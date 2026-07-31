@@ -107,6 +107,11 @@ export interface Tile {
   levelWallMats: Map<number, THREE.MeshStandardMaterial[]>;
   /** aktuell gewählte Etage der Innenansicht (Umschalter; Default EG) */
   levelFilter: number;
+  /** Pull the in-world storey switch's display state out of `levelFilter`
+   *  (its marking and its height). Whoever sets `levelFilter` from outside —
+   *  the lift, the avatar changing storey — calls this with it; a tile without
+   *  a scene or with a single storey has no switch. */
+  levelSwitch?: () => void;
   /** Zoom-Zugabe für die Innenansicht bei mehrgeschossigen Gebäuden:
    *  Obergeschosse brauchen mehr Kameradistanz, sonst springt die Ansicht
    *  beim Rauszoomen zurück auf die Hülle, bevor man sie sehen kann */

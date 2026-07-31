@@ -1353,6 +1353,34 @@ async function startApp(username: string) {
     return true;
   }
 
+  /** Storey the displayed one was last pulled to per tile — the memory that
+   *  makes the following EDGE-triggered (see below). */
+  const followedStorey = new Map<string, number>();
+
+  /**
+   * The displayed storey follows the avatar (E3 acceptance). Every way the
+   * avatar changes storey now moves the view with it: entering a building, a
+   * room change the poll brings in, the room walk — the lift was the only one
+   * that did it, and everywhere else the player ended up standing on a floor
+   * the view was not showing.
+   *
+   * Edge-triggered on purpose: the storey is applied when the AVATAR'S changes,
+   * not every frame. A player who picks a storey on the in-world switch to look
+   * around keeps that view for as long as the avatar stays where it is —
+   * pulling it back per frame would make the switch useless while embodied.
+   * In the overview the caller never runs at all, so there the switch is the
+   * only authority, unchanged.
+   */
+  function followAvatarStorey(tile: Tile | null, room: string | null) {
+    if (!tile || !room) return;
+    const level = tile.roomLevels.get(room) ?? 0;
+    if (followedStorey.get(tile.loc.id) === level) return;
+    followedStorey.set(tile.loc.id, level);
+    if (tile.levelFilter === level) return;
+    tile.levelFilter = level;
+    tile.levelSwitch?.();   // the in-world widget marks and floats at it too
+  }
+
   // `performance.now()` throughout, never the wall clock: these are DURATIONS,
   // and a clock correction must not make a hold fire instantly or never.
   engine.addFrameHook(() => {
@@ -1373,6 +1401,7 @@ async function startApp(username: string) {
         || performance.now() - requestedAt > ROOM_CONFIRM_MS)) {
       requestedRoom = null;
     }
+    followAvatarStorey(tile, current);
     // Scale (T5 finding): `update()` skips every placement field for the
     // player-driven figure, so its scale used to stay frozen at whatever it
     // was at takeover — a map-sized avatar inside a room, or a room-sized one
@@ -1522,8 +1551,10 @@ async function startApp(username: string) {
     // From here the lift owns the figure until it stands at that point.
     elevatorRide = { goal: stop.clone(), until: performance.now() + ELEVATOR_RIDE_MS };
     // The view follows the ride. `levelFilter` is the in-world storey button,
-    // pure view state — the same switch a click on it would throw.
+    // pure view state — the same switch a click on it would throw, widget
+    // marking included.
     tile.levelFilter = level;
+    tile.levelSwitch?.();
     roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
     setGameState({ elevator: { levels: state.elevator.levels, current: level } });
   }

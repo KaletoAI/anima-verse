@@ -615,19 +615,28 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
                       (floorYof.get(lv) ?? lv * scene.storey_m) + scene.storey_m * (2 / 3),
                       elevatorXZ?.y ?? 0);
     };
+    // The display state comes OUT of `tile.levelFilter`, not out of the click:
+    // the storey is set from outside as well (the lift, the avatar changing
+    // storey), and the switch then kept marking the old one and floating at its
+    // height. The click handler takes the same path — one source.
+    const refresh = () => {
+      swAt(tile.levelFilter);
+      el.querySelectorAll<HTMLButtonElement>('button').forEach(
+        (b) => b.classList.toggle('active', b.dataset.level === String(tile.levelFilter)));
+    };
     for (const lv of [...levels].sort((a, b) => a - b)) {
       const btn = document.createElement('button');
       btn.textContent = lv === 0 ? 'EG' : `${lv}.`;
-      if (lv === tile.levelFilter) btn.classList.add('active');
+      btn.dataset.level = String(lv);
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         tile.levelFilter = lv;
-        swAt(lv);
-        el.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+        refresh();
       });
       el.appendChild(btn);
     }
-    swAt(tile.levelFilter);
+    refresh();
+    tile.levelSwitch = refresh;
     g.add(sw);
   }
 
@@ -845,4 +854,7 @@ export function unmountScene(tile: Tile): void {
   tile.levelSlabs.clear();
   tile.levelWallMats.clear();
   tile.elevatorStops = undefined;
+  // The old scene's switch is gone with its DOM — its refresh function would
+  // otherwise write to a widget that is no longer there.
+  tile.levelSwitch = undefined;
 }
