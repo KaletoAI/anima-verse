@@ -927,9 +927,14 @@ async function startApp(username: string) {
    */
   function enterThroughDoor(cell: Cell, roomId: string) {
     const tile = tileAtCell(cell);
+    // Only where there is an interior to enter — the same condition the view
+    // opens one on. Walking onto passable ground (a street, a park with
+    // zones) must not take the steering away for a second: there the avatar
+    // is simply outdoors, wherever the player walks.
+    if (!tile?.isBuilding || !tile.interior) return;
     // Centre as the fallback: an entry room without a derived exit (an outdoor
     // room, an overlay zone) still has a place the avatar belongs at.
-    const point = tile && (tile.roomExits.get(roomId) ?? tile.roomCenters.get(roomId));
+    const point = tile.roomExits.get(roomId) ?? tile.roomCenters.get(roomId);
     if (!point) return;
     npcs.setPlayerTarget(avatarName, point.clone());
     doorWalk = { goal: point.clone(), until: performance.now() + DOOR_WALK_MS };
