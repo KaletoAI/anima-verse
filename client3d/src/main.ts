@@ -765,6 +765,22 @@ async function startApp(username: string) {
    *  boundary that is the same clamp a step in flight already causes. The T6
    *  section further down owns the writes. */
   let roomRequestInFlight = false;
+  /** How long a lift ride may take before the figure is handed back even
+   *  without arriving. A safety net only: the figure can be held up (a model
+   *  reload throws its group away mid-ride), and a ride that never ends would
+   *  leave the player unable to steer at all. */
+  const ELEVATOR_RIDE_MS = 4000;
+  /** Distance that counts as "arrived at the holding point" — in XZ AND in
+   *  height, so the vertical part of the ride has to be over as well. */
+  const ELEVATOR_ARRIVE = 0.2;
+  /** The running lift ride, declared here for the same reason as the flag
+   *  above: it INTERLOCKS with the walking hook. While it is set the hook does
+   *  not steer at all — the goal belongs to the lift, and one steering frame
+   *  would overwrite it, walking the figure out of the shaft while its height
+   *  still blends to the other storey (through the ceiling) into a room nobody
+   *  chose, which the room walk then pays for with a second
+   *  `/play/enter-room`. The elevator section further down owns the writes. */
+  let elevatorRide: { goal: THREE.Vector3; until: number } | null = null;
   /** Cell our own step aims at (or came back to after a refusal) — the
    *  authority check must not read it as foreign movement. It is consumed by
    *  the FIRST worldmap poll after the request ended (see
@@ -876,8 +892,9 @@ async function startApp(username: string) {
 
   engine.onGroundClick = (x, y) => {
     const state = getGameState();
-    // Overview mode is untouched: there a click stays a tile pick.
-    if (state.mode !== 'embodied' || state.movementLocked) return false;
+    // Overview mode is untouched: there a click stays a tile pick. A running
+    // lift ride owns the figure, so no new order is planned during it either.
+    if (state.mode !== 'embodied' || state.movementLocked || elevatorRide) return false;
     const pos = npcs.positionOf(avatarName);
     const hit = engine.groundPointAt(x, y);
     if (!pos || !hit) return false;
@@ -922,6 +939,7 @@ async function startApp(username: string) {
       // embodied session, where it would belong to a cell nobody stands on.
       askedEdge = null;
       expectedCell = null;
+      elevatorRide = null;   // ditto for a ride nobody is in any more
       return;
     }
     // Party follower: the leader carries the avatar along; the server refuses
@@ -932,6 +950,19 @@ async function startApp(username: string) {
     }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;                     // no figure on the map (yet) — nothing to steer
+    // A running lift ride owns the figure: its goal is the holding point of
+    // the target storey, and steering would overwrite it in the very next
+    // frame. The ride is short, so the keys and click orders are ignored for
+    // its duration instead of cancelling it half-way — a ride abandoned in
+    // mid-air would leave the figure between two storeys. It ends when the
+    // figure stands at the point (XZ and height), or on the safety deadline.
+    if (elevatorRide) {
+      const arrived = Math.hypot(elevatorRide.goal.x - pos.x, elevatorRide.goal.z - pos.z)
+          < ELEVATOR_ARRIVE
+        && Math.abs(elevatorRide.goal.y - pos.y) < ELEVATOR_ARRIVE;
+      if (!arrived && performance.now() <= elevatorRide.until) return;
+      elevatorRide = null;
+    }
     // Pace of the SIZE the figure is drawn at (E3 fix): indoors it stands at
     // the room scale, where a world metre is not a figure metre — unscaled,
     // 3.4 m/s next to a figure a third the size reads as eleven metres a
@@ -1140,8 +1171,10 @@ async function startApp(username: string) {
     return tile.roomCenters.get(room)?.y ?? null;
   }
 
-  /** @returns true when the server accepted the room. */
-  async function enterRoomOnFoot(roomId: string): Promise<boolean> {
+  /** @param announce show the server's reason to the player when it wrote one
+   *                  (the ride does, the room walk stays silent).
+   *  @returns true when the server accepted the room. */
+  async function enterRoomOnFoot(roomId: string, announce = false): Promise<boolean> {
     roomRequestInFlight = true;
     requestedRoom = roomId;
     requestedAt = performance.now();
@@ -1150,7 +1183,7 @@ async function startApp(username: string) {
     try {
       await api.enterRoom(roomId, abort.signal);
       return true;
-    } catch {
+    } catch (e) {
       // Silent, exactly like the HUD's room chips: a rule refused it, the room
       // is stale, or the deadline ran out — the next poll shows what actually
       // holds. What the failure DOES buy is the block below, so a player
@@ -1158,6 +1191,14 @@ async function startApp(username: string) {
       // request lands here too and gets the ordinary 4-second block.
       roomRejectedUntil.set(roomId, performance.now() + ROOM_REJECT_MS);
       requestedRoom = null;
+      // A room change the player ASKED for (the lift) must not fail mutely.
+      // Only the server's own player text goes out — a `reason` marks it as
+      // written for the player; a technical detail string ("room not in
+      // current location") or a bare status stays in the console, and no text
+      // is invented here (the vanilla side renders none).
+      const err = e instanceof api.ApiError ? e : null;
+      if (announce && err?.reason) uiActions.toast?.(err.message);
+      else if (announce) console.warn('[elevator] enter-room refused', e);
       return false;
     } finally {
       clearTimeout(deadline);
@@ -1316,15 +1357,23 @@ async function startApp(username: string) {
     // The ONE room-request machine of the room walk — a ride while a cell step
     // or another room change is in flight would let the network order decide
     // where the avatar ends up (the entry-room gate judges a step by the room
-    // the avatar is in). No second enter-room path.
-    if (roomRequestInFlight || stepInFlight) return;
-    if (!await enterRoomOnFoot(target)) return;
+    // the avatar is in). No second enter-room path, and the SAME cooldown: a
+    // room the server just refused stays refused for the ride as well, or
+    // every press would run into the same 403.
+    if (roomRequestInFlight || stepInFlight
+      || (roomRejectedUntil.get(target) ?? 0) > performance.now()) return;
+    // A click order would fight the ride from the next frame on — and it was
+    // made for the storey the player is leaving.
+    cancelRoute();
+    if (!await enterRoomOnFoot(target, true)) return;
     // The server accepted the room, so that IS the avatar's room now — the
     // same word the step answer gives (`moved.room_id`), up to three seconds
     // before the poll repeats it. Without it the room walk would judge the
     // ride against the storey just left and ask the avatar back down.
     roomOf.set(avatarName, target);
     npcs.setPlayerTarget(avatarName, stop.clone());
+    // From here the lift owns the figure until it stands at that point.
+    elevatorRide = { goal: stop.clone(), until: performance.now() + ELEVATOR_RIDE_MS };
     // The view follows the ride. `levelFilter` is the in-world storey button,
     // pure view state — the same switch a click on it would throw.
     tile.levelFilter = level;

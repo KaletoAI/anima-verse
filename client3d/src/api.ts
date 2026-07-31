@@ -53,6 +53,24 @@ export class ApiError extends Error {
   }
 }
 
+/** The refusal of a game call, read the way the server writes it: a `detail`
+ *  object with `reason` + `message` is text FOR the player, a plain string
+ *  detail is technical ("room not in current location") and only ever reaches
+ *  the console. Callers tell the two apart by `reason` — an empty one means
+ *  there is nothing worth showing. */
+async function refusal(res: Response): Promise<ApiError> {
+  let detail: unknown = null;
+  try {
+    const body = await res.json();
+    detail = (body && typeof body === 'object' && 'detail' in body) ? body.detail : body;
+  } catch { /* error without a body — status alone has to do */ }
+  const obj = detail && typeof detail === 'object' ? detail as Record<string, unknown> : null;
+  const message = typeof detail === 'string' ? detail
+    : typeof obj?.message === 'string' ? obj.message
+      : `HTTP ${res.status}`;
+  return new ApiError(res.status, message, typeof obj?.reason === 'string' ? obj.reason : '');
+}
+
 export type StepDirection = 'north' | 'south' | 'east' | 'west';
 
 /** One grid step of the avatar. Throws an `ApiError`: 403 = party follower,
@@ -68,27 +86,19 @@ export async function avatarStep(direction: StepDirection, signal?: AbortSignal
     body: JSON.stringify({ direction }),
     signal,
   });
-  if (!res.ok) {
-    let detail: unknown = null;
-    try {
-      const body = await res.json();
-      detail = (body && typeof body === 'object' && 'detail' in body) ? body.detail : body;
-    } catch { /* error without a body — status alone has to do */ }
-    const obj = detail && typeof detail === 'object' ? detail as Record<string, unknown> : null;
-    const message = typeof detail === 'string' ? detail
-      : typeof obj?.message === 'string' ? obj.message
-        : `HTTP ${res.status}`;
-    throw new ApiError(res.status, message, typeof obj?.reason === 'string' ? obj.reason : '');
-  }
+  if (!res.ok) throw await refusal(res);
   return res.json();
 }
 
 /** Move the avatar into another room of its current location — the same call
- *  the HUD's room chips make. Throws on any refusal (a block rule, a room the
- *  server does not have at this location); the caller stays silent about it,
- *  the next poll shows what actually holds. `signal` lets the caller put a
- *  deadline on it: only ONE room change may be in flight, so a request that
- *  never answers would bar every further one until the page is reloaded. */
+ *  the HUD's room chips make. Throws an `ApiError` on any refusal (a rule, a
+ *  room the server does not have at this location). Whether that is shown is
+ *  the caller's call: the room walk stays silent (the next poll shows what
+ *  holds), the elevator ride announces a refusal that carries a `reason` —
+ *  today `/play/enter-room` writes one for `party_follower` only, every other
+ *  refusal is technical text and stays out of the player's face. `signal` lets
+ *  the caller put a deadline on it: only ONE room change may be in flight, so
+ *  a request that never answers would bar every further one until reload. */
 export async function enterRoom(roomId: string, signal?: AbortSignal): Promise<void> {
   const res = await fetch('/play/enter-room', {
     method: 'POST',
@@ -96,7 +106,7 @@ export async function enterRoom(roomId: string, signal?: AbortSignal): Promise<v
     body: JSON.stringify({ room_id: roomId }),
     signal,
   });
-  if (!res.ok) throw new Error(`enter-room ${res.status}`);
+  if (!res.ok) throw await refusal(res);
 }
 
 export async function getCharactersAtLocation(locationId: string): Promise<AtLocationChar[]> {
