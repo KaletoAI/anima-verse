@@ -458,6 +458,11 @@ async function startApp(username: string) {
   /** aktuell DARGESTELLTER Raum je Figur (null = Außenansicht) — erkennt
    *  Betreten/Verlassen/Wechsel für das Exit-Routing */
   const shownRoom = new Map<string, string | null>();
+  /** Figures the placement pass left INVISIBLE (a storey that is not shown, a
+   *  room whose interior is closed). Rewritten by every `computeNpcStates`
+   *  run; read by the talk target, because nobody can be addressed through a
+   *  wall one cannot even see. */
+  const hiddenChars = new Set<string>();
 
   // AV3D-8: room_id kommt direkt mit der Worldmap; dazu die Clip-Set-Kette
   function takeRoomsFrom(map: WorldMap) {
@@ -563,6 +568,7 @@ async function startApp(username: string) {
 
   function computeNpcStates(map: WorldMap): NpcState[] {
     const byLoc = new Map<string, MapCharacter[]>();
+    hiddenChars.clear();
     for (const c of map.characters) {
       if (!tiles.has(c.location_id)) continue;
       (byLoc.get(c.location_id) ?? byLoc.set(c.location_id, []).get(c.location_id)!).push(c);
@@ -684,9 +690,22 @@ async function startApp(username: string) {
           face = travelTo.clone().sub(pos).setY(0);
         }
         // Etagen-Umschalter: Figuren auf nicht gewählten Etagen ausblenden
-        const hidden = !!inRoom && tile.fade > 0.5
+        const wrongStorey = !!inRoom && tile.fade > 0.5
           && !tile.alwaysVisibleRooms.has(inRoom)
           && (tile.roomLevels.get(inRoom) ?? 0) !== tile.levelFilter;
+        // A character the server has in a ROOM of this tile belongs inside it.
+        // With the interior closed there is nothing to draw it in, and the
+        // `else` branch above lines it up in FRONT of the building — the whole
+        // tavern standing on the doorstep, which is the acceptance finding.
+        // So it simply is not drawn until the interior opens; then the room
+        // placement and the exit routing take over unchanged (`inRoom` flips,
+        // `shownRoom` sees the transition and walks the figure in through the
+        // door). Untouched: characters without a room, always-visible rooms,
+        // travellers (they returned above) and the player-driven avatar
+        // (`update()` skips every placement field for it).
+        const roomIsClosed = !inRoom && !!room && !!roomCenter;
+        const hidden = wrongStorey || roomIsClosed;
+        if (hidden) hiddenChars.add(c.name);
         states.push({
           char: c,
           pos,
@@ -1600,6 +1619,11 @@ async function startApp(username: string) {
     const candidates: TalkCandidate[] = [];
     for (const c of lastMap.characters) {
       if (c.name === avatarName) continue;
+      // Nobody one cannot see is addressable: since the acceptance round a
+      // character in a room whose interior is closed is not drawn at all, and
+      // it stands where the placement pass parked it. Without this the prompt
+      // would offer a conversation with an invisible figure.
+      if (hiddenChars.has(c.name)) continue;
       const p = npcs.positionOf(c.name);
       const scale = npcs.scaleOf(c.name);
       if (!p || scale === null) continue;   // not (yet) a figure in the scene
