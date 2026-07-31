@@ -9,6 +9,7 @@ import { planRoute, type ClickRoute } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
+import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -260,7 +261,16 @@ async function startApp(username: string) {
   // Szenen-Signatur bewegt sich (Layout, map3d, Modell-Meta, Prop-Sidecar) →
   // Kachel neu bauen. Wird eine Szene zu 404 (Layout gelöscht), bleibt genau
   // die prozedurale Kachel übrig — es gibt dann nichts mehr aufzuklappen.
+  /** Blocking wall lines per location and storey, for the avatar's collision
+   *  (game/collide.ts). Built from the payload, so it is cached per
+   *  `(location, storey)` and thrown away in exactly ONE place: `onScene`
+   *  below, the only moment a payload is replaced (a moved scene signature),
+   *  and the same moment the tile is rebuilt from it. Nothing else can change
+   *  a wall — the walls are the server's. */
+  const wallCache = new Map<string, Map<number, Segment[]>>();
+
   scenes.onScene = (locId) => {
+    wallCache.delete(locId);
     const tile = tiles.get(locId);
     if (tile) rebuildTile(tile, tile.loc);
   };
@@ -1216,6 +1226,14 @@ async function startApp(username: string) {
     // frame. On a blocked axis the goal is the position itself (stand still),
     // the free axis keeps sliding along the edge.
     ({ x, z } = keepAhead({ x, z }, pos, dir));
+    // Walls have the LAST word (E3 acceptance: "the avatar walks through
+    // walls"). After the cell logic and after `keepAhead`, because a goal that
+    // is perfectly legal for its cell may still lie in the next room — and a
+    // wall must outrank the anti-vibration rule, not the other way round. The
+    // clamp slides along the wall exactly as the cell clamp slides along a
+    // boundary, so nothing here has to stop the figure dead.
+    const walls = avatarWalls(tileAtCell(here));
+    if (walls) ({ x, z } = clampAgainstWalls(pos, { x, z }, walls.segments, walls.radius));
     walkGoal.set(x, roomFloorY(tileAtCell(here)) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal);
   });
@@ -1352,6 +1370,49 @@ async function startApp(username: string) {
     const room = avatarRoomId(tile);
     if (!room || tile.alwaysVisibleRooms.has(room)) return null;
     return tile.roomCenters.get(room)?.y ?? null;
+  }
+
+  /**
+   * The walls the AVATAR currently bumps into, or null when nothing should
+   * block. Three conditions, and each one is a real case:
+   *
+   *  - a building whose interior is DRAWN (`interior.visible`, set by
+   *    `applyTileFade` from the camera distance). With the shell closed there
+   *    is nothing on screen to bump into and the figure is walking the tile
+   *    from outside — invisible walls there would be the worse bug.
+   *  - a scene payload. A legacy procedural tile has no wall vocabulary at
+   *    all; there is nothing to derive segments from and it stays as it was.
+   *  - at least one segment on the storey.
+   *
+   * The storey is the AVATAR's (its room's), not `levelFilter`: a player
+   * looking at another floor still walks the walls of their own.
+   *
+   * Guided movements are NOT affected — the walking hook returns early for a
+   * lift ride and for a doorway walk, both of which aim at a point the route
+   * was chosen for (the door, the holding point) and would only be fought by
+   * a clamp.
+   */
+  function avatarWalls(tile: Tile | null
+  ): { segments: Segment[]; radius: number } | null {
+    if (!tile?.isBuilding || !tile.interior?.visible) return null;
+    const scene = scenes.get(tile.loc.id);
+    if (!scene) return null;
+    const room = avatarRoomId(tile);
+    const level = (room ? tile.roomLevels.get(room) : undefined) ?? tile.levelFilter;
+    let byLevel = wallCache.get(tile.loc.id);
+    if (!byLevel) {
+      byLevel = new Map();
+      wallCache.set(tile.loc.id, byLevel);
+    }
+    let segments = byLevel.get(level);
+    if (!segments) {
+      segments = wallSegments(scene, level);
+      byLevel.set(level, segments);
+    }
+    // The radius comes from the SCENE's `k`, the same number the doorways are
+    // measured in: walls and body then shrink together and a 0.6 m gap in a
+    // village drawn at k = 0.21 is still a 0.6 m gap for the figure.
+    return segments.length ? { segments, radius: bodyRadius(scene.k) } : null;
   }
 
   /** @param announce show the server's reason to the player when it wrote one
