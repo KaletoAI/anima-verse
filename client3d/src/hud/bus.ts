@@ -10,8 +10,11 @@
  *   calls (e.g. a key press opening the chat).
  *
  * Deliberately dependency-free: no React import here, so scene code may import
- * it without pulling the HUD bundle in. Only `main.ts` writes game state; the
- * plaque writes exactly one field (clearing the selection).
+ * it without pulling the HUD bundle in. Game state has three writers, each
+ * owning a disjoint set of fields: `main.ts` with its mode helper
+ * `game/embody.ts` (mode, selection, talk target), `CharacterPlaque.tsx` (one
+ * field — clearing the selection) and `Hud.tsx` (party state out of the
+ * `/play/scene` poll — `movementLocked` + `partyLeader`, E3-T3).
  */
 import type { MapCharacter } from '../types';
 

@@ -388,10 +388,19 @@ async function startApp(username: string) {
   // Esc leaves the mode — THE one binding for it. Guarded like the engine's own
   // keys: while the focus sits in a form field Esc belongs to that field (the
   // chat clears/blurs with it), not to the camera.
+  //
+  // OVERLAYS OWN ESCAPE: an open lightbox (`.lb-overlay`) or a portalled modal
+  // (`.ga-modal-backdrop`, e.g. the gift/gallery pickers) closes on Esc itself,
+  // and one key press must not do both — close the picture AND throw the player
+  // out of the mode. Listening in the CAPTURE phase is what makes the check
+  // reliable: the overlay's own window listener runs in the bubble phase, and
+  // React may already have unmounted the node by the time a second bubble
+  // listener sees the event.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || isTypingTarget(e)) return;
+    if (document.querySelector('.lb-overlay, .ga-modal-backdrop')) return;
     if (getGameState().mode === 'embodied') exitEmbodied(embody);
-  });
+  }, true);
 
   // --- Event-Pins ----------------------------------------------------------
   const pins = new Map<string, THREE.Sprite>();
@@ -745,7 +754,9 @@ async function startApp(username: string) {
    *  the FIRST worldmap poll after the request ended (see
    *  `reconcileAvatarCell`), not by a timer. */
   let expectedCell: Cell | null = null;
-  /** cell key -> time until which a refused crossing stays refused */
+  /** cell key -> `performance.now()` stamp until which a refused crossing stays
+   *  refused. The monotonic clock, never the wall clock: this is a DURATION,
+   *  and the same choice the room walk (T6) makes for its own cooldowns. */
   const rejectedUntil = new Map<string, number>();
   /**
    * The ONE cell boundary the server has been asked about. It exists because
@@ -777,7 +788,7 @@ async function startApp(username: string) {
       edge.granted = true;
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
-      rejectedUntil.set(`${to.gx},${to.gy}`, Date.now() + REJECT_MEMORY_MS);
+      rejectedUntil.set(`${to.gx},${to.gy}`, performance.now() + REJECT_MEMORY_MS);
       expectedCell = from;
       if (askedEdge === edge) askedEdge = null;
       // The crossing did NOT happen, so the figure must not be standing past
@@ -881,6 +892,11 @@ async function startApp(username: string) {
     const state = getGameState();
     if (state.mode !== 'embodied') {
       cancelRoute();                      // leaving the mode drops the route
+      // …and with it the whole step machine: a pending permission or an
+      // expected cell from the last walk must not survive into the next
+      // embodied session, where it would belong to a cell nobody stands on.
+      askedEdge = null;
+      expectedCell = null;
       return;
     }
     // Party follower: the leader carries the avatar along; the server refuses
@@ -938,7 +954,7 @@ async function startApp(username: string) {
         if (!askedEdge.granted) ({ x, z } = clampToCell(x, z, here, CELL));
       } else {
         const barred = !step || !passableCells.has(key)
-          || (rejectedUntil.get(key) ?? 0) > Date.now();
+          || (rejectedUntil.get(key) ?? 0) > performance.now();
         // `roomRequestInFlight` clamps exactly like a step in flight (E3-T6):
         // a room change and a cell step must not overlap, or the entry-room
         // gate judges this step against a room that is still moving.
