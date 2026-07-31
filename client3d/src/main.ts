@@ -802,6 +802,11 @@ async function startApp(username: string) {
    *  the FIRST worldmap poll after the request ended (see
    *  `reconcileAvatarCell`), not by a timer. */
   let expectedCell: Cell | null = null;
+  /** Until when a `not_at_entry_room` 403 counts as a race and is answered by
+   *  running the entry-room chain instead of by a toast. Bounds it to one
+   *  automatic attempt per memory window — a second refusal in a row is a real
+   *  disagreement with the server and belongs on screen. */
+  let entryRetryUntil = 0;
   /** cell key -> `performance.now()` stamp until which a refused crossing stays
    *  refused. The monotonic clock, never the wall clock: this is a DURATION,
    *  and the same choice the room walk (T6) makes for its own cooldowns. */
@@ -861,10 +866,23 @@ async function startApp(username: string) {
       // A click route was planned across this edge — it is void now, whatever
       // the reason. Walking on would only collect the same refusal again.
       cancelRoute();
+      // The entry-room gate is walked by the client now (`entryRoomToEnter`),
+      // so this 403 is a RACE, not something the player did: the poll moved
+      // the avatar's room between the check and the request. A toast asking
+      // them to walk to a room the client walks to by itself is noise — the
+      // chain is simply run once and the edge is not blocked for it. Once,
+      // though: a second refusal inside the memory window IS worth telling
+      // them about instead of looping silently.
+      if (err?.reason === 'not_at_entry_room' && performance.now() > entryRetryUntil) {
+        entryRetryUntil = performance.now() + REJECT_MEMORY_MS;
+        rejectedUntil.delete(`${to.gx},${to.gy}`);
+        const entry = entryRoomToEnter(tileAtCell(from));
+        if (entry) void enterEntryRoom(entry);
+      }
       // 403 = a rule refused it and the server wrote the reason for the
       // player. 404 = there is simply no location that way, which the edge
       // already shows — no toast for that.
-      if (err?.status === 403) uiActions.toast?.(err.message);
+      else if (err?.status === 403) uiActions.toast?.(err.message);
       else if (abort.signal.aborted) console.warn('[walk] step request timed out');
       else if (!err) console.warn('[walk] step request failed', e);
     } finally {
@@ -1092,6 +1110,10 @@ async function startApp(username: string) {
         // the client may decide about on its own.
         const barred = !step || !locIdAtCell.has(key)
           || (rejectedUntil.get(key) ?? 0) > performance.now();
+        // Room the avatar has to be in before it may leave this location at
+        // all (E3 acceptance "the village cannot be left"), null when it
+        // already is or the location has no gate.
+        const gateRoom = entryRoomToEnter(tileAtCell(here));
         // `roomRequestInFlight` clamps exactly like a step in flight (E3-T6):
         // a room change and a cell step must not overlap, or the entry-room
         // gate judges this step against a room that is still moving.
@@ -1101,6 +1123,16 @@ async function startApp(username: string) {
           // A step merely in flight is NOT that: there the figure just waits
           // at the boundary for its turn.
           if (barred) cancelRoute();
+          ({ x, z } = clampToCell(x, z, here, CELL));
+        } else if (gateRoom) {
+          // The entry-room gate is 2D logic — in 3D the client walks it. The
+          // avatar stands in a room that is not the one this location is left
+          // through, so the room change goes FIRST, through the one
+          // room-request machine (`enterRoomOnFoot` sets the interlock flag in
+          // the same frame). The figure waits at the boundary meanwhile,
+          // exactly as it waits for a step: one request, no hail, and the step
+          // follows in the frame after the answer.
+          void enterEntryRoom(gateRoom);
           ({ x, z } = clampToCell(x, z, here, CELL));
         } else {
           askedEdge = { from: here, to: next, granted: false };
@@ -1281,6 +1313,44 @@ async function startApp(username: string) {
       clearTimeout(deadline);
       roomRequestInFlight = false;   // guaranteed, or the interlock never opens
     }
+  }
+
+  /**
+   * The room the avatar has to be in before it may leave this location — its
+   * ENTRY room — or null when there is nothing to do (E3 acceptance: "the
+   * village cannot be left, you have to walk to the square first").
+   *
+   * The gate itself is the server's (`world_ops.move_avatar_step` refuses a
+   * step out of any other room, 403 `not_at_entry_room`). In the 2D UI the
+   * player clicks the room chip themselves; walking a figure through a world
+   * has no such moment, so the client walks the rule instead of reporting it.
+   * The server stays untouched and keeps deciding — this only takes the step
+   * the player would otherwise have to guess at.
+   */
+  function entryRoomToEnter(tile: Tile | null): string | null {
+    if (!tile) return null;
+    const entry = (tile.loc.entry_room || '').trim();
+    if (!entry) return null;                       // location without a gate
+    const room = avatarRoomId(tile);
+    // No room resolved at all (outdoors, a payload still on its way): nothing
+    // to correct, and the server decides exactly as before.
+    if (!room || room === entry) return null;
+    if (!tile.loc.rooms.some((r) => r.id === entry)) return null;
+    // A refused entry room is not walked around in circles: let the ordinary
+    // step go out and let the server say why, in its own words.
+    if ((roomRejectedUntil.get(entry) ?? 0) > performance.now()) return null;
+    return entry;
+  }
+
+  /** Enter the entry room so the next step out may pass. The ONE room-request
+   *  machine, and the server's answer is adopted the same way the step answer
+   *  is: it IS the avatar's room now, three seconds before the poll repeats
+   *  it — without that the gate would fire again in the very next frame. */
+  async function enterEntryRoom(roomId: string): Promise<boolean> {
+    if (!await enterRoomOnFoot(roomId)) return false;
+    roomOf.set(avatarName, roomId);
+    roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
+    return true;
   }
 
   // `performance.now()` throughout, never the wall clock: these are DURATIONS,
