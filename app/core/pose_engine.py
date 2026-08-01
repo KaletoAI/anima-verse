@@ -21,21 +21,46 @@ from app.core.log import get_logger
 
 logger = get_logger("pose_engine")
 
+# Completion budget for the pose_normalize call. The template demands 2-6
+# English words, i.e. roughly 8-12 tokens; 24 leaves about double that for
+# tokenizer variance and punctuation while cutting a rambling answer off early
+# instead of paying for a whole paragraph.
+_MAX_ANSWER_TOKENS = 24
+
+# Garbage gate for the LLM answer. The value is stored as canonical_pose and
+# goes verbatim into the image prompt, so an answer that is obviously not a
+# pose must not be stored at all — the raw fallback is the better value.
+# 80 chars = the storage cap the DB value has always had; 12 words = double the
+# template's ceiling of 6, so a wordy but genuine pose ("sitting on a couch
+# reading a book by the window", 10 words) still passes while a prose sentence
+# ("Sure! Here is the canonical pose you asked for: …", 13 words) does not.
+_MAX_ANSWER_CHARS = 80
+_MAX_ANSWER_WORDS = 12
+
+
+def _is_pose_shaped(text: str) -> bool:
+    """True if the cleaned LLM answer can plausibly be a pose at all.
+
+    Deliberately NOT a content judgement — only a length/word-count filter
+    against obviously broken output (prose, explanations, refusals).
+    """
+    return len(text) <= _MAX_ANSWER_CHARS and len(text.split()) <= _MAX_ANSWER_WORDS
+
 
 def normalize_pose(raw_pose: str, activity_hint: str = "") -> str:
-    """Ruft pose_normalize-LLM auf und liefert die kanonische Kurzform.
+    """Call the pose_normalize LLM and return the canonical short form.
 
-    Bei Fehler / Routing-Konflikt: faellt zurueck auf den raw_pose (lowercase,
-    geschnitten) — keine harte Fehlersituation.
+    On error / routing conflict: falls back to the raw_pose (lowercased,
+    truncated) — never a hard failure.
     """
     raw = (raw_pose or "").strip()
     if not raw:
         return ""
-    # Sehr kurze Inputs sind schon "normal" — ABER nur, wenn keine Orts-/
-    # Szenen-Praeposition drinsteckt. "standing at mountain" / "standing in
-    # lobby" tragen den ORT mit; ohne Normalisierung embedden sie verschieden
-    # und gleiche Koerperposen werden nie zusammengeführt. Solche Faelle laufen
-    # daher durch den Normalizer (der den Ort strippt → exakter Match → merge).
+    # Very short inputs are already "normal" — BUT only if they carry no
+    # location/scene preposition. "standing at mountain" / "standing in lobby"
+    # carry the PLACE along; without normalization they embed differently and
+    # identical body poses are never merged. Such cases therefore go through
+    # the normalizer (which strips the place → exact match → merge).
     _low = raw.lower()
     _has_location = any(
         f" {p} " in f" {_low} "
@@ -47,7 +72,7 @@ def normalize_pose(raw_pose: str, activity_hint: str = "") -> str:
 
     try:
         from app.core.prompt_templates import render_task
-        from app.core.llm_router import call as llm_call
+        from app.core.llm_router import llm_call
         sys_prompt, user_prompt = render_task(
             "pose_normalize",
             raw_pose=raw,
@@ -57,16 +82,28 @@ def normalize_pose(raw_pose: str, activity_hint: str = "") -> str:
             task="pose_normalize",
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
+            max_tokens=_MAX_ANSWER_TOKENS,
         )
-        norm = (response or "").strip().strip('"').strip("'")
-        if norm:
-            # Single-line, lowercase, max 80 chars (DB-Anti-Halluzination)
-            norm = norm.splitlines()[0].strip().lower()
-            return norm[:80]
+        # FIRST line, THEN quotes/whitespace. The other way round a multi-line
+        # answer keeps a stray closing quote ('"standing at window"\nBecause…'
+        # would become 'standing at window"') and that lands verbatim in the
+        # image prompt.
+        lines = (response.content or "").splitlines()
+        first = lines[0].strip() if lines else ""
+        if first.startswith("```"):
+            # Fenced answer — the pose is not on the first line. Discard the
+            # whole answer instead of guessing which line carries it.
+            first = ""
+        # One strip pass over quotes AND trailing punctuation: stripping the
+        # quote alone leaves '"standing at window".' as 'standing at window".'
+        # — the same stray quote, just behind a period.
+        norm = first.strip(" .,\"'").lower()
+        if norm and _is_pose_shaped(norm):
+            return norm
     except Exception as e:
-        logger.debug("normalize_pose LLM-Call fehlgeschlagen: %s", e)
+        logger.debug("normalize_pose LLM call failed: %s", e)
 
-    # Fallback: rohen Text auf 80 Zeichen kuerzen
+    # Fallback: truncate the raw text to 80 characters
     return raw.lower()[:80]
 
 
@@ -129,15 +166,23 @@ def enqueue_visual_analysis(variant_id: int, image_path: str) -> None:
 
 
 def _run_visual_analysis(variant_id: int, image_path: str) -> None:
-    """Worker-Function fuer enqueue_visual_analysis."""
+    """Worker function for enqueue_visual_analysis."""
     try:
         from pathlib import Path
         p = Path(image_path)
         if not p.exists():
             logger.debug("Visual-Analyse skip: %s existiert nicht", image_path)
             return
-        # image_recognition-Task: "Describe what the person is doing in this image"
+        # image_recognition task: "Describe what the person is doing in this image"
         try:
+            # NOT FUNCTIONAL: this call cannot work as written. `llm_call` takes
+            # no image input at all (task, system_prompt, user_prompt,
+            # agent_name, priority, label, max_tokens), so `image_paths` has no
+            # receiver — and the imported name `call` does not exist either.
+            # Vision in this repo runs through app/imagegen/service.py
+            # (_get_vision_llm_config). Making this work is a rewiring onto that
+            # path, not a line fix, and is tracked as its own scope (LLM routing
+            # review, section A4) — deliberately left untouched here.
             from app.core.llm_router import call as llm_call
             response = llm_call(
                 task="image_recognition",
@@ -163,8 +208,8 @@ def _run_visual_analysis(variant_id: int, image_path: str) -> None:
         canonical = canonical.splitlines()[0].strip().lower()[:80]
         if not canonical:
             return
-        # Embedding fuer neue Beschreibung berechnen (Stub gibt None — Match
-        # faellt dann auf String zurueck).
+        # Compute an embedding for the new description (None means the match
+        # falls back to string equality).
         new_embedding = compute_embedding(canonical)
         from app.core.pose_variants import update_variant_canonical
         if update_variant_canonical(variant_id, canonical, embedding=new_embedding):

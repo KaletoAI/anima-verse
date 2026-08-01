@@ -1270,9 +1270,10 @@ async def play_use_item(request: Request, user=Depends(get_current_user)):
 
 @router.post("/play/cast-self")
 async def play_cast_self(request: Request, user=Depends(get_current_user)):
-    """Wirkt einen Spell aus dem Inventar auf den Avatar selbst — über
-    spell_engine.execute_cast (respektiert copy_on_give, Effekt-Item-Übergabe,
-    Cast-Activity). NICHT consume_item (Spell verschwindet sonst trotz copy_on_give)."""
+    """Cast a spell from the inventory on the avatar itself — through
+    spell_engine.execute_cast (honours copy_on_give, effect-item handover, cast
+    activity). NOT consume_item (the spell would vanish despite copy_on_give)."""
+    import asyncio
     from app.core.spell_engine import build_spell_catalog, execute_cast
     avatar = _require_avatar()
     body = await request.json()
@@ -1280,7 +1281,10 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
     spell = next((s for s in build_spell_catalog(avatar) if s.get("id") == item_id), None)
     if not spell:
         raise HTTPException(status_code=404, detail="not a spell or not in inventory")
-    res = execute_cast(avatar, avatar, spell)
+    # Off the event loop: execute_cast sets the spell's cast activity via
+    # set_pose_intent, which can call the pose_normalize LLM and block on the
+    # provider queue. The result is used below, so it is awaited.
+    res = await asyncio.to_thread(execute_cast, avatar, avatar, spell)
     # Make the effect visible as a storyteller line (location_id explicit — the
     # storyteller has no own location, otherwise the fan-out goes nowhere).
     try:
@@ -1687,7 +1691,8 @@ async def play_set_mood(request: Request, user=Depends(get_current_user)):
 
 @router.post("/play/self/activity")
 async def play_set_activity(request: Request, user=Depends(get_current_user)):
-    """Avatar setzt seine eigene Pose/Tätigkeit (freie Pose)."""
+    """The avatar sets its own pose/activity (free-text pose)."""
+    import asyncio
     from app.models.character import (set_pose_intent, is_character_sleeping,
                                       set_is_sleeping, wake_from_offmap)
     avatar = _require_avatar()
@@ -1701,7 +1706,10 @@ async def play_set_activity(request: Request, user=Depends(get_current_user)):
             wake_from_offmap(avatar)
         except Exception:
             pass
-    set_pose_intent(avatar, activity)
+    # Off the event loop: set_pose_intent resolves a pose variant, which calls
+    # the pose_normalize LLM and blocks on the provider queue (up to 3 attempts
+    # x 300 s worker timeout). Running that inline would stall every SSE stream.
+    await asyncio.to_thread(set_pose_intent, avatar, activity)
     return {"ok": True, "activity": activity}
 
 

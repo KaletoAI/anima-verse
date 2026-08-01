@@ -193,7 +193,8 @@ def get_effective_activity_route(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/current-activity")
 async def update_character_current_activity(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert die aktuelle Aktivitaet"""
+    """Update the character's current activity."""
+    import asyncio as _aio
     try:
         data = await request.json()
         user_id = data.get("user_id", "")
@@ -214,9 +215,13 @@ async def update_character_current_activity(character_name: str, request: Reques
                     pass
                 woke = True
 
-        # Freie Pose setzen (kein Library-Matching, kein Auto-Raum-Move mehr —
-        # Raum/Ort bleiben unveraendert, die Pose ist freier Text).
-        set_pose_intent(character_name, activity)
+        # Set the free-text pose (no library matching, no auto room move —
+        # room/location stay unchanged, the pose is free text).
+        # Off the event loop: set_pose_intent resolves a pose variant, which
+        # calls the pose_normalize LLM and blocks on the provider queue (up to
+        # 3 attempts x 300 s worker timeout). Running that inline would stall
+        # every SSE stream.
+        await _aio.to_thread(set_pose_intent, character_name, activity)
 
         return {"status": "success", "character": character_name,
                 "current_activity": activity, "woke": woke,

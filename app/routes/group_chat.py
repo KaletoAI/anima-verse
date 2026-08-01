@@ -740,11 +740,16 @@ async def group_chat(request: Request):
                         "timestamp": utc_now_iso(),
                     })
 
-                # Extract mood + activity from response (save to character)
+                # Extract mood + activity from response (save to character).
+                # Off the event loop: _extract_activity ends in set_pose_intent
+                # -> pose_normalize LLM, which blocks on the provider queue.
+                # This generator is the SSE stream — a blocking call here
+                # stalls every client, and "**I do X**" prose hits that path
+                # routinely, not just in edge cases.
                 try:
                     from app.routes.chat import _extract_mood, _extract_activity
-                    _extract_mood(char_name, full_response)
-                    _extract_activity(char_name, full_response)
+                    await asyncio.to_thread(_extract_mood, char_name, full_response)
+                    await asyncio.to_thread(_extract_activity, char_name, full_response)
                 except Exception:
                     pass
 

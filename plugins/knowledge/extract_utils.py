@@ -332,27 +332,27 @@ def extract_knowledge_from_files(character_name: str,
     max_input_tokens: int = 12000,
     max_output_tokens: int = 1500,
     max_age_days: int = 0) -> Dict[str, Any]:
-    """Liest Dateien aus Ordnern und extrahiert Wissen per LLM (Batch-Modus).
+    """Read files from folders and extract knowledge via LLM (batch mode).
 
     Features:
-    - Batch-Extraktion: Mehrere Dateien pro LLM-Call, gruppiert nach Tag
-    - folder_path kann komma-separiert mehrere Pfade enthalten
-    - exclude_dirs: Komma-separierte Verzeichnisnamen zum Ausschliessen
-    - max_age_days: Nur Dateien beruecksichtigen, die nicht aelter als X Tage sind
-    - Echter Timestamp aus Datei-Inhalt/Name/mtime
-    - Konfigurierbare batch_size und max_input/output_tokens
+    - Batch extraction: several files per LLM call, grouped by day
+    - folder_path may hold several comma-separated paths
+    - exclude_dirs: comma-separated directory names to skip
+    - max_age_days: only consider files not older than X days
+    - Real timestamp taken from file content/name/mtime
+    - Configurable batch_size and max_input/output_tokens
     """
     if not folder_path:
         return {"success": False, "error": "Kein folder_path konfiguriert"}
 
-    # 1. Dateien sammeln
+    # 1. Collect files
     files, folder_paths = _discover_files(folder_path, file_pattern, include_subdirs, exclude_dirs, max_age_days)
     if not files:
         logger.info("Keine Dateien gefunden in %s (%s)", folder_paths, file_pattern)
         return {"success": True, "files_found": 0, "extracted": 0, "cleaned_stale": 0}
     logger.info("%d Dateien gefunden in %s (%s)", len(files), folder_paths, file_pattern)
 
-    # 2. File-Keys und Bereinigung
+    # 2. File keys and cleanup
     file_keys = {f: _make_file_key(f, folder_paths) for f in files}
     current_keys = set(file_keys.values())
 
@@ -360,7 +360,7 @@ def extract_knowledge_from_files(character_name: str,
     if cleaned:
         logger.info("%d alte file_extraction-Eintraege bereinigt", cleaned)
 
-    # 3. mtime-Cache
+    # 3. mtime cache
     mtime_cache, cache_path = _load_mtime_cache(character_name)
     changed_files = []
     skipped_count = 0
@@ -388,17 +388,17 @@ def extract_knowledge_from_files(character_name: str,
             "cached": skipped_count,
         }
 
-    # 4. LLM via Router (Task: extraction)
+    # 4. LLM via router (task: extraction)
     agent_config = get_character_config(character_name)
     if llm_model_override:
         logger.info("llm_model_override ignoriert: Router entscheidet via Task (extraction)")
 
-    _inst = resolve_llm("extraction", character_name=character_name)
+    _inst = resolve_llm("extraction", agent_name=character_name)
     if not _inst:
         return {"success": False, "error": "Kein LLM fuer task=extraction verfuegbar"}
     llm = _inst.create_llm()
 
-    # max_output_tokens am LLM setzen wenn moeglich
+    # Set max_output_tokens on the LLM when supported
     if max_output_tokens and hasattr(llm, 'max_tokens'):
         llm.max_tokens = max_output_tokens
 
@@ -408,7 +408,7 @@ def extract_knowledge_from_files(character_name: str,
     personality = get_character_personality(character_name) or ""
     new_cache = dict(mtime_cache)
 
-    # 5. Dateien lesen und Metadaten sammeln
+    # 5. Read files and collect metadata
     file_infos: List[Dict[str, Any]] = []
     for filepath in changed_files:
         try:
@@ -430,7 +430,7 @@ def extract_knowledge_from_files(character_name: str,
                 "related_char": _detect_related_character(filepath),
             })
 
-            # mtime im Cache aktualisieren
+            # Update the mtime cache
             try:
                 new_cache[fkey] = os.path.getmtime(filepath)
             except OSError:
@@ -438,7 +438,7 @@ def extract_knowledge_from_files(character_name: str,
         except Exception as e:
             logger.info("Fehler beim Lesen von %s: %s", filepath, e)
 
-    # 6. Batches bilden und extrahieren
+    # 6. Build batches and extract
     batches = _build_batches(file_infos, batch_size, max_input_tokens)
     logger.info("%d Dateien in %d Batches aufgeteilt", len(file_infos), len(batches))
 
@@ -464,7 +464,7 @@ def extract_knowledge_from_files(character_name: str,
             ts_info = f" [{', '.join(days[:3])}]"
         logger.info("  -> %d Fakten extrahiert%s", fact_count, ts_info)
 
-    # 7. Fakten pro Tag + related_character gruppiert speichern
+    # 7. Store facts grouped by day + related_character
     day_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for item in all_extracted:
         ts = item.get("timestamp", "")
@@ -494,7 +494,7 @@ def extract_knowledge_from_files(character_name: str,
             related_character=related_char,
             timestamp=group_timestamp)
 
-    # 8. Cache speichern
+    # 8. Persist the cache
     _save_mtime_cache(new_cache, cache_path, current_keys)
 
     extracted_count = len(all_extracted)

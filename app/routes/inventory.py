@@ -696,20 +696,24 @@ async def cast_spell_on_self_route(
     character_name: str,
     item_id: str,
     request: Request) -> Dict[str, Any]:
-    """Wirkt einen Spell aus dem Inventar des Characters auf sich selbst.
+    """Cast a spell from the character's inventory on itself.
 
-    Caster und Target sind beide ``character_name``. Erfolgschance,
-    Item-Verbrauch (copy_on_give), Effekt-Item-Uebergabe (give_item) und
-    Cast-Activity laufen alle ueber spell_engine.execute_cast — gleicher
-    Pfad wie beim Chat-getriggerten Cast, nur ohne Inkantation-Detection.
+    Caster and target are both ``character_name``. Success chance, item
+    consumption (copy_on_give), effect-item handover (give_item) and the cast
+    activity all run through spell_engine.execute_cast — the same path as the
+    chat-triggered cast, just without incantation detection.
     """
+    import asyncio
     from app.core.spell_engine import build_spell_catalog, execute_cast
     catalog = build_spell_catalog(character_name)
     spell = next((s for s in catalog if s["id"] == item_id), None)
     if not spell:
         raise HTTPException(status_code=404,
             detail="Item ist kein Spell oder nicht im Inventar")
-    result = execute_cast(character_name, character_name, spell)
+    # Off the event loop: execute_cast sets the spell's cast activity via
+    # set_pose_intent, which can call the pose_normalize LLM and block on the
+    # provider queue. The result is used below, so it is awaited.
+    result = await asyncio.to_thread(execute_cast, character_name, character_name, spell)
     return {"ok": True,
             "spell_id": spell["id"],
             "spell_name": spell.get("name") or spell["id"],
