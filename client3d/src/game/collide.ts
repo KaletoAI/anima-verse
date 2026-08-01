@@ -156,9 +156,17 @@ function closestOn(p: Point, s: Segment): Point {
 
 const cross = (ax: number, az: number, bx: number, bz: number) => ax * bz - az * bx;
 
-/** Do the two closed segments touch or intersect? Plain orientation test —
- *  collinear overlap counts as a crossing, which is what we want: a move that
- *  runs ALONG the inside of a wall must not be read as free. */
+/**
+ * Does the move `p0 -> p1` run into `s`? Plain orientation test; a collinear
+ * overlap counts too, so a move that runs ALONG the inside of a wall is not
+ * read as free.
+ *
+ * Contact exactly AT `p0` does not count. `p0` is where the figure already
+ * stands, and it can stand on a wall line after a server-side put-back — if
+ * that touch counted, every direction would be a crossing and the figure
+ * would be frozen there for good. Only what lies BEYOND its own position
+ * blocks it.
+ */
 function segmentsCross(p0: Point, p1: Point, s: Segment): boolean {
   const rx = p1.x - p0.x;
   const rz = p1.z - p0.z;
@@ -174,11 +182,13 @@ function segmentsCross(p0: Point, p1: Point, s: Segment): boolean {
     if (r2 < EPS) return false;
     const t0 = (qpx * rx + qpz * rz) / r2;
     const t1 = t0 + (sx * rx + sz * rz) / r2;
-    return Math.max(0, Math.min(t0, t1)) <= Math.min(1, Math.max(t0, t1)) + EPS;
+    const lo = Math.max(0, Math.min(t0, t1));
+    const hi = Math.min(1, Math.max(t0, t1));
+    return hi > EPS && lo <= hi + EPS;
   }
   const t = cross(qpx, qpz, sx, sz) / denom;
   const u = cross(qpx, qpz, rx, rz) / denom;
-  return t >= -EPS && t <= 1 + EPS && u >= -EPS && u <= 1 + EPS;
+  return t > EPS && t <= 1 + EPS && u >= -EPS && u <= 1 + EPS;
 }
 
 /** First segment the straight move `from -> to` runs into, or null. */
@@ -265,9 +275,13 @@ const PUSH_PASSES = 8;
  * THE ORIGIN IS NOT ASSUMED LEGAL. Walking never brings the figure closer to a
  * wall than `radius`, but the server can put it anywhere wall-blind — the
  * put-back after a refused step (`snapPlayerTo`), a teleport, a party pull.
- * A `from` exactly ON a wall line makes every from->goal a crossing, which
- * would freeze the figure in place in all directions for good, so the origin
- * is pushed clear first and everything below is measured from THERE.
+ * So the origin is pushed clear first and everything below is measured from
+ * THERE — but that lift is itself a move and is held to the same rules: it
+ * may not end closer to a wall than the figure stood and it may not cross
+ * one. A `from` sitting exactly ON a wall line is fine either way, because
+ * contact at the figure's own position is not a crossing (`segmentsCross`);
+ * without that exemption every direction would block and the figure would be
+ * frozen there for good.
  *
  * WHAT IS GUARANTEED. Not "`radius` clear of every wall" — that is
  * unreachable in a corridor narrower than the body, and pretending otherwise
@@ -283,11 +297,18 @@ export function clampAgainstWalls(from: Point, to: Point,
   segments: readonly Segment[], radius: number): Point {
   if (!segments.length) return { x: to.x, z: to.z };
 
-  // The origin, pushed clear — but only if that actually helps: in a corridor
-  // narrower than the body the push ends up closer than the figure stood.
+  // The origin, pushed clear — but only if that actually helps. Two ways it
+  // does not: in a corridor narrower than the body the push ends up CLOSER
+  // than the figure stood, and in a niche it cannot resolve (a room hull and
+  // the building contour 0.089 m apart) it ping-pongs straight OVER a wall and
+  // would teleport the figure to the far side — out of the building, for the
+  // niche that matters. The lift is therefore a move like any other and has to
+  // survive the same crossing test; when it does not, the figure keeps its
+  // spot, close to the wall, and the candidates below stay conservative.
   const fromClear = minDistance(from, segments);
   const lifted = pushOut(from, segments, radius, to);
-  const base = minDistance(lifted, segments) >= Math.min(radius, fromClear) - CLEAR_TOL
+  const base = !firstCrossed(from, lifted, segments)
+    && minDistance(lifted, segments) >= Math.min(radius, fromClear) - CLEAR_TOL
     ? lifted : from;
   const need = Math.min(radius, minDistance(base, segments));
 
