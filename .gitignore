@@ -122,6 +122,8 @@ Aufgaben.md
 # fastembed downloads a full HF model cache here (built-in embeddings)
 /models/fastembed/
 voices/*.wav
+# Game audio (music/ambience) — user files, served by /assets/audio
+audio/
 
 # original comfyui workflows
 workflows/ComfyUI-Workflows/

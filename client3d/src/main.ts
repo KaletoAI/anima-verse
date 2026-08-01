@@ -11,6 +11,7 @@ import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState 
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, type DoorMarker } from './game/doors';
+import { getAudio } from './game/audio';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -110,6 +111,11 @@ async function boot() {
     return;
   }
   showLogin(async (u, p) => {
+    // The login click is the guaranteed user gesture — the one moment a
+    // browser lets an AudioContext start. Nothing plays here; audio output is
+    // merely no longer blocked afterwards (task 3 moves this to the title
+    // screen, which is where the gesture will then happen).
+    void getAudio().unlock();
     const user = await api.login(u, p);
     await startApp(user.username);
   });
