@@ -1382,10 +1382,12 @@ async function startApp(username: string) {
    *    from outside — invisible walls there would be the worse bug.
    *  - a scene payload. A legacy procedural tile has no wall vocabulary at
    *    all; there is nothing to derive segments from and it stays as it was.
-   *  - at least one segment on the storey.
-   *
-   * The storey is the AVATAR's (its room's), not `levelFilter`: a player
-   * looking at another floor still walks the walls of their own.
+   *  - a KNOWN storey for the avatar: the one its room is on. Not
+   *    `levelFilter` as a fallback — that is the storey the CAMERA shows, and
+   *    clamping a figure against the walls of a floor it is not on is worse
+   *    than not clamping at all. No room resolved (a poll in flight, a stale
+   *    id) means no collision for those few frames.
+   *  - at least one segment on that storey.
    *
    * Guided movements are NOT affected — the walking hook returns early for a
    * lift ride and for a doorway walk, both of which aim at a point the route
@@ -1398,7 +1400,8 @@ async function startApp(username: string) {
     const scene = scenes.get(tile.loc.id);
     if (!scene) return null;
     const room = avatarRoomId(tile);
-    const level = (room ? tile.roomLevels.get(room) : undefined) ?? tile.levelFilter;
+    const level = room ? tile.roomLevels.get(room) : undefined;
+    if (level === undefined) return null;
     let byLevel = wallCache.get(tile.loc.id);
     if (!byLevel) {
       byLevel = new Map();
@@ -1406,7 +1409,13 @@ async function startApp(username: string) {
     }
     let segments = byLevel.get(level);
     if (!segments) {
-      segments = wallSegments(scene, level);
+      // The payload is TILE-LOCAL (world metres around the tile centre), the
+      // figure position is absolute — so the centre is baked in here, exactly
+      // as `mountScene` bakes it into room centres, exits, markers and the
+      // wall mids of the culling. Without it the segments of a building on
+      // grid (4,2) sit 45 m from the figure and nothing ever blocks.
+      segments = wallSegments(scene, level,
+        { x: tile.center.x, z: tile.center.z });
       byLevel.set(level, segments);
     }
     // The radius comes from the SCENE's `k`, the same number the doorways are

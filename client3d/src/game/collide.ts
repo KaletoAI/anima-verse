@@ -53,6 +53,10 @@ export const BODY_RADIUS_M = 0.25;
  *  enough to never catch, far too little to slip past a wall end. */
 export const DOOR_EASE_M = 0.12;
 
+/** Slack of the clearance guarantee (world metres) — floating-point noise
+ *  only, well below anything the payload can express. */
+const CLEAR_TOL = 1e-6;
+
 /** Two wall ends this close together count as ONE joint (world metres). The
  *  payload rounds its coordinates to 4 decimals and a contour piece meets a
  *  room hull through a projection, so exact equality is not available; a
@@ -80,21 +84,33 @@ export function bodyRadius(k: number): number {
 }
 
 /**
- * The blocking wall lines of ONE storey, with the door gaps already widened.
+ * The blocking wall lines of ONE storey, in WORLD coordinates, with the door
+ * gaps already widened.
  *
- * Everything the payload lists for `level` becomes a segment; the only work
- * done here is the ease: a wall end that no OTHER wall end meets is a doorway
- * cheek (or the free end of a stub), and it is pulled back by
- * `DOOR_EASE_M * k`. Corners and the sill/head/glass joints of a window share
- * their endpoints, so they keep their full length.
+ * `origin` is the tile centre and is NOT optional in practice: the payload is
+ * tile-LOCAL — `scene_recipe._w()` yields world metres around the centre of
+ * the tile, which is why every other consumer adds `tile.center` (room rects,
+ * room centres, overlay zones, wall mids for the culling, elevator stops,
+ * exits, markers). Positions the clamp is compared against come from
+ * `npcs.positionOf()` and are absolute, so without the offset the segments of
+ * a building on grid (4,2) sit 45 m away from it and nothing ever blocks.
+ *
+ * Apart from the offset the only work done here is the ease: a wall end that
+ * no OTHER wall end meets is pulled back by `DOOR_EASE_M * k`. That is a
+ * FREE END, not literally a door — a doorway cheek is the case it exists for,
+ * but a wall stub that simply ends in the room (and, in a payload with a
+ * single wall on a storey, both of its corners) is treated the same. Corners
+ * of a closed hull and the sill/head/glass joints of a window share their
+ * endpoints and keep their full length.
  */
 export function wallSegments(payload: ScenePayload | null | undefined,
-  level: number): Segment[] {
+  level: number, origin: Point = { x: 0, z: 0 }): Segment[] {
   const walls = payload?.walls ?? [];
   const raw: Segment[] = [];
   for (const w of walls) {
     if (!w || w.level !== level) continue;
-    const seg = { ax: w.from[0], az: w.from[1], bx: w.to[0], bz: w.to[1] };
+    const seg = { ax: origin.x + w.from[0], az: origin.z + w.from[1],
+                  bx: origin.x + w.to[0], bz: origin.z + w.to[1] };
     if (!Number.isFinite(seg.ax) || !Number.isFinite(seg.az)
       || !Number.isFinite(seg.bx) || !Number.isFinite(seg.bz)) continue;
     if (Math.hypot(seg.bx - seg.ax, seg.bz - seg.az) < EPS) continue;
@@ -185,37 +201,28 @@ function slideAlong(from: Point, to: Point, s: Segment): Point {
   return { x: from.x + ux * along, z: from.z + uz * along };
 }
 
-/**
- * Clamp a steering goal so the way there crosses no wall.
- *
- * Same shape as the cell-boundary clamp in `walk.ts`: the figure does not stop
- * dead at a wall, it SLIDES — the component of the move parallel to the wall
- * survives, only the component into it is dropped. Three stages:
- *
- *  1. Tunnel guard. A goal on the far side of a wall is projected onto that
- *     wall's direction. Done twice, so a slide that runs into a second wall
- *     (a corner) is caught as well.
- *  2. Push-out. Whatever is left is pushed out of every wall's capsule until
- *     it stands `radius` clear. Repeated a few times so a corner settles.
- *  3. Last word. If the pushing shoved the goal through a wall after all
- *     (a corner, a gap thinner than the body), the figure stands still — a
- *     stopped avatar is recoverable, one outside the building is not.
- *
- * `from` is the figure's current position and is assumed wall-legal; it stays
- * that way because the goal never gets closer than `radius` to a wall.
- */
-export function clampAgainstWalls(from: Point, to: Point,
-  segments: readonly Segment[], radius: number): Point {
-  if (!segments.length) return { x: to.x, z: to.z };
-  let p: Point = { x: to.x, z: to.z };
-
-  for (let pass = 0; pass < 2; pass += 1) {
-    const hit = firstCrossed(from, p, segments);
-    if (!hit) break;
-    p = slideAlong(from, p, hit);
+/** Distance of a point to the nearest wall line. */
+function minDistance(p: Point, segments: readonly Segment[]): number {
+  let best = Infinity;
+  for (const s of segments) {
+    const c = closestOn(p, s);
+    best = Math.min(best, Math.hypot(p.x - c.x, p.z - c.z));
   }
+  return best;
+}
 
-  for (let pass = 0; pass < 3; pass += 1) {
+/**
+ * Push a point out of every wall capsule until it stands `radius` clear.
+ *
+ * An ITERATION, not a solution: between two walls closer together than twice
+ * the radius it cannot converge and just ping-pongs, which is why the caller
+ * checks the result instead of trusting it. `hint` decides the side when the
+ * point sits exactly ON a wall line, where no side information exists.
+ */
+function pushOut(start: Point, segments: readonly Segment[], radius: number,
+  hint: Point): Point {
+  let p = start;
+  for (let pass = 0; pass < PUSH_PASSES; pass += 1) {
     let moved = false;
     for (const s of segments) {
       const c = closestOn(p, s);
@@ -229,20 +236,74 @@ export function clampAgainstWalls(from: Point, to: Point,
         nx = dx / d;
         nz = dz / d;
       } else {
-        // Dead on the wall line: push towards the side the figure is on.
         const ux = s.bx - s.ax;
         const uz = s.bz - s.az;
         const len = Math.hypot(ux, uz) || 1;
         nx = uz / len;
         nz = -ux / len;
-        if ((from.x - c.x) * nx + (from.z - c.z) * nz < 0) { nx = -nx; nz = -nz; }
+        if ((hint.x - c.x) * nx + (hint.z - c.z) * nz < 0) { nx = -nx; nz = -nz; }
       }
       p = { x: c.x + nx * radius, z: c.z + nz * radius };
       moved = true;
     }
     if (!moved) break;
   }
-
-  if (firstCrossed(from, p, segments)) return { x: from.x, z: from.z };
   return p;
+}
+
+/** How often the push-out may go round. Enough for a corner (two walls settle
+ *  in two), bounded because a corridor narrower than the body never settles. */
+const PUSH_PASSES = 8;
+
+/**
+ * Clamp a steering goal so the way there crosses no wall.
+ *
+ * Same shape as the cell-boundary clamp in `walk.ts`: the figure does not stop
+ * dead at a wall, it SLIDES — the component of the move parallel to the wall
+ * survives, only the component into it is dropped.
+ *
+ * THE ORIGIN IS NOT ASSUMED LEGAL. Walking never brings the figure closer to a
+ * wall than `radius`, but the server can put it anywhere wall-blind — the
+ * put-back after a refused step (`snapPlayerTo`), a teleport, a party pull.
+ * A `from` exactly ON a wall line makes every from->goal a crossing, which
+ * would freeze the figure in place in all directions for good, so the origin
+ * is pushed clear first and everything below is measured from THERE.
+ *
+ * WHAT IS GUARANTEED. Not "`radius` clear of every wall" — that is
+ * unreachable in a corridor narrower than the body, and pretending otherwise
+ * is how a figure ends up standing 2 mm inside a wall. The promise is
+ * relative: the result never crosses a wall on the way, and is never CLOSER
+ * to one than the figure already was (capped at `radius`). Three candidates
+ * are tried in order — pushed goal, plain slide, the origin itself — and the
+ * first that keeps the promise wins. The origin always keeps it, so there is
+ * always an answer, and a too-narrow corridor stays walkable instead of
+ * freezing.
+ */
+export function clampAgainstWalls(from: Point, to: Point,
+  segments: readonly Segment[], radius: number): Point {
+  if (!segments.length) return { x: to.x, z: to.z };
+
+  // The origin, pushed clear — but only if that actually helps: in a corridor
+  // narrower than the body the push ends up closer than the figure stood.
+  const fromClear = minDistance(from, segments);
+  const lifted = pushOut(from, segments, radius, to);
+  const base = minDistance(lifted, segments) >= Math.min(radius, fromClear) - CLEAR_TOL
+    ? lifted : from;
+  const need = Math.min(radius, minDistance(base, segments));
+
+  // Tunnel guard: a goal on the far side of a wall keeps only its component
+  // ALONG that wall. Twice, so a slide into a second wall (a corner) is caught.
+  let slid: Point = { x: to.x, z: to.z };
+  for (let pass = 0; pass < 2; pass += 1) {
+    const hit = firstCrossed(base, slid, segments);
+    if (!hit) break;
+    slid = slideAlong(base, slid, hit);
+  }
+
+  for (const candidate of [pushOut(slid, segments, radius, base), slid, base]) {
+    if (firstCrossed(base, candidate, segments)) continue;
+    if (minDistance(candidate, segments) < need - CLEAR_TOL) continue;
+    return candidate;
+  }
+  return base;
 }
