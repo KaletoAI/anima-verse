@@ -649,6 +649,21 @@ SECTIONS = {
             "imagegen_default": {"type": "imagegen_select", "label": "Default ImageGen"},
         },
     },
+    "game": {
+        "label": "Game",
+        "icon": "🎮",
+        "fields": {
+            "travel_seconds_per_cell": {
+                "type": "int",
+                "label": "Journey seconds per cell",
+                "default": 60,
+                "min": 1,
+                "max": 3600,
+                "description": "Game seconds one journey cell takes. Existing journeys "
+                               "keep the pace they started with.",
+            },
+        },
+    },
     "ui": {
         "label": "UI / Themes & Image Downscaling",
         "icon": "🎨",

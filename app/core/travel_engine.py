@@ -24,9 +24,34 @@ from app.core.timeutils import parse_iso
 
 logger = get_logger("travel_engine")
 
-# How many GAME seconds one grid cell takes. One knob for the whole world;
-# it becomes a configurable game setting with the game-settings stage.
+# How many GAME seconds one grid cell takes by DEFAULT. The world setting
+# `game.travel_seconds_per_cell` overrides it (see get_seconds_per_cell);
+# this stays the fallback for an unset or unusable setting.
 GAME_SECONDS_PER_CELL = 60.0
+_MIN_SECONDS_PER_CELL = 1.0
+_MAX_SECONDS_PER_CELL = 3600.0
+
+
+def get_seconds_per_cell() -> float:
+    """GAME seconds one grid cell takes, from the world setting
+    `game.travel_seconds_per_cell`, clamped to [1, 3600]; anything unusable
+    (missing, non-numeric, bool, NaN) falls back to GAME_SECONDS_PER_CELL.
+
+    Read at journey START only: the pace is written onto the journey, so a
+    running journey keeps the tempo it started with and clients keep deriving
+    the same position from the same payload.
+    """
+    from app.core import config
+    raw = config.get("game.travel_seconds_per_cell", GAME_SECONDS_PER_CELL)
+    if isinstance(raw, bool):
+        return GAME_SECONDS_PER_CELL
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return GAME_SECONDS_PER_CELL
+    if not math.isfinite(value):
+        return GAME_SECONDS_PER_CELL
+    return min(max(value, _MIN_SECONDS_PER_CELL), _MAX_SECONDS_PER_CELL)
 
 
 def journey_state(path: List[str], started_at_game: str, now_game: datetime,
@@ -107,9 +132,12 @@ def start_journey(character_name: str, target_id: str) -> Dict[str, Any] | None:
     if not path or len(path) < 2:
         return None
 
+    # The pace is fixed at the START and travels with the journey — changing
+    # the world setting mid-route never re-times someone already walking.
+    seconds_per_cell = get_seconds_per_cell()
     journey = {"target": target_id, "path": path,
                "started_at_game": game_now_iso(),
-               "seconds_per_cell": GAME_SECONDS_PER_CELL}
+               "seconds_per_cell": seconds_per_cell}
     profile = get_character_profile(character_name)
     profile["journey"] = journey
     profile["movement_target"] = target_id
@@ -126,7 +154,7 @@ def start_journey(character_name: str, target_id: str) -> Dict[str, Any] | None:
         _publish_state("travel_started", character_name,
                        target_id=target_id, path=path,
                        eta_game=journey_state(path, journey["started_at_game"],
-                                              _game_now(), GAME_SECONDS_PER_CELL)["eta_game"])
+                                              _game_now(), seconds_per_cell)["eta_game"])
     except Exception:
         pass
     logger.info("Journey started: %s -> %s (%d cells)",

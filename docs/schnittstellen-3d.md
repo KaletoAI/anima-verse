@@ -540,8 +540,10 @@ Feld **`travel`** — `null`, solange keine Reise läuft:
 - **Freeze:** steht die Spieluhr, stehen alle Reisen. `frac`/`progress_cells`
   bleiben konstant, `cell_seconds_real` ist `null` — genau dann darf nicht
   extrapoliert werden.
-- `seconds_per_cell` ist heute 60 SPIEL-Sekunden pro Zelle (eine Welt-
-  Stellschraube, kein Client-Wissen); der Client rechnet ausschließlich mit
+- `seconds_per_cell` ist die Welt-Einstellung `game.travel_seconds_per_cell`
+  (Admin → Game, Default 60 SPIEL-Sekunden pro Zelle, geklemmt auf 1…3600).
+  Sie wird beim START einer Reise auf die Reise geschrieben — laufende Reisen
+  behalten ihr Tempo. Kein Client-Wissen; der Client rechnet ausschließlich mit
   `cell_seconds_real`.
 - **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Restzeit-
   Anzeigen rechnen daher `(len(path)−1 − progress_cells) × cell_seconds_real`
