@@ -11,6 +11,7 @@ Public API:
 Returns a kwargs dict that can be passed straight into
 ``render('chat/agent_thought.md', **ctx)``.
 """
+import re
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, game_local_now
@@ -26,11 +27,31 @@ _OUTFIT_AFTER_LOCATION_MINUTES = 10
 # Hours since last retrospect that count as "boost — time to reflect".
 _RETROSPECT_BOOST_HOURS = 24
 # Thought journal (plan-thought-journal.md): how many of the character's own
-# last thoughts go back into the next thought prompt, and the hard character
-# budget for the whole block. Module constants on purpose — config sprawl
-# only once there is a real tuning need.
+# last thoughts go back into the next thought prompt, and how much of EACH of
+# them. Module constants on purpose — config sprawl only once there is a real
+# tuning need.
+#
+# Two decisions, both measured (task A1.1 + the A1.2b follow-up):
+#
+# HOW MUCH — a journal entry is the character's whole narrated turn (hundreds of
+# characters of finished prose). Handed back verbatim it invites the model to
+# copy it instead of continuing it: 20 of 25 verbatim prompt→answer blocks of
+# >=100 characters sat in exactly this section, up to 1199 characters long, and
+# the copied blocks were long (P90 125 words). A ~45-word fragment is too short
+# to pass as a finished answer worth reusing.
+#
+# WHICH END — the TAIL. A narrated turn opens with scene setting and ends with
+# the intention ("… and I decide to come back tomorrow"). The block exists to
+# answer "what was I in the middle of", so it must carry the intention. Measured
+# over 308 long journal entries, of the 169 that contain an intention marker at
+# all, a 300-character CLOSING excerpt carries it in 99 (59 %) — against 42
+# (25 %) for a 198-character opening excerpt and 38 (22 %) for head+tail split.
 THOUGHT_RECENT_N = 3
-THOUGHT_RECENT_CHARS = 1200
+THOUGHT_RECENT_TAIL_CHARS = 300
+# Derived: the whole block can never exceed N excerpts plus their "- " prefix
+# and joining newline. Kept as a constant because callers and checks assert
+# against the rendered block as a whole.
+THOUGHT_RECENT_CHARS = THOUGHT_RECENT_N * (THOUGHT_RECENT_TAIL_CHARS + 3)
 
 
 def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str, Any]:
@@ -499,15 +520,64 @@ def _build_effects_block(character_name: str) -> str:
         return ""
 
 
+# A sentence end: closing punctuation, optionally followed by closing quotes or
+# brackets, at a word boundary. The quote tail matters here — narrated turns are
+# full of `sagte ich."` and `"Komm her."` and a boundary missed there costs a
+# whole sentence.
+_SENTENCE_END = re.compile(r"[.!?…][\"»”'’)\]]*(?=\s|$)")
+
+
+def _closing_excerpt(text: str, limit: int) -> str:
+    """The END of one journal entry, at most ``limit`` characters.
+
+    The tail is what the block is for: a narrated turn opens with scene setting
+    and closes with the intention the character was left holding. So the excerpt
+    grows backwards from the end — as many WHOLE sentences as fit, and a hard
+    cut at a word boundary only when not even the last sentence fits.
+
+    The leading "… " marks where text was dropped (the beginning) and is the
+    visible signal that this is a fragment of an earlier turn, not a finished
+    piece of prose to be reused. Short entries are returned untouched.
+    """
+    if len(text) <= limit:
+        return text
+    budget = limit - 2  # room for the leading "… " marker
+    # Every position a sentence STARTS at (right behind a sentence end).
+    starts = []
+    for m in _SENTENCE_END.finditer(text):
+        s = m.end()
+        while s < len(text) and text[s].isspace():
+            s += 1
+        if s < len(text):
+            starts.append(s)
+    # The earliest of those whose tail still fits = the most whole sentences.
+    fitting = [s for s in starts if len(text) - s <= budget]
+    if fitting:
+        return "… " + text[min(fitting):]
+    # Not even the last sentence fits — cut hard. Move to the next word start so
+    # the fragment doesn't begin inside a word, unless that would cost more than
+    # half the budget (one very long word): the "… " already says it's a cut.
+    cut = len(text) - budget
+    space = text.find(" ", cut)
+    if space != -1 and len(text) - (space + 1) >= budget // 2:
+        cut = space + 1
+    return "… " + text[cut:].lstrip()
+
+
 def recent_thoughts_block(character_name: str) -> str:
-    """The character's own last thoughts, OLDEST FIRST — one line each.
+    """The character's own last thoughts, OLDEST FIRST — one closing excerpt each.
 
     Newest last so the prompt reads chronologically into the present moment.
-    Two hard limits, both module constants: at most ``THOUGHT_RECENT_N``
-    entries and ``THOUGHT_RECENT_CHARS`` characters overall; a single very
-    long thought is truncated rather than dropped, and older entries fall away
-    before newer ones. Empty journal → empty string, and the template then
-    renders no block at all.
+    Of each entry only its END is handed over, at most
+    ``THOUGHT_RECENT_TAIL_CHARS`` characters (see ``_closing_excerpt``) — that
+    is where the intention of a narrated turn sits. At most ``THOUGHT_RECENT_N``
+    entries are rendered, so the whole block stays within the derived
+    ``THOUGHT_RECENT_CHARS``. A long thought is shortened, never dropped.
+    Empty journal → empty string, and the template then renders no block at
+    all.
+
+    The journal itself keeps the full text — only this prompt-facing handover
+    is condensed.
 
     Public because the smoke checks it directly; it is otherwise only called
     from ``build_thought_context``.
@@ -521,25 +591,12 @@ def recent_thoughts_block(character_name: str) -> str:
     if not rows:
         return ""
     lines: List[str] = []
-    used = 0
-    # rows are newest first — walk them that way so the NEWEST thought gets
-    # the budget, then flip the result.
+    # rows are newest first — flip at the end so the block reads oldest first.
     for row in rows:
         text = " ".join((row.get("content") or "").split())
         if not text:
             continue
-        # The budget counts the RENDERED block: the "- " prefix and the
-        # newline joining this line to the previous one belong to it.
-        overhead = 2 + (1 if lines else 0)
-        room = THOUGHT_RECENT_CHARS - used - overhead
-        if room <= 0:
-            break
-        if len(text) > room:
-            text = text[:room - 1].rstrip() + "…"
-            if len(text) <= 1:
-                break
-        lines.append(f"- {text}")
-        used += overhead + len(text)
+        lines.append(f"- {_closing_excerpt(text, THOUGHT_RECENT_TAIL_CHARS)}")
     return "\n".join(reversed(lines))
 
 

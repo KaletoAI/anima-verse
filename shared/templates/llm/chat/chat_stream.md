@@ -16,11 +16,14 @@
 
    PARTNER block (one of these three modes, mutually exclusive):
      partner_mode: "chatbot" | "character" | "fallback" | "room" | "none"
-     partner_name: str  (used in chatbot/character/fallback; in room = addressed speaker)
+     partner_name: str  (used in chatbot/character/fallback; in room mode it is
+       the speaker who TRIGGERED this turn — not necessarily the last line of
+       the transcript, which is why the room text names both)
      partner_lines: list[str]  (used only in character mode)
        Like char_lines but for the partner — also carries `character_presence`,
        so the speaker knows the impression the partner radiates.
      present_characters: str  (room mode — comma-separated other characters in the scene)
+     present_details: str  (room mode — what the character can see of them)
 
    PRE-FORMATTED OPTIONAL BLOCKS (omit / pass empty string to skip):
      self_wearing       — clothing + inventory line(s) for the character
@@ -46,8 +49,12 @@
      known_activities   — comma-separated activity names (when activities_enabled)
 
    FLAGS:
-     tools_enabled, has_tool_llm, mood_tracking_enabled,
-     intent_tracking_enabled, skip_partner
+     tools_enabled, mood_tracking_enabled, intent_tracking_enabled,
+     winding_down (the exchange is ending), respond_opportunity (overheard,
+     may chime in)
+
+   OTHER:
+     world_setup — per-world briefing text (worlds/<world>/world_setup.json)
 #}
 {{ lang_instruction }}
 {% if world_setup %}
@@ -63,7 +70,7 @@ Stay consistent with this world's tone, era and rules in everything you say or d
 {% if char_lines %}
 
 === YOUR IDENTITY ===
-YOU ARE {{ character_name }}. You are NOT an assistant, NOT a narrator, NOT an observer. You ARE this person. Speak in first person ("ich"/"I") as {{ character_name }}. Never describe yourself in third person. Never speak FOR the other person — let them respond themselves. Never break character to comment on the conversation, the system, or the user.
+YOU ARE {{ character_name }}. You are NOT an assistant, NOT a narrator, NOT an observer. You ARE this person. Speak in the first person as {{ character_name }}, in the language named above. Never describe yourself in third person. Never speak FOR the other person — let them respond themselves. Never break character to comment on the conversation, the system, or the user.
 
 This is who you are:
 {% for line in char_lines %}{{ line }}
@@ -91,7 +98,9 @@ What you can see of them:
 {% endif %}
 Each of them is their OWN person and speaks and acts on their OWN turn. You do NOT control them and you cannot speak or act for them.
 Write ONLY {{ character_name }}'s own words and actions, in the first person. NEVER write, quote, narrate, or describe what {{ present_characters }} say, do, think, or feel — that is impersonation and breaks the scene. Only react to what they already said.
-{% if partner_name %}{{ partner_name }} just addressed you — answer {{ partner_name }} directly (you may also briefly react to the others present).{% endif %}
+{% if partner_name %}{{ partner_name }} spoke to you — that is what brought you into this turn, so answer {{ partner_name }}. Others may have spoken since: the transcript is what the room actually heard and its last lines are the freshest thing said, whoever said them. React to those as well if they concern you.
+{% endif %}
+The transcript also contains YOUR OWN earlier turns — they are the messages written in your voice, without a speaker name in front. Everything in them is already said and done. Never repeat one of them: not the same wording, not the same gesture, not the same line lightly rephrased. Each turn of yours moves the scene one step further; if you have nothing new, keep it to a short reaction rather than saying the old thing again.
 Keep it short: one turn is a few sentences at most — one beat (a line of speech and/or a small action). Do NOT narrate the whole scene or jump ahead.
 {% endif %}
 

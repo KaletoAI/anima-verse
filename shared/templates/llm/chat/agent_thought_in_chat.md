@@ -15,6 +15,7 @@
 
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block          — active status modifiers (drunk, exhausted, …)
+     state_flags_block      — ongoing state flags (situation line)
      present_people_block   — characters in the same ROOM (visible details)
      elsewhere_block        — characters in OTHER rooms of this location
      alone_here             — True only when it is CERTAIN nobody else is here
@@ -23,11 +24,13 @@
      room_items_block       — visible items in the current room
      inventory_block        — what the character is carrying
      recent_chat_block      — last 3 chat messages with the avatar
-     recent_thoughts        — this character's OWN last thoughts (private)
+     recent_thoughts        — how this character's OWN last thoughts ENDED,
+                              short closing excerpts (private)
      inbox_block            — unread messages from any sender
      events_block           — acute events at location
      commitments_block      — open promises
      tools_hint             — tool-format hint
+     lang_instruction       — which language this character speaks
 #}
 You are {{ character_name }}.
 {% if personality %}Personality: {{ personality }}{% endif %}
@@ -86,7 +89,11 @@ Current situation:
 {% endif %}
 {% if recent_thoughts %}
 
-=== Your recent thoughts (private — only you know them) ===
+=== Where you left off (private — only you know this) ===
+Each line below is only the LAST part of one of your own earlier turns, oldest
+first; the leading "…" is where the rest was cut away. They tell you what you
+were left holding — NOT text to work from. Everything in them has already
+happened. Do not reuse a sentence, a phrase or an image from these lines.
 {{ recent_thoughts }}
 {% endif %}
 {% if events_block %}
