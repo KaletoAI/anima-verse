@@ -131,6 +131,11 @@
 #hud .hud-panel.hud-flash {
   animation-name: hud-flash-gold;
 }
+/* The auto-shown chat fades in AND pulses (hud.css). Keep both names here, or
+   the gold swap above would replace the fade instead of joining it. */
+#hud .hud-panel.hud-chat.hud-flash {
+  animation-name: hud-chat-in, hud-flash-gold;
+}
 @media (prefers-reduced-motion: reduce) {
   #hud .hud-panel.hud-flash { outline-color: var(--hud-gold); }
 }

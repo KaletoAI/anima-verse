@@ -12,6 +12,10 @@
  * itself. The `photoDialog` slot is deliberately NOT set — the 📷 scene-photo
  * button is absent in HUD v1 (the image-gen dialog lives in the game-admin
  * UI); open point for stage 6.
+ *
+ * The CHAT panel additionally runs in an auto mode (E3 acceptance) — it shows
+ * itself when something is said and withdraws when the room stays silent; see
+ * the block around CHAT_IDLE_MS below. Self/Others stay purely manual.
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -36,13 +40,39 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string }> = [
   { id: 'others', icon: 'others', title: 'Others' },
 ];
 
+/** Quiet time after which an unpinned chat panel withdraws. Long enough to
+ *  read the line that brought it up and start typing, short enough that a
+ *  silent room clears the view without anyone reaching for the rail. Roughly
+ *  four poll intervals (5 s), so a late answer still counts as "the
+ *  conversation goes on" and not as a fresh interruption. */
+const CHAT_IDLE_MS = 20000;
+/** The idle timeout ran out while the panel was still in use (focus inside it,
+ *  or one of its picker modals open) — look again after this. */
+const CHAT_BUSY_RECHECK_MS = 5000;
+
 export function Hud({ avatar }: { avatar: string }) {
   const { t } = useI18n();
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false,
   });
+  /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
+  const chatOpen = useRef(open.chat);
+  chatOpen.current = open.chat;
+  /**
+   * The chat panel knows two modes, and the rail switches between them:
+   * unpinned (the auto mode — shows itself on a new line, withdraws when
+   * idle) and pinned open (stays until it is closed again). ONE rail click
+   * decides it: opening by hand pins, closing unpins — the auto state is
+   * simply discarded, there is no three-click cycle to learn. Closing keeps
+   * the auto SHOW alive on purpose: "away for now" is not "never again", and
+   * the next spoken line brings the panel back.
+   */
+  const [chatPinned, setChatPinned] = useState(false);
+  /** the rendered chat section — for the focus check of the idle timeout */
+  const chatRef = useRef<HTMLElement | null>(null);
   const toggle = useCallback((id: PanelId) => {
+    if (id === 'chat') setChatPinned(!chatOpen.current);
     setOpen((o) => ({ ...o, [id]: !o[id] }));
   }, []);
 
@@ -101,9 +131,11 @@ export function Hud({ avatar }: { avatar: string }) {
   // open panel therefore gets a one-shot flash of its edge instead (0.6 s,
   // hud.css/theme-fantasy.css). The press is always answered, never silently
   // swallowed.
-  const chatOpen = useRef(open.chat);
-  chatOpen.current = open.chat;
-  /** counts presses onto an ALREADY open chat; only drives the flash below */
+  //
+  // F does NOT pin the panel: pressing it means "talk to that one", not "keep
+  // this window forever". While it matters, `talkTarget` holds the panel open
+  // anyway, and typing does too — see the idle block below.
+  /** counts hails onto an ALREADY open chat; drives the flash below */
   const [chatHail, setChatHail] = useState(0);
   const [chatFlash, setChatFlash] = useState(false);
   useEffect(() => {
@@ -123,6 +155,56 @@ export function Hud({ avatar }: { avatar: string }) {
     const off = window.setTimeout(() => setChatFlash(false), 700);
     return () => { cancelAnimationFrame(raf); window.clearTimeout(off); };
   }, [chatHail]);
+
+  // Auto SHOW (E3 acceptance): a new line in the room brings the chat up. The
+  // detection rides on the ONE poll above — line count plus the last line's
+  // timestamp — instead of a second subscription.
+  //
+  // Two cases deliberately do NOT count as new, they only set the baseline:
+  // the FIRST payload after mount (otherwise the chat pops open on every page
+  // load, which is the opposite of what the auto mode is for) and a room
+  // change (walking into a room with an older transcript is not somebody
+  // speaking). A room whose transcript then grows is a real line again.
+  const seenScene = useRef<{ room: string; stamp: string } | null>(null);
+  const sceneRoom = data?.room_id || '';
+  const lastLine = data?.scene?.length ? data.scene[data.scene.length - 1] : null;
+  const sceneStamp = data ? `${data.scene?.length ?? 0}|${lastLine?.ts || ''}` : '';
+  useEffect(() => {
+    if (!sceneStamp) return;                        // no payload yet
+    const prev = seenScene.current;
+    seenScene.current = { room: sceneRoom, stamp: sceneStamp };
+    if (!prev || prev.room !== sceneRoom) return;   // first load / room change
+    if (prev.stamp === sceneStamp) return;          // same transcript, silence
+    if (!chatOpen.current) setOpen((o) => ({ ...o, chat: true }));
+    // Same one-shot pulse the talk key uses: an appearing panel announces
+    // itself once instead of just materialising in the corner.
+    setChatHail((n) => n + 1);
+  }, [sceneRoom, sceneStamp]);
+
+  // Auto HIDE: after CHAT_IDLE_MS in which nothing happened — and only while
+  // nothing points at the chat. Every dependency of this effect restarts the
+  // window, which is precisely what "idle" means here: `chatHail` counts every
+  // new line and every talk key, `open.chat` the panel coming up, and
+  // talkTarget/elevatorOpen are standing offers that must not be answered by a
+  // vanishing panel. A pinned panel is not this effect's business at all.
+  useEffect(() => {
+    if (!open.chat || chatPinned) return;
+    if (game.talkTarget || game.elevatorOpen) return;
+    let timer = 0;
+    function expire() {
+      // Still in use? Typing in the composer, or one of its picker modals open
+      // (they portal to document.body, and unmounting the panel would tear the
+      // open picker down with it). Wait and look again.
+      if (chatRef.current?.contains(document.activeElement)
+          || document.querySelector('.ga-modal-backdrop')) {
+        timer = window.setTimeout(expire, CHAT_BUSY_RECHECK_MS);
+        return;
+      }
+      setOpen((o) => ({ ...o, chat: false }));
+    }
+    timer = window.setTimeout(expire, CHAT_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open.chat, chatPinned, chatHail, game.talkTarget, game.elevatorOpen]);
 
   const panelHead = (id: PanelId, icon: IconName, title: string) => (
     <header className="hud-panel-head">
@@ -167,7 +249,8 @@ export function Hud({ avatar }: { avatar: string }) {
       </nav>
 
       {open.chat && (
-        <section className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}>
+        <section ref={chatRef}
+          className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}>
           {panelHead('chat', 'chat', avatarName || '—')}
           <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
             hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom} />

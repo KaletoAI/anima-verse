@@ -143,6 +143,26 @@
   height: 680px;
   max-width: min(calc(100vw - 90px), max(420px, calc(50vw - 232px)));
   max-height: calc(100vh - 70px);
+  /* Auto mode (E3): the chat comes and goes on its own, so its arrival gets a
+     short fade-and-rise instead of a hard cut. Only the appearance is
+     animated — the panel leaves by unmounting, and holding a React subtree
+     alive purely for an exit animation is not worth the rebuild. */
+  animation: hud-chat-in 150ms ease-out 1;
+}
+@keyframes hud-chat-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+/* Both at once: the auto-shown panel also pulses its edge (see the flash rules
+   below). The shorthand of a single-class rule would drop one of the two, so
+   the combination names both — theme-fantasy.css swaps the pulse keyframes on
+   this same selector. */
+#hud .hud-panel.hud-chat.hud-flash {
+  animation: hud-chat-in 150ms ease-out 1, hud-flash 0.6s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  #hud .hud-chat { animation-duration: 0.01s; }
+  #hud .hud-panel.hud-chat.hud-flash { animation-duration: 0.01s, 0.01s; }
 }
 
 /* ---- Bottom centre: talk prompt above the character plaque (E3-T1/T5) ----
