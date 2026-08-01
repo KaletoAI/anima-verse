@@ -66,7 +66,7 @@ def log_llm_call(
     """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
     Args:
-        task: kind of call (chat_stream, image_prompt, social_reaction, etc.)
+        task: kind of call (chat_stream, image_prompt, extraction, etc.)
         model: model name (e.g. mistral:latest)
         agent_name: character name
         provider: provider name (e.g. OllamaLocal, OpenAI-API)

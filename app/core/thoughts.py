@@ -243,9 +243,8 @@ class ThoughtRunner:
         now = utc_now()
         time_of_day = now.strftime("%H:%M")
 
-        # LLM und Tools erstellen (via Router, Task aus llm_task-Parameter,
-        # default "thought"). Sub-Tasks wie "thought_greeting" fallen automatisch
-        # auf "thought" zurueck wenn nicht explizit geroutet.
+        # Build LLM and tools (via the router, task from the llm_task
+        # parameter, default "thought").
         _thought_inst = resolve_llm(llm_task, agent_name=character_name)
         llm = _thought_inst.create_llm() if _thought_inst else None
         if not llm:

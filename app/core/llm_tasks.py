@@ -45,14 +45,12 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # "extraction" routing through resolve_llm's parent fallback as long as it is
     # not assigned separately.
     "extraction_chat_state": {"label": "Chat State Extract (Outfit/Pose/Stats)", "priority": Priority.NORMAL, "category": "tool"},
-    "social_reaction":    {"label": "Social Reaction (Thought)","priority": Priority.LOW,    "category": "tool",   "gate": "social_reactions.enabled"},
     "random_event":       {"label": "Random Event",             "priority": Priority.LOW,    "category": "tool",   "gate": "random_events.enabled", "thinking": True},
     "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool",   "thinking": True},
     "outfit_generation":  {"label": "Outfit Generation",        "priority": Priority.NORMAL, "category": "tool",   "gate": "image_generation.enabled", "thinking": True},
     "send_message":       {"label": "Send Message",             "priority": Priority.NORMAL, "category": "chat",   "gate": "skills.send_message.enabled"},
     "talk_to":            {"label": "Talk-To (Char-to-Char)",   "priority": Priority.LOW,    "category": "chat",   "gate": "skills.talk_to.enabled"},
     "thought":            {"label": "Thought (Fallback)",       "priority": Priority.LOW,    "category": "chat"},
-    "thought_greeting":   {"label": "Thought: Avatar Greeting", "priority": Priority.LOW, "category": "chat"},
     # "intent" stays as the fallback when a specific intent_* task has no
     # routing (see llm_router.resolve_llm). New code should not use it directly
     # any more — use one of the intent_* sub-tasks instead.
@@ -77,7 +75,6 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
 
     # Summaries
-    "memory_consolidation":  {"label": "Memory Consolidation",     "priority": Priority.LOW, "category": "helper"},
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},
     "relationship_summary":  {"label": "Relationship Summary",     "priority": Priority.LOW, "category": "helper", "gate": "relationships.summary_enabled"},
 
@@ -228,11 +225,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": False, "latency_sensitive": True,
     },
-    "social_reaction": {
-        "tools": False, "vision": False, "json": False, "min_context": 8192,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
-        "creative": True, "language_de": True, "latency_sensitive": False,
-    },
     "random_event": {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
@@ -261,11 +253,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     "thought": {
         "tools": True, "vision": False, "json": False, "min_context": 8192,
         "model_class": "large", "arch": "dense", "hallucination_risk": "high",
-        "creative": True, "language_de": True, "latency_sensitive": False,
-    },
-    "thought_greeting": {
-        "tools": False, "vision": False, "json": False, "min_context": 8192,
-        "model_class": "large", "arch": "any", "hallucination_risk": "high",
         "creative": True, "language_de": True, "latency_sensitive": False,
     },
     "intent": {
@@ -302,11 +289,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     },
 
     # --- Summaries ----------------------------------------------------------
-    "memory_consolidation": {
-        "tools": False, "vision": False, "json": False, "min_context": 2048,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "high",
-        "creative": False, "language_de": True, "latency_sensitive": False,
-    },
     "consolidation": {
         "tools": False, "vision": False, "json": False, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "high",

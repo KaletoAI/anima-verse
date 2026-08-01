@@ -22,22 +22,23 @@ from app.core.log import get_logger
 logger = get_logger("llm_task_state")
 
 
-# Preset → Liste deaktivierter Tasks
+# Preset → list of disabled tasks. Every entry must be an id from
+# llm_tasks.TASK_TYPES (set_runtime_disabled drops unknown ones silently).
 PRESETS = {
     "background": [
-        "social_reaction", "random_event", "thought", "secret_generation",
-        "memory_consolidation", "consolidation", "relationship_summary",
+        "random_event", "thought", "secret_generation",
+        "consolidation", "relationship_summary",
         "outfit_generation", "image_comment",
     ],
     "world_dev": [
-        # Alle Hintergrund-LLM-Aktivitaeten, die im World-Dev-Modus stoeren
-        "social_reaction", "random_event", "thought", "secret_generation",
-        "memory_consolidation", "consolidation", "relationship_summary",
+        # All background LLM activity that gets in the way in world-dev mode
+        "random_event", "thought", "secret_generation",
+        "consolidation", "relationship_summary",
         "instagram_caption", "image_comment", "image_prompt", "image_recognition",
         "image_analysis", "outfit_generation", "expression_map",
     ],
     "chat_only": [
-        # alles ausser chat_stream, group_chat_stream und extraction
+        # everything except chat_stream, group_chat_stream and extraction
     ],
 }
 

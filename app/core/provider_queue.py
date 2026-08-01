@@ -135,7 +135,7 @@ class ProviderQueue:
         """Submits an LLM call to this provider's queue. Blocks until result ready.
 
         Args:
-            task_type: e.g. "image_prompt", "extraction", "social_reaction"
+            task_type: e.g. "image_prompt", "extraction", "talk_to"
             priority: Priority.LOW / NORMAL / HIGH
             llm: LLMClient instance
             messages_or_prompt: List[Message] or str prompt

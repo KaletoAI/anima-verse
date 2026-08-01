@@ -44,10 +44,6 @@
         {
           "task": "thought",
           "order": 1
-        },
-        {
-          "task": "thought_greeting",
-          "order": 1
         }
       ],
       "enabled": true,
@@ -61,10 +57,6 @@
       "tasks": [
         {
           "task": "extraction_chat_state",
-          "order": 1
-        },
-        {
-          "task": "social_reaction",
           "order": 1
         },
         {
@@ -97,10 +89,6 @@
         },
         {
           "task": "pose_normalize",
-          "order": 1
-        },
-        {
-          "task": "memory_consolidation",
           "order": 1
         },
         {

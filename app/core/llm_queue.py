@@ -30,7 +30,7 @@ class Priority(IntEnum):
     HIGH = 10       # story_stream
     NORMAL = 20     # image_prompt, extraction, history_summary, instagram_caption, image_comment
     IMAGE_GEN = 25  # image_generation via GPU slot (between NORMAL and LOW)
-    LOW = 30        # social_reaction, talkto
+    LOW = 30        # talk_to, random_event, consolidation
 
 
 @dataclass
