@@ -18,8 +18,10 @@ Cross-Location-SetLocation ist seit der Reise-Engine (2026-07) keine
 Sofort-Teleportation und kein AgentLoop-Schrittmechanismus mehr, sondern eine
 **server-autoritative Reise** (`app/core/travel_engine.py`): `start_journey`
 legt die Zellenkette über bekannte Orte fest, ein Hintergrund-**TravelTicker**
-führt die Position auf der **Spieluhr** nach — aktuell 60 Spiel-Sekunden pro
-Zelle (eingefrorene Welt = stehende Reise). Bei Ankunft greifen Entry-Room,
+führt die Position auf der **Spieluhr** nach (eingefrorene Welt = stehende
+Reise). Das Tempo ist die Welt-Einstellung `game.travel_seconds_per_cell`
+(Admin → Game, Default 60 Spiel-Sekunden pro Zelle); es wird beim START auf
+die Reise geschrieben, laufende Reisen behalten also ihr Tempo. Bei Ankunft greifen Entry-Room,
 Auto-Discovery und ein AgentLoop-Bump; der `CancelTravel`-Skill bricht eine
 laufende Reise ab. `GET /play/worldmap` liefert die Reise als `travel`-Payload
 (§ A11 in `docs/schnittstellen-3d.md`). Reisen gelten nur für NPCs; der

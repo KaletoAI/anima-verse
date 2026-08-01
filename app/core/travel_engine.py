@@ -11,6 +11,7 @@ Stored on the character profile (see Task 2):
         "path": ["<loc-id>", ...],      # incl. start and target cell
         "started_at_game": "<iso>",     # GAME clock stamp (game_now_iso)
         "seconds_per_cell": 60.0,       # GAME seconds per grid cell
+                                        # (from the world setting at journey start)
     }
 ``movement_target`` stays the plain target-id field existing readers use.
 """
@@ -34,8 +35,16 @@ _MAX_SECONDS_PER_CELL = 3600.0
 
 def get_seconds_per_cell() -> float:
     """GAME seconds one grid cell takes, from the world setting
-    `game.travel_seconds_per_cell`, clamped to [1, 3600]; anything unusable
-    (missing, non-numeric, bool, NaN) falls back to GAME_SECONDS_PER_CELL.
+    `game.travel_seconds_per_cell`.
+
+    The boundary between "garbage" and "extreme but meant":
+      * missing, non-numeric, bool, NaN/inf, **zero or negative** -> the
+        default GAME_SECONDS_PER_CELL. Zero counts as garbage on purpose: an
+        emptied admin field arrives as 0, and silently turning that into the
+        fastest legal pace would make every new journey 60x faster without
+        anyone asking for it.
+      * 0 < value < 1 is absurdly fast but positive and deliberate -> clamped
+        up to the lower bound 1.0; anything above 3600 is clamped down.
 
     Read at journey START only: the pace is written onto the journey, so a
     running journey keeps the tempo it started with and clients keep deriving
@@ -43,15 +52,32 @@ def get_seconds_per_cell() -> float:
     """
     from app.core import config
     raw = config.get("game.travel_seconds_per_cell", GAME_SECONDS_PER_CELL)
-    if isinstance(raw, bool):
+    if raw is None:
         return GAME_SECONDS_PER_CELL
+    if isinstance(raw, bool):
+        return _reject_pace(raw)
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return GAME_SECONDS_PER_CELL
-    if not math.isfinite(value):
-        return GAME_SECONDS_PER_CELL
+        return _reject_pace(raw)
+    if not math.isfinite(value) or value <= 0:
+        return _reject_pace(raw)
     return min(max(value, _MIN_SECONDS_PER_CELL), _MAX_SECONDS_PER_CELL)
+
+
+_pace_warned = False
+
+
+def _reject_pace(raw: Any) -> float:
+    """Log the discarded setting ONCE and return the default — the fallback
+    sits on the journey-start path, a warning per journey would spam."""
+    global _pace_warned
+    if not _pace_warned:
+        _pace_warned = True
+        logger.warning("Unusable game.travel_seconds_per_cell (%r) — "
+                       "using the default %.0f s per cell",
+                       raw, GAME_SECONDS_PER_CELL)
+    return GAME_SECONDS_PER_CELL
 
 
 def journey_state(path: List[str], started_at_game: str, now_game: datetime,
@@ -193,8 +219,10 @@ def advance_all_journeys() -> None:
             j = get_journey(name)
             if not j:
                 continue
+            # The journey's OWN pace — never the current world setting: a
+            # setting change must not re-time someone already walking.
             st = journey_state(j["path"], j["started_at_game"], now,
-                               float(j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL))
+                               float(j["seconds_per_cell"]))
             cur = (get_character_current_location(name) or "").strip()
             if not st["arrived"] and st["current_id"] == cur:
                 continue                       # nothing to apply this tick

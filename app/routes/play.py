@@ -1496,8 +1496,7 @@ async def play_worldmap(user=Depends(get_current_user)):
 
     # Journeys are a pure function of the GAME clock — read it ONCE for the
     # whole payload so every character in one response shares the same now.
-    from app.core.travel_engine import (
-        GAME_SECONDS_PER_CELL, get_journey, journey_state)
+    from app.core.travel_engine import get_journey, journey_state
     from app.core.timeutils import game_now, game_speed_factor, to_world_tz
     _now_game = game_now()
     _factor = game_speed_factor()
@@ -1537,7 +1536,9 @@ async def play_worldmap(user=Depends(get_current_user)):
         try:
             _j = get_journey(name, profile=_prof)
             if _j:
-                _spc = float(_j.get("seconds_per_cell") or GAME_SECONDS_PER_CELL)
+                # The pace the journey was STARTED with (world setting at that
+                # moment) — a later setting change never re-times it.
+                _spc = float(_j["seconds_per_cell"])
                 _st = journey_state(_j["path"], _j["started_at_game"],
                                     _now_game, _spc)
                 travel = {
