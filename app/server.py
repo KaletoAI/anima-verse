@@ -86,16 +86,18 @@ async def lifespan(app: FastAPI):
     clear_story_tmp()
     clear_tts_tmp()
 
-    # Log-Retention: alte Eintraege aus llm_calls.jsonl + image_prompts.jsonl
-    # entfernen (Default 5 Tage, konfigurierbar via server.log_retention_days
-    # in der Admin-Config). Verhindert Wachstum ins Unendliche.
+    # Log retention: entries older than the window are moved out of
+    # llm_calls.jsonl + image_prompts.jsonl into their monthly bucket under
+    # logs/archive/ (default 5 days, configurable via server.log_retention_days
+    # in the admin config). Keeps the live logs from growing without bound
+    # without losing the history.
     try:
         from app.utils.llm_logger import prune_logs_on_startup
         _log_pruned = prune_logs_on_startup()
-        if _log_pruned.get("llm_calls") or _log_pruned.get("image_prompts"):
-            logger.info("Log-Retention: %s", _log_pruned)
+        if _log_pruned.get("archived"):
+            logger.info("Log retention: %s", _log_pruned)
     except Exception as _le:
-        logger.warning("Log-Retention beim Start fehlgeschlagen: %s", _le)
+        logger.warning("Log retention at startup failed: %s", _le)
 
     # Multiuser: Default-Admin bootstrappen falls noch kein User existiert
     from app.core.users import ensure_default_admin

@@ -6,12 +6,14 @@ active turn trace additionally carry ``trace_id``/``trace_kind`` so the log view
 group all calls of one action.
 """
 import json
+import os
+import re
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.core.timeutils import utc_now
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -19,6 +21,11 @@ logger = get_logger("llm_log")
 
 LOG_DIR = Path("./logs")
 LOG_FILE = LOG_DIR / "llm_calls.jsonl"
+# Pruned entries are appended here, bucketed by their own month:
+# logs/archive/<stem>_<YYYY-MM>.jsonl. Same directory start.sh uses for the
+# rotated main_*.log / client3d_*.log — different naming scheme, no overlap.
+ARCHIVE_DIR = LOG_DIR / "archive"
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 _lock = threading.Lock()
 
 
@@ -204,15 +211,77 @@ def get_max_tokens(llm) -> int:
     return int(val) if val else 0
 
 
+def _archive_pruned_lines(path: Path, buckets: Dict[str, List[str]]) -> None:
+    """Appends the pruned lines to their monthly archive buckets.
+
+    ``buckets`` maps ``YYYY-MM`` → the raw JSONL lines of that month. Each
+    bucket is appended verbatim to ``<archive>/<stem>_<YYYY-MM>.jsonl``, where
+    ``<archive>`` is the ``archive`` sub-directory next to the pruned log
+    (``logs/archive`` for the production logs) and ``<stem>`` the log's file
+    name without suffix (``llm_calls``, ``image_prompts``).
+
+    Appending across several buckets is not atomic, so a failure rolls every
+    file touched in this call back to the size it had before — a retry on the
+    next startup must not duplicate entries.
+
+    Raises on any I/O failure; the caller then leaves the live log untouched.
+    """
+    archive_dir = path.parent / ARCHIVE_DIR.name
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    # (file, size before this call) for the rollback — only files that were
+    # actually opened for appending land here.
+    touched: List[Tuple[Path, int]] = []
+    try:
+        for month in sorted(buckets):
+            target = archive_dir / ("%s_%s.jsonl" % (path.stem, month))
+            size_before = target.stat().st_size if target.exists() else 0
+            with open(target, "a", encoding="utf-8") as f:
+                touched.append((target, size_before))
+                for ln in buckets[month]:
+                    f.write(ln + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+    except Exception:
+        for target, size in touched:
+            try:
+                with open(target, "r+b") as f:
+                    f.truncate(size)
+            except Exception as rollback_err:
+                logger.warning("Archive rollback for %s failed: %s", target, rollback_err)
+        raise
+
+
 def prune_jsonl_log(path: Path, retention_days: int) -> int:
-    """Removes JSONL entries whose ``starttime`` is older than
-    ``retention_days`` days. Rewrites the file atomically (tmp + rename).
+    """Moves JSONL entries whose ``starttime`` is older than ``retention_days``
+    days out of the live log and into a monthly archive. The shortened live
+    file is rewritten atomically (tmp + rename).
 
     Both logs (llm_calls.jsonl, image_prompts.jsonl) carry ``starttime``
-    as an ISO string — same schema assumption. Entries without a starttime
-    are kept conservatively (no timestamp = cannot age out).
+    as an ISO string — same schema assumption. Entries without a starttime,
+    with an unparsable line or with a ``starttime`` that does not start with
+    ``YYYY-MM`` are kept conservatively (no usable timestamp = cannot age out)
+    and therefore never end up in the archive.
 
-    Returns: number of removed entries (0 when there is nothing to do).
+    Archive layout: one file per log and calendar month,
+    ``logs/archive/<stem>_<YYYY-MM>.jsonl`` (e.g.
+    ``logs/archive/llm_calls_2026-07.jsonl``). The month comes from the entry
+    itself, not from the current time, so entries land in the right bucket even
+    when the server has not run for a long while. Buckets are only ever
+    appended to.
+
+    Order matters: the archive is written BEFORE the live file is replaced. If
+    archiving fails, the live file stays untouched and the function returns 0 —
+    an over-long log is preferable to lost data.
+
+    Returns: number of entries removed from the live file — normally identical
+    to the number of entries appended to the archive. 0 when there is nothing to
+    do and 0 as well on every failure. Note the one case where the two numbers
+    differ: if archiving succeeded but rewriting the live file failed, the
+    entries are already in the archive while the live file still holds them, so
+    the return value is 0 although entries were archived. That is deliberate —
+    the return value states what left the live file — and it is logged as its
+    own warning, because the next startup will archive those entries a second
+    time.
     """
     if retention_days < 1:
         return 0
@@ -222,6 +291,7 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
     cutoff_iso = cutoff.isoformat()
 
     kept: List[str] = []
+    buckets: Dict[str, List[str]] = {}
     removed = 0
     with _lock:
         try:
@@ -237,21 +307,49 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
                         kept.append(line_strip)
                         continue
                     ts = (obj.get("starttime") or "").strip()
-                    if ts and ts < cutoff_iso:
+                    month = ts[:7]
+                    if ts and ts < cutoff_iso and _MONTH_RE.match(month):
+                        buckets.setdefault(month, []).append(line_strip)
                         removed += 1
                         continue
                     kept.append(line_strip)
-            if removed:
-                tmp = path.with_suffix(path.suffix + ".tmp")
-                with open(tmp, "w", encoding="utf-8") as f:
-                    for ln in kept:
-                        f.write(ln + "\n")
-                tmp.replace(path)
-                logger.info("Log-Cleanup %s: %d alte Eintraege entfernt (>%d Tage)",
-                            path.name, removed, retention_days)
         except Exception as e:
-            logger.warning("Log-Cleanup fuer %s fehlgeschlagen: %s", path, e)
+            logger.warning("Log cleanup for %s failed while reading: %s", path, e)
             return 0
+
+        if not removed:
+            return 0
+
+        try:
+            _archive_pruned_lines(path, buckets)
+        except Exception as e:
+            logger.warning(
+                "Log archiving for %s failed (%s) — live file kept unchanged, "
+                "%d entries not removed", path, e, removed)
+            return 0
+
+        try:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for ln in kept:
+                    f.write(ln + "\n")
+            tmp.replace(path)
+        except Exception as e:
+            # Nothing is lost — the entries are already in the archive — but the
+            # live file still holds them, so the next startup will archive the
+            # same entries again. Say so explicitly: this is the only path that
+            # produces duplicates, and the operator has to be able to tell it
+            # apart from the read failure above.
+            logger.warning(
+                "Log cleanup for %s failed while replacing the live file (%s) — "
+                "%d entries are ALREADY archived in %s but still in the live "
+                "file; the next startup will archive them a second time",
+                path, e, removed, ", ".join(sorted(buckets)))
+            return 0
+
+        logger.info("Log cleanup %s: %d old entries archived (>%d days) in %s",
+                    path.name, removed, retention_days,
+                    ", ".join(sorted(buckets)))
     return removed
 
 
@@ -259,15 +357,26 @@ def prune_logs_on_startup() -> Dict[str, int]:
     """Called by the server lifespan at startup. Reads the retention period
     from the config (server.log_retention_days, default 5) and trims
     llm_calls.jsonl + image_prompts.jsonl to that window.
+
+    Entries falling out of the window are not dropped but appended to their
+    monthly bucket under ``logs/archive/`` (see ``prune_jsonl_log``). The
+    returned dict names the counts per log plus ``archived`` as their sum, so
+    the lifespan log line can state how many entries were moved. ``archived``
+    counts entries that left the live file; a failure after a successful
+    archive write reports 0 for that log even though its entries reached the
+    archive — that case has its own warning in ``prune_jsonl_log``.
     """
     try:
         from app.core import config as _cfg
         days = int(_cfg.get("server.log_retention_days") or 5)
     except Exception:
         days = 5
+    llm_calls = prune_jsonl_log(LOG_FILE, days)
+    image_prompts = prune_jsonl_log(LOG_DIR / "image_prompts.jsonl", days)
     out = {
-        "llm_calls": prune_jsonl_log(LOG_FILE, days),
-        "image_prompts": prune_jsonl_log(LOG_DIR / "image_prompts.jsonl", days),
+        "llm_calls": llm_calls,
+        "image_prompts": image_prompts,
+        "archived": llm_calls + image_prompts,
         "retention_days": days,
     }
     return out
