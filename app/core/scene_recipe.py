@@ -93,8 +93,10 @@ FIGURE_ROOT_DROP = {"sit": 0.314, "sleep": 0.631, "laying": 0.051,
                     "lie": 0.051}
 # Diorama clipping (§ B1): the shell polygon a room model may be cut against
 # is capped — the shader test runs per fragment, more points than this are not
-# worth the frame time, so the opt-in is ignored instead.
-CLIP_OUTLINE_MAX_POINTS = 32
+# worth the frame time, so the opt-in is ignored instead. Raised 32 → 64 for
+# tessellated curved hulls (plan-area-detail-scenes.md): a hull with a few
+# bends lands at 8 segments per curve and blew the old cap.
+CLIP_OUTLINE_MAX_POINTS = 64
 # Area locations (plan-area-locations.md): how many holes may be cut out of a
 # location model and how many points each may have. Same per-polygon cap as
 # the room clip — the shader that applies them is its inverted twin.
@@ -816,6 +818,11 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     from urllib.parse import quote
     loc_id = str(location.get("id") or "")
     ground = bool((map3d or {}).get("area_model"))
+    # Detail scene (plan-area-detail-scenes.md): the area model becomes a
+    # FADING shell ("shell_area") — but it keeps the ground ANCHOR law below.
+    # Only the display word changes; every number in the spec stays put, so
+    # toggling the flag never moves the model.
+    detail = ground and bool((map3d or {}).get("area_detail"))
     # A GROUND model fills its location — `size` is a building-on-a-plot dial
     # and would leave a rim of plan with no ground under it (user finding
     # 2026-07-28: size 0.92 put a 0.45 m gap between the model and the
@@ -834,7 +841,7 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         walk_world = bottom + walk
     return {
         "role": "building",
-        "display": "ground" if ground else "shell",
+        "display": "shell_area" if detail else ("ground" if ground else "shell"),
         "id": loc_id,
         "url": f"/play/locations/{quote(loc_id)}/model",
         "level": 0,
@@ -1124,6 +1131,54 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
 
 # ── Composer ────────────────────────────────────────────────────────────
 
+# The four boundary edges of the reference square: fraction point on the
+# edge for a given ``at`` (room-opening letter convention — left→right on
+# N/S, top→bottom on E/W) and the INWARD normal in world axes (x east,
+# z south).
+_BOUNDARY_EDGES: Dict[str, Any] = {
+    "N": (lambda at: (at, 0.0), [0, 1]),
+    "E": (lambda at: (1.0, at), [-1, 0]),
+    "S": (lambda at: (at, 1.0), [0, -1]),
+    "W": (lambda at: (0.0, at), [1, 0]),
+}
+
+
+def _boundary_openings(map3d: Dict[str, Any],
+                       extent: float) -> List[Dict[str, Any]]:
+    """Location-edge pass-throughs (plan-area-detail-scenes.md) in world
+    metres — where a road enters and leaves the cell. Geometry + room link
+    only: the entry-room gate is untouched, and no renderer consumes them
+    yet (the journey walk-through is a later stage; the data is complete —
+    an opening pair plus the linked room's hull is a path across the cell).
+    """
+    out: List[Dict[str, Any]] = []
+    for op in (map3d or {}).get("boundary_openings") or []:
+        if not isinstance(op, dict):
+            continue
+        spec = _BOUNDARY_EDGES.get(str(op.get("edge") or "").upper())
+        if not spec:
+            continue
+        try:
+            at = float(op.get("at") or 0)
+            width_m = float(op.get("width_m") or 0)
+        except (TypeError, ValueError):
+            continue
+        point, inward = spec
+        px, py = point(at)
+        entry: Dict[str, Any] = {
+            "edge": str(op["edge"]).upper(),
+            "at_world": [_r(_w(px, extent)), _r(_w(py, extent))],
+            "width_m": _r(width_m, 3),
+            "type": str(op.get("type") or "passage"),
+            "inward": inward,
+        }
+        room = op.get("room")
+        if isinstance(room, str) and room.strip():
+            entry["room_id"] = room.strip()
+        out.append(entry)
+    return out
+
+
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                   building_meta: Optional[Dict[str, Any]] = None,
                   room_metas: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -1195,7 +1250,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # needs holes to stand in. Which room is CUT and which one is laid ON the
     # model follows from outdoor/indoor plus its position relative to the
     # floor plan — no per-room display field exists, deliberately.
-    area_model = bool(map3d.get("area_model"))
+    # With ``area_detail`` (plan-area-detail-scenes.md) the model FADES like a
+    # building shell instead, so there is nothing to cut holes into or to lay
+    # zones onto: the rooms compose like a normal building interior (outdoor
+    # rooms keep their texture-only plates) and this whole branch is skipped.
+    area_model = bool(map3d.get("area_model")) \
+        and not bool(map3d.get("area_detail"))
     contour_world = _outline_world(map3d, extent)
     overlay_rooms: Dict[str, Dict[str, Any]] = {}
     if area_model:
@@ -1273,7 +1333,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             block["overlay"] = overlay
         room_blocks.append(block)
 
-    return {
+    boundary = _boundary_openings(map3d, extent)
+
+    out = {
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas),
         "rooms": room_blocks,
@@ -1302,3 +1364,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "outdoor_rooms": [r.get("room_id") or "" for r in recipes
                           if r.get("always_visible")],
     }
+    if boundary:
+        out["boundary_openings"] = boundary
+    return out

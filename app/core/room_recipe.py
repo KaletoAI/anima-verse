@@ -37,6 +37,8 @@ import math
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.core.scatter_curves import scatter as _scatter_props
+from app.core.scatter_curves import tessellate
 
 logger = get_logger(__name__)
 
@@ -101,6 +103,12 @@ MIN_SHARE_M = 0.8
 _UNANCHORED_PLAN_WIDTH_M = 8.0
 # How far the derived exit sits inside the room, measured from the opening.
 EXIT_INSET_M = 0.3
+# Scatter keep-outs (plan-area-detail-scenes.md): clearance in REAL metres in
+# front of an opening (beyond its half width) and around exit / markers /
+# model-less manual props. Axis-aligned squares on purpose — § B5a wants the
+# arithmetic hand-checkable.
+SCATTER_OPENING_CLEAR_M = 0.6
+SCATTER_POINT_CLEAR_M = 0.5
 # Opening types a character can walk through (a window is not a way out).
 _WALKABLE_TYPES = ("door", "passage")
 
@@ -128,6 +136,24 @@ def _abs_outline(lay: Dict[str, Any]) -> List[List[float]]:
         pts = _UNIT_SQUARE
     try:
         return [[x + float(u) * w, y + float(v) * d] for u, v in pts]
+    except (TypeError, ValueError):
+        return []
+
+
+def _abs_shape(lay: Dict[str, Any]) -> List[List[float]]:
+    """Like ``_abs_outline`` but with curved edges TESSELLATED — the shape a
+    renderer actually sees. Beziers are affine-invariant, so tessellating in
+    the bbox-local frame and mapping to plate fractions afterwards is exact."""
+    rect = _layout_rect(lay)
+    if not rect:
+        return []
+    x, y, w, d = rect
+    pts = lay.get("outline") or _UNIT_SQUARE
+    if not isinstance(pts, list) or len(pts) < 3:
+        pts = _UNIT_SQUARE
+    tess, _ = tessellate(pts, lay.get("outline_curves"))
+    try:
+        return [[x + float(u) * w, y + float(v) * d] for u, v in tess]
     except (TypeError, ValueError):
         return []
 
@@ -350,7 +376,13 @@ def compose_recipe(room: Dict[str, Any],
     x, y, w, d = rect
 
     pts = lay.get("outline") or _UNIT_SQUARE
-    outline = [[_r(x + float(u) * w), _r(y + float(v) * d)] for u, v in pts]
+    # Curved edges (plan-area-detail-scenes.md) are tessellated HERE — the
+    # payload outline is always a plain polygon, downstream (walls, plates,
+    # clips, both renderers) never learns curves existed. ``edge_map`` shifts
+    # opening edge indices past the inserted points; on a curve-free outline
+    # it is the identity.
+    tess_pts, edge_map = tessellate(pts, lay.get("outline_curves"))
+    outline = [[_r(x + float(u) * w), _r(y + float(v) * d)] for u, v in tess_pts]
 
     own_id = str(room.get("id") or "")
     others = [s for s in (siblings or [])
@@ -358,6 +390,18 @@ def compose_recipe(room: Dict[str, Any],
     openings = [_normalize_opening(op) for op in (lay.get("openings") or [])
                 if isinstance(op, dict)]
     openings.extend(_mirrored_openings(lay, others, plan_width_m))
+    if len(tess_pts) != len(pts):
+        # Openings live on CONTROL-polygon edges (own ones and the mirrored
+        # projections alike) — remap onto the tessellated indexing. Straight
+        # edges map 1:1, so ``at`` stays valid; openings ON a curved edge
+        # were already rejected by the sanitizer.
+        for op in openings:
+            try:
+                e = int(op.get("edge") or 0)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= e < len(edge_map):
+                op["edge"] = edge_map[e]
 
     from app.core import props as prop_store
     placements: List[Dict[str, Any]] = []
@@ -404,6 +448,115 @@ def compose_recipe(room: Dict[str, Any],
             composed["animation"] = marker.get("animation") or ""
             composed["placement"] = idx
             prop_markers.append(composed)
+
+    # Prop scatter (plan-area-detail-scenes.md): a configured random
+    # distribution, computed at COMPOSE time from the persisted seed —
+    # positions are never stored, so every renderer derives the same forest
+    # and the signature below moves whenever seed/items/spacing do (the
+    # placements land in the hashed payload). Scatter runs in REAL metres
+    # (spacing and footprints are metric); plate fractions × plan width
+    # convert both ways. Scattered entries are appended AFTER the manual
+    # ones so ``prop_markers[].placement`` indices never move, and they get
+    # NO prop markers (no sit spots on twenty pines).
+    scatter_cfg = lay.get("scatter")
+    if isinstance(scatter_cfg, dict) and scatter_cfg.get("items"):
+        planw = plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M
+        level = int(lay.get("level") or 0)
+        outline_m = [[p[0] * planw, p[1] * planw] for p in outline]
+        keepouts: List[List[List[float]]] = []
+        # Sibling hulls on the same level — the road stays tree-free. Curved
+        # siblings contribute their TESSELLATED shape (the curved road is
+        # exactly the case this exists for).
+        for sibling in others:
+            slay = sibling.get("layout")
+            if not isinstance(slay, dict) \
+                    or int(slay.get("level") or 0) != level:
+                continue
+            shape = _abs_shape(slay)
+            if len(shape) >= 3:
+                keepouts.append([[p[0] * planw, p[1] * planw] for p in shape])
+
+        def _square(cx: float, cy: float, half: float) -> List[List[float]]:
+            return [[cx - half, cy - half], [cx + half, cy - half],
+                    [cx + half, cy + half], [cx - half, cy + half]]
+
+        for op in openings:
+            try:
+                e = int(op.get("edge") or 0) % len(outline)
+                at = float(op.get("at") or 0)
+                half = float(op.get("width_m") or 0) / 2.0 \
+                    + SCATTER_OPENING_CLEAR_M
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            px, py = _point_on_edge(outline, e, at)
+            keepouts.append(_square(px * planw, py * planw, half))
+        ex = lay.get("exit")
+        if isinstance(ex, (list, tuple)) and len(ex) == 2:
+            keepouts.append(_square((x + float(ex[0]) * w) * planw,
+                                    (y + float(ex[1]) * d) * planw,
+                                    SCATTER_POINT_CLEAR_M))
+        else:
+            derived = _derive_exit(outline, openings, plan_width_m)
+            if derived:
+                keepouts.append(_square(derived[0] * planw,
+                                        derived[1] * planw,
+                                        SCATTER_POINT_CLEAR_M))
+        for marker in (lay.get("markers") or []):
+            mat = marker.get("at") if isinstance(marker, dict) else None
+            if isinstance(mat, (list, tuple)) and len(mat) == 2:
+                keepouts.append(_square((x + float(mat[0]) * w) * planw,
+                                        (y + float(mat[1]) * d) * planw,
+                                        SCATTER_POINT_CLEAR_M))
+        for entry in placements:
+            dims = entry.get("dims") or {}
+            half = max(float(dims.get("width_m") or 0),
+                       float(dims.get("depth_m") or 0)) / 2.0 \
+                or SCATTER_POINT_CLEAR_M
+            keepouts.append(_square(entry["at"][0] * planw,
+                                    entry["at"][1] * planw, half))
+
+        items = [i for i in scatter_cfg.get("items") if isinstance(i, dict)]
+        scatter_infos: Dict[str, Any] = {}
+        footprints: Dict[str, float] = {}
+        for item in items:
+            pid = str(item.get("prop_id") or "")
+            if not pid or pid in scatter_infos:
+                continue
+            prop = prop_store.get_prop(pid)
+            scatter_infos[pid] = prop
+            if prop:
+                footprints[pid] = max(float(prop["width_m"]),
+                                      float(prop["depth_m"]))
+        try:
+            seed = int(scatter_cfg.get("seed") or 0)
+        except (TypeError, ValueError):
+            seed = 0
+        try:
+            spacing = float(scatter_cfg.get("spacing_m") or 0)
+        except (TypeError, ValueError):
+            spacing = 0.0
+        for placed in _scatter_props(seed, items, outline_m, keepouts,
+                                     spacing, footprints):
+            pid = placed["prop_id"]
+            entry = {
+                "prop_id": pid,
+                "at": [_r(placed["at"][0] / planw),
+                       _r(placed["at"][1] / planw)],
+                "yaw": _r(placed["yaw"], 1),
+                "offset_y": 0.0,
+                "scattered": True,
+            }
+            prop = scatter_infos.get(pid)
+            if not prop:
+                entry["missing"] = True
+            else:
+                entry["dims"] = {"width_m": prop["width_m"],
+                                 "depth_m": prop["depth_m"],
+                                 "height_m": prop["height_m"]}
+                entry["has_model"] = bool(prop.get("has_model"))
+                if prop.get("has_model"):
+                    entry["model_url"] = prop.get("model_url") or ""
+            placements.append(entry)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",

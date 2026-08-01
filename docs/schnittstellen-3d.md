@@ -101,6 +101,53 @@
 >    `offset_y −0,75` aus der Mess-Ära, also stand sein Dorfplatz (ein
 >    Level-0-Raum) auf −0,75, während Etage 0 auf 0 und Etage −1 auf −0,8475
 >    liegt — Figuren auf Kellerhöhe an einem Platz ohne Keller.
+>
+> **Nachtrag v5.2 — Detailszenen für Flächen-Locations (2026-08-02,
+> `development_instructions/plan-area-detail-scenes.md`):**
+>
+> 10. **Drittes Display `shell_area`.** `map3d.area_detail` (nur zusammen mit
+>     `area_model`) macht aus dem `ground`-Modell eine AUSBLENDENDE Hülle:
+>     `models[].display: "shell_area"` fadet beim Reinzoomen wie `shell`,
+>     behält aber das `ground`-ANKER-Gesetz (begehbare Fläche auf Etage 0,
+>     `size` fix 1, `offset_y` gilt nicht — Nr. 7). Die Rezept-Innenwelt
+>     komponiert wie ein Gebäude-Interieur: keine `cutouts`, keine
+>     Overlay-Zonen; Outdoor-Räume behalten ihre Textur-Platten (§ A5).
+>     Der Kachelboden des Renderers folgt dort dem Fade (fern unsichtbar
+>     wegen Nr. 5, nah als Backstop unter der Detailszene).
+> 11. **Kurven sind Editor-Daten, der Payload bleibt Polygon.**
+>     `layout.outline_curves` = `[{edge, c:[u,v]}]` — pro Kante höchstens ein
+>     quadratischer Bezier-Kontrollpunkt (bbox-lokal wie die Outline-Punkte,
+>     Klemme [−1, 2]). Der SERVER tesselliert beim Komponieren:
+>     `B(t) = (1−t)²·P0 + 2t(1−t)·C + t²·P1` an `t = k/8` (7 eingefügte
+>     Punkte je Kurvenkante); Opening-Kantenindizes werden über die
+>     Einfüge-Map verschoben. Openings AUF einer Kurvenkante sind v1
+>     abgelehnt. Die bbox-Invariante (x/y/w/d = echte Bounding-Box) gilt
+>     über die TESSELLIERTEN Punkte — ein Bogen, der über das
+>     Kontrollpolygon hinausragt, zählt mit. Beide Renderer sehen weiter
+>     nur Polygone. Punkte-Kappung dafür angehoben: `clip_outline` und
+>     `cutouts` je Polygon ≤ **64** Punkte (vorher 32).
+> 12. **`layout.scatter` streut Props deterministisch.**
+>     `{seed (uint32), items: [{prop_id, count}…] (Σ ≤ 120), spacing_m}` —
+>     die Positionen werden beim KOMPONIEREN aus dem Seed gerechnet, nie
+>     gespeichert, und landen als normale `placements`/`models`-Einträge
+>     (`scattered: true`, ohne Prop-Marker) im Payload. PRNG ist xorshift32
+>     (`x ^= x<<13; x ^= x>>17; x ^= x<<5`, uint32; Seed 0 → 1), pro
+>     Kandidat GENAU drei Züge u, v, yaw (`next()/2³²`; yaw × 360) über der
+>     Outline-Bbox. Akzeptiert wird ein Kandidat im Raum-Polygon, außerhalb
+>     aller Keep-outs (Nachbar-Hüllen gleicher Etage — tesselliert —,
+>     Quadrate um Openings ±(width/2 + 0,6 m), Exit/Marker ±0,5 m, manuelle
+>     Props ±footprint/2), Mittelpunktsabstand ≥ (fp_a + fp_b)/2 +
+>     `spacing_m`; Versuchsbudget `count × 30`, Unterbelegung erlaubt.
+>     Identischer Seed ⇒ identische Szene in Admin-Vorschau und Client;
+>     § B5a prüft exakte Positionen gegen die von Hand gerechnete Folge.
+> 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze
+>     (Straße quert die Zelle): `[{edge: N|E|S|W, at_world: [x, z],
+>     width_m, type: "passage", room_id?, inward: [±1|0, ±1|0]}]`, Punkt
+>     über den Rahmen des Bezugsquadrats (`at` wie Raum-Openings:
+>     links→rechts auf N/S, oben→unten auf E/W), `inward` = einwärtige
+>     Normale in Weltachsen. Reine Geometrie + Raum-Link — das
+>     `entry_room`-Gate bleibt unverändert; noch konsumiert sie kein
+>     Renderer (Journey-Durchlauf = spätere Etappe).
 
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 

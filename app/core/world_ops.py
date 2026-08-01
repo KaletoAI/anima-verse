@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
+from app.core.scatter_curves import curve_map, tessellate
 from app.imagegen.base import BackendBusyError
 
 if TYPE_CHECKING:  # type-only — the composer is imported where it is used
@@ -387,6 +388,49 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # today's behaviour (single building, model fades).
     if bool(raw.get("area_model")):
         out["area_model"] = True
+    # Detail scene (plan-area-detail-scenes.md): ON TOP of area_model — the
+    # location model becomes a FADING shell (display "shell_area") and the
+    # rooms compose like a building interior (plates/textures instead of
+    # cutouts/overlay zones). Only set when true; meaningless without
+    # area_model, so it is dropped there.
+    if out.get("area_model") and bool(raw.get("area_detail")):
+        out["area_detail"] = True
+    # Boundary openings (plan-area-detail-scenes.md): pass-throughs at the
+    # LOCATION edge (a road crossing the cell east–west = two entries).
+    # Geometry + room link only — entry_room stays the gameplay gate. The
+    # reference square is a rectangle by definition, so edges are letters,
+    # never polygon indices; ``at`` follows the room-opening convention
+    # (left→right on N/S, top→bottom on E/W). ``room`` is a format check,
+    # never an existence check (same rule as prop ids).
+    bo = raw.get("boundary_openings")
+    if isinstance(bo, list):
+        entries = []
+        for op in bo[:8]:
+            if not isinstance(op, dict):
+                continue
+            edge = op.get("edge")
+            if not (isinstance(edge, str)
+                    and edge.strip().upper() in ("N", "S", "E", "W")):
+                continue
+            try:
+                at = float(op.get("at"))
+                width_m = float(op.get("width_m"))
+            except (TypeError, ValueError):
+                continue
+            if not (0.5 <= width_m <= 10.0):
+                continue
+            entry: Dict[str, Any] = {
+                "edge": edge.strip().upper(),
+                "at": round(min(max(at, 0.0), 1.0), 4),
+                "width_m": round(width_m, 3),
+                "type": "passage",
+            }
+            room = op.get("room")
+            if isinstance(room, str) and room.strip():
+                entry["room"] = room.strip()[:64]
+            entries.append(entry)
+        if entries:
+            out["boundary_openings"] = entries
     return out
 
 
@@ -457,10 +501,23 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                            - pts[(i + 1) % len(pts)][0] * pts[i][1]
                            for i in range(len(pts)))
             if abs(shoelace) / 2 >= 1e-4:
-                min_u = min(p[0] for p in pts)
-                max_u = max(p[0] for p in pts)
-                min_v = min(p[1] for p in pts)
-                max_v = max(p[1] for p in pts)
+                # Curved edges (plan-area-detail-scenes.md): the outline stays
+                # the plain CONTROL polygon; curves are the parallel sparse
+                # list ``outline_curves`` (one quadratic-bezier control point
+                # per edge, bbox-local like the points). They only survive
+                # when no outline point was dropped above — a dropped point
+                # would silently shift every edge index under them.
+                curves = curve_map(raw.get("outline_curves"), len(pts)) \
+                    if len(pts) == len(ol) else {}
+                # The bbox invariant covers the DELIVERED geometry: fold over
+                # the TESSELLATED points, so a curve bulging past the control
+                # polygon still ends up inside x/y/w/d.
+                shape, _ = tessellate(
+                    pts, [{"edge": e, "c": list(c)} for e, c in curves.items()])
+                min_u = min(p[0] for p in shape)
+                max_u = max(p[0] for p in shape)
+                min_v = min(p[1] for p in shape)
+                max_v = max(p[1] for p in shape)
                 span_u = max_u - min_u
                 span_v = max_v - min_v
                 folded = True
@@ -479,6 +536,9 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                         out["d"] = new_d
                         pts = [[(p[0] - min_u) / span_u, (p[1] - min_v) / span_v]
                                for p in pts]
+                        curves = {e: ((c[0] - min_u) / span_u,
+                                      (c[1] - min_v) / span_v)
+                                  for e, c in curves.items()}
                     else:
                         folded = False
                 if folded:
@@ -486,7 +546,23 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                     # shoelace sum.
                     if shoelace < 0:
                         pts.reverse()
+                        # Edge i (v[i]→v[i+1]) becomes edge n-2-i in the
+                        # reversed indexing; the control point itself is a
+                        # position and stays.
+                        n = len(pts)
+                        curves = {(n - 2 - e) % n: c for e, c in curves.items()}
                     out["outline"] = [[round(p[0], 4), round(p[1], 4)] for p in pts]
+                    if curves:
+                        # With endpoints and curve inside the folded [0,1]²
+                        # bbox a quadratic control point lies in [-1, 2]
+                        # (C = 2·B(½) − (P0+P1)/2) — clamp to that, not to
+                        # [0,1]: a road bend's control point legitimately
+                        # sits outside the hull.
+                        out["outline_curves"] = [
+                            {"edge": e,
+                             "c": [round(min(max(c[0], -1.0), 2.0), 4),
+                                   round(min(max(c[1], -1.0), 2.0), 4)]}
+                            for e, c in sorted(curves.items())]
     try:
         out["level"] = int(raw.get("level") or 0)
     except (TypeError, ValueError):
@@ -632,11 +708,15 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             out["openings"] = openings[:50]
     # An integer edge is a polygon edge INDEX — it only exists if the hull has
     # that many edges (n points = n edges; without an outline the implicit unit
-    # square has 4). Letter edges ('N'|'S'|'E'|'W') are untouched.
+    # square has 4). Letter edges ('N'|'S'|'E'|'W') are untouched. Openings on
+    # CURVED edges are rejected (v1 decision, plan-area-detail-scenes.md) —
+    # boundary pass-throughs handle the road case.
     if out.get("openings"):
         edge_count = len(out["outline"]) if out.get("outline") else 4
+        curved = {c["edge"] for c in out.get("outline_curves") or []}
         kept = [o for o in out["openings"]
-                if not (isinstance(o.get("edge"), int) and o["edge"] >= edge_count)]
+                if not (isinstance(o.get("edge"), int)
+                        and (o["edge"] >= edge_count or o["edge"] in curved))]
         if kept:
             out["openings"] = kept
         else:
@@ -683,6 +763,49 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             placements.append(entry)
         if placements:
             out["props"] = placements[:100]
+    # Prop scatter (plan-area-detail-scenes.md): a configured RANDOM
+    # distribution — n props of m kinds thrown over the room area from a
+    # persisted seed. The positions are computed deterministically at
+    # compose time (room_recipe → scatter_curves.scatter), never stored, so
+    # every renderer sees the same forest and § B5a can diff exact numbers.
+    # Own budget (Σ count ≤ 120) besides the manual ``props`` cap.
+    sc = raw.get("scatter")
+    if isinstance(sc, dict):
+        from app.core.props import safe_prop_id
+        items = []
+        total = 0
+        raw_items = sc.get("items")
+        for item in (raw_items if isinstance(raw_items, list) else [])[:16]:
+            if not isinstance(item, dict):
+                continue
+            pid = safe_prop_id(str(item.get("prop_id") or ""))
+            try:
+                count = int(item.get("count"))
+            except (TypeError, ValueError):
+                continue
+            if not pid or not (1 <= count <= 100):
+                continue
+            count = min(count, 120 - total)
+            if count <= 0:
+                break
+            items.append({"prop_id": pid, "count": count})
+            total += count
+        seed: Optional[int] = None
+        try:
+            seed = int(sc.get("seed")) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            pass
+        if items and seed is not None:
+            entry = {"seed": seed, "items": items}
+            sp = sc.get("spacing_m")
+            if sp is not None and f"{sp}".strip() != "":
+                try:
+                    v = round(max(0.0, min(5.0, float(sp))), 2)
+                    if v:
+                        entry["spacing_m"] = v
+                except (TypeError, ValueError):
+                    pass
+            out["scatter"] = entry
     return out
 
 
@@ -766,7 +889,8 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
 # surfaces ride along on whatever scale already applies, so editing them is
 # not "geometry work" and never trips the scale-anchor requirement.
 _LAYOUT_GEOMETRY_KEYS = ("level", "x", "y", "w", "d", "rotation", "outline",
-                         "props", "floor_offset_y")
+                         "outline_curves", "props", "scatter",
+                         "floor_offset_y")
 
 
 def _layout_geometry(layout: Any) -> Optional[Dict[str, Any]]:
