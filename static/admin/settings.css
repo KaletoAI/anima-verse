@@ -193,3 +193,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 /* Embedded iframe for tool pages */
 .content iframe { width: 100%; height: 100%; border: none; }
 .content.iframe-mode { padding: 0; overflow: hidden; }
+
+/* ── LLM routing: requirement badges & model mismatch ── */
+/* The requirement profile of a task: hard requirements as icons, soft ones as
+   compact text badges. Rendered by renderRequirementBadges() in settings.js. */
+.req-badges {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+    margin-top: 4px; font-size: 10px; line-height: 1.6;
+}
+.req-hard {
+    background: #1c2128; border: 1px solid #30363d; color: #c9d1d9;
+    padding: 0 5px; border-radius: 4px; font-size: 10px; cursor: help;
+    white-space: nowrap;
+}
+.req-soft { color: #8b949e; cursor: help; white-space: nowrap; }
+.req-sep { color: #484f58; }
+/* Mismatch between task requirement and model capability (hard warning) and the
+   grey "no capability data" hint — both also used in the editable task rows. */
+.req-warn {
+    background: #da363322; border: 1px solid #f8514955; color: #f85149;
+    padding: 0 6px; border-radius: 10px; font-size: 10px; font-weight: 600;
+    cursor: help; white-space: nowrap; text-decoration: none;
+}
+/* Compact icon-only warning for the narrow editable task rows (renderMatchIcon):
+   no chip text, the full warning lives in the tooltip. */
+.req-warn-icon {
+    color: #f85149; font-size: 13px; line-height: 1;
+    cursor: help; text-decoration: none;
+}
+.req-unknown {
+    background: #21262d; border: 1px solid #30363d; color: #8b949e;
+    padding: 0 6px; border-radius: 10px; font-size: 10px;
+    cursor: help; white-space: nowrap; text-decoration: none;
+}
+.task-match-slot { display: inline-flex; align-items: center; gap: 4px; }
+.task-match-slot:empty { display: none; }

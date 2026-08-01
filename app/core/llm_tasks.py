@@ -52,7 +52,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "send_message":       {"label": "Send Message",             "priority": Priority.NORMAL, "category": "chat",   "gate": "skills.send_message.enabled"},
     "talk_to":            {"label": "Talk-To (Char-to-Char)",   "priority": Priority.LOW,    "category": "chat",   "gate": "skills.talk_to.enabled"},
     "thought":            {"label": "Thought (Fallback)",       "priority": Priority.LOW,    "category": "chat"},
-    "thought_greeting":   {"label": "Thought: Avatar-Begruessung", "priority": Priority.LOW, "category": "chat"},
+    "thought_greeting":   {"label": "Thought: Avatar Greeting", "priority": Priority.LOW, "category": "chat"},
     # "intent" stays as the fallback when a specific intent_* task has no
     # routing (see llm_router.resolve_llm). New code should not use it directly
     # any more — use one of the intent_* sub-tasks instead.
@@ -127,6 +127,38 @@ MODEL_CLASS_LABELS: Dict[str, str] = {
     "small":  "Small (up to ~15B)",
     "medium": "Medium (15-70B)",
     "large":  "Large (>70B / frontier API)",
+}
+
+
+# Short badge text per requirement VALUE — the compact soft-requirement line in
+# the admin routing UI ("large · dense · fact-critical · DE · interactive").
+# Display metadata only: no profile keys, no values are defined here.
+#
+# A value that is NOT listed renders NO badge. That is how the "hide the
+# default" rule is expressed without a second table: `arch: "any"` and the
+# False side of the boolean flags simply have no entry, so only what sets a
+# task apart from the norm shows up. Booleans are keyed by their lowercase
+# string form ("true"/"false") so the table survives the JSON hop to the UI.
+# Hard requirements (tools/vision/json/min_context) are rendered as icons and
+# are deliberately absent here.
+REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
+    "model_class": {
+        "small":  "small",
+        "medium": "medium",
+        "large":  "large",
+    },
+    "arch": {
+        "dense": "dense",
+        "moe":   "MoE",
+    },
+    "hallucination_risk": {
+        "low":    "facts uncritical",
+        "medium": "facts matter",
+        "high":   "fact-critical",
+    },
+    "creative":          {"true": "creative"},
+    "language_de":       {"true": "DE"},
+    "latency_sensitive": {"true": "interactive"},
 }
 
 

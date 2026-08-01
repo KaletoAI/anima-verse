@@ -865,18 +865,82 @@ async def settings_save(request: Request, user=Depends(require_admin)):
 
 @router.get("/settings/llm-tasks")
 async def settings_llm_tasks(user=Depends(require_admin)):
-    """Liefert die Liste bekannter LLM-Task-Typen fuer den Admin-UI-Selector."""
-    from app.core.llm_tasks import TASK_TYPES, CATEGORY_LABELS
-    return [
-        {
-            "id": tid,
-            "label": t.get("label", tid),
-            "category": t.get("category", ""),
-            "category_label": CATEGORY_LABELS.get(str(t.get("category", "")), ""),
-            "thinking": bool(t.get("thinking")),
+    """The LLM task catalog for the admin UI: tasks plus the label tables.
+
+    The label tables ride along once (not per task) so the UI can render the
+    requirement badges generically — key order in `requirement_labels` is the
+    render order, `requirement_badge_labels` supplies the short badge text per
+    value, `model_class_labels` the long form for the tooltip.
+    A task without a `requirements` profile (pose_embedding) reports
+    `requirements: null` — the UI shows no badge block for it.
+    """
+    from app.core.llm_tasks import (
+        TASK_TYPES, CATEGORY_LABELS, REQUIREMENT_LABELS,
+        REQUIREMENT_BADGE_LABELS, MODEL_CLASS_LABELS)
+    return {
+        "tasks": [
+            {
+                "id": tid,
+                "label": t.get("label", tid),
+                "category": t.get("category", ""),
+                "category_label": CATEGORY_LABELS.get(str(t.get("category", "")), ""),
+                "thinking": bool(t.get("thinking")),
+                "requirements": t.get("requirements") or None,
+            }
+            for tid, t in TASK_TYPES.items()
+        ],
+        "requirement_labels": REQUIREMENT_LABELS,
+        "requirement_badge_labels": REQUIREMENT_BADGE_LABELS,
+        "model_class_labels": MODEL_CLASS_LABELS,
+    }
+
+
+@router.post("/settings/model-capabilities/lookup")
+async def settings_model_capabilities_lookup(request: Request, user=Depends(require_admin)):
+    """Resolve capabilities for a batch of "Provider::Model" strings.
+
+    The lookup itself (substring match, longest match wins, provider prefix
+    stripped) belongs to app.core.model_capabilities and stays there — the
+    routing UI asks this endpoint instead of reimplementing the matching.
+
+    Body:  {"models": ["Provider::Model", ...]}
+    Reply: {"models": {"Provider::Model": {"tools": bool|null,
+                                           "vision": bool|null,
+                                           "known": bool}}}
+    `known` is False when no capability entry matches at all (or the matching
+    entry is empty `{}`); a field is null when the entry does not state it.
+    Only real booleans come back as booleans — everything else is "unknown".
+    """
+    from app.core.model_capabilities import get_model_capabilities
+
+    # A malformed body is a client mistake -> 400 with a readable reason, not a
+    # 500 out of json()/`.get` (empty body and a bare JSON array both hit this).
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="body must be JSON: {\"models\": [...]}")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object with a \"models\" list")
+    wanted = data.get("models") or []
+    if not isinstance(wanted, list):
+        raise HTTPException(status_code=400, detail="models must be a list")
+
+    def _flag(caps: Dict[str, Any], key: str):
+        val = caps.get(key)
+        return val if isinstance(val, bool) else None
+
+    out: Dict[str, Any] = {}
+    for raw in wanted[:500]:
+        key = str(raw or "")
+        if not key or key in out:
+            continue
+        caps = get_model_capabilities(key) or {}
+        out[key] = {
+            "tools": _flag(caps, "tool_calling"),
+            "vision": _flag(caps, "vision"),
+            "known": bool(caps),
         }
-        for tid, t in TASK_TYPES.items()
-    ]
+    return {"models": out}
 
 
 @router.get("/settings/llm-task-state")

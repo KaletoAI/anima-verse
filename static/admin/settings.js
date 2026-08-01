@@ -417,12 +417,12 @@ function renderSection(key) {
 
     // Sub-arrays (backends, catalogs) are NOT rendered here — each has its
     // own nav sub-item (see buildNav /
-    // renderSubArrayPage), damit die Hauptseite nicht ueberladen ist.
+    // renderSubArrayPage), so the main page does not get overloaded.
 
     // Array sections (providers)
     if (sec.is_array) {
         if (key === 'llm_routing') {
-            // Zweispaltig: links Editor, rechts Task-View (read-only)
+            // Two columns: editor on the left, read-only task view on the right
             html += '<div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">';
             html += '<div>';
             html += '<div style="margin-bottom: 12px;">';
@@ -431,11 +431,11 @@ function renderSection(key) {
             html += renderArrayItems(sec, data || [], key);
             html += '</div>';
             html += '<div>';
-            html += '<div class="subsection-title" style="margin-bottom:8px;">Sichtweise pro Task</div>';
+            html += '<div class="subsection-title" style="margin-bottom:8px;">' + ROUTING_TEXT.perTaskView + '</div>';
             html += '<div id="llm-task-view"><div class="desc">Loading…</div></div>';
             html += '</div>';
             html += '</div>';
-            // Der Tool-/Helper-Eignungstest lebt jetzt unter "Model Capabilities".
+            // The tool/helper suitability test now lives under "Model Capabilities".
             html += '<div class="desc" style="margin-top:16px;">🧪 The Tool/Helper suitability test moved to <a href="/admin/models" target="_blank" style="color:#58a6ff;">Model Capabilities</a>.</div>';
             setTimeout(() => renderLlmTaskView(data || []), 0);
         } else {
@@ -522,8 +522,8 @@ let LLM_SIMPLE_SEL = {};
 async function renderLlmSimpleEditor() {
     const content = document.getElementById('content');
     content.innerHTML = '<div class="section active"><h1 class="section-title">🧭 LLM Models (Simple)</h1><div class="desc">Loading…</div></div>';
-    const tasks = await loadLlmTasks();
-    llmSimpleDetect(tasks);
+    const catalog = await loadLlmCatalog();
+    llmSimpleDetect(catalog.tasks || []);
 
     let html = '<div class="section active">';
     html += '<h1 class="section-title">🧭 LLM Models (Simple)</h1>';
@@ -558,7 +558,7 @@ async function renderLlmSimpleEditor() {
     }
     html += '</div>';
     content.innerHTML = html;
-    // Model-Dropdowns initial fuellen (aus Cache / interne Choices)
+    // Fill the model dropdowns initially (from cache / internal choices)
     for (const cat of LLM_SIMPLE_CATS) llmSimplePopulateModels(cat.key, false);
 }
 
@@ -661,12 +661,12 @@ async function llmSimpleLoadModels(cat) {
     llmSimplePopulateModels(cat, false);
 }
 
-// Schreibt CONFIG.llm_routing (order=1) + CONFIG.embedding aus LLM_SIMPLE_SEL.
+// Writes CONFIG.llm_routing (order=1) + CONFIG.embedding from LLM_SIMPLE_SEL.
 function llmSimpleRebuild() {
-    const tasks = LLM_TASKS_CACHE || [];
+    const tasks = (LLM_CATALOG_CACHE || EMPTY_LLM_CATALOG).tasks || [];
     const byCat = {};
     for (const t of tasks) (byCat[t.category] = byCat[t.category] || []).push(t.id);
-    // Kopie ziehen, dann alle order==1-Zuordnungen entfernen (Fallbacks bleiben)
+    // Take a copy, then drop every order==1 assignment (fallbacks stay)
     let routing = (CONFIG.llm_routing || []).map(e => Object.assign({}, e, { tasks: (e.tasks || []).slice() }));
     for (const e of routing) e.tasks = (e.tasks || []).filter(t => (t.order || 1) !== 1);
     for (const cat of LLM_SIMPLE_CATS) {
@@ -683,10 +683,10 @@ function llmSimpleRebuild() {
         if (!entry.tasks) entry.tasks = [];
         for (const id of ids) entry.tasks.push({ task: id, order: 1 });
     }
-    // Leer gewordene Eintraege entfernen (ausser sie sind nur zum Preload da)
+    // Remove entries that ran empty (unless they only exist for preloading)
     routing = routing.filter(e => (e.tasks && e.tasks.length) || e.preload_on_startup);
     CONFIG.llm_routing = routing;
-    // Embedding-Config
+    // Embedding config
     if (!CONFIG.embedding) CONFIG.embedding = {};
     const e = LLM_SIMPLE_SEL.embedding || {};
     if (e.provider === LLM_SIMPLE_INTERNAL) {
@@ -699,19 +699,238 @@ function llmSimpleRebuild() {
     }
 }
 
+// ── LLM routing: requirement badges & model mismatch ────────────────────
+// All user-visible strings of this block are collected in ROUTING_TEXT /
+// MISMATCH_TEXT so a later i18n layer can pick them up in one pass — this page
+// has no t() yet, so they are plain English literals for now.
+const ROUTING_TEXT = {
+    profileTitle:     'Requirement profile of this task',
+    requiredSuffix:   ' required',
+    capsUnknown:      'capabilities unknown',
+    capsUnknownTitle: 'No capability entry for this model — maintain it under /admin/models. No check possible, no warning.',
+    perTaskView:      'Per-task view',
+    orderApplied:     'Order set for all tasks',
+    catalogFailed:    'Could not load the LLM task list — task dropdowns and the '
+                    + 'per-task view stay empty. After a code update the server '
+                    + 'needs a restart; if that is not it, your session may have expired.',
+};
+
+// Warning text per automatically checkable requirement. Only these two can be
+// verified against the model-capability data; json / min_context and every soft
+// criterion are displayed but never checked.
+const MISMATCH_TEXT = {
+    tools:  {
+        label: 'model lacks tool calling',
+        title: 'This task needs a model that reliably answers in the tool-call text format; the capability entry says this model does not.',
+    },
+    vision: {
+        label: 'model lacks vision',
+        title: 'This task sends images to the model; the capability entry says this model has no image input.',
+    },
+};
+
+// Hard requirements are rendered as an icon (+ tooltip from the server-side
+// requirement labels). Anything else in the profile falls through to the soft
+// text badges. A requirement key without an icon and without a badge label is
+// not rendered at all.
+const HARD_REQUIREMENT_ICONS = {
+    tools:       '🔧',
+    vision:      '👁',
+    json:        '{ }',
+    min_context: '📏',
+};
+
+// >>> harness-extract:evaluateRoutingMatch
+// Requirement key -> capability field delivered by
+// /admin/settings/model-capabilities/lookup. The lookup itself (substring
+// match, longest wins) happens server-side in app/core/model_capabilities.py.
+const CHECKABLE_REQUIREMENTS = { tools: 'tools', vision: 'vision' };
+
+// Compares a task's requirement profile against one model's capabilities.
+//   requirements: the task profile (null for a task without one)
+//   caps:         {tools: true|false|null, vision: ..., known: bool}
+// Returns {missing: [requirementKey, ...], unknown: bool}.
+// Warn ONLY on requirement === true AND capability === false. A null/absent
+// capability or an unknown model yields `unknown` (grey hint), never a warning.
+function evaluateRoutingMatch(requirements, caps) {
+    const empty = { missing: [], unknown: false };
+    if (!requirements || typeof requirements !== 'object') return empty;
+    const needed = Object.keys(CHECKABLE_REQUIREMENTS)
+        .filter(k => requirements[k] === true);
+    if (!needed.length) return empty;
+    if (!caps || caps.known !== true) return { missing: [], unknown: true };
+    const missing = [];
+    let unresolved = false;
+    for (const k of needed) {
+        const val = caps[CHECKABLE_REQUIREMENTS[k]];
+        if (val === false) missing.push(k);
+        else if (val !== true) unresolved = true;
+    }
+    return { missing: missing, unknown: unresolved && !missing.length };
+}
+// <<< harness-extract:evaluateRoutingMatch
+
+// "Provider::Model" -> capability record. Filled by ensureModelCaps(); a failed
+// lookup is cached as "unknown" so a re-render never loops on the same models.
+const MODEL_CAPS_CACHE = {};
+
+async function ensureModelCaps(keys) {
+    const missing = [...new Set((keys || []).filter(
+        k => k && MODEL_CAPS_CACHE[k] === undefined))];
+    if (!missing.length) return false;
+    let got = {};
+    try {
+        const resp = await fetch('/admin/settings/model-capabilities/lookup', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({ models: missing }),
+        });
+        if (resp.ok) got = (await resp.json()).models || {};
+    } catch (e) { /* treated as unknown below */ }
+    for (const k of missing) {
+        MODEL_CAPS_CACHE[k] = got[k] || { tools: null, vision: null, known: false };
+    }
+    return true;
+}
+
+function capsKeyFor(provider, model) {
+    return (provider || '') + '::' + (model || '');
+}
+
+// Compact context size for the badge: 16384 -> "16k".
+function _fmtContextTokens(n) {
+    const v = Number(n) || 0;
+    return (v >= 1024 && v % 1024 === 0) ? (v / 1024) + 'k' : String(v);
+}
+
+// Renders the requirement profile generically: key ORDER and tooltips come from
+// the server (requirement_labels), the short badge text from
+// requirement_badge_labels. A value with no badge label renders nothing — that
+// is how defaults (arch "any", the False flags) stay invisible. No task id and
+// no per-task field list appears here, so a new task in the catalog renders
+// correctly without a UI change.
+function renderRequirementBadges(req, catalog) {
+    if (!req || typeof req !== 'object') return '';
+    const labels = (catalog && catalog.requirement_labels) || {};
+    const badgeLabels = (catalog && catalog.requirement_badge_labels) || {};
+    const classLabels = (catalog && catalog.model_class_labels) || {};
+    let hard = '';
+    const soft = [];
+    for (const key of Object.keys(labels)) {
+        const val = req[key];
+        if (val === undefined || val === null || val === '') continue;
+        const icon = HARD_REQUIREMENT_ICONS[key];
+        if (icon) {
+            if (val === false || val === 0) continue;   // not required by this task
+            const isNum = typeof val === 'number';
+            const title = labels[key] + (isNum ? ': ' + val : ROUTING_TEXT.requiredSuffix);
+            hard += '<span class="req-hard" title="' + esc(title) + '">' + icon
+                 + (isNum ? ' ' + esc(_fmtContextTokens(val)) : '') + '</span>';
+            continue;
+        }
+        const text = (badgeLabels[key] || {})[String(val).toLowerCase()];
+        if (!text) continue;   // default / no badge label -> not shown
+        // model_class is the ONLY key with a long form. Applying the table to
+        // every key would mis-explain values that exist in both tables (e.g.
+        // hallucination_risk "medium" would read as the model-size text).
+        const long = (key === 'model_class' ? (classLabels[String(val)] || val) : val);
+        soft.push('<span class="req-soft" title="' + esc(labels[key] + ': ' + long) + '">'
+                + esc(text) + '</span>');
+    }
+    if (!hard && !soft.length) return '';
+    return '<div class="req-badges" title="' + esc(ROUTING_TEXT.profileTitle) + '">'
+         + hard + soft.join('<span class="req-sep">·</span>') + '</div>';
+}
+
+// Warning / unknown chips for one task+model pair. Empty while the capabilities
+// of that model have not been fetched yet (the caller awaits ensureModelCaps).
+function renderMatchBadges(req, capsKey) {
+    const caps = MODEL_CAPS_CACHE[capsKey];
+    if (caps === undefined) return '';
+    const res = evaluateRoutingMatch(req, caps);
+    let html = '';
+    for (const key of res.missing) {
+        const txt = MISMATCH_TEXT[key];
+        if (!txt) continue;
+        html += '<span class="req-warn" title="' + esc(txt.title) + '">⚠ '
+             + esc(txt.label) + '</span>';
+    }
+    if (res.unknown) {
+        html += '<span class="req-unknown" title="' + esc(ROUTING_TEXT.capsUnknownTitle)
+             + '">' + esc(ROUTING_TEXT.capsUnknown) + '</span>';
+    }
+    return html;
+}
+
+// Compact variant for the narrow editable task rows: ONLY a real warning, and
+// only as an icon whose tooltip carries the full text. No chip text and no
+// "capabilities unknown" hint — that row is a flex-row of select + number +
+// delete button and has no space for either.
+function renderMatchIcon(req, capsKey) {
+    const caps = MODEL_CAPS_CACHE[capsKey];
+    if (caps === undefined) return '';
+    const res = evaluateRoutingMatch(req, caps);
+    let html = '';
+    for (const key of res.missing) {
+        const txt = MISMATCH_TEXT[key];
+        if (!txt) continue;
+        html += '<span class="req-warn-icon" title="' + esc(txt.label + ' — ' + txt.title)
+             + '">⚠</span>';
+    }
+    return html;
+}
+
+// Fills the mismatch slots of the editable task rows of one llm_routing entry
+// with the compact warning icon. Runs as a post-pass because
+// renderTaskOrderRow() is synchronous.
+async function updateTaskRowMatchBadges(path) {
+    const slots = document.querySelectorAll('[data-taskmatch^="' + path + '|"]');
+    if (!slots.length) return;
+    const catalog = await loadLlmCatalog();
+    const reqById = {};
+    for (const t of (catalog.tasks || [])) reqById[t.id] = t.requirements || null;
+    const entry = getVal(path.replace(/\.tasks$/, '')) || {};
+    const items = getVal(path) || [];
+    const key = capsKeyFor(entry.provider, entry.model);
+    if (entry.model) await ensureModelCaps([key]);
+    slots.forEach(el => {
+        const idx = parseInt((el.getAttribute('data-taskmatch') || '').split('|')[1], 10);
+        const item = items[idx] || {};
+        el.innerHTML = entry.model ? renderMatchIcon(reqById[item.task], key) : '';
+    });
+}
+
+// Task select of an editable routing row changed.
+function onTaskRowTaskChanged(path, index, value) {
+    setVal(path + '[' + index + '].task', value);
+    updateTaskRowMatchBadges(path);
+    applyEmbedVisibility();
+    if (ACTIVE_SECTION === 'llm_routing') renderLlmTaskView(CONFIG.llm_routing || []);
+}
+
+// Model/provider of an llm_routing entry changed -> re-check its task rows and
+// the per-task overview. Every other model field on the page is ignored.
+function onRoutingModelChanged(path) {
+    const m = /^(llm_routing\[\d+\])\.(model|provider)$/.exec(path || '');
+    if (!m) return;
+    updateTaskRowMatchBadges(m[1] + '.tasks');
+    if (ACTIVE_SECTION === 'llm_routing') renderLlmTaskView(CONFIG.llm_routing || []);
+}
+
 async function renderLlmTaskView(entries) {
-    const tasks = await loadLlmTasks();
+    const catalog = await loadLlmCatalog();
+    const tasks = catalog.tasks || [];
     const view = document.getElementById('llm-task-view');
     if (!view) return;
 
-    // State vom Server laden (runtime + persistent + presets)
+    // Load state from the server (runtime + persistent + presets)
     let state = { disabled: [], runtime_disabled: [], presets: {} };
     try {
         const r = await fetch('/admin/settings/llm-task-state', { credentials: 'same-origin' });
         if (r.ok) state = await r.json();
     } catch (e) {}
 
-    // Persistent disabled aus CONFIG (UI-Quelle fuer Toggles)
+    // Persistently disabled from CONFIG (the UI source for the toggles)
     const persistentDisabled = new Set(
         ((CONFIG.llm_task_state || {}).disabled_tasks || [])
     );
@@ -736,8 +955,16 @@ async function renderLlmTaskView(entries) {
     }
     for (const k in byTask) byTask[k].sort((a, b) => a.order - b.order);
 
+    // Capabilities of every assigned model — one batched lookup before the
+    // markup is built, so the mismatch chips are there on the first paint.
+    const capsKeys = [];
+    for (const k in byTask) {
+        for (const r of byTask[k]) if (r.model) capsKeys.push(capsKeyFor(r.provider, r.model));
+    }
+    await ensureModelCaps(capsKeys);
+
     let html = '';
-    // Preset-Selector (runtime, nicht persistent — gilt nur fuer diese Server-Session)
+    // Preset selector (runtime, not persistent — only for this server session)
     html += '<div style="margin-bottom:10px; padding:8px 10px; background:#161b22; border:1px solid #30363d; border-radius:6px;">';
     html += '<div style="font-size:12px; color:#8b949e; margin-bottom:6px;">Runtime preset (not persistent):</div>';
     html += '<select id="llm-task-preset" onchange="applyTaskPreset(this.value)" style="background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px; border-radius:4px; width:100%;">';
@@ -751,15 +978,15 @@ async function renderLlmTaskView(entries) {
     }
     html += '</div>';
 
-    // Sortierung nach Category (chat → tool → helper → image), innerhalb
-    // dann nach Label. So sind groessere Modelle (chat) oben, kleine
-    // Helfer unten — entspricht der Lese-Erwartung "wer braucht was".
+    // Sorted by category (chat → tool → helper → image), then by label. Bigger
+    // models (chat) end up on top, small helpers at the bottom — which matches
+    // the reading expectation "who needs what".
     const _CAT_ORDER = { chat: 0, tool: 1, helper: 2, image: 3, embedding: 4 };
-    // Per-Category Farben fuer Border + Badge:
-    //   chat:   blau    — grosse Modelle
-    //   tool:   violett — strukturierte Outputs
-    //   helper: gruen   — kleine/billige Modelle
-    //   image:  orange  — Vision / Bild-IO
+    // Per-category colors for border + badge:
+    //   chat:   blue   — large models
+    //   tool:   violet — structured output
+    //   helper: green  — small/cheap models
+    //   image:  orange — vision / image IO
     const _CAT_COLORS = {
         chat:   { bg: '#1f3a5f', fg: '#79c0ff', border: '#30547a' },
         tool:   { bg: '#3a2f5f', fg: '#d2a8ff', border: '#54497a' },
@@ -777,7 +1004,7 @@ async function renderLlmTaskView(entries) {
 
     let _lastCat = null;
     for (const t of sortedTasks) {
-        // Category-Header bei Wechsel
+        // Category header whenever the category changes
         if (t.category !== _lastCat) {
             _lastCat = t.category;
             const cc = _CAT_COLORS[t.category] || _CAT_COLORS[''];
@@ -811,13 +1038,16 @@ async function renderLlmTaskView(entries) {
         html += '<input type="checkbox" ' + (isPersistDisabled ? '' : 'checked') + ' onchange="toggleTaskPersistent(\'' + t.id + '\', !this.checked)"> active';
         html += '</label>';
         html += '</div>';
+        // Requirement profile of the task (nothing for a task without one).
+        html += renderRequirementBadges(t.requirements, catalog);
         if (isRuntimeDisabled) {
             html += '<div style="font-size:11px; color:#d29922;">runtime-disabled (preset)</div>';
         }
         if (isEmpty) {
-            // pose_embedding laeuft ueber CONFIG.embedding (eingebautes fastembed/ONNX
-            // oder externer /v1/embeddings-Provider), NICHT ueber llm_routing. Bei
-            // internem/auto-Backend ist "no LLM assigned" irrefuehrend -> echten Status zeigen.
+            // pose_embedding runs over CONFIG.embedding (built-in fastembed/ONNX or an
+            // external /v1/embeddings provider), NOT over llm_routing. With the
+            // internal/auto backend "no LLM assigned" would be misleading -> show the
+            // real status instead.
             const _emb = CONFIG.embedding || {};
             const _embBackend = (_emb.backend || 'auto');
             if (t.id === 'pose_embedding' && _embBackend !== 'external') {
@@ -839,6 +1069,8 @@ async function renderLlmTaskView(entries) {
                 if (r.llmDisabled) {
                     html += '<span style="color:#d29922; text-decoration:none;">(LLM disabled)</span>';
                 }
+                // Mismatch per provider/model entry of this task row.
+                if (r.model) html += renderMatchBadges(t.requirements, capsKeyFor(r.provider, r.model));
                 html += '</div>';
             }
             html += '</div>';
@@ -1076,14 +1308,14 @@ function renderProviderSelect(val, path) {
     for (const p of providers) {
         opts += '<option value="' + esc(p.name) + '"' + (p.name === val ? ' selected' : '') + '>' + esc(p.name) + ' (' + p.type + ')</option>';
     }
-    return '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value); refreshModelSelect(\'' + path + '\')">' + opts + '</select>';
+    return '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value); refreshModelSelect(\'' + path + '\'); onRoutingModelChanged(\'' + path + '\')">' + opts + '</select>';
 }
 
 function renderModelSelect(val, path) {
-    // Provider wird zur Klick-Zeit aus dem Geschwister-Feld gelesen (nicht zur
-    // Render-Zeit eingebrannt), sonst zeigt der Button nach einem Provider-
-    // Wechsel weiter auf den alten Provider und holt die falsche Modell-Liste.
-    let select = '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value)">';
+    // The provider is read from the sibling field at click time (not baked in at
+    // render time) — otherwise the button would still point at the old provider
+    // after a provider switch and fetch the wrong model list.
+    let select = '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value); onRoutingModelChanged(\'' + path + '\')">';
     select += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
     select += '</select>';
     select += ' <button class="btn btn-sm" onclick="loadModels(\'' + path + '\')">Load Models</button>';
@@ -1454,20 +1686,47 @@ function selectMasterItem(path, itemPath) {
 }
 
 // ── Task/Order List (llm_routing.tasks) ──
-let LLM_TASKS_CACHE = null;
+// The catalog is one object: {tasks, requirement_labels,
+// requirement_badge_labels, model_class_labels} — the label tables ride along
+// once so the requirement badges can be rendered generically.
+let LLM_CATALOG_CACHE = null;
 
-async function loadLlmTasks(forceRefresh) {
-    if (LLM_TASKS_CACHE && !forceRefresh) return LLM_TASKS_CACHE;
+const EMPTY_LLM_CATALOG = {
+    tasks: [], requirement_labels: {}, requirement_badge_labels: {}, model_class_labels: {},
+};
+
+// Loads the task catalog. A failure must be LOUD: without it every task
+// dropdown and the whole task view stay empty, which looks like an empty
+// config instead of a broken fetch. The most likely cause is a server that
+// still serves the pre-A0.3 list form (restart missing) — the response is
+// therefore checked for shape, and there is deliberately NO fallback reader
+// for the old list.
+async function loadLlmCatalog(forceRefresh) {
+    if (LLM_CATALOG_CACHE && !forceRefresh) return LLM_CATALOG_CACHE;
+    let failure = '';
     try {
-        // cache-bust per Query-Param damit Browser nicht aus dem HTTP-Cache
-        // serviert (z.B. nach Server-Neustart mit neuen Sub-Tasks).
+        // Cache-bust via query param so the browser does not serve from the HTTP
+        // cache (e.g. after a server restart that added new sub-tasks).
         const resp = await fetch('/admin/settings/llm-tasks?_=' + Date.now(),
             { credentials: 'same-origin', cache: 'no-store' });
-        LLM_TASKS_CACHE = await resp.json();
+        if (!resp.ok) {
+            failure = 'HTTP ' + resp.status;
+        } else {
+            const data = await resp.json();
+            if (!data || typeof data !== 'object' || !Array.isArray(data.tasks)) {
+                failure = 'unexpected response shape';
+            } else {
+                LLM_CATALOG_CACHE = data;
+            }
+        }
     } catch (e) {
-        LLM_TASKS_CACHE = [];
+        failure = e.message || String(e);
     }
-    return LLM_TASKS_CACHE;
+    if (failure) {
+        LLM_CATALOG_CACHE = EMPTY_LLM_CATALOG;
+        toast(ROUTING_TEXT.catalogFailed + ' (' + failure + ')', 'error');
+    }
+    return LLM_CATALOG_CACHE;
 }
 
 function renderTaskOrderList(items, path, f) {
@@ -1505,17 +1764,19 @@ function renderTaskOrderRow(item, path, i) {
     const task = item.task || '';
     const order = (item.order !== undefined ? item.order : 1);
     let html = '<div class="flex-row" id="taskrow-' + path + '-' + i + '">';
-    html += '<select data-taskrow="' + path + '-' + i + '" style="flex:3;" onchange="setVal(\'' + path + '[' + i + '].task\', this.value)">';
+    html += '<select data-taskrow="' + path + '-' + i + '" style="flex:3;" onchange="onTaskRowTaskChanged(\'' + path + '\', ' + i + ', this.value)">';
     html += '<option value="' + esc(task) + '" selected>' + esc(task || '— select —') + '</option>';
     html += '</select>';
     html += '<input type="number" value="' + order + '" min="1" step="1" style="max-width:70px;" title="Order" onchange="setVal(\'' + path + '[' + i + '].order\', parseInt(this.value) || 1)">';
+    // Slot for the mismatch chip — filled by updateTaskRowMatchBadges().
+    html += '<span class="task-match-slot" data-taskmatch="' + path + '|' + i + '"></span>';
     html += '<button class="btn btn-sm btn-danger" onclick="removeTaskOrderRow(\'' + path + '\', ' + i + ')">✕</button>';
     html += '</div>';
     return html;
 }
 
 async function populateTaskSelects(path) {
-    const tasks = await loadLlmTasks();
+    const tasks = (await loadLlmCatalog()).tasks || [];
     // Group tasks by category for guidance — show grouped <optgroup>s in the dropdown.
     const order = ['image', 'tool', 'chat', 'helper', 'embedding', ''];
     const grouped = {};
@@ -1541,20 +1802,21 @@ async function populateTaskSelects(path) {
         sel.innerHTML = opts;
     });
     applyEmbedVisibility();
+    updateTaskRowMatchBadges(path);
 }
 
-// True, wenn der Routing-Eintrag mindestens einen Task der Gruppe "embedding"
-// bedient (Embedding-Modelle nutzen kein temperature/max_tokens).
+// True when the routing entry serves at least one task of the "embedding" group
+// (embedding models use no temperature/max_tokens).
 function _entryIsEmbedding(data) {
     if (!data || !Array.isArray(data.tasks) || !data.tasks.length) return false;
-    const cache = LLM_TASKS_CACHE || [];
-    const embedIds = new Set(cache.filter(t => t.category === 'embedding').map(t => t.id));
-    if (!embedIds.size) embedIds.add('pose_embedding');  // Fallback bis Cache geladen
+    const cached = (LLM_CATALOG_CACHE || EMPTY_LLM_CATALOG).tasks || [];
+    const embedIds = new Set(cached.filter(t => t.category === 'embedding').map(t => t.id));
+    if (!embedIds.size) embedIds.add('pose_embedding');  // fallback until the catalog is loaded
     return data.tasks.some(it => it && embedIds.has(it.task));
 }
 
-// Blendet temperature/max_tokens bei Embedding-Eintraegen aus (Post-Pass, damit
-// es auch live beim Hinzufuegen/Entfernen des Tasks toggelt).
+// Hides temperature/max_tokens on embedding entries (post-pass, so it also
+// toggles live when the task is added/removed).
 function applyEmbedVisibility() {
     document.querySelectorAll('[data-embedhide-entry]').forEach(el => {
         const entryPath = el.getAttribute('data-embedhide-entry');
@@ -1572,7 +1834,7 @@ function addTaskOrderRow(path) {
 }
 
 async function addTaskGroup(path, category) {
-    const tasks = await loadLlmTasks();
+    const tasks = (await loadLlmCatalog()).tasks || [];
     const obj = _ensureContainer(path, 'array');
     const existing = new Set((obj || []).map(it => it && it.task).filter(Boolean));
     let added = 0;
@@ -1591,7 +1853,7 @@ async function addTaskGroup(path, category) {
 // no-thinking alias). wantThinking=true → only tasks flagged thinking; false →
 // the rest of tool/helper. Chat/image/embedding tasks are never included here.
 async function addTaskGroupByThinking(path, wantThinking) {
-    const tasks = await loadLlmTasks();
+    const tasks = (await loadLlmCatalog()).tasks || [];
     const obj = _ensureContainer(path, 'array');
     const existing = new Set((obj || []).map(it => it && it.task).filter(Boolean));
     let added = 0;
@@ -1634,12 +1896,12 @@ function setAllTaskOrders(path) {
         if (it && typeof it === 'object') it.order = order;
     }
     rerenderTaskOrderList(path);
-    toast('Order=' + order + ' fuer alle ' + obj.length + ' Tasks gesetzt', 'success');
+    toast(ROUTING_TEXT.orderApplied + ': order=' + order + ' (' + obj.length + ')', 'success');
 }
 
 function rerenderTaskOrderList(path) {
-    // Re-render nur den Tasks-Container statt die ganze Section — damit
-    // das umgebende Array-Item offen bleibt.
+    // Re-render only the tasks container instead of the whole section, so the
+    // surrounding array item stays open.
     const parts = parsePath(path);
     let obj = CONFIG;
     for (const p of parts) obj = obj && obj[p];
@@ -1652,7 +1914,7 @@ function rerenderTaskOrderList(path) {
     }
     wrap.innerHTML = html;
     populateTaskSelects(path);
-    // Sichtweise rechts mit aktualisieren wenn wir im llm_routing-Tab sind
+    // Also refresh the per-task view on the right while we are in the llm_routing tab
     if (ACTIVE_SECTION === 'llm_routing') {
         renderLlmTaskView(CONFIG.llm_routing || []);
     }
