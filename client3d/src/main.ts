@@ -10,6 +10,7 @@ import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
+import { doorMarkers, type DoorMarker } from './game/doors';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -19,11 +20,35 @@ import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, showLogin } from './ui';
 import { mountHud } from './hud/mount';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './hud/bus';
+import type { ScenePayload } from './api';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
 const INTERIOR_CAM_DIST = 26; // closer than this -> resolve the rooms
+
+// --- Doorway markers (E3 acceptance: "you cannot see the doors") ------------
+//
+// A door is a GAP in the wall segments (§ B1) — the server emits no door
+// geometry, and a hole between two wall pieces does not read as a way through.
+// So the game layer lays a flat threshold into each gap. This is an OVERLAY,
+// exactly like the event pins and the selection ring: nothing here touches the
+// recipe, the diorama or any shared render code, and `game/doors.ts` (pure
+// maths, hand-checked in scripts/smoke_walk_math.mjs) says WHERE the gaps are.
+//
+// One unit quad and one material for every marker of every tile: a threshold
+// differs only in position, direction and size, so per-marker geometry would
+// buy nothing. Pre-rotated into the XZ plane, so a marker only needs the
+// heading (`rotation.y`) — with `rotation.x` also set, the two Euler angles
+// would compose and the quad would stand up.
+const DOOR_MARK_GEO = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+/** The gold of the UI (`--gold` of the HUD), at the opacity of a hint. */
+const DOOR_MARK_MAT = new THREE.MeshBasicMaterial({
+  color: 0xf2d98c, transparent: true, opacity: 0.35, depthWrite: false,
+});
+/** Depth of the threshold ACROSS the wall, as a share of the doorway's width —
+ *  never thinner than the wall it fills, or it would vanish inside it. */
+const DOOR_MARK_DEPTH = 0.3;
 
 /**
  * "Zoom to" a figure, for a figure drawn at scale 1. With the camera's 45°
@@ -206,12 +231,96 @@ async function startApp(username: string) {
   await scenes.prime(placeable.map((l) => l.id));
 
   const tiles = new Map<string, Tile>();
+
+  /** Threshold quads per location, one child group per storey. They live in
+   *  `engine.scene` and not in `tile.group` on purpose: a rebuild throws the
+   *  tile group away wholesale, and an overlay that is rebuilt from the SAME
+   *  payload wants its own bookkeeping — the same reason the event pins and the
+   *  wall-segment cache keep theirs. */
+  const doorMarks = new Map<string, THREE.Group>();
+
+  function dropDoorMarks(locId: string) {
+    const old = doorMarks.get(locId);
+    if (!old) return;
+    engine.scene.remove(old);
+    doorMarks.delete(locId);
+  }
+
+  /**
+   * Height the threshold lies at. `baseY` is the foot of the WALL the gap sits
+   * in and always exists; a room's own floor may be higher, because it is a
+   * sampled diorama plate and not the wall's base (`sampleRoomWalkables` lifts
+   * `roomCenters` onto it, the same number the avatar walks at). The higher of
+   * the two is the floor one would actually step on, so the quad cannot sink
+   * into it. The lift on top scales with the scene: at Willowbrook's k = 0.21 a
+   * whole storey is 0.63 m, and a fixed centimetre offset there is a step.
+   */
+  function doorMarkY(tile: Tile, m: DoorMarker, k: number): number {
+    let y = m.baseY;
+    for (const id of m.roomIds) {
+      const c = tile.roomCenters.get(id);
+      if (c && c.y > y) y = c.y;
+    }
+    return y + 0.02 * Math.max(k, 0.35);
+  }
+
+  /** (Re)build the thresholds of one tile from its payload. Called after every
+   *  mount — the mount is what fills `roomCenters` with the sampled floor the
+   *  markers are laid on. */
+  function buildDoorMarks(tile: Tile, scene: ScenePayload) {
+    dropDoorMarks(tile.loc.id);
+    if (!tile.isBuilding) return;
+    // The payload is TILE-LOCAL (world metres around the tile centre) while the
+    // scene is absolute — the C1 lesson of the collision round, where segments
+    // sat 45 m from the figure. `doorMarkers` bakes the centre in for us.
+    const origin = { x: tile.center.x, z: tile.center.z };
+    const root = new THREE.Group();
+    root.visible = false;
+    for (const { level } of scene.levels) {
+      const marks = doorMarkers(scene, level, origin);
+      if (!marks.length) continue;
+      // Wall thickness of this storey — the floor is the same for every wall of
+      // a recipe, so the first one answers for all of them.
+      const thickness = scene.walls.find((w) => w.level === level)?.thickness ?? 0;
+      const storey = new THREE.Group();
+      storey.userData.level = level;
+      for (const m of marks) {
+        const mesh = new THREE.Mesh(DOOR_MARK_GEO, DOOR_MARK_MAT);
+        mesh.scale.set(m.width, 1, Math.max(m.width * DOOR_MARK_DEPTH, thickness));
+        // World +x turned onto the wall direction: a rotation by φ about Y maps
+        // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x).
+        mesh.rotation.y = Math.atan2(-m.along.z, m.along.x);
+        mesh.position.set(m.mid.x, doorMarkY(tile, m, scene.k), m.mid.z);
+        // Late, so the quad is not swallowed by the fading walls it lies
+        // between, and unpickable — the selection-ring lesson: an overlay that
+        // catches the ray steals the click that was meant for the tile.
+        mesh.renderOrder = 3;
+        mesh.raycast = () => {};
+        storey.add(mesh);
+      }
+      root.add(storey);
+    }
+    if (!root.children.length) return;
+    engine.scene.add(root);
+    doorMarks.set(tile.loc.id, root);
+  }
+
+  /** Mount a payload and lay its thresholds afterwards. `finally` and not
+   *  `then`: the markers come from the payload alone, so a mount that fell over
+   *  (a model that would not load) still gets its doors — and the rejection
+   *  stays unhandled exactly as it was before. */
+  function mountWithDoors(tile: Tile, scene: ScenePayload) {
+    void mountScene(tile, scene).finally(() => {
+      if (tiles.get(tile.loc.id) === tile) buildDoorMarks(tile, scene);
+    });
+  }
+
   for (const loc of placeable) {
     const tile = buildTile(loc);
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
-    if (scene) void mountScene(tile, scene);
+    if (scene) mountWithDoors(tile, scene);
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
@@ -244,6 +353,10 @@ async function startApp(username: string) {
   }));
   function rebuildTile(old: Tile, loc: WorldLocation) {
     engine.scene.remove(old.group);
+    // The thresholds go with it, unconditionally: a scene that turned 404
+    // (layout deleted) is never mounted again, so nothing else would clear
+    // them and they would hang in the air over a procedural tile.
+    dropDoorMarks(loc.id);
     old.group.traverse((o) => {   // CSS2D-Label-Elemente aufräumen
       const el = (o as { isCSS2DObject?: boolean; element?: HTMLElement });
       if (el.isCSS2DObject && el.element) el.element.remove();
@@ -255,7 +368,7 @@ async function startApp(username: string) {
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
-    if (scene) void mountScene(tile, scene);
+    if (scene) mountWithDoors(tile, scene);
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }
   // Szenen-Signatur bewegt sich (Layout, map3d, Modell-Meta, Prop-Sidecar) →
@@ -1871,6 +1984,21 @@ async function startApp(username: string) {
     // Räume samt Diorama und Props winkelabhängig verschwinden.
     for (const tile of tiles.values()) {
       if (tile.roomGroups.size) applyRoomVisibility(tile);
+    }
+
+    // Doorway thresholds: a hint for the room view, nothing for the map. Shown
+    // only where the interior actually resolved — the same 0.5 the room
+    // resolution uses, so a marker never floats over a closed shell — and only
+    // on the storey the tile displays, exactly like its walls and slabs. Built
+    // once per tile, so a frame only flips visibility.
+    for (const [locId, root] of doorMarks) {
+      const tile = tiles.get(locId);
+      const on = !!tile && tile.fade > 0.5;
+      root.visible = on;
+      if (!tile || !on) continue;
+      for (const storey of root.children) {
+        storey.visible = storey.userData.level === tile.levelFilter;
+      }
     }
     npcs.tick(dt, engine.dist);
     bob += dt * 2.2;
