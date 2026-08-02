@@ -415,7 +415,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   // Ein vorhandenes Modell bestätigt das Flag nur (display shell_area).
   tile.modelIsShellArea = !!scene.area_detail;
   if (tile.groundPlate) {
-    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.01 : 0.04;
+    // −0,05 statt −0,01: 1 cm unter den Etage-0-Platten reichte dem
+    // Tiefenpuffer aus der Distanz nicht (Z-Fighting-Wellen, User-Bild
+    // 2026-08-03); zusätzlich drückt polygonOffset den Backstop im
+    // Tiefenvergleich nach hinten, damit er auch bei drapierten,
+    // parallelen Flächen NIE durch die Zonen-Platten sticht.
+    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.05 : 0.04;
+    const gm = tile.groundPlate.material as THREE.MeshStandardMaterial;
+    gm.polygonOffset = tile.modelIsShellArea;
+    gm.polygonOffsetFactor = tile.modelIsShellArea ? 1 : 0;
+    gm.polygonOffsetUnits = tile.modelIsShellArea ? 2 : 0;
+    gm.needsUpdate = true;
   }
   if (scene.terrain && tile.groundPlate) {
     // Die kachel-eigene Platte (kein Payload-Primitiv, sondern der Backstop

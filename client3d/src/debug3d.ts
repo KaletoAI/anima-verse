@@ -61,7 +61,8 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
       const n = g ? (g.index ? g.index.count : g.attributes.position?.count || 0) : 0;
       mesh.getWorldPosition(wp);
       const img = (mat?.map as THREE.Texture | null)?.image as
-        { complete?: boolean; width?: number } | undefined;
+        { complete?: boolean; width?: number; src?: string } | undefined;
+      const src = (img?.src || '').split('/').slice(-1)[0].slice(0, 28);
       out.push({
         n: tag + ':' + [mesh.name || mesh.type, mesh.parent?.name || '']
           .filter(Boolean).join('<').slice(0, 42),
@@ -70,7 +71,7 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
         o: Math.round(((mat?.opacity ?? 1)) * 100) / 100,
         t: mat?.transparent ? 1 : 0,
         m: mat?.map ? ((img && (img.complete === undefined || img.complete
-          || (img.width || 0) > 0)) ? 'ld' : 'pend') : '-',
+          || (img.width || 0) > 0)) ? ('ld:' + src) : 'pend') : '-',
         tri: Math.round(n / 3),
       });
     });
@@ -131,7 +132,10 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
         visible: gp.visible ? 1 : 0,
         opacity: gm ? Math.round(gm.opacity * 100) / 100 : -1,
         transparent: gm?.transparent ? 1 : 0,
-        map: gm?.map ? 'ld' : '-',
+        map: gm?.map
+          ? 'ld:' + String((gm.map.image as { src?: string } | undefined)?.src
+              || '').split('/').slice(-1)[0].slice(0, 28)
+          : '-',
       } : null,
     };
     const rows = [
