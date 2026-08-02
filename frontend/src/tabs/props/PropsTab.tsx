@@ -18,7 +18,8 @@ import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { PropCreateForm } from './PropCreateForm'
 import { PropDetail } from './PropDetail'
-import { CATEGORY_DATALIST_ID, CATEGORY_SUGGESTIONS } from './propTypes'
+import { PropImageDialog } from './PropImageDialog'
+import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { ImageBackendInfo, MeshBackendInfo, PropFull } from './propTypes'
 
 export type { ImageBackendInfo, MeshBackendInfo, PropFull, PropMarker } from './propTypes'
@@ -39,6 +40,9 @@ export function PropsTab() {
   // generate button goes through the dialog — face count / texture size
   // are per-run overrides).
   const [regen, setRegen] = useState<{ id: string; meshOnly: boolean } | null>(null)
+  // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
+  // final prompt; the mesh stays until re-meshed from the new image).
+  const [imgRegen, setImgRegen] = useState<PropFull | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
 
@@ -194,6 +198,7 @@ export function PropsTab() {
             armedDelete={armedDel === selectedProp.id}
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
             onRegenerateMesh={() => setRegen({ id: selectedProp.id, meshOnly: true })}
+            onRegenerateImage={() => setImgRegen(selectedProp)}
           />
         ) : (
           <div className="ga-placeholder">{t('Pick a prop or create a new one.')}</div>
@@ -228,10 +233,33 @@ export function PropsTab() {
           }}
           onClose={() => setRegen(null)}
         />
+        <PropImageDialog
+          prop={imgRegen}
+          backends={imageBackends}
+          onGenerate={(imageBackend, prompt, negative) => {
+            const target = imgRegen
+            setImgRegen(null)
+            if (!target) return
+            void apiPost<{ status?: string }>(
+              `/world/props/${encodeURIComponent(target.id)}/generate`,
+              { image_only: true, image_backend: imageBackend,
+                prompt, negative })
+              .then((d) => {
+                toast(d?.status === 'already_running'
+                  ? t('This prop is already generating.')
+                  : t('Rendering a new source image…'))
+                startPoll()
+              })
+              .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+          }}
+          onClose={() => setImgRegen(null)}
+        />
       </section>
-      {/* One shared category vocabulary for the create form and the detail. */}
+      {/* One shared category vocabulary for the create form and the detail —
+          the categories the EXISTING props use (same source as the list
+          filter), not a predefined list. Free text stays possible. */}
       <datalist id={CATEGORY_DATALIST_ID}>
-        {CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}
+        {categories.map((c) => <option key={c} value={c} />)}
       </datalist>
     </div>
   )

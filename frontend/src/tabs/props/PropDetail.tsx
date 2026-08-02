@@ -42,7 +42,7 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
 const MARKER_SAVE_DEBOUNCE_MS = 400
 
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
-  armedDelete, onRegenerate, onRegenerateMesh }: {
+  armedDelete, onRegenerate, onRegenerateMesh, onRegenerateImage }: {
   prop: PropFull
   pending: boolean
   cacheBump: number
@@ -53,6 +53,8 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   onRegenerateMesh: () => void
   /** Re-run the source→mesh chain with the stored description/name. */
   onRegenerate: () => void
+  /** Render a NEW source image only — the mesh stays until re-meshed. */
+  onRegenerateImage: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -584,6 +586,27 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                 {t('No source image (uploaded model).')}
               </div>
             )}
+            {/* Provenance of the CURRENT image: what it was generated with.
+                Full prompt/negative in the tooltip — the caption stays one
+                line. Uploaded/legacy images have no record and say so. */}
+            {srcOk ? (
+              <span className="ga-hint" style={{ fontSize: 10, lineHeight: '13px' }}
+                title={prop.prompt
+                  ? `${t('Prompt')}: ${prop.prompt}${prop.negative
+                    ? `\n${t('Negative prompt')}: ${prop.negative}` : ''}`
+                  : t('No generation record for this image.')}>
+                {prop.backend_image
+                  ? `🖼 ${prop.backend_image}${prop.source_generated_at
+                    ? ` · ${prop.source_generated_at.slice(0, 10)}` : ''}`
+                  : t('No generation record for this image.')}
+              </span>
+            ) : null}
+            <button type="button" className="ga-btn ga-btn-sm"
+              disabled={pending}
+              onClick={onRegenerateImage}
+              title={t('Render a NEW source image (backend and prompt in the dialog). The current 3D model stays until you re-mesh from the new image.')}>
+              🖼 {pending ? t('Generating…') : t('New image')}
+            </button>
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={pending || !srcOk}
               onClick={onRegenerateMesh}

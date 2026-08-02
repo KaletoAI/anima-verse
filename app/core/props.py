@@ -630,7 +630,10 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             "created_at": meta.get("created_at") or "",
             "source": meta.get("source") or "",
             "backend": meta.get("backend") or "",
+            "backend_image": meta.get("backend_image") or "",
             "prompt": meta.get("prompt") or "",
+            "negative": meta.get("negative") or "",
+            "source_generated_at": meta.get("source_generated_at") or "",
             "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
             "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
         })
@@ -837,6 +840,9 @@ def _render_source(prop_id: str, backend_glob: str,
     meta["backend_image"] = backend.name
     meta["prompt"] = prompt
     meta["negative"] = negative
+    # Provenance for the UI: the source panel shows what the CURRENT image
+    # was generated with (backend + when; prompt/negative in the tooltip).
+    meta["source_generated_at"] = utc_now_iso()
     _write_sidecar(prop_id, meta)
     return True
 
@@ -844,7 +850,8 @@ def _render_source(prop_id: str, backend_glob: str,
 def _generate(prop_id: str, prompt: str, negative: str,
               image_backend_glob: str, mesh_backend_glob: str,
               face_num: Any = None, texture_size: Any = None,
-              mesh_only: bool = False) -> Dict[str, Any]:
+              mesh_only: bool = False,
+              image_only: bool = False) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries)."""
@@ -860,11 +867,15 @@ def _generate(prop_id: str, prompt: str, negative: str,
     error = ""
     try:
         # mesh_only re-meshes the EXISTING source image (new backend / face
-        # count / texture size) without burning an image render.
+        # count / texture size) without burning an image render; image_only
+        # renders a NEW source image and stops — re-meshing is its own,
+        # separately triggered step ("3D from this image").
         if not mesh_only and not _render_source(prop_id, image_backend_glob,
                                                 prompt, negative):
             error = "source render failed"
             return {"ok": False, "error": error}
+        if image_only:
+            return {"ok": True}
         src = source_path(prop_id)
         if not src:
             error = ("no source image to mesh from" if mesh_only
@@ -930,7 +941,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        mesh_backend_glob: str = "",
                        face_num: Any = None,
                        texture_size: Any = None,
-                       mesh_only: bool = False) -> bool:
+                       mesh_only: bool = False,
+                       image_only: bool = False) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
     False only while THIS prop+backend combination is already generating
@@ -948,7 +960,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
         try:
             _generate(pid, prompt, negative, image_backend_glob,
                       mesh_backend_glob, face_num=face_num,
-                      texture_size=texture_size, mesh_only=mesh_only)
+                      texture_size=texture_size, mesh_only=mesh_only,
+                      image_only=image_only)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:

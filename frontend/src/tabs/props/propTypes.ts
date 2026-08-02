@@ -39,7 +39,13 @@ export interface PropFull {
   created_at?: string
   source?: string
   backend?: string
+  /** Image backend the CURRENT source image was rendered on. */
+  backend_image?: string
+  /** Final prompt / negative of the current source image (provenance). */
   prompt?: string
+  negative?: string
+  /** When the current source image was rendered (UTC ISO). */
+  source_generated_at?: string
   model_url?: string
   source_url?: string
 }
@@ -55,13 +61,10 @@ export interface MeshBackendInfo {
   face_num?: number | null
 }
 
-// Suggested categories (open vocabulary — free text via datalist). The base
-// ones (chair/bed/bench/…) are what the client's category→animation mapping
-// keys on (AV3D-6); everything else is decoration.
-export const CATEGORY_SUGGESTIONS = [
-  'chair', 'table', 'bed', 'sofa', 'bench', 'stool', 'shelf', 'cabinet',
-  'desk', 'lamp', 'plant', 'rug', 'decoration', 'appliance', 'misc',
-]
+// Categories are an open vocabulary (free text): the shared datalist offers
+// the categories the EXISTING props use, nothing is predefined. The client's
+// category→animation mapping (AV3D-6) still keys on names like chair/bed —
+// but that is a consumer convention, not an input restriction.
 
 /** id of the shared category <datalist> — rendered once by PropsTab. */
 export const CATEGORY_DATALIST_ID = 'prop-category-options'

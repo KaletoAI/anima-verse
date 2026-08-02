@@ -885,14 +885,19 @@ async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
 async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     """Re-run the source→mesh chain for an EXISTING prop (body:
     {prompt?, negative?, image_backend?, mesh_backend?} — empty prompt =
-    composed from the stored description/name). Background job — poll
-    /world/props for pending."""
+    composed from the stored description/name). ``mesh_only`` re-meshes the
+    existing source image; ``image_only`` renders a new source image and
+    stops (re-meshing is its own step). Background job — poll /world/props
+    for pending."""
     from app.core.props import get_prop, trigger_generation
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
     data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
     if not isinstance(data, dict):
         data = {}
+    if bool(data.get("mesh_only")) and bool(data.get("image_only")):
+        raise HTTPException(status_code=400,
+                            detail="mesh_only and image_only are exclusive")
     if not trigger_generation(prop_id,
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),
@@ -900,7 +905,8 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
-                              mesh_only=bool(data.get("mesh_only"))):
+                              mesh_only=bool(data.get("mesh_only")),
+                              image_only=bool(data.get("image_only"))):
         return {"status": "already_running"}
     return {"status": "generating"}
 
