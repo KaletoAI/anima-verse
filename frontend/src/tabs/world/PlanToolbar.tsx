@@ -11,7 +11,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 
 /** Click-to-place modes of the floor-plan editor ('' = plain selection). */
 export type PlanMode = '' | 'marker' | 'marker-move' | 'outline'
-  | 'elevator' | 'door' | 'window' | 'draw-room'
+  | 'elevator' | 'door' | 'window' | 'draw-room' | 'curve' | 'boundary-door'
 
 function Tool({ icon, title, onClick, active = false, danger = false,
   disabled = false, small = false }: {
@@ -58,6 +58,10 @@ interface PlanToolbarProps {
   /** The selected room has a 3D model with a declared real width — only then
    *  can the floor plan be fitted to it. */
   canFitToModel: boolean
+  /** The selected room has a DRAWN hull — curves bend hull edges only. */
+  canCurve: boolean
+  /** map3d.area_detail is set — boundary pass-throughs are edited then. */
+  areaDetail: boolean
   propsOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
@@ -76,7 +80,7 @@ interface PlanToolbarProps {
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasExit, hasOutline,
   outlineDraftLen, hasElevator, building, noAnchor, canSuggest,
-  canFitToModel, onFitToModel,
+  canFitToModel, canCurve, areaDetail, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
@@ -131,6 +135,14 @@ export function PlanToolbar({
             <Tool icon="🗑" danger onClick={onRemoveElevator}
               title={t('Remove the elevator')} />
           ) : null}
+          {areaDetail ? (
+            <Tool
+              icon="⇥"
+              active={mode === 'boundary-door'}
+              onClick={() => onMode('boundary-door')}
+              title={t('Entry/exit at the location edge — click near the plan border; a road crossing the cell gets one on each side. Edit width and linked room below the plan.')}
+            />
+          ) : null}
         </>
       ) : null}
 
@@ -162,6 +174,14 @@ export function PlanToolbar({
         onClick={onRotate}
         title={t('Rotate the room 90° clockwise — hull, exit point and 3D model turn together. Now: {deg}°')
           .replace('{deg}', String(selectionRotation))}
+      />
+      <Tool
+        icon="◡"
+        active={mode === 'curve'}
+        disabled={!canCurve || noAnchor}
+        onClick={() => onMode('curve')}
+        title={noAnchor ? anchorTip
+          : t('Curve — click a hull edge of the selected room to bend it (drag the control point; click the edge again to remove the curve). Needs a drawn hull. Openings cannot sit on curved edges.')}
       />
       <Tool
         icon="⇲"

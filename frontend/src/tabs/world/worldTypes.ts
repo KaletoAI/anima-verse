@@ -60,6 +60,18 @@ export interface RoomLayout {
    *  the prop — the client sizes it from the prop's own dims × the plan's
    *  scale factor. A dangling prop_id renders as a placeholder. */
   props?: RoomPropPlacement[]
+  /** Curved hull edges (plan-area-detail-scenes.md): at most ONE quadratic
+   *  bezier control point per edge, bbox-local like the outline points
+   *  (server clamp [-1, 2]). The SERVER tessellates at compose time — the
+   *  payload stays pure polygon. Openings on curved edges are rejected. */
+  outline_curves?: Array<{ edge: number; c: [number, number] }>
+  /** Deterministic prop scatter: `count` props per kind thrown over the room
+   *  area from a persisted uint32 seed (Σ count ≤ 120). Positions are
+   *  computed server-side at compose time, never stored — reroll = new
+   *  seed. `spacing_m` adds clearance on top of the footprint rule. */
+  scatter?: { seed: number
+    items: Array<{ prop_id: string; count: number }>
+    spacing_m?: number }
 }
 
 export interface RoomPropPlacement {
@@ -149,6 +161,17 @@ export interface Map3D {
    *  outside it. Outdoor rooms outside the plan become zones on the model
    *  surface. Absent = today's behaviour (single building, model fades). */
   area_model?: boolean
+  /** Detail scene ON TOP of area_model (plan-area-detail-scenes.md): the
+   *  location model becomes a FADING shell (display "shell_area") and the
+   *  rooms compose like a building interior — no cutouts, no overlay zones.
+   *  Only meaningful together with area_model. */
+  area_detail?: boolean
+  /** Pass-throughs at the LOCATION edge (a road crossing the cell east–west
+   *  = two entries). Geometry + room link only — entry_room stays the
+   *  gameplay gate. `at` follows the room-opening letter convention
+   *  (left→right on N/S, top→bottom on E/W). */
+  boundary_openings?: Array<{ edge: 'N' | 'E' | 'S' | 'W'; at: number
+    width_m: number; type?: 'passage'; room?: string }>
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  location's reference square (extent_m), auto-closed — the client
    *  renders floor plates and walls per used level from it. Absent =

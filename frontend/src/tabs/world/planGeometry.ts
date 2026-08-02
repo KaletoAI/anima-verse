@@ -217,9 +217,12 @@ export interface SnapTargets { points: Pt[]; segments: Array<{ a: Pt; b: Pt }> }
 
 /** Snap targets for a drawing session: the hulls of the placed rooms on the
  *  level, optionally the building outline (NOT when it is the thing being
- *  redrawn), plus loose extra points (the draft's own vertices). */
+ *  redrawn), the reference-square FRAME (corners, edge midpoints and the
+ *  edges themselves — "the road ends at the east edge" is a real snap, and
+ *  the frame is the contract surface everywhere), plus loose extra points
+ *  (the draft's own vertices). */
 export function buildSnapTargets(hulls: PolyRoom[], opts?: {
-  buildingOutline?: Pt[]; extraPoints?: Pt[] }): SnapTargets {
+  buildingOutline?: Pt[]; extraPoints?: Pt[]; frame?: boolean }): SnapTargets {
   const points: Pt[] = []
   const segments: Array<{ a: Pt; b: Pt }> = []
   const addPoly = (pts: Pt[]) => {
@@ -231,6 +234,15 @@ export function buildSnapTargets(hulls: PolyRoom[], opts?: {
   for (const h of hulls) addPoly(absOutline(h))
   const bo = opts?.buildingOutline
   if (bo && bo.length >= 3) addPoly(bo)
+  if (opts?.frame) {
+    const c = rectToOutline()
+    for (let i = 0; i < 4; i++) {
+      const a = c[i]
+      const b = c[(i + 1) % 4]
+      points.push(a, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
+      segments.push({ a, b })
+    }
+  }
   for (const p of opts?.extraPoints || []) points.push(p)
   return { points, segments }
 }

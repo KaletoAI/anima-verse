@@ -388,6 +388,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // A ground location brings its own floor: the stage plate would cut the
     // model at y = 0 exactly like the 3D client's tile plate did (Mondscheinsee
     // spans −0.80 … +2.69). The edge loop stays — it is the frame, not a floor.
+    // `shell_area` (v5.2) deliberately does NOT match: in the interior view —
+    // which this preview IS — that model is faded out, and the plate is the
+    // backstop under the detail scene, exactly what the client shows close up.
     const groundLoc = (sc?.models || []).some(
       (m) => m.role === 'building' && m.display === 'ground')
     if (h.ground) h.ground.visible = !groundLoc

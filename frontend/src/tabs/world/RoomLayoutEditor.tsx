@@ -102,6 +102,7 @@ type DragState =
   | { kind: 'move'; roomId: string; startX: number; startY: number; origX: number; origY: number; moving?: boolean }
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number }
   | { kind: 'opening'; roomId: string; index: number; edge: number }
+  | { kind: 'curveCtl'; roomId: string; edge: number }
   | { kind: 'prop'; roomId: string; index: number }
   | { kind: 'ghost'; roomId: string; index: number }
   | { kind: 'model'; roomId: string }
@@ -184,6 +185,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const [markerSel, setMarkerSel] = useState<number | null>(null)
   // Elevator selected on the plan → the slider row below fine-tunes it.
   const [elevatorSel, setElevatorSel] = useState(false)
+  // Selected boundary pass-through (index into map3d.boundary_openings) —
+  // highlights its bar on the frame and its edit row below the plan.
+  const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
   const [clipKinds, setClipKinds] = useState<string[]>([])
   useEffect(() => {
     apiGet<{ kinds?: string[] }>('/assets/animation-clips')
@@ -414,6 +418,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // Rooms snap onto the building outline; while the OUTLINE itself is
       // being redrawn it is not a target.
       buildingOutline: clickMode === 'draw-room' ? map3d?.outline : undefined,
+      // The reference-square frame is always a target: corners, edge
+      // midpoints and the edges — a room meant to touch the cell edge
+      // really touches it (plan-area-detail-scenes.md).
+      frame: true,
       extraPoints: outlineDraft,
     })
   }, [clickMode, rooms, level, outlineDraft, drawTarget, map3d?.outline])
@@ -622,6 +630,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       x: r4(minX), y: r4(minY), w: r4(w), d: r4(d),
       outline: pts.map(([u, v]) => [r4(u), r4(v)] as [number, number]),
       openings: [],
+      // Curves sat on the OLD hull's edges — they go with the openings.
+      outline_curves: undefined,
     })
     setSelected(drawTarget)
     setDrawTarget('')
@@ -706,6 +716,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           openings: (lay.openings || []).map((o, idx) =>
             idx === drag.index ? { ...o, edge: drag.edge, at } : o),
         })
+      } else if (drag.kind === 'curveCtl') {
+        // Bezier control point (plan-area-detail-scenes.md): room-local
+        // fractions, clamped to the server's [-1, 2] validity window — a
+        // bulge may leave the bbox on purpose.
+        const rect = canvas.getBoundingClientRect()
+        const fx = (e.clientX - rect.left) / rect.width
+        const fy = (e.clientY - rect.top) / rect.height
+        const c: [number, number] = [
+          r4(clamp((fx - lay.x) / (lay.w || 1), -1, 2)),
+          r4(clamp((fy - lay.y) / (lay.d || 1), -1, 2)),
+        ]
+        updateLayout(drag.roomId, {
+          outline_curves: (lay.outline_curves || []).map((cv) =>
+            cv.edge === drag.edge ? { ...cv, c } : cv),
+        })
       } else {
         // Prop / ghost drag: reposition inside the room (room-local
         // fractions). The piece keeps its real size — only `at` moves.
@@ -768,6 +793,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       setOpeningSel(index)
       dragRef.current = { kind: 'opening', roomId: room.id, index, edge }
     }, [clickMode, setSelected])
+
+  // Drag a curve control point (allowed while the ◡ tool is armed — the
+  // handle IS that tool's editing surface).
+  const startCurveDrag = useCallback(
+    (e: React.PointerEvent, room: Room, edge: number) => {
+      if (!room.id) return
+      e.preventDefault()
+      e.stopPropagation()
+      dragRef.current = { kind: 'curveCtl', roomId: room.id, edge }
+    }, [])
 
   // Drag a placed prop within its room (no drag while a tool is armed).
   const startPropDrag = useCallback(
@@ -873,12 +908,44 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   { at: [px, py] as [number, number], animation: markerKind }],
       })
       setMarkerSel((room.layout.markers || []).length)
+    } else if (clickMode === 'curve') {
+      // Toggle a bezier control point on the nearest hull edge of the
+      // SELECTED room (plan-area-detail-scenes.md). The mode stays armed —
+      // a road bends more than once.
+      const lay0 = room.layout
+      if (room.id !== selected || !lay0.outline || lay0.outline.length < 3) return
+      const { edge } = nearestPolygonEdge(outlineOf(lay0), [px, py])
+      const cur = lay0.outline_curves || []
+      let next: NonNullable<RoomLayout['outline_curves']>
+      if (cur.some((c) => c.edge === edge)) {
+        next = cur.filter((c) => c.edge !== edge)
+      } else {
+        // Start the control point at the edge midpoint pushed OUTWARD by a
+        // quarter edge length: hulls wind clockwise in screen coords, the
+        // interior lies right of a→b, so outward is (dy, −dx).
+        const { a, b } = edgeSegment(outlineOf(lay0), edge)
+        const dx = b[0] - a[0]
+        const dy = b[1] - a[1]
+        const c: [number, number] = [
+          r4(clamp((a[0] + b[0]) / 2 + dy * 0.25, -1, 2)),
+          r4(clamp((a[1] + b[1]) / 2 - dx * 0.25, -1, 2)),
+        ]
+        next = [...cur, { edge, c }]
+      }
+      updateLayout(room.id, { outline_curves: next.length ? next : undefined })
+      return
     } else if (clickMode === 'door' || clickMode === 'window') {
       // Place a door/window on the nearest hull edge at the clicked
       // position. `to` follows from where the edge leads: a shared wall
       // points at the neighbour, an exterior wall at "outside" — editable
       // in the panel.
       const { edge, at } = nearestPolygonEdge(outlineOf(room.layout), [px, py])
+      if ((room.layout.outline_curves || []).some((c) => c.edge === edge)) {
+        // The server rejects these (v1) — refuse up front instead of
+        // silently losing the opening on save.
+        toast(t('Openings cannot sit on a curved edge — remove the curve first.'), 'error')
+        return
+      }
       const lay0 = room.layout
       const others: PolyRoom[] = roomsRef.current
         .filter((r) => r.id && r.id !== room.id && r.layout
@@ -902,7 +969,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
     setClickMode('')
   }, [clickMode, armedProp, ghostYaw, markerKind, markerSel, selected,
-    setSelected, updateLayout, calibrationRoomId, onCalibrationAt])
+    setSelected, updateLayout, calibrationRoomId, onCalibrationAt, t, toast])
 
   const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
 
@@ -927,11 +994,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
     // Geometry that carries a real size stays locked without a scale anchor
     // (the toolbar disables these too — this is the second lock).
-    if (planW <= 0 && (m === 'draw-room' || m === 'outline' || m === 'marker')) return
+    if (planW <= 0 && (m === 'draw-room' || m === 'outline' || m === 'marker'
+        || m === 'curve')) return
     if (m === 'draw-room') {
       if (!selectedRoom?.id) return
       setDrawTarget(selectedRoom.id)
     }
+    // Curves bend hull edges — without a drawn hull there is nothing to bend.
+    if (m === 'curve' && !selectedRoom?.layout?.outline?.length) return
     setOutlineDraft([])
     setHoverSnap(null)
     setClickMode(m)
@@ -986,6 +1056,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       ...(lay.outline?.length
         ? { outline: lay.outline.map(
             ([u, v]) => [r4(1 - v), r4(u)] as [number, number]) }
+        : {}),
+      // Curve control points bake the same transform as the outline points;
+      // edge indices stay (the hull's vertex order is unchanged).
+      ...(lay.outline?.length && lay.outline_curves?.length
+        ? { outline_curves: lay.outline_curves.map((cv) => ({ ...cv,
+            c: [r4(1 - cv.c[1]), r4(cv.c[0])] as [number, number] })) }
         : {}),
       ...(lay.openings?.length
         ? { openings: lay.openings.map((o) => (typeof o.edge === 'string'
@@ -1203,8 +1279,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           <label className="ga-check-row" style={{ fontSize: '0.82em' }}
             title={t('For villages, lakes and other AREAS: the location model stays in the interior view and gets holes cut into it — the floor plan plus every indoor room placed outside it. Outdoor rooms outside the plan become walkable zones on the model surface. Off = single building, the model fades out.')}>
             <input type="checkbox" checked={!!map3d?.area_model}
-              onChange={(e) => onMap3d('area_model', e.target.checked || undefined)} />
+              onChange={(e) => {
+                onMap3d('area_model', e.target.checked || undefined)
+                if (!e.target.checked) onMap3d('area_detail', undefined)
+              }} />
             <span>{t('Area location (model stays in interior view)')}</span>
+          </label>
+        ) : null}
+        {onMap3d && map3d?.area_model ? (
+          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+            title={t('Detail scene: the area model becomes a fading shell — zooming in fades it out like a building and shows the drawn rooms (ground textures, scattered props) instead. No holes are cut into the model any more.')}>
+            <input type="checkbox" checked={!!map3d?.area_detail}
+              onChange={(e) => onMap3d('area_detail', e.target.checked || undefined)} />
+            <span>{t('Detail scene (model fades on zoom-in)')}</span>
           </label>
         ) : null}
       </div>
@@ -1280,6 +1367,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         canSuggest={placed.length > 0}
         canFitToModel={!!(selectedRoom?.id && planW > 0
           && (modelDims[selectedRoom.id]?.widthM || 0) > 0)}
+        canCurve={!!selectedRoom?.layout?.outline?.length}
+        areaDetail={!!map3d?.area_detail}
         onFitToModel={fitToModel}
         propsOpen={propsOpen}
         onMode={armMode}
@@ -1331,11 +1420,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onPointerLeave={() => { setHoverSnap(null); setPropGhost(null) }}
         onClickCapture={(e) => {
           // Canvas-level drawing/placement (outline or room hull points,
-          // elevator) applies at CANVAS coordinates, also when the click
-          // lands inside a room — capture phase keeps the room handlers out
-          // of the way.
+          // elevator, boundary pass-throughs) applies at CANVAS coordinates,
+          // also when the click lands inside a room — capture phase keeps
+          // the room handlers out of the way.
           if (clickMode !== 'outline' && clickMode !== 'draw-room'
-              && clickMode !== 'elevator') return
+              && clickMode !== 'elevator' && clickMode !== 'boundary-door') return
           e.stopPropagation()
           if (clickMode === 'outline' || clickMode === 'draw-room') {
             // Clicks go through the snap engine (Shift = free-hand); landing on
@@ -1347,6 +1436,31 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             } else {
               setOutlineDraft((prev) => [...prev, res.p])
             }
+          } else if (clickMode === 'boundary-door') {
+            // Pass-through at the LOCATION edge (plan-area-detail-scenes.md):
+            // snap the click to the nearest frame edge; `at` follows the
+            // room-opening letter convention (left→right on N/S, top→bottom
+            // on E/W).
+            const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
+            const fx = clamp((e.clientX - rect.left) / rect.width, 0, 1)
+            const fy = clamp((e.clientY - rect.top) / rect.height, 0, 1)
+            const cur = map3d?.boundary_openings || []
+            if (cur.length >= 8) {
+              toast(t('At most 8 boundary pass-throughs per location.'), 'error')
+            } else {
+              const cand = [
+                { edge: 'N' as const, dist: fy, at: fx },
+                { edge: 'E' as const, dist: 1 - fx, at: fy },
+                { edge: 'S' as const, dist: 1 - fy, at: fx },
+                { edge: 'W' as const, dist: fx, at: fy },
+              ].sort((a, b) => a.dist - b.dist)[0]
+              onMap3d?.('boundary_openings', [...cur, {
+                edge: cand.edge, at: r4(cand.at), width_m: 3,
+                type: 'passage' as const,
+              }])
+              setSelectedBoundary(cur.length)
+            }
+            setClickMode('')
           } else {
             const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
             onMap3d?.('elevator', [
@@ -1359,10 +1473,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         {/* Building outline (existing + draft) + snap feedback as an SVG
             overlay. */}
         {(map3d?.outline?.length || outlineDraft.length
+          || map3d?.boundary_openings?.length
           || (hoverSnap && (clickMode === 'outline' || clickMode === 'draw-room'))
           || (armedProp && propGhost)) ? (
           <svg viewBox="0 0 100 100" preserveAspectRatio="none"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+            {/* Boundary pass-throughs: gold bars ON the frame edge — the
+                only overlay children that take pointer events (select). */}
+            {(map3d?.boundary_openings || []).map((bo, i) => {
+              const half = (bo.width_m / (planW || 8)) * 50
+              const horiz = bo.edge === 'N' || bo.edge === 'S'
+              const cx = horiz ? bo.at * 100 : (bo.edge === 'E' ? 100 : 0)
+              const cy = horiz ? (bo.edge === 'S' ? 100 : 0) : bo.at * 100
+              return (
+                <rect key={`bo-${i}`}
+                  x={horiz ? cx - half : cx - 1.2}
+                  y={horiz ? cy - 1.2 : cy - half}
+                  width={horiz ? half * 2 : 2.4}
+                  height={horiz ? 2.4 : half * 2}
+                  fill="#e0a356" opacity={selectedBoundary === i ? 1 : 0.7}
+                  style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                  onClick={(ev) => { ev.stopPropagation(); setSelectedBoundary(i) }}
+                >
+                  <title>{`${bo.edge} · ${bo.width_m} m`}</title>
+                </rect>
+              )
+            })}
             {map3d?.outline?.length ? (
               <polygon
                 points={map3d.outline.map(([x, y]) => `${x * 100},${y * 100}`).join(' ')}
@@ -1501,14 +1637,61 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none"
                   style={{ position: 'absolute', inset: 0, width: '100%',
                     height: '100%', pointerEvents: 'none', overflow: 'visible' }}>
-                  <polygon
-                    points={lay.outline.map(([u, v]) => `${u * 100},${v * 100}`).join(' ')}
-                    fill={isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)'}
-                    stroke={isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}
-                    strokeWidth={2} vectorEffect="non-scaling-stroke"
-                  />
+                  {(() => {
+                    // Curved edges render as quadratic beziers — display
+                    // only; the committed geometry is the server's
+                    // tessellated payload (plan-area-detail-scenes.md).
+                    const pts = lay.outline!
+                    const curves = new Map((lay.outline_curves || [])
+                      .map((c) => [c.edge, c.c] as [number, [number, number]]))
+                    let d = `M ${pts[0][0] * 100},${pts[0][1] * 100}`
+                    for (let i = 0; i < pts.length; i++) {
+                      const q = pts[(i + 1) % pts.length]
+                      const c = curves.get(i)
+                      d += c
+                        ? ` Q ${c[0] * 100},${c[1] * 100} ${q[0] * 100},${q[1] * 100}`
+                        : ` L ${q[0] * 100},${q[1] * 100}`
+                    }
+                    return (
+                      <path d={d + ' Z'}
+                        fill={isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)'}
+                        stroke={isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}
+                        strokeWidth={2} vectorEffect="non-scaling-stroke"
+                      />
+                    )
+                  })()}
+                  {isSel ? (lay.outline_curves || []).map((cv) => {
+                    const { a, b } = edgeSegment(outlineOf(lay), cv.edge)
+                    return (
+                      <g key={cv.edge} opacity={0.6}>
+                        <line x1={a[0] * 100} y1={a[1] * 100}
+                          x2={cv.c[0] * 100} y2={cv.c[1] * 100}
+                          stroke="#e0a356" strokeWidth={1}
+                          strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
+                        <line x1={b[0] * 100} y1={b[1] * 100}
+                          x2={cv.c[0] * 100} y2={cv.c[1] * 100}
+                          stroke="#e0a356" strokeWidth={1}
+                          strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
+                      </g>
+                    )
+                  }) : null}
                 </svg>
               ) : null}
+              {isSel && lay.outline?.length ? (lay.outline_curves || []).map((cv) => (
+                <span
+                  key={`ctl-${cv.edge}`}
+                  title={t('Curve control point — drag to bend the edge; click the edge with the ◡ tool to remove the curve.')}
+                  onPointerDown={(e) => startCurveDrag(e, room, cv.edge)}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute',
+                    left: `${cv.c[0] * 100}%`, top: `${cv.c[1] * 100}%`,
+                    width: 10, height: 10, marginLeft: -5, marginTop: -5,
+                    borderRadius: '50%', background: '#e0a356',
+                    border: '1px solid #0d1117', cursor: 'grab', zIndex: 5,
+                  }}
+                />
+              )) : null}
               <span style={{
                 position: 'absolute', left: 3, top: 2, right: 3, fontSize: 10,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -1862,6 +2045,59 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       </div>
       </div>
       <PlanScaleBar planWidthM={planW} canvasPx={canvasPx} />
+      {/* Boundary pass-throughs (plan-area-detail-scenes.md): building-level
+          data, so the rows live under the plan, not in the room panel. */}
+      {onMap3d && map3d?.area_detail && map3d?.boundary_openings?.length ? (
+        <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
+          <div className="ga-form-section-label">{t('Boundary pass-throughs')}</div>
+          {(map3d.boundary_openings || []).map((bo, i) => {
+            const write = (patch: Partial<typeof bo>) =>
+              onMap3d('boundary_openings', (map3d.boundary_openings || [])
+                .map((b, j) => (j === i ? { ...b, ...patch } : b)))
+            return (
+              <div key={i} onClick={() => setSelectedBoundary(i)}
+                style={{ display: 'flex', gap: 6, alignItems: 'center',
+                  fontSize: '0.82em', padding: '2px 4px', borderRadius: 4,
+                  background: selectedBoundary === i
+                    ? 'rgba(224,163,86,0.15)' : undefined }}>
+                <span style={{ width: 16, textAlign: 'center' }}>{bo.edge}</span>
+                <input className="ga-input" type="number" min={0} max={1}
+                  step={0.01} style={{ width: 64 }} value={bo.at}
+                  title={t('Position along the edge (0..1)')}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (Number.isFinite(v)) write({ at: r4(clamp(v, 0, 1)) })
+                  }} />
+                <input className="ga-input" type="number" min={0.5} max={10}
+                  step={0.5} style={{ width: 64 }} value={bo.width_m}
+                  title={t('Width (m)')}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (Number.isFinite(v)) write({ width_m: clamp(v, 0.5, 10) })
+                  }} />
+                <select className="ga-input" style={{ flex: 1, minWidth: 90 }}
+                  value={bo.room || ''}
+                  title={t('Linked room — where the pass-through leads (feeds the future journey walk-through).')}
+                  onChange={(e) => write({ room: e.target.value || undefined })}>
+                  <option value="">{t('No room link')}</option>
+                  {placedRooms.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                  ))}
+                </select>
+                <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                  title={t('Remove')}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const next = (map3d.boundary_openings || [])
+                      .filter((_, j) => j !== i)
+                    onMap3d('boundary_openings', next.length ? next : undefined)
+                    setSelectedBoundary(null)
+                  }}>✕</button>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
       </div>
 
       <PlanSidePanel
@@ -1879,6 +2115,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
           floor_offset_y: v,
         })}
+        onLayoutPatch={(patch) => updateLayout(selectedRoom?.id || '', patch)}
+        propOptions={Object.entries(propDims)
+          .map(([id, d]) => ({ id, name: d.name || id }))
+          .sort((a, b) => a.name.localeCompare(b.name))}
         surfaceKinds={surfaceKinds}
         onSurface={setSurface}
         furnishState={furnish.status?.state || ''}

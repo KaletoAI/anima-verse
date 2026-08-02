@@ -70,8 +70,11 @@ export interface SceneModelSpec {
    *  dem Boden steht und beim Reinzoomen wie ein Dach aufblendet; `ground` =
    *  eine Flächen-Location, deren Modell DER Boden ist — es bleibt stehen und
    *  bekommt Löcher (cutouts). Der Client hat das früher aus `cutouts.length`
-   *  geraten und lag bei Flächen ohne Grundriss falsch (2026-07-28). */
-  display?: 'shell' | 'ground'
+   *  geraten und lag bei Flächen ohne Grundriss falsch (2026-07-28).
+   *  `shell_area` (v5.2, plan-area-detail-scenes.md) = Flächen-Location im
+   *  Detail-Modus: ANKER wie `ground` (Gehfläche auf Etage 0), blendet aber
+   *  beim Reinzoomen aus wie `shell` — darunter liegt die Detailszene. */
+  display?: 'shell' | 'ground' | 'shell_area'
   id: string
   /** ETag-Endpunkt; leer = kein Mesh (dann placeholder_dims) */
   url: string
