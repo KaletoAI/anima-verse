@@ -196,10 +196,14 @@ def terrain_grid(seed: int,
       cliff; a zero rim makes every tile edge match every other one.
     * **Flat hulls** — the tessellated outlines of rooms that must stay
       even (every indoor room, plus outdoor rooms flagged ``relief_flat``:
-      a road, a paved square). Walls and roads on a slope look broken.
-      Nothing is smoothed around them: the neighbouring cell interpolates
-      the transition on its own, which at a 10 m tile is a ramp of roughly
-      0.6 m per cell.
+      a road, a paved square), DILATED by one grid cell: a point is pinned
+      when it lies inside a hull or within one cell (1/16 plan fraction)
+      of its boundary. Without the margin only the points INSIDE were
+      zero, and the boundary cells interpolated the neighbours' heights
+      back INTO the room — the draped ground pierced the flat road plate
+      and chopped it up (user finding 2026-08-02). With it, every cell
+      that touches the hull has all-zero corners, so the field is exactly
+      0 across the whole flat room and the ramp starts one cell outside.
 
     Every other point draws ONE number from a xorshift32 seeded with the
     spatial hash of (seed, i, j) — position-independent, so a point keeps
@@ -214,6 +218,25 @@ def terrain_grid(seed: int,
     n = TERRAIN_CELLS
     amp = float(amplitude_world)
     hulls = [h for h in flat_hulls if len(h) >= 3]
+    margin = 1.0 / n
+
+    def _flat(u: float, v: float) -> bool:
+        for hull in hulls:
+            if point_in_poly((u, v), hull):
+                return True
+            m = len(hull)
+            for a in range(m):
+                ax, ay = float(hull[a][0]), float(hull[a][1])
+                bx, by = float(hull[(a + 1) % m][0]), float(hull[(a + 1) % m][1])
+                dx, dy = bx - ax, by - ay
+                l2 = dx * dx + dy * dy
+                t = 0.0 if l2 <= 0 else max(0.0, min(1.0, ((u - ax) * dx
+                                                           + (v - ay) * dy) / l2))
+                qx, qy = ax + t * dx, ay + t * dy
+                if (u - qx) ** 2 + (v - qy) ** 2 <= margin * margin:
+                    return True
+        return False
+
     grid: List[List[float]] = []
     for j in range(n + 1):
         row: List[float] = []
@@ -221,8 +244,7 @@ def terrain_grid(seed: int,
             if i == 0 or j == 0 or i == n or j == n:
                 row.append(0.0)
                 continue
-            pt = (i / n, j / n)
-            if any(point_in_poly(pt, hull) for hull in hulls):
+            if _flat(i / n, j / n):
                 row.append(0.0)
                 continue
             rng = XorShift32((int(seed) + i * TERRAIN_HASH_I

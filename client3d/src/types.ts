@@ -45,6 +45,10 @@ export interface Room {
 export interface Map3dMeta {
   style?: string;   // house | tower | shop | hall | generic | ...
   floors?: number;
+  /** Flächen-Location (Dorf, See, Wald) — das Modell IST der Boden bzw.
+   *  (mit Detail-Modus) eine ausblendende Hülle. Fürs Panel: Räume sind
+   *  dort Zonen, keine Zimmer. */
+  area_model?: boolean;
   color?: string;   // Grundfarbe der Fassade, z.B. "#8fa3b0"
   /** Drehung des Gebäude-Modells um die Hochachse in Grad (Fallback: map_rotation_2d) */
   rotation?: number;

@@ -68,7 +68,14 @@ export class InfoPanel {
   }
 
   show(loc: WorldLocation, chars: MapCharacter[], events: MapEvent[], roomOf: Map<string, string>) {
-    const roomsHtml = loc.rooms.length
+    // Flächen-/Gelände-Locations (Wald, See, Straße): ihre Räume sind Zonen
+    // mit generischen Namen — die Liste ist dort Rauschen und bleibt weg,
+    // wie die Raum-Labels in der Szene (User-Vorgabe 2026-08-02). Erkennung
+    // wie beim Kachelbau: Flächen-Flag, passierbares Gelände oder Natur-Art.
+    const area = !!loc.map3d?.area_model || !!loc.passable
+      || ['water', 'forest', 'grass', 'road', 'sand', 'rock']
+        .includes((loc.terrain || '').toLowerCase());
+    const roomsHtml = !area && loc.rooms.length
       ? `<h3>Räume</h3><ul>${loc.rooms.map((r) => {
           const inRoom = chars.filter((c) => roomOf.get(c.name) === r.name || roomOf.get(c.name) === r.id);
           return `<li>${esc(r.name)}${inRoom.length ? ` <span class="who">· ${inRoom.map((c) => esc(c.name)).join(', ')}</span>` : ''}</li>`;
