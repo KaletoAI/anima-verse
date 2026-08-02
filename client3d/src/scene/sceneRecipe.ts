@@ -408,6 +408,15 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   // werden darüber drapiert. Objekthöhen NICHT — die kommen fertig gehoben.
   tile.terrain = scene.terrain;
   tile.terrainExtent = scene.extent_m;
+  // Detail-Modus der LOCATION (v5.2 Nr. 10) — kommt als Payload-Flag und
+  // gilt auch OHNE Location-Modell (der Wald hat bewusst keins mehr): der
+  // Backstop rutscht UNTER die Etage-0-Platten, sonst begräbt er bei 0,04
+  // genau die Zonen-Texturen, die er stützen soll (User-Befund 2026-08-02).
+  // Ein vorhandenes Modell bestätigt das Flag nur (display shell_area).
+  tile.modelIsShellArea = !!scene.area_detail;
+  if (tile.groundPlate) {
+    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.01 : 0.04;
+  }
   if (scene.terrain && tile.groundPlate) {
     // Die kachel-eigene Platte (kein Payload-Primitiv, sondern der Backstop
     // unter der Detailszene) wellt sich mit. Nur die GEOMETRIE wird getauscht:
@@ -425,7 +434,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
 
   // Flächen-/Gelände-Location (Wald, See, Dorf): Räume sind ZONEN, keine
   // Zimmer — die Regel speist Raum-Labels, Panel UND die Platten unten.
-  const areaLoc = tile.natureSite || !tile.isBuilding
+  const areaLoc = tile.natureSite || !tile.isBuilding || !!scene.area_detail
     || (scene.models || []).some((m) => m.role === 'building'
         && (m.display === 'ground' || m.display === 'shell_area'));
 
@@ -843,21 +852,18 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // behandelt — sein Kachelboden folgt dafür dem Fade (applyTileFade).
   const area = display === 'ground';
   tile.modelIsGround = area;
-  tile.modelIsShellArea = display === 'shell_area';
+  // Nur SETZEN, nie löschen — das Payload-Flag `scene.area_detail` hat die
+  // Kachel schon markiert, wenn die Location auch ohne Modell im
+  // Detail-Modus ist.
+  if (display === 'shell_area') tile.modelIsShellArea = true;
   // Eine Flächen-Location BRINGT ihren Boden mit. Die kachel-eigene Platte
   // (10 × 10 m, undurchsichtig, y 0,04) steht in keinem Payload — sie ist
   // Client-Erfindung und schnitt das Modell auf ihrer Höhe ab: beim
   // Mondscheinsee lag alles unter +0,04 dahinter, also Seebecken und Strand
   // (Modell y −0,80 … +2,69). Für `display: ground` bleibt sie weg.
   if (tile.groundPlate) tile.groundPlate.visible = !area;
-  // Als BACKSTOP der Detailszene muss die Platte UNTER die Payload-Platten:
-  // die flachen Outdoor-Texturen (Straße, Waldboden) liegen auf Etage 0, und
-  // bei y 0,04 verdeckte der Backstop genau sie — die Straße wurde erst ab
-  // +0,1 m Raumhöhe sichtbar (User-Befund 2026-08-02). Das Relief hebt beide
-  // mit denselben Gitterwerten, die Ordnung bleibt also überall erhalten.
-  if (tile.groundPlate) {
-    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.01 : 0.04;
-  }
+  // Die Backstop-Höhe (−0,01 im Detail-Modus) setzt mountScene zentral —
+  // hier würde sie nur dupliziert.
   tile.shellMats = [];
   tile.roofMats = [];
   // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es

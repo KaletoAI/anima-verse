@@ -1456,4 +1456,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         out["boundary_openings"] = boundary
     if terrain:
         out["terrain"] = terrain
+    # Detail mode is a property of the LOCATION, not of its model: a forest
+    # may have no location model at all (the whole point of the detail
+    # scenes), and the renderers still need to know — backstop plate, fade
+    # gate and zone handling key off this flag; `display: shell_area` on the
+    # building spec is merely its per-model consequence (user finding
+    # 2026-08-02: without a model the backstop buried the zone plates).
+    if map3d.get("area_model") and map3d.get("area_detail"):
+        out["area_detail"] = True
     return out

@@ -258,6 +258,11 @@ export interface ScenePayload {
   outdoor_rooms: string[]
   /** Höhenfeld der Detailszene — nur wenn `map3d.relief` gesetzt ist. */
   terrain?: SceneTerrain
+  /** Detail-Modus der LOCATION (v5.2 Nr. 10) — unabhängig davon, ob ein
+   *  Location-Modell existiert: Backstop-Platte, Fade-Gate und Zonen-Regeln
+   *  hängen hieran; `display: shell_area` am Gebäude-Spec ist nur die
+   *  Modell-Konsequenz. */
+  area_detail?: boolean
 }
 
 /**

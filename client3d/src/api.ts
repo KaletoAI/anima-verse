@@ -308,6 +308,8 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     // Gitter ohne Zeilen ist kein Relief, sondern eine kaputte Antwort.
     terrain: Array.isArray(data.terrain?.grid) && data.terrain.grid.length > 1
       ? (data.terrain as SceneTerrain) : undefined,
+    // Detail-Modus der Location (v5.2 Nr. 10) — gilt auch ohne Modell.
+    area_detail: data.area_detail === true ? true : undefined,
   };
 }
 
