@@ -190,8 +190,17 @@ class OpenAIMeshBackend(ImageBackend):
             "name": str(params.get("mesh_name") or "").strip(),
             "remove background": bool(params.get("remove_background",
                                                  self.remove_background)),
-            "face num": int(params.get("face_num") or self.face_num),
         }
+        # Detail-count param: the classic mesh aliases call it "face num",
+        # the splat-based ones (Triposplat) just "num" — SAME value under
+        # whichever the alias declares (both, if it declares both; "num" is
+        # the survivor once "face num" retires, 2026-08-02). An unreadable
+        # schema falls back to the classic name, the previous behaviour.
+        faces = int(params.get("face_num") or self.face_num)
+        declared = [n for n in ("face num", "num")
+                    if n in self._alias_param_names]
+        for pname in (declared or ["face num"]):
+            alias_params[pname] = faces
         # "no fingers" exists on the HUMANOID aliases only — the generic ones
         # do not declare it (there are no fingers to skip on a quadruped).
         if self.mesh_rig == "mixamo":
