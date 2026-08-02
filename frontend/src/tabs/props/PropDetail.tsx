@@ -75,12 +75,17 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     width_m: String(prop.width_m), depth_m: String(prop.depth_m),
     height_m: String(prop.height_m),
   })
+  // Drafts re-arm on PROP CHANGE only — the background poll reloads the
+  // list every few seconds while a generation runs, and resetting on every
+  // fresh object identity overwrote whatever the admin was typing (user
+  // finding 2026-08-02: the description reverted mid-edit).
   useEffect(() => {
     setNameDraft(prop.name)
     setDescDraft(prop.description || '')
     setCategoryDraft(prop.category)
     setTagsDraft(prop.tags.join(', '))
-  }, [prop.id, prop.name, prop.description, prop.category, prop.tags])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prop.id])
   // The dims drafts sync separately WITH guards: after a commit the server
   // echoes the values back through onChanged(), and blindly resetting here
   // stomped whatever the admin was already typing in the next field (fast

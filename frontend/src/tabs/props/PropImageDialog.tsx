@@ -2,16 +2,25 @@
  * PropImageDialog — render a NEW source image for an existing prop
  * (plan-area-detail-scenes.md follow-up: images used to be regenerable only
  * as part of the whole source→mesh chain). The dialog shows the COMPLETE
- * final prompt (final-prompt rule): prefilled with the prompt the current
- * image was rendered with, or the picked backend's use-case style when the
- * prop has no record; an emptied prompt lets the server compose one from the
- * stored description/name. The mesh is untouched — re-meshing from the new
- * image is the separate "3D from this image" step.
+ * final prompt (final-prompt rule), composed FRESH from the prop's current
+ * description (name as fallback) + the picked backend's use-case style —
+ * exactly like the create form, so an edited description flows into the
+ * next render (the OLD image's prompt stays readable in the panel caption).
+ * Manual edits stick; picking another backend recomposes an untouched
+ * prompt. The mesh is untouched — re-meshing from the new image is the
+ * separate "3D from this image" step.
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { ImageBackendInfo, PropFull } from './propTypes'
+
+/** Same composition rule as the create form: style + subject. */
+const composePrompt = (prop: PropFull, backend?: ImageBackendInfo): string => {
+  const subject = (prop.description || prop.name || '').trim()
+  const style = (backend?.prompt_style || '').trim()
+  return style ? (subject ? `${style}, ${subject}` : style) : subject
+}
 
 export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
   /** null = closed. */
@@ -23,16 +32,18 @@ export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
   const { t } = useI18n()
   const [picked, setPicked] = useState('')
   const [prompt, setPrompt] = useState('')
+  const [touched, setTouched] = useState(false)
   const [negative, setNegative] = useState('')
 
-  // Re-arm per open: prefer the CURRENT image's record (backend + final
-  // prompt), fall back to the first backend and its use-case style.
+  // Re-arm per open: the CURRENT image's backend stays preselected, but the
+  // prompt composes fresh from the (possibly just edited) description.
   useEffect(() => {
     if (!prop) return
     const known = backends.find((b) => b.name === prop.backend_image)
     const initial = known || backends[0]
     setPicked(initial?.name || '')
-    setPrompt(prop.prompt || '')
+    setPrompt(composePrompt(prop, initial))
+    setTouched(false)
     setNegative(prop.negative ?? (initial?.prompt_negative || ''))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prop?.id])
@@ -60,23 +71,23 @@ export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
               <select className="ga-input" value={picked}
                 onChange={(e) => {
                   setPicked(e.target.value)
-                  // A fresh backend pick refreshes the negative default only
-                  // when the admin has not written an own one.
-                  if (!negative.trim()) {
-                    const b = backends.find((x) => x.name === e.target.value)
-                    setNegative(b?.prompt_negative || '')
-                  }
+                  const b = backends.find((x) => x.name === e.target.value)
+                  // Another backend has another style — recompose an
+                  // UNTOUCHED prompt; manual edits stick. Same for the
+                  // negative default.
+                  if (!touched) setPrompt(composePrompt(prop, b))
+                  if (!negative.trim()) setNegative(b?.prompt_negative || '')
                 }}>
                 {backends.map((b) => (
                   <option key={b.name} value={b.name}>{b.name}</option>
                 ))}
               </select>
               <label className="ga-hint"
-                title={t('The full prompt sent to the render. Empty = the server composes it from the prop description/name and the backend\'s style.')}>
+                title={t('The full prompt sent to the render — composed from the backend style and the prop description (name as fallback). Empty = the server composes the same thing.')}>
                 {t('Final prompt (sent to the render)')}
               </label>
               <textarea className="ga-textarea" rows={4} value={prompt}
-                onChange={(e) => setPrompt(e.target.value)} />
+                onChange={(e) => { setPrompt(e.target.value); setTouched(true) }} />
               <label className="ga-hint">{t('Negative prompt')}</label>
               <textarea className="ga-textarea" rows={2} value={negative}
                 onChange={(e) => setNegative(e.target.value)} />
