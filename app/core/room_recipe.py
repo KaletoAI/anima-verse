@@ -449,17 +449,23 @@ def compose_recipe(room: Dict[str, Any],
             composed["placement"] = idx
             prop_markers.append(composed)
 
-    # Prop scatter (plan-area-detail-scenes.md): a configured random
-    # distribution, computed at COMPOSE time from the persisted seed —
-    # positions are never stored, so every renderer derives the same forest
-    # and the signature below moves whenever seed/items/spacing do (the
-    # placements land in the hashed payload). Scatter runs in REAL metres
-    # (spacing and footprints are metric); plate fractions × plan width
-    # convert both ways. Scattered entries are appended AFTER the manual
-    # ones so ``prop_markers[].placement`` indices never move, and they get
-    # NO prop markers (no sit spots on twenty pines).
-    scatter_cfg = lay.get("scatter")
-    if isinstance(scatter_cfg, dict) and scatter_cfg.get("items"):
+    # Prop scatter (plan-area-detail-scenes.md, 2026-08-02 redesign): a
+    # PLACEMENT property, not a room list — a placement with
+    # ``scatter_count`` throws that many copies of its prop over the room
+    # area from its own ``scatter_seed``, while the placement itself stays
+    # as the manually positioned anchor. Positions are computed at COMPOSE
+    # time and never stored, so every renderer derives the same forest and
+    # the signature below moves with seed/count/spacing (the copies land in
+    # the hashed payload). Scatter runs in REAL metres; plate fractions ×
+    # plan width convert both ways. Copies are appended AFTER all manual
+    # entries so ``prop_markers[].placement`` indices never move, and they
+    # get NO prop markers (no sit spots on twenty pines). Keep-outs are the
+    # GEOMETRIC zones only (sibling hulls, openings, exit, markers) —
+    # ``scatter_spacing_m`` alone rules the density (0 = copies may
+    # overlap; the old footprint minimum kept every tree a crown apart).
+    scatter_sources = [p for p in (lay.get("props") or [])
+                       if isinstance(p, dict) and p.get("scatter_count")]
+    if scatter_sources:
         planw = plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M
         level = int(lay.get("level") or 0)
         outline_m = [[p[0] * planw, p[1] * planw] for p in outline]
@@ -507,56 +513,39 @@ def compose_recipe(room: Dict[str, Any],
                 keepouts.append(_square((x + float(mat[0]) * w) * planw,
                                         (y + float(mat[1]) * d) * planw,
                                         SCATTER_POINT_CLEAR_M))
-        for entry in placements:
-            dims = entry.get("dims") or {}
-            half = max(float(dims.get("width_m") or 0),
-                       float(dims.get("depth_m") or 0)) / 2.0 \
-                or SCATTER_POINT_CLEAR_M
-            keepouts.append(_square(entry["at"][0] * planw,
-                                    entry["at"][1] * planw, half))
 
-        items = [i for i in scatter_cfg.get("items") if isinstance(i, dict)]
-        scatter_infos: Dict[str, Any] = {}
-        footprints: Dict[str, float] = {}
-        for item in items:
-            pid = str(item.get("prop_id") or "")
-            if not pid or pid in scatter_infos:
+        for source in scatter_sources:
+            pid = str(source.get("prop_id") or "")
+            try:
+                count = int(source.get("scatter_count") or 0)
+                seed = int(source.get("scatter_seed") or 0)
+            except (TypeError, ValueError):
                 continue
+            try:
+                spacing = float(source.get("scatter_spacing_m") or 0)
+            except (TypeError, ValueError):
+                spacing = 0.0
             prop = prop_store.get_prop(pid)
-            scatter_infos[pid] = prop
-            if prop:
-                footprints[pid] = max(float(prop["width_m"]),
-                                      float(prop["depth_m"]))
-        try:
-            seed = int(scatter_cfg.get("seed") or 0)
-        except (TypeError, ValueError):
-            seed = 0
-        try:
-            spacing = float(scatter_cfg.get("spacing_m") or 0)
-        except (TypeError, ValueError):
-            spacing = 0.0
-        for placed in _scatter_props(seed, items, outline_m, keepouts,
-                                     spacing, footprints):
-            pid = placed["prop_id"]
-            entry = {
-                "prop_id": pid,
-                "at": [_r(placed["at"][0] / planw),
-                       _r(placed["at"][1] / planw)],
-                "yaw": _r(placed["yaw"], 1),
-                "offset_y": 0.0,
-                "scattered": True,
-            }
-            prop = scatter_infos.get(pid)
-            if not prop:
-                entry["missing"] = True
-            else:
-                entry["dims"] = {"width_m": prop["width_m"],
-                                 "depth_m": prop["depth_m"],
-                                 "height_m": prop["height_m"]}
-                entry["has_model"] = bool(prop.get("has_model"))
-                if prop.get("has_model"):
-                    entry["model_url"] = prop.get("model_url") or ""
-            placements.append(entry)
+            for placed in _scatter_props(seed, count, outline_m, keepouts,
+                                         spacing):
+                entry: Dict[str, Any] = {
+                    "prop_id": pid,
+                    "at": [_r(placed["at"][0] / planw),
+                           _r(placed["at"][1] / planw)],
+                    "yaw": _r(placed["yaw"], 1),
+                    "offset_y": 0.0,
+                    "scattered": True,
+                }
+                if not prop:
+                    entry["missing"] = True
+                else:
+                    entry["dims"] = {"width_m": prop["width_m"],
+                                     "depth_m": prop["depth_m"],
+                                     "height_m": prop["height_m"]}
+                    entry["has_model"] = bool(prop.get("has_model"))
+                    if prop.get("has_model"):
+                        entry["model_url"] = prop.get("model_url") or ""
+                placements.append(entry)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",

@@ -13,7 +13,7 @@ real metres). Only ``spacing`` and the footprints must share the frame of
 ``outline``.
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 # Segments a curved edge is split into (t = k/8). Fixed, not configurable:
 # the number is part of the geometry contract — both the sanitizer's bbox
@@ -118,65 +118,47 @@ def point_in_poly(pt: Sequence[float], poly: Sequence[Sequence[float]]) -> bool:
 
 
 def scatter(seed: int,
-            items: Sequence[Dict[str, Any]],
+            count: int,
             outline: Sequence[Sequence[float]],
             keepouts: Sequence[Sequence[Sequence[float]]] = (),
-            spacing: float = 0.0,
-            footprints: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
-    """Deterministic rejection sampling over a room hull.
+            spacing: float = 0.0) -> List[Dict[str, Any]]:
+    """Deterministic rejection sampling over a room hull — ONE kind per call
+    (scatter is a placement property; each scattering placement brings its
+    own seed).
 
-    ``items`` = [{"prop_id", "count"}, …] processed in list order;
     ``keepouts`` = polygons in the outline's frame (a rect is a 4-point
-    polygon); ``footprints`` = max horizontal extent per prop id, same unit
-    as the outline. Per attempt EXACTLY three draws are consumed — u, v,
-    yaw — whether the candidate is accepted or not, so the whole run is a
-    fixed function of the seed. A candidate is accepted iff its centre lies
-    inside the hull, outside every keep-out, and its distance to each
-    already placed prop is at least ``(fp_a + fp_b) / 2 + spacing``.
-    Returns [{"prop_id", "at": [x, y], "yaw"}] in placement order.
+    polygon). Per attempt EXACTLY three draws are consumed — u, v, yaw —
+    whether the candidate is accepted or not, so the whole run is a fixed
+    function of the seed. A candidate is accepted iff its centre lies inside
+    the hull, outside every keep-out, and at least ``spacing`` away from
+    every copy already placed IN THIS CALL. ``spacing`` is the whole
+    density rule: 0 means copies may overlap — a forest's crowns do (the
+    former footprint-based minimum kept every tree a crown apart, user
+    finding 2026-08-02). Returns [{"at": [x, y], "yaw"}] in placement order.
     """
     rng = XorShift32(seed)
     xs = [float(p[0]) for p in outline]
     ys = [float(p[1]) for p in outline]
-    if not xs or not ys:
+    if not xs or not ys or count <= 0:
         return []
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
     placed: List[Dict[str, Any]] = []
-    sizes: List[float] = []
-    for item in items:
-        prop_id = str(item.get("prop_id") or "")
-        try:
-            count = int(item.get("count") or 0)
-        except (TypeError, ValueError):
+    budget = int(count) * ATTEMPTS_PER_PROP
+    while len(placed) < count and budget > 0:
+        budget -= 1
+        u = rng.next01()
+        v = rng.next01()
+        yaw = rng.next01()
+        x = x0 + u * (x1 - x0)
+        y = y0 + v * (y1 - y0)
+        if not point_in_poly((x, y), outline):
             continue
-        if not prop_id or count <= 0:
+        if any(point_in_poly((x, y), ko) for ko in keepouts):
             continue
-        fp = float((footprints or {}).get(prop_id) or 0.0)
-        budget = count * ATTEMPTS_PER_PROP
-        got = 0
-        while got < count and budget > 0:
-            budget -= 1
-            u = rng.next01()
-            v = rng.next01()
-            yaw = rng.next01()
-            x = x0 + u * (x1 - x0)
-            y = y0 + v * (y1 - y0)
-            if not point_in_poly((x, y), outline):
+        if spacing > 0:
+            sp2 = float(spacing) * float(spacing)
+            if any((x - o["at"][0]) ** 2 + (y - o["at"][1]) ** 2 < sp2
+                   for o in placed):
                 continue
-            if any(point_in_poly((x, y), ko) for ko in keepouts):
-                continue
-            clear = True
-            for other, ofp in zip(placed, sizes):
-                min_d = (fp + ofp) / 2.0 + float(spacing)
-                dx = x - other["at"][0]
-                dy = y - other["at"][1]
-                if dx * dx + dy * dy < min_d * min_d:
-                    clear = False
-                    break
-            if not clear:
-                continue
-            placed.append({"prop_id": prop_id, "at": [x, y],
-                           "yaw": round(yaw * 360.0, 1)})
-            sizes.append(fp)
-            got += 1
+        placed.append({"at": [x, y], "yaw": round(yaw * 360.0, 1)})
     return placed

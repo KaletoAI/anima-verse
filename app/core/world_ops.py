@@ -725,10 +725,17 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # objects from the prop library. REAL-SIZE RULE — a placement never
     # scales the prop; the client sizes it from the PROP's own dims × the
     # plan's scale factor, so only position/yaw/height live here.
+    # A placement may additionally SCATTER (plan-area-detail-scenes.md,
+    # 2026-08-02 redesign: scatter is a placement property, not a separate
+    # room list): ``scatter_count`` copies of the prop are thrown over the
+    # room area from ``scatter_seed`` at compose time; the placement itself
+    # stays as the manually positioned anchor. Σ scatter_count ≤ 120 per
+    # room, on top of the ≤ 100 manual placements.
     pr = raw.get("props")
     if isinstance(pr, list):
         from app.core.props import safe_prop_id
         placements = []
+        scatter_total = 0
         for p in pr:
             if not isinstance(p, dict):
                 continue
@@ -760,52 +767,31 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                     entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
                 except (TypeError, ValueError):
                     pass
+            # Scatter fields survive only complete (count + seed) and within
+            # the room budget — a truncated count keeps what still fits.
+            try:
+                sc_count = int(p.get("scatter_count"))
+                sc_seed = int(p.get("scatter_seed")) & 0xFFFFFFFF
+            except (TypeError, ValueError):
+                sc_count = 0
+                sc_seed = 0
+            if sc_count >= 1:
+                sc_count = min(sc_count, 120 - scatter_total)
+                if sc_count >= 1:
+                    entry["scatter_count"] = sc_count
+                    entry["scatter_seed"] = sc_seed
+                    scatter_total += sc_count
+                    sp = p.get("scatter_spacing_m")
+                    if sp is not None and f"{sp}".strip() != "":
+                        try:
+                            v = round(max(0.0, min(5.0, float(sp))), 2)
+                            if v:
+                                entry["scatter_spacing_m"] = v
+                        except (TypeError, ValueError):
+                            pass
             placements.append(entry)
         if placements:
             out["props"] = placements[:100]
-    # Prop scatter (plan-area-detail-scenes.md): a configured RANDOM
-    # distribution — n props of m kinds thrown over the room area from a
-    # persisted seed. The positions are computed deterministically at
-    # compose time (room_recipe → scatter_curves.scatter), never stored, so
-    # every renderer sees the same forest and § B5a can diff exact numbers.
-    # Own budget (Σ count ≤ 120) besides the manual ``props`` cap.
-    sc = raw.get("scatter")
-    if isinstance(sc, dict):
-        from app.core.props import safe_prop_id
-        items = []
-        total = 0
-        raw_items = sc.get("items")
-        for item in (raw_items if isinstance(raw_items, list) else [])[:16]:
-            if not isinstance(item, dict):
-                continue
-            pid = safe_prop_id(str(item.get("prop_id") or ""))
-            try:
-                count = int(item.get("count"))
-            except (TypeError, ValueError):
-                continue
-            if not pid or not (1 <= count <= 100):
-                continue
-            count = min(count, 120 - total)
-            if count <= 0:
-                break
-            items.append({"prop_id": pid, "count": count})
-            total += count
-        seed: Optional[int] = None
-        try:
-            seed = int(sc.get("seed")) & 0xFFFFFFFF
-        except (TypeError, ValueError):
-            pass
-        if items and seed is not None:
-            entry = {"seed": seed, "items": items}
-            sp = sc.get("spacing_m")
-            if sp is not None and f"{sp}".strip() != "":
-                try:
-                    v = round(max(0.0, min(5.0, float(sp))), 2)
-                    if v:
-                        entry["spacing_m"] = v
-                except (TypeError, ValueError):
-                    pass
-            out["scatter"] = entry
     return out
 
 
@@ -889,8 +875,7 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
 # surfaces ride along on whatever scale already applies, so editing them is
 # not "geometry work" and never trips the scale-anchor requirement.
 _LAYOUT_GEOMETRY_KEYS = ("level", "x", "y", "w", "d", "rotation", "outline",
-                         "outline_curves", "props", "scatter",
-                         "floor_offset_y")
+                         "outline_curves", "props", "floor_offset_y")
 
 
 def _layout_geometry(layout: Any) -> Optional[Dict[str, Any]]:

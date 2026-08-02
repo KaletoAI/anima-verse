@@ -2115,10 +2115,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
           floor_offset_y: v,
         })}
-        onLayoutPatch={(patch) => updateLayout(selectedRoom?.id || '', patch)}
-        propOptions={Object.entries(propDims)
-          .map(([id, d]) => ({ id, name: d.name || id }))
-          .sort((a, b) => a.name.localeCompare(b.name))}
         surfaceKinds={surfaceKinds}
         onSurface={setSurface}
         furnishState={furnish.status?.state || ''}
@@ -2229,6 +2225,63 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 className="ga-input"
               />
             </label>
+            {/* Scatter (v5.2 Nr. 12): a placement property — this anchor
+                throws `scatter_count` copies over the room from its own
+                seed; spacing alone rules the density (0 = may overlap). */}
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Scatter: throw copies of THIS prop over the room area. The placement stays as the anchor; positions come from the seed — the road, openings and markers stay clear.')}>
+              <input
+                type="checkbox"
+                checked={!!placement.scatter_count}
+                onChange={(e) => patchProp(e.target.checked
+                  ? { scatter_count: 10,
+                      scatter_seed: crypto.getRandomValues(new Uint32Array(1))[0] }
+                  : { scatter_count: undefined, scatter_seed: undefined,
+                      scatter_spacing_m: undefined })}
+              />
+              <span>{t('Scatter')}</span>
+            </label>
+            {placement.scatter_count ? (
+              <>
+                <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+                  title={t('Number of scattered copies (Σ 120 per room; the anchor is extra).')}>
+                  n
+                  <input
+                    type="number" min={1} max={120} step={1}
+                    value={placement.scatter_count}
+                    onChange={(e) => {
+                      const v = Math.round(parseFloat(e.target.value) || 0)
+                      if (v >= 1) patchProp({ scatter_count: Math.min(120, v) })
+                    }}
+                    style={{ width: 62 }}
+                    className="ga-input"
+                  />
+                </label>
+                <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+                  title={t('Minimum centre distance between the copies in metres — the whole density rule. 0 = they may overlap (a forest’s crowns do).')}>
+                  ↔ m
+                  <input
+                    type="number" min={0} max={5} step={0.1}
+                    value={placement.scatter_spacing_m ?? 0}
+                    onChange={(e) => {
+                      const v = Math.round((parseFloat(e.target.value) || 0) * 100) / 100
+                      patchProp({ scatter_spacing_m: v > 0 ? Math.min(5, v) : undefined })
+                    }}
+                    style={{ width: 62 }}
+                    className="ga-input"
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  title={t('Reroll — a new seed gives a new arrangement.')}
+                  onClick={() => patchProp({
+                    scatter_seed: crypto.getRandomValues(new Uint32Array(1))[0] })}
+                >
+                  🎲
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               className="ga-btn ga-btn-sm"

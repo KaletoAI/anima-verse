@@ -126,18 +126,25 @@
 >     Kontrollpolygon hinausragt, zählt mit. Beide Renderer sehen weiter
 >     nur Polygone. Punkte-Kappung dafür angehoben: `clip_outline` und
 >     `cutouts` je Polygon ≤ **64** Punkte (vorher 32).
-> 12. **`layout.scatter` streut Props deterministisch.**
->     `{seed (uint32), items: [{prop_id, count}…] (Σ ≤ 120), spacing_m}` —
->     die Positionen werden beim KOMPONIEREN aus dem Seed gerechnet, nie
->     gespeichert, und landen als normale `placements`/`models`-Einträge
->     (`scattered: true`, ohne Prop-Marker) im Payload. PRNG ist xorshift32
->     (`x ^= x<<13; x ^= x>>17; x ^= x<<5`, uint32; Seed 0 → 1), pro
->     Kandidat GENAU drei Züge u, v, yaw (`next()/2³²`; yaw × 360) über der
->     Outline-Bbox. Akzeptiert wird ein Kandidat im Raum-Polygon, außerhalb
->     aller Keep-outs (Nachbar-Hüllen gleicher Etage — tesselliert —,
->     Quadrate um Openings ±(width/2 + 0,6 m), Exit/Marker ±0,5 m, manuelle
->     Props ±footprint/2), Mittelpunktsabstand ≥ (fp_a + fp_b)/2 +
->     `spacing_m`; Versuchsbudget `count × 30`, Unterbelegung erlaubt.
+> 12. **Scatter ist eine PLATZIERUNGS-Eigenschaft** (Neufassung 2026-08-02;
+>     die separate Raum-Liste `layout.scatter` ist ersatzlos weg). Eine
+>     normale Prop-Platzierung trägt optional `scatter_count` (Σ ≤ 120 je
+>     Raum), `scatter_seed` (uint32) und `scatter_spacing_m` (0..5): die
+>     Platzierung selbst bleibt als manuell gesetzter Anker stehen,
+>     `scatter_count` Kopien werden beim KOMPONIEREN über die Raumfläche
+>     gestreut, nie gespeichert, und landen als normale
+>     `placements`/`models`-Einträge (`scattered: true`, ohne Prop-Marker)
+>     im Payload. PRNG ist xorshift32 (`x ^= x<<13; x ^= x>>17; x ^= x<<5`,
+>     uint32; Seed 0 → 1), pro Kandidat GENAU drei Züge u, v, yaw
+>     (`next()/2³²`; yaw × 360) über der Outline-Bbox. Akzeptiert wird ein
+>     Kandidat im Raum-Polygon, außerhalb aller Keep-outs (Nachbar-Hüllen
+>     gleicher Etage — tesselliert —, Quadrate um Openings ±(width/2 +
+>     0,6 m), Exit/Marker ±0,5 m) und mit Mittelpunktsabstand ≥
+>     `scatter_spacing_m` zu den Kopien DERSELBEN Platzierung.
+>     `scatter_spacing_m` ist die GANZE Dichteregel: 0 = Kopien dürfen
+>     überlappen (Baumkronen tun das) — die frühere Footprint-Untergrenze
+>     hielt jeden Baum eine Kronenbreite auf Abstand (User-Befund
+>     2026-08-02). Versuchsbudget `count × 30`, Unterbelegung erlaubt.
 >     Identischer Seed ⇒ identische Szene in Admin-Vorschau und Client;
 >     § B5a prüft exakte Positionen gegen die von Hand gerechnete Folge.
 > 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze

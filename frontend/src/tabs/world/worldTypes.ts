@@ -65,13 +65,6 @@ export interface RoomLayout {
    *  (server clamp [-1, 2]). The SERVER tessellates at compose time — the
    *  payload stays pure polygon. Openings on curved edges are rejected. */
   outline_curves?: Array<{ edge: number; c: [number, number] }>
-  /** Deterministic prop scatter: `count` props per kind thrown over the room
-   *  area from a persisted uint32 seed (Σ count ≤ 120). Positions are
-   *  computed server-side at compose time, never stored — reroll = new
-   *  seed. `spacing_m` adds clearance on top of the footprint rule. */
-  scatter?: { seed: number
-    items: Array<{ prop_id: string; count: number }>
-    spacing_m?: number }
 }
 
 export interface RoomPropPlacement {
@@ -82,6 +75,15 @@ export interface RoomPropPlacement {
   yaw?: number
   /** Vertical offset in metres (clamped ±5), additive to the floor. */
   offset_y?: number
+  /** Scatter (plan-area-detail-scenes.md, v5.2 Nr. 12): this many COPIES of
+   *  the prop are thrown over the room area at compose time; the placement
+   *  itself stays as the manually positioned anchor. Σ ≤ 120 per room. */
+  scatter_count?: number
+  /** uint32 seed the copies derive from — reroll = new seed. */
+  scatter_seed?: number
+  /** Minimum centre distance between the copies in metres (0..5). 0 = they
+   *  may overlap — the WHOLE density rule, there is no footprint minimum. */
+  scatter_spacing_m?: number
 }
 
 export interface RoomOpening {

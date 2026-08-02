@@ -9,10 +9,7 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { PropsPalette } from './PropsPalette'
 import type { PropFull } from '../props/propTypes'
-import type { Room, RoomLayout, SurfaceKind } from './worldTypes'
-
-/** A fresh uint32 scatter seed — reroll = new arrangement. */
-const rollSeed = (): number => crypto.getRandomValues(new Uint32Array(1))[0]
+import type { Room, SurfaceKind } from './worldTypes'
 
 /** The two shell surfaces a room may skin — mirrors layout.surfaces. */
 const SURFACE_SLOTS: Array<{ key: 'floor' | 'wall'; label: string }> = [
@@ -36,11 +33,6 @@ interface PlanSidePanelProps {
   onAlwaysVisible: (value: boolean) => void
   /** Height offset of the ROOM in real metres (undefined = 0). */
   onFloorOffset: (value: number | undefined) => void
-  /** Generic layout patch for the selected room — the scatter block writes
-   *  the whole `scatter` object through it (undefined removes it). */
-  onLayoutPatch: (patch: Partial<RoomLayout>) => void
-  /** Prop library for the scatter selects (id + display name). */
-  propOptions: Array<{ id: string; name: string }>
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
   surfaceKinds: SurfaceKind[]
   onSurface: (key: 'floor' | 'wall', kind: string) => void
@@ -73,32 +65,13 @@ const FURNISH_BADGE: Record<string, string> = {
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
   markerMode, onArmMarker, onAlwaysVisible, onFloorOffset,
-  onLayoutPatch, propOptions, surfaceKinds, onSurface,
+  surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
   noAnchor, propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
   const markers = layout?.markers || []
-  // Scatter (plan-area-detail-scenes.md): the panel edits the CONFIG only —
-  // positions are computed server-side from the seed at compose time, so the
-  // preview updates through the normal draft → scene-preview round trip.
-  const scatterItems = layout?.scatter?.items || []
-  const scatterTotal = scatterItems.reduce((s, it) => s + (it.count || 0), 0)
-  const writeScatter = (items: Array<{ prop_id: string; count: number }>,
-      spacing?: number | undefined) => {
-    if (!items.length) {
-      onLayoutPatch({ scatter: undefined })
-      return
-    }
-    const spacingEff = spacing !== undefined ? spacing
-      : layout?.scatter?.spacing_m
-    onLayoutPatch({ scatter: {
-      seed: layout?.scatter?.seed ?? rollSeed(),
-      items,
-      ...(spacingEff ? { spacing_m: spacingEff } : {}),
-    } })
-  }
 
   // Room-specific blocks — the palette below them is independent of the
   // selection (the 🪑 tool may be open with nothing selected).
@@ -142,88 +115,6 @@ export function PlanSidePanel({
           }}
         />
       </label>
-
-      {/* Scatter: n props of m kinds thrown over the room area from a
-          persisted seed — the forest tool (plan-area-detail-scenes.md). */}
-      <div className="ga-form-section-label" style={{ marginTop: 4 }}>
-        {t('Scatter')}
-        {scatterItems.length ? (
-          <span style={{ fontWeight: 'normal', opacity: 0.75,
-            color: scatterTotal > 120 ? 'var(--danger, #f85149)' : undefined }}>
-            {' '}· {scatterTotal}/120
-          </span>
-        ) : null}
-      </div>
-      {scatterItems.map((it, i) => (
-        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <select className="ga-input" style={{ flex: 1, minWidth: 80 }}
-            value={it.prop_id}
-            onChange={(e) => writeScatter(scatterItems.map((x, j) =>
-              j === i ? { ...x, prop_id: e.target.value } : x))}>
-            {propOptions.some((p) => p.id === it.prop_id) ? null : (
-              <option value={it.prop_id}>{it.prop_id}</option>
-            )}
-            {propOptions.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <input className="ga-input" type="number" min={1} max={100}
-            style={{ width: 58 }} value={it.count}
-            onChange={(e) => {
-              const v = Math.round(Number(e.target.value))
-              if (Number.isFinite(v)) {
-                writeScatter(scatterItems.map((x, j) =>
-                  j === i ? { ...x, count: Math.min(100, Math.max(1, v)) } : x))
-              }
-            }} />
-          <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-            title={t('Remove')}
-            onClick={() => writeScatter(scatterItems.filter((_, j) => j !== i))}>
-            ✕
-          </button>
-        </div>
-      ))}
-      {scatterItems.length < 16 && propOptions.length ? (
-        <select className="ga-input" value=""
-          title={t('Add a prop kind to scatter over the room area.')}
-          onChange={(e) => {
-            if (e.target.value)
-              writeScatter([...scatterItems, { prop_id: e.target.value, count: 10 }])
-          }}>
-          <option value="">+ {t('Add scatter prop…')}</option>
-          {propOptions.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-      ) : null}
-      {scatterItems.length ? (
-        <>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center',
-            fontSize: '0.82em' }}
-            title={t('Extra clearance between scattered props, on top of their own footprints.')}>
-            <span style={{ flex: 1 }}>{t('Min spacing (m)')}</span>
-            <input className="ga-input" type="number" min={0} max={5} step={0.1}
-              style={{ width: 64 }} value={layout.scatter?.spacing_m ?? 0}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                if (Number.isFinite(v))
-                  writeScatter(scatterItems, Math.min(5, Math.max(0, v)))
-              }} />
-            <button type="button" className="ga-btn ga-btn-sm"
-              title={t('Reroll — a new seed gives a new arrangement.')}
-              onClick={() => onLayoutPatch({ scatter: {
-                ...(layout.scatter || { items: scatterItems }),
-                items: scatterItems,
-                seed: rollSeed(),
-              } })}>
-              🎲
-            </button>
-          </label>
-          <span className="ga-hint">
-            {t('Positions are computed from the seed — reroll for a new arrangement. Other rooms, openings and placed props stay clear.')}
-          </span>
-        </>
-      ) : null}
 
       <button
         type="button"
