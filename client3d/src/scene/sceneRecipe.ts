@@ -423,6 +423,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     gp.geometry = draped;
   }
 
+  // Flächen-/Gelände-Location (Wald, See, Dorf): Räume sind ZONEN, keine
+  // Zimmer — die Regel speist Raum-Labels, Panel UND die Platten unten.
+  const areaLoc = tile.natureSite || !tile.isBuilding
+    || (scene.models || []).some((m) => m.role === 'building'
+        && (m.display === 'ground' || m.display === 'shell_area'));
+
   // ── Räume: Gruppen, Etagen, Outdoor-Flags ───────────────────────────────
   // Outdoor-Räume (§ A5) hängen direkt an der Kachel und sind damit in jeder
   // Zoomstufe sichtbar; Innenräume hängen an der Innenansicht.
@@ -483,6 +489,18 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       mesh.geometry = drapeGeometry(THREE, flat, scene.terrain,
                                     scene.extent_m, mesh.matrix);
       flat.dispose();
+    }
+    // Zonen-Platte ohne erklärte Boden-Art auf einer Flächen-Location: NICHT
+    // einfärben — die Palette-Farbe (das „Grün") gehört in Gebäude-Grundrisse,
+    // hier IST das Terrain der Boden. Die Platte bleibt im Graphen (Raum-
+    // Rechtecke, NPC-Mitten und die Begehbarkeits-Abtastung hängen an ihr),
+    // nur ihr Material wird voll durchsichtig (User-Befund 2026-08-02).
+    if (areaLoc && plate.room_id && outdoor.has(plate.room_id)
+        && !plate.texture_kind) {
+      const m = mesh.material as THREE.Material;
+      m.transparent = true;
+      m.opacity = 0;
+      m.depthWrite = false;
     }
     // Shadow flags are view state and stay here: upper storeys cast, every
     // plate receives.
@@ -621,13 +639,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   }
 
   // ── Raum-Labels + Etagen-Umschalter (Sicht-Zustand, bleibt Client) ──────
-  // Raum-Labels nur in GEBÄUDEN: auf einer Flächen-/Gelände-Location (Wald,
-  // See, Dorf — Flächen-Display oder Natur-Kachel) sind die Räume Zonen wie
-  // „Road"/„Forest", und ihre generischen Namen über der Szene sind Rauschen
-  // (User-Vorgabe 2026-08-02). Reiner Sicht-Zustand, bewusst nur hier.
-  const areaLoc = tile.natureSite || !tile.isBuilding
-    || (scene.models || []).some((m) => m.role === 'building'
-        && (m.display === 'ground' || m.display === 'shell_area'));
+  // Raum-Labels nur in GEBÄUDEN (`areaLoc` von oben): auf einer Flächen-
+  // Location sind die Räume Zonen wie „Road"/„Forest", und ihre generischen
+  // Namen über der Szene sind Rauschen (User-Vorgabe 2026-08-02).
   for (const [id, rg] of roomGroup) {
     if (areaLoc) break;  // Zonen statt Zimmer — keine Namen einblenden
     const name = nameOf.get(id);
