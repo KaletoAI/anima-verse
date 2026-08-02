@@ -3,7 +3,7 @@ import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types'
 // outwards, the parsing helpers here need them in their own scope.
 import type {
   SceneExit, SceneExtra, SceneMarker, SceneModelSpec, ScenePayload,
-  ScenePlate, SceneRoom, SceneWall,
+  ScenePlate, SceneRoom, SceneTerrain, SceneWall,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
 // the choosing side and the fetching side cannot drift apart (E4-T5).
@@ -270,7 +270,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 // frontend/src/tabs/world/worldTypes.ts) und waren bereits auseinander-
 // gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
 export type {
-  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
+  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneTerrain,
   SceneMarker, SceneExit, SceneStyle, SceneRoom,
   /** hiess hier frueher ApiOpening */
   SceneOpening,
@@ -304,6 +304,10 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     markers: arr<SceneMarker>(data.markers),
     exits: arr<SceneExit>(data.exits),
     outdoor_rooms: arr<string>(data.outdoor_rooms),
+    // Höhenfeld (§ B1 Nr. 14) — nur bei Relief-Locations im Payload. Ein
+    // Gitter ohne Zeilen ist kein Relief, sondern eine kaputte Antwort.
+    terrain: Array.isArray(data.terrain?.grid) && data.terrain.grid.length > 1
+      ? (data.terrain as SceneTerrain) : undefined,
   };
 }
 

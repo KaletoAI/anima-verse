@@ -33,6 +33,11 @@ export interface ScenePlate {
   texture_kind?: string
   opacity_role: 'ground' | 'upper'
   room_id?: string
+  /** Terrain relief (v5.2 Nr. 14): THIS plate follows the height field —
+   *  the renderer subdivides it and raises its vertices via `sampleTerrain`
+   *  instead of laying it flat on `top_y`. Only outdoor plates of non-flat
+   *  rooms carry it; storey plates, walls and every other plate stay flat. */
+  relief?: boolean
 }
 
 /** Ein Wandstück — um Türen/Fenster bereits geteilt; das Glasband eines
@@ -214,6 +219,22 @@ export interface SceneRoom {
   }
 }
 
+/** Deterministisches Geländerelief der Detailszene (§ B1 Nr. 14). 17 × 17
+ *  Stützpunkte über dem Bezugsquadrat, `grid[j][i]` in WELT-Metern; i läuft
+ *  West→Ost, j Nord→Süd, der Rand ist 0. Fehlt = die Szene ist eben.
+ *
+ *  Der Server hat damit bereits ALLES gehoben, was in einem nicht-flachen
+ *  Raum steht — Renderer drapieren nur Boden und `relief`-Platten und
+ *  sampeln Figurenhöhen (`sampleTerrain`), sie heben nie ein Objekt nach. */
+export interface SceneTerrain {
+  /** Kantenlänge einer Gitterzelle in Welt-Metern (`extent_m / 16`). */
+  step: number
+  /** 17 × 17 Stützpunkte, `grid[j][i]`, Welt-Meter. */
+  grid: number[][]
+  /** Ausschlag in Welt-Metern (bereits × k). */
+  amplitude_m: number
+}
+
 export interface ScenePayload {
   signature: string
   rooms: SceneRoom[]
@@ -235,6 +256,8 @@ export interface ScenePayload {
   markers: SceneMarker[]
   exits: SceneExit[]
   outdoor_rooms: string[]
+  /** Höhenfeld der Detailszene — nur wenn `map3d.relief` gesetzt ist. */
+  terrain?: SceneTerrain
 }
 
 /**

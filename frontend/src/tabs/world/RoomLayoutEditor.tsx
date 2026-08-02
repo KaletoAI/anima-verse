@@ -1294,6 +1294,52 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             <span>{t('Detail scene (model fades on zoom-in)')}</span>
           </label>
         ) : null}
+        {/* Terrain relief (v5.2 Nr. 14). A detail scene without a diorama is
+            dead flat; the amplitude rolls the ground and the server lifts
+            everything standing on it — no prop height is ever set by hand.
+            The seed is written WITH the first amplitude: the field is
+            deterministic, so a relief without a seed has no identity. */}
+        {onMap3d && map3d?.area_detail ? (
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Terrain relief: swing of the ground in real metres (0 = flat). A deterministic height field rolls the whole location; the server lifts props, markers and exits onto it, indoor rooms stay level. Outdoor rooms can opt out per room ("Keep flat").')}>
+            ⛰
+            <span>{t('Relief (m)')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={0}
+              max={5}
+              step={0.05}
+              style={{ width: 72 }}
+              value={map3d?.relief?.amplitude_m ?? ''}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (!e.target.value.trim() || !Number.isFinite(v) || v <= 0) {
+                  onMap3d('relief', undefined)
+                  return
+                }
+                onMap3d('relief', {
+                  amplitude_m: v,
+                  seed: map3d?.relief?.seed
+                    ?? crypto.getRandomValues(new Uint32Array(1))[0],
+                })
+              }}
+            />
+            {map3d?.relief ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                title={t('Roll a new height field — same amplitude, different hills.')}
+                onClick={() => onMap3d('relief', {
+                  amplitude_m: map3d.relief!.amplitude_m,
+                  seed: crypto.getRandomValues(new Uint32Array(1))[0],
+                })}
+              >
+                🎲
+              </button>
+            ) : null}
+          </label>
+        ) : null}
       </div>
 
       {/* Scale anchor missing: floor-plan geometry has no real size without
@@ -2111,6 +2157,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onArmMarker={() => armMode('marker')}
         onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
           always_visible: v || undefined,
+        })}
+        onReliefFlat={(v) => updateLayout(selectedRoom?.id || '', {
+          relief_flat: v || undefined,
         })}
         onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
           floor_offset_y: v,

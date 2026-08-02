@@ -26,6 +26,8 @@ export { applyCutouts, disposeCutoutMaterials, CUTOUT_MAX_POLYS,
   CUTOUT_MAX_POINTS } from './cutouts'
 export type { CutoutHandle } from './cutouts'
 
+export { sampleTerrain, drapeGeometry, TERRAIN_CELLS } from './terrain'
+
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'
 
@@ -42,5 +44,5 @@ export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
-  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom,
+  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
 } from './types'

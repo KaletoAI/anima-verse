@@ -24,6 +24,7 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
+  drapeGeometry,
   applyClipOutline, disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
@@ -954,6 +955,19 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             transparent: upper, opacity: upper ? upperFloor : 1 })
         }
         const mesh = buildPlate(THREE, plate, mat)
+        if (plate.relief && sc.terrain) {
+          // Terrain relief (§ B1 Nr. 14): an outdoor plate of a non-flat room
+          // follows the height field instead of lying on top_y — subdivided
+          // and raised through the SAME sampler the 3D client uses, so the
+          // preview shows the slope the game shows. The stage plate below
+          // stays flat on purpose: it is the reference square, a measuring
+          // aid, not ground.
+          mesh.updateMatrix()
+          const flat = mesh.geometry
+          mesh.geometry = drapeGeometry(THREE, flat, sc.terrain, PLATE_M,
+                                        mesh.matrix)
+          flat.dispose()
+        }
         boxes.add(mesh)
         if (verifyRef.current) {
           verifier.primitive(mesh, VERIFY_ORIGIN,

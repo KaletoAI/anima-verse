@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { surfaceMaterial } from '@anima/scene-render';
-import type { CutoutHandle, SurfaceMaterialSpec } from '@anima/scene-render';
+import { sampleTerrain, surfaceMaterial } from '@anima/scene-render';
+import type { CutoutHandle, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
@@ -128,6 +128,15 @@ export interface Tile {
   /** Szene dieser Kachel nutzt eine Etage < 0 (aus dem Payload abgeleitet,
    *  gesetzt von mountScene). Ohne Keller bleibt der Boden unangetastet. */
   hasBasement?: boolean;
+  /** Höhenfeld der montierten Szene (§ B1 Nr. 14) — fehlt = ebene Kachel.
+   *  Objekthöhen kommen FERTIG gehoben aus dem Payload; das Feld dient hier
+   *  nur dem Drapieren des Bodens und der Standhöhe der Figuren. */
+  terrain?: SceneTerrain;
+  /** Kantenlänge des Bezugsquadrats, über dem `terrain` liegt (extent_m). */
+  terrainExtent?: number;
+  /** Ebene Original-Geometrie der Kachelplatte, solange eine Relief-Szene
+   *  sie drapiert hat — unmountScene setzt sie zurück. */
+  flatGroundGeo?: THREE.BufferGeometry;
   /** Flächen-Location (plan-area-locations.md): das Location-Modell bleibt in
    *  der Innenansicht stehen und bekommt stattdessen Löcher. Das Handle
    *  schaltet sie mit dem Crossfade — Fernsicht intaktes Modell, Innenansicht
@@ -895,14 +904,30 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
  *  bei y=0 darin zu versinken. Strahl von oben; Dach-Treffer (alles über
  *  1,2 m) werden übersprungen, ohne Treffer bleibt es beim Kachel-Boden. */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
+  const lift = terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
-  if (!target) return 0;
+  if (!target) return lift;
   const ray = new THREE.Raycaster(
     new THREE.Vector3(at.x, 20, at.z), new THREE.Vector3(0, -1, 0));
   for (const h of ray.intersectObject(target, true)) {
-    if (h.point.y < 1.2) return h.point.y + 0.01;
+    if (h.point.y < 1.2) return h.point.y + 0.01 + lift;
   }
-  return 0;
+  return lift;
+}
+
+/** Höhe des Geländereliefs an einem WELT-Punkt dieser Kachel (0 ohne Szene
+ *  oder ohne Relief) — der Aufschlag auf den ebenen Boden.
+ *
+ *  Das ist die EINZIGE Stelle, an der der Client eine Relief-Höhe selbst
+ *  ermittelt, und sie gilt nur für den Boden und die Figuren darauf: alles,
+ *  was der Payload als Objekt beschreibt (Props, Marker, Ausgänge), kommt
+ *  bereits gehoben — dort nochmals zu sampeln zählte die Hebung doppelt
+ *  (Vertrag v5.2 Nr. 14, „Arbeitsteilung"). Das Payload rechnet um das
+ *  KACHELZENTRUM, die Aufrufer reichen Weltkoordinaten herein. */
+export function terrainLiftAt(tile: Tile, x: number, z: number): number {
+  if (!tile.terrain) return 0;
+  return sampleTerrain(tile.terrain, x - tile.center.x, z - tile.center.z,
+                       tile.terrainExtent || CELL);
 }
 
 /** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen

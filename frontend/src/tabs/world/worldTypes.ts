@@ -19,6 +19,11 @@ export interface RoomLayout {
   /** AV3D-12: show this room permanently, independent of the interior view
    *  — for outdoor rooms not covered by the building model. */
   always_visible?: boolean
+  /** Terrain relief opt-out (v5.2 Nr. 14): this OUTDOOR room stays level
+   *  while the rest of the location rolls — a road, a paved square, a
+   *  clearing. Indoor rooms are flat anyway (walls need even ground), so the
+   *  editor only offers it on always-visible rooms. */
+  relief_flat?: boolean
   /** Cut the room's diorama at its shell (§ B1): the renderer discards every
    *  fragment outside the room hull, so a model that overhangs its floor plan
    *  ends at the room. Ignored for outdoor rooms. */
@@ -168,6 +173,13 @@ export interface Map3D {
    *  rooms compose like a building interior — no cutouts, no overlay zones.
    *  Only meaningful together with area_model. */
   area_detail?: boolean
+  /** Terrain relief of the detail scene (v5.2 Nr. 14): a deterministic
+   *  height field over the reference square. `amplitude_m` is the swing in
+   *  REAL metres (0.05..5, × k at compose time), `seed` picks the field and
+   *  is mandatory — the editor always writes one. Only valid together with
+   *  area_model + area_detail; the sanitizer drops it otherwise. Absent =
+   *  the scene is dead flat. */
+  relief?: { amplitude_m: number; seed: number }
   /** Pass-throughs at the LOCATION edge (a road crossing the cell east–west
    *  = two entries). Geometry + room link only — entry_room stays the
    *  gameplay gate. `at` follows the room-opening letter convention
@@ -198,7 +210,7 @@ export interface Map3D {
 // Re-exported so every existing importer keeps working unchanged.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
-  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom,
+  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
 } from '@anima/scene-render'
 
 /** What the preview POSTs to /play/scene-preview: the editor draft as it

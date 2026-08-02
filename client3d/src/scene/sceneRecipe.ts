@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
-  buildPlate, buildWall, CLIP_MAX_POINTS, placeModelSpec, plateTargets,
+  buildPlate, buildWall, CLIP_MAX_POINTS, drapeGeometry, placeModelSpec, plateTargets,
   SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
 import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
@@ -402,6 +402,27 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   // up (applyTileFade). The recipe itself needs nothing for this.
   tile.hasBasement = levels.some((lv) => lv < 0);
 
+  // ── Geländerelief (§ B1 Nr. 14) ─────────────────────────────────────────
+  // Das Höhenfeld gilt für die ganze Kachel: die Figuren-Standhöhe liest es
+  // über `terrainLiftAt`, der Boden und die `relief`-Platten weiter unten
+  // werden darüber drapiert. Objekthöhen NICHT — die kommen fertig gehoben.
+  tile.terrain = scene.terrain;
+  tile.terrainExtent = scene.extent_m;
+  if (scene.terrain && tile.groundPlate) {
+    // Die kachel-eigene Platte (kein Payload-Primitiv, sondern der Backstop
+    // unter der Detailszene) wellt sich mit. Nur die GEOMETRIE wird getauscht:
+    // Material, Höhe, Sichtbarkeit und der shell_area-Fade in applyTileFade
+    // hängen am Mesh und bleiben damit unangetastet. Das ebene Original hebt
+    // unmountScene wieder ein.
+    const gp = tile.groundPlate;
+    gp.updateMatrix();
+    const draped = drapeGeometry(THREE, gp.geometry, scene.terrain,
+                                 scene.extent_m, gp.matrix);
+    if (!tile.flatGroundGeo) tile.flatGroundGeo = gp.geometry;
+    else gp.geometry.dispose();
+    gp.geometry = draped;
+  }
+
   // ── Räume: Gruppen, Etagen, Outdoor-Flags ───────────────────────────────
   // Outdoor-Räume (§ A5) hängen direkt an der Kachel und sind damit in jeder
   // Zoomstufe sichtbar; Innenräume hängen an der Innenansicht.
@@ -452,6 +473,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   const builtWalls: { mesh: THREE.Mesh; wall: SceneWall }[] = [];
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, k, style));
+    if (plate.relief && scene.terrain) {
+      // Outdoor-Platte eines nicht-flachen Raums: unterteilen und über das
+      // Gitter legen (§ B1 Nr. 14). Muss VOR der Begehbarkeits-Abtastung
+      // passieren — die tastet den Boden per Strahl ab und soll den Hang
+      // sehen, nicht die Ebene, von der er abgeleitet wurde.
+      mesh.updateMatrix();
+      const flat = mesh.geometry;
+      mesh.geometry = drapeGeometry(THREE, flat, scene.terrain,
+                                    scene.extent_m, mesh.matrix);
+      flat.dispose();
+    }
     // Shadow flags are view state and stay here: upper storeys cast, every
     // plate receives.
     mesh.receiveShadow = true;
@@ -843,6 +875,20 @@ export function unmountScene(tile: Tile): void {
   tile.cutouts = undefined;
   tile.modelIsGround = false;
   tile.modelIsShellArea = false;
+  tile.terrain = undefined;
+  tile.terrainExtent = undefined;
+  // Drapierte Kachelplatte zurückbauen: das ebene Original ist die Kachel,
+  // nicht die Szene — eine Location ohne Relief muss nach dem Remount wieder
+  // brettflach sein.
+  if (tile.flatGroundGeo) {
+    if (tile.groundPlate) {
+      tile.groundPlate.geometry.dispose();
+      tile.groundPlate.geometry = tile.flatGroundGeo;
+    } else {
+      tile.flatGroundGeo.dispose();
+    }
+    tile.flatGroundGeo = undefined;
+  }
   if (tile.groundPlate) tile.groundPlate.visible = true;
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();

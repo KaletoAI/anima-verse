@@ -17,7 +17,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, terrainLiftAt, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
@@ -897,6 +897,16 @@ async function startApp(username: string) {
             pos = roomCenter.clone().add(
               roomSlot(idx, mates.length, c.name).multiplyScalar(roomScale)
             );
+            // Relief (§ B1 Nr. 14): die Raum-Mitte ist EINE Höhe, der Boden
+            // unter der versetzten Figur ist es nicht. Als DIFFERENZ zur
+            // Mitte angesetzt, damit es egal bleibt, ob die Mitte selbst
+            // schon auf dem abgetasteten Hang liegt — sonst zählte die
+            // Hebung doppelt. Marker- und Spot-Positionen bleiben außen vor:
+            // die kommen gehoben vom Server bzw. vom Strahl auf die bereits
+            // drapierte Platte.
+            const rise = terrainLiftAt(tile, pos.x, pos.z)
+              - terrainLiftAt(tile, roomCenter.x, roomCenter.z);
+            if (rise) pos.setY(pos.y + rise);
           }
           scale = roomScale;
         } else {

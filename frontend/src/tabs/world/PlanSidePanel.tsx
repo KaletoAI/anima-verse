@@ -31,6 +31,8 @@ interface PlanSidePanelProps {
   markerMode: boolean
   onArmMarker: () => void
   onAlwaysVisible: (value: boolean) => void
+  /** Terrain-relief opt-out of THIS room (only offered on outdoor rooms). */
+  onReliefFlat: (value: boolean) => void
   /** Height offset of the ROOM in real metres (undefined = 0). */
   onFloorOffset: (value: number | undefined) => void
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
@@ -64,7 +66,7 @@ const FURNISH_BADGE: Record<string, string> = {
 
 export function PlanSidePanel({
   room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  markerMode, onArmMarker, onAlwaysVisible, onFloorOffset,
+  markerMode, onArmMarker, onAlwaysVisible, onReliefFlat, onFloorOffset,
   surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
   noAnchor, propsOpen, onPickProp, armedPropId,
@@ -95,6 +97,22 @@ export function PlanSidePanel({
         />
         <span>{t('Outdoor room (always visible)')}</span>
       </label>
+
+      {/* Terrain-relief opt-out (v5.2 Nr. 14). Only outdoor rooms can be
+          asked: an indoor room is level in any case, because walls need even
+          ground. Without a relief on the location the checkbox is simply
+          without effect, so it does not depend on it. */}
+      {layout.always_visible ? (
+        <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+          title={t('Keeps THIS outdoor room level while the terrain relief rolls the rest of the location — for a road, a paved square, a clearing. Indoor rooms are always flat anyway. Without a relief on the location it changes nothing.')}>
+          <input
+            type="checkbox"
+            checked={!!layout.relief_flat}
+            onChange={(e) => onReliefFlat(e.target.checked)}
+          />
+          <span>{t('Keep flat (road, clearing)')}</span>
+        </label>
+      ) : null}
 
       {/* Where the ROOM sits, as opposed to a model inside it. It belongs to
           the room, not to a diorama — it used to live in the model-placement

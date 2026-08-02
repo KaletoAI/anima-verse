@@ -120,8 +120,16 @@ export function buildPlaceholder(THREE: typeof import('three'),
 // from the payload alone, so it is settled here once for both renderers.
 
 /** Plate: top face on `top_y`; a body additionally has its bottom face one
- *  thickness below it. */
+ *  thickness below it.
+ *
+ *  A `relief` plate has NO such target: the renderer deforms it over the
+ *  height field (v5.2 Nr. 14), so its world box reaches from `top_y` minus
+ *  the deepest dip to `top_y` plus the highest rise — a range the payload
+ *  does not state as a number. The verifiable numbers of the relief are the
+ *  ones the composer already applied (prop `bottom_y`, marker `y_world`) and
+ *  the field itself, both checked in the server-side smoke test. */
 export function plateTargets(plate: ScenePlate): PrimitiveTarget[] {
+  if (plate.relief) return []
   const targets: PrimitiveTarget[] = [
     { field: 'top_y', actual: (b) => b.max.y, target: plate.top_y },
   ]
