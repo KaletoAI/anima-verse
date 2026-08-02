@@ -767,7 +767,7 @@ async function startApp(username: string) {
     updateSoundtrack?.();
   };
 
-  // Tageszeit der Welt -> Beleuchtung (alle 60 s nachführen)
+  // Time of day of the world -> lighting (kept up to date every 60 s)
   async function pollGameHour() {
     const h = await api.getGameHour();
     if (h != null) engine.setGameHour(h);

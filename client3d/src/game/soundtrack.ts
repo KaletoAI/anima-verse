@@ -21,6 +21,9 @@
  * passes through. `terrainSwitch` holds a new terrain for `AMBIENT_HOLD_MS`
  * before it counts; the FIRST terrain of a session is taken immediately,
  * because a debounce is there to stop flapping, not to open with silence.
+ * ONLY that first one: once something has played, every change waits out the
+ * full hold — silence included, and the terrain that follows silence is a
+ * change like any other and waits again.
  *
  * NO SUBSTITUTIONS ANYWHERE. A missing night folder means silence at night,
  * not the day playlist; an unknown terrain means silence, not "the closest
@@ -165,7 +168,9 @@ export function newTerrainSwitch(): TerrainSwitch {
  * One step of the debounce: the state that follows `state` when `candidate` is
  * what one hears at `nowMs`. The caller plays `applied` whenever it changed.
  *
- * - nothing has ever played and there IS a terrain → take it at once;
+ * - nothing has ever played YET and there IS a terrain → take it at once (this
+ *   is the only step that skips the hold — after it, `started` stays true for
+ *   the rest of the session, silence and every later terrain included);
  * - the candidate is what already plays → the hold is cancelled;
  * - a new candidate → the hold starts now;
  * - the same candidate for `holdMs` → it takes over;

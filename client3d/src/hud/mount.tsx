@@ -80,12 +80,12 @@ export function mountHud(opts: { username: string; avatar: string }): void {
   root = createRoot(host);
   // ToastProvider is mandatory: ScenePanel calls useToast() and throws on
   // mount without it. Same provider nesting as /play (frontend player/main).
-  // `opts.username` is part of the mount contract but unused in HUD v1 — the
-  // vanilla top bar already shows the login name.
+  // `opts.username` is not shown anywhere (the vanilla top bar already carries
+  // the login name) — it is the identity `/tts/speak` is asked with (E4-T6).
   root.render(
     <I18nProvider>
       <ToastProvider>
-        <Hud avatar={opts.avatar} />
+        <Hud avatar={opts.avatar} username={opts.username} />
       </ToastProvider>
     </I18nProvider>
   );

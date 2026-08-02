@@ -1,6 +1,6 @@
 import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types';
-// Zusaetzlich lokal importiert: der Re-Export weiter unten stellt die Typen
-// nur nach aussen, die Parse-Helfer hier brauchen sie im eigenen Scope.
+// Imported locally as well: the re-export further down only exposes the types
+// outwards, the parsing helpers here need them in their own scope.
 import type {
   SceneExit, SceneExtra, SceneMarker, SceneModelSpec, ScenePayload,
   ScenePlate, SceneRoom, SceneWall,
@@ -160,14 +160,59 @@ export async function getAudioManifest(): Promise<AudioManifest> {
   }
 }
 
+// --- Spoken lines (E4-T6) ----------------------------------------------------
+
+/** Does this world speak at all (`GET /tts/status` → `enabled`, i.e.
+ *  `config.tts.enabled`)? Asked ONCE when the HUD mounts. `false` on any
+ *  failure: a client that cannot reach the status must stay silent rather than
+ *  fire a render request per line into nothing. */
+export async function ttsStatus(): Promise<boolean> {
+  try {
+    const res = await fetch('/tts/status');
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !!data?.enabled;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Render one spoken line and return the URL of the audio, or `''` when there is
+ * nothing to play. Never throws — a world without a voice is a world one can
+ * still play in, so every failure (TTS off, backend down, no speakable text
+ * after the server's cleanup) is the same empty string.
+ *
+ * `characterName` picks the VOICE: the server looks the character's TTS config
+ * up itself (`app/routes/tts.py`) — but only when `user_id` is non-empty as
+ * well (`if user_id and character_name` there), so leaving it out would give
+ * every character the world's default voice. It is the logged-in user, the same
+ * identity `mountHud` already carries.
+ */
+export async function ttsSpeak(text: string, characterName: string,
+                               userId: string): Promise<string> {
+  try {
+    const res = await fetch('/tts/speak', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, user_id: userId, character_name: characterName }),
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    return typeof data?.audio_url === 'string' ? data.audio_url : '';
+  } catch {
+    return '';
+  }
+}
+
 export interface ApiModel {
   url: string;
-  /** Kennung des konkreten Modells (ändert sich z.B. beim Outfit-Wechsel) */
+  /** identity of this particular model (changes e.g. with the outfit) */
   signature?: string;
   format: 'glb' | 'fbx';
-  /** "mixamo" = Clip-Bibliothek anwendbar; "generic" = eigenes Skelett (Tiere) */
+  /** "mixamo" = the clip library applies; "generic" = own skeleton (animals) */
   rig: 'mixamo' | 'generic' | string;
-  /** nur im FBX-Fall: separat gespeicherte Textur */
+  /** FBX case only: the texture, stored separately */
   textureUrl?: string;
 }
 

@@ -356,11 +356,16 @@ export class AudioEngine {
     });
   }
 
-  /** Stops everything at once — music, ambience and the whole speech queue
-   *  (the current line AND the ones already waiting behind it). */
-  stopAll(): void {
-    this.music.stop();
-    this.ambient.stop();
+  /**
+   * Stops the SPOKEN lines only — the line sounding right now and every one
+   * already hanging on the chain behind it. Music and ambience keep playing.
+   *
+   * That separation is the whole point (E4-T6): the player's own message
+   * interrupts what the room is saying, and a chat message that also killed the
+   * soundtrack would be a bug nobody would look for here. `stopAll` is the
+   * bigger hammer and uses this one.
+   */
+  stopSpeech(): void {
     this.speechGen += 1;
     if (this.speaking) {
       try {
@@ -371,6 +376,14 @@ export class AudioEngine {
       this.speaking = null;
     }
     this.speech = Promise.resolve();
+  }
+
+  /** Stops everything at once — music, ambience and the whole speech queue
+   *  (the current line AND the ones already waiting behind it). */
+  stopAll(): void {
+    this.music.stop();
+    this.ambient.stop();
+    this.stopSpeech();
   }
 
   /**

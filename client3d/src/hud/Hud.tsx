@@ -21,13 +21,19 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon,
   ScenePanel, SelfPanel, OthersPanel,
-  type SceneData, type IconName,
+  type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
 import { GameMenu } from './GameMenu';
+import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
 import { loadPrefs, savePrefs, PREFS_KEY, type Prefs } from '../game/prefs';
+import {
+  afterOwnLine, createVoiceover, newSceneLines, sceneStampOf, speakableLines,
+  type SceneSnapshot, type Voiceover,
+} from '../game/voiceover';
+import { isTypingTarget } from '../scene/engine';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
@@ -59,7 +65,7 @@ const CHAT_IDLE_MS = 20000;
  *  or one of its picker modals open) — look again after this. */
 const CHAT_BUSY_RECHECK_MS = 5000;
 
-export function Hud({ avatar }: { avatar: string }) {
+export function Hud({ avatar, username }: { avatar: string; username: string }) {
   const { t } = useI18n();
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
@@ -230,29 +236,86 @@ export function Hud({ avatar }: { avatar: string }) {
     return () => { cancelAnimationFrame(raf); window.clearTimeout(off); };
   }, [chatHail]);
 
-  // Auto SHOW (E3 acceptance): a new line in the room brings the chat up. The
-  // detection rides on the ONE poll above — line count plus the last line's
-  // timestamp — instead of a second subscription.
+  // --- Spoken lines (E4-T6) ------------------------------------------------
+  //
+  // The driver of the voices lives HERE because the poll does: it is the same
+  // set of new lines that brings the chat panel up, so both read `voiceover.ts`
+  // rather than each deciding for itself what "new" means.
+  //
+  // The speech queue is NOT registered on `gameActions.applyAudioPrefs`: that
+  // slot belongs to the soundtrack driver in main.ts (one field, one owner),
+  // and this driver does not need it — the prefs it follows are the React state
+  // right above, and the effect below reacts to the ONE derived boolean, so a
+  // dragged volume slider (dozens of changes a second) never reaches it.
+  const [ttsServer, setTtsServer] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    // ONCE per mount: `config.tts.enabled` does not change while a session
+    // runs, and `ttsStatus` never throws (false on any failure).
+    void ttsStatus().then((on) => { if (alive) setTtsServer(on); });
+    return () => { alive = false; };
+  }, []);
+  // 'auto' follows the server, 'on' still needs it (nothing can render a voice
+  // without the backend), 'off' is off. So: the server AND not switched off.
+  const speaking = ttsServer && prefs.ttsOn !== 'off';
+  const speakingRef = useRef(speaking);
+  speakingRef.current = speaking;
+  const voice = useRef<Voiceover | null>(null);
+  if (!voice.current) {
+    voice.current = createVoiceover({
+      synth: (line) => ttsSpeak(line.text, line.speaker, username),
+      play: (url) => getAudio().speak(url),
+      // SPEECH ONLY — `stopAll` would take the music and the ambience with it.
+      stop: () => getAudio().stopSpeech(),
+    });
+  }
+  useEffect(() => {
+    // Switching the voices off silences them at once, and leaving the HUD does
+    // too. Both run only on a real change of the flag.
+    if (!speaking) voice.current?.clear();
+  }, [speaking]);
+  useEffect(() => () => voice.current?.clear(), []);
+
+  // Auto SHOW (E3 acceptance): a new line in the room brings the chat up — and
+  // (E4-T6) the same lines are what gets read aloud. The detection rides on the
+  // ONE poll above (`newSceneLines`: line count plus the last line's timestamp
+  // as the effect's trigger, the timestamps themselves as the rule) instead of
+  // a second subscription.
   //
   // Two cases deliberately do NOT count as new, they only set the baseline:
   // the FIRST payload after mount (otherwise the chat pops open on every page
   // load, which is the opposite of what the auto mode is for) and a room
   // change (walking into a room with an older transcript is not somebody
   // speaking). A room whose transcript then grows is a real line again.
-  const seenScene = useRef<{ room: string; stamp: string } | null>(null);
+  const seenScene = useRef<SceneSnapshot | null>(null);
   const sceneRoom = data?.room_id || '';
-  const lastLine = data?.scene?.length ? data.scene[data.scene.length - 1] : null;
-  const sceneStamp = data ? `${data.scene?.length ?? 0}|${lastLine?.ts || ''}` : '';
+  /** the payload's lines, for the effect that only runs when `sceneStamp`
+   *  changed — the array identity is fresh on every poll and says nothing */
+  const sceneLines = useRef<SceneLine[]>([]);
+  sceneLines.current = data?.scene || [];
+  const sceneStamp = data ? sceneStampOf(data.scene) : '';
   useEffect(() => {
     if (!sceneStamp) return;                        // no payload yet
     const prev = seenScene.current;
-    seenScene.current = { room: sceneRoom, stamp: sceneStamp };
-    if (!prev || prev.room !== sceneRoom) return;   // first load / room change
-    if (prev.stamp === sceneStamp) return;          // same transcript, silence
+    const cur: SceneSnapshot = { room: sceneRoom, lines: sceneLines.current };
+    seenScene.current = cur;
+    const fresh = newSceneLines(prev, cur);
+    if (!fresh.length) return;
     if (!chatOpen.current) setOpen((o) => ({ ...o, chat: true }));
     // Same one-shot pulse the talk key uses: an appearing panel announces
     // itself once instead of just materialising in the corner.
     setChatHail((n) => n + 1);
+    // The player's own message is the interruption: it silences the queue, and
+    // only what came AFTER it is still worth hearing.
+    const rest = afterOwnLine(fresh, avatarName);
+    if (rest.length !== fresh.length) voice.current?.clear();
+    if (speakingRef.current) {
+      voice.current?.push(speakableLines(rest, avatarName));
+    }
+    // `avatarName` and the refs are deliberately not dependencies: this effect
+    // must run exactly once per CHANGED transcript, not whenever the payload
+    // object is replaced by an identical one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneRoom, sceneStamp]);
 
   // Auto HIDE: after CHAT_IDLE_MS in which nothing happened — and only while
@@ -337,12 +400,19 @@ export function Hud({ avatar }: { avatar: string }) {
               global key path ignores anything typed into a form control, and a
               volume slider is one — so after touching a slider the keys would
               be swallowed. The panel holds no text field, so both keys are
-              unambiguous inside it. */}
+              unambiguous inside it.
+              And ONLY for those: the global chain listens in the CAPTURE phase
+              and has therefore already answered every other press by the time
+              this runs — with the storey choice FIRST, which is why closing the
+              menu here as well made one Esc close two things (E4-T4 minor). The
+              guard is the same predicate main.ts uses, so there is exactly one
+              rule about what "typed into a control" means. */}
           {open.menu && (
             <section className="hud-panel hud-menu-panel"
               onKeyDown={(e) => {
                 if (e.key !== 'Escape' && e.key.toLowerCase() !== 'm') return;
                 if (e.ctrlKey || e.metaKey || e.altKey) return;
+                if (!isTypingTarget(e.nativeEvent)) return;
                 e.stopPropagation();
                 setOpen((o) => ({ ...o, menu: false }));
               }}>
