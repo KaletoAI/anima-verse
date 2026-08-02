@@ -621,7 +621,15 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   }
 
   // ── Raum-Labels + Etagen-Umschalter (Sicht-Zustand, bleibt Client) ──────
+  // Raum-Labels nur in GEBÄUDEN: auf einer Flächen-/Gelände-Location (Wald,
+  // See, Dorf — Flächen-Display oder Natur-Kachel) sind die Räume Zonen wie
+  // „Road"/„Forest", und ihre generischen Namen über der Szene sind Rauschen
+  // (User-Vorgabe 2026-08-02). Reiner Sicht-Zustand, bewusst nur hier.
+  const areaLoc = tile.natureSite || !tile.isBuilding
+    || (scene.models || []).some((m) => m.role === 'building'
+        && (m.display === 'ground' || m.display === 'shell_area'));
   for (const [id, rg] of roomGroup) {
+    if (areaLoc) break;  // Zonen statt Zimmer — keine Namen einblenden
     const name = nameOf.get(id);
     if (!name) continue;
     const rect = tile.roomRects.get(id);

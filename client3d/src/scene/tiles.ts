@@ -44,6 +44,9 @@ export interface Tile {
   group: THREE.Group;
   center: THREE.Vector3;
   isBuilding: boolean;
+  /** Benannte Natur-Location (Wald, See, Wiese, Straße) — kein Gebäude,
+   *  nur Gelände mit Label; Raum-Labels bleiben dort aus. */
+  natureSite?: boolean;
   height: number;
   interior: THREE.Group | null;
   interiorLabels: CSS2DObject[];
@@ -683,6 +686,7 @@ export function buildTile(loc: WorldLocation): Tile {
   };
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
+  tile.natureSite = natureSite;
 
   const addLabel = () => {
     const el = document.createElement('div');
