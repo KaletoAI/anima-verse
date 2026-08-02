@@ -18,7 +18,7 @@ from datetime import date, datetime
 
 from app.core.timeutils import utc_now_iso, game_now_iso
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
@@ -1588,9 +1588,11 @@ def drop_item(character_name: str,
     room_id: str,
     item_id: str,
     quantity: int = 1) -> Dict[str, Any]:
-    """Character legt ein Item aus dem Inventar in einen Raum ab.
+    """The character puts an item from the inventory down in a room.
 
-    Schreibt Memory + Diary-Eintrag. Equipped Pieces werden vorher unequipped.
+    Writes a memory + diary entry. An equipped piece comes off first — that
+    take-off is logged with source "dropped", so the history says WHY it is
+    no longer worn.
 
     Returns: {success: bool, error?: str, item_name: str}
     """
@@ -1606,12 +1608,12 @@ def drop_item(character_name: str,
         equipped = get_equipped_pieces(character_name)
         for slot, eid in (equipped or {}).items():
             if eid == item_id:
-                unequip_piece(character_name, slot=slot)
+                unequip_piece(character_name, slot=slot, source="dropped")
                 break
     else:
         eqi = get_equipped_items(character_name) or []
         if item_id in eqi:
-            unequip_item(character_name, item_id)
+            unequip_item(character_name, item_id, source="dropped")
 
     # In den Raum legen
     if not add_item_to_room(location_id, room_id, item_id, quantity=quantity):
@@ -1679,7 +1681,8 @@ def get_equipped_item_ids(character_name: str) -> List[str]:
 
 def _record_outfit_history(character_name: str, action: str,
                             item_ids: List[str], slots: List[str],
-                            source: str) -> None:
+                            source: str,
+                            displaced: Optional[List[str]] = None) -> None:
     """Write one worn-state change into ``state_history`` (type ``outfit``).
 
     Until now only location/room/effects/sleep were logged, so "when and why
@@ -1688,6 +1691,13 @@ def _record_outfit_history(character_name: str, action: str,
     slot — keeps the diary readable; the metadata carries who did it
     (``source``: skill / compliance / wardrobe / avatar / telegram / …), the
     affected slots and the item ids.
+
+    ``displaced`` names what an equip pushed out of the slot. Without it the
+    log answers "she put the dress on" but not "so why is she not wearing the
+    blouse any more" — which is half of finding E.
+
+    Only REAL changes belong here: the callers diff before/after, so a
+    no-op re-apply of the same outfit writes nothing.
     """
     ids = [i for i in (item_ids or []) if i]
     if not ids:
@@ -1702,6 +1712,10 @@ def _record_outfit_history(character_name: str, action: str,
         }
         if slots:
             meta["slots"] = sorted({s for s in slots if s})
+        gone = [i for i in (displaced or []) if i]
+        if gone:
+            meta["displaced"] = [((get_item(i) or {}).get("name") or i)
+                                 for i in gone[:6]]
         _record_state_change(character_name, "outfit", ", ".join(names[:6]), meta)
     except Exception as e:
         logger.debug("outfit history [%s/%s] failed: %s", character_name, action, e)
@@ -1709,7 +1723,8 @@ def _record_outfit_history(character_name: str, action: str,
 
 def _notify_outfit_changed(character_name: str, source: str, *,
                             action: str = "", item_ids: Optional[List[str]] = None,
-                            slots: Optional[List[str]] = None) -> None:
+                            slots: Optional[List[str]] = None,
+                            displaced: Optional[List[str]] = None) -> None:
     """Single funnel for "worn state changed": state-history entry + SSE
     outfit event + debounced 3D reference renders (T-pose + default pose,
     app/core/model_refs.py). All five worn-state mutations below go through
@@ -1721,7 +1736,7 @@ def _notify_outfit_changed(character_name: str, source: str, *,
     """
     if action:
         _record_outfit_history(character_name, action, item_ids or [],
-                                slots or [], source)
+                                slots or [], source, displaced)
     try:
         from app.core.outfit_events import publish as _publish_outfit
         _publish_outfit(character_name, source)
@@ -1816,7 +1831,8 @@ def equip_piece(character_name: str, item_id: str,
                 character_name, slots, item_id,
                 f" (displaced {displaced})" if displaced else "")
     _notify_outfit_changed(character_name, source or "equip_piece",
-                           action="equip", item_ids=[item_id], slots=slots)
+                           action="equip", item_ids=[item_id], slots=slots,
+                           displaced=displaced)
     return {"status": "ok", "slots": slots, "displaced": displaced}
 
 
@@ -1921,18 +1937,20 @@ def apply_equipped_pieces(character_name: str, *,
     remove_slots: Optional[List[str]] = None,
     pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
     source: str = "") -> Dict[str, Any]:
-    """Atomarer Equip-Wechsel mit Diff-Erkennung.
+    """Atomic equip change with diff detection.
 
-    pieces: Soll-Zustand der Piece-Slots (slot -> item_id). None = Pieces bleiben
-            unveraendert. Dict uebergeben (auch leer) = vollstaendiger Soll-State;
-            Slots die belegt sind aber weder in `pieces` noch in `remove_slots`
-            auftauchen, werden geleert.
-    items:  Soll-Zustand der Nicht-Piece-Items (Liste). None = unveraendert.
-    remove_slots: Slots die explizit geleert werden (auch ohne pieces-Argument).
-    pieces_meta: Optionale Per-Slot-Metadaten (z.B. {"outer": {"color": "red"}}).
-            Wird in equipped_pieces_meta gemerged und ueberschreibt die
-            Auto-Cleanup-Logik (d.h. wer Meta mitliefert, bestimmt endgueltig).
-    source: Freitext zum Logging (ui_wardrobe, telegram, skill, ...).
+    pieces: target state of the piece slots (slot -> item_id). None = pieces
+            stay untouched. Passing a dict (even an empty one) = the COMPLETE
+            target state; slots that are occupied but appear neither in
+            `pieces` nor in `remove_slots` are cleared.
+    items:  target state of the non-piece items (list). None = untouched.
+    remove_slots: slots that are explicitly cleared (also without a `pieces`
+            argument).
+    pieces_meta: optional per-slot metadata (e.g. {"outer": {"color": "red"}}).
+            Merged into equipped_pieces_meta and overriding the auto-cleanup
+            logic (whoever supplies meta has the final say).
+    source: caller context, for the log line and the state-history entry
+            (ui_wardrobe, telegram, skill, ...).
 
     Returns: {
         "status": "ok",
@@ -2111,22 +2129,39 @@ def apply_equipped_pieces(character_name: str, *,
             character_name, source or "?", len(target_pieces), len(target_items))
         # History: one entry per DIRECTION, not per slot — a preset swap is a
         # single decision, and multi-slot pieces would otherwise appear twice.
-        # An item that is displaced and re-applied in the same call only
-        # counts as "put on".
-        applied_ids: List[str] = []
-        for a in applied:
-            if a["item_id"] not in applied_ids:
-                applied_ids.append(a["item_id"])
-        cleared_ids: List[str] = []
-        for c in cleared:
-            if c["item_id"] not in applied_ids and c["item_id"] not in cleared_ids:
-                cleared_ids.append(c["item_id"])
-        _record_outfit_history(
-            character_name, "unequip", cleared_ids,
-            [c["slot"] for c in cleared], source)
-        _record_outfit_history(
-            character_name, "equip", applied_ids,
-            [a["slot"] for a in applied], source)
+        #
+        # The entry is diffed against the state BEFORE, never taken from
+        # `applied`: `applied` is the full target state (every slot this call
+        # sets), so a mere top swap would claim "put on hoodie, slacks, shoes"
+        # although slacks and shoes never came off. The character reads its
+        # own log in the prompt — it must not contain actions that never
+        # happened. `meta_changed` alone (a pure colour change) is no worn-
+        # state change at all and writes nothing.
+        if changed:
+            def _unique(ids: Iterable[str]) -> List[str]:
+                out: List[str] = []
+                for iid in ids:
+                    if iid and iid not in out:
+                        out.append(iid)
+                return out
+
+            before_ids = set(before_pieces.values()) | set(before_items)
+            after_ids = set(target_pieces.values()) | set(target_items)
+            newly_on = _unique(
+                [i for i in target_pieces.values() if i not in before_ids]
+                + [i for i in target_items if i not in before_ids])
+            newly_off = _unique(
+                [i for i in before_pieces.values() if i not in after_ids]
+                + [i for i in before_items if i not in after_ids])
+            _record_outfit_history(
+                character_name, "unequip", newly_off,
+                [s for s, i in before_pieces.items() if i in newly_off], source)
+            # No `displaced` here: this path already writes the unequip entry
+            # above, so naming the same pieces twice would only inflate the
+            # log.
+            _record_outfit_history(
+                character_name, "equip", newly_on,
+                [s for s, i in target_pieces.items() if i in newly_on], source)
         _notify_outfit_changed(character_name, source)
 
     return {

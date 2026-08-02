@@ -352,15 +352,15 @@ def apply_outfit_compliance(
         else:
             result["forced_kept"].append(slot)
 
-    # 2. forbidden_slots: leeren falls noch belegt (und nicht forced).
+    # 2. forbidden_slots: clear them if still occupied (and not forced).
     forbidden = set(intent.get("forbidden_slots") or [])
     if forbidden:
         from app.models.inventory import unequip_piece
         for slot in sorted(forbidden):
             if slot in forced:
-                continue  # forced gewinnt gegen forbidden (Konflikt-Sonderfall)
+                continue  # forced beats forbidden (the conflict special case)
             if eq_pieces.get(slot):
-                # unequip_piece kuemmert sich um Multi-Slot-Mirror
+                # unequip_piece takes care of the multi-slot mirrors
                 try:
                     unequip_piece(character_name, slot=slot, source="compliance")
                     eq_pieces.pop(slot, None)
@@ -408,7 +408,7 @@ def apply_outfit_compliance(
                 {"slot": slot, "reason": "no_inventory_piece"}
             )
             continue
-        # Equippen ueber equip_piece (kuemmert sich um Mirror, Persistenz)
+        # Equip through equip_piece (handles mirrors and persistence)
         from app.models.inventory import equip_piece
         try:
             equip_piece(character_name, cand_id, source="compliance")
@@ -416,7 +416,7 @@ def apply_outfit_compliance(
             result["auto_filled"].append({"slot": slot, "item_id": cand_id})
             changed = True
         except Exception as e:
-            logger.warning("auto_fill [%s/%s] fehlgeschlagen: %s",
+            logger.warning("auto_fill [%s/%s] failed: %s",
                            character_name, slot, e)
             result["violations"].append(
                 {"slot": slot, "reason": f"equip_failed: {e}"}

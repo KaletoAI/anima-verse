@@ -390,6 +390,9 @@ def _render_outfit(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[s
         return None
     label = _OUTFIT_ACTIONS.get((meta.get("action") or "").strip(), "Outfit")
     content = f"{label}: {value}"
+    displaced = [d for d in (meta.get("displaced") or []) if d]
+    if displaced:
+        content += f" (replaces {', '.join(displaced)})"
     source = (meta.get("source") or "").strip()
     if source:
         content += f" — {source}"

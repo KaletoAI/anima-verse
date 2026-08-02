@@ -24,8 +24,17 @@ logger = get_logger("thought_context")
 
 # Window during which "you just moved" justifies an outfit-decision hint.
 _OUTFIT_AFTER_LOCATION_MINUTES = 10
-# How many owned-but-unworn pieces the dressing hint names PER group.
-_WARDROBE_LIST_CAP = 12
+# How many owned-but-unworn pieces the dressing hint names in TOTAL (the
+# whole block measured ~380 characters at this size — cheap next to what a
+# naked character costs).
+_WARDROBE_LIST_CAP = 24
+# Candidates guaranteed for EACH bare core slot before the list is filled up.
+_WARDROBE_PER_BARE_SLOT = 2
+# The slots a dressed character has filled — a listing that names none of
+# them is useless exactly when it matters most.
+_WARDROBE_CORE_SLOTS = ("top", "bottom", "feet")
+# How many underwear pieces the separate underwear group names.
+_WARDROBE_UNDERWEAR_CAP = 4
 # Hours since last retrospect that count as "boost — time to reflect".
 _RETROSPECT_BOOST_HOURS = 24
 # Thought journal (plan-thought-journal.md): how many of the character's own
@@ -362,6 +371,21 @@ def _build_wardrobe_choices(character_name: str) -> str:
     is a PREFERENCE, not a rule: both groups are named in full and the
     closing sentence explicitly allows mixing.
 
+    Three properties the listing has to have, all learned the hard way:
+
+    * **Every bare core slot is represented.** The inventory arrives ordered
+      by acquisition, so a plain cap named the oldest pieces and a character
+      with 22 items was offered neither trousers nor shoes — the very thing
+      this block exists to fix. Each bare slot of top/bottom/feet gets its
+      candidates reserved BEFORE the list is filled up.
+    * **Underwear is neutral.** Per the partition rule (commit 170826f)
+      underwear never clashes with outerwear, so underwear candidates get
+      their own group and are deliberately kept out of the "other styles"
+      warning — otherwise the block would talk a character out of perfectly
+      normal underwear.
+    * **A cut is spoken, not silent** — the overhang is named as "…and N
+      more pieces" so the character knows the list is not the whole wardrobe.
+
     Nothing (relevant) worn — a naked character, or one wearing only untagged
     pieces — has no style to match, so ``matching_pieces`` returns no
     preference at all and the pieces are listed flat.
@@ -369,34 +393,96 @@ def _build_wardrobe_choices(character_name: str) -> str:
     try:
         from app.models.inventory import (
             get_character_inventory, get_equipped_pieces)
-        from app.core.outfit_coherence import matching_pieces
+        from app.core.outfit_renderer import collect_covered_slots
+        from app.core.outfit_coherence import matching_pieces, UNDERWEAR_SLOTS
 
         inv = get_character_inventory(character_name, include_equipped=False) or {}
         entries = inv.get("inventory") if isinstance(inv, dict) else inv
         names: Dict[str, str] = {}
+        slots_of: Dict[str, set] = {}
         for entry in (entries or []):
             if entry.get("item_category") != "outfit_piece":
                 continue
             iid = entry.get("item_id") or ""
-            if iid and iid not in names:
-                names[iid] = (entry.get("item_name") or iid).strip()
+            if not iid or iid in names:
+                continue
+            names[iid] = (entry.get("item_name") or iid).strip()
+            slots_of[iid] = {s for s in ((entry.get("outfit_piece") or {}).get("slots") or []) if s}
         if not names:
             return ""
 
         worn = get_equipped_pieces(character_name) or {}
-        fitting, others = matching_pieces(worn, list(names.keys()))
+        covered = collect_covered_slots(worn) or set()
+
+        def _is_free(slot: str) -> bool:
+            return not worn.get(slot) and slot not in covered
+
+        # Underwear travels in its own group — it is exempt from the style
+        # rule, so it must be exempt from the style warning too.
+        underwear = [i for i in names
+                     if slots_of[i] and slots_of[i] <= UNDERWEAR_SLOTS]
+        rest = [i for i in names if i not in underwear]
+
+        fitting, others = matching_pieces(worn, rest)
+        preference = fitting + others          # order of preference for filling
+        fitting_set = set(fitting)
+
+        chosen: List[str] = []
+
+        def _take(iid: str) -> None:
+            if iid not in chosen and len(chosen) < _WARDROBE_LIST_CAP:
+                chosen.append(iid)
+
+        # 1) Reserve candidates for each bare core slot — matching ones first.
+        for slot in _WARDROBE_CORE_SLOTS:
+            if not _is_free(slot):
+                continue
+            taken = 0
+            for iid in preference:
+                if taken >= _WARDROBE_PER_BARE_SLOT:
+                    break
+                if slot in slots_of[iid] and iid not in chosen:
+                    _take(iid)
+                    taken += 1
+        # 2) Fill the remaining budget in order of preference.
+        for iid in preference:
+            _take(iid)
+
+        # Underwear: the pieces for an uncovered underwear slot go first.
+        uw_free = [i for i in underwear if any(_is_free(s) for s in slots_of[i])]
+        uw_chosen = (uw_free + [i for i in underwear if i not in uw_free])[
+            :_WARDROBE_UNDERWEAR_CAP]
 
         def _named(ids: List[str]) -> str:
-            return ", ".join(names[i] for i in ids[:_WARDROBE_LIST_CAP])
+            return ", ".join(names[i] for i in ids)
 
-        if not fitting:
-            return f"Clothes you own but are not wearing: {_named(others)}."
-        line = ("Clothes you own but are not wearing — matching what you have "
-                f"on: {_named(fitting)}")
-        if others:
-            line += f"; in other styles: {_named(others)}"
-        return (line + ". Pieces of the same style go together — combine "
-                "across styles only when the situation calls for it.")
+        shown_fitting = [i for i in fitting if i in chosen]
+        shown_others = [i for i in others if i in chosen]
+
+        if shown_fitting:
+            line = ("Clothes you own but are not wearing — matching what you "
+                    f"have on: {_named(shown_fitting)}")
+            if shown_others:
+                line += f"; in other styles: {_named(shown_others)}"
+            line += (". Pieces of the same style go together — combine across "
+                     "styles only when the situation calls for it.")
+        elif chosen:
+            line = f"Clothes you own but are not wearing: {_named(chosen)}."
+        else:
+            line = ""
+
+        if uw_chosen:
+            lead = ("Underwear you could put on"
+                    if any(_is_free(s) for s in UNDERWEAR_SLOTS)
+                    else "Underwear you own")
+            uw_line = (f"{lead}: {_named(uw_chosen)} — underwear goes with "
+                       "any style.")
+            line = f"{line} {uw_line}" if line else uw_line
+
+        left = len(names) - len(chosen) - len(uw_chosen)
+        if left > 0:
+            line += f" …and {left} more piece{'s' if left != 1 else ''}."
+        return line
     except Exception as e:
         logger.debug("wardrobe choices failed for %s: %s", character_name, e)
         return ""

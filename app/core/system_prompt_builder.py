@@ -411,6 +411,7 @@ def build_recent_activity_section(character_name: str,
                      "partner": (meta.get("partner") or "").strip(),
                      "reason": (meta.get("reason") or "").strip(),
                      "action": (meta.get("action") or "").strip(),
+                     "displaced": [d for d in (meta.get("displaced") or []) if d],
                      "detail": (meta.get("detail") or "").strip()}
             if t == "location":
                 entry["value_display"] = _resolve_location_name(val)
@@ -472,7 +473,9 @@ def build_recent_activity_section(character_name: str,
                 # source (skill/compliance/…) stays out — only what changed.
                 verb = {"equip": "put on",
                         "unequip": "took off"}.get(e.get("action") or "", "changed")
-                lines.append(f"• {time_str}  {verb} {val}")
+                gone = e.get("displaced") or []
+                suffix = f" (instead of {', '.join(gone)})" if gone else ""
+                lines.append(f"• {time_str}  {verb} {val}{suffix}")
             elif t == "travel_failed":
                 reason_raw = (e.get("reason") or "").strip()
                 human = {
