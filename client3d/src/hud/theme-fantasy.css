@@ -6,9 +6,11 @@
  * properties and adds ornament, scoped to #hud, so /play stays untouched.
  *
  * HARD RULES kept here:
- * - Every selector starts with `#hud`. The portalled picker modals live
- *   OUTSIDE #hud (createPortal -> document.body) and are reached as later
- *   siblings via `#hud ~ .ga-modal-backdrop` — still `#hud`-anchored.
+ * - Every selector starts with `#hud` or `#hud-title`. The portalled picker
+ *   modals live OUTSIDE #hud (createPortal -> document.body) and are reached
+ *   as later siblings via `#hud ~ .ga-modal-backdrop` — still `#hud`-anchored.
+ *   `#hud-title` is the title/loading screen's own root (E4-T3), a sibling of
+ *   #hud so the two React roots never share a container.
  * - No external assets and no webfonts: system serif (Georgia) for headings,
  *   system-ui for body text, everything else is gradients, layered
  *   box-shadows, a gradient border-image and font-variant.
@@ -30,6 +32,7 @@
  * --hud-* tokens below are this file's own and nothing outside it reads them.
  * Both blocks are also set on the picker backdrop, which portals out of #hud. */
 #hud,
+#hud-title,
 #hud ~ .ga-modal-backdrop {
   --bg: #15110d;
   --bg-alt: #1d1811;
@@ -329,4 +332,114 @@
 #hud ::-webkit-scrollbar-thumb:hover,
 #hud ~ .ga-modal-backdrop ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, rgba(242, 205, 110, 0.62), rgba(160, 122, 52, 0.62));
+}
+
+/* ---- Title / login / loading screen (E4-T3) ----------------------------
+ * The one surface a player sees before the world exists, so it carries the
+ * theme most openly: a serif title in gold over ink, on a vellum plate with a
+ * brass edge. Same rules as everything above — no assets, no webfonts, system
+ * serif (Georgia) plus gradients and layered shadows.
+ *
+ * `#hud-title` is a sibling root of `#hud` (see hud.css) and is listed in the
+ * palette block at the top, so it consumes the same custom properties. */
+#hud-title .title-screen {
+  /* Darker than a panel: this is the void the world rises out of. The two
+   * radial washes give the flat backdrop a lit centre so the plate does not
+   * float on a plain rectangle. */
+  background:
+    radial-gradient(70% 55% at 50% 38%, rgba(120, 92, 50, 0.22), transparent 70%),
+    radial-gradient(120% 90% at 50% 120%, rgba(60, 44, 24, 0.35), transparent 70%),
+    #0b0906;
+}
+#hud-title .title-plate {
+  padding: 40px 34px 34px;
+  background: var(--hud-vellum);
+  border-color: rgba(242, 205, 110, 0.38);
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(242, 205, 110, 0.14),
+    inset 0 0 40px rgba(0, 0, 0, 0.5),
+    0 18px 48px rgba(0, 0, 0, 0.7);
+}
+#hud-title .title-name {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  font-variant: small-caps;
+  letter-spacing: 0.09em;
+  color: var(--hud-gold);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.8), 0 0 26px rgba(242, 205, 110, 0.25);
+}
+/* The rule under the title: the same fading gradient hairline the panel heads
+ * use, so title screen and HUD share one ornament. */
+#hud-title .title-sub {
+  padding-top: 14px;
+  border-top: 1px solid transparent;
+  border-image: var(--hud-rule) 1;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  color: var(--hud-muted);
+  opacity: 1;
+}
+
+#hud-title .title-field span {
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  text-transform: none;
+  letter-spacing: 0.09em;
+  color: rgba(242, 205, 110, 0.62);
+  opacity: 1;
+}
+#hud-title .title-field input {
+  background: rgba(0, 0, 0, 0.32);
+  border-color: rgba(242, 205, 110, 0.26);
+  border-radius: 3px;
+  color: var(--text);
+}
+#hud-title .title-field input:focus {
+  border-color: rgba(242, 205, 110, 0.6);
+  box-shadow: 0 0 0 1px rgba(242, 205, 110, 0.22);
+}
+
+/* The gate itself: brass, and the only bright thing on the screen — it is what
+ * the player is meant to press. */
+#hud-title .title-btn {
+  background: var(--hud-brass);
+  border-color: rgba(120, 88, 34, 0.9);
+  border-radius: 3px;
+  color: var(--hud-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  font-size: 1.05em;
+  letter-spacing: 0.08em;
+  box-shadow: inset 0 1px 0 rgba(255, 244, 214, 0.5), 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+#hud-title .title-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #f4dd9c 0%, #d9b45c 48%, #b28c3c 100%);
+}
+#hud-title .title-btn:disabled {
+  filter: saturate(0.55);
+}
+
+#hud-title .title-bar {
+  height: 8px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.42);
+  border-color: rgba(242, 205, 110, 0.26);
+}
+#hud-title .title-bar-fill {
+  background: var(--hud-brass);
+  box-shadow: 0 0 12px rgba(242, 205, 110, 0.35);
+}
+#hud-title .title-stage {
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  color: var(--hud-muted);
+  opacity: 1;
+}
+#hud-title .title-note {
+  color: #dc8a6e;
+}
+#hud-title .title-error {
+  color: #e0765f;
 }

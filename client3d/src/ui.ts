@@ -1,8 +1,15 @@
 import type { MapCharacter, MapEvent, WorldLocation } from './types';
 
-/** Start-Statusanzeige: hält die Seite am Leben, während auf den Server
- *  gewartet wird (Neustart des Backends während des Bootens). Ohne sie bliebe
- *  nur eine leere Seite, die sich nie wieder fängt. */
+/**
+ * Start status line: keeps the page alive while we wait for the server (a
+ * backend restart during boot). Without it there would only be an empty page
+ * that never catches itself again.
+ *
+ * It survives the title screen (E4-T3) for ONE reason: the very first request
+ * — `authStatus` — runs before React exists, because whether the title screen
+ * has to ask for a login is exactly what that answer decides. Every later wait
+ * is shown by the title screen itself.
+ */
 export function bootStatus() {
   const el = document.createElement('div');
   el.className = 'boot-status';
@@ -18,36 +25,6 @@ export function bootStatus() {
       el.remove();
     },
   };
-}
-
-export function showLogin(onLogin: (u: string, p: string) => Promise<void>): HTMLElement {
-  const overlay = document.createElement('div');
-  overlay.className = 'login-overlay';
-  overlay.innerHTML = `
-    <form class="login-card">
-      <h1>Anima Verse</h1>
-      <p class="subtitle">3D-Weltkarte — Prototyp</p>
-      <label>Benutzer <input name="username" autocomplete="username" value="admin" /></label>
-      <label>Passwort <input name="password" type="password" autocomplete="current-password" /></label>
-      <div class="login-error" hidden></div>
-      <button type="submit">Anmelden</button>
-    </form>`;
-  const form = overlay.querySelector('form')!;
-  const err = overlay.querySelector('.login-error') as HTMLElement;
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const data = new FormData(form);
-    err.hidden = true;
-    try {
-      await onLogin(String(data.get('username')), String(data.get('password')));
-      overlay.remove();
-    } catch (ex) {
-      err.textContent = ex instanceof Error ? ex.message : 'Login fehlgeschlagen';
-      err.hidden = false;
-    }
-  });
-  document.body.appendChild(overlay);
-  return overlay;
 }
 
 export function createHud(opts: { username: string; avatar: string; onLogout: () => void }) {

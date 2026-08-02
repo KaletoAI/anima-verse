@@ -18,8 +18,9 @@ import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
-import { bootStatus, createHud, InfoPanel, showLogin } from './ui';
-import { mountHud } from './hud/mount';
+import { bootStatus, createHud, InfoPanel } from './ui';
+import { reportBootStage, setBootNote } from './game/boot';
+import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './hud/bus';
 import type { ScenePayload } from './api';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
@@ -70,54 +71,96 @@ const app = document.getElementById('app')!;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Start-Anfragen so lange wiederholen, bis der Server antwortet.
+ * Where a boot request reports that it is still waiting for the server. There
+ * are two of them and they are NOT the same surface: before the title screen
+ * exists there is only the bare status line of `ui.bootStatus`, afterwards the
+ * message belongs on the title screen itself (`game/boot.ts`), which is on top
+ * of everything at that point.
+ */
+interface WaitSink {
+  /** the server did not answer; the next attempt runs in `seconds` */
+  waiting(seconds: number): void;
+  /** it answered — take the message away */
+  clear(): void;
+}
+
+/**
+ * Repeat a start request until the server answers.
  *
- * Der Backend-Neustart (start.sh) trifft nur Port 8000; der Vite-Proxy
- * antwortet währenddessen mit 500, also schlagen genau die Boot-Abfragen
- * fehl. Vorher starb der Client daran endgültig: `startApp` warf, niemand
- * fing es, die Seite blieb leer und kam von selbst nie wieder — ein Reload
- * während des Neustarts sah aus wie ein Absturz. Jetzt wartet der Boot mit
- * sichtbarem Status und fängt sich, sobald der Server wieder da ist.
+ * The backend restart (start.sh) only hits port 8000; the Vite proxy answers
+ * with 500 meanwhile, so exactly the boot queries fail. The client used to die
+ * of that for good: `startApp` threw, nobody caught it, the page stayed empty
+ * and never recovered by itself — a reload during the restart looked like a
+ * crash. Now the boot waits with a visible status and catches itself as soon
+ * as the server is back.
  */
 async function retryBoot<T>(what: string, fn: () => Promise<T>,
-                            status: ReturnType<typeof bootStatus>): Promise<T> {
+                            sink: WaitSink): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       const out = await fn();
-      status.remove();
+      sink.clear();
       return out;
     } catch (e) {
       const wait = Math.min(15_000, 1000 * 2 ** Math.min(attempt, 4));
-      console.warn(`[boot] ${what} fehlgeschlagen (Versuch ${attempt + 1}) — `
-        + `neuer Versuch in ${wait / 1000} s`, e);
-      status.set(`Server nicht erreichbar (${what}) — neuer Versuch in `
-        + `${Math.round(wait / 1000)} s …`);
+      console.warn(`[boot] ${what} failed (attempt ${attempt + 1}) — `
+        + `retrying in ${wait / 1000} s`, e);
+      sink.waiting(Math.round(wait / 1000));
       await sleep(wait);
     }
   }
 }
 
+/** The wait sink of the title screen — used for everything `startApp` fetches,
+ *  because from then on the title screen IS the loading screen. */
+const titleSink: WaitSink = {
+  waiting: (seconds) => setBootNote({ kind: 'retry', seconds }),
+  clear: () => setBootNote(null),
+};
+
 async function boot() {
+  // `bootStatus` survives for exactly ONE job: the reachability check below
+  // runs BEFORE any React exists — the title screen cannot be mounted before
+  // we know whether it has to ask for a login — and a server that is down at
+  // that moment must still say so instead of leaving a black page. Everything
+  // after this point reports through the title screen (`titleSink`).
   const status = bootStatus();
-  // Erreichbarkeit und Anmeldung trennen: ein nicht erreichbarer Server ist
-  // KEIN "nicht angemeldet" — sonst zeigt der Client eine Login-Maske, deren
-  // Absenden zwangsläufig scheitert.
-  const auth = await retryBoot('Anmeldestatus', () => api.authStatus(), status);
-  if (auth.authenticated && auth.user) {
-    void startApp(auth.user.username).catch((e) => {
-      console.error('[boot] Start fehlgeschlagen', e);
-      status.set('Start fehlgeschlagen — bitte Seite neu laden.');
+  // Keep reachability and authentication apart: an unreachable server is NOT
+  // "not signed in" — otherwise the client shows a login form whose submit is
+  // bound to fail.
+  const auth = await retryBoot('auth status', () => api.authStatus(), {
+    waiting: (seconds) => status.set(
+      `The server is not answering — trying again in ${seconds} s…`),
+    clear: () => status.remove(),
+  });
+
+  const start = (username: string) => {
+    void startApp(username).catch((e) => {
+      console.error('[boot] start failed', e);
+      setBootNote({ kind: 'failed' });
     });
-    return;
-  }
-  showLogin(async (u, p) => {
+  };
+
+  // The title screen replaces the old vanilla login overlay AND the loading
+  // gap behind it: it stays up while `startApp` builds the world underneath
+  // and fades once `game/boot.ts` has all four stages.
+  mountTitle({
+    needsLogin: !(auth.authenticated && auth.user),
     // The login click is the guaranteed user gesture — the one moment a
     // browser lets an AudioContext start. Nothing plays here; audio output is
-    // merely no longer blocked afterwards (task 3 moves this to the title
-    // screen, which is where the gesture will then happen).
-    void getAudio().unlock();
-    const user = await api.login(u, p);
-    await startApp(user.username);
+    // merely no longer blocked afterwards.
+    onLogin: async (u, p) => {
+      void getAudio().unlock();
+      const user = await api.login(u, p);
+      start(user.username);
+    },
+    // Same gesture for the session that is already signed in. This case used
+    // to have no click at all: the old boot went straight into `startApp` and
+    // the audio context stayed suspended for the whole session.
+    onEnter: () => {
+      void getAudio().unlock();
+      start(auth.user!.username);
+    },
   });
 }
 
@@ -130,13 +173,14 @@ async function startApp(username: string) {
   // figures.load() wirft nie (Manifest/Clips fangen selbst) und darf NICHT
   // wiederholt werden — ein zweiter Lauf würde die Modelle doppelt einhängen.
   const figuresReady = figures.load();
-  const status = bootStatus();
-  const [allLocs, firstMap, surfaces] = await retryBoot('Weltdaten', () => Promise.all([
+  const [allLocs, firstMap, surfaces] = await retryBoot('world data', () => Promise.all([
     api.getLocations(),
     api.getWorldMap(),
     api.getSurfaceTextures(),
-  ]), status);
+  ]), titleSink);
+  reportBootStage('world');
   await figuresReady;
+  reportBootStage('figures');
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
   setPropLoadFocus(engine.target);   // GLB-Queue: Modelle nahe der Kamera zuerst
   const npcs = new NpcManager(figures);
@@ -151,6 +195,11 @@ async function startApp(username: string) {
   const hud = createHud({
     username,
     avatar: firstMap.avatar,
+    // Logging out reloads, and that is the whole way back to the title: the
+    // reload runs `boot()` again, `authStatus` now says "not signed in" and
+    // the title screen comes up with its login form. Tearing the engine,
+    // the pollers and the three roots down by hand to reach the same state
+    // would be a second shutdown path with nothing to gain.
     onLogout: async () => {
       await api.logout();
       location.reload();
@@ -235,6 +284,7 @@ async function startApp(username: string) {
   // Modus entsteht.
   const scenes = new SceneLibrary();
   await scenes.prime(placeable.map((l) => l.id));
+  reportBootStage('scenes');
 
   const tiles = new Map<string, Tile>();
 
@@ -329,6 +379,12 @@ async function startApp(username: string) {
     if (scene) mountWithDoors(tile, scene);
   }
   engine.setPickables([...tiles.values()].map((t) => t.group));
+  // Last stage: the map stands and can be clicked. The title screen fades on
+  // this one — the scene models behind the tiles keep streaming in afterwards
+  // (`mountWithDoors` is deliberately not awaited), and holding the screen
+  // until the last GLB is decoded would mean staring at a bar over a world
+  // that is already finished enough to look at.
+  reportBootStage('tiles');
 
   let firstSweep = true;
   const requestServerModels = () => {

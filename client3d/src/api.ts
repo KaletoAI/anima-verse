@@ -21,7 +21,9 @@ export async function login(username: string, password: string): Promise<AuthUse
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) throw new Error('Login fehlgeschlagen');
+  // Console/diagnostics only — the title screen shows its own translated line
+  // (the raw text of a proxy error page would be neither).
+  if (!res.ok) throw new Error(`login failed (HTTP ${res.status})`);
   const data = await res.json();
   return data.user as AuthUser;
 }
