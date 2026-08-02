@@ -57,10 +57,12 @@ const FADE_STEPS = 8;
  * Schedules one half of an equal-power crossfade on `param`: `up` fades in
  * along sin(t·π/2), `down` fades out along cos(t·π/2).
  *
- * WHY NOT A STRAIGHT LINE: two linear ramps crossing each other sum to 0.5 at
- * the midpoint instead of 1, which is a 6 dB dip — audible as a "hole" in the
- * middle of every track change. sin² + cos² = 1 keeps the POWER constant, so
- * the seam sounds like one continuous piece of music.
+ * WHY NOT A STRAIGHT LINE: with two linear ramps both sides sit at half
+ * amplitude in the middle of the seam, so the combined POWER of two unrelated
+ * tracks is 0.5² + 0.5² = 0.5 — a 3 dB dip, audible as a "hole" in the middle
+ * of every track change. sin² + cos² = 1 keeps the power constant instead
+ * (measured residue −0.042 dB with the eight segments below), so the seam
+ * sounds like one continuous piece of music.
  *
  * The curve is approximated with `FADE_STEPS` linear ramps rather than
  * `setValueCurveAtTime`, deliberately: a scheduled value curve makes the
@@ -244,7 +246,7 @@ export class AudioEngine {
   /** Spoken lines are strictly serial: the tail of this chain is the point
    *  where the next `speak()` hangs itself. */
   private speech: Promise<void> = Promise.resolve();
-  /** Bumped by `stopSpeech` (and thus by `stopAll`) — a queued line whose
+  /** Bumped by `stopSpeech` — a queued line whose
    *  generation is stale drops out instead of playing (see `playSpeech`). */
   private speechGen = 0;
   private speaking: AudioBufferSourceNode | null = null;
@@ -314,7 +316,7 @@ export class AudioEngine {
    * are heard one after the other instead of on top of each other.
    *
    * Never rejects, and always resolves: a line that fails to load, arrives
-   * after `stopAll()` or is spoken into a still-locked context is a line not
+   * after `stopSpeech()` or is spoken into a still-locked context is a line not
    * heard — not a broken chat and not a promise the caller waits on forever.
    */
   speak(url: string): Promise<void> {
@@ -326,7 +328,7 @@ export class AudioEngine {
 
   private async playSpeech(url: string, gen: number): Promise<void> {
     // The generation is checked before every step, exactly like `Playlist`
-    // does it: `stopAll` cannot cancel the promise chain that is already
+    // does it: `stopSpeech` cannot cancel the promise chain that is already
     // built, so each link has to notice that it belongs to a stopped queue and
     // fall through — otherwise the line AFTER the stopped one still plays, and
     // the next `speak()` (hanging on the fresh chain) plays on top of it.
@@ -362,8 +364,9 @@ export class AudioEngine {
    *
    * That separation is the whole point (E4-T6): the player's own message
    * interrupts what the room is saying, and a chat message that also killed the
-   * soundtrack would be a bug nobody would look for here. `stopAll` is the
-   * bigger hammer and uses this one.
+   * soundtrack would be a bug nobody would look for here. There is deliberately
+   * no "stop everything" hammer: the two playlists stop by being handed an
+   * empty list, which is what the menu switches already do.
    */
   stopSpeech(): void {
     this.speechGen += 1;
@@ -376,14 +379,6 @@ export class AudioEngine {
       this.speaking = null;
     }
     this.speech = Promise.resolve();
-  }
-
-  /** Stops everything at once — music, ambience and the whole speech queue
-   *  (the current line AND the ones already waiting behind it). */
-  stopAll(): void {
-    this.music.stop();
-    this.ambient.stop();
-    this.stopSpeech();
   }
 
   /**

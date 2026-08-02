@@ -265,7 +265,7 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
     voice.current = createVoiceover({
       synth: (line) => ttsSpeak(line.text, line.speaker, username),
       play: (url) => getAudio().speak(url),
-      // SPEECH ONLY — `stopAll` would take the music and the ambience with it.
+      // SPEECH ONLY — music and the ambience bed keep playing.
       stop: () => getAudio().stopSpeech(),
     });
   }
@@ -278,9 +278,10 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
 
   // Auto SHOW (E3 acceptance): a new line in the room brings the chat up — and
   // (E4-T6) the same lines are what gets read aloud. The detection rides on the
-  // ONE poll above (`newSceneLines`: line count plus the last line's timestamp
-  // as the effect's trigger, the timestamps themselves as the rule) instead of
-  // a second subscription.
+  // ONE poll above (`sceneStampOf` — line count plus the IDENTITY of the last
+  // line — as the effect's trigger, and `newSceneLines`, which anchors on that
+  // last seen line and takes everything behind it, as the rule) instead of a
+  // second subscription.
   //
   // Two cases deliberately do NOT count as new, they only set the baseline:
   // the FIRST payload after mount (otherwise the chat pops open on every page

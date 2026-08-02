@@ -219,7 +219,7 @@ export interface VoiceoverDeps {
   /** Play one URL, resolving when it has finished (`AudioEngine.speak`). */
   play: (url: string) => Promise<void>;
   /** Silence what is sounding right now — SPEECH ONLY
-   *  (`AudioEngine.stopSpeech`; `stopAll` would take the music with it). */
+   *  (`AudioEngine.stopSpeech`; music and ambience keep playing). */
   stop: () => void;
 }
 

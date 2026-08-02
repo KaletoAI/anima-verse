@@ -32,6 +32,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
+from app.core import paths
 from app.core.http_files import etag_file_response
 
 router = APIRouter(prefix="/assets", tags=["assets"])
@@ -47,12 +48,11 @@ MUSIC_SUBS = ("day", "night")
 def get_audio_dir() -> Path:
     """``<repo>/audio`` — the drop folder for music and ambience.
 
-    Resolved from this file's location, like ``paths._project_root`` does, so
-    it does not depend on the working directory the server was started from.
-    Untracked user data; the standalone check in ``scripts/`` overrides this
-    function so it never touches the real folder.
+    Delegates to ``paths.get_game_audio_dir()`` (one place owns storage paths);
+    the indirection stays because the standalone check in ``scripts/`` replaces
+    THIS function so it never touches the real, user-owned folder.
     """
-    return Path(__file__).resolve().parents[2] / "audio"
+    return paths.get_game_audio_dir()
 
 
 def _listable(name: str) -> bool:

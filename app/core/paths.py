@@ -67,6 +67,17 @@ def get_animation_clips_dir() -> Path:
     return get_shared_dir() / "models" / "clips"
 
 
+def get_game_audio_dir() -> Path:
+    """Music and ambience for the 3D client — world-independent user data in
+    ``<repo>/audio/`` (``music/day|night/*``, ``ambient/<terrain>/*``).
+
+    Gitignored like the animation clips and ``voices/``: the directory IS the
+    interface, dropping a file in is the whole workflow. Served by
+    ``app/routes/game_audio.py``; a missing directory is the normal state.
+    """
+    return _project_root / "audio"
+
+
 def get_test_figure_dir() -> Path:
     """Shared neutral TEST FIGURE (a Mixamo standard character like X Bot) —
     world-independent, used by the admin previews for marker/scale figures.
