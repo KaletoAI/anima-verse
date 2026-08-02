@@ -828,6 +828,14 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // Mondscheinsee lag alles unter +0,04 dahinter, also Seebecken und Strand
   // (Modell y −0,80 … +2,69). Für `display: ground` bleibt sie weg.
   if (tile.groundPlate) tile.groundPlate.visible = !area;
+  // Als BACKSTOP der Detailszene muss die Platte UNTER die Payload-Platten:
+  // die flachen Outdoor-Texturen (Straße, Waldboden) liegen auf Etage 0, und
+  // bei y 0,04 verdeckte der Backstop genau sie — die Straße wurde erst ab
+  // +0,1 m Raumhöhe sichtbar (User-Befund 2026-08-02). Das Relief hebt beide
+  // mit denselben Gitterwerten, die Ordnung bleibt also überall erhalten.
+  if (tile.groundPlate) {
+    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.01 : 0.04;
+  }
   tile.shellMats = [];
   tile.roofMats = [];
   // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es
@@ -889,7 +897,10 @@ export function unmountScene(tile: Tile): void {
     }
     tile.flatGroundGeo = undefined;
   }
-  if (tile.groundPlate) tile.groundPlate.visible = true;
+  if (tile.groundPlate) {
+    tile.groundPlate.visible = true;
+    tile.groundPlate.position.y = 0.04;
+  }
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;
