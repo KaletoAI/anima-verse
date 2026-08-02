@@ -1677,10 +1677,51 @@ def get_equipped_item_ids(character_name: str) -> List[str]:
     return dedup
 
 
-def _notify_outfit_changed(character_name: str, source: str) -> None:
-    """Single funnel for "worn state changed": SSE outfit event + debounced
-    3D reference renders (T-pose + default pose, app/core/model_refs.py).
-    All five worn-state mutations below go through here."""
+def _record_outfit_history(character_name: str, action: str,
+                            item_ids: List[str], slots: List[str],
+                            source: str) -> None:
+    """Write one worn-state change into ``state_history`` (type ``outfit``).
+
+    Until now only location/room/effects/sleep were logged, so "when and why
+    did this character take that off" was not reconstructable (finding E of
+    plan-npc-clothing-behavior.md). One entry per mutation call — not per
+    slot — keeps the diary readable; the metadata carries who did it
+    (``source``: skill / compliance / wardrobe / avatar / telegram / …), the
+    affected slots and the item ids.
+    """
+    ids = [i for i in (item_ids or []) if i]
+    if not ids:
+        return
+    try:
+        from app.models.character import _record_state_change
+        names = [((get_item(i) or {}).get("name") or i) for i in ids]
+        meta: Dict[str, Any] = {
+            "action": action,
+            "source": source or "unknown",
+            "item_ids": ids[:6],
+        }
+        if slots:
+            meta["slots"] = sorted({s for s in slots if s})
+        _record_state_change(character_name, "outfit", ", ".join(names[:6]), meta)
+    except Exception as e:
+        logger.debug("outfit history [%s/%s] failed: %s", character_name, action, e)
+
+
+def _notify_outfit_changed(character_name: str, source: str, *,
+                            action: str = "", item_ids: Optional[List[str]] = None,
+                            slots: Optional[List[str]] = None) -> None:
+    """Single funnel for "worn state changed": state-history entry + SSE
+    outfit event + debounced 3D reference renders (T-pose + default pose,
+    app/core/model_refs.py). All five worn-state mutations below go through
+    here.
+
+    ``source`` is the caller context (skill / compliance / wardrobe / …) and
+    falls back to the mutation name; ``action`` + ``item_ids`` + ``slots``
+    describe WHAT changed and only feed the history entry.
+    """
+    if action:
+        _record_outfit_history(character_name, action, item_ids or [],
+                                slots or [], source)
     try:
         from app.core.outfit_events import publish as _publish_outfit
         _publish_outfit(character_name, source)
@@ -1693,11 +1734,16 @@ def _notify_outfit_changed(character_name: str, source: str) -> None:
         logger.debug("%s model-ref schedule failed: %s", source, _re)
 
 
-def equip_piece(character_name: str, item_id: str) -> Dict[str, Any]:
-    """Legt ein Outfit-Piece an. Belegt alle Slots aus item.outfit_piece.slots
-    symmetrisch und verdraengt jedes Piece, das aktuell in einem dieser Slots sitzt.
+def equip_piece(character_name: str, item_id: str,
+                source: str = "") -> Dict[str, Any]:
+    """Put on an outfit piece. Occupies every slot from item.outfit_piece.slots
+    symmetrically and displaces whatever currently sits in one of those slots.
 
-    Returns: {"status": "ok", "slots": [...], "displaced": [old_item_ids,...]} oder
+    ``source`` is the caller context (skill / compliance / wardrobe / avatar /
+    …) and ends up in the state-history entry — that is what makes "who put
+    this on, and when" answerable afterwards.
+
+    Returns: {"status": "ok", "slots": [...], "displaced": [old_item_ids,...]} or
              {"status": "error", "reason": "..."}
     """
     from app.models.character import get_character_profile, save_character_profile
@@ -1768,18 +1814,21 @@ def equip_piece(character_name: str, item_id: str) -> Dict[str, Any]:
     save_character_profile(character_name, profile)
     logger.info("equip_piece [%s]: slots=%s item=%s%s",
                 character_name, slots, item_id,
-                f" (verdraengt {displaced})" if displaced else "")
-    _notify_outfit_changed(character_name, "equip_piece")
+                f" (displaced {displaced})" if displaced else "")
+    _notify_outfit_changed(character_name, source or "equip_piece",
+                           action="equip", item_ids=[item_id], slots=slots)
     return {"status": "ok", "slots": slots, "displaced": displaced}
 
 
 def unequip_piece(character_name: str,
-                   slot: str = "", item_id: str = "") -> Dict[str, Any]:
-    """Entfernt ein Piece — entweder per slot oder per item_id.
+                   slot: str = "", item_id: str = "",
+                   source: str = "") -> Dict[str, Any]:
+    """Take off a piece — addressed either by slot or by item_id.
 
-    Multi-Slot-Pieces werden vollstaendig ausgezogen: alle Slots in denen
-    das Item sitzt werden geleert. Das Piece bleibt im Inventar, ist nur
-    nicht mehr equipped. Farb-Meta fuer alle betroffenen Slots wird entfernt.
+    Multi-slot pieces come off completely: every slot the item sits in is
+    cleared. The piece stays in the inventory, it is just no longer equipped.
+    The colour meta of every affected slot is dropped. ``source`` is the
+    caller context for the state-history entry.
     """
     from app.models.character import get_character_profile, save_character_profile
     profile = get_character_profile(character_name)
@@ -1809,14 +1858,17 @@ def unequip_piece(character_name: str,
     save_character_profile(character_name, profile)
     logger.info("unequip_piece [%s]: item=%s slots=%s",
                 character_name, removed, cleared_slots)
-    _notify_outfit_changed(character_name, "unequip_piece")
+    _notify_outfit_changed(character_name, source or "unequip_piece",
+                           action="unequip", item_ids=[removed],
+                           slots=cleared_slots)
     return {"status": "ok", "slot": target_slot, "item_id": removed,
             "cleared_slots": cleared_slots}
 
 
-def equip_item(character_name: str, item_id: str) -> Dict[str, Any]:
-    """Legt ein Nicht-Piece-Item an (z.B. Hammer, Brille). Item muss im
-    Inventar sein. Outfit-Pieces gehen ueber equip_piece, nicht hier.
+def equip_item(character_name: str, item_id: str,
+               source: str = "") -> Dict[str, Any]:
+    """Equip a non-piece item (hammer, glasses, …). The item has to be in the
+    inventory. Outfit pieces go through equip_piece, not here.
     """
     from app.models.character import get_character_profile, save_character_profile
     if not has_item(character_name, item_id):
@@ -1836,12 +1888,14 @@ def equip_item(character_name: str, item_id: str) -> Dict[str, Any]:
     profile["equipped_items"] = items
     save_character_profile(character_name, profile)
     logger.info("equip_item [%s]: %s", character_name, item_id)
-    _notify_outfit_changed(character_name, "equip_item")
+    _notify_outfit_changed(character_name, source or "equip_item",
+                           action="equip", item_ids=[item_id])
     return {"status": "ok"}
 
 
-def unequip_item(character_name: str, item_id: str) -> Dict[str, Any]:
-    """Entfernt ein Nicht-Piece-Item aus der Ausruestung. Bleibt im Inventar."""
+def unequip_item(character_name: str, item_id: str,
+                 source: str = "") -> Dict[str, Any]:
+    """Take a non-piece item off the equipment. It stays in the inventory."""
     from app.models.character import get_character_profile, save_character_profile
     profile = get_character_profile(character_name)
     state = _get_equipped(profile)
@@ -1852,7 +1906,8 @@ def unequip_item(character_name: str, item_id: str) -> Dict[str, Any]:
     profile["equipped_items"] = items
     save_character_profile(character_name, profile)
     logger.info("unequip_item [%s]: %s", character_name, item_id)
-    _notify_outfit_changed(character_name, "unequip_item")
+    _notify_outfit_changed(character_name, source or "unequip_item",
+                           action="unequip", item_ids=[item_id])
     return {"status": "ok"}
 
 
@@ -2054,6 +2109,24 @@ def apply_equipped_pieces(character_name: str, *,
         logger.info(
             "apply_equipped_pieces [%s] source=%s pieces=%d items=%d changed=1",
             character_name, source or "?", len(target_pieces), len(target_items))
+        # History: one entry per DIRECTION, not per slot — a preset swap is a
+        # single decision, and multi-slot pieces would otherwise appear twice.
+        # An item that is displaced and re-applied in the same call only
+        # counts as "put on".
+        applied_ids: List[str] = []
+        for a in applied:
+            if a["item_id"] not in applied_ids:
+                applied_ids.append(a["item_id"])
+        cleared_ids: List[str] = []
+        for c in cleared:
+            if c["item_id"] not in applied_ids and c["item_id"] not in cleared_ids:
+                cleared_ids.append(c["item_id"])
+        _record_outfit_history(
+            character_name, "unequip", cleared_ids,
+            [c["slot"] for c in cleared], source)
+        _record_outfit_history(
+            character_name, "equip", applied_ids,
+            [a["slot"] for a in applied], source)
         _notify_outfit_changed(character_name, source)
 
     return {

@@ -555,7 +555,7 @@ class OutfitCreationSkill(BaseSkill):
                             obtained_from="outfit_creation")
                         created.append({"id": iid, "slots": slots_list, "name": p["name"]})
                     # equip_piece raeumt verdraengte Pieces (auch Multi-Slot) eigenstaendig auf.
-                    r = equip_piece(character_name, iid)
+                    r = equip_piece(character_name, iid, source="outfit_creation")
                     if (r or {}).get("status") == "ok":
                         for s in slots_list:
                             equipped.append(s)

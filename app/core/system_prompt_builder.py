@@ -410,6 +410,7 @@ def build_recent_activity_section(character_name: str,
             entry = {"ts": ts, "type": t, "value": val,
                      "partner": (meta.get("partner") or "").strip(),
                      "reason": (meta.get("reason") or "").strip(),
+                     "action": (meta.get("action") or "").strip(),
                      "detail": (meta.get("detail") or "").strip()}
             if t == "location":
                 entry["value_display"] = _resolve_location_name(val)
@@ -466,6 +467,12 @@ def build_recent_activity_section(character_name: str,
                 default_reason = reason_raw.lower() in ("", "zugang verweigert", "access denied")
                 reason = "" if default_reason else f" — {reason_raw}"
                 lines.append(f"• {time_str}  Wanted to go to {val}, access denied{reason}")
+            elif t == "outfit":
+                # M4 entries. The character reads its OWN log here, so the
+                # source (skill/compliance/…) stays out — only what changed.
+                verb = {"equip": "put on",
+                        "unequip": "took off"}.get(e.get("action") or "", "changed")
+                lines.append(f"• {time_str}  {verb} {val}")
             elif t == "travel_failed":
                 reason_raw = (e.get("reason") or "").strip()
                 human = {

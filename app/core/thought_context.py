@@ -24,6 +24,8 @@ logger = get_logger("thought_context")
 
 # Window during which "you just moved" justifies an outfit-decision hint.
 _OUTFIT_AFTER_LOCATION_MINUTES = 10
+# How many owned-but-unworn pieces the dressing hint names PER group.
+_WARDROBE_LIST_CAP = 12
 # Hours since last retrospect that count as "boost — time to reflect".
 _RETROSPECT_BOOST_HOURS = 24
 # Thought journal (plan-thought-journal.md): how many of the character's own
@@ -350,7 +352,72 @@ def _bare_slots_summary(character_name: str) -> str:
     return ", ".join(parts)
 
 
+def _build_wardrobe_choices(character_name: str) -> str:
+    """The clothes the character OWNS but is not wearing, grouped by whether
+    they go with the current outfit (CO2, soft preference).
+
+    Until now the dressing decision saw the wardrobe only as the flat
+    ``inventory_block`` list — a blazer next to fishnets, with nothing saying
+    which belongs to which — and the NPCs combined accordingly. The grouping
+    is a PREFERENCE, not a rule: both groups are named in full and the
+    closing sentence explicitly allows mixing.
+
+    Nothing (relevant) worn — a naked character, or one wearing only untagged
+    pieces — has no style to match, so ``matching_pieces`` returns no
+    preference at all and the pieces are listed flat.
+    """
+    try:
+        from app.models.inventory import (
+            get_character_inventory, get_equipped_pieces)
+        from app.core.outfit_coherence import matching_pieces
+
+        inv = get_character_inventory(character_name, include_equipped=False) or {}
+        entries = inv.get("inventory") if isinstance(inv, dict) else inv
+        names: Dict[str, str] = {}
+        for entry in (entries or []):
+            if entry.get("item_category") != "outfit_piece":
+                continue
+            iid = entry.get("item_id") or ""
+            if iid and iid not in names:
+                names[iid] = (entry.get("item_name") or iid).strip()
+        if not names:
+            return ""
+
+        worn = get_equipped_pieces(character_name) or {}
+        fitting, others = matching_pieces(worn, list(names.keys()))
+
+        def _named(ids: List[str]) -> str:
+            return ", ".join(names[i] for i in ids[:_WARDROBE_LIST_CAP])
+
+        if not fitting:
+            return f"Clothes you own but are not wearing: {_named(others)}."
+        line = ("Clothes you own but are not wearing — matching what you have "
+                f"on: {_named(fitting)}")
+        if others:
+            line += f"; in other styles: {_named(others)}"
+        return (line + ". Pieces of the same style go together — combine "
+                "across styles only when the situation calls for it.")
+    except Exception as e:
+        logger.debug("wardrobe choices failed for %s: %s", character_name, e)
+        return ""
+
+
 def _build_outfit_decision_block(character_name: str) -> str:
+    """The dressing hint plus the wardrobe it can choose from.
+
+    The hint itself (when it fires at all) comes from
+    ``_outfit_decision_hint``; ``_build_wardrobe_choices`` appends the owned
+    pieces, sorted by what goes with the current outfit. No hint, no listing —
+    the wardrobe is only interesting when there is a reason to get dressed.
+    """
+    hint = _outfit_decision_hint(character_name)
+    if not hint:
+        return ""
+    choices = _build_wardrobe_choices(character_name)
+    return f"{hint}\n{choices}" if choices else hint
+
+
+def _outfit_decision_hint(character_name: str) -> str:
     """Outfit-decision hint when:
       a) location changed within the last N minutes, OR
       b) the agent just woke up (activity changed away from 'Sleeping'
@@ -400,12 +467,18 @@ def _build_outfit_decision_block(character_name: str) -> str:
             except (ValueError, TypeError):
                 changed = None
             if changed and now - changed <= timedelta(minutes=_OUTFIT_AFTER_LOCATION_MINUTES * 2):
-                # Look at the previous activity in state_history.
+                # Look at the previous activity in state_history. The type
+                # filter belongs in SQL: state_history carries every change
+                # type (outfit changes since M4), so an unfiltered "last 5
+                # rows" can consist of nothing but other types and lose the
+                # wake-up entirely.
                 try:
                     prev = conn.execute(
                         "SELECT state_json FROM state_history "
                         "WHERE character_name=? AND ts < ? "
-                        "ORDER BY ts DESC LIMIT 5",
+                        "AND json_valid(state_json) "
+                        "AND json_extract(state_json,'$.type')='activity' "
+                        "ORDER BY ts DESC LIMIT 1",
                         (character_name, activity_changed_at),
                     ).fetchall()
                     import json as _json

@@ -837,9 +837,9 @@ async def equip_route(character_name: str, request: Request) -> Dict[str, Any]:
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
     if item.get("category") == "outfit_piece":
-        result = equip_piece(character_name, item_id)
+        result = equip_piece(character_name, item_id, source="wardrobe_ui")
     else:
-        result = equip_item(character_name, item_id)
+        result = equip_item(character_name, item_id, source="wardrobe_ui")
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "equip failed"))
     # Direct (UI) action is world-visible: narrator line -> others can react.
@@ -870,9 +870,10 @@ async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]
     if not slot and not item_id:
         raise HTTPException(status_code=400, detail="slot or item_id required")
     # erst als Piece (slot oder item_id), dann als equipped Item
-    result = unequip_piece(character_name, slot=slot, item_id=item_id)
+    result = unequip_piece(character_name, slot=slot, item_id=item_id,
+                            source="wardrobe_ui")
     if result.get("status") != "ok" and item_id:
-        result = unequip_item(character_name, item_id)
+        result = unequip_item(character_name, item_id, source="wardrobe_ui")
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "unequip failed"))
     # Direct (UI) action is world-visible: narrator line -> others can react.

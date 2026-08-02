@@ -1813,7 +1813,7 @@ def _apply_removed_pieces(character_name: str,
             name = (it.get("name") or "").strip().lower()
             if not name or name not in wanted:
                 continue
-            r = unequip_piece(character_name, slot=slot)
+            r = unequip_piece(character_name, slot=slot, source="chat_extract")
             if r.get("status") == "ok":
                 unequipped.append(f"{it.get('name', iid)} ({slot})")
 

@@ -113,6 +113,21 @@ def _visible_slot_types(pieces: Dict[str, str]) -> List[Tuple[str, List[str]]]:
     return [(slot, _types_of(iid)) for slot, iid in visible.items() if iid]
 
 
+def _relevant_tag_sets(pieces: Dict[str, str]) -> List[Set[str]]:
+    """The tag sets that DECIDE a combination: the tagged non-underwear
+    pieces — or, when nothing else is visible, the tagged underwear.
+
+    Empty list = there is nothing tagged to judge by (naked, or all
+    wildcards). Both ``common_types`` and the dressing preference below read
+    the rule from here, so they can never drift apart.
+    """
+    slot_types = _visible_slot_types(pieces)
+    outer = [set(t) for slot, t in slot_types
+             if t and slot not in UNDERWEAR_SLOTS]
+    return outer or [set(t) for slot, t in slot_types
+                     if t and slot in UNDERWEAR_SLOTS]
+
+
 def common_types(pieces: Dict[str, str]) -> Set[str]:
     """The tags the RELEVANT visible pieces share — the reason a combination
     is coherent, for a log line or a tooltip.
@@ -122,11 +137,7 @@ def common_types(pieces: Dict[str, str]) -> Set[str]:
     with no relevant tagged piece at all it is the whole vocabulary
     (everything goes).
     """
-    slot_types = _visible_slot_types(pieces)
-    outer = [set(t) for slot, t in slot_types
-             if t and slot not in UNDERWEAR_SLOTS]
-    tagged = outer or [set(t) for slot, t in slot_types
-                       if t and slot in UNDERWEAR_SLOTS]
+    tagged = _relevant_tag_sets(pieces)
     if not tagged:
         return set(CANONICAL_OUTFIT_TYPES)
     common = tagged[0]
@@ -145,6 +156,48 @@ def is_coherent(pieces: Dict[str, str]) -> bool:
     so is a single visible piece.
     """
     return bool(common_types(pieces))
+
+
+def matching_pieces(worn: Dict[str, str],
+                    candidates: Iterable[str]) -> Tuple[List[str], List[str]]:
+    """Split candidate pieces into ``(matching, other)`` against what is worn.
+
+    Pure and order-preserving — the caller (the dressing hint in
+    ``thought_context``) only PRESENTS the two groups; nothing here forbids
+    anything. The rule is the same one ``is_coherent`` uses: a candidate
+    matches when it shares a tag with what the current combination stands
+    for, and an untagged candidate is a wildcard that always matches.
+
+    Two documented edge cases:
+
+    * **Nothing (relevant) worn** — a naked character, or one wearing only
+      wildcards, has no style to match. There is deliberately NO preference
+      then: the result is ``([], all candidates)`` and the caller renders one
+      flat list.
+    * **An already incoherent outfit** has no common tag; the UNION of the
+      worn tags takes over, so the hint still points at something the
+      character wears instead of at nothing at all.
+    """
+    tagged = _relevant_tag_sets(worn or {})
+    if not tagged:
+        return [], [iid for iid in candidates if iid]
+    reference = set(tagged[0])
+    for other in tagged[1:]:
+        reference &= other
+    if not reference:
+        reference = set().union(*tagged)
+
+    matching: List[str] = []
+    rest: List[str] = []
+    for iid in candidates:
+        if not iid:
+            continue
+        tags = _types_of(iid)
+        if not tags or (set(tags) & reference):
+            matching.append(iid)
+        else:
+            rest.append(iid)
+    return matching, rest
 
 
 def coherent_pieces(combos: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:

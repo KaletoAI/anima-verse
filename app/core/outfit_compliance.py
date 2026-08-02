@@ -362,7 +362,7 @@ def apply_outfit_compliance(
             if eq_pieces.get(slot):
                 # unequip_piece kuemmert sich um Multi-Slot-Mirror
                 try:
-                    unequip_piece(character_name, slot=slot)
+                    unequip_piece(character_name, slot=slot, source="compliance")
                     eq_pieces.pop(slot, None)
                     result["forbidden_cleared"].append(slot)
                     changed = True
@@ -411,7 +411,7 @@ def apply_outfit_compliance(
         # Equippen ueber equip_piece (kuemmert sich um Mirror, Persistenz)
         from app.models.inventory import equip_piece
         try:
-            equip_piece(character_name, cand_id)
+            equip_piece(character_name, cand_id, source="compliance")
             eq_pieces[slot] = cand_id
             result["auto_filled"].append({"slot": slot, "item_id": cand_id})
             changed = True

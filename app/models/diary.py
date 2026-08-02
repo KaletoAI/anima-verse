@@ -34,6 +34,7 @@ ENTRY_TYPES = {
     "location":           "Ortswechsel",
     "activity":           "Aktivitaet",
     "condition":          "Zustand",
+    "outfit":             "Outfit",
     "effects":            "Effekte",
     "thought":            "Gedanke",
     "assignment_update":  "Aufgaben-Update",
@@ -52,6 +53,7 @@ ENTRY_ICONS = {
     "location":           "\U0001f4cd",   # 📍
     "activity":           "\u26a1",       # ⚡
     "condition":          "\U0001f525",   # 🔥
+    "outfit":             "\U0001f455",   # 👕
     "effects":            "\U0001f4ca",   # 📊
     "thought":            "\U0001f9e0",   # 🧠
     "assignment_update":  "\U0001f4cb",   # 📋
@@ -373,6 +375,27 @@ def _render_condition(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dic
     return {"type": "condition", "content": content, "timestamp": ts, "metadata": meta}
 
 
+#: Worn-state directions as they read in the timeline.
+_OUTFIT_ACTIONS = {"equip": "Put on", "unequip": "Took off"}
+
+
+def _render_outfit(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[str, Any]]:
+    """Outfit change (M4) — what was put on/taken off, and by whom.
+
+    ``source`` is the caller context recorded at the equip/unequip call
+    (skill / compliance / wardrobe_ui / avatar / …); it is exactly the part
+    that used to be missing when asking "why is this character undressed".
+    """
+    if not value:
+        return None
+    label = _OUTFIT_ACTIONS.get((meta.get("action") or "").strip(), "Outfit")
+    content = f"{label}: {value}"
+    source = (meta.get("source") or "").strip()
+    if source:
+        content += f" — {source}"
+    return {"type": "outfit", "content": content, "timestamp": ts, "metadata": meta}
+
+
 def _render_access_denied(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[str, Any]]:
     loc_name = meta.get("location_name") or value
     reason = meta.get("reason", "") or ""
@@ -432,6 +455,7 @@ def _render_effects(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[
 register_diary_renderer("location", _render_location)
 register_diary_renderer("activity", _render_activity)
 register_diary_renderer("condition", _render_condition)
+register_diary_renderer("outfit", _render_outfit)
 register_diary_renderer("access_denied", _render_access_denied)
 register_diary_renderer("discovery", _render_discovery)
 register_diary_renderer("room", _render_room)

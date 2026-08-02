@@ -104,7 +104,7 @@ class OutfitChangeSkill(BaseSkill):
         # 2) Unequip Slots — Slot leeren + forbidden markieren.
         # Compliance/AutoFill respektiert forbidden_slots und fuellt nicht.
         for slot in spec.get("unequip_slots", []):
-            res = unequip_piece(character_name, slot=slot)
+            res = unequip_piece(character_name, slot=slot, source="skill")
             if res.get("status") == "ok":
                 # Name the removed piece, not the slot ("feet" -> the shoes).
                 _nm = self._item_label(res.get("item_id")) or f"slot '{slot}'"
@@ -121,10 +121,10 @@ class OutfitChangeSkill(BaseSkill):
         for token in spec.get("unequip_items", []):
             iid = resolve_item_id(token) or token
             # erst als Piece versuchen, dann als Item
-            r = unequip_piece(character_name, item_id=iid)
+            r = unequip_piece(character_name, item_id=iid, source="skill")
             piece_unequipped = r.get("status") == "ok"
             if not piece_unequipped:
-                r = unequip_item(character_name, iid)
+                r = unequip_item(character_name, iid, source="skill")
             if r.get("status") == "ok":
                 results.append(f"'{self._item_label(iid)}' abgelegt")
                 if piece_unequipped:
@@ -149,7 +149,7 @@ class OutfitChangeSkill(BaseSkill):
                 errors.append(f"'{token}': Item-Definition fehlt")
                 continue
             if it.get("category") == "outfit_piece":
-                r = equip_piece(character_name, iid)
+                r = equip_piece(character_name, iid, source="skill")
                 if r.get("status") == "ok":
                     slots_str = "+".join(r.get("slots") or [])
                     msg = f"'{it.get('name', iid)}' angelegt (Slot {slots_str})"
@@ -163,7 +163,7 @@ class OutfitChangeSkill(BaseSkill):
                 else:
                     errors.append(f"'{token}': {r.get('reason', 'equip fehlgeschlagen')}")
             else:
-                r = equip_item(character_name, iid)
+                r = equip_item(character_name, iid, source="skill")
                 if r.get("status") == "ok":
                     results.append(f"'{it.get('name', iid)}' an die Hand genommen")
                 else:

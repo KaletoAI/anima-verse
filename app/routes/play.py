@@ -1213,7 +1213,7 @@ async def play_equip(request: Request, user=Depends(get_current_user)):
     item_id = str((body or {}).get("item_id") or "").strip()
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
-    res = equip_piece(avatar, item_id)
+    res = equip_piece(avatar, item_id, source="avatar")
     if res.get("status") != "ok":
         raise HTTPException(status_code=400, detail=res.get("reason", "equip failed"))
     # Direct action is world-visible: narrator line -> NPCs can react.
@@ -1237,7 +1237,7 @@ async def play_unequip(request: Request, user=Depends(get_current_user)):
     item_id = str((body or {}).get("item_id") or "").strip()
     if not slot and not item_id:
         raise HTTPException(status_code=400, detail="slot or item_id required")
-    res = unequip_piece(avatar, slot=slot, item_id=item_id)
+    res = unequip_piece(avatar, slot=slot, item_id=item_id, source="avatar")
     if res.get("status") != "ok":
         raise HTTPException(status_code=400, detail=res.get("reason", "unequip failed"))
     # Direct action is world-visible: narrator line -> NPCs can react.
