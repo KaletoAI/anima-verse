@@ -295,6 +295,21 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass
+    # Tile rotation (contract v5.2 Nr. 15): 90 / 180 / 270 degrees clockwise,
+    # anything else dropped (absent = unrotated). This does NOT rotate the
+    # stored plan — it rotates the COMPOSED scene payload around the tile
+    # centre, so ONE template location (a road running east–west) can be
+    # cloned onto several map cells with each clone facing a different way.
+    # The floor-plan editor keeps editing the template in its base
+    # orientation; both renderers stay dumb.
+    trot = raw.get("tile_rotation")
+    if trot is not None and f"{trot}".strip() != "":
+        try:
+            snapped = int(round(float(trot) / 90.0)) * 90 % 360
+        except (TypeError, ValueError):
+            snapped = 0
+        if snapped in (90, 180, 270):
+            out["tile_rotation"] = snapped
     # How wide the location is in WORLD metres — the reference square every
     # plan fraction lives in AND the box the model fills. 10 = exactly one
     # map tile (the default); more overlaps the neighbours on purpose

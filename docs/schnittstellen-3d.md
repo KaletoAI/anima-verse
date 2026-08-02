@@ -193,6 +193,50 @@
 >     einem Raum mit `relief_flat` ist jede Zahl bitgleich zu einer Szene ohne
 >     Relief. `relief` liegt im gehashten `map3d`, `relief_flat` im
 >     Raum-Rezept — Regler, Würfel und Checkbox bewegen also die Signatur.
+> 15. **`map3d.tile_rotation` — EINE Vorlage, mehrere Ausrichtungen.** Eine
+>     Straße, die ost–west durch die Zelle läuft, wird EINMAL als Vorlage
+>     gezeichnet und auf mehrere Kartenzellen geklont; jeder Klon setzt
+>     `tile_rotation` ∈ {90, 180, 270} (Grad im Uhrzeigersinn, andere Werte
+>     werden im Sanitizer verworfen, fehlend = ungedreht). Gedreht wird
+>     **ausschließlich der komponierte Payload**, um die Kachelmitte, ganz am
+>     Ende von `compose_scene` — **der Editor zeigt die Vorlage UNROTIERT**,
+>     im gespeicherten Plan bewegt sich kein einziger Punkt, und beide
+>     Renderer bleiben dumm (§ B5). Zwei Regeln, je 90°-Schritt, in der
+>     Draufsicht (x Ost, z Süd, also Bildschirm von oben mit y nach unten):
+>     **Welt-Punkt/-Vektor** `(x, z) → (−z, x)` — Ursprung ist die
+>     Kachelmitte, dieselbe Matrix gilt also für Punkte UND Richtungen
+>     (`outward_normal`, `inward`, keine Translation); **Plan-Fraktion**
+>     `(u, v) → (1 − v, u)` (dieselbe Drehung im Einheitsquadrat, dessen
+>     Mitte 0,5 ist). Daraus folgt der Rest:
+>     - `plates[].outline`, `walls[].from|to`, `models[].anchor` /
+>       `clip_outline` / `cutouts`, `markers[].at_world`, `exits[].at_world`,
+>       `rooms[].overlay.centre|rect` → Welt-Regel; `rooms[].outline` →
+>       Fraktions-Regel. `rooms[].exit` wird **nur bei `exit_derived`**
+>       gedreht (absolute Plan-Fraktion); ein EXPLIZITER Exit ist eine
+>       Fraktion des RAUM-RECHTECKS und gehört dem 2D-Editor, der die
+>       unrotierte Vorlage zeigt — er bleibt stehen.
+>     - `models[].yaw_deg` = `(yaw + 90·k) % 360`. Ein `extras`-Kasten behält
+>       seine Höhe, tauscht bei ungeradem k w/d und dreht sein `side`-Wort
+>       N→E→S→W.
+>     - **Kompass-Regel:** `markers[].facing` (und die `rotation` eines
+>       Raum-Markers) ist der Figuren-Kompass 0 = Süd, 90 = Ost — er wächst
+>       gegen den Uhrzeigersinn. Ein Szenen-Schritt im Uhrzeigersinn dreht
+>       eine nach Süden schauende Figur nach Westen, also
+>       `facing_neu = (facing + 270·k) % 360`.
+>     - **Rand-Öffnungen:** Buchstabe N→E→S→W, `at` wie `rotateOpeningCW` im
+>       Editor (N→E `at`, E→S `1−at`, S→W `at`, W→N `1−at`); `at_world` wird
+>       aus dem gedrehten Paar über den Rahmen des Bezugsquadrats NEU
+>       gerechnet, `inward` als Vektor gedreht (beides deckungsgleich).
+>     - **Terrain-Gitter:** neu berechnet statt transformiert, denn
+>       `h_neu(u,v) = h_alt(rot⁻¹(u,v))` mit `rot⁻¹(u,v) = (v, 1−u)`
+>       (Gegenuhrzeiger). Mit `(u,v) = (i/n, j/n)` folgt `i_alt = j`,
+>       `j_alt = n − i`, also **`neu[j][i] = alt[n−i][j]`** je Schritt;
+>       `step` und `amplitude_m` bleiben.
+>     - **Unberührt:** `signature` (`tile_rotation` liegt im gehashten
+>       `map3d` und bewegt sie von allein), `extent_m`, `k`, `storey_m`,
+>       `levels`, `style`, `figures`, `outdoor_rooms`, `area_detail` sowie
+>       jede Höhe (`y`, `base_y`, `top_y`, `bottom_y`, `y_world`) — die
+>       Drehachse IST +y.
 
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 

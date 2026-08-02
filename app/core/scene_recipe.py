@@ -1223,6 +1223,211 @@ def _boundary_openings(map3d: Dict[str, Any],
     return out
 
 
+# ── Tile rotation (v5.2 Nr. 15) ─────────────────────────────────────────
+
+# One clockwise 90° step, seen in PLAN VIEW (x east, z south — screen
+# top-down with y down): the letters of the four boundary edges, the side
+# words of an extras box and the ``at`` flip that keeps an opening on the
+# same physical spot. The ``at`` rule is the editor's ``rotateOpeningCW``
+# verbatim (frontend/src/tabs/world/planGeometry.ts) and follows from the
+# fraction rule alone: E at 0.3 sits at (1, 0.3) → (1 − 0.3, 1) = (0.7, 1),
+# which is S at 0.7.
+_TILE_EDGE_CW = {"N": "E", "E": "S", "S": "W", "W": "N"}
+_TILE_EDGE_FLIP = {"N": False, "E": True, "S": False, "W": True}
+_TILE_SIDE_CW = {"north": "east", "east": "south",
+                 "south": "west", "west": "north"}
+
+
+def _rotate_scene(out: Dict[str, Any], k: int, extent: float) -> Dict[str, Any]:
+    """Turn the FINISHED scene payload ``k`` × 90° clockwise about the tile
+    centre (``map3d.tile_rotation``), in place, and return it.
+
+    Why the payload and not the plan: one template location — a road running
+    east–west, a corner piece, a river bend — is cloned onto several map
+    cells, and each clone only differs in which way it faces. The floor-plan
+    editor keeps editing the ONE template in its base orientation; the server
+    turns the composed result. Both renderers stay dumb, exactly as § B5
+    demands, and nothing in the stored plan moves.
+
+    Conventions (plan view, x east / z south, i.e. screen top-down, y down —
+    so "clockwise on screen" is what the two rules below encode):
+
+    * **World point / vector**, one step: ``(x, z) → (−z, x)``. The origin is
+      the tile centre, so the same matrix serves points and directions
+      (``outward_normal``, ``inward``) with no translation anywhere.
+    * **Plan fraction**, one step: ``(u, v) → (1 − v, u)`` — the world rule
+      carried into the unit square, whose centre is 0.5 instead of 0.
+
+    Consequences the payload has to carry along:
+
+    * ``models[].yaw_deg`` is a MODEL yaw around +y; a scene turned clockwise
+      turns every model with it → ``(yaw + 90 · k) % 360``.
+    * ``markers[].facing`` (and a room marker's ``rotation``) is a COMPASS in
+      the figure convention 0 = south, 90 = east — it grows counter-clockwise
+      in world axes, opposite to this rotation. A clockwise scene step turns a
+      south-facing figure west, so ``compass_new = (compass + 270 · k) % 360``.
+    * A box in ``extras`` keeps its height and swaps its w/d extents on an odd
+      number of steps; its ``side`` word rotates N→E→S→W like an edge letter.
+    * ``rooms[].exit`` is rotated ONLY when ``exit_derived``: a derived exit is
+      an ABSOLUTE plan fraction and belongs to the turned scene, while an
+      EXPLICIT exit is a fraction of the ROOM RECTANGLE and its consumer is
+      the 2D editor, which shows the UNROTATED template. Turning it would move
+      the handle the author is dragging. The world-metre ``exits[]`` entry
+      carries the rotated truth for the renderers either way.
+    * ``terrain.grid`` is resampled instead of transformed: the field is
+      indexed ``grid[j][i]`` at plan fraction ``(i/n, j/n)``, and the rotated
+      field must answer ``h_new(u, v) = h_old(rot⁻¹(u, v))`` with the INVERSE
+      (counter-clockwise) step ``rot⁻¹(u, v) = (v, 1 − u)``. Substituting
+      ``(u, v) = (i/n, j/n)`` gives ``(j/n, 1 − i/n)``, i.e. old indices
+      ``i_old = j`` and ``j_old = n − i`` — hence ``new[j][i] = old[n−i][j]``.
+      ``step`` and ``amplitude_m`` are rotation-invariant.
+
+    Untouched on purpose: ``signature`` (``map3d`` is hashed whole, so
+    ``tile_rotation`` moves it by itself), ``extent_m`` / ``k`` / ``storey_m``
+    / ``levels`` / ``style`` / ``figures`` / ``outdoor_rooms`` /
+    ``area_detail`` — all rotation-invariant — and every height (``y``,
+    ``base_y``, ``top_y``, ``bottom_y``, ``y_world``), because the axis of
+    rotation IS +y.
+
+    Every transformed coordinate goes back through ``_r`` (4 places, no
+    −0.0), and every list is REBUILT rather than mutated: the composer shares
+    point lists between entries (one contour list across all level plates, one
+    normal across an edge's wall pieces, the module-level ``inward`` vectors),
+    so in-place edits would rotate some of them repeatedly.
+    """
+    steps = int(k) % 4
+    if steps == 0:
+        return out
+
+    def rot_world(x: float, z: float) -> Tuple[float, float]:
+        for _ in range(steps):
+            x, z = -z, x
+        return x, z
+
+    def rot_frac(u: float, v: float) -> Tuple[float, float]:
+        for _ in range(steps):
+            u, v = 1.0 - v, u
+        return u, v
+
+    def pt_world(p: Any) -> List[float]:
+        x, z = rot_world(_num(p[0]), _num(p[1]))
+        return [_r(x), _r(z)]
+
+    def poly_world(points: Any) -> List[List[float]]:
+        return [pt_world(p) for p in points or []
+                if isinstance(p, (list, tuple)) and len(p) >= 2]
+
+    def poly_frac(points: Any) -> List[List[float]]:
+        out_pts: List[List[float]] = []
+        for p in points or []:
+            if not isinstance(p, (list, tuple)) or len(p) < 2:
+                continue
+            u, v = rot_frac(_num(p[0]), _num(p[1]))
+            out_pts.append([_r(u), _r(v)])
+        return out_pts
+
+    for plate in out.get("plates") or []:
+        if plate.get("outline"):
+            plate["outline"] = poly_world(plate["outline"])
+
+    for wall in out.get("walls") or []:
+        for key in ("from", "to", "outward_normal"):
+            if wall.get(key):
+                wall[key] = pt_world(wall[key])
+
+    for extra in out.get("extras") or []:
+        centre = extra.get("center")
+        if isinstance(centre, (list, tuple)) and len(centre) == 3:
+            x, z = rot_world(_num(centre[0]), _num(centre[2]))
+            extra["center"] = [_r(x), _r(_num(centre[1])), _r(z)]
+        size = extra.get("size")
+        if isinstance(size, (list, tuple)) and len(size) == 3 and steps % 2:
+            extra["size"] = [_r(_num(size[2])), _r(_num(size[1])),
+                             _r(_num(size[0]))]
+        side = extra.get("side")
+        if isinstance(side, str) and side in _TILE_SIDE_CW:
+            for _ in range(steps):
+                side = _TILE_SIDE_CW[side]
+            extra["side"] = side
+
+    for spec in out.get("models") or []:
+        if spec.get("anchor"):
+            spec["anchor"] = pt_world(spec["anchor"])
+        if spec.get("yaw_deg") is not None:
+            spec["yaw_deg"] = _r((_num(spec["yaw_deg"]) + 90 * steps) % 360, 1)
+        if spec.get("clip_outline"):
+            spec["clip_outline"] = poly_world(spec["clip_outline"])
+        if spec.get("cutouts"):
+            spec["cutouts"] = [poly_world(poly) for poly in spec["cutouts"]]
+
+    for marker in out.get("markers") or []:
+        if marker.get("at_world"):
+            marker["at_world"] = pt_world(marker["at_world"])
+        for key in ("facing", "rotation"):
+            if marker.get(key) is not None:
+                marker[key] = _r((_num(marker[key]) + 270 * steps) % 360, 1)
+
+    for entry in out.get("exits") or []:
+        if entry.get("at_world"):
+            entry["at_world"] = pt_world(entry["at_world"])
+
+    for block in out.get("rooms") or []:
+        if block.get("outline"):
+            block["outline"] = poly_frac(block["outline"])
+        exit_pt = block.get("exit")
+        if block.get("exit_derived") and isinstance(exit_pt, (list, tuple)) \
+                and len(exit_pt) == 2:
+            block["exit"] = poly_frac([exit_pt])[0]
+        overlay = block.get("overlay")
+        if isinstance(overlay, dict):
+            if overlay.get("centre"):
+                overlay["centre"] = pt_world(overlay["centre"])
+            rect = overlay.get("rect")
+            if isinstance(rect, dict):
+                rx, rz = rot_world(_num(rect.get("x")), _num(rect.get("z")))
+                rw, rd = _num(rect.get("w")), _num(rect.get("d"))
+                if steps % 2:
+                    rw, rd = rd, rw
+                overlay["rect"] = {"x": _r(rx), "z": _r(rz),
+                                   "w": _r(rw), "d": _r(rd)}
+
+    for opening in out.get("boundary_openings") or []:
+        letter = str(opening.get("edge") or "").upper()
+        at_world = opening.get("at_world")
+        if letter not in _TILE_EDGE_CW or not at_world:
+            continue
+        # Back to the edge frame: the FREE coordinate of an edge is u on N/S
+        # and v on E/W — the other one is pinned to 0 or 1 by the edge itself.
+        u = _num(at_world[0]) / extent + 0.5
+        v = _num(at_world[1]) / extent + 0.5
+        at = u if letter in ("N", "S") else v
+        for _ in range(steps):
+            if _TILE_EDGE_FLIP[letter]:
+                at = 1.0 - at
+            letter = _TILE_EDGE_CW[letter]
+        point, _inward = _BOUNDARY_EDGES[letter]
+        px, pv = point(round(at, 6))
+        opening["edge"] = letter
+        opening["at_world"] = [_r(_w(px, extent)), _r(_w(pv, extent))]
+        inward = opening.get("inward")
+        if inward:
+            # Rotating the stored vector and looking up the new edge's own
+            # inward normal are the same thing — the vector is kept as the
+            # integer pair the contract promises.
+            ix, iz = rot_world(_num(inward[0]), _num(inward[1]))
+            opening["inward"] = [int(round(ix)), int(round(iz))]
+
+    terrain = out.get("terrain")
+    grid = (terrain or {}).get("grid") if isinstance(terrain, dict) else None
+    if grid:
+        n = len(grid) - 1
+        for _ in range(steps):
+            grid = [[grid[n - i][j] for i in range(n + 1)]
+                    for j in range(n + 1)]
+        terrain["grid"] = grid
+    return out
+
+
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                   building_meta: Optional[Dict[str, Any]] = None,
                   room_metas: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -1464,4 +1669,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # 2026-08-02: without a model the backstop buried the zone plates).
     if map3d.get("area_model") and map3d.get("area_detail"):
         out["area_detail"] = True
+    # Tile rotation (v5.2 Nr. 15) is the LAST word: the whole finished payload
+    # turns about the tile centre, so one template location can be cloned onto
+    # several cells facing different ways. Everything above composed the
+    # template in its base orientation — that is what the editor edits.
+    tile_rotation = int(_num(map3d.get("tile_rotation")))
+    if tile_rotation in (90, 180, 270):
+        _rotate_scene(out, tile_rotation // 90, extent)
     return out
