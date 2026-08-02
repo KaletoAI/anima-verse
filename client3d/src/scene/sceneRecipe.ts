@@ -783,9 +783,6 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
     tile.group.remove(tile.shell);
     tile.shell = undefined;
   }
-  // Prozedurale Fallback-Bäume weichen dem Server-Modell — im Detail-Modus
-  // sind die gestreuten Props (`scattered`) ihr Ersatz.
-  if (tile.decor) tile.decor.visible = false;
   tile.serverModel = model;
   // `area` = das Modell bleibt stehen und bekommt Löcher; das gilt NUR für
   // `ground`. Der Detail-Modus fadet und wird deshalb unten wie eine Hülle

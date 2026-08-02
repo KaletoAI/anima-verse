@@ -61,7 +61,6 @@ export interface Tile {
    *  folgt dabei dem Fade, statt fest sichtbar oder fest weg zu sein. */
   modelIsShellArea?: boolean;
   /** prozedurale Deko (Bäume) — weicht einem Server-Modell */
-  decor?: THREE.Group;
   /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
   labelObj?: CSS2DObject;
   shellMats: THREE.MeshStandardMaterial[];
@@ -477,20 +476,11 @@ function groundPlate(_loc: WorldLocation, tex: THREE.Texture,
   return plate;
 }
 
-function makeTree(rnd: () => number): THREE.Group {
-  const g = new THREE.Group();
-  const trunk = box(0.3, 0.8, 0.3, std({ color: 0x6b4a2f }));
-  trunk.position.y = 0.4;
-  const c1 = new THREE.Mesh(new THREE.ConeGeometry(1.1 + rnd() * 0.4, 1.8, 7), std({ color: 0x3e6b35 }));
-  c1.position.y = 1.6;
-  const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.8 + rnd() * 0.3, 1.4, 7), std({ color: 0x4a7d3e }));
-  c2.position.y = 2.5;
-  c1.castShadow = c2.castShadow = true;
-  g.add(trunk, c1, c2);
-  const s = 0.8 + rnd() * 0.7;
-  g.scale.setScalar(s);
-  return g;
-}
+// `makeTree` stand hier bis 2026-08-02: prozedurale Kegel-Bäume auf
+// forest-Kacheln. Seit Wald & Co. ihre Detailszene aus GESTREUTEN
+// Bibliotheks-Props beziehen (plan-area-detail-scenes.md), sind generische
+// Deko-Elemente für ALLE Geländearten gestrichen (User-Vorgabe) — das
+// Gelände sagt nur noch die Bodentextur, was drauf steht, sagt die Welt.
 
 interface BuildingSpec {
   w: number; d: number; h: number;
@@ -698,32 +688,10 @@ export function buildTile(loc: WorldLocation): Tile {
   if (!isBuilding) {
     tile.groundPlate = groundPlateFor();
     group.add(tile.groundPlate);
-    if (style === 'forest') {
-      const decor = new THREE.Group();
-      for (let i = 0; i < 8; i++) {
-        const tree = makeTree(rnd);
-        tree.position.set((rnd() - 0.5) * (CELL - 3), 0, (rnd() - 0.5) * (CELL - 3));
-        decor.add(tree);
-      }
-      group.add(decor);
-      tile.decor = decor;
-    }
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
     tile.groundPlate = groundPlateFor();
     group.add(tile.groundPlate);
-    if (style === 'forest') {
-      // Bäume am Rand, Mitte bleibt frei für die Raum-Slabs
-      const decor = new THREE.Group();
-      for (let i = 0; i < 7; i++) {
-        const tree = makeTree(rnd);
-        const a = (i / 7) * Math.PI * 2 + rnd() * 0.5;
-        tree.position.set(Math.cos(a) * (3.2 + rnd()), 0, Math.sin(a) * (3.2 + rnd()));
-        decor.add(tree);
-      }
-      group.add(decor);
-      tile.decor = decor;
-    }
     tile.height = style === 'forest' ? 3 : 0.6;
     addLabel();
   } else {

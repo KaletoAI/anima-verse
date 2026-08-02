@@ -140,6 +140,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // Model-load completion re-triggers the rebuild (loads are async, the
   // rebuild itself is synchronous against the cache).
   const [bump, setBump] = useState(0)
+  // Triangle budget of the last rebuild — what the location costs to draw.
+  const [budget, setBudget] = useState<{ tris: number; meshes: number
+    models: number } | null>(null)
   // Scene handle for the incremental rebuild (drag updates arrive per
   // pointermove — recreating the whole renderer would thrash).
   const handleRef = useRef<{
@@ -1139,6 +1142,29 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     } else {
       setVerifyReport(null)
     }
+
+    // Triangle budget of the WHOLE location as built (plates, walls, models,
+    // scattered copies, placeholders) — everything the rebuild put into
+    // `boxes`. This is the number the frame rate rides on: a scattered prop
+    // shares its geometry between clones, but every clone is its own draw
+    // call and its triangles render each frame.
+    {
+      let tris = 0
+      let meshes = 0
+      boxes.traverse((o) => {
+        const mesh = o as Mesh
+        if (!mesh.isMesh || mesh.visible === false) return
+        const g = mesh.geometry as { index?: { count: number } | null
+          attributes?: { position?: { count: number } } } | undefined
+        const n = g?.index ? g.index.count : g?.attributes?.position?.count || 0
+        if (n > 0) {
+          tris += Math.round(n / 3)
+          meshes += 1
+        }
+      })
+      const modelCount = (sc?.models || []).length
+      setBudget({ tris, meshes, models: modelCount })
+    }
   }
 
   useEffect(() => {
@@ -1424,6 +1450,19 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           (the plan pane is the busy one, this row stays quiet). */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div className="ga-form-section-label" style={{ margin: 0, flex: 1 }}>{t('3D preview')}</div>
+        {budget ? (
+          <span
+            className="ga-hint"
+            style={{ fontSize: 11,
+              color: budget.tris > 500_000 ? 'var(--danger, #f85149)'
+                : budget.tris > 250_000 ? '#d29922' : undefined }}
+            title={t('Triangle budget of THIS location as built (models, scattered copies, plates, walls). Guideline: stay under ~250k triangles per location, 500k is where weak clients hurt — scattered props should be lean meshes (2–5k triangles, face count in the mesh dialog), single furniture up to ~20k. Every scattered copy is its own draw call.')}
+          >
+            △ {budget.tris >= 1000
+              ? `${Math.round(budget.tris / 1000)}k` : budget.tris}
+            {' · '}{budget.models} {t('models')}
+          </span>
+        ) : null}
         {previewLevels.length > 1 ? (
           <span style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
             <button
