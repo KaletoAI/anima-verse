@@ -176,8 +176,10 @@ REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
 #                  input, rounded up the ladder 2048/4096/8192/16384/32768/65536).
 # SOFT keys (quality guidance for model selection):
 #   model_class       — "small" | "medium" | "large" (see MODEL_CLASS_LABELS).
-#   arch              — "dense" | "moe" | "any"; "dense" only where repetition
-#                       and self-consistency are the dominating risk.
+#   arch              — "dense" | "moe" | "any"; only set it where the
+#                       architecture is MEASURABLY the cause. "Repetition" is
+#                       not such a reason by itself — A1 measured the chat echo
+#                       on dense and MoE models alike (A1.1 § 2.6).
 #   hallucination_risk— "low" | "medium" | "high": the cost of invented facts.
 #   creative          — creative prose vs. precision/extraction.
 #   language_de       — must write good German prose (user-facing or stored
@@ -186,16 +188,28 @@ REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
 #   latency_sensitive — someone is actively waiting (user turn, streaming, the
 #                       tool phase of a reply); False = background job.
 #
-# STATUS: first pass, derived from category + the A0 inventory
-# (development_instructions/llm-routing-review/findings.md). Sections A1-A5 of
-# plan-llm-routing-review.md replace these with reasoned values.
+# STATUS: mixed. The five creative-chat tasks (`chat_stream`,
+# `group_chat_stream`, `talk_to`, `thought`, `send_message`) carry REASONED
+# values from section A1 of plan-llm-routing-review.md — measurement in
+# .superpowers/sdd/plan-llm-routing-review/task-A1.1-report.md, decisions in
+# task-A1.3-report.md. Every OTHER profile is still the first pass derived from
+# category + the A0 inventory (development_instructions/llm-routing-review/
+# findings.md); sections A2-A5 replace those with reasoned values.
 # `pose_embedding` has NO profile on purpose: it does not run over the chat
 # providers but over app/core/embedding.py and the /v1/embeddings endpoint.
+#
+# A1 result that shapes all five chat profiles: the dominant repetition is a
+# COPY out of the task's own prompt (the "recent thoughts" block), measured
+# across three models on two providers and on a MoE as well as on dense models
+# — so it is not an architecture property and `arch` stays "any" (A1.1 § 2.6,
+# § 2.7). And the fact complaints traced to a missing data model, not to the
+# model: kinship cannot be expressed in `relationships.type` at all, so no
+# model can know it (A1.1 § 3.2, findings B11/B12).
 TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     # --- Streaming / RP -----------------------------------------------------
     "chat_stream": {
         "tools": True, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "dense", "hallucination_risk": "high",
+        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": True,
     },
     "story_stream": {
@@ -205,7 +219,7 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     },
     "group_chat_stream": {
         "tools": True, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "dense", "hallucination_risk": "high",
+        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": True,
     },
     "storyteller": {
@@ -240,19 +254,26 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": True, "language_de": True, "latency_sensitive": True,
     },
+    # `send_message` and `talk_to` are never resolved under their own name
+    # (findings [D2]/Q4): both skills only drop the line into the recipient's
+    # inbox and return; the answer is written later by the recipient's AgentLoop
+    # turn through chat_engine.run_chat_turn, whose LLM comes from
+    # resolve_llm("chat_stream"). Their profiles therefore describe the chat
+    # turn that actually fulfils them — same requirements as `chat_stream`,
+    # except that nobody waits for it (the sending skill does not block).
     "send_message": {
-        "tools": False, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "dense", "hallucination_risk": "high",
+        "tools": True, "vision": False, "json": False, "min_context": 16384,
+        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": False,
     },
     "talk_to": {
-        "tools": False, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "dense", "hallucination_risk": "high",
+        "tools": True, "vision": False, "json": False, "min_context": 16384,
+        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": False,
     },
     "thought": {
         "tools": True, "vision": False, "json": False, "min_context": 8192,
-        "model_class": "large", "arch": "dense", "hallucination_risk": "high",
+        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": False,
     },
     "intent": {
