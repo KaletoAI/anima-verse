@@ -1845,7 +1845,15 @@ async function startApp(username: string) {
     // open — the same condition the room placement uses; from the outside
     // there is nothing to walk between. A party follower is carried by its
     // leader and the server refuses the call anyway.
-    if (!tile || tile.fadeTarget !== 1 || state.movementLocked) {
+    //
+    // T5 (backend-status-3d.md, "Raumwechsel greift nur in Gebäuden"): on an
+    // AREA location that is not the whole story. Its rooms are outdoor zones,
+    // drawn at every zoom level, and its cell is passable — the avatar walks
+    // in from the map instead of being placed inside. Tying the switch to the
+    // interior alone meant the room there never changed on foot, which left
+    // the prompt scoped to a room the player cannot reach.
+    const interiorUp = !!tile && tile.fadeTarget === 1;
+    if (!tile || !(interiorUp || tile.modelIsShellArea) || state.movementLocked) {
       roomWalk = idleRoomWalk();
       return;
     }
@@ -1859,7 +1867,11 @@ async function startApp(username: string) {
       roomWalk = idleRoomWalk();
       return;
     }
-    const rooms = interiorRooms(tile);
+    // With the interior still closed (an area location seen from farther out)
+    // only the ALWAYS-VISIBLE rooms are on screen: switching into a hidden
+    // indoor room there would move the avatar somewhere the player cannot see.
+    const rooms = interiorRooms(tile).filter(
+      (r) => interiorUp || tile.alwaysVisibleRooms.has(r.id));
     // The storey is the FIGURE'S OWN, never the displayed one: `levelFilter`
     // is the in-world storey BUTTON, pure view state. Glancing at the first
     // floor from the hall must not post the avatar up there, and a room set by
