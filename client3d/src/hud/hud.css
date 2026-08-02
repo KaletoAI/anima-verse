@@ -510,6 +510,94 @@
 }
 .ga-img-nomatch { color: var(--danger, #f85149); font-size: 0.85em; }
 
+/* ---- Game menu: the fourth rail panel (E4-T4) ----
+   A dock panel like Self/Others, so it inherits the panel chrome and needs
+   only its own inner layout. It sizes itself to its content instead of taking
+   the dock's equal share: the menu is a short, finished list, and stretching
+   it to half the screen next to a full Self panel would look like something
+   was missing. */
+#hud .hud-dock .hud-panel.hud-menu-panel {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+#hud .hud-menu-section + .hud-menu-section {
+  margin-top: 18px;
+}
+#hud .hud-menu-head {
+  margin: 0 0 8px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  opacity: 0.7;
+}
+/* One slider row: name and percentage on one line, the rail underneath at full
+   width — a slider one has to aim at is the wrong control for a setting one
+   adjusts by ear. The percentage is right-aligned and tabular so the number
+   does not dance while dragging. */
+#hud .hud-menu-slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin-bottom: 10px;
+}
+#hud .hud-menu-slider input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent, #6aa9ff);
+  cursor: pointer;
+}
+#hud .hud-menu-value {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+#hud .hud-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+/* Segmented switch: every position visible, the active one lit. */
+#hud .hud-menu-seg {
+  display: flex;
+  gap: 4px;
+}
+#hud .hud-menu-seg button {
+  padding: 3px 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+#hud .hud-menu-seg button:hover { border-color: var(--accent, #6aa9ff); }
+#hud .hud-menu-seg button.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 24%, transparent);
+}
+#hud .hud-menu-hint {
+  margin: 10px 0 0;
+  font-size: 0.85em;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+#hud .hud-menu-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  background: var(--bg-alt, #0d1117);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#hud .hud-menu-btn:hover { border-color: var(--accent, #6aa9ff); }
+
 /* ---- Title / login / loading screen (E4-T3) ----
    Structure only, colours in theme-fantasy.css as everywhere else.
 
@@ -521,16 +609,24 @@
 
    It sits above the vanilla top bar (z 10) and the HUD (z 20) because it
    covers the world while the world is still being built; the portalled picker
-   modals (z 2000) stay above it, which cannot happen during boot anyway. */
+   modals (z 2000) stay above it, which cannot happen during boot anyway.
+
+   Same pointer rule as #hud, and for a sharper reason: the node stays in the
+   document for the whole 900 ms fade, full-screen and on top. Without this it
+   swallows every click on the world one is being let into — the screen looks
+   gone and the game does not answer. Only the screen itself takes the pointer
+   back, and it drops it again as soon as it starts leaving (.leaving below). */
 #hud-title {
   position: fixed;
   inset: 0;
   z-index: 900;
+  pointer-events: none;
   color: var(--text, #c9d1d9);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 14px;
 }
 #hud-title .title-screen {
+  pointer-events: auto;
   position: absolute;
   inset: 0;
   display: grid;

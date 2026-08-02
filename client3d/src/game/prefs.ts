@@ -24,14 +24,26 @@
  *  is enabled there), `on`/`off` = the user has decided. */
 export type TtsMode = 'auto' | 'on' | 'off';
 
+/**
+ * TWO KINDS OF FIELD, and the menu (E4-T4) treats them differently:
+ * the VOLUMES go straight to `AudioEngine.setVolume` as they are dragged, the
+ * SWITCHES are only stored. A switch says what should play AT ALL, and that is
+ * the business of the music/ambience/speech drivers (stage 4, tasks 5 + 6) —
+ * they read these fields (`gameActions.applyAudioPrefs` carries every change
+ * to them) and start or stop accordingly. A menu that stopped the music
+ * itself would be a second driver fighting the first.
+ */
 export interface Prefs {
   /** Master volume, multiplied onto every bus. */
   master: number;
   music: number;
   ambient: number;
   tts: number;
+  /** play background music at all — read by the music driver */
   musicOn: boolean;
+  /** play the ambience bed at all — read by the ambience driver */
   ambientOn: boolean;
+  /** speak lines at all — read by the speech driver */
   ttsOn: TtsMode;
 }
 

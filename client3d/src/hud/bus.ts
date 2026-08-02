@@ -17,6 +17,7 @@
  * `/play/scene` poll — `movementLocked` + `partyLeader`, E3-T3).
  */
 import type { ElevatorState } from '../game/elevator';
+import type { Prefs } from '../game/prefs';
 import type { MapCharacter } from '../types';
 
 export type GameMode = 'overview' | 'embodied';
@@ -47,6 +48,16 @@ export interface HudGameActions {
   /** ride to that storey: enter its room on the server, then walk the figure
    *  to the holding point of the target storey */
   rideElevator?: (level: number) => void;
+  /** sign out and return to the title screen — the game menu's "Back to
+   *  title" (E4-T4). main.ts owns the flow (logout + reload), so the menu
+   *  does not become a second shutdown path. */
+  backToTitle?: () => void;
+  /** the player changed an audio setting in the menu (E4-T4). The VOLUMES are
+   *  already applied to the engine when this runs — this is for the switches
+   *  (musicOn/ambientOn/ttsOn), which say what should play at all and are the
+   *  business of the music/ambience/speech drivers (stage 4, tasks 5 + 6).
+   *  Only CHANGES arrive here; the state at startup is read with `loadPrefs`. */
+  applyAudioPrefs?: (prefs: Prefs) => void;
 }
 
 /** React-side handlers the vanilla app calls (e.g. the F key opens the chat). */
@@ -55,6 +66,11 @@ export interface HudUiActions {
   /** show a short message to the player (Hud.tsx wires the package toast) —
    *  the vanilla side renders no text of its own (E3-T3) */
   toast?: (msg: string) => void;
+  /** M opens and closes the game menu (E4-T4) */
+  toggleMenu?: () => void;
+  /** Esc: close the menu IF it is open, and say whether it was — the caller
+   *  hands the key on to the mode exit when it was not. */
+  closeMenu?: () => boolean;
 }
 
 const state: HudGameState = {

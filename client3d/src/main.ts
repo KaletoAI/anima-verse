@@ -192,19 +192,18 @@ async function startApp(username: string) {
   };
   const panel = new InfoPanel();
 
-  const hud = createHud({
-    username,
-    avatar: firstMap.avatar,
-    // Logging out reloads, and that is the whole way back to the title: the
-    // reload runs `boot()` again, `authStatus` now says "not signed in" and
-    // the title screen comes up with its login form. Tearing the engine,
-    // the pollers and the three roots down by hand to reach the same state
-    // would be a second shutdown path with nothing to gain.
-    onLogout: async () => {
-      await api.logout();
-      location.reload();
-    },
-  });
+  // Logging out reloads, and that is the whole way back to the title: the
+  // reload runs `boot()` again, `authStatus` now says "not signed in" and the
+  // title screen comes up with its login form. Tearing the engine, the pollers
+  // and the three roots down by hand to reach the same state would be a second
+  // shutdown path with nothing to gain. ONE flow, two doors: the top bar's
+  // logout and the game menu's "Back to title" (E4-T4).
+  const backToTitle = async () => {
+    await api.logout();
+    location.reload();
+  };
+  gameActions.backToTitle = () => void backToTitle();
+  const hud = createHud({ username, avatar: firstMap.avatar, onLogout: backToTitle });
   mountHud({ username, avatar: firstMap.avatar });   // React HUD island (E2-T5)
   npcs.setAvatar(firstMap.avatar);
 
@@ -615,8 +614,23 @@ async function startApp(username: string) {
       setGameState({ elevatorOpen: false });
       return;
     }
+    // Then the game menu (E4-T4), for the same reason and one step later: it
+    // is a panel of the HUD, so the overlay guard above cannot see it, and it
+    // is opened DELIBERATELY — a key that closed the menu and left the mode in
+    // one press would answer a question nobody asked. `closeMenu` says whether
+    // there was anything to close, so the key falls through when there was not.
+    if (uiActions.closeMenu?.()) return;
     if (getGameState().mode === 'embodied') exitEmbodied(embody);
   }, true);
+
+  // M is the menu key — the game menu opens and closes with it, in both modes.
+  // Guarded like Esc and F: inside a form field it types an m. Modifier
+  // combinations belong to the browser (Ctrl+M, Cmd+M are window commands).
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'm' || isTypingTarget(e)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    uiActions.toggleMenu?.();
+  });
 
   // --- Event-Pins ----------------------------------------------------------
   const pins = new Map<string, THREE.Sprite>();

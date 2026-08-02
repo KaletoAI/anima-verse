@@ -113,15 +113,29 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
   // the timeout is cleared and the screen never unmounts. As a guard (with a
   // ref) it would break the other way round under a remount, where the
   // cleanup has already run and no timer is left to replace. So the effect
-  // depends only on the two facts that decide it — `setLeaving(true)` on an
+  // depends only on the three facts that decide it — `setLeaving(true)` on an
   // already-true state is a no-op React bails out of.
+  //
+  // A FAILED START HOLDS THE SCREEN. `startApp` can throw after the last stage
+  // was reported (a late load, a bad payload): the bar then stands at 100 %,
+  // this effect would fade the screen out and take the one sentence that
+  // explains the black world with it. While the trouble line says "failed",
+  // the screen stays.
   useEffect(() => {
     if (!entered || boot.percent < 100) return;
+    if (boot.note?.kind === 'failed') {
+      // The failure may arrive AFTER the fade was started (the throw comes out
+      // of a `.catch` on `startApp`, the last stage was reported before it) —
+      // then the cleanup of the previous run has just cancelled the unmount,
+      // and this brings the half-faded screen back to full.
+      setLeaving(false);
+      return;
+    }
     setLeaving(true);
     const fade = prefersReducedMotion() ? 0 : FADE_MS;
     const timer = window.setTimeout(() => doneRef.current(), fade);
     return () => window.clearTimeout(timer);
-  }, [entered, boot.percent]);
+  }, [entered, boot.percent, boot.note?.kind]);
 
   const enter = useCallback(() => {
     setEntered(true);

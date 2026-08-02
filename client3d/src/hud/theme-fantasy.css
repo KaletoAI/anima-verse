@@ -178,7 +178,7 @@
   color: var(--hud-gold);
 }
 
-/* ---- Rail: three brass studs pressed into the edge of the screen ------- */
+/* ---- Rail: brass studs pressed into the edge of the screen ------------- */
 #hud .hud-rail button {
   background: radial-gradient(circle at 34% 26%, #3b3225 0%, #262017 62%, #191410 100%);
   border-color: rgba(242, 205, 110, 0.32);
@@ -258,6 +258,70 @@
 }
 #hud .player-chip-follow {
   border-color: rgba(176, 125, 58, 0.75);
+}
+
+/* ---- Game menu: brass rails and pressed keys (E4-T4) ------------------
+ * The section headings take the gold small-caps of the panel heads, so the
+ * menu reads as part of the same set. The sliders are the one place where a
+ * native control is themed rather than rebuilt: `accent-color` colours track
+ * and thumb in every current browser, and a hand-built range control would be
+ * three pseudo-element blocks for nothing. */
+#hud .hud-menu-head {
+  color: var(--hud-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  text-transform: none;
+  letter-spacing: 0.09em;
+  opacity: 1;
+}
+#hud .hud-menu-slider input[type="range"] {
+  accent-color: #c9a34f;
+}
+#hud .hud-menu-label {
+  color: #d5cbb4;
+}
+#hud .hud-menu-value {
+  color: var(--hud-gold);
+  opacity: 0.85;
+}
+#hud .hud-menu-seg button {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.06), rgba(0, 0, 0, 0.2));
+  border-color: rgba(242, 205, 110, 0.28);
+  color: #c8bda2;
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: 0.04em;
+  transition: color 0.12s, border-color 0.12s;
+}
+#hud .hud-menu-seg button:hover {
+  border-color: rgba(242, 205, 110, 0.6);
+  color: var(--hud-gold);
+}
+#hud .hud-menu-seg button.on {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.24), rgba(242, 205, 110, 0.1));
+  border-color: rgba(242, 205, 110, 0.7);
+  color: var(--hud-gold);
+}
+#hud .hud-menu-hint {
+  color: var(--hud-muted);
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  opacity: 0.9;
+}
+/* Leaving is a deliberate act: the button is brass like the gate on the title
+ * screen it leads back to, not another quiet chip. */
+#hud .hud-menu-btn {
+  background: var(--hud-brass);
+  border-color: rgba(120, 88, 34, 0.9);
+  border-radius: 4px;
+  color: var(--hud-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.5), 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+#hud .hud-menu-btn:hover {
+  background: linear-gradient(180deg, #f4dd9c 0%, #d9b45c 48%, #b28c3c 100%);
+  border-color: rgba(120, 88, 34, 0.9);
 }
 
 /* ---- Transcript ------------------------------------------------------- */

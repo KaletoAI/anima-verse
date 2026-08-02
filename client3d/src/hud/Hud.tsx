@@ -2,10 +2,10 @@
  * HUD v1 of the 3D client (plan-3d-game stage 2, tasks 5 + 6). hud.css carries
  * the structure, theme-fantasy.css the look (variables redefined under #hud).
  *
- * Layout: a right-edge rail with three toggle buttons (chat/self/others), the
- * chat as a docked panel bottom-left, self/others as a right-side dock column.
- * The root never catches the pointer — only rail and panels do (hud.css), so
- * camera dragging on the canvas keeps working everywhere else.
+ * Layout: a right-edge rail with four toggle buttons (chat/self/others/menu),
+ * the chat as a docked panel bottom-left, the others as a right-side dock
+ * column. The root never catches the pointer — only rail and panels do
+ * (hud.css), so camera dragging on the canvas keeps working everywhere else.
  *
  * This container owns the ONE `/play/scene` poll (same contract as PlayerApp
  * in /play): ScenePanel receives data + refresh as props and never polls
@@ -24,7 +24,10 @@ import {
   type SceneData, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
+import { GameMenu } from './GameMenu';
 import { elevatorOptions } from '../game/elevator';
+import { getAudio } from '../game/audio';
+import { loadPrefs, savePrefs, PREFS_KEY, type Prefs } from '../game/prefs';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
@@ -32,13 +35,19 @@ import './hud.css';
 // overrides the plain rules of hud.css, so it must come last.
 import './theme-fantasy.css';
 
-type PanelId = 'chat' | 'self' | 'others';
+type PanelId = 'chat' | 'self' | 'others' | 'menu';
 
 const PANELS: Array<{ id: PanelId; icon: IconName; title: string }> = [
   { id: 'chat', icon: 'chat', title: 'Chat' },
   { id: 'self', icon: 'self', title: 'Self' },
   { id: 'others', icon: 'others', title: 'Others' },
+  // The package's gear (`settings`) — no icon of our own was added for this.
+  { id: 'menu', icon: 'settings', title: 'Menu' },
 ];
+
+/** The prefs fields that are a volume. Each is named exactly like the audio
+ *  bus it drives, so applying one is a lookup and not a mapping table. */
+const VOLUME_FIELDS = ['master', 'music', 'ambient', 'tts'] as const;
 
 /** Quiet time after which an unpinned chat panel withdraws. Long enough to
  *  read the line that brought it up and start typing, short enough that a
@@ -54,7 +63,7 @@ export function Hud({ avatar }: { avatar: string }) {
   const { t } = useI18n();
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
-    chat: true, self: false, others: false,
+    chat: true, self: false, others: false, menu: false,
   });
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
@@ -74,6 +83,71 @@ export function Hud({ avatar }: { avatar: string }) {
   const toggle = useCallback((id: PanelId) => {
     if (id === 'chat') setChatPinned(!chatOpen.current);
     setOpen((o) => ({ ...o, [id]: !o[id] }));
+  }, []);
+
+  // --- Game menu (E4-T4) ---------------------------------------------------
+  //
+  // The menu is a rail panel like the others, so its OPEN state lives here
+  // with theirs — one place, one shape. The vanilla side (M, Esc) reaches it
+  // through `uiActions`, the same direction the F key already uses for the
+  // chat; nothing about the menu goes into the game state, because the game
+  // does not care whether a menu is open.
+  //
+  // `closeMenu` answers whether it actually closed something: that is what
+  // lets the Esc chain in main.ts hand the key on to the mode exit when no
+  // menu is open, without ever reading React state.
+  const menuOpen = useRef(open.menu);
+  menuOpen.current = open.menu;
+  useEffect(() => {
+    uiActions.toggleMenu = () => toggle('menu');
+    uiActions.closeMenu = () => {
+      if (!menuOpen.current) return false;
+      setOpen((o) => ({ ...o, menu: false }));
+      return true;
+    };
+    return () => { uiActions.toggleMenu = undefined; uiActions.closeMenu = undefined; };
+  }, [toggle]);
+
+  // The local settings of this browser. Loaded once — `localStorage` has no
+  // other writer in this tab — and applied to the audio engine right here, so
+  // the stored volumes hold from the first note on and not only after somebody
+  // opens the menu.
+  const [prefs, setPrefsState] = useState<Prefs>(
+    () => loadPrefs(localStorage.getItem(PREFS_KEY)));
+  useEffect(() => {
+    const audio = getAudio();
+    for (const field of VOLUME_FIELDS) audio.setVolume(field, prefs[field]);
+    // Mount only: every later change goes through `setPrefs` below, which
+    // applies exactly the field that moved instead of re-ramping all four.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /**
+   * THE CONTRACT BEHIND THE MENU, in one function:
+   * - a VOLUME acts immediately (`AudioEngine.setVolume`, 50 ms ramp) — a
+   *   slider one has to release before hearing anything is unusable;
+   * - a SWITCH (musicOn/ambientOn/ttsOn) is only stored. The drivers of tasks
+   *   5 and 6 own what is played, and a menu that stopped the music itself
+   *   would be a second driver fighting the first;
+   * - EVERYTHING is written to `localStorage` at once, not on close. The menu
+   *   has no OK button, so "changed" is the only moment there is.
+   * `gameActions.applyAudioPrefs` is the seam for those drivers: they register
+   * it and hear every change; the state at startup they read themselves with
+   * `loadPrefs` (they run before this island mounts).
+   */
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const setPrefs = useCallback((patch: Partial<Prefs>) => {
+    // Through the ref, not through a state updater: storing and ramping are
+    // side effects, and an updater may be run more than once per change.
+    const next = { ...prefsRef.current, ...patch };
+    prefsRef.current = next;
+    const audio = getAudio();
+    for (const field of VOLUME_FIELDS) {
+      if (patch[field] !== undefined) audio.setVolume(field, next[field]);
+    }
+    localStorage.setItem(PREFS_KEY, savePrefs(next));
+    gameActions.applyAudioPrefs?.(next);
+    setPrefsState(next);
   }, []);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
@@ -257,8 +331,28 @@ export function Hud({ avatar }: { avatar: string }) {
         </section>
       )}
 
-      {(open.self || open.others) && (
+      {(open.self || open.others || open.menu) && (
         <div className="hud-dock">
+          {/* Esc and M are handled HERE as well, not only in main.ts: the
+              global key path ignores anything typed into a form control, and a
+              volume slider is one — so after touching a slider the keys would
+              be swallowed. The panel holds no text field, so both keys are
+              unambiguous inside it. */}
+          {open.menu && (
+            <section className="hud-panel hud-menu-panel"
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape' && e.key.toLowerCase() !== 'm') return;
+                if (e.ctrlKey || e.metaKey || e.altKey) return;
+                e.stopPropagation();
+                setOpen((o) => ({ ...o, menu: false }));
+              }}>
+              {panelHead('menu', 'settings', t('Menu'))}
+              <div className="hud-panel-body">
+                <GameMenu prefs={prefs} onChange={setPrefs}
+                  onBackToTitle={() => gameActions.backToTitle?.()} />
+              </div>
+            </section>
+          )}
           {open.self && (
             <section className="hud-panel">
               {panelHead('self', 'self', avatarName || t('Self'))}
