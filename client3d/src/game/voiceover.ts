@@ -62,6 +62,21 @@ export interface SceneSnapshot {
   lines: readonly SceneLine[];
 }
 
+/**
+ * Did the avatar change room between two snapshots?
+ *
+ * `newSceneLines` answers a room change with `[]` — the same answer it gives
+ * for silence — so the caller cannot tell the two apart, and they need
+ * opposite things: silence lets the queue run on, a room change drops it. The
+ * lines still waiting were said in the room one has just LEFT, and hearing
+ * them read out somewhere else is the wrong room's conversation.
+ *
+ * The first payload is not a change: there is no room one came from.
+ */
+export function roomChanged(prev: SceneSnapshot | null, cur: SceneSnapshot): boolean {
+  return !!prev && prev.room !== cur.room;
+}
+
 /** The name the player sees, read exactly as `SceneView` reads it: the
  *  top-level speaker first, then the one in `meta`. */
 export function speakerOf(line: SceneLine): string {

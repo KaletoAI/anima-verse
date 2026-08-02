@@ -30,8 +30,8 @@ import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
 import { loadPrefs, savePrefs, PREFS_KEY, type Prefs } from '../game/prefs';
 import {
-  afterOwnLine, createVoiceover, newSceneLines, sceneStampOf, speakableLines,
-  type SceneSnapshot, type Voiceover,
+  afterOwnLine, createVoiceover, newSceneLines, roomChanged, sceneStampOf,
+  speakableLines, type SceneSnapshot, type Voiceover,
 } from '../game/voiceover';
 import { isTypingTarget } from '../scene/engine';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
@@ -300,6 +300,11 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
     const prev = seenScene.current;
     const cur: SceneSnapshot = { room: sceneRoom, lines: sceneLines.current };
     seenScene.current = cur;
+    // Leaving the room ends its conversation: what is still waiting (and what
+    // is sounding) was said WHERE ONE NO LONGER IS. Same interruption as the
+    // player's own message below — `newSceneLines` cannot say it, because a
+    // room change and silence are both "no new lines" to it.
+    if (roomChanged(prev, cur)) voice.current?.clear();
     const fresh = newSceneLines(prev, cur);
     if (!fresh.length) return;
     if (!chatOpen.current) setOpen((o) => ({ ...o, chat: true }));
