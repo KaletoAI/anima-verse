@@ -1,11 +1,11 @@
-"""LLM Client — Ersetzt LangChain ChatOpenAI mit dem OpenAI Python SDK.
+"""LLM client — replaces LangChain ChatOpenAI with the OpenAI Python SDK.
 
-Bietet:
-- LLMClient: Haelt Config (model, api_key, etc.) und bietet invoke() + astream()
-- AnthropicLLMClient: Client fuer Anthropic Claude-Modelle (native SDK)
-- LLMResponse: Antwort-Wrapper mit .content und .usage
-- LLMChunk: Streaming-Chunk mit .content
-- to_openai_messages(): Konvertiert Dicts/Legacy-Objekte in OpenAI-Format
+Provides:
+- LLMClient: holds the config (model, api_key, …) and offers invoke() + astream()
+- AnthropicLLMClient: client for Anthropic Claude models (native SDK)
+- LLMResponse: answer wrapper with .content, .usage and .finish_reason
+- LLMChunk: streaming chunk with .content
+- to_openai_messages(): converts dicts/legacy objects into the OpenAI format
 """
 import asyncio
 import time
@@ -79,17 +79,51 @@ def _busy_delay(base: float, attempt: int) -> float:
     return min(base * (2 ** (attempt - 1)), 120.0)
 
 
+def _warn_if_cut_off(mode: str, model: str, finish: Optional[str]) -> None:
+    """Warns about a non-"stop" finish reason — the one wording both paths use.
+
+    Streaming and non-streaming calls must produce the SAME message shape, so a
+    grep for ``finish_reason=`` in main.log finds every truncated answer no
+    matter which path produced it. ``mode`` labels the path ("Call" / "Stream").
+
+    An unknown reason (``None``) stays silent: the provider said nothing, which
+    is not evidence of truncation. "length" = the completion budget was hit
+    (thinking models burn hidden reasoning tokens from the same budget; some
+    providers silently CLAMP an oversized max_tokens first).
+    """
+    if not finish or finish == "stop":
+        return
+    logger.warning("%s on %s ended with finish_reason=%r — output likely "
+                   "truncated (length = max_tokens/budget hit)",
+                   mode, model, finish)
+
+
 @dataclass
 class LLMResponse:
-    """Wrapper fuer LLM-Antworten (Ersatz fuer LangChain AIMessage)."""
+    """Wrapper for LLM answers (replacement for the LangChain AIMessage)."""
     content: str
     usage: Optional[Dict[str, int]] = None  # {"prompt_tokens": N, "completion_tokens": N}
+    # Why the provider stopped generating, in the OpenAI vocabulary
+    # ("stop" = finished on its own, "length" = completion budget hit and the
+    # text is cut off mid-sentence, "content_filter", …). ``None`` means the
+    # provider sent no reason — NOT that the answer is complete. Never guess a
+    # value here: a fabricated "stop" would claim a completeness nobody checked.
+    finish_reason: Optional[str] = None
 
 
 @dataclass
 class LLMChunk:
-    """Einzelner Streaming-Chunk."""
+    """A single streaming chunk.
+
+    A chunk carries EITHER text or the terminal ``finish_reason`` — never both.
+    ``astream`` appends exactly ONE contentless terminal chunk when the provider
+    named a reason, because the reason is only known after the last token. Every
+    consumer already skips chunks without content, so the marker adds no
+    character to any assembled answer and never reaches the browser; consumers
+    that want the reason read ``finish_reason`` before that skip.
+    """
     content: str
+    finish_reason: Optional[str] = None
 
 
 def _is_qwen3_model(model_name: str) -> bool:
@@ -205,9 +239,13 @@ class LLMClient:
                 "prompt_tokens": resp.usage.prompt_tokens,
                 "completion_tokens": resp.usage.completion_tokens,
             }
+        choice = resp.choices[0]
+        finish = getattr(choice, "finish_reason", None) or None
+        _warn_if_cut_off("Call", self.model, finish)
         return LLMResponse(
-            content=resp.choices[0].message.content or "",
-            usage=usage)
+            content=choice.message.content or "",
+            usage=usage,
+            finish_reason=finish)
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async Streaming Generator (fuer streaming.py Agent-Loop).
@@ -243,13 +281,12 @@ class LLMClient:
                     yield LLMChunk(content=_c.delta.content)
                 if getattr(_c, "finish_reason", None):
                     finish = _c.finish_reason
-        # Visibility for cut-off output: 'length' = completion budget hit
-        # (thinking models burn hidden reasoning tokens from the same budget;
-        # some providers silently CLAMP an oversized max_tokens first).
-        if finish and finish != "stop":
-            logger.warning("Stream on %s ended with finish_reason=%r — output "
-                           "likely truncated (length = max_tokens/budget hit)",
-                           self.model, finish)
+        _warn_if_cut_off("Stream", self.model, finish)
+        if finish:
+            # Terminal marker — contentless, see LLMChunk. The streaming path
+            # bypasses the queue, so this is the ONLY way the reason reaches
+            # the caller's log line.
+            yield LLMChunk(content="", finish_reason=finish)
 
     def __repr__(self) -> str:
         return f"LLMClient(model={self.model!r}, base_url={self.base_url!r})"
@@ -389,6 +426,25 @@ def _split_anthropic_messages(
     return system, merged
 
 
+def _anthropic_finish_reason(stop_reason: Optional[str]) -> Optional[str]:
+    """Maps an Anthropic ``stop_reason`` to the OpenAI ``finish_reason`` words.
+
+    The log field must carry ONE vocabulary, otherwise counting truncated
+    answers means knowing which provider wrote each line. ``end_turn`` and
+    ``stop_sequence`` are the same event as OpenAI's "stop", ``max_tokens`` the
+    same as "length". Anything unmapped passes through verbatim — an unknown
+    reason stays visible instead of being flattened into a known one.
+    """
+    if not stop_reason:
+        return None
+    return {
+        "end_turn": "stop",
+        "stop_sequence": "stop",
+        "max_tokens": "length",
+        "tool_use": "tool_calls",
+    }.get(stop_reason, stop_reason)
+
+
 class AnthropicLLMClient:
     """LLM Client fuer Anthropic Claude-Modelle (native SDK).
 
@@ -452,7 +508,9 @@ class AnthropicLLMClient:
                 "prompt_tokens": resp.usage.input_tokens,
                 "completion_tokens": resp.usage.output_tokens,
             }
-        return LLMResponse(content=content, usage=usage)
+        finish = _anthropic_finish_reason(getattr(resp, "stop_reason", None))
+        _warn_if_cut_off("Call", self.model, finish)
+        return LLMResponse(content=content, usage=usage, finish_reason=finish)
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         """Async Streaming Generator."""
@@ -462,6 +520,19 @@ class AnthropicLLMClient:
         ) as stream:
             async for text in stream.text_stream:
                 yield LLMChunk(content=text)
+            # Same terminal marker as the OpenAI stream. The reason only exists
+            # on the assembled final message, and asking for it must never break
+            # a stream that already delivered its text.
+            finish = None
+            try:
+                final = await stream.get_final_message()
+                finish = _anthropic_finish_reason(
+                    getattr(final, "stop_reason", None))
+            except Exception as e:
+                logger.debug("Anthropic stream finish_reason unavailable: %s", e)
+            _warn_if_cut_off("Stream", self.model, finish)
+            if finish:
+                yield LLMChunk(content="", finish_reason=finish)
 
     def __repr__(self) -> str:
         return f"AnthropicLLMClient(model={self.model!r}, base_url={self.base_url!r})"

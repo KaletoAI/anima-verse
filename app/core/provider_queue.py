@@ -841,7 +841,15 @@ def _strip_thinking(response) -> Any:
 
 
 def _get_max_tokens_safe(llm) -> int:
-    """Extracts max_tokens from LLM instance."""
+    """Extracts max_tokens from the LLM instance.
+
+    Returns 0 when the client carries no completion limit — that is "no limit
+    configured, the provider's default budget applies", NOT "could not be
+    determined". Both client classes always define ``max_tokens`` (the
+    Anthropic one even forces a value), so a missing attribute cannot occur;
+    ``tokens.max: 0`` in llm_calls.jsonl therefore reads unambiguously as
+    "unlimited from our side".
+    """
     val = getattr(llm, "max_tokens", None)
     return int(val) if val else 0
 
@@ -853,6 +861,10 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
     On failure (timeout / backend error) ``response`` is None and ``error``
     carries the message — the full prompt is still logged so the exact failing
     request can be inspected afterwards.
+
+    This is where the provider's ``finish_reason`` reaches the JSONL: the whole
+    LLM path runs through the queue, so the caller never sees the raw response
+    object. Providers that send no reason leave the field out of the line.
     """
     try:
         from app.utils.llm_logger import log_llm_call, extract_token_info, estimate_tokens
@@ -909,6 +921,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             label=getattr(task, "label", "") or "",
             trace_id=getattr(task, "trace_id", "") or "",
             trace_kind=getattr(task, "trace_kind", "") or "",
+            finish_reason=getattr(response, "finish_reason", None) or "",
             error=error)
     except Exception as e:
         logger.error("Logging-Fehler: %s", e, exc_info=True)

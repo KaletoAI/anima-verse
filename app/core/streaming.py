@@ -933,6 +933,9 @@ class StreamingAgent:
 
         iteration_response = ""
         chunk_count = 0
+        # Why the provider stopped ("length" = budget hit, text cut off). Set
+        # from the terminal chunk of astream; "" = the provider named no reason.
+        finish_reason = ""
         _iter_start = time.monotonic()
 
         for _attempt in range(_EMPTY_RETRIES + 1):
@@ -950,6 +953,7 @@ class StreamingAgent:
             # Per-Attempt Variablen
             iteration_response = ""
             chunk_count = 0
+            finish_reason = ""
             tool_call_detected = False
             tool_call_end_pos = -1
             count_sent = 0
@@ -1018,6 +1022,15 @@ class StreamingAgent:
                 _pending_task = None
                 if chunk is _STREAM_END:
                     _stream_done = True
+                    continue
+
+                # Terminal marker: astream appends ONE contentless chunk that
+                # carries the provider's finish_reason (llm_client.LLMChunk).
+                # It is not output — it must not be counted as a chunk and
+                # never reaches the client.
+                _fr = getattr(chunk, "finish_reason", None)
+                if _fr:
+                    finish_reason = _fr
                     continue
 
                 chunk_count += 1
@@ -1144,7 +1157,8 @@ class StreamingAgent:
         # --- LLM-Logging ---
         self._log_llm_call(
             active_llm, system_content, user_input, iteration_response,
-            llm_label, _iter_start, history=history)
+            llm_label, _iter_start, history=history,
+            finish_reason=finish_reason)
 
         # --- Tool-Matches extrahieren ---
         if detect_tools and iteration_response:
@@ -1200,6 +1214,7 @@ class StreamingAgent:
         _HEARTBEAT_INTERVAL = 15
         _start = time.monotonic()
         response_text = ""
+        finish_reason = ""
         saw_empty = False
         last_error = None
         for _attempt in (1, 2):
@@ -1220,6 +1235,9 @@ class StreamingAgent:
                 continue
             response = _strip_thinking(response)
             response_text = (getattr(response, "content", None) or "").strip()
+            # This one call is NOT streamed, so the reason rides on the
+            # response object itself (LLMResponse.finish_reason).
+            finish_reason = getattr(response, "finish_reason", None) or ""
             if response_text:
                 break
             saw_empty = True
@@ -1236,7 +1254,8 @@ class StreamingAgent:
             raise last_error
 
         self._log_llm_call(self.tool_llm, system_content, user_input,
-                           response_text, "Tool-LLM", _start)
+                           response_text, "Tool-LLM", _start,
+                           finish_reason=finish_reason)
         yield LoopInfoEvent(
             iteration=iteration,
             max_iterations=self.max_iterations,
@@ -1465,8 +1484,16 @@ class StreamingAgent:
     # ------------------------------------------------------------------
 
     def _log_llm_call(self, active_llm, system_content, user_input,
-                      response, llm_label, start_time, history=None):
-        """Logs a completed LLM call."""
+                      response, llm_label, start_time, history=None,
+                      finish_reason=""):
+        """Logs a completed LLM call.
+
+        ``finish_reason`` is the provider's stop reason when it is known ("" =
+        not reported). Streaming bypasses the queue, so these lines are written
+        here instead of in ``provider_queue._log_task_result`` — without the
+        argument the four SSE tasks would be the only ones in llm_calls.jsonl
+        that cannot say whether the answer was cut off at the token budget.
+        """
         if not self.log_task:
             return
         try:
@@ -1485,6 +1512,7 @@ class StreamingAgent:
                 tokens_output=estimate_tokens(response),
                 max_tokens=get_max_tokens(active_llm),
                 messages=history or None,
+                finish_reason=finish_reason or "",
                 llm_role=llm_label)
         except Exception as e:
             logger.error("LLM-Log Fehler: %s", e)

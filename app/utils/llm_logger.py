@@ -62,7 +62,8 @@ def log_llm_call(
     template: str = "",
     label: str = "",
     trace_id: str = "",
-    trace_kind: str = ""):
+    trace_kind: str = "",
+    finish_reason: str = ""):
     """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
     Args:
@@ -76,7 +77,11 @@ def log_llm_call(
         duration_s: duration in seconds
         tokens_input: input tokens (real or estimated)
         tokens_output: output tokens (real or estimated)
-        max_tokens: max tokens / context length
+        max_tokens: the completion limit this call was sent with. ``0`` means
+            no limit was configured on the client, so the provider's own
+            default budget applied — it never means "unknown", because every
+            client carries the attribute (see
+            ``provider_queue._get_max_tokens_safe``).
         messages: optional full message list for multi-message calls
         llm_role: role of the LLM call (Tool-LLM, Chat-LLM, LLM)
         template: full path or file name of the rendered Jinja template
@@ -96,6 +101,12 @@ def log_llm_call(
         trace_kind: kind of the action (``respond``, ``thought``, ``chat``,
             ...), same fallback as ``trace_id``. The fallback fills each field
             on its own, so an explicit value always wins per field.
+        finish_reason: why the provider stopped generating ("stop", "length",
+            ...). Only written to the JSONL when it is actually known — an
+            empty value leaves the field out entirely instead of implying a
+            clean "stop", so counting truncated answers over a longer window
+            (the archive keeps monthly buckets) stays honest about which lines
+            carry the information at all.
     """
     if not trace_id or not trace_kind:
         try:
@@ -131,6 +142,8 @@ def log_llm_call(
 
     if label:
         entry["label"] = label
+    if finish_reason:
+        entry["finish_reason"] = finish_reason
     if trace_id:
         entry["trace_id"] = trace_id
     if trace_kind:
