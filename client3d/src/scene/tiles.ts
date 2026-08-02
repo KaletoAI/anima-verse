@@ -55,6 +55,11 @@ export interface Tile {
    *  es blendet beim Reinzoomen nie weg, sondern bekommt Löcher. Kommt aus
    *  der Spec, nicht aus dem Vorhandensein von cutouts. */
   modelIsGround?: boolean;
+  /** `display: 'shell_area'` (§ B6 Nr. 10) — Flächen-Location im Detail-Modus:
+   *  Anker wie `ground`, aber das Modell blendet beim Reinzoomen aus wie eine
+   *  Hülle und gibt die komponierte Detailszene darunter frei. Der Kachelboden
+   *  folgt dabei dem Fade, statt fest sichtbar oder fest weg zu sein. */
+  modelIsShellArea?: boolean;
   /** prozedurale Deko (Bäume) — weicht einem Server-Modell */
   decor?: THREE.Group;
   /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
@@ -1043,22 +1048,44 @@ export function applyTileFade(tile: Tile, dt: number) {
   const gp = tile.groundPlate;
   if (gp) {
     const gm = gp.material as THREE.MeshStandardMaterial;
-    const ghost = !!tile.hasBasement && f > 0.03;
-    if (gm.transparent !== ghost) {
-      gm.transparent = ghost;
-      // Ohne Tiefen-Schreiben verdeckt die Platte nichts mehr, was unter ihr
-      // liegt — der eigentliche Punkt der Übung.
-      gm.depthWrite = !ghost;
-      gm.needsUpdate = true;
+    if (tile.modelIsShellArea) {
+      // Detail-Modus (§ B6 Nr. 10): die Kachelplatte folgt dem FADE. Fern ist
+      // sie weg, weil das Modell dort seinen eigenen Boden mitbringt (Nr. 5) —
+      // eine Platte auf y 0,04 schnitte sein Gelände genau dort ab (der alte
+      // Mondscheinsee-Befund). Nah ist das Modell ausgeblendet und die Platte
+      // ist der Backstop unter der Detailszene, wo deren Raum-Platten die Zelle
+      // nicht abdecken. Gegenläufig zu roofMats unten, mit demselben Faktor:
+      // wo die Hülle bei 1/1,4 verschwunden ist, steht der Boden voll.
+      // Das Material gehört dieser Kachel allein (buildTile legt pro Platte
+      // eines an) — die Deckkraft hier zieht keine Nachbarkachel mit.
+      // Die Platte startet durchscheinend, der Zweig unten dreht das aber ab,
+      // solange die Kachel kein Detail-Modell trug (Umschalten per Remount).
+      if (!gm.transparent) {
+        gm.transparent = true;
+        gm.needsUpdate = true;
+      }
+      gp.visible = f > 0.03;
+      gm.opacity = Math.min(1, f * 1.4);
+    } else {
+      const ghost = !!tile.hasBasement && f > 0.03;
+      if (gm.transparent !== ghost) {
+        gm.transparent = ghost;
+        // Ohne Tiefen-Schreiben verdeckt die Platte nichts mehr, was unter ihr
+        // liegt — der eigentliche Punkt der Übung.
+        gm.depthWrite = !ghost;
+        gm.needsUpdate = true;
+      }
+      gm.opacity = ghost ? Math.max(0.15, 1 - f * 0.85) : 1;
     }
-    gm.opacity = ghost ? Math.max(0.15, 1 - f * 0.85) : 1;
   }
 
   // Flächen-Location: statt das Modell wegzublenden werden seine Löcher
   // geschaltet — derselbe Zustand, andere Wirkung. Fernsicht zeigt die
   // Location intakt, die Innenansicht schneidet Grundriss und abseits
   // stehende Räume heraus, damit das Rezept-Innenleben darin sichtbar wird.
-  tile.cutouts?.setEnabled(f > 0.03);
+  // Der Detail-Modus hat keine Löcher (sein Innenleben komponiert wie ein
+  // Gebäude-Interieur) — dort deckt der Fade des Modells selbst auf.
+  if (!tile.modelIsShellArea) tile.cutouts?.setEnabled(f > 0.03);
   // Bei EINGEBLENDETER Unter-Etage tritt das Area-Modell ganz beiseite
   // (User-Befund 2026-07-28: die vergrößerte Boden-Öffnung war da, aber das
   // nie fadende Location-Modell stand davor). Gleiche Semantik wie der

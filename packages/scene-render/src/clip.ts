@@ -28,8 +28,9 @@ import type { Material, Mesh, Object3D,
 
 /** Gleiche Obergrenze wie `CLIP_OUTLINE_MAX_POINTS` im Composer — der Test
  *  läuft je Fragment, deshalb schickt der Server nie mehr und wir compilieren
- *  nie mehr. */
-export const CLIP_MAX_POINTS = 32
+ *  nie mehr. 32 → 64 mit Vertrag v5.2 Nr. 11 (tessellierte Kurven-Hüllen):
+ *  MUSS dem Composer-Cap folgen, sonst schneidet der Client still ab. */
+export const CLIP_MAX_POINTS = 64
 
 /** Punkt-im-Polygon per Strahl-Paritätstest, vor den Clipping-Chunk des
  *  Fragment-`main` injiziert. `clipPrev` läuft die Kante (i-1 → i) mit,

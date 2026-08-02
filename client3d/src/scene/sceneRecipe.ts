@@ -692,9 +692,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       // Fläche ohne Grundriss (Mondscheinsee: kein outline, kein Indoor-Raum
       // außerhalb) hatte keine Löcher, galt als Gebäudehülle und blendete beim
       // Reinzoomen komplett weg (User-Befund 2026-07-28).
+      applySceneBuilding(tile, placed, spec.display ?? 'shell');
       const cutouts = spec.cutouts || [];
-      const area = spec.display === 'ground';
-      applySceneBuilding(tile, placed, area);
       if (cutouts.length) {
         // Polygone kommen um das Kachelzentrum, der Shader misst in
         // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
@@ -766,6 +765,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
  *  verhält sich fürs Reinzoomen wie ein Dach (blendet aus, gibt den Blick auf
  *  die Räume frei). Ein `ground`-Modell bleibt stattdessen stehen.
  *
+ *  Drei Modi, und die Spec sagt welcher (§ B6 Nr. 10): `shell` = Gebäude,
+ *  `ground` = Fläche mit Löchern, `shell_area` = Fläche im Detail-Modus —
+ *  fürs Ausblenden ist sie eine Hülle (Modell in roofParts/roofMats), ihre
+ *  PLATZIERUNG bleibt die einer Fläche und wird hier so wenig angefasst wie
+ *  bei den anderen beiden.
+ *
  *  Hier wird an der Spec-Geometrie NICHTS mehr nachjustiert: die frühere
  *  Um-Verankerung samt Y-Morph zwischen Kachel- und Detail-Maßstab war eine
  *  reine Client-Erfindung und ließ dieselbe Location im Client bis zu 1,0 m
@@ -773,14 +778,21 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
  *  −0,85 m). Seit die Spec nur noch EINEN Faktor liefert, gibt es auch nichts
  *  mehr zu blenden. */
 function applySceneBuilding(tile: Tile, model: THREE.Group,
-                            area = false): void {
+                            display: NonNullable<SceneModelSpec['display']> = 'shell'): void {
   if (tile.shell) {
     tile.group.remove(tile.shell);
     tile.shell = undefined;
   }
+  // Prozedurale Fallback-Bäume weichen dem Server-Modell — im Detail-Modus
+  // sind die gestreuten Props (`scattered`) ihr Ersatz.
   if (tile.decor) tile.decor.visible = false;
   tile.serverModel = model;
+  // `area` = das Modell bleibt stehen und bekommt Löcher; das gilt NUR für
+  // `ground`. Der Detail-Modus fadet und wird deshalb unten wie eine Hülle
+  // behandelt — sein Kachelboden folgt dafür dem Fade (applyTileFade).
+  const area = display === 'ground';
   tile.modelIsGround = area;
+  tile.modelIsShellArea = display === 'shell_area';
   // Eine Flächen-Location BRINGT ihren Boden mit. Die kachel-eigene Platte
   // (10 × 10 m, undurchsichtig, y 0,04) steht in keinem Payload — sie ist
   // Client-Erfindung und schnitt das Modell auf ihrer Höhe ab: beim
@@ -833,6 +845,7 @@ export function unmountScene(tile: Tile): void {
   tile.cutouts?.dispose();
   tile.cutouts = undefined;
   tile.modelIsGround = false;
+  tile.modelIsShellArea = false;
   if (tile.groundPlate) tile.groundPlate.visible = true;
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();

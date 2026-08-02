@@ -2085,7 +2085,12 @@ async function startApp(username: string) {
     let open: Tile | null = null;
     let basementOpen: Tile | null = null;
     for (const tile of tiles.values()) {
-      if (tile.isBuilding && tile.interior) {
+      // A detail-scene area location (`display: 'shell_area'`, § B6 Nr. 10)
+      // fades like a building although its cell is PASSABLE — `isBuilding` is
+      // false there by definition, so gating on it alone kept the interior of
+      // exactly those locations shut, the one place the fade is supposed to
+      // reveal something.
+      if (tile.interior && (tile.isBuilding || tile.modelIsShellArea)) {
         const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
         // mehrgeschossig: Innenansicht bis zu größerer Distanz halten, sonst
         // springt die Ansicht auf die Hülle, bevor man die Obergeschosse sieht

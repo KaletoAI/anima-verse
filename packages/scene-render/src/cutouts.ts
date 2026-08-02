@@ -36,8 +36,10 @@ import type { Material, Mesh, Object3D,
 /** Same ceiling as ``CUTOUT_MAX_POLYS`` in the composer — the test runs per
  *  fragment, so the server never sends more and we never compile more. */
 export const CUTOUT_MAX_POLYS = 16
-/** Per-polygon ceiling, shared with the room clip. */
-export const CUTOUT_MAX_POINTS = 32
+/** Per-polygon ceiling, shared with the room clip. 32 → 64 with contract
+ *  v5.2 item 11 (tessellated curved hulls) — must follow the composer cap,
+ *  or the client truncates silently. */
+export const CUTOUT_MAX_POINTS = 64
 
 export interface CutoutHandle {
   /** Holes on (interior view) or off (far view: the model is intact). */
