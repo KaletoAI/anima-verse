@@ -244,8 +244,8 @@ export class AudioEngine {
   /** Spoken lines are strictly serial: the tail of this chain is the point
    *  where the next `speak()` hangs itself. */
   private speech: Promise<void> = Promise.resolve();
-  /** Bumped by `stopAll` — a queued line whose generation is stale drops out
-   *  instead of playing (see `playSpeech`). */
+  /** Bumped by `stopSpeech` (and thus by `stopAll`) — a queued line whose
+   *  generation is stale drops out instead of playing (see `playSpeech`). */
   private speechGen = 0;
   private speaking: AudioBufferSourceNode | null = null;
   private unlocked = false;

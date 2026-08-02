@@ -41,7 +41,7 @@ import type { SceneLine } from '@anima/player-ui';
  *
  * The canonical, persisted one is `STORYTELLER_SPEAKER` in
  * `app/core/perception.py:41`. `/play/scene` substitutes the LOCALISED label
- * for display before it sends the payload (`app/routes/play.py:236`), so the
+ * for display before it sends the payload (`app/routes/play.py:239`), so the
  * client sees the translated name in a German world — which is why this is a
  * list and not one constant. The translations live in
  * `shared/languages/<lang>.json` under the key "Storyteller" (today only
@@ -62,14 +62,38 @@ export interface SceneSnapshot {
   lines: readonly SceneLine[];
 }
 
+/** The name the player sees, read exactly as `SceneView` reads it: the
+ *  top-level speaker first, then the one in `meta`. */
+export function speakerOf(line: SceneLine): string {
+  return line.speaker || (line.meta?.speaker as string) || '';
+}
+
 /**
- * Fingerprint of a transcript: how many lines and the newest timestamp. Cheap,
- * a plain string, and exactly what a React effect can depend on — the poll
- * hands out a fresh array every 5 seconds, and its identity says nothing.
+ * Identity of ONE line, as strong as the payload gets: the timestamp plus who
+ * said what. The timestamp alone is NOT an identity — the server stamps with
+ * `utc_now_iso()`, whose default is `timespec="seconds"`
+ * (`app/core/timeutils.py:33`), so a whole second's worth of lines can share
+ * one `ts` (`2026-06-24T22:46:09+00:00`).
+ */
+function identityOf(line: SceneLine): string {
+  return `${line.ts || ''}|${speakerOf(line)}|${line.content || ''}`;
+}
+
+/**
+ * Fingerprint of a transcript: how many lines, and the identity of the newest
+ * one. Cheap, a plain string, and exactly what a React effect can depend on —
+ * the poll hands out a fresh array every 5 seconds, and its identity says
+ * nothing.
+ *
+ * The last line's SPEAKER AND CONTENT are part of it, not just its `ts`: at a
+ * one-second resolution the pair (count, ts) does not change when the rolling
+ * window drops a line at the front while a new one arrives in the same second,
+ * and a transcript that changed but does not move this string is a line the
+ * HUD never sees at all.
  */
 export function sceneStampOf(lines: readonly SceneLine[] | undefined): string {
   const list = lines || [];
-  return `${list.length}|${list.length ? list[list.length - 1].ts || '' : ''}`;
+  return `${list.length}|${list.length ? identityOf(list[list.length - 1]) : ''}`;
 }
 
 /**
@@ -77,11 +101,27 @@ export function sceneStampOf(lines: readonly SceneLine[] | undefined): string {
  * the HUD. The chat auto-show and the speech driver must never disagree about
  * what "somebody said something" means, so they read the same function.
  *
- * A line is new when its `ts` is GREATER than the newest one already seen.
- * Not "the tail after the old length": `/play/scene` is a rolling window (100
- * lines), so in a busy room the count stays equal while the content moves on.
- * Two lines sharing a timestamp to the microsecond would cost the second one —
- * a trade the window rule is worth.
+ * ANCHORED, NOT COMPARED BY TIME. The last line already seen is looked up in
+ * the new transcript and everything after it is new. A `ts` comparison cannot
+ * do this job: timestamps have SECOND resolution (see `identityOf`), so a
+ * second character answering within the same second as the last line of the
+ * previous poll — the parallel respond lane does exactly that — would never be
+ * greater than what was seen and would be dropped in silence. Anchoring also
+ * survives the rolling window of `/play/scene` (100 lines): the anchor moves
+ * to the front instead of the count telling a story.
+ *
+ * DUPLICATES. Two lines with the same identity are two characters saying the
+ * same words in the same second — rare, but it decides where to cut. So the
+ * anchor is counted: if the previous transcript held it twice, the SECOND
+ * occurrence in the new one is the anchor, and a third one is new. Fewer
+ * occurrences than before means the older ones rolled out of the window, and
+ * the last one is the anchor.
+ *
+ * FALLBACK. If the anchor is gone from the window entirely (more than a
+ * hundred lines since the last poll, or a consolidated scene), there is
+ * nothing to anchor to and the `ts` comparison is the last resort — with its
+ * known blind spot for the same second, which at that point costs at most one
+ * line out of a hundred that were missed anyway.
  *
  * Two cases are deliberately NOT new and only set the baseline: the first
  * payload after mount (`prev` = null — otherwise the chat pops open on every
@@ -92,15 +132,17 @@ export function newSceneLines(prev: SceneSnapshot | null,
                               cur: SceneSnapshot): SceneLine[] {
   if (!prev) return [];
   if (prev.room !== cur.room) return [];
-  const seen = prev.lines.length ? prev.lines[prev.lines.length - 1].ts || '' : '';
-  if (!seen) return cur.lines.slice();
-  return cur.lines.filter((l) => (l.ts || '') > seen);
-}
-
-/** The name the player sees, read exactly as `SceneView` reads it: the
- *  top-level speaker first, then the one in `meta`. */
-export function speakerOf(line: SceneLine): string {
-  return line.speaker || (line.meta?.speaker as string) || '';
+  if (!prev.lines.length) return cur.lines.slice();
+  const anchor = identityOf(prev.lines[prev.lines.length - 1]);
+  let seenTimes = 0;
+  for (const l of prev.lines) if (identityOf(l) === anchor) seenTimes += 1;
+  const hits: number[] = [];
+  for (let i = 0; i < cur.lines.length; i++) {
+    if (identityOf(cur.lines[i]) === anchor) hits.push(i);
+  }
+  if (hits.length) return cur.lines.slice(hits[Math.min(seenTimes, hits.length) - 1] + 1);
+  const seenTs = prev.lines[prev.lines.length - 1].ts || '';
+  return cur.lines.filter((l) => (l.ts || '') > seenTs);
 }
 
 /** Perception kinds that are a voice speaking IN this room. */
