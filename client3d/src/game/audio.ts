@@ -49,6 +49,34 @@ const PRELOAD_S = 6;
 /** A track shorter than two crossfades cannot be faded at full length —
  *  the fade is capped at a third of it so a jingle still gets a seam. */
 const MIN_FADE_SHARE = 3;
+/** Segments per crossfade. The fade follows an EQUAL-POWER curve, and this is
+ *  how finely it is approximated — see `equalPowerFade`. */
+const FADE_STEPS = 8;
+
+/**
+ * Schedules one half of an equal-power crossfade on `param`: `up` fades in
+ * along sin(t·π/2), `down` fades out along cos(t·π/2).
+ *
+ * WHY NOT A STRAIGHT LINE: two linear ramps crossing each other sum to 0.5 at
+ * the midpoint instead of 1, which is a 6 dB dip — audible as a "hole" in the
+ * middle of every track change. sin² + cos² = 1 keeps the POWER constant, so
+ * the seam sounds like one continuous piece of music.
+ *
+ * The curve is approximated with `FADE_STEPS` linear ramps rather than
+ * `setValueCurveAtTime`, deliberately: a scheduled value curve makes the
+ * `cancelScheduledValues` + `setValueAtTime` that `stop()` needs illegal while
+ * it runs, and eight segments are already inaudibly close to the curve
+ * (worst-case error < 1 %).
+ */
+function equalPowerFade(param: AudioParam, t0: number, dur: number,
+                        up: boolean): void {
+  param.setValueAtTime(up ? 0 : 1, t0);
+  for (let i = 1; i <= FADE_STEPS; i++) {
+    const t = i / FADE_STEPS;
+    const v = up ? Math.sin((t * Math.PI) / 2) : Math.cos((t * Math.PI) / 2);
+    param.linearRampToValueAtTime(v, t0 + dur * t);
+  }
+}
 
 interface PlayOpts {
   /** Seconds of overlap between two tracks. */
@@ -166,12 +194,12 @@ class Playlist {
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
       src.connect(gain);
-      gain.gain.setValueAtTime(fade > 0 ? 0 : 1, begin);
-      if (fade > 0) gain.gain.linearRampToValueAtTime(1, begin + fade);
       const seam = begin + buffer.duration - fade;
       if (fade > 0) {
-        gain.gain.setValueAtTime(1, seam);
-        gain.gain.linearRampToValueAtTime(0, begin + buffer.duration);
+        equalPowerFade(gain.gain, begin, fade, true);
+        equalPowerFade(gain.gain, seam, fade, false);   // holds 1 until `seam`
+      } else {
+        gain.gain.setValueAtTime(1, begin);
       }
       src.start(begin);
       this.live.push({ src, gain });
@@ -210,12 +238,15 @@ export class AudioEngine {
   private buses: Record<Bus, GainNode>;
   private music: Playlist;
   private ambient: Playlist;
-  /** Decoded buffers by URL. The same few tracks loop for a whole session, so
-   *  decoding one twice would be pure waste. */
+  /** Decoded buffers by URL — MUSIC AND AMBIENCE ONLY. The same few tracks
+   *  loop for a whole session, so decoding one twice would be pure waste. */
   private buffers = new Map<string, Promise<AudioBuffer>>();
   /** Spoken lines are strictly serial: the tail of this chain is the point
    *  where the next `speak()` hangs itself. */
   private speech: Promise<void> = Promise.resolve();
+  /** Bumped by `stopAll` — a queued line whose generation is stale drops out
+   *  instead of playing (see `playSpeech`). */
+  private speechGen = 0;
   private speaking: AudioBufferSourceNode | null = null;
   private unlocked = false;
 
@@ -282,23 +313,36 @@ export class AudioEngine {
    * every call waits for the one before it, so two characters talking at once
    * are heard one after the other instead of on top of each other.
    *
-   * Never rejects — a line that fails to load is a line not heard, not a
-   * broken chat.
+   * Never rejects, and always resolves: a line that fails to load, arrives
+   * after `stopAll()` or is spoken into a still-locked context is a line not
+   * heard — not a broken chat and not a promise the caller waits on forever.
    */
   speak(url: string): Promise<void> {
-    const done = this.speech.then(() => this.playSpeech(url));
+    const gen = this.speechGen;
+    const done = this.speech.then(() => this.playSpeech(url, gen));
     this.speech = done.catch(() => undefined);
     return this.speech;
   }
 
-  private async playSpeech(url: string): Promise<void> {
+  private async playSpeech(url: string, gen: number): Promise<void> {
+    // The generation is checked before every step, exactly like `Playlist`
+    // does it: `stopAll` cannot cancel the promise chain that is already
+    // built, so each link has to notice that it belongs to a stopped queue and
+    // fall through — otherwise the line AFTER the stopped one still plays, and
+    // the next `speak()` (hanging on the fresh chain) plays on top of it.
+    if (gen !== this.speechGen) return;
+    // A suspended context never fires `onended`, so starting here would stall
+    // the whole queue on a promise that cannot resolve. Silence is the correct
+    // behaviour before the unlock gesture.
+    if (!this.running) return;
     let buffer: AudioBuffer;
     try {
-      buffer = await this.buffer(url);
+      buffer = await this.buffer(url, false);
     } catch (e) {
       console.warn(`[audio] could not load the speech file ${url}`, e);
       return;
     }
+    if (gen !== this.speechGen) return;
     await new Promise<void>((resolve) => {
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
@@ -312,10 +356,12 @@ export class AudioEngine {
     });
   }
 
-  /** Stops everything at once — music, ambience and the current line. */
+  /** Stops everything at once — music, ambience and the whole speech queue
+   *  (the current line AND the ones already waiting behind it). */
   stopAll(): void {
     this.music.stop();
     this.ambient.stop();
+    this.speechGen += 1;
     if (this.speaking) {
       try {
         this.speaking.stop();
@@ -327,19 +373,29 @@ export class AudioEngine {
     this.speech = Promise.resolve();
   }
 
-  /** Fetch + decode, once per URL. TTS files are one-shot, but caching them
-   *  costs a map entry and saves the repeat of an identical line. */
-  private buffer(url: string): Promise<AudioBuffer> {
-    const known = this.buffers.get(url);
+  /**
+   * Fetch + decode. With `cache` (the playlists) the buffer is kept per URL,
+   * because the same handful of tracks loops for a whole session.
+   *
+   * Spoken lines pass `cache = false`, and that is not a nicety: a cache entry
+   * is not "a map entry", it is the DECODED PCM — a minute of stereo at 48 kHz
+   * is around 11 MB of heap. TTS lines are unique and never repeat, so caching
+   * them would grow without bound over a long session, with no eviction rule
+   * that could sensibly decide what to drop.
+   */
+  private buffer(url: string, cache = true): Promise<AudioBuffer> {
+    const known = cache ? this.buffers.get(url) : undefined;
     if (known) return known;
     const pending = (async () => {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`${resp.status} ${url}`);
       return this.ctx.decodeAudioData(await resp.arrayBuffer());
     })();
-    // A failed load must not stay cached as a failure forever.
-    pending.catch(() => this.buffers.delete(url));
-    this.buffers.set(url, pending);
+    if (cache) {
+      // A failed load must not stay cached as a failure forever.
+      pending.catch(() => this.buffers.delete(url));
+      this.buffers.set(url, pending);
+    }
     return pending;
   }
 }

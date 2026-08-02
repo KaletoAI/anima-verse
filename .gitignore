@@ -123,7 +123,7 @@ Aufgaben.md
 /models/fastembed/
 voices/*.wav
 # Game audio (music/ambience) — user files, served by /assets/audio
-audio/
+/audio/
 
 # original comfyui workflows
 workflows/ComfyUI-Workflows/
