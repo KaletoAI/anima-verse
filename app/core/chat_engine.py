@@ -19,15 +19,58 @@ from app.core.perception import STORYTELLER_SPEAKER
 logger = get_logger("chat_engine")
 
 
+def dedupe_assistant_repeats(messages: List[Dict[str, str]],
+                             drop_preceding_user: bool = True,
+                             log_label: str = "History") -> List[Dict[str, str]]:
+    """Drops assistant messages whose fuzzy signature was already seen.
+
+    Breaks the self-reinforcement loop: a model that sees its own phrase twice
+    in the context writes it a third time. Only the FIRST occurrence stays (see
+    ``history_manager.fuzzy_signature`` — marker/whitespace variants match).
+
+    ``drop_preceding_user`` decides what happens to the line before a dropped
+    duplicate:
+
+    - 1:1 history (True): the "user" line is the partner's message this reply
+      answered. It goes with it, so no question stays behind without an answer.
+    - Room transcript (False): a "user" line is a DIFFERENT speaker's utterance,
+      prefixed with their name. Deleting it because my own reply was a duplicate
+      would erase a third party's words from the scene — the responder would
+      answer a conversation it never heard.
+
+    Public because the standalone check calls it directly; otherwise only used
+    by ``build_chat_context``.
+    """
+    from app.utils.history_manager import fuzzy_signature
+
+    seen: set = set()
+    deduped: List[Dict[str, str]] = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            key = fuzzy_signature(msg.get("content", ""))
+            if key and key in seen:
+                if drop_preceding_user and deduped and deduped[-1]["role"] == "user":
+                    deduped.pop()
+                continue
+            if key:
+                seen.add(key)
+        deduped.append(msg)
+    if len(deduped) < len(messages):
+        logger.info("%s: %d fuzzy duplicates removed (%d → %d)",
+                    log_label, len(messages) - len(deduped),
+                    len(messages), len(deduped))
+    return deduped
+
+
 def _messages_from_room_stream(responder: str,
                                stream: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Baut die Konversation aus dem Raum-Wahrnehmungs-Stream des Antwortenden
-    (Multi-Party-Transkript) statt der 1:1-Chat-History.
+    """Builds the conversation from the responder's room perception stream
+    (multi-party transcript) instead of the 1:1 chat history.
 
-    Kern der Raum-Konversation: was der Character im Raum GEHÖRT hat, ist sein
-    Gesprächskontext — nicht eine alte paarweise History. Fremd-Zeilen werden mit
-    Sprechernamen geprefixt (`Thalion: …`), damit das LLM in einer Mehr-Personen-
-    Szene weiß, wer was gesagt hat. Geflüster-Meta (kein Inhalt) fällt raus.
+    Core of the room conversation: what the character HEARD in the room is its
+    conversational context — not an old pairwise history. Foreign lines are
+    prefixed with the speaker name (`Thalion: …`) so the LLM knows who said what
+    in a multi-person scene. Whisper meta (no content) is dropped.
     """
     out: List[Dict[str, str]] = []
     for row in stream or []:
@@ -188,8 +231,7 @@ def build_chat_context(
     from app.models.chat import get_chat_history
     from app.utils.history_manager import (
         get_time_based_history, get_cached_summary, refresh_summary_if_uncovered,
-        strip_history_artifacts, fuzzy_signature, count_assistant_repetitions)
-    from app.core import config as _cfg
+        strip_history_artifacts, anti_repetition_overrides)
     from app.routes.chat import _build_full_system_prompt, _strip_tool_hallucinations
 
     agent_config = get_character_config(character_name)
@@ -234,37 +276,24 @@ def build_chat_context(
     full_chat_history = [] if room_stream else get_chat_history(
         character_name, partner_name=_history_partner)
 
-    # LLM bauen — Anti-Repetition aus chat-Section der Admin-Config:
-    # frequency_penalty (Token-Penalty) + graduellem Temperature-Bump pro
-    # detektierter Phrasen-Wiederholung.
-    _llm_overrides: Dict[str, Any] = {}
-    _freq = float(_cfg.get("chat.frequency_penalty", 0.3) or 0)
-    if _freq > 0:
-        _llm_overrides["frequency_penalty"] = _freq
-    _step = float(_cfg.get("chat.anti_rep_step", 0.1) or 0)
-    if _step > 0:
-        _lookback = int(_cfg.get("chat.anti_rep_lookback", 6) or 6)
-        # Wiederholungs-Detection: im Raum-Modus über die eigenen jüngsten
-        # Room-Äußerungen des Responders (Perception-Stream) statt der
-        # chat_messages-History — so greift es korrekt über die ganze Szene UND
-        # überlebt das chat_messages-Aus (plan-history-consolidation-cleanup.md).
-        if room_stream:
-            _rep_source = [{"role": "assistant", "content": (r.get("content") or "")}
-                           for r in room_stream
-                           if (r.get("speaker") or (r.get("meta") or {}).get("speaker") or "").strip()
-                           == character_name and (r.get("content") or "").strip()]
-        else:
-            _rep_source = full_chat_history
-        _rep_count = count_assistant_repetitions(_rep_source, _lookback)
-        if _rep_count > 0:
-            _max = float(_cfg.get("chat.anti_rep_max", 1.2) or 1.2)
-            _base_temp = float(getattr(_chat_instance, "temperature", 0.7))
-            _new_temp = min(_base_temp + _step * _rep_count, _max)
-            _llm_overrides["temperature"] = _new_temp
-            logger.info(
-                "[%s] %d Wiederholung(en) in den letzten %d Turns erkannt "
-                "→ Temperature %.2f → %.2f",
-                character_name, _rep_count, _lookback, _base_temp, _new_temp)
+    # Build the LLM — anti-repetition from the chat section of the admin config:
+    # frequency_penalty (token penalty) + a graduated temperature bump per
+    # detected phrase repetition.
+    # Repetition source: in room mode the responder's own most recent room
+    # utterances (perception stream) instead of the chat_messages history — that
+    # way it works across the whole scene AND survives the chat_messages
+    # phase-out (plan-history-consolidation-cleanup.md).
+    if room_stream:
+        _rep_source = [{"role": "assistant", "content": (r.get("content") or "")}
+                       for r in room_stream
+                       if (r.get("speaker") or (r.get("meta") or {}).get("speaker") or "").strip()
+                       == character_name and (r.get("content") or "").strip()]
+    else:
+        _rep_source = full_chat_history
+    _llm_overrides: Dict[str, Any] = anti_repetition_overrides(
+        _rep_source,
+        float(getattr(_chat_instance, "temperature", 0.7)),
+        agent_name=character_name)
     llm = _chat_instance.create_llm(**_llm_overrides) if _chat_instance else None
 
     # History window (zeitgesteuert)
@@ -303,46 +332,30 @@ def build_chat_context(
                 continue
             messages.append({"role": "user", "content": content})
 
-    # Self-Reinforcement-Loop brechen: Fuzzy-Match auf Anfangsphrasen
-    # (siehe history_manager.fuzzy_signature). Marker/Whitespace-Variationen
-    # werden ignoriert.
-    _seen: set = set()
-    _deduped: list = []
-    _i = 0
-    while _i < len(messages):
-        m = messages[_i]
-        if m["role"] == "assistant":
-            key = fuzzy_signature(m["content"])
-            if key and key in _seen:
-                if _deduped and _deduped[-1]["role"] == "user":
-                    _deduped.pop()
-                _i += 1
-                continue
-            if key:
-                _seen.add(key)
-        _deduped.append(m)
-        _i += 1
-    if len(_deduped) < len(messages):
-        logger.info("C2C-History: %d Fuzzy-Duplikate entfernt",
-                    len(messages) - len(_deduped))
-        messages = _deduped
-
-    # Raum-Modus: die Konversation kommt aus dem Wahrnehmungs-Stream (was der
-    # Character im Raum gehört hat), nicht aus der 1:1-History. Behebt, dass ein
-    # anwesender Dritter (z.B. Rosi) auf eine Ansprache antwortet, ohne das eben
-    # Gehörte zu kennen, und stattdessen aus altem paarweisen Verlauf halluziniert.
+    # Room mode: the conversation comes from the perception stream (what the
+    # character heard in the room), not from the 1:1 history. Fixes that a third
+    # person present (e.g. a bystander) answers an address without knowing what
+    # was just said and hallucinates from an old pairwise history instead.
     room_mode = bool(room_stream)
     present_characters: List[str] = []
     if room_mode:
         messages = _messages_from_room_stream(character_name, room_stream)
         # Present = the speakers in the room stream (except me + the storyteller) — from
-        # baut der System-Prompt das Gruppen-Szenen-Framing (Anti-Impersonation).
+        # that the system prompt builds the group-scene framing (anti-impersonation).
         _seen = set()
         for _row in room_stream:
             _sp = (_row.get("speaker") or (_row.get("meta") or {}).get("speaker") or "").strip()
             if _sp and _sp != character_name and _sp != STORYTELLER_SPEAKER and _sp not in _seen:
                 _seen.add(_sp)
                 present_characters.append(_sp)
+
+    # Break the self-reinforcement loop — AFTER the room-mode replacement, so it
+    # acts on the list that is actually sent. In room mode a "user" line is a
+    # foreign speaker, so the preceding line is kept (see
+    # dedupe_assistant_repeats).
+    messages = dedupe_assistant_repeats(
+        messages, drop_preceding_user=not room_mode,
+        log_label="Room transcript" if room_mode else "C2C history")
 
     # Tools aus aktivierten Skills ableiten
     sm = get_skill_manager()

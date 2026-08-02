@@ -34,6 +34,44 @@ def _user_notification_tool_names() -> frozenset:
         return frozenset()
 
 
+def thought_anti_repetition_overrides(character_name: str,
+                                      base_temperature: float) -> Dict[str, Any]:
+    """Reactive temperature bump for a thought turn — same net as in the chat.
+
+    The chat path counts repetitions over its message list; a thought turn has
+    no such list, its own recent output IS the thought journal — the very same
+    entries the prompt hands back to the character under "Your recent thoughts".
+    So the journal is what is measured: the last ``chat.anti_rep_lookback``
+    entries (default 6), the same window and the same three config fields as the
+    chat path, no thought-specific setting.
+
+    ``frequency_penalty`` deliberately stays out: it is a configured chat-reply
+    sampler value, and this task never asked for a new static sampler setting.
+    Only the reactive bump crosses over.
+
+    Returns kwargs for ``LLMInstance.create_llm``; empty dict = leave the
+    instance as configured.
+    """
+    from app.core import config
+    from app.models import thought_store
+    from app.utils.history_manager import anti_repetition_overrides
+
+    lookback = int(config.get("chat.anti_rep_lookback", 6) or 6)
+    try:
+        rows = thought_store.list_thoughts(character_name, limit=lookback)
+    except Exception as e:
+        logger.debug("thought anti-repetition: journal unreadable for %s: %s",
+                     character_name, e)
+        return {}
+    # list_thoughts is newest first — the counter reads chat order (oldest
+    # first), so that "seen before" means what it says.
+    recent = [{"role": "assistant", "content": (r.get("content") or "")}
+              for r in reversed(rows or []) if (r.get("content") or "").strip()]
+    return anti_repetition_overrides(recent, base_temperature,
+                                     agent_name=character_name,
+                                     with_frequency_penalty=False)
+
+
 def _cascade_brake_tool_names() -> frozenset:
     """Messaging verbs declared CASCADE_BRAKE by their skills (F7) — the
     reply_only_to gate applies to these, no tool names hardcoded here."""
@@ -270,15 +308,28 @@ class ThoughtRunner:
         _tool_inst = resolve_llm("intent", agent_name=character_name) if agent_tools else None
         tool_llm = _tool_inst.create_llm() if _tool_inst else None
 
-        # Fast-Modus: Tool-LLM uebernimmt den ganzen Gedanken (kein Dual-Pass).
-        # Mode wird auf "single" forciert, damit das LLM die Tool-Calls
-        # selbst schreibt statt auf ein nicht-existentes Tool-LLM zu warten.
+        # Fast mode: the tool LLM takes over the whole thought (no dual pass).
+        # Mode is forced to "single" so the LLM writes the tool calls itself
+        # instead of waiting for a tool LLM that no longer exists.
         _is_fast = False
         if fast and tool_llm:
             llm = tool_llm
             tool_llm = None
             _is_fast = True
-            logger.info("Fast-Modus: Tool-LLM uebernimmt Gedanken statt Chat-LLM")
+            logger.info("Fast mode: the tool LLM writes the thought instead of the chat LLM")
+
+        # Anti-repetition: the thought prompt hands the character its own last
+        # journal entries verbatim ("Your recent thoughts"), and that is exactly
+        # where the measured echo loop comes from — so the same reactive
+        # temperature bump as in the chat path applies here. It hits whichever
+        # instance NARRATES this turn; the tool LLM of the dual pass stays
+        # untouched, its job is turning prose into tool calls, not writing prose.
+        _narrator_inst = _tool_inst if _is_fast else _thought_inst
+        if _narrator_inst:
+            _anti_rep = thought_anti_repetition_overrides(
+                character_name, float(getattr(_narrator_inst, "temperature", 0.7)))
+            if _anti_rep:
+                llm = _narrator_inst.create_llm(**_anti_rep)
 
         from app.core.dependencies import determine_mode
         mode = "single" if _is_fast else determine_mode(agent_tools, tool_llm, config)

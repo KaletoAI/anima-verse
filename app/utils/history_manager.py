@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
@@ -119,51 +119,170 @@ def get_time_based_history(
 _FUZZY_MARKER_RE = re.compile(
     r'\*\*I\s+(?:feel|do|am\s+at)\s+[^*]+\*\*', re.IGNORECASE)
 _FUZZY_NONALNUM_RE = re.compile(r'[^a-z0-9äöüß]+')
+# Sentence boundary: an end-of-sentence mark followed by whitespace, or a line
+# break. Good enough for prose — the parts are only ever compared to each other.
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+|\n+')
+
+# A verbatim sentence needs at least this many normalized characters before it
+# counts as a repetition marker. Derived from the echo measurement in
+# task-A1.1-report.md section 2.5, which measured verbatim sentences >= 60
+# characters; shorter sentences ("I nod slowly.") recur in normal prose.
+REPETITION_SENTENCE_MIN_CHARS = 60
+
+
+def _normalize_fuzzy(text: str) -> str:
+    """Lowercase and drop markers, whitespace and punctuation.
+
+    Leaves only the letters/digits that carry the wording, so two renderings of
+    the same sentence normalize to the same string.
+    """
+    return _FUZZY_NONALNUM_RE.sub("", _FUZZY_MARKER_RE.sub("", text).lower())
 
 
 def fuzzy_signature(content: str, length: int = 60) -> str:
-    """Erzeugt eine fuzzy-Signatur einer Assistant-Antwort fuer Repetitions-
-    Erkennung. Marker (`**I feel ...**`), Whitespace, Satzzeichen werden
-    rausgefiltert; die ersten ``length`` alphanumerischen Zeichen sind die
-    Signatur. So matchen Antworten die nur in Marker/Whitespace/Akzent
-    abweichen.
+    """Fuzzy signature of a reply — the DEDUP KEY.
+
+    Markers (`**I feel ...**`), whitespace and punctuation are filtered out;
+    the first ``length`` alphanumeric characters are the signature. Replies
+    that differ only in marker/whitespace/accents therefore match.
+
+    This is deliberately narrow: a message whose signature is already known
+    gets DELETED from the prompt (see ``chat_engine.dedupe_assistant_repeats``),
+    so a false positive costs real context. The repetition COUNTER uses the
+    wider ``repetition_keys`` instead, where a false positive only costs a bit
+    of temperature.
     """
     if not content:
         return ""
-    s = _FUZZY_MARKER_RE.sub("", content).lower()
-    s = _FUZZY_NONALNUM_RE.sub("", s)
-    return s[:length]
+    return _normalize_fuzzy(content)[:length]
+
+
+def repetition_keys(
+        content: str,
+        min_sentence_chars: int = REPETITION_SENTENCE_MIN_CHARS) -> set:
+    """Comparison keys of a reply — for the repetition COUNTER.
+
+    Two replies count as a repetition as soon as they share one key:
+
+    - the opening signature (``fuzzy_signature``) — catches the reply that
+      restarts with the same phrase, i.e. the old whole-message behaviour;
+    - every single sentence with at least ``min_sentence_chars`` normalized
+      characters — catches the far more common case where a reply opens with a
+      new sentence and only then falls back into the old text (measured in
+      task-A1.1-report.md section 2.5: roughly half of the real repetitions are
+      only visible at sentence level).
+
+    Deliberately more sensitive than ``fuzzy_signature``: here a false positive
+    only raises the temperature a notch, while a miss lets the loop run.
+    """
+    if not content:
+        return set()
+    keys = set()
+    sig = fuzzy_signature(content)
+    if sig:
+        keys.add(sig)
+    for part in _SENTENCE_SPLIT_RE.split(_FUZZY_MARKER_RE.sub("", content)):
+        normalized = _normalize_fuzzy(part)
+        if len(normalized) >= min_sentence_chars:
+            keys.add(normalized)
+    return keys
 
 
 def detect_assistant_repetition(messages: List[Dict[str, str]],
                                  lookback: int = 6) -> bool:
-    """Boolean-Wrapper fuer ``count_assistant_repetitions`` — kompatibel mit
-    aelteren Aufrufern. True wenn mindestens 1 Duplikat gefunden wurde.
+    """Boolean wrapper for ``count_assistant_repetitions``. True as soon as at
+    least one repetition was found.
     """
     return count_assistant_repetitions(messages, lookback) > 0
 
 
 def count_assistant_repetitions(messages: List[Dict[str, str]],
                                  lookback: int = 6) -> int:
-    """Zaehlt wie viele der letzten ``lookback`` Assistant-Antworten
-    eine bereits gesehene Fuzzy-Signatur haben.
+    """Counts how many of the last ``lookback`` assistant replies repeat
+    something an earlier one in that window already said.
 
-    Beispiel: 4 Antworten mit Signatur A + 1 mit Signatur B + 1 mit C
-    → 3 Duplikate (3x A wiederholt). Ergebnis nutzbar fuer eine graduelle
-    Temperature-Erhoehung (z.B. base + step * count).
+    A reply counts once, no matter how much of it is old — either its opening
+    signature or one of its long sentences was seen before (see
+    ``repetition_keys``). Example: 4 replies opening the same way + 1 + 1
+    → 3 repetitions. The result drives the graduated temperature bump
+    (base + step * count, see ``anti_repetition_overrides``).
+
+    ``messages`` is a chat-ordered list (oldest first); only entries with
+    ``role == "assistant"`` are looked at.
     """
     if not messages:
         return 0
-    sigs: List[str] = []
+    window: List[set] = []
     for msg in reversed(messages):
         if msg.get("role") != "assistant":
             continue
-        sig = fuzzy_signature(msg.get("content", ""))
-        if sig:
-            sigs.append(sig)
-        if len(sigs) >= lookback:
+        keys = repetition_keys(msg.get("content", ""))
+        if keys:
+            window.append(keys)
+        if len(window) >= lookback:
             break
-    return len(sigs) - len(set(sigs))
+    window.reverse()  # oldest first again — "seen before" needs the real order
+
+    seen: set = set()
+    repetitions = 0
+    for keys in window:
+        if keys & seen:
+            repetitions += 1
+        seen |= keys
+    return repetitions
+
+
+def anti_repetition_overrides(
+        recent_outputs: List[Dict[str, str]],
+        base_temperature: float,
+        agent_name: str = "",
+        with_frequency_penalty: bool = True) -> Dict[str, Any]:
+    """The reactive anti-loop net, shared by the chat and the thought path.
+
+    A safety net, not a sampling setting: when a character starts repeating
+    itself, the temperature is raised by ``chat.anti_rep_step`` per detected
+    repetition and capped at ``chat.anti_rep_max``. The same four config fields
+    (``chat.frequency_penalty``, ``anti_rep_step``, ``anti_rep_max``,
+    ``anti_rep_lookback``) drive both paths — there are no per-path settings.
+
+    Args:
+        recent_outputs: the character's own recent outputs as a chat-ordered
+            message list (oldest first); only ``role == "assistant"`` counts.
+            A caller with a different journal wraps its entries accordingly.
+        base_temperature: the temperature configured in LLM Routing.
+        agent_name: for the log line only.
+        with_frequency_penalty: pass False for paths that are not a chat reply
+            — the static penalty is a configured chat-reply value and stays
+            where it was configured for.
+
+    Returns:
+        kwargs for ``LLMInstance.create_llm``. An empty dict = change nothing.
+    """
+    from app.core import config
+
+    overrides: Dict[str, Any] = {}
+    if with_frequency_penalty:
+        freq = float(config.get("chat.frequency_penalty", 0.3) or 0)
+        if freq > 0:
+            overrides["frequency_penalty"] = freq
+
+    step = float(config.get("chat.anti_rep_step", 0.1) or 0)
+    if step <= 0:
+        return overrides  # reactive bump disabled
+
+    lookback = int(config.get("chat.anti_rep_lookback", 6) or 6)
+    count = count_assistant_repetitions(recent_outputs, lookback)
+    if count <= 0:
+        return overrides
+
+    ceiling = float(config.get("chat.anti_rep_max", 1.2) or 1.2)
+    new_temp = min(base_temperature + step * count, ceiling)
+    overrides["temperature"] = new_temp
+    logger.info(
+        "[%s] %d repetition(s) detected in the last %d turns "
+        "→ temperature %.2f → %.2f",
+        agent_name or "?", count, lookback, base_temperature, new_temp)
+    return overrides
 
 
 def strip_history_artifacts(content: str) -> str:
