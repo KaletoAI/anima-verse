@@ -24,6 +24,19 @@ TESS_N = 8
 # placement (dense room, many keep-outs) is fine — forests are not exact.
 ATTEMPTS_PER_PROP = 30
 
+# Terrain relief (contract v5.2 Nr. 14): the height field spans the reference
+# square as 16 × 16 CELLS, i.e. 17 × 17 support points. Fixed like TESS_N —
+# the count is part of the geometry contract, so server, 3D client and admin
+# preview address the very same points and can be diffed numerically.
+TERRAIN_CELLS = 16
+
+# Spatial-hash constants for the per-point seed. Two large odd primes (the
+# classic Teschner spatial-hash triple) so that neighbouring (i, j) land far
+# apart in the xorshift state: seeding with ``seed + i + j`` would produce a
+# visibly striped field, because adjacent seeds share most of their bits.
+TERRAIN_HASH_I = 73856093
+TERRAIN_HASH_J = 19349663
+
 
 def curve_map(curves: Any, edge_count: int) -> Dict[int, Tuple[float, float]]:
     """``outline_curves`` entries as {edge index: control point}. Invalid or
@@ -162,3 +175,87 @@ def scatter(seed: int,
                 continue
         placed.append({"at": [x, y], "yaw": round(yaw * 360.0, 1)})
     return placed
+
+
+def terrain_grid(seed: int,
+                 amplitude_world: float,
+                 flat_hulls: Sequence[Sequence[Sequence[float]]] = (),
+                 ) -> List[List[float]]:
+    """The location's height field as ``grid[j][i]`` support points.
+
+    ``i`` runs west→east, ``j`` north→south; point (i, j) sits at plan
+    fraction (i/16, j/16) of the reference square. Values are WORLD metres —
+    the caller has already multiplied the real-metre amplitude by k, because
+    everything downstream (prop lift, plate drape) is world metres too.
+
+    Two kinds of point are pinned to zero, and both are structural rather
+    than cosmetic:
+
+    * **The border** (i or j at 0 or 16). Neighbouring map tiles compute
+      their own field from their own seed and would otherwise meet at a
+      cliff; a zero rim makes every tile edge match every other one.
+    * **Flat hulls** — the tessellated outlines of rooms that must stay
+      even (every indoor room, plus outdoor rooms flagged ``relief_flat``:
+      a road, a paved square). Walls and roads on a slope look broken.
+      Nothing is smoothed around them: the neighbouring cell interpolates
+      the transition on its own, which at a 10 m tile is a ramp of roughly
+      0.6 m per cell.
+
+    Every other point draws ONE number from a xorshift32 seeded with the
+    spatial hash of (seed, i, j) — position-independent, so a point keeps
+    its height no matter which order or how often it is computed, and the
+    field can be re-derived by hand for § B5a verification. The draw is
+    mapped from [0, 1) to [−1, 1) and scaled by the amplitude.
+
+    ``flat_hulls`` are polygons in ABSOLUTE plan fractions and must arrive
+    already tessellated (curved room edges) — this function does not know
+    about curves.
+    """
+    n = TERRAIN_CELLS
+    amp = float(amplitude_world)
+    hulls = [h for h in flat_hulls if len(h) >= 3]
+    grid: List[List[float]] = []
+    for j in range(n + 1):
+        row: List[float] = []
+        for i in range(n + 1):
+            if i == 0 or j == 0 or i == n or j == n:
+                row.append(0.0)
+                continue
+            pt = (i / n, j / n)
+            if any(point_in_poly(pt, hull) for hull in hulls):
+                row.append(0.0)
+                continue
+            rng = XorShift32((int(seed) + i * TERRAIN_HASH_I
+                              + j * TERRAIN_HASH_J) & 0xFFFFFFFF)
+            value = round((rng.next01() * 2.0 - 1.0) * amp, 4)
+            row.append(value if value else 0.0)  # never −0.0 in payloads
+        grid.append(row)
+    return grid
+
+
+def terrain_height(grid: Sequence[Sequence[float]], u: float,
+                   v: float) -> float:
+    """Bilinear sample of the height field at plan fraction (u, v).
+
+    The grid is only 17 × 17 points but every object in the scene stands
+    somewhere between them, so the field has to be continuous — and it has to
+    be continuous the SAME way in Python and in the renderers, or a prop the
+    server lifted by 0.3 m would sit on ground the client drapes to 0.28 m.
+    Bilinear over the four surrounding points is the cheapest such rule and
+    the one both sides implement.
+
+    (u, v) is clamped to [0, 1]²; a sample exactly on the far edge falls back
+    into the last cell (fraction 1.0), so u = 1 reads the border point.
+    """
+    if not grid or not grid[0]:
+        return 0.0
+    n = len(grid) - 1
+    fx = min(max(float(u), 0.0), 1.0) * n
+    fy = min(max(float(v), 0.0), 1.0) * n
+    i = min(int(fx), n - 1)
+    j = min(int(fy), n - 1)
+    tx = fx - i
+    ty = fy - j
+    north = grid[j][i] * (1.0 - tx) + grid[j][i + 1] * tx
+    south = grid[j + 1][i] * (1.0 - tx) + grid[j + 1][i + 1] * tx
+    return north * (1.0 - ty) + south * ty

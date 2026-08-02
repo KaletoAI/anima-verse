@@ -26,7 +26,10 @@ attaches the scene to its tile):
 - ``models``  — ONE spec form for building, room diorama and prop; the client
                 runs the single ``place()`` routine of § B2 over it,
 - ``figures``/``markers``/``exits`` — the figure scale and every anchor point
-                already resolved into world coordinates.
+                already resolved into world coordinates,
+- ``terrain`` — the optional height field of a detail scene; the composer has
+                already lifted every object standing on it, so the renderers
+                only drape their ground and sample figure heights.
 
 Numbers are NOT free here: every constant below is quoted from the contract
 (``docs/schnittstellen-3d.md``, § A2/A3/A6 for the values, part B for the
@@ -39,10 +42,11 @@ is read through ``room_recipe`` exactly as the room recipe does it.
 """
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 from app.core.room_recipe import compose_recipe
+from app.core.scatter_curves import TERRAIN_CELLS, terrain_grid, terrain_height
 
 logger = get_logger(__name__)
 
@@ -343,8 +347,8 @@ def room_exit_world(recipe: Dict[str, Any], room: Dict[str, Any],
 # ── Plates ──────────────────────────────────────────────────────────────
 
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
-            levels: List[int], storey: float, k: float,
-            extent: float) -> List[Dict[str, Any]]:
+            levels: List[int], storey: float, k: float, extent: float,
+            relief_rooms: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
     """One contour plate per used level + one floor plate per room.
 
     The level plate carries the storey's floor kind (``map3d.level_floors``,
@@ -352,6 +356,11 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     so a room floor overrides only its own area. Outdoor rooms (§ A5) get NO
     body — they appear as a plate of thickness 0, i.e. a pure texture surface
     on the ground below.
+
+    ``relief_rooms`` are the room ids whose ground follows the terrain field
+    (v5.2 Nr. 14): their plate gets ``relief: true``, which is the renderers'
+    ONLY instruction to subdivide it and raise its vertices. Level plates and
+    every other room plate stay exactly as flat as before.
     """
     plates: List[Dict[str, Any]] = []
     contour = _outline_world(map3d, extent)
@@ -388,6 +397,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         kind = str(((recipe.get("surfaces") or {}).get("floor")) or "").strip()
         if kind:
             entry["texture_kind"] = kind
+        if relief_rooms and entry["room_id"] in relief_rooms:
+            entry["relief"] = True
         plates.append(entry)
     return plates
 
@@ -859,7 +870,9 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
 
 def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
                    meta: Dict[str, Any], storey: float, k: float,
-                   extent: float) -> Optional[Dict[str, Any]]:
+                   extent: float,
+                   lift: Optional[Callable[[float, float], float]] = None,
+                   ) -> Optional[Dict[str, Any]]:
     """A room's diorama model as a placement spec (§ B2a).
 
     ONE law of scale, no exception left (2026-07-28): the diorama scales like
@@ -874,6 +887,11 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     the recipe scene — it is treated like one more prop (placed via model_at,
     calibrated via width_m/walk_y), whether or not the room carries prop
     placements. A room without a diorama simply has no model.
+
+    ``lift`` is the terrain sampler for a room that follows the relief
+    (v5.2 Nr. 14) — rare for a diorama, but the rule is one rule: everything
+    standing in a non-flat room is raised to the ground under its anchor.
+    ``walk_y_world`` derives from ``bottom_y`` and rides along by itself.
     """
     if not meta:
         return None
@@ -888,6 +906,8 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     at = recipe.get("model_at")
     if not isinstance(at, (list, tuple)) or len(at) != 2:
         at = [0.5, 0.5]
+    anchor_u = x + _num(at[0], 0.5) * w
+    anchor_v = y + _num(at[1], 0.5) * d
     spec: Dict[str, Any] = {
         "role": "room",
         "id": room_id,
@@ -896,14 +916,14 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "level": level,
         "fix_euler": _fix_euler(meta.get("rotation")),
         "yaw_deg": _r(_num(lay.get("rotation")), 1),
-        "anchor": [_r(_w(x + _num(at[0], 0.5) * w, extent)),
-                   _r(_w(y + _num(at[1], 0.5) * d, extent))],
+        "anchor": [_r(_w(anchor_u, extent)), _r(_w(anchor_v, extent))],
         # Same floor the room's PROPS stand on: its plate indoors, the room
         # floor outdoors — plus the diorama clearance and the plan's dial.
         "bottom_y": _r(_room_floor_y(recipe, storey, k)
                        + (0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP)
                        + DIORAMA_CLEARANCE
-                       + _num(recipe.get("model_offset_y"))),
+                       + _num(recipe.get("model_offset_y"))
+                       + (lift(anchor_u, anchor_v) if lift else 0.0)),
         "measure": "xz",
     }
     width_m = _num(meta.get("width_m"))
@@ -975,7 +995,9 @@ def _cutouts(contour: List[List[float]],
 
 
 def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
-                 extent: float) -> List[Dict[str, Any]]:
+                 extent: float,
+                 lift: Optional[Callable[[float, float], float]] = None,
+                 ) -> List[Dict[str, Any]]:
     """The room's prop placements as specs (REAL-SIZE rule, § A2).
 
     A placement never scales its prop: the size comes from the prop's own
@@ -983,6 +1005,11 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
     carry ``placeholder_dims`` (already × k) so the consumer can draw a box.
     Furniture stands ON the room plate (plate top + clearance); an outdoor
     room has no plate, so the clearance sits on the storey level directly.
+
+    ``lift`` samples the terrain relief (v5.2 Nr. 14) under each placement —
+    the height of a prop on a slope is NEVER set by hand (user rule): manual
+    anchor and scattered copy alike get the ground under their own anchor
+    added here. A flat room passes ``None`` and keeps every existing number.
     """
     from urllib.parse import quote
     from app.core import props as prop_store
@@ -997,6 +1024,8 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
         dims = [_num(dims_raw.get("width_m"), 1.0), _num(dims_raw.get("depth_m"), 1.0),
                 _num(dims_raw.get("height_m"), 1.0)]
         at = placement.get("at") or [0.5, 0.5]
+        anchor_u = _num(at[0], 0.5)
+        anchor_v = _num(at[1], 0.5)
         has_model = bool(placement.get("has_model"))
         prop = prop_store.get_prop(pid) if pid else None
         spec: Dict[str, Any] = {
@@ -1009,8 +1038,9 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
             "yaw_deg": _r(_num(placement.get("yaw")), 1),
             "max_m": _r(max(dims) * k),
             "measure": "xyz",
-            "anchor": [_r(_w(at[0], extent)), _r(_w(at[1], extent))],
-            "bottom_y": _r(floor_y + _num(placement.get("offset_y")) * k),
+            "anchor": [_r(_w(anchor_u, extent)), _r(_w(anchor_v, extent))],
+            "bottom_y": _r(floor_y + _num(placement.get("offset_y")) * k
+                           + (lift(anchor_u, anchor_v) if lift else 0.0)),
         }
         if not has_model:
             spec["placeholder_dims"] = {"w": _r(dims[0] * k), "d": _r(dims[1] * k),
@@ -1022,7 +1052,9 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
 # ── Markers, exits, figures ─────────────────────────────────────────────
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
-             k: float, extent: float) -> List[Dict[str, Any]]:
+             k: float, extent: float,
+             lift: Optional[Callable[[float, float], float]] = None,
+             ) -> List[Dict[str, Any]]:
     """Every marker of one room, finished in world coordinates.
 
     Room markers are fractions of the room rectangle with an offset additive
@@ -1038,6 +1070,11 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     markers, so prop markers had no drop at all and every author baked one
     into the marker by hand (all 15 in the field carry a negative height).
     One source, both renderers, both marker sources.
+
+    ``lift`` is the terrain sampler of a room that follows the relief (v5.2
+    Nr. 14): a marker names a surface, and on a slope that surface has moved
+    with the ground under it — so the sample at the marker's OWN anchor is
+    added to ``y_world``, the same way it is added to a prop's ``bottom_y``.
     """
     room_id = recipe.get("room_id") or ""
     floor_y = _room_floor_y(recipe, storey, k)
@@ -1052,11 +1089,13 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     out: List[Dict[str, Any]] = []
     for marker in recipe.get("markers") or []:
         at = marker.get("at") or [0.5, 0.5]
+        anchor_u = x + _num(at[0], 0.5) * w
+        anchor_v = y + _num(at[1], 0.5) * d
         entry: Dict[str, Any] = {
             "room_id": room_id,
-            "at_world": [_r(_w(x + _num(at[0], 0.5) * w, extent)),
-                         _r(_w(y + _num(at[1], 0.5) * d, extent))],
-            "y_world": _r(floor_y + _num(marker.get("offset_y"))),
+            "at_world": [_r(_w(anchor_u, extent)), _r(_w(anchor_v, extent))],
+            "y_world": _r(floor_y + _num(marker.get("offset_y"))
+                          + (lift(anchor_u, anchor_v) if lift else 0.0)),
             "animation": marker.get("animation") or "",
             "root_offset": _root_drop(marker.get("animation")),
             "source": "room",
@@ -1083,11 +1122,16 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             continue
         at = placement.get("at") or [0.5, 0.5]
         offset = marker.get("offset_m") or [0.0, 0.0]
+        # The marker belongs to its PLACEMENT: it is sampled at the prop's
+        # anchor, not at its own offset point, so a bench and every seat on
+        # it rise by exactly the same amount and the mesh stays level.
         entry = {
             "room_id": room_id,
             "at_world": [_r(_w(at[0], extent) + _num(offset[0]) * k),
                          _r(_w(at[1], extent) + _num(offset[1]) * k)],
-            "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m")) * k),
+            "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m")) * k
+                          + (lift(_num(at[0], 0.5), _num(at[1], 0.5))
+                             if lift else 0.0)),
             "animation": marker.get("animation") or "",
             "root_offset": _root_drop(marker.get("animation")),
             "source": "prop",
@@ -1297,16 +1341,60 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                          "d": _r(max(max(zs) - min(zs), 0.5))},
                 "y": _r(y),
             }
+    # ── Terrain relief (plan-area-detail-scenes.md, v5.2 Nr. 14) ────────
+    # A detail scene without a diorama is a billiard table; the relief gives
+    # it a deterministic height field. The composer owns the whole vertical
+    # story: it lifts EVERYTHING that stands in a non-flat room, and the
+    # renderers only drape the ground they are told to drape — no object
+    # height is ever sampled twice or set by hand.
+    #
+    # FLAT = every indoor room (walls need a level floor) plus every outdoor
+    # room that opted out via ``relief_flat`` (road, paved square). Their
+    # hulls are pinned to zero in the field, so nothing in them moves by a
+    # single digit. The recipe ``outline`` is already the tessellated hull in
+    # absolute plan fractions — the same points the plates use, not a second
+    # derivation.
+    #
+    # The relief only survives the sanitizer on an ``area_detail`` location;
+    # the gate is repeated here because a hand-posted or legacy map3d must
+    # not put a height field under an ordinary building either.
+    relief = map3d.get("relief")
+    terrain: Optional[Dict[str, Any]] = None
+    relief_rooms: Set[str] = set()
+    if isinstance(relief, dict) and map3d.get("area_detail"):
+        amplitude_world = _num(relief.get("amplitude_m")) * k
+        if amplitude_world > 0:
+            flat_hulls: List[List[List[float]]] = []
+            for recipe in recipes:
+                hull = [[_num(p[0]), _num(p[1])]
+                        for p in recipe.get("outline") or []]
+                if recipe.get("always_visible") and not recipe.get("relief_flat"):
+                    relief_rooms.add(str(recipe.get("room_id") or ""))
+                elif len(hull) >= 3:
+                    flat_hulls.append(hull)
+            grid = terrain_grid(int(_num(relief.get("seed"))), amplitude_world,
+                                flat_hulls)
+            terrain = {"step": _r(extent / TERRAIN_CELLS), "grid": grid,
+                       "amplitude_m": _r(amplitude_world)}
+
+    def _lift_for(room_id: str) -> Optional[Callable[[float, float], float]]:
+        """The terrain sampler of one room — ``None`` for a flat room, which
+        is what keeps every existing number bit-identical there."""
+        if terrain is None or room_id not in relief_rooms:
+            return None
+        return lambda u, v: terrain_height(terrain["grid"], u, v)
+
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
+        lift = _lift_for(room_id)
         walls.extend(_room_walls(recipe, storey, k, extent, min(levels)))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
-                                 storey, k, extent)
+                                 storey, k, extent, lift)
         if diorama:
             models.append(diorama)
-        models.extend(_prop_models(recipe, storey, k, extent))
-        markers.extend(_markers(recipe, room, storey, k, extent))
+        models.extend(_prop_models(recipe, storey, k, extent, lift))
+        markers.extend(_markers(recipe, room, storey, k, extent, lift))
 
     # Per-room recipe vocabulary in PLAN FRACTIONS — the 2D editor's ghost
     # openings and derived-exit dot draw from here instead of re-deriving
@@ -1353,7 +1441,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # that is how a drawn area becomes a lake (_overlay_plates).
         "plates": (_plates(map3d, [r for r in recipes
                                    if str(r.get("room_id") or "") not in overlay_rooms],
-                           levels, storey, k, extent)
+                           levels, storey, k, extent, relief_rooms)
                    + _overlay_plates(recipes, overlay_rooms, min(levels), extent)),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey, k, extent),
@@ -1366,4 +1454,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     }
     if boundary:
         out["boundary_openings"] = boundary
+    if terrain:
+        out["terrain"] = terrain
     return out

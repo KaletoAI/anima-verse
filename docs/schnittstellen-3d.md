@@ -155,6 +155,44 @@
 >     Normale in Weltachsen. Reine Geometrie + Raum-Link — das
 >     `entry_room`-Gate bleibt unverändert; noch konsumiert sie kein
 >     Renderer (Journey-Durchlauf = spätere Etappe).
+> 14. **`scene.terrain` — deterministisches Geländerelief.** Ohne Diorama ist
+>     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed}` (nur
+>     zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5 REALE
+>     Meter, `seed` Pflicht) legt ein Höhenfeld über das Bezugsquadrat.
+>     **Gitter:** 16 × 16 Zellen → **17 × 17 Stützpunkte**, `grid[j][i]`,
+>     Stützpunkt (i, j) auf Plan-Fraktion (i/16, j/16) — i West→Ost, j
+>     Nord→Süd; `step` = `extent_m / 16` Welt-Meter. **Rand = 0** (i oder j
+>     ∈ {0, 16}), damit Nachbarkacheln nahtlos aneinanderstoßen. **Flach = 0**
+>     für jeden Stützpunkt, der in der TESSELLIERTEN Hülle eines flachen Raums
+>     liegt (Point-in-Poly wie beim Scatter, Nr. 12): flach ist jeder
+>     Innenraum (nicht `always_visible` — Wände brauchen ebenen Boden) plus
+>     jeder Außenraum mit `layout.relief_flat` (Straße, Platz, Lichtung).
+>     Nichts wird geglättet; die Nachbarzelle interpoliert den Übergang.
+>     Sonst genau EIN xorshift32-Zug (Nr. 12, Seed 0 → 1) auf dem
+>     Raum-Hash der Position:
+>     `h(i,j) = (XorShift32((seed + i·73856093 + j·19349663) & 0xFFFFFFFF)
+>     .next01() · 2 − 1) · amplitude_m · k` — Welt-Meter, auf 4 Stellen
+>     gerundet. Die beiden Konstanten sind Teil des Vertrags.
+>     **Zwischen den Stützpunkten bilinear:** Zelle `x = min(int(u·16), 15)`,
+>     `fx = u·16 − x` (analog v/j), u/v auf [0, 1] geklemmt — dieselbe Formel
+>     in `scatter_curves.terrain_height` und in `@anima/scene-render`
+>     (`sampleTerrain`), § B5a-prüfbar von Hand.
+>     **Payload:** `scene.terrain = {step, grid, amplitude_m}`, nur wenn
+>     `relief` gesetzt ist; `amplitude_m` ist hier bereits × k.
+>     **Arbeitsteilung:** *der Server hebt alles, was in nicht-flachen Räumen
+>     steht* — Prop-`bottom_y` (manuell wie gestreut), Dioramen-`bottom_y`,
+>     Marker-`y_world`, jeweils um `terrain_height` am EIGENEN Plan-Anker der
+>     Platzierung (Prop-Marker am Anker ihrer Platzierung, damit Möbel und
+>     Sitzpunkt gemeinsam steigen). *Die Renderer drapieren nur Boden +
+>     `relief`-Platten und sampeln Figuren-Höhen* — Raumplatten
+>     nicht-flacher Außenräume tragen dafür `"relief": true` (unterteilen +
+>     Vertices über `sampleTerrain` heben); Etagenplatten, Wände und alle
+>     übrigen Platten bleiben unverändert. Objekthöhen werden NIE zusätzlich
+>     im Renderer gesampelt, sonst zählt die Hebung doppelt.
+>     **Flache Räume ändern sich numerisch nicht:** in einem Innenraum oder
+>     einem Raum mit `relief_flat` ist jede Zahl bitgleich zu einer Szene ohne
+>     Relief. `relief` liegt im gehashten `map3d`, `relief_flat` im
+>     Raum-Rezept — Regler, Würfel und Checkbox bewegen also die Signatur.
 
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 

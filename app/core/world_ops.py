@@ -395,6 +395,23 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # area_model, so it is dropped there.
     if out.get("area_model") and bool(raw.get("area_detail")):
         out["area_detail"] = True
+    # Terrain relief (plan-area-detail-scenes.md, contract v5.2 Nr. 14): a
+    # deterministic height field over the reference square, so a detail scene
+    # is not a billiard table. Only meaningful ON TOP of a detail scene —
+    # without ``area_detail`` there is no composed ground to lift and no
+    # relief plates to drape, so it is dropped there (same gate style as
+    # area_detail itself, which already implies area_model). ``amplitude_m``
+    # is REAL metres (× k when composing); ``seed`` is mandatory — a relief
+    # without a stored seed would re-roll the whole terrain on every edit.
+    rel = raw.get("relief")
+    if out.get("area_detail") and isinstance(rel, dict):
+        try:
+            amplitude = float(rel.get("amplitude_m"))
+            seed = int(rel.get("seed")) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            amplitude = None
+        if amplitude is not None and 0.05 <= amplitude <= 5.0:
+            out["relief"] = {"amplitude_m": round(amplitude, 2), "seed": seed}
     # Boundary openings (plan-area-detail-scenes.md): pass-throughs at the
     # LOCATION edge (a road crossing the cell east–west = two entries).
     # Geometry + room link only — entry_room stays the gameplay gate. The
@@ -583,6 +600,13 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # at the shell.
     if raw.get("clip_model"):
         out["clip_model"] = True
+    # Relief opt-out (v5.2 Nr. 14): this room stays EVEN even when the
+    # location carries a terrain relief — a road, a paved square, a clearing.
+    # Indoor rooms (not ``always_visible``) are flat anyway, walls need a
+    # level floor, so the flag only says anything for outdoor rooms. Only
+    # stored when true, like always_visible.
+    if raw.get("relief_flat"):
+        out["relief_flat"] = True
     # No recipe walls for this room: open zones, pavilions, areas inside an
     # area model. The server then emits no `walls` entries for it at all, so
     # both renderers follow without knowing the flag. Openings stay editor

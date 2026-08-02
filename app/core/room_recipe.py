@@ -579,6 +579,12 @@ def compose_recipe(room: Dict[str, Any],
     # toggling the checkbox makes the client re-fetch.
     if lay.get("clip_model"):
         payload["clip_model"] = True
+    # Relief opt-out (§ B contract v5.2 Nr. 14): the room keeps a level floor
+    # even under a terrain relief. Read from the layout into the recipe for
+    # the SAME reason as clip_model — only payload fields reach the signature
+    # below, so ticking "keep flat" has to make the client re-fetch.
+    if lay.get("relief_flat"):
+        payload["relief_flat"] = True
     # No recipe walls for this room (open zone, pavilion). Read from the
     # recipe like clip_model, so the flag is inside the signature below and
     # toggling the checkbox makes the client re-fetch.
