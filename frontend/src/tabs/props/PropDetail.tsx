@@ -42,7 +42,8 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
 const MARKER_SAVE_DEBOUNCE_MS = 400
 
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
-  armedDelete, onRegenerate, onRegenerateMesh, onRegenerateImage }: {
+  armedDelete, onRegenerate, onRegenerateMesh, onRegenerateImage,
+  onRefresh }: {
   prop: PropFull
   pending: boolean
   cacheBump: number
@@ -55,6 +56,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   onRegenerate: () => void
   /** Render a NEW source image only — the mesh stays until re-meshed. */
   onRegenerateImage: () => void
+  /** Reload the prop + bust the image cache — generations run in the
+   *  background, this fetches the current state on demand. */
+  onRefresh: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -601,12 +605,20 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                   : t('No generation record for this image.')}
               </span>
             ) : null}
-            <button type="button" className="ga-btn ga-btn-sm"
-              disabled={pending}
-              onClick={onRegenerateImage}
-              title={t('Render a NEW source image (backend and prompt in the dialog). The current 3D model stays until you re-mesh from the new image.')}>
-              🖼 {pending ? t('Generating…') : t('New image')}
-            </button>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button type="button" className="ga-btn ga-btn-sm"
+                style={{ flex: 1 }}
+                disabled={pending}
+                onClick={onRegenerateImage}
+                title={t('Render a NEW source image (backend and prompt in the dialog). The current 3D model stays until you re-mesh from the new image.')}>
+                🖼 {pending ? t('Generating…') : t('New image')}
+              </button>
+              <button type="button" className="ga-btn ga-btn-sm"
+                onClick={onRefresh}
+                title={t('Reload — fetch the current image and metadata (the render runs in the background).')}>
+                🔄
+              </button>
+            </div>
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={pending || !srcOk}
               onClick={onRegenerateMesh}

@@ -199,6 +199,10 @@ export function PropsTab() {
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
             onRegenerateMesh={() => setRegen({ id: selectedProp.id, meshOnly: true })}
             onRegenerateImage={() => setImgRegen(selectedProp)}
+            onRefresh={() => {
+              setCacheBump((b) => b + 1)
+              void load()
+            }}
           />
         ) : (
           <div className="ga-placeholder">{t('Pick a prop or create a new one.')}</div>
