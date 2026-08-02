@@ -5,6 +5,9 @@ import type {
   SceneExit, SceneExtra, SceneMarker, SceneModelSpec, ScenePayload,
   ScenePlate, SceneRoom, SceneWall,
 } from '@anima/scene-render';
+// The audio manifest is TYPED and validated in the pure soundtrack module, so
+// the choosing side and the fetching side cannot drift apart (E4-T5).
+import { emptyManifest, readManifest, type AudioManifest } from './game/soundtrack';
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -138,6 +141,22 @@ export async function getAnimationClips(): Promise<ApiClip[]> {
     return (data.clips ?? []) as ApiClip[];
   } catch {
     return [];
+  }
+}
+
+/** Music and ambience the server has on disk (`app/routes/game_audio.py`).
+ *  Empty when the route is missing or the request fails — audio is decoration,
+ *  and a client that throws its start away because a folder is empty would be
+ *  the worse bug. The shape is validated by `readManifest` (pure, checked in
+ *  scripts/smoke_walk_math.mjs), so callers always get two music buckets and a
+ *  plain terrain map. */
+export async function getAudioManifest(): Promise<AudioManifest> {
+  try {
+    const res = await fetch('/assets/audio');
+    if (!res.ok) return emptyManifest();
+    return readManifest(await res.json());
+  } catch {
+    return emptyManifest();
   }
 }
 

@@ -12,6 +12,11 @@ import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevat
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, type DoorMarker } from './game/doors';
 import { getAudio } from './game/audio';
+import { loadPrefs, PREFS_KEY } from './game/prefs';
+import {
+  ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
+  pickMusic, terrainSwitch, type AudioManifest,
+} from './game/soundtrack';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
@@ -27,6 +32,11 @@ import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
+/** How often the soundtrack driver reconsiders what should be playing (E4-T5).
+ *  Every input of that decision moves on its own schedule (the night factor
+ *  with the game-hour poll, the terrain with every step), and recomputing the
+ *  whole answer is a handful of string comparisons — no need to be clever. */
+const SOUNDTRACK_TICK_MS = 1000;
 const INTERIOR_CAM_DIST = 26; // closer than this -> resolve the rooms
 
 // --- Doorway markers (E3 acceptance: "you cannot see the doors") ------------
@@ -198,9 +208,17 @@ async function startApp(username: string) {
   // and the three roots down by hand to reach the same state would be a second
   // shutdown path with nothing to gain. ONE flow, two doors: the top bar's
   // logout and the game menu's "Back to title" (E4-T4).
+  // The reload runs in a `finally`: a logout that fails (the server is down —
+  // exactly the moment one wants back to the title screen) must not swallow
+  // the way back and leave the button looking dead. A cookie that survives is
+  // no loss either, the reload lands on the title screen with the session it
+  // still has.
   const backToTitle = async () => {
-    await api.logout();
-    location.reload();
+    try {
+      await api.logout();
+    } finally {
+      location.reload();
+    }
   };
   gameActions.backToTitle = () => void backToTitle();
   const hud = createHud({ username, avatar: firstMap.avatar, onLogout: backToTitle });
@@ -739,9 +757,14 @@ async function startApp(username: string) {
   }
   setInterval(pollModelChanges, 20_000);
 
-  // Fenster leuchten nachts
+  // Windows glow at night — and the soundtrack changes with the same factor.
+  /** Installed further down by the soundtrack driver (E4-T5), which needs the
+   *  avatar and the cell lookup; null until then, so an early day/night change
+   *  simply lights the windows. */
+  let updateSoundtrack: (() => void) | null = null;
   engine.onDayNight = (night) => {
     for (const tile of tiles.values()) applyNightGlow(tile, night);
+    updateSoundtrack?.();
   };
 
   // Tageszeit der Welt -> Beleuchtung (alle 60 s nachführen)
@@ -982,6 +1005,77 @@ async function startApp(username: string) {
     const id = locIdAtCell.get(`${c.gx},${c.gy}`);
     return id ? tiles.get(id) ?? null : null;
   }
+
+  // --- Soundtrack: music by daylight, ambience by ground (E4-T5) ------------
+  //
+  // WHAT plays is decided in `game/soundtrack.ts` (pure, hand-checked in
+  // scripts/smoke_walk_math.mjs); what is left here is the wiring — where the
+  // numbers come from and when they are looked at. ONE tick recomputes the
+  // whole answer, because every input moves on its own schedule (the night
+  // factor with the game-hour poll, the terrain with every step, the switches
+  // with a click in the menu) and a full recompute can never end up in a state
+  // that no input would produce. Repeating it is free: an identical playlist
+  // is a no-op in the engine.
+  //
+  // NOTHING SOUNDS BEFORE THE CONTEXT RUNS. It is created suspended and only
+  // the title screen's click resumes it (`getAudio().unlock()` in `boot`); a
+  // source started into a suspended context would not play but would still
+  // consume its place in the schedule. So the tick waits for `running` — which
+  // is at the same time the retry for the case where the resume lands a moment
+  // after the world is built.
+  const audio = getAudio();
+  // The drivers read the stored settings themselves — this one runs before the
+  // React island that owns the menu even mounts (E4-T4).
+  const startPrefs = loadPrefs(localStorage.getItem(PREFS_KEY));
+  let musicOn = startPrefs.musicOn;
+  let ambientOn = startPrefs.ambientOn;
+  let audioManifest: AudioManifest = emptyManifest();
+  let musicNight = false;
+  let ambience = newTerrainSwitch();
+  /** Crossfade of the day/night change. Longer than the playlist's own seam:
+   *  this one is a change of mood, not the next track. */
+  const MUSIC_CROSSFADE_S = 4;
+
+  function tickSoundtrack() {
+    if (!audio.running) return;
+    musicNight = nightForMusic(musicNight, engine.nightFactor);
+    audio.playMusic(musicOn ? pickMusic(audioManifest, musicNight) : [],
+      { crossfadeS: MUSIC_CROSSFADE_S });
+    const mode = getGameState().mode;
+    // Embodied the avatar's own cell decides, in the overview the cell the
+    // camera looks at; the terrain is read off the tile standing there, so a
+    // tile rebuilt with a different terrain takes effect without a cache.
+    const pos = mode === 'embodied' ? npcs.positionOf(avatarName) : null;
+    const here = ambientTerrainFor(
+      mode,
+      pos ? cellOf(pos.x, pos.z, CELL) : null,
+      cellOf(engine.target.x, engine.target.z, CELL),
+      (c) => tileAtCell(c)?.loc.terrain ?? '',
+    );
+    ambience = terrainSwitch(ambience, here, performance.now());
+    audio.playAmbient(ambientOn ? pickAmbient(audioManifest, ambience.applied) : []);
+  }
+  updateSoundtrack = tickSoundtrack;
+  setInterval(tickSoundtrack, SOUNDTRACK_TICK_MS);
+  // ONE fetch per session: the folder is user data that does not change while
+  // the game runs, and `getAudioManifest` never throws — a server without the
+  // route or a failed request is the empty manifest, i.e. silence until the
+  // next reload.
+  void api.getAudioManifest().then((m) => {
+    audioManifest = m;
+    tickSoundtrack();
+  });
+
+  // The switches of the game menu (E4-T4). This fires on EVERY change there,
+  // which means dozens of times a second while a volume slider is dragged — so
+  // it compares the two fields it owns and returns. The volumes are already on
+  // the engine by the time this runs; they are none of this driver's business.
+  gameActions.applyAudioPrefs = (p) => {
+    if (p.musicOn === musicOn && p.ambientOn === ambientOn) return;
+    musicOn = p.musicOn;
+    ambientOn = p.ambientOn;
+    tickSoundtrack();
+  };
 
   /** `tick()` only counts a figure as moving from 0.05 units away, and at a
    *  high frame rate ONE step is shorter than that — the avatar would stand
