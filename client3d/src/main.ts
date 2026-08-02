@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as api from './api';
+import { initDebug3d } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
@@ -304,6 +305,8 @@ async function startApp(username: string) {
   reportBootStage('scenes');
 
   const tiles = new Map<string, Tile>();
+  // Numeric on-screen probe for remote diagnosis — inert without ?debug3d=1.
+  initDebug3d(engine, tiles);
 
   /** Threshold quads per location, one child group per storey. They live in
    *  `engine.scene` and not in `tile.group` on purpose: a rebuild throws the

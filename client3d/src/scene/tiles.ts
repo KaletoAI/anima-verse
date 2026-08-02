@@ -1057,12 +1057,18 @@ export function applyTileFade(tile: Tile, dt: number) {
       // eines an) — die Deckkraft hier zieht keine Nachbarkachel mit.
       // Die Platte startet durchscheinend, der Zweig unten dreht das aber ab,
       // solange die Kachel kein Detail-Modell trug (Umschalten per Remount).
-      if (!gm.transparent) {
-        gm.transparent = true;
+      // OHNE Server-Modell gibt es keine Fernsicht, die die Platte ersetzen
+      // könnte — dann bleibt sie IMMER voll da (Fernboden UND Backstop in
+      // einem). Gemessen 2026-08-03: v=0/o=0 bei dist 30 ließ die Zonen
+      // ohne Erde in der Luft stehen, der Fade-Übergang flackerte
+      // halbtransparent (die „grünen Flecken").
+      const fades = !!tile.serverModel;
+      if (gm.transparent !== fades) {
+        gm.transparent = fades;
         gm.needsUpdate = true;
       }
-      gp.visible = f > 0.03;
-      gm.opacity = Math.min(1, f * 1.4);
+      gp.visible = fades ? f > 0.03 : true;
+      gm.opacity = fades ? Math.min(1, f * 1.4) : 1;
     } else {
       const ghost = !!tile.hasBasement && f > 0.03;
       if (gm.transparent !== ghost) {
