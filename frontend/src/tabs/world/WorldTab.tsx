@@ -109,6 +109,14 @@ export function WorldTab() {
         activity_hint: src.activity_hint,
         knowledge_item_id: src.knowledge_item_id,
         passable: src.passable,
+        // The floor-plan world travels with the copy: map3d carries the
+        // SCALE ANCHOR (plan_width_m) the room layouts need — without it the
+        // server rightly refuses geometry (user finding 2026-08-03). NOT
+        // copied: entry_room — it references a room ID, and the copy gets
+        // fresh ones, so it would dangle; pick it anew on the copy.
+        map3d: src.map3d,
+        terrain: src.terrain,
+        event_settings: src.event_settings,
       })
       toast(t('Location copied'))
       await reload()
