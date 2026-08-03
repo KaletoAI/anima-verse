@@ -214,6 +214,29 @@ def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
     return {"backends": out, "default": default}
 
 
+def list_shrink_backends() -> Dict[str, Any]:
+    """Available mesh→mesh backends (``category`` mesh2mesh) for the "Create
+    low variant" dialog: ``{"backends": [...]}`` in the same entry shape as
+    ``list_mesh_backends``. No default — the reduction is one explicit admin
+    action, not a routed job; with a single backend the dialog preselects it.
+    """
+    from app.imagegen.service import get_image_service
+    out = []
+    try:
+        for b in get_image_service().list_shrink_backends():
+            out.append({
+                "name": b.name,
+                "model": getattr(b, "model", ""),
+                "cost": getattr(b, "cost", 0),
+                "face_num": getattr(b, "face_num", None),
+                "face_num_max": getattr(b, "face_num_max", 0),
+                "rig": getattr(b, "mesh_rig", "none"),
+            })
+    except Exception as e:
+        logger.debug("Shrink-Backends listen fehlgeschlagen: %s", e)
+    return {"backends": out}
+
+
 def find_texture(character_name: str,
                  signature: Optional[str] = None) -> Optional[Path]:
     """Basecolor image belonging to the cached mesh (generic/FBX case), or

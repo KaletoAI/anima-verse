@@ -31,6 +31,11 @@ render — for rooms one assigned to the room, picked by the caller); generation
 goes through ``service.generate_mesh(rig="none")`` on the backend queue
 channel, as a background job with a pending flag — the same busy/serialization
 contract as the character mesh.
+
+The ``low`` variant has a second, cheaper path: ``trigger_shrink`` reduces an
+ALREADY STORED file mesh→mesh (``service.generate_mesh_variant``, gateway alias
+``mesh-shrink``) instead of meshing the source image again. Same queue channel,
+same pending flag; the result is a new gallery file selected for ``low``.
 """
 import threading
 from pathlib import Path
@@ -44,6 +49,12 @@ from app.core.timeutils import utc_now_iso
 logger = get_logger(__name__)
 
 _STEM = "building"
+# Tier a mesh→mesh reduction always writes into — a low variant IS the coarse
+# resolution slot; there is nothing to choose.
+LOW_TIER = "low"
+# Marks a job key as a reduction, so a shrink and a fresh generation from the
+# same-named input never collide in the double-click guard.
+_SHRINK_KEY_PREFIX = "shrink:"
 
 _lock = threading.Lock()
 _generating: set = set()  # "<owner>:<stem>:<source image>" running job keys
@@ -125,8 +136,9 @@ def select_model(location_id: str, filename: str, room_id: str = "",
 def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
     """All stored models of a stem for the admin UI, newest first:
     ``[{filename, format, created_at, backend, source, source_image,
-    rotation, tier, selected_for, active}]``. ``tier`` is what the file was
-    made for, ``selected_for`` the tiers it currently serves."""
+    source_file, rotation, tier, selected_for, active}]``. ``tier`` is what
+    the file was made for, ``selected_for`` the tiers it currently serves,
+    ``source_file`` the stored model a low variant was reduced FROM."""
     owner = _owner_id(location_id)
     if not owner:
         return []
@@ -146,6 +158,7 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
             "source_image": meta.get("source_image", ""),
+            "source_file": meta.get("source_file", ""),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "offset_y": float(meta.get("offset_y") or 0.0),
             "offset_x": float(meta.get("offset_x") or 0.0),
@@ -364,6 +377,11 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
         "tiers": sorted(_gallery(owner, room_id).tiers()) if owner else [],
     }
     out.update(list_mesh_backends("none"))  # {"backends": [...], "default": ""}
+    # mesh→mesh aliases (the "Create low variant" action on a stored file) —
+    # a separate list: they consume a MESH, so they must never show up in the
+    # normal generate dialog.
+    from app.core.model3d import list_shrink_backends
+    out["shrink_backends"] = list_shrink_backends()["backends"]
     return out
 
 
@@ -760,6 +778,117 @@ def trigger_generation(location_id: str, *, source_image: str,
                      args=[location_id, source_image, backend_glob, room_id,
                            face_num, texture_size, tier],
                      daemon=True).start()
+    return True
+
+
+def _shrink(location_id: str, source_file: str, backend_glob: str,
+            room_id: str = "", face_num: Any = None,
+            texture_size: Any = None) -> Dict[str, Any]:
+    """Blocking mesh→mesh reduction of ONE stored model. Runs on a worker
+    thread (see trigger_shrink). Adds a NEW file to the same gallery and makes
+    it the ``low`` variant — the source file stays untouched."""
+    from app.imagegen.service import get_image_service
+    owner = _owner_id(location_id)
+    if not owner:
+        return {"ok": False, "error": "location_not_found"}
+    gallery = _gallery(owner, room_id)
+    src = gallery.file(source_file)
+    if not src:
+        logger.warning("Location model %s: shrink source missing (%s)",
+                       owner, source_file)
+        return {"ok": False, "error": "source_model_missing"}
+
+    from app.core.task_queue import get_task_queue
+    label = owner
+    try:
+        from app.models.world import get_location_by_id, get_room_by_id
+        loc = get_location_by_id(location_id) or {}
+        label = loc.get("name") or owner
+        if room_id:
+            room = get_room_by_id(loc, room_id) or {}
+            label = f"{label} / {room.get('name') or room_id}"
+    except Exception:
+        pass
+    task_id = ""
+    try:
+        task_id = get_task_queue().track_start(
+            "model3d_generation", f"Low variant: {label}", start_running=True)
+    except Exception:
+        task_id = ""
+
+    error = ""
+    try:
+        res = get_image_service().generate_mesh_variant(
+            source_model_path=str(src),
+            output_path=str(gallery.new_path()),
+            backend_glob=backend_glob,
+            mesh_name=_stem(room_id) if room_id else owner,
+            face_num=face_num,
+            texture_size=texture_size)
+        if not res.get("ok"):
+            error = str(res.get("error") or "shrink failed")
+            logger.error("Location model %s shrink failed: %s", owner, error)
+            return {"ok": False, "error": error}
+
+        path = Path(res["path"])
+        meta = {
+            "created_at": utc_now_iso(),
+            "source": "shrink",
+            "format": res.get("format", "glb"),
+            "rig": "none",
+            "tier": LOW_TIER,
+            "backend": res.get("backend", ""),
+            # Which stored file this variant was reduced FROM — the only way
+            # to tell later which full mesh a low variant belongs to.
+            "source_file": source_file,
+            "location": owner,
+        }
+        if face_num:
+            meta["face_num"] = int(face_num)
+        if texture_size:
+            meta["texture_size"] = int(texture_size)
+        if room_id:
+            meta["room"] = room_id
+        write_sidecar(path, meta)
+        select_model(location_id, path.name, room_id, LOW_TIER)
+        logger.info("Location model %s: low variant %s (%d bytes, from %s)",
+                    owner, path.name, path.stat().st_size, source_file)
+        return {"ok": True, "path": str(path), "meta": meta}
+    finally:
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=error)
+            except Exception:
+                pass
+
+
+def trigger_shrink(location_id: str, *, source_file: str,
+                   backend_glob: str = "", room_id: str = "",
+                   face_num: Any = None, texture_size: Any = None) -> bool:
+    """Start a low-variant reduction of a STORED model in the background.
+    False when this very file is already being reduced for this target
+    (double-click guard) or the location is unknown. The result always lands
+    in tier ``low`` — that is what the reduction is for."""
+    owner = _owner_id(location_id)
+    if not owner:
+        return False
+    key = _gen_key(owner, room_id, f"{_SHRINK_KEY_PREFIX}{source_file}")
+    with _lock:
+        if key in _generating:
+            return False
+        _generating.add(key)
+
+    def _run() -> None:
+        try:
+            _shrink(location_id, source_file, backend_glob, room_id,
+                    face_num=face_num, texture_size=texture_size)
+        except Exception as e:
+            logger.error("Location model shrink for %s failed: %s", owner, e)
+        finally:
+            with _lock:
+                _generating.discard(key)
+
+    threading.Thread(target=_run, daemon=True).start()
     return True
 
 

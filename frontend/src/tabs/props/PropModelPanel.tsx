@@ -5,11 +5,14 @@
  * gallery, app/core/model_store.py): one active file per resolution tier
  * (`full` / `low`), plus every older run. The panel lists them, previews any
  * of them in the detail viewer above, assigns a file to a tier, uploads a GLB
- * into a chosen tier and deletes single files. Its counterpart on the world
- * tab is `BuildingModelPanel`; the rows themselves are the shared
- * `ModelGallery` components.
+ * into a chosen tier, reduces one to a low variant (mesh→mesh) and deletes
+ * single files. Its counterpart on the world tab is `BuildingModelPanel`; the
+ * rows themselves are the shared `ModelGallery` components.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  MeshBackendDialog, type MeshBackend, type MeshGenerateOpts,
+} from '../../components/MeshBackendDialog'
 import {
   DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow, TierPicker, TierSummary,
   type GalleryModel, type ModelTier,
@@ -22,9 +25,13 @@ interface PropModelInfo {
   models?: GalleryModel[]
   tiers?: string[]
   none_selected?: boolean
+  /** mesh→mesh aliases (category mesh2mesh); empty = the low-variant action
+   *  stays disabled. */
+  shrink_backends?: MeshBackend[]
 }
 
-export function PropModelPanel({ propId, reloadKey, preview, onPreview, onChanged }: {
+export function PropModelPanel({ propId, reloadKey, preview, onPreview,
+  onChanged, pending = false, onGenerating }: {
   propId: string
   /** Bumped by the container when a generation finished — reloads the list. */
   reloadKey: number
@@ -34,6 +41,11 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview, onChange
   /** Reload the prop record — selecting/deleting a mesh changes has_model and
    *  may re-measure the dims. */
   onChanged: () => Promise<unknown>
+  /** A generation of THIS prop is running (server state, from the container). */
+  pending?: boolean
+  /** Start the container's pending poll — a low variant runs in the
+   *  background like every mesh job. */
+  onGenerating?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -105,6 +117,27 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview, onChange
     }
   }, [enc, uploadTier, onPreview, load, onChanged, t, toast])
 
+  // Stored mesh waiting in the low-variant dialog (mesh→mesh reduction of
+  // THAT file — the prop's dims stay untouched, they belong to the full mesh).
+  const [shrinkFile, setShrinkFile] = useState<string | null>(null)
+  const shrinkBackends = info?.shrink_backends || []
+  const shrink = useCallback((backend: string, opts?: MeshGenerateOpts) => {
+    const file = shrinkFile
+    setShrinkFile(null)
+    if (!file) return
+    void apiPost<{ status?: string }>(`/world/props/${enc}/models/shrink`,
+      { file, backend,
+        ...(opts?.face_num ? { face_num: opts.face_num } : {}),
+        ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}) })
+      .then((d) => {
+        toast(d?.status === 'already_running'
+          ? t('This model is already being reduced.')
+          : t('Creating the low variant…'))
+        onGenerating?.()
+      })
+      .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+  }, [shrinkFile, enc, onGenerating, t, toast])
+
   const models = info?.models || []
   // The row the viewer shows: the explicit preview, else the active file.
   const shownFile = models.find((m) => m.filename === preview)?.filename
@@ -113,6 +146,17 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview, onChange
 
   return (
     <>
+      <MeshBackendDialog
+        open={shrinkFile !== null}
+        title={t('Create low variant')}
+        hint={t('The stored mesh itself is reduced (mesh→mesh) — no new generation, no source image. The result becomes this gallery’s “low” model.')}
+        backends={shrinkBackends}
+        defaultBackend={shrinkBackends.length === 1 ? shrinkBackends[0].name : ''}
+        defaultTextureSize={1024}
+        generateLabel={t('Create')}
+        onGenerate={shrink}
+        onClose={() => setShrinkFile(null)}
+      />
       <div className="ga-form-section-label">{t('3D models')}</div>
       <TierSummary tiers={info?.tiers} />
       {models.length === 0 ? (
@@ -135,6 +179,9 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview, onChange
               onSelect={(tier) => { void select(m.filename, tier) }}
               onArmDelete={setArmedDel}
               onDelete={() => { void remove(m.filename) }}
+              onShrink={() => setShrinkFile(m.filename)}
+              shrinkAvailable={shrinkBackends.length > 0}
+              shrinkPending={pending}
             />
           ))}
         </div>

@@ -27,6 +27,8 @@ export interface GalleryModel {
   source?: string
   /** Building/room only: the gallery image the mesh was generated from. */
   source_image?: string
+  /** Low variants: the stored model file this one was reduced FROM. */
+  source_file?: string
   /** The tier the file was MADE for (sidecar; default `full`). */
   tier?: string
   /** The tiers the file currently SERVES (the selection). */
@@ -67,14 +69,18 @@ export function TierSummary({ tiers }: { tiers?: string[] }) {
 }
 
 /** Per-run facts of one stored file, as one line ("upload", backend, faces,
- *  texture) — empty when the file carries no record. */
+ *  texture, origin) — empty when the file carries no record. */
 function runHint(m: GalleryModel, t: (s: string) => string): string {
   const parts: string[] = []
   if (m.source === 'upload') parts.push(t('upload'))
-  else if (m.backend) parts.push(m.backend)
+  // A reduction is not a generation: naming the mesh→mesh step is what
+  // separates a real low mesh from a second full run at a low budget.
+  else if (m.source === 'shrink') parts.push(t('reduced'))
+  if (m.backend) parts.push(m.backend)
   if (m.face_num) parts.push(`${m.face_num.toLocaleString()} ${t('faces')}`)
   if (m.texture_size) parts.push(`${m.texture_size}²`)
   if (m.source_image) parts.push(`${t('from')} ${m.source_image}`)
+  if (m.source_file) parts.push(`${t('from')} ${m.source_file}`)
   return parts.join(' · ')
 }
 
@@ -117,10 +123,12 @@ export function NoModelRow({ noneSelected, onSelect }: {
 
 /**
  * One gallery row: click previews the file, the tier buttons make it the
- * active model of that tier, × deletes it (armed two-step, no window.confirm).
+ * active model of that tier, ⤵ reduces it to a low variant, × deletes it
+ * (armed two-step, no window.confirm).
  */
 export function ModelGalleryRow({
   model, shown, armedDelete, onPreview, onSelect, onArmDelete, onDelete,
+  onShrink, shrinkAvailable = false, shrinkPending = false,
 }: {
   model: GalleryModel
   /** The file the viewer currently shows. */
@@ -131,6 +139,14 @@ export function ModelGalleryRow({
   /** null disarms. */
   onArmDelete: (filename: string | null) => void
   onDelete: () => void
+  /** Reduce THIS file to a low variant (mesh→mesh). Omitted = no such action
+   *  in this gallery. */
+  onShrink?: () => void
+  /** A mesh2mesh backend is configured — without one the action stays visible
+   *  but disabled, so the missing configuration is what the admin sees. */
+  shrinkAvailable?: boolean
+  /** A job of this gallery is running — no second one on top. */
+  shrinkPending?: boolean
 }) {
   const { t } = useI18n()
   const selectedFor = model.selected_for || []
@@ -180,6 +196,19 @@ export function ModelGalleryRow({
             </button>
           )
         })}
+        {onShrink ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={!shrinkAvailable || shrinkPending}
+            onClick={(e) => { e.stopPropagation(); onShrink() }}
+            title={shrinkAvailable
+              ? t('Create a low variant from this file: the mesh itself is reduced (mesh→mesh) and the result becomes the “low” model of this gallery.')
+              : t('No mesh→mesh backend configured — add one with api_type openai_mesh and category mesh2mesh (alias “mesh-shrink”) in Media Generation.')}
+          >
+            ⤵ {t('low variant')}
+          </button>
+        ) : null}
         {armedDelete ? (
           <>
             <button

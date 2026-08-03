@@ -73,6 +73,8 @@ logger = get_logger(__name__)
 MODEL_STEM = "model"
 SOURCE_NAME = "source.png"
 SIDECAR_NAME = "sidecar.json"
+# Tier a mesh→mesh reduction always writes into (see trigger_shrink).
+LOW_TIER = "low"
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
@@ -494,9 +496,10 @@ def model_file_path(prop_id: str, filename: str) -> Optional[Path]:
 def list_models(prop_id: str) -> List[Dict[str, Any]]:
     """All stored meshes of the prop for the admin gallery, newest first:
     ``[{filename, tier, selected_for, face_num, texture_size, format,
-    created_at, backend, source, active}]``. ``tier`` is what the file was
-    made for, ``selected_for`` the tiers it currently serves, ``active`` the
-    one a client without a tier request gets."""
+    created_at, backend, source, source_file, active}]``. ``tier`` is what the
+    file was made for, ``selected_for`` the tiers it currently serves,
+    ``source_file`` the stored mesh a low variant was reduced FROM, ``active``
+    the one a client without a tier request gets."""
     g = model_gallery(prop_id)
     if not g:
         return []
@@ -514,22 +517,28 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
             "created_at": meta.get("created_at", ""),
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
+            "source_file": meta.get("source_file", ""),
             "active": bool(active and p.name == active.name),
         })
     return out
 
 
 def get_model_info(prop_id: str) -> Dict[str, Any]:
-    """Gallery status for the admin panel: ``{models, tiers, none_selected}``
-    — the prop counterpart of ``location_model3d.get_building_info`` minus the
-    backend list (the props tab already carries it). ``tiers`` are the
-    resolution tiers the prop actually HAS; a missing one is what the admin
-    sees as "low missing"."""
+    """Gallery status for the admin panel: ``{models, tiers, none_selected,
+    shrink_backends}`` — the prop counterpart of
+    ``location_model3d.get_building_info`` minus the img2mesh backend list
+    (the props tab already carries that one). ``tiers`` are the resolution
+    tiers the prop actually HAS; a missing one is what the admin sees as "low
+    missing". ``shrink_backends`` are the mesh→mesh aliases behind "Create low
+    variant" — a different list from the img2mesh backends, and empty when
+    none is configured."""
+    from app.core.model3d import list_shrink_backends
     g = model_gallery(prop_id)
     return {
         "models": list_models(prop_id),
         "tiers": sorted(g.tiers()) if g else [],
         "none_selected": bool(g and g.none_selected()),
+        "shrink_backends": list_shrink_backends()["backends"],
     }
 
 
@@ -1060,6 +1069,95 @@ def _generate(prop_id: str, prompt: str, negative: str,
                 get_task_queue().track_finish(task_id, error=error)
             except Exception:
                 pass
+
+
+def _shrink(prop_id: str, source_file: str, backend_glob: str,
+            face_num: Any = None, texture_size: Any = None) -> Dict[str, Any]:
+    """Blocking mesh→mesh reduction of ONE stored mesh (worker thread, see
+    trigger_shrink). Adds a NEW file to the prop's gallery and makes it the
+    ``low`` variant; the source file and the prop's dims stay untouched — the
+    dims are measured from the FULL mesh and a coarser copy of the same object
+    must not move them."""
+    from app.core.task_queue import get_task_queue
+    from app.imagegen.service import get_image_service
+    g = model_gallery(prop_id)
+    src = g.file(source_file) if g else None
+    if not g or not src:
+        return {"ok": False, "error": "source model missing"}
+    name = read_sidecar(prop_id).get("name") or prop_id
+    task_id = ""
+    try:
+        task_id = get_task_queue().track_start(
+            "model3d_generation", f"Low variant: {name}", start_running=True)
+    except Exception:
+        task_id = ""
+
+    error = ""
+    try:
+        res = get_image_service().generate_mesh_variant(
+            source_model_path=str(src),
+            output_path=str(g.new_path()),
+            backend_glob=backend_glob,
+            mesh_name=prop_id,
+            face_num=face_num,
+            texture_size=texture_size)
+        if not res.get("ok"):
+            error = str(res.get("error") or "shrink failed")
+            logger.error("Prop %s shrink failed: %s", prop_id, error)
+            return {"ok": False, "error": error}
+        path = Path(res["path"])
+        write_model_sidecar(path, {
+            "created_at": utc_now_iso(),
+            "source": "shrink",
+            "format": res.get("format", "glb"),
+            "rig": "none",
+            "tier": LOW_TIER,
+            "backend": res.get("backend", ""),
+            "source_file": source_file,
+            **({"face_num": int(face_num)} if face_num else {}),
+            **({"texture_size": int(texture_size)} if texture_size else {}),
+        })
+        g.select(path.name, LOW_TIER)
+        logger.info("Prop %s: low variant %s (backend %s, from %s)",
+                    prop_id, path.name, res.get("backend", ""), source_file)
+        return {"ok": True, "path": str(path)}
+    finally:
+        if task_id:
+            try:
+                get_task_queue().track_finish(task_id, error=error)
+            except Exception:
+                pass
+
+
+def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
+                   face_num: Any = None, texture_size: Any = None) -> bool:
+    """Start a low-variant reduction of a STORED mesh in the background.
+    False when the prop/file is unknown or this very file is already being
+    reduced (double-click guard). The result always lands in tier ``low``."""
+    pid = safe_prop_id(prop_id)
+    if not pid or not read_sidecar(pid):
+        return False
+    g = model_gallery(pid)
+    if not g or not g.file(source_file):
+        return False
+    key = _gen_key(pid, f"shrink:{source_file}")
+    with _lock:
+        if key in _generating:
+            return False
+        _generating.add(key)
+
+    def _run() -> None:
+        try:
+            _shrink(pid, source_file, backend_glob, face_num=face_num,
+                    texture_size=texture_size)
+        except Exception as e:
+            logger.error("Prop shrink for %s failed: %s", pid, e)
+        finally:
+            with _lock:
+                _generating.discard(key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
 
 
 def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",

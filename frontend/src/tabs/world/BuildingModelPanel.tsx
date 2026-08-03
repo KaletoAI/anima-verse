@@ -44,6 +44,9 @@ export interface BuildingModelStatus {
   pending?: boolean
   models?: ModelEntry[]
   backends?: MeshBackend[]
+  /** mesh→mesh aliases (category mesh2mesh) — the "Create low variant"
+   *  action. Empty = none configured, the action stays disabled. */
+  shrink_backends?: MeshBackend[]
   default?: string
   /** The admin explicitly chose "no model" — distinct from "no files". */
   none_selected?: boolean
@@ -189,6 +192,28 @@ export function BuildingModelPanel({
     },
     [generateSource, onGenerateSourceConsumed, enc, startPoll, t, toast],
   )
+
+  // Stored file waiting in the low-variant dialog (mesh→mesh reduction of
+  // THAT file — not a fresh generation, so it has its own dialog instance and
+  // its own backend list).
+  const [shrinkFile, setShrinkFile] = useState<string | null>(null)
+  const shrinkBackends = model3d?.shrink_backends || []
+  const shrink = useCallback((backend: string, opts?: MeshGenerateOpts) => {
+    const file = shrinkFile
+    setShrinkFile(null)
+    if (!file) return
+    void apiPost<{ status?: string }>(`/world/locations/${enc}/model3d/shrink`,
+      { file, backend,
+        ...(opts?.face_num ? { face_num: opts.face_num } : {}),
+        ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}) })
+      .then((d) => {
+        toast(d?.status === 'already_running'
+          ? t('This model is already being reduced.')
+          : t('Creating the low variant…'))
+        startPoll()
+      })
+      .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
+  }, [shrinkFile, enc, startPoll, t, toast])
 
   const models = model3d?.models || []
   const noneSelected = !!model3d?.none_selected
@@ -419,10 +444,25 @@ export function BuildingModelPanel({
     />
   )
 
+  const shrinkPicker = (
+    <MeshBackendDialog
+      open={shrinkFile !== null}
+      title={t('Create low variant')}
+      hint={t('The stored mesh itself is reduced (mesh→mesh) — no new generation, no source image. The result becomes this gallery’s “low” model.')}
+      backends={shrinkBackends}
+      defaultBackend={shrinkBackends.length === 1 ? shrinkBackends[0].name : ''}
+      defaultTextureSize={1024}
+      generateLabel={t('Create')}
+      onGenerate={shrink}
+      onClose={() => setShrinkFile(null)}
+    />
+  )
+
   if (!current) {
     return (
       <div className="ga-form" style={{ gap: 6 }}>
         {picker}
+        {shrinkPicker}
         <div className="ga-form-section-label">{label}</div>
         {model3d?.pending ? (
           <span className="ga-hint">{t('Generating the 3D model — this takes a few minutes.')}</span>
@@ -443,6 +483,7 @@ export function BuildingModelPanel({
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       {picker}
+      {shrinkPicker}
       <div className="ga-form-section-label">{label}</div>
       {model3d?.pending ? (
         <span className="ga-hint">{t('Generating a new model — the current one stays until it is done.')}</span>
@@ -679,6 +720,9 @@ export function BuildingModelPanel({
             onSelect={(tier) => { void select(m.filename, tier) }}
             onArmDelete={setArmedDel}
             onDelete={() => { void deleteModel(m.filename) }}
+            onShrink={() => setShrinkFile(m.filename)}
+            shrinkAvailable={shrinkBackends.length > 0}
+            shrinkPending={!!model3d?.pending}
           />
         ))}
       </div>

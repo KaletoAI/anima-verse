@@ -283,9 +283,11 @@ _LOCATION_MODEL_MAX_BYTES = 100 * 1024 * 1024
 
 @router.get("/locations/{location_id}/model3d/status")
 def location_model3d_status(location_id: str) -> Dict[str, Any]:
-    """Building-model status: {exists, pending, meta, backends, default}.
-    ``backends`` = the available rig-'none' mesh backends; ``default`` = the
-    admin default only when its rig is 'none'."""
+    """Building-model status: {exists, pending, meta, backends, default,
+    shrink_backends}. ``backends`` = the available rig-'none' img2mesh
+    backends; ``default`` = the admin default only when its rig is 'none';
+    ``shrink_backends`` = the mesh→mesh aliases behind "Create low variant"
+    (empty = none configured)."""
     from app.core.location_model3d import get_building_info
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
@@ -331,6 +333,39 @@ async def location_model3d_generate(location_id: str, request: Request) -> Dict[
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
                               tier=_tier(data.get("tier"))):
+        return {"status": "already_running"}
+    return {"status": "generating"}
+
+
+def _shrink_body(data: Any) -> Dict[str, Any]:
+    """Parsed body of a low-variant request (body: {file, backend?, face_num?,
+    texture_size?}). ``file`` is a STORED gallery file of the subject — the
+    reduction reads a mesh, not an image."""
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    source_file = str(data.get("file") or "").strip()
+    if not source_file:
+        raise HTTPException(status_code=400,
+                            detail="file required (a stored model of this subject)")
+    return {"source_file": source_file,
+            "backend_glob": str(data.get("backend") or "").strip(),
+            "face_num": _mesh_int(data.get("face_num")) or None,
+            "texture_size": _mesh_int(data.get("texture_size")) or None}
+
+
+@router.post("/locations/{location_id}/model3d/shrink")
+async def location_model3d_shrink(location_id: str, request: Request) -> Dict[str, Any]:
+    """Reduce a STORED building model to a low variant (body: {file, backend?,
+    face_num?, texture_size?}) via a mesh→mesh backend. The result is a NEW
+    gallery file, always selected for tier ``low``. Background job — poll
+    status for pending."""
+    from app.core.location_model3d import model_file_path, trigger_shrink
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    body = _shrink_body(await request.json())
+    if not model_file_path(location_id, body["source_file"]):
+        raise HTTPException(status_code=404, detail="Model not found")
+    if not trigger_shrink(location_id, **body):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -477,7 +512,8 @@ def _require_room(location_id: str, room_id: str) -> None:
 
 @router.get("/locations/{location_id}/rooms/{room_id}/model3d/status")
 def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
-    """Room-model status: {exists, pending, meta, backends, default}."""
+    """Room-model status: {exists, pending, meta, backends, default,
+    shrink_backends} — same shape as the building twin."""
     from app.core.location_model3d import get_building_info
     _require_room(location_id, room_id)
     return get_building_info(location_id, room_id=room_id)
@@ -504,6 +540,21 @@ async def room_model3d_generate(location_id: str, room_id: str,
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
                               tier=_tier(data.get("tier"))):
+        return {"status": "already_running"}
+    return {"status": "generating"}
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/shrink")
+async def room_model3d_shrink(location_id: str, room_id: str,
+                              request: Request) -> Dict[str, Any]:
+    """Reduce a STORED room model to a low variant (body: {file, backend?,
+    face_num?, texture_size?}). Same contract as the building twin."""
+    from app.core.location_model3d import model_file_path, trigger_shrink
+    _require_room(location_id, room_id)
+    body = _shrink_body(await request.json())
+    if not model_file_path(location_id, body["source_file"], room_id):
+        raise HTTPException(status_code=404, detail="Model not found")
+    if not trigger_shrink(location_id, room_id=room_id, **body):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -992,9 +1043,10 @@ async def prop_upload(prop_id: str, file: UploadFile = File(...),
 
 @router.get("/props/{prop_id}/models")
 def prop_models(prop_id: str) -> Dict[str, Any]:
-    """The prop's mesh gallery: ``{models, tiers, none_selected}`` — the same
-    shape the building/room panel reads from /model3d/status, minus the
-    backend list (the props tab already carries it)."""
+    """The prop's mesh gallery: ``{models, tiers, none_selected,
+    shrink_backends}`` — the same shape the building/room panel reads from
+    /model3d/status, minus the img2mesh backend list (the props tab already
+    carries that one)."""
     from app.core.props import get_model_info, get_prop
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
@@ -1017,6 +1069,23 @@ async def prop_model_select(prop_id: str, request: Request) -> Dict[str, Any]:
     if not select_model(prop_id, filename, tier=tier):
         raise HTTPException(status_code=404, detail="Model not found")
     return {"status": "success", "active": filename, "tier": tier}
+
+
+@router.post("/props/{prop_id}/models/shrink")
+async def prop_model_shrink(prop_id: str, request: Request) -> Dict[str, Any]:
+    """Reduce a STORED mesh of the prop to a low variant (body: {file,
+    backend?, face_num?, texture_size?}) via a mesh→mesh backend. The result
+    is a NEW gallery file, always selected for tier ``low``. Background job —
+    poll /world/props for pending."""
+    from app.core.props import get_prop, model_file_path, trigger_shrink
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    body = _shrink_body(await request.json())
+    if not model_file_path(prop_id, body["source_file"]):
+        raise HTTPException(status_code=404, detail="Model not found")
+    if not trigger_shrink(prop_id, **body):
+        return {"status": "already_running"}
+    return {"status": "generating"}
 
 
 @router.delete("/props/{prop_id}/models")

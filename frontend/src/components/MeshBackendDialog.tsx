@@ -53,15 +53,19 @@ function faceFor(tier: ModelTier, backendDefault: number): string {
  * With `showTier` the dialog also asks WHICH resolution slot the result fills
  * (galleries that hold one mesh per tier). Picking `low` prefills the reduced
  * budget into the very same fields, so the admin sees — and may change — what
- * the run will actually use.
+ * the run will actually use. The mesh→mesh reduction ("Create low variant")
+ * uses the same dialog WITHOUT the tier choice — its result is a low variant
+ * by definition — and prefills the shrink alias' own defaults.
  */
 export function MeshBackendDialog({
   open,
   title,
   backends,
   defaultBackend = '',
+  defaultTextureSize = 0,
   generateLabel,
   showTier = false,
+  hint = '',
   onGenerate,
   onClose,
 }: {
@@ -70,10 +74,15 @@ export function MeshBackendDialog({
   backends: MeshBackend[]
   /** Preselected backend (e.g. the admin default when rig-compatible). */
   defaultBackend?: string
+  /** Preselected texture size (0 = "backend default"). The alias defaults are
+   *  not readable from here, so a caller that knows them states them. */
+  defaultTextureSize?: number
   generateLabel?: string
   /** Offer the target resolution tier — for the model galleries; the
    *  character model has no tiers. */
   showTier?: boolean
+  /** One line above the fields explaining what this particular run does. */
+  hint?: string
   onGenerate: (backend: string, opts: MeshGenerateOpts) => void
   onClose: () => void
 }) {
@@ -93,10 +102,10 @@ export function MeshBackendDialog({
     setPicked(defaultBackend)
     const b = backends.find((x) => x.name === defaultBackend)
     setFaceDraft(faceFor(DEFAULT_MODEL_TIER, b?.face_num || 0))
-    setTexSize('')
+    setTexSize(defaultTextureSize ? String(defaultTextureSize) : '')
     setTier(DEFAULT_MODEL_TIER)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultBackend, backendsKey])
+  }, [open, defaultBackend, defaultTextureSize, backendsKey])
 
   if (!open) return null
   const none = backends.length === 0
@@ -160,6 +169,7 @@ export function MeshBackendDialog({
             </div>
           ) : (
             <div className="ga-form">
+              {hint ? <div className="ga-hint">{hint}</div> : null}
               {showTier ? (
                 <>
                   <label className="ga-hint">{t('Target resolution tier')}</label>

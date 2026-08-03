@@ -48,7 +48,7 @@ const MARKER_SAVE_DEBOUNCE_MS = 400
 
 export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   armedDelete, onRegenerate, onRegenerateMesh, onRegenerateImage,
-  onRefresh }: {
+  onRefresh, onGenerating }: {
   prop: PropFull
   pending: boolean
   cacheBump: number
@@ -64,6 +64,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   /** Reload the prop + bust the image cache — generations run in the
    *  background, this fetches the current state on demand. */
   onRefresh: () => void
+  /** Start the container's pending poll — a background job was just kicked
+   *  off from inside the detail (the mesh gallery's low variant). */
+  onGenerating: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -689,6 +692,8 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             preview={previewFile}
             onPreview={setPreviewFile}
             onChanged={onChanged}
+            pending={pending}
+            onGenerating={onGenerating}
           />
         </div>
       </div>

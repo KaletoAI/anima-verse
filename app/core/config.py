@@ -576,6 +576,13 @@ def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
 # schema default. Nothing here is retro-written into an existing world — a
 # world's backend list belongs to its admin.
 _MESH_GATEWAY_URL = "http://192.168.8.10:4000"
+# Mesh→mesh alias: reduces an EXISTING mesh (category "mesh2mesh"), the
+# "Create low variant" action of the model galleries. Deliberately only
+# `mesh-shrink`: the quad remesher `mesh-shrink-quad` crashes backend-side
+# (mesh-client-spec § 3.4) and a configured-but-broken alias is worse than a
+# missing one.
+_DEFAULT_SHRINK_BACKEND = ("mesh-shrink", "none", 1, 5000, 0, 0)
+
 _DEFAULT_MESH_BACKENDS = [
     # (name, rig, cost, face_num, face_num_max, max_concurrent)
     ("Trellis2-Humanoid-Low", "mixamo", 1, 20000, 0, 0),
@@ -596,9 +603,10 @@ _DEFAULT_MESH_BACKENDS = [
 
 
 def _default_mesh_backend_entries() -> list:
-    """The seed list as config dicts."""
+    """The seed list as config dicts (img2mesh aliases + the mesh→mesh one)."""
     out = []
-    for name, rig, cost, faces, faces_max, concurrent in _DEFAULT_MESH_BACKENDS:
+    for name, rig, cost, faces, faces_max, concurrent in (
+            [*_DEFAULT_MESH_BACKENDS, _DEFAULT_SHRINK_BACKEND]):
         entry = {
             "name": name,
             "enabled": True,
@@ -606,7 +614,8 @@ def _default_mesh_backend_entries() -> list:
             "api_url": _MESH_GATEWAY_URL,
             "api_key": "",
             "model": name,
-            "category": "img2mesh",
+            "category": ("mesh2mesh" if name == _DEFAULT_SHRINK_BACKEND[0]
+                         else "img2mesh"),
             "cost": cost,
             "timeout": 3600,
             "poll_interval": 2,
@@ -624,7 +633,8 @@ def _default_mesh_backend_entries() -> list:
 
 
 def _seed_default_mesh_backends(config: dict, config_path: Path) -> bool:
-    """Seeds the img2mesh backend catalog into a BRAND-NEW world's config.
+    """Seeds the mesh backend catalog (img2mesh + mesh2mesh) into a BRAND-NEW
+    world's config.
 
     Only ever called for a world whose config.json did not exist yet: an
     existing world's backend list is the admin's, and silently appending
@@ -640,7 +650,7 @@ def _seed_default_mesh_backends(config: dict, config_path: Path) -> bool:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         logger.info("Default mesh backends seeded (%d) -> %s",
-                    len(_DEFAULT_MESH_BACKENDS), config_path)
+                    len(_DEFAULT_MESH_BACKENDS) + 1, config_path)
         return True
     except OSError as e:
         logger.error("Failed to seed default mesh backends to %s: %s",

@@ -38,6 +38,21 @@ logger = get_logger("image_backends")
 _MAX_CONSEC_404 = 3
 _MAX_CONSEC_OTHER = 10
 
+# Statuses that mean "this request will never work": the gateway rejected the
+# payload itself (400 = unknown files key / unreadable value, 413 = file over
+# 64 MB, mesh-client-spec § 1). Retrying is pointless and the reason must
+# reach the caller instead of dying in the log — a swallowed rejection looks
+# exactly like a mesh backend that produced nothing.
+_TERMINAL_STATUSES = (400, 413)
+
+
+class GatewayRejectedError(RuntimeError):
+    """The gateway refused the request payload (HTTP 400/413) — terminal.
+
+    Carries the status in its message so the backend runner recognises it as a
+    payload error (service reachable, request broken) and leaves the backend
+    in the pool instead of putting it on cooldown."""
+
 
 def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
                kind: str) -> str:
@@ -45,8 +60,9 @@ def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
 
     Retries the POST up to 3× on 429/503 (Retry-After honoured, capped at
     120 s); if the gateway is still busy afterwards raises ``BackendBusyError``
-    (load, not a defect). ``kind`` is a short label for the error log
-    (e.g. "Video" / "Mesh").
+    (load, not a defect). A 400/413 is the opposite — the payload itself was
+    rejected — and raises ``GatewayRejectedError`` so the reason surfaces.
+    ``kind`` is a short label for the error log (e.g. "Video" / "Mesh").
     """
     resp = None
     for _attempt in range(3):
@@ -73,6 +89,12 @@ def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
         raise BackendBusyError(
             f"{backend.name}: HTTP {resp.status_code} (Gateway ausgelastet) "
             f"nach 3 Versuchen")
+    if resp is not None and resp.status_code in _TERMINAL_STATUSES:
+        detail = (resp.text or "").strip()[:300]
+        logger.error("%s: %s-Request abgelehnt (HTTP %d) - %s", backend.name,
+                     kind, resp.status_code, detail)
+        raise GatewayRejectedError(
+            f"{backend.name}: HTTP {resp.status_code} — {detail or 'request rejected'}")
     if resp is None or resp.status_code not in (200, 201, 202):
         logger.error("%s: %s-Request HTTP %s - %s", backend.name, kind,
                      getattr(resp, "status_code", "?"),

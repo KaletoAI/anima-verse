@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
+from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
+                                               MESH_UPLOAD_MAX_BYTES)
 from app.imagegen.base import BackendBusyError
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
@@ -450,13 +452,24 @@ class ImageService:
             return False
 
     def list_mesh_backends(self, rig: str = "") -> List[ImageBackend]:
-        """Available mesh backends, optionally narrowed to a rig kind
-        ("mixamo" = humanoid GLB, "generic" = fbx + texture)."""
-        out = self.list_available_backends(media="mesh")
+        """Available img2mesh backends, optionally narrowed to a rig kind
+        ("mixamo" = humanoid GLB, "generic" = fbx + texture).
+
+        mesh→mesh backends are NOT in here: they consume a mesh, not an image,
+        so a normal generation must never land on one."""
+        out = [b for b in self.list_available_backends(media="mesh")
+               if getattr(b, "category", "") != MESH2MESH_CATEGORY]
         if rig:
             out = [b for b in out
                    if (getattr(b, "mesh_rig", "mixamo") or "mixamo") == rig]
         return out
+
+    def list_shrink_backends(self) -> List[ImageBackend]:
+        """Available mesh→mesh backends (``category == "mesh2mesh"``) — the
+        reduction aliases behind "Create low variant". The complement of
+        ``list_mesh_backends``: the two lists never overlap."""
+        return [b for b in self.list_available_backends(media="mesh")
+                if getattr(b, "category", "") == MESH2MESH_CATEGORY]
 
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
@@ -582,6 +595,118 @@ class ImageService:
         return {"ok": True, "path": str(out), "texture_path": texture_path,
                 "format": fmt, "rig": used_rig,
                 "filename": model_name or out.name,
+                "backend": getattr(used, "name", "")}
+
+    def generate_mesh_variant(self, source_model_path: str, output_path: str,
+                              backend_glob: str = "", mesh_name: str = "",
+                              face_num=None, texture_size=None) -> Dict[str, Any]:
+        """Reduces an EXISTING mesh to a coarser one via a mesh→mesh backend
+        (``mesh-shrink``, mesh-client-spec § 3.4) — the "low variant" of a
+        stored model.
+
+        The source mesh travels IN the request (``files.input_mesh_path``), so
+        any stored GLB works, including ones that never came from this
+        gateway. The rig is always ``none``: a shrink result is an unrigged
+        GLB with re-baked, embedded textures, and low variants exist for
+        props/rooms/buildings only — never for a character, whose skeleton the
+        reduction would destroy.
+
+        Runs on the backend's queue channel like every mesh job. Because a low
+        variant must render on its own, the downloaded GLB is validated for an
+        EMBEDDED texture — a shrink that lost it is a failed job, not a stored
+        file nobody notices until the distance view turns grey.
+
+        Returns {"ok", "path", "format", "rig", "filename", "backend"}.
+        """
+        from pathlib import Path as _P
+        src = _P(source_model_path)
+        if not src.is_file():
+            return {"ok": False, "error": "source model not found"}
+        size = src.stat().st_size
+        if size > MESH_UPLOAD_MAX_BYTES:
+            # Refused BEFORE the queue: the gateway would answer 413 and that
+            # is terminal, so a channel slot for it is pure waste.
+            return {"ok": False,
+                    "error": (f"source mesh is {size / 1024 / 1024:.1f} MB — "
+                              f"over the gateway limit of "
+                              f"{MESH_UPLOAD_MAX_BYTES // 1024 // 1024} MB")}
+
+        params: Dict[str, Any] = {
+            "source_model_path": str(src),
+            "mesh_name": mesh_name or src.stem,
+        }
+        if face_num:
+            params["face_num"] = int(face_num)
+        if texture_size:
+            params["texture_size"] = int(texture_size)
+
+        shrinks = self.list_shrink_backends()
+        primary = None
+        if backend_glob.strip():
+            primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
+            if primary and getattr(primary, "category", "") != MESH2MESH_CATEGORY:
+                logger.warning("generate_mesh_variant: Backend '%s' ist kein "
+                               "mesh2mesh-Backend — abgelehnt", primary.name)
+                primary = None
+        if not primary:
+            primary = shrinks[0] if shrinks else None
+        if not primary:
+            logger.warning("generate_mesh_variant: kein mesh2mesh-Backend "
+                           "verfuegbar (glob=%r)", backend_glob)
+            return {"ok": False, "error": "no mesh2mesh backend available"}
+
+        def _op(backend: ImageBackend):
+            def _gen():
+                blobs = backend.generate("", "", params,
+                                         log_meta={"agent_name": "",
+                                                   "original_prompt": "",
+                                                   "media": "mesh"})
+                meta = list(getattr(backend, "last_result_files", []) or [])
+                return {"blobs": blobs, "files": meta} if blobs else []
+            return self._run_on_backend_channel(
+                backend, _gen, task_type="mesh_generation", agent_name="system")
+        try:
+            result, used = self.run_on_backend(primary, _op)
+        except Exception as e:
+            logger.error("generate_mesh_variant fehlgeschlagen: %s", e)
+            return {"ok": False, "error": str(e)}
+        if not result:
+            return {"ok": False, "error": "generation failed"}
+        files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
+                                       in zip(result["files"], result["blobs"])]
+        # rig "none": the GLB is the whole delivery — the *_basecolor* /
+        # *_metallic* PNGs the shrink alias also returns are auxiliary maps of
+        # the same bake and are dropped.
+        model, _tex = _split_mesh_files(files, "none")
+        if model is None:
+            logger.error("generate_mesh_variant: kein Modell in der "
+                         "Auslieferung (%s)",
+                         ", ".join(str(f.get("name") or "?") for f in files))
+            return {"ok": False, "error": "no model file delivered"}
+
+        from app.core.model_validate import validate_static_glb
+        check = validate_static_glb(model["blob"])
+        if not check["ok"]:
+            logger.error("generate_mesh_variant: Ergebnis ungueltig — %s",
+                         "; ".join(check["errors"]))
+            return {"ok": False,
+                    "error": "invalid low variant: " + "; ".join(check["errors"])}
+        for warn in check["warnings"]:
+            logger.warning("generate_mesh_variant: %s", warn)
+
+        out = _P(output_path)
+        suffix = _mesh_file_suffix(model)
+        if suffix and suffix != out.suffix.lower():
+            out = out.with_suffix(suffix)
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(model["blob"])
+        except OSError as e:
+            logger.error("generate_mesh_variant: Schreiben fehlgeschlagen: %s", e)
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "path": str(out),
+                "format": out.suffix.lstrip(".").lower(), "rig": "none",
+                "filename": str(model.get("name") or out.name),
                 "backend": getattr(used, "name", "")}
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:

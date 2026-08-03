@@ -16,6 +16,21 @@ schema (``GET /v1/generations/{alias}/schema``, which always wins):
     GET  {api_url}/v1/jobs/{job_id}           queued|running|done|failed
     POST {api_url}/v1/jobs/{job_id}/cancel
 
+The SAME class also drives the mesh→mesh aliases (``mesh-shrink``, spec § 3.4,
+config ``category: "mesh2mesh"``): there the input is not an image but an
+existing mesh, and it travels IN the request under ``files`` — never in
+``params``, where the name would mean a file path on the gateway's backend:
+
+    {"model": "mesh-shrink", "mode": "async",
+     "params": {"input_name": "prop", "input_face_num": 5000},
+     "files": {"input_mesh_path": "data:model/gltf-binary;base64,…"}}
+
+``files`` is deliberately STRICT on the gateway side (unlike ``params``): an
+unknown key or an unreadable value is a ``400``, a file over 64 MB a ``413``.
+Both are terminal — a silently swallowed input would produce a technically
+successful job on the wrong mesh. The size limit is therefore checked here
+BEFORE anything is submitted.
+
 Every public param name is ``input_*``; an UNKNOWN name is silently ignored by
 the gateway (the alias default applies), so a stale name reaches nothing. Only
 params the alias declares are sent — except when the schema is unreadable, then
@@ -45,6 +60,23 @@ from app.imagegen.backends._gateway_job import poll_job, submit_job
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
+
+# Purpose category of a mesh→mesh alias (mesh-shrink): it consumes a MESH, not
+# an image, and must never be matched by a normal img2mesh generation.
+MESH2MESH_CATEGORY = "mesh2mesh"
+
+# Hard size limit of a file sent in ``files`` (mesh-client-spec § 1). The
+# gateway answers 413 above it; refusing here keeps a doomed job out of the
+# backend channel entirely.
+MESH_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
+
+# data-URI mime per extension — the gateway derives the stored extension from
+# it (unknown → .glb). Our stores only ever hold GLB/FBX.
+_UPLOAD_MIME = {
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".fbx": "model/fbx",
+}
 
 
 class OpenAIMeshBackend(ImageBackend):
@@ -94,9 +126,10 @@ class OpenAIMeshBackend(ImageBackend):
         # family name in code: Hunyuan3D FREEZES above 40000 — the job never
         # errors, it hangs until the timeout.
         self.face_num_max = int(os.environ.get(f"{env_prefix}FACE_NUM_MAX", "") or 0)
-        # Alias self-discovery (image slot name + declared param names);
-        # safe fallback without schema.
+        # Alias self-discovery (image slot name, file slot name, declared param
+        # names); safe fallback without schema.
         self._image_slot: str = ""
+        self._file_slot: str = ""
         self._alias_param_names: set = set()
         self._tls = threading.local()
 
@@ -142,7 +175,8 @@ class OpenAIMeshBackend(ImageBackend):
         return True
 
     def _fetch_alias_schema(self) -> None:
-        """Reads the image slot name from the alias schema (e.g. input_image)."""
+        """Reads the input slots + declared param names from the alias schema
+        (e.g. ``input_image`` for img2mesh, ``input_mesh_path`` for shrink)."""
         try:
             r = requests.get(f"{self.api_url}/v1/generations/{self.model}/schema",
                              headers=self._headers(), timeout=10)
@@ -157,6 +191,16 @@ class OpenAIMeshBackend(ImageBackend):
                     self._image_slot = slot
             elif isinstance(images, dict) and images:
                 self._image_slot = next(iter(images))
+            # Non-image input slots (mesh→mesh: input_mesh_path). Same shape as
+            # the image slots; absent on every img2mesh alias.
+            files = sd.get("files") or []
+            if isinstance(files, list) and files:
+                first = files[0]
+                slot = (first.get("name") if isinstance(first, dict) else str(first)) or ""
+                if slot:
+                    self._file_slot = slot
+            elif isinstance(files, dict) and files:
+                self._file_slot = next(iter(files))
             # Declared param names — optional params (e.g.
             # input_texture_resolution) are only sent when the alias really
             # declares them.
@@ -170,9 +214,10 @@ class OpenAIMeshBackend(ImageBackend):
                     if n:
                         names.add(str(n).strip().lower())
             self._alias_param_names = names
-            logger.info("%s: Alias-Schema gelesen (image_slot=%s, params=%s)",
-                        self.name, self._image_slot or "input_image",
-                        sorted(names) or "?")
+            logger.info("%s: Alias-Schema gelesen (image_slot=%s, file_slot=%s, "
+                        "params=%s)", self.name,
+                        self._image_slot or "input_image",
+                        self._file_slot or "-", sorted(names) or "?")
         except Exception as e:
             logger.debug("%s: Alias-Schema nicht lesbar: %s", self.name, e)
 
@@ -185,6 +230,38 @@ class OpenAIMeshBackend(ImageBackend):
                 if path:
                     return str(path)
         return str(params.get("source_image_path") or "")
+
+    def build_input_files(self, params: Dict[str, Any]) -> Dict[str, str]:
+        """The ``files`` block of a mesh→mesh request, or ``{}`` when this run
+        has no source mesh (every img2mesh generation).
+
+        Per spec § 3.4 the mesh travels IN the request: base64, a data-URI or
+        an http(s) URL the gateway fetches itself. We send a data-URI so the
+        gateway can derive the extension from the mime — a bare base64 blob
+        would always land as ``.glb``, which is a lie for an FBX. A local path
+        that is missing, or a file over 64 MB, raises HERE: the gateway would
+        answer 400/413 and both are terminal, so submitting is pointless.
+
+        Public so the payload can be checked without a gateway
+        (scripts/smoke_mesh_gateway.py)."""
+        src = str(params.get("source_model_path") or "").strip()
+        if not src:
+            return {}
+        slot = self._file_slot or "input_mesh_path"
+        if src.startswith(("http://", "https://")):
+            return {slot: src}
+        p = Path(src)
+        if not p.is_file():
+            raise FileNotFoundError(f"source mesh not found: {src}")
+        size = p.stat().st_size
+        if size > MESH_UPLOAD_MAX_BYTES:
+            raise ValueError(
+                f"source mesh is {size / 1024 / 1024:.1f} MB — over the "
+                f"gateway limit of {MESH_UPLOAD_MAX_BYTES // 1024 // 1024} MB "
+                f"(HTTP 413)")
+        mime = _UPLOAD_MIME.get(p.suffix.lower(), "application/octet-stream")
+        b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+        return {slot: f"data:{mime};base64,{b64}"}
 
     def _result_name_from(self, url: str, resp: requests.Response) -> str:
         cd = resp.headers.get("Content-Disposition", "") or ""
@@ -223,9 +300,13 @@ class OpenAIMeshBackend(ImageBackend):
         alias_params: Dict[str, Any] = {
             "input_name": (str(params.get("mesh_name") or "").strip()
                            or str(self.model or self.name or "mesh").strip()),
-            "input_remove_background": bool(params.get(
-                "remove_background", self.remove_background)),
         }
+        # Background removal is an IMAGE step — the shrink alias does not
+        # declare it (and would ignore it), so it goes out only where the
+        # schema knows it.
+        if self._declares("input_remove_background"):
+            alias_params["input_remove_background"] = bool(params.get(
+                "remove_background", self.remove_background))
         # Detail count: the mesh aliases call it input_face_num, the splat
         # pipeline (Triposplat) has no face param and takes input_num_gaussians
         # instead — SAME value under whichever the alias declares. 0 = send
@@ -236,8 +317,9 @@ class OpenAIMeshBackend(ImageBackend):
                         if n in self._alias_param_names]
             for pname in (declared or ["input_face_num"]):
                 alias_params[pname] = faces
-        # input_no_fingers is accepted by ALL families but only does something
-        # in the Humanoid rig stage — send it whenever it is declared.
+        # input_no_fingers is accepted by ALL img2mesh families but only does
+        # something in the Humanoid rig stage — send it whenever it is
+        # declared (the shrink alias passes it through without effect).
         if self._declares("input_no_fingers"):
             alias_params["input_no_fingers"] = bool(
                 params.get("no_fingers", self.no_fingers))
@@ -255,27 +337,39 @@ class OpenAIMeshBackend(ImageBackend):
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
         self._tls.result_files = []
-        src = self._input_image(params)
-        image_val = ""
-        if src.startswith(("http://", "https://")):
-            image_val = src
-        elif src:
-            p = Path(src)
-            if not p.exists():
-                logger.error("%s: Eingangsbild fehlt: %s", self.name, src)
-                return []
-            image_val = base64.b64encode(p.read_bytes()).decode("utf-8")
-        if not image_val:
-            logger.error("%s: kein Eingangsbild fuer die Mesh-Generierung", self.name)
+        # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
+        # carries a source MESH in `files` or an input IMAGE in `images`.
+        try:
+            input_files = self.build_input_files(params)
+        except (OSError, ValueError) as e:
+            logger.error("%s: Eingangs-Mesh unbrauchbar: %s", self.name, e)
             return []
-
-        alias_params = self.build_alias_params(params)
         payload: Dict[str, Any] = {
             "model": params.get("model") or self.model,
-            "images": {self._image_slot or "input_image": image_val},
-            "params": alias_params,
+            "params": {},
             "mode": "async",
         }
+        if input_files:
+            payload["files"] = input_files
+        else:
+            src = self._input_image(params)
+            image_val = ""
+            if src.startswith(("http://", "https://")):
+                image_val = src
+            elif src:
+                p = Path(src)
+                if not p.exists():
+                    logger.error("%s: Eingangsbild fehlt: %s", self.name, src)
+                    return []
+                image_val = base64.b64encode(p.read_bytes()).decode("utf-8")
+            if not image_val:
+                logger.error("%s: kein Eingangsbild fuer die Mesh-Generierung",
+                             self.name)
+                return []
+            payload["images"] = {self._image_slot or "input_image": image_val}
+
+        alias_params = self.build_alias_params(params)
+        payload["params"] = alias_params
 
         url = f"{self.api_url}{self.mesh_endpoint}"
         # Read the detail count back out of the params: an alias may declare
@@ -285,9 +379,10 @@ class OpenAIMeshBackend(ImageBackend):
         faces = (alias_params.get("input_face_num")
                  or alias_params.get("input_num_gaussians")
                  or "alias default")
-        logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, name='%s')",
-                    self.name, payload["model"], faces,
-                    alias_params["input_name"])
+        logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, name='%s', "
+                    "Eingang=%s)", self.name, payload["model"], faces,
+                    alias_params["input_name"],
+                    "mesh" if input_files else "image")
         job_id = submit_job(self, url, payload, "Mesh")
         if not job_id:
             return []

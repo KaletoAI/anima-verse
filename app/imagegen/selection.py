@@ -17,8 +17,9 @@ logger = get_logger("image_gen")
 
 # Detects 4xx status codes in exception strings (e.g. "400 Client Error",
 # "HTTP 422", "Bad Request"). 4xx = service reachable, payload broken —
-# do NOT mark the backend as unavailable.
-_re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|22)\b|Bad Request|Unprocessable", re.IGNORECASE)
+# do NOT mark the backend as unavailable. 413 belongs here too: an oversized
+# upload (mesh→mesh, 64 MB cap) says nothing about the backend's health.
+_re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|13|22)\b|Bad Request|Unprocessable", re.IGNORECASE)
 # Cooldown after a non-payload error (5xx / connection / empty result).
 # Mirrors the LLM provider cooldown: a failed backend is removed from the
 # match selection for this duration and retried automatically afterwards.

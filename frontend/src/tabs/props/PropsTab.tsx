@@ -199,6 +199,7 @@ export function PropsTab() {
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
             onRegenerateMesh={() => setRegen({ id: selectedProp.id, meshOnly: true })}
             onRegenerateImage={() => setImgRegen(selectedProp)}
+            onGenerating={startPoll}
             onRefresh={() => {
               setCacheBump((b) => b + 1)
               void load()
