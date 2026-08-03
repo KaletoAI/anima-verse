@@ -29,9 +29,11 @@ def extract_memories_from_exchange(character_name: str,
 
     Args:
         character_name: Memory-Owner (Speaker B im Template)
-        partner_name:   Konversationspartner (Speaker A im Template) — z.B.
-                        ein Avatar-Name oder ein anderer NPC-Name. Wenn leer,
-                        wird die Extraktion uebersprungen.
+        partner_name:   Conversation partner (speaker A in the template) — an
+                        avatar or another NPC name. EMPTY means a thought turn:
+                        the monologue template is used, no addressee is
+                        invented, and related_character stays empty unless the
+                        text itself names someone.
         partner_message: Was der Partner sagte (text_a)
         own_message:    Was der Memory-Owner sagte (text_b)
 
@@ -43,11 +45,15 @@ def extract_memories_from_exchange(character_name: str,
     if not config.get("extraction_enabled", True):
         return []
 
-    # Ohne Partner kein dyadischer Austausch → nichts zu extrahieren.
+    # No partner = a thought turn, not a dyadic exchange. That is the ONLY
+    # path this function still gets called on since the per-turn chat
+    # extraction was retired (chat_engine, "if _is_thought"), so refusing it
+    # meant refusing everything: no semantic fact and no commitment has been
+    # written since 2026-06-07. A monologue gets its own template — naming an
+    # absent partner as the other speaker would invent an addressee, and
+    # related_character below would then attribute every fact to them.
     partner_name = (partner_name or "").strip()
-    if not partner_name:
-        logger.debug("[%s] extraction skipped: no partner_name", character_name)
-        return []
+    monologue = not partner_name
 
     # Existing memories for deduplication + commitment tracking.
     # load_memories sorts ts DESC, so the NEWEST entries are at the front —
@@ -85,15 +91,18 @@ def extract_memories_from_exchange(character_name: str,
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
 
-        sys_prompt, user_prompt = render_task(
-            "extraction_memory",
-            speaker_a=partner_name,
+        shared = dict(
             speaker_b=character_name,
-            text_a=partner_message,
             text_b=clean_own[:1500],
             existing_summary=existing_summary,
             commitments_block=commitments_block,
             lang_instruction=_lang_instruction(character_name, "memory contents"))
+        if monologue:
+            sys_prompt, user_prompt = render_task("extraction_thought", **shared)
+        else:
+            sys_prompt, user_prompt = render_task(
+                "extraction_memory", speaker_a=partner_name,
+                text_a=partner_message, **shared)
 
         response = llm_call(
             task="extraction",
@@ -148,12 +157,12 @@ def extract_memories_from_exchange(character_name: str,
             # nicht "dem Spieler/User" sondern dem echten Charakter zugeordnet
             # werden.
             related = (item.get("related_character") or "").strip()
-            if not related:
+            if not related and not monologue:
                 related = partner_name
             # Generische Labels herausfiltern — niemals als Adressat speichern.
             if related.lower() in {"user", "player", "spieler", "the user",
                                     "assistant", "character"}:
-                related = partner_name
+                related = partner_name  # empty in a monologue: no addressee
             if related:
                 entry["related_character"] = related
             # Due hint for commitments — a number of minutes from now.
