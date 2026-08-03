@@ -40,6 +40,13 @@ class ProviderManager:
         # LLM and an image backend on the same physical GPU). Empty group =
         # no gate.
         self._serialize_gates: Dict[str, threading.Semaphore] = {}
+        # Every queue object ever built, keyed by channel key. A reload (and
+        # check_all_availability, which drops channels of unreachable
+        # providers) must never orphan a queue that still runs tasks — the
+        # replacement would start with all its concurrency slots free. Busy
+        # queues are therefore kept here and re-adopted; idle ones of channels
+        # that no longer exist are pruned.
+        self._queues: Dict[str, ProviderQueue] = {}
         self._round_robin: int = 0  # Tiebreaker for equal-load channel selection
 
     def _serialize_gate(self, group: str) -> Optional[threading.Semaphore]:
@@ -50,7 +57,15 @@ class ProviderManager:
         return self._serialize_gates.setdefault(group, threading.Semaphore(1))
 
     def load_providers(self) -> None:
-        """Scans the env for PROVIDER_N_* blocks. Stops when PROVIDER_N_NAME is missing."""
+        """Scans the env for PROVIDER_N_* blocks. Stops when PROVIDER_N_NAME is missing.
+
+        Channels whose key survives the reload are ADOPTED, not rebuilt: a
+        fresh ProviderQueue starts with zero active slots while the old object
+        still runs its in-flight tasks — an admin save mid-job then admits a
+        second task onto a busy ``concurrent=1`` backend (observed 2026-08-03,
+        double mesh run ending in gateway timeouts). See
+        :meth:`ProviderQueue.reconfigure`.
+        """
         self.providers.clear()
         self.channels.clear()
         self._backend_providers.clear()
@@ -98,14 +113,11 @@ class ProviderManager:
             # GPU contention with something else — which is what a
             # serialize_group expresses. Cloud providers without a group
             # never pause their background tasks for streaming chats.
-            pq = ProviderQueue(
-                provider, queue_name=name,
-                max_concurrent=max_concurrent,
-                chat_pause_enabled=bool(serialize_group),
-                serialize_group=serialize_group,
-                reserve_chat_slot=reserve_chat_slot)
-            pq._serialize_gate = self._serialize_gate(serialize_group)
-            self.channels[name] = pq
+            self._channel(name, provider,
+                          max_concurrent=max_concurrent,
+                          chat_pause_enabled=bool(serialize_group),
+                          serialize_group=serialize_group,
+                          reserve_chat_slot=reserve_chat_slot)
 
             timeout_info = f", timeout={timeout}s" if timeout else ""
             group_info = f", serialize_group={serialize_group}" if serialize_group else ""
@@ -121,6 +133,42 @@ class ProviderManager:
         # Channels for image backends — every backend gets its own channel
         # for serialization (one queue per URL/endpoint).
         self._load_backend_channels()
+        self._prune_queues()
+
+    def _channel(self, key: str, provider: Provider, *,
+                 max_concurrent: int, chat_pause_enabled: bool,
+                 serialize_group: str,
+                 reserve_chat_slot: bool = False) -> ProviderQueue:
+        """One channel for ``key`` — reusing a surviving queue object so
+        in-flight tasks keep holding their concurrency slots across a config
+        reload; only a genuinely new key gets a fresh queue."""
+        gate = self._serialize_gate(serialize_group)
+        pq = self._queues.get(key)
+        if pq is not None:
+            pq.reconfigure(provider, max_concurrent=max_concurrent,
+                           chat_pause_enabled=chat_pause_enabled,
+                           serialize_group=serialize_group,
+                           reserve_chat_slot=reserve_chat_slot,
+                           serialize_gate=gate)
+        else:
+            pq = ProviderQueue(provider, queue_name=key,
+                               max_concurrent=max_concurrent,
+                               chat_pause_enabled=chat_pause_enabled,
+                               serialize_group=serialize_group,
+                               reserve_chat_slot=reserve_chat_slot)
+            pq._serialize_gate = gate
+        self._queues[key] = pq
+        self.channels[key] = pq
+        return pq
+
+    def _prune_queues(self) -> None:
+        """Forgets remembered queues of channels that no longer exist AND are
+        idle. A busy one stays: it must be re-adopted if its channel comes
+        back, so its running task keeps holding the concurrency slot."""
+        for key in [k for k in self._queues if k not in self.channels]:
+            if self._queues[key].is_busy():
+                continue
+            self._queues.pop(key, None)
 
     def _load_backend_channels(self) -> None:
         """Creates one channel per enabled image backend.
@@ -189,13 +237,10 @@ class ProviderManager:
             # Serialize-group gate: a backend with the same group as an LLM
             # provider (or another backend) shares its Semaphore(1) -> image
             # and chat calls serialize (e.g. one physical GPU).
-            pq = ProviderQueue(
-                synth, queue_name=channel_key,
-                max_concurrent=max_concurrent,
-                chat_pause_enabled=False,
-                serialize_group=serialize_group)
-            pq._serialize_gate = self._serialize_gate(serialize_group)
-            self.channels[channel_key] = pq
+            self._channel(channel_key, synth,
+                          max_concurrent=max_concurrent,
+                          chat_pause_enabled=False,
+                          serialize_group=serialize_group)
             group_info = f", serialize_group={serialize_group}" if serialize_group else ""
             logger.info("  -> Backend-Channel %s: %s (%s, concurrent=%d%s)",
                         channel_key, api_url, api_type, max_concurrent, group_info)

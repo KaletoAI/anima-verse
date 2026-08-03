@@ -73,6 +73,56 @@ _RETRIABLE_GPU_ERRORS = (
 _GPU_MAX_RETRIES = 2  # Max retry attempts for retriable GPU errors
 
 
+class _Permits:
+    """The concurrency slots of ONE channel, with a limit that may change
+    while tasks run.
+
+    A plain Semaphore cannot be shrunk: taking permits back would block on the
+    ones held by running tasks, and a reaper thread racing for them loses
+    against a waiting worker. Here the limit is a number, and a task that
+    finishes simply does not get its slot back while the channel is over its
+    limit — the reduction lands deterministically, at the next release.
+
+    The object identity matters: it is what survives a config reload, so an
+    in-flight task keeps occupying its slot (see ``ProviderQueue.reconfigure``).
+    """
+
+    def __init__(self, limit: int):
+        self._cond = threading.Condition()
+        self._limit = max(1, int(limit))
+        self._held = 0
+
+    @property
+    def limit(self) -> int:
+        with self._cond:
+            return self._limit
+
+    def acquire(self, blocking: bool = True) -> bool:
+        with self._cond:
+            while self._held >= self._limit:
+                if not blocking:
+                    return False
+                self._cond.wait()
+            self._held += 1
+            return True
+
+    def release(self) -> None:
+        with self._cond:
+            self._held = max(0, self._held - 1)
+            self._cond.notify()
+
+    def set_limit(self, limit: int) -> None:
+        """New limit, effective immediately for free slots. Slots held by
+        running tasks stay held — a shrink lands as they finish."""
+        with self._cond:
+            self._limit = max(1, int(limit))
+            self._cond.notify_all()
+
+    def held(self) -> int:
+        with self._cond:
+            return self._held
+
+
 class ProviderQueue:
     """Per-provider (or per-backend) queue with configurable concurrency and chat pause."""
 
@@ -106,7 +156,7 @@ class ProviderQueue:
         self._tasks_idle.set()  # Initially no tasks running
         self._running = False
         self._workers: List[threading.Thread] = []
-        self._semaphore = threading.Semaphore(effective_concurrent)
+        self._semaphore = _Permits(effective_concurrent)
         # Optional serialize-group gate: one shared Semaphore across ALL
         # channels with the same serialize_group (e.g. an LLM provider and an
         # image backend sharing one GPU). Set by the ProviderManager; None =
@@ -124,6 +174,38 @@ class ProviderQueue:
         self._history_limit: int = 30
         self._pending_tasks: List[LLMTask] = []
         self._futures: Dict[str, Any] = {}  # task_id -> Future (for running task cancel)
+
+    def reconfigure(self, provider: Provider, *, max_concurrent: int = 0,
+                    chat_pause_enabled: bool = True, serialize_group: str = "",
+                    reserve_chat_slot: bool = False,
+                    serialize_gate: Optional[threading.Semaphore] = None) -> None:
+        """Applies new settings IN PLACE so this queue object — and with it
+        every in-flight task's concurrency slot — survives a config reload.
+
+        A freshly built queue starts with ALL its slots free: while the old
+        object still runs its task, the new one admits the next one and a
+        ``concurrent=1`` backend executes two jobs at once (observed
+        2026-08-03: an admin save mid-mesh-job double-ran a gateway backend
+        into 600-s ComfyUI timeouts). The slot bookkeeping (``_Permits``)
+        therefore stays the SAME object and only its limit changes; a shrink
+        lands as the running tasks finish. The worker-thread count re-syncs
+        the next time the queue idles — the permits alone enforce the limit.
+        """
+        effective = max_concurrent if max_concurrent > 0 else provider.max_concurrent
+        with self._lock:
+            self.provider = provider
+            self._chat_pause_enabled = chat_pause_enabled
+            self.serialize_group = serialize_group
+            self.reserve_chat_slot = bool(reserve_chat_slot)
+            self._serialize_gate = serialize_gate
+            self._max_concurrent = effective
+        self._semaphore.set_limit(effective)
+
+    def is_busy(self) -> bool:
+        """A task is running or waiting on this queue — the ProviderManager
+        must keep such a queue across a reload instead of replacing it."""
+        with self._lock:
+            return bool(self._current_tasks) or not self._queue.empty()
 
     def submit(
         self,
