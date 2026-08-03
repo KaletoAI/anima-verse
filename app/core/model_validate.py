@@ -18,7 +18,8 @@ structure can be read without a glTF library.
 import json
 import math
 import struct
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from app.core.log import get_logger
 
@@ -119,6 +120,136 @@ def parse_glb(data: bytes) -> Dict[str, Any]:
                 joints.append(str(nodes[j].get("name", "")))
     return {"gltf": gltf, "images": images, "joints": joints,
             "joint_count": len(joints), "bin": bin_chunk}
+
+
+# ── Capability probe: what a stored mesh BRINGS ─────────────────────────
+# Two mesh shapes reach our stores, and they are not interchangeable: a
+# TEXTURED mesh (UVs + texture images) and a VERTEX-COLOURED one (colour in
+# COLOR_0, material KHR_materials_unlit, no UVs, no image at all). Both render
+# fine, but every post-process that re-bakes a texture — the mesh→mesh
+# reduction, an FBX rigging, later maps — needs the textured shape. The probe
+# answers that from the FILE; which alias produced it is irrelevant (and a
+# name in the code would be a lie the moment a new alias appears).
+
+
+class MeshNotShrinkable(ValueError):
+    """A stored mesh cannot be reduced / re-textured — carries the reason.
+
+    Raised by the ``trigger_shrink`` entry points so the reason reaches the
+    route (and from there the admin) instead of turning into a bare False.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def read_glb_json(path: Union[str, Path]) -> Dict[str, Any]:
+    """The glTF JSON of a GLB, read from the HEADER + JSON chunk ONLY.
+
+    A GLB is a 12-byte header followed by length/type-prefixed chunks, and the
+    JSON chunk comes first per spec — so everything the capability probe needs
+    sits in the first few hundred kB of a file that may be >100 MB. Chunks
+    before the JSON one are skipped by ``seek``, never read.
+
+    Raises ValueError when the file is not a readable glTF 2 container.
+    """
+    with open(path, "rb") as fh:
+        header = fh.read(12)
+        if len(header) < 12 or header[:4] != b"glTF":
+            raise ValueError("not a GLB file (magic missing)")
+        _magic, version, _length = struct.unpack("<III", header)
+        if version != 2:
+            raise ValueError(f"unsupported glTF version: {version}")
+        while True:
+            head = fh.read(8)
+            if len(head) < 8:
+                raise ValueError("no JSON chunk in the GLB")
+            chunk_len, chunk_type = struct.unpack("<II", head)
+            if chunk_type == 0x4E4F534A:      # 'JSON'
+                body = fh.read(chunk_len)
+                if len(body) < chunk_len:
+                    raise ValueError("truncated JSON chunk")
+                return json.loads(body.decode("utf-8"))
+            fh.seek(chunk_len + ((4 - chunk_len % 4) % 4), 1)
+
+
+def gltf_capabilities(gltf: Dict[str, Any]) -> Dict[str, Any]:
+    """What a glTF document brings: ``{images, uv, vertex_colors, unlit,
+    meshes}``.
+
+    ``images`` counts the texture images the document declares, ``uv`` is True
+    as soon as ONE primitive carries a ``TEXCOORD_*`` attribute,
+    ``vertex_colors`` likewise for ``COLOR_*``, ``unlit`` reports the
+    ``KHR_materials_unlit`` extension. Every mesh of the document is looked at,
+    not only the ones the default scene reaches — a re-bake would have to cope
+    with all of them.
+    """
+    uv = False
+    vertex_colors = False
+    meshes = gltf.get("meshes") or []
+    for mesh in meshes:
+        for prim in (mesh.get("primitives") or []):
+            attrs = prim.get("attributes") or {}
+            if not isinstance(attrs, dict):
+                continue
+            for key in attrs:
+                if str(key).startswith("TEXCOORD_"):
+                    uv = True
+                elif str(key).startswith("COLOR_"):
+                    vertex_colors = True
+    return {
+        "images": len(gltf.get("images") or []),
+        "uv": uv,
+        "vertex_colors": vertex_colors,
+        "unlit": "KHR_materials_unlit" in (gltf.get("extensionsUsed") or []),
+        "meshes": len(meshes),
+    }
+
+
+def glb_capabilities(data: bytes) -> Dict[str, Any]:
+    """``gltf_capabilities`` of a GLB held in memory (upload path)."""
+    return gltf_capabilities(parse_glb(data)["gltf"])
+
+
+def glb_capabilities_at(path: Union[str, Path]) -> Dict[str, Any]:
+    """``gltf_capabilities`` of a STORED GLB — header + JSON chunk only, so a
+    100-MB mesh costs a few hundred kB of reading."""
+    return gltf_capabilities(read_glb_json(path))
+
+
+def shrink_capability(path: Union[str, Path]) -> Dict[str, Any]:
+    """Can this stored mesh be reduced / re-textured? ``{shrinkable, reason,
+    caps}`` — ``reason`` is a short human sentence and empty when it can.
+
+    The blocking condition is what the FILE lacks: no UV coordinates and/or no
+    texture image means the reduction has nothing to bake the texture onto (or
+    nothing to bake). A file we cannot read is NOT blocked — only a positive
+    finding blocks, so an exotic or non-GLB entry keeps its action and the
+    gateway stays the authority on it.
+    """
+    try:
+        caps = glb_capabilities_at(path)
+    except (OSError, ValueError, KeyError, struct.error,
+            json.JSONDecodeError, UnicodeDecodeError):
+        return {"shrinkable": True, "reason": "", "caps": {}}
+    uv = bool(caps.get("uv"))
+    images = int(caps.get("images") or 0)
+    if uv and images:
+        return {"shrinkable": True, "reason": "", "caps": caps}
+    if not uv and caps.get("vertex_colors"):
+        reason = ("vertex-coloured mesh without UVs — a reduction would have "
+                  "nothing to re-bake")
+    elif not uv and not images:
+        reason = ("mesh without UVs and without a texture image — a reduction "
+                  "would have nothing to re-bake")
+    elif not uv:
+        reason = ("mesh without UV coordinates — the reduction cannot bake the "
+                  "texture onto the new topology")
+    else:
+        reason = ("mesh without an embedded texture image — the reduction has "
+                  "nothing to re-bake")
+    return {"shrinkable": False, "reason": reason, "caps": caps}
 
 
 # ── Geometry: raw-axis bounding box ─────────────────────────────────────

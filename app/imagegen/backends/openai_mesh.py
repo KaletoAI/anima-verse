@@ -29,7 +29,9 @@ existing mesh, and it travels IN the request under ``files`` — never in
 unknown key or an unreadable value is a ``400``, a file over 64 MB a ``413``.
 Both are terminal — a silently swallowed input would produce a technically
 successful job on the wrong mesh. The size limit is therefore checked here
-BEFORE anything is submitted.
+BEFORE anything is submitted. For the same reason the sha256 of whatever we
+upload is kept and compared against the inputs the job view reports, so a
+gateway-side mix-up shows up at the job instead of at the finished model.
 
 Every public param name is ``input_*``; an UNKNOWN name is silently ignored by
 the gateway (the alias default applies), so a stale name reaches nothing. Only
@@ -57,7 +59,7 @@ import requests
 
 from app.core.log import get_logger
 from app.imagegen.backends._gateway_job import poll_job, submit_job
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import GatewayInputMismatchError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -147,6 +149,54 @@ class OpenAIMeshBackend(ImageBackend):
         The artifact tokens in the name (``_basecolor`` / ``_metallic`` /
         ``_articulationxl``) are what sorts the files apart."""
         return [dict(f) for f in (getattr(self._tls, "result_files", []) or [])]
+
+    # -- input identity -----------------------------------------------------
+    # The gateway once ran two jobs on the same input file name and delivered
+    # one client the other one's mesh. Its fix reports the stored inputs with
+    # their sha256 in the job view (``input_images[]``, analogous to
+    # ``results[]``); we hash what we upload anyway, so the swap becomes
+    # detectable at the job instead of at the finished model. An OLD gateway
+    # simply carries no such field — then there is nothing to compare and
+    # nothing to warn about.
+    INPUT_LIST_KEYS = ("input_images", "inputs", "input_files")
+
+    def _remember_input(self, raw: bytes) -> str:
+        """sha256 of the bytes we are about to upload (thread-local, one input
+        per run). Returns the digest for the job-start log."""
+        digest = hashlib.sha256(raw).hexdigest()
+        self._tls.input_sha256 = digest
+        return digest
+
+    def _check_input_identity(self, sd: Dict[str, Any], job_id: str) -> None:
+        """Compare our uploaded input against the job view's input list.
+
+        Raises ``GatewayInputMismatchError`` when the gateway reports inputs
+        and OURS is not among them. No list (old gateway), no digest (an http
+        URL the gateway fetched itself) or a list without any sha256 → no
+        check, no warning.
+        """
+        want = getattr(self._tls, "input_sha256", "") or ""
+        if not want:
+            return
+        entries: List[Any] = []
+        for key in self.INPUT_LIST_KEYS:
+            val = sd.get(key)
+            if isinstance(val, list) and val:
+                entries = val
+                break
+        got = [str(e.get("sha256") or "").strip().lower()
+               for e in entries if isinstance(e, dict)]
+        got = [h for h in got if h]
+        if not got:
+            return
+        if want in got:
+            logger.debug("%s: Job %s Eingang bestaetigt (sha256 %s)",
+                         self.name, job_id, want[:12])
+            return
+        raise GatewayInputMismatchError(
+            f"{self.name}: job {job_id} ran on a DIFFERENT input than we "
+            f"uploaded (ours sha256 {want[:12]}, the gateway stored "
+            f"{', '.join(h[:12] for h in got)}) — result discarded")
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -260,7 +310,9 @@ class OpenAIMeshBackend(ImageBackend):
                 f"gateway limit of {MESH_UPLOAD_MAX_BYTES // 1024 // 1024} MB "
                 f"(HTTP 413)")
         mime = _UPLOAD_MIME.get(p.suffix.lower(), "application/octet-stream")
-        b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+        raw = p.read_bytes()
+        self._remember_input(raw)
+        b64 = base64.b64encode(raw).decode("utf-8")
         return {slot: f"data:{mime};base64,{b64}"}
 
     def _result_name_from(self, url: str, resp: requests.Response) -> str:
@@ -337,6 +389,7 @@ class OpenAIMeshBackend(ImageBackend):
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
         self._tls.result_files = []
+        self._tls.input_sha256 = ""
         # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
         # carries a source MESH in `files` or an input IMAGE in `images`.
         try:
@@ -361,7 +414,9 @@ class OpenAIMeshBackend(ImageBackend):
                 if not p.exists():
                     logger.error("%s: Eingangsbild fehlt: %s", self.name, src)
                     return []
-                image_val = base64.b64encode(p.read_bytes()).decode("utf-8")
+                raw = p.read_bytes()
+                self._remember_input(raw)
+                image_val = base64.b64encode(raw).decode("utf-8")
             if not image_val:
                 logger.error("%s: kein Eingangsbild fuer die Mesh-Generierung",
                              self.name)
@@ -379,10 +434,11 @@ class OpenAIMeshBackend(ImageBackend):
         faces = (alias_params.get("input_face_num")
                  or alias_params.get("input_num_gaussians")
                  or "alias default")
+        sha = getattr(self._tls, "input_sha256", "") or ""
         logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, name='%s', "
-                    "Eingang=%s)", self.name, payload["model"], faces,
+                    "Eingang=%s sha256=%s)", self.name, payload["model"], faces,
                     alias_params["input_name"],
-                    "mesh" if input_files else "image")
+                    "mesh" if input_files else "image", sha[:12] or "-")
         job_id = submit_job(self, url, payload, "Mesh")
         if not job_id:
             return []
@@ -394,6 +450,9 @@ class OpenAIMeshBackend(ImageBackend):
             # TOKEN which ones it must store.
             for warn in (sd.get("warnings") or []):
                 logger.warning("%s: Gateway-Warnung: %s", self.name, warn)
+            # Did the job run on OUR input? (No-op on a gateway that does not
+            # report its stored inputs.)
+            self._check_input_identity(sd, job_id)
             _results = [r for r in (sd.get("results") or [])
                         if isinstance(r, dict)]
             if not _results:

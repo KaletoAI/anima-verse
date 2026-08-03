@@ -65,7 +65,8 @@ from app.core.log import get_logger
 from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   read_sidecar as read_model_sidecar,
                                   write_sidecar as write_model_sidecar)
-from app.core.model_validate import glb_bounds
+from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
+                                     shrink_capability)
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
@@ -496,10 +497,15 @@ def model_file_path(prop_id: str, filename: str) -> Optional[Path]:
 def list_models(prop_id: str) -> List[Dict[str, Any]]:
     """All stored meshes of the prop for the admin gallery, newest first:
     ``[{filename, tier, selected_for, face_num, texture_size, format,
-    created_at, backend, source, source_file, active}]``. ``tier`` is what the
-    file was made for, ``selected_for`` the tiers it currently serves,
-    ``source_file`` the stored mesh a low variant was reduced FROM, ``active``
-    the one a client without a tier request gets."""
+    created_at, backend, source, source_file, shrinkable, shrink_reason,
+    active}]``. ``tier`` is what the file was made for, ``selected_for`` the
+    tiers it currently serves, ``source_file`` the stored mesh a low variant
+    was reduced FROM, ``active`` the one a client without a tier request gets.
+
+    ``shrinkable`` / ``shrink_reason`` come from the cheap capability probe
+    (header + JSON chunk): a vertex-coloured mesh without UVs can never be
+    reduced, and the admin must see that on the row instead of starting a job
+    that fails permanently."""
     g = model_gallery(prop_id)
     if not g:
         return []
@@ -507,6 +513,7 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for p in g.files():
         meta = read_model_sidecar(p)
+        cap = shrink_capability(p)
         out.append({
             "filename": p.name,
             "tier": g.tier_of(p),
@@ -518,6 +525,8 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
             "source_file": meta.get("source_file", ""),
+            "shrinkable": bool(cap["shrinkable"]),
+            "shrink_reason": cap["reason"],
             "active": bool(active and p.name == active.name),
         })
     return out
@@ -1133,13 +1142,21 @@ def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
                    face_num: Any = None, texture_size: Any = None) -> bool:
     """Start a low-variant reduction of a STORED mesh in the background.
     False when the prop/file is unknown or this very file is already being
-    reduced (double-click guard). The result always lands in tier ``low``."""
+    reduced (double-click guard). The result always lands in tier ``low``.
+
+    Raises ``MeshNotShrinkable`` when the source mesh brings no UVs/texture —
+    the gateway job would fail permanently on such an input, so it is refused
+    here as well (the UI already hides the action; this is the second line)."""
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False
     g = model_gallery(pid)
-    if not g or not g.file(source_file):
+    src = g.file(source_file) if g else None
+    if not g or not src:
         return False
+    cap = shrink_capability(src)
+    if not cap["shrinkable"]:
+        raise MeshNotShrinkable(cap["reason"])
     key = _gen_key(pid, f"shrink:{source_file}")
     with _lock:
         if key in _generating:

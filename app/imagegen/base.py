@@ -36,6 +36,32 @@ class BackendBusyError(Exception):
     """
 
 
+class GatewayRejectedError(RuntimeError):
+    """The request could never work — the INPUT was refused, not the backend.
+
+    Two shapes reach this: the gateway rejects the payload outright (HTTP
+    400 = unknown ``files`` key / unreadable value, 413 = over the 64 MB cap),
+    or a started job dies on a per-node error that can only come from the input
+    we uploaded (a mesh without UVs/texture handed to the re-bake step). Both
+    are terminal: the service is healthy, retrying changes nothing, and the
+    reason has to reach the caller instead of dying in the log.
+
+    The backend runner therefore treats it exactly like a 4xx payload error —
+    re-raise, NO cooldown (see ``selection.run_on_backend``).
+    """
+
+
+class GatewayInputMismatchError(RuntimeError):
+    """The job did not run on the input we uploaded.
+
+    The gateway reports the sha256 of each stored input alongside the results;
+    when ours is not among them, the delivered mesh belongs to someone else's
+    job (this happened once, from a shared input filename on the gateway
+    side). Storing that result would silently attach a foreign model to our
+    prop — the job counts as failed instead.
+    """
+
+
 class ImageBackend(ABC):
     """
     Base class for image generation backends.

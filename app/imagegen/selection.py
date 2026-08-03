@@ -11,7 +11,8 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
-from app.imagegen.base import BackendBusyError, ImageBackend
+from app.imagegen.base import (BackendBusyError, GatewayRejectedError,
+                               ImageBackend)
 
 logger = get_logger("image_gen")
 
@@ -268,8 +269,10 @@ class BackendPool:
 
         - BackendBusyError = load, not a defect: NO cooldown, re-raised
           typed so the queue boundary can retry (see base.BackendBusyError).
-        - 4xx payload errors: backend stays available (the service is
-          reachable, the sent JSON is broken) — re-raised.
+        - 4xx payload errors and GatewayRejectedError (the gateway refused
+          the request, or a job died on the input we sent): backend stays
+          available (the service is reachable, the request is broken) —
+          re-raised.
         - Other exceptions / empty result: cooldown + raise.
 
         op(backend) -> List[bytes] | [] | None
@@ -292,9 +295,11 @@ class BackendPool:
             raise
         except Exception as e:
             _err_str = str(e)
-            if _re_4xx.search(_err_str):
-                # 4xx (workflow validation & co.): service reachable, payload
-                # broken — the backend must stay in the pool.
+            if isinstance(e, GatewayRejectedError) or _re_4xx.search(_err_str):
+                # 4xx (workflow validation & co.) and every other rejected
+                # INPUT — a payload the gateway refuses, or a job that dies on
+                # the mesh we uploaded: service reachable, request broken — the
+                # backend must stay in the pool.
                 logger.warning(
                     "Backend-Runner: %s warf Payload-Fehler (%s: %s) — "
                     "Backend bleibt verfuegbar", backend.name,

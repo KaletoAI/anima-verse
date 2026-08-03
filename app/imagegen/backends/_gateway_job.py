@@ -14,6 +14,9 @@ Failure semantics mirror the busy/cooldown contract in ``base.py``:
     (load, no cooldown)
   * job runs longer than ``max_wait`` / sits queued longer than
     ``max_queue_wait`` -> ``BackendBusyError`` (load, no cooldown)
+  * gateway rejects the payload (400/413) or a started job dies on an INPUT
+    error -> ``GatewayRejectedError`` (terminal, no cooldown — the reason is
+    the client's, not the backend's)
   * gateway loses the job (repeated 404) or keeps failing the poll (5xx /
     network) -> ``[]`` (the job is gone/broken -> cooldown is correct)
 
@@ -22,13 +25,15 @@ The lost-job caps are the point of this module: a gateway restart makes
 ``max_queue_wait`` (an hour by default), pinning the serialized backend channel
 (video) or leaving a character stuck in ``_generating`` (mesh).
 """
+import re
 import time
 from typing import Any, Callable, Dict, List
 
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import BackendBusyError, ImageBackend
+from app.imagegen.base import (BackendBusyError, GatewayInputMismatchError,
+                               GatewayRejectedError, ImageBackend)
 
 logger = get_logger("image_backends")
 
@@ -45,13 +50,17 @@ _MAX_CONSEC_OTHER = 10
 # exactly like a mesh backend that produced nothing.
 _TERMINAL_STATUSES = (400, 413)
 
-
-class GatewayRejectedError(RuntimeError):
-    """The gateway refused the request payload (HTTP 400/413) — terminal.
-
-    Carries the status in its message so the backend runner recognises it as a
-    payload error (service reachable, request broken) and leaves the backend
-    in the pool instead of putting it on cooldown."""
+# A STARTED job can fail on the input just as terminally: the re-bake node of
+# the mesh→mesh chain reads the input mesh's texture, and a mesh that carries
+# none (vertex colours only, no UVs) makes it receive nothing. The gateway
+# reports that as a per-node error — matched on the meaningful part, since the
+# node number and the node's class name are not ours to depend on. It says
+# "wrong input", never "broken backend": no cooldown, and a retry is pointless
+# (mesh-client-spec § 3.3/3.4).
+_TERMINAL_JOB_ERROR = re.compile(r"expected\s+np\.ndarray.*?NoneType",
+                                 re.IGNORECASE | re.DOTALL)
+_TERMINAL_JOB_HINT = ("the input mesh has no UVs/texture, so the re-bake step "
+                      "got nothing to read — permanent, a retry cannot help")
 
 
 def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
@@ -168,8 +177,15 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             sd = poll.json() if poll.content else {}
             status = (sd.get("status") or "").lower() if isinstance(sd, dict) else ""
             if status in ("failed", "error"):
+                detail = str(sd.get("error") or sd)
+                if _TERMINAL_JOB_ERROR.search(detail):
+                    logger.error("%s: Job %s scheiterte am EINGANG, nicht am "
+                                 "Backend — %s (%s)", backend.name, job_id,
+                                 _TERMINAL_JOB_HINT, detail[:200])
+                    raise GatewayRejectedError(
+                        f"{backend.name}: {_TERMINAL_JOB_HINT} — {detail[:200]}")
                 logger.error("%s: Job %s failed: %s", backend.name, job_id,
-                             str(sd.get("error") or sd)[:300])
+                             detail[:300])
                 return []
             if status == "running" and not started:
                 # The GPU took the job — only now does max_wait start.
@@ -186,6 +202,11 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             if status in ("done", "completed"):
                 return on_done(sd, time.time() - start)
             # queued / running → keep waiting
+        except (GatewayRejectedError, GatewayInputMismatchError):
+            # A verdict about the INPUT — raised above or by ``on_done`` — not
+            # a failed poll. Counting it as one would keep polling a job that
+            # is already decided.
+            raise
         except Exception as e:
             misses_other += 1
             if misses_other > _MAX_CONSEC_OTHER:

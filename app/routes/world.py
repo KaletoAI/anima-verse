@@ -353,21 +353,34 @@ def _shrink_body(data: Any) -> Dict[str, Any]:
             "texture_size": _mesh_int(data.get("texture_size")) or None}
 
 
+def _shrink_start(trigger, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    """Run a ``trigger_shrink`` and map its outcome to the HTTP answer.
+
+    A source mesh the reduction cannot use (no UVs / no texture) is a bad
+    REQUEST, not a failure to report later: the gateway job would die with a
+    permanent input error, so the reason goes back as a 400 instead."""
+    from app.core.model_validate import MeshNotShrinkable
+    try:
+        started = trigger(*args, **kwargs)
+    except MeshNotShrinkable as e:
+        raise HTTPException(status_code=400, detail=e.reason) from e
+    return {"status": "generating" if started else "already_running"}
+
+
 @router.post("/locations/{location_id}/model3d/shrink")
 async def location_model3d_shrink(location_id: str, request: Request) -> Dict[str, Any]:
     """Reduce a STORED building model to a low variant (body: {file, backend?,
     face_num?, texture_size?}) via a mesh→mesh backend. The result is a NEW
     gallery file, always selected for tier ``low``. Background job — poll
-    status for pending."""
+    status for pending. A source mesh without UVs/texture answers 400 with
+    the reason (it can never be reduced)."""
     from app.core.location_model3d import model_file_path, trigger_shrink
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
     body = _shrink_body(await request.json())
     if not model_file_path(location_id, body["source_file"]):
         raise HTTPException(status_code=404, detail="Model not found")
-    if not trigger_shrink(location_id, **body):
-        return {"status": "already_running"}
-    return {"status": "generating"}
+    return _shrink_start(trigger_shrink, location_id, **body)
 
 
 @router.post("/locations/{location_id}/model3d/upload")
@@ -548,15 +561,14 @@ async def room_model3d_generate(location_id: str, room_id: str,
 async def room_model3d_shrink(location_id: str, room_id: str,
                               request: Request) -> Dict[str, Any]:
     """Reduce a STORED room model to a low variant (body: {file, backend?,
-    face_num?, texture_size?}). Same contract as the building twin."""
+    face_num?, texture_size?}). Same contract as the building twin —
+    including the 400 on a source mesh that cannot be reduced."""
     from app.core.location_model3d import model_file_path, trigger_shrink
     _require_room(location_id, room_id)
     body = _shrink_body(await request.json())
     if not model_file_path(location_id, body["source_file"], room_id):
         raise HTTPException(status_code=404, detail="Model not found")
-    if not trigger_shrink(location_id, room_id=room_id, **body):
-        return {"status": "already_running"}
-    return {"status": "generating"}
+    return _shrink_start(trigger_shrink, location_id, room_id=room_id, **body)
 
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/upload")
@@ -1076,16 +1088,15 @@ async def prop_model_shrink(prop_id: str, request: Request) -> Dict[str, Any]:
     """Reduce a STORED mesh of the prop to a low variant (body: {file,
     backend?, face_num?, texture_size?}) via a mesh→mesh backend. The result
     is a NEW gallery file, always selected for tier ``low``. Background job —
-    poll /world/props for pending."""
+    poll /world/props for pending. A source mesh without UVs/texture answers
+    400 with the reason (it can never be reduced)."""
     from app.core.props import get_prop, model_file_path, trigger_shrink
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
     body = _shrink_body(await request.json())
     if not model_file_path(prop_id, body["source_file"]):
         raise HTTPException(status_code=404, detail="Model not found")
-    if not trigger_shrink(prop_id, **body):
-        return {"status": "already_running"}
-    return {"status": "generating"}
+    return _shrink_start(trigger_shrink, prop_id, **body)
 
 
 @router.delete("/props/{prop_id}/models")

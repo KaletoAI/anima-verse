@@ -35,6 +35,11 @@ export interface GalleryModel {
   selected_for?: string[]
   face_num?: number
   texture_size?: number
+  /** Whether a mesh→mesh reduction of THIS file can work at all (server-side
+   *  capability probe): a mesh without UVs/texture has nothing to re-bake. */
+  shrinkable?: boolean
+  /** Why not — a short server sentence, empty when it is shrinkable. */
+  shrink_reason?: string
   /** The file a client without a tier request gets. */
   active?: boolean
 }
@@ -152,6 +157,18 @@ export function ModelGalleryRow({
   const selectedFor = model.selected_for || []
   const madeFor = model.tier || DEFAULT_MODEL_TIER
   const hint = runHint(model, t)
+  // Two independent reasons can block the reduction — a missing backend (the
+  // world's configuration) and a source mesh that cannot be re-baked (this
+  // file). Both must stay readable, so the tooltip lists what applies.
+  const canShrink = model.shrinkable !== false
+  const shrinkBlocked: string[] = []
+  if (!shrinkAvailable) {
+    shrinkBlocked.push(t('No mesh→mesh backend configured — add one with api_type openai_mesh and category mesh2mesh (alias “mesh-shrink”) in Media Generation.'))
+  }
+  if (!canShrink) {
+    shrinkBlocked.push(
+      `${t('This mesh cannot be reduced')}: ${model.shrink_reason || t('the mesh brings no UVs/texture to re-bake.')}`)
+  }
   return (
     <div
       onClick={onPreview}
@@ -200,11 +217,11 @@ export function ModelGalleryRow({
           <button
             type="button"
             className="ga-btn ga-btn-sm"
-            disabled={!shrinkAvailable || shrinkPending}
+            disabled={!shrinkAvailable || !canShrink || shrinkPending}
             onClick={(e) => { e.stopPropagation(); onShrink() }}
-            title={shrinkAvailable
-              ? t('Create a low variant from this file: the mesh itself is reduced (mesh→mesh) and the result becomes the “low” model of this gallery.')
-              : t('No mesh→mesh backend configured — add one with api_type openai_mesh and category mesh2mesh (alias “mesh-shrink”) in Media Generation.')}
+            title={shrinkBlocked.length
+              ? shrinkBlocked.join(' — ')
+              : t('Create a low variant from this file: the mesh itself is reduced (mesh→mesh) and the result becomes the “low” model of this gallery.')}
           >
             ⤵ {t('low variant')}
           </button>
