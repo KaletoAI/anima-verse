@@ -137,7 +137,13 @@ def _build_generation_context(character_name: str) -> str:
     # 4. Relevante Memories (top 10)
     try:
         from app.models.memory import retrieve_relevant_memories
-        memories = retrieve_relevant_memories(character_name, context="secrets personality history", limit=10)
+        # The parameters are called current_message/max_results. Under the old
+        # names this raised a TypeError on every call, swallowed by the except
+        # below — the "Key memories" block never made it into a single secret
+        # prompt.
+        memories = retrieve_relevant_memories(
+            character_name, current_message="secrets personality history",
+            max_results=10)
         if memories:
             mem_lines = [f"- {m.get('content', '')}" for m in memories]
             parts.append("Key memories:\n" + "\n".join(mem_lines))
