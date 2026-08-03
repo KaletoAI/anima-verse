@@ -44,6 +44,36 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
     errors.push('rej: ' + String(e.reason).slice(0, 160));
   });
 
+  // Raycast probe: `window.__pick3d(nx, ny)` (normalized 0..1 screen coords)
+  // answers "WHAT renders this pixel" — object chain, height, material colour
+  // and texture. The one question a screenshot cannot answer numerically.
+  (window as unknown as { __pick3d?: unknown }).__pick3d =
+    (nx: number, ny: number) => {
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2(nx * 2 - 1, -(ny * 2 - 1)),
+                        engine.camera);
+      return ray.intersectObjects(engine.scene.children, true)
+        .slice(0, 5).map((hit) => {
+          const mesh = hit.object as THREE.Mesh;
+          const mat = (Array.isArray(mesh.material) ? mesh.material[0]
+            : mesh.material) as THREE.MeshStandardMaterial | undefined;
+          const chain: string[] = [];
+          for (let p: THREE.Object3D | null = mesh; p && chain.length < 5;
+               p = p.parent) chain.push(p.name || p.type);
+          return {
+            chain: chain.join('<'),
+            y: Math.round(hit.point.y * 1000) / 1000,
+            color: mat?.color ? '#' + mat.color.getHexString() : '-',
+            map: String(((mat?.map as THREE.Texture | null)?.image as
+              { src?: string } | undefined)?.src || '')
+              .split('/').slice(-1)[0].slice(0, 30),
+            opacity: mat?.opacity,
+            tri: Math.round(((mesh.geometry as THREE.BufferGeometry)
+              ?.attributes?.position?.count || 0) / 3),
+          };
+        });
+    };
+
   const wp = new THREE.Vector3();
   const rowsOf = (root: THREE.Object3D | null | undefined,
                   tag: string): MeshRow[] => {

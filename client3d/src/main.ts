@@ -256,6 +256,15 @@ async function startApp(username: string) {
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.copy(center);
+  // DEUTLICH unter alles Kachel-Eigene (Platten 0,04, Detail-Backstop −0,05,
+  // Relief-Senken): diese Welt-Grasebene lag bei y 0 KOPLANAR mit den
+  // Etage-0-Zonenplatten der Detailszenen und gewann das Z-Fighting in
+  // organischen Flecken — die „grünen Stellen", die jede Platten-Korrektur
+  // überlebten (Raster-Raycast 2026-08-03: Treffer „Mesh<Scene", Canvas-
+  // Gras). Jede Location zeigt ihren eigenen Terrain-Boden; das Gras hier
+  // ist nur noch der Untergrund ZWISCHEN den Kacheln (User-Vorgabe: die
+  // grüne Fallback-Fläche gehört nirgendwohin, wo Terrain konfiguriert ist).
+  ground.position.y = -0.5;
   ground.receiveShadow = true;
   engine.scene.add(ground);
 
