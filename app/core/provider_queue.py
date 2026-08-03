@@ -922,6 +922,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             trace_id=getattr(task, "trace_id", "") or "",
             trace_kind=getattr(task, "trace_kind", "") or "",
             finish_reason=getattr(response, "finish_reason", None) or "",
+            llm=task._llm,
             error=error)
     except Exception as e:
         logger.error("Logging-Fehler: %s", e, exc_info=True)

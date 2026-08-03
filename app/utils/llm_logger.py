@@ -45,6 +45,27 @@ def _template_basename(template_path: str, fallback_task: str) -> str:
     return name or fallback_task or ""
 
 
+def _sampler_info(llm: Any) -> Dict[str, float]:
+    """The sampler values a call actually ran with, as far as the client knows.
+
+    Defensive on purpose: the Anthropic client has no top_p attribute, some
+    call sites pass no client at all, and a logger must never be the reason a
+    call fails.
+    """
+    if llm is None:
+        return {}
+    out: Dict[str, float] = {}
+    for attr in ("temperature", "frequency_penalty", "top_p"):
+        value = getattr(llm, attr, None)
+        if value is None:
+            continue
+        try:
+            out[attr] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def log_llm_call(
     task: str,
     model: str,
@@ -63,7 +84,8 @@ def log_llm_call(
     label: str = "",
     trace_id: str = "",
     trace_kind: str = "",
-    finish_reason: str = ""):
+    finish_reason: str = "",
+    llm: Any = None):
     """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
     Args:
@@ -107,6 +129,14 @@ def log_llm_call(
             clean "stop", so counting truncated answers over a longer window
             (the archive keeps monthly buckets) stays honest about which lines
             carry the information at all.
+        llm: the client instance the call was made with, if the caller has it.
+            Only its sampler values are read (temperature, frequency_penalty,
+            top_p) and written as ``sampler``. They matter because two of them
+            are raised REACTIVELY per call by the anti-repetition net — without
+            them in the line, a degenerated answer can only be traced back by
+            correlating against ``main.log`` timestamps, which is how the
+            2026-08-02 token-salad case had to be solved. Values that are not
+            set are left out; an absent key means "provider default".
     """
     if not trace_id or not trace_kind:
         try:
@@ -140,6 +170,9 @@ def log_llm_call(
         "response": response,
     }
 
+    sampler = _sampler_info(llm)
+    if sampler:
+        entry["sampler"] = sampler
     if label:
         entry["label"] = label
     if finish_reason:

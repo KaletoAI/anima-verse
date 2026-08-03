@@ -1513,6 +1513,7 @@ class StreamingAgent:
                 max_tokens=get_max_tokens(active_llm),
                 messages=history or None,
                 finish_reason=finish_reason or "",
+                llm=active_llm,
                 llm_role=llm_label)
         except Exception as e:
             logger.error("LLM-Log Fehler: %s", e)
@@ -1539,6 +1540,7 @@ class StreamingAgent:
                 max_tokens=get_max_tokens(active_llm),
                 messages=history or None,
                 error=str(error),
+                llm=active_llm,
                 llm_role=llm_label)
         except Exception:
             pass
