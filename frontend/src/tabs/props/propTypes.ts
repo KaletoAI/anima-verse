@@ -59,6 +59,8 @@ export interface ImageBackendInfo {
 export interface MeshBackendInfo {
   name: string
   face_num?: number | null
+  /** Hard ceiling of the face count (0/absent = none). */
+  face_num_max?: number | null
 }
 
 // Categories are an open vocabulary (free text): the shared datalist offers

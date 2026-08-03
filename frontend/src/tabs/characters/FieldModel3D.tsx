@@ -39,6 +39,8 @@ interface MeshBackend {
   model?: string
   cost?: number
   face_num?: number | null
+  /** Hard ceiling of the face count (0/absent = none). */
+  face_num_max?: number | null
 }
 
 interface Model3DStatus {

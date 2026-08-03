@@ -156,9 +156,11 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                 logger.info("%s: Job %s gestartet (%.0fs in der Queue)",
                             backend.name, job_id, start - queued_since)
             if status == "running" and sd.get("progress") is not None:
-                logger.info("%s: Job %s laeuft — %.0f%% (ETA %ss)", backend.name,
+                # progress + elapsed_s are what the job view offers for
+                # logging (mesh-client-spec § 1) — mesh jobs run for minutes.
+                logger.info("%s: Job %s laeuft — %.0f%% (%ss)", backend.name,
                             job_id, float(sd.get("progress") or 0) * 100,
-                            sd.get("eta_s", "?"))
+                            sd.get("elapsed_s", "?"))
             if status in ("done", "completed"):
                 return on_done(sd, time.time() - start)
             # queued / running → keep waiting

@@ -6,6 +6,10 @@ import { DEFAULT_MODEL_TIER, MODEL_TIERS, type ModelTier } from './ModelGallery'
 export interface MeshBackend {
   name: string
   face_num?: number | null
+  /** Hard ceiling of this backend's face count (0/absent = none). Some
+   *  backends do not fail above their limit, they hang — so the field caps
+   *  the input instead of letting the job run into a timeout. */
+  face_num_max?: number | null
 }
 
 /** Per-run overrides next to the backend pick — empty = backend default. */
@@ -96,6 +100,10 @@ export function MeshBackendDialog({
 
   if (!open) return null
   const none = backends.length === 0
+  const selectedBackend = backends.find((x) => x.name === picked)
+  // 0 = no cap. Above its cap such a backend does not fail, it HANGS — so the
+  // field stops the value here (the server clamps too, and logs it).
+  const faceMax = selectedBackend?.face_num_max || 0
 
   const pick = (name: string) => {
     setPicked(name)
@@ -115,8 +123,10 @@ export function MeshBackendDialog({
 
   const start = () => {
     const opts: MeshGenerateOpts = {}
-    const f = parseInt(faceDraft, 10)
+    let f = parseInt(faceDraft, 10)
     const selected = backends.find((x) => x.name === picked)
+    const max = selected?.face_num_max || 0
+    if (Number.isFinite(f) && max > 0 && f > max) f = max
     // Send the face count only when it differs from the backend default —
     // an untouched prefill keeps meaning "backend default".
     if (Number.isFinite(f) && f > 0 && f !== (selected?.face_num || 0)) {
@@ -191,15 +201,20 @@ export function MeshBackendDialog({
                     className="ga-input"
                     type="number"
                     min={500}
-                    max={100000}
+                    max={faceMax || 100000}
                     step={500}
                     value={faceDraft}
                     placeholder={t('backend default')}
                     onChange={(e) => setFaceDraft(e.target.value)}
                   />
+                  {faceMax ? (
+                    <span className="ga-hint">
+                      {t('Max')} {faceMax.toLocaleString()} — {t('this backend hangs above its limit')}
+                    </span>
+                  ) : null}
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 140 }}
-                  title={t('Texture resolution for THIS run — passed to the gateway as soon as the alias declares a "texture size" parameter; until then it is ignored there. Small props rarely need more than 1024.')}>
+                  title={t('Texture resolution for THIS run — sent as "input_texture_resolution" whenever the alias declares it. Small props rarely need more than 1024.')}>
                   <span className="ga-hint">{t('Texture size')}</span>
                   <select
                     className="ga-input"

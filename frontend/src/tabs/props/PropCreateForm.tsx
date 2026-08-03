@@ -42,6 +42,8 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
   const [styleTouched, setStyleTouched] = useState(false)
 
   const imageBackendInfo = imageBackends.find((b) => b.name === imageBackend) || imageBackends[0]
+  // 0 = no cap. Above its cap such a backend does not fail, it HANGS.
+  const faceLimit = meshBackends.find((b) => b.name === meshBackend)?.face_num_max || 0
 
   // The final prompt = the use-case style of the chosen image backend + the
   // object subject (description, else the name). Style is its OWN editable
@@ -74,8 +76,11 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       image_backend: imageBackendInfo?.name || '', mesh_backend: meshBackend,
       ...((): Record<string, number> => {
         const out: Record<string, number> = {}
-        const f = parseInt(faceDraft, 10)
+        let f = parseInt(faceDraft, 10)
         const selected = meshBackends.find((x) => x.name === meshBackend)
+        // A backend with a face limit HANGS above it instead of failing.
+        const max = selected?.face_num_max || 0
+        if (Number.isFinite(f) && max > 0 && f > max) f = max
         // Untouched prefill = the backend default — only a changed value is
         // a real per-run override.
         if (Number.isFinite(f) && f > 0 && f !== (selected?.face_num || 0)) out.face_num = f
@@ -159,15 +164,19 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
               ))}
             </select>
           </Field>
-          <Field label={t('Face count')}>
-            <input className="ga-input" type="number" min={500} max={100000}
+          <Field label={t('Face count')}
+            hint={faceLimit
+              ? `${t('Max')} ${faceLimit.toLocaleString()} — ${t('this backend hangs above its limit')}`
+              : undefined}>
+            <input className="ga-input" type="number" min={500}
+              max={faceLimit || 100000}
               step={500} value={faceDraft} placeholder={t('backend default')}
               title={t('Target triangle count for THIS run — small deco needs far fewer faces than a character (2,000–20,000).')}
               onChange={(e) => setFaceDraft(e.target.value)} />
           </Field>
           <Field label={t('Texture size')}>
             <select className="ga-input" value={texSize}
-              title={t('Passed to the gateway as soon as the alias declares a "texture size" parameter; until then it is ignored there.')}
+              title={t('Sent as "input_texture_resolution" whenever the alias declares it.')}
               onChange={(e) => setTexSize(e.target.value)}>
               <option value="">{t('— backend default —')}</option>
               {[512, 1024, 2048].map((v) => (

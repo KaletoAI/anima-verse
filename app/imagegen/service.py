@@ -65,63 +65,76 @@ def _log_image_failure(lv: dict, error_msg: str) -> None:
         logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
 
 
-# Material maps the mesh gateway may ship ALONGSIDE the model (Trellis2
-# chains deliver e.g. a metallic PNG even for GLB aliases). None of these is
-# the basecolor an FBX needs — applied as basecolor they tint the whole model.
-_MESH_AUX_MAP_TOKENS = ("metallic", "roughness", "normal", "occlusion",
-                        "emissive", "displacement")
-_MESH_BASECOLOR_TOKENS = ("basecolor", "base_color", "albedo", "diffuse")
+# Artifact tokens in the delivered file names (mesh-client-spec § 2, rule 1):
+# assignment is by TOKEN SUBSTRING, never by position or extension. The FBX of
+# a UniRig chain carries _articulationxl, the maps _basecolor / _metallic.
+_MESH_TOKEN_BASECOLOR = "_basecolor"
+_MESH_TOKEN_METALLIC = "_metallic"
+_MESH_TOKEN_RIGGED_FBX = "_articulationxl"
+
+# Extension for a delivered file whose NAME has none — the mime is the second
+# half of the same source (rule 2: name and mime always travel together).
+_MESH_MIME_SUFFIX = {
+    "model/gltf-binary": ".glb",
+    "model/fbx": ".fbx",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
 
 
-def _sniff_mesh_suffix(blob: bytes) -> str:
-    """File format by magic bytes — authoritative over delivered names
-    (a name can be missing or wrong; the content cannot)."""
-    if blob[:4] == b"glTF":
-        return ".glb"
-    if blob.startswith(b"Kaydara FBX Binary"):
-        return ".fbx"
-    if blob[:8] == b"\x89PNG\r\n\x1a\n":
-        return ".png"
-    if blob[:3] == b"\xff\xd8\xff":
-        return ".jpg"
+def _mesh_file_kind(f: Dict[str, str]) -> str:
+    """"model" / "image" / "" for one delivered file — ``kind`` from the job
+    view, the mime as the second opinion."""
+    kind = str(f.get("kind") or "").strip().lower()
+    if kind in ("model", "image"):
+        return kind
+    mime = str(f.get("mime") or "").strip().lower()
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("model/"):
+        return "model"
     return ""
 
 
-def _split_mesh_files(blobs: List[bytes], names: List[str]):
-    """Sorts a mesh job's delivered files into the model and — FBX case only —
-    its basecolor texture. Returns ``(model_blob, model_name, texture_blob)``.
-
-    A GLB embeds its textures, so every image delivered next to a GLB is an
-    auxiliary material map and dropped. For an FBX the basecolor is picked by
-    gateway file name; auxiliary maps (metallic/roughness/…) never qualify.
-    An unnamed image (older chains send no names) still counts as basecolor.
-    """
+def _mesh_file_suffix(f: Dict[str, str]) -> str:
+    """Extension a delivered file must be STORED with — from its name, with
+    the mime as fallback. Never sniffed: the JPEG re-encode is per file, so
+    only the response knows whether this map is .png or .jpg."""
     from pathlib import Path as _P
-    model_blob = None
-    model_name = ""
-    images = []  # (blob, lowercased gateway name)
-    for idx, blob in enumerate(blobs):
-        nm = names[idx] if idx < len(names) else ""
-        suf = _sniff_mesh_suffix(blob) or _P(nm).suffix.lower()
-        if suf in (".png", ".jpg", ".jpeg", ".webp"):
-            images.append((blob, nm.lower()))
-        elif model_blob is None:
-            model_blob, model_name = blob, nm
-    if model_blob is None:  # nothing classifiable — first blob is the model
-        if not blobs:
-            return None, "", None
-        model_blob, model_name = blobs[0], (names[0] if names else "")
-        images = [(b, n) for b, n in images if b is not model_blob]
+    suf = _P(str(f.get("name") or "")).suffix.lower()
+    if suf:
+        return suf
+    return _MESH_MIME_SUFFIX.get(str(f.get("mime") or "").strip().lower(), "")
 
-    model_suf = _sniff_mesh_suffix(model_blob) or _P(model_name).suffix.lower()
-    if model_suf == ".glb":
-        return model_blob, model_name, None
-    candidates = [(b, n) for b, n in images
-                  if not any(tok in n for tok in _MESH_AUX_MAP_TOKENS)]
-    preferred = [(b, n) for b, n in candidates
-                 if any(tok in n for tok in _MESH_BASECOLOR_TOKENS)]
-    pick = preferred or candidates
-    return model_blob, model_name, (pick[0][0] if pick else None)
+
+def _split_mesh_files(files: List[Dict[str, Any]], rig: str):
+    """Picks the files a mesh job's result must be STORED as, per
+    mesh-client-spec § 2 + § 3.1. Returns ``(model, texture)`` — each one of
+    the given file dicts (``blob``/``name``/``mime``/``kind``) or None.
+
+    * rig ``mixamo`` / ``none`` → ONLY the model GLB; its texture is embedded,
+      so every delivered map is auxiliary and dropped.
+    * rig ``generic`` → the rigged FBX **and** its ``*_basecolor*`` image, an
+      inseparable pair (the FBX references its texture through a temp path
+      that is dead on our side, so it is re-bound via the stored file name).
+      ``*_metallic*`` is dropped.
+    """
+    models = [f for f in files if _mesh_file_kind(f) == "model"]
+    images = [f for f in files if _mesh_file_kind(f) == "image"]
+    if not models:
+        return None, None
+    if (rig or "").strip().lower() != "generic":
+        return models[0], None
+    rigged = [f for f in models
+              if _MESH_TOKEN_RIGGED_FBX in str(f.get("name") or "").lower()]
+    model = (rigged or models)[0]
+    texture = next(
+        (f for f in images
+         if _MESH_TOKEN_BASECOLOR in str(f.get("name") or "").lower()
+         and _MESH_TOKEN_METALLIC not in str(f.get("name") or "").lower()),
+        None)
+    return model, texture
 
 
 def render_has_reference_image(character_name: str, *,
@@ -456,10 +469,11 @@ class ImageService:
         vice versa. ``backend_glob`` picks a specific alias (its rig is
         verified); empty = cheapest available backend of that rig.
 
-        A job may return TWO files: the generic aliases deliver an FBX plus a
-        separate basecolor PNG (an FBX embeds no texture). The model file keeps
-        our stem with the gateway's suffix; the texture is stored next to it as
-        ``<stem>.png``.
+        A job returns up to THREE files (model + basecolor + metallic map); the
+        rig decides which of them must be stored (see ``_split_mesh_files``).
+        The model file keeps our stem with the gateway's suffix; the texture is
+        stored next to it, keeping ITS delivered extension (.png or .jpg — the
+        gateway re-encodes per file, not per job).
 
         Returns {"ok", "path", "texture_path", "format", "rig", "filename",
         "backend"}.
@@ -504,13 +518,13 @@ class ImageService:
                                          log_meta={"agent_name": character_name,
                                                    "original_prompt": "",
                                                    "media": "mesh"})
-                # Capture the delivered file names ON THIS THREAD: the channel
-                # runs _gen on a queue worker and last_result_names is
+                # Capture the delivered file metadata ON THIS THREAD: the
+                # channel runs _gen on a queue worker and last_result_files is
                 # thread-local — read later from the caller thread it is
                 # empty (that once mislabeled a delivered GLB as .fbx and the
                 # viewer's FBXLoader died on "cannot find the version number").
-                names = list(getattr(backend, "last_result_names", []) or [])
-                return {"blobs": blobs, "names": names} if blobs else []
+                meta = list(getattr(backend, "last_result_files", []) or [])
+                return {"blobs": blobs, "files": meta} if blobs else []
             return self._run_on_backend_channel(
                 backend, _gen, task_type="mesh_generation",
                 agent_name=character_name)
@@ -525,39 +539,46 @@ class ImageService:
         if not result:
             return {"ok": False, "error": "generation failed"}
         blobs: List[bytes] = result["blobs"]
-        names: List[str] = result["names"]
+        files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
+                                       in zip(result["files"], blobs)]
+        used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
 
-        # Sort the returned blobs: the model file (glb/fbx/…) and — for the
-        # generic aliases — its basecolor texture. Content sniffing first,
-        # gateway names as the fallback for formats without a magic check.
-        model_blob, model_name, texture_blob = _split_mesh_files(blobs, names)
+        # Which of the delivered files this rig must STORE — decided by the
+        # artifact token in the gateway file name, never by position/extension.
+        model, texture = _split_mesh_files(files, used_rig)
+        if model is None:
+            logger.error("generate_mesh: kein Modell in der Auslieferung (%s)",
+                         ", ".join(str(f.get("name") or "?") for f in files))
+            return {"ok": False, "error": "no model file delivered"}
+        if used_rig == "generic" and texture is None:
+            # The FBX + basecolor pair is INSEPARABLE: the FBX only references
+            # its texture through a gateway temp path, so an FBX without the
+            # image is unusable and not repairable later. Hard error, not a
+            # warning — storing it would fill the gallery with dead assets.
+            logger.error("generate_mesh: FBX ohne *_basecolor* geliefert (%s)",
+                         ", ".join(str(f.get("name") or "?") for f in files))
+            return {"ok": False, "error": "no basecolor delivered for the FBX"}
 
+        model_name = str(model.get("name") or "")
         out = _P(output_path)
-        suffix = (_sniff_mesh_suffix(model_blob)
-                  or (_P(model_name).suffix.lower() if model_name else ""))
+        suffix = _mesh_file_suffix(model)
         if suffix and suffix != out.suffix.lower():
             out = out.with_suffix(suffix)
         texture_path = ""
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(model_blob)
-            if texture_blob is not None:
-                # PNG or JPEG — the gateway prefers JPEG now (a third of the
-                # size); the extension follows the content.
-                tex = out.with_suffix(_sniff_mesh_suffix(texture_blob) or ".png")
-                tex.write_bytes(texture_blob)
+            out.write_bytes(model["blob"])
+            if texture is not None:
+                # PNG or JPEG — per FILE, so the delivered extension is the
+                # only truthful one.
+                tex = out.with_suffix(_mesh_file_suffix(texture) or ".png")
+                tex.write_bytes(texture["blob"])
                 texture_path = str(tex)
         except Exception as e:
             logger.error("generate_mesh: Schreiben fehlgeschlagen: %s", e)
             return {"ok": False, "error": str(e)}
 
-        used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
         fmt = out.suffix.lstrip(".").lower()
-        if fmt == "fbx" and not texture_path:
-            # An FBX embeds no texture — without the companion PNG the model is
-            # untextured (grey). Surface it instead of silently shipping it.
-            logger.warning("%s: FBX ohne Textur-PNG geliefert (%s)",
-                           getattr(used, "name", "?"), out.name)
         return {"ok": True, "path": str(out), "texture_path": texture_path,
                 "format": fmt, "rig": used_rig,
                 "filename": model_name or out.name,

@@ -568,6 +568,86 @@ def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
         return False
 
 
+# Mesh (img2mesh) backends a BRAND-NEW world starts with — the gateway alias
+# catalog of mesh-client-spec § 3.2/3.3, one entry per alias. face_num carries
+# the family default (0/absent = let the alias decide, which is what the splat
+# pipeline needs), face_num_max the ceiling of a family that HANGS instead of
+# failing above it. Only mesh-relevant fields are seeded; everything else is
+# schema default. Nothing here is retro-written into an existing world — a
+# world's backend list belongs to its admin.
+_MESH_GATEWAY_URL = "http://192.168.8.10:4000"
+_DEFAULT_MESH_BACKENDS = [
+    # (name, rig, cost, face_num, face_num_max, max_concurrent)
+    ("Trellis2-Humanoid-Low", "mixamo", 1, 20000, 0, 0),
+    ("Trellis2-Humanoid-High", "mixamo", 2, 20000, 0, 0),
+    ("Trellis2-Generic-Low", "generic", 1, 20000, 0, 0),
+    ("Trellis2-Generic-High", "generic", 2, 20000, 0, 0),
+    ("Trellis2-Object-Low", "none", 1, 20000, 0, 0),
+    ("Pixal3D-Humanoid", "mixamo", 3, 50000, 0, 2),
+    ("Pixal3D-Generic", "generic", 3, 50000, 0, 0),
+    ("Pixal3D-Object", "none", 5, 50000, 0, 0),
+    # Splat pipeline: no face param at all (input_num_gaussians, default
+    # 10000) — face_num stays 0 so nothing is sent.
+    ("Triposplat-Object", "none", 1, 0, 0, 0),
+    ("Hunyuan3D-Humanoid", "mixamo", 2, 40000, 40000, 0),
+    ("Hunyuan3D-Generic", "generic", 2, 40000, 40000, 0),
+    ("Hunyuan3D-Object", "none", 2, 40000, 40000, 0),
+]
+
+
+def _default_mesh_backend_entries() -> list:
+    """The seed list as config dicts."""
+    out = []
+    for name, rig, cost, faces, faces_max, concurrent in _DEFAULT_MESH_BACKENDS:
+        entry = {
+            "name": name,
+            "enabled": True,
+            "api_type": "openai_mesh",
+            "api_url": _MESH_GATEWAY_URL,
+            "api_key": "",
+            "model": name,
+            "category": "img2mesh",
+            "cost": cost,
+            "timeout": 3600,
+            "poll_interval": 2,
+            "max_concurrent": concurrent,
+            "mesh_rig": rig,
+            "remove_background": True,
+            "no_fingers": False,
+        }
+        if faces:
+            entry["face_num"] = faces
+        if faces_max:
+            entry["face_num_max"] = faces_max
+        out.append(entry)
+    return out
+
+
+def _seed_default_mesh_backends(config: dict, config_path: Path) -> bool:
+    """Seeds the img2mesh backend catalog into a BRAND-NEW world's config.
+
+    Only ever called for a world whose config.json did not exist yet: an
+    existing world's backend list is the admin's, and silently appending
+    aliases to it would resurrect entries they deleted on purpose.
+    """
+    ig = config.setdefault("image_generation", {})
+    backends = ig.setdefault("backends", [])
+    if any(isinstance(b, dict) and b.get("api_type") == "openai_mesh"
+           for b in backends):
+        return False
+    backends.extend(_default_mesh_backend_entries())
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("Default mesh backends seeded (%d) -> %s",
+                    len(_DEFAULT_MESH_BACKENDS), config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to seed default mesh backends to %s: %s",
+                     config_path, e)
+        return False
+
+
 def _migrate_backend_categories(config: dict, config_path: Path) -> bool:
     """One-time rename of the backend category ``generate`` -> ``txt2img``.
 
@@ -749,7 +829,11 @@ def load(config_path: Optional[Path] = None) -> dict:
     _SECRETS_PATH = _CONFIG_PATH.parent / "secrets.json"
     path = _CONFIG_PATH
 
-    if not path.exists():
+    # A world whose config.json does not exist yet gets the one-time defaults
+    # a NEW world starts with (mesh backends); an existing world never does.
+    fresh_world = not path.exists()
+
+    if fresh_world:
         logger.warning("Config file not found: %s — using empty config", path)
         _CONFIG = {}
     else:
@@ -762,6 +846,8 @@ def load(config_path: Optional[Path] = None) -> dict:
             _CONFIG = {}
 
     _seed_default_use_cases(_CONFIG, path)
+    if fresh_world:
+        _seed_default_mesh_backends(_CONFIG, path)
     _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
     _migrate_backend_categories(_CONFIG, path)
@@ -1088,7 +1174,7 @@ def _flatten_to_env(config: dict) -> None:
                      "seconds", "video_endpoint",
                      # Mesh backend (openai_mesh, img2mesh)
                      "mesh_endpoint", "mesh_rig", "remove_background",
-                     "face_num", "no_fingers"]:
+                     "face_num", "face_num_max", "no_fingers"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):

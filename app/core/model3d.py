@@ -201,6 +201,9 @@ def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
                 "model": getattr(b, "model", ""),
                 "cost": getattr(b, "cost", 0),
                 "face_num": getattr(b, "face_num", None),
+                # 0 = no cap. A backend that HANGS above a face count (rather
+                # than failing) needs the dialog to stop the value, not the job.
+                "face_num_max": getattr(b, "face_num_max", 0),
                 "rig": getattr(b, "mesh_rig", "mixamo"),
             })
     except Exception as e:
