@@ -34,6 +34,40 @@ def _user_notification_tool_names() -> frozenset:
         return frozenset()
 
 
+def _within_max_age(rows: list) -> list:
+    """Drops journal entries older than ``chat.anti_rep_max_age_hours``.
+
+    "The last six turns" means something else on this path than in a chat: six
+    journal entries can span days. Measured on 2026-08-02, the duplicates that
+    triggered a bump were 1.2 to 91.6 hours old (median 49) — one character had
+    the same three duplicates from two days earlier penalise every single turn.
+    The window is GAME time, so a frozen world freezes it too.
+
+    0 disables the age limit and restores the pure entry-count window.
+    """
+    from app.core import config
+
+    max_age = float(config.get("chat.anti_rep_max_age_hours", 12) or 0)
+    if max_age <= 0 or not rows:
+        return rows
+    from datetime import timedelta
+    from app.core.timeutils import game_now, parse_iso
+
+    cutoff = game_now() - timedelta(hours=max_age)
+    fresh = []
+    for r in rows:
+        stamp = r.get("game_ts") or r.get("ts")
+        if not stamp:
+            fresh.append(r)  # undatable entry: do not silently drop it
+            continue
+        try:
+            if parse_iso(stamp) >= cutoff:
+                fresh.append(r)
+        except Exception:
+            fresh.append(r)
+    return fresh
+
+
 def thought_anti_repetition_overrides(character_name: str,
                                       base_temperature: float) -> Dict[str, Any]:
     """Reactive temperature bump for a thought turn — same net as in the chat.
@@ -65,10 +99,11 @@ def thought_anti_repetition_overrides(character_name: str,
         logger.debug("thought anti-repetition: journal unreadable for %s: %s",
                      character_name, e)
         return {}
+    rows = _within_max_age(rows or [])
     # list_thoughts is newest first — the counter reads chat order (oldest
     # first), so that "seen before" means what it says.
     recent = [{"role": "assistant", "content": (r.get("content") or "")}
-              for r in reversed(rows or []) if (r.get("content") or "").strip()]
+              for r in reversed(rows) if (r.get("content") or "").strip()]
     return anti_repetition_overrides(recent, base_temperature,
                                      agent_name=character_name,
                                      with_frequency_penalty=False)
