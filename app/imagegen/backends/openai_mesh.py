@@ -228,9 +228,11 @@ class OpenAIMeshBackend(ImageBackend):
         }
 
         url = f"{self.api_url}{self.mesh_endpoint}"
+        # `faces`, not alias_params["face num"]: an alias may declare ONLY
+        # "num" (the splat-based ones do), and then that key does not exist —
+        # the log line used to raise a KeyError and kill the job.
         logger.info("%s: starte Mesh-Job (Alias=%s, faces=%d, name='%s')",
-                    self.name, payload["model"], alias_params["face num"],
-                    alias_params["name"])
+                    self.name, payload["model"], faces, alias_params["name"])
         job_id = submit_job(self, url, payload, "Mesh")
         if not job_id:
             return []
