@@ -49,21 +49,24 @@ def extract_memories_from_exchange(character_name: str,
         logger.debug("[%s] extraction skipped: no partner_name", character_name)
         return []
 
-    # Bestehende Memories fuer Deduplizierung + Commitment-Tracking
+    # Existing memories for deduplication + commitment tracking.
+    # load_memories sorts ts DESC, so the NEWEST entries are at the front —
+    # a [-15:] slice would hand the model the fifteen OLDEST memories as its
+    # "do not repeat" context, which is the opposite of what it needs.
     from app.models.memory import load_memories
     existing = load_memories(character_name)
     existing_summary = "\n".join(
-        f"- {e['content']}" for e in existing[-15:]
+        f"- {e['content']}" for e in existing[:15]
     ) if existing else "(none yet)"
 
-    # Offene Commitments auflisten (fuer Completion-Erkennung)
+    # Open commitments (for completion detection) — same order, same reason.
     open_commitments = [
         e for e in existing
         if e.get("memory_type") == "commitment"
         and "completed" not in e.get("tags", [])
     ]
     commitments_list = "\n".join(
-        f"- [ID:{c['id']}] {c['content']}" for c in open_commitments[-10:]
+        f"- [ID:{c['id']}] {c['content']}" for c in open_commitments[:10]
     ) if open_commitments else ""
 
     # Clean own message (remove meta-tags)
@@ -277,6 +280,12 @@ def apply_extracted_memories(character_name: str,
             extra_meta["source"] = source
         if event_id:
             extra_meta["event_id"] = event_id
+        # The due hint the model gave us. It used to end here: the meta
+        # whitelist knew no "delay", so it was dropped without a trace and no
+        # stored commitment in any world ever carried one — while the prompt
+        # block kept promising "(when: …)".
+        if delay:
+            extra_meta["delay"] = delay
 
         result = add_memory(
             character_name=character_name,

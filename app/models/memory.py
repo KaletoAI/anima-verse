@@ -96,11 +96,44 @@ def _row_to_entry(row) -> Dict[str, Any]:
     return entry
 
 
+# Everything an entry may carry into the `meta` JSON column. The list is a
+# whitelist on purpose — a memory row must not become a dumping ground — but it
+# used to be written out twice, and a key that was not in it vanished WITHOUT a
+# trace. Two features died that way: `delay` (a commitment's due hint, dropped
+# by apply_extracted_memories → 0 rows with meta.delay in any world) and
+# `summary`/`summary_stale` (the pairwise relationship summary, which could
+# therefore never be stored and stayed permanently "stale").
+META_KEYS = ("context", "importance", "access_count", "last_accessed",
+             "decay_factor", "related_character", "delay",
+             "summary", "summary_stale")
+
+# Entry fields that are stored in their own columns, not in `meta` — knowing
+# them is what lets the builder below tell "belongs elsewhere" from "typo".
+_ROW_KEYS = ("id", "memory_type", "tier", "content", "timestamp", "ts",
+             "tags", "source_ids")
+
+
+def _build_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Picks the meta fields out of an entry and complains about the rest.
+
+    A silent drop is the worst outcome: the caller sees a successful save and
+    the field is simply gone. Unknown keys are still not stored — but they now
+    say so.
+    """
+    meta = {k: entry[k] for k in META_KEYS if k in entry}
+    unknown = [k for k in entry
+               if k not in META_KEYS and k not in _ROW_KEYS]
+    if unknown:
+        logger.warning(
+            "memory entry carries unknown field(s) %s — not stored. Add them to "
+            "META_KEYS in app/models/memory.py if they belong in meta.",
+            ", ".join(sorted(unknown)))
+    return meta
+
+
 def _entry_to_row(entry: Dict[str, Any]) -> Dict[str, Any]:
     """Konvertiert ein Entry-Dict in DB-Felder."""
-    meta_keys = ("context", "importance", "access_count", "last_accessed",
-                 "decay_factor", "related_character")
-    meta = {k: entry[k] for k in meta_keys if k in entry}
+    meta = _build_meta(entry)
     return {
         "tier": entry.get("memory_type", "semantic"),
         "ts": entry.get("timestamp", _now_iso()),
@@ -232,8 +265,7 @@ def add_memory(character_name: str,
         "related_character": related_character,
     }
     try:
-        meta = {k: entry[k] for k in ("context", "importance", "access_count",
-                "last_accessed", "decay_factor", "related_character") if k in entry}
+        meta = _build_meta(entry)
         if extra_meta:
             meta.update(extra_meta)
         with transaction() as conn:
