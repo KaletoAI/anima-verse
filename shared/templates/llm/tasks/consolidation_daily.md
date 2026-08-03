@@ -30,6 +30,7 @@ Inner life of the day — what {{ character_name }} thought while it happened
 
 Write 3-5 compact sentences from {{ character_name }}'s perspective (third person).
 Focus on: key moments, people involved, emotions, decisions.
-Name every person by the name used in the material — never only by role or relationship ("her brother", "the colleague"). Use ONLY names that literally appear above; never complete or resolve a name that is not written there.
+Name every person by the name used in the material — never only by role or relationship ("her brother", "the colleague"), and never by a stand-in like "the narrator", "the conversation partner" or "the other one". Use ONLY names that literally appear above; never complete or resolve a name that is not written there.
+Keep WHO did or said what exactly as the material has it, and do not turn an intention into an accomplished action.
 {% if thoughts_of_day %}Let the inner life colour WHY things happened — but write about the day, not about the thinking.
 {% endif %}Reply with ONLY the summary.{{ lang_instruction }}

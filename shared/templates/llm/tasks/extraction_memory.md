@@ -6,10 +6,12 @@ placeholders:
   speaker_b: Name of the memory owner (the character whose memories we extract)
   text_a: What speaker_a said
   text_b: What speaker_b said
-  existing_summary: Bullet list of recent existing memories ("Noch keine Erinnerungen." if none)
+  existing_summary: Bullet list of recent existing memories ("(none yet)" if none)
   commitments_block: Pre-formatted block of open commitments (empty string when none)
+  lang_instruction: Optional "\nWrite the memory contents in <Language>." or empty
 ---
 ## system
+You are a strict information extractor. Extract ONLY what the exchange literally states — never infer, complete or embellish a fact, a motive or a relationship, and never change who said or did something. Reply ONLY with valid JSON — no commentary, no explanation, no markdown code fences.
 
 ## user
 Analyze this conversation exchange between two characters and extract important memories for {{ speaker_b }}.
@@ -35,9 +37,10 @@ Already stored memories (DO NOT repeat):
 IMPORTANT:
 - Extract ONLY what is literally said in the exchange above. Never infer, complete or embellish a fact, a motive or a relationship that is not stated there. When in doubt, leave it out.
 - Extract ONLY facts (semantic) and promises (commitment)
+- Keep WHO did or said what exactly as the source line has it. Never swap speaker and addressee, never move a statement to the other person, and never turn an intention into an accomplished action ("planned to warn her" is not "warned her"). Report an act with the neutral word the source uses — do not upgrade "reported" to "betrayed".
 - NO episodic memories (experiences) — those are auto-consolidated from chat history
 - Extract memories from BOTH speakers when relevant for {{ speaker_b }}'s memory
-- Use the actual names "{{ speaker_a }}" and "{{ speaker_b }}" — NEVER write "User", "Player", "Spieler", "the user", "I" or generic labels
+- Use the actual names "{{ speaker_a }}" and "{{ speaker_b }}" — NEVER write "User", "Player", "Spieler", "the user", "I" or generic labels. A stand-in like "the narrator", "my conversation partner", "the other one" or "der Erzähler" is a generic label too.{{ lang_instruction }}
 - "commitment" requires EITHER (a) a concrete time hint OR (b) an external addressee ({{ speaker_a }} or another named character). Inner plans without a time hint and without an addressee are NOT commitments — at most semantic.
 - For commitments to {{ speaker_a }}: set "related_character": "{{ speaker_a }}".
 - For commitments to a third party named in the text: set "related_character" to that name.

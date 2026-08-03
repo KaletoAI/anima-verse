@@ -230,14 +230,25 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
 
     # --- Tool / decision LLM ------------------------------------------------
     "extraction": {
+        # A2: model_class raised to medium — of 84 stored entries read against
+        # their source, 5 contradicted it, and every one of those was an
+        # attribution error (who said or did it; an intention turned into an
+        # accomplished action). That is this task's expensive failure mode, and
+        # it is what a smaller model gets wrong. No live evidence for
+        # min_context: the path has not fired since 2026-06-07 (findings.md A2).
         "tools": False, "vision": False, "json": True, "min_context": 2048,
-        "model_class": "small", "arch": "any", "hallucination_risk": "high",
+        "model_class": "medium", "arch": "any", "hallucination_risk": "high",
         "creative": False, "language_de": True, "latency_sensitive": False,
     },
     "extraction_chat_state": {
+        # A2: latency_sensitive corrected to False — chat.py hands the call to
+        # run_in_executor WITHOUT awaiting it, from post_process_response, which
+        # runs after the stream is complete; no SSE event carries the result.
+        # The stat_effects branch is a daemon thread without a turn at all.
+        # small confirmed: 0 parse errors and 0 invented piece names in 880 calls.
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
-        "creative": False, "language_de": False, "latency_sensitive": True,
+        "creative": False, "language_de": False, "latency_sensitive": False,
     },
     "random_event": {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
@@ -311,7 +322,13 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
 
     # --- Summaries ----------------------------------------------------------
     "consolidation": {
-        "tools": False, "vision": False, "json": False, "min_context": 2048,
+        # A2: min_context 2048 -> 4096, measured input maximum 4390 tokens (the
+        # retrospect branch alone has P90 3286). latency_sensitive stays False
+        # and is now confirmed: history_manager became fire-and-forget, and the
+        # slowest branches (daily/today, P50 55-67 s) are pure background jobs.
+        # json=False holds for the summary branches ONLY — retrospect and
+        # story_arc_* share this routing entry and demand strict JSON (Q3).
+        "tools": False, "vision": False, "json": False, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "high",
         "creative": False, "language_de": True, "latency_sensitive": False,
     },

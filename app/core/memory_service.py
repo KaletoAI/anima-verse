@@ -89,7 +89,8 @@ def extract_memories_from_exchange(character_name: str,
             text_a=partner_message,
             text_b=clean_own[:1500],
             existing_summary=existing_summary,
-            commitments_block=commitments_block)
+            commitments_block=commitments_block,
+            lang_instruction=_lang_instruction(character_name, "memory contents"))
 
         response = llm_call(
             task="extraction",
@@ -596,16 +597,19 @@ def run_consolidation_for_all_users():
     submit_consolidation_for_all()
 
 
-def _lang_instruction(character_name: str) -> str:
-    """Summaries in the character's language — the LLM defaults to English
+def _lang_instruction(character_name: str, noun: str = "summary") -> str:
+    """Stored text in the character's language — the LLM defaults to English
     otherwise. Empty string for English characters (and when the profile is
     unreadable), so the instruction is simply absent instead of wrong.
+
+    ``noun`` names what is being written, so the sentence fits the task
+    ("summary" for the rollups, "memory contents" for the extraction).
     """
     try:
         from app.models.character import get_character_profile, LANGUAGE_MAP
         code = (get_character_profile(character_name) or {}).get("language", "")
         if code and code != "en":
-            return f"\nWrite the summary in {LANGUAGE_MAP.get(code, code)}."
+            return f"\nWrite the {noun} in {LANGUAGE_MAP.get(code, code)}."
     except Exception:
         pass
     return ""
