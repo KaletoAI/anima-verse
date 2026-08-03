@@ -25,7 +25,7 @@ Extract as a JSON array. For each memory:
 - related_character: the OTHER character involved in this memory — usually "{{ speaker_a }}". Use the exact name, never a generic label.
 - importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor, 1=trivial)
 - tags: list of keywords
-- delay: ONLY for commitments — time hint when (e.g. "30m", "2h", "1d", "tomorrow", "14:00"). Empty if no time given.
+- delay_minutes: ONLY for commitments — how many minutes from now the promise is due, as a NUMBER (30 = in half an hour, 120 = in two hours, 480 = this evening, 1440 = tomorrow, 10080 = next week). Use 0 when no time was given. Never write words here.
 
 Already stored memories (DO NOT repeat):
 {{ existing_summary }}
@@ -44,16 +44,16 @@ IMPORTANT:
 - "commitment" requires EITHER (a) a concrete time hint OR (b) an external addressee ({{ speaker_a }} or another named character). Inner plans without a time hint and without an addressee are NOT commitments — at most semantic.
 - For commitments to {{ speaker_a }}: set "related_character": "{{ speaker_a }}".
 - For commitments to a third party named in the text: set "related_character" to that name.
-- For commitments with a time hint: set "delay" (e.g. "tomorrow", "at 14:00", "in 2 hours")
+- For commitments with a time hint: set "delay_minutes" to the number of minutes from now (in two hours = 120, tomorrow = 1440). A promise without a time gets 0.
 - MAXIMUM 2 commitments per extraction. If more plans appear in the text, pick the most important ones.
-- If an open promise was fulfilled by this exchange, return its ID in "completed_ids"
+- If an open promise was fulfilled by this exchange, put the number shown in its [ID:…] bracket into "completed_ids" — the plain number, nothing else.
 - Ignore meta-tags, trivia, smalltalk
 - If nothing new: empty arrays []
 
 Reply ONLY with valid JSON:
 {"memories": [
-    {"memory_type": "...", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay": "..."},
+    {"memory_type": "...", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay_minutes": N},
     ...
 ],
-"completed_ids": ["mem_...", ...]
+"completed_ids": [<id from the [ID:…] bracket>, ...]
 }

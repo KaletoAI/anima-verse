@@ -156,10 +156,14 @@ def extract_memories_from_exchange(character_name: str,
                 related = partner_name
             if related:
                 entry["related_character"] = related
-            # Delay fuer Commitments erfassen
-            delay = (item.get("delay") or "").strip()
-            if delay and mem_type == "commitment":
-                entry["delay"] = delay
+            # Due hint for commitments — a number of minutes from now.
+            if mem_type == "commitment":
+                try:
+                    minutes = int(item.get("delay_minutes") or 0)
+                except (TypeError, ValueError):
+                    minutes = 0
+                if minutes > 0:
+                    entry["delay_minutes"] = minutes
             valid.append(entry)
 
         # Erledigte Commitments markieren
@@ -174,15 +178,22 @@ def extract_memories_from_exchange(character_name: str,
         return []
 
 
-def _mark_commitments_completed(character_name: str, commitment_ids: List[str]
+def _mark_commitments_completed(character_name: str, commitment_ids: List[Any]
 ):
-    """Markiert Commitments als erledigt (tag 'completed' hinzufuegen)."""
+    """Marks commitments as done (adds the 'completed' tag).
+
+    The ids come from an LLM, so they arrive as numbers or as strings of
+    numbers depending on the day. The entry id is the integer row id, and the
+    prompt prints it as ``[ID:123]`` — a returned ``"123"`` used to match
+    nothing at all, silently. Both sides are compared as text.
+    """
     from app.models.memory import load_memories, save_memories
 
+    wanted = {str(i).strip() for i in commitment_ids if str(i).strip()}
     entries = load_memories(character_name)
     changed = False
     for entry in entries:
-        if entry.get("id") in commitment_ids and entry.get("memory_type") == "commitment":
+        if str(entry.get("id")) in wanted and entry.get("memory_type") == "commitment":
             tags = entry.get("tags", [])
             if "completed" not in tags:
                 tags.append("completed")
@@ -241,7 +252,17 @@ def apply_extracted_memories(character_name: str,
     for item in extracted:
         tags = item.get("tags", [])
         mem_type = item.get("memory_type", "semantic")
-        delay = item.get("delay", "")
+        # The model returns a number of minutes now, not prose. The old
+        # free-text hint could not be parsed reliably: the parser knew
+        # German words and bare "HH:MM", while the template asked for
+        # "tomorrow" and "at 14:00" — both yielded 0, so no commitment
+        # ever produced a reminder.
+        try:
+            delay_minutes = int(item.get("delay_minutes") or 0)
+        except (TypeError, ValueError):
+            delay_minutes = 0
+        if delay_minutes < 0:
+            delay_minutes = 0
         new_content = item.get("content", "")
 
         # Dedup: gegen alle <14d alten Memories. Bei >50% Keyword-Overlap skip,
@@ -253,15 +274,15 @@ def apply_extracted_memories(character_name: str,
         # Background-Pfad: commitment ohne delay UND ohne externen Adressaten
         # → semantic. Bleibt als Fakt erhalten, faellt aber unter den 50er-Cap
         # statt unter den commitment-Schutz.
-        if is_background and mem_type == "commitment" and not delay:
+        if is_background and mem_type == "commitment" and not delay_minutes:
             if not _ADDRESSEE_RE.search(new_content or ""):
                 mem_type = "semantic"
 
         # Commitment mit Zeitangabe → Intent erzeugen
         intent_created = False
-        if mem_type == "commitment" and delay:
-            _create_intent_from_commitment(character_name, item["content"], delay
-            )
+        if mem_type == "commitment" and delay_minutes:
+            _create_intent_from_commitment(character_name, item["content"],
+                                           delay_minutes)
             tags = list(tags) + ["intent_created"]
             intent_created = True
 
@@ -284,8 +305,8 @@ def apply_extracted_memories(character_name: str,
         # whitelist knew no "delay", so it was dropped without a trace and no
         # stored commitment in any world ever carried one — while the prompt
         # block kept promising "(when: …)".
-        if delay:
-            extra_meta["delay"] = delay
+        if delay_minutes:
+            extra_meta["delay_minutes"] = delay_minutes
 
         result = add_memory(
             character_name=character_name,
@@ -301,14 +322,19 @@ def apply_extracted_memories(character_name: str,
     return count
 
 
-def _create_intent_from_commitment(character_name: str, content: str, delay: str
-):
-    """Erzeugt einen remind-Intent aus einem Commitment mit Zeitangabe."""
+def _create_intent_from_commitment(character_name: str, content: str,
+                                   delay_minutes: int):
+    """Creates a remind intent from a commitment that carries a due hint.
+
+    ``delay_minutes`` comes straight from the extraction template as a number.
+    It used to be free text that a German-centric parser tried to read while
+    the template asked for English hints — "tomorrow" and "at 14:00" both
+    parsed to zero, so no commitment ever produced a reminder.
+    """
     try:
         from app.core.intent_engine import Intent, execute_intent
 
-        # Delay normalisieren
-        delay_seconds = _parse_commitment_delay(delay)
+        delay_seconds = int(delay_minutes) * 60
         if delay_seconds <= 0:
             return
 
@@ -334,56 +360,6 @@ def _create_intent_from_commitment(character_name: str, content: str, delay: str
 
     except Exception as e:
         logger.warning("Commitment→Intent Fehler: %s", e)
-
-
-def _parse_commitment_delay(delay: str) -> int:
-    """Parst natuerlichsprachige Zeitangaben zu Sekunden.
-
-    Unterstuetzt: 30m, 2h, 1d, morgen, spaeter, uebermorgen, HH:MM
-    """
-    delay = delay.strip().lower()
-    if not delay:
-        return 0
-
-    # Relative: 30m, 2h, 1d
-    m = re.match(r'^(\d+)\s*(m|min|h|hr|d|tag)e?$', delay)
-    if m:
-        val = int(m.group(1))
-        unit = m.group(2)
-        if unit in ('m', 'min'):
-            return val * 60
-        elif unit in ('h', 'hr'):
-            return val * 3600
-        elif unit in ('d', 'tag'):
-            return val * 86400
-
-    # Natuerlichsprachig
-    if 'morgen' in delay and 'uebermorgen' not in delay:
-        return 16 * 3600  # ~morgen frueh (16h von jetzt)
-    if 'uebermorgen' in delay:
-        return 40 * 3600
-    if 'spaeter' in delay or 'later' in delay:
-        return 2 * 3600  # 2 Stunden
-    if 'bald' in delay or 'soon' in delay:
-        return 1 * 3600
-    if 'naechste woche' in delay or 'next week' in delay:
-        return 7 * 86400
-    if 'heute abend' in delay or 'tonight' in delay:
-        return 6 * 3600
-
-    # HH:MM Format
-    time_match = re.match(r'^(\d{1,2}):(\d{2})$', delay)
-    if time_match:
-        target_h = int(time_match.group(1))
-        target_m = int(time_match.group(2))
-        now = utc_now()
-        target = now.replace(hour=target_h, minute=target_m, second=0, microsecond=0)
-        if target <= now:
-            target += timedelta(days=1)  # Morgen zur gleichen Zeit
-        diff = (target - now).total_seconds()
-        return max(60, int(diff))
-
-    return 0
 
 
 # ---------------------------------------------------------------------------

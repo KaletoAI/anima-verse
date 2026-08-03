@@ -99,12 +99,12 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # Everything an entry may carry into the `meta` JSON column. The list is a
 # whitelist on purpose — a memory row must not become a dumping ground — but it
 # used to be written out twice, and a key that was not in it vanished WITHOUT a
-# trace. Two features died that way: `delay` (a commitment's due hint, dropped
-# by apply_extracted_memories → 0 rows with meta.delay in any world) and
+# trace. Two features died that way: the due hint of a commitment (handed in by
+# apply_extracted_memories, dropped here → 0 rows carrying one in any world) and
 # `summary`/`summary_stale` (the pairwise relationship summary, which could
 # therefore never be stored and stayed permanently "stale").
 META_KEYS = ("context", "importance", "access_count", "last_accessed",
-             "decay_factor", "related_character", "delay",
+             "decay_factor", "related_character", "delay_minutes",
              "summary", "summary_stale")
 
 # Entry fields that are stored in their own columns, not in `meta` — knowing

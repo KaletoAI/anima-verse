@@ -291,6 +291,31 @@ def _build_general_task(profile: Dict[str, Any]) -> str:
     return (profile.get("character_task", "") or "").strip()
 
 
+def _due_hint(timestamp: str, delay_minutes: int) -> str:
+    """Turns "promised at T, due T+minutes" into a short GAME-time hint.
+
+    Returns "" when the timestamp is unreadable — a wrong due date is worse
+    than none at all.
+    """
+    from app.core.timeutils import game_now, parse_iso
+    from datetime import timedelta
+    try:
+        due = parse_iso(timestamp) + timedelta(minutes=int(delay_minutes))
+    except Exception:
+        return ""
+    try:
+        remaining = (due - game_now()).total_seconds() / 60.0
+    except Exception:
+        return ""
+    if remaining <= 0:
+        return "overdue"
+    if remaining < 90:
+        return f"in {int(remaining)} min"
+    if remaining < 48 * 60:
+        return f"in {int(remaining / 60)} h"
+    return f"in {int(remaining / 1440)} d"
+
+
 def _build_commitments_block(character_name: str) -> str:
     """Open commitments — promises this character made and hasn't fulfilled."""
     try:
@@ -314,8 +339,18 @@ def _build_commitments_block(character_name: str) -> str:
             content = (m.get("content") or "").strip()
             if not content:
                 continue
-            delay = (m.get("delay") or "").strip()
-            suffix = f" (when: {delay})" if delay else ""
+            # Due hint, stored as minutes from the moment of the promise.
+            # It used to read a "delay" field that the storage layer dropped,
+            # so this suffix has never once appeared.
+            suffix = ""
+            try:
+                minutes = int(m.get("delay_minutes") or 0)
+            except (TypeError, ValueError):
+                minutes = 0
+            if minutes > 0:
+                due = _due_hint(m.get("timestamp", ""), minutes)
+                if due:
+                    suffix = f" (due: {due})"
             lines.append(f"- {content}{suffix}")
         return "\n".join(lines)
     except Exception as e:
