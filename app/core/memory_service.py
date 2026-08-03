@@ -54,7 +54,7 @@ def extract_memories_from_exchange(character_name: str,
     existing = load_memories(character_name)
     existing_summary = "\n".join(
         f"- {e['content']}" for e in existing[-15:]
-    ) if existing else "Noch keine Erinnerungen."
+    ) if existing else "(none yet)"
 
     # Offene Commitments auflisten (fuer Completion-Erkennung)
     open_commitments = [
@@ -596,8 +596,23 @@ def run_consolidation_for_all_users():
     submit_consolidation_for_all()
 
 
+def _lang_instruction(character_name: str) -> str:
+    """Summaries in the character's language — the LLM defaults to English
+    otherwise. Empty string for English characters (and when the profile is
+    unreadable), so the instruction is simply absent instead of wrong.
+    """
+    try:
+        from app.models.character import get_character_profile, LANGUAGE_MAP
+        code = (get_character_profile(character_name) or {}).get("language", "")
+        if code and code != "en":
+            return f"\nWrite the summary in {LANGUAGE_MAP.get(code, code)}."
+    except Exception:
+        pass
+    return ""
+
+
 def _llm_summarize(system_prompt: str, user_prompt: str, character_name: str) -> str:
-    """Ruft LLM fuer eine Zusammenfassung auf. Returns leeren String bei Fehler."""
+    """Calls the LLM for a summary. Returns an empty string on failure."""
     try:
         from app.core.llm_router import llm_call
         response = llm_call(
@@ -673,16 +688,7 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
             continue
         existing = existing_daily.get(day_str, "")
 
-        # Tages-Summary in der Sprache des Characters (sonst defaultet das LLM
-        # auf Englisch). LANGUAGE_MAP wandelt den Code in den Klarnamen.
-        lang_instruction = ""
-        try:
-            from app.models.character import get_character_profile, LANGUAGE_MAP
-            _lang = (get_character_profile(character_name) or {}).get("language", "")
-            if _lang and _lang != "en":
-                lang_instruction = f"\nWrite the summary in {LANGUAGE_MAP.get(_lang, _lang)}."
-        except Exception:
-            pass
+        lang_instruction = _lang_instruction(character_name)
 
         # Inner life of that day (plan-thought-journal.md) — private to this
         # character, empty when the journal has nothing for the date.
@@ -840,6 +846,7 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
             "consolidation_weekly",
             week_key=week_key,
             character_name=character_name,
+            lang_instruction=_lang_instruction(character_name),
             entries_text=entries_text)
 
         summary = _llm_summarize(sys_prompt, user_prompt, character_name)
@@ -930,6 +937,7 @@ def _consolidate_weekly_to_monthly(character_name: str) -> int:
             "consolidation_monthly",
             month_key=month_key,
             character_name=character_name,
+            lang_instruction=_lang_instruction(character_name),
             entries_text=entries_text)
 
         summary = _llm_summarize(sys_prompt, user_prompt, character_name)

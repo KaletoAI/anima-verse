@@ -14,7 +14,7 @@ placeholders:
 ---
 ## system
 You are a strict information extractor. Reply ONLY with valid JSON, no commentary.
-{% if not outfit_locked %}
+{% if not outfit_locked and piece_list %}
 {{ target_name }} currently has these clothing pieces equipped:
 {{ piece_list }}
 
@@ -44,7 +44,7 @@ Rules for "stats":
 Extraction APPLIES ONLY TO the {{ source_label }}. The "Context" block (if present) is provided to disambiguate references (e.g. "yes, gladly" only makes sense once you see the request that triggered it) — do NOT extract from the context.
 
 Reply schema:
-{ {%- if not is_avatar -%}"pose": "<short phrase>"{% if stats_enabled %}, "stats": {"<value>": <delta>, ...}{% endif %}{% if not outfit_locked %}, {% endif %}{%- endif -%}{% if not outfit_locked %}"removed": ["<exact piece name>", ...]{% endif %} }
+{ {%- if not is_avatar -%}"pose": "<short phrase>"{% if stats_enabled %}, "stats": {"<value>": <delta>, ...}{% endif %}{% if not outfit_locked and piece_list %}, {% endif %}{%- endif -%}{% if not outfit_locked and piece_list %}"removed": ["<exact piece name>", ...]{% endif %} }
 
 ## user
 /no_think

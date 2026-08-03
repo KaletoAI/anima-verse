@@ -19,9 +19,9 @@ Analyze this conversation exchange between two characters and extract important 
 
 Extract as a JSON array. For each memory:
 - memory_type: "semantic" (fact/info) or "commitment" (promise/plan)
-- content: short, compact sentence (max 1-2 sentences) — written from {{ speaker_b }}'s perspective in third person
+- content: short, compact sentence (max 1-2 sentences) — written from {{ speaker_b }}'s perspective in third person. Every person in it is named, never only by role or relationship ("her brother", "the colleague") — this line is read months later without this conversation. Use ONLY names that literally appear in the exchange above; never complete or resolve a name that is not written there.
 - related_character: the OTHER character involved in this memory — usually "{{ speaker_a }}". Use the exact name, never a generic label.
-- importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor)
+- importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor, 1=trivial)
 - tags: list of keywords
 - delay: ONLY for commitments — time hint when (e.g. "30m", "2h", "1d", "tomorrow", "14:00"). Empty if no time given.
 
@@ -33,6 +33,7 @@ Already stored memories (DO NOT repeat):
 {% endif %}
 
 IMPORTANT:
+- Extract ONLY what is literally said in the exchange above. Never infer, complete or embellish a fact, a motive or a relationship that is not stated there. When in doubt, leave it out.
 - Extract ONLY facts (semantic) and promises (commitment)
 - NO episodic memories (experiences) — those are auto-consolidated from chat history
 - Extract memories from BOTH speakers when relevant for {{ speaker_b }}'s memory
