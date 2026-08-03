@@ -578,9 +578,10 @@ def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
 _MESH_GATEWAY_URL = "http://192.168.8.10:4000"
 # Mesh→mesh alias: reduces an EXISTING mesh (category "mesh2mesh"), the
 # "Create low variant" action of the model galleries. Deliberately only
-# `mesh-shrink`: the quad remesher `mesh-shrink-quad` crashes backend-side
-# (mesh-client-spec § 3.4) and a configured-but-broken alias is worse than a
-# missing one.
+# `mesh-shrink`: the quad remesher `mesh-shrink-quad` works but treats
+# `input_face_num` as a rough guide only (5000 requested measured as ~38000
+# triangles, mesh-client-spec § 3.4) — a low variant needs a PREDICTABLE
+# target size, which `mesh-shrink` hits.
 _DEFAULT_SHRINK_BACKEND = ("mesh-shrink", "none", 1, 5000, 0, 0)
 
 _DEFAULT_MESH_BACKENDS = [

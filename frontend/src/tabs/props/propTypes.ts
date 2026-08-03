@@ -61,6 +61,8 @@ export interface MeshBackendInfo {
   face_num?: number | null
   /** Hard ceiling of the face count (0/absent = none). */
   face_num_max?: number | null
+  /** Alias can bake reduced LOD stages in the same job (from its schema). */
+  lod_stages?: boolean
 }
 
 // Categories are an open vocabulary (free text): the shared datalist offers

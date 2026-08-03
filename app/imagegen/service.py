@@ -73,6 +73,17 @@ def _log_image_failure(lv: dict, error_msg: str) -> None:
 _MESH_TOKEN_BASECOLOR = "_basecolor"
 _MESH_TOKEN_METALLIC = "_metallic"
 _MESH_TOKEN_RIGGED_FBX = "_articulationxl"
+_MESH_TOKEN_RIGGED_GLB = "_rigged"
+
+# The ComfyUI export counter the gateway appends to the MAIN result, directly
+# before the extension (``<name>_00001_.glb``, spec § 2/§ 3.2). It is what
+# tells the main mesh apart from a LOD stage of the same job — the stage ends
+# on ``_<digits>`` WITHOUT the trailing underscore.
+_MESH_TOKEN_MAIN = "_00001_"
+
+# A LOD stage file: digits directly before the extension (spec § 3.2). The
+# number is the REQUESTED triangle count, not the delivered one.
+_MESH_LOD_STAGE_RE = re.compile(r"_(\d+)$")
 
 # Extension for a delivered file whose NAME has none — the mime is the second
 # half of the same source (rule 2: name and mime always travel together).
@@ -110,10 +121,66 @@ def _mesh_file_suffix(f: Dict[str, str]) -> str:
     return _MESH_MIME_SUFFIX.get(str(f.get("mime") or "").strip().lower(), "")
 
 
+def _mesh_file_stem(f: Dict[str, Any]) -> str:
+    """Lower-cased delivered file name without its extension."""
+    from pathlib import Path as _P
+    return _P(str(f.get("name") or "")).stem.lower()
+
+
+def mesh_lod_stage_faces(f: Dict[str, Any]) -> int:
+    """Requested triangle count of a LOD stage file, 0 when the name is not a
+    stage (mesh-client-spec § 3.2).
+
+    A stage is ``<name>_<digits>.glb`` — digits DIRECTLY before the extension.
+    The main result ends on the ComfyUI counter ``_00001_`` (trailing
+    underscore), so it can never be read as a stage. The number is what was
+    REQUESTED; the real triangle count is only in the GLB itself (a stage above
+    the source size silently returns a copy at original size)."""
+    stem = _mesh_file_stem(f)
+    if stem.endswith(_MESH_TOKEN_MAIN):
+        return 0
+    m = _MESH_LOD_STAGE_RE.search(stem)
+    return int(m.group(1)) if m else 0
+
+
+def _pick_main_model(models: List[Dict[str, Any]], rig: str):
+    """The ONE delivered file that is this job's main mesh — chosen by NAME
+    (mesh-client-spec § 2, rule 1), never by position.
+
+    Preference: the rig's own artifact token (``_articulationxl`` for a UniRig
+    FBX, ``_rigged`` for a Make-It-Animatable GLB), then the ComfyUI main
+    counter ``_00001_``, then — when no name matches at all — the single
+    delivered model. Only several INDISTINGUISHABLE files fall back to the
+    first one, and that is logged: position is a guess, not a rule."""
+    if not models:
+        return None
+    token = {"generic": _MESH_TOKEN_RIGGED_FBX,
+             "mixamo": _MESH_TOKEN_RIGGED_GLB}.get((rig or "").strip().lower())
+    if token:
+        tagged = [f for f in models if token in _mesh_file_stem(f)]
+        if tagged:
+            return tagged[0]
+    main = [f for f in models if _mesh_file_stem(f).endswith(_MESH_TOKEN_MAIN)]
+    if main:
+        if len(main) > 1:
+            logger.warning(
+                "mesh result: %d files carry the main token %s — taking the "
+                "first (%s)", len(main), _MESH_TOKEN_MAIN, main[0].get("name"))
+        return main[0]
+    if len(models) == 1:
+        return models[0]
+    logger.warning("mesh result: no file carries a main token, %d candidates "
+                   "(%s) — taking the first", len(models),
+                   ", ".join(str(f.get("name") or "?") for f in models))
+    return models[0]
+
+
 def _split_mesh_files(files: List[Dict[str, Any]], rig: str):
     """Picks the files a mesh job's result must be STORED as, per
-    mesh-client-spec § 2 + § 3.1. Returns ``(model, texture)`` — each one of
-    the given file dicts (``blob``/``name``/``mime``/``kind``) or None.
+    mesh-client-spec § 2 + § 3.1/3.2. Returns ``(model, texture, stages)`` —
+    ``model``/``texture`` each one of the given file dicts
+    (``blob``/``name``/``mime``/``kind``) or None, ``stages`` a list of stage
+    files carrying an extra ``lod_faces`` key, smallest first.
 
     * rig ``mixamo`` / ``none`` → ONLY the model GLB; its texture is embedded,
       so every delivered map is auxiliary and dropped.
@@ -121,22 +188,53 @@ def _split_mesh_files(files: List[Dict[str, Any]], rig: str):
       inseparable pair (the FBX references its texture through a temp path
       that is dead on our side, so it is re-bound via the stored file name).
       ``*_metallic*`` is dropped.
-    """
+    * LOD stages (``input_lod_faces``, § 3.2) exist for UNRIGGED results only.
+      A rigged job that ever delivered one would deliver a reduced mesh WITHOUT
+      the rig, so stages are ignored there instead of stored.
+
+    Which file is which is decided by the NAME in every case — the response
+    order is alphabetical by file name, not the order anything was requested
+    in, so a positional pick would take a stage for the main mesh."""
     models = [f for f in files if _mesh_file_kind(f) == "model"]
     images = [f for f in files if _mesh_file_kind(f) == "image"]
     if not models:
-        return None, None
-    if (rig or "").strip().lower() != "generic":
-        return models[0], None
-    rigged = [f for f in models
-              if _MESH_TOKEN_RIGGED_FBX in str(f.get("name") or "").lower()]
-    model = (rigged or models)[0]
+        return None, None, []
+    rig = (rig or "").strip().lower()
+    stages: List[Dict[str, Any]] = []
+    if rig not in ("generic", "mixamo"):
+        staged = [(mesh_lod_stage_faces(f), f) for f in models]
+        stages = [dict(f, lod_faces=n) for n, f in sorted(
+            (e for e in staged if e[0]), key=lambda e: e[0])]
+        models = [f for n, f in staged if not n] or models
+    model = _pick_main_model(models, rig)
+    if rig != "generic":
+        # A delivery that is NOTHING but stages (no main token at all) has one
+        # of them promoted to the main mesh above — it must not be stored a
+        # second time as its own stage.
+        stages = [s for s in stages
+                  if model is None or s.get("name") != model.get("name")]
+        return model, None, stages
     texture = next(
         (f for f in images
          if _MESH_TOKEN_BASECOLOR in str(f.get("name") or "").lower()
          and _MESH_TOKEN_METALLIC not in str(f.get("name") or "").lower()),
         None)
-    return model, texture
+    return model, texture, []
+
+
+def _unique_mesh_name(base: str) -> str:
+    """``input_name`` for ONE mesh job: the subject id plus a short run token.
+
+    Per mesh-client-spec § 3.2 the name must be UNIQUE per job. The LOD stages
+    of a run live under that name on the backend, so a second run with the same
+    name and fewer stages hands the OLDER stages out again — files that look
+    like this run's result and are not. The subject id stays the prefix so the
+    delivered names remain attributable in the gateway's job view.
+
+    The token starts with a letter on purpose: a name ending in ``_<digits>``
+    would read as a LOD stage of itself (see ``mesh_lod_stage_faces``)."""
+    stem = re.sub(r"[^A-Za-z0-9_-]", "", (base or "").strip()) or "mesh"
+    return f"{stem}-r{uuid.uuid4().hex[:6]}"
 
 
 def render_has_reference_image(character_name: str, *,
@@ -474,7 +572,8 @@ class ImageService:
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None, texture_size=None,
-                      no_fingers=None, rig: str = "") -> Dict[str, Any]:
+                      no_fingers=None, rig: str = "",
+                      lod_faces=None) -> Dict[str, Any]:
         """Generates a 3D model from ONE image via a MEDIA_TYPE=="mesh" backend.
 
         ``rig`` ("mixamo" for humanoids, "generic" for everything else) narrows
@@ -488,17 +587,31 @@ class ImageService:
         stored next to it, keeping ITS delivered extension (.png or .jpg — the
         gateway re-encodes per file, not per job).
 
+        ``lod_faces`` (one target triangle count or several) additionally asks
+        for reduced STAGES of the same model, baked from the same views in the
+        SAME job (mesh-client-spec § 3.2) — only aliases that declare the param
+        get it. The stages are handed back as BYTES in ``stages`` (each with
+        the requested ``faces`` from its file name) because they belong into
+        the caller's gallery, not next to the main file: one generation can
+        thus fill a full+low pair.
+
         Returns {"ok", "path", "texture_path", "format", "rig", "filename",
-        "backend"}.
+        "backend", "stages"}.
         """
         from pathlib import Path as _P
         params: Dict[str, Any] = {
             "source_image_path": source_image_path,
             "reference_images": {"input_image": source_image_path},
-            "mesh_name": mesh_name or character_name,
+            # NEVER the bare subject id: the stages of a run live under this
+            # name on the backend and a repeat would drag the older ones along
+            # (§ 3.2). The subject stays the prefix, so the delivered file
+            # names still say what they belong to.
+            "mesh_name": _unique_mesh_name(mesh_name or character_name),
         }
         if face_num:
             params["face_num"] = int(face_num)
+        if lod_faces:
+            params["lod_faces"] = lod_faces
         # Forwarded to the alias ONLY when it declares a texture-size param
         # (see openai_mesh) — plumbed through now, live once the gateway
         # chains expose it.
@@ -558,7 +671,7 @@ class ImageService:
 
         # Which of the delivered files this rig must STORE — decided by the
         # artifact token in the gateway file name, never by position/extension.
-        model, texture = _split_mesh_files(files, used_rig)
+        model, texture, stages = _split_mesh_files(files, used_rig)
         if model is None:
             logger.error("generate_mesh: kein Modell in der Auslieferung (%s)",
                          ", ".join(str(f.get("name") or "?") for f in files))
@@ -592,10 +705,22 @@ class ImageService:
             return {"ok": False, "error": str(e)}
 
         fmt = out.suffix.lstrip(".").lower()
+        # The stages travel as bytes: they are gallery files of the caller's
+        # subject, and only the caller knows how its gallery names files.
+        stage_out = [{"faces": int(s.get("lod_faces") or 0),
+                      "blob": s["blob"],
+                      "filename": str(s.get("name") or ""),
+                      "format": (_mesh_file_suffix(s) or ".glb").lstrip(".")}
+                     for s in stages]
+        if stage_out:
+            logger.info("generate_mesh: %d LOD-Stufe(n) geliefert (%s)",
+                        len(stage_out),
+                        ", ".join(f"{s['faces']}" for s in stage_out))
         return {"ok": True, "path": str(out), "texture_path": texture_path,
                 "format": fmt, "rig": used_rig,
                 "filename": model_name or out.name,
-                "backend": getattr(used, "name", "")}
+                "backend": getattr(used, "name", ""),
+                "stages": stage_out}
 
     def generate_mesh_variant(self, source_model_path: str, output_path: str,
                               backend_glob: str = "", mesh_name: str = "",
@@ -676,8 +801,9 @@ class ImageService:
                                        in zip(result["files"], result["blobs"])]
         # rig "none": the GLB is the whole delivery — the *_basecolor* /
         # *_metallic* PNGs the shrink alias also returns are auxiliary maps of
-        # the same bake and are dropped.
-        model, _tex = _split_mesh_files(files, "none")
+        # the same bake and are dropped. A shrink never produces LOD stages
+        # (that is what this whole job IS), so the third value is empty.
+        model, _tex, _stages = _split_mesh_files(files, "none")
         if model is None:
             logger.error("generate_mesh_variant: kein Modell in der "
                          "Auslieferung (%s)",

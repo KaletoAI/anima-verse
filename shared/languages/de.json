@@ -1283,7 +1283,7 @@
     "Text missing": "Text fehlt",
     "Text to translate…": "Zu übersetzender Text…",
     "texture": "Textur",
-    "The distance mesh. Until the mesh→mesh reduction exists, a low variant is a second run with a smaller budget: face count and texture below are prefilled accordingly — change them freely.": "Das Fern-Mesh. Solange es die Mesh→Mesh-Verkleinerung nicht gibt, ist eine Low-Variante ein zweiter Lauf mit kleinerem Budget: Face-Anzahl und Textur unten sind entsprechend vorbelegt — frei änderbar.",
+    "The distance mesh. This run is a second, smaller one: face count and texture below are prefilled accordingly — change them freely. A low mesh can also come from a generation stage or from “⤵ low variant”.": "Das Fern-Mesh. Dieser Lauf ist ein zweiter, kleinerer: Face-Anzahl und Textur unten sind entsprechend vorbelegt — frei änderbar. Ein Low-Mesh kann auch aus einer Generierungs-Stufe oder aus „⤵ low variant“ kommen.",
     "The modelled quality — what the clients render up close.": "Die modellierte Qualität — was die Clients aus der Nähe rendern.",
     "The neighbor kind the gradient runs to (from the map grid).": "Die Nachbar-Art, zu der der Verlauf läuft (aus dem Karten-Grid).",
     "The server is not answering — trying again in {n} s…": "Der Server antwortet nicht — neuer Versuch in {n} s …",

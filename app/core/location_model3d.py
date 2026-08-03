@@ -661,13 +661,65 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     return meta
 
 
+def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
+                      main_file: str, backend: str, owner: str,
+                      room_id: str = "",
+                      source_image: str = "",
+                      texture_size: Any = None) -> str:
+    """Store the LOD stages of ONE generation as their own gallery files and
+    return the SMALLEST one's file name (the caller selects it as ``low``).
+
+    A stage is a self-contained GLB baked from the same views as the main
+    result (mesh-client-spec § 3.2) — a normal gallery file, not a companion.
+    ``face_num`` is the REQUESTED count read from the delivered file name (the
+    real one is only inside the GLB); ``source_file`` names this run's main
+    mesh, so the pair is visible in the admin list. Further stages stay stored
+    but unselected — the admin can promote any of them."""
+    smallest = ""
+    for stage in stages:
+        blob = stage.get("blob") or b""
+        if not blob:
+            continue
+        path = gallery.new_path(f".{stage.get('format') or 'glb'}")
+        path.write_bytes(blob)
+        meta: Dict[str, Any] = {
+            "created_at": utc_now_iso(),
+            "source": "lod",
+            "format": stage.get("format") or "glb",
+            "rig": "none",
+            "tier": LOW_TIER,
+            "backend": backend,
+            "source_image": source_image,
+            "source_file": main_file,
+            "location": owner,
+        }
+        if stage.get("faces"):
+            meta["face_num"] = int(stage["faces"])
+        if texture_size:
+            meta["texture_size"] = int(texture_size)
+        if room_id:
+            meta["room"] = room_id
+        write_sidecar(path, meta)
+        # The stages arrive sorted ascending, so the FIRST stored one is the
+        # smallest — that is the one the distance view wants.
+        if not smallest:
+            smallest = path.name
+    return smallest
+
+
 def _generate(location_id: str, source_image: str, backend_glob: str,
               room_id: str = "", face_num: Any = None,
               texture_size: Any = None,
-              tier: str = DEFAULT_TIER) -> Dict[str, Any]:
+              tier: str = DEFAULT_TIER,
+              lod_faces: Any = None) -> Dict[str, Any]:
     """Blocking mesh generation from a gallery image of the location. Runs on a
     worker thread (see trigger_generation). Adds a NEW model and selects it for
-    ``tier`` — existing models stay (pick any of them in the admin panel)."""
+    ``tier`` — existing models stay (pick any of them in the admin panel).
+
+    ``lod_faces`` asks the alias for reduced stages of the same bake
+    (mesh-client-spec § 3.2); each becomes its own gallery file and the
+    smallest is selected as the ``low`` variant, so ONE run leaves a complete
+    full+low pair."""
     from app.models.world import get_gallery_dir
     from app.imagegen.service import get_image_service
     owner = _owner_id(location_id)
@@ -707,14 +759,16 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
 
     error = ""
     try:
+        gallery = _gallery(owner, room_id)
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
-            output_path=str(_gallery(owner, room_id).new_path()),
+            output_path=str(gallery.new_path()),
             backend_glob=backend_glob,
             mesh_name=_stem(room_id) if room_id else owner,
             rig="none",
             face_num=face_num,
-            texture_size=texture_size)
+            texture_size=texture_size,
+            lod_faces=lod_faces)
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Location model %s failed: %s", owner, error)
@@ -743,6 +797,13 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
         select_model(location_id, path.name, room_id, tier)
         logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
                     path.stat().st_size, source_image)
+        low = _store_lod_stages(gallery, res.get("stages") or [], path.name,
+                                res.get("backend", ""), owner, room_id,
+                                source_image, texture_size)
+        if low:
+            select_model(location_id, low, room_id, LOW_TIER)
+            logger.info("Location model %s: LOD stage %s selected as low "
+                        "variant", owner, low)
         return {"ok": True, "path": str(path), "meta": meta}
     finally:
         if task_id:
@@ -754,11 +815,13 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
 
 def _run(location_id: str, source_image: str, backend_glob: str,
          room_id: str = "", face_num: Any = None,
-         texture_size: Any = None, tier: str = DEFAULT_TIER) -> None:
+         texture_size: Any = None, tier: str = DEFAULT_TIER,
+         lod_faces: Any = None) -> None:
     owner = _owner_id(location_id)
     try:
         _generate(location_id, source_image, backend_glob, room_id,
-                  face_num=face_num, texture_size=texture_size, tier=tier)
+                  face_num=face_num, texture_size=texture_size, tier=tier,
+                  lod_faces=lod_faces)
     except Exception as e:
         logger.error("Location model generation for %s failed: %s", owner, e)
     finally:
@@ -769,13 +832,17 @@ def _run(location_id: str, source_image: str, backend_glob: str,
 def trigger_generation(location_id: str, *, source_image: str,
                        backend_glob: str = "", room_id: str = "",
                        face_num: Any = None, texture_size: Any = None,
-                       tier: str = DEFAULT_TIER) -> bool:
+                       tier: str = DEFAULT_TIER,
+                       lod_faces: Any = None) -> bool:
     """Start a building/room-model generation in the background. Generations
     from different source images run concurrently as far as the backend GPU
     channel allows (it serializes per backend); False only when THIS image
     is already being meshed for this target (double-click guard). ``tier``
     says which resolution slot the result becomes (a low run is the same
-    chain with a smaller face_num/texture_size)."""
+    chain with a smaller face_num/texture_size).
+
+    ``lod_faces`` asks the alias for reduced stages of the SAME bake — with it
+    a single run fills both tiers instead of needing a second job."""
     owner = _owner_id(location_id)
     if not owner:
         return False
@@ -785,7 +852,7 @@ def trigger_generation(location_id: str, *, source_image: str,
         _generating.add(_gen_key(owner, room_id, source_image))
     threading.Thread(target=_run,
                      args=[location_id, source_image, backend_glob, room_id,
-                           face_num, texture_size, tier],
+                           face_num, texture_size, tier, lod_faces],
                      daemon=True).start()
     return True
 

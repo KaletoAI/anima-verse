@@ -41,6 +41,8 @@ interface MeshBackend {
   face_num?: number | null
   /** Hard ceiling of the face count (0/absent = none). */
   face_num_max?: number | null
+  /** Alias can bake reduced LOD stages in the same job (from its schema). */
+  lod_stages?: boolean
 }
 
 interface Model3DStatus {

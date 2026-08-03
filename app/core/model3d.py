@@ -204,6 +204,11 @@ def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
                 # 0 = no cap. A backend that HANGS above a face count (rather
                 # than failing) needs the dialog to stop the value, not the job.
                 "face_num_max": getattr(b, "face_num_max", 0),
+                # Can this alias bake reduced LOD stages in the SAME job
+                # (input_lod_faces)? Read from the alias schema, never from its
+                # name — the dialog offers the stage control only where it
+                # actually reaches something.
+                "lod_stages": bool(getattr(b, "supports_lod_stages", False)),
                 "rig": getattr(b, "mesh_rig", "mixamo"),
             })
     except Exception as e:
@@ -230,6 +235,9 @@ def list_shrink_backends() -> Dict[str, Any]:
                 "cost": getattr(b, "cost", 0),
                 "face_num": getattr(b, "face_num", None),
                 "face_num_max": getattr(b, "face_num_max", 0),
+                # Same field as in list_mesh_backends so the dialog reads ONE
+                # shape; a reduction alias never bakes stages of its own.
+                "lod_stages": bool(getattr(b, "supports_lod_stages", False)),
                 "rig": getattr(b, "mesh_rig", "none"),
             })
     except Exception as e:

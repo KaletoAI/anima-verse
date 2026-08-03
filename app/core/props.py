@@ -982,12 +982,52 @@ def _render_source(prop_id: str, backend_glob: str,
     return True
 
 
+def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
+                      main_file: str, backend: str,
+                      texture_size: Any = None) -> str:
+    """Store the LOD stages of ONE generation as their own gallery files and
+    select the SMALLEST for tier ``low``. Returns the selected file name.
+
+    A stage is a self-contained GLB baked from the same views as the main
+    result (mesh-client-spec § 3.2), so it is a normal gallery file — not a
+    companion of the main one. ``face_num`` is the REQUESTED count from the
+    file name (the real one is only inside the GLB), ``source_file`` names the
+    run's main mesh so the pair is visible in the admin list. Extra stages stay
+    in the gallery unselected — the admin can promote any of them."""
+    selected = ""
+    for stage in stages:
+        blob = stage.get("blob") or b""
+        if not blob:
+            continue
+        path = gallery.new_path(f".{stage.get('format') or 'glb'}")
+        path.write_bytes(blob)
+        write_model_sidecar(path, {
+            "created_at": utc_now_iso(),
+            "source": "lod",
+            "format": stage.get("format") or "glb",
+            "rig": "none",
+            "tier": LOW_TIER,
+            "backend": backend,
+            "source_file": main_file,
+            **({"face_num": int(stage.get("faces") or 0)}
+               if stage.get("faces") else {}),
+            **({"texture_size": int(texture_size)} if texture_size else {}),
+        })
+        # Smallest requested stage wins the low slot; the stages arrive sorted
+        # ascending, so the FIRST stored one is it.
+        if not selected:
+            gallery.select(path.name, LOW_TIER)
+            selected = path.name
+    return selected
+
+
 def _generate(prop_id: str, prompt: str, negative: str,
               image_backend_glob: str, mesh_backend_glob: str,
               face_num: Any = None, texture_size: Any = None,
               mesh_only: bool = False,
               image_only: bool = False,
-              tier: str = DEFAULT_TIER) -> Dict[str, Any]:
+              tier: str = DEFAULT_TIER,
+              lod_faces: Any = None) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries)."""
@@ -1040,7 +1080,8 @@ def _generate(prop_id: str, prompt: str, negative: str,
             mesh_name=prop_id,
             rig="none",
             face_num=face_num,
-            texture_size=texture_size)
+            texture_size=texture_size,
+            lod_faces=lod_faces)
         if not res.get("ok"):
             error = str(res.get("error") or "mesh generation failed")
             logger.error("Prop %s mesh failed: %s", prop_id, error)
@@ -1061,6 +1102,14 @@ def _generate(prop_id: str, prompt: str, negative: str,
             **({"texture_size": int(texture_size)} if texture_size else {}),
         })
         g.select(path.name, tier)
+        # LOD stages of the SAME job (§ 3.2): each becomes its own gallery
+        # file, the smallest fills the `low` slot — one generation leaves a
+        # complete full+low pair.
+        low = _store_lod_stages(g, res.get("stages") or [], path.name,
+                                res.get("backend", ""), texture_size)
+        if low:
+            logger.info("Prop %s: LOD stage %s selected as low variant",
+                        prop_id, low)
 
         meta = _materialize_dims(prop_id, read_sidecar(prop_id))
         meta["source"] = "generated"
@@ -1184,11 +1233,15 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        texture_size: Any = None,
                        mesh_only: bool = False,
                        image_only: bool = False,
-                       tier: str = DEFAULT_TIER) -> bool:
+                       tier: str = DEFAULT_TIER,
+                       lod_faces: Any = None) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
     False only while THIS prop+backend combination is already generating
-    (double-click guard), or when the prop does not exist."""
+    (double-click guard), or when the prop does not exist.
+
+    ``lod_faces`` additionally asks the mesh alias for reduced stages of the
+    same bake; the smallest one lands as the prop's ``low`` variant."""
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False
@@ -1203,7 +1256,7 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
             _generate(pid, prompt, negative, image_backend_glob,
                       mesh_backend_glob, face_num=face_num,
                       texture_size=texture_size, mesh_only=mesh_only,
-                      image_only=image_only, tier=tier)
+                      image_only=image_only, tier=tier, lod_faces=lod_faces)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:

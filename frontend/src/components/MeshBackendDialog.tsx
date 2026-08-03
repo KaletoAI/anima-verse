@@ -10,6 +10,9 @@ export interface MeshBackend {
    *  backends do not fail above their limit, they hang — so the field caps
    *  the input instead of letting the job run into a timeout. */
   face_num_max?: number | null
+  /** This alias can bake reduced LOD stages in the SAME job. Comes from the
+   *  alias schema (server side), never from the backend's name. */
+  lod_stages?: boolean
 }
 
 /** Per-run overrides next to the backend pick — empty = backend default. */
@@ -19,13 +22,19 @@ export interface MeshGenerateOpts {
   /** Resolution slot the result fills (only sent when the caller offers the
    *  tier choice). */
   tier?: ModelTier
+  /** Target triangle count of the low stage baked in the same job (absent =
+   *  no stage requested). */
+  lod_faces?: number
 }
 
 const TEXTURE_SIZES = [512, 1024, 2048]
 
-// Interim low-variant recipe (plan-3d-lod-und-betreten.md Etappe 2): until
-// the ComfyUI mesh→mesh reduction exists (Etappe 4), a low variant is simply
-// a second run with a smaller budget. The numbers are a PREFILL, shown in the
+/** Prefilled target size of the low stage — the alias default of the contract. */
+const LOD_STAGE_DEFAULT = 5000
+
+// Low-variant recipe for a run that targets the `low` tier directly — the
+// third way next to a baked generation stage and the mesh→mesh reduction: a
+// second run with a smaller budget. The numbers are a PREFILL, shown in the
 // editable fields — not a hidden rewrite of what the admin asked for.
 const LOW_FACE_FRACTION = 0.25
 /** Offered when the picked backend declares no face default of its own. */
@@ -49,6 +58,11 @@ function faceFor(tier: ModelTier, backendDefault: number): string {
  * size" is plumbed the same way and reaches the gateway as soon as its alias
  * declares the parameter. Rendered via createPortal so it also works inside
  * the /play grid.
+ *
+ * A backend whose alias can bake reduced LOD stages in the same job (server
+ * flag `lod_stages`, read from the alias schema) additionally offers the low
+ * stage's target size — one run then fills both tiers. The control is absent
+ * for every other backend.
  *
  * With `showTier` the dialog also asks WHICH resolution slot the result fills
  * (galleries that hold one mesh per tier). Picking `low` prefills the reduced
@@ -91,6 +105,11 @@ export function MeshBackendDialog({
   const [faceDraft, setFaceDraft] = useState('')
   const [texSize, setTexSize] = useState('')
   const [tier, setTier] = useState<ModelTier>(DEFAULT_MODEL_TIER)
+  // Low stage baked alongside the main result — only for backends whose alias
+  // declares it. On by default (it costs seconds and fills the low tier), but
+  // switchable off: some subjects only ever get looked at from up close.
+  const [lodOn, setLodOn] = useState(true)
+  const [lodDraft, setLodDraft] = useState(String(LOD_STAGE_DEFAULT))
   // Reset the selection to the default each time the dialog opens (the
   // backends and default may have loaded/changed between opens). Keyed on
   // the backends' CONTENT, not the array identity — the callers refresh
@@ -104,6 +123,8 @@ export function MeshBackendDialog({
     setFaceDraft(faceFor(DEFAULT_MODEL_TIER, b?.face_num || 0))
     setTexSize(defaultTextureSize ? String(defaultTextureSize) : '')
     setTier(DEFAULT_MODEL_TIER)
+    setLodOn(true)
+    setLodDraft(String(LOD_STAGE_DEFAULT))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultBackend, defaultTextureSize, backendsKey])
 
@@ -113,6 +134,10 @@ export function MeshBackendDialog({
   // 0 = no cap. Above its cap such a backend does not fail, it HANGS — so the
   // field stops the value here (the server clamps too, and logs it).
   const faceMax = selectedBackend?.face_num_max || 0
+  // The stage control only exists where the alias can bake one, and only for a
+  // run that fills the FULL tier — a low run IS the reduced mesh already.
+  const canLod = !!selectedBackend?.lod_stages
+    && (!showTier || tier === DEFAULT_MODEL_TIER)
 
   const pick = (name: string) => {
     setPicked(name)
@@ -144,6 +169,10 @@ export function MeshBackendDialog({
     const tex = parseInt(texSize, 10)
     if (Number.isFinite(tex) && tex > 0) opts.texture_size = tex
     if (showTier) opts.tier = tier
+    if (canLod && lodOn) {
+      const lod = parseInt(lodDraft, 10)
+      if (Number.isFinite(lod) && lod > 0) opts.lod_faces = lod
+    }
     onGenerate(picked, opts)
   }
 
@@ -185,7 +214,7 @@ export function MeshBackendDialog({
                   <div className="ga-hint">
                     {tier === DEFAULT_MODEL_TIER
                       ? t('The modelled quality — what the clients render up close.')
-                      : t('The distance mesh. Until the mesh→mesh reduction exists, a low variant is a second run with a smaller budget: face count and texture below are prefilled accordingly — change them freely.')}
+                      : t('The distance mesh. This run is a second, smaller one: face count and texture below are prefilled accordingly — change them freely. A low mesh can also come from a generation stage or from “⤵ low variant”.')}
                   </div>
                 </>
               ) : null}
@@ -238,6 +267,33 @@ export function MeshBackendDialog({
                   </select>
                 </label>
               </div>
+              {canLod ? (
+                <>
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={lodOn}
+                      onChange={(e) => setLodOn(e.target.checked)}
+                    />
+                    <span className="ga-hint">{t('Also bake a low stage')}</span>
+                    <input
+                      className="ga-input"
+                      type="number"
+                      min={500}
+                      max={faceMax || 100000}
+                      step={500}
+                      style={{ width: 110 }}
+                      disabled={!lodOn}
+                      value={lodDraft}
+                      onChange={(e) => setLodDraft(e.target.value)}
+                    />
+                    <span className="ga-hint">{t('faces')}</span>
+                  </label>
+                  <div className="ga-hint">
+                    {t('The stage is baked from the same views in the same job, while “⤵ low variant” reduces an already stored mesh.')}
+                  </div>
+                </>
+              ) : null}
               <div className="ga-hint">
                 {t('Higher face counts mean more detail, bigger files and a slower run.')}
               </div>

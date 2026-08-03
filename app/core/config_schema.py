@@ -497,8 +497,9 @@ SECTIONS = {
                         "the result is an unrigged GLB with an embedded texture and lands as the 'low' "
                         "variant of the gallery it came from. Face count 5000 and texture 1024 are the "
                         "alias defaults.\n"
-                        "Do NOT configure 'mesh-shrink-quad' — the quad remesher currently crashes on the "
-                        "gateway backend."
+                        "Prefer 'mesh-shrink' over 'mesh-shrink-quad': the quad remesher treats the face "
+                        "count as a rough guide only (5000 requested measured as ~38000 triangles), and a "
+                        "low variant needs a predictable target size."
                     )},
                     "mesh_rig": {"type": "select", "label": "Rig", "choices": ["mixamo", "generic", "none"], "default": "mixamo", "triggers_rerender": True, "description": "What kind of skeleton this alias produces — it decides what may use it. 'mixamo' (the -Humanoid aliases): 52-bone humanoid rig, delivered as ONE GLB with embedded textures; the shared animation clips apply. 'generic' (the -Generic aliases): no standard skeleton, delivered as an FBX plus its separate basecolor image — the pair is inseparable; NO animation clips. 'none' (the -Object aliases): unrigged GLB with embedded texture for static props / building models — never offered for characters (only humanoid->mixamo and non-humanoid->generic are), only for location building models. Humanoid characters are matched to mixamo backends, non-humanoid ones (template feature 'humanoid' off) to generic backends.", "applicable_for": ["openai_mesh"]},
                     "remove_background": {"half": True, "type": "bool", "label": "Remove background", "default": True, "description": "Alias param 'input_remove_background': cut the subject out before meshing. Keep ON for character renders on a plain background; OFF only for images with a clean alpha channel.", "applicable_for": ["openai_mesh"]},

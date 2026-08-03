@@ -39,7 +39,11 @@ params the alias declares are sent — except when the schema is unreadable, the
 the ``input_*`` names go out blind (worst case they are ignored).
 
 ``input_name`` decides the delivered FILE NAMES and is therefore always set;
-leaving it empty makes the workflow inherit leftovers from a previous run.
+leaving it empty makes the workflow inherit leftovers from a previous run. It
+must also be UNIQUE per job (§ 3.2): a run's LOD stages live under that name on
+the backend, so a later run with the same name hands the older stages out with
+its own result. The caller builds the unique name (see
+``service._unique_mesh_name``).
 Meshing takes minutes → always ``mode:"async"`` + polling. ``MEDIA_TYPE ==
 "mesh"`` keeps it out of image/video matching; the central ``generate()`` skips
 image post-processing for it. Returns ALL delivered files as ``List[bytes]``;
@@ -79,6 +83,34 @@ _UPLOAD_MIME = {
     ".gltf": "model/gltf+json",
     ".fbx": "model/fbx",
 }
+
+# Alias param for the reduced LOD stages of the same job (mesh-client-spec
+# § 3.2): a comma-separated list of target triangle counts, sent as a STRING.
+# Only the -Object family of the Hunyuan3D chain declares it today — which
+# alias that is comes from the SCHEMA, never from a name match in code.
+LOD_FACES_PARAM = "input_lod_faces"
+
+
+def normalize_lod_faces(value: Any) -> List[int]:
+    """Requested LOD stages as a clean list of positive ints — accepts one
+    number, a list, or an already comma-separated string. Duplicates are
+    dropped (the gateway would bake the same stage twice), order is kept."""
+    if value is None or isinstance(value, bool):
+        return []
+    raw: List[Any]
+    if isinstance(value, (list, tuple, set)):
+        raw = list(value)
+    else:
+        raw = str(value).replace(";", ",").split(",")
+    out: List[int] = []
+    for item in raw:
+        try:
+            n = int(float(str(item).strip()))
+        except (TypeError, ValueError):
+            continue
+        if n > 0 and n not in out:
+            out.append(n)
+    return out
 
 
 class OpenAIMeshBackend(ImageBackend):
@@ -322,6 +354,17 @@ class OpenAIMeshBackend(ImageBackend):
             return unquote(m.group(1)).strip()
         return unquote(Path(urlparse(url).path).name or "")
 
+    @property
+    def supports_lod_stages(self) -> bool:
+        """Whether this ALIAS can bake reduced LOD stages in the same job —
+        read from the schema (``input_lod_faces``), never from the alias name.
+
+        Deliberately STRICTER than ``_declares``: an unreadable schema counts
+        as "no" here. Sending an unknown param blind is free (the gateway
+        ignores it), but OFFERING the admin a control that reaches nothing is
+        not."""
+        return LOD_FACES_PARAM in self._alias_param_names
+
     def _declares(self, param: str) -> bool:
         """Whether the alias declares ``param``. An UNREADABLE schema (no names
         at all) counts as "declares everything": the gateway ignores unknown
@@ -375,6 +418,16 @@ class OpenAIMeshBackend(ImageBackend):
         if self._declares("input_no_fingers"):
             alias_params["input_no_fingers"] = bool(
                 params.get("no_fingers", self.no_fingers))
+        # LOD stages (§ 3.2): reduced versions of the SAME bake, delivered by
+        # the same job. Sent as a comma-separated STRING — the contract's type,
+        # not a list — and only where the schema declares the param.
+        lod = normalize_lod_faces(params.get("lod_faces"))
+        if lod:
+            if self._declares(LOD_FACES_PARAM):
+                alias_params[LOD_FACES_PARAM] = ",".join(str(n) for n in lod)
+            else:
+                logger.info("%s: lod_faces=%s requested but the alias declares "
+                            "no LOD param — dropped", self.name, lod)
         # Texture size: plumbed through the whole chain, sent only when the
         # alias declares it.
         tex = params.get("texture_size")
@@ -435,19 +488,22 @@ class OpenAIMeshBackend(ImageBackend):
                  or alias_params.get("input_num_gaussians")
                  or "alias default")
         sha = getattr(self._tls, "input_sha256", "") or ""
-        logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, name='%s', "
-                    "Eingang=%s sha256=%s)", self.name, payload["model"], faces,
-                    alias_params["input_name"],
+        lod = alias_params.get(LOD_FACES_PARAM) or "-"
+        logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, lod=%s, "
+                    "name='%s', Eingang=%s sha256=%s)", self.name,
+                    payload["model"], faces, lod, alias_params["input_name"],
                     "mesh" if input_files else "image", sha[:12] or "-")
         job_id = submit_job(self, url, payload, "Mesh")
         if not job_id:
             return []
 
         def _download(sd: Dict[str, Any], running_s: float) -> List[bytes]:
-            # A job delivers UP TO THREE files: the model plus its *_basecolor*
-            # and *_metallic* maps. Download them all, in order, and hand their
-            # gateway metadata (name/mime/kind) up — the caller decides by
-            # TOKEN which ones it must store.
+            # A job delivers the model plus its *_basecolor* / *_metallic*
+            # maps, and with input_lod_faces one self-contained GLB per
+            # requested stage. Download them all and hand their gateway
+            # metadata (name/mime/kind) up — the caller decides by NAME which
+            # ones it must store. The response order is alphabetical by file
+            # name (§ 3.2), so position says nothing.
             for warn in (sd.get("warnings") or []):
                 logger.warning("%s: Gateway-Warnung: %s", self.name, warn)
             # Did the job run on OUR input? (No-op on a gateway that does not

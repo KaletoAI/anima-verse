@@ -81,6 +81,9 @@ function runHint(m: GalleryModel, t: (s: string) => string): string {
   // A reduction is not a generation: naming the mesh→mesh step is what
   // separates a real low mesh from a second full run at a low budget.
   else if (m.source === 'shrink') parts.push(t('reduced'))
+  // A stage came out of the SAME job as its full mesh (baked from the same
+  // views), which is why it names a source_file without being a reduction.
+  else if (m.source === 'lod') parts.push(t('LOD stage'))
   if (m.backend) parts.push(m.backend)
   if (m.face_num) parts.push(`${m.face_num.toLocaleString()} ${t('faces')}`)
   if (m.texture_size) parts.push(`${m.texture_size}²`)

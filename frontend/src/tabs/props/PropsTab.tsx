@@ -227,6 +227,7 @@ export function PropsTab() {
                 ...(target.meshOnly ? { mesh_only: true } : {}),
                 ...(opts.face_num ? { face_num: opts.face_num } : {}),
                 ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
+                ...(opts.lod_faces ? { lod_faces: opts.lod_faces } : {}),
                 ...(opts.tier ? { tier: opts.tier } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'

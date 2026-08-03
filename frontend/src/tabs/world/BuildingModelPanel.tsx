@@ -178,6 +178,7 @@ export function BuildingModelPanel({
         { source_image: src, backend,
           ...(opts?.face_num ? { face_num: opts.face_num } : {}),
           ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}),
+          ...(opts?.lod_faces ? { lod_faces: opts.lod_faces } : {}),
           ...(opts?.tier ? { tier: opts.tier } : {}) })
         .then((d) => {
           // already_running = double-click guard for the SAME image; jobs

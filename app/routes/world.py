@@ -313,10 +313,11 @@ def _tier(val) -> str:
 @router.post("/locations/{location_id}/model3d/generate")
 async def location_model3d_generate(location_id: str, request: Request) -> Dict[str, Any]:
     """Generate the location's 3D building model from a gallery image
-    (body: {source_image, backend?, face_num?, texture_size?, tier?}).
-    ``tier`` says which resolution slot the result fills (default ``full``; a
-    ``low`` run is the same chain with a smaller face count). Background job —
-    poll status for pending."""
+    (body: {source_image, backend?, face_num?, texture_size?, tier?,
+    lod_faces?}). ``tier`` says which resolution slot the result fills
+    (default ``full``); ``lod_faces`` additionally asks the alias to bake a
+    reduced stage in the SAME job, which lands as the ``low`` variant.
+    Background job — poll status for pending."""
     from app.core.location_model3d import trigger_generation
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
@@ -332,7 +333,8 @@ async def location_model3d_generate(location_id: str, request: Request) -> Dict[
                               backend_glob=backend,
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
-                              tier=_tier(data.get("tier"))):
+                              tier=_tier(data.get("tier")),
+                              lod_faces=_mesh_int(data.get("lod_faces")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -536,8 +538,9 @@ def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
 async def room_model3d_generate(location_id: str, room_id: str,
                                 request: Request) -> Dict[str, Any]:
     """Generate the room's 3D model from a gallery image assigned to the room
-    (body: {source_image, backend?, face_num?, texture_size?, tier?}). Same
-    tier contract as the building model. Background job — poll status."""
+    (body: {source_image, backend?, face_num?, texture_size?, tier?,
+    lod_faces?}). Same tier contract as the building model. Background job —
+    poll status."""
     from app.core.location_model3d import trigger_generation
     _require_room(location_id, room_id)
     data = await request.json()
@@ -552,7 +555,8 @@ async def room_model3d_generate(location_id: str, room_id: str,
                               backend_glob=backend, room_id=room_id,
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
-                              tier=_tier(data.get("tier"))):
+                              tier=_tier(data.get("tier")),
+                              lod_faces=_mesh_int(data.get("lod_faces")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -917,7 +921,8 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
                         mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
                         face_num=_mesh_int(data.get("face_num")) or None,
                         texture_size=_mesh_int(data.get("texture_size")) or None,
-                        tier=_tier(data.get("tier")))
+                        tier=_tier(data.get("tier")),
+                        lod_faces=_mesh_int(data.get("lod_faces")) or None)
     return {"status": "generating", "prop": prop}
 
 
@@ -968,8 +973,11 @@ async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
 @router.post("/props/{prop_id}/generate")
 async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     """Re-run the source→mesh chain for an EXISTING prop (body:
-    {prompt?, negative?, image_backend?, mesh_backend?} — empty prompt =
-    composed from the stored description/name). ``mesh_only`` re-meshes the
+    {prompt?, negative?, image_backend?, mesh_backend?, face_num?,
+    texture_size?, tier?, lod_faces?} — empty prompt = composed from the
+    stored description/name). ``lod_faces`` asks the mesh alias for a reduced
+    stage of the same bake, which lands as the ``low`` variant.
+    ``mesh_only`` re-meshes the
     existing source image; ``image_only`` renders a new source image and
     stops (re-meshing is its own step). Background job — poll /world/props
     for pending."""
@@ -991,7 +999,8 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               texture_size=_mesh_int(data.get("texture_size")) or None,
                               mesh_only=bool(data.get("mesh_only")),
                               image_only=bool(data.get("image_only")),
-                              tier=_tier(data.get("tier"))):
+                              tier=_tier(data.get("tier")),
+                              lod_faces=_mesh_int(data.get("lod_faces")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 
