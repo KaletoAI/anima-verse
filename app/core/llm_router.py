@@ -80,6 +80,7 @@ class LLMInstance:
         provider_timeout = self._provider.timeout if self._provider else None
         timeout = provider_timeout or int(os.environ.get("LLM_REQUEST_TIMEOUT", "120"))
         frequency_penalty = overrides.get("frequency_penalty")
+        top_p = overrides.get("top_p")
 
         if self._provider and self._provider.type == "anthropic":
             return AnthropicLLMClient(
@@ -98,7 +99,8 @@ class LLMInstance:
             max_tokens=max_tokens,
             request_timeout=timeout,
             chat_template=overrides.get("chat_template") or self.chat_template,
-            frequency_penalty=frequency_penalty)
+            frequency_penalty=frequency_penalty,
+            top_p=top_p)
 
 
 def get_llm_instance_by_name(model_name: str) -> Optional[LLMInstance]:

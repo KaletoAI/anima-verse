@@ -45,9 +45,11 @@ def thought_anti_repetition_overrides(character_name: str,
     entries (default 6), the same window and the same three config fields as the
     chat path, no thought-specific setting.
 
-    ``frequency_penalty`` deliberately stays out: it is a configured chat-reply
-    sampler value, and this task never asked for a new static sampler setting.
-    Only the reactive bump crosses over.
+    The STATIC ``chat.frequency_penalty`` deliberately stays out: it is a
+    configured chat-reply sampler value. Only the reactive bump crosses over —
+    and since 2026-08-03 that bump IS a penalty (see
+    ``anti_repetition_overrides``), so on this path it starts from 0 rather
+    than from the configured chat value.
 
     Returns kwargs for ``LLMInstance.create_llm``; empty dict = leave the
     instance as configured.

@@ -240,10 +240,21 @@ def anti_repetition_overrides(
     """The reactive anti-loop net, shared by the chat and the thought path.
 
     A safety net, not a sampling setting: when a character starts repeating
-    itself, the temperature is raised by ``chat.anti_rep_step`` per detected
-    repetition and capped at ``chat.anti_rep_max``. The same four config fields
-    (``chat.frequency_penalty``, ``anti_rep_step``, ``anti_rep_max``,
-    ``anti_rep_lookback``) drive both paths — there are no per-path settings.
+    itself, the **repetition penalty** is raised by
+    ``chat.anti_rep_penalty_step`` per detected repetition, capped at
+    ``chat.anti_rep_penalty_max``. The penalty is the targeted instrument —
+    it acts on the tokens that are actually being repeated.
+
+    Temperature is NOT that instrument and is off by default
+    (``chat.anti_rep_step`` = 0). It was the only lever until 2026-08-03, and
+    it is measurably destructive: at a raised temperature of 1.10, two out of
+    two replies of one model collapsed into multi-script token salad, against
+    zero of 26 at its configured 0.80 in the same window. Anyone switching it
+    back on wants ``chat.top_p`` set as well — without a nucleus cut-off every
+    temperature step lifts the least likely tokens the most.
+
+    ``chat.top_p`` is applied on every call that goes through this net,
+    repetition or not: it is the standing clamp, not a reaction.
 
     Args:
         recent_outputs: the character's own recent outputs as a chat-ordered
@@ -252,8 +263,9 @@ def anti_repetition_overrides(
         base_temperature: the temperature configured in LLM Routing.
         agent_name: for the log line only.
         with_frequency_penalty: pass False for paths that are not a chat reply
-            — the static penalty is a configured chat-reply value and stays
-            where it was configured for.
+            — the STATIC penalty is a configured chat-reply value and stays
+            where it was configured for. The reactive bump crosses over
+            regardless, starting from 0 instead of from the static value.
 
     Returns:
         kwargs for ``LLMInstance.create_llm``. An empty dict = change nothing.
@@ -261,27 +273,42 @@ def anti_repetition_overrides(
     from app.core import config
 
     overrides: Dict[str, Any] = {}
-    if with_frequency_penalty:
-        freq = float(config.get("chat.frequency_penalty", 0.3) or 0)
-        if freq > 0:
-            overrides["frequency_penalty"] = freq
 
-    step = float(config.get("chat.anti_rep_step", 0.1) or 0)
-    if step <= 0:
-        return overrides  # reactive bump disabled
+    top_p = float(config.get("chat.top_p", 0) or 0)
+    if top_p > 0:
+        overrides["top_p"] = top_p
+
+    static_penalty = 0.0
+    if with_frequency_penalty:
+        static_penalty = float(config.get("chat.frequency_penalty", 0.3) or 0)
+        if static_penalty > 0:
+            overrides["frequency_penalty"] = static_penalty
+
+    temp_step = float(config.get("chat.anti_rep_step", 0) or 0)
+    pen_step = float(config.get("chat.anti_rep_penalty_step", 0.15) or 0)
+    if temp_step <= 0 and pen_step <= 0:
+        return overrides  # reactive net disabled
 
     lookback = int(config.get("chat.anti_rep_lookback", 6) or 6)
     count = count_assistant_repetitions(recent_outputs, lookback)
     if count <= 0:
         return overrides
 
-    ceiling = float(config.get("chat.anti_rep_max", 1.2) or 1.2)
-    new_temp = min(base_temperature + step * count, ceiling)
-    overrides["temperature"] = new_temp
+    parts = []
+    if pen_step > 0:
+        pen_ceiling = float(config.get("chat.anti_rep_penalty_max", 1.0) or 1.0)
+        new_penalty = min(static_penalty + pen_step * count, pen_ceiling)
+        overrides["frequency_penalty"] = new_penalty
+        parts.append("penalty %.2f → %.2f" % (static_penalty, new_penalty))
+    if temp_step > 0:
+        ceiling = float(config.get("chat.anti_rep_max", 0.9) or 0.9)
+        new_temp = min(base_temperature + temp_step * count, ceiling)
+        overrides["temperature"] = new_temp
+        parts.append("temperature %.2f → %.2f" % (base_temperature, new_temp))
+
     logger.info(
-        "[%s] %d repetition(s) detected in the last %d turns "
-        "→ temperature %.2f → %.2f",
-        agent_name or "?", count, lookback, base_temperature, new_temp)
+        "[%s] %d repetition(s) detected in the last %d turns → %s",
+        agent_name or "?", count, lookback, ", ".join(parts))
     return overrides
 
 
