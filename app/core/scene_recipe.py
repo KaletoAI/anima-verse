@@ -45,6 +45,7 @@ import math
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
+from app.core.model_store import DEFAULT_TIER
 from app.core.room_recipe import compose_recipe
 from app.core.scatter_curves import TERRAIN_CELLS, terrain_grid, terrain_height
 
@@ -789,6 +790,16 @@ def _building_yaw(location: Dict[str, Any], map3d: Dict[str, Any]) -> float:
     return _num(location.get("map_rotation_2d"))
 
 
+def _variants(base_url: str, tiers: Any) -> Dict[str, str]:
+    """``models[].variants`` (§ B1): one URL per resolution tier the subject
+    HAS. A model that declares no tiers is a ``full`` one — that is what every
+    model made before the tiers existed is. Consumers pick the tier they want
+    and fall back to the best available one; an empty object means there is no
+    mesh at all (then ``placeholder_dims`` carries the placement)."""
+    names = [str(t) for t in (tiers or []) if t] or [DEFAULT_TIER]
+    return {t: f"{base_url}?tier={t}" for t in names}
+
+
 def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
                     meta: Dict[str, Any], k: float,
                     extent: float) -> Optional[Dict[str, Any]]:
@@ -854,7 +865,8 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         "role": "building",
         "display": "shell_area" if detail else ("ground" if ground else "shell"),
         "id": loc_id,
-        "url": f"/play/locations/{quote(loc_id)}/model",
+        "variants": _variants(f"/play/locations/{quote(loc_id)}/model",
+                              meta.get("tiers")),
         "level": 0,
         "fix_euler": _fix_euler(meta.get("rotation")),
         "yaw_deg": _r(_building_yaw(location, map3d), 1),
@@ -911,7 +923,8 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     spec: Dict[str, Any] = {
         "role": "room",
         "id": room_id,
-        "url": f"/play/rooms/{quote(room_id)}/model",
+        "variants": _variants(f"/play/rooms/{quote(room_id)}/model",
+                              meta.get("tiers")),
         "room_id": room_id,
         "level": level,
         "fix_euler": _fix_euler(meta.get("rotation")),
@@ -1031,7 +1044,9 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
         spec: Dict[str, Any] = {
             "role": "prop",
             "id": pid,
-            "url": f"/assets/props/{quote(pid)}/model" if has_model else "",
+            "variants": (_variants(f"/assets/props/{quote(pid)}/model",
+                                   placement.get("model_tiers"))
+                         if has_model else {}),
             "room_id": room_id,
             "level": level,
             "fix_euler": _fix_euler((prop or {}).get("rotation")),

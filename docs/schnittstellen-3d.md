@@ -237,6 +237,32 @@
 >       `levels`, `style`, `figures`, `outdoor_rooms`, `area_detail` sowie
 >       jede Höhe (`y`, `base_y`, `top_y`, `bottom_y`, `y_world`) — die
 >       Drehachse IST +y.
+>
+> **Nachtrag v5.3 — Auflösungsstufen (2026-08-03,
+> `development_instructions/plan-3d-lod-und-betreten.md`):**
+>
+> 16. **`models[].url` ist ersetzt durch `models[].variants`** — ein Objekt
+>     `{"full": "<url>", "low": "<url>"}` mit einem Eintrag je Stufe, die es
+>     WIRKLICH gibt (fehlende Stufe fehlt im Objekt, leeres Objekt = kein
+>     Mesh → `placeholder_dims`). Kein Alias-Feld `url` daneben. Gilt für
+>     `role` building/room/prop gleichermaßen; die URLs tragen den
+>     Stufen-Parameter (`…/model?tier=full`).
+>     **Konsumentenregel:** gewünschte Stufe nehmen, sonst die beste
+>     vorhandene (Reihenfolge `full`, `low`, dann alles Weitere) — eine
+>     fehlende Low-Variante darf ein Objekt nie verschwinden lassen. Die
+>     Regel steht EINMAL als `pickVariant()` in `@anima/scene-render`; beide
+>     Renderer rufen sie auf, keiner baut sie nach.
+>     **Serving:** `GET /play/locations/{id}/model`, `/play/rooms/{id}/model`
+>     und `/assets/props/{id}/model` nehmen `?tier=` (Default `full`, weiter
+>     ETag/304); eine unbekannte Stufe bekommt die beste vorhandene, 404 nur
+>     ohne jedes Mesh. `…/model/meta` liefert zusätzlich
+>     `tiers: {"<stufe>": {signature, url}}`.
+>     **Signaturen decken ALLE Stufen ab:** die Meta-Signatur ist der Hash
+>     über Dateiname + `created_at` JEDER selektierten Stufe (vorher nur die
+>     aktive Datei — eine neu erzeugte Low-Variante blieb unbemerkt), und
+>     `placements[].model_sig` im Raum-Rezept trägt dasselbe für Props in die
+>     Szenen-Signatur. `placements[].model_url` ist entfallen, dafür nennt
+>     `placements[].model_tiers` die vorhandenen Stufen.
 
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 
@@ -746,7 +772,15 @@ keine einzige eigene Geometrie-Entscheidung mehr.
 
   # --- Modell-Platzierungen (eine Spec-Form für ALLES) ---
   models:  [ { role: "building"|"room"|"prop",
-               id, url,                    # ETag-Endpoint wie bisher
+               id,
+               variants,                   # {"full": url, "low": url} —
+                                           # ETag-Endpoints je Auflösungs-
+                                           # stufe (Nachtrag v5.3 Nr. 16);
+                                           # fehlende Stufe fehlt, {} = kein
+                                           # Mesh. Konsument: gewünschte
+                                           # Stufe, sonst beste vorhandene
+                                           # (pickVariant in
+                                           # @anima/scene-render).
                room_id?, level,
                fix_euler: {x,y,z},         # 'YXZ', Grad — vor Messung
                yaw_deg,                    # Eltern-Rotation, −rad im Client

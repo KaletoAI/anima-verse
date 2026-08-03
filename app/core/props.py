@@ -9,11 +9,21 @@ instead of being set per room.
 
 Storage: ``worlds/<world>/props/<prop_id>/``:
 
-    model.glb     — the mesh (unrigged GLB, embedded texture)
-    source.png    — the product-shot render the mesh was made from
-    sidecar.json  — {name, category, width_m, depth_m, height_m,
-                     dims_estimated, rotation{x,y,z}, tags[], markers[],
-                     bbox[3], created_at, source, backend, prompt}
+    model_<ts>.glb   — the meshes (unrigged GLB, embedded texture)
+    model_<ts>.json  — one sidecar per mesh: {created_at, source, format,
+                       tier, backend, face_num, texture_size}
+    selection.json   — {"model": {"<tier>": "<filename>"}}
+    source.png       — the product-shot render the meshes were made from
+    sidecar.json     — the prop MASTER record: {name, category, width_m,
+                       depth_m, height_m, dims_estimated, rotation{x,y,z},
+                       tags[], markers[], bbox[3], created_at, source, prompt}
+
+The mesh files are a GALLERY like the location/room models — same mechanics,
+same module (``app/core/model_store.py``): several files per prop, one active
+per resolution tier (``full`` / ``low``), selected in ``selection.json``.
+Everything that describes ONE generation run (backend, face_num,
+texture_size) lives on that run's sidecar; the master record describes the
+OBJECT (2026-08-03, plan-3d-lod-und-betreten.md).
 
 ``prop_id`` = slug of the name + a short hash (stable, file-safe).
 
@@ -52,12 +62,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.core.model_store import (DEFAULT_TIER, ModelGallery, read_sidecar as
+                                  read_model_sidecar, write_sidecar as
+                                  write_model_sidecar)
 from app.core.model_validate import glb_bounds
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
 
-MODEL_NAME = "model.glb"
+MODEL_STEM = "model"
 SOURCE_NAME = "source.png"
 SIDECAR_NAME = "sidecar.json"
 
@@ -345,7 +358,7 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
 def create_prop(*, name: str, category: str = "", width_m: Any = None,
                 depth_m: Any = None, height_m: Any = None,
                 tags: Any = None, description: str = "", prompt: str = "",
-                source: str = "manual", backend: str = "") -> Dict[str, Any]:
+                source: str = "manual") -> Dict[str, Any]:
     """Create a new prop record (sidecar only — the model/source files are
     added by upload or the generation chain). Returns ``{id, **sidecar}``.
 
@@ -381,7 +394,6 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         "markers": [],
         "created_at": utc_now_iso(),
         "source": (source or "manual").strip(),
-        "backend": (backend or "").strip(),
         "prompt": (prompt or "").strip(),
     }
     _write_sidecar(prop_id, meta)
@@ -459,12 +471,17 @@ def delete_prop(prop_id: str) -> bool:
 
 # ── Files ───────────────────────────────────────────────────────────────
 
-def model_path(prop_id: str) -> Optional[Path]:
+def model_gallery(prop_id: str) -> Optional[ModelGallery]:
+    """The prop's mesh gallery (None for an invalid id)."""
     d = _prop_dir(prop_id)
-    if not d:
-        return None
-    p = d / MODEL_NAME
-    return p if p.exists() else None
+    return ModelGallery(d, MODEL_STEM, (".glb",)) if d else None
+
+
+def model_path(prop_id: str, tier: str = "") -> Optional[Path]:
+    """The ACTIVE mesh of ``tier`` — a tier the prop does not have falls back
+    to the best available one, so a prop without a low variant still renders."""
+    g = model_gallery(prop_id)
+    return g.find(tier) if g else None
 
 
 def source_path(prop_id: str) -> Optional[Path]:
@@ -475,16 +492,26 @@ def source_path(prop_id: str) -> Optional[Path]:
     return p if p.exists() else None
 
 
-def save_uploaded_glb(prop_id: str, contents: bytes) -> bool:
-    """Store an uploaded GLB as the prop's model. The prop record must already
-    exist (created first); validation is the caller's job."""
-    if not read_sidecar(prop_id):
+def save_uploaded_glb(prop_id: str, contents: bytes,
+                      tier: str = DEFAULT_TIER) -> bool:
+    """Store an uploaded GLB as a NEW mesh of the prop and make it the active
+    one of its tier. The prop record must already exist (created first);
+    validation is the caller's job."""
+    g = model_gallery(prop_id) if read_sidecar(prop_id) else None
+    if not g:
         return False
-    d = _prop_dir(prop_id, create=True)
-    if not d:
-        return False
-    (d / MODEL_NAME).write_bytes(contents)
-    logger.info("Prop %s: model uploaded (%d bytes)", safe_prop_id(prop_id), len(contents))
+    target = g.new_path()
+    target.write_bytes(contents)
+    write_model_sidecar(target, {
+        "created_at": utc_now_iso(),
+        "source": "upload",
+        "format": "glb",
+        "rig": "none",
+        "tier": tier or DEFAULT_TIER,
+    })
+    g.select(target.name, tier)
+    logger.info("Prop %s: model uploaded (%d bytes) -> %s",
+                safe_prop_id(prop_id), len(contents), target.name)
     _store_bbox(prop_id)
     return True
 
@@ -604,7 +631,12 @@ def _all_prop_ids() -> List[str]:
 
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
     meta = _ensure_bbox(prop_id, meta)
-    has_model = model_path(prop_id) is not None
+    gallery = model_gallery(prop_id)
+    # Which resolution tiers the prop HAS — the selection decides, not the
+    # presence of files (an admin may have switched the prop off with the
+    # __none__ sentinel). Empty = no mesh at all.
+    tiers = sorted(gallery.tiers()) if gallery else []
+    has_model = bool(tiers)
     dims = _effective_dims(meta)
     rec: Dict[str, Any] = {
         "id": prop_id,
@@ -619,9 +651,15 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         "tags": meta.get("tags") or [],
         "marker_count": len(meta.get("markers") or []),
         "has_model": has_model,
+        "model_tiers": tiers,
     }
     if full:
         has_source = source_path(prop_id) is not None
+        # Per-run facts of the ACTIVE mesh (they live on its own sidecar since
+        # the gallery rebuild) — the admin panel shows what the current model
+        # was made with.
+        active = gallery.find() if gallery else None
+        run = read_model_sidecar(active) if active else {}
         rec.update({
             "description": meta.get("description") or "",
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
@@ -629,12 +667,16 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             "has_source": has_source,
             "created_at": meta.get("created_at") or "",
             "source": meta.get("source") or "",
-            "backend": meta.get("backend") or "",
+            "backend": run.get("backend") or "",
+            "face_num": int(run.get("face_num") or 0),
+            "texture_size": int(run.get("texture_size") or 0),
+            "model_signature": gallery.signature() if gallery else "",
             "backend_image": meta.get("backend_image") or "",
             "prompt": meta.get("prompt") or "",
             "negative": meta.get("negative") or "",
             "source_generated_at": meta.get("source_generated_at") or "",
             "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
+            "model_file": active.name if active else "",
             "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
         })
         if meta.get("bbox"):
@@ -851,7 +893,8 @@ def _generate(prop_id: str, prompt: str, negative: str,
               image_backend_glob: str, mesh_backend_glob: str,
               face_num: Any = None, texture_size: Any = None,
               mesh_only: bool = False,
-              image_only: bool = False) -> Dict[str, Any]:
+              image_only: bool = False,
+              tier: str = DEFAULT_TIER) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries)."""
@@ -886,14 +929,20 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if not mesh_backend_glob.strip():
             # Same admin default the character 3D tab uses — without it the
             # pool picks the cheapest mesh backend, which is arbitrary when
-            # several share cost 0.
-            from app.core import config
-            mesh_backend_glob = str(config.get(
-                "image_generation.mesh_imagegen_default", "") or "").strip()
-        d = _prop_dir(prop_id, create=True)
+            # several share cost 0. list_mesh_backends blanks the default when
+            # it is not a rig-'none' MESH backend: the setting also holds
+            # image-backend names, and one of those as a mesh glob matches
+            # nothing (or the wrong thing).
+            from app.core.model3d import list_mesh_backends
+            mesh_backend_glob = str(
+                list_mesh_backends("none").get("default") or "").strip()
+        g = model_gallery(prop_id)
+        if not g:
+            error = "bad prop id"
+            return {"ok": False, "error": error}
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
-            output_path=str(d / MODEL_NAME),
+            output_path=str(g.new_path()),
             backend_glob=mesh_backend_glob,
             mesh_name=prop_id,
             rig="none",
@@ -904,29 +953,31 @@ def _generate(prop_id: str, prompt: str, negative: str,
             logger.error("Prop %s mesh failed: %s", prop_id, error)
             return {"ok": False, "error": error}
 
-        # rig="none" always yields a GLB (buildings/props contract), so the
-        # output stays model.glb; the rename is a safety net if the sniffed
-        # suffix ever differed (our serving expects exactly model.glb).
+        # A NEW file in the gallery, active for its tier — the previous meshes
+        # stay (pick one of them in the admin panel). Everything about THIS
+        # run goes on the file's own sidecar, not on the prop record.
         path = Path(res["path"])
-        target = d / MODEL_NAME
-        if path != target and path.exists():
-            path.replace(target)
+        write_model_sidecar(path, {
+            "created_at": utc_now_iso(),
+            "source": "generated",
+            "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
+            "rig": res.get("rig", "none"),
+            "tier": tier or DEFAULT_TIER,
+            "backend": res.get("backend", ""),
+            **({"face_num": int(face_num)} if face_num else {}),
+            **({"texture_size": int(texture_size)} if texture_size else {}),
+        })
+        g.select(path.name, tier)
 
         meta = _materialize_dims(prop_id, read_sidecar(prop_id))
         meta["source"] = "generated"
-        meta["backend"] = res.get("backend", "") or meta.get("backend", "")
-        # Per-run overrides, recorded for transparency (None = backend default).
-        if face_num:
-            meta["face_num"] = int(face_num)
-        if texture_size:
-            meta["texture_size"] = int(texture_size)
         bbox = _extract_bbox(prop_id)
         if bbox:
             meta["bbox"] = bbox
             _redistribute_dims(meta)
         _write_sidecar(prop_id, meta)
-        logger.info("Prop %s: model generated (backend %s)",
-                    prop_id, meta.get("backend", ""))
+        logger.info("Prop %s: model generated (%s, backend %s)",
+                    prop_id, path.name, res.get("backend", ""))
         return {"ok": True}
     finally:
         if task_id:
@@ -942,7 +993,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        face_num: Any = None,
                        texture_size: Any = None,
                        mesh_only: bool = False,
-                       image_only: bool = False) -> bool:
+                       image_only: bool = False,
+                       tier: str = DEFAULT_TIER) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
     False only while THIS prop+backend combination is already generating
@@ -961,7 +1013,7 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
             _generate(pid, prompt, negative, image_backend_glob,
                       mesh_backend_glob, face_num=face_num,
                       texture_size=texture_size, mesh_only=mesh_only,
-                      image_only=image_only)
+                      image_only=image_only, tier=tier)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:

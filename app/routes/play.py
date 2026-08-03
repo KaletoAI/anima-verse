@@ -402,13 +402,15 @@ async def play_scene_render_image(sig: str, user=Depends(get_current_user)):
 # 404 stays normal (the client keeps rendering the location procedurally).
 
 @router.get("/play/locations/{location_id}/model")
-def play_location_model(location_id: str, request: Request):
-    """Serves the location's 3D building model (GLB bytes). 404 = no model.
-    ETag/If-None-Match — the file changes rarely."""
+def play_location_model(location_id: str, request: Request, tier: str = ""):
+    """Serves the location's 3D building model (GLB bytes) in the requested
+    resolution tier (``full`` = default, ``low`` = the distance mesh). A tier
+    the location does not have falls back to the best available one; 404 = no
+    model at all. ETag/If-None-Match — the file changes rarely."""
     from fastapi.responses import Response
     from app.core.location_model3d import find_building_model
     from app.core.http_files import etag_file_response
-    p = find_building_model(location_id)
+    p = find_building_model(location_id, tier=tier)
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
@@ -418,13 +420,19 @@ def play_location_model(location_id: str, request: Request):
 
 @router.get("/play/locations/{location_id}/model/meta")
 def play_location_model_meta(location_id: str):
-    """Meta of the location's building model ({format, rig, url}). 404 = none."""
+    """Meta of the location's building model ({format, rig, tiers, url}).
+    ``tiers`` names the resolution tiers that exist, each with its own
+    signature; ``url`` serves the default tier, ``?tier=`` any other.
+    404 = none."""
     from urllib.parse import quote
     from app.core.location_model3d import get_client_meta
     meta = get_client_meta(location_id)
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
-    return {**meta, "url": f"/play/locations/{quote(location_id)}/model"}
+    base = f"/play/locations/{quote(location_id)}/model"
+    return {**meta, "url": base,
+            "tiers": {t: {**info, "url": f"{base}?tier={t}"}
+                      for t, info in (meta.get("tiers") or {}).items()}}
 
 
 def _test_figure_file():
@@ -486,15 +494,18 @@ def play_test_figure_meta():
 # by room id alone (room ids are template-identical across clones).
 
 @router.get("/play/rooms/{room_id}/model")
-def play_room_model(room_id: str, request: Request):
-    """Serves the room's 3D model (GLB bytes). 404 = no model (the client
-    keeps rendering the room as a plain slab). ETag/If-None-Match."""
+def play_room_model(room_id: str, request: Request, tier: str = ""):
+    """Serves the room's 3D model (GLB bytes) in the requested resolution tier
+    (``full`` = default), falling back to the best available one. 404 = no
+    model (the client keeps rendering the room as a plain slab).
+    ETag/If-None-Match."""
     from fastapi.responses import Response
     from app.models.world import find_location_by_room
     from app.core.location_model3d import find_building_model
     from app.core.http_files import etag_file_response
     loc = find_location_by_room(room_id)
-    p = find_building_model(loc.get("id", ""), room_id=room_id) if loc else None
+    p = (find_building_model(loc.get("id", ""), room_id=room_id, tier=tier)
+         if loc else None)
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
@@ -537,7 +548,8 @@ def play_room_recipe(room_id: str):
 
 @router.get("/play/rooms/{room_id}/model/meta")
 def play_room_model_meta(room_id: str):
-    """Meta of the room's 3D model ({format, rig, rotation, url}). 404 = none."""
+    """Meta of the room's 3D model ({format, rig, rotation, tiers, url}) —
+    same tier contract as the building model. 404 = none."""
     from urllib.parse import quote
     from app.models.world import find_location_by_room
     from app.core.location_model3d import get_client_meta
@@ -545,7 +557,10 @@ def play_room_model_meta(room_id: str):
     meta = get_client_meta(loc.get("id", ""), room_id=room_id) if loc else None
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
-    return {**meta, "url": f"/play/rooms/{quote(room_id)}/model"}
+    base = f"/play/rooms/{quote(room_id)}/model"
+    return {**meta, "url": base,
+            "tiers": {t: {**info, "url": f"{base}?tier={t}"}
+                      for t, info in (meta.get("tiers") or {}).items()}}
 
 
 # --- Scene recipe (shared/schnittstellen-3d.md part B) — the COMPLETE scene

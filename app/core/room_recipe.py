@@ -12,7 +12,7 @@ the COMPOSED conveniences so the client renders without re-deriving them:
   only in the room that owns it but has to be a hole in BOTH rooms' walls, so
   the recipe mirrors it geometrically (see ``_mirrored_openings``),
 - ``exit`` derived from the doors when the room has no explicit one,
-- ``placements`` joined with each prop's real dims + model url (REAL-SIZE
+- ``placements`` joined with each prop's real dims + its mesh tiers (REAL-SIZE
   rule: a placement never scales a prop — its own dims × the plan factor k
   do), and
 - ``prop_markers`` as fully composed transforms RELATIVE to their placement
@@ -432,7 +432,12 @@ def compose_recipe(room: Dict[str, Any],
                          "height_m": prop["height_m"]}
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
-            entry["model_url"] = prop.get("model_url") or ""
+            # Which resolution tiers the prop has, plus the change key of its
+            # mesh SELECTION: the scene payload turns the tiers into
+            # ``variants`` URLs, and the signature below moves when a prop
+            # gets a new mesh (the URL alone never changes).
+            entry["model_tiers"] = prop.get("model_tiers") or []
+            entry["model_sig"] = prop.get("model_signature") or ""
         idx = len(placements)
         placements.append(entry)
         bbox = prop.get("bbox")
@@ -544,7 +549,8 @@ def compose_recipe(room: Dict[str, Any],
                                      "height_m": prop["height_m"]}
                     entry["has_model"] = bool(prop.get("has_model"))
                     if prop.get("has_model"):
-                        entry["model_url"] = prop.get("model_url") or ""
+                        entry["model_tiers"] = prop.get("model_tiers") or []
+                        entry["model_sig"] = prop.get("model_signature") or ""
                 placements.append(entry)
 
     payload: Dict[str, Any] = {

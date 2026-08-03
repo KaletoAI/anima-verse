@@ -170,11 +170,14 @@ def list_props():
 
 
 @router.get("/props/{prop_id}/model")
-def get_prop_model(prop_id: str, request: Request):
-    """Serves a prop's GLB mesh. ETag + If-None-Match; a 404 is the normal
-    "no model yet" state (the record may exist before the mesh does)."""
+def get_prop_model(prop_id: str, request: Request, tier: str = ""):
+    """Serves a prop's GLB mesh in the requested resolution tier (``full`` =
+    default, ``low`` = overview mesh). A tier the prop does not have falls
+    back to the best available one — a missing low variant must never make an
+    object disappear. ETag + If-None-Match; a 404 is the normal "no model yet"
+    state (the record may exist before the mesh does)."""
     from app.core.props import model_path
-    path = model_path(prop_id)
+    path = model_path(prop_id, tier)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "model/gltf-binary",

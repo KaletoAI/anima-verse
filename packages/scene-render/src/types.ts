@@ -67,6 +67,27 @@ export interface SceneExtra {
   level?: number
 }
 
+/** Auflösungsstufen eines Meshes, in FALLBACK-Reihenfolge (§ B1 variants).
+ *  Der Server liefert nur die Stufen, die es wirklich gibt. */
+export const MODEL_TIERS = ['full', 'low'] as const
+export type ModelTier = (typeof MODEL_TIERS)[number]
+
+/** URL der gewünschten Stufe, sonst die beste vorhandene ('' = kein Mesh).
+ *  EINE Regel für beide Renderer: eine fehlende Low-Variante darf ein Objekt
+ *  nie verschwinden lassen, und kein Renderer erfindet dafür eigene Logik. */
+export function pickVariant(
+  variants: Record<string, string> | undefined,
+  tier: string = 'full',
+): string {
+  if (!variants) return ''
+  const order = [tier, ...MODEL_TIERS, ...Object.keys(variants)]
+  for (const t of order) {
+    const url = variants[t]
+    if (url) return url
+  }
+  return ''
+}
+
 /** EINE Platzierungs-Spec für Gebäude, Raum-Diorama und Prop gleichermaßen —
  *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
 export interface SceneModelSpec {
@@ -81,8 +102,12 @@ export interface SceneModelSpec {
    *  beim Reinzoomen aus wie `shell` — darunter liegt die Detailszene. */
   display?: 'shell' | 'ground' | 'shell_area'
   id: string
-  /** ETag-Endpunkt; leer = kein Mesh (dann placeholder_dims) */
-  url: string
+  /** ETag-Endpunkte je Auflösungsstufe (`full` = modellierte Qualität,
+   *  `low` = Fernsicht-Mesh; fehlende Stufe fehlt im Objekt). LEER = kein
+   *  Mesh (dann placeholder_dims). Ein Konsument nimmt die gewünschte Stufe
+   *  und sonst die beste vorhandene — `pickVariant()` macht genau das, und
+   *  beide Renderer benutzen sie (plan-3d-lod-und-betreten.md, 2026-08-03). */
+  variants: Partial<Record<ModelTier, string>> & Record<string, string>
   room_id?: string
   level: number
   /** Orientierungs-Fix, Euler 'YXZ' in Grad — VOR dem Messen. Yaw außen,

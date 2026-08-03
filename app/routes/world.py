@@ -300,10 +300,21 @@ def _mesh_int(val) -> int:
         return 0
 
 
+def _tier(val) -> str:
+    """Requested resolution tier from a body/form field ('' = the default
+    tier). Unknown names are not rejected — the store answers with what it
+    has (plan-3d-lod-und-betreten.md)."""
+    from app.core.model_store import DEFAULT_TIER, normalize_tier
+    return normalize_tier(val) or DEFAULT_TIER
+
+
 @router.post("/locations/{location_id}/model3d/generate")
 async def location_model3d_generate(location_id: str, request: Request) -> Dict[str, Any]:
     """Generate the location's 3D building model from a gallery image
-    (body: {source_image, backend?}). Background job — poll status for pending."""
+    (body: {source_image, backend?, face_num?, texture_size?, tier?}).
+    ``tier`` says which resolution slot the result fills (default ``full``; a
+    ``low`` run is the same chain with a smaller face count). Background job —
+    poll status for pending."""
     from app.core.location_model3d import trigger_generation
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
@@ -318,7 +329,8 @@ async def location_model3d_generate(location_id: str, request: Request) -> Dict[
     if not trigger_generation(location_id, source_image=source_image,
                               backend_glob=backend,
                               face_num=_mesh_int(data.get("face_num")) or None,
-                              texture_size=_mesh_int(data.get("texture_size")) or None):
+                              texture_size=_mesh_int(data.get("texture_size")) or None,
+                              tier=_tier(data.get("tier"))):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -350,7 +362,8 @@ async def location_model3d_upload(location_id: str, request: Request) -> Dict[st
             "warnings": result["warnings"],
         })
     meta = save_uploaded_building(location_id, contents,
-                                  source_image=str(form.get("source_image") or ""))
+                                  source_image=str(form.get("source_image") or ""),
+                                  tier=_tier(form.get("tier")))
     return {"status": "success", **meta, "warnings": result["warnings"]}
 
 
@@ -367,17 +380,20 @@ def location_model3d_delete(location_id: str, file: str = "") -> Dict[str, Any]:
 
 @router.post("/locations/{location_id}/model3d/select")
 async def location_model3d_select(location_id: str, request: Request) -> Dict[str, Any]:
-    """Make a stored model the ACTIVE building model (body: {file}) — the one
-    the clients get via /play/locations/{id}/model. An empty {file} selects
-    NO model: nothing is rendered until another one is chosen/generated."""
+    """Make a stored model the ACTIVE building model of a resolution tier
+    (body: {file, tier?}) — the one the clients get via
+    /play/locations/{id}/model?tier=. An empty {file} deselects: on the
+    default tier nothing is rendered until another one is chosen/generated,
+    on any other tier that tier ceases to exist."""
     from app.core.location_model3d import select_model
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
     data = await request.json()
     filename = str((data or {}).get("file") or "").strip()
-    if not select_model(location_id, filename):
+    tier = _tier((data or {}).get("tier"))
+    if not select_model(location_id, filename, tier=tier):
         raise HTTPException(status_code=404, detail="Model not found")
-    return {"status": "success", "active": filename}
+    return {"status": "success", "active": filename, "tier": tier}
 
 
 @router.get("/locations/{location_id}/model3d/files/{filename}")
@@ -471,7 +487,8 @@ def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
 async def room_model3d_generate(location_id: str, room_id: str,
                                 request: Request) -> Dict[str, Any]:
     """Generate the room's 3D model from a gallery image assigned to the room
-    (body: {source_image, backend?}). Background job — poll status for pending."""
+    (body: {source_image, backend?, face_num?, texture_size?, tier?}). Same
+    tier contract as the building model. Background job — poll status."""
     from app.core.location_model3d import trigger_generation
     _require_room(location_id, room_id)
     data = await request.json()
@@ -485,7 +502,8 @@ async def room_model3d_generate(location_id: str, room_id: str,
     if not trigger_generation(location_id, source_image=source_image,
                               backend_glob=backend, room_id=room_id,
                               face_num=_mesh_int(data.get("face_num")) or None,
-                              texture_size=_mesh_int(data.get("texture_size")) or None):
+                              texture_size=_mesh_int(data.get("texture_size")) or None,
+                              tier=_tier(data.get("tier"))):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -518,7 +536,7 @@ async def room_model3d_upload(location_id: str, room_id: str,
         })
     meta = save_uploaded_building(location_id, contents,
                                   source_image=str(form.get("source_image") or ""),
-                                  room_id=room_id)
+                                  room_id=room_id, tier=_tier(form.get("tier")))
     return {"status": "success", **meta, "warnings": result["warnings"]}
 
 
@@ -535,15 +553,17 @@ def room_model3d_delete(location_id: str, room_id: str, file: str = "") -> Dict[
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/select")
 async def room_model3d_select(location_id: str, room_id: str,
                               request: Request) -> Dict[str, Any]:
-    """Make a stored model the ACTIVE room model (body: {file}). An empty
-    {file} selects NO model — the room renders without a diorama."""
+    """Make a stored model the ACTIVE room model of a resolution tier (body:
+    {file, tier?}). An empty {file} on the default tier selects NO model — the
+    room renders without a diorama."""
     from app.core.location_model3d import select_model
     _require_room(location_id, room_id)
     data = await request.json()
     filename = str((data or {}).get("file") or "").strip()
-    if not select_model(location_id, filename, room_id=room_id):
+    tier = _tier((data or {}).get("tier"))
+    if not select_model(location_id, filename, room_id=room_id, tier=tier):
         raise HTTPException(status_code=404, detail="Model not found")
-    return {"status": "success", "active": filename}
+    return {"status": "success", "active": filename, "tier": tier}
 
 
 @router.get("/locations/{location_id}/rooms/{room_id}/model3d/files/{filename}")
@@ -833,7 +853,8 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
                         image_backend_glob=str(data.get("image_backend") or "").strip(),
                         mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
                         face_num=_mesh_int(data.get("face_num")) or None,
-                        texture_size=_mesh_int(data.get("texture_size")) or None)
+                        texture_size=_mesh_int(data.get("texture_size")) or None,
+                        tier=_tier(data.get("tier")))
     return {"status": "generating", "prop": prop}
 
 
@@ -906,7 +927,8 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
                               mesh_only=bool(data.get("mesh_only")),
-                              image_only=bool(data.get("image_only"))):
+                              image_only=bool(data.get("image_only")),
+                              tier=_tier(data.get("tier"))):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -941,9 +963,10 @@ async def prop_markers(prop_id: str, request: Request) -> Dict[str, Any]:
 
 @router.post("/props/{prop_id}/upload")
 async def prop_upload(prop_id: str, file: UploadFile = File(...),
-                      force: str = "") -> Dict[str, Any]:
-    """Upload a GLB as the prop's model (validated as an unrigged GLB with an
-    embedded texture, like the building models; force=1 stores despite errors)."""
+                      force: str = "", tier: str = "") -> Dict[str, Any]:
+    """Upload a GLB as a NEW model of the prop and make it the active one of
+    its resolution tier (validated as an unrigged GLB with an embedded
+    texture, like the building models; force=1 stores despite errors)."""
     from app.core.props import get_prop, save_uploaded_glb
     from app.core.model_validate import validate_static_glb
     if not get_prop(prop_id):
@@ -962,7 +985,7 @@ async def prop_upload(prop_id: str, file: UploadFile = File(...),
             "errors": result["errors"],
             "warnings": result["warnings"],
         })
-    if not save_uploaded_glb(prop_id, contents):
+    if not save_uploaded_glb(prop_id, contents, _tier(tier)):
         raise HTTPException(status_code=404, detail="Prop not found")
     return {"status": "ok", "warnings": result["warnings"]}
 

@@ -209,7 +209,7 @@ export interface Map3D {
 // here and optional there, and the two described `openings` differently.
 // Re-exported so every existing importer keeps working unchanged.
 export type {
-  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
+  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
 } from '@anima/scene-render'
 

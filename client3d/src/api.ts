@@ -271,7 +271,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 // gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneTerrain,
-  SceneMarker, SceneExit, SceneStyle, SceneRoom,
+  SceneMarker, SceneExit, SceneStyle, SceneRoom, ModelTier,
   /** hiess hier frueher ApiOpening */
   SceneOpening,
 } from '@anima/scene-render';
@@ -299,6 +299,9 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     plates: arr<ScenePlate>(data.plates).filter((p) => arr(p.outline).length >= 3),
     walls: arr<SceneWall>(data.walls),
     extras: arr<SceneExtra>(data.extras),
+    // Modelle wandern unveraendert durch: `variants` je Stufe (§ B1) statt
+    // einer festen URL — welche Stufe geladen wird, entscheidet der Renderer
+    // ueber pickVariant(), nicht diese Schicht.
     models: arr<SceneModelSpec>(data.models),
     figures: data.figures ?? { base_height_m_world: 1.7, stand_clearance: 0.12 },
     markers: arr<SceneMarker>(data.markers),

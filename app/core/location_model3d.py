@@ -9,7 +9,13 @@ template's models. Stored parallel to the gallery images under
 
     building.glb / building_<ts>.glb   + matching .json sidecars
     room_<room_id>[_<ts>].glb          + matching .json sidecars
-    selection.json                     — {"<stem>": "<active filename>"}
+    selection.json                     — {"<stem>": {"<tier>": "<filename>"}}
+
+The file mechanics themselves (timestamped files, per-file sidecars,
+selection, ``__none__`` sentinel, resolution TIERS) live in
+``app/core/model_store.py`` — the same gallery the prop store uses. Every
+function here takes an optional ``tier`` (``full`` = the modelled quality and
+the default, ``low`` = the overview mesh).
 
 The un-timestamped names are the legacy single-model store — they stay valid
 entries. Without a selection entry the NEWEST file is active; generation and
@@ -26,25 +32,18 @@ goes through ``service.generate_mesh(rig="none")`` on the backend queue
 channel, as a background job with a pending flag — the same busy/serialization
 contract as the character mesh.
 """
-import json
-import re
 import threading
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
-from app.core.model3d import MODEL_EXTS
+from app.core.model_store import (DEFAULT_TIER, ModelGallery, read_sidecar,
+                                  write_sidecar)
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
 
 _STEM = "building"
-_SEL_FILE = "selection.json"
-# Selection sentinel: the admin explicitly chose NO model for this stem —
-# find_building_model returns None instead of falling back to the newest
-# file, so nothing is rendered (meta 404 = the normal no-model state).
-_SEL_NONE = "__none__"
 
 _lock = threading.Lock()
 _generating: set = set()  # "<owner>:<stem>:<source image>" running job keys
@@ -71,57 +70,20 @@ def _model_dir(owner_id: str, *, create: bool = False) -> Path:
     return d
 
 
-def _name_re(stem: str) -> re.Pattern:
-    """Filenames of a stem: ``<stem>.<ext>`` (legacy) or ``<stem>_<ts>.<ext>``."""
-    exts = "|".join(e.lstrip(".") for e in MODEL_EXTS)
-    return re.compile(rf"^{re.escape(stem)}(_\d+)?\.({exts})$")
+def _gallery(owner_id: str, room_id: str = "") -> ModelGallery:
+    """The shared gallery for one subject (location building or one room)."""
+    return ModelGallery(_model_dir(owner_id), _stem(room_id))
 
 
 def is_model_filename(filename: str, room_id: str = "") -> bool:
     """Route-level validation: the name belongs to this stem (also blocks
     path escapes and cross-stem deletes)."""
-    return bool(_name_re(_stem(room_id)).match(filename or ""))
-
-
-def _created_key(p: Path) -> float:
-    """Sort key: sidecar created_at, falling back to file mtime."""
-    meta = _read_sidecar(p)
-    ts = meta.get("created_at") or ""
-    if ts:
-        from app.core.timeutils import parse_iso
-        try:
-            return parse_iso(ts).timestamp()
-        except (TypeError, ValueError):
-            pass
-    try:
-        return p.stat().st_mtime
-    except OSError:
-        return 0.0
+    return ModelGallery(Path("."), _stem(room_id)).matches(filename)
 
 
 def _list_files(owner_id: str, room_id: str = "") -> List[Path]:
     """All stored model files of a stem, newest first."""
-    d = _model_dir(owner_id)
-    if not d.is_dir():
-        return []
-    pat = _name_re(_stem(room_id))
-    files = [p for p in d.iterdir() if p.is_file() and pat.match(p.name)]
-    return sorted(files, key=_created_key, reverse=True)
-
-
-def _read_sidecar(model_path: Path) -> Dict[str, Any]:
-    mp = model_path.with_suffix(".json")
-    if mp.exists():
-        try:
-            return json.loads(mp.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
-    return {}
-
-
-def _write_sidecar(model_path: Path, meta: Dict[str, Any]) -> None:
-    model_path.with_suffix(".json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return _gallery(owner_id, room_id).files()
 
 
 # ── No mesh measurement (2026-07-28) ────────────────────────────────────
@@ -136,79 +98,49 @@ def _write_sidecar(model_path: Path, meta: Dict[str, Any]) -> None:
 _MEASURED_KEYS = ("measured", "bbox_fixed", "walk_frac")
 
 
-def _read_selection(owner_id: str) -> Dict[str, str]:
-    sp = _model_dir(owner_id) / _SEL_FILE
-    if sp.exists():
-        try:
-            sel = json.loads(sp.read_text(encoding="utf-8"))
-            if isinstance(sel, dict):
-                return sel
-        except (OSError, ValueError):
-            pass
-    return {}
-
-
-def _write_selection(owner_id: str, sel: Dict[str, str]) -> None:
-    (_model_dir(owner_id, create=True) / _SEL_FILE).write_text(
-        json.dumps(sel, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def find_building_model(location_id: str, room_id: str = "") -> Optional[Path]:
-    """The ACTIVE model file of a location/room (via the gallery owner), or
-    None. Active = the selection entry when it points at an existing file,
-    else the newest stored model — so the legacy single-file store keeps
-    working without a migration write."""
+def find_building_model(location_id: str, room_id: str = "",
+                        tier: str = "") -> Optional[Path]:
+    """The ACTIVE model file of a location/room in ``tier`` (via the gallery
+    owner), or None. A tier the subject does not have falls back to the best
+    available one; the admin's "no model" sentinel suppresses all of them."""
     owner = _owner_id(location_id)
     if not owner:
         return None
-    sel = _read_selection(owner).get(_stem(room_id), "")
-    if sel == _SEL_NONE:
-        return None
-    if sel and is_model_filename(sel, room_id):
-        p = _model_dir(owner) / sel
-        if p.exists():
-            return p
-    files = _list_files(owner, room_id)
-    return files[0] if files else None
+    return _gallery(owner, room_id).find(tier)
 
 
-def select_model(location_id: str, filename: str, room_id: str = "") -> bool:
-    """Make ``filename`` the active model of the stem. An EMPTY filename
-    selects NO model (user decision 2026-07-27): the sentinel is persisted
-    and nothing is rendered until another model is selected or generated
-    (a fresh generation becomes active and clears it). False when a
-    non-empty file does not belong to the stem or is missing."""
+def select_model(location_id: str, filename: str, room_id: str = "",
+                 tier: str = DEFAULT_TIER) -> bool:
+    """Make ``filename`` the active model of the stem in ``tier``. An EMPTY
+    filename deselects (user decision 2026-07-27): on the default tier the
+    sentinel is persisted and nothing is rendered until another model is
+    selected or generated, on any other tier that tier ceases to exist.
+    False when a non-empty file does not belong to the stem or is missing."""
     owner = _owner_id(location_id)
     if not owner:
         return False
-    if not filename:
-        sel = _read_selection(owner)
-        sel[_stem(room_id)] = _SEL_NONE
-        _write_selection(owner, sel)
-        return True
-    if not is_model_filename(filename, room_id):
-        return False
-    if not (_model_dir(owner) / filename).exists():
-        return False
-    sel = _read_selection(owner)
-    sel[_stem(room_id)] = filename
-    _write_selection(owner, sel)
-    return True
+    return _gallery(owner, room_id).select(filename, tier)
 
 
 def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
     """All stored models of a stem for the admin UI, newest first:
     ``[{filename, format, created_at, backend, source, source_image,
-    rotation, active}]``."""
+    rotation, tier, selected_for, active}]``. ``tier`` is what the file was
+    made for, ``selected_for`` the tiers it currently serves."""
     owner = _owner_id(location_id)
     if not owner:
         return []
+    gallery = _gallery(owner, room_id)
     active = find_building_model(location_id, room_id)
     out: List[Dict[str, Any]] = []
-    for p in _list_files(owner, room_id):
-        meta = _read_sidecar(p)
+    for p in gallery.files():
+        meta = read_sidecar(p)
         out.append({
             "filename": p.name,
+            "tier": gallery.tier_of(p),
+            "selected_for": gallery.selected_for(p.name),
+            "face_num": int(meta.get("face_num") or 0),
+            "texture_size": int(meta.get("texture_size") or 0),
             "format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
             "created_at": meta.get("created_at", ""),
             "backend": meta.get("backend", ""),
@@ -321,7 +253,7 @@ def migrate_scale_frame_once() -> Dict[str, int]:
         map3d = loc.get("map3d")
         owner = _owner_id(loc_id) if loc_id else ""
         building = find_building_model(loc_id) if owner else None
-        b_meta = _read_sidecar(building) if building else {}
+        b_meta = read_sidecar(building) if building else {}
 
         if isinstance(map3d, dict) and map3d:
             plan_w = _explicit_plan_width(map3d)
@@ -373,7 +305,7 @@ def migrate_scale_frame_once() -> Dict[str, int]:
         k_old = 8.0 / plan_w if plan_w > 0 else 1.0
         for room_id in [""] + room_ids:
             for path in _list_files(owner, room_id):
-                meta = _read_sidecar(path)
+                meta = read_sidecar(path)
                 if not meta:
                     continue
                 touched = False
@@ -385,7 +317,7 @@ def migrate_scale_frame_once() -> Dict[str, int]:
                     meta["walk_y"] = round(float(walk) / k_old, 3)
                     touched = True
                 if touched:
-                    _write_sidecar(path, meta)
+                    write_sidecar(path, meta)
                     stats["sidecars"] += 1
     if changed:
         _save_world_data(wdata)
@@ -422,12 +354,14 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "exists": bool(path),
         "pending": is_pending(location_id, room_id),
-        "meta": _read_sidecar(path) if (owner and path) else {},
+        "meta": read_sidecar(path) if (owner and path) else {},
         "models": list_models(location_id, room_id),
         # The admin explicitly chose "no model" — distinct from "no files":
         # the UI shows the None entry as the active choice.
-        "none_selected": bool(owner and _read_selection(owner)
-                              .get(_stem(room_id)) == _SEL_NONE),
+        "none_selected": bool(owner and _gallery(owner, room_id).none_selected()),
+        # Which resolution tiers the subject actually has (the admin marks a
+        # missing one instead of the store inventing a placeholder).
+        "tiers": sorted(_gallery(owner, room_id).tiers()) if owner else [],
     }
     out.update(list_mesh_backends("none"))  # {"backends": [...], "default": ""}
     return out
@@ -435,18 +369,25 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
 
 def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, Any]]:
     """Lean meta for the 3D client (``{format, rig, rotation, offset_y,
-    signature}``) of the ACTIVE model, or None when there is none — no
+    tiers, signature}``) of the ACTIVE model, or None when there is none — no
     backend/model enumeration (that is the admin status's job). ``rotation``
     is the admin's persisted 90°-step orientation fix; the client applies it
     to the model root on load. Map placement (yaw + tile size) is NOT here —
     that is ``map3d.rotation``/``map3d.size`` on the location (rooms:
     ``room.layout``), delivered via the worldmap/locations (see
-    schnittstellen-3d.md)."""
-    import hashlib
-    p = find_building_model(location_id, room_id)
+    schnittstellen-3d.md).
+
+    The placement dials come from the DEFAULT tier's sidecar: a low variant is
+    the same object at a coarser resolution, so it inherits the orientation
+    fix and the offsets rather than carrying dials of its own."""
+    owner = _owner_id(location_id)
+    if not owner:
+        return None
+    gallery = _gallery(owner, room_id)
+    p = gallery.find()
     if not p:
         return None
-    meta = _read_sidecar(p)
+    meta = read_sidecar(p)
     out = {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
            "rig": meta.get("rig", "none"),
            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
@@ -457,12 +398,18 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
            # former height/floors dials went with the per-axis scaling
            # (2026-07-28).
            "width_m": float(meta.get("width_m") or 0.0),
-           # Changes whenever ANOTHER model file becomes active (new
-           # generation, upload, selection) — a running client polls the
+           # The resolution tiers this subject HAS, each with its own change
+           # key — the client asks for one with ?tier= and re-downloads that
+           # file alone when its signature moves.
+           "tiers": {t: {"signature": gallery.signature(t)}
+                     for t in gallery.tiers()},
+           # Changes whenever ANOTHER model file becomes active in ANY tier
+           # (new generation, upload, selection) — a running client polls the
            # meta and re-downloads on a signature change (AV3D-2 addendum);
-           # rotation/offset edits are visible in the meta itself.
-           "signature": hashlib.md5(
-               f"{p.name}:{meta.get('created_at', '')}".encode()).hexdigest()[:12]}
+           # rotation/offset edits are visible in the meta itself. Covering
+           # every tier is the point: a freshly generated low variant used to
+           # leave the signature untouched and stayed invisible.
+           "signature": gallery.signature()}
     if room_id:
         # Rooms: the height offset lives in the FLOOR PLAN
         # (layout.model_offset_y), not on the model — the sidecar offsets are
@@ -512,7 +459,7 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
          else find_building_model(location_id, room_id))
     if not p:
         raise ValueError("no model")
-    meta = _read_sidecar(p)
+    meta = read_sidecar(p)
     cur = meta.get("rotation") or {}
     rot: Dict[str, float] = {}
     for axis in ("x", "y", "z"):
@@ -532,7 +479,7 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
         for key in _MEASURED_KEYS:
             meta.pop(key, None)
     meta["rotation"] = rot
-    _write_sidecar(p, meta)
+    write_sidecar(p, meta)
     return meta
 
 
@@ -561,7 +508,7 @@ def set_offset_y(location_id: str, offset_y: Any = None,
          else find_building_model(location_id))
     if not p:
         raise ValueError("no model")
-    meta = _read_sidecar(p)
+    meta = read_sidecar(p)
     for key, raw in (("offset_y", offset_y), ("offset_x", offset_x),
                      ("offset_z", offset_z), ("walk_y", walk_y)):
         if raw is None:
@@ -576,7 +523,7 @@ def set_offset_y(location_id: str, offset_y: Any = None,
         # to mean "measure it yourself" — with the measurement gone that made
         # the dial look dead (user finding 2026-07-28).
         meta[key] = v
-    _write_sidecar(p, meta)
+    write_sidecar(p, meta)
     return meta
 
 
@@ -593,7 +540,7 @@ def _set_sidecar_number(location_id: str, field: str, value: Any, *,
          else find_building_model(location_id, room_id))
     if not p:
         raise ValueError("no model")
-    meta = _read_sidecar(p)
+    meta = read_sidecar(p)
     try:
         v = cast(value)
     except (TypeError, ValueError):
@@ -604,7 +551,7 @@ def _set_sidecar_number(location_id: str, field: str, value: Any, *,
             meta[field] = round(meta[field], 2)
     else:
         meta.pop(field, None)
-    _write_sidecar(p, meta)
+    write_sidecar(p, meta)
     return meta
 
 
@@ -642,7 +589,7 @@ def set_walk_y(location_id: str, room_id: str, walk_y: Any = None,
          else find_building_model(location_id, room_id))
     if not p:
         raise ValueError("no model")
-    meta = _read_sidecar(p)
+    meta = read_sidecar(p)
     if walk_y is None or f"{walk_y}".strip() == "":
         meta.pop("walk_y", None)
     else:
@@ -651,45 +598,37 @@ def set_walk_y(location_id: str, room_id: str, walk_y: Any = None,
         except (TypeError, ValueError):
             v = float(meta.get("walk_y") or 0.0)
         meta["walk_y"] = round(min(max(v, 0.0), 50.0), 3)
-    _write_sidecar(p, meta)
+    write_sidecar(p, meta)
     return meta
-
-
-def _new_model_path(d: Path, stem: str, suffix: str = ".glb") -> Path:
-    """Fresh timestamped target file; bumps the timestamp on a collision."""
-    ts = int(time.time())
-    while True:
-        p = d / f"{stem}_{ts}{suffix}"
-        if not p.exists():
-            return p
-        ts += 1
 
 
 def save_uploaded_building(location_id: str, contents: bytes, *,
                            source_image: str = "",
                            backend: str = "",
-                           room_id: str = "") -> Dict[str, Any]:
+                           room_id: str = "",
+                           tier: str = DEFAULT_TIER) -> Dict[str, Any]:
     """Store an uploaded GLB as a NEW model of the location/room and make it
-    the active one. Validation is the caller's job (validate_static_glb)."""
+    the active one of its tier. Validation is the caller's job
+    (validate_static_glb)."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("location not found")
-    d = _model_dir(owner, create=True)
-    target = _new_model_path(d, _stem(room_id))
+    target = _gallery(owner, room_id).new_path()
     target.write_bytes(contents)
     meta = {
         "created_at": utc_now_iso(),
         "source": "upload",
         "format": "glb",
         "rig": "none",
+        "tier": tier or DEFAULT_TIER,
         "source_image": source_image,
         "backend": backend,
         "location": owner,
     }
     if room_id:
         meta["room"] = room_id
-    _write_sidecar(target, meta)
-    select_model(location_id, target.name, room_id)
+    write_sidecar(target, meta)
+    select_model(location_id, target.name, room_id, tier)
     logger.info("Location model %s%s: uploaded (%d bytes) -> %s", owner,
                 f"/{room_id}" if room_id else "", len(contents), target.name)
     return meta
@@ -697,10 +636,11 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
 
 def _generate(location_id: str, source_image: str, backend_glob: str,
               room_id: str = "", face_num: Any = None,
-              texture_size: Any = None) -> Dict[str, Any]:
+              texture_size: Any = None,
+              tier: str = DEFAULT_TIER) -> Dict[str, Any]:
     """Blocking mesh generation from a gallery image of the location. Runs on a
-    worker thread (see trigger_generation). Adds a NEW model and selects it —
-    existing models stay (pick any of them in the admin panel)."""
+    worker thread (see trigger_generation). Adds a NEW model and selects it for
+    ``tier`` — existing models stay (pick any of them in the admin panel)."""
     from app.models.world import get_gallery_dir
     from app.imagegen.service import get_image_service
     owner = _owner_id(location_id)
@@ -740,10 +680,9 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
 
     error = ""
     try:
-        d = _model_dir(owner, create=True)
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
-            output_path=str(_new_model_path(d, _stem(room_id))),
+            output_path=str(_gallery(owner, room_id).new_path()),
             backend_glob=backend_glob,
             mesh_name=_stem(room_id) if room_id else owner,
             rig="none",
@@ -760,14 +699,21 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             "source": "generated",
             "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
             "rig": res.get("rig", "none"),
+            "tier": tier or DEFAULT_TIER,
             "source_image": source_image,
             "backend": res.get("backend", ""),
             "location": owner,
         }
+        # What this run was made WITH — the numbers that separate a full from
+        # a low variant. They belong to the FILE, not to the subject.
+        if face_num:
+            meta["face_num"] = int(face_num)
+        if texture_size:
+            meta["texture_size"] = int(texture_size)
         if room_id:
             meta["room"] = room_id
-        _write_sidecar(path, meta)
-        select_model(location_id, path.name, room_id)
+        write_sidecar(path, meta)
+        select_model(location_id, path.name, room_id, tier)
         logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
                     path.stat().st_size, source_image)
         return {"ok": True, "path": str(path), "meta": meta}
@@ -781,11 +727,11 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
 
 def _run(location_id: str, source_image: str, backend_glob: str,
          room_id: str = "", face_num: Any = None,
-         texture_size: Any = None) -> None:
+         texture_size: Any = None, tier: str = DEFAULT_TIER) -> None:
     owner = _owner_id(location_id)
     try:
         _generate(location_id, source_image, backend_glob, room_id,
-                  face_num=face_num, texture_size=texture_size)
+                  face_num=face_num, texture_size=texture_size, tier=tier)
     except Exception as e:
         logger.error("Location model generation for %s failed: %s", owner, e)
     finally:
@@ -795,11 +741,14 @@ def _run(location_id: str, source_image: str, backend_glob: str,
 
 def trigger_generation(location_id: str, *, source_image: str,
                        backend_glob: str = "", room_id: str = "",
-                       face_num: Any = None, texture_size: Any = None) -> bool:
+                       face_num: Any = None, texture_size: Any = None,
+                       tier: str = DEFAULT_TIER) -> bool:
     """Start a building/room-model generation in the background. Generations
     from different source images run concurrently as far as the backend GPU
     channel allows (it serializes per backend); False only when THIS image
-    is already being meshed for this target (double-click guard)."""
+    is already being meshed for this target (double-click guard). ``tier``
+    says which resolution slot the result becomes (a low run is the same
+    chain with a smaller face_num/texture_size)."""
     owner = _owner_id(location_id)
     if not owner:
         return False
@@ -809,7 +758,7 @@ def trigger_generation(location_id: str, *, source_image: str,
         _generating.add(_gen_key(owner, room_id, source_image))
     threading.Thread(target=_run,
                      args=[location_id, source_image, backend_glob, room_id,
-                           face_num, texture_size],
+                           face_num, texture_size, tier],
                      daemon=True).start()
     return True
 
@@ -817,37 +766,10 @@ def trigger_generation(location_id: str, *, source_image: str,
 def delete_building_model(location_id: str, room_id: str = "",
                           filename: str = "") -> bool:
     """Remove ONE stored model (+ sidecar) by filename, or ALL models of the
-    stem when ``filename`` is empty. Deleting the active model moves the
-    selection to the newest remaining one. True if anything was removed."""
+    stem when ``filename`` is empty. A selection pointing at a removed file
+    moves to the newest remaining one (default tier) or is dropped (any other
+    tier). True if anything was removed."""
     owner = _owner_id(location_id)
     if not owner:
         return False
-    d = _model_dir(owner)
-    removed = False
-    if filename:
-        p = model_file_path(location_id, filename, room_id)
-        if not p:
-            return False
-        sidecar = p.with_suffix(".json")
-        p.unlink()
-        if sidecar.exists():
-            sidecar.unlink()
-        removed = True
-    else:
-        for p in _list_files(owner, room_id):
-            sidecar = p.with_suffix(".json")
-            p.unlink()
-            if sidecar.exists():
-                sidecar.unlink()
-            removed = True
-    # Re-point (or drop) the selection — never leave it dangling.
-    sel = _read_selection(owner)
-    cur = sel.get(_stem(room_id), "")
-    if cur and not (d / cur).exists():
-        remaining = _list_files(owner, room_id)
-        if remaining:
-            sel[_stem(room_id)] = remaining[0].name
-        else:
-            sel.pop(_stem(room_id), None)
-        _write_selection(owner, sel)
-    return removed
+    return _gallery(owner, room_id).delete(filename)

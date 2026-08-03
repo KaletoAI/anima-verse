@@ -36,13 +36,13 @@ export {
   plateTargets, wallTargets,
 } from './primitives'
 
-export { FIGURE_ROOT_DROP, rootDropFor } from './types'
+export { FIGURE_ROOT_DROP, rootDropFor, pickVariant, MODEL_TIERS } from './types'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
   disposeSurfaceMaterials } from './materials'
 export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {
-  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec,
+  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
 } from './types'

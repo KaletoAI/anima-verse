@@ -25,7 +25,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   drapeGeometry,
-  applyClipOutline, disposeClipMaterials, placeModelSpec, plateTargets, SpecVerifier,
+  applyClipOutline, disposeClipMaterials, pickVariant, placeModelSpec, plateTargets,
+  SpecVerifier,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
@@ -723,7 +724,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       }
       // Props: the mesh when there is one, else the payload's placeholder
       // box (dims × k, already world metres) — a placement is never dropped.
-      const entry = spec.url ? ensurePropModel(spec.id, spec.url) : null
+      // Tier (§ B1 variants): stage 1 requests `full` everywhere — the
+      // distance-based choice is stage 3 (plan-3d-lod-und-betreten.md).
+      const propUrl = pickVariant(spec.variants, 'full')
+      const entry = propUrl ? ensurePropModel(spec.id, propUrl) : null
       if (entry) {
         placeSpec(entry.obj, spec)
       } else if (spec.placeholder_dims) {

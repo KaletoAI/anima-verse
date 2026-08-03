@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
-  buildPlate, buildWall, CLIP_MAX_POINTS, drapeGeometry, placeModelSpec, plateTargets,
+  buildPlate, buildWall, CLIP_MAX_POINTS, drapeGeometry, pickVariant, placeModelSpec,
+  plateTargets,
   SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
 import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
@@ -187,7 +188,7 @@ class Verifier {
   skip(spec: SceneModelSpec): void {
     this.skipped += 1;
     console.warn(`[scene] ${spec.role}:${spec.id} übersprungen — Mesh nicht ladbar `
-      + `(${spec.url || 'ohne URL'})`);
+      + `(${pickVariant(spec.variants) || 'ohne URL'})`);
     this.v.check(`${spec.role}:${spec.id}`, 'geladen', 0, 1);
   }
 
@@ -721,8 +722,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   verify.total = scene.models.length;
   await Promise.all(scene.models.map(async (spec) => {
     let source: THREE.Object3D | null = null;
-    if (spec.url) {
-      const raw = await loadGlb(spec.url, tile.center);
+    // Stufe (§ B1 variants): Etappe 1 lädt überall `full` — die
+    // distanzabhängige Wahl kommt in Etappe 3 (plan-3d-lod-und-betreten.md).
+    // Eine fehlende Stufe fällt in pickVariant auf die beste vorhandene.
+    const url = pickVariant(spec.variants, 'full');
+    if (url) {
+      const raw = await loadGlb(url, tile.center);
       if (stale()) return;
       source = raw ? raw.clone(true) : null;
     }
