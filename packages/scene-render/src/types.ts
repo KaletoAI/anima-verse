@@ -244,6 +244,24 @@ export interface SceneRoom {
   }
 }
 
+/** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and
+ *  leaves the cell. Pure geometry + room link, WORLD metres around the tile
+ *  centre like every other scene coordinate; `inward` is the inward normal in
+ *  world axes (x east, z south). Tile rotation (Nr. 15) is already applied by
+ *  the server — consumers only ever add the tile centre. client3d consumes
+ *  them for the entry proximity of the "Betreten" offer (Etappe 3,
+ *  plan-3d-lod-und-betreten.md); the admin preview does not render them. */
+export interface SceneBoundaryOpening {
+  edge: 'N' | 'E' | 'S' | 'W'
+  at_world: [number, number]
+  width_m: number
+  /** "passage" today — vocabulary open, like room openings */
+  type: string
+  /** room this opening routes into (the server accepts entry here) */
+  room_id?: string
+  inward: [number, number]
+}
+
 /** Deterministisches Geländerelief der Detailszene (§ B1 Nr. 14). 17 × 17
  *  Stützpunkte über dem Bezugsquadrat, `grid[j][i]` in WELT-Metern; i läuft
  *  West→Ost, j Nord→Süd, der Rand ist 0. Fehlt = die Szene ist eben.
@@ -281,6 +299,8 @@ export interface ScenePayload {
   markers: SceneMarker[]
   exits: SceneExit[]
   outdoor_rooms: string[]
+  /** Durchgänge an der Location-Grenze (§ B1 Nr. 13) — nur wenn autorisiert. */
+  boundary_openings?: SceneBoundaryOpening[]
   /** Höhenfeld der Detailszene — nur wenn `map3d.relief` gesetzt ist. */
   terrain?: SceneTerrain
   /** Detail-Modus der LOCATION (v5.2 Nr. 10) — unabhängig davon, ob ein

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { sampleTerrain, surfaceMaterial } from '@anima/scene-render';
-import type { CutoutHandle, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
+import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
@@ -35,6 +35,25 @@ function styleKind(raw: string | undefined): TileStyle | null {
   if (/house|haus|home|residence|cottage|villa/.test(s)) return 'house';
   if (/generic|hall|block|building/.test(s)) return 'generic';
   return terrainKind(s); // erlaubt auch style: "lake"/"forest"
+}
+
+/** One placed model of the mounted scene, kept for tier swapping (Etappe 3,
+ *  plan-3d-lod-und-betreten.md): the spec, the URL that is actually standing
+ *  and the object in the graph. `mountScene` writes the records,
+ *  `setSceneModelTier` (sceneRecipe.ts) swaps them in place — the old mesh
+ *  stays visible until the new one is in. */
+export interface PlacedSceneModel {
+  spec: SceneModelSpec;
+  /** URL the standing object was loaded from ('' = no mesh / placeholder) */
+  url: string;
+  /** URL a swap in flight wants — a newer wish supersedes an older answer */
+  wantUrl?: string;
+  object: THREE.Object3D | null;
+  /** group the object hangs in (room group / interior); building models hang
+   *  in tile.group and go through applySceneBuilding instead */
+  parent?: THREE.Object3D;
+  /** object is the grey placeholder box (own geometry/material, disposable) */
+  placeholder?: boolean;
 }
 
 export interface Tile {
@@ -119,10 +138,6 @@ export interface Tile {
    *  the lift, the avatar changing storey — calls this with it; a tile without
    *  a scene or with a single storey has no switch. */
   levelSwitch?: () => void;
-  /** Zoom-Zugabe für die Innenansicht bei mehrgeschossigen Gebäuden:
-   *  Obergeschosse brauchen mehr Kameradistanz, sonst springt die Ansicht
-   *  beim Rauszoomen zurück auf die Hülle, bevor man sie sehen kann */
-  interiorLift: number;
   /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
   roomOutdoor: Set<string>;
   /** Boden-/Sockelplatte DIESER Kachel (immer opak, Höhe 0) — die Innenansicht
@@ -145,6 +160,8 @@ export interface Tile {
    *  schaltet sie mit dem Crossfade — Fernsicht intaktes Modell, Innenansicht
    *  Löcher — und gibt beim Remount seine Material-Klone frei. */
   cutouts?: CutoutHandle;
+  /** Modell-Platzierungen der montierten Szene (Stufen-Tausch, Etappe 3) */
+  placedModels?: PlacedSceneModel[];
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   highlightRing: THREE.Mesh;
@@ -649,7 +666,7 @@ export function buildTile(loc: WorldLocation): Tile {
     roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, interiorLift: 0, roomOutdoor: new Set(),
+    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, roomOutdoor: new Set(),
     highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
   };
 
@@ -1027,9 +1044,16 @@ export function applyNightGlow(tile: Tile, night: number) {
   }
 }
 
+/** Rate of the crossfade below. Since the fade is EVENT-driven (open/close of
+ *  the one detail view, Etappe 3) it is a deliberate transition, not a zoom
+ *  side effect: τ = 1/4 s reaches 95 % in ~0.75 s — the "~0.8 s feel" of the
+ *  plan. The old 6 (≈0.5 s) read as a snap once the camera no longer moved
+ *  with it. */
+const FADE_RATE = 4;
+
 /** Crossfade Außenansicht <-> Raumansicht (fade 0..1). */
 export function applyTileFade(tile: Tile, dt: number) {
-  tile.fade = THREE.MathUtils.lerp(tile.fade, tile.fadeTarget, 1 - Math.exp(-6 * dt));
+  tile.fade = THREE.MathUtils.lerp(tile.fade, tile.fadeTarget, 1 - Math.exp(-FADE_RATE * dt));
   const f = tile.fade;
   // Kein Y-Morph mehr: die Spec liefert EINEN Maßstab, und der gilt in jeder
   // Zoomstufe. Wer hier wieder etwas skaliert, erzeugt genau die Divergenz

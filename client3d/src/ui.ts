@@ -59,6 +59,11 @@ export function createHud(opts: { username: string; avatar: string; onLogout: ()
 export class InfoPanel {
   private el: HTMLElement;
   onZoomTo: ((locationId: string) => void) | null = null;
+  /** "Hineinsehen": fly the camera in AND open the detail view — pure view
+   *  state, no server call (Etappe 3). */
+  onLookInside: ((locationId: string) => void) | null = null;
+  /** close the open detail view of this location (visible crossfade) */
+  onCloseView: ((locationId: string) => void) | null = null;
 
   constructor() {
     this.el = document.createElement('div');
@@ -67,7 +72,8 @@ export class InfoPanel {
     document.body.appendChild(this.el);
   }
 
-  show(loc: WorldLocation, chars: MapCharacter[], events: MapEvent[], roomOf: Map<string, string>) {
+  show(loc: WorldLocation, chars: MapCharacter[], events: MapEvent[], roomOf: Map<string, string>,
+       view?: { openable: boolean; open: boolean }) {
     // Flächen-/Gelände-Locations (Wald, See, Straße): ihre Räume sind Zonen
     // mit generischen Namen — die Liste ist dort Rauschen und bleibt weg,
     // wie die Raum-Labels in der Szene (User-Vorgabe 2026-08-02). Erkennung
@@ -94,12 +100,64 @@ export class InfoPanel {
       <h2>${esc(loc.name)}</h2>
       ${loc.description ? `<p class="desc">${esc(loc.description)}</p>` : ''}
       ${roomsHtml}${charsHtml}${eventsHtml}
-      <button class="panel-zoom">🔍 Reinzoomen</button>`;
+      <button class="panel-zoom"></button>`;
     this.el.hidden = false;
     (this.el.querySelector('.panel-close') as HTMLElement).addEventListener('click', () => this.hide());
-    (this.el.querySelector('.panel-zoom') as HTMLElement).addEventListener('click', () => {
-      this.onZoomTo?.(loc.id);
+    // Action button: without a detail view it stays the plain zoom-to; with
+    // one it becomes "Hineinsehen" (fly in AND open, Etappe 3) or — while the
+    // view is open — the close. The button flips itself after the click, so
+    // the panel need not be re-shown.
+    const action = this.el.querySelector('.panel-zoom') as HTMLButtonElement;
+    let isOpen = !!view?.open;
+    const render = () => {
+      action.textContent = !view?.openable ? '🔍 Reinzoomen'
+        : isOpen ? '✕ Ansicht schließen' : '🔍 Hineinsehen';
+    };
+    render();
+    action.addEventListener('click', () => {
+      if (!view?.openable) {
+        this.onZoomTo?.(loc.id);
+        return;
+      }
+      if (isOpen) this.onCloseView?.(loc.id);
+      else this.onLookInside?.(loc.id);
+      isOpen = !isOpen;
+      render();
     });
+  }
+
+  hide() {
+    this.el.hidden = true;
+  }
+}
+
+/**
+ * Floating control while a detail view is OPEN in the overview (Etappe 3,
+ * closing rule a): one badge with the location's name and its ✕ — the always
+ * visible way out, independent of the info panel. Hidden while the avatar
+ * drives the view (embodied mode): there the open location follows the
+ * avatar, and an explicit close would be reopened in the very next frame.
+ */
+export class OpenViewBadge {
+  private el: HTMLElement;
+  private nameEl: HTMLElement;
+  onClose: (() => void) | null = null;
+
+  constructor() {
+    this.el = document.createElement('div');
+    this.el.className = 'open-view-badge';
+    this.el.hidden = true;
+    this.el.innerHTML = '<span class="ovb-name"></span>'
+      + '<button class="ovb-close" title="Ansicht schließen">✕</button>';
+    this.nameEl = this.el.querySelector('.ovb-name') as HTMLElement;
+    (this.el.querySelector('.ovb-close') as HTMLElement)
+      .addEventListener('click', () => this.onClose?.());
+    document.body.appendChild(this.el);
+  }
+
+  show(name: string) {
+    this.nameEl.textContent = name;
+    this.el.hidden = false;
   }
 
   hide() {

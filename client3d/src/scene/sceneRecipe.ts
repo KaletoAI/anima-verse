@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
-  buildPlate, buildWall, CLIP_MAX_POINTS, drapeGeometry, pickVariant, placeModelSpec,
-  plateTargets,
+  buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials, drapeGeometry,
+  pickVariant, placeModelSpec, plateTargets,
   SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
-import type { PrimitiveTarget, VerifyRow } from '@anima/scene-render';
+import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
   type SceneExtra, type SceneModelSpec, type ScenePayload, type ScenePlate,
@@ -15,8 +15,17 @@ import { loadGlb } from './propAssets';
 import {
   preloadSurfaceTexture, sampleRoomWalkables, setLocationAnchor, surfaceFor,
   surfaceMaterialSpec,
-  type Tile,
+  type PlacedSceneModel, type Tile,
 } from './tiles';
+
+/** Which resolution tier a mount loads, per model group. `building` = the
+ *  far-view shell/area model, `interior` = everything else (dioramas, props).
+ *  Pure VIEW STATE — main.ts decides (camera distance / open detail view),
+ *  `pickVariant` resolves a missing tier to the best existing one. */
+export interface SceneTiers { building: ModelTier; interior: ModelTier }
+
+const tierOf = (spec: SceneModelSpec, tiers: SceneTiers): ModelTier =>
+  (spec.role === 'building' ? tiers.building : tiers.interior);
 
 /**
  * Scene recipe (schnittstellen-3d.md part B) — the server computes, the
@@ -347,13 +356,15 @@ const mountSeq = new WeakMap<Tile, number>();
  * Füllt die Tile-Felder der Innenansicht
  * (roomGroups/-Centers/-Exits/-Levels/-Rects/-Slots/-Markers, outlineWalls,
  * levelSlabs, levelWallMats, elevatorStops, alwaysVisibleRooms, interior,
- * interiorLabels, interiorLift) — der ganze Sicht- und Interaktionscode
+ * interiorLabels) — der ganze Sicht- und Interaktionscode
  * darüber (LOD, Crossfade, Fokus, Culling, NPCs) bleibt unberührt.
  *
  * Modelle (Gebäudehülle, Raum-Dioramen, Props) laufen ALLE durch `placeModelSpec` (§ B2, geteiltes Paket);
  * sie trudeln asynchron ein und werden nachgetragen.
  */
-export async function mountScene(tile: Tile, scene: ScenePayload): Promise<VerifyReport | null> {
+export async function mountScene(tile: Tile, scene: ScenePayload,
+                                 tiers: SceneTiers = { building: 'full', interior: 'full' }
+): Promise<VerifyReport | null> {
   const seq = (mountSeq.get(tile) ?? 0) + 1;
   mountSeq.set(tile, seq);
   // veraltet = diese Kachel wurde neu montiert ODER ganz aus der Szene genommen
@@ -381,6 +392,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
 
   // Vorherigen Aufbau entfernen (Remount bei Signatur-Wechsel).
   unmountScene(tile);
+  // Fresh placement ledger for the tier swap (Etappe 3): every model spec of
+  // THIS mount registers below; an in-flight swap of the old mount finds its
+  // record gone and drops its answer.
+  const placements: PlacedSceneModel[] = [];
+  tile.placedModels = placements;
 
   const g = new THREE.Group();
   g.name = SCENE_GROUP;
@@ -678,8 +694,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     rg.add(label);
     tile.interiorLabels.push(label);
   }
-  const maxLevel = levels.length ? Math.max(...levels) : 0;
-  tile.interiorLift = Math.max(0, maxLevel) * scene.storey_m * 1.5;
+  // `interiorLift` stand hier bis Etappe 3: die Zoom-Zugabe des entfernten
+  // Distanz-Aufklappens — die Detail-Ansicht öffnet jetzt ereignisgetrieben.
   if (levels.length > 1) {
     const el = document.createElement('div');
     el.className = 'level-switch';
@@ -722,10 +738,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
   verify.total = scene.models.length;
   await Promise.all(scene.models.map(async (spec) => {
     let source: THREE.Object3D | null = null;
-    // Stufe (§ B1 variants): Etappe 1 lädt überall `full` — die
-    // distanzabhängige Wahl kommt in Etappe 3 (plan-3d-lod-und-betreten.md).
-    // Eine fehlende Stufe fällt in pickVariant auf die beste vorhandene.
-    const url = pickVariant(spec.variants, 'full');
+    // Tier (§ B1 variants): the caller says which tier this mount loads —
+    // view state (camera distance / open detail view, Etappe 3 of
+    // plan-3d-lod-und-betreten.md); a missing tier falls back to the best
+    // existing one inside pickVariant.
+    const url = pickVariant(spec.variants, tierOf(spec, tiers));
     if (url) {
       const raw = await loadGlb(url, tile.center);
       if (stale()) return;
@@ -738,7 +755,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       ph.receiveShadow = true;
       ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
       ph.rotation.y = -deg(spec.yaw_deg);
-      parentFor(spec.room_id).add(ph);
+      const parent = parentFor(spec.room_id);
+      parent.add(ph);
+      placements.push({ spec, url, object: ph, parent, placeholder: true });
       verify.placed += 1;
       // Auch der Platzhalter wird gegen seine Spec geprüft: er steht an
       // derselben Stelle und hat dieselbe Zielgröße wie das fehlende Mesh
@@ -753,7 +772,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
       // Mesh nach allen Versuchen nicht ladbar UND kein Platzhalter geliefert:
       // hier fehlt ein Objekt in der Szene. Das wird GEZÄHLT (A3) — früher
       // verschwand die Platzierung stillschweigend und die Verify-Tabelle
-      // meldete trotzdem „keine Abweichung".
+      // meldete trotzdem „keine Abweichung". The ledger entry is still
+      // written: a later tier swap may try the mesh again.
+      placements.push({ spec, url, object: null, parent: parentFor(spec.room_id) });
       verify.skip(spec);
       return;
     }
@@ -765,38 +786,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     const placed = placeModelSpec(THREE, source, spec,
                                   { clone: false, clip: false });
     if (spec.role === 'building') {
-      // Was das Modell IST, sagt die SPEC (`display`) — nicht ein Nebeneffekt.
-      // Vorher wurde „Flächen-Location" aus `cutouts.length > 0` geraten; eine
-      // Fläche ohne Grundriss (Mondscheinsee: kein outline, kein Indoor-Raum
-      // außerhalb) hatte keine Löcher, galt als Gebäudehülle und blendete beim
-      // Reinzoomen komplett weg (User-Befund 2026-07-28).
-      applySceneBuilding(tile, placed, spec.display ?? 'shell');
-      const cutouts = spec.cutouts || [];
-      if (cutouts.length) {
-        // Polygone kommen um das Kachelzentrum, der Shader misst in
-        // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
-        tile.cutouts?.dispose();
-        tile.cutouts = applyCutouts(THREE, placed, cutouts.map(
-          (poly) => poly.map(([cx, cz]) => [tile.center.x + cx,
-                                            tile.center.z + cz] as [number, number])));
-        // Sofort den aktuellen Sichtzustand anlegen: die Kachel kann bereits
-        // in der Innenansicht stehen, wenn das Modell nachträglich eintrifft.
-        tile.cutouts.setEnabled(tile.fade > 0.03);
-      }
+      applyBuildingModel(tile, placed, spec);
+      placements.push({ spec, url, object: placed });
     } else {
-      parentFor(spec.room_id).add(placed);
+      const parent = parentFor(spec.room_id);
+      parent.add(placed);
+      placements.push({ spec, url, object: placed, parent });
       if (spec.role === 'room' && spec.walk_y_world !== undefined && spec.room_id) {
         walkY.set(spec.room_id, spec.walk_y_world);
       }
-      // Raum-Clipping (§ B1): NUR das Spec-Modell wird beschnitten — Figuren
-      // und Marker bleiben unberührt, die stehen bewusst auch am Rand.
-      // Polygon kommt um das Kachelzentrum, der Shader misst in Weltkoordinaten.
-      const clip = spec.clip_outline;
-      if (clip && clip.length >= 3) {
-        applyClipOutline(THREE, placed, clip.slice(0, CLIP_MAX_POINTS).map(
-          ([cx, cz]) => [tile.center.x + cx, tile.center.z + cz] as [number, number]));
-        verify.clipped(spec, Math.min(clip.length, CLIP_MAX_POINTS));
-      }
+      const clipped = applyModelClip(tile, placed, spec);
+      if (clipped) verify.clipped(spec, clipped);
     }
     verify.placement(placed, spec, tile.center);
   }));
@@ -837,6 +837,122 @@ export async function mountScene(tile: Tile, scene: ScenePayload): Promise<Verif
     + `${scene.markers.length} Marker, Etagen ${levels.join('/')}`
     + (verify.skipped ? ` — ${verify.skipped} Modell(e) NICHT ladbar` : ''));
   return verify.report(locId);
+}
+
+/** Building spec applied in full — shell swap plus cutouts. Shared by the
+ *  mount and the tier swap, so both paths stay one behaviour. What the model
+ *  IS says the SPEC (`display`), never a side effect: "area location" used to
+ *  be guessed from `cutouts.length > 0` and a plain area (Mondscheinsee, no
+ *  outline) faded away like a shell (user finding 2026-07-28). */
+function applyBuildingModel(tile: Tile, placed: THREE.Group,
+                            spec: SceneModelSpec): void {
+  applySceneBuilding(tile, placed, spec.display ?? 'shell');
+  const cutouts = spec.cutouts || [];
+  if (cutouts.length) {
+    // Polygone kommen um das Kachelzentrum, der Shader misst in
+    // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
+    tile.cutouts?.dispose();
+    tile.cutouts = applyCutouts(THREE, placed, cutouts.map(
+      (poly) => poly.map(([cx, cz]) => [tile.center.x + cx,
+                                        tile.center.z + cz] as [number, number])));
+    // Sofort den aktuellen Sichtzustand anlegen: die Kachel kann bereits
+    // in der Innenansicht stehen, wenn das Modell nachträglich eintrifft.
+    tile.cutouts.setEnabled(tile.fade > 0.03);
+  }
+}
+
+/** Room clipping (§ B1): ONLY the spec model is cut — figures and markers
+ *  stay untouched, they deliberately stand at the edge too. The polygon comes
+ *  around the tile centre, the shader measures in world coordinates. Returns
+ *  the applied point count (0 = no clip). */
+function applyModelClip(tile: Tile, placed: THREE.Object3D,
+                        spec: SceneModelSpec): number {
+  const clip = spec.clip_outline;
+  if (!clip || clip.length < 3) return 0;
+  applyClipOutline(THREE, placed, clip.slice(0, CLIP_MAX_POINTS).map(
+    ([cx, cz]) => [tile.center.x + cx, tile.center.z + cz] as [number, number]));
+  return Math.min(clip.length, CLIP_MAX_POINTS);
+}
+
+/**
+ * Swap the mounted models of ONE group onto another resolution tier
+ * (plan-3d-lod-und-betreten.md Etappe 3): `building` = the far-view model
+ * (camera-distance driven), `interior` = dioramas + props (area locations
+ * carry `low` while closed, `full` while open). WHICH tier is wanted is the
+ * caller's view state; this routine only resolves URLs via `pickVariant` and
+ * swaps in place.
+ *
+ * Swap rules: the standing mesh stays visible until the replacement finished
+ * loading (no flash of nothing); a spec whose variants resolve to the SAME
+ * URL (no low tier authored) is a no-op — zero special cases. Swapped-out
+ * clones leave the graph and their CLONED materials are disposed (clip
+ * shaders, shell/roof clones); geometries and base materials belong to the
+ * loader cache and stay.
+ */
+export async function setSceneModelTier(tile: Tile, group: 'building' | 'interior',
+                                        tier: ModelTier): Promise<void> {
+  const placements = tile.placedModels;
+  if (!placements) return;
+  await Promise.all(placements.map(async (rec) => {
+    if ((group === 'building') !== (rec.spec.role === 'building')) return;
+    const url = pickVariant(rec.spec.variants, tier);
+    if (!url || url === rec.url) return;
+    if (rec.wantUrl === url) return;            // same swap already in flight
+    rec.wantUrl = url;
+    const raw = await loadGlb(url, tile.center);
+    // Superseded: a newer wish overwrote ours, or a remount replaced the
+    // whole ledger — either way this answer belongs to nobody.
+    if (rec.wantUrl !== url || tile.placedModels !== placements) return;
+    rec.wantUrl = undefined;
+    if (!raw) return;                            // keep what stands
+    const placed = placeModelSpec(THREE, raw.clone(true), rec.spec,
+                                  { clone: false, clip: false });
+    const old = rec.object;
+    if (rec.spec.role === 'building') {
+      // applySceneBuilding clones the shell materials into roofMats — capture
+      // the OLD clones before it resets the list, they are disposed below.
+      const oldMats = [...tile.roofMats];
+      applyBuildingModel(tile, placed, rec.spec);
+      if (old) {
+        tile.group.remove(old);
+        for (const m of oldMats) m.dispose();
+      }
+    } else {
+      applyModelClip(tile, placed, rec.spec);
+      rec.parent?.add(placed);
+      if (old) {
+        old.parent?.remove(old);
+        disposeClipMaterials(old);
+        const mesh = old as THREE.Mesh;
+        if (rec.placeholder && mesh.isMesh) {
+          // The grey box owns its geometry and material (buildPlaceholder).
+          mesh.geometry.dispose();
+          (mesh.material as THREE.Material).dispose();
+        }
+      }
+    }
+    rec.object = placed;
+    rec.url = url;
+    rec.placeholder = false;
+  }));
+  if (tile.placedModels !== placements) return;
+  // A swapped diorama changes the sampled floor and furniture — re-read the
+  // affected rooms exactly the way the mount does, so figures keep standing
+  // on what is actually visible.
+  if (group === 'interior') {
+    const roomsChanged = new Set<string>();
+    for (const rec of placements) {
+      if (rec.spec.role === 'room' && rec.spec.room_id) roomsChanged.add(rec.spec.room_id);
+    }
+    for (const id of roomsChanged) {
+      const rg = tile.roomGroups.get(id);
+      if (!rg) continue;
+      const declared = placements.find((r) => r.spec.role === 'room'
+        && r.spec.room_id === id
+        && r.spec.walk_y_world !== undefined)?.spec.walk_y_world;
+      sampleRoomWalkables(tile, id, rg, declared);
+    }
+  }
 }
 
 /** Gebäudehülle aus der Szene einwechseln: ersetzt die prozedurale Hülle und
@@ -923,6 +1039,9 @@ export function unmountScene(tile: Tile): void {
   // Cutout-Material-Klone der vorigen Szene freigeben (Muster
   // disposeClipMaterials — die Texturen sind mit dem Cache geteilt).
   tile.cutouts?.dispose();
+  // Placement ledger of the old mount: gone with the scene — an in-flight
+  // tier swap compares against this list and drops its answer.
+  tile.placedModels = undefined;
   tile.cutouts = undefined;
   tile.modelIsGround = false;
   tile.modelIsShellArea = false;

@@ -152,9 +152,19 @@
 >     width_m, type: "passage", room_id?, inward: [±1|0, ±1|0]}]`, Punkt
 >     über den Rahmen des Bezugsquadrats (`at` wie Raum-Openings:
 >     links→rechts auf N/S, oben→unten auf E/W), `inward` = einwärtige
->     Normale in Weltachsen. Reine Geometrie + Raum-Link — das
->     `entry_room`-Gate bleibt unverändert; noch konsumiert sie kein
->     Renderer (Journey-Durchlauf = spätere Etappe).
+>     Normale in Weltachsen. **Konsum (Etappe 3, 2026-08-03,
+>     plan-3d-lod-und-betreten.md):** client3d liest die Openings für die
+>     Eintritts-Nähe des „Betreten"-Angebots — Weltposition = Kachelzentrum
+>     + `at_world`, mehr rechnet kein Renderer (der Server hat auch die
+>     `tile_rotation` nach Nr. 15 bereits eingerechnet). Und der SERVER
+>     akzeptiert den Avatar-Schritt über eine Kante mit autorisiertem
+>     Opening als legitimen Übergang (`app/core/boundary_entry.py`,
+>     verdrahtet in `world_ops.move_avatar_step`): der Eintritt routet in
+>     den verknüpften Raum (`room`, sonst `entry_room`), das Verlassen ist
+>     aus dem verknüpften Raum heraus ohne Entry-Room erlaubt. Für jede
+>     andere Kante bleibt das `entry_room`-Gate unverändert die
+>     Gameplay-Instanz; ohne Raum-Link ändert ein Opening am Gate nichts.
+>     Der Journey-Durchlauf ist weiterhin eine spätere Etappe.
 > 14. **`scene.terrain` — deterministisches Geländerelief.** Ohne Diorama ist
 >     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed}` (nur
 >     zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5 REALE
@@ -263,6 +273,14 @@
 >     `placements[].model_sig` im Raum-Rezept trägt dasselbe für Props in die
 >     Szenen-Signatur. `placements[].model_url` ist entfallen, dafür nennt
 >     `placements[].model_tiers` die vorhandenen Stufen.
+>     **Stufen-WAHL ist Sicht-Zustand des Clients** (Etappe 3, 2026-08-03):
+>     welcher Konsument wann `low` fordert, entscheidet jeder Renderer für
+>     sich — client3d nimmt Fernsicht-Gebäudemodelle distanzbasiert mit
+>     Hysterese und lädt das Innenleben von `area_detail`-Locations `low`,
+>     solange deren Detail-Ansicht nicht geöffnet ist; die Admin-Vorschau
+>     fordert immer `full`. Der Payload bleibt davon unberührt — `variants`
+>     nennt nur, was existiert, und `pickVariant()` bleibt die eine
+>     Auflösungsregel.
 
 # Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
 

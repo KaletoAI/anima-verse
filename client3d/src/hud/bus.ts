@@ -38,6 +38,10 @@ export interface HudGameState {
   elevator: ElevatorState | null;
   /** the storey choice is unfolded (F opens and closes it, Esc closes it) */
   elevatorOpen: boolean;
+  /** adjacent location the avatar could enter (standing near a boundary
+   *  opening, or next to a location without authored openings) — the
+   *  "Betreten" offer of Etappe 3. Talk and elevator prompts win over it. */
+  enterOffer: { name: string } | null;
 }
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
@@ -48,6 +52,8 @@ export interface HudGameActions {
   /** ride to that storey: enter its room on the server, then walk the figure
    *  to the holding point of the target storey */
   rideElevator?: (level: number) => void;
+  /** perform the offered location entry (the real server step + walk-in) */
+  enterLocation?: () => void;
   /** sign out and return to the title screen — the game menu's "Back to
    *  title" (E4-T4). main.ts owns the flow (logout + reload), so the menu
    *  does not become a second shutdown path. */
@@ -76,7 +82,7 @@ export interface HudUiActions {
 const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '',
-  elevator: null, elevatorOpen: false,
+  elevator: null, elevatorOpen: false, enterOffer: null,
 };
 const listeners = new Set<() => void>();
 let snapshot: HudGameState = { ...state };

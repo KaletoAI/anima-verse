@@ -21,14 +21,15 @@ import {
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, terrainLiftAt, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
-import { mountScene, sceneFigureScale, SceneLibrary } from './scene/sceneRecipe';
+import { mountScene, sceneFigureScale, SceneLibrary, setSceneModelTier } from './scene/sceneRecipe';
+import { entryOfferNear, type EntryTile } from './game/enterLocation';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
-import { bootStatus, createHud, InfoPanel } from './ui';
+import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './hud/bus';
-import type { ScenePayload } from './api';
+import type { ModelTier, ScenePayload } from './api';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
 const WORLDMAP_POLL_MS = 3000;
@@ -38,7 +39,35 @@ const ROOMS_POLL_MS = 4000;
  *  with the game-hour poll, the terrain with every step), and recomputing the
  *  whole answer is a handful of string comparisons — no need to be clever. */
 const SOUNDTRACK_TICK_MS = 1000;
-const INTERIOR_CAM_DIST = 26; // closer than this -> resolve the rooms
+
+// --- The ONE open detail view (Etappe 3, plan-3d-lod-und-betreten.md) --------
+// `openLocationId` (in startApp) is the singleton the whole view keys off:
+// exactly ONE location shows its interior, and the crossfade (applyTileFade)
+// is the TRANSITION, driven by open/close events — never by camera distance.
+// The former INTERIOR_CAM_DIST 26 + "target within 0.75 cells" auto-open is
+// gone; opening is explicit ("Hineinsehen"/"Betreten") or avatar-driven.
+/** Camera farther out than this closes the open view (overview only). Must
+ *  stay ABOVE the embodied EXIT_DIST 34 with headroom, so the open view can
+ *  never close under an embodied avatar — 60 leaves 26 m of it. */
+const CLOSE_CAM_DIST = 60;
+/** Camera target panned this far off the open tile closes it too — the tile
+ *  has left the view. Three cells is generous next to the old 0.75-cell
+ *  auto-open gate: looking around inside stays free of surprises. */
+const CLOSE_TARGET_DIST = CELL * 3;
+/** "Hineinsehen" flies in to this distance — the old panel fly-to, kept. */
+const OPEN_FLY_DIST = 15;
+/** Far-view building models: hysteresis of the camera-distance tier choice
+ *  (Nr. 5). Nearer than NEAR → `full`, farther than FAR → `low`; the 15 m
+ *  band between them keeps a camera hovering at the line from thrashing
+ *  swaps. Boot overview distance is 70 (> FAR), so the map starts light. */
+const BUILDING_TIER_NEAR = 45;
+const BUILDING_TIER_FAR = 60;
+/** Tier re-evaluation cadence — second-scale like the talk target: a swap
+ *  loads a GLB anyway, per-frame checks would buy nothing. */
+const LOD_TICK_MS = 1000;
+/** How far past an opening the "Betreten" walk-in aims, in world metres —
+ *  just inside the cell, so the figure visibly crosses the boundary. */
+const OPENING_WALK_IN_M = 1.5;
 
 // --- Doorway markers (E3 acceptance: "you cannot see the doors") ------------
 //
@@ -317,6 +346,79 @@ async function startApp(username: string) {
   // Numeric on-screen probe for remote diagnosis — inert without ?debug3d=1.
   initDebug3d(engine, tiles);
 
+  // --- The open detail view: ONE explicit singleton (Etappe 3) --------------
+  // Every downstream consumer (interior visibility, labels, roof fade, door
+  // thresholds, NPC room figures, ground hole, neighbour occlusion, elevator
+  // prompt, figure scale) keeps reading `tile.fade`/`fadeTarget` — only the
+  // fade TARGET now comes from here instead of from camera geometry.
+  let openLocationId: string | null = null;
+  /** A tile with something to reveal: a mounted interior on a building or a
+   *  detail-mode area location — the same condition the fade loop gates on. */
+  const openable = (tile: Tile) =>
+    !!tile.interior && (tile.isBuilding || !!tile.modelIsShellArea);
+  const badge = new OpenViewBadge();
+  /** The floating close control shows exactly while a view is open in the
+   *  OVERVIEW. Embodied it stays hidden: there the avatar's location owns the
+   *  state and an explicit close would be reopened the very next frame. */
+  function refreshOpenBadge() {
+    const tile = openLocationId ? tiles.get(openLocationId) : null;
+    if (tile && getGameState().mode !== 'embodied') badge.show(tile.loc.name);
+    else badge.hide();
+  }
+  function openLocation(id: string) {
+    if (openLocationId === id) return;
+    const tile = tiles.get(id);
+    if (!tile || !openable(tile)) return;
+    // Opening one location closes the current one — the crossfade of both
+    // runs in the frame hook off their diverged fade targets.
+    openLocationId = id;
+    refreshOpenBadge();
+  }
+  function closeOpenLocation() {
+    if (openLocationId === null) return;
+    openLocationId = null;
+    refreshOpenBadge();
+  }
+  badge.onClose = () => closeOpenLocation();
+  subscribeGameState(refreshOpenBadge);
+
+  // --- Resolution tiers (Etappe 3, Nr. 4 + 5) -------------------------------
+  // WHICH tier a model group shows is pure view state and decided HERE; the
+  // resolution to a URL (missing tier → best existing) is pickVariant's, and
+  // the in-place swap is setSceneModelTier's. Two drivers:
+  //  - `building` (far-view models): camera distance with hysteresis,
+  //  - `interior` (dioramas + props): area-detail locations carry `low`
+  //    while closed and `full` while open; building interiors stay `full`
+  //    (they are invisible while closed — nothing to save).
+  const buildingTierByLoc = new Map<string, ModelTier>();
+  const interiorTierByLoc = new Map<string, ModelTier>();
+  function wantedBuildingTier(tile: Tile): ModelTier {
+    const d = engine.camera.position.distanceTo(tile.center);
+    const cur = buildingTierByLoc.get(tile.loc.id) ?? 'low';
+    if (cur === 'low' && d < BUILDING_TIER_NEAR) return 'full';
+    if (cur === 'full' && d > BUILDING_TIER_FAR) return 'low';
+    return cur;
+  }
+  function wantedInteriorTier(locId: string, scene: ScenePayload | null | undefined): ModelTier {
+    return scene?.area_detail && openLocationId !== locId ? 'low' : 'full';
+  }
+  function tickModelTiers() {
+    for (const tile of tiles.values()) {
+      if (!tile.placedModels) continue;   // no mounted scene, nothing to swap
+      const b = wantedBuildingTier(tile);
+      if (buildingTierByLoc.get(tile.loc.id) !== b) {
+        buildingTierByLoc.set(tile.loc.id, b);
+        void setSceneModelTier(tile, 'building', b);
+      }
+      const i = wantedInteriorTier(tile.loc.id, scenes.get(tile.loc.id));
+      if (interiorTierByLoc.get(tile.loc.id) !== i) {
+        interiorTierByLoc.set(tile.loc.id, i);
+        void setSceneModelTier(tile, 'interior', i);
+      }
+    }
+  }
+  setInterval(tickModelTiers, LOD_TICK_MS);
+
   /** Threshold quads per location, one child group per storey. They live in
    *  `engine.scene` and not in `tile.group` on purpose: a rebuild throws the
    *  tile group away wholesale, and an overlay that is rebuilt from the SAME
@@ -393,9 +495,15 @@ async function startApp(username: string) {
   /** Mount a payload and lay its thresholds afterwards. `finally` and not
    *  `then`: the markers come from the payload alone, so a mount that fell over
    *  (a model that would not load) still gets its doors — and the rejection
-   *  stays unhandled exactly as it was before. */
+   *  stays unhandled exactly as it was before. The mount loads the tiers the
+   *  view wants RIGHT NOW (and pins the tier maps to them, so the 1 Hz tick
+   *  issues no redundant swap straight after). */
   function mountWithDoors(tile: Tile, scene: ScenePayload) {
-    void mountScene(tile, scene).finally(() => {
+    const building = wantedBuildingTier(tile);
+    const interior = wantedInteriorTier(tile.loc.id, scene);
+    buildingTierByLoc.set(tile.loc.id, building);
+    interiorTierByLoc.set(tile.loc.id, interior);
+    void mountScene(tile, scene, { building, interior }).finally(() => {
       if (tiles.get(tile.loc.id) === tile) buildDoorMarks(tile, scene);
     });
   }
@@ -565,12 +673,22 @@ async function startApp(username: string) {
     const tile = tiles.get(id);
     if (!tile) return;
     const chars = (lastMap?.characters ?? []).filter((c) => c.location_id === id);
-    panel.show(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf);
+    panel.show(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf,
+      { openable: openable(tile), open: openLocationId === id });
   };
   panel.onZoomTo = (id) => {
     const tile = tiles.get(id);
-    if (tile) engine.flyTo(tile.center.clone(), 15);
+    if (tile) engine.flyTo(tile.center.clone(), OPEN_FLY_DIST);
   };
+  // "Hineinsehen" (Etappe 3): the old fly-to stays part of it — fly in AND
+  // open the detail view. Pure view state, no server call.
+  panel.onLookInside = (id) => {
+    const tile = tiles.get(id);
+    if (!tile) return;
+    engine.flyTo(tile.center.clone(), OPEN_FLY_DIST);
+    openLocation(id);
+  };
+  panel.onCloseView = () => closeOpenLocation();
 
   // --- Figure selection (E3-T1) --------------------------------------------
   // Figure picking runs before the tile pick: a hit figure gets the ring and
@@ -999,6 +1117,7 @@ async function startApp(username: string) {
     // is only rewritten here anyway. See the section further down.
     updateTalkTarget();
     updateElevator();   // standing at the lift is a second-scale event too
+    updateEnterOffer(); // …and so is standing at a location entry (Etappe 3)
   }, 1000);
   npcs.update(computeNpcStates(firstMap));
 
@@ -2020,6 +2139,110 @@ async function startApp(username: string) {
     setGameState({ elevator: { levels: state.elevator.levels, current: level } });
   }
 
+  // --- Entering an adjacent location (Etappe 3, "Betreten") -----------------
+  // The offer is view logic, the ENTRY is the server's: pressing F runs the
+  // very same `/world/avatar/step` flow the walking hook uses — entry-room
+  // chain, one step machine, one interlock set — and then walks the figure
+  // in. The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
+  // numbers in scripts/smoke_walk_math.mjs): within ENTER_RADIUS of an
+  // authored boundary opening (§ B1 Nr. 13) of a 4-adjacent location, or on
+  // any adjacent cell of a location without authored openings.
+  /** the standing offer, resolved to the cell the step must aim at */
+  let enterOffer: { locId: string; cell: Cell } | null = null;
+
+  function updateEnterOffer() {
+    const state = getGameState();
+    const clear = () => {
+      enterOffer = null;
+      if (state.enterOffer) setGameState({ enterOffer: null });
+    };
+    if (state.mode !== 'embodied' || state.movementLocked) return clear();
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return clear();
+    const here = cellOf(pos.x, pos.z, CELL);
+    const myLoc = locIdAtCell.get(`${here.gx},${here.gy}`);
+    const candidates: EntryTile[] = [];
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const t = tileAtCell({ gx: here.gx + dx, gy: here.gy + dy });
+      // Only locations with a detail view to enter — walking onto plain
+      // passable ground is ordinary walking and needs no offer.
+      if (!t || t.loc.id === myLoc || !openable(t)) continue;
+      // Openings come TILE-LOCAL from the payload (world metres around the
+      // tile centre, § B1 Nr. 13) — the centre is added here exactly as the
+      // exits and markers get it added in mountScene.
+      const openings = (scenes.get(t.loc.id)?.boundary_openings ?? []).map((o) => ({
+        x: t.center.x + o.at_world[0],
+        z: t.center.z + o.at_world[1],
+      }));
+      candidates.push({
+        locId: t.loc.id,
+        cell: { gx: t.loc.grid_x!, gy: t.loc.grid_y! },
+        openings,
+        center: { x: t.center.x, z: t.center.z },
+      });
+    }
+    const offer = entryOfferNear({ x: pos.x, z: pos.z }, here, candidates);
+    if (!offer) return clear();
+    enterOffer = { locId: offer.locId, cell: offer.cell };
+    const name = tiles.get(offer.locId)?.loc.name ?? '';
+    if (state.enterOffer?.name !== name) setGameState({ enterOffer: { name } });
+  }
+  // Leaving the mode drops the offer in the same tick, like talk and lift.
+  subscribeGameState(() => {
+    if (getGameState().mode !== 'embodied') updateEnterOffer();
+  });
+
+  gameActions.enterLocation = () => { void enterOfferedLocation(); };
+
+  /** Perform the offered entry: the entry-room chain of the location one is
+   *  LEAVING first (the same 2D gate the walking hook walks), then the one
+   *  step request, then the walk-in — through the door for buildings
+   *  (requestStep already routes that via the answered room), towards the
+   *  nearest opening for an area location (it has no door point). */
+  async function enterOfferedLocation() {
+    const offer = enterOffer;
+    const state = getGameState();
+    if (!offer || state.mode !== 'embodied' || state.movementLocked) return;
+    // The one step/room machine: nothing may overlap a running request or a
+    // guided movement — the same interlocks the walking hook honours.
+    if (stepInFlight || roomRequestInFlight || elevatorRide || doorWalk) return;
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    const here = cellOf(pos.x, pos.z, CELL);
+    const step = stepDirection(here, offer.cell);
+    if (!step) return;   // offer went stale — the avatar changed cells
+    if ((rejectedUntil.get(`${offer.cell.gx},${offer.cell.gy}`) ?? 0) > performance.now()) return;
+    cancelRoute();
+    const gateRoom = entryRoomToEnter(tileAtCell(here));
+    if (gateRoom && !await enterEntryRoom(gateRoom)) return;
+    const edge = { from: here, to: offer.cell, granted: false };
+    askedEdge = edge;
+    await requestStep(step, here, offer.cell, edge);
+    if (!edge.granted) return;
+    // Granted, but the figure still stands short of the boundary — unlike a
+    // WASD step, where it is already walking. Without a walk-in the figure
+    // would linger on the old cell and the authority check would snap it to
+    // the tile centre two polls later. Buildings got their door walk from
+    // requestStep; everything else aims at the nearest opening, one step
+    // inward (`inward` is the payload's unit normal), or the cell centre.
+    if (!doorWalk) {
+      const target = tiles.get(offer.locId);
+      if (!target) return;
+      let goal: { x: number; z: number } | null = null;
+      let best = Infinity;
+      for (const o of scenes.get(offer.locId)?.boundary_openings ?? []) {
+        const ox = target.center.x + o.at_world[0] + o.inward[0] * OPENING_WALK_IN_M;
+        const oz = target.center.z + o.at_world[1] + o.inward[1] * OPENING_WALK_IN_M;
+        const d = Math.hypot(ox - pos.x, oz - pos.z);
+        if (d < best) { best = d; goal = { x: ox, z: oz }; }
+      }
+      goal = goal ?? { x: target.center.x, z: target.center.z };
+      const g = new THREE.Vector3(goal.x, groundY(goal.x, goal.z), goal.z);
+      npcs.setPlayerTarget(avatarName, g);
+      doorWalk = { goal: g.clone(), until: performance.now() + DOOR_WALK_MS };
+    }
+  }
+
   // --- Talking by proximity (E3-T5) -----------------------------------------
   // Walking up to someone is the whole interaction: the bus carries the name,
   // the HUD shows the prompt and F opens the chat. The rule itself is pure
@@ -2110,12 +2333,43 @@ async function startApp(username: string) {
       setGameState({ elevatorOpen: !state.elevatorOpen });
       return;
     }
+    // Entering an adjacent location (Etappe 3) — last in the F priority,
+    // exactly the order the HUD shows the offers in.
+    if (state.enterOffer) {
+      gameActions.enterLocation?.();
+      return;
+    }
     if (state.mode === 'overview' && state.selected?.isAvatar) gameActions.enterEmbodied?.();
   });
 
-  // --- Frame-Hook: LOD (Raumauflösung), NPC-Animation, Pin-Bobbing ----------
+  // --- Frame-Hook: Detail-Ansicht (Singleton), NPC-Animation, Pin-Bobbing ---
   let bob = 0;
   engine.addFrameHook((dt) => {
+    // Who owns the open view this frame (Etappe 3):
+    //  - EMBODIED, the avatar's own location IS it — auto-open on entering
+    //    (embody start included), auto-close on stepping out. The camera
+    //    cannot close it: the mode exits at EXIT_DIST 34 < CLOSE_CAM_DIST 60.
+    //  - OVERVIEW, the explicit choice stands until the explicit close or an
+    //    auto-close: camera beyond CLOSE_CAM_DIST, or the tile panned out of
+    //    view. There is NO auto-REopen — opening is only ever explicit.
+    // Closing is always the crossfade below, never a hard cut.
+    if (getGameState().mode === 'embodied') {
+      const pos = npcs.positionOf(avatarName);
+      if (pos) {
+        const t = tileAtCell(cellOf(pos.x, pos.z, CELL));
+        if (t && openable(t)) openLocation(t.loc.id);
+        else closeOpenLocation();
+      }
+    } else if (openLocationId) {
+      const t = tiles.get(openLocationId);
+      const off = t
+        ? Math.hypot(engine.target.x - t.center.x, engine.target.z - t.center.z)
+        : Infinity;
+      if (!t || engine.dist > CLOSE_CAM_DIST || off > CLOSE_TARGET_DIST) {
+        closeOpenLocation();
+      }
+    }
+
     let open: Tile | null = null;
     let basementOpen: Tile | null = null;
     for (const tile of tiles.values()) {
@@ -2125,10 +2379,10 @@ async function startApp(username: string) {
       // exactly those locations shut, the one place the fade is supposed to
       // reveal something.
       if (tile.interior && (tile.isBuilding || tile.modelIsShellArea)) {
-        const d = Math.hypot(engine.target.x - tile.center.x, engine.target.z - tile.center.z);
-        // mehrgeschossig: Innenansicht bis zu größerer Distanz halten, sonst
-        // springt die Ansicht auf die Hülle, bevor man die Obergeschosse sieht
-        tile.fadeTarget = engine.dist < INTERIOR_CAM_DIST + tile.interiorLift && d < CELL * 0.75 ? 1 : 0;
+        // The fade TARGET comes from the singleton — never from camera
+        // geometry (Etappe 3). A tile that just lost the state keeps fading
+        // out here over the same crossfade the opening one fades in on.
+        tile.fadeTarget = tile.loc.id === openLocationId ? 1 : 0;
         applyTileFade(tile, dt);
         if (tile.fade > 0.03) {
           applyLevelDisplay(tile);
@@ -2139,7 +2393,10 @@ async function startApp(username: string) {
           // a basement scene's interior is up, the global ground opens too.
           if (tile.hasBasement) basementOpen = tile;
         }
-        if (tile.fadeTarget === 1 && tile.fade > 0.4) open = tile;
+        // The hole/occlusion pass below always assumed "one open tile" — it
+        // is now BOUND to the singleton explicitly (fade still gates, so the
+        // neighbours only vanish once there is something to see).
+        if (tile.loc.id === openLocationId && tile.fade > 0.4) open = tile;
       }
     }
     groundHoleOn.value = basementOpen ? 1 : 0;

@@ -477,6 +477,16 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
             <div className="hud-talk">{t('Press F to use the elevator')}</div>
           )
         )}
+        {/* Entering an adjacent location (Etappe 3): same prompt shape, and
+            deliberately LAST in the priority — talk and elevator win, so one
+            F press is never two offers. The vanilla side owns the rule of
+            WHEN the offer stands (opening proximity / adjacent cell) and
+            performs the real server entry on F. */}
+        {!game.talkTarget && !game.elevator && game.enterOffer && (
+          <div className="hud-talk">
+            {t('Press F to enter {name}').replace('{name}', game.enterOffer.name)}
+          </div>
+        )}
         {/* Selected figure (E3-T1): always mounted, renders null without a
             selection — the plaque is driven by the bus, not by panel state. */}
         <CharacterPlaque />

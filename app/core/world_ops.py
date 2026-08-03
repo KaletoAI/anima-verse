@@ -134,10 +134,19 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
     if not cur:
         raise HTTPException(status_code=404, detail="current location not found")
 
-    # Departure gate: the avatar may only leave a location via the entry room.
+    # Departure gate: the avatar may only leave a location via the entry room
+    # — or across an authored boundary opening while standing in that
+    # opening's linked room (contract § B1 Nr. 13; the road that crosses the
+    # cell is a legitimate way out at exactly its pass-throughs).
+    from app.core.boundary_entry import (
+        EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave_via_opening,
+        opening_entry_room,
+    )
+    exit_edge = EDGE_OF_DIRECTION[direction]
     cur_entry = get_entry_room_id(cur)
     cur_room = (get_character_current_room(avatar) or "").strip()
-    if cur_entry and cur_room and cur_room != cur_entry:
+    if cur_entry and cur_room and cur_room != cur_entry \
+            and not may_leave_via_opening(cur, cur_room, exit_edge):
         # Fetch the entry-room name for the message
         _entry_name = ""
         for _r in (cur.get("rooms") or []):
@@ -165,7 +174,11 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
     target_id = target.get("id") or ""
 
     # Block rules: the avatar is subject to the same restrictions as NPCs.
-    target_entry_room = get_entry_room_id(target)
+    # An authored boundary opening on the shared edge routes the avatar into
+    # its linked room instead of the entry room (§ B1 Nr. 13) — the road
+    # continues on the road, the entry room stays the gate everywhere else.
+    target_entry_room = (opening_entry_room(target, OPPOSITE_EDGE[exit_edge])
+                         or get_entry_room_id(target))
     from app.models.rules import check_leave, check_access
     ok_leave, leave_msg = check_leave(avatar)
     if not ok_leave:

@@ -178,6 +178,34 @@ html, body, #app {
 }
 .panel-zoom:hover { background: rgba(242, 205, 110, 0.25); }
 
+/* Offene Detail-Ansicht (Etappe 3): schwebender Schließen-Badge oben mittig */
+.open-view-badge {
+  position: fixed;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(22, 26, 33, 0.92);
+  border: 1px solid rgba(242, 205, 110, 0.4);
+  border-radius: 16px;
+  padding: 5px 8px 5px 14px;
+  color: #f2d98c;
+  font-size: 13px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.open-view-badge .ovb-close {
+  background: none;
+  border: none;
+  color: #a99f8a;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.open-view-badge .ovb-close:hover { color: #f2d98c; }
+
 /* Etagen-Umschalter (AV3D-2/12): kleine Knopfleiste neben dem Location-Label */
 .level-switch {
   pointer-events: auto;
