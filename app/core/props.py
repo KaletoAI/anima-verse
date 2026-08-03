@@ -62,9 +62,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
-from app.core.model_store import (DEFAULT_TIER, ModelGallery, read_sidecar as
-                                  read_model_sidecar, write_sidecar as
-                                  write_model_sidecar)
+from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
+                                  read_sidecar as read_model_sidecar,
+                                  write_sidecar as write_model_sidecar)
 from app.core.model_validate import glb_bounds
 from app.core.timeutils import utc_now_iso
 
@@ -482,6 +482,81 @@ def model_path(prop_id: str, tier: str = "") -> Optional[Path]:
     to the best available one, so a prop without a low variant still renders."""
     g = model_gallery(prop_id)
     return g.find(tier) if g else None
+
+
+def model_file_path(prop_id: str, filename: str) -> Optional[Path]:
+    """Path of ONE stored mesh by filename (the admin previews non-active
+    files with it). Validated against the stem; None when missing/foreign."""
+    g = model_gallery(prop_id)
+    return g.file(filename) if g else None
+
+
+def list_models(prop_id: str) -> List[Dict[str, Any]]:
+    """All stored meshes of the prop for the admin gallery, newest first:
+    ``[{filename, tier, selected_for, face_num, texture_size, format,
+    created_at, backend, source, active}]``. ``tier`` is what the file was
+    made for, ``selected_for`` the tiers it currently serves, ``active`` the
+    one a client without a tier request gets."""
+    g = model_gallery(prop_id)
+    if not g:
+        return []
+    active = g.find()
+    out: List[Dict[str, Any]] = []
+    for p in g.files():
+        meta = read_model_sidecar(p)
+        out.append({
+            "filename": p.name,
+            "tier": g.tier_of(p),
+            "selected_for": g.selected_for(p.name),
+            "face_num": int(meta.get("face_num") or 0),
+            "texture_size": int(meta.get("texture_size") or 0),
+            "format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
+            "created_at": meta.get("created_at", ""),
+            "backend": meta.get("backend", ""),
+            "source": meta.get("source", ""),
+            "active": bool(active and p.name == active.name),
+        })
+    return out
+
+
+def get_model_info(prop_id: str) -> Dict[str, Any]:
+    """Gallery status for the admin panel: ``{models, tiers, none_selected}``
+    — the prop counterpart of ``location_model3d.get_building_info`` minus the
+    backend list (the props tab already carries it). ``tiers`` are the
+    resolution tiers the prop actually HAS; a missing one is what the admin
+    sees as "low missing"."""
+    g = model_gallery(prop_id)
+    return {
+        "models": list_models(prop_id),
+        "tiers": sorted(g.tiers()) if g else [],
+        "none_selected": bool(g and g.none_selected()),
+    }
+
+
+def select_model(prop_id: str, filename: str,
+                 tier: str = DEFAULT_TIER) -> bool:
+    """Make a stored mesh the active one of ``tier``. An EMPTY filename
+    deselects — on the default tier that persists the "render nothing"
+    sentinel, on any other tier the tier ceases to exist. False when the prop
+    or the file does not exist."""
+    g = model_gallery(prop_id) if read_sidecar(prop_id) else None
+    if not g or not g.select(filename, tier):
+        return False
+    if (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER:
+        # The mesh the dims are derived from changed — re-measure it.
+        _store_bbox(prop_id)
+    return True
+
+
+def delete_model(prop_id: str, filename: str = "") -> bool:
+    """Remove ONE stored mesh (+ its sidecar) or ALL of them. A selection
+    pointing at a removed file moves to the newest remaining one (default
+    tier) or is dropped (any other tier)."""
+    g = model_gallery(prop_id) if read_sidecar(prop_id) else None
+    if not g or not g.delete(filename):
+        return False
+    _store_bbox(prop_id)
+    return True
 
 
 def source_path(prop_id: str) -> Optional[Path]:

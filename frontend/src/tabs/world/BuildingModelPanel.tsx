@@ -13,19 +13,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { MeshBackendDialog, type MeshBackend } from '../../components/MeshBackendDialog'
+import { MeshBackendDialog, type MeshBackend, type MeshGenerateOpts } from '../../components/MeshBackendDialog'
+import {
+  DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow, TierPicker, TierSummary,
+  type GalleryModel, type ModelTier,
+} from '../../components/ModelGallery'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { notifyModel3dChanged } from './topDownSnapshot'
 import type { Map3D, ScenePayload } from './worldTypes'
 import { useActiveMeasure } from './measureKit'
 
-export interface ModelEntry {
-  filename: string
-  format?: string
-  created_at?: string
-  backend?: string
-  source?: string
-  source_image?: string
+export interface ModelEntry extends GalleryModel {
   /** Persisted 90°-step orientation fix — the 3D client applies it too. */
   rotation?: { x?: number; y?: number; z?: number }
   /** Vertical placement offset in metres (± — negative sinks the model). */
@@ -39,8 +37,6 @@ export interface ModelEntry {
    *  its largest side — the diorama scales from it like a prop. Buildings
    *  have none; their size is the location's extent × size. */
   width_m?: number
-  /** The model the clients get (/play/... routes serve only this one). */
-  active?: boolean
 }
 
 export interface BuildingModelStatus {
@@ -51,6 +47,9 @@ export interface BuildingModelStatus {
   default?: string
   /** The admin explicitly chose "no model" — distinct from "no files". */
   none_selected?: boolean
+  /** The resolution tiers the subject actually has — a missing one is what
+   *  the header badge reports. */
+  tiers?: string[]
 }
 
 /** Client default when map3d.size is unset (schnittstellen-3d.md). */
@@ -168,14 +167,15 @@ export function BuildingModelPanel({
 
   // Fire the generation from the chosen backend + the gallery image picked via 🧊.
   const generate = useCallback(
-    (backend: string, opts?: { face_num?: number; texture_size?: number }) => {
+    (backend: string, opts?: MeshGenerateOpts) => {
       const src = generateSource
       onGenerateSourceConsumed()
       if (!src) return
       void apiPost<{ status?: string }>(`/world/locations/${enc}/model3d/generate`,
         { source_image: src, backend,
           ...(opts?.face_num ? { face_num: opts.face_num } : {}),
-          ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}) })
+          ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}),
+          ...(opts?.tier ? { tier: opts.tier } : {}) })
         .then((d) => {
           // already_running = double-click guard for the SAME image; jobs
           // from different images queue up on the backend channel.
@@ -323,10 +323,12 @@ export function BuildingModelPanel({
     }
   }, [current, roomId, widthDraft, enc, locationId, t, toast])
 
-  // Make a stored model the active one (what the 3D clients get).
-  const select = useCallback(async (filename: string) => {
+  // Make a stored model the active one of a resolution tier (what the 3D
+  // clients get for that tier).
+  const select = useCallback(async (filename: string,
+                                    tier: ModelTier = DEFAULT_MODEL_TIER) => {
     try {
-      await apiPost(`/world/locations/${enc}/model3d/select`, { file: filename })
+      await apiPost(`/world/locations/${enc}/model3d/select`, { file: filename, tier })
       await load()
       notifyModel3dChanged(roomId ? { roomId } : { locationId })
       toast(t('Active model set'))
@@ -348,13 +350,16 @@ export function BuildingModelPanel({
     }
   }, [enc, preview, load, locationId, roomId, t, toast])
 
-  // Upload a GLB as a NEW model (validated; surface 422 reasons).
+  // Upload a GLB as a NEW model of the chosen tier (validated; surface 422
+  // reasons).
   const uploadRef = useRef<HTMLInputElement>(null)
+  const [uploadTier, setUploadTier] = useState<ModelTier>(DEFAULT_MODEL_TIER)
   const upload = useCallback(async (file: File) => {
     if (!file) return
     try {
       const fd = new FormData()
       fd.append('file', file)
+      fd.append('tier', uploadTier)
       const res = await fetch(`/world/locations/${enc}/model3d/upload`, {
         method: 'POST', body: fd, credentials: 'same-origin',
       })
@@ -370,7 +375,7 @@ export function BuildingModelPanel({
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, load, locationId, roomId, t, toast])
+  }, [enc, load, locationId, roomId, uploadTier, t, toast])
 
   const yaw = map3d?.rotation
   const size = map3d?.size
@@ -388,6 +393,7 @@ export function BuildingModelPanel({
       >
         ⬆ {t('Upload model')}
       </button>
+      <TierPicker value={uploadTier} onChange={setUploadTier} />
       <input
         ref={uploadRef}
         type="file"
@@ -407,6 +413,7 @@ export function BuildingModelPanel({
         model3d?.default
           || ((model3d?.backends || []).length === 1 ? (model3d?.backends || [])[0].name : '')
       }
+      showTier
       onGenerate={generate}
       onClose={onGenerateSourceConsumed}
     />
@@ -655,109 +662,31 @@ export function BuildingModelPanel({
       </div>
       ) : null}
 
-      {/* Stored models — like the image gallery: click previews, "Select"
-          makes it the model the 3D clients get. */}
+      {/* Stored models — like the image gallery: click previews, the tier
+          buttons make a file the model the 3D clients get for that tier. */}
+      <TierSummary tiers={model3d?.tiers} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {models.length > 0 ? (
-          <div
-            style={{
-              display: 'flex', gap: 8, alignItems: 'center',
-              padding: '3px 6px', borderRadius: 6,
-              border: '1px solid var(--border, #30363d)',
-            }}
-          >
-            <span title={noneSelected ? t('No model is rendered.') : undefined}
-              style={{ width: '1.2em', textAlign: 'center' }}>
-              {noneSelected ? '⭐' : ''}
-            </span>
-            <span style={{ fontSize: '0.82em' }}>{t('No model')}</span>
-            <span className="ga-hint">{t('render nothing')}</span>
-            <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
-              {!noneSelected ? (
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  onClick={() => { void select('') }}
-                  title={t('Render no 3D model — until another one is selected or generated.')}
-                >
-                  {t('Select')}
-                </button>
-              ) : null}
-            </span>
-          </div>
+          <NoModelRow noneSelected={noneSelected} onSelect={() => { void select('') }} />
         ) : null}
-        {models.map((m) => {
-          const shown = m.filename === current.filename
-          return (
-            <div
-              key={m.filename}
-              onClick={() => setPreview(m.filename)}
-              style={{
-                display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-                padding: '3px 6px', borderRadius: 6, cursor: 'pointer',
-                border: `1px solid ${shown ? 'var(--accent, #58a6ff)' : 'var(--border, #30363d)'}`,
-                background: shown ? 'rgba(88,166,255,0.08)' : 'transparent',
-              }}
-            >
-              <span title={m.active ? t('Active model — the 3D clients get this one.') : undefined}
-                style={{ width: '1.2em', textAlign: 'center' }}>
-                {m.active ? '⭐' : ''}
-              </span>
-              <span style={{ fontSize: '0.82em' }}>
-                {(m.created_at || '').replace('T', ' ').slice(0, 16) || m.filename}
-              </span>
-              <span className="ga-hint">
-                {m.source === 'upload' ? t('upload') : m.backend || ''}
-                {m.source_image ? ` · ${t('from')} ${m.source_image}` : ''}
-              </span>
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
-                {!m.active ? (
-                  <button
-                    type="button"
-                    className="ga-btn ga-btn-sm"
-                    onClick={(e) => { e.stopPropagation(); void select(m.filename) }}
-                    title={t('Make this the active model (delivered to the 3D clients).')}
-                  >
-                    {t('Select')}
-                  </button>
-                ) : null}
-                {armedDel === m.filename ? (
-                  <>
-                    <button
-                      type="button"
-                      className="ga-btn ga-btn-sm ga-btn-danger"
-                      onClick={(e) => { e.stopPropagation(); void deleteModel(m.filename) }}
-                    >
-                      {t('Sure?')}
-                    </button>
-                    <button
-                      type="button"
-                      className="ga-btn ga-btn-sm"
-                      onClick={(e) => { e.stopPropagation(); setArmedDel(null) }}
-                    >
-                      {t('Cancel')}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="ga-btn ga-btn-sm ga-btn-danger"
-                    onClick={(e) => { e.stopPropagation(); setArmedDel(m.filename) }}
-                    title={t('Delete this model')}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            </div>
-          )
-        })}
+        {models.map((m) => (
+          <ModelGalleryRow
+            key={m.filename}
+            model={m}
+            shown={m.filename === current.filename}
+            armedDelete={armedDel === m.filename}
+            onPreview={() => setPreview(m.filename)}
+            onSelect={(tier) => { void select(m.filename, tier) }}
+            onArmDelete={setArmedDel}
+            onDelete={() => { void deleteModel(m.filename) }}
+          />
+        ))}
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {uploadButton}
         <span className="ga-hint">
-          {t('Generate more models via 🧊 on a gallery tile — new ones become active automatically.')}
+          {t('Generate more models via 🧊 on a gallery tile — new ones become the active model of their target tier.')}
         </span>
       </div>
     </div>

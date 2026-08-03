@@ -215,6 +215,7 @@ export function PropsTab() {
           backends={meshBackends}
           defaultBackend={meshBackends.length === 1 ? meshBackends[0].name : ''}
           generateLabel={regen?.meshOnly ? t('Mesh') : t('Regenerate')}
+          showTier
           onGenerate={(backend, opts) => {
             const target = regen
             setRegen(null)
@@ -224,7 +225,8 @@ export function PropsTab() {
               { mesh_backend: backend,
                 ...(target.meshOnly ? { mesh_only: true } : {}),
                 ...(opts.face_num ? { face_num: opts.face_num } : {}),
-                ...(opts.texture_size ? { texture_size: opts.texture_size } : {}) })
+                ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
+                ...(opts.tier ? { tier: opts.tier } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'
                   ? t('This prop is already generating.')

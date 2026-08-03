@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
+import { DEFAULT_MODEL_TIER, MODEL_TIERS, type ModelTier } from './ModelGallery'
 
 export interface MeshBackend {
   name: string
@@ -11,9 +12,29 @@ export interface MeshBackend {
 export interface MeshGenerateOpts {
   face_num?: number
   texture_size?: number
+  /** Resolution slot the result fills (only sent when the caller offers the
+   *  tier choice). */
+  tier?: ModelTier
 }
 
 const TEXTURE_SIZES = [512, 1024, 2048]
+
+// Interim low-variant recipe (plan-3d-lod-und-betreten.md Etappe 2): until
+// the ComfyUI mesh→mesh reduction exists (Etappe 4), a low variant is simply
+// a second run with a smaller budget. The numbers are a PREFILL, shown in the
+// editable fields — not a hidden rewrite of what the admin asked for.
+const LOW_FACE_FRACTION = 0.25
+/** Offered when the picked backend declares no face default of its own. */
+const LOW_FACE_FALLBACK = 4000
+const LOW_TEXTURE_SIZE = 512
+
+/** Face budget prefilled for a tier: the backend default for `full`, a
+ *  quarter of it (rounded to 500) for `low`. '' = leave it to the backend. */
+function faceFor(tier: ModelTier, backendDefault: number): string {
+  if (tier === DEFAULT_MODEL_TIER) return backendDefault ? String(backendDefault) : ''
+  if (!backendDefault) return String(LOW_FACE_FALLBACK)
+  return String(Math.max(500, Math.round(backendDefault * LOW_FACE_FRACTION / 500) * 500))
+}
 
 /**
  * Backend picker for a mesh generation — shared by EVERY 3D generate button
@@ -24,6 +45,11 @@ const TEXTURE_SIZES = [512, 1024, 2048]
  * size" is plumbed the same way and reaches the gateway as soon as its alias
  * declares the parameter. Rendered via createPortal so it also works inside
  * the /play grid.
+ *
+ * With `showTier` the dialog also asks WHICH resolution slot the result fills
+ * (galleries that hold one mesh per tier). Picking `low` prefills the reduced
+ * budget into the very same fields, so the admin sees — and may change — what
+ * the run will actually use.
  */
 export function MeshBackendDialog({
   open,
@@ -31,6 +57,7 @@ export function MeshBackendDialog({
   backends,
   defaultBackend = '',
   generateLabel,
+  showTier = false,
   onGenerate,
   onClose,
 }: {
@@ -40,6 +67,9 @@ export function MeshBackendDialog({
   /** Preselected backend (e.g. the admin default when rig-compatible). */
   defaultBackend?: string
   generateLabel?: string
+  /** Offer the target resolution tier — for the model galleries; the
+   *  character model has no tiers. */
+  showTier?: boolean
   onGenerate: (backend: string, opts: MeshGenerateOpts) => void
   onClose: () => void
 }) {
@@ -47,6 +77,7 @@ export function MeshBackendDialog({
   const [picked, setPicked] = useState(defaultBackend)
   const [faceDraft, setFaceDraft] = useState('')
   const [texSize, setTexSize] = useState('')
+  const [tier, setTier] = useState<ModelTier>(DEFAULT_MODEL_TIER)
   // Reset the selection to the default each time the dialog opens (the
   // backends and default may have loaded/changed between opens). Keyed on
   // the backends' CONTENT, not the array identity — the callers refresh
@@ -57,8 +88,9 @@ export function MeshBackendDialog({
     if (!open) return
     setPicked(defaultBackend)
     const b = backends.find((x) => x.name === defaultBackend)
-    setFaceDraft(b?.face_num ? String(b.face_num) : '')
+    setFaceDraft(faceFor(DEFAULT_MODEL_TIER, b?.face_num || 0))
     setTexSize('')
+    setTier(DEFAULT_MODEL_TIER)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultBackend, backendsKey])
 
@@ -68,9 +100,17 @@ export function MeshBackendDialog({
   const pick = (name: string) => {
     setPicked(name)
     // The face field always shows what THIS run would use: the newly picked
-    // backend's configured default, ready to be overridden.
+    // backend's configured default (reduced when the target tier is low),
+    // ready to be overridden.
     const b = backends.find((x) => x.name === name)
-    setFaceDraft(b?.face_num ? String(b.face_num) : '')
+    setFaceDraft(faceFor(tier, b?.face_num || 0))
+  }
+
+  const pickTier = (next: ModelTier) => {
+    setTier(next)
+    const b = backends.find((x) => x.name === picked)
+    setFaceDraft(faceFor(next, b?.face_num || 0))
+    setTexSize(next === DEFAULT_MODEL_TIER ? '' : String(LOW_TEXTURE_SIZE))
   }
 
   const start = () => {
@@ -84,6 +124,7 @@ export function MeshBackendDialog({
     }
     const tex = parseInt(texSize, 10)
     if (Number.isFinite(tex) && tex > 0) opts.texture_size = tex
+    if (showTier) opts.tier = tier
     onGenerate(picked, opts)
   }
 
@@ -109,6 +150,25 @@ export function MeshBackendDialog({
             </div>
           ) : (
             <div className="ga-form">
+              {showTier ? (
+                <>
+                  <label className="ga-hint">{t('Target resolution tier')}</label>
+                  <select
+                    className="ga-input"
+                    value={tier}
+                    onChange={(e) => pickTier(e.target.value as ModelTier)}
+                  >
+                    {MODEL_TIERS.map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                  <div className="ga-hint">
+                    {tier === DEFAULT_MODEL_TIER
+                      ? t('The modelled quality — what the clients render up close.')
+                      : t('The distance mesh. Until the mesh→mesh reduction exists, a low variant is a second run with a smaller budget: face count and texture below are prefilled accordingly — change them freely.')}
+                  </div>
+                </>
+              ) : null}
               <label className="ga-hint">{t('Backend')}</label>
               <select
                 className="ga-input"

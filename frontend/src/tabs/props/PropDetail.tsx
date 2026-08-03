@@ -1,7 +1,11 @@
 /**
  * PropDetail — detail panel of one prop: 3D viewer + persisted orientation
- * fix + the editable sidecar fields + object-local markers + GLB upload and
- * the armed two-step delete (both in the sticky toolbar).
+ * fix + the editable sidecar fields + object-local markers + the armed
+ * two-step delete.
+ *
+ * The prop's meshes are a GALLERY (`PropModelPanel`, one active file per
+ * resolution tier) — upload and tier assignment live there, and clicking a
+ * row previews that file in the viewer here.
  *
  * Markers are OBJECT-LOCAL (`at` = [u, v, w] fractions of the model bounding
  * box), so they travel with the prop into any room.
@@ -13,6 +17,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from '../characters/Model3DViewer'
+import { PropModelPanel } from './PropModelPanel'
 import { orientedDims } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { PropFull, PropMarker } from './propTypes'
@@ -63,7 +68,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
-  const uploadRef = useRef<HTMLInputElement>(null)
+  // Which stored mesh the viewer shows ('' = the active one the clients get).
+  const [previewFile, setPreviewFile] = useState('')
+  useEffect(() => { setPreviewFile('') }, [prop.id])
 
   const [nameDraft, setNameDraft] = useState(prop.name)
   const [descDraft, setDescDraft] = useState(prop.description || '')
@@ -210,26 +217,6 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     }
   }, [prop.rotation, enc, onChanged, t, toast])
 
-  const upload = useCallback(async (file: File) => {
-    if (!file) return
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch(`/world/props/${enc}/upload`, {
-        method: 'POST', body: fd, credentials: 'same-origin',
-      })
-      const body = await res.json().catch(() => null)
-      if (!res.ok) {
-        const errs: string[] = Array.isArray(body?.detail?.errors) ? body.detail.errors : []
-        throw new Error(errs.length ? errs.join(' · ') : (body?.detail?.toString?.() || `HTTP ${res.status}`))
-      }
-      await onChanged()
-      toast(t('Saved'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [enc, onChanged, t, toast])
-
   // Object-local markers (A4) — same vocabulary as room markers, but the
   // frame is the object's own bounding box: `at` = [u, v, w] fractions,
   // `facing` = degrees. The fractions may leave the box by half a box per
@@ -344,16 +331,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={pending}
               onClick={onRegenerate}
-              title={t('Re-render the source image from the stored description (name as fallback) and mesh it again — replaces the model, dims and markers stay.')}>
+              title={t('Re-render the source image from the stored description (name as fallback) and mesh it again — the new mesh joins the gallery, dims and markers stay.')}>
               🧊 {pending ? t('Generating…') : t('Regenerate')}
             </button>
-            <button type="button" className="ga-btn ga-btn-sm"
-              onClick={() => uploadRef.current?.click()}
-              title={t('Upload a GLB as this prop’s 3D model.')}>
-              ⬆ {t('Upload model')}
-            </button>
-            <input ref={uploadRef} type="file" accept=".glb" style={{ display: 'none' }}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = '' }} />
           </>
         }
       />
@@ -632,9 +612,13 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             </button>
           </div>
           <div style={{ flex: '1 1 260px', minWidth: 240 }}>
-          {prop.has_model ? (
+          {prop.has_model || previewFile ? (
             <Model3DViewer
-              url={`/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
+              url={previewFile
+                // A file picked in the gallery below — including ones no tier
+                // serves (only the admin route hands those out).
+                ? `/world/props/${enc}/models/files/${encodeURIComponent(previewFile)}?v=${cacheBump}`
+                : `/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
               format="glb"
               height={340}
               rotation={prop.rotation}
@@ -696,6 +680,16 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
             </>
           ) : null}
+
+          {/* The prop's mesh gallery: every stored run, one active file per
+              resolution tier, upload and delete. */}
+          <PropModelPanel
+            propId={prop.id}
+            reloadKey={cacheBump}
+            preview={previewFile}
+            onPreview={setPreviewFile}
+            onChanged={onChanged}
+          />
         </div>
       </div>
     </>

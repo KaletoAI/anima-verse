@@ -389,6 +389,10 @@ html, * {
 
 .ga-tag-admin { background: #1f3a5f; color: #79c0ff; }
 .ga-tag-char  { background: #3a2f5f; color: #d2a8ff; }
+/* Model resolution tiers (full/low) — a present tier reads neutral, a
+   missing one has to be noticeable without being an error. */
+.ga-tag-tier    { background: #1c3326; color: #7ee2a8; }
+.ga-tag-missing { background: #3d2b17; color: #e3b341; }
 
 .ga-status-ok { color: #3fb950; }
 .ga-status-paused { color: var(--text-muted, #6e7681); }

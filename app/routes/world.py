@@ -990,6 +990,57 @@ async def prop_upload(prop_id: str, file: UploadFile = File(...),
     return {"status": "ok", "warnings": result["warnings"]}
 
 
+@router.get("/props/{prop_id}/models")
+def prop_models(prop_id: str) -> Dict[str, Any]:
+    """The prop's mesh gallery: ``{models, tiers, none_selected}`` — the same
+    shape the building/room panel reads from /model3d/status, minus the
+    backend list (the props tab already carries it)."""
+    from app.core.props import get_model_info, get_prop
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return get_model_info(prop_id)
+
+
+@router.post("/props/{prop_id}/models/select")
+async def prop_model_select(prop_id: str, request: Request) -> Dict[str, Any]:
+    """Make a stored mesh the ACTIVE one of a resolution tier (body:
+    {file, tier?}) — what the clients get via /assets/props/{id}/model?tier=.
+    An empty {file} deselects: on the default tier nothing is rendered until
+    another one is chosen/generated, on any other tier that tier ceases to
+    exist."""
+    from app.core.props import get_prop, select_model
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    data = await request.json()
+    filename = str((data or {}).get("file") or "").strip()
+    tier = _tier((data or {}).get("tier"))
+    if not select_model(prop_id, filename, tier=tier):
+        raise HTTPException(status_code=404, detail="Model not found")
+    return {"status": "success", "active": filename, "tier": tier}
+
+
+@router.delete("/props/{prop_id}/models")
+def prop_model_delete(prop_id: str, file: str = "") -> Dict[str, Any]:
+    """Remove ONE stored mesh (?file=<name>) or all of them (no param).
+    Deleting a selected file re-points the selection."""
+    from app.core.props import delete_model, get_prop
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "success", "removed": delete_model(prop_id, file.strip())}
+
+
+@router.get("/props/{prop_id}/models/files/{filename}")
+def prop_model_file(prop_id: str, filename: str, request: Request):
+    """Serve ONE stored mesh by filename — the admin gallery previews
+    non-active files with it (clients only ever see the selected ones)."""
+    from app.core.http_files import etag_file_response
+    from app.core.props import model_file_path
+    p = model_file_path(prop_id, filename)
+    if not p:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return etag_file_response(p, request, "model/gltf-binary")
+
+
 @router.delete("/props/{prop_id}")
 def prop_delete(prop_id: str) -> Dict[str, Any]:
     """Delete a prop (model + source + sidecar)."""
