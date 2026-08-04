@@ -1418,7 +1418,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         canFitToModel={!!(selectedRoom?.id && planW > 0
           && (modelDims[selectedRoom.id]?.widthM || 0) > 0)}
         canCurve={!!selectedRoom?.layout?.outline?.length}
-        areaDetail={!!map3d?.area_detail}
         onFitToModel={fitToModel}
         propsOpen={propsOpen}
         onMode={armMode}
@@ -2096,10 +2095,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       </div>
       <PlanScaleBar planWidthM={planW} canvasPx={canvasPx} />
       {/* Boundary pass-throughs (plan-area-detail-scenes.md): building-level
-          data, so the rows live under the plan, not in the room panel. Also
-          shown with zero openings when the server reports no entrance at
-          all (has_entrance false) — that is exactly where one gets added. */}
-      {onMap3d && map3d?.area_detail
+          data, so the rows live under the plan, not in the room panel. An
+          ordinary means of every location, not a speciality of area/detail
+          ones (ruling 2026-08-04) — shown with zero openings too, when the
+          server reports no entrance at all (has_entrance false), which is
+          exactly where one gets added. */}
+      {onMap3d
         && (map3d?.boundary_openings?.length || hasEntrance === false) ? (
         <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
           <div className="ga-form-section-label">{t('Boundary pass-throughs')}</div>
@@ -2108,9 +2109,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               <span>⚠ {t('No pass-through: this location cannot be entered. Add one below.')}</span>
             </div>
           ) : null}
-          {(map3d.boundary_openings || []).map((bo, i) => {
+          {(map3d?.boundary_openings || []).map((bo, i) => {
             const write = (patch: Partial<typeof bo>) =>
-              onMap3d('boundary_openings', (map3d.boundary_openings || [])
+              onMap3d('boundary_openings', (map3d?.boundary_openings || [])
                 .map((b, j) => (j === i ? { ...b, ...patch } : b)))
             return (
               <div key={i} onClick={() => setSelectedBoundary(i)}
@@ -2146,7 +2147,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   title={t('Remove')}
                   onClick={(e) => {
                     e.stopPropagation()
-                    const next = (map3d.boundary_openings || [])
+                    const next = (map3d?.boundary_openings || [])
                       .filter((_, j) => j !== i)
                     onMap3d('boundary_openings', next.length ? next : undefined)
                     setSelectedBoundary(null)

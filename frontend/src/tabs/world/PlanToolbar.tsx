@@ -60,8 +60,6 @@ interface PlanToolbarProps {
   canFitToModel: boolean
   /** The selected room has a DRAWN hull — curves bend hull edges only. */
   canCurve: boolean
-  /** map3d.area_detail is set — boundary pass-throughs are edited then. */
-  areaDetail: boolean
   propsOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
@@ -80,7 +78,7 @@ interface PlanToolbarProps {
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasExit, hasOutline,
   outlineDraftLen, hasElevator, building, noAnchor, canSuggest,
-  canFitToModel, canCurve, areaDetail, onFitToModel,
+  canFitToModel, canCurve, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
@@ -135,14 +133,12 @@ export function PlanToolbar({
             <Tool icon="🗑" danger onClick={onRemoveElevator}
               title={t('Remove the elevator')} />
           ) : null}
-          {areaDetail ? (
-            <Tool
-              icon="⇥"
-              active={mode === 'boundary-door'}
-              onClick={() => onMode('boundary-door')}
-              title={t('Entry/exit at the location edge — click near the plan border; a road crossing the cell gets one on each side. Edit width and linked room below the plan.')}
-            />
-          ) : null}
+          <Tool
+            icon="⇥"
+            active={mode === 'boundary-door'}
+            onClick={() => onMode('boundary-door')}
+            title={t('Entry/exit at the location edge — click near the plan border; a road crossing the cell gets one on each side. Edit width and linked room below the plan.')}
+          />
         </>
       ) : null}
 
