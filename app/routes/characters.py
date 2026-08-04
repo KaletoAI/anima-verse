@@ -1337,16 +1337,26 @@ def get_character_model_meta(character_name: str) -> Dict[str, Any]:
     # unset, the client keeps its default.
     from app.core.height import height_cm
     meta["height_cm"] = height_cm(get_character_profile(character_name) or {})
+    # Resolution tiers of THIS model, in fallback order. A client may request
+    # any of them via ?tier= — an unbuilt one falls back to the full mesh, so
+    # this list only says which ones actually save anything.
+    from app.core.model3d import available_tiers
+    meta["tiers"] = available_tiers(_path)
     return meta
 
 
 @router.get("/{character_name}/model")
-def get_character_model_file(character_name: str, request: Request):
+def get_character_model_file(character_name: str, request: Request,
+                             tier: str = ""):
     """Serves the 3D model bytes (uploaded one, else the generated mesh).
-    404 lets clients degrade to the portrait marker."""
+    404 lets clients degrade to the portrait marker.
+
+    ``tier=low`` asks for the reduced distance mesh; a tier that was never
+    built falls back to the full one, so a client may always ask.
+    """
     from fastapi.responses import Response
-    from app.core.model3d import find_model3d_serving
-    path, _ = find_model3d_serving(character_name)
+    from app.core.model3d import find_model3d_serving_tier
+    path, _, _served = find_model3d_serving_tier(character_name, tier)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
@@ -1542,6 +1552,27 @@ def measure_character_model3d(character_name: str,
     return res
 
 
+@router.post("/{character_name}/model3d/lod")
+def build_character_model3d_lod(character_name: str,
+                                ratio: float = 0.25) -> Dict[str, Any]:
+    """Builds the reduced (``low``) mesh of the served outfit combination.
+
+    ``ratio`` is the target fraction of the triangle count. It is explicit
+    because how far a model can be reduced before it shows depends on the
+    model — measured so far: props take 0.25 well, room dioramas want 0.5.
+    """
+    from app.core.model3d import build_lod
+    if not 0.02 <= ratio < 1:
+        raise HTTPException(status_code=400,
+                            detail="ratio must be between 0.02 and 1")
+    res = build_lod(character_name, ratio=ratio)
+    if not res.get("ok"):
+        err = res.get("error", "")
+        raise HTTPException(status_code=404 if err == "no_model" else 503,
+                            detail=err or "LOD build failed")
+    return res
+
+
 @router.post("/{character_name}/model3d/retexture")
 def retexture_character_model3d(character_name: str) -> Dict[str, Any]:
     """Re-encodes the stored model's textures to JPEG (geometry untouched).
@@ -1613,13 +1644,17 @@ async def set_character_model3d_options(character_name: str, request: Request) -
 
 
 @router.get("/{character_name}/model3d/file")
-def get_character_model3d_file(character_name: str, request: Request):
+def get_character_model3d_file(character_name: str, request: Request,
+                               tier: str = ""):
     """Serves the mesh for the current outfit combination — exact entry,
     else the nearest stored one (find_model3d_serving). ETag +
-    If-None-Match — the files are several MB. 404 when absent."""
+    If-None-Match — the files are several MB. 404 when absent.
+
+    ``tier=low`` serves the reduced version of the SAME combination, falling
+    back to the full mesh when none was built."""
     from fastapi.responses import Response
-    from app.core.model3d import find_model3d_serving
-    path, _ = find_model3d_serving(character_name)
+    from app.core.model3d import find_model3d_serving_tier
+    path, _, _served = find_model3d_serving_tier(character_name, tier)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"

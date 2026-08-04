@@ -17,7 +17,7 @@ import json
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from app.core.log import get_logger
@@ -84,6 +84,43 @@ def get_model3d_dir(character_name: str) -> Path:
     return d
 
 
+# Resolution tiers of a character mesh. Unlike props and locations there is
+# nothing to SELECT here — the outfit signature already determines the model —
+# so a tier is not a gallery entry but the SAME signature at another
+# resolution, stored in a subdirectory of that name. A subdirectory rather
+# than a "<signature>.low.glb" sibling for the same reason the raw backups
+# live in one: the store walks the model directory to find the nearest
+# matching outfit, and a coarse stand-in must never be a candidate for that.
+FULL_TIER = "full"
+LOW_TIER = "low"
+MODEL_TIERS = (FULL_TIER, LOW_TIER)
+
+
+def tier_dir(character_name: str, tier: str) -> Path:
+    """Directory holding the meshes of ``tier`` (full = the model root)."""
+    base = get_model3d_dir(character_name)
+    return base if tier in ("", FULL_TIER) else base / tier
+
+
+def tier_variant(model_path: Path, tier: str) -> Optional[Path]:
+    """The ``tier`` file belonging to a stored mesh, or None if not built.
+
+    Same file name, one directory down — the signature is what ties the two
+    together, so a tier can never drift onto another outfit's model.
+    """
+    if tier in ("", FULL_TIER):
+        return model_path if model_path.exists() else None
+    candidate = model_path.parent / tier / model_path.name
+    return candidate if candidate.exists() else None
+
+
+def available_tiers(model_path: Optional[Path]) -> List[str]:
+    """Which tiers exist for a stored mesh, in fallback order."""
+    if not model_path:
+        return []
+    return [t for t in MODEL_TIERS if tier_variant(model_path, t)]
+
+
 def find_model3d(character_name: str,
                  signature: Optional[str] = None) -> Optional[Path]:
     """Path of the cached mesh for the given outfit combination (default: the
@@ -127,6 +164,25 @@ def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, 
         if manifest is not None:
             return manifest
     return None
+
+
+def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tuple:
+    """(path, match, tier) of the mesh to serve at ``tier``.
+
+    The outfit combination is resolved FIRST, exactly as always, and only the
+    winner is then looked up at the requested resolution. Doing it the other
+    way round would let a coarse stand-in of some other outfit beat the right
+    model. A tier that was never built falls back to ``full`` — a consumer
+    asking for a resolution gets the best available one, never nothing.
+    """
+    path, match = find_model3d_serving(character_name)
+    if not path:
+        return None, "", ""
+    tier = (tier or FULL_TIER).strip().lower()
+    variant = tier_variant(path, tier) if tier in MODEL_TIERS else None
+    if variant:
+        return variant, match, tier
+    return path, match, FULL_TIER
 
 
 def find_model3d_serving(character_name: str) -> tuple:
@@ -316,6 +372,19 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                     info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):
                 pass
+        # Which resolutions exist for THIS file. "full" is always there (it is
+        # the file itself); "low" only once it has been built.
+        info["tiers"] = available_tiers(path)
+        low = tier_variant(path, LOW_TIER)
+        if low:
+            info["low_size"] = low.stat().st_size
+            info["low_url"] = f"/characters/{enc}/model3d/file?tier={LOW_TIER}"
+            try:
+                low_meta = json.loads(low.with_suffix(".json").read_text(encoding="utf-8"))
+                info["low_tris"] = low_meta.get("tris")
+                info["low_ratio"] = low_meta.get("lod_ratio")
+            except (OSError, ValueError):
+                pass
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         if info["format"] == "fbx":
@@ -336,9 +405,19 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
 def _purge_combination(out_dir: Path, signature: str) -> None:
     """Remove any stored model of this outfit combination (model + texture +
     sidecar), whatever its format/source — the caller writes a fresh one."""
+    keep = MODEL_EXTS + (".png", ".jpg", ".jpeg", ".json")
     for old in out_dir.glob(f"{signature}.*"):
-        if old.suffix.lower() in MODEL_EXTS + (".png", ".jpg", ".jpeg", ".json"):
+        if old.suffix.lower() in keep:
             old.unlink()
+    # The reduced tiers of the same combination go with it — they are derived
+    # from the file being replaced and would otherwise be served alongside a
+    # model they no longer belong to.
+    for tier in MODEL_TIERS:
+        if tier == FULL_TIER:
+            continue
+        for old in (out_dir / tier).glob(f"{signature}.*"):
+            if old.suffix.lower() in keep:
+                old.unlink()
 
 
 def save_uploaded_model(character_name: str, original_filename: str,
@@ -506,6 +585,78 @@ def retexture_model(character_name: str,
             "reason": res.get("error", ""),
             "bytes_saved": meta["refined"]["bytes_saved"],
             "size": path.stat().st_size}
+
+
+def build_lod(character_name: str, signature: Optional[str] = None, *,
+              ratio: float = 0.25) -> Dict[str, Any]:
+    """Builds the reduced (``low``) version of a stored mesh.
+
+    The source is the model of the SERVED combination, the result lands under
+    ``model3d/low/`` with the same file name. Rig and skin travel with it —
+    Decimate interpolates the vertex weights onto the surviving vertices — so
+    the joint count is unchanged and the shared animation clips still apply.
+
+    Reduction changes the silhouette; that is its purpose. ``ratio`` is
+    therefore the caller's decision, not a default that quietly ages.
+    """
+    path = (find_model3d(character_name, signature) if signature
+            else find_model3d_serving(character_name)[0])
+    if not path:
+        return {"ok": False, "error": "no_model"}
+    if path.suffix.lower() != ".glb":
+        return {"ok": False, "error": f"LOD handles GLB, not {path.suffix}"}
+    from app.blender import runner
+    from app.blender.refine import unavailable_reason
+    out_dir = tier_dir(character_name, LOW_TIER)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="av-lod-") as tmp:
+        res = runner.run("lod", inputs={"model": path},
+                         params={"ratios": [float(ratio)]}, out_dir=Path(tmp),
+                         timeout_s=600)
+        if not res.get("ok") or not res.get("outputs"):
+            return {"ok": False,
+                    "error": unavailable_reason() or res.get("error")
+                    or "no stage produced"}
+        stage = (res["data"].get("stages") or [{}])[0]
+        blob = Path(next(iter(res["outputs"].values()))).read_bytes()
+        # Same bar as everywhere: the reduced mesh must still validate as what
+        # it is, or it does not get stored.
+        meta_path = path.with_suffix(".json")
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) \
+                if meta_path.exists() else {}
+        except (OSError, ValueError):
+            meta = {}
+        verdict = _validator_for(meta.get("rig") or "")(blob)
+        if not verdict.get("ok"):
+            return {"ok": False,
+                    "error": "reduced mesh failed validation: "
+                             + "; ".join(verdict.get("errors") or [])}
+        target = out_dir / path.name
+        target.write_bytes(blob)
+    side = {
+        "created_at": utc_now_iso(),
+        "source": "lod",
+        "format": "glb",
+        "rig": meta.get("rig", ""),
+        "tier": LOW_TIER,
+        "source_file": path.name,
+        "lod_ratio": float(ratio),
+        "tris": stage.get("tris"),
+        "tris_before": stage.get("tris_before"),
+        "signature": path.stem,
+        "character": character_name,
+    }
+    target.with_suffix(".json").write_text(
+        json.dumps(side, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Model3D %s: LOD %s (%s -> %s tris, %d bytes)", character_name,
+                target.name, stage.get("tris_before"), stage.get("tris"),
+                target.stat().st_size)
+    return {"ok": True, "tier": LOW_TIER, "ratio": float(ratio),
+            "tris": stage.get("tris"), "tris_before": stage.get("tris_before"),
+            "size": target.stat().st_size,
+            "size_before": path.stat().st_size}
 
 
 def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
@@ -802,12 +953,19 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
 
 
 def delete_model3d(character_name: str, signature: Optional[str] = None) -> bool:
-    """Deletes the cached mesh (+ sidecar + texture); True if removed."""
+    """Deletes the cached mesh (+ sidecar + texture + reduced tiers); True if
+    removed. A tier is derived from this file, so it never outlives it."""
     path = find_model3d(character_name, signature)
     if not path:
         return False
     for companion in (path.with_suffix(".json"), path.with_suffix(".png")):
         if companion.exists():
             companion.unlink()
+    for tier in MODEL_TIERS:
+        variant = tier_variant(path, tier)
+        if variant and tier != FULL_TIER:
+            for companion in (variant.with_suffix(".json"), variant):
+                if companion.exists():
+                    companion.unlink()
     path.unlink()
     return True

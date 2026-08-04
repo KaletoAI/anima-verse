@@ -50,6 +50,12 @@ interface Model3DInfo {
   source?: string
   source_filename?: string
   measured?: Model3DMeasured
+  /** Resolutions that exist for this file: always 'full', plus 'low' once a
+   *  reduced version has been built. */
+  tiers?: string[]
+  low_size?: number
+  low_tris?: number
+  low_ratio?: number
 }
 
 interface MeshBackend {
@@ -331,6 +337,22 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }, [enc, load, t, toast])
 
+  // Builds the distance mesh. 0.25 is what props took well; a character is
+  // judged in motion, so this is a starting point, not a setting.
+  const buildLod = useCallback(async () => {
+    setBusy(true)
+    try {
+      const d = await apiPost<{ tris?: number; tris_before?: number }>(
+        `/characters/${enc}/model3d/lod?ratio=0.25`, {})
+      await load()
+      toast(`${t('Distance mesh built')}: ${d.tris_before?.toLocaleString()} → ${d.tris?.toLocaleString()} ${t('tris')}`)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [enc, load, t, toast])
+
   const remove = useCallback(async () => {
     if (!confirmDelete) {
       setConfirmDelete(true)
@@ -485,6 +507,15 @@ export function FieldModel3D({ character }: { character: string }) {
                 : ''}
             </div>
           ) : null}
+          {/* The distance mesh, once one exists — the client serves it at
+              range and the full model up close. */}
+          {model.tiers?.includes('low') ? (
+            <div className="ga-hint">
+              {`${t('distance mesh')}: ${model.low_tris?.toLocaleString() ?? '?'} ${t('tris')}`}
+              {model.low_size ? ` · ${(model.low_size / (1024 * 1024)).toFixed(1)} MB` : ''}
+              {model.low_ratio ? ` · ${Math.round(model.low_ratio * 100)} %` : ''}
+            </div>
+          ) : null}
           {/* Rig only means something for an UPLOAD — a generated model's
               skeleton is fixed by the backend alias. It decides whether the
               shared clips apply. (owned: the rig update writes the CURRENT
@@ -600,6 +631,17 @@ export function FieldModel3D({ character }: { character: string }) {
             title={t('Re-encodes the textures to JPEG — typically 60–90 % smaller with the geometry untouched. The original is kept, and the result is only used if it still validates.')}
           >
             {t('Shrink textures')}
+          </button>
+        ) : null}
+        {owned && canMeasure && model?.format === 'glb' ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={pending}
+            onClick={buildLod}
+            title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}
+          >
+            {model.tiers?.includes('low') ? t('Rebuild distance mesh') : t('Build distance mesh')}
           </button>
         ) : null}
         {/* Delete targets the CURRENT combination's entry — a nearest
