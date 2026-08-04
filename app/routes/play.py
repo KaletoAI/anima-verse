@@ -820,10 +820,23 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     #    den das Ziel beim Antworten narrativ verarbeitet.
     import asyncio
     spell = None
+    # Spell detection has NO model routed while the avatar carries spell items:
+    # `detect_and_cast` then fails silently (`resolve_llm` returns None, the
+    # except below swallows it) and the incantation lands in the room as plain
+    # words. Without this flag the player is left guessing why nothing happens
+    # — the 1:1 chat path has warned about it since `chat.py:794`, /play did not
+    # (A3 of plan-room-conversation-ergaenzungsplan.md).
+    spell_routing_missing = False
     spell_target = next((a for a in addressees if a and a != avatar), "")
     if spell_target and content.strip():
         try:
-            from app.core.spell_engine import detect_and_cast
+            from app.core.spell_engine import (
+                build_spell_catalog, detect_and_cast, has_spell_detect_routing)
+            if build_spell_catalog(avatar) and not has_spell_detect_routing(avatar):
+                spell_routing_missing = True
+                logger.warning(
+                    "play_say: no LLM routed for spell_detect — %s carries spell "
+                    "items, no cast can run", avatar)
             spell = await asyncio.to_thread(detect_and_cast, avatar, spell_target, content, volume)
             if spell and spell.get("hint"):
                 logger.info("play_say: spell %s by %s on %s — %s",
@@ -891,6 +904,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     return {"ok": uid is not None, "utterance_id": uid,
             "bumped": reactions.get("obligatory", []),
             "chimed": reactions.get("chime", []),
+            "spell_routing_missing": spell_routing_missing,
             "spell": {
                 "spell_id": spell.get("spell_id") or "",
                 "spell_name": spell.get("spell_name") or spell.get("spell_id") or "",

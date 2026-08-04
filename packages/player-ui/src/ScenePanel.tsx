@@ -214,11 +214,18 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     setAttach(null)
     try {
       const addr = volume === 'whisper' ? addressees.slice(0, 1) : addressees
-      await apiPost('/play/say', {
+      const said = await apiPost<{ spell_routing_missing?: boolean }>('/play/say', {
         content: text, volume, addressees: addr,
         ...(attach?.image_id ? { image_id: attach.image_id } : {}),
         ...(attach?.image_url ? { image_url: attach.image_url } : {}),
       })
+      // Spell detection has no model assigned — the words were said, but no
+      // spell could be cast. Saying nothing here is what made this look like a
+      // broken spell instead of a missing setting (A3).
+      if (said?.spell_routing_missing) {
+        toast(t('You carry spell items, but no model is assigned to spell detection — '
+          + 'the words were spoken, no spell was cast.'), 'error')
+      }
       await refreshScene()
     } catch {
       // Failed send keeps the draft (pre-cut behaviour): restore the local
@@ -235,7 +242,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     } finally {
       setSending(false)
     }
-  }, [text, volume, addressees, sending, attach, refreshScene])
+  }, [text, volume, addressees, sending, attach, refreshScene, toast, t])
 
   // 📷 scene photo: step 1 distills the prompt from the recent room
   // conversation (+ person descriptions) and opens the image-gen dialog

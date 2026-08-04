@@ -6,13 +6,41 @@
  *   • LLM-Calls (providers[*].chat_active) — die "X denkt …"-Einträge mit
  *     Label, Modell, laufender Dauer, Schätzung und Iteration.
  *   • Getrackte Tasks (active_tasks) — Bild-/Video-/TTS-/GPU-Tasks.
- * Read-only, Poll alle 2 s; laufende Dauer tickt sekündlich lokal.
+ * Poll alle 3 s; laufende Dauer tickt sekündlich lokal. Einzige Aktion ist das
+ * Abbrechen einer Zeile (A6) — alles andere ist Anzeige.
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { apiDelete } from '@anima/player-ui'
 import { useI18n } from '../i18n/I18nProvider'
 import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
 import { EmptyState } from './EmptyState'
 import { Icon, type IconName } from './icons'
+
+/**
+ * Abbrechen-Knopf einer laufenden/wartenden Zeile (A6 des
+ * plan-room-conversation-ergaenzungsplan.md). Ein Klick genügt — kein
+ * Bestätigungsdialog: ein abgebrochener Task ist neu auslösbar, und ein Modal
+ * für jede Kleinigkeit ist teurer als der seltene Fehlklick.
+ *
+ * Nach dem Klick bleibt die Zeile stehen und wird blass, bis der 3-s-Poll sie
+ * abräumt — das ist die Rückmeldung. Kommt sie zurück (der Task war schon
+ * fertig oder unbekannt), wird der Knopf wieder aktiv.
+ */
+function CancelBtn({ onCancel, busy }: { onCancel: () => void; busy: boolean }) {
+  const { t } = useI18n()
+  return (
+    <button type="button" onClick={onCancel} disabled={busy}
+      title={busy ? t('Cancelling…') : t('Cancel task')}
+      aria-label={busy ? t('Cancelling…') : t('Cancel task')}
+      style={{
+        flex: '0 0 auto', background: 'none', border: 'none', padding: '0 2px',
+        color: 'var(--text-muted, #8b949e)', cursor: busy ? 'default' : 'pointer',
+        opacity: busy ? 0.4 : 0.7, display: 'flex', alignItems: 'center',
+      }}>
+      <Icon name="close" size={12} />
+    </button>
+  )
+}
 
 function fmtDur(s: number): string {
   if (s < 60) return `${s}s`
@@ -20,7 +48,10 @@ function fmtDur(s: number): string {
   return `${m}m ${s % 60}s`
 }
 
-function LLMRow({ tk, nowMs, pending }: { tk: LLMTaskInfo; nowMs: number; pending?: boolean }) {
+function LLMRow({ tk, nowMs, pending, onCancel, cancelling }: {
+  tk: LLMTaskInfo; nowMs: number; pending?: boolean;
+  onCancel?: (id: string) => void; cancelling?: boolean;
+}) {
   const { t } = useI18n()
   // started_at wird erst bei Verarbeitungsstart gesetzt; chat_active-Tasks haben
   // es oft (noch) nicht → created_at (Registrierungszeit) als Fallback, damit die
@@ -61,6 +92,9 @@ function LLMRow({ tk, nowMs, pending }: { tk: LLMTaskInfo; nowMs: number; pendin
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.85em', opacity: pending ? 0.7 : 1 }}>
           {title}
         </span>
+        {onCancel && tk.task_id ? (
+          <CancelBtn busy={!!cancelling} onCancel={() => onCancel(tk.task_id as string)} />
+        ) : null}
       </div>
       <div style={{ paddingLeft: 16, fontSize: '0.72em', opacity: pending ? 0.45 : 0.6, lineHeight: 1.3,
                     fontVariantNumeric: 'tabular-nums', wordBreak: 'break-word',
@@ -108,7 +142,10 @@ function RecentRow({ r }: { r: RecentTaskInfo }) {
   )
 }
 
-function TrackedRow({ tk, nowMs }: { tk: TrackedTaskInfo; nowMs: number }) {
+function TrackedRow({ tk, nowMs, onCancel, cancelling }: {
+  tk: TrackedTaskInfo; nowMs: number;
+  onCancel?: (id: string) => void; cancelling?: boolean;
+}) {
   const { t } = useI18n()
   const running = (tk.status || '') === 'running'
   const elapsed = elapsedSeconds(tk.started_at, nowMs)
@@ -145,6 +182,9 @@ function TrackedRow({ tk, nowMs }: { tk: TrackedTaskInfo; nowMs: number }) {
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.85em', opacity: running ? 1 : 0.7 }}>
           {title}
         </span>
+        {onCancel && tk.task_id ? (
+          <CancelBtn busy={!!cancelling} onCancel={() => onCancel(tk.task_id as string)} />
+        ) : null}
       </div>
       <div style={{ paddingLeft: 16, fontSize: '0.72em', opacity: running ? 0.6 : 0.45,
                     lineHeight: 1.3, fontVariantNumeric: 'tabular-nums',
@@ -162,6 +202,21 @@ export function TaskPanel() {
   const { llmTasks, pendingLLM, trackedTasks, recent, channels } = useQueue(3000)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [showRecent, setShowRecent] = useState(false)
+  // Ids whose cancel is on its way out. EIN Endpunkt für beide Gruppen:
+  // DELETE /queue/tasks/{id} versucht erst die Provider-Queue und fällt auf
+  // die getrackten Tasks zurück (app/routes/queue.py:58) — die Zeile muss
+  // also nicht wissen, in welcher Queue sie hängt.
+  const [cancelling, setCancelling] = useState<Record<string, boolean>>({})
+  const cancel = useCallback(async (id: string) => {
+    setCancelling((c) => ({ ...c, [id]: true }))
+    try {
+      await apiDelete(`/queue/tasks/${encodeURIComponent(id)}`)
+    } catch {
+      // Nicht gefunden oder schon fertig: Knopf wieder freigeben, die Zeile
+      // verschwindet dann beim nächsten Poll von selbst — oder eben nicht.
+      setCancelling((c) => { const n = { ...c }; delete n[id]; return n })
+    }
+  }, [])
 
   // One-second UI clock (local, not a network poll) while anything with a
   // running duration / wait time is shown (running + pending LLM + tracked).
@@ -235,8 +290,10 @@ export function TaskPanel() {
       )}
       {llmTasks.length > 0 || pendingLLM.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {llmTasks.map((tk, i) => <LLMRow key={tk.task_id || `llm${i}`} tk={tk} nowMs={nowMs} />)}
-          {pendingLLM.map((tk, i) => <LLMRow key={tk.task_id || `pllm${i}`} tk={tk} nowMs={nowMs} pending />)}
+          {llmTasks.map((tk, i) => <LLMRow key={tk.task_id || `llm${i}`} tk={tk} nowMs={nowMs}
+            onCancel={cancel} cancelling={!!cancelling[tk.task_id || '']} />)}
+          {pendingLLM.map((tk, i) => <LLMRow key={tk.task_id || `pllm${i}`} tk={tk} nowMs={nowMs} pending
+            onCancel={cancel} cancelling={!!cancelling[tk.task_id || '']} />)}
         </div>
       ) : null}
       {(llmTasks.length > 0 || pendingLLM.length > 0) && trackedTasks.length > 0 && (
@@ -244,7 +301,8 @@ export function TaskPanel() {
       )}
       {trackedTasks.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {trackedTasks.map((tk, i) => <TrackedRow key={tk.task_id || `trk${i}`} tk={tk} nowMs={nowMs} />)}
+          {trackedTasks.map((tk, i) => <TrackedRow key={tk.task_id || `trk${i}`} tk={tk} nowMs={nowMs}
+            onCancel={cancel} cancelling={!!cancelling[tk.task_id || '']} />)}
         </div>
       )}
       {recent.length > 0 && (
