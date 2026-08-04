@@ -282,6 +282,13 @@ SECTIONS = {
             "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "", "description": "Imagegen target (backend-name glob) for 'Fit to neighbors' and 'Match edges'. Must resolve to a category=inpaint backend, which generates via POST /v1/images/edits (canvas + mask as two images)."},
             "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
+            # --- Blender refinement (local subprocess, no gateway/GPU) ---
+            "_grp_blender": {"type": "group_header", "label": "Blender Refinement (local)"},
+            "blender_enabled": {"type": "bool", "label": "Blender refinement enabled", "default": True, "description": "Run generated 3D models through a local Blender pass (measure, then normalise scale/origin/axes). Blender runs as a subprocess on THIS server — no gateway, no GPU, seconds per model. Off means every model is stored exactly as the mesh backend delivered it; that is also the correct setting on a host without Blender."},
+            "blender_executable": {"type": "str", "label": "Blender executable", "default": "", "description": "Full path to the Blender binary. Empty = auto-discovery ('blender' on PATH, then the usual unpacked-tarball locations). Set this on a host with several installs, otherwise which one runs is a matter of PATH order. The detected path and version are shown in the 3D model panels."},
+            "blender_timeout_s": {"type": "int", "label": "Blender timeout (s)", "default": 120, "min": 10, "max": 1800, "description": "Hard limit per Blender run; the process is killed when it expires and the model is kept unchanged. Measuring and normalising take under a second even for dense meshes — raise this only for the heavier refinement steps (texture bakes) on large models."},
+            "blender_keep_original": {"type": "bool", "label": "Keep the raw mesh", "default": True, "description": "Store the untouched backend result next to the refined model as '<name>.raw.<ext>'. An img2mesh bake cannot be reproduced (GPU, not deterministic), so without the original a bad refinement is final. Costs disk; turn off only when space is tight."},
+
             # --- 3D reference renders (T-pose / default pose) ---
             # Placeholders kept IN SYNC with TPOSE_PROMPT_DEFAULT in
             # app/core/model_refs.py and with the "_default" entry of
