@@ -311,6 +311,26 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }, [enc, load, t, toast])
 
+  // Re-encodes the textures. Writes the model, so it is offered only for a
+  // model this outfit actually owns.
+  const retexture = useCallback(async () => {
+    setBusy(true)
+    try {
+      const d = await apiPost<{ applied?: boolean; reason?: string; bytes_saved?: number }>(
+        `/characters/${enc}/model3d/retexture`, {})
+      await load()
+      toast(
+        d.applied
+          ? `${t('Textures re-encoded')} — ${(((d.bytes_saved || 0) / (1024 * 1024))).toFixed(1)} MB ${t('saved')}`
+          : `${t('Left unchanged')}: ${d.reason || t('nothing to do')}`,
+      )
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [enc, load, t, toast])
+
   const remove = useCallback(async () => {
     if (!confirmDelete) {
       setConfirmDelete(true)
@@ -568,6 +588,18 @@ export function FieldModel3D({ character }: { character: string }) {
             title={t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')}
           >
             {t('Measure')}
+          </button>
+        ) : null}
+        {/* Only for a GLB this outfit owns — it rewrites the stored file. */}
+        {owned && canMeasure && model?.format === 'glb' ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={pending}
+            onClick={retexture}
+            title={t('Re-encodes the textures to JPEG — typically 60–90 % smaller with the geometry untouched. The original is kept, and the result is only used if it still validates.')}
+          >
+            {t('Shrink textures')}
           </button>
         ) : null}
         {/* Delete targets the CURRENT combination's entry — a nearest

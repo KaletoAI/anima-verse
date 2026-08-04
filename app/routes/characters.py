@@ -1542,6 +1542,24 @@ def measure_character_model3d(character_name: str,
     return res
 
 
+@router.post("/{character_name}/model3d/retexture")
+def retexture_character_model3d(character_name: str) -> Dict[str, Any]:
+    """Re-encodes the stored model's textures to JPEG (geometry untouched).
+
+    New models go through this on arrival; this is for what was stored before.
+    The result replaces the file only if it is smaller AND passes the same
+    validation a fresh delivery faces — otherwise the original stays and the
+    reason is returned.
+    """
+    from app.core.model3d import retexture_model
+    res = retexture_model(character_name)
+    if not res.get("ok"):
+        err = res.get("error", "")
+        raise HTTPException(status_code=404 if err == "no_model" else 503,
+                            detail=err or "re-encode failed")
+    return res
+
+
 @router.post("/{character_name}/model3d/generate")
 def generate_character_model3d(character_name: str, force: bool = False,
                                backend: str = "", face_num: int = 0,

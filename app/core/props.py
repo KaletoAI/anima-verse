@@ -630,10 +630,34 @@ def _extract_bbox(prop_id: str) -> Optional[List[float]]:
     return sizes if max(sizes) > 0 else None
 
 
+def _auto_retexture(prop_id: str) -> None:
+    """Re-encodes the prop model's textures to JPEG, if switched on.
+
+    A prop is placed many times over, so its byte size is the one that
+    multiplies. Geometry is untouched; the result is only kept if it is
+    smaller and still validates as a static model."""
+    from app.blender import refine
+    from app.core.model_validate import validate_static_glb
+    if not refine.auto_retexture_enabled():
+        return
+    mp = model_path(prop_id)
+    if not mp or mp.suffix.lower() != ".glb":
+        return
+    res = refine.retexture(mp, validator=validate_static_glb)
+    if res.get("applied"):
+        logger.info("Prop %s: Texturen neu kodiert (%d bytes gespart)",
+                    prop_id, (res.get("data") or {}).get("bytes_saved", 0))
+
+
 def _store_bbox(prop_id: str) -> None:
-    """Measure the model and persist ``bbox`` on the sidecar (one
-    read-modify-write), redistributing still-estimated dims over the fresh
-    proportions. A failed measurement leaves the sidecar untouched."""
+    """Everything that happens once a model has landed: re-encode its
+    textures, measure it, persist ``bbox`` on the sidecar (one
+    read-modify-write) and redistribute still-estimated dims over the fresh
+    proportions. A failed measurement leaves the sidecar untouched.
+
+    Called from all three ingest paths (generate, shrink variant, upload), so
+    this is the one place a post-ingest step has to be added."""
+    _auto_retexture(prop_id)
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return

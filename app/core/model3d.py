@@ -385,6 +385,37 @@ def _attach_measurement(meta: Dict[str, Any], path: Path) -> None:
     attach_measurement(meta, path)
 
 
+def _validator_for(rig: str):
+    """The check a model of this rig must pass — the same one a fresh
+    delivery faces, so a refinement can never lower the bar."""
+    from app.core.model_validate import validate_glb, validate_static_glb
+    return validate_glb if rig != "none" else validate_static_glb
+
+
+def _auto_retexture(character_name: str, path: Path,
+                    meta: Dict[str, Any]) -> None:
+    """Re-encodes the stored model's textures, if that is switched on.
+
+    Records the outcome in ``meta["refined"]`` either way: a refinement that
+    was skipped or rejected is worth seeing in the panel, otherwise a model
+    that quietly stayed 9 MB looks the same as one that was never eligible.
+    """
+    from app.blender import refine
+    if not refine.auto_retexture_enabled() or path.suffix.lower() != ".glb":
+        return
+    res = refine.retexture(path, validator=_validator_for(meta.get("rig") or ""))
+    data = res.get("data") or {}
+    meta["refined"] = {
+        "retexture": bool(res.get("applied")),
+        "reason": res.get("error", ""),
+        "bytes_saved": data.get("bytes_saved", 0) if res.get("applied") else 0,
+        "at": utc_now_iso(),
+    }
+    if not res.get("applied") and res.get("error"):
+        logger.info("Model3D %s: Textur-Neukodierung nicht angewandt (%s)",
+                    character_name, res["error"])
+
+
 def measure_model(character_name: str, signature: Optional[str] = None, *,
                   force: bool = False) -> Dict[str, Any]:
     """Real geometry of a stored model — world-space size, triangles, bone
@@ -421,6 +452,53 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
     except OSError as e:
         logger.warning("Model3D %s: Messung nicht gespeichert: %s", path.name, e)
     return {"ok": True, "cached": False, "measured": meta["measured"]}
+
+
+def retexture_model(character_name: str,
+                    signature: Optional[str] = None) -> Dict[str, Any]:
+    """Re-encodes a stored model's textures and updates its sidecar.
+
+    Only meaningful for models that predate the automatic step. The gates live
+    in ``app/blender/refine.py``; what happens here is the bookkeeping — the
+    outcome and the fresh measurement go into the sidecar, so the panel shows
+    what the file IS after the swap, not what it was.
+    """
+    path = (find_model3d(character_name, signature) if signature
+            else find_model3d_serving(character_name)[0])
+    if not path:
+        return {"ok": False, "error": "no_model"}
+    from app.blender import refine
+    meta_path = path.with_suffix(".json")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) \
+            if meta_path.exists() else {}
+    except (OSError, ValueError):
+        meta = {}
+    if path.suffix.lower() != ".glb":
+        return {"ok": False, "error": f"retexture handles GLB, not {path.suffix}"}
+    res = refine.retexture(path, validator=_validator_for(meta.get("rig") or ""))
+    if not res.get("ok"):
+        from app.blender.refine import unavailable_reason
+        return {"ok": False,
+                "error": unavailable_reason() or res.get("error") or "failed"}
+    data = res.get("data") or {}
+    meta["refined"] = {
+        "retexture": bool(res.get("applied")),
+        "reason": res.get("error", ""),
+        "bytes_saved": data.get("bytes_saved", 0) if res.get("applied") else 0,
+        "at": utc_now_iso(),
+    }
+    if res.get("applied"):
+        _attach_measurement(meta, path)
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    except OSError as e:
+        logger.warning("Model3D %s: Sidecar nicht geschrieben: %s", path.name, e)
+    return {"ok": True, "applied": bool(res.get("applied")),
+            "reason": res.get("error", ""),
+            "bytes_saved": meta["refined"]["bytes_saved"],
+            "size": path.stat().st_size}
 
 
 def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
@@ -634,6 +712,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # T-pose render this mesh comes from already recorded it, so the
         # source of truth is copied rather than derived a second time.
         meta.update(_ref_manifest(src))
+        _auto_retexture(character_name, path, meta)
+        # AFTER the re-encode: the numbers have to describe the file that is
+        # actually served, not the one the backend handed over.
         _attach_measurement(meta, path)
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
