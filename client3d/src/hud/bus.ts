@@ -48,6 +48,10 @@ export interface HudGameState {
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
 export interface HudGameActions {
   zoomTo?: (charName: string) => void;
+  /** show a line as a speech bubble over that figure's head (stage 6). The
+   *  HUD owns the transcript poll, the scene owns the figures — so this is
+   *  the only way the two meet. Unknown names are dropped by the scene. */
+  sayBubble?: (charName: string, text: string) => void;
   enterEmbodied?: () => void;
   exitEmbodied?: () => void;
   /** ride to that storey: enter its room on the server, then walk the figure

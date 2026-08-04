@@ -64,6 +64,26 @@ html, body, #app {
 .npc-avatar .npc-name { color: #f2d98c; }
 .npc-label.above { transform: translateY(-35%); }
 
+/* Speech bubble (stage 6). Sits above name and activity because it is the
+   first child of the label column. Width is capped in characters rather than
+   pixels so a bubble stays the same shape at every zoom level, and it wraps
+   instead of stretching across the map. Pointer-transparent like the whole
+   label: it is read, never clicked. */
+.npc-bubble {
+  max-width: 22ch;
+  margin-bottom: 4px;
+  padding: 5px 9px;
+  border: 1px solid rgba(242, 205, 110, 0.45);
+  border-radius: 10px;
+  background: rgba(16, 19, 24, 0.88);
+  color: #f0ece1;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  text-wrap: pretty;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
 /* ---------- HUD ---------- */
 .hud-top {
   position: fixed;

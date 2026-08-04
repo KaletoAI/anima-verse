@@ -362,6 +362,13 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
     // Same one-shot pulse the talk key uses: an appearing panel announces
     // itself once instead of just materialising in the corner.
     setChatHail((n) => n + 1);
+    // Speech bubbles (stage 6) over the heads in the scene. Same filter as the
+    // voice, so bubble and voice never disagree about who said what: only what
+    // a voice in THIS room said, no narration, no notes, and not the player's
+    // own words — those are in the composer they were just typed into.
+    for (const line of speakableLines(fresh, avatarName)) {
+      gameActions.sayBubble?.(line.speaker, line.text);
+    }
     // The player's own message is the interruption: it silences the queue, and
     // only what came AFTER it is still worth hearing.
     const rest = afterOwnLine(fresh, avatarName);

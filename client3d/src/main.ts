@@ -766,6 +766,7 @@ async function startApp(username: string) {
     setGameState({ selected: char ? { char, isAvatar: name === lastMap!.avatar } : null });
     return true;
   };
+  gameActions.sayBubble = (name, text) => npcs.say(name, text);
   gameActions.zoomTo = (name) => {
     // While a follow target is set (embodied mode) the camera belongs to the
     // followed figure: a fly-to would be dragged back by the chase every

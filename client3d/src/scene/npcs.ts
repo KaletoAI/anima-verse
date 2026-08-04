@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
+import { bubbleMs, bubbleText } from '../game/bubble';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
@@ -87,6 +88,10 @@ interface Npc {
   label: CSS2DObject;
   labelName: HTMLSpanElement;
   labelActivity: HTMLSpanElement;
+  /** speech bubble above the name — empty and hidden unless someone speaks */
+  labelBubble: HTMLDivElement;
+  /** `performance.now()` at which the bubble is taken down again (0 = down) */
+  bubbleUntil: number;
   target: THREE.Vector3;
   /** Ziel-Skalierung (1 = Kartengröße; kleiner in Innenräumen) */
   targetScale: number;
@@ -488,7 +493,12 @@ export class NpcManager {
     nameEl.textContent = st.char.name;
     const actEl = document.createElement('span');
     actEl.className = 'npc-activity';
-    el.append(nameEl, actEl);
+    // The bubble is the FIRST child, so it grows upwards out of the label
+    // block and never pushes name or activity off the head.
+    const bubbleEl = document.createElement('div');
+    bubbleEl.className = 'npc-bubble';
+    bubbleEl.hidden = true;
+    el.append(bubbleEl, nameEl, actEl);
     const label = new CSS2DObject(el);
     label.position.set(0, labelY, 0);
     root.add(label);
@@ -496,6 +506,7 @@ export class NpcManager {
     return {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
+      labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), targetScale: st.scale ?? 1, face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
@@ -555,9 +566,39 @@ export class NpcManager {
     return out;
   }
 
+  /**
+   * Show what a figure just said as a bubble over its head (stage 6).
+   *
+   * The HUD calls this out of the SAME batch of new transcript lines that
+   * feeds the voice-over, so bubble and voice always agree about who said
+   * what. A second line from the same figure REPLACES the first — a stack of
+   * bubbles would cover the scene, and the chat panel is where the backlog
+   * belongs. Unknown names are ignored: the speaker may be in another room,
+   * or a figure the worldmap has not delivered yet.
+   */
+  say(name: string, text: string): void {
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    const shown = bubbleText(text);
+    if (!shown) return;
+    npc.labelBubble.textContent = shown;
+    npc.labelBubble.hidden = false;
+    // Reading time, not a fixed timeout: a one-word answer should not hang in
+    // the air as long as three sentences (game/bubble.ts).
+    npc.bubbleUntil = performance.now() + bubbleMs(text);
+  }
+
   /** Pro Frame: Richtung Ziel laufen, Animation nach Zustand wählen. */
   tick(dt: number, camDist: number) {
     const labelVisible = camDist < 55;
+    const now = performance.now();
+    for (const npc of this.npcs.values()) {
+      if (npc.bubbleUntil && now >= npc.bubbleUntil) {
+        npc.bubbleUntil = 0;
+        npc.labelBubble.hidden = true;
+        npc.labelBubble.textContent = '';
+      }
+    }
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
