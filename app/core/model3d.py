@@ -31,6 +31,9 @@ MODEL_EXTS = (".fbx", ".glb", ".gltf", ".obj", ".ply", ".vrm")
 
 _lock = threading.Lock()
 _generating: set = set()
+# Distance meshes currently being built in the background, keyed by file path
+# — one build per file, however many clients ask for it at once.
+_lod_building: set = set()
 _char_locks: Dict[str, threading.Lock] = {}
 
 
@@ -166,6 +169,57 @@ def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, 
     return None
 
 
+def _auto_lod_enabled() -> bool:
+    from app.core import config
+    return bool(config.get("image_generation.blender_auto_lod", True))
+
+
+def _auto_lod_ratio() -> float:
+    from app.core import config
+    try:
+        return float(config.get("image_generation.blender_lod_ratio", 0.25))
+    except (TypeError, ValueError):
+        return 0.25
+
+
+def request_lod(character_name: str, model_path: Path) -> bool:
+    """Builds the missing distance mesh in the BACKGROUND. True if started.
+
+    A client asking for a resolution that does not exist yet still gets the
+    full mesh (the tier fallback); this makes sure the next request has the
+    real thing. Serving must never wait on a build, and the same file must
+    never be built twice at once — hence the thread and the in-flight set.
+
+    The admin stays in charge: the generated mesh is a floor, not a ceiling.
+    A better low-poly version made elsewhere can replace it at any time.
+    """
+    if not _auto_lod_enabled() or model_path.suffix.lower() != ".glb":
+        return False
+    key = str(model_path)
+    with _lock:
+        if key in _lod_building:
+            return False
+        _lod_building.add(key)
+
+    def _run_build() -> None:
+        try:
+            res = build_lod(character_name, model_path.stem,
+                            ratio=_auto_lod_ratio())
+            if not res.get("ok"):
+                logger.debug("Model3D %s: LOD nicht erzeugt (%s)",
+                             character_name, res.get("error"))
+        except Exception as e:                              # noqa: BLE001
+            logger.warning("Model3D %s: LOD-Bau fehlgeschlagen: %s",
+                           character_name, e)
+        finally:
+            with _lock:
+                _lod_building.discard(key)
+
+    threading.Thread(target=_run_build, daemon=True,
+                     name=f"lod-{character_name}").start()
+    return True
+
+
 def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tuple:
     """(path, match, tier) of the mesh to serve at ``tier``.
 
@@ -182,6 +236,10 @@ def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tup
     variant = tier_variant(path, tier) if tier in MODEL_TIERS else None
     if variant:
         return variant, match, tier
+    # Asked for a resolution that does not exist yet: serve the full mesh now
+    # and build the missing one in the background, so the next request has it.
+    if tier == LOW_TIER:
+        request_lod(character_name, path)
     return path, match, FULL_TIER
 
 

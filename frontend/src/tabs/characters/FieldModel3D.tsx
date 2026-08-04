@@ -114,6 +114,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
+  // Which resolution the viewer shows — a VIEW state, never sent anywhere.
+  const [viewTier, setViewTier] = useState<'full' | 'low'>('full')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const texRef = useRef<HTMLInputElement>(null)
@@ -421,10 +423,14 @@ export function FieldModel3D({ character }: { character: string }) {
       return (bestOfKind(wanted) || bestOfKind(DEFAULT_CLIP_KIND))?.url || ''
     })
   }, [clips, myClips, bestOfKind])
-  // Cache-bust per combination so a re-generated mesh is re-fetched.
+  // Cache-bust per combination so a re-generated mesh is re-fetched. The tier
+  // is part of the URL, so switching it reloads the viewer with the other
+  // resolution — same camera, same clip, only the mesh changes.
   const viewerUrl = model
     ? `/characters/${enc}/model3d/file?v=${encodeURIComponent(bust)}`
+      + (viewTier === 'low' ? '&tier=low' : '')
     : ''
+  const hasLow = !!model?.tiers?.includes('low')
 
   return (
     <div className="ga-form">
@@ -436,6 +442,31 @@ export function FieldModel3D({ character }: { character: string }) {
             clipUrl={mixamo ? clipUrl : ''}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
           />
+          {/* Only shown once a distance mesh exists — otherwise there is
+              nothing to compare and the control would be a dead end. */}
+          {hasLow ? (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Showing')}</span>
+              <button
+                type="button"
+                className={`ga-btn ga-btn-sm${viewTier === 'full' ? ' ga-btn-primary' : ''}`}
+                aria-pressed={viewTier === 'full'}
+                onClick={() => setViewTier('full')}
+              >
+                {t('Full')}
+                {measured?.tris ? ` · ${measured.tris.toLocaleString()}` : ''}
+              </button>
+              <button
+                type="button"
+                className={`ga-btn ga-btn-sm${viewTier === 'low' ? ' ga-btn-primary' : ''}`}
+                aria-pressed={viewTier === 'low'}
+                onClick={() => setViewTier('low')}
+              >
+                {t('Distance')}
+                {model.low_tris ? ` · ${model.low_tris.toLocaleString()}` : ''}
+              </button>
+            </div>
+          ) : null}
           {/* The clips of THIS character's set (+ the setless fallbacks). */}
           {myClips.length ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
