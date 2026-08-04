@@ -33,6 +33,9 @@ export interface PropFull {
   bbox?: [number, number, number]
   /** True = placeholder cube, not informed by the model's proportions yet. */
   dims_estimated?: boolean
+  /** What Blender read out of the mesh — informational, nothing is derived
+   *  from it (the dims come from `bbox`). Absent until measured. */
+  measured?: { tris?: number; verts?: number; uv_layers?: number; vertex_colors?: number }
   rotation?: { x?: number; y?: number; z?: number }
   markers?: PropMarker[]
   has_source?: boolean

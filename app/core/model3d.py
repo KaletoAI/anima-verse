@@ -379,22 +379,10 @@ def save_uploaded_model(character_name: str, original_filename: str,
 
 
 def _attach_measurement(meta: Dict[str, Any], path: Path) -> None:
-    """Measures the stored file with Blender and puts the numbers in ``meta``.
-
-    Best-effort by design: a host without Blender, a disabled refinement or a
-    script failure must never cost a model that was just generated. The mesh
-    itself is not touched — this only reads.
-    """
-    from app.blender import runner
-    res = runner.run("measure", inputs={"model": path})
-    if not res.get("ok"):
-        logger.debug("Model3D %s: nicht vermessen (%s)", path.name,
-                     res.get("error"))
-        return
-    data = dict(res["data"])
-    data["at"] = utc_now_iso()
-    data["blender"] = runner.version()
-    meta["measured"] = data
+    """Measures the stored file and puts the numbers in ``meta`` (best-effort;
+    see app/blender/refine.py). The mesh itself is never touched."""
+    from app.blender.refine import attach_measurement
+    attach_measurement(meta, path)
 
 
 def measure_model(character_name: str, signature: Optional[str] = None, *,
@@ -425,12 +413,8 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
         return {"ok": True, "cached": True, "measured": cached}
     _attach_measurement(meta, path)
     if not meta.get("measured"):
-        from app.blender import runner
-        st = runner.status()
-        return {"ok": False,
-                "error": "blender is disabled" if not st["enabled"]
-                else ("no blender executable found" if not st["executable"]
-                      else "measurement failed")}
+        from app.blender.refine import unavailable_reason
+        return {"ok": False, "error": unavailable_reason() or "measurement failed"}
     try:
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
                              encoding="utf-8")

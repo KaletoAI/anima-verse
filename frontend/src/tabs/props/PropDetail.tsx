@@ -404,6 +404,16 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               {t('Estimated — refined automatically when the model arrives.')}
             </span>
           ) : null}
+          {/* Measured in the mesh itself — the cost of placing this prop
+              many times, which the box above does not say anything about. */}
+          {prop.measured?.tris ? (
+            <span className="ga-hint">
+              {`${prop.measured.tris.toLocaleString()} ${t('tris')}`}
+              {prop.measured.uv_layers === 0 && (prop.measured.vertex_colors || 0) > 0
+                ? ` · ${t('no UVs, colour in the vertices')}`
+                : ''}
+            </span>
+          ) : null}
 
           {prop.prompt ? (
             <span className="ga-hint" style={{ fontSize: '0.78em' }} title={prop.prompt}>

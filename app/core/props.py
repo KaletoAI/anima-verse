@@ -643,6 +643,14 @@ def _store_bbox(prop_id: str) -> None:
         return
     meta["bbox"] = bbox
     _redistribute_dims(meta)
+    # Same write, one more source: the header parser above yields the box, but
+    # not the triangle count, the UV sets or whether the colour sits in the
+    # vertices — and those are what decides whether a prop is cheap enough to
+    # place many times. Purely informational; nothing here derives dims from it.
+    mp = model_path(prop_id)
+    if mp:
+        from app.blender.refine import attach_measurement
+        attach_measurement(meta, mp)
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):
