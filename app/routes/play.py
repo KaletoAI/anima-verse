@@ -265,8 +265,10 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
 
 @router.post("/play/enter-room")
 async def play_enter_room(request: Request, user=Depends(get_current_user)):
-    """Changes the room within the current location (free movement inside the
-    location; the entry-room constraint only applies to leaving the location)."""
+    """Changes the room within the current location, subject to room-scoped
+    block rules (the entry-room constraint only applies to leaving the
+    location). An empty room_id is a valid request too: it leaves the room
+    and stands on the location's ground, unchecked."""
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        clear_pose_intent,
