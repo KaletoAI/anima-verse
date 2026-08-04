@@ -17,7 +17,7 @@
  *
  * three ist überall ein PARAMETER, nie ein Import.
  */
-import type { Material, Texture } from 'three'
+import type { Material, MeshStandardMaterial, Texture } from 'three'
 
 type THREE = typeof import('three')
 
@@ -187,7 +187,7 @@ function hex3(hex?: string): { r: number; g: number; b: number } {
   return { r: ((v >> 16) & 255) / 255, g: ((v >> 8) & 255) / 255, b: (v & 255) / 255 }
 }
 
-function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
+function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
                           mask: Texture): void {
   const uWave = { value: Math.max(spec.wave_m ?? 1.6, 0.05) }
   const uSpeed = { value: spec.speed ?? 0.05 }
@@ -196,7 +196,8 @@ function applyWaterShader(mat: any, spec: SurfaceMaterialSpec,
   const uMapStrength = { value: spec.map_strength ?? 0.75 }
   const uMask = { value: mask }
 
-  mat.onBeforeCompile = (shader: any) => {
+  // Kein Typ am Parameter: three leitet ihn aus `onBeforeCompile` her.
+  mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = uTime
     shader.uniforms.uSky = uSky
     shader.uniforms.uWaveM = uWave

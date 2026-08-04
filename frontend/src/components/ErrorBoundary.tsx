@@ -18,7 +18,6 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   }
 
   componentDidCatch(err: Error, info: ErrorInfo) {
-    // eslint-disable-next-line no-console
     console.error('[game-admin] tab crashed:', err, info)
   }
 

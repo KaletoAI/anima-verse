@@ -162,7 +162,6 @@ export function Silhouette({
     if (navigator.clipboard) {
       navigator.clipboard.writeText(code).catch(() => undefined)
     }
-    // eslint-disable-next-line no-console
     console.log('[silhouette] paths:\n' + code)
   }
 

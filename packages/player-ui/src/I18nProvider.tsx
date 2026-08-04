@@ -81,7 +81,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         const k = `${lang}::${en}`
         if (!missingLogged.has(k)) {
           missingLogged.add(k)
-          // eslint-disable-next-line no-console
           console.debug(`[i18n] missing [${lang}]: ${en}`)
         }
         return en
