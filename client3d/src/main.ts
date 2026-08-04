@@ -2206,8 +2206,8 @@ async function startApp(username: string) {
   // chain, one step machine, one interlock set — and then walks the figure
   // in. The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
   // numbers in scripts/smoke_walk_math.mjs): within ENTER_RADIUS of an
-  // authored boundary opening (§ B1 Nr. 13) of a 4-adjacent location, or on
-  // any adjacent cell of a location without authored openings.
+  // authored boundary opening (§ B1 Nr. 13) of a 4-adjacent location — a
+  // location without authored openings offers no entry (2026-08-04).
   /** the standing offer, resolved to the cell the step must aim at */
   let enterOffer: { locId: string; cell: Cell } | null = null;
 
@@ -2239,7 +2239,6 @@ async function startApp(username: string) {
         locId: t.loc.id,
         cell: { gx: t.loc.grid_x!, gy: t.loc.grid_y! },
         openings,
-        center: { x: t.center.x, z: t.center.z },
       });
     }
     const offer = entryOfferNear({ x: pos.x, z: pos.z }, here, candidates);

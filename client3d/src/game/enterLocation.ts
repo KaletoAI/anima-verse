@@ -19,11 +19,10 @@ export interface EntryTile {
   locId: string;
   cell: Cell;
   /** authored openings of this location in WORLD coordinates (the tile
-   *  centre is already added); EMPTY list = the fallback rule applies —
-   *  a location without authored openings treats every adjacent cell as
-   *  entry (plan decision 2026-08-03). */
+   *  centre is already added); EMPTY list = no way in: since the strictness
+   *  decision of 2026-08-04 only an authored opening is an entrance (the
+   *  server refuses the step as well). */
   openings: { x: number; z: number }[];
-  center: { x: number; z: number };
 }
 
 export interface EntryOffer { locId: string; cell: Cell; dist: number }
@@ -33,11 +32,8 @@ export interface EntryOffer { locId: string; cell: Cell; dist: number }
  *
  * - Only 4-adjacent tiles count: a step crosses exactly one edge, and the
  *   offer performs a step.
- * - A tile WITH authored openings offers entry within `radius` of one of
- *   them (the openings refine the access).
- * - A tile WITHOUT openings is offered from any adjacent cell; its distance
- *   is measured to the tile centre, so a genuine opening next door
- *   (≤ radius < half a cell) always outranks it.
+ * - A tile offers entry within `radius` of one of its authored openings; a
+ *   tile with no openings offers nothing.
  */
 export function entryOfferNear(
   pos: { x: number; z: number },
@@ -50,13 +46,9 @@ export function entryOfferNear(
     const adjacency = Math.abs(t.cell.gx - cell.gx) + Math.abs(t.cell.gy - cell.gy);
     if (adjacency !== 1) continue;
     let dist: number | null = null;
-    if (t.openings.length) {
-      for (const o of t.openings) {
-        const d = Math.hypot(o.x - pos.x, o.z - pos.z);
-        if (d <= radius && (dist === null || d < dist)) dist = d;
-      }
-    } else {
-      dist = Math.hypot(t.center.x - pos.x, t.center.z - pos.z);
+    for (const o of t.openings) {
+      const d = Math.hypot(o.x - pos.x, o.z - pos.z);
+      if (d <= radius && (dist === null || d < dist)) dist = d;
     }
     if (dist !== null && (!best || dist < best.dist)) {
       best = { locId: t.locId, cell: t.cell, dist };
