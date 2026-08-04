@@ -29,6 +29,10 @@ export interface GameMenuProps {
   prefs: Prefs;
   /** merge, store and (for volumes) apply — `Hud.tsx` owns all three steps */
   onChange: (patch: Partial<Prefs>) => void;
+  /** the performance readout is shown (Etappe 5). NOT part of `Prefs`: that
+   *  object and its storage key are the AUDIO settings, this is a view one. */
+  perfOn: boolean;
+  onPerfChange: (on: boolean) => void;
   /** sign out and go back to the title screen (main.ts owns the flow) */
   onBackToTitle: () => void;
 }
@@ -75,7 +79,7 @@ function Choice<T extends string | boolean>({ label, value, options, onPick }: {
   );
 }
 
-export function GameMenu({ prefs, onChange, onBackToTitle }: GameMenuProps) {
+export function GameMenu({ prefs, onChange, perfOn, onPerfChange, onBackToTitle }: GameMenuProps) {
   const { t } = useI18n();
 
   const volumes: Array<{ field: VolumeField; label: string }> = [
@@ -110,6 +114,15 @@ export function GameMenu({ prefs, onChange, onBackToTitle }: GameMenuProps) {
           onPick={(v) => onChange({ ttsOn: v })} />
         <p className="hud-menu-hint">
           {t('Voices follow the server in auto mode. These settings are kept in this browser only.')}
+        </p>
+      </section>
+
+      <section className="hud-menu-section">
+        <h3 className="hud-menu-head">{t('Display')}</h3>
+        <Choice label={t('Performance readout')} value={perfOn} options={onOff}
+          onPick={onPerfChange} />
+        <p className="hud-menu-hint">
+          {t('Frame rate, draw calls and how many models stand on the full or the low resolution.')}
         </p>
       </section>
 

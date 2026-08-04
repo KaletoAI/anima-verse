@@ -25,6 +25,7 @@ import {
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
 import { GameMenu } from './GameMenu';
+import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
@@ -34,7 +35,7 @@ import {
   speakableLines, type SceneSnapshot, type Voiceover,
 } from '../game/voiceover';
 import { isTypingTarget } from '../scene/engine';
-import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
+import { gameActions, getGameState, setGameState, setPerfEnabled, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
 // Load order matters: the fantasy theme redefines the custom properties and
@@ -61,6 +62,9 @@ const VOLUME_FIELDS = ['master', 'music', 'ambient', 'tts'] as const;
  *  four poll intervals (5 s), so a late answer still counts as "the
  *  conversation goes on" and not as a fresh interruption. */
 const CHAT_IDLE_MS = 20000;
+/** Storage key of the performance readout — separate from the audio prefs on
+ *  purpose, see the block that reads it. */
+const PERF_KEY = 'av3d.perf.v1';
 /** The idle timeout ran out while the panel was still in use (focus inside it,
  *  or one of its picker modals open) — look again after this. */
 const CHAT_BUSY_RECHECK_MS = 5000;
@@ -155,6 +159,22 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
     gameActions.applyAudioPrefs?.(next);
     setPrefsState(next);
   }, []);
+
+  /**
+   * The performance readout (Etappe 5) — a LOCAL view setting like the volumes
+   * above, but with its own storage key: `PREFS_KEY` is versioned as the AUDIO
+   * prefs (`av3d.audio.v1`), and a display switch has no business in there.
+   *
+   * One boolean, so no `loadPrefs`-style reader is needed: anything that is
+   * not the string "1" means off, which is also what an empty store and a
+   * hand-edited value give. `setPerfEnabled` is what actually gates the
+   * measuring in `main.ts` — while this is off, nothing is traversed at all.
+   */
+  const [perfOn, setPerfOn] = useState(() => localStorage.getItem(PERF_KEY) === '1');
+  useEffect(() => {
+    setPerfEnabled(perfOn);
+    localStorage.setItem(PERF_KEY, perfOn ? '1' : '0');
+  }, [perfOn]);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
     'play-scene', () => apiGet<SceneData>('/play/scene'), { intervalMs: 5000 });
@@ -367,6 +387,10 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
 
   return (
     <>
+      {/* Performance readout (Etappe 5): shown while the menu switch is on,
+          top-left and read-only — see PerfOverlay.tsx. */}
+      {perfOn && <PerfOverlay />}
+
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
           chrome — one chip below the vanilla top bar that also leaves again.
           Layout and the pointer exception live in hud.css with every other
@@ -425,6 +449,7 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
               {panelHead('menu', 'settings', t('Menu'))}
               <div className="hud-panel-body">
                 <GameMenu prefs={prefs} onChange={setPrefs}
+                  perfOn={perfOn} onPerfChange={setPerfOn}
                   onBackToTitle={() => gameActions.backToTitle?.()} />
               </div>
             </section>

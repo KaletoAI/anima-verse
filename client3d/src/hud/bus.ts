@@ -17,6 +17,7 @@
  * `/play/scene` poll — `movementLocked` + `partyLeader`, E3-T3).
  */
 import type { ElevatorState } from '../game/elevator';
+import type { PerfStats } from '../game/perfstats';
 import type { Prefs } from '../game/prefs';
 import type { MapCharacter } from '../types';
 
@@ -101,3 +102,38 @@ export function subscribeGameState(fn: () => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
 }
+
+// --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ------------
+//
+// A SECOND store next to the game state, with its own listener set, because
+// this one ticks several times a second: publishing it through `setGameState`
+// would re-render the chat, the plaque and the rail along with it — the
+// display would cost more than what it measures.
+//
+// The switch travels the other way (React -> vanilla) and is a plain flag
+// rather than an action: `main.ts` asks before it measures, so a hidden
+// overlay costs nothing at all, not even the traversal.
+
+let perf: PerfStats | null = null;
+const perfListeners = new Set<() => void>();
+let perfOn = false;
+
+/** main.ts publishes a fresh readout (null = nothing measured right now). */
+export function setPerfStats(next: PerfStats | null): void {
+  perf = next;
+  for (const fn of perfListeners) fn();
+}
+export function getPerfStats(): PerfStats | null { return perf; }
+export function subscribePerfStats(fn: () => void): () => void {
+  perfListeners.add(fn);
+  return () => { perfListeners.delete(fn); };
+}
+
+/** The HUD switches the readout on and off; switching it off also clears the
+ *  last numbers, so re-opening never shows a frozen picture from minutes ago. */
+export function setPerfEnabled(on: boolean): void {
+  perfOn = on;
+  if (!on) setPerfStats(null);
+}
+/** Asked by main.ts before it measures — see the note above. */
+export function perfEnabled(): boolean { return perfOn; }

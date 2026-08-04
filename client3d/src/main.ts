@@ -13,6 +13,10 @@ import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevat
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, type DoorMarker } from './game/doors';
 import { getAudio } from './game/audio';
+import {
+  newFpsMeter, pushFrame, tierCounts, visibleVertices,
+  type TierCounts, type TierSample,
+} from './game/perfstats';
 import { loadPrefs, PREFS_KEY } from './game/prefs';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
@@ -28,7 +32,7 @@ import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
-import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './hud/bus';
+import { gameActions, getGameState, perfEnabled, setGameState, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
@@ -65,6 +69,10 @@ const BUILDING_TIER_FAR = 60;
 /** Tier re-evaluation cadence — second-scale like the talk target: a swap
  *  loads a GLB anyway, per-frame checks would buy nothing. */
 const LOD_TICK_MS = 1000;
+/** How often the performance readout is refreshed (Etappe 5). Three to four
+ *  updates a second: fast enough that a stutter shows up while it is felt,
+ *  slow enough that the digits stay readable instead of blurring. */
+const PERF_UI_MS = 300;
 /** How far past an opening the "Betreten" walk-in aims, in world metres —
  *  just inside the cell, so the figure visibly crosses the boundary. */
 const OPENING_WALK_IN_M = 1.5;
@@ -417,7 +425,60 @@ async function startApp(username: string) {
       }
     }
   }
-  setInterval(tickModelTiers, LOD_TICK_MS);
+  // --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ---------
+  //
+  // Three sources, three cadences, and the split is the whole point:
+  //  - FPS is sampled EVERY frame (a rate averaged from anything slower is
+  //    not a frame rate), but that is one array push — `game/perfstats.ts`.
+  //  - The vertex sum and the tier split need a walk over the scene graph and
+  //    the placement ledgers. Those run on the SAME ~1 Hz tick as the tier
+  //    choice: a traversal per frame would distort the very figure it
+  //    measures.
+  //  - `renderer.info` is free to read and is picked up by the publisher.
+  // Nothing is measured at all while the readout is off (`perfEnabled`) —
+  // a display nobody looks at may not cost a frame.
+  let fpsMeter = newFpsMeter();
+  let fpsNow = 0;
+  engine.addFrameHook((dt) => {
+    if (perfEnabled()) { fpsNow = pushFrame(fpsMeter, dt); return; }
+    // Switched off: throw the window away once, so switching it on again
+    // starts measuring now instead of showing a second from another minute.
+    if (fpsMeter.samples.length) { fpsMeter = newFpsMeter(); fpsNow = 0; }
+  });
+  /** Last heavy measurement, refreshed on the LOD tick. */
+  let perfHeavy = { vertices: 0, tiers: { full: 0, low: 0 } as TierCounts };
+  function measurePerfHeavy() {
+    const placed: TierSample[] = [];
+    for (const tile of tiles.values()) {
+      for (const rec of tile.placedModels ?? []) {
+        placed.push({ variants: rec.spec.variants, url: rec.url });
+      }
+    }
+    perfHeavy = { vertices: visibleVertices(engine.scene), tiers: tierCounts(placed) };
+  }
+  // The publisher is faster than the measurement on purpose: the tier numbers
+  // may stand for a second (they change about that often), but an FPS reading
+  // that only moved once a second would feel broken while the picture stutters.
+  setInterval(() => {
+    if (!perfEnabled()) return;
+    const info = engine.renderer.info;
+    setPerfStats({
+      fps: fpsNow,
+      // Read outside the frame hook, so these are the counters of the frame
+      // that was last rendered — which is exactly what should be displayed.
+      triangles: info.render.triangles,
+      calls: info.render.calls,
+      vertices: perfHeavy.vertices,
+      geometries: info.memory.geometries,
+      textures: info.memory.textures,
+      tiers: perfHeavy.tiers,
+    });
+  }, PERF_UI_MS);
+
+  setInterval(() => {
+    tickModelTiers();
+    if (perfEnabled()) measurePerfHeavy();
+  }, LOD_TICK_MS);
 
   /** Threshold quads per location, one child group per storey. They live in
    *  `engine.scene` and not in `tile.group` on purpose: a rebuild throws the

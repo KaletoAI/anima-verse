@@ -507,3 +507,14 @@
 #hud-title .title-error {
   color: #e0765f;
 }
+
+/* Performance readout (Etappe 5): ink panel with the gold rule of the rest of
+   the HUD; the figures themselves stay plain so they read as measurements. */
+#hud .hud-perf {
+  background: rgba(26, 20, 10, 0.88);
+  border-color: rgba(242, 205, 110, 0.38);
+}
+#hud .hud-perf-label {
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--hud-muted);
+}

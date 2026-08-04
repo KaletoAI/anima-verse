@@ -750,3 +750,44 @@
   font-size: 0.85em;
   color: var(--danger, #f85149);
 }
+
+/* ---- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ----
+   Top-left under the vanilla top bar (z 10, ~40px): the mode chip is centred,
+   the info panel sits right, the chat docks bottom-left — this corner is the
+   only one nothing else claims.
+
+   READ-ONLY, so no pointer exception above: a click on the numbers still
+   reaches the scene and turns the camera. Tabular figures so a rising
+   draw-call count does not make the block jitter. */
+#hud .hud-perf {
+  position: absolute;
+  top: 52px;
+  left: 12px;
+  min-width: 168px;
+  padding: 7px 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  background: var(--bg-container, #161b22);
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+#hud .hud-perf-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+#hud .hud-perf-row.wide {
+  /* the two paired figures need the room the label would otherwise take */
+  font-size: 11px;
+  opacity: 0.95;
+}
+#hud .hud-perf-label {
+  color: var(--text-muted, #8b949e);
+  white-space: nowrap;
+}
+#hud .hud-perf-value {
+  font-weight: 600;
+  white-space: nowrap;
+}
