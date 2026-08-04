@@ -1554,14 +1554,16 @@ def measure_character_model3d(character_name: str,
 
 @router.post("/{character_name}/model3d/lod")
 def build_character_model3d_lod(character_name: str,
-                                ratio: float = 0.25) -> Dict[str, Any]:
+                                ratio: float = 0) -> Dict[str, Any]:
     """Builds the reduced (``low``) mesh of the served outfit combination.
 
     ``ratio`` is the target fraction of the triangle count. It is explicit
     because how far a model can be reduced before it shows depends on the
     model — measured so far: props take 0.25 well, room dioramas want 0.5.
     """
+    from app.blender.refine import lod_ratio
     from app.core.model3d import build_lod
+    ratio = ratio or lod_ratio("character")
     if not 0.02 <= ratio < 1:
         raise HTTPException(status_code=400,
                             detail="ratio must be between 0.02 and 1")

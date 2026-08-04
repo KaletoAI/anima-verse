@@ -151,6 +151,36 @@ def retexture(path: Path,
                             "image_generation.blender_keep_original", True)))
 
 
+# What a distance mesh is built from, and how hard it may be reduced. The
+# kinds are separate settings because they fail differently: a prop is a
+# compact shape with evenly spread triangles, a room is flat walls beside a
+# few small details, and a character is watched closely and in motion.
+LOD_KINDS = ("character", "prop", "room", "building")
+
+
+def lod_ratio(kind: str) -> float:
+    """Configured target fraction for this kind of subject.
+
+    A world that predates these settings has no value stored, and the fallback
+    then comes from the SCHEMA — not from a second number written here, which
+    would silently disagree with what the admin page shows as the default.
+    """
+    from app.core import config
+    from app.core.config_schema import get_schema
+    key = kind if kind in LOD_KINDS else "prop"
+    field = f"blender_lod_ratio_{key}"
+    fallback = 0.25
+    try:
+        fallback = float(
+            get_schema()["image_generation"]["fields"][field]["default"])
+    except (KeyError, TypeError, ValueError):
+        pass
+    try:
+        return float(config.get(f"image_generation.{field}", fallback) or fallback)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def auto_retexture_enabled() -> bool:
     """Whether a freshly stored model is re-encoded without being asked."""
     from app.core import config

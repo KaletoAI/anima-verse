@@ -175,11 +175,8 @@ def _auto_lod_enabled() -> bool:
 
 
 def _auto_lod_ratio() -> float:
-    from app.core import config
-    try:
-        return float(config.get("image_generation.blender_lod_ratio", 0.25))
-    except (TypeError, ValueError):
-        return 0.25
+    from app.blender.refine import lod_ratio
+    return lod_ratio("character")
 
 
 def request_lod(character_name: str, model_path: Path) -> bool:

@@ -339,13 +339,13 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }, [enc, load, t, toast])
 
-  // Builds the distance mesh. 0.25 is what props took well; a character is
-  // judged in motion, so this is a starting point, not a setting.
+  // Builds the distance mesh at the detail configured for characters
+  // (Media Generation → Blender Refinement).
   const buildLod = useCallback(async () => {
     setBusy(true)
     try {
       const d = await apiPost<{ tris?: number; tris_before?: number }>(
-        `/characters/${enc}/model3d/lod?ratio=0.25`, {})
+        `/characters/${enc}/model3d/lod`, {})
       await load()
       toast(`${t('Distance mesh built')}: ${d.tris_before?.toLocaleString()} → ${d.tris?.toLocaleString()} ${t('tris')}`)
     } catch (e) {
