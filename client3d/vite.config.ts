@@ -4,13 +4,22 @@ import react from '@vitejs/plugin-react';
 const target = process.env.ANIMA_API ?? 'http://localhost:8000';
 // Backend prefixes the dev server forwards. Besides the client's own calls
 // (/auth /play /world /characters /state /events /assets) this covers every
-// prefix the @anima/player-ui panels touch (endpoint sweep, E2-T5):
-// /play (scene/say/self/others/…), /characters (also portrait/library image
-// URLs), /chat (image upload + library), /inventory (gift picker), /queue
-// (queue status feed), /i18n (translations).
+// prefix the @anima/player-ui panels touch: /play (scene/say/self/others/…),
+// /characters (also portrait/library image URLs, memory + knowledge), /chat
+// (image upload + library), /inventory (gift picker), /queue (queue status
+// feed), /i18n (translations), /diary (MindPanel's diary section) and /static
+// (the silhouette fallback in BelongingsPanel).
+//
+// A MISSING prefix does not 404 — Vite answers with its SPA index.html, so the
+// caller gets 200 + HTML, `res.json()` fails and `apiGet` resolves to null,
+// which then explodes somewhere deep in a component (that is exactly how
+// /diary was found: "Cannot read properties of null (reading 'entries')").
+// `api.ts` now names that case, but the list still has to be complete. When a
+// panel moves into the package, sweep it:
+//   grep -ohE "[\`'\"]/[a-zA-Z0-9_-]+" packages/player-ui/src/*.tsx | sort -u
 const proxied = [
   '/auth', '/play', '/world', '/characters', '/state', '/events', '/assets',
-  '/chat', '/inventory', '/queue', '/i18n',
+  '/chat', '/inventory', '/queue', '/i18n', '/diary', '/static',
 ];
 
 export default defineConfig({

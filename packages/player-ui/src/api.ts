@@ -55,6 +55,16 @@ async function parseJsonOrThrow(res: Response): Promise<unknown> {
     const msg = typeof detail === 'string' ? detail : `HTTP ${res.status}`
     throw new ApiError(res.status, detail, msg)
   }
+  // HTML on an OK response is never a real answer — it is a dev server (or a
+  // reverse proxy) that does not forward this prefix and hands back its SPA
+  // index instead. Without this the caller would just get `null` and blow up
+  // far from the cause; that is how a missing /diary rule in client3d's Vite
+  // proxy surfaced as "Cannot read properties of null" inside MindPanel. An
+  // empty body with no content type (204 from a DELETE) stays legal.
+  if (body === null && (res.headers.get('content-type') || '').includes('html')) {
+    throw new ApiError(res.status, null,
+      `${res.url || 'request'}: expected JSON, got HTML — is this path proxied to the API?`)
+  }
   return body
 }
 
