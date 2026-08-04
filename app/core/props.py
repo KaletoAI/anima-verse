@@ -630,8 +630,8 @@ def _extract_bbox(prop_id: str) -> Optional[List[float]]:
     return sizes if max(sizes) > 0 else None
 
 
-def _auto_retexture(prop_id: str) -> None:
-    """Re-encodes the prop model's textures to JPEG, if switched on.
+def _retexture_file(path: Optional[Path], label: str) -> None:
+    """Re-encodes ONE stored GLB's textures to JPEG, if switched on.
 
     A prop is placed many times over, so its byte size is the one that
     multiplies. Geometry is untouched; the result is only kept if it is
@@ -640,13 +640,17 @@ def _auto_retexture(prop_id: str) -> None:
     from app.core.model_validate import validate_static_glb
     if not refine.auto_retexture_enabled():
         return
-    mp = model_path(prop_id)
-    if not mp or mp.suffix.lower() != ".glb":
+    if not path or Path(path).suffix.lower() != ".glb":
         return
-    res = refine.retexture(mp, validator=validate_static_glb)
+    res = refine.retexture(Path(path), validator=validate_static_glb)
     if res.get("applied"):
-        logger.info("Prop %s: Texturen neu kodiert (%d bytes gespart)",
-                    prop_id, (res.get("data") or {}).get("bytes_saved", 0))
+        logger.info("%s: Texturen neu kodiert (%d bytes gespart)", label,
+                    (res.get("data") or {}).get("bytes_saved", 0))
+
+
+def _auto_retexture(prop_id: str) -> None:
+    """Re-encodes the prop's ACTIVE model (see ``_retexture_file``)."""
+    _retexture_file(model_path(prop_id), f"Prop {prop_id}")
 
 
 def _store_bbox(prop_id: str) -> None:
@@ -1033,6 +1037,10 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
             continue
         path = gallery.new_path(f".{stage.get('format') or 'glb'}")
         path.write_bytes(blob)
+        # LOD stages carry their own embedded textures and are, per the
+        # gateway spec, often LARGER than the main result because of it —
+        # they are exactly the files that must not stay uncompressed.
+        _retexture_file(path, f"LOD {path.name}")
         write_model_sidecar(path, {
             "created_at": utc_now_iso(),
             "source": "lod",

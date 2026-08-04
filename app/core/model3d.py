@@ -370,6 +370,9 @@ def save_uploaded_model(character_name: str, original_filename: str,
         "pieces": dict(pieces or {}),
         "items": list(items or []),
     }
+    # An upload takes the same route as a generated model: re-encode first,
+    # then measure, so the numbers describe what will be served.
+    _auto_retexture(character_name, target, meta)
     _attach_measurement(meta, target)
     target.with_suffix(".json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -387,9 +390,13 @@ def _attach_measurement(meta: Dict[str, Any], path: Path) -> None:
 
 def _validator_for(rig: str):
     """The check a model of this rig must pass — the same one a fresh
-    delivery faces, so a refinement can never lower the bar."""
+    delivery faces, so a refinement can never lower the bar.
+
+    Only a MIXAMO model owes the 52-joint rule. A generic rig has its own
+    skeleton by definition, and a static model has none; holding either to the
+    humanoid check would reject every refinement of it out of hand."""
     from app.core.model_validate import validate_glb, validate_static_glb
-    return validate_glb if rig != "none" else validate_static_glb
+    return validate_glb if rig == "mixamo" else validate_static_glb
 
 
 def _auto_retexture(character_name: str, path: Path,
