@@ -115,6 +115,33 @@ class XorShift32:
         return self.next() / 4294967296.0
 
 
+def variant_mix(base_seed: int, variant: int) -> int:
+    """Mix a clone's variant number into one of its stored seeds.
+
+    A clone of a location stores almost nothing of its own — every field it
+    does not carry is merged in from the template at read time, and that
+    includes the scatter seeds of its props and the seed of its relief. Two
+    copies of the same template therefore used to look identical down to the
+    last blade of grass.
+
+    A clone carries ONE variant number, drawn when it is placed on the map.
+    Mixing it into every stored seed makes the whole copy differ while keeping
+    it FIXED: the same pair always yields the same number, so a copy does not
+    reshuffle on every load.
+
+    ``variant == 0`` returns the stored seed unchanged — that is what every
+    location predating this change carries, and it keeps its exact look.
+
+    The mix is the same xorshift32 step the height field already uses
+    (``XorShift32``), so a result can be re-derived by hand for verification.
+    """
+    v = int(variant) & 0xFFFFFFFF
+    if not v:
+        return int(base_seed) & 0xFFFFFFFF
+    return XorShift32((int(base_seed) & 0xFFFFFFFF)
+                      ^ (v * 0x9E3779B1 & 0xFFFFFFFF)).next()
+
+
 def point_in_poly(pt: Sequence[float], poly: Sequence[Sequence[float]]) -> bool:
     """Parity test — same routine as ``furnish_solver._point_in_poly``."""
     x, y = float(pt[0]), float(pt[1])

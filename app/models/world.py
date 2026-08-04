@@ -1775,15 +1775,16 @@ def cleanup_orphan_clones() -> Dict[str, int]:
 
 
 def clone_location(template_id: str, grid_x: int, grid_y: int) -> Optional[Dict[str, Any]]:
-    """Erzeugt eine neue Klon-Instanz von einem (passable) Template.
+    """Create a new clone instance of a (passable) template.
 
-    Klon speichert minimal: id, template_location_id, grid_x, grid_y. Alle
-    sonstigen Felder werden zur Lesezeit aus dem Template gemerged.
-    Returns das resolved-Dict des Klons oder None bei Fehler.
+    A clone stores the bare minimum: id, template_location_id, grid_x, grid_y
+    plus its own ``variant_seed``. Every other field is merged in from the
+    template at read time.
+    Returns the resolved dict of the clone, or None on error.
     """
     if not template_id:
         return None
-    # Garde: Klone ohne gueltige Grid-Position landen nicht in der DB.
+    # Guard: clones without a valid grid position never reach the DB.
     try:
         gx = int(grid_x)
         gy = int(grid_y)
@@ -1799,13 +1800,13 @@ def clone_location(template_id: str, grid_x: int, grid_y: int) -> Optional[Dict[
             break
     if not template:
         return None
-    # Doppelte Klone derselben Template-Zelle vermeiden — der erste Klon
-    # gewinnt, weitere Drops auf dieselbe Zelle werden verworfen.
+    # Avoid duplicate clones of the same template cell — the first clone
+    # wins, further drops onto the same cell are discarded.
     for loc in data.get("locations", []):
         if (loc.get("template_location_id") or "") == template_id \
                 and loc.get("grid_x") == gx and loc.get("grid_y") == gy:
-            logger.info("clone_location: existierender Klon an (%d,%d) fuer "
-                        "Template %s, kein neuer Eintrag", gx, gy, template_id)
+            logger.info("clone_location: existing clone at (%d,%d) for "
+                        "template %s, no new entry", gx, gy, template_id)
             return loc
     new_id = _generate_location_id()
     clone = {
@@ -1814,15 +1815,22 @@ def clone_location(template_id: str, grid_x: int, grid_y: int) -> Optional[Dict[
         "grid_x": gx,
         "grid_y": gy,
         "rooms": [],
+        # The one number this copy owns. Every seed it inherits from the
+        # template (prop scattering, ground relief) is mixed with it, so two
+        # copies of one template stop looking identical. Drawn once, here:
+        # it is stored, never re-drawn, so the copy keeps its look. Never 0 —
+        # that value is reserved for "no variant", which is what every
+        # location predating this carries.
+        "variant_seed": _random.randint(1, 0xFFFFFFFF),
     }
-    # Kein „Auto"-Modus: gleich das erste Map-Bild des Templates fest zuordnen
-    # (sofern vorhanden) — ansonsten setzt es spaeter die Generierung.
+    # No "auto" mode: assign the template's first map image right away (if
+    # there is one) — otherwise generation sets it later.
     _fm = first_map_image(template_id, "map_2d")
     if _fm:
         clone["map_image_2d"] = _fm
     data["locations"].append(clone)
     _save_world_data(data)
-    # Resolved zurueckgeben — Frontend bekommt die merge-fertige Instanz.
+    # Return it resolved — the frontend gets the merge-ready instance.
     for loc in _resolve_clones(data["locations"]):
         if loc.get("id") == new_id:
             return loc

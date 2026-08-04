@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 from app.core.log import get_logger
 from app.core.scatter_curves import scatter as _scatter_props
 from app.core.scatter_curves import tessellate
+from app.core.scatter_curves import variant_mix
 
 logger = get_logger(__name__)
 
@@ -359,7 +360,8 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
 
 def compose_recipe(room: Dict[str, Any],
                    siblings: Any = (),
-                   plan_width_m: float = 0.0) -> Optional[Dict[str, Any]]:
+                   plan_width_m: float = 0.0,
+                   variant_seed: int = 0) -> Optional[Dict[str, Any]]:
     """The full recipe of ONE room, or None when it has no layout.
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
@@ -368,6 +370,9 @@ def compose_recipe(room: Dict[str, Any],
     ``plan_width_m`` is the location's scale anchor — only the tolerances of
     the shared-wall test and the exit inset use it; 0 means "assume the 8 m
     reference plate", the same fallback the editor uses.
+    ``variant_seed`` is the one number a copy placed on the map owns; it is
+    mixed into every stored scatter seed so two copies of one template stop
+    looking identical. 0 means "not a copy" and leaves every seed untouched.
     """
     lay = room.get("layout")
     rect = _layout_rect(lay)
@@ -523,7 +528,8 @@ def compose_recipe(room: Dict[str, Any],
             pid = str(source.get("prop_id") or "")
             try:
                 count = int(source.get("scatter_count") or 0)
-                seed = int(source.get("scatter_seed") or 0)
+                seed = variant_mix(int(source.get("scatter_seed") or 0),
+                                   variant_seed)
             except (TypeError, ValueError):
                 continue
             try:

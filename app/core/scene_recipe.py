@@ -47,7 +47,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from app.core.log import get_logger
 from app.core.model_store import DEFAULT_TIER
 from app.core.room_recipe import compose_recipe
-from app.core.scatter_curves import TERRAIN_CELLS, terrain_grid, terrain_height
+from app.core.scatter_curves import (TERRAIN_CELLS, terrain_grid,
+                                     terrain_height, variant_mix)
 
 logger = get_logger(__name__)
 
@@ -1456,6 +1457,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     """
     map3d = location.get("map3d") or {}
     rooms = [r for r in (location.get("rooms") or []) if isinstance(r, dict)]
+    # A copy placed on the map owns ONE number; it is mixed into every seed
+    # this location inherits from its template, so two copies stop looking
+    # identical. 0 = not a copy, and then every seed stays untouched.
+    variant = int(location.get("variant_seed") or 0)
     building_meta = building_meta or {}
     room_metas = room_metas or {}
     extent, k, storey = derive_scalars(map3d, plan_width_m)
@@ -1464,7 +1469,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     by_room: Dict[str, Dict[str, Any]] = {}
     for room in rooms:
         recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                               plan_width_m)
+                                plan_width_m, variant_seed=variant)
         if not recipe:
             continue
         recipes.append(recipe)
@@ -1592,8 +1597,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                     relief_rooms.add(str(recipe.get("room_id") or ""))
                 elif len(hull) >= 3:
                     flat_hulls.append(hull)
-            grid = terrain_grid(int(_num(relief.get("seed"))), amplitude_world,
-                                flat_hulls)
+            grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))),
+                                            variant),
+                                amplitude_world, flat_hulls)
             terrain = {"step": _r(extent / TERRAIN_CELLS), "grid": grid,
                        "amplitude_m": _r(amplitude_world)}
 
