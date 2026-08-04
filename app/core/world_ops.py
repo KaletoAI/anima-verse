@@ -450,6 +450,11 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # area_detail itself, which already implies area_model). ``amplitude_m``
     # is REAL metres (× k when composing); ``seed`` is mandatory — a relief
     # without a stored seed would re-roll the whole terrain on every edit.
+    # ``wave_m`` is the second axis: how WIDE one swell is, also in REAL
+    # metres (1…200 — narrower than a stride is noise, wider than a couple of
+    # map tiles is a single slope). It is optional; without it the composer
+    # uses the default grid, which is the field every location had before the
+    # wave width existed.
     rel = raw.get("relief")
     if out.get("area_detail") and isinstance(rel, dict):
         try:
@@ -458,7 +463,15 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             amplitude = None
         if amplitude is not None and 0.05 <= amplitude <= 5.0:
-            out["relief"] = {"amplitude_m": round(amplitude, 2), "seed": seed}
+            entry: Dict[str, Any] = {"amplitude_m": round(amplitude, 2),
+                                     "seed": seed}
+            try:
+                wave = float(rel.get("wave_m"))
+            except (TypeError, ValueError):
+                wave = None
+            if wave is not None and 1.0 <= wave <= 200.0:
+                entry["wave_m"] = round(wave, 2)
+            out["relief"] = entry
     # Boundary openings (plan-area-detail-scenes.md): pass-throughs at the
     # LOCATION edge (a road crossing the cell east–west = two entries).
     # Geometry + room link only — entry_room stays the gameplay gate. The

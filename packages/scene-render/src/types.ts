@@ -262,19 +262,24 @@ export interface SceneBoundaryOpening {
   inward: [number, number]
 }
 
-/** Deterministisches Geländerelief der Detailszene (§ B1 Nr. 14). 17 × 17
- *  Stützpunkte über dem Bezugsquadrat, `grid[j][i]` in WELT-Metern; i läuft
- *  West→Ost, j Nord→Süd, der Rand ist 0. Fehlt = die Szene ist eben.
+/** The detail scene's deterministic terrain relief (§ B1 Nr. 14):
+ *  (n+1) × (n+1) support points over the reference square, `grid[j][i]` in
+ *  WORLD metres; i runs west→east, j north→south, the border is 0. Absent =
+ *  the scene is flat.
  *
- *  Der Server hat damit bereits ALLES gehoben, was in einem nicht-flachen
- *  Raum steht — Renderer drapieren nur Boden und `relief`-Platten und
- *  sampeln Figurenhöhen (`sampleTerrain`), sie heben nie ein Objekt nach. */
+ *  The RESOLUTION n is not a constant — it follows the author's wave width,
+ *  so it is read from the payload (`grid.length - 1`, or `step`), never
+ *  assumed.
+ *
+ *  The server has already lifted EVERYTHING standing in a non-flat room —
+ *  renderers only drape ground and `relief` plates and sample figure heights
+ *  (`sampleTerrain`); they never lift an object themselves. */
 export interface SceneTerrain {
-  /** Kantenlänge einer Gitterzelle in Welt-Metern (`extent_m / 16`). */
+  /** Edge length of ONE grid cell in world metres (`extent_m / n`). */
   step: number
-  /** 17 × 17 Stützpunkte, `grid[j][i]`, Welt-Meter. */
+  /** (n+1) × (n+1) support points, `grid[j][i]`, world metres. */
   grid: number[][]
-  /** Ausschlag in Welt-Metern (bereits × k). */
+  /** Swing in world metres (already × k). */
   amplitude_m: number
 }
 

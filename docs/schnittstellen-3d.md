@@ -172,13 +172,18 @@
 >     die Gameplay-Instanz. Der Journey-Durchlauf ist weiterhin eine
 >     spätere Etappe.
 > 14. **`scene.terrain` — deterministisches Geländerelief.** Ohne Diorama ist
->     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed}` (nur
->     zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5 REALE
->     Meter, `seed` Pflicht) legt ein Höhenfeld über das Bezugsquadrat.
->     **Gitter:** 16 × 16 Zellen → **17 × 17 Stützpunkte**, `grid[j][i]`,
->     Stützpunkt (i, j) auf Plan-Fraktion (i/16, j/16) — i West→Ost, j
->     Nord→Süd; `step` = `extent_m / 16` Welt-Meter. **Rand = 0** (i oder j
->     ∈ {0, 16}), damit Nachbarkacheln nahtlos aneinanderstoßen. **Flach = 0**
+>     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed, wave_m?}`
+>     (nur zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5
+>     REALE Meter, `seed` Pflicht) legt ein Höhenfeld über das Bezugsquadrat.
+>     **Gitter:** n × n Zellen → **(n+1) × (n+1) Stützpunkte**, `grid[j][i]`,
+>     Stützpunkt (i, j) auf Plan-Fraktion (i/n, j/n) — i West→Ost, j
+>     Nord→Süd; `step` = `extent_m / n` Welt-Meter. **n ist keine Konstante:**
+>     `wave_m` ist die Breite EINER Bodenwelle in REALEN Metern (1..200),
+>     daraus `n = round(plan_width_m / wave_m)`, geklemmt auf [2, 64]; ohne
+>     `wave_m` gilt der Default n = 16. Clients lesen n aus dem gelieferten
+>     Gitter (`grid.length − 1`) bzw. rechnen mit `step`, nie mit einer
+>     eigenen 16. **Rand = 0** (i oder j ∈ {0, n}), damit Nachbarkacheln
+>     nahtlos aneinanderstoßen. **Flach = 0**
 >     für jeden Stützpunkt, der in der TESSELLIERTEN Hülle eines flachen Raums
 >     liegt (Point-in-Poly wie beim Scatter, Nr. 12): flach ist jeder
 >     Innenraum (nicht `always_visible` — Wände brauchen ebenen Boden) plus

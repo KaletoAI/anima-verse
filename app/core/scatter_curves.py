@@ -24,11 +24,22 @@ TESS_N = 8
 # placement (dense room, many keep-outs) is fine — forests are not exact.
 ATTEMPTS_PER_PROP = 30
 
-# Terrain relief (contract v5.2 Nr. 14): the height field spans the reference
-# square as 16 × 16 CELLS, i.e. 17 × 17 support points. Fixed like TESS_N —
-# the count is part of the geometry contract, so server, 3D client and admin
-# preview address the very same points and can be diffed numerically.
+# Terrain relief (contract v5.2 Nr. 14): the DEFAULT resolution of the height
+# field over the reference square — 16 × 16 cells, i.e. 17 × 17 support
+# points. This is what every location produced before the wave width existed,
+# so it stays the fallback for anything that does not set one. The actual
+# count travels WITH the grid (its row count) and with ``terrain.step``, so
+# server, 3D client and admin preview address the very same points and can be
+# diffed numerically.
 TERRAIN_CELLS = 16
+
+# Bounds of the height field's resolution. TWO is the coarsest field that is
+# not flat: the border ring is pinned to zero so neighbouring tiles meet, and
+# a single cell would be nothing but border. SIXTY-FOUR is where finer waves
+# stop reading as terrain and start reading as noise, and the field grows
+# quadratically (64² support points).
+RELIEF_CELLS_MIN = 2
+RELIEF_CELLS_MAX = 64
 
 # Spatial-hash constants for the per-point seed. Two large odd primes (the
 # classic Teschner spatial-hash triple) so that neighbouring (i, j) land far
@@ -204,27 +215,62 @@ def scatter(seed: int,
     return placed
 
 
+def relief_cells(wave_m: Any, extent_m: Any) -> int:
+    """How many grid cells a wave of ``wave_m`` metres needs over the square.
+
+    The author sets a LENGTH — how wide one ground swell is — because a cell
+    count means nothing at the drawing board. One cell is one swell's support
+    spacing, so the count is simply the square divided by the wave, clamped.
+
+    Both lengths must be in the SAME frame, and the caller owes REAL metres
+    on both: the wave width is authored in real metres, so the reference
+    square has to arrive as its real edge length (``extent_m / k``), not as
+    its world extent.
+
+    Anything unusable (zero, negative, no extent) falls back to
+    ``TERRAIN_CELLS``, which over an 80 m square is a 5 m wave — exactly what
+    every location produced before this parameter existed.
+    """
+    try:
+        wave = float(wave_m)
+        extent = float(extent_m)
+    except (TypeError, ValueError):
+        return TERRAIN_CELLS
+    if wave <= 0 or extent <= 0:
+        return TERRAIN_CELLS
+    return max(RELIEF_CELLS_MIN, min(RELIEF_CELLS_MAX, round(extent / wave)))
+
+
 def terrain_grid(seed: int,
                  amplitude_world: float,
                  flat_hulls: Sequence[Sequence[Sequence[float]]] = (),
+                 cells: int = TERRAIN_CELLS,
                  ) -> List[List[float]]:
     """The location's height field as ``grid[j][i]`` support points.
 
+    ``cells`` is the resolution: the grid spans the reference square as
+    ``n × n`` cells, i.e. ``n + 1`` support points per side, clamped to
+    [``RELIEF_CELLS_MIN``, ``RELIEF_CELLS_MAX``]. It comes from the authored
+    wave width via :func:`relief_cells` — fewer cells mean wider, gentler
+    swells, more cells mean a choppier field at the same amplitude. The
+    default reproduces the fixed 16 × 16 field every location had before the
+    wave width existed.
+
     ``i`` runs west→east, ``j`` north→south; point (i, j) sits at plan
-    fraction (i/16, j/16) of the reference square. Values are WORLD metres —
+    fraction (i/n, j/n) of the reference square. Values are WORLD metres —
     the caller has already multiplied the real-metre amplitude by k, because
     everything downstream (prop lift, plate drape) is world metres too.
 
     Two kinds of point are pinned to zero, and both are structural rather
     than cosmetic:
 
-    * **The border** (i or j at 0 or 16). Neighbouring map tiles compute
+    * **The border** (i or j at 0 or n). Neighbouring map tiles compute
       their own field from their own seed and would otherwise meet at a
       cliff; a zero rim makes every tile edge match every other one.
     * **Flat hulls** — the tessellated outlines of rooms that must stay
       even (every indoor room, plus outdoor rooms flagged ``relief_flat``:
       a road, a paved square), DILATED by one grid cell: a point is pinned
-      when it lies inside a hull or within one cell (1/16 plan fraction)
+      when it lies inside a hull or within one cell (1/n plan fraction)
       of its boundary. Without the margin only the points INSIDE were
       zero, and the boundary cells interpolated the neighbours' heights
       back INTO the room — the draped ground pierced the flat road plate
@@ -242,7 +288,7 @@ def terrain_grid(seed: int,
     already tessellated (curved room edges) — this function does not know
     about curves.
     """
-    n = TERRAIN_CELLS
+    n = max(RELIEF_CELLS_MIN, min(RELIEF_CELLS_MAX, int(cells)))
     amp = float(amplitude_world)
     hulls = [h for h in flat_hulls if len(h) >= 3]
     margin = 1.0 / n
@@ -286,8 +332,9 @@ def terrain_height(grid: Sequence[Sequence[float]], u: float,
                    v: float) -> float:
     """Bilinear sample of the height field at plan fraction (u, v).
 
-    The grid is only 17 × 17 points but every object in the scene stands
-    somewhere between them, so the field has to be continuous — and it has to
+    The grid is a coarse lattice (17 × 17 points at the default resolution)
+    but every object in the scene stands somewhere between its points, so the
+    field has to be continuous — and it has to
     be continuous the SAME way in Python and in the renderers, or a prop the
     server lifted by 0.3 m would sit on ground the client drapes to 0.28 m.
     Bilinear over the four surrounding points is the cheapest such rule and

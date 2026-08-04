@@ -353,6 +353,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // The ONLY scale anchor (2026-07-28): how many REAL metres the location is
   // wide. Nothing derives it from a model any more.
   const planW = map3d?.plan_width_m || 0
+  // Relief wave width, said in something a person can picture: the server
+  // turns the authored metres into a grid over the plan (cells = plan width /
+  // wave, clamped to 2…64), so the caption reports the swell count the
+  // current setting actually produces. Without a wave width the default is
+  // the fixed 16 cells every location had before the setting existed — the
+  // number the empty field's placeholder shows.
+  const reliefWaveDefaultM = planW > 0 ? Math.round((planW / 16) * 10) / 10 : 0
+  const reliefWaveM = map3d?.relief?.wave_m || reliefWaveDefaultM
+  const reliefSwells = reliefWaveM > 0 && planW > 0
+    ? Math.max(2, Math.min(64, Math.round(planW / reliefWaveM)))
+    : 0
   // MANDATORY for floor-plan work (Abnahme round 4): a layout without it has
   // no real size. Existing data stays readable and selectable; only the
   // geometry tools are locked.
@@ -1323,6 +1334,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   return
                 }
                 onMap3d('relief', {
+                  ...map3d?.relief,
                   amplitude_m: v,
                   seed: map3d?.relief?.seed
                     ?? crypto.getRandomValues(new Uint32Array(1))[0],
@@ -1335,13 +1347,49 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 className="ga-btn ga-btn-sm"
                 title={t('Roll a new height field — same amplitude, different hills.')}
                 onClick={() => onMap3d('relief', {
-                  amplitude_m: map3d.relief!.amplitude_m,
+                  ...map3d.relief!,
                   seed: crypto.getRandomValues(new Uint32Array(1))[0],
                 })}
               >
                 🎲
               </button>
             ) : null}
+          </label>
+        ) : null}
+        {/* The relief's SECOND axis: the amplitude says how high the ground
+            swings, this says how far apart the swells sit. Without it the
+            only way to get more relief was a steeper version of the same 16
+            humps — past half a metre that reads as a ploughed field. */}
+        {onMap3d && map3d?.area_detail && map3d?.relief ? (
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Wave width: how wide ONE ground swell is, in real metres. Small values make a choppy, ploughed-field look, large values make long, gentle rolls. Empty = the default of 16 swells across the plan.')}>
+            〰
+            <span>{t('Wave (m)')}</span>
+            <input
+              className="ga-input"
+              type="number"
+              min={1}
+              max={200}
+              step={1}
+              style={{ width: 72 }}
+              placeholder={reliefWaveDefaultM ? String(reliefWaveDefaultM) : ''}
+              value={map3d.relief.wave_m ?? ''}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                const wave = e.target.value.trim() && Number.isFinite(v) && v > 0
+                  ? v : undefined
+                onMap3d('relief', { ...map3d.relief!, wave_m: wave })
+              }}
+            />
+            <span style={{ opacity: 0.7 }}>
+              {reliefSwells
+                ? (map3d.relief.wave_m
+                  ? t('≈ {n} swells across the {w} m plan')
+                  : t('default: ≈ {n} swells across the {w} m plan'))
+                  .replace('{n}', String(reliefSwells))
+                  .replace('{w}', String(planW))
+                : t('Set the plan width to see what a wave width means here.')}
+            </span>
           </label>
         ) : null}
       </div>

@@ -41,9 +41,11 @@ export const TERRAIN_CELLS = 16
  * value applies, and the border is pinned to 0 by the composer so that
  * neighbouring tiles meet seamlessly.
  *
- * Cell and fraction exactly as the contract states: `i = min(floor(u·16),
- * 15)`, `fx = u·16 − i` (`j`/`v` likewise), then the bilinear mix of
- * `grid[j][i]`, `grid[j][i+1]`, `grid[j+1][i]`, `grid[j+1][i+1]`.
+ * Cell and fraction exactly as the contract states, with `n` taken from the
+ * delivered grid (`grid.length − 1`, the default 16 only when the payload
+ * says so): `i = min(floor(u·n), n − 1)`, `fx = u·n − i` (`j`/`v` likewise),
+ * then the bilinear mix of `grid[j][i]`, `grid[j][i+1]`, `grid[j+1][i]`,
+ * `grid[j+1][i+1]`.
  */
 export function sampleTerrain(terrain: SceneTerrain | null | undefined,
                               x: number, z: number, extent: number): number {

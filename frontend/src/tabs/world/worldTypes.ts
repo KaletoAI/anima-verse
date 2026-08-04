@@ -176,10 +176,12 @@ export interface Map3D {
   /** Terrain relief of the detail scene (v5.2 Nr. 14): a deterministic
    *  height field over the reference square. `amplitude_m` is the swing in
    *  REAL metres (0.05..5, × k at compose time), `seed` picks the field and
-   *  is mandatory — the editor always writes one. Only valid together with
-   *  area_model + area_detail; the sanitizer drops it otherwise. Absent =
-   *  the scene is dead flat. */
-  relief?: { amplitude_m: number; seed: number }
+   *  is mandatory — the editor always writes one. `wave_m` is the second
+   *  axis: how WIDE one swell is, in REAL metres (1..200); the server turns
+   *  it into the grid resolution, and without it the default 16 × 16 field
+   *  applies. Only valid together with area_model + area_detail; the
+   *  sanitizer drops it otherwise. Absent = the scene is dead flat. */
+  relief?: { amplitude_m: number; seed: number; wave_m?: number }
   /** Pass-throughs at the LOCATION edge (a road crossing the cell east–west
    *  = two entries). Geometry + room link only — entry_room stays the
    *  gameplay gate. `at` follows the room-opening letter convention

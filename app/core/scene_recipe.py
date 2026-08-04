@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from app.core.log import get_logger
 from app.core.model_store import DEFAULT_TIER
 from app.core.room_recipe import compose_recipe
-from app.core.scatter_curves import (TERRAIN_CELLS, terrain_grid,
+from app.core.scatter_curves import (relief_cells, terrain_grid,
                                      terrain_height, variant_mix)
 
 logger = get_logger(__name__)
@@ -1597,10 +1597,20 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                     relief_rooms.add(str(recipe.get("room_id") or ""))
                 elif len(hull) >= 3:
                     flat_hulls.append(hull)
+            # The wave width is authored in REAL metres, so it is divided
+            # into the REAL edge length of the reference square — that is
+            # ``extent / k`` (= plan_width_m), NOT the world extent, which is
+            # already the k-scaled one. In legacy mode k is 1 and both
+            # frames coincide.
+            cells = relief_cells(relief.get("wave_m"),
+                                 extent / k if k > 0 else extent)
             grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))),
                                             variant),
-                                amplitude_world, flat_hulls)
-            terrain = {"step": _r(extent / TERRAIN_CELLS), "grid": grid,
+                                amplitude_world, flat_hulls, cells)
+            # ``step`` follows the grid that was actually built, never the
+            # default — otherwise the renderers subdivide with a cell size
+            # that does not exist in the payload they were handed.
+            terrain = {"step": _r(extent / (len(grid) - 1)), "grid": grid,
                        "amplitude_m": _r(amplitude_world)}
 
     def _lift_for(room_id: str) -> Optional[Callable[[float, float], float]]:
