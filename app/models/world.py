@@ -906,6 +906,22 @@ def get_room_name(location_id: str, room_id: str) -> str:
     return room_id
 
 
+def get_ground_name(location_id: str, lang: str = "") -> str:
+    """Display name of a location's GROUND — the area no room takes up.
+
+    The ground is addressed by the EMPTY room id, so ``get_room_name`` cannot
+    name it (it needs a room). Authors may give it a name of its own
+    ("Market square", "Clearing"); without one every location falls back to
+    the same translated word.
+    """
+    loc = get_location_by_id(location_id) or {} if location_id else {}
+    name = str(loc.get("ground_name") or "").strip()
+    if name:
+        return name
+    from app.core.i18n import t
+    return t("Outside", lang)
+
+
 def get_location_name(location_id: str) -> str:
     """Gibt den Namen eines Ortes anhand seiner ID zurueck.
 

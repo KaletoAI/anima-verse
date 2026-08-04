@@ -140,6 +140,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         knowledge_item_id: draft.knowledge_item_id,
         passable: draft.passable,
         terrain: draft.terrain,
+        ground_name: draft.ground_name,
         map3d: draft.map3d,
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
@@ -419,6 +420,15 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             {TERRAIN_TYPES.filter((v) => !terrainKinds.some((k) => k.kind === v))
               .map((v) => <option key={v} value={v} />)}
           </datalist>
+        </Field>
+        <Field label={t('Ground name')}
+          hint={t('What the open area of this location is called — the part no room covers. Characters standing there are described as being here. Empty = "Outside".')}>
+          <input
+            className="ga-input"
+            value={draft.ground_name || ''}
+            placeholder={t('Outside')}
+            onChange={(e) => upd('ground_name', e.target.value)}
+          />
         </Field>
         <Field label={t('Footprint (W × D)')} hint={t('Building base size in map grid cells.')}>
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>

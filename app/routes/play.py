@@ -183,6 +183,10 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         rooms_out.append({"id": rid, "name": rn, "is_entry": rid == entry_id})
         if room and (rid == room or rn == room):
             room_name = rn
+    if not room:
+        from app.models.world import get_ground_name
+        from app.models.character import get_character_language
+        room_name = get_ground_name(loc, get_character_language(avatar) or "de")
 
     # Nachbar-Orte + Entry-Gate aus der bestehenden Route-Funktion wiederverwenden
     nb = {}

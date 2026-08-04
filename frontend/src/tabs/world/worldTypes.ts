@@ -264,6 +264,9 @@ export interface Location {
   map_image_off?: boolean
   event_settings?: EventSettings
   terrain?: string
+  /** Name of the location's ground — the area no room takes up. Empty = the
+   *  translated default. */
+  ground_name?: string
   map3d?: Map3D
   /** Server verdict: does this location carry any boundary pass-through?
    *  Without one it cannot be entered — the editor warns, it does not judge. */

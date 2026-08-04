@@ -105,9 +105,9 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
                               limit: int = 100,
                               include_meta_lines: bool = False
                               ) -> List[Dict[str, Any]]:
-    """Wahrnehmungen eines Characters, gefiltert auf einen Raum (fuer die
-    Player-Szenen-Ansicht). Join auf ``utterances`` nur fuer die Raum-Metadaten —
-    nie fuer den Inhalt (der bleibt in ``perceptions`` schon gefiltert).
+    """A character's perceptions, filtered to one room (for the player's
+    scene view). Joins ``utterances`` only for the room metadata — never for
+    the content (that stays already filtered in ``perceptions``).
 
     include_meta_lines: display-only lines (meta.display_only, e.g.
     relationship-change notes) are for the PLAYER UI only — the default
