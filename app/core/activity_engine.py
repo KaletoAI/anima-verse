@@ -585,20 +585,6 @@ def _check_has_secret(character_name: str) -> Tuple[bool, str]:
 
 
 # ============================================================
-# 2. VISIBILITY RESOLVER
-# ============================================================
-
-def is_character_interruptible(character_name: str) -> Tuple[bool, str]:
-    """Pose-Modell: keine ``interruptible``-Flags mehr (Activity-Library
-    entfernt). Ein Character ist immer unterbrechbar.
-
-    Returns (True, "") — Signatur fuer Aufrufer (talk_to/chat/partner_consent)
-    bleibt erhalten.
-    """
-    return True, ""
-
-
-# ============================================================
 # 7. STUNDENTIMER — Decay/Regen fuer alle Status-Werte
 # ============================================================
 

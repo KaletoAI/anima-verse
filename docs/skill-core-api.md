@@ -113,7 +113,6 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 | `list_available_characters()` ✅ | Alle bespielbaren Charakternamen (talk_to löst darüber den Ziel-Namen auf) |
 | `get_character_current_location(name)` ✅ | Aktueller Aufenthaltsort (Präsenz-Check: TalkTo nur bei gleichem Ort) |
 | `is_character_sleeping(name)` ✅ | Schläft der Ziel-Charakter? (nicht erreichbar) |
-| `app.core.activity_engine.is_character_interruptible(name)` ✅ | `(bool, busy_activity)` — ob der Charakter gerade unterbrechbar ist |
 
 ## Wahrnehmung & Loop ⚠
 

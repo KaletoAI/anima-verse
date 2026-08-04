@@ -119,16 +119,6 @@ def ask_partner_to_join(initiator: str,
     except Exception:
         pass
 
-    try:
-        from app.core.activity_engine import is_character_interruptible
-        can_interrupt, busy = is_character_interruptible(partner)
-        if not can_interrupt:
-            logger.info("Partner %s nicht unterbrechbar (%s) — auto-declined",
-                        partner, busy)
-            return False, f"partner_busy:{busy}"
-    except Exception:
-        pass
-
     invitation = _build_invitation_text(activity_def)
 
     # TalkTo-aequivalent: run_chat_turn direkt aufrufen, damit der Partner

@@ -119,14 +119,10 @@ class TalkToSkill(PluginSkill):
                 f"them first (Move/SetLocation) or use SendMessage."
             )
 
-        # Sleep / busy check
+        # Sleep check
         from app.models.character import is_character_sleeping
         if is_character_sleeping(target_name):
             return f"{target_name} is sleeping and cannot be reached."
-        from app.core.activity_engine import is_character_interruptible
-        can_interrupt, busy = is_character_interruptible(target_name)
-        if not can_interrupt:
-            return f"{target_name} is focused on '{busy}' and cannot be interrupted right now."
 
         self.ctx.logger.info("TalkTo %s -> %s: %s", sender_name, target_name, message[:100])
 

@@ -1080,17 +1080,6 @@ async def chat(request: Request) -> StreamingResponse:
             "You are no longer sleeping after this message."
         )
 
-    # --- Nicht-unterbrechbare Aktivitaet ---
-    if not _is_sleeping:
-        from app.core.activity_engine import is_character_interruptible
-        _interruptible, _busy_activity = is_character_interruptible(current_agent)
-        if not _interruptible:
-            system_content += (
-                f"\n\nIMPORTANT: You are currently deeply focused on '{_busy_activity}' and cannot be "
-                f"easily interrupted. React annoyed, distracted, or briefly — you want to get back "
-                f"to what you were doing. Keep your response very short (1-2 sentences max)."
-            )
-
     # --- StreamingAgent Setup ---
     tools_dict = {}
     tool_format = "tag"
