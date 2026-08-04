@@ -35,11 +35,21 @@ TERRAIN_CELLS = 16
 
 # Bounds of the height field's resolution. TWO is the coarsest field that is
 # not flat: the border ring is pinned to zero so neighbouring tiles meet, and
-# a single cell would be nothing but border. SIXTY-FOUR is where finer waves
-# stop reading as terrain and start reading as noise, and the field grows
-# quadratically (64² support points).
+# a single cell would be nothing but border.
+#
+# TWENTY-TWO is the finest field the renderers can actually DRAW, and that is
+# the binding limit — not taste. ``drapeGeometry``
+# (packages/scene-render/src/terrain.ts) subdivides a plate only while its
+# longest edge exceeds one cell, and it stops after ``MAX_SPLITS = 5``
+# halvings. A plate spanning the reference square starts at its diagonal,
+# e·√2, so the finest edge it ever reaches is e·√2 / 2⁵ = e / 22.63 — a
+# 22-cell field (cell e/22) is still resolved, a 23-cell one (cell e/23) is
+# not. Past that the payload would keep getting finer while the drawn ground
+# stopped following. Raising this therefore means raising ``MAX_SPLITS``
+# first, which costs triangles in EVERY location — and the complaint that
+# brought this parameter into existence was ground that is too FINE.
 RELIEF_CELLS_MIN = 2
-RELIEF_CELLS_MAX = 64
+RELIEF_CELLS_MAX = 22
 
 # Spatial-hash constants for the per-point seed. Two large odd primes (the
 # classic Teschner spatial-hash triple) so that neighbouring (i, j) land far
@@ -230,6 +240,12 @@ def relief_cells(wave_m: Any, extent_m: Any) -> int:
     Anything unusable (zero, negative, no extent) falls back to
     ``TERRAIN_CELLS``, which over an 80 m square is a 5 m wave — exactly what
     every location produced before this parameter existed.
+
+    Rounding is HALF-UP (``int(q + 0.5)``), not Python's banker's rounding:
+    the admin caption tells the author how many swells the setting produces
+    and computes it in JavaScript, whose ``Math.round`` is half-up. With
+    ``round`` an exact .5 quotient promised one swell more than the server
+    built.
     """
     try:
         wave = float(wave_m)
@@ -238,7 +254,8 @@ def relief_cells(wave_m: Any, extent_m: Any) -> int:
         return TERRAIN_CELLS
     if wave <= 0 or extent <= 0:
         return TERRAIN_CELLS
-    return max(RELIEF_CELLS_MIN, min(RELIEF_CELLS_MAX, round(extent / wave)))
+    return max(RELIEF_CELLS_MIN,
+               min(RELIEF_CELLS_MAX, int(extent / wave + 0.5)))
 
 
 def terrain_grid(seed: int,
@@ -334,11 +351,11 @@ def terrain_height(grid: Sequence[Sequence[float]], u: float,
 
     The grid is a coarse lattice (17 × 17 points at the default resolution)
     but every object in the scene stands somewhere between its points, so the
-    field has to be continuous — and it has to
-    be continuous the SAME way in Python and in the renderers, or a prop the
-    server lifted by 0.3 m would sit on ground the client drapes to 0.28 m.
-    Bilinear over the four surrounding points is the cheapest such rule and
-    the one both sides implement.
+    field has to be continuous — and it has to be continuous the SAME way in
+    Python and in the renderers, or a prop the server lifted by 0.3 m would
+    sit on ground the client drapes to 0.28 m. Bilinear over the four
+    surrounding points is the cheapest such rule and the one both sides
+    implement.
 
     (u, v) is clamped to [0, 1]²; a sample exactly on the far edge falls back
     into the last cell (fraction 1.0), so u = 1 reads the border point.

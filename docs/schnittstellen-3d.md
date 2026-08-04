@@ -179,10 +179,12 @@
 >     Stützpunkt (i, j) auf Plan-Fraktion (i/n, j/n) — i West→Ost, j
 >     Nord→Süd; `step` = `extent_m / n` Welt-Meter. **n ist keine Konstante:**
 >     `wave_m` ist die Breite EINER Bodenwelle in REALEN Metern (1..200),
->     daraus `n = round(plan_width_m / wave_m)`, geklemmt auf [2, 64]; ohne
->     `wave_m` gilt der Default n = 16. Clients lesen n aus dem gelieferten
->     Gitter (`grid.length − 1`) bzw. rechnen mit `step`, nie mit einer
->     eigenen 16. **Rand = 0** (i oder j ∈ {0, n}), damit Nachbarkacheln
+>     daraus `n = int(plan_width_m / wave_m + 0,5)` (halb-auf, wie
+>     `Math.round`), geklemmt auf [2, 22] — die Obergrenze ist das, was
+>     `drapeGeometry` mit `MAX_SPLITS = 5` noch auflöst (e·√2 / 2⁵ = e/22,63);
+>     ohne `wave_m` gilt der Default n = 16. Clients lesen n aus dem
+>     gelieferten Gitter (`grid.length − 1`) bzw. rechnen mit `step`, nie mit
+>     einer eigenen 16. **Rand = 0** (i oder j ∈ {0, n}), damit Nachbarkacheln
 >     nahtlos aneinanderstoßen. **Flach = 0**
 >     für jeden Stützpunkt, der in der TESSELLIERTEN Hülle eines flachen Raums
 >     liegt (Point-in-Poly wie beim Scatter, Nr. 12): flach ist jeder

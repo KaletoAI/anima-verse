@@ -355,14 +355,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const planW = map3d?.plan_width_m || 0
   // Relief wave width, said in something a person can picture: the server
   // turns the authored metres into a grid over the plan (cells = plan width /
-  // wave, clamped to 2…64), so the caption reports the swell count the
-  // current setting actually produces. Without a wave width the default is
-  // the fixed 16 cells every location had before the setting existed — the
-  // number the empty field's placeholder shows.
+  // wave, half-up, clamped to 2…22 — RELIEF_CELLS_MIN/MAX in
+  // app/core/scatter_curves.py, whose upper bound is what the drape can
+  // resolve), so the caption reports the swell count the current setting
+  // actually produces. Without a wave width the default is the fixed 16 cells
+  // every location had before the setting existed — the number the empty
+  // field's placeholder shows.
   const reliefWaveDefaultM = planW > 0 ? Math.round((planW / 16) * 10) / 10 : 0
   const reliefWaveM = map3d?.relief?.wave_m || reliefWaveDefaultM
   const reliefSwells = reliefWaveM > 0 && planW > 0
-    ? Math.max(2, Math.min(64, Math.round(planW / reliefWaveM)))
+    ? Math.max(2, Math.min(22, Math.round(planW / reliefWaveM)))
     : 0
   // MANDATORY for floor-plan work (Abnahme round 4): a layout without it has
   // no real size. Existing data stays readable and selectable; only the

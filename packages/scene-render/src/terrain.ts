@@ -120,7 +120,13 @@ function longestEdge(pos: number[]): number {
 
 /** Ceiling on the split depth: 5 levels = 1024 triangles per original one.
  *  A plate is a handful of triangles, so this is generous; it exists so a
- *  pathological outline cannot melt the tab. */
+ *  pathological outline cannot melt the tab.
+ *
+ *  It also decides how FINE a height field may usefully be: a plate over the
+ *  reference square starts at its diagonal e·√2, so the smallest edge this
+ *  loop reaches is e·√2 / 2⁵ = e/22.63. That is why the server caps the
+ *  relief at 22 cells (`RELIEF_CELLS_MAX`, app/core/scatter_curves.py) —
+ *  raise one of the two and the other has to move with it. */
 const MAX_SPLITS = 5
 
 /**
