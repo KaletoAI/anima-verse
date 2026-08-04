@@ -164,15 +164,17 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         list_available_characters,
         get_character_current_location,
         get_character_current_room,
+        get_character_language,
         get_effective_activity)
     from app.models.account import get_active_character
-    from app.models.world import get_room_name
+    from app.models.world import get_room_name, get_ground_name
+    from app.core.perception import ground_presence_split
 
     my_room = get_character_current_room(character_name) or ""
     player_char = get_active_character()
+    lang = get_character_language(character_name) or "de"
 
-    same_room: list = []
-    elsewhere: list = []
+    candidates: list = []
     for other in list_available_characters():
         if other == character_name or other == player_char:
             continue
@@ -180,39 +182,41 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         if not other_loc or other_loc != location_id:
             continue
         other_room = get_character_current_room(other) or ""
-        if other_room == my_room:
-            same_room.append(other)
-        else:
-            elsewhere.append((other, other_room))
+        candidates.append((other, other_room))
 
     player_loc = get_character_current_location(player_char) if player_char else ""
     player_room = get_character_current_room(player_char) or "" if player_char else ""
     player_at_location = bool(player_loc and player_loc == location_id)
+    if player_char and player_at_location:
+        candidates.insert(0, (player_char, player_room))
+
+    same_room, elsewhere = ground_presence_split(my_room, candidates)
+    player_present = bool(player_char) and player_char in same_room
+    others_in_room = [o for o in same_room if o != player_char]
+    anyone_in_room = player_present or bool(others_in_room)
 
     lines: list = []
     elsewhere_lines: list = []
-    if player_char and player_at_location and player_room == my_room:
+    if player_present:
         lines.append(f"- {player_char} is present")
-    elif player_char and player_at_location:
-        elsewhere.insert(0, (player_char, player_room))
-    elif player_char:
+    elif player_char and not player_at_location:
         lines.append(
             f"- {player_char} is NOT here "
             f"(do NOT react as if {player_char} were present, "
             f"do NOT imagine an interaction with {player_char})"
         )
 
-    for other in same_room:
+    for other in others_in_room:
         other_act = get_effective_activity(other) or ""
         suffix = f" ({other_act})" if other_act else ""
         lines.append(f"- {other} is here{suffix}")
 
     for other, other_room in elsewhere:
-        room_label = get_room_name(location_id, other_room) or "another room"
+        room_label = (get_room_name(location_id, other_room)
+                      or get_ground_name(location_id, lang))
         elsewhere_lines.append(f"- {other} — in: {room_label}")
 
-    return lines, elsewhere_lines, bool(same_room or (
-        player_char and player_at_location and player_room == my_room))
+    return lines, elsewhere_lines, anyone_in_room
 
 
 def _load_events(location_id: str) -> str:

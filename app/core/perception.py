@@ -133,6 +133,25 @@ def ground_visible_rooms(perceiver_room: str) -> Optional[Tuple[str, str]]:
     return (perceiver_room, "")
 
 
+def ground_presence_split(my_room: str,
+                          others: List[Tuple[str, str]]
+                          ) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """Split a location's characters into "here" and "elsewhere".
+
+    Mirrors ``_resolve_presence``: standing ON THE GROUND (empty room) makes
+    the whole location "here", standing IN a room makes only that room "here".
+    A character on the ground, seen from inside a room, is elsewhere — but on
+    the ground, not in "another room", and the caller names it accordingly.
+
+    Pure, so ``scripts/smoke_ground_area.py`` can check it by hand.
+    """
+    if not my_room:
+        return [name for name, _ in others], []
+    here = [name for name, room in others if room == my_room]
+    away = [(name, room) for name, room in others if room != my_room]
+    return here, away
+
+
 def announce_action(character_name: str, text: str,
                     source: str = "direct_action",
                     perception_meta: Optional[Dict[str, Any]] = None,
