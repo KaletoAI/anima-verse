@@ -6,13 +6,17 @@ LOCATION edge (a road crossing the cell). Since Etappe 3 of
 step (``world_ops.move_avatar_step``) accepts an opening as a legitimate
 crossing point —
 
-- ENTERING across an edge that carries an authored opening routes the avatar
-  into the opening's linked room instead of the ``entry_room`` (fallback:
-  ``entry_room`` when the opening has no valid room link);
+- ENTERING is only possible across an edge that carries an authored opening
+  (decision 2026-08-04: a location without one cannot be entered at all). The
+  opening's room link routes the avatar; WITHOUT one the avatar lands on the
+  location's ground, in no room;
 - LEAVING across such an edge is allowed WITHOUT standing in the entry room,
   provided the avatar stands in the opening's linked room (the round trip of
   an opening entry — otherwise the avatar that walked in on the road could
-  never walk back out on it).
+  never walk back out on it) — or in NO room at all, the location's ground,
+  which is where a roomless opening puts the avatar (decision 2026-08-04: an
+  opening without a room link is an entrance too, just to no room in
+  particular).
 
 The ``entry_room`` gate stays the gameplay authority for every other edge.
 
@@ -81,14 +85,47 @@ def opening_entry_room(target: Dict[str, Any], entry_edge: str) -> str:
     return ""
 
 
-def may_leave_via_opening(current: Dict[str, Any], current_room: str,
-                          exit_edge: str) -> bool:
-    """True when the avatar may leave ``current`` across ``exit_edge`` without
-    standing in the entry room: an authored opening sits on that edge and the
-    avatar stands in its linked room. Openings without a room link do not
-    relax the gate — there is no room to judge "standing at the opening" by.
+def opening_on_edge(location: Dict[str, Any], edge: str) -> bool:
+    """True when ``location`` carries an authored opening on the WORLD ``edge``.
+
+    The room link answers "which room does it route into"; this answers "is
+    this edge a way in at all". Since the strictness decision of 2026-08-04
+    the second question stands on its own: an opening WITHOUT a room link is
+    the entrance to a location whose ground is not a room.
     """
-    if not current_room:
-        return False
-    return any(op["edge"] == exit_edge and op["room"] == current_room
-               for op in _rotated_openings(current))
+    return any(op["edge"] == edge for op in _rotated_openings(location))
+
+
+def has_entrance(location: Dict[str, Any]) -> bool:
+    """True when the location carries at least one authored opening.
+
+    The ONE source for both the step gate and the editor's warning: a location
+    nobody can reach is reported, never silently repaired.
+    """
+    return bool(_rotated_openings(location))
+
+
+def may_leave(current: Dict[str, Any], current_room: str, entry_room: str,
+              exit_edge: str) -> bool:
+    """Whether the avatar may leave ``current`` across ``exit_edge``.
+
+    Three ways out, in this order:
+
+    - across an authored opening on that edge — from its linked room (the
+      round trip of an opening entry) or from NO room at all (the location's
+      ground, which is where a roomless opening puts the avatar);
+    - from the entry room, the gameplay gate for every other edge;
+    - from anywhere when the location declares no entry room.
+
+    The middle rule is what keeps a roomless avatar out of a trap: in a
+    location without openings it may not walk out over any edge, but it can
+    always enter the entry room first and leave from there.
+    """
+    for op in _rotated_openings(current):
+        if op["edge"] != exit_edge:
+            continue
+        if not current_room or op["room"] == current_room:
+            return True
+    if not entry_room:
+        return True
+    return current_room == entry_room

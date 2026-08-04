@@ -136,17 +136,17 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
 
     # Departure gate: the avatar may only leave a location via the entry room
     # — or across an authored boundary opening while standing in that
-    # opening's linked room (contract § B1 Nr. 13; the road that crosses the
-    # cell is a legitimate way out at exactly its pass-throughs).
+    # opening's linked room, or in NO room at all, the location's ground
+    # (contract § B1 Nr. 13; the road that crosses the cell is a legitimate
+    # way out at exactly its pass-throughs).
     from app.core.boundary_entry import (
-        EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave_via_opening,
-        opening_entry_room,
+        EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave, opening_entry_room,
+        opening_on_edge,
     )
     exit_edge = EDGE_OF_DIRECTION[direction]
     cur_entry = get_entry_room_id(cur)
     cur_room = (get_character_current_room(avatar) or "").strip()
-    if cur_entry and cur_room and cur_room != cur_entry \
-            and not may_leave_via_opening(cur, cur_room, exit_edge):
+    if not may_leave(cur, cur_room, cur_entry, exit_edge):
         # Fetch the entry-room name for the message
         _entry_name = ""
         for _r in (cur.get("rooms") or []):
@@ -173,12 +173,24 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
 
     target_id = target.get("id") or ""
 
+    # Entering (decision 2026-08-04): an authored boundary opening is the ONLY
+    # way onto a location. No opening on the crossed edge, no entry — and a
+    # location without any opening cannot be entered at all. That is reported
+    # (``has_entrance`` feeds the editor's warning), never silently repaired.
+    # The opening's room link routes the avatar; WITHOUT one the avatar lands
+    # on the location's ground and is in no room, which the perception layer
+    # already reads as "the whole location" (_list_characters_in_room).
+    entry_edge = OPPOSITE_EDGE[exit_edge]
+    if not opening_on_edge(target, entry_edge):
+        from app.core.i18n import t as _t
+        from app.models.character import get_character_language
+        _lang = get_character_language(avatar) or "de"
+        raise HTTPException(status_code=403, detail={
+            "reason": "no_entrance",
+            "message": _t("There is no way in on this side.", _lang)})
+    target_entry_room = opening_entry_room(target, entry_edge)
+
     # Block rules: the avatar is subject to the same restrictions as NPCs.
-    # An authored boundary opening on the shared edge routes the avatar into
-    # its linked room instead of the entry room (§ B1 Nr. 13) — the road
-    # continues on the road, the entry room stays the gate everywhere else.
-    target_entry_room = (opening_entry_room(target, OPPOSITE_EDGE[exit_edge])
-                         or get_entry_room_id(target))
     from app.models.rules import check_leave, check_access
     ok_leave, leave_msg = check_leave(avatar)
     if not ok_leave:
@@ -190,8 +202,10 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
             detail={"reason": "block_enter", "message": enter_msg})
 
     save_character_current_location(avatar, target_id)
-    if target_entry_room:
-        save_character_current_room(avatar, target_entry_room)
+    # ALWAYS write the room, empty included: a roomless opening puts the
+    # avatar on the location's ground, and only an explicit write clears the
+    # room it came from.
+    save_character_current_room(avatar, target_entry_room)
     # A location change interrupts the running pose (otherwise the old one
     # persists at the new place). The avatar is player-controlled → clear,
     # do not reassign.
