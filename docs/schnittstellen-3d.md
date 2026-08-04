@@ -147,6 +147,16 @@
 >     2026-08-02). Versuchsbudget `count × 30`, Unterbelegung erlaubt.
 >     Identischer Seed ⇒ identische Szene in Admin-Vorschau und Client;
 >     § B5a prüft exakte Positionen gegen die von Hand gerechnete Folge.
+>     **Der wirksame Seed ist nicht immer der gespeicherte:** trägt die
+>     Location ein `variant_seed` ≠ 0 — die EINE Zahl, die ein auf die Karte
+>     gesetzter Klon besitzt —, dann leitet sich JEDER Seed dieser Location
+>     (Scatter hier wie Relief-`seed` in Nr. 14) aus
+>     `variant_mix(gespeicherter Seed, variant_seed)` ab: EIN xorshift32-Zug
+>     auf `gespeicherter Seed ⊕ (variant_seed · 0x9E3779B1 & 0xFFFFFFFF)`.
+>     Ohne `variant_seed` (fehlend oder 0) gilt der gespeicherte Seed
+>     unverändert. Grund: ein Klon erbt seine Seeds mitsamt der Vorlage und
+>     sähe ihr sonst bis zum letzten Grashalm gleich. Die Handrechnung nach
+>     § B5a rechnet mit dem wirksamen Seed.
 > 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze
 >     (Straße quert die Zelle): `[{edge: N|E|S|W, at_world: [x, z],
 >     width_m, type: "passage", room_id?, inward: [±1|0, ±1|0]}]`, Punkt
@@ -193,12 +203,17 @@
 >     Nichts wird geglättet; die Nachbarzelle interpoliert den Übergang.
 >     Sonst genau EIN xorshift32-Zug (Nr. 12, Seed 0 → 1) auf dem
 >     Raum-Hash der Position:
->     `h(i,j) = (XorShift32((seed + i·73856093 + j·19349663) & 0xFFFFFFFF)
+>     `h(i,j) = (XorShift32((seed_eff + i·73856093 + j·19349663) & 0xFFFFFFFF)
 >     .next01() · 2 − 1) · amplitude_m · k` — Welt-Meter, auf 4 Stellen
->     gerundet. Die beiden Konstanten sind Teil des Vertrags.
->     **Zwischen den Stützpunkten bilinear:** Zelle `x = min(int(u·16), 15)`,
->     `fx = u·16 − x` (analog v/j), u/v auf [0, 1] geklemmt — dieselbe Formel
->     in `scatter_curves.terrain_height` und in `@anima/scene-render`
+>     gerundet. Die beiden Konstanten sind Teil des Vertrags. `seed_eff` ist
+>     der wirksame Seed nach Nr. 12: `variant_mix(relief.seed, variant_seed)`
+>     bei einem Klon, sonst `relief.seed` unverändert.
+>     **Zwischen den Stützpunkten bilinear:** mit n = `grid.length − 1` ist
+>     `fx = clamp01(u) · n`, Zelle `i = min(int(fx), n − 1)` und `tx = fx − i`
+>     (analog v/j/fy) — kein festes Raster, sondern immer das GELIEFERTE.
+>     Ein Sample genau auf der Ostkante (u = 1) fällt damit in die letzte
+>     Zelle mit tx = 1 und liest den Randstützpunkt. Dieselbe Formel in
+>     `scatter_curves.terrain_height` und in `@anima/scene-render`
 >     (`sampleTerrain`), § B5a-prüfbar von Hand.
 >     **Payload:** `scene.terrain = {step, grid, amplitude_m}`, nur wenn
 >     `relief` gesetzt ist; `amplitude_m` ist hier bereits × k.

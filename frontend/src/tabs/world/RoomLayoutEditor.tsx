@@ -1378,8 +1378,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               value={map3d.relief.wave_m ?? ''}
               onChange={(e) => {
                 const v = Number(e.target.value)
+                // Clamped to the SERVER's window (1…200 m, 2 decimals — the
+                // relief block of _sanitize_map3d). `min`/`max` do not stop a
+                // typed value, and the sanitizer drops a wave width outside
+                // its window entirely, falling back to the default grid — so
+                // an unclamped 0.5 would let the caption promise swells the
+                // server never builds.
                 const wave = e.target.value.trim() && Number.isFinite(v) && v > 0
-                  ? v : undefined
+                  ? Math.round(Math.min(200, Math.max(1, v)) * 100) / 100
+                  : undefined
                 onMap3d('relief', { ...map3d.relief!, wave_m: wave })
               }}
             />
