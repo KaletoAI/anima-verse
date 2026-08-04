@@ -529,8 +529,12 @@ export function FieldModel3D({ character }: { character: string }) {
               above only repeats what the container claims. */}
           {measured ? (
             <div className="ga-hint">
+              {/* Named axes, not three bare numbers: the height is the third
+                  one, and read as the first it looks like the figure is the
+                  wrong size when it is only the width. */}
               <span title={t('Raw size of the mesh as stored. The 3D client scales every figure to the character height, so this is not the size on screen.')}>
-                {`${t('measured')}: ${(measured.dims_m || []).map((v) => v.toFixed(2)).join(' × ')} m`}
+                {`${t('measured')}: ${t('h')} ${(measured.dims_m?.[2] ?? 0).toFixed(2)} m`}
+                {` · ${t('w')} ${(measured.dims_m?.[0] ?? 0).toFixed(2)} · ${t('d')} ${(measured.dims_m?.[1] ?? 0).toFixed(2)}`}
               </span>
               {measured.tris ? ` · ${measured.tris.toLocaleString()} ${t('tris')}` : ''}
               {measured.bones
