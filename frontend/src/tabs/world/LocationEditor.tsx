@@ -582,6 +582,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           locationId={location.id}
           map3d={draft.map3d}
           onMap3d={updMap3d}
+          hasEntrance={location.has_entrance}
           onSelectRoom={setFloorRoomSel}
           scene={scene}
           calibrationRoomId={calibration?.roomId || ''}

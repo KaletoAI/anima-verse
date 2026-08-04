@@ -269,9 +269,14 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
             filtered.append(loc)
         locations = filtered
 
+    from app.core.boundary_entry import has_entrance
     for loc in locations:
         loc_id = loc.get("id", "")
         loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
+        # Without an authored pass-through the location cannot be entered at
+        # all (decision 2026-08-04). The rule lives in ONE function; the
+        # editor only displays what it says.
+        loc["has_entrance"] = has_entrance(loc)
     return {"locations": locations}
 
 

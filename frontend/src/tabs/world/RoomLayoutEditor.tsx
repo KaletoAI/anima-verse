@@ -76,6 +76,10 @@ interface RoomLayoutEditorProps {
    *  the elevator position (AV3D-12) in it. */
   map3d?: Map3D
   onMap3d?: <K extends keyof Map3D>(key: K, value: Map3D[K] | undefined) => void
+  /** Server verdict (Location.has_entrance): does this location carry any
+   *  boundary pass-through at all? Without one it cannot be entered — the
+   *  boundary-openings section warns with it, it does not re-derive the rule. */
+  hasEntrance?: boolean
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
   onSelectRoom?: (roomId: string) => void
@@ -111,7 +115,7 @@ type DragState =
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
 interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -2092,10 +2096,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       </div>
       <PlanScaleBar planWidthM={planW} canvasPx={canvasPx} />
       {/* Boundary pass-throughs (plan-area-detail-scenes.md): building-level
-          data, so the rows live under the plan, not in the room panel. */}
-      {onMap3d && map3d?.area_detail && map3d?.boundary_openings?.length ? (
+          data, so the rows live under the plan, not in the room panel. Also
+          shown with zero openings when the server reports no entrance at
+          all (has_entrance false) — that is exactly where one gets added. */}
+      {onMap3d && map3d?.area_detail
+        && (map3d?.boundary_openings?.length || hasEntrance === false) ? (
         <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
           <div className="ga-form-section-label">{t('Boundary pass-throughs')}</div>
+          {hasEntrance === false ? (
+            <div className="ga-anchor-banner">
+              <span>⚠ {t('No pass-through: this location cannot be entered. Add one below.')}</span>
+            </div>
+          ) : null}
           {(map3d.boundary_openings || []).map((bo, i) => {
             const write = (patch: Partial<typeof bo>) =>
               onMap3d('boundary_openings', (map3d.boundary_openings || [])

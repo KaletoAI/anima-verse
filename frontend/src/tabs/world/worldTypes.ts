@@ -265,6 +265,9 @@ export interface Location {
   event_settings?: EventSettings
   terrain?: string
   map3d?: Map3D
+  /** Server verdict: does this location carry any boundary pass-through?
+   *  Without one it cannot be entered — the editor warns, it does not judge. */
+  has_entrance?: boolean
 }
 
 // Suggested values only — both fields accept free text (the consuming map
