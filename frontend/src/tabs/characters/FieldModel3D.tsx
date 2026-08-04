@@ -17,6 +17,23 @@ import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from './Model3DViewer'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
 
+/** What Blender measured in the actual geometry — as opposed to what the
+ *  file's header claims. Absent until the model has been measured. */
+interface Model3DMeasured {
+  /** world-space bounding box [x, y, z] in metres */
+  dims_m?: number[]
+  /** lowest point; 0 means the model stands on the ground plane */
+  min_z?: number
+  tris?: number
+  verts?: number
+  bones?: number
+  mixamo_bones?: number
+  /** 0 with vertex_colors > 0 = colour lives in the vertices, no UVs */
+  uv_layers?: number
+  vertex_colors?: number
+  at?: string
+}
+
 interface Model3DInfo {
   filename?: string
   /** signature of the SERVED file (nearest match: another combination's) */
@@ -32,6 +49,7 @@ interface Model3DInfo {
   backend?: string
   source?: string
   source_filename?: string
+  measured?: Model3DMeasured
 }
 
 interface MeshBackend {
@@ -57,6 +75,8 @@ interface Model3DStatus {
   animation_sets?: string[]
   animation_set_derived?: string
   pending?: boolean
+  /** Local Blender install — decides whether measuring is offered at all. */
+  blender?: { enabled?: boolean; executable?: string; version?: string; usable?: boolean }
 }
 
 interface AnimationClip {
@@ -276,6 +296,21 @@ export function FieldModel3D({ character }: { character: string }) {
     [enc, load, t, toast],
   )
 
+  // Measuring reads the geometry with Blender; it never modifies the mesh, so
+  // it needs no confirmation and no ownership of the combination.
+  const measure = useCallback(async () => {
+    setBusy(true)
+    try {
+      await apiPost(`/characters/${enc}/model3d/measure?force=1`, {})
+      await load()
+      toast(t('Measured'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [enc, load, t, toast])
+
   const remove = useCallback(async () => {
     if (!confirmDelete) {
       setConfirmDelete(true)
@@ -297,6 +332,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const owned = !!model && model.match !== 'nearest'
   const pending = !!st.pending || busy
   const sizeMb = model?.size ? (model.size / (1024 * 1024)).toFixed(1) : ''
+  const measured = model?.measured
+  const canMeasure = !!st.blender?.usable
   // Only a Mixamo rig can play the shared clips (humanoid characters).
   const mixamo = (model?.rig || st.rig) !== 'generic'
   const bust = model?.created_at || st.signature || ''
@@ -409,6 +446,25 @@ export function FieldModel3D({ character }: { character: string }) {
             {model.created_at ? ` · ${new Date(model.created_at).toLocaleString()}` : ''}
             {model.source_filename ? ` · ${model.source_filename}` : ''}
           </div>
+          {/* What is actually IN the file, measured by Blender — the line
+              above only repeats what the container claims. */}
+          {measured ? (
+            <div className="ga-hint">
+              <span title={t('Raw size of the mesh as stored. The 3D client scales every figure to the character height, so this is not the size on screen.')}>
+                {`${t('measured')}: ${(measured.dims_m || []).map((v) => v.toFixed(2)).join(' × ')} m`}
+              </span>
+              {measured.tris ? ` · ${measured.tris.toLocaleString()} ${t('tris')}` : ''}
+              {measured.bones
+                ? ` · ${measured.bones} ${t('bones')}${measured.mixamo_bones ? ' (mixamo)' : ''}`
+                : ''}
+              {measured.uv_layers === 0 && (measured.vertex_colors || 0) > 0
+                ? ` · ${t('no UVs, colour in the vertices')}`
+                : ''}
+              {typeof measured.min_z === 'number' && Math.abs(measured.min_z) > 0.01
+                ? ` · ${t('centred on the origin, not standing on the ground')}`
+                : ''}
+            </div>
+          ) : null}
           {/* Rig only means something for an UPLOAD — a generated model's
               skeleton is fixed by the backend alias. It decides whether the
               shared clips apply. (owned: the rig update writes the CURRENT
@@ -500,6 +556,19 @@ export function FieldModel3D({ character }: { character: string }) {
           <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file`} download>
             {t('Download')}
           </a>
+        ) : null}
+        {/* Reads the geometry with Blender — never writes the mesh, so it is
+            offered for a nearest stand-in too. */}
+        {model && canMeasure ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={pending}
+            onClick={measure}
+            title={t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')}
+          >
+            {t('Measure')}
+          </button>
         ) : null}
         {/* Delete targets the CURRENT combination's entry — a nearest
             stand-in belongs to another combination and has none to delete. */}

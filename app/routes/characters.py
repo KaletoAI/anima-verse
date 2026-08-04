@@ -1524,6 +1524,24 @@ async def set_character_model3d_rig(character_name: str, request: Request) -> Di
     return meta
 
 
+@router.post("/{character_name}/model3d/measure")
+def measure_character_model3d(character_name: str,
+                              force: bool = False) -> Dict[str, Any]:
+    """Measures the served model with Blender and caches it in the sidecar.
+
+    Reads only — the mesh is never modified. Generated and uploaded models are
+    measured on arrival, so this is for stored models from before, or after a
+    change that kept the file size identical (``force``).
+    """
+    from app.core.model3d import measure_model
+    res = measure_model(character_name, force=force)
+    if not res.get("ok"):
+        err = res.get("error", "")
+        raise HTTPException(status_code=404 if err == "no_model" else 503,
+                            detail=err or "measurement failed")
+    return res
+
+
 @router.post("/{character_name}/model3d/generate")
 def generate_character_model3d(character_name: str, force: bool = False,
                                backend: str = "", face_num: int = 0,

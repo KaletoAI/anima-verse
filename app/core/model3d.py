@@ -307,6 +307,11 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 info["backend"] = meta.get("backend", "")
                 info["source_filename"] = meta.get("source_filename", "")
                 info["face_num"] = meta.get("face_num")
+                # Measured geometry, if this model has been through Blender.
+                # Read from the sidecar only — the info route is polled, and
+                # measuring costs a subprocess.
+                if meta.get("measured"):
+                    info["measured"] = meta["measured"]
                 if meta.get("rig"):
                     info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):
@@ -320,6 +325,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 info["texture_size"] = tex.stat().st_size
         out["model"] = info
     out["options"] = get_model3d_options(character_name)
+    from app.blender import runner
+    out["blender"] = runner.status()
     out.update(list_mesh_backends(rig))
     with _lock:
         out["pending"] = character_name in _generating
@@ -363,11 +370,73 @@ def save_uploaded_model(character_name: str, original_filename: str,
         "pieces": dict(pieces or {}),
         "items": list(items or []),
     }
+    _attach_measurement(meta, target)
     target.with_suffix(".json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
                 character_name, target.name, len(contents), signature)
     return meta
+
+
+def _attach_measurement(meta: Dict[str, Any], path: Path) -> None:
+    """Measures the stored file with Blender and puts the numbers in ``meta``.
+
+    Best-effort by design: a host without Blender, a disabled refinement or a
+    script failure must never cost a model that was just generated. The mesh
+    itself is not touched — this only reads.
+    """
+    from app.blender import runner
+    res = runner.run("measure", inputs={"model": path})
+    if not res.get("ok"):
+        logger.debug("Model3D %s: nicht vermessen (%s)", path.name,
+                     res.get("error"))
+        return
+    data = dict(res["data"])
+    data["at"] = utc_now_iso()
+    data["blender"] = runner.version()
+    meta["measured"] = data
+
+
+def measure_model(character_name: str, signature: Optional[str] = None, *,
+                  force: bool = False) -> Dict[str, Any]:
+    """Real geometry of a stored model — world-space size, triangles, bone
+    names, whether UVs exist — measured by Blender and cached in the sidecar.
+
+    What the GLB header claims and what the geometry IS are two different
+    things; this is the second one. Cached against the file size, so a
+    replaced model is re-measured on its own and ``force`` is only needed
+    after a change that keeps the size identical.
+
+    ``signature`` None = whatever is currently SERVED (which may be a nearest
+    stand-in, exactly as the viewer shows it).
+    """
+    path = (find_model3d(character_name, signature) if signature
+            else find_model3d_serving(character_name)[0])
+    if not path:
+        return {"ok": False, "error": "no_model"}
+    meta_path = path.with_suffix(".json")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) \
+            if meta_path.exists() else {}
+    except (OSError, ValueError):
+        meta = {}
+    cached = meta.get("measured") or {}
+    if cached and not force and cached.get("file_bytes") == path.stat().st_size:
+        return {"ok": True, "cached": True, "measured": cached}
+    _attach_measurement(meta, path)
+    if not meta.get("measured"):
+        from app.blender import runner
+        st = runner.status()
+        return {"ok": False,
+                "error": "blender is disabled" if not st["enabled"]
+                else ("no blender executable found" if not st["executable"]
+                      else "measurement failed")}
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    except OSError as e:
+        logger.warning("Model3D %s: Messung nicht gespeichert: %s", path.name, e)
+    return {"ok": True, "cached": False, "measured": meta["measured"]}
 
 
 def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
@@ -581,6 +650,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # T-pose render this mesh comes from already recorded it, so the
         # source of truth is copied rather than derived a second time.
         meta.update(_ref_manifest(src))
+        _attach_measurement(meta, path)
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
