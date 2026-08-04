@@ -260,6 +260,21 @@
   border-color: rgba(176, 125, 58, 0.75);
 }
 
+/* The stage-6 panels act through .ga-btn. It gets the chip's brass rather
+   than the primary's, because these are ordinary actions in a list ("give",
+   "drop", "load more") and not the one button a panel is about. */
+#hud .ga-btn,
+#hud ~ .ga-modal-backdrop .ga-btn {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.06), rgba(0, 0, 0, 0.2));
+  border-color: rgba(242, 205, 110, 0.28);
+  color: #d5cbb4;
+}
+#hud .ga-btn:hover:not(:disabled),
+#hud ~ .ga-modal-backdrop .ga-btn:hover:not(:disabled) {
+  border-color: rgba(242, 205, 110, 0.6);
+  color: var(--hud-gold);
+}
+
 /* ---- Game menu: brass rails and pressed keys (E4-T4) ------------------
  * The section headings take the gold small-caps of the panel heads, so the
  * menu reads as part of the same set. The sliders are the one place where a

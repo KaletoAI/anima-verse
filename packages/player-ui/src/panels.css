@@ -96,3 +96,13 @@
   gap: 4px;
 }
 .player-empty-sm .player-empty-title { font-size: 0.85em; }
+
+/* Task panel: the "still running" pulse. Moved verbatim out of
+   frontend/src/player/player.css with TaskPanel in stage 6. */
+.player-task-pulse {
+  animation: player-task-pulse 1.4s ease-in-out infinite;
+}
+@keyframes player-task-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}

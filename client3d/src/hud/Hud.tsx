@@ -2,16 +2,22 @@
  * HUD v1 of the 3D client (plan-3d-game stage 2, tasks 5 + 6). hud.css carries
  * the structure, theme-fantasy.css the look (variables redefined under #hud).
  *
- * Layout: a right-edge rail with four toggle buttons (chat/self/others/menu),
- * the chat as a docked panel bottom-left, the others as a right-side dock
- * column. The root never catches the pointer — only rail and panels do
- * (hud.css), so camera dragging on the canvas keeps working everywhere else.
+ * Layout: a right-edge rail of toggle buttons, the chat as a docked panel
+ * bottom-left, everything else as a right-side dock column. The root never
+ * catches the pointer — only rail and panels do (hud.css), so camera dragging
+ * on the canvas keeps working everywhere else.
+ *
+ * Stage 6 added the remaining /play panels (inventory, mind, phone, news,
+ * tasks) to that rail. They are the identical components out of
+ * `@anima/player-ui` and poll themselves, so the frame is all this file adds;
+ * `requires` on a rail entry hides the button when the bound skill package is
+ * gone, the same gating /play does.
  *
  * This container owns the ONE `/play/scene` poll (same contract as PlayerApp
  * in /play): ScenePanel receives data + refresh as props and never polls
  * itself. The `photoDialog` slot is deliberately NOT set — the 📷 scene-photo
- * button is absent in HUD v1 (the image-gen dialog lives in the game-admin
- * UI); open point for stage 6.
+ * button is absent (the image-gen dialog lives in the game-admin UI); still
+ * open, together with gallery/instagram which depend on that same dialog.
  *
  * The CHAT panel additionally runs in an auto mode (E3 acceptance) — it shows
  * itself when something is said and withdraws when the room stays silent; see
@@ -21,6 +27,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon,
   ScenePanel, SelfPanel, OthersPanel,
+  BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
@@ -42,15 +49,31 @@ import './hud.css';
 // overrides the plain rules of hud.css, so it must come last.
 import './theme-fantasy.css';
 
-type PanelId = 'chat' | 'self' | 'others' | 'menu';
+type PanelId = 'chat' | 'self' | 'others' | 'menu'
+  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks';
 
-const PANELS: Array<{ id: PanelId; icon: IconName; title: string }> = [
+/** `requires` = the skill id the panel is bound to, exactly as in /play's
+ *  PANEL_META: without the skill package the button is gone, so removing a
+ *  package degrades the HUD by itself instead of leaving a dead button. */
+const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: string }> = [
   { id: 'chat', icon: 'chat', title: 'Chat' },
   { id: 'self', icon: 'self', title: 'Self' },
   { id: 'others', icon: 'others', title: 'Others' },
+  { id: 'belongings', icon: 'backpack', title: 'Inventory' },
+  { id: 'mind', icon: 'brain', title: 'Mind' },
+  { id: 'phone', icon: 'phone', title: 'Phone', requires: 'send_message' },
+  { id: 'news', icon: 'news', title: 'News' },
+  { id: 'tasks', icon: 'tasks', title: 'Tasks' },
   // The package's gear (`settings`) — no icon of our own was added for this.
   { id: 'menu', icon: 'settings', title: 'Menu' },
 ];
+
+/** The panels that are a full reading surface rather than a status strip.
+ *  At most ONE of them is open: the dock is one column of fixed height, and
+ *  five 120px minimums plus self/others/menu do not fit on any screen — they
+ *  would silently spill past the bottom edge. Opening one therefore closes
+ *  the other four; self/others/menu keep stacking freely as before. */
+const CONTENT_PANELS = new Set<PanelId>(['belongings', 'mind', 'phone', 'news', 'tasks']);
 
 /** The prefs fields that are a volume. Each is named exactly like the audio
  *  bus it drives, so applying one is a lookup and not a mapping table. */
@@ -74,6 +97,7 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
+    belongings: false, mind: false, phone: false, news: false, tasks: false,
   });
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
@@ -92,7 +116,14 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
   const chatRef = useRef<HTMLElement | null>(null);
   const toggle = useCallback((id: PanelId) => {
     if (id === 'chat') setChatPinned(!chatOpen.current);
-    setOpen((o) => ({ ...o, [id]: !o[id] }));
+    setOpen((o) => {
+      const next = { ...o, [id]: !o[id] };
+      // Opening a content panel closes its siblings — see CONTENT_PANELS.
+      if (!o[id] && CONTENT_PANELS.has(id)) {
+        for (const other of CONTENT_PANELS) if (other !== id) next[other] = false;
+      }
+      return next;
+    });
   }, []);
 
   // --- Game menu (E4-T4) ---------------------------------------------------
@@ -406,7 +437,7 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
       )}
 
       <nav className="hud-rail">
-        {PANELS.map((p) => (
+        {PANELS.filter((p) => !p.requires || hasCapability(p.requires)).map((p) => (
           <button key={p.id} className={open[p.id] ? 'on' : ''}
             onClick={() => toggle(p.id)} aria-pressed={open[p.id]}
             title={t(p.title)} aria-label={t(p.title)}>
@@ -424,7 +455,8 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
         </section>
       )}
 
-      {(open.self || open.others || open.menu) && (
+      {(open.self || open.others || open.menu || open.belongings || open.mind
+        || open.phone || open.news || open.tasks) && (
         <div className="hud-dock">
           {/* Esc and M are handled HERE as well, not only in main.ts: the
               global key path ignores anything typed into a form control, and a
@@ -464,6 +496,41 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
             <section className="hud-panel">
               {panelHead('others', 'others', t('Others'))}
               <div className="hud-panel-body"><OthersPanel /></div>
+            </section>
+          )}
+          {/* The content panels (stage 6). They are the SAME components /play
+              renders — they poll themselves and take no scene data, so there
+              is nothing to wire beyond the frame. Only one of them is ever
+              mounted at a time (CONTENT_PANELS), which also keeps their polls
+              from all running at once. */}
+          {open.belongings && (
+            <section className="hud-panel">
+              {panelHead('belongings', 'backpack', t('Inventory'))}
+              <div className="hud-panel-body"><BelongingsPanel /></div>
+            </section>
+          )}
+          {open.mind && (
+            <section className="hud-panel">
+              {panelHead('mind', 'brain', t('Mind'))}
+              <div className="hud-panel-body"><MindPanel character={avatarName} /></div>
+            </section>
+          )}
+          {open.phone && (
+            <section className="hud-panel">
+              {panelHead('phone', 'phone', t('Phone'))}
+              <div className="hud-panel-body"><PhonePanel /></div>
+            </section>
+          )}
+          {open.news && (
+            <section className="hud-panel">
+              {panelHead('news', 'news', t('News'))}
+              <div className="hud-panel-body"><NewsPanel /></div>
+            </section>
+          )}
+          {open.tasks && (
+            <section className="hud-panel">
+              {panelHead('tasks', 'tasks', t('Tasks'))}
+              <div className="hud-panel-body"><TaskPanel /></div>
             </section>
           )}
         </div>

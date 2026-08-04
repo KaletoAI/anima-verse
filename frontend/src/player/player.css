@@ -400,13 +400,8 @@
   40% { opacity: 1; }
 }
 /* Pulsierender Punkt vor laufenden LLM-Tasks im Task-Panel. */
-.player-task-pulse {
-  animation: player-task-pulse 1.4s ease-in-out infinite;
-}
-@keyframes player-task-pulse {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 1; }
-}
+/* .player-task-pulse moved to @anima/player-ui/panels.css together with
+   TaskPanel (stage 6). */
 
 /* The shared empty state (.player-empty*) now lives in
    @anima/player-ui/panels.css, because EmptyState itself sits in the package.

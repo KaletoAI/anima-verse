@@ -420,6 +420,25 @@
 }
 .ga-input:focus { outline: none; border-color: var(--accent, #6aa9ff); }
 
+/* The stage-6 panels (inventory, mind, phone, news, tasks) act through
+   .ga-btn and explain themselves with .ga-hint — both defined only in the
+   frontend's game-admin.css, so without these the buttons would be unstyled
+   browser chrome inside the HUD. Same rule as .ga-input above: plain and
+   functional here, the brass pass lives in theme-fantasy.css. */
+.ga-btn {
+  font: inherit;
+  color: inherit;
+  background: var(--bg-container, #161b22);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.ga-btn:hover:not(:disabled) { border-color: var(--accent, #6aa9ff); }
+.ga-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ga-btn-sm { padding: 3px 8px; font-size: 12px; }
+.ga-hint { color: var(--text-muted, #8b949e); font-size: 12px; }
+
 .ga-toast {
   position: fixed;
   bottom: 16px;
