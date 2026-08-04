@@ -157,14 +157,20 @@
 >     Eintritts-Nähe des „Betreten"-Angebots — Weltposition = Kachelzentrum
 >     + `at_world`, mehr rechnet kein Renderer (der Server hat auch die
 >     `tile_rotation` nach Nr. 15 bereits eingerechnet). Und der SERVER
->     akzeptiert den Avatar-Schritt über eine Kante mit autorisiertem
->     Opening als legitimen Übergang (`app/core/boundary_entry.py`,
->     verdrahtet in `world_ops.move_avatar_step`): der Eintritt routet in
->     den verknüpften Raum (`room`, sonst `entry_room`), das Verlassen ist
->     aus dem verknüpften Raum heraus ohne Entry-Room erlaubt. Für jede
->     andere Kante bleibt das `entry_room`-Gate unverändert die
->     Gameplay-Instanz; ohne Raum-Link ändert ein Opening am Gate nichts.
->     Der Journey-Durchlauf ist weiterhin eine spätere Etappe.
+>     erlaubt den Avatar-Schritt nur über eine Kante mit autorisiertem
+>     Opening (`app/core/boundary_entry.py`, verdrahtet in
+>     `world_ops.move_avatar_step`) — eine Kante ohne Opening ist kein
+>     Übergang mehr, und eine Location ohne jede Opening ist überhaupt nicht
+>     betretbar (403 `no_entrance`, Entscheidung 2026-08-04: sonst wäre ein
+>     Ort ohne Autoren-Öffnung heimlich über jede Kante begehbar). Der
+>     Eintritt routet in den verknüpften Raum (`room`); eine Opening OHNE
+>     `room` ist trotzdem gültig — sie ist der Eingang zu einer Location,
+>     deren Boden kein Raum ist, und der Avatar steht danach in keinem Raum.
+>     Das Verlassen ist aus dem verknüpften Raum heraus oder aus keinem Raum
+>     ohne Entry-Room erlaubt (der Rundweg derselben Opening); für jede
+>     andere Kante bleibt das `entry_room`-Gate beim Verlassen unverändert
+>     die Gameplay-Instanz. Der Journey-Durchlauf ist weiterhin eine
+>     spätere Etappe.
 > 14. **`scene.terrain` — deterministisches Geländerelief.** Ohne Diorama ist
 >     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed}` (nur
 >     zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5 REALE
