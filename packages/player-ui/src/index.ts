@@ -14,6 +14,7 @@ export * from './ScenePanel';
 export * from './SelfPanel';
 export * from './OthersPanel';
 // Stage 6: the remaining /play panels, so the 3D HUD shows the identical ones.
+export * from './ErrorBoundary';
 export * from './BelongingsPanel';
 export * from './MindThoughtsSection';
 export * from './MindPanel';

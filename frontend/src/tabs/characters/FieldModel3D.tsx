@@ -442,9 +442,10 @@ export function FieldModel3D({ character }: { character: string }) {
             clipUrl={mixamo ? clipUrl : ''}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
           />
-          {/* Only shown once a distance mesh exists — otherwise there is
-              nothing to compare and the control would be a dead end. */}
-          {hasLow ? (
+          {/* Shown whenever Blender is around, not only once a distance mesh
+              exists: asking for one that is missing is what makes the server
+              build it. The button says so, and a reload has it. */}
+          {canMeasure && model.format === 'glb' ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Showing')}</span>
               <button
@@ -465,6 +466,11 @@ export function FieldModel3D({ character }: { character: string }) {
                 {t('Distance')}
                 {model.low_tris ? ` · ${model.low_tris.toLocaleString()}` : ''}
               </button>
+              {!hasLow ? (
+                <span className="ga-hint">
+                  {t('none built yet — asking for it starts the build, reload in a moment')}
+                </span>
+              ) : null}
             </div>
           ) : null}
           {/* The clips of THIS character's set (+ the setless fallbacks). */}

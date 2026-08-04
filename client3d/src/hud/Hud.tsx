@@ -25,7 +25,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  apiGet, apiPost, usePoll, useI18n, useToast, Icon,
+  apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel,
   type SceneData, type SceneLine, type IconName,
@@ -74,6 +74,14 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
  *  would silently spill past the bottom edge. Opening one therefore closes
  *  the other four; self/others/menu keep stacking freely as before. */
 const CONTENT_PANELS = new Set<PanelId>(['belongings', 'mind', 'phone', 'news', 'tasks']);
+
+/** Panels that need more than the dock's 320px (user finding, acceptance of
+ *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
+ *  a navigation column NEXT to its content and folds that column down to bare
+ *  icons below 340px — in a 320px dock it was never anything else. Widening
+ *  the dock to 480 (half again) is what makes both readable; only one content
+ *  panel is ever open, so the column can follow the one that is. */
+const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind']);
 
 /** The prefs fields that are a volume. Each is named exactly like the audio
  *  bus it drives, so applying one is a lookup and not a mapping table. */
@@ -457,14 +465,17 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
         <section ref={chatRef}
           className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}>
           {panelHead('chat', 'chat', avatarName || '—')}
-          <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
-            hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom} />
+          <ErrorBoundary inline label="Chat">
+            <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
+              hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom} />
+          </ErrorBoundary>
         </section>
       )}
 
       {(open.self || open.others || open.menu || open.belongings || open.mind
         || open.phone || open.news || open.tasks) && (
-        <div className="hud-dock">
+        <div className={'hud-dock'
+          + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}>
           {/* Esc and M are handled HERE as well, not only in main.ts: the
               global key path ignores anything typed into a form control, and a
               volume slider is one — so after touching a slider the keys would
@@ -487,22 +498,28 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
               }}>
               {panelHead('menu', 'settings', t('Menu'))}
               <div className="hud-panel-body">
-                <GameMenu prefs={prefs} onChange={setPrefs}
-                  perfOn={perfOn} onPerfChange={setPerfOn}
-                  onBackToTitle={() => gameActions.backToTitle?.()} />
+                <ErrorBoundary inline label="Menu">
+                  <GameMenu prefs={prefs} onChange={setPrefs}
+                    perfOn={perfOn} onPerfChange={setPerfOn}
+                    onBackToTitle={() => gameActions.backToTitle?.()} />
+                </ErrorBoundary>
               </div>
             </section>
           )}
           {open.self && (
             <section className="hud-panel">
               {panelHead('self', 'self', avatarName || t('Self'))}
-              <div className="hud-panel-body"><SelfPanel /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Self"><SelfPanel /></ErrorBoundary>
+              </div>
             </section>
           )}
           {open.others && (
             <section className="hud-panel">
               {panelHead('others', 'others', t('Others'))}
-              <div className="hud-panel-body"><OthersPanel /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Others"><OthersPanel /></ErrorBoundary>
+              </div>
             </section>
           )}
           {/* The content panels (stage 6). They are the SAME components /play
@@ -513,31 +530,41 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
           {open.belongings && (
             <section className="hud-panel">
               {panelHead('belongings', 'backpack', t('Inventory'))}
-              <div className="hud-panel-body"><BelongingsPanel /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Inventory"><BelongingsPanel /></ErrorBoundary>
+              </div>
             </section>
           )}
           {open.mind && (
             <section className="hud-panel">
               {panelHead('mind', 'brain', t('Mind'))}
-              <div className="hud-panel-body"><MindPanel character={avatarName} /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Mind"><MindPanel character={avatarName} /></ErrorBoundary>
+              </div>
             </section>
           )}
           {open.phone && (
             <section className="hud-panel">
               {panelHead('phone', 'phone', t('Phone'))}
-              <div className="hud-panel-body"><PhonePanel /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Phone"><PhonePanel /></ErrorBoundary>
+              </div>
             </section>
           )}
           {open.news && (
             <section className="hud-panel">
               {panelHead('news', 'news', t('News'))}
-              <div className="hud-panel-body"><NewsPanel /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="News"><NewsPanel /></ErrorBoundary>
+              </div>
             </section>
           )}
           {open.tasks && (
             <section className="hud-panel">
               {panelHead('tasks', 'tasks', t('Tasks'))}
-              <div className="hud-panel-body"><TaskPanel /></div>
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Tasks"><TaskPanel /></ErrorBoundary>
+              </div>
             </section>
           )}
         </div>

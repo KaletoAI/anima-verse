@@ -364,6 +364,13 @@
 #hud:has(~ .info-panel:not([hidden])) .hud-dock {
   --dock-right: clamp(62px, 100vw - 1184px, 324px);
 }
+/* Inventory and Mind get half again (user finding, stage 6 part 1): the
+   inventory is a table of item rows, and MindPanel folds its navigation
+   column down to bare icons below 340px — in a 320px dock it never showed a
+   label. `max-width` keeps the same guard against a narrow window. */
+#hud .hud-dock.hud-dock-wide {
+  width: 480px;
+}
 #hud .hud-dock .hud-panel {
   flex: 1 1 0;
   min-height: 120px;

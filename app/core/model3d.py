@@ -508,6 +508,7 @@ def save_uploaded_model(character_name: str, original_filename: str,
     # then measure, so the numbers describe what will be served.
     _auto_retexture(character_name, target, meta)
     _attach_measurement(meta, target)
+    request_lod(character_name, target)
     target.with_suffix(".json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
@@ -929,6 +930,11 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # AFTER the re-encode: the numbers have to describe the file that is
         # actually served, not the one the backend handed over.
         _attach_measurement(meta, path)
+        # And the distance mesh right away — waiting for someone to ask means
+        # the first viewer at range gets the full mesh for nothing, and the
+        # build costs under a second against the minutes this generation just
+        # took.
+        request_lod(character_name, path)
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
