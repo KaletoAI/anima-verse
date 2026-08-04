@@ -897,7 +897,10 @@ async function startApp(username: string) {
   // AV3D-8: room_id kommt direkt mit der Worldmap; dazu die Clip-Set-Kette
   function takeRoomsFrom(map: WorldMap) {
     for (const c of map.characters) {
-      if (c.room_id) roomOf.set(c.name, c.room_id);
+      // An empty room_id is the location's GROUND, not a missing answer — it
+      // must overwrite whatever room this character was in before, or the
+      // client keeps believing it stands in a room of the PREVIOUS location.
+      roomOf.set(c.name, c.room_id ?? '');
       figures.setCharacterSets(c.name, c.animation_sets);
       figures.setCharacterHeight(c.name, c.height_cm);
     }
@@ -1387,8 +1390,12 @@ async function startApp(username: string) {
       // poll and adopts the nearest room centre out of nothing, which walks
       // the avatar straight out of the entry room it was just placed in; the
       // step back out then earns a `not_at_entry_room` 403.
+      // An empty room_id is the location's GROUND, not a missing answer — it
+      // must overwrite roomOf unconditionally, or the avatar keeps the room
+      // of the location it just left. `enterThroughDoor` stays gated on an
+      // actual room, since there is no door onto the ground to walk through.
+      roomOf.set(avatarName, moved.room_id ?? '');
       if (moved.room_id) {
-        roomOf.set(avatarName, moved.room_id);
         enterThroughDoor(to, moved.room_id);
       }
     } catch (e) {
