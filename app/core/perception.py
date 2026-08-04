@@ -113,6 +113,26 @@ def _resolve_presence(location_id: str, room_id: str) -> Tuple[List[str], List[s
     return room_members, location_others
 
 
+def ground_visible_rooms(perceiver_room: str) -> Optional[Tuple[str, str]]:
+    """Which rooms' lines a perceiver sees — None for "every room".
+
+    The EMPTY room id addresses a location's GROUND: the area no room takes
+    up. The earshot has always read it that way (``_resolve_presence`` with an
+    empty room resolves to the whole location), and this is the same rule for
+    the transcript:
+
+    - a perceiver on the ground sees every room of its location (``None``);
+    - a perceiver inside a room sees that room AND the ground — someone
+      standing outside is heard inside, so their line has to be readable
+      there too.
+
+    Pure, so ``scripts/smoke_ground_area.py`` can check it by hand.
+    """
+    if not perceiver_room:
+        return None
+    return (perceiver_room, "")
+
+
 def announce_action(character_name: str, text: str,
                     source: str = "direct_action",
                     perception_meta: Optional[Dict[str, Any]] = None,
