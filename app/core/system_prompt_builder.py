@@ -154,8 +154,10 @@ def _format_presence_block(location_name: str, presence_lines: list,
 
 def _load_presence(character_name: str, location_id: str) -> tuple:
     """Build ``(presence_lines, elsewhere_lines, anyone_in_room)`` for the
-    active world. ``presence_lines`` = people in the character's ROOM,
-    ``elsewhere_lines`` = people in other rooms of this location.
+    active world. ``presence_lines`` = people within reach — the character's
+    ROOM plus everyone standing on the location's ground, exactly as the
+    earshot counts them (``perception.ground_presence_split``);
+    ``elsewhere_lines`` = people in OTHER rooms of this location.
     Returns ([], [], False) when no location."""
     if not location_id:
         return [], [], False
@@ -164,15 +166,13 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         list_available_characters,
         get_character_current_location,
         get_character_current_room,
-        get_character_language,
         get_effective_activity)
     from app.models.account import get_active_character
-    from app.models.world import get_room_name, get_ground_name
+    from app.models.world import get_room_name
     from app.core.perception import ground_presence_split
 
     my_room = get_character_current_room(character_name) or ""
     player_char = get_active_character()
-    lang = get_character_language(character_name) or "de"
 
     candidates: list = []
     for other in list_available_characters():
@@ -211,10 +211,10 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         suffix = f" ({other_act})" if other_act else ""
         lines.append(f"- {other} is here{suffix}")
 
+    # "elsewhere" only ever holds real rooms — a ground-stander is here.
     for other, other_room in elsewhere:
-        room_label = (get_room_name(location_id, other_room)
-                      or get_ground_name(location_id, lang))
-        elsewhere_lines.append(f"- {other} — in: {room_label}")
+        elsewhere_lines.append(
+            f"- {other} — in: {get_room_name(location_id, other_room)}")
 
     return lines, elsewhere_lines, anyone_in_room
 

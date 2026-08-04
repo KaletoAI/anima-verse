@@ -1078,31 +1078,30 @@ def location_presence_split(character_name: str, location_id: str,
                             room_id: str) -> Tuple[List[str], List[Tuple[str, str]]]:
     """Split the location's characters by room, excluding self.
 
-    Returns ``(here_names, elsewhere_pairs)``: names in the SAME room
-    (exact ``current_room`` equality, matching the perception model) and
-    ``(name, room_label)`` pairs for other rooms of this location. The ONE
-    computation behind the prompt presence blocks and the thought
-    journal's ``nearby`` snapshot — no second SQL path.
+    Returns ``(here_names, elsewhere_pairs)``: names within reach and
+    ``(name, room_label)`` pairs for the other rooms of this location. The
+    reach rule is NOT decided here — it is ``perception.ground_presence_split``,
+    the same one the chat prompt uses, so a character on the location's ground
+    (empty room) counts as here for everyone. The ONE computation behind the
+    prompt presence blocks and the thought journal's ``nearby`` snapshot — no
+    second SQL path, no second rule.
 
     Raises on lookup failure (callers decide what "unknown" means —
     _build_presence must not render a failed lookup as "you are alone").
     """
     from app.models.group_chat import get_characters_at_location
-    from app.models.character import get_character_current_room, get_character_language
-    from app.models.world import get_room_name, get_ground_name
-    lang = get_character_language(character_name) or "de"
-    here: List[str] = []
-    elsewhere: List[Tuple[str, str]] = []
+    from app.models.character import get_character_current_room
+    from app.models.world import get_room_name
+    from app.core.perception import ground_presence_split
+    candidates: List[Tuple[str, str]] = []
     for p in (get_characters_at_location(location_id) or [])[:16]:
         n = (p.get("name") or "").strip()
         if not n or n == character_name:
             continue
-        other_room = get_character_current_room(n) or ""
-        if other_room == (room_id or ""):
-            here.append(n)
-        else:
-            elsewhere.append(
-                (n, get_room_name(location_id, other_room) or get_ground_name(location_id, lang)))
+        candidates.append((n, get_character_current_room(n) or ""))
+    here, away = ground_presence_split(room_id or "", candidates)
+    # "away" only ever holds real rooms, so a room name always resolves.
+    elsewhere = [(n, get_room_name(location_id, r)) for n, r in away]
     return here, elsewhere
 
 

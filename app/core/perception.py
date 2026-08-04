@@ -138,17 +138,24 @@ def ground_presence_split(my_room: str,
                           ) -> Tuple[List[str], List[Tuple[str, str]]]:
     """Split a location's characters into "here" and "elsewhere".
 
-    Mirrors ``_resolve_presence``: standing ON THE GROUND (empty room) makes
-    the whole location "here", standing IN a room makes only that room "here".
-    A character on the ground, seen from inside a room, is elsewhere — but on
-    the ground, not in "another room", and the caller names it accordingly.
+    Mirrors ``_resolve_presence`` / the earshot primitive
+    ``room_entry._list_characters_in_room``, where an EMPTY room id means the
+    location's GROUND and a ground-stander is a member of EVERY room:
+
+    - a perceiver on the ground: the whole location is "here";
+    - a perceiver inside a room: that room AND everyone on the ground is
+      "here" — what is within earshot is what the prompt may call present.
+
+    Only two genuinely different rooms stay apart. ``others`` are
+    ``(name, room_id)`` pairs; "elsewhere" therefore never carries a
+    ground-stander.
 
     Pure, so ``scripts/smoke_ground_area.py`` can check it by hand.
     """
     if not my_room:
         return [name for name, _ in others], []
-    here = [name for name, room in others if room == my_room]
-    away = [(name, room) for name, room in others if room != my_room]
+    here = [name for name, room in others if not room or room == my_room]
+    away = [(name, room) for name, room in others if room and room != my_room]
     return here, away
 
 
