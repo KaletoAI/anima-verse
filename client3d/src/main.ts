@@ -646,8 +646,9 @@ async function startApp(username: string, role: string) {
   /** What the veil currently standing was built from. The poll runs every
    *  three seconds and nearly always finds the same three inputs — rebuilding
    *  regardless would throw away and re-allocate a dozen geometries per poll
-   *  for a picture that does not change. */
-  let fogKey = ' ';
+   *  for a picture that does not change. `null` until the first build: every
+   *  string is a possible key, so the sentinel must not be one. */
+  let fogKey: string | null = null;
   function rebuildFog() {
     const frame = fogBounds
       ? `${fogBounds.min_x},${fogBounds.min_y},${fogBounds.max_x},${fogBounds.max_y}` : '';
@@ -1048,7 +1049,12 @@ async function startApp(username: string, role: string) {
     fogBounds = map.grid_bounds;
     fogged = map.fogged;
     rebuildFog();   // a no-op unless the frame, the switch or the known set moved
-    if (map.locations.some((l) => l.grid_x != null && l.grid_y != null && !tiles.has(l.id))) {
+    // The trigger asks the SAME question the reveal answers — `placeableOf`,
+    // not a hand-written filter next to it. A cheaper test that forgot the
+    // template rule would fire on every single poll in a world whose template
+    // location is itself placed, and each shot would refetch all of
+    // /world/locations to build nothing.
+    if (placeableOf(map, detailById).some((l) => !tiles.has(l.id))) {
       // Deliberately not awaited: the reveal fetches and mounts, and the poll
       // must not be held up by it (it guards itself against a second run).
       void revealLocations(map);
@@ -1397,7 +1403,12 @@ async function startApp(username: string, role: string) {
     await scenes.prime(fresh.map((l) => l.id));
     for (const loc of fresh) {
       addTile(loc);
-      locSig.set(loc.id, sigOf(details.get(loc.id) ?? loc));
+      // Seeded from the SAME source the boot path seeds from, template
+      // fallback included: a revealed clone has no detail entry of its own,
+      // and a signature taken from the merged location would differ from the
+      // first poll's and rebuild the fresh tile for nothing.
+      locSig.set(loc.id, sigOf(
+        details.get(loc.id) ?? details.get(loc.template_location_id || '') ?? loc));
       const cell = `${loc.grid_x},${loc.grid_y}`;
       if (loc.passable || loc.template_location_id) passableCells.add(cell);
       locIdAtCell.set(cell, loc.id);
