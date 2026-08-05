@@ -35,7 +35,11 @@ export type { SceneLine }
  *  the flag only exists so a client can label it without knowing the
  *  reserved id. */
 export interface RoomInfo { id: string; name: string; is_entry: boolean; is_ground: boolean }
-export interface Neighbor { id: string; name: string }
+/** A neighbour location of the avatar's cell. `may_leave` is the server's own
+ *  departure decision FOR THIS DIRECTION (`boundary_entry.may_leave`): an
+ *  authored pass-through opens exactly its own edge, so the answer differs
+ *  from arrow to arrow and no client recomputes it. */
+export interface Neighbor { id: string; name: string; may_leave: boolean }
 export type Dir = 'north' | 'south' | 'east' | 'west'
 
 export interface SceneData {
@@ -52,7 +56,6 @@ export interface SceneData {
   party_invites?: Array<{ invite_id: string; inviter: string }>
   rooms: RoomInfo[]
   neighbors: Partial<Record<Dir, Neighbor | null>>
-  at_entry_room: boolean
   entry_room_name: string
   avatar_expr_version?: string
   bg_version?: string

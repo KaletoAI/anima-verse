@@ -529,7 +529,6 @@ export function PlayerApp() {
           rooms={data?.rooms || []}
           currentRoomId={data?.room_id || ''}
           neighbors={data?.neighbors || {}}
-          atEntryRoom={data?.at_entry_room !== false}
           entryRoomName={data?.entry_room_name || ''}
           busy={moving}
           onStep={handleStep}

@@ -2184,12 +2184,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                     const v = Number(e.target.value)
                     if (Number.isFinite(v)) write({ at: r4(clamp(v, 0, 1)) })
                   }} />
-                <input className="ga-input" type="number" min={0.5} max={10}
+                {/* The pass-through lies ON the location edge, so the edge is
+                    its maximum: plan_width_m metres (the reference square is
+                    a square). Without the anchor the server's 10 m fallback
+                    applies — the same rule on both sides. */}
+                <input className="ga-input" type="number" min={0.5}
+                  max={planW || 10}
                   step={0.5} style={{ width: 64 }} value={bo.width_m}
-                  title={t('Width (m)')}
+                  title={t('Width (m) — at most the length of the edge')}
                   onChange={(e) => {
                     const v = Number(e.target.value)
-                    if (Number.isFinite(v)) write({ width_m: clamp(v, 0.5, 10) })
+                    if (Number.isFinite(v)) {
+                      write({ width_m: clamp(v, 0.5, planW || 10) })
+                    }
                   }} />
                 <select className="ga-input" style={{ flex: 1, minWidth: 90 }}
                   value={bo.room || ''}

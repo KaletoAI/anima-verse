@@ -35,11 +35,12 @@ router = APIRouter(prefix="/world", tags=["world"])
 
 @router.get("/avatar/neighbors")
 def avatar_neighbors_route() -> Dict[str, Any]:
-    """Liefert die Nachbar-Locations des Avatars in jede Himmelsrichtung.
+    """Return the avatar's neighbor locations for each compass direction.
 
-    Response: { "north": {id, name} | null, "south": ..., "east": ..., "west": ... }
-    Damit kann das Direction-Pad nicht-erreichbare Richtungen ausblenden,
-    statt erst auf der 404-Antwort zu reagieren.
+    Response: { "north": {id, name, may_leave} | null, "south": ..., "east":
+    ..., "west": ... }. Lets the direction pad hide unreachable directions
+    instead of reacting to the 404 response, and grey out exactly the ones
+    the departure gate refuses (``may_leave``, the step route's own rule).
     """
     return world_ops.compute_avatar_neighbors()
 

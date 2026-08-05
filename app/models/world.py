@@ -1026,8 +1026,9 @@ def ensure_ground_room(rooms: List[Dict[str, Any]],
     (plan-grundflaeche.md § 3) — but the editor submits WHOLE room lists, so
     a delete arrives as a list that simply lacks it. This puts it back, with
     the name the location had for it (``previous`` = the stored room list),
-    and appends it LAST so the "entry_room defaults to the first room" rule
-    keeps pointing at a real room.
+    appended LAST so it never displaces an authored room in the editor's
+    order — position carries no meaning any more, ``entry_room`` is declared
+    or it is not (``get_entry_room_id``).
 
     It is also what gives a location created AFTER the one-time migration its
     ground: the migration runs once, this runs on every write.

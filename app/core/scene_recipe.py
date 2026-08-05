@@ -1235,10 +1235,14 @@ _BOUNDARY_EDGES: Dict[str, Any] = {
 def _boundary_openings(map3d: Dict[str, Any],
                        extent: float) -> List[Dict[str, Any]]:
     """Location-edge pass-throughs (plan-area-detail-scenes.md) in world
-    metres — where a road enters and leaves the cell. Geometry + room link
-    only: the entry-room gate is untouched, and no renderer consumes them
-    yet (the journey walk-through is a later stage; the data is complete —
-    an opening pair plus the linked room's hull is a path across the cell).
+    metres — where a road enters and leaves the cell.
+
+    Geometry plus the room link, and both are read: the 3D client offers
+    "enter" at an opening of the edge a step would cross and walks the figure
+    in through it (``main.ts``), while the server decides entry and departure
+    on the same data (``boundary_entry``). Still open is the journey
+    walk-through — an opening pair plus the linked room's hull is a path
+    across the cell.
     """
     out: List[Dict[str, Any]] = []
     for op in (map3d or {}).get("boundary_openings") or []:

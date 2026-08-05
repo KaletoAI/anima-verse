@@ -1,35 +1,41 @@
 /**
- * MovePad — kompakte Bewegungssteuerung (präsentational).
- * plan-room-conversation Phase 2.
+ * MovePad — the compact movement control (presentational).
+ * plan-room-conversation phase 2.
  *
- * Aufbau: oben Raumwechsel (Chips), darunter abgetrennt das Richtungs-D-Pad —
- * beides horizontal zentriert. Wird das Panel schmal, blendet die
- * Pfeil-Beschriftung (Nachbarort-Name) aus (Selbst-Messung via ResizeObserver).
+ * Layout: room changes on top (chips), the direction pad below them, both
+ * horizontally centred. On a narrow panel the arrow labels (the neighbour
+ * location's name) disappear (self-measured via ResizeObserver).
  *
- * Reine Anzeige: Aktionen + Refresh liegen in PlayerApp (onStep/onEnterRoom).
+ * Display only: the actions + refresh live in PlayerApp (onStep/onEnterRoom).
+ *
+ * The departure gate is NOT recomputed here: every neighbour carries the
+ * server's own `may_leave` for its direction (`boundary_entry.may_leave`),
+ * because an authored pass-through opens exactly its own edge — the pad used
+ * to hold a copy of an older rule and greyed out steps the server allows.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 
 interface RoomInfo { id: string; name: string; is_entry: boolean; is_ground: boolean }
-interface Neighbor { id: string; name: string }
+interface Neighbor { id: string; name: string; may_leave: boolean }
 type Dir = 'north' | 'south' | 'east' | 'west'
 type Neighbors = Partial<Record<Dir, Neighbor | null>>
 
+const DIRS: Dir[] = ['north', 'south', 'east', 'west']
+
 export function MovePad({
-  rooms, currentRoomId, neighbors, atEntryRoom, entryRoomName, busy,
+  rooms, currentRoomId, neighbors, entryRoomName, busy,
   onStep, onEnterRoom, partyFollower = false, partyLeaderName = '',
 }: {
   rooms: RoomInfo[]
   currentRoomId: string
   neighbors: Neighbors
-  atEntryRoom: boolean
   entryRoomName: string
   busy: boolean
   onStep: (dir: Dir) => void
   onEnterRoom: (roomId: string) => void
-  /** Avatar ist Party-Follower: keine eigene Bewegung (Kompass + Raum-Chips aus),
-   *  er wird vom Leader mitgezogen. */
+  /** The avatar is a party follower: no movement of its own (compass + room
+   *  chips off), the leader pulls it along. */
   partyFollower?: boolean
   partyLeaderName?: string
 }) {
@@ -48,25 +54,35 @@ export function MovePad({
     return () => ro.disconnect()
   }, [])
 
-  const compact = w < 200  // zu schmal → Pfeil-Beschriftung ausblenden
-  const gated = !atEntryRoom
-  // Festes Raster → alle Pfeil-Zellen exakt gleich groß (unabhängig von Label).
-  // ohne Schrift: halb so groß · mit Schrift: breiter (130%) + flacher (70%).
-  const CW = compact ? 24 : 60     // Zellbreite
-  const RH = compact ? 20 : 38     // Zellhöhe
+  const compact = w < 200  // too narrow → hide the arrow labels
+  // Every direction that leads anywhere, and whether the server lets one out
+  // that way. All four barred = the pad is useless here and the hint takes
+  // its place; a single open direction keeps the pad on screen.
+  const dests = DIRS.map((d) => neighbors[d]).filter((n): n is Neighbor => !!n)
+  const gated = dests.length > 0 && !dests.some((n) => n.may_leave !== false)
+  // Fixed grid → every arrow cell exactly the same size (label or not).
+  // Without text: half as big · with text: wider (130%) + flatter (70%).
+  const CW = compact ? 24 : 60     // cell width
+  const RH = compact ? 20 : 38     // cell height
 
   const cell = (dir: Dir, glyph: string) => {
     const dest = neighbors[dir] || null
-    const disabled = !dest || busy || gated
+    const barred = !!dest && dest.may_leave === false
+    const disabled = !dest || busy || barred
     return (
-      <button onClick={() => onStep(dir)} disabled={disabled} title={dest?.name || ''}
+      <button onClick={() => onStep(dir)} disabled={disabled}
+        title={dest
+          ? (barred
+            ? `${dest.name} — ${t('not from this room')}`
+            : dest.name)
+          : ''}
         style={{
           width: '100%', height: '100%', padding: '2px 3px', borderRadius: 6,
           boxSizing: 'border-box', overflow: 'hidden',
           cursor: disabled ? 'default' : 'pointer',
           border: '1px solid var(--border, #30363d)',
           background: disabled ? 'transparent' : 'var(--bg-hover, #1f2937)',
-          color: 'inherit', opacity: dest ? (gated ? 0.4 : 1) : 0.25,
+          color: 'inherit', opacity: dest ? (barred ? 0.4 : 1) : 0.25,
           display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', lineHeight: 1.1,
         }}>
@@ -79,8 +95,8 @@ export function MovePad({
   }
   const blank = <span />
 
-  // Party-Follower: keine eigene Bewegung — Kompass + Raum-Chips komplett aus,
-  // nur ein Hinweis. Der Avatar wird vom Leader mitgezogen.
+  // Party follower: no movement of its own — compass + room chips off, only
+  // a note. The leader pulls the avatar along.
   if (partyFollower) {
     return (
       <div ref={rootRef} style={{
@@ -103,8 +119,9 @@ export function MovePad({
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 8 }}>
-      {/* oben fest: Pfeile, zentriert. Nicht am Ausgang → das (komplett
-          deaktivierte) D-Pad ganz ausblenden, nur der Hinweis bleibt (spart Platz). */}
+      {/* Fixed on top: the arrows, centred. No way out from this room at all
+          → hide the (fully disabled) pad and leave the hint alone (saves
+          space). A single open direction keeps the whole pad. */}
       <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
         {!gated && (
           <div style={{
@@ -125,12 +142,14 @@ export function MovePad({
         )}
       </div>
 
-      {/* optische Trennung */}
+      {/* visual separator */}
       {rooms.length > 1 && (
         <div style={{ flex: '0 0 auto', height: 1, width: '85%', alignSelf: 'center', background: 'var(--border, #30363d)', opacity: 0.6 }} />
       )}
 
-      {/* unten: Räume, scrollt wenn zu klein */}
+      {/* Below: the rooms, scrolling when the panel is too small. The ground
+          is one of them, so a location with a single authored room already
+          has two chips — there is always a way back onto the ground. */}
       {rooms.length > 1 && (
         <div style={{
           flex: '1 1 auto', minHeight: 0, overflowY: 'auto',

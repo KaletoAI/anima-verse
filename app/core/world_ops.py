@@ -41,17 +41,26 @@ from app.models.world import (
 def compute_avatar_neighbors() -> Dict[str, Any]:
     """Return the avatar's neighbor locations for each compass direction.
 
-    Response: { "north": {id, name} | null, "south": ..., "east": ..., "west": ... }
-    Lets the direction pad hide unreachable directions instead of reacting
-    to the 404 response.
+    Response: { "north": {id, name, may_leave} | null, "south": ..., "east":
+    ..., "west": ..., "current_location_id", "current_location_name",
+    "entry_room_name" }. Lets the direction pad hide unreachable directions
+    instead of reacting to the 404 response.
+
+    ``may_leave`` is the departure gate PER DIRECTION and comes from the very
+    function the step route decides with (``boundary_entry.may_leave``): an
+    authored opening lets one out over its own edge only, so the answer
+    differs from arrow to arrow. One rule, one place — the pad used to carry
+    its own copy of an older one and greyed out steps the server allows.
     """
+    from app.core.boundary_entry import EDGE_OF_DIRECTION, may_leave
     from app.models.account import get_active_character
     from app.models.character import (
         get_character_current_location, get_character_current_room)
 
-    out = {"north": None, "south": None, "east": None, "west": None,
-           "current_location_id": "", "current_location_name": "",
-           "at_entry_room": True, "entry_room_name": ""}
+    out: Dict[str, Any] = {
+        "north": None, "south": None, "east": None, "west": None,
+        "current_location_id": "", "current_location_name": "",
+        "entry_room_name": ""}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
@@ -64,13 +73,10 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
     out["current_location_id"] = cur.get("id", "") or ""
     out["current_location_name"] = cur.get("name", "") or ""
 
-    # Departure gate: the frontend can hide the direction arrows when the
-    # avatar is not in the entry room. The server-side block lives in
-    # avatar_step_route.
+    # The name is what the hint text says one has to walk to; whether one has
+    # to is decided per direction below.
     cur_entry = get_entry_room_id(cur)
     cur_room = (get_character_current_room(avatar) or "").strip()
-    if cur_entry and cur_room and cur_room != cur_entry:
-        out["at_entry_room"] = False
     for _r in (cur.get("rooms") or []):
         if isinstance(_r, dict) and _r.get("id") == cur_entry:
             out["entry_room_name"] = _r.get("name", "") or ""
@@ -88,6 +94,8 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
             out[direction] = {
                 "id": loc.get("id", "") or "",
                 "name": loc.get("name", "") or "",
+                "may_leave": may_leave(cur, cur_room, cur_entry,
+                                       EDGE_OF_DIRECTION[direction]),
             }
     return out
 
@@ -136,15 +144,18 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="current location not found")
 
     # Departure gate: the avatar may only leave a location via the entry room
-    # — or across an authored boundary opening while standing in that
-    # opening's linked room, or in NO room at all, the location's ground
+    # — or across an authored boundary opening while standing in the room
+    # that opening links to, the location's ground when it links to none
     # (contract § B1 Nr. 13; the road that crosses the cell is a legitimate
     # way out at exactly its pass-throughs).
     from app.core.boundary_entry import (
         EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave, opening_entry_room,
         opening_on_edge,
     )
+    from app.core.i18n import t as _t
+    from app.models.character import get_character_language
     from app.models.world import get_arrival_room_id
+    _lang = get_character_language(avatar) or "de"
     exit_edge = EDGE_OF_DIRECTION[direction]
     cur_entry = get_entry_room_id(cur)
     cur_room = (get_character_current_room(avatar) or "").strip()
@@ -155,9 +166,12 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
             if isinstance(_r, dict) and _r.get("id") == cur_entry:
                 _entry_name = _r.get("name", "") or ""
                 break
+        # Same sentence the compass shows next to the pad — one refusal, one
+        # wording, translated like every other player-facing text.
+        _hint = _t("To leave the place, go to the entry room:", _lang)
         raise HTTPException(status_code=403,
             detail={"reason": "not_at_entry_room",
-                    "message": f"Du musst zuerst zum Entry-Room ({_entry_name or cur_entry}) gehen, um diesen Ort zu verlassen."})
+                    "message": f"{_hint} {_entry_name or cur_entry}"})
 
     cur_x = int(cur.get("grid_x") or 0)
     cur_y = int(cur.get("grid_y") or 0)
@@ -184,9 +198,6 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
     # the declared entry room, otherwise the location's ground room).
     entry_edge = OPPOSITE_EDGE[exit_edge]
     if not opening_on_edge(target, entry_edge):
-        from app.core.i18n import t as _t
-        from app.models.character import get_character_language
-        _lang = get_character_language(avatar) or "de"
         raise HTTPException(status_code=403, detail={
             "reason": "no_entrance",
             "message": _t("There is no way in on this side.", _lang)})
@@ -741,6 +752,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # never polygon indices; ``at`` follows the room-opening convention
     # (left→right on N/S, top→bottom on E/W). ``room`` is a format check,
     # never an existence check (same rule as prop ids).
+    # The WIDTH lies on that edge, so the edge is its maximum: the reference
+    # square is a square, hence ``plan_width_m`` metres per side (a café in
+    # the middle of a city cell is entered along its whole edge, not through
+    # a 10 m slot). Without the anchor no edge length is known and 10 m
+    # stands in. Out of range is CLAMPED, never dropped — a saved opening
+    # that silently disappears costs the author their work.
+    max_width_m = float(out.get("plan_width_m") or 10.0)
     bo = raw.get("boundary_openings")
     if isinstance(bo, list):
         entries = []
@@ -756,12 +774,10 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 width_m = float(op.get("width_m"))
             except (TypeError, ValueError):
                 continue
-            if not (0.5 <= width_m <= 10.0):
-                continue
             entry: Dict[str, Any] = {
                 "edge": edge.strip().upper(),
                 "at": round(min(max(at, 0.0), 1.0), 4),
-                "width_m": round(width_m, 3),
+                "width_m": round(min(max(width_m, 0.5), max_width_m), 3),
                 "type": "passage",
             }
             room = op.get("room")

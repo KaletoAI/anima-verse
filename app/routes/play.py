@@ -150,7 +150,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
 
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
-             "scene": [], "rooms": [], "neighbors": {}, "at_entry_room": True,
+             "scene": [], "rooms": [], "neighbors": {},
              "entry_room_name": "", "avatar_expr_version": "", "bg_version": "",
              "bg_id": "", "capabilities": []}
     avatar = (get_active_character() or "").strip()
@@ -195,7 +195,8 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         if room and (rid == room or rn == room):
             room_name = rn
 
-    # Nachbar-Orte + Entry-Gate aus der bestehenden Route-Funktion wiederverwenden
+    # Neighbour locations + the per-direction departure gate, reused from the
+    # existing route function.
     nb = {}
     try:
         from app.routes.world import avatar_neighbors_route
@@ -268,7 +269,6 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         "bg_id": _bg_id(loc, room) if loc else "",
         "rooms": rooms_out,
         "neighbors": {k: nb.get(k) for k in ("north", "south", "east", "west")},
-        "at_entry_room": bool(nb.get("at_entry_room", True)),
         "entry_room_name": nb.get("entry_room_name", "") or "",
         "capabilities": _player_capabilities(avatar),
     }

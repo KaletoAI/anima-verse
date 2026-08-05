@@ -28,7 +28,10 @@ import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, 
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary, setSceneModelTier } from './scene/sceneRecipe';
-import { entryOfferNear, type EntryTile } from './game/enterLocation';
+import {
+  entryOfferNear, mayLeaveAcross, EXIT_EDGE_OF,
+  type Edge, type EntryTile,
+} from './game/enterLocation';
 import { PathGrid } from './scene/pathfind';
 import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
@@ -1714,7 +1717,7 @@ async function startApp(username: string, role: string) {
       // and goes out as it stands.
       const race = err?.reason === 'not_at_entry_room'
         && performance.now() > entryRetryUntil
-        ? entryRoomToEnter(tileAtCell(from)) : null;
+        ? entryRoomToEnter(tileAtCell(from), EXIT_EDGE_OF[direction]) : null;
       if (race) {
         entryRetryUntil = performance.now() + REJECT_MEMORY_MS;
         rejectedUntil.delete(`${to.gx},${to.gy}`);
@@ -1966,10 +1969,12 @@ async function startApp(username: string, role: string) {
         // the client may decide about on its own.
         const barred = !step || !locIdAtCell.has(key)
           || (rejectedUntil.get(key) ?? 0) > performance.now();
-        // Room the avatar has to be in before it may leave this location at
-        // all (E3 acceptance "the village cannot be left"), null when it
-        // already is or the location has no gate.
-        const gateRoom = entryRoomToEnter(tileAtCell(here));
+        // Room the avatar has to be in before it may leave this location
+        // OVER THIS EDGE (E3 acceptance "the village cannot be left"), null
+        // when it already is, the location has no gate, or an authored
+        // pass-through opens this very edge from the room it stands in.
+        const gateRoom = step
+          ? entryRoomToEnter(tileAtCell(here), EXIT_EDGE_OF[step]) : null;
         // `roomRequestInFlight` clamps exactly like a step in flight (E3-T6):
         // a room change and a cell step must not overlap, or the entry-room
         // gate judges this step against a room that is still moving.
@@ -2248,9 +2253,10 @@ async function startApp(username: string, role: string) {
   }
 
   /**
-   * The room the avatar has to be in before it may leave this location — its
-   * ENTRY room — or null when there is nothing to do (E3 acceptance: "the
-   * village cannot be left, you have to walk to the square first").
+   * The room the avatar has to be in before it may leave this location over
+   * `exitEdge` — its ENTRY room — or null when there is nothing to do (E3
+   * acceptance: "the village cannot be left, you have to walk to the square
+   * first").
    *
    * The gate itself is the server's (`world_ops.move_avatar_step` refuses a
    * step out of any other room, 403 `not_at_entry_room`). In the 2D UI the
@@ -2258,8 +2264,14 @@ async function startApp(username: string, role: string) {
    * has no such moment, so the client walks the rule instead of reporting it.
    * The server stays untouched and keeps deciding — this only takes the step
    * the player would otherwise have to guess at.
+   *
+   * The rule is per EDGE, which is why it needs one: an authored pass-through
+   * lets one out of its own linked room (the ground, when it links to none)
+   * over its own edge, so a detour through the entry room would be a detour
+   * the server never asked for — and one a rule locking that room could make
+   * impossible.
    */
-  function entryRoomToEnter(tile: Tile | null): string | null {
+  function entryRoomToEnter(tile: Tile | null, exitEdge: Edge): string | null {
     if (!tile) return null;
     const entry = (tile.loc.entry_room || '').trim();
     if (!entry) return null;                       // location without a gate
@@ -2267,6 +2279,12 @@ async function startApp(username: string, role: string) {
     // No room resolved at all (outdoors, a payload still on its way): nothing
     // to correct, and the server decides exactly as before.
     if (!room || room === entry) return null;
+    // The server's own rule first: standing at an opening of this edge is a
+    // way out on its own.
+    const openings = (scenes.get(tile.loc.id)?.boundary_openings ?? [])
+      .map((o) => ({ edge: o.edge, room_id: o.room_id }));
+    if (mayLeaveAcross(exitEdge, room, entry, openings,
+      getGameState().groundRoomId)) return null;
     if (!tile.loc.rooms.some((r) => r.id === entry)) return null;
     // A refused entry room is not walked around in circles: let the ordinary
     // step go out and let the server say why, in its own words.
@@ -2536,8 +2554,9 @@ async function startApp(username: string, role: string) {
   // chain, one step machine, one interlock set — and then walks the figure
   // in. The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
   // numbers in scripts/smoke_walk_math.mjs): within ENTER_RADIUS of an
-  // authored boundary opening (§ B1 Nr. 13) of a 4-adjacent location — a
-  // location without authored openings offers no entry (2026-08-04).
+  // authored boundary opening (§ B1 Nr. 13) ON THE EDGE THE STEP CROSSES, of
+  // a 4-adjacent location — a location without such an opening offers no
+  // entry (2026-08-04), exactly as the server refuses that step.
   /** the standing offer, resolved to the cell the step must aim at */
   let enterOffer: { locId: string; cell: Cell } | null = null;
 
@@ -2560,10 +2579,14 @@ async function startApp(username: string, role: string) {
       if (!t || t.loc.id === myLoc || !openable(t)) continue;
       // Openings come TILE-LOCAL from the payload (world metres around the
       // tile centre, § B1 Nr. 13) — the centre is added here exactly as the
-      // exits and markers get it added in mountScene.
+      // exits and markers get it added in mountScene. The EDGE rides along:
+      // only the one the step crosses is a way in, and the rule filters on
+      // it (the payload's letter is already the world edge, rotation
+      // applied).
       const openings = (scenes.get(t.loc.id)?.boundary_openings ?? []).map((o) => ({
         x: t.center.x + o.at_world[0],
         z: t.center.z + o.at_world[1],
+        edge: o.edge,
       }));
       candidates.push({
         locId: t.loc.id,
@@ -2603,7 +2626,7 @@ async function startApp(username: string, role: string) {
     if (!step) return;   // offer went stale — the avatar changed cells
     if ((rejectedUntil.get(`${offer.cell.gx},${offer.cell.gy}`) ?? 0) > performance.now()) return;
     cancelRoute();
-    const gateRoom = entryRoomToEnter(tileAtCell(here));
+    const gateRoom = entryRoomToEnter(tileAtCell(here), EXIT_EDGE_OF[step]);
     if (gateRoom && !await enterEntryRoom(gateRoom)) return;
     const edge = { from: here, to: offer.cell, granted: false };
     askedEdge = edge;
