@@ -1250,17 +1250,19 @@ def save_character_current_location(character_name: str = "", location: str = ""
             profile.pop("journey", None)
     profile["current_location"] = location
     profile["location_changed_at"] = utc_now_iso()
-    # On a location change, set current_room directly to the entry room of the
-    # NEW location (instead of just clearing it). Otherwise every caller that
-    # sets no room explicitly afterwards (avatar move, teleport, scheduler)
-    # leaves a roomless character — its utterances get room_id='' and drop out
-    # of the room-filtered chat window. A caller can still set a specific room
-    # at the new place afterwards (wins, because later). Location without
-    # rooms / off-map sentinel -> empty (no entry room).
+    # On a location change, set current_room directly to the ARRIVAL room of
+    # the NEW location (instead of just clearing it): the declared entry room
+    # when there is one, otherwise the ground (plan-grundflaeche.md § 6).
+    # Otherwise every caller that sets no room explicitly afterwards (avatar
+    # move, teleport, scheduler) leaves a roomless character — its utterances
+    # get room_id='' and drop out of the room-filtered chat window. A caller
+    # can still set a specific room at the new place afterwards (wins, because
+    # later). Off-map sentinel / unknown location -> empty: no location, no
+    # ground to stand on.
     if location and location != old_location:
-        from app.models.world import get_location_by_id, get_entry_room_id
+        from app.models.world import get_location_by_id, get_arrival_room_id
         _new_loc = get_location_by_id(location)
-        profile["current_room"] = get_entry_room_id(_new_loc) if _new_loc else ""
+        profile["current_room"] = get_arrival_room_id(_new_loc) if _new_loc else ""
     # Aktivitaet (pose_intent) bei echtem Location-Wechsel leeren — sie gilt fuer
     # den alten Ort und wird sonst stale ("casting a spell" bleibt nach dem
     # Weggehen haengen). Greift fuer ALLE Bewegungswege zentral: Move-Skill,
@@ -3298,7 +3300,7 @@ def appear_in_world(character_name: str) -> bool:
         return False  # steht schon irgendwo
     target = None
     try:
-        from app.models.world import get_location, get_entry_room_id, list_locations
+        from app.models.world import get_location, get_arrival_room_id, list_locations
         cfg = get_character_config(character_name) or {}
         home = (cfg.get("home_location") or "").strip()
         if home and home != OFFMAP_SLEEP_SENTINEL:
@@ -3311,7 +3313,7 @@ def appear_in_world(character_name: str) -> bool:
         loc_id = target.get("id") or ""
         if not loc_id:
             return False
-        room_id = get_entry_room_id(target)
+        room_id = get_arrival_room_id(target)
     except Exception as e:
         get_logger("character").error("appear_in_world fuer %s fehlgeschlagen: %s", character_name, e)
         return False

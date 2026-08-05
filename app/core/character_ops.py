@@ -2155,16 +2155,17 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
     room = data.get("current_room", "")
 
     # Name → ID aufloesen falls noetig
-    from app.models.world import resolve_location as _resolve_loc, get_entry_room_id
+    from app.models.world import resolve_location as _resolve_loc, get_arrival_room_id
     from app.models.character import get_character_current_location, get_character_current_room, save_character_current_room, clear_pose_intent
     loc_obj = _resolve_loc(location)
     location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
     location_name_resp = loc_obj.get("name", location) if loc_obj else location
     old_loc = get_character_current_location(character_name)
     old_room = get_character_current_room(character_name) or ""
-    # Default-Raum fuer Cross-Location-Move: Entry-Room des Ziels.
+    # Default room for a cross-location move: where one arrives at the target
+    # — its entry room, or the ground when none is declared.
     if not room and loc_obj and location_to_save != old_loc:
-        room = get_entry_room_id(loc_obj) or ""
+        room = get_arrival_room_id(loc_obj)
     # Avatar: Outfit NICHT automatisch umstellen (manuelle User-Wahl bleibt).
     from app.models.account import get_active_character
     _is_avatar = (get_active_character() == character_name)
@@ -2261,7 +2262,7 @@ async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
     if not location:
         raise HTTPException(status_code=400, detail="location_id fehlt")
 
-    from app.models.world import resolve_location as _resolve_loc, get_entry_room_id
+    from app.models.world import resolve_location as _resolve_loc, get_arrival_room_id
     from app.models.character import (
         add_known_location, get_character_current_room,
         save_character_current_room, clear_pose_intent)
@@ -2270,9 +2271,10 @@ async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
     location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
     location_name_resp = loc_obj.get("name", location) if loc_obj else location
 
-    # Kein Raum mitgegeben → Entry-Room der Ziel-Location nehmen.
+    # No room handed in → take the target's arrival room (entry room, or the
+    # ground when none is declared).
     if not room and loc_obj:
-        room = get_entry_room_id(loc_obj) or ""
+        room = get_arrival_room_id(loc_obj)
 
     old_loc = get_character_current_location(character_name)
     old_room = get_character_current_room(character_name) or ""

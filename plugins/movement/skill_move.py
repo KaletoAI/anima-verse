@@ -78,7 +78,7 @@ class MoveSkill(PluginSkill):
             get_character_current_location, save_character_current_location,
             save_character_current_room)
         from app.models.world import (
-            list_locations, get_location_by_id, get_entry_room_id)
+            list_locations, get_location_by_id, get_arrival_room_id)
 
         cur_id = get_character_current_location(character_name) or ""
         cur = get_location_by_id(cur_id) if cur_id else None
@@ -115,9 +115,8 @@ class MoveSkill(PluginSkill):
         # Schritt ausfuehren. Auto-Discovery passiert in
         # save_character_current_location (kennt den Ort ab Betreten).
         save_character_current_location(character_name, target_id)
-        room_id = get_entry_room_id(target)
-        if room_id:
-            save_character_current_room(character_name, room_id)
+        # Arrival room of the target: its entry room, or the ground.
+        save_character_current_room(character_name, get_arrival_room_id(target))
 
         # Decency-Compliance nach Orts-/Raumwechsel (analog SetLocation).
         try:

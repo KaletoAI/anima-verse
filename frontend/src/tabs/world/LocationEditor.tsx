@@ -6,7 +6,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
-import { DANGER_LEVELS, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D, type SurfaceKind } from './worldTypes'
+import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D, type SurfaceKind } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
 import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel } from './BuildingModelPanel'
@@ -194,20 +194,17 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         </Field>
         <Field
           label={t('Entry')}
-          hint={t('Room used as entry/exit. Avatar must be there to leave; arrivals land here.')}
+          hint={t('Optional. Set: arrivals land in that room and one has to be there to leave. Empty: one arrives on the ground and may leave from anywhere.')}
         >
           <select
             className="ga-input"
             value={draft.entry_room || ''}
             onChange={(e) => upd('entry_room', e.target.value)}
-            disabled={!draft.rooms || draft.rooms.length === 0}
           >
-            {(draft.rooms || []).length === 0 ? (
-              <option value="">— {t('no rooms')} —</option>
-            ) : null}
+            <option value="">— {t('arrive on the ground')} —</option>
             {(draft.rooms || []).map((r) => (
               <option key={r.id || r.name} value={r.id || ''}>
-                {r.name || r.id || '?'}
+                {r.name || (r.id === GROUND_ROOM_ID ? t('Outside') : r.id) || '?'}
               </option>
             ))}
           </select>

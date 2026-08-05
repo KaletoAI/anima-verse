@@ -187,7 +187,11 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
             # The ground room may stay unnamed — then it falls back to the
             # same translated word in every location.
             rn = get_ground_name(loc, get_character_language(avatar) or "de")
-        rooms_out.append({"id": rid, "name": rn, "is_entry": rid == entry_id})
+        # is_ground marks the location's ground so a client can label it
+        # without knowing the reserved id. It is a room like any other:
+        # addressed by this id, entered through /play/enter-room.
+        rooms_out.append({"id": rid, "name": rn, "is_entry": rid == entry_id,
+                          "is_ground": rid == GROUND_ROOM_ID})
         if room and (rid == room or rn == room):
             room_name = rn
 
@@ -274,21 +278,22 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
 async def play_enter_room(request: Request, user=Depends(get_current_user)):
     """Changes the room within the current location, subject to room-scoped
     block rules (the entry-room constraint only applies to leaving the
-    location). An empty room_id is a valid request too: it leaves the room
-    and stands on the location's ground, unchecked."""
+    location). Going onto the ground is an ordinary room change like any
+    other and runs through the same check — a rule may lock the ground too."""
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        clear_pose_intent,
                                        is_character_sleeping,
                                        save_character_current_room,
                                        set_is_sleeping)
-    from app.models.world import get_location_by_id
+    from app.models.world import GROUND_ROOM_ID, get_location_by_id
 
     body = await request.json()
-    # An EMPTY room_id is a valid request: it means "leave the room and stand
-    # on the location's ground" — the state a roomless boundary opening puts
-    # the avatar in. Nothing is being entered, so nothing is checked.
-    room_id = str(body.get("room_id") or "").strip() if isinstance(body, dict) else ""
+    # An empty room_id means "onto the location's ground" — and since the
+    # ground is a room of its own it is addressed by its id from here on, so
+    # exactly one path exists and the checks below apply to it as well.
+    room_id = (str(body.get("room_id") or "").strip()
+               if isinstance(body, dict) else "") or GROUND_ROOM_ID
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
@@ -302,18 +307,17 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     loc = (get_character_current_location(avatar) or "").strip()
     loc_obj = get_location_by_id(loc) if loc else None
     valid = {(r.get("id") or "") for r in ((loc_obj.get("rooms") if loc_obj else None) or [])}
-    if room_id:
-        if room_id not in valid:
-            raise HTTPException(status_code=400, detail="room not in current location")
-        # The second of the two gates (plan-betreten-und-tueren.md § 5 A): a
-        # block rule may forbid a ROOM, not just a location. The location step
-        # has checked this since it was written; the room change never did, so
-        # every room rule was bypassed by walking.
-        from app.models.rules import check_access
-        ok_enter, enter_msg = check_access(avatar, loc, room_id=room_id)
-        if not ok_enter:
-            raise HTTPException(status_code=403, detail={
-                "reason": "block_enter", "message": enter_msg})
+    if room_id not in valid:
+        raise HTTPException(status_code=400, detail="room not in current location")
+    # The second of the two gates (plan-betreten-und-tueren.md § 5 A): a
+    # block rule may forbid a ROOM, not just a location. The location step
+    # has checked this since it was written; the room change never did, so
+    # every room rule was bypassed by walking.
+    from app.models.rules import check_access
+    ok_enter, enter_msg = check_access(avatar, loc, room_id=room_id)
+    if not ok_enter:
+        raise HTTPException(status_code=403, detail={
+            "reason": "block_enter", "message": enter_msg})
     save_character_current_room(avatar, room_id)
     # Movement interrupts the running pose — otherwise the avatar keeps
     # "cooking" although they just changed rooms.

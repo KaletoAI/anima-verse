@@ -251,14 +251,14 @@ interface LocationTreeRowProps {
   onSelect: (s: Selection) => void
 }
 
-// Entry-room id of a location: the explicit entry_room (when it matches a
-// room), otherwise the first room — analogous to get_entry_room_id (backend).
+// Entry-room id of a location: the explicit entry_room when it matches a room,
+// otherwise none — analogous to get_entry_room_id (backend). The field is
+// optional; without it one arrives on the ground, so there is no implicit
+// "first room" entry any more.
 function entryRoomId(loc: Location): string {
-  const rooms = loc.rooms || []
-  if (!rooms.length) return ''
   const explicit = (loc.entry_room || '').trim()
-  if (explicit && rooms.some((r) => r.id === explicit)) return explicit
-  return rooms[0]?.id || ''
+  if (explicit && (loc.rooms || []).some((r) => r.id === explicit)) return explicit
+  return ''
 }
 
 // Danger-level color (0 = no display, 1..5 increasingly red).

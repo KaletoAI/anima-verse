@@ -30,7 +30,11 @@ import { useLightbox } from './Lightbox'
 
 export type { SceneLine }
 
-export interface RoomInfo { id: string; name: string; is_entry: boolean }
+/** One room of the current location as `/play/scene` lists it. `is_ground`
+ *  marks the location's ground — a room like any other, entered by its id;
+ *  the flag only exists so a client can label it without knowing the
+ *  reserved id. */
+export interface RoomInfo { id: string; name: string; is_entry: boolean; is_ground: boolean }
 export interface Neighbor { id: string; name: string }
 export type Dir = 'north' | 'south' | 'east' | 'west'
 

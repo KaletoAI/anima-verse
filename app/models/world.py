@@ -214,17 +214,11 @@ def _save_world_data(data: Dict[str, Any]):
                 lid = loc.get("id")
                 if not lid:
                     continue
-                # Migration: entry_room defaultet auf den ersten Raum, wenn er
-                # fehlt oder auf einen nicht mehr existierenden Raum zeigt.
-                _rooms = loc.get("rooms") or []
-                if _rooms:
-                    _entry = (loc.get("entry_room") or "").strip()
-                    _valid = any(isinstance(r, dict) and r.get("id") == _entry
-                                 for r in _rooms)
-                    if not _valid:
-                        _first = _rooms[0]
-                        if isinstance(_first, dict) and _first.get("id"):
-                            loc["entry_room"] = _first.get("id")
+                # No entry_room default is written here any more: the field is
+                # optional (plan-grundflaeche.md § 6), and filling it in on
+                # every save made "empty = arrive on the ground" unreachable.
+                # A value pointing at a deleted room is answered by
+                # get_entry_room_id, which reads it as "none declared".
                 conn.execute("""
                     INSERT INTO locations
                         (id, name, description, grid_x, grid_y, outfit_type,
@@ -1368,27 +1362,37 @@ def get_neighbor_location_ids(location_id: str) -> List[str]:
 
 
 def get_entry_room_id(location: Dict[str, Any]) -> str:
-    """Liefert den Entry-Room einer Location.
+    """The declared entry room of a location — '' when none is declared.
 
-    Der Entry-Room ist der einzige Raum durch den eine Location betreten und
-    verlassen werden kann (Avatar D-Pad, NPC-Walk, Pathfinder).
+    ``entry_room`` is OPTIONAL (plan-grundflaeche.md § 6): set, it is the
+    deliberate exception "here one arrives indoors" and stays the gate one has
+    to stand in to leave; empty, arrival lands on the ground room and leaving
+    is free. There is no implicit "first room" default any more — that behaved
+    like an entry room nobody had authored.
 
-    - Liegt explizit ``location.entry_room`` vor und der Raum existiert: nimm den.
-    - Sonst der erste Raum (Migration / impliziter Default).
-    - Hat die Location keine Raeume: leerer String.
+    A declared room that no longer exists counts as not declared.
     """
     if not isinstance(location, dict):
         return ""
-    rooms = location.get("rooms") or []
-    if not rooms:
-        return ""
     explicit = (location.get("entry_room") or "").strip()
-    if explicit:
-        for r in rooms:
-            if isinstance(r, dict) and r.get("id") == explicit:
-                return explicit
-    first = rooms[0]
-    return (first.get("id") or "") if isinstance(first, dict) else ""
+    if not explicit:
+        return ""
+    for r in (location.get("rooms") or []):
+        if isinstance(r, dict) and r.get("id") == explicit:
+            return explicit
+    return ""
+
+
+def get_arrival_room_id(location: Dict[str, Any]) -> str:
+    """The room a character lands in when it arrives at ``location``.
+
+    The ONE rule for every arrival path (avatar step, journey, scheduler,
+    move/set-location skills, admin move): the declared entry room when there
+    is one, otherwise the ground — which is a room like any other since the
+    ground migration, so nobody arrives roomless. A boundary opening WITH a
+    room link answers the question by itself and never gets here.
+    """
+    return get_entry_room_id(location) or GROUND_ROOM_ID
 
 
 def find_path_through_known(start_id: str, target_id: str,

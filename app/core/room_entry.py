@@ -21,10 +21,13 @@ GREETING_COOLDOWN_MIN = 30
 
 
 def _list_characters_in_room(location_id: str, room_id: str, exclude: str = "") -> List[str]:
-    """Listet alle Characters die im selben Raum (oder bei leerem room_id im Location) sind.
+    """Characters in the same room — or, with an empty ``room_id``, everyone in
+    the location (the deliberate "the whole location" query, e.g. for a shout).
 
-    char_room kann historisch entweder Raum-ID oder Raum-Name enthalten —
-    Match gegen beides.
+    ``char_room`` may historically hold a room ID or a room NAME — matched
+    against both. It is never empty any more: since the ground migration
+    everybody standing in a location stands in one of its rooms, and an empty
+    value means "no data", not "everywhere".
     """
     from app.models.character import (
         list_available_characters,
@@ -58,7 +61,7 @@ def _list_characters_in_room(location_id: str, room_id: str, exclude: str = "") 
         if get_character_current_location(c) != location_id:
             continue
         char_room = (get_character_current_room(c) or "").strip()
-        if room_id and char_room and char_room not in (target_id, target_name):
+        if room_id and char_room not in (target_id, target_name):
             continue
         out.append(c)
     return out

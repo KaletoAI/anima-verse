@@ -144,6 +144,7 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
         EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave, opening_entry_room,
         opening_on_edge,
     )
+    from app.models.world import get_arrival_room_id
     exit_edge = EDGE_OF_DIRECTION[direction]
     cur_entry = get_entry_room_id(cur)
     cur_room = (get_character_current_room(avatar) or "").strip()
@@ -178,9 +179,9 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
     # way onto a location. No opening on the crossed edge, no entry — and a
     # location without any opening cannot be entered at all. That is reported
     # (``has_entrance`` feeds the editor's warning), never silently repaired.
-    # The opening's room link routes the avatar; WITHOUT one the avatar lands
-    # on the location's ground and is in no room, which the perception layer
-    # already reads as "the whole location" (_list_characters_in_room).
+    # The opening's room link routes the avatar; WITHOUT one it says nothing
+    # about the room and the arrival rule decides (plan-grundflaeche.md § 6:
+    # the declared entry room, otherwise the location's ground room).
     entry_edge = OPPOSITE_EDGE[exit_edge]
     if not opening_on_edge(target, entry_edge):
         from app.core.i18n import t as _t
@@ -189,7 +190,8 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
         raise HTTPException(status_code=403, detail={
             "reason": "no_entrance",
             "message": _t("There is no way in on this side.", _lang)})
-    target_entry_room = opening_entry_room(target, entry_edge)
+    target_entry_room = (opening_entry_room(target, entry_edge)
+                         or get_arrival_room_id(target))
 
     # Block rules: the avatar is subject to the same restrictions as NPCs.
     from app.models.rules import check_leave, check_access
@@ -203,9 +205,9 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
             detail={"reason": "block_enter", "message": enter_msg})
 
     save_character_current_location(avatar, target_id)
-    # ALWAYS write the room, empty included: a roomless opening puts the
-    # avatar on the location's ground, and only an explicit write clears the
-    # room it came from.
+    # Write the room explicitly: the opening may route somewhere other than
+    # the arrival room the location write picks by itself, and only an
+    # explicit write clears the room the avatar came from.
     save_character_current_room(avatar, target_entry_room)
     # A location change interrupts the running pose (otherwise the old one
     # persists at the new place). The avatar is player-controlled → clear,

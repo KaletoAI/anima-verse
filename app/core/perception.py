@@ -96,17 +96,18 @@ def compute_earshot(*, speaker: str, volume: str,
 
 
 def _resolve_presence(location_id: str, room_id: str) -> Tuple[List[str], List[str]]:
-    """Raum-Mitglieder + Mitglieder anderer Raeume derselben Location.
+    """Members of the room + members of the other rooms of the same location.
 
-    Delegiert an die bestehende Hoerweite-Primitive aus ``room_entry``.
+    Delegates to the existing earshot primitive in ``room_entry``.
     """
     from app.core.room_entry import _list_characters_in_room
     if not location_id:
         return [], []
-    if room_id:
-        room_members = _list_characters_in_room(location_id, room_id)
-    else:
-        room_members = _list_characters_in_room(location_id, "")
+    # No branch on an empty room any more: the ground is a room, so the room
+    # query answers for it like for any other. The second call passes ""
+    # deliberately — that IS the "everyone in the location" query, and the
+    # difference of the two sets is who is within shouting distance.
+    room_members = _list_characters_in_room(location_id, room_id)
     all_in_loc = _list_characters_in_room(location_id, "")
     rm = set(room_members)
     location_others = [c for c in all_in_loc if c not in rm]

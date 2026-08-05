@@ -139,8 +139,12 @@ def start_journey(character_name: str, target_id: str) -> Dict[str, Any] | None:
     Returns the stored journey dict, or None when there is no path (or the
     character already stands on the target). Leave/access checks are the
     CALLER's job (SetLocation already does them) — this only handles the
-    mechanics. Entry-room discipline: the character steps to the entry room
-    of the current location, journeys always leave through it.
+    mechanics. Entry-room discipline: DOES the current location declare an
+    entry room, the character steps into it first — journeys leave through
+    it, like every other way out. Declares it none, leaving is free from
+    wherever the character stands (plan-grundflaeche.md § 6) and nobody is
+    moved. Where the journey ARRIVES is decided centrally by
+    ``save_character_current_location`` (the arrival room of the target).
     """
     from app.models.character import (
         get_character_current_location, get_character_current_room,

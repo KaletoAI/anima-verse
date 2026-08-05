@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 
-interface RoomInfo { id: string; name: string; is_entry: boolean }
+interface RoomInfo { id: string; name: string; is_entry: boolean; is_ground: boolean }
 interface Neighbor { id: string; name: string }
 type Dir = 'north' | 'south' | 'east' | 'west'
 type Neighbors = Partial<Record<Dir, Neighbor | null>>
@@ -141,7 +141,9 @@ export function MovePad({
             const cur = r.id === currentRoomId
             return (
               <button key={r.id} disabled={cur || busy} onClick={() => onEnterRoom(r.id)}
-                title={r.is_entry ? t('Entry / exit room') : ''}
+                title={r.is_ground
+                  ? t('The ground of this location — the area no room takes up')
+                  : r.is_entry ? t('Entry / exit room') : ''}
                 style={{
                   padding: '2px 8px', borderRadius: 10, fontSize: '0.8em', height: 'fit-content',
                   cursor: cur ? 'default' : 'pointer',
@@ -149,7 +151,7 @@ export function MovePad({
                   background: cur ? 'var(--accent, #6aa9ff)' : 'transparent',
                   color: cur ? '#fff' : 'inherit', opacity: cur ? 1 : 0.85,
                 }}>
-                {r.name}{r.is_entry ? ' ⌂' : ''}
+                {r.is_ground ? '🌐 ' : ''}{r.name}{r.is_entry ? ' ⌂' : ''}
               </button>
             )
           })}

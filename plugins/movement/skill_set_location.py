@@ -344,13 +344,15 @@ class SetLocationSkill(PluginSkill):
                 # 2. Zweiter Part ist kein Raum → als freie Pose deuten
                 pose = requested_second
 
-        # Falls kein Raum gefunden: Entry-Room der Location nehmen (statt random)
-        if not matched_room and rooms:
-            from app.models.world import get_entry_room_id
-            _entry_id = get_entry_room_id(matched_location)
+        # No room named: land where every arrival lands — the declared entry
+        # room, or the location's ground (plan-grundflaeche.md § 6). Never a
+        # random first room.
+        if not matched_room:
+            from app.models.world import get_arrival_room_id
+            _arrival_id = get_arrival_room_id(matched_location)
             matched_room = next(
-                (r for r in rooms if r.get("id") == _entry_id),
-                rooms[0])
+                (r for r in rooms if r.get("id") == _arrival_id),
+                {"id": _arrival_id, "name": ""})
 
         room_id = matched_room.get("id", "") if matched_room else ""
         room_name = matched_room.get("name", "") if matched_room else ""

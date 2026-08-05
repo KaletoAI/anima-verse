@@ -726,7 +726,7 @@ class SchedulerManager:
 
         from app.models.world import (get_location_name as _get_loc_name,
                                        resolve_location, get_location,
-                                       get_entry_room_id)
+                                       get_arrival_room_id)
         if location:
             loc_obj = resolve_location(location)
             if loc_obj:
@@ -781,11 +781,12 @@ class SchedulerManager:
 
                 old_loc = get_character_current_location(agent)
                 save_character_current_location(agent, location)
-                # Bei echtem Ortswechsel in den Entry-Room des neuen Orts setzen.
+                # On a real location change, put the agent in the new place's
+                # arrival room — the declared entry room, or its ground.
                 if location and location != old_loc:
                     try:
                         _ld = get_location(location)
-                        _room = get_entry_room_id(_ld) if _ld else ""
+                        _room = get_arrival_room_id(_ld) if _ld else ""
                     except Exception:
                         _room = ""
                     save_character_current_room(agent, _room or "")
