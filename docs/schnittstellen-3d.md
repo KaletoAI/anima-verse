@@ -166,7 +166,12 @@
 >     plan-3d-lod-und-betreten.md):** client3d liest die Openings für die
 >     Eintritts-Nähe des „Betreten"-Angebots — Weltposition = Kachelzentrum
 >     + `at_world`, mehr rechnet kein Renderer (der Server hat auch die
->     `tile_rotation` nach Nr. 15 bereits eingerechnet). Und der SERVER
+>     `tile_rotation` nach Nr. 15 bereits eingerechnet). Dabei zählen
+>     **nur die Öffnungen der Kante, die der Schritt kreuzt**: eine Öffnung
+>     an der Nordkante ist kein Eingang für den, der von Westen her tritt,
+>     so nah er an der Ecke auch stehen mag (`entryOfferNear` filtert auf
+>     dieselbe Kante, die der Server prüft — sonst verspricht das Angebot
+>     einen Schritt, den `opening_on_edge` ablehnt). Und der SERVER
 >     erlaubt den Avatar-Schritt nur über eine Kante mit autorisiertem
 >     Opening (`app/core/boundary_entry.py`, verdrahtet in
 >     `world_ops.move_avatar_step`) — eine Kante ohne Opening ist kein
@@ -174,13 +179,27 @@
 >     betretbar (403 `no_entrance`, Entscheidung 2026-08-04: sonst wäre ein
 >     Ort ohne Autoren-Öffnung heimlich über jede Kante begehbar). Der
 >     Eintritt routet in den verknüpften Raum (`room`); eine Opening OHNE
->     `room` ist trotzdem gültig — sie ist der Eingang zu einer Location,
->     deren Boden kein Raum ist, und der Avatar steht danach in keinem Raum.
->     Das Verlassen ist aus dem verknüpften Raum heraus oder aus keinem Raum
->     ohne Entry-Room erlaubt (der Rundweg derselben Opening); für jede
->     andere Kante bleibt das `entry_room`-Gate beim Verlassen unverändert
->     die Gameplay-Instanz. Der Journey-Durchlauf ist weiterhin eine
->     spätere Etappe.
+>     `room` ist trotzdem gültig — sie sagt dann nichts über den Raum, und
+>     es entscheidet die Ankunftsregel (`world.get_arrival_room_id`: der
+>     erklärte `entry_room`, sonst die Grundfläche). Seit § A13 kommt
+>     niemand mehr raumlos an.
+>     **Das Verlassen entscheidet EINE Funktion**
+>     (`boundary_entry.may_leave`), in dieser Reihenfolge: über eine
+>     autorisierte Öffnung DIESER Kante aus dem Raum heraus, den sie
+>     verknüpft — ohne Verknüpfung führt sie auf die Grundfläche, also ist
+>     die Grundfläche der Raum, aus dem sie herauslässt (der Rundweg
+>     derselben Öffnung); sonst aus dem `entry_room`, dem Gameplay-Gate
+>     jeder anderen Kante; und von überall, wenn die Location keinen
+>     `entry_room` erklärt. Dieselbe Funktion beantwortet den Kompass:
+>     `GET /world/avatar-neighbors` trägt `may_leave` **pro Richtung** in
+>     jedem Nachbar-Eintrag; das frühere Wurzelfeld `at_entry_room` ist
+>     ersatzlos weg — es rechnete eine zweite, ältere Regel nach und
+>     blendete Richtungen aus, die der Server erlaubt.
+>     **`width_m` wird beim Speichern geklemmt, nie verworfen:**
+>     [0,5 … `plan_width_m`] Meter (ohne Anker steht 10 ein) — die Kante
+>     ist die Obergrenze, und eine gespeicherte Öffnung, die stillschweigend
+>     verschwindet, kostet den Autor seine Arbeit. Der Journey-Durchlauf ist
+>     weiterhin eine spätere Etappe.
 > 14. **`scene.terrain` — deterministisches Geländerelief.** Ohne Diorama ist
 >     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed, wave_m?}`
 >     (nur zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5
@@ -842,6 +861,48 @@ ist die gefilterte Sicht leer (nur die rasterlosen Einträge), nicht etwa voll.
 **Spielmechanik, keine Sicherheitsgrenze.** Der Filter macht das Entdecken zum
 Spielinhalt; er ist kein Mandantenschutz. Wer die Welt wirklich nicht sehen
 soll, bekommt keinen Zugang — nicht bloß Nebel.
+
+---
+
+## A13. Die Grundfläche ist ein Raum — neu 2026-08-05
+
+`plan-grundflaeche.md` §§ 3/6. **Den Zustand „in keinem Raum" gibt es nicht
+mehr.** Jede Location trägt einen **reservierten Raum** mit fester Id
+`__ground__` (`world.GROUND_ROOM_ID`) — die Fläche, die kein anderer Raum
+einnimmt. Der Server bringt ihn mit (Einmal-Migration, danach
+`ensure_ground_room` bei jedem Schreiben; Klone erben ihn von ihrer Vorlage);
+der Autor legt ihn nie an und kann ihn nicht löschen, nur benennen.
+
+- **Keine Geometrie.** Die Grundfläche trägt kein `layout` und damit kein
+  Rezept (`compose_recipe` liefert ohne Layout `None`). Sie taucht in
+  **keiner** Platte, keiner Wand und keinem `rooms[]`-Block des Szenen-
+  Rezepts (§ B1) auf und wird nie als Fläche gezeichnet. Sichtbar ist sie
+  als das, was ohnehin unter den Räumen liegt: die Etagenplatte der Etage 0
+  mit dem aus `terrain` aufgelösten Kind (§ A9, Reihenfolge in § A6).
+  **Achtung:** diese Platte entsteht nur, wenn die Location einen Grundriss
+  hat (`map3d.outline`) — ohne ihn gibt es in der Detailszene keine
+  Etagenplatte, und das Boden-Kind wird dort nirgends sichtbar.
+- **Adressiert wird sie wie jeder Raum, über ihre Id.** `GET /play/scene`
+  führt sie in `rooms[]` mit `is_ground: true`; **von dort holen Clients die
+  Id** — die reservierte Konstante bleibt Server-Sache und wird in keinem
+  Renderer nachgebaut. `POST /play/enter-room` bildet ein leeres `room_id`
+  auf sie ab und schickt sie durch dieselbe Regel-Prüfung wie jeden anderen
+  Raum: eine Block-Regel kann auch die Grundfläche sperren.
+- **Name am Raum**, wie bei jedem anderen; ohne Namen greift überall dasselbe
+  übersetzte Wort (`get_ground_name`). Das frühere Location-Feld
+  `ground_name` ist ersatzlos weg.
+- **Ankommen:** `entry_room` ist damit **optional** — gesetzt = man kommt
+  dort an, leer = man kommt auf der Grundfläche an. Das entscheidet EINE
+  Funktion für jeden Ankunftsweg (`world.get_arrival_room_id`: Avatar-
+  Schritt, Reise, Scheduler, Bewegungs-Skills, Admin-Versetzung). Eine
+  Boundary-Öffnung mit Raumverweis schlägt beides (§ B1 Nr. 13).
+- **Hörweite gewöhnlich.** Wer auf der Grundfläche steht, ist in einem Raum
+  wie jeder andere und hört nicht mehr in geschlossene Räume hinein — die
+  sichtbarste Verhaltensänderung dieses Umbaus.
+- **Für Renderer heißt das:** eine Figur, die in keinem Raum-Umriss liegt,
+  steht auf der Grundfläche, nicht „nirgends". Die Raum-Heuristik hat damit
+  ein gültiges Ziel statt eines Lochs (client3d, `groundRoomId` aus dem
+  Payload) — vorher behielt sie den Raum der VORIGEN Location.
 
 ---
 
