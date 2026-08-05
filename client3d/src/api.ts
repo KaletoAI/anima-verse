@@ -10,7 +10,35 @@ import type {
 // the choosing side and the fetching side cannot drift apart (E4-T5).
 import { emptyManifest, readManifest, type AudioManifest } from './game/soundtrack';
 
+/**
+ * The session is gone (401) — NOT a server that cannot be reached.
+ *
+ * The two used to be one generic `Error`, and every caller that catches
+ * broadly (the worldmap poll) reported the expired session as "backend
+ * unreachable": a red dot over a running server. `floorplan.ts` tells them
+ * apart the same way, by status.
+ */
+export class AuthError extends Error {
+  constructor() {
+    super('not signed in');
+    this.name = 'AuthError';
+  }
+}
+
+/** True for the one failure that needs a login rather than a retry. */
+export function isAuthError(e: unknown): e is AuthError {
+  return e instanceof AuthError;
+}
+
 async function json<T>(res: Response): Promise<T> {
+  // Announced to the whole app, once per failing call: `main.ts` listens and
+  // brings the title screen's login form up. Same event name the shared
+  // package fires (`@anima/player-ui` api.ts), so ONE listener covers the
+  // HUD's own calls as well.
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('auth:required'));
+    throw new AuthError();
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json() as Promise<T>;
 }

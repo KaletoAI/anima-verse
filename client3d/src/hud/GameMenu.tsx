@@ -43,7 +43,8 @@ export interface GameMenuProps {
   isAdmin: boolean;
   /** the fog of war is currently switched off for this browser */
   showAll: boolean;
-  /** store the switch and apply it — `Hud.tsx` reloads the view */
+  /** store the switch and apply it — `Hud.tsx` hands it to main.ts, which
+   *  switches the view in the running world */
   onShowAllChange: (on: boolean) => void;
   /** sign out and go back to the title screen (main.ts owns the flow) */
   onBackToTitle: () => void;
@@ -148,15 +149,16 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
 
       {/* The one entry that is not a player setting: it lifts the fog of war
           for an administrator, which is a different VIEW of the world and not
-          a matter of taste. Hence its own section, and hence the note about
-          the reload — the whole map is built from that view at start-up. */}
+          a matter of taste. Hence its own section. It takes effect at once —
+          main.ts adds and removes the places of the other view in the running
+          world, so there is nothing to warn about. */}
       {isAdmin && (
         <section className="hud-menu-section">
           <h3 className="hud-menu-head">{t('Administration')}</h3>
           <Choice label={t('Show all locations (admin)')} value={showAll} options={onOff}
             onPick={onShowAllChange} />
           <p className="hud-menu-hint">
-            {t('Shows the whole map, including places your character has not discovered yet. Reloads the view.')}
+            {t('Shows the whole map, including places your character has not discovered yet. Takes effect at once.')}
           </p>
         </section>
       )}

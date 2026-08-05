@@ -70,6 +70,11 @@ export interface HudGameActions {
    *  title" (E4-T4). main.ts owns the flow (logout + reload), so the menu
    *  does not become a second shutdown path. */
   backToTitle?: () => void;
+  /** the administrator flipped "show all locations" in the game menu. The
+   *  switch changes which VIEW the client fetches, and main.ts applies it to
+   *  the running world — the places of the other view are added and removed in
+   *  place, so there is no reload and nothing is lost. */
+  setShowAll?: (on: boolean) => void;
   /** the player changed an audio setting in the menu (E4-T4). The VOLUMES are
    *  already applied to the engine when this runs — this is for the switches
    *  (musicOn/ambientOn/ttsOn), which say what should play at all and are the

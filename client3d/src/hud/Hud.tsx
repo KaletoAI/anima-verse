@@ -263,20 +263,25 @@ export function Hud({ avatar, username, role }: {
   /**
    * "Show all locations" (Etappe 5) — the administrator's way past the fog of
    * war. A LOCAL switch like the two above, but it decides which VIEW the
-   * client fetches (`/play/worldmap?all=1`), and that choice is made once at
-   * boot: every tile, the pathfinding grid and the veil are built from it. So
-   * it is applied by reloading rather than by unbuilding half the world at
-   * runtime — the menu says as much next to the switch.
+   * client fetches (`/play/worldmap?all=1`).
+   *
+   * It applies LIVE: `main.ts` fetches the other view and reconciles the world
+   * against it — the places it adds come in through the reveal path, the ones
+   * it takes away are given back. The stored value is only what the NEXT start
+   * begins with. It used to reload the page, which threw a built world away
+   * for a change of view and dropped the player back on the title gate.
    *
    * Only offered to role `admin`, and `main.ts` reads the stored value under
    * the same condition: a value left behind in somebody else's browser (a
    * demoted account, a shared machine) must not make the client ask for a view
    * the server answers with 403.
    */
-  const showAll = localStorage.getItem(SHOW_ALL_KEY) === '1';
+  const [showAll, setShowAllState] = useState(
+    () => localStorage.getItem(SHOW_ALL_KEY) === '1');
   const setShowAll = useCallback((on: boolean) => {
     localStorage.setItem(SHOW_ALL_KEY, on ? '1' : '0');
-    location.reload();
+    setShowAllState(on);
+    gameActions.setShowAll?.(on);
   }, []);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(

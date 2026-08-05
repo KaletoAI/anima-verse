@@ -27,7 +27,7 @@ import {
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, terrainLiftAt, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
-import { mountScene, sceneFigureScale, SceneLibrary, setSceneModelTier } from './scene/sceneRecipe';
+import { mountScene, sceneFigureScale, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
 import {
   entryOfferNear, mayLeaveAcross, EXIT_EDGE_OF,
   type Edge, type EntryTile,
@@ -177,6 +177,78 @@ const titleSink: WaitSink = {
   clear: () => setBootNote(null),
 };
 
+/**
+ * Marker that survives exactly ONE reload, for the ONE case that still needs
+ * one: a re-login as a DIFFERENT player (see `installReloginGate`). The world
+ * that stands belongs to the old session, so the page is loaded again — and
+ * then the title screen's "Enter world" gate would be a door the player has
+ * just walked through. With the marker set, boot goes straight in.
+ *
+ * It is NOT used anywhere else. The admin's view switch applies live
+ * (`applyShowAll`), and a logout must land on the title screen, so
+ * `backToTitle` deliberately leaves the marker alone.
+ */
+const RESUME_KEY = 'av3d.resume';
+
+/**
+ * Stand in for the title screen's button as the audio gesture.
+ *
+ * A browser only lets an `AudioContext` start from a real user gesture, and a
+ * resumed page has no button to click. So the next click or key press — the
+ * first one, whatever it is — unlocks the engine. Capture phase so nothing can
+ * swallow it, one-shot, and `unlock()` is idempotent anyway; until it happens
+ * the soundtrack tick simply keeps waiting for `running` (see below).
+ */
+function unlockAudioOnFirstGesture(): void {
+  const once = () => {
+    window.removeEventListener('pointerdown', once, true);
+    window.removeEventListener('keydown', once, true);
+    void getAudio().unlock();
+  };
+  window.addEventListener('pointerdown', once, true);
+  window.addEventListener('keydown', once, true);
+}
+
+/**
+ * The session died while the world was running — bring the login form back
+ * instead of leaving the player in front of a map that quietly stops moving.
+ *
+ * `auth:required` is fired by BOTH api layers on a 401 (client3d's `api.ts`
+ * and the shared `@anima/player-ui`), so this one listener covers the scene
+ * polls and the HUD's own calls alike. Deduped: a burst of failing polls is
+ * one lost session, not a stack of overlays.
+ *
+ * A SUCCESSFUL RE-LOGIN RESUMES IN PLACE. There is nothing to rebuild — the
+ * world stands, the polls simply start succeeding again with the fresh cookie,
+ * and the title screen fades itself out because the boot state is long at
+ * 100 %. The one exception is a re-login under ANOTHER name: avatar, role and
+ * the whole known-places view were built for the session that is gone, so that
+ * case reloads (with the resume marker, so it does not land on the gate).
+ */
+let reloginOpen = false;
+function installReloginGate(username: string): void {
+  window.addEventListener('auth:required', () => {
+    if (reloginOpen) return;
+    reloginOpen = true;
+    mountTitle({
+      needsLogin: true,
+      onLogin: async (u, p) => {
+        void getAudio().unlock();
+        const user = await api.login(u, p);
+        reloginOpen = false;
+        if (user.username !== username) {
+          sessionStorage.setItem(RESUME_KEY, '1');
+          location.reload();
+        }
+      },
+      // Not reachable with `needsLogin` — the screen shows the form, not the
+      // button. Kept honest anyway: whoever gets past the gate leaves it open
+      // for the next lost session.
+      onEnter: () => { reloginOpen = false; },
+    });
+  });
+}
+
 async function boot() {
   // `bootStatus` survives for exactly ONE job: the reachability check below
   // runs BEFORE any React exists — the title screen cannot be mounted before
@@ -194,11 +266,24 @@ async function boot() {
   });
 
   const start = (username: string, role: string) => {
+    installReloginGate(username);
     void startApp(username, role).catch((e) => {
       console.error('[boot] start failed', e);
       setBootNote({ kind: 'failed' });
     });
   };
+
+  // Coming back from the one reload that is not a fresh start (see
+  // RESUME_KEY): the player is signed in and has just clicked their way
+  // through a login form — asking them to click "Enter world" as well would be
+  // a door in front of a door. The gesture the button would have been is
+  // caught from the first click or key press instead.
+  if (auth.authenticated && auth.user && sessionStorage.getItem(RESUME_KEY) === '1') {
+    sessionStorage.removeItem(RESUME_KEY);
+    unlockAudioOnFirstGesture();
+    start(auth.user.username, auth.user.role);
+    return;
+  }
 
   // The title screen replaces the old vanilla login overlay AND the loading
   // gap behind it: it stays up while `startApp` builds the world underneath
@@ -228,9 +313,10 @@ async function startApp(username: string, role: string) {
   // fetched. Only an administrator may see the unfiltered map — a stored `1`
   // in anybody else's browser is ignored here (the server would answer 403,
   // and a client that asked would break its own boot for a setting it is not
-  // allowed to have). It is read once: the menu applies a change by reloading.
+  // allowed to have). The stored value is the STARTING view; the menu switches
+  // it while the world runs (`applyShowAll`), which is why it is a `let`.
   const isAdmin = role === 'admin';
-  const showAll = isAdmin && localStorage.getItem(SHOW_ALL_KEY) === '1';
+  let showAll = isAdmin && localStorage.getItem(SHOW_ALL_KEY) === '1';
   const engine = new Engine(app);
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
@@ -883,16 +969,21 @@ async function startApp(username: string, role: string) {
     panel.show(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf,
       { openable: openable(tile), open: openLocationId === id });
   };
+  /** Fly-in distance of the panel buttons: never FARTHER than where the camera
+   *  already stands. `flyTo` sets the distance unconditionally, so a fixed
+   *  OPEN_FLY_DIST pushed a camera that was already closer back out — "look
+   *  inside" would zoom OUT. */
+  const flyInDist = () => Math.min(engine.targetDist, OPEN_FLY_DIST);
   panel.onZoomTo = (id) => {
     const tile = tiles.get(id);
-    if (tile) engine.flyTo(tile.center.clone(), OPEN_FLY_DIST);
+    if (tile) engine.flyTo(tile.center.clone(), flyInDist());
   };
   // "Hineinsehen" (Etappe 3): the old fly-to stays part of it — fly in AND
   // open the detail view. Pure view state, no server call.
   panel.onLookInside = (id) => {
     const tile = tiles.get(id);
     if (!tile) return;
-    engine.flyTo(tile.center.clone(), OPEN_FLY_DIST);
+    engine.flyTo(tile.center.clone(), flyInDist());
     openLocation(id);
   };
   panel.onCloseView = () => closeOpenLocation();
@@ -1033,6 +1124,10 @@ async function startApp(username: string, role: string) {
    *  NpcManager only runs against a genuinely NEW payload (npcs.update is
    *  called at 1 Hz off the cached map, the poll refreshes every 3 s) */
   let mapStamp = 1;
+  /** Counts the changes of the VIEW (`applyShowAll`). A poll that started
+   *  under the old view is dropped when it comes back under the new one — the
+   *  two payloads describe different worlds. */
+  let viewRev = 0;
   const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
   /** aktuell DARGESTELLTER Raum je Figur (null = Außenansicht) — erkennt
    *  Betreten/Verlassen/Wechsel für das Exit-Routing */
@@ -1072,8 +1167,13 @@ async function startApp(username: string, role: string) {
 
   async function pollWorldMap() {
     let map: WorldMap;
+    const rev = viewRev;
     try {
       map = await api.getWorldMap(showAll);
+      // The view was switched while this was in flight (the admin's "show all"):
+      // this payload belongs to the OTHER view and would re-reveal tiles the
+      // switch has just taken away. The switch published its own snapshot.
+      if (rev !== viewRev) return;
       lastMap = map;
       mapStamp += 1;
       hud.setOnline(true);
@@ -1082,8 +1182,12 @@ async function startApp(username: string, role: string) {
       refreshSelection(map);
       reconcileAvatarCell(map);   // server moved the avatar? (E3-T3)
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
-    } catch {
-      hud.setOnline(false);
+    } catch (e) {
+      // An expired session is not an unreachable server: the dot stays as it
+      // was and the `auth:required` listener (boot) brings the login form up.
+      // Painting it red here is what made a lost login look like a dead
+      // backend.
+      if (!api.isAuthError(e)) hud.setOnline(false);
       return;
     }
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
@@ -1440,10 +1544,10 @@ async function startApp(username: string, role: string) {
    * the next poll — `tiles` is what says "already built", so nothing is done
    * twice.
    *
-   * ONE DIRECTION ONLY. In play a place once known stays known, so nothing has
-   * to be taken away again. The only thing that can shrink the map is the
-   * administrator's "show all" switch, and that one is applied by reloading
-   * the view (see the game menu) rather than by unbuilding half a world.
+   * ONE DIRECTION ONLY, and that is the whole of it: in play a place once
+   * known stays known. The only thing that can take places away again is the
+   * administrator's "show all" switch — `applyShowAll` below owns that
+   * direction and calls this one for the places the other view adds.
    */
   let revealBusy = false;
   async function revealLocations(map: WorldMap): Promise<void> {
@@ -1502,6 +1606,135 @@ async function startApp(username: string, role: string) {
     pathGrid = publishPathGrid();
     rebuildFog();
   }
+
+  /**
+   * Give a tile back. The mirror image of `addTile`, and the only place that
+   * takes one down for good — a rebuild (`rebuildTile`) replaces a tile with a
+   * fresh one and must NOT come through here.
+   *
+   * WHAT IS FREED AND WHAT IS NOT. `unmountScene` is the scene side's own
+   * teardown (its group, the clip material clones, the room groups and their
+   * labels); what stays behind afterwards is what `buildTile` itself made —
+   * ring, ground plate, procedural shell — and those geometries and materials
+   * belong to this tile alone, so they are disposed. Two things are left
+   * deliberately: everything hanging off a placed server MODEL (geometries and
+   * base materials belong to the loader cache, see setSceneModelTier — freeing
+   * them would poison every later mount of the same URL) and every TEXTURE
+   * (the surface library is shared between tiles; a material's dispose does
+   * not touch its maps).
+   */
+  function dropTile(id: string): void {
+    const tile = tiles.get(id);
+    if (!tile) return;
+    if (openLocationId === id) closeOpenLocation();
+    if (hovered === tile) {
+      // Including the cursor: `onHover` bails out early when the id it gets is
+      // the one it already knows, so a pointer left on a vanished tile would
+      // keep the hand shape over empty ground.
+      hovered = null;
+      document.body.style.cursor = 'default';
+    }
+    tiles.delete(id);
+    dropDoorMarks(id);
+    wallCache.delete(id);
+    locSig.delete(id);
+    buildingTierByLoc.delete(id);
+    interiorTierByLoc.delete(id);
+    const cell = `${tile.loc.grid_x},${tile.loc.grid_y}`;
+    passableCells.delete(cell);
+    locIdAtCell.delete(cell);
+    engine.scene.remove(tile.group);
+    // Captured BEFORE the unmount, which clears the ledger: these subtrees are
+    // the loader cache's and are only unhooked, never disposed.
+    const cached = new Set<THREE.Object3D>();
+    for (const rec of tile.placedModels ?? []) if (rec.object) cached.add(rec.object);
+    unmountScene(tile);
+    const free = (o: THREE.Object3D) => {
+      if (cached.has(o)) return;
+      // CSS2D labels live in the DOM — the renderer does not take them down.
+      const label = o as { isCSS2DObject?: boolean; element?: HTMLElement };
+      if (label.isCSS2DObject && label.element) label.element.remove();
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.geometry.dispose();
+        for (const m of (Array.isArray(mesh.material) ? mesh.material : [mesh.material])) {
+          m?.dispose();
+        }
+      }
+      for (const child of [...o.children]) free(child);
+    };
+    free(tile.group);
+  }
+
+  /**
+   * Take down every tile the given payload no longer carries, and republish
+   * everything derived from the set of tiles. Returns whether anything went.
+   *
+   * The avatar's own location is never dropped, whatever the payload says: it
+   * is where the player stands, and a cell pulled out from under the figure
+   * would leave the walk machine (passability, collision, the enter offer)
+   * without ground to stand on.
+   */
+  function dropVanished(map: WorldMap): boolean {
+    const keep = new Set(placeableOf(map, detailById).map((l) => l.id));
+    const here = map.characters.find((c) => c.name === map.avatar)?.location_id;
+    if (here) keep.add(here);
+    const gone = [...tiles.keys()].filter((id) => !keep.has(id));
+    if (!gone.length) return false;
+    for (const id of gone) dropTile(id);
+    for (let i = placeable.length - 1; i >= 0; i -= 1) {
+      if (!keep.has(placeable[i].id)) placeable.splice(i, 1);
+    }
+    // The panel may be showing one of the places that just went; it carries no
+    // location of its own to compare, and a view switch is a fine moment to
+    // close it either way.
+    panel.hide();
+    publishTerrainGrid();
+    engine.setPickables([...tiles.values()].map((t) => t.group));
+    pathGrid = publishPathGrid();
+    rebuildFog();
+    return true;
+  }
+
+  /**
+   * The administrator's "show all locations" switch, applied LIVE (game menu).
+   *
+   * It changes which VIEW is fetched (`/play/worldmap?all=1`, § A12), and the
+   * world is reconciled against the new payload in place: what the other view
+   * adds goes through the reveal path of Etappe 5, what it takes away through
+   * `dropVanished`. No reload — the switch is a view, not a new session.
+   *
+   * The flag moves BEFORE anything is built, and `viewRev` invalidates the
+   * poll that was in flight while it moved: a stale payload of the previous
+   * view would immediately reveal the tiles this switch has just removed.
+   */
+  let viewSwitchBusy = false;
+  async function applyShowAll(on: boolean): Promise<void> {
+    if (!isAdmin || on === showAll || viewSwitchBusy) return;
+    viewSwitchBusy = true;
+    try {
+      const map = await api.getWorldMap(on);
+      showAll = on;
+      viewRev += 1;
+      lastMap = map;
+      mapStamp += 1;
+      fogBounds = map.grid_bounds;
+      fogged = map.fogged;
+      dropVanished(map);
+      takeRoomsFrom(map);
+      updatePins(map);
+      refreshSelection(map);
+      // Adds the places the other view knows and republishes what it touched;
+      // a run with nothing fresh returns without doing anything.
+      await revealLocations(map);
+    } catch (e) {
+      console.warn('[view] show-all switch failed', e);
+      uiActions.toast?.('The view could not be switched.', true);
+    } finally {
+      viewSwitchBusy = false;
+    }
+  }
+  gameActions.setShowAll = (on) => { void applyShowAll(on); };
 
   // --- Soundtrack: music by daylight, ambience by ground (E4-T5) ------------
   //
