@@ -10,6 +10,9 @@ import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
+/** The avatar's relationship TO this character, as `/play/others` sends it.
+ *  Absent/null when there is no relationship at all. */
+interface Relation { type: string; strength: number; sentiment: number }
 interface CharState {
   name: string
   mood: string
@@ -19,6 +22,7 @@ interface CharState {
   conditions: Array<{ name?: string; label?: string; icon?: string }>
   profile_image: string
   in_party?: boolean
+  relation?: Relation | null
 }
 interface Others { avatar: string; characters: CharState[] }
 
@@ -26,6 +30,21 @@ function portraitUrl(c: CharState): string {
   return c.profile_image
     ? `/characters/${encodeURIComponent(c.name)}/images/${encodeURIComponent(c.profile_image)}`
     : `/characters/${encodeURIComponent(c.name)}/outfit-expression?fallback=default`
+}
+
+/** One line "type · strength". The sentiment is NOT printed — only its sign
+ *  colours the line (positive/negative/neutral), and the exact value stays in
+ *  the tooltip. The strength shows as the server sends it; no bucketing. */
+function RelationLine({ c, t }: { c: CharState; t: (s: string) => string }) {
+  const rel = c.relation
+  if (!rel) return null
+  const sign = rel.sentiment > 0 ? 'positive' : rel.sentiment < 0 ? 'negative' : 'neutral'
+  return (
+    <div className={`player-relation player-relation-${sign}`}
+      title={`${t('Relationship')}: ${rel.type} · ${rel.strength} · ${rel.sentiment}`}>
+      {rel.type} · {rel.strength}
+    </div>
+  )
 }
 
 function StatBars({ c }: { c: CharState }) {
@@ -103,6 +122,7 @@ export function OthersPanel() {
               </div>
               {c.mood && <div style={{ opacity: 0.6, fontSize: '0.78em', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.mood}</div>}
               {c.activity && <div style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.activity}</div>}
+              <RelationLine c={c} t={t} />
             </div>
           </div>
           {c.conditions.length > 0 && (

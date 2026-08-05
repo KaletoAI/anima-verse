@@ -13,6 +13,7 @@ export * from './GiftPicker';
 export * from './ScenePanel';
 export * from './SelfPanel';
 export * from './OthersPanel';
+export * from './PartyStrip';
 // Stage 6: the remaining /play panels, so the 3D HUD shows the identical ones.
 export * from './ErrorBoundary';
 export * from './BelongingsPanel';

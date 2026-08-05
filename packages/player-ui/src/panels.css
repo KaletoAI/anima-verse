@@ -203,3 +203,44 @@
   0%, 100% { opacity: 0.45; }
   50% { opacity: 1; }
 }
+
+/* Party strip: one row — leader, followers, own role, Leave. The host places
+   it (the 3D HUD does so in hud.css); everything here is the row itself. */
+.player-party {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 0.9em;
+  background: rgba(120, 170, 255, 0.16);
+  border: 1px solid rgba(120, 170, 255, 0.55);
+}
+.player-party-leader { font-weight: 600; }
+.player-party-members { opacity: 0.85; }
+.player-party-role { opacity: 0.6; font-size: 0.85em; }
+.player-party-ask { opacity: 0.8; }
+.player-party-btn {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 0.92em;
+}
+.player-party-btn:hover { border-color: var(--accent, #6aa9ff); }
+
+/* Others panel: the avatar's relationship to a present character. The
+   sentiment only decides the colour — the value itself stays as the server
+   sends it, no bucketing into words. */
+.player-relation {
+  font-size: 0.74em;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-relation-positive { color: var(--ok, #59c37a); }
+.player-relation-negative { color: var(--danger, #e05656); }

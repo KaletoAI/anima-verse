@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
-  ScenePanel, SelfPanel, OthersPanel,
+  ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
@@ -280,6 +280,17 @@ export function Hud({ avatar, username, role }: {
     finally { setMoving(false); }
   }, [moving, refreshScene]);
 
+  // Leaving the party (Etappe 6): PartyStrip is presentational, so the post
+  // and the refresh sit here. No optimistic UI — the strip goes away when the
+  // next scene payload says the party is gone. Invitations stay in ScenePanel;
+  // answering the same invite from two surfaces would resolve it twice.
+  const leaveParty = useCallback(async () => {
+    try {
+      await apiPost('/play/party/leave', {});
+      await refreshScene();
+    } catch { /* stale invite/party — the next poll corrects the view */ }
+  }, [refreshScene]);
+
   const present = data?.present || [];
   const avatarName = data?.avatar || avatar;
 
@@ -511,6 +522,15 @@ export function Hud({ avatar, username, role }: {
           <button className="player-chip" onClick={() => gameActions.exitEmbodied?.()}>
             {t('Leave (Esc)')}
           </button>
+        </div>
+      )}
+
+      {/* Party strip (Etappe 6): who travels with the avatar, top centre and
+          below the mode chip. Fed from THIS container's scene poll — no second
+          request — and only present while there is a party at all. */}
+      {data?.party && (
+        <div className="hud-party">
+          <PartyStrip party={data.party} onLeave={leaveParty} />
         </div>
       )}
 
