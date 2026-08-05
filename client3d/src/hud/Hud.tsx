@@ -17,10 +17,10 @@
  * in /play): ScenePanel receives data + refresh as props and never polls
  * itself. The `photoDialog` slot is filled with `PlayerPhotoDialog` (stage 6),
  * the package's slim player-side dialog — the big game-admin `ImageGenDialog`
- * that /play slots in stays where it is. The gallery panel followed in stage 6
- * part 2 WITHOUT its `regenDialog` slot: regenerating an image needs that same
- * admin dialog, so the HUD simply does not offer the button. Instagram is
- * still open for the same reason.
+ * that /play slots in stays where it is. The gallery and Instagram panels
+ * followed in stage 6 part 2 WITHOUT their dialog slots: regenerating an image
+ * (and animating a post) needs those same admin dialogs, so the HUD simply
+ * does not offer the buttons.
  *
  * The CHAT panel additionally runs in an auto mode (E3 acceptance) — it shows
  * itself when something is said and withdraws when the room stays silent; see
@@ -31,7 +31,7 @@ import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
-  GalleryPanel,
+  GalleryPanel, InstagramPanel,
   PlayerPhotoDialog,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
@@ -58,7 +58,8 @@ import './hud.css';
 import './theme-fantasy.css';
 
 type PanelId = 'chat' | 'self' | 'others' | 'menu'
-  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests' | 'gallery';
+  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests' | 'gallery'
+  | 'instagram';
 
 /** `requires` = the skill id the panel is bound to, exactly as in /play's
  *  PANEL_META: without the skill package the button is gone, so removing a
@@ -72,6 +73,9 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
   // Like /play's PANEL_META, the gallery carries no `requires`: looking at the
   // avatar's own images is not bound to a skill package.
   { id: 'gallery', icon: 'gallery', title: 'Gallery' },
+  // Bound to the instagram skill package, exactly as in /play's PANEL_META:
+  // no package, no feed, no button.
+  { id: 'instagram', icon: 'instagram', title: 'Instagram', requires: 'instagram' },
   { id: 'phone', icon: 'phone', title: 'Phone', requires: 'send_message' },
   { id: 'news', icon: 'news', title: 'News' },
   { id: 'quests', icon: 'scroll', title: 'Quests' },
@@ -82,11 +86,12 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
 
 /** The panels that are a full reading surface rather than a status strip.
  *  At most ONE of them is open: the dock is one column of fixed height, and
- *  six 120px minimums plus self/others/menu do not fit on any screen — they
+ *  their 120px minimums plus self/others/menu do not fit on any screen — they
  *  would silently spill past the bottom edge. Opening one therefore closes
- *  the other five; self/others/menu keep stacking freely as before. */
+ *  all the others; self/others/menu keep stacking freely as before. */
 const CONTENT_PANELS = new Set<PanelId>([
-  'belongings', 'mind', 'phone', 'news', 'tasks', 'quests', 'gallery']);
+  'belongings', 'mind', 'phone', 'news', 'tasks', 'quests', 'gallery',
+  'instagram']);
 
 /** Panels that need more than the dock's 320px (user finding, acceptance of
  *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
@@ -98,8 +103,10 @@ const CONTENT_PANELS = new Set<PanelId>([
  *  320px the text side is down to a couple of words per line. The gallery is
  *  the fourth: its thumbnail grid fills 72px columns, so a 320px dock is three
  *  pictures per row and 480px is five — the same wall, half again as much of
- *  it visible at once. */
-const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests', 'gallery']);
+ *  it visible at once. Instagram is the fifth for the plainest reason of all:
+ *  a post is a full-width picture, so the dock width IS the picture width. */
+const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests', 'gallery',
+  'instagram']);
 
 /** The prefs fields that are a volume. Each is named exactly like the audio
  *  bus it drives, so applying one is a lookup and not a mapping table. */
@@ -126,7 +133,7 @@ export function Hud({ avatar, username, role }: {
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
     belongings: false, mind: false, phone: false, news: false, tasks: false,
-    quests: false, gallery: false,
+    quests: false, gallery: false, instagram: false,
   });
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
@@ -572,7 +579,8 @@ export function Hud({ avatar, username, role }: {
       )}
 
       {(open.self || open.others || open.menu || open.belongings || open.mind
-        || open.phone || open.news || open.tasks || open.quests || open.gallery) && (
+        || open.phone || open.news || open.tasks || open.quests || open.gallery
+        || open.instagram) && (
         <div className={'hud-dock'
           + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}>
           {/* Esc and M are handled HERE as well, not only in main.ts: the
@@ -653,6 +661,19 @@ export function Hud({ avatar, username, role }: {
                     the slot the button is simply not there. Browsing, paging
                     and deleting work in full. */}
                 <ErrorBoundary inline label="Gallery"><GalleryPanel /></ErrorBoundary>
+              </div>
+            </section>
+          )}
+          {open.instagram && (
+            <section className="hud-panel">
+              {panelHead('instagram', 'instagram', t('Instagram'))}
+              <div className="hud-panel-body">
+                {/* Neither `imageGenDialog` nor `animateDialog`: regenerating
+                    and animating a post need the game-admin dialogs, which are
+                    not part of the package — without the slots those two
+                    buttons are simply not there. Reading, liking, commenting
+                    and deleting work in full. */}
+                <ErrorBoundary inline label="Instagram"><InstagramPanel /></ErrorBoundary>
               </div>
             </section>
           )}

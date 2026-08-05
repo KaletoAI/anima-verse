@@ -7,8 +7,9 @@ const target = process.env.ANIMA_API ?? 'http://localhost:8000';
 // prefix the @anima/player-ui panels touch: /play (scene/say/self/others/…),
 // /characters (also portrait/library image URLs, memory + knowledge), /chat
 // (image upload + library), /inventory (gift picker), /queue (queue status
-// feed), /i18n (translations), /diary (MindPanel's diary section) and /static
-// (the silhouette fallback in BelongingsPanel).
+// feed), /i18n (translations), /diary (MindPanel's diary section), /instagram
+// (the feed panel and its post images) and /static (the silhouette fallback in
+// BelongingsPanel).
 //
 // A MISSING prefix does not 404 — Vite answers with its SPA index.html, so the
 // caller gets 200 + HTML, `res.json()` fails and `apiGet` resolves to null,
@@ -19,7 +20,7 @@ const target = process.env.ANIMA_API ?? 'http://localhost:8000';
 //   grep -ohE "[\`'\"]/[a-zA-Z0-9_-]+" packages/player-ui/src/*.tsx | sort -u
 const proxied = [
   '/auth', '/play', '/world', '/characters', '/state', '/events', '/assets',
-  '/chat', '/inventory', '/queue', '/i18n', '/diary', '/static',
+  '/chat', '/inventory', '/queue', '/i18n', '/diary', '/instagram', '/static',
 ];
 
 export default defineConfig({

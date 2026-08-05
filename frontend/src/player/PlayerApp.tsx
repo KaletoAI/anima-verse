@@ -19,6 +19,7 @@ import { usePoll } from './usePolling'
 import { useToast } from '../lib/Toast'
 import { ScenePanel, type SceneData, type Dir } from './ScenePanel'
 import { ImageGenDialog } from '../components/ImageGenDialog'
+import { AnimateDialog } from '../components/AnimateDialog'
 import { MovePad } from './MovePad'
 import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel, type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
@@ -653,7 +654,36 @@ export function PlayerApp() {
     <div key="instagram" className="player-panel" style={{ zIndex: zOf('instagram') }} onMouseDownCapture={() => bringToFront('instagram')}>
       <div className="player-panel-head">{headIcon('instagram')}{t('Instagram')}{headerControls('instagram', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'auto' }}>
-        <InstagramPanel />
+        {/* imageGenDialog/animateDialog: both big dialogs of the regenerate and
+            animate flows belong to the game-admin UI, not to the shared panel
+            package — /play slots them in, the 3D HUD deliberately leaves them
+            out (neither button is there). */}
+        <InstagramPanel
+          imageGenDialog={(ctl) => (
+            <ImageGenDialog
+              open
+              title={t('Regenerate image')}
+              defaultPrompt={ctl.prompt}
+              sourceImageUrl={ctl.sourceImageUrl}
+              mode="regenerate"
+              showRoomReference
+              characterOptions={{ detected: ctl.detected, available: ctl.available }}
+              onSubmit={ctl.onSubmit}
+              onClose={ctl.onClose}
+            />
+          )}
+          animateDialog={(ctl) => (
+            <AnimateDialog
+              open
+              title={ctl.hasVideo ? t('Re-animate') : t('Animate image')}
+              sourceImageUrl={ctl.sourceImageUrl}
+              defaultPrompt={ctl.prompt}
+              onSuggest={ctl.onSuggest}
+              onSubmit={ctl.onSubmit}
+              onClose={ctl.onClose}
+            />
+          )}
+        />
       </div>
     </div>
   )

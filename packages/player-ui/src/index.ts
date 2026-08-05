@@ -24,6 +24,7 @@ export * from './NewsPanel';
 export * from './TaskPanel';
 export * from './QuestsPanel';
 export * from './GalleryPanel';
+export * from './InstagramPanel';
 // Named, not `export *`: the dialog's prop types (PhotoDialogControl,
 // ScenePhotoSubmit) already leave the package through ScenePanel, and a second
 // export path for the same names would collide (TS2308).
