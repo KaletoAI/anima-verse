@@ -166,10 +166,12 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         list_available_characters,
         get_character_current_location,
         get_character_current_room,
+        get_character_language,
         get_effective_activity)
     from app.models.account import get_active_character
     from app.models.world import get_room_name
 
+    lang = get_character_language(character_name) or "de"
     my_room = get_character_current_room(character_name) or ""
     player_char = get_active_character()
 
@@ -214,7 +216,7 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
     # Every room resolves by name, the location's ground among them.
     for other, other_room in elsewhere:
         elsewhere_lines.append(
-            f"- {other} — in: {get_room_name(location_id, other_room)}")
+            f"- {other} — in: {get_room_name(location_id, other_room, lang)}")
 
     return lines, elsewhere_lines, anyone_in_room
 

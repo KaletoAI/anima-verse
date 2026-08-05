@@ -1116,11 +1116,14 @@ def clear_movement_target(character_name: str) -> None:
     set_movement_target(character_name, "")
 
 
-def _room_name_for(room_id: str, location_id: str = "") -> str:
+def _room_name_for(room_id: str, location_id: str = "",
+                   lang: str = "") -> str:
     """Display name of a room (or the id as fallback).
 
     ``location_id`` is what makes the answer unambiguous — room ids repeat
-    across locations (every one of them owns the reserved ground room).
+    across locations (every one of them owns the reserved ground room). The
+    ground's reserved id is never returned: unnamed, it answers with the
+    translated default, which ``world.get_ground_name`` owns.
     """
     if not room_id:
         return ""
@@ -1130,6 +1133,10 @@ def _room_name_for(room_id: str, location_id: str = "") -> str:
             return row[0]
     except Exception:
         pass
+    # Lazy, like every other world import in this module.
+    from app.models.world import GROUND_ROOM_ID, get_ground_name
+    if room_id == GROUND_ROOM_ID:
+        return get_ground_name(location_id, lang)
     return room_id
 
 
@@ -1493,13 +1500,10 @@ def save_character_current_room(character_name: str, room_id: str,
     # state_history-Event bei echtem Raumwechsel — sonst sind Raum-Aenderungen
     # in der Diary/Activity-Auswertung unsichtbar (frueher nur location getrackt).
     if room_id and room_id != old_room:
-        room_name = room_id
-        try:
-            row = _room_name_row(get_connection(), room_id, cur_loc)
-            if row and row[0]:
-                room_name = row[0]
-        except Exception:
-            pass
+        # The character's own language — these lines are narrated about it and
+        # stored in its history, and the ground's default word is translated.
+        _lang = get_character_language(character_name) or "de"
+        room_name = _room_name_for(room_id, cur_loc, _lang)
         _record_state_change(character_name, "room", room_id,
                               metadata={"name": room_name, "old": old_room})
         # C1: movement trace (storyteller) on a room change WITHIN the same
@@ -1508,7 +1512,7 @@ def save_character_current_room(character_name: str, room_id: str,
         # zum alten Ort) NICHT fälschlich als Raumwechsel getrackt.
         if old_room and _room_in_location(old_room, cur_loc) \
                 and _room_in_location(room_id, cur_loc):
-            _old_rn = _room_name_for(old_room, cur_loc)
+            _old_rn = _room_name_for(old_room, cur_loc, _lang)
             _movement_trace(character_name, cur_loc, old_room,
                             f"{character_name} verlässt {_old_rn} (Richtung {room_name}).")
             _movement_trace(character_name, cur_loc, room_id,

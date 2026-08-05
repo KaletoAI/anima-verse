@@ -910,14 +910,21 @@ def get_location_by_id(location_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_room_name(location_id: str, room_id: str) -> str:
+def get_room_name(location_id: str, room_id: str, lang: str = "") -> str:
     """Display name of a room within a location.
 
     Falls back to the raw ``room_id`` when it cannot be resolved (hand-made
     rooms may use the name itself as id); '' when either id is missing.
+
+    The GROUND room is the one id that must never surface — it is reserved,
+    not authored, and would read as gibberish in a prompt or a narrated line.
+    Unnamed, it answers with the translated default; ``get_ground_name`` owns
+    that default, here and everywhere else (plan-grundflaeche.md § 3).
     """
     if not (location_id and room_id):
         return ""
+    if room_id == GROUND_ROOM_ID:
+        return get_ground_name(location_id, lang)
     try:
         loc = get_location_by_id(location_id) or {}
         for room in (loc.get("rooms") or []):

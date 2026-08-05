@@ -1089,10 +1089,12 @@ def location_presence_split(character_name: str, location_id: str,
     _build_presence must not render a failed lookup as "you are alone").
     """
     from app.models.group_chat import get_characters_at_location
-    from app.models.character import get_character_current_room
+    from app.models.character import (get_character_current_room,
+                                      get_character_language)
     from app.models.world import get_room_name
     here: List[str] = []
     elsewhere: List[Tuple[str, str]] = []
+    lang = get_character_language(character_name) or "de"
     my_room = room_id or ""
     for p in (get_characters_at_location(location_id) or [])[:16]:
         n = (p.get("name") or "").strip()
@@ -1102,7 +1104,7 @@ def location_presence_split(character_name: str, location_id: str,
         if other_room == my_room:
             here.append(n)
         else:
-            elsewhere.append((n, get_room_name(location_id, other_room)))
+            elsewhere.append((n, get_room_name(location_id, other_room, lang)))
     return here, elsewhere
 
 

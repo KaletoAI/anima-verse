@@ -114,7 +114,10 @@ class TalkToSkill(PluginSkill):
         target_room = get_character_current_room(target_name) or ""
         if self_room != target_room:
             from app.models.world import get_room_name
-            room_label = get_room_name(self_loc, target_room)
+            from app.models.character import get_character_language
+            room_label = get_room_name(
+                self_loc, target_room,
+                get_character_language(sender_name) or "de")
             return (
                 f"{target_name} is at this location but in another room "
                 f"({room_label}) — they cannot hear you from here. Go to "
