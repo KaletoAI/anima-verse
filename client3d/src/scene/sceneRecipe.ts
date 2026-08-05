@@ -10,6 +10,7 @@ import {
   type SceneExtra, type SceneModelSpec, type ScenePayload, type ScenePlate,
   type SceneWall,
 } from '../api';
+import { roomDoor } from '../game/doors';
 import { BASE_FIGURE_HEIGHT_M } from './figures';
 import { loadGlb } from './propAssets';
 import {
@@ -640,6 +641,20 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     const name = nameOf.get(id);
     if (name) tile.roomExits.set(name, world);
   }
+  // THE door of each room, for the floor sampling's reference ray: the one
+  // leading outside, else the first the payload lists (`roomDoor`, the same
+  // rule the walk uses). Read, never derived (plan-betreten-und-tueren.md
+  // § 4.1) — and kept on the tile rather than looked up per call, because the
+  // model-tier swap re-samples a room without having the payload at hand.
+  const doorOrigin = { x: tile.center.x, z: tile.center.z };
+  const roomsWithDoor = new Set<string>();
+  for (const doorway of scene.doorways) {
+    for (const id of doorway.rooms ?? []) if (id) roomsWithDoor.add(id);
+  }
+  for (const id of roomsWithDoor) {
+    const door = roomDoor(scene, id, doorOrigin);
+    if (door) tile.roomDoors.set(id, new THREE.Vector3(door.mid.x, door.baseY, door.mid.z));
+  }
   for (const marker of scene.markers) {
     const id = marker.room_id;
     if (!id || !marker.animation) continue;
@@ -1070,6 +1085,7 @@ export function unmountScene(tile: Tile): void {
   tile.roomGroups.clear();
   tile.roomCenters.clear();
   tile.roomExits.clear();
+  tile.roomDoors.clear();
   tile.roomSlots.clear();
   tile.roomSpots.clear();
   tile.roomSitSpots.clear();

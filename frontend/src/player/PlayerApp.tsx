@@ -458,8 +458,17 @@ export function PlayerApp() {
     if (moving) return
     setMoving(true)
     try { await apiPost('/play/enter-room', { room_id: roomId }); await load() }
-    catch { /* ignore */ } finally { setMoving(false) }
-  }, [moving, load])
+    catch (e) {
+      // A refusal (403 block rule, party follower, …) carries its reason in
+      // the detail — show it, otherwise the click looks like it did nothing.
+      const err = e as ApiError
+      const detail = err?.detail as { message?: string } | string | undefined
+      const msg = typeof detail === 'string'
+        ? detail
+        : (detail && typeof detail === 'object' ? detail.message : undefined)
+      if (msg) toast(msg, 'error')
+    } finally { setMoving(false) }
+  }, [moving, load, toast])
 
   const present = data?.present || []
   // The Others panel is tied purely to presence: visible ⟺ someone else is

@@ -91,6 +91,12 @@ export interface Tile {
   roomCenters: Map<string, THREE.Vector3>;
   /** Ausgangspunkt pro Raum (Welt-Koordinaten; Schlüssel: ID und Name) */
   roomExits: Map<string, THREE.Vector3>;
+  /** THE door of a room, in world coordinates (key: room ID): its outside
+   *  door, else its first — read from the payload's `doorways[]`, never
+   *  derived (plan-betreten-und-tueren.md § 4.1). The floor sampling shoots
+   *  its reference ray there; only x/z matter for that, so the y is the wall
+   *  foot the payload names and is not lifted afterwards. */
+  roomDoors: Map<string, THREE.Vector3>;
   /** Bezugsrahmen der Begehbarkeits-Abtastung je Raum: Halter auf der
    *  Raum-Mitte in Auflagehöhe + Maße der Raum-Umschließenden */
   roomSlots: Map<string, { holder: THREE.Group; w: number; d: number }>;
@@ -661,7 +667,8 @@ export function buildTile(loc: WorldLocation): Tile {
   const tile: Tile = {
     loc, group, center, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
-    roomCenters: new Map(), roomExits: new Map(), roomSlots: new Map(), roomSpots: new Map(),
+    roomCenters: new Map(), roomExits: new Map(), roomDoors: new Map(),
+    roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, roomOutdoor: new Set(),
@@ -826,15 +833,17 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
     .filter((y) => Math.abs(y - floorBin * 0.07) < 0.08)
     .sort((a, b) => a - b);
   let floor = inBin[Math.floor(inBin.length / 2)];
-  // Referenzmessung am Exit: generierte Meshes haben an verdeckten Stellen
-  // LÖCHER im Boden — Raster-Strahlen fallen dort auf die Sockelplatte
-  // durch und die dominante Lage unterschätzt den Boden (Figuren stehen im
-  // Boden). An der Tür ist der Boden praktisch immer intakt (Sichtfeld der
-  // Generierung): liegt der Treffer dort ETWAS über der dominanten Lage,
-  // ist ER der Boden; deutlich höhere Treffer (Möbel vor der Tür) nicht.
-  const exitP = tile.roomExits.get(roomId);
-  if (exitP) {
-    ray.set(new THREE.Vector3(exitP.x, base.y + 20, exitP.z), down);
+  // Reference ray at the room's DOOR (`tile.roomDoors`, straight from the
+  // payload's `doorways[]`): generated meshes have HOLES in the floor at
+  // hidden places — grid rays fall through them onto the base plate and the
+  // dominant layer underestimates the floor (figures stand IN it). At the
+  // door the floor is practically always intact (it is what the generation
+  // looked at): if the hit there lies A LITTLE above the dominant layer, it
+  // IS the floor; clearly higher hits (furniture in front of the door) are
+  // not.
+  const doorP = tile.roomDoors.get(roomId);
+  if (doorP) {
+    ray.set(new THREE.Vector3(doorP.x, base.y + 20, doorP.z), down);
     const eh = ray.intersectObjects(roots, true)[0];
     if (eh && eh.point.y > floor + 0.1 && eh.point.y < floor + 0.55) floor = eh.point.y;
   }

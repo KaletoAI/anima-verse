@@ -12,10 +12,12 @@ south at yaw 0, so front compass = (−yaw) mod 360 (mirrors
 ``room_recipe.compose_prop_marker``).
 
 v1 simplifications (documented in the plan): walkways are modelled as
-keep-out rectangles in front of doors/passages (0.6 m deep) plus a clear
-zone around ``layout.exit`` — no path finding; wall anchors snap the yaw to
-the wall's compass class (hulls are drawn axis-snapped in practice); in
-front of windows only pieces taller than the sill are rejected.
+keep-out rectangles in front of doors/passages (0.6 m deep) — no path
+finding; wall anchors snap the yaw to the wall's compass class (hulls are
+drawn axis-snapped in practice); in front of windows only pieces taller than
+the sill are rejected. The openings ARE the doorways
+(plan-betreten-und-tueren.md § 4.1), so they are the only clear zones; the
+extra square around ``layout.exit`` is gone with the exit point itself.
 """
 
 import math
@@ -28,7 +30,6 @@ BUDGET_FRACTION = 0.45
 WALL_GAP_M = 0.05          # breathing room between prop back and wall
 DOOR_CLEAR_M = 0.6         # keep-out depth in front of doors/passages
 WINDOW_CLEAR_M = 0.6       # sill-limited zone depth in front of windows
-EXIT_CLEAR_M = 0.5         # half edge of the square kept free around exit
 SAMPLE_STEP_M = 0.25       # deterministic candidate stepping
 REF_GAPS_M = (0.15, 0.35, 0.6)
 
@@ -111,8 +112,8 @@ def _rects_overlap(a: List[Vec], b: List[Vec]) -> bool:
 
 
 class _Zone:
-    """Keep-out rectangle. ``max_height`` None = blocks everything (door /
-    exit), a number = blocks only pieces taller than it (window sill)."""
+    """Keep-out rectangle. ``max_height`` None = blocks everything (door or
+    passage), a number = blocks only pieces taller than it (window sill)."""
 
     def __init__(self, corners: List[Vec], max_height: Optional[float]):
         self.corners = corners
@@ -211,18 +212,13 @@ def _footprint(dims: Dict[str, float], yaw: float) -> Tuple[float, float]:
 
 
 class _Solver:
-    def __init__(self, *, outline_m, openings, existing, props,
-                 exit_frac=None):
+    def __init__(self, *, outline_m, openings, existing, props):
         self.poly, self.W, self.D = _normalize_outline(outline_m)
         self.area = _poly_area(self.poly)
         cx = sum(p[0] for p in self.poly) / len(self.poly)
         cy = sum(p[1] for p in self.poly) / len(self.poly)
         self.centroid = (cx, cy)
         self.zones = _opening_zones(self.poly, self.centroid, openings)
-        if exit_frac:
-            ex, ey = float(exit_frac[0]) * self.W, float(exit_frac[1]) * self.D
-            self.zones.append(_Zone(_rect_corners(
-                ex, ey, EXIT_CLEAR_M * 2, EXIT_CLEAR_M * 2, 0), None))
         self.props = props
         self.used_area = 0.0
         # Occupied footprints: (corners, prop_id, centre, yaw)
@@ -370,8 +366,7 @@ def solve(*, outline_m: List[List[float]],
           openings: List[Dict[str, Any]],
           existing: List[Dict[str, Any]],
           plan: List[Dict[str, Any]],
-          props: Dict[str, Dict[str, Any]],
-          exit_frac: Optional[List[float]] = None) -> Dict[str, Any]:
+          props: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Solve the relational plan. Returns ``{"placed": [layout.props
     entries], "unplaced": [{"name", "reason"}]}`` — reasons are short
     English strings that feed the repair template and the review UI."""
@@ -380,7 +375,7 @@ def solve(*, outline_m: List[List[float]],
             {"name": str(it.get("prop") or "?"), "reason": "invalid room polygon"}
             for it in plan or []]}
     s = _Solver(outline_m=outline_m, openings=openings, existing=existing,
-                props=props, exit_frac=exit_frac)
+                props=props)
     if s.area <= 0.01 or s.W <= 0.01 or s.D <= 0.01:
         return {"placed": [], "unplaced": [
             {"name": str(it.get("prop") or "?"), "reason": "invalid room polygon"}

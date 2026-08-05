@@ -470,9 +470,12 @@ def compose_recipe(room: Dict[str, Any],
     # plan width convert both ways. Copies are appended AFTER all manual
     # entries so ``prop_markers[].placement`` indices never move, and they
     # get NO prop markers (no sit spots on twenty pines). Keep-outs are the
-    # GEOMETRIC zones only (sibling hulls, openings, exit, markers) —
+    # GEOMETRIC zones only (sibling hulls, openings, markers) —
     # ``scatter_spacing_m`` alone rules the density (0 = copies may
     # overlap; the old footprint minimum kept every tree a crown apart).
+    # The exit point is NOT among them any more: the openings already are
+    # the doorways (plan-betreten-und-tueren.md § 4.1), and a square around
+    # a point that is not on a wall kept trees off an arbitrary spot.
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
     if scatter_sources:
@@ -506,17 +509,6 @@ def compose_recipe(room: Dict[str, Any],
                 continue
             px, py = _point_on_edge(outline, e, at)
             keepouts.append(_square(px * planw, py * planw, half))
-        ex = lay.get("exit")
-        if isinstance(ex, (list, tuple)) and len(ex) == 2:
-            keepouts.append(_square((x + float(ex[0]) * w) * planw,
-                                    (y + float(ex[1]) * d) * planw,
-                                    SCATTER_POINT_CLEAR_M))
-        else:
-            derived = _derive_exit(outline, openings, plan_width_m)
-            if derived:
-                keepouts.append(_square(derived[0] * planw,
-                                        derived[1] * planw,
-                                        SCATTER_POINT_CLEAR_M))
         for marker in (lay.get("markers") or []):
             mat = marker.get("at") if isinstance(marker, dict) else None
             if isinstance(mat, (list, tuple)) and len(mat) == 2:

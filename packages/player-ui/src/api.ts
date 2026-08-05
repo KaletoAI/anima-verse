@@ -3,9 +3,9 @@
  *
  * - Sends credentials so session cookies travel with the request (the
  *   FastAPI server expects them for `require_admin`).
- * - On 401/403 redirects to the login page just like the legacy admin
- *   pages did, with a return URL so the user lands back here after
- *   signing in.
+ * - On 401 (and only 401) redirects to the login page just like the legacy
+ *   admin pages did, with a return URL so the user lands back here after
+ *   signing in. A 403 is a refusal, not a missing session.
  * - Returns parsed JSON; on non-OK status throws an `ApiError` carrying
  *   the server-provided detail when available so call sites can surface
  *   a useful toast.
@@ -40,16 +40,13 @@ async function parseJsonOrThrow(res: Response): Promise<unknown> {
   } catch {
     /* leave body null */
   }
-  // 401 = not logged in → login. 403 = either "not an admin" (auth → login) OR
-  // a game block rule (e.g. movement locked during an event) — the latter is
-  // NOT an auth error and must NOT redirect to the (old) login UI.
+  // Only 401 means "not logged in" — that is the ONE status that may swap the
+  // page for the login form. A 403 is a refusal by the running game (a block
+  // rule, a missing entrance, a party follower without movement rights, …);
+  // it travels on as a normal ApiError so the caller can toast the reason.
+  // Deciding this by a reason allowlist logged the player out on every refusal
+  // the list did not yet know.
   if (res.status === 401) redirectToLogin()
-  if (res.status === 403) {
-    const d = asRecord(body)?.detail ?? body
-    const reason = String(asRecord(d)?.reason || '')
-    const isGameBlock = reason.startsWith('block_') || reason === 'not_at_entry_room'
-    if (!isGameBlock) redirectToLogin()
-  }
   if (!res.ok) {
     const detail = asRecord(body)?.detail ?? body
     const msg = typeof detail === 'string' ? detail : `HTTP ${res.status}`

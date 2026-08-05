@@ -11,7 +11,7 @@ import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
-import { doorMarkers, type DoorMarker } from './game/doors';
+import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { getAudio } from './game/audio';
 import {
   newFpsMeter, pushFrame, tierCounts, visibleVertices,
@@ -646,21 +646,32 @@ async function startApp(username: string, role: string) {
   }
 
   /**
-   * Height the threshold lies at. `baseY` is the foot of the WALL the gap sits
-   * in and always exists; a room's own floor may be higher, because it is a
-   * sampled diorama plate and not the wall's base (`sampleRoomWalkables` lifts
-   * `roomCenters` onto it, the same number the avatar walks at). The higher of
-   * the two is the floor one would actually step on, so the quad cannot sink
-   * into it. The lift on top scales with the scene: at Willowbrook's k = 0.21 a
-   * whole storey is 0.63 m, and a fixed centimetre offset there is a step.
+   * The floor one actually steps on in a doorway. `baseY` is the foot of the
+   * WALL the gap sits in and always exists; a room's own floor may be higher,
+   * because it is a sampled diorama plate and not the wall's base
+   * (`sampleRoomWalkables` lifts `roomCenters` onto it, the same number the
+   * avatar walks at), so the higher of the two wins.
    */
-  function doorMarkY(tile: Tile, m: DoorMarker, k: number): number {
+  function doorFloorY(tile: Tile, m: DoorMarker): number {
     let y = m.baseY;
     for (const id of m.roomIds) {
       const c = tile.roomCenters.get(id);
       if (c && c.y > y) y = c.y;
     }
-    return y + 0.02 * Math.max(k, 0.35);
+    return y;
+  }
+
+  /** Height the threshold QUAD lies at: the floor plus a lift that scales with
+   *  the scene, so it cannot sink into it — at Willowbrook's k = 0.21 a whole
+   *  storey is 0.63 m, and a fixed centimetre offset there is a step. */
+  function doorMarkY(tile: Tile, m: DoorMarker, k: number): number {
+    return doorFloorY(tile, m) + 0.02 * Math.max(k, 0.35);
+  }
+
+  /** A doorway as a waypoint for a walking figure: its centre, on the floor a
+   *  figure stands on there. */
+  function doorStop(tile: Tile, m: DoorMarker): THREE.Vector3 {
+    return new THREE.Vector3(m.mid.x, doorFloorY(tile, m), m.mid.z);
   }
 
   /** (Re)build the thresholds of one tile from its payload. Called after every
@@ -1412,25 +1423,41 @@ async function startApp(username: string, role: string) {
           // stellen statt bei y=0 darin zu versinken (Befund Kira).
           pos.setY(tileGroundY(tile, pos));
         }
-        // Exit-Routing: bei Betreten/Verlassen/Wechsel des dargestellten
-        // Raums über die Ausgänge laufen statt durch Wände; bei
-        // Etagenwechseln zusätzlich über den Fahrstuhl (AV3D-12)
+        // Door routing: entering, leaving or changing the shown room walks
+        // through the DOOR, not through a wall. Which door is a payload
+        // question, not a heuristic (plan-betreten-und-tueren.md § 4.1): two
+        // rooms that share a wall have ONE doorway naming both, and that is
+        // the whole route. Otherwise the figure leaves through its room's own
+        // door and enters through the other's — which is also the case for
+        // room ↔ ground, where the ground has no doorway of its own and the
+        // room's OUTSIDE door is the way. A storey change adds the lift
+        // (AV3D-12); rooms joined by a doorway are on one storey by
+        // construction, so only the two-door route can need it.
         const prevShown = shownRoom.get(c.name) ?? null;
         if (inRoom !== prevShown) {
-          const exits: THREE.Vector3[] = [];
-          const prevExit = prevShown ? tile.roomExits.get(prevShown) : undefined;
-          if (prevExit) exits.push(prevExit.clone());                // alten Raum verlassen
+          const scene = scenes.get(tile.loc.id);
+          const origin = { x: tile.center.x, z: tile.center.z };
+          const from = roomIdOf(tile, prevShown);
+          const to = roomIdOf(tile, inRoom);
           const levelOf = (r: string | null) => (r ? tile.roomLevels.get(r) ?? 0 : 0);
           const lf = levelOf(prevShown), lt = levelOf(inRoom);
-          if (lf !== lt && tile.elevatorStops) {
-            const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
-            const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
-            if (a) exits.push(a.clone());                            // Fahrstuhl einsteigen
-            if (b) exits.push(b.clone());                            // Fahrt zur Ziel-Etage
+          const stops: THREE.Vector3[] = [];
+          const shared = from && to ? doorwayBetween(scene, from, to, origin) : null;
+          if (shared) {
+            stops.push(doorStop(tile, shared));
+          } else {
+            const leave = from ? roomDoor(scene, from, origin) : null;
+            if (leave) stops.push(doorStop(tile, leave));            // alten Raum verlassen
+            if (lf !== lt && tile.elevatorStops) {
+              const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
+              const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
+              if (a) stops.push(a.clone());                          // Fahrstuhl einsteigen
+              if (b) stops.push(b.clone());                          // Fahrt zur Ziel-Etage
+            }
+            const enter = to ? roomDoor(scene, to, origin) : null;
+            if (enter) stops.push(doorStop(tile, enter));            // neuen Raum betreten
           }
-          const nextExit = inRoom ? tile.roomExits.get(inRoom) : undefined;
-          if (nextExit) exits.push(nextExit.clone());                // neuen Raum betreten
-          if (exits.length) via = exits;
+          if (stops.length) via = stops;
           shownRoom.set(c.name, inRoom);
         }
         const targetTile = c.movement_target_id ? tiles.get(c.movement_target_id) : undefined;
@@ -2385,13 +2412,18 @@ async function startApp(username: string, role: string) {
   /** room id -> time until which a refused switch stays refused */
   const roomRejectedUntil = new Map<string, number>();
 
-  /** The avatar's room as the SERVER sees it, resolved to a room ID: `roomOf`
-   *  carries the worldmap's `room_id`, but the pre-AV3D-8 fallback poll writes
-   *  a room NAME into the same map — and `/play/enter-room` takes ids only. */
-  function avatarRoomId(tile: Tile): string | null {
-    const raw = roomOf.get(avatarName);
+  /** A room reference from `roomOf` as a room ID: it carries the worldmap's
+   *  `room_id`, but the pre-AV3D-8 fallback poll writes a room NAME into the
+   *  same map — and ids are what `/play/enter-room` takes and what every
+   *  payload block (`doorways[].rooms`) speaks in. */
+  function roomIdOf(tile: Tile, raw: string | null | undefined): string | null {
     if (!raw) return null;
     return tile.loc.rooms.find((r) => r.id === raw || r.name === raw)?.id ?? null;
+  }
+
+  /** The avatar's room as the SERVER sees it, resolved to a room ID. */
+  function avatarRoomId(tile: Tile): string | null {
+    return roomIdOf(tile, roomOf.get(avatarName));
   }
 
   /** Rooms of an interior, reduced to id/storey/centre — the shared input of

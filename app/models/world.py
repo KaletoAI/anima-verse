@@ -2115,25 +2115,26 @@ def delete_location(identifier: str) -> bool:
 def get_background_path(location_identifier: str, room: str = "",
                         hour: int = -1, strict_room: bool = False,
                         stable: bool = False) -> Optional[Path]:
-    """Gibt den Pfad zu einem zufaellig gewaehlten Hintergrundbild zurueck.
+    """Returns the path of a background image chosen for location + room.
 
-    Regeln:
-    - Raum gesetzt UND Raum hat Bilder → eines der Raum-Bilder (Tag/Nacht bevorzugt)
-    - Raum nicht gesetzt ODER Raum hat keine Bilder → eines der Location-Bilder
-      (nicht raum-zugeordnet, Tag/Nacht bevorzugt) — ausser ``strict_room=True``
-    - Location nicht gesetzt ODER Location hat keine Bilder → None
+    Rules:
+    - room set AND room has images → one of the room images (day/night preferred)
+    - room unset OR room has no images → one of the location images
+      (not room-tagged, day/night preferred) — except with ``strict_room=True``
+      and except for the ground room (see below)
+    - location unset OR location has no images → None
 
     Args:
-        hour: Aktuelle Stunde (0-23). -1 = keine Tageszeit-Filterung.
-        strict_room: Wenn True und ``room`` gesetzt: KEIN Fallback auf
-            Location-Default. Liefert None wenn der Raum keine dedizierten
-            Bilder hat. Verwendet vom Regenerate-Pfad, damit ein expliziter
-            Raumwechsel im Dialog nicht stillschweigend dieselbe Default-
-            Datei zurueckgibt (User wuerde den Wechsel nie bemerken).
-        stable: Wenn True wird innerhalb einer Kategorie deterministisch (statt
-            zufaellig) gewaehlt — dasselbe (Ort, Raum, Tageszeit) liefert stets
-            dasselbe Bild. Genutzt von /play, wo das angezeigte Bild stabil sein
-            muss (Figuren-Positionen sind an den Dateinamen gekoppelt).
+        hour: Current hour (0-23). -1 = no time-of-day filtering.
+        strict_room: If True and ``room`` is set: NO fallback to the location
+            default. Returns None when the room has no dedicated images. Used
+            by the regenerate path so that an explicit room change in the
+            dialogue does not silently return the same default file (the user
+            would never notice the change).
+        stable: If True the pick inside a category is deterministic instead of
+            random — the same (location, room, time of day) always yields the
+            same image. Used by /play, where the displayed image must be
+            stable (figure positions are keyed to the file name).
     """
     loc = resolve_location(location_identifier)
     if not loc:
@@ -2170,14 +2171,19 @@ def get_background_path(location_identifier: str, room: str = "",
         # save paths; both fixed, this filter heals existing worlds).
         return image_types.get(img, "") not in ("map", "map_2d")
 
-    # Kandidaten-Auswahl nach Regel:
-    # 1) Raum gesetzt → Raum-Bilder versuchen
-    # 2) Wenn keine Raum-Bilder / kein Raum → Location-Bilder (ohne Raum-Tag)
+    # Candidate selection by rule:
+    # 1) room set → try the room images
+    # 2) no room images / no room → location images (without a room tag)
     candidates: List[str] = []
     if room:
         candidates = [img for img in valid if image_rooms.get(img, "") == room and _not_map(img)]
-        if not candidates and strict_room:
-            # Strikter Modus: User hat den Raum bewusst gewaehlt — KEIN Fallback.
+        if not candidates and (strict_room or room == GROUND_ROOM_ID):
+            # Strict mode: the user picked the room deliberately — NO fallback.
+            # The ground room is always strict: it is the outdoors, and the
+            # untagged location images are interiors, so falling back would
+            # show a living room to someone standing outside. The ground can
+            # never own a tagged image of its own, hence None is its normal
+            # state and the caller must tolerate a missing background.
             return None
     if not candidates:
         candidates = [img for img in valid if image_rooms.get(img, "") == "" and _not_map(img)]

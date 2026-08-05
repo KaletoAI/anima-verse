@@ -728,7 +728,7 @@ def _phase_place(room_id: str) -> None:
         return furnish_solver.solve(
             outline_m=geom["outline_m"], openings=openings,
             existing=existing_solver, plan=_list_field(plan, "plan"),
-            props=solver_props, exit_frac=lay.get("exit"))
+            props=solver_props)
 
     result = _run([])
     if result.get("unplaced"):
