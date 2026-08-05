@@ -247,3 +247,46 @@
 /* Sentiment 0 — spelled out so the third class is visibly intended, not a
    selector somebody forgot to write. */
 .player-relation-neutral { color: inherit; }
+
+/* PlayerPhotoDialog (stage 6): the slim scene-photo dialog. Its chrome comes
+   from the host's `.ga-modal*`/`.ga-input`/`.ga-btn` rules, like the other
+   portalled package modals — only the parts that exist nowhere else live here.
+   The subject chips get their OWN class instead of reusing `.player-chip`:
+   that family stays in the host stylesheets, and client3d themes it under
+   `#hud`, which a document.body portal is not inside. */
+.player-photo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.player-photo-chip {
+  font: inherit;
+  font-size: 0.85em;
+  color: inherit;
+  padding: 3px 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+  background: var(--bg, #0d1117);
+  cursor: pointer;
+}
+.player-photo-chip:hover:not(:disabled) { border-color: var(--accent, #6aa9ff); }
+.player-photo-chip.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 22%, transparent);
+}
+.player-photo-chip:disabled { opacity: 0.5; cursor: default; }
+
+.player-photo-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+}
+
+.player-photo-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}

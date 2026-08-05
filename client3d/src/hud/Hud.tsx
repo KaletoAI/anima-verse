@@ -15,9 +15,10 @@
  *
  * This container owns the ONE `/play/scene` poll (same contract as PlayerApp
  * in /play): ScenePanel receives data + refresh as props and never polls
- * itself. The `photoDialog` slot is deliberately NOT set — the 📷 scene-photo
- * button is absent (the image-gen dialog lives in the game-admin UI); still
- * open, together with gallery/instagram which depend on that same dialog.
+ * itself. The `photoDialog` slot is filled with `PlayerPhotoDialog` (stage 6),
+ * the package's slim player-side dialog — the big game-admin `ImageGenDialog`
+ * that /play slots in stays where it is. Gallery/instagram still depend on
+ * that admin dialog and remain open.
  *
  * The CHAT panel additionally runs in an auto mode (E3 acceptance) — it shows
  * itself when something is said and withdraws when the room stays silent; see
@@ -28,6 +29,7 @@ import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
+  PlayerPhotoDialog,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
@@ -550,7 +552,8 @@ export function Hud({ avatar, username, role }: {
           {panelHead('chat', 'chat', avatarName || '—')}
           <ErrorBoundary inline label="Chat">
             <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
-              hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom} />
+              hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
+              photoDialog={(ctl) => <PlayerPhotoDialog {...ctl} />} />
           </ErrorBoundary>
         </section>
       )}
