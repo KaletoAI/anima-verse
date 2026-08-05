@@ -876,6 +876,7 @@
     "No skills available": "Keine Skills verfügbar",
     "No soul files enabled for this template.": "Keine Soul-Dateien für dieses Template aktiviert.",
     "No states yet": "Noch keine Zustände",
+    "No surface-texture entry with this id — the ground falls back to the default kind. Pick a listed id or create the surface in Assets.": "Kein Oberflächen-Eintrag mit dieser ID — der Boden fällt auf die Standard-Art zurück. Eine gelistete ID wählen oder die Oberfläche unter Assets anlegen.",
     "No story arcs": "Keine Story Arcs",
     "No story arcs yet.": "Keine Story Arcs vorhanden.",
     "No story to save": "Keine Story zum Speichern",
