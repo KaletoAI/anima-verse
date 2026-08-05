@@ -21,6 +21,7 @@ logger = get_logger("world")
 
 from app.models.world import (
     list_locations, add_location, location_visible_to_character,
+    visibility_context,
     rename_location, resolve_location, get_location_by_id,
     get_entry_room_id,
     get_background_path, get_background_file_path,
@@ -211,6 +212,18 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
     # do not reassign.
     clear_pose_intent(avatar)
 
+    # Uncovering the map = entering + discover rules (§ A12). The journey
+    # ticker rolls them on arrival; the step API is the OTHER way a character
+    # arrives somewhere and the primary one in embodied mode, so it rolls them
+    # too. Only on a real location change — a step that ends where it started
+    # must not hand out a free roll.
+    if target_id and target_id != cur_loc_id:
+        try:
+            from app.models.rules import check_discover_rules
+            check_discover_rules(avatar)
+        except Exception:
+            logger.debug("discover check failed for %s", avatar, exc_info=True)
+
     # Roll-on-entry: on entering a location, immediately roll whether an
     # event arises for the avatar (e.g. "wolves block the path").
     try:
@@ -307,6 +320,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
 
     avatar = (avatar_name or "").strip()
     fogged = not show_all
+    # The fog predicate runs once per placed location on a 3-second poll —
+    # read the avatar's known_locations/inventory ONCE and hand them to the
+    # predicate instead of letting it re-read them per location.
+    _vis_ctx = visibility_context(avatar) if (fogged and avatar) else None
 
     def _visible(loc: Dict[str, Any]) -> bool:
         """Fog predicate. An unplaced location (no grid cell) is not on the map
@@ -317,7 +334,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             return True
         if not avatar:
             return False
-        return location_visible_to_character(avatar, loc)
+        return location_visible_to_character(avatar, loc, context=_vis_ctx)
 
     locations = []
     name_by_id = {}

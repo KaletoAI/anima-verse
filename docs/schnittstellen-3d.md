@@ -805,6 +805,10 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | `grid_bounds` | **nein** | siehe unten |
 | `avatar`, `current_location_id` | nein | der Avatar sieht sich selbst |
 
+Rasterlose Orte gelten dabei als **sichtbar** — sie passieren den Filter, und
+damit werden auch die Charaktere und Events, die an ihnen hängen, mitgeliefert
+(sie stehen auf keiner Zelle und verraten keine Kartenposition).
+
 **Neue Wurzelfelder**
 
 | Feld | Typ | Bedeutung |

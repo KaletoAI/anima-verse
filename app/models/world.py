@@ -16,7 +16,7 @@ import re
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
@@ -818,26 +818,30 @@ def get_location(identifier: str) -> Optional[Dict[str, Any]]:
 # bevor er ueberhaupt die Location sieht.
 # ============================================================
 
-def _character_has_item(character_name: str, item_id: str) -> bool:
-    """Prueft ob der Character das angegebene Item im Inventar hat."""
-    if not item_id or not character_name:
-        return False
+def _character_item_ids(character_name: str) -> Set[str]:
+    """All item ids in the character's inventory (empty set on any failure)."""
+    if not character_name:
+        return set()
     try:
         from app.models.inventory import _load_inventory
         inv = _load_inventory(character_name).get("inventory", []) or []
     except Exception:
+        return set()
+    return {e.get("item_id") for e in inv if e.get("item_id")}
+
+
+def _character_has_item(character_name: str, item_id: str) -> bool:
+    """Check whether the character carries the given item."""
+    if not item_id or not character_name:
         return False
-    for entry in inv:
-        if entry.get("item_id") == item_id:
-            return True
-    return False
+    return item_id in _character_item_ids(character_name)
 
 
 def _character_known_locations(character_name: str) -> List[str]:
-    """Liefert die known_locations-Liste eines Characters (immer eine Liste).
+    """The character's known_locations list (always a list).
 
-    Leere Liste = der Character kennt noch keinen Ort und kann nirgends hin.
-    Auto-Discovery beim Betreten und Discover-Regeln erweitern die Liste.
+    Empty list = the character knows no place yet and can go nowhere.
+    Auto-discovery on entering and discover rules extend the list.
     """
     if not character_name:
         return []
@@ -852,18 +856,44 @@ def _character_known_locations(character_name: str) -> List[str]:
     return []
 
 
+def visibility_context(character_name: str) -> Dict[str, Any]:
+    """Everything ``location_visible_to_character`` reads about the character,
+    fetched ONCE.
+
+    Callers that test many locations for the same character (the worldmap
+    payload does, on a 3-second poll) pass the result back in instead of
+    letting the predicate re-read the character config and the inventory per
+    location. The rules themselves stay in the predicate — this only supplies
+    its inputs.
+    """
+    return {
+        "known": set(_character_known_locations(character_name)),
+        "items": _character_item_ids(character_name),
+    }
+
+
 def location_visible_to_character(character_name: str,
-                                    location: Dict[str, Any]) -> bool:
-    """True wenn der Character das Wissens-Item der Location besitzt
-    (oder keins gesetzt ist) UND die Location in seiner known_locations-Liste
-    steht. Strict — leere Liste = nichts sichtbar.
+                                    location: Dict[str, Any],
+                                    context: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True when the character owns the location's knowledge item (or none is
+    set) AND the location is in its known_locations list. Strict — an empty
+    list means nothing is visible.
+
+    ``context``: a ``visibility_context()`` result for this character; when
+    given, its precomputed sets replace the per-call DB reads. Same answer,
+    one lookup instead of two per location.
     """
     if not isinstance(location, dict):
         return False
     iid = (location.get("knowledge_item_id") or "").strip()
-    if iid and not _character_has_item(character_name, iid):
-        return False
-    known = _character_known_locations(character_name)
+    if iid:
+        has = iid in context["items"] if context is not None \
+            else _character_has_item(character_name, iid)
+        if not has:
+            return False
+    known = context["known"] if context is not None \
+        else _character_known_locations(character_name)
     loc_id = location.get("id") or ""
     if loc_id not in known:
         return False
