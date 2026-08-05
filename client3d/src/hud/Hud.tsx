@@ -291,6 +291,17 @@ export function Hud({ avatar, username, role }: {
     setGameState({ movementLocked: isFollower, partyLeader });
   }, [isFollower, partyLeader]);
 
+  // The ground room of the place the avatar is in. It is a room like any
+  // other, but it carries no geometry, so the room walk in the vanilla app
+  // cannot derive it from the scene it renders — it is the one room that is
+  // recognised by a FLAG instead of by a shape. This poll already has the
+  // list, and the id travels the same way the party state does. Empty until
+  // the first payload arrives: the walk then simply leaves the room alone.
+  const groundRoomId = (data?.rooms || []).find((r) => r.is_ground)?.id || '';
+  useEffect(() => {
+    setGameState({ groundRoomId });
+  }, [groundRoomId]);
+
   // Toast bridge (E3-T3): the vanilla app renders no text of its own, so a
   // refused step (403 with the server's reason) is shown through the package
   // toast that already lives inside this island.

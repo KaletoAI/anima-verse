@@ -2114,6 +2114,16 @@ async function startApp(username: string, role: string) {
     return rooms;
   }
 
+  /** Whether a point lies inside a room's floor rectangle (world XZ) — the
+   *  same rectangles the focus mode uses, taken from the mounted scene. A room
+   *  the tile has no rectangle for (no plate, no overlay) contains nothing. */
+  function insideRoomRect(tile: Tile, roomId: string,
+                          pos: { x: number; z: number }): boolean {
+    const r = tile.roomRects.get(roomId);
+    if (!r) return false;
+    return Math.abs(pos.x - r.x) <= r.w / 2 && Math.abs(pos.z - r.z) <= r.d / 2;
+  }
+
   /**
    * Height the avatar WALKS at INSIDE A BUILDING: the floor of the room it is
    * in, on every storey, taken from the same source the NPC placement uses
@@ -2361,15 +2371,42 @@ async function startApp(username: string, role: string) {
     // indoor room there would move the avatar somewhere the player cannot see.
     const rooms = interiorRooms(tile).filter(
       (r) => interiorUp || tile.alwaysVisibleRooms.has(r.id));
+    // The ground is a TARGET, not a gap (plan-grundflaeche.md § 8, stage 2).
+    // The rooms of a place do not cover it, so whoever steps out of a room
+    // stands outside every rectangle — and that used to mean "no candidate",
+    // which left the avatar in the room it had left, for the server, the
+    // prompt and the chat window alike. The ground is the one room with an id
+    // and no geometry: it cannot be found by distance, it is what remains
+    // when no rectangle holds the figure. Its id comes from the scene payload
+    // (`is_ground`) over the bus — the reserved constant stays the server's.
+    //
+    // Whether a rectangle holds the figure decides which room it is in; among
+    // several (overlapping outdoor zones) the nearest centre still wins, and
+    // the hold below is unchanged, so the boundary between "in" and "out"
+    // flickers no more than the boundary between two rooms does.
+    //
+    // Only where there ARE rooms: a tile whose scene has not arrived (no
+    // rectangles, no centres) proposes nothing at all, exactly as before —
+    // adopting a room out of nothing is what the guard above prevents.
+    const ground = getGameState().groundRoomId;
+    const inside = rooms.filter((r) => insideRoomRect(tile, r.id, pos));
+    const candidates = inside.length ? inside
+      : (rooms.length && ground
+        ? [{ id: ground, level: 0, center: { x: pos.x, z: pos.z } }]
+        : rooms);
     // The storey is the FIGURE'S OWN, never the displayed one: `levelFilter`
     // is the in-world storey BUTTON, pure view state. Glancing at the first
     // floor from the hall must not post the avatar up there, and a room set by
     // the HUD chip must not be pulled back down because the view shows the
     // ground floor. Without a room yet, the displayed storey is the only
-    // answer there is.
-    const level = (current ? tile.roomLevels.get(current) : undefined) ?? tile.levelFilter;
+    // answer there is. The ground has no plate, so `roomLevels` does not know
+    // it — it is the ground storey by definition.
+    const ownLevel = current
+      ? tile.roomLevels.get(current) ?? (current === ground ? 0 : undefined)
+      : undefined;
+    const level = ownLevel ?? tile.levelFilter;
     const before = roomWalk;
-    const out = nearestRoomSwitch(current, { x: pos.x, z: pos.z }, rooms,
+    const out = nearestRoomSwitch(current, { x: pos.x, z: pos.z }, candidates,
       level, before, performance.now(), ROOM_HOLD_SECONDS);
     const next = out.next;
     if (!next || next === current) { roomWalk = out.state; return; }

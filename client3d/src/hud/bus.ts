@@ -13,8 +13,8 @@
  * it without pulling the HUD bundle in. Game state has three writers, each
  * owning a disjoint set of fields: `main.ts` with its mode helper
  * `game/embody.ts` (mode, selection, talk target, elevator), `CharacterPlaque.tsx` (one
- * field — clearing the selection) and `Hud.tsx` (party state out of the
- * `/play/scene` poll — `movementLocked` + `partyLeader`, E3-T3).
+ * field — clearing the selection) and `Hud.tsx` (what the `/play/scene` poll
+ * says: `movementLocked` + `partyLeader` (E3-T3) and `groundRoomId`).
  */
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
@@ -34,6 +34,12 @@ export interface HudGameState {
   movementLocked: boolean;
   /** name of the party leader while `movementLocked` is set, else empty */
   partyLeader: string;
+  /** Id of the ground room of the avatar's CURRENT location, from the
+   *  `/play/scene` room list (`is_ground`) — empty while no payload has
+   *  arrived. The ground is a room with an id but no geometry, so the room
+   *  walk cannot find it by distance; it reads the id here instead of knowing
+   *  the server's reserved constant. */
+  groundRoomId: string;
   /** elevator the avatar is standing at (embodied mode), or null. The talk
    *  prompt WINS over it: with someone in range only that prompt shows, so one
    *  F press is never two offers at once. */
@@ -87,7 +93,7 @@ export interface HudUiActions {
 
 const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
-  movementLocked: false, partyLeader: '',
+  movementLocked: false, partyLeader: '', groundRoomId: '',
   elevator: null, elevatorOpen: false, enterOffer: null,
 };
 const listeners = new Set<() => void>();
