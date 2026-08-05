@@ -244,3 +244,6 @@
 }
 .player-relation-positive { color: var(--ok, #59c37a); }
 .player-relation-negative { color: var(--danger, #e05656); }
+/* Sentiment 0 — spelled out so the third class is visibly intended, not a
+   selector somebody forgot to write. */
+.player-relation-neutral { color: inherit; }

@@ -39,19 +39,24 @@
 }
 
 /* ---- Party strip: who travels with the avatar (Etappe 6) ----
-   Top centre, same lane as the mode chip — so it steps one row down while
-   that chip is there instead of sharing the spot with it. The row itself is
-   styled in panels.css (.player-party); this only places it. It carries a
-   button, hence the pointer exception. */
+   Top centre, in a lane of its OWN below both things that already sit there:
+   the mode chip (top 58px, ends ~81px, embodied only) and the open-view badge
+   (style.css, top 46px, ends ~79px, overview only). The two modes are
+   mutually exclusive but the strip shows in BOTH, and the badge lives outside
+   #hud where a :has() dodge cannot see it — so the strip clears the lower of
+   the two edges unconditionally instead of dodging one of them. It is z 20
+   over the badge's z 10 and takes the pointer, so an overlap would swallow
+   clicks on the badge's ✕.
+   The row itself is styled in panels.css (.player-party); this only places
+   it. It carries a button, hence the pointer exception. */
 #hud .hud-party {
   position: absolute;
-  top: 58px;
+  top: 90px;
   left: 50%;
   transform: translateX(-50%);
   max-width: min(560px, 70vw);
   pointer-events: auto;
 }
-#hud:has(.hud-mode) .hud-party { top: 100px; }
 
 /* ---- Right-edge rail: the three panel toggles ---- */
 #hud .hud-rail {
