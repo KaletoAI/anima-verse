@@ -7,15 +7,25 @@
  * lose + schlafende Characters. Pan (Ziehen auf leerer Fläche) + Zoom (Mausrad
  * Richtung Cursor), in localStorage gespeichert. Bewegung bleibt im Move-Pad.
  * Reuse der layout-neutralen worldmap-* Klassen aus /static/themes/base.css.
+ *
+ * Fog of war (§ A12): the payload is filtered server-side to what the avatar
+ * knows, so the grid comes from `grid_bounds` (all placed locations) instead of
+ * the delivered ones — it stays stable while the world is discovered — and
+ * empty cells wear the fog veil while `fogged` holds. Admins get a "show all"
+ * checkbox that switches the request (and the poll cache key) to `?all=1`.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
+import { useAuth } from '../lib/AuthGate'
 import { apiGet } from '../lib/api'
 import { usePoll } from './usePolling'
 
 const CELL = 72
 const GAP = 0 // Zellen stoßen aneinander → zusammenhängende Karte (keine Lücken)
 const PAD = 6
+// Height of the admin-only header row — counted into the reported content
+// height so the panel autosize still fits the whole map.
+const HEAD_H = 22
 const VIEW_KEY = 'anima.map2d.view'
 const LABELS_KEY = 'anima.map2d.labels'
 
@@ -54,9 +64,15 @@ interface WChar {
   travel?: { eta_game: string; progress_cells: number; path: string[] } | null
 }
 interface WEvent { category: string; text: string }
+interface GridBounds { min_x: number; min_y: number; max_x: number; max_y: number }
 interface WorldMap {
   avatar: string; current_location_id: string
   locations: WLoc[]; characters: WChar[]; events_by_location: Record<string, WEvent[]>
+  /** Extent over ALL placed locations (fog or not) — the grid stays stable
+   *  while the avatar discovers the world. Null in an empty world. */
+  grid_bounds?: GridBounds | null
+  /** The payload is filtered to what the avatar knows (§ A12). */
+  fogged?: boolean
 }
 
 interface View { zoom: number; sx: number; sy: number }
@@ -110,6 +126,20 @@ function MapPatch({ loc, left, top, size }: { loc: WLoc; left: number; top: numb
       alt="" onError={() => setHidden(true)}
       style={{ position: 'absolute', left, top, width: size, height: size,
         objectFit: 'cover', pointerEvents: 'none' }} />
+  )
+}
+
+// Fog-of-war cell: inside the grid bounds, but the avatar knows nothing here.
+// Same look as the unknown tiles in the Game-Admin KnownLocationsEditor —
+// darkened veil, no name (an empty cell carries no location data at all).
+function FogCell({ title }: { title: string }) {
+  return (
+    <div title={title} style={{
+      width: CELL, height: CELL, boxSizing: 'border-box', position: 'relative',
+      border: '1px solid rgba(255,255,255,0.08)', background: 'var(--bg, #0d1117)',
+    }}>
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} />
+    </div>
   )
 }
 
@@ -175,8 +205,17 @@ function Cell({ loc, isActive, chars, events, travellingTo, arrivesAt, showLabel
 export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all' }:
   { currentLocationId: string; autoFit?: boolean; labelMode?: LabelMode }) {
   const { t } = useI18n()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
+  // Admin-only view switch (component state, off by default — admins play too).
+  // It decides WHICH view is fetched, so the poll key carries the flag: a
+  // fogged and an unfogged payload must never share one cache entry.
+  const [showAll, setShowAll] = useState(false)
+  const allView = isAdmin && showAll
   const { data } = usePoll<WorldMap>(
-    'play-worldmap', () => apiGet<WorldMap>('/play/worldmap'), { intervalMs: 10000 })
+    allView ? 'play-worldmap-all' : 'play-worldmap',
+    () => apiGet<WorldMap>(allView ? '/play/worldmap?all=1' : '/play/worldmap'),
+    { intervalMs: 10000 })
   // autoFit (vergrößertes Overlay): gespeicherte Ansicht ignorieren, stattdessen
   // die Karte in den Container einpassen — und NICHT zurückschreiben.
   const savedRef = useRef<View | null>(autoFit ? null : loadView())
@@ -283,6 +322,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   const current = currentLocationId || data?.current_location_id || ''
   const travellingTo = t('travelling to')
   const arrivesAt = t('arrives ~')
+  const fogTitle = t('unknown (fog of war)')
 
   const { cells, gridW, gridH } = useMemo(() => {
     const empty = { cells: null as React.ReactNode, gridW: 0, gridH: 0 }
@@ -292,11 +332,17 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     const placed: WLoc[] = data.locations.filter((l) =>
       l.grid_x != null && l.grid_y != null && (l.grid_x as number) >= 0 && (l.grid_y as number) >= 0 &&
       !(l.passable && !(l.template_location_id || '').trim()))
-    if (!placed.length) return empty
+    // Extent: the server-side bounds over ALL placed locations keep the grid
+    // (and its cell scale) stable while the avatar discovers the world. Only
+    // an empty world (no bounds) falls back to the delivered locations.
+    const bounds = data.grid_bounds || null
+    if (!placed.length && !bounds) return empty
     const xs = placed.map((l) => l.grid_x as number)
     const ys = placed.map((l) => l.grid_y as number)
-    const minX = Math.min(...xs), maxX = Math.max(...xs)
-    const minY = Math.min(...ys), maxY = Math.max(...ys)
+    const minX = bounds ? bounds.min_x : Math.min(...xs)
+    const maxX = bounds ? bounds.max_x : Math.max(...xs)
+    const minY = bounds ? bounds.min_y : Math.min(...ys)
+    const maxY = bounds ? bounds.max_y : Math.max(...ys)
     const cols = maxX - minX + 1
     const rows = maxY - minY + 1
     const byCell = new Map<string, WLoc>()
@@ -342,7 +388,10 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       for (let x = minX; x <= maxX; x++) {
         const l = byCell.get(`${x},${y}`)
         if (!l) {
-          els.push(<div key={`${x},${y}`} style={{ width: CELL, height: CELL, opacity: 0.12 }} />)
+          // Fogged view: an empty cell is unexplored, not empty world.
+          els.push(data.fogged
+            ? <FogCell key={`${x},${y}`} title={fogTitle} />
+            : <div key={`${x},${y}`} style={{ width: CELL, height: CELL, opacity: 0.12 }} />)
           continue
         }
         els.push(
@@ -365,7 +414,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     const gH = rows * CELL + (rows - 1) * GAP + PAD * 2
 
     return { cells: grid, gridW: gW, gridH: gH }
-  }, [data, current, travellingTo, arrivesAt, labelMode])
+  }, [data, current, travellingTo, arrivesAt, fogTitle, labelMode])
 
   // Restore saved scroll once after first load, else center the grid.
   useEffect(() => {
@@ -428,7 +477,16 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       // BREITE und Höhe passend zur Zoomstufe setzt (DOM-Messung scheitert, weil
       // die Karte intern scrollt/fittet). gridW/gridH sind ungeskaliert → * zoom.
       // Nur im Grid-Panel (nicht im autoFit-Overlay).
-      {...(!autoFit && gridW ? { 'data-content-w': Math.round(gridW * zoom), 'data-content-h': Math.round(gridH * zoom) } : {})}>
+      {...(!autoFit && gridW ? { 'data-content-w': Math.round(gridW * zoom), 'data-content-h': Math.round(gridH * zoom) + (isAdmin ? HEAD_H : 0) } : {})}>
+      {isAdmin ? (
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 6, height: HEAD_H,
+          fontSize: '0.78em', opacity: 0.75, cursor: 'pointer', userSelect: 'none',
+        }} onMouseDown={(e) => e.stopPropagation()}>
+          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+          {t('Show all locations (admin)')}
+        </label>
+      ) : null}
       <div ref={containerRef} onMouseDown={onDown}
         style={{ flex: 1, minHeight: 0, overflow: 'auto', cursor: 'grab' }}>
         <div style={{ width: gridW * zoom, height: gridH * zoom }}>
