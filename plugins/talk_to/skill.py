@@ -107,15 +107,12 @@ class TalkToSkill(PluginSkill):
         # someone in another room of the same location cannot hear this.
         # Without the gate, cross-room TalkTo staged hours-long one-sided
         # "scenes" with a partner who never perceived a word (2026-07-30).
-        # The reach rule itself is the earshot's: an empty room means the
-        # location's GROUND, and the ground is within reach of every room —
-        # so ground_presence_split decides, not a second comparison here.
+        # Plain room equality — the location's ground is a room like any
+        # other (world.GROUND_ROOM_ID), so it needs no rule of its own.
         from app.models.character import get_character_current_room
-        from app.core.perception import ground_presence_split
         self_room = get_character_current_room(sender_name) or ""
         target_room = get_character_current_room(target_name) or ""
-        in_reach, _ = ground_presence_split(self_room, [(target_name, target_room)])
-        if not in_reach:
+        if self_room != target_room:
             from app.models.world import get_room_name
             room_label = get_room_name(self_loc, target_room)
             return (

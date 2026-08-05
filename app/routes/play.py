@@ -176,17 +176,19 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     loc_obj = get_location_by_id(loc) if loc else None
     location_name = (loc_obj.get("name", "") if loc_obj else "")
     entry_id = get_entry_room_id(loc_obj) if loc_obj else ""
+    from app.models.world import GROUND_ROOM_ID, get_ground_name
+    from app.models.character import get_character_language
     rooms_out, room_name = [], ""
     for r in ((loc_obj.get("rooms") if loc_obj else None) or []):
         rid = r.get("id", "") or ""
         rn = r.get("name", "") or ""
+        if rid == GROUND_ROOM_ID and not rn:
+            # The ground room may stay unnamed — then it falls back to the
+            # same translated word in every location.
+            rn = get_ground_name(loc, get_character_language(avatar) or "de")
         rooms_out.append({"id": rid, "name": rn, "is_entry": rid == entry_id})
         if room and (rid == room or rn == room):
             room_name = rn
-    if not room:
-        from app.models.world import get_ground_name
-        from app.models.character import get_character_language
-        room_name = get_ground_name(loc, get_character_language(avatar) or "de")
 
     # Nachbar-Orte + Entry-Gate aus der bestehenden Route-Funktion wiederverwenden
     nb = {}

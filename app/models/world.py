@@ -446,6 +446,24 @@ def _generate_room_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
+# The GROUND of a location — the area no room takes up — IS a room, with one
+# reserved id that is the same in every location (room ids are unique per
+# location, so no second namespace appears).
+#
+# Why a reserved id and not a flag on the room: a flag would have to be taught
+# to every consumer, one by one. An id has to be taught to nobody — decency
+# checks, earshot, rules, the room heuristic and both renderers see a room and
+# do with it what they always do with rooms. The predecessor tried the other
+# way round, giving the EMPTY room id that meaning, and the same bug appeared
+# four times over: in Python an empty string reads as "not set" everywhere
+# (plan-grundflaeche.md § 2 / § 4).
+#
+# Authors never create it. ``migrate_ground_rooms_once`` brings it along, and
+# the reserved shape keeps it out of the 8-hex space ``_generate_room_id``
+# draws from.
+GROUND_ROOM_ID = "__ground__"
+
+
 # === Raum-Hilfsfunktionen ===
 
 def get_location_rooms(location: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -909,17 +927,156 @@ def get_room_name(location_id: str, room_id: str) -> str:
 def get_ground_name(location_id: str, lang: str = "") -> str:
     """Display name of a location's GROUND — the area no room takes up.
 
-    The ground is addressed by the EMPTY room id, so ``get_room_name`` cannot
-    name it (it needs a room). Authors may give it a name of its own
-    ("Market square", "Clearing"); without one every location falls back to
-    the same translated word.
+    Reads the reserved GROUND room like any other room. Authors may give it a
+    name of its own ("Market square", "Clearing") by editing that room;
+    without one every location falls back to the same translated word.
     """
     loc = get_location_by_id(location_id) or {} if location_id else {}
-    name = str(loc.get("ground_name") or "").strip()
-    if name:
-        return name
+    for room in (loc.get("rooms") or []):
+        if str(room.get("id") or "") == GROUND_ROOM_ID:
+            name = str(room.get("name") or "").strip()
+            if name:
+                return name
+            break
     from app.core.i18n import t
     return t("Outside", lang)
+
+
+def ground_room_action(location: Dict[str, Any]) -> str:
+    """What the ground migration has to do for ONE location.
+
+    A pure decision, so ``scripts/smoke_ground_room.py`` can check it by hand
+    while the loop around it touches rows:
+
+    - ``"add"`` — the location carries no room with the reserved id and gets
+      one. The normal case, with or without rooms of its own: the ground
+      exists in every location.
+    - ``"skip"`` — a CLONE. It stores ``rooms: []`` and inherits its
+      template's rooms on read, so its ground comes from the template.
+    - ``"present"`` — a room already carries the reserved id. Nothing is
+      touched: on a repeated run that is this migration's own room, and when
+      an author assigned the id by hand, overwriting would destroy their
+      room. Both are the same case here — the caller reports it and moves on.
+    """
+    if str(location.get("template_location_id") or "").strip():
+        return "skip"
+    for room in (location.get("rooms") or []):
+        if str(room.get("id") or "") == GROUND_ROOM_ID:
+            return "present"
+    return "add"
+
+
+def ground_room_target(current_room: str, room_ids: List[str]) -> str:
+    """The room a character has to be moved into, ``""`` when it stays put.
+
+    ``room_ids`` are the room ids of the character's current location, the
+    ground room among them. Pure, checked by hand in
+    ``scripts/smoke_ground_room.py``:
+
+    - no room at all: it stood on the ground all along;
+    - a room its location actually has (the ground included): it stays;
+    - a room its location does NOT have: it stood nowhere, and the ground is
+      the honest place for that.
+    """
+    if current_room and current_room in room_ids:
+        return ""
+    return GROUND_ROOM_ID
+
+
+def migrate_ground_rooms_once() -> Dict[str, int]:
+    """One-time, idempotent: give every location its ground room and move
+    everything that stood in no room onto it.
+
+    Three passes — locations, characters, utterances — and the counts come
+    back so the boot log can state them: ``locations`` added, ``characters``
+    moved, ``utterances`` moved, ``collisions`` reported. Guarded by a
+    world_kv marker, so a second boot returns zeros without touching a row;
+    the per-location decision is idempotent on its own as well
+    (``ground_room_action`` never adds a second one).
+
+    A collision — an author's room on the reserved id — is skipped WHOLE:
+    neither its characters nor its utterances are moved, because that id does
+    not address a ground there. Each one is logged with its location id, or
+    the author would never find it.
+    """
+    counts = {"locations": 0, "characters": 0, "utterances": 0,
+              "collisions": 0}
+    if get_world_setting("migration.ground_room_v1", "") == "done":
+        return counts
+    try:
+        data = _load_world_data()
+        collisions: set = set()
+        changed = False
+        for loc in data.get("locations", []):
+            lid = str(loc.get("id") or "")
+            action = ground_room_action(loc)
+            # The former location field `ground_name` becomes the room's own
+            # name and is gone from the location for good; empty keeps the
+            # translated default.
+            name = str(loc.pop("ground_name", "") or "").strip()
+            if name:
+                changed = True
+            if action == "add":
+                loc.setdefault("rooms", []).append({
+                    "id": GROUND_ROOM_ID,
+                    "name": name,
+                    "description": "",
+                    "activities": [],
+                })
+                counts["locations"] += 1
+                changed = True
+            elif action == "present":
+                collisions.add(lid)
+                counts["collisions"] += 1
+                logger.warning(
+                    "ground-room migration: location %s (%s) already has a "
+                    "room with the reserved id %r — skipped, nothing moved "
+                    "there", lid, loc.get("name", ""), GROUND_ROOM_ID)
+        if changed:
+            _save_world_data(data)
+
+        # Which locations have a usable ground now — clones included, they
+        # inherit it, collisions excluded.
+        rooms_by_loc: Dict[str, List[str]] = {}
+        for loc in list_locations():
+            lid = str(loc.get("id") or "")
+            if not lid or lid in collisions:
+                continue
+            ids = [str(r.get("id") or "") for r in (loc.get("rooms") or [])]
+            if GROUND_ROOM_ID in ids:
+                rooms_by_loc[lid] = ids
+
+        with transaction() as conn:
+            rows = conn.execute(
+                "SELECT character_name, current_location, current_room "
+                "FROM character_state").fetchall()
+            for name, cur_loc, cur_room in rows:
+                ids = rooms_by_loc.get(str(cur_loc or ""))
+                if ids is None:
+                    continue
+                target = ground_room_target(str(cur_room or ""), ids)
+                if not target:
+                    continue
+                conn.execute(
+                    "UPDATE character_state SET current_room=? "
+                    "WHERE character_name=?", (target, name))
+                counts["characters"] += 1
+            for lid in rooms_by_loc:
+                cur = conn.execute(
+                    "UPDATE utterances SET room_id=? "
+                    "WHERE location_id=? AND room_id=''",
+                    (GROUND_ROOM_ID, lid))
+                counts["utterances"] += cur.rowcount or 0
+
+        set_world_setting("migration.ground_room_v1", "done")
+        logger.info(
+            "ground-room migration: %d location(s) got the ground room, "
+            "%d character(s) and %d utterance(s) moved onto it, "
+            "%d collision(s)", counts["locations"], counts["characters"],
+            counts["utterances"], counts["collisions"])
+    except Exception as e:
+        logger.warning("ground-room migration failed: %s", e)
+    return counts
 
 
 def get_location_name(location_id: str) -> str:

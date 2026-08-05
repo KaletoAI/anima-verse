@@ -154,10 +154,10 @@ def _format_presence_block(location_name: str, presence_lines: list,
 
 def _load_presence(character_name: str, location_id: str) -> tuple:
     """Build ``(presence_lines, elsewhere_lines, anyone_in_room)`` for the
-    active world. ``presence_lines`` = people within reach — the character's
-    ROOM plus everyone standing on the location's ground, exactly as the
-    earshot counts them (``perception.ground_presence_split``);
-    ``elsewhere_lines`` = people in OTHER rooms of this location.
+    active world. ``presence_lines`` = people in the character's ROOM,
+    ``elsewhere_lines`` = people in OTHER rooms of this location. The
+    location's ground is a room like any other (``world.GROUND_ROOM_ID``),
+    so plain room equality decides both.
     Returns ([], [], False) when no location."""
     if not location_id:
         return [], [], False
@@ -169,7 +169,6 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         get_effective_activity)
     from app.models.account import get_active_character
     from app.models.world import get_room_name
-    from app.core.perception import ground_presence_split
 
     my_room = get_character_current_room(character_name) or ""
     player_char = get_active_character()
@@ -190,7 +189,8 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
     if player_char and player_at_location:
         candidates.insert(0, (player_char, player_room))
 
-    same_room, elsewhere = ground_presence_split(my_room, candidates)
+    same_room = [name for name, room in candidates if room == my_room]
+    elsewhere = [(name, room) for name, room in candidates if room != my_room]
     player_present = bool(player_char) and player_char in same_room
     others_in_room = [o for o in same_room if o != player_char]
     anyone_in_room = player_present or bool(others_in_room)
@@ -211,7 +211,7 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         suffix = f" ({other_act})" if other_act else ""
         lines.append(f"- {other} is here{suffix}")
 
-    # "elsewhere" only ever holds real rooms — a ground-stander is here.
+    # Every room resolves by name, the location's ground among them.
     for other, other_room in elsewhere:
         elsewhere_lines.append(
             f"- {other} — in: {get_room_name(location_id, other_room)}")

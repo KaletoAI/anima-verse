@@ -113,52 +113,6 @@ def _resolve_presence(location_id: str, room_id: str) -> Tuple[List[str], List[s
     return room_members, location_others
 
 
-def ground_visible_rooms(perceiver_room: str) -> Optional[Tuple[str, str]]:
-    """Which rooms' lines a perceiver sees — None for "every room".
-
-    The EMPTY room id addresses a location's GROUND: the area no room takes
-    up. The earshot has always read it that way (``_resolve_presence`` with an
-    empty room resolves to the whole location), and this is the same rule for
-    the transcript:
-
-    - a perceiver on the ground sees every room of its location (``None``);
-    - a perceiver inside a room sees that room AND the ground — someone
-      standing outside is heard inside, so their line has to be readable
-      there too.
-
-    Pure, so ``scripts/smoke_ground_area.py`` can check it by hand.
-    """
-    if not perceiver_room:
-        return None
-    return (perceiver_room, "")
-
-
-def ground_presence_split(my_room: str,
-                          others: List[Tuple[str, str]]
-                          ) -> Tuple[List[str], List[Tuple[str, str]]]:
-    """Split a location's characters into "here" and "elsewhere".
-
-    Mirrors ``_resolve_presence`` / the earshot primitive
-    ``room_entry._list_characters_in_room``, where an EMPTY room id means the
-    location's GROUND and a ground-stander is a member of EVERY room:
-
-    - a perceiver on the ground: the whole location is "here";
-    - a perceiver inside a room: that room AND everyone on the ground is
-      "here" — what is within earshot is what the prompt may call present.
-
-    Only two genuinely different rooms stay apart. ``others`` are
-    ``(name, room_id)`` pairs; "elsewhere" therefore never carries a
-    ground-stander.
-
-    Pure, so ``scripts/smoke_ground_area.py`` can check it by hand.
-    """
-    if not my_room:
-        return [name for name, _ in others], []
-    here = [name for name, room in others if not room or room == my_room]
-    away = [(name, room) for name, room in others if room and room != my_room]
-    return here, away
-
-
 def announce_action(character_name: str, text: str,
                     source: str = "direct_action",
                     perception_meta: Optional[Dict[str, Any]] = None,

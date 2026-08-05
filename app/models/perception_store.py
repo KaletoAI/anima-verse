@@ -114,24 +114,17 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     False keeps them out of every LLM-transcript consumer; only the
     /play/scene route opts in.
 
-    The empty room id is the location's ground and sees the whole location;
-    a room sees itself and the ground (``ground_visible_rooms``)."""
+    Plain room equality: the location's ground is a room like any other
+    (``world.GROUND_ROOM_ID``), so it needs no rule of its own here."""
     conn = get_connection()
     # Include u.volume (whisper/normal/shout) — NOT secret content, just the
     # volume; the content itself stays filtered in p.content (whisper_meta = empty).
-    from app.core.perception import ground_visible_rooms
-    rooms = ground_visible_rooms(room_id)
-    base = ("SELECT p.*, u.volume AS volume FROM perceptions p "
-            "JOIN utterances u ON u.id = p.utterance_id "
-            "WHERE p.perceiver=? AND u.location_id=? ")
-    tail = "ORDER BY p.ts DESC, p.id DESC LIMIT ?"
-    if rooms is None:
-        rows = conn.execute(base + tail,
-                            (perceiver, location_id, limit)).fetchall()
-    else:
-        rows = conn.execute(base + "AND u.room_id IN (?, ?) " + tail,
-                            (perceiver, location_id, rooms[0], rooms[1],
-                             limit)).fetchall()
+    rows = conn.execute(
+        "SELECT p.*, u.volume AS volume FROM perceptions p "
+        "JOIN utterances u ON u.id = p.utterance_id "
+        "WHERE p.perceiver=? AND u.location_id=? AND u.room_id=? "
+        "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
+        (perceiver, location_id, room_id, limit)).fetchall()
     out = [_row_to_dict(r) for r in reversed(rows)]
     if not include_meta_lines:
         out = [r for r in out if not ((r.get("meta") or {}).get("display_only"))]

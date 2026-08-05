@@ -6,7 +6,7 @@ import { ListHeader } from '../../components/ListHeader'
 import { ImportButton } from '../../components/ImportExport'
 import { loadItems, type ItemRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
-import { DANGER_LEVELS, type Location, type Selection } from './worldTypes'
+import { DANGER_LEVELS, GROUND_ROOM_ID, type Location, type Selection } from './worldTypes'
 import { LocationEditor } from './LocationEditor'
 import { RoomEditor } from './RoomEditor'
 import { LocationGallery } from './LocationGallery'
@@ -321,16 +321,22 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
             const isRoomSelected =
               selection?.kind === 'room' && selection.locationId === location.id && selection.roomId === r.id
             const isEntry = !!r.id && r.id === eid
+            // The ground room may stay unnamed — show the translated default
+            // instead of its reserved id.
+            const isGround = r.id === GROUND_ROOM_ID
+            const label = r.name || (isGround ? t('Outside') : r.id)
             return (
               <li key={r.id}>
                 <button
                   type="button"
                   className={`ga-list-row ga-list-row-nested${isRoomSelected ? ' is-active' : ''}`}
                   onClick={() => onSelect({ kind: 'room', locationId: location.id, roomId: r.id || '' })}
-                  title={isEntry ? t('Entry room') : undefined}
+                  title={isEntry ? t('Entry room')
+                    : isGround ? t('The ground of this location — the area no room takes up')
+                      : undefined}
                 >
                   <span className="ga-list-row-main">
-                    {isEntry ? '🚪' : '↳'} {r.name || r.id}
+                    {isEntry ? '🚪' : isGround ? '🌐' : '↳'} {label}
                   </span>
                   {r.decency ? <span className="ga-source ga-source-world">{r.decency}</span> : null}
                 </button>

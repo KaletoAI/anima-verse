@@ -1032,7 +1032,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     entry_room = data.get("entry_room")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
-    ground_name = data.get("ground_name")
     map3d = data.get("map3d")
     if not location_name:
         raise HTTPException(status_code=400, detail="Name missing")
@@ -1061,7 +1060,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or entry_room is not None or indoor is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
-                  or terrain is not None or ground_name is not None
+                  or terrain is not None
                   or map3d is not None)
     if _has_extra and location:
         from app.models.world import _load_world_data, _save_world_data
@@ -1097,8 +1096,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                     _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
                 if terrain is not None:
                     _l["terrain"] = (terrain or "").strip()
-                if ground_name is not None:
-                    _l["ground_name"] = (ground_name or "").strip()
                 if map3d is not None:
                     _m3 = _sanitize_map3d(map3d)
                     if _m3:
@@ -1136,7 +1133,6 @@ def update_location_with_extras(location_id: str,
     entry_room = data.get("entry_room")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
-    ground_name = data.get("ground_name")
     map3d = data.get("map3d")
 
     loc = get_location_by_id(location_id)
@@ -1171,7 +1167,7 @@ def update_location_with_extras(location_id: str,
                   or entry_room is not None or indoor is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
-                  or terrain is not None or ground_name is not None
+                  or terrain is not None
                   or map3d is not None)
     if _has_extra:
         from app.models.world import _load_world_data, _save_world_data
@@ -1207,8 +1203,6 @@ def update_location_with_extras(location_id: str,
                     _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
                 if terrain is not None:
                     _l["terrain"] = (terrain or "").strip()
-                if ground_name is not None:
-                    _l["ground_name"] = (ground_name or "").strip()
                 if map3d is not None:
                     _m3 = _sanitize_map3d(map3d)
                     if _m3:

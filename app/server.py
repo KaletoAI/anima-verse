@@ -231,6 +231,18 @@ async def lifespan(app: FastAPI):
     except Exception as _me:
         logger.debug("legacy-model migration failed: %s", _me)
 
+    # Migration: the ground of a location becomes a room of its own — every
+    # location gets the reserved ground room, and every character and
+    # utterance that stood in no room moves onto it
+    # (plan-grundflaeche.md § 8). Idempotent, world_kv-marked.
+    try:
+        from app.models.world import migrate_ground_rooms_once
+        _gr = migrate_ground_rooms_once()
+        if any(_gr.values()):
+            logger.info("Ground-room migration: %s", _gr)
+    except Exception as _gre:
+        logger.debug("ground-room migration failed: %s", _gre)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()
