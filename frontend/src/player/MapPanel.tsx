@@ -186,9 +186,13 @@ function Cell({ loc, isActive, chars, events, travellingTo, arrivesAt, showLabel
             const traveling = !!c.movement_target_id && c.movement_target_id !== loc.id
             // ISO game timestamp -> HH:MM; empty when no journey is running.
             const eta = c.travel?.eta_game ? c.travel.eta_game.slice(11, 16) : ''
-            const title = c.name + (traveling
-              ? ` — ${travellingTo} ${c.movement_target_name || c.movement_target_id}`
-                + (eta ? ` (${arrivesAt} ${eta})` : '')
+            // Fog (§ A12): an empty target name means the avatar does not know
+            // the destination. Then the tooltip says nothing about it — never
+            // the raw id — same as the 3D client's character list. The walking
+            // badge still shows that the character is under way.
+            const target = c.movement_target_name || ''
+            const title = c.name + (traveling && target
+              ? ` — ${travellingTo} ${target}` + (eta ? ` (${arrivesAt} ${eta})` : '')
               : '')
             return (
               <span key={c.name} className={traveling ? 'worldmap-avatar-wrap traveling' : 'worldmap-avatar-wrap'}
@@ -332,11 +336,17 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       focusX: 0, focusY: 0, fitW: 0, fitH: 0, fitCX: 0, fitCY: 0,
     }
     if (!data) return empty
-    // Placed = echte Orte + platzierte Klone passierbarer Templates (keine
-    // unplatzierten Terrain-Definitionen).
-    const placed: WLoc[] = data.locations.filter((l) =>
-      l.grid_x != null && l.grid_y != null && (l.grid_x as number) >= 0 && (l.grid_y as number) >= 0 &&
+    // Delivered = every location that sits on a cell. Under fog the server
+    // already dropped what the avatar does not know, so this is exactly the
+    // known part of the map — the fog check below runs against it.
+    const delivered: WLoc[] = data.locations.filter((l) =>
+      l.grid_x != null && l.grid_y != null && (l.grid_x as number) >= 0 && (l.grid_y as number) >= 0)
+    // Placed = real locations + placed clones of passable templates (no
+    // unplaced terrain definitions). Display filter only: a delivered
+    // passable non-clone is KNOWN, it just draws no tile of its own.
+    const placed: WLoc[] = delivered.filter((l) =>
       !(l.passable && !(l.template_location_id || '').trim()))
+    const deliveredCells = new Set(delivered.map((l) => `${l.grid_x},${l.grid_y}`))
     // Extent: the server-side bounds over ALL placed locations keep the grid
     // (and its cell scale) stable while the avatar discovers the world. Only
     // an empty world (no bounds) falls back to the delivered locations.
@@ -400,8 +410,10 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       for (let x = minX; x <= maxX; x++) {
         const l = byCell.get(`${x},${y}`)
         if (!l) {
-          // Fogged view: an empty cell is unexplored, not empty world.
-          els.push(data.fogged
+          // Fogged view: a cell the server delivered NOTHING for is
+          // unexplored. A delivered-but-not-drawn cell (passable non-clone)
+          // is known — it stays a plain empty cell, no fog.
+          els.push(data.fogged && !deliveredCells.has(`${x},${y}`)
             ? <FogCell key={`${x},${y}`} title={fogTitle} />
             : <div key={`${x},${y}`} style={{ width: CELL, height: CELL, opacity: 0.12 }} />)
           continue
