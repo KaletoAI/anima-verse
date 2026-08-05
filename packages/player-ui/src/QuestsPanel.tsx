@@ -72,7 +72,11 @@ export function QuestsPanel({ pollIntervalMs = 15000 }: { pollIntervalMs?: numbe
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
   }, [])
 
-  const arcs = data?.arcs || []
+  // No answer yet (first open, or the poll is backing off after failures) is
+  // NOT "no quests" — a player with running arcs would be told the opposite of
+  // the truth. Same distinction the Others panel makes.
+  if (!data) return <EmptyState small title={t('Loading…')} />
+  const arcs = data.arcs || []
   if (arcs.length === 0) {
     return (
       <EmptyState icon="scroll" title={t('No quests yet')}
