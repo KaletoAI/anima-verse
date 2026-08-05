@@ -9,9 +9,10 @@ Die gebaute Shell liegt (wie game-admin) unter ``static/game_admin/play.html``
 """
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
+from app.core import users
 from app.core.auth_dependency import get_current_user, require_admin
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
@@ -1474,184 +1475,23 @@ async def play_gallery_delete_image(character: str, filename: str, user=Depends(
 
 
 @router.get("/play/worldmap")
-async def play_worldmap(user=Depends(get_current_user)):
-    """Aggregated 2D world map: locations (grid/passable/rotation + optional
-    terrain/map3d metadata), character positions (+avatar/activity/room/mood/
-    travel target) and active disruption/danger events. One request instead of
-    N fetches — read-only, for the player map panel and external map clients."""
+async def play_worldmap(user=Depends(get_current_user),
+                        show_all: int = Query(0, alias="all")):
+    """Aggregated 2D world map — fog of war by default (§ A12).
+
+    Default: only what the active avatar knows (`known_locations`, strict).
+    `?all=1` lifts the fog and is reserved for admins (403 otherwise) — the
+    unfiltered view for world building and debugging.
+    """
     from app.models.account import get_active_character
-    from app.models.world import list_locations
-    from app.models.events import list_events
-    from app.models.character import (
-        list_available_characters, get_character_current_location,
-        get_effective_activity, get_movement_target, get_character_profile_image,
-        get_character_current_room, get_character_current_feeling,
-    )
-    from app.core.expression_pose_maps import resolve_pose_animation
-    from app.core.animation_sets import resolve_sets as resolve_animation_sets
+    from app.core.world_ops import build_worldmap_payload
 
+    is_admin = (user.get("role") == users.ROLE_ADMIN)
+    if show_all and not is_admin:
+        raise HTTPException(status_code=403,
+                            detail="all=1 is reserved for admins")
     avatar = (get_active_character() or "").strip()
-
-    locations = []
-    name_by_id = {}
-    for loc in list_locations():
-        lid = loc.get("id") or ""
-        name_by_id[lid] = loc.get("name") or ""
-        entry = {
-            "id": lid,
-            "name": loc.get("name") or "",
-            "grid_x": loc.get("grid_x"),
-            "grid_y": loc.get("grid_y"),
-            "passable": bool(loc.get("passable")),
-            "template_location_id": (loc.get("template_location_id") or ""),
-            "map_rotation_2d": int(loc.get("map_rotation_2d") or 0),
-            "terrain": (loc.get("terrain") or ""),
-        }
-        map3d = loc.get("map3d")
-        if isinstance(map3d, dict) and map3d:
-            entry["map3d"] = map3d
-        # Derived floors fallback: map3d.style/floors only matter for the
-        # client's PROCEDURAL rendering (no building model). Without an
-        # explicit floors value the storey count comes from the room layouts
-        # (highest above-ground level + 1) — one field less to maintain.
-        if "floors" not in (entry.get("map3d") or {}):
-            _levels = [int((r.get("layout") or {}).get("level") or 0)
-                       for r in (loc.get("rooms") or [])
-                       if isinstance(r, dict) and r.get("layout")]
-            _top = max([l for l in _levels if l >= 0], default=None)
-            if _top is not None:
-                entry["map3d"] = {**(entry.get("map3d") or {}), "floors": _top + 1}
-        # Multi-tile patch (drawn UNDER the per-cell tiles, centred on this
-        # cell) + the per-cell "own tile hidden" switch. Clients load the
-        # patch via /world/locations/{id}/map-patch-2d.
-        if loc.get("map_image_off"):
-            entry["map_image_off"] = True
-        if (loc.get("map_patch_2d") or "").strip():
-            entry["map_patch_2d"] = True
-            entry["map_patch_span"] = int(loc.get("map_patch_span") or 3)
-        # Room-layout signature (AV3D-2 addendum): a running client loads
-        # /world/locations only once — this bump tells it a room layout of
-        # this location changed, so it can re-fetch specifically.
-        _lay_rooms = [(r.get("id"), r.get("layout"))
-                      for r in (loc.get("rooms") or [])
-                      if isinstance(r, dict) and r.get("layout")]
-        if _lay_rooms:
-            import hashlib as _hashlib
-            import json as _json
-            entry["layout_sig"] = _hashlib.md5(_json.dumps(
-                _lay_rooms, sort_keys=True, default=str).encode()).hexdigest()[:10]
-        locations.append(entry)
-
-    # Journeys are a pure function of the GAME clock — read it ONCE for the
-    # whole payload so every character in one response shares the same now.
-    from app.core.travel_engine import get_journey, journey_state
-    from app.core.timeutils import game_now, game_speed_factor, to_world_tz
-    _now_game = game_now()
-    _factor = game_speed_factor()
-
-    characters = []
-    for name in list_available_characters():
-        loc_id = get_character_current_location(name) or ""
-        if not loc_id:
-            continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
-        mt = get_movement_target(name) or ""
-        prof = get_character_profile_image(name) or ""
-        activity = get_effective_activity(name) or ""
-        # AV3D-6: which clip a 3D figure plays. The KIND comes from the
-        # activity (via the pose preset's `animation`), the SET from the
-        # character (its clip family: lady/man/dog/…). Both may be empty —
-        # then the client keeps guessing from the text, exactly as before.
-        # Travel is deliberately NOT forced to "walk": the activity is
-        # reported honestly, the client has movement_target_id anyway.
-        # The set chain, most specific first: explicit attribute, then the one
-        # derived from the character (animal / female / male). The client walks
-        # it per kind and only falls back to the plain <kind>.fbx when neither
-        # set has that clip — an explicit set may be incomplete.
-        # ONE profile load per character, shared by the set chain and the
-        # height — this loop runs per character on every worldmap request.
-        try:
-            from app.models.character import get_character_profile as _gcp
-            _prof = _gcp(name) or {}
-        except Exception:
-            _prof = {}
-        anim_sets = resolve_animation_sets(name, profile=_prof)
-        # Active journey (or None): path + progress let clients interpolate the
-        # figure between two polls instead of teleporting it cell by cell.
-        # Reads the profile loaded above — no second load on this hot endpoint.
-        # Isolated like the ticker's per-character block: one malformed journey
-        # dict degrades to travel=null, it never breaks the whole worldmap.
-        travel = None
-        try:
-            _j = get_journey(name, profile=_prof)
-            if _j:
-                # The pace the journey was STARTED with (world setting at that
-                # moment) — a later setting change never re-times it.
-                _spc = float(_j["seconds_per_cell"])
-                _st = journey_state(_j["path"], _j["started_at_game"],
-                                    _now_game, _spc)
-                travel = {
-                    "path": _j["path"],
-                    "target_id": _j["target"],
-                    "seg": _st["seg"],
-                    "frac": _st["frac"],
-                    "progress_cells": _st["progress_cells"],
-                    # Same instant, WORLD-timezone offset: clients slice the
-                    # HH:MM out of this, which must be game wall-clock — the
-                    # engine stores the stamp in UTC (§ A11).
-                    "eta_game": to_world_tz(_st["eta_game"]).isoformat(),
-                    # GAME seconds per cell in REAL seconds — null on a frozen
-                    # world (factor 0): nothing moves, so nothing extrapolates.
-                    "cell_seconds_real": (_spc / _factor) if _factor > 0 else None,
-                }
-        except Exception as e:
-            travel = None
-            logger.warning("travel payload failed for %s: %s", name, e)
-        # Body height in cm — the 3D client scales the figures against each
-        # other with it (a 155 cm character must not tower over a 190 cm one).
-        # None when unset: the client keeps its own default scale.
-        try:
-            from app.core.height import height_cm as _height_cm
-            cm = _height_cm(_prof)
-        except Exception:
-            cm = None
-        characters.append({
-            "name": name,
-            "location_id": loc_id,
-            "height_cm": cm,
-            "room_id": get_character_current_room(name) or "",
-            "activity": activity,
-            "activity_animation": resolve_pose_animation(activity),
-            "animation_set": (anim_sets[0] if anim_sets else ""),
-            "animation_sets": anim_sets,
-            "mood": get_character_current_feeling(name) or "",
-            "movement_target_id": mt,
-            "movement_target_name": name_by_id.get(mt, "") or mt,
-            "travel": travel,
-            "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
-        })
-
-    events_by_location = {}
-    for ev in list_events():
-        if ev.get("resolved"):
-            continue
-        cat = ev.get("category") or ""
-        if cat not in ("disruption", "danger"):
-            continue
-        lid = ev.get("location_id") or ""
-        if not lid:
-            continue
-        events_by_location.setdefault(lid, []).append({
-            "category": cat,
-            "text": ev.get("text") or "",
-        })
-
-    return {
-        "avatar": avatar,
-        "current_location_id": (get_character_current_location(avatar) if avatar else ""),
-        "locations": locations,
-        "characters": characters,
-        "events_by_location": events_by_location,
-    }
+    return build_worldmap_payload(avatar, show_all=bool(show_all) and is_admin)
 
 
 @router.get("/play/scenes")

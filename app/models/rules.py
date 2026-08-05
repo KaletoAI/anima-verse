@@ -725,19 +725,18 @@ def resolve_force_destination(character_name: str,
 # ============================================================
 
 def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
-    """Prueft Discover-Regeln und entdeckt ggf. einen angrenzenden, noch
-    unbekannten Ort.
+    """Check the discover rules and possibly uncover an adjacent, still
+    unknown location.
 
-    Vorgang:
-    - Iteriert die Discover-Regeln in Reihenfolge.
-    - Pro Regel: Character-Filter, Bedingung in der aktuellen Location, dann
-      Wahrscheinlichkeits-Wuerfel.
-    - Erste Regel mit erfolgreichem Wuerfelwurf gewinnt — dann wird ein
-      zufaelliger noch unbekannter Nachbar (Grid-adjacent) zur known_locations-
-      Liste hinzugefuegt.
+    How it works:
+    - Iterates the discover rules in order.
+    - Per rule: character filter, condition in the current location, then the
+      probability roll.
+    - The first rule with a successful roll wins — a random still-unknown
+      neighbour (grid-adjacent) is then added to the known_locations list.
 
-    Returns: Dict mit location_id/location_name/rule_*/message bei Treffer,
-    sonst None (nichts entdeckt diese Runde).
+    Returns: dict with location_id/location_name/rule_*/message on a hit,
+    otherwise None (nothing discovered this round).
     """
     import random as _random
     from app.core.activity_engine import evaluate_condition
@@ -746,14 +745,9 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
         add_known_location, _record_state_change)
     from app.models.world import get_neighbor_location_ids, get_location_by_id
 
-    # Avatar entdeckt nicht — der User sieht alles in seiner Welt.
-    try:
-        from app.models.account import is_player_controlled
-        if is_player_controlled(character_name):
-            return None
-    except Exception:
-        pass
-
+    # The avatar discovers like everyone else: with fog of war (§ A12) the
+    # player map shows only known_locations, so exempting the avatar would
+    # leave it unable to ever uncover the map.
     location_id = get_character_current_location(character_name) or ""
     if not location_id:
         return None
@@ -801,7 +795,7 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
                           "rule_name": rule.get("name", "")})
         except Exception:
             pass
-        logger.info("Discover-Rule '%s' fuer %s -> %s",
+        logger.info("Discover rule '%s' for %s -> %s",
                     rule.get("name", "?"), character_name, loc_name)
         return {
             "location_id": discovered_id,

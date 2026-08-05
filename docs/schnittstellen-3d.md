@@ -783,6 +783,49 @@ Zahlen — keine Screenshot-Beurteilung.
 
 ---
 
+## A12. Fog of War im Worldmap-Payload — neu 2026-08-05
+
+`GET /play/worldmap` liefert standardmäßig NICHT mehr die ganze Welt, sondern
+nur, was der aktive Avatar kennt. Gebaut wird der Payload in EINER Funktion —
+`app/core/world_ops.build_worldmap_payload(avatar_name, show_all)`; die Route
+macht nur noch Auth, Parameter und 403.
+
+**Sichtbarkeitsregel** — maßgeblich ist `location_visible_to_character`
+(`app/models/world.py`): der Ort muss in den `known_locations` des Avatars
+stehen (strict — leere Liste = nichts) und ein eventuelles
+`knowledge_item_id` muss im Inventar liegen.
+
+| Feld | Gefiltert? | Regel |
+|---|---|---|
+| `locations[]` | ja | **platzierte** Orte (beide `grid_x`/`grid_y` gesetzt) nur wenn sichtbar. Orte OHNE Rasterposition passieren immer — sie stehen nicht auf der Karte und verraten nichts (Template-Stellvertreter) |
+| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett |
+| `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
+| `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
+| `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
+| `grid_bounds` | **nein** | siehe unten |
+| `avatar`, `current_location_id` | nein | der Avatar sieht sich selbst |
+
+**Neue Wurzelfelder**
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `grid_bounds` | `{"min_x", "min_y", "max_x", "max_y"} \| null` | Ausdehnung des Rasters über ALLE platzierten Orte, **vor** dem Filter berechnet. `null`, wenn kein Ort platziert ist |
+| `fogged` | `bool` | `true` = gefilterte Sicht (`= not show_all`). Clients zeigen daran „hier ist noch Nebel" an, statt eine leere Karte zu vermuten |
+
+`grid_bounds` ist bewusst UNGEFILTERT: Kartenrahmen, Zoom-Anschlag und
+Mini-Map-Maßstab dürfen nicht springen, sobald der Avatar einen Ort entdeckt.
+Die Ausdehnung verrät nur, wie groß die Welt ist — nicht, was in ihr steht.
+
+**Admin-Override:** `GET /play/worldmap?all=1` liefert die ungefilterte Sicht
+(`fogged: false`). Nur für Rolle `admin` — sonst **403**. Ohne aktiven Avatar
+ist die gefilterte Sicht leer (nur die rasterlosen Einträge), nicht etwa voll.
+
+**Spielmechanik, keine Sicherheitsgrenze.** Der Filter macht das Entdecken zum
+Spielinhalt; er ist kein Mandantenschutz. Wer die Welt wirklich nicht sehen
+soll, bekommt keinen Zugang — nicht bloß Nebel.
+
+---
+
 # Teil B — Ziel-Vertrag v4: das Szenen-Rezept
 
 Kern des Umbaus: EIN Endpoint liefert die komplette darstellbare Szene
