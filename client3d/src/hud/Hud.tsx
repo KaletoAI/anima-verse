@@ -27,7 +27,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel,
-  BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel,
+  BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
@@ -53,7 +53,7 @@ import './hud.css';
 import './theme-fantasy.css';
 
 type PanelId = 'chat' | 'self' | 'others' | 'menu'
-  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks';
+  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests';
 
 /** `requires` = the skill id the panel is bound to, exactly as in /play's
  *  PANEL_META: without the skill package the button is gone, so removing a
@@ -66,6 +66,7 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
   { id: 'mind', icon: 'brain', title: 'Mind' },
   { id: 'phone', icon: 'phone', title: 'Phone', requires: 'send_message' },
   { id: 'news', icon: 'news', title: 'News' },
+  { id: 'quests', icon: 'scroll', title: 'Quests' },
   { id: 'tasks', icon: 'tasks', title: 'Tasks' },
   // The package's gear (`settings`) — no icon of our own was added for this.
   { id: 'menu', icon: 'settings', title: 'Menu' },
@@ -73,18 +74,21 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
 
 /** The panels that are a full reading surface rather than a status strip.
  *  At most ONE of them is open: the dock is one column of fixed height, and
- *  five 120px minimums plus self/others/menu do not fit on any screen — they
+ *  six 120px minimums plus self/others/menu do not fit on any screen — they
  *  would silently spill past the bottom edge. Opening one therefore closes
- *  the other four; self/others/menu keep stacking freely as before. */
-const CONTENT_PANELS = new Set<PanelId>(['belongings', 'mind', 'phone', 'news', 'tasks']);
+ *  the other five; self/others/menu keep stacking freely as before. */
+const CONTENT_PANELS = new Set<PanelId>([
+  'belongings', 'mind', 'phone', 'news', 'tasks', 'quests']);
 
 /** Panels that need more than the dock's 320px (user finding, acceptance of
  *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
  *  a navigation column NEXT to its content and folds that column down to bare
  *  icons below 340px — in a 320px dock it was never anything else. Widening
  *  the dock to 480 (half again) is what makes both readable; only one content
- *  panel is ever open, so the column can follow the one that is. */
-const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind']);
+ *  panel is ever open, so the column can follow the one that is. The quest
+ *  book joins them: a beat row is a timestamp column NEXT to its text, and in
+ *  320px the text side is down to a couple of words per line. */
+const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests']);
 
 /** The prefs fields that are a volume. Each is named exactly like the audio
  *  bus it drives, so applying one is a lookup and not a mapping table. */
@@ -111,6 +115,7 @@ export function Hud({ avatar, username, role }: {
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
     belongings: false, mind: false, phone: false, news: false, tasks: false,
+    quests: false,
   });
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
@@ -531,7 +536,7 @@ export function Hud({ avatar, username, role }: {
       )}
 
       {(open.self || open.others || open.menu || open.belongings || open.mind
-        || open.phone || open.news || open.tasks) && (
+        || open.phone || open.news || open.tasks || open.quests) && (
         <div className={'hud-dock'
           + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}>
           {/* Esc and M are handled HERE as well, not only in main.ts: the
@@ -616,6 +621,14 @@ export function Hud({ avatar, username, role }: {
               {panelHead('news', 'news', t('News'))}
               <div className="hud-panel-body">
                 <ErrorBoundary inline label="News"><NewsPanel /></ErrorBoundary>
+              </div>
+            </section>
+          )}
+          {open.quests && (
+            <section className="hud-panel">
+              {panelHead('quests', 'scroll', t('Quests'))}
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Quests"><QuestsPanel /></ErrorBoundary>
               </div>
             </section>
           )}

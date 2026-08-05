@@ -24,6 +24,9 @@ import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel, type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
 import { TaskPanel } from './TaskPanel'
 import { NewsPanel } from './NewsPanel'
+// New in stage 6 and package-only from the start — no re-export stub needed,
+// the panel never lived in frontend/.
+import { QuestsPanel } from '@anima/player-ui'
 import { LayoutsPanel } from './LayoutsPanel'
 import { SelfPanel } from './SelfPanel'
 import { OthersPanel } from './OthersPanel'
@@ -587,6 +590,15 @@ export function PlayerApp() {
     </div>
   )
 
+  const questsPanel = (
+    <div key="quests" className="player-panel" style={{ zIndex: zOf('quests') }} onMouseDownCapture={() => bringToFront('quests')}>
+      <div className="player-panel-head">{headIcon('quests')}{t('Quests')}{headerControls('quests', true)}</div>
+      <div className="player-panel-body" style={{ padding: 0, overflow: 'hidden' }}>
+        <QuestsPanel />
+      </div>
+    </div>
+  )
+
   const selfPanel = (
     <div key="self" className="player-panel" style={{ zIndex: zOf('self') }} onMouseDownCapture={() => bringToFront('self')}>
       <div className="player-panel-head">{headIcon('self')}{data?.avatar || t('Self')}{headerControls('self', true)}</div>
@@ -663,7 +675,7 @@ export function PlayerApp() {
     scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
     journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel, phone: phonePanel,
-    news: newsPanel, settings: settingsPanel,
+    news: newsPanel, quests: questsPanel, settings: settingsPanel,
   }
 
   // Spaltenzahl aus gemessener Breite: colWidth ≈ CELL → quadratische Zellen.

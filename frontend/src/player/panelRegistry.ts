@@ -30,6 +30,10 @@ export const DEFAULT_LAYOUT: Layout[] = [
   { i: 'phone', x: 18, y: 7, w: 18, h: 30, minW: 10, minH: 12 },
   { i: 'tasks', x: 24, y: 27, w: 17, h: 10, minW: 6, minH: 4 },
   { i: 'news', x: 18, y: 6, w: 34, h: 33, minW: 8, minH: 8 },
+  // The quest book has no saved position anywhere yet — this entry is its BOX
+  // (initial + minimum size), not an opening: it is closed by default and the
+  // user places it via the panel picker like every other occasional panel.
+  { i: 'quests', x: 22, y: 8, w: 26, h: 28, minW: 8, minH: 8 },
   { i: 'layouts', x: 24, y: 37, w: 17, h: 14, minW: 6, minH: 6 },
   { i: 'settings', x: 11, y: 5, w: 59, h: 38, minW: 12, minH: 12 },
 ]
@@ -59,6 +63,7 @@ export const PANEL_META: {
   { id: 'phone', label: 'Phone', icon: 'phone', requires: 'send_message' },
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
   { id: 'news', label: 'News', icon: 'news' },
+  { id: 'quests', label: 'Quests', icon: 'scroll' },
   { id: 'settings', label: 'Avatar', icon: 'avatar' },
   { id: 'layouts', label: 'Layouts', icon: 'layouts', kind: 'dialog' },
 ]
@@ -71,7 +76,7 @@ export const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((
 // Closed-by-default = all grid panels that were NOT open in the saved default
 // (open: scene/env/map/worldmap/self/others/belongings/gallery/instagram/tasks).
 // 'layouts' is a dialog and is never tiled anyway.
-export const CLOSED_BY_DEFAULT = new Set(['journal', 'news', 'phone', 'settings'])
+export const CLOSED_BY_DEFAULT = new Set(['journal', 'news', 'phone', 'quests', 'settings'])
 export const INITIAL_OPEN = GRID_PANELS.filter((id) => !CLOSED_BY_DEFAULT.has(id))
 export const ICON_BY_ID: Record<string, IconName> = Object.fromEntries(
   PANEL_META.map((p) => [p.id, p.icon]))
@@ -93,6 +98,7 @@ export const PANEL_COLOR: Record<string, string> = {
   instagram: '#e1567c',  // Instagram — pink
   phone: '#6cc24a',      // Phone — green
   news: '#e0675e',       // News — red
+  quests: '#c7b07b',     // Quests — parchment
   settings: '#9aa4b2',   // Avatar — grey
 }
 // Panels that can show enlarged (view-only overlay). Extensible.

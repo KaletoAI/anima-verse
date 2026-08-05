@@ -21,3 +21,4 @@ export * from './MindPanel';
 export * from './PhonePanel';
 export * from './NewsPanel';
 export * from './TaskPanel';
+export * from './QuestsPanel';
