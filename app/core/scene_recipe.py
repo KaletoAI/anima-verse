@@ -757,19 +757,26 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
     ``width_m × k`` for anyone to recompute, and ``base_y`` is the foot of the
     wall the gap belongs to. The consumer rule is: nothing is recalculated.
 
-    One physical opening on a shared wall = ONE entry. It is authored in one
-    room and mirrored into the neighbour (``room_recipe._mirrored_openings``),
-    so it arrives twice: the mirrored copy carries ``mirrored`` and names its
-    owner in ``to``. The pair is recognized by the owner plus the position of
-    the opening CENTRE on the two wall faces — the same faces the mirror
-    accepted as one wall, i.e. at most ``SHARE_TOL_M`` REAL metres apart
-    (× k for world metres), plus the rounding the mirrored ``at`` carries
-    (4 decimals of a plate fraction). The neighbour then only contributes its
-    room id.
+    ONE gap in the wall = ONE entry. The identity rule is the position of the
+    opening CENTRE before the edge clamp: two openings on the same level whose
+    centres lie within ``SHARE_TOL_M`` REAL metres of each other (× k for
+    world metres, plus the rounding a mirrored ``at`` carries — 4 decimals of
+    a plate fraction) are the same hole, because that is the distance at which
+    the mirror still calls two faces one wall AND at which ``_subtract`` melts
+    the overlapping spans into a single gap. Three cases run through it:
 
-    ``rooms[0]`` is the room whose wall this entry was cut out of; the
-    neighbour follows. The GROUND room never appears — it has no walls, and
-    ``outside`` already says the door leads onto the ground.
+    * the neighbour's mirrored copy (``room_recipe._mirrored_openings``) — it
+      contributes only its room id;
+    * BOTH rooms of a party wall authoring their own door at the same spot;
+    * the same door authored twice in one room.
+
+    The widest span wins the geometry (the gap is the union of the overlapping
+    spans) and with it the first place in ``rooms``: ``rooms[0]`` is always the
+    room whose wall this entry was cut out of.
+
+    ``outside`` is GEOMETRY, not authored text — see below. The GROUND room
+    never appears in ``rooms``: it has no walls, and ``outside`` already says
+    the door leads onto it.
 
     A window is no way out (``_WALKABLE_TYPES``), a room without a shell has
     no threshold, and the order is deterministic (level, position, rooms):
@@ -786,9 +793,10 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
 
     tol = SHARE_TOL_M * k + 1e-4 * extent
     # (entry, unclamped centre) of the openings on their OWN room's wall, and
-    # the neighbour's copies with the id of the room that owns them.
+    # the neighbours' mirrored copies. Own ones are deduped FIRST, so an entry
+    # is based on a room that owns its wall stretch wherever one exists.
     owned: List[Tuple[Dict[str, Any], List[float]]] = []
-    mirrored: List[Tuple[Dict[str, Any], List[float], str]] = []
+    mirrored: List[Tuple[Dict[str, Any], List[float]]] = []
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         level = int(recipe.get("level") or 0)
@@ -810,7 +818,6 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
                     "width_m": _r(s1 - s0),
                     "base_y": base,
                     "rooms": _rooms_of(room_id, to),
-                    "outside": to.lower() == "outside" or to == GROUND_ROOM_ID,
                 }
                 # The CENTRE before the edge clamp: that point is identical on
                 # both faces of a shared wall (up to the wall's own offset),
@@ -818,30 +825,45 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
                 t = min(max(_num(op.get("at")), 0.0), 1.0) * length
                 centre = [a[0] + ux * t, a[1] + uz * t]
                 if op.get("mirrored"):
-                    mirrored.append((entry, centre, to))
+                    mirrored.append((entry, centre))
                 else:
                     owned.append((entry, centre))
 
-    out = [entry for entry, _c in owned]
-    for entry, centre, owner in mirrored:
-        best: Optional[Dict[str, Any]] = None
+    kept: List[Tuple[Dict[str, Any], List[float]]] = []
+    for entry, centre in owned + mirrored:
+        base_entry: Optional[Dict[str, Any]] = None
         best_d = 0.0
-        for cand, cand_centre in owned:
-            if cand["level"] != entry["level"] or cand["rooms"][0] != owner:
+        for cand, cand_centre in kept:
+            if cand["level"] != entry["level"]:
                 continue
             d = math.hypot(cand_centre[0] - centre[0],
                            cand_centre[1] - centre[1])
             # Ties keep the FIRST candidate — the room order of the payload.
-            if d <= tol and (best is None or d < best_d):
-                best, best_d = cand, d
-        if best is None:
-            # The owner emits no walls of its own (open zone): the gap in THIS
-            # room's wall is real all the same, so it stays — as its entry.
-            out.append(entry)
-            continue
-        for room_id in entry["rooms"]:
-            if room_id not in best["rooms"]:
-                best["rooms"].append(room_id)
+            if d <= tol and (base_entry is None or d < best_d):
+                base_entry, best_d = cand, d
+        if base_entry is None:
+            kept.append((entry, centre))
+        elif entry["width_m"] > base_entry["width_m"] + 1e-9:
+            # The gap is the union of the overlapping spans, so the wider
+            # entry is the one that describes it — geometry AND the leading
+            # room move over with it.
+            rooms = entry["rooms"] + [r for r in base_entry["rooms"]
+                                      if r not in entry["rooms"]]
+            base_entry.update(entry)
+            base_entry["rooms"] = rooms
+        else:
+            for room_id in entry["rooms"]:
+                if room_id not in base_entry["rooms"]:
+                    base_entry["rooms"].append(room_id)
+
+    out = [entry for entry, _c in kept]
+    for entry in out:
+        # ``outside`` is decided HERE, on the finished geometry, and never on
+        # what an author typed into ``to``: after the dedup a single room means
+        # no second room's wall meets this gap, i.e. it opens out of the
+        # building — onto the ground. A door someone left unlabelled is
+        # therefore a proper exterior door, not a doorway to nowhere.
+        entry["outside"] = len(entry["rooms"]) == 1
     out.sort(key=lambda e: (e["level"], e["at_world"], e["rooms"]))
     return out
 
