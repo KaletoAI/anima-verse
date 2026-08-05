@@ -19,6 +19,7 @@ import {
 } from './game/perfstats';
 import { loadPrefs, PREFS_KEY } from './game/prefs';
 import { fogQuadRects, SHOW_ALL_KEY, unknownCells } from './game/fog';
+import type { MinimapCell } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -33,7 +34,7 @@ import { grassTexture, seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
-import { gameActions, getGameState, perfEnabled, setGameState, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
+import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import type { MapCharacter, WorldLocation, WorldMap } from './types';
 
@@ -74,6 +75,12 @@ const LOD_TICK_MS = 1000;
  *  updates a second: fast enough that a stutter shows up while it is felt,
  *  slow enough that the digits stay readable instead of blurring. */
 const PERF_UI_MS = 300;
+/** How often the minimap slice is reconsidered (Etappe 5, task 3). Four times
+ *  a second: the picture only changes when the avatar crosses a cell boundary
+ *  or the camera turns, both of which are slower than that — and a slice
+ *  published per frame would re-render React sixty times a second for a dot
+ *  that has not moved. Nothing is published unless something changed. */
+const MINIMAP_MS = 250;
 /** How far past an opening the "Betreten" walk-in aims, in world metres —
  *  just inside the cell, so the figure visibly crosses the boundary. */
 const OPENING_WALK_IN_M = 1.5;
@@ -366,11 +373,32 @@ async function startApp(username: string, role: string) {
 
   // Nachbarschafts-Grid der Oberflächen-Arten (für Zusammenstellungen
   // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
+  /** The known cells for the minimap (Etappe 5, task 3), out of the SAME list
+   *  and the SAME surface-kind function the tiles are built from — so the map
+   *  in the corner can never show a colour the world does not have. Rebuilt
+   *  only when the set of known locations changes, which is what lets the
+   *  4 Hz publisher below hand the very same array out again. */
+  let minimapCells: MinimapCell[] = [];
+  /** Counts every rebuild of the cells above. The publisher compares it
+   *  instead of the array's contents: the list is a few hundred entries at
+   *  most, but comparing it four times a second for a picture that changes
+   *  once an hour would be work for nothing. */
+  let minimapCellsRev = 0;
+  /** The minimap cells out of the SAME kind list the tiles are built from —
+   *  taking the terrain from anywhere else is how the two pictures drift. */
+  function setMinimapCells(kinds: { gx: number; gy: number; kind: string }[]) {
+    minimapCells = kinds.map((k) => ({ x: k.gx, y: k.gy, terrain: k.kind }));
+    minimapCellsRev += 1;
+  }
   /** Publish the surface-kind neighbourhood of every known location. Called at
    *  boot and again whenever a discovered place joins the map — a new cell is
    *  a new neighbour for the coast blends around it. */
-  const publishTerrainGrid = () => setTerrainGrid(
-    placeable.map((l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) })));
+  const publishTerrainGrid = () => {
+    const kinds = placeable.map(
+      (l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) }));
+    setTerrainGrid(kinds);
+    setMinimapCells(kinds);
+  };
   publishTerrainGrid();
 
   // Szenen-Rezept (Vertrag Teil B): der Server liefert die komplette Szene
@@ -774,10 +802,14 @@ async function startApp(username: string, role: string) {
       }
       if (terrainChanged) {
         const nextLoc = new Map(dirty.map(([tl, loc]) => [tl.loc.id, loc]));
-        setTerrainGrid([...tiles.values()].map((tl) => {
+        const kinds = [...tiles.values()].map((tl) => {
           const loc = nextLoc.get(tl.loc.id) ?? tl.loc;
           return { gx: loc.grid_x!, gy: loc.grid_y!, kind: gridSurfaceKind(loc) };
-        }));
+        });
+        setTerrainGrid(kinds);
+        // The minimap follows the same repaint: a terrain edited in the admin
+        // must change the colour in the corner, not only the ground.
+        setMinimapCells(kinds);
         // Die 4-Nachbarn jeder Terrain-Änderung mit neu bauen: deren
         // Zusammenstellungen (Küste) beziehen ihre Wasserrichtung aus dem
         // Grid — gemaltes Wasser muss die Küste daneben umbacken.
@@ -1336,6 +1368,47 @@ async function startApp(username: string, role: string) {
     const id = locIdAtCell.get(`${c.gx},${c.gy}`);
     return id ? tiles.get(id) ?? null : null;
   }
+
+  // --- Minimap slice (Etappe 5, task 3) --------------------------------------
+  //
+  // The HUD draws the map, this publishes what it draws — and it publishes ONLY
+  // ON A CHANGE. The signature below is the whole rule: the cell revision, the
+  // avatar's cell and the camera yaw in whole degrees. Everything smaller than
+  // that (a step across a cell, a fraction of a degree of orbit) would redraw a
+  // 160-pixel canvas and re-render React for a picture nobody could tell apart.
+  //
+  // The avatar's CELL comes from `cellOf` — the very function the step machine
+  // above asks, so the dot stands on the cell the server is being told about
+  // and never on a neighbouring one. Leaving the mode publishes the empty slice
+  // once: the minimap belongs to the embodied view, and a map left standing
+  // with a dot from minutes ago would be worse than none.
+  let minimapSig = '';
+  setInterval(() => {
+    if (getGameState().mode !== 'embodied') {
+      if (minimapSig === '') return;
+      minimapSig = '';
+      setMinimap(null);
+      return;
+    }
+    const pos = npcs.positionOf(avatarName);
+    const cell = pos ? cellOf(pos.x, pos.z, CELL) : null;
+    // Whole degrees: the compass needle turns in 45° steps (Q/E) plus the free
+    // orbit, and a degree is finer than the needle can show anyway.
+    const yawDeg = Math.round(engine.yaw * 180 / Math.PI);
+    const frame = fogBounds
+      ? `${fogBounds.min_x},${fogBounds.min_y},${fogBounds.max_x},${fogBounds.max_y}` : '';
+    const sig = `${minimapCellsRev}|${cell ? `${cell.gx},${cell.gy}` : ''}|${yawDeg}|${frame}`;
+    if (sig === minimapSig) return;
+    minimapSig = sig;
+    setMinimap({
+      cells: minimapCells,
+      avatar: cell ? { x: cell.gx, y: cell.gy } : null,
+      // The published yaw is the QUANTISED one, so the drawn wedge and the
+      // signature can never disagree about where the avatar looks.
+      yaw: yawDeg * Math.PI / 180,
+      bounds: fogBounds,
+    });
+  }, MINIMAP_MS);
 
   /**
    * A place the avatar has just discovered joins the map (Etappe 5).

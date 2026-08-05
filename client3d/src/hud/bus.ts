@@ -17,6 +17,7 @@
  * `/play/scene` poll — `movementLocked` + `partyLeader`, E3-T3).
  */
 import type { ElevatorState } from '../game/elevator';
+import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
 import type { Prefs } from '../game/prefs';
 import type { MapCharacter } from '../types';
@@ -141,3 +142,31 @@ export function setPerfEnabled(on: boolean): void {
 }
 /** Asked by main.ts before it measures — see the note above. */
 export function perfEnabled(): boolean { return perfOn; }
+
+// --- Minimap (Etappe 5, task 3) ---------------------------------------------
+//
+// A THIRD store, for the same reason the perf readout got the second one: this
+// slice is republished up to four times a second while one walks, and pushing
+// it through `setGameState` would re-render the chat, the plaque and the whole
+// rail with every step. Here it re-renders one canvas and nothing else.
+//
+// `main.ts` is the only writer and it publishes only on a real CHANGE (the
+// avatar's cell, the quantised yaw, the set of known cells or the frame) — so
+// a subscriber can treat every notification as "redraw", and standing still
+// costs nothing at all.
+
+const emptyMinimap: MinimapState = { cells: [], avatar: null, yaw: 0, bounds: null };
+let minimap: MinimapState = emptyMinimap;
+const minimapListeners = new Set<() => void>();
+
+/** main.ts publishes a fresh slice. Pass `null` for "nothing to show" (the
+ *  overview mode), which is the initial state as well. */
+export function setMinimap(next: MinimapState | null): void {
+  minimap = next ?? emptyMinimap;
+  for (const fn of minimapListeners) fn();
+}
+export function getMinimap(): MinimapState { return minimap; }
+export function subscribeMinimap(fn: () => void): () => void {
+  minimapListeners.add(fn);
+  return () => { minimapListeners.delete(fn); };
+}

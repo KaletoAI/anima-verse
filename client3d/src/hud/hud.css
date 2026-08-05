@@ -817,3 +817,31 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ---- Minimap (Etappe 5, task 3) ----
+   Top-right, mirroring the performance readout in the opposite corner. It is
+   READ-ONLY — no pointer exception above, so a click on the map still reaches
+   the scene and turns the camera.
+
+   The dock starts below it while it is up: both want the top-right corner, and
+   the minimap is the smaller of the two. 52 top + 1 border + 6 padding + 160
+   canvas + 6 + 1 = 226, plus the dock's own 12px gap = 238. The :has() rule
+   keeps that coupling in CSS, the same way the info-panel shift above does —
+   no JS wiring between the two components. */
+#hud .hud-minimap {
+  position: absolute;
+  top: 52px;
+  right: 62px; /* the dock's --dock-right: 10px rail offset + 40px rail + 12px */
+  padding: 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  background: var(--bg-container, #161b22);
+  line-height: 0;
+}
+#hud .hud-minimap canvas {
+  display: block;
+  border-radius: 4px;
+}
+#hud:has(.hud-minimap) .hud-dock {
+  top: 238px;
+}

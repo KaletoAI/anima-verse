@@ -533,3 +533,10 @@
   font-family: Georgia, "Times New Roman", serif;
   color: var(--hud-muted);
 }
+
+/* Minimap (Etappe 5, task 3) — the same parchment-and-gold frame the
+   performance readout wears, so the two corners match. */
+#hud .hud-minimap {
+  background: rgba(26, 20, 10, 0.88);
+  border-color: rgba(242, 205, 110, 0.38);
+}

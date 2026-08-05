@@ -33,6 +33,10 @@ export interface GameMenuProps {
    *  object and its storage key are the AUDIO settings, this is a view one. */
   perfOn: boolean;
   onPerfChange: (on: boolean) => void;
+  /** the minimap is shown in the embodied mode (Etappe 5). A view setting like
+   *  `perfOn`, with its own storage key — see `Hud.tsx`. */
+  minimapOn: boolean;
+  onMinimapChange: (on: boolean) => void;
   /** the signed-in account may see the unfiltered map (Etappe 5) — the entry
    *  below exists only for one, and the server refuses the view for anybody
    *  else anyway */
@@ -88,6 +92,7 @@ function Choice<T extends string | boolean>({ label, value, options, onPick }: {
 }
 
 export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
+                           minimapOn, onMinimapChange,
                            isAdmin, showAll, onShowAllChange,
                            onBackToTitle }: GameMenuProps) {
   const { t } = useI18n();
@@ -129,6 +134,11 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
 
       <section className="hud-menu-section">
         <h3 className="hud-menu-head">{t('Display')}</h3>
+        <Choice label={t('Minimap')} value={minimapOn} options={onOff}
+          onPick={onMinimapChange} />
+        <p className="hud-menu-hint">
+          {t('The whole world in the top right corner, north up, with your position and heading. Only while you are in the world.')}
+        </p>
         <Choice label={t('Performance readout')} value={perfOn} options={onOff}
           onPick={onPerfChange} />
         <p className="hud-menu-hint">

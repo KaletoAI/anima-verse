@@ -32,12 +32,14 @@ import {
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
 import { GameMenu } from './GameMenu';
+import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
 import { loadPrefs, savePrefs, PREFS_KEY, type Prefs } from '../game/prefs';
 import { SHOW_ALL_KEY } from '../game/fog';
+import { MINIMAP_PREF_KEY } from '../game/minimap';
 import {
   afterOwnLine, createVoiceover, newSceneLines, roomChanged, sceneStampOf,
   speakableLines, type SceneSnapshot, type Voiceover,
@@ -217,6 +219,23 @@ export function Hud({ avatar, username, role }: {
     setPerfEnabled(perfOn);
     localStorage.setItem(PERF_KEY, perfOn ? '1' : '0');
   }, [perfOn]);
+
+  /**
+   * The minimap (Etappe 5, task 3) — a local view setting like the readout
+   * above, and stored the same way. The DEFAULT IS ON, which is why the reader
+   * tests for "0" rather than for "1": a fresh browser has nothing stored, and
+   * a map one has to go and switch on is a map nobody finds.
+   *
+   * There is no `setMinimapEnabled` counterpart to `setPerfEnabled`: the slice
+   * is published on its own store, so with the canvas unmounted nothing is
+   * subscribed and a publish reaches nobody. `main.ts` gates on the embodied
+   * mode, this gates on the switch, and the two together are the condition.
+   */
+  const [minimapOn, setMinimapOn] = useState(
+    () => localStorage.getItem(MINIMAP_PREF_KEY) !== '0');
+  useEffect(() => {
+    localStorage.setItem(MINIMAP_PREF_KEY, minimapOn ? '1' : '0');
+  }, [minimapOn]);
 
   /**
    * "Show all locations" (Etappe 5) — the administrator's way past the fog of
@@ -459,6 +478,12 @@ export function Hud({ avatar, username, role }: {
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}
 
+      {/* Minimap (Etappe 5, task 3): the whole world, north up, top right.
+          Only in the embodied mode — in the overview one IS looking at the
+          map, and a second small copy of it would say nothing. The switch in
+          the game menu is the other half of the condition. */}
+      {game.mode === 'embodied' && minimapOn && <Minimap />}
+
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
           chrome — one chip below the vanilla top bar that also leaves again.
           Layout and the pointer exception live in hud.css with every other
@@ -523,6 +548,7 @@ export function Hud({ avatar, username, role }: {
                 <ErrorBoundary inline label="Menu">
                   <GameMenu prefs={prefs} onChange={setPrefs}
                     perfOn={perfOn} onPerfChange={setPerfOn}
+                    minimapOn={minimapOn} onMinimapChange={setMinimapOn}
                     isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
                     onBackToTitle={() => gameActions.backToTitle?.()} />
                 </ErrorBoundary>
