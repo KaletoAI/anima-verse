@@ -23,9 +23,11 @@ import { usePoll } from './usePolling'
 const CELL = 72
 const GAP = 0 // Zellen stoßen aneinander → zusammenhängende Karte (keine Lücken)
 const PAD = 6
-// Height of the admin-only header row — counted into the reported content
-// height so the panel autosize still fits the whole map.
+// Size of the admin-only header row — counted into the reported content size
+// so the panel autosize fits the map AND keeps the row's label unclipped at
+// low zoom (the width is the checkbox plus the longest label rendering).
 const HEAD_H = 22
+const HEAD_W = 220
 const VIEW_KEY = 'anima.map2d.view'
 const LABELS_KEY = 'anima.map2d.labels'
 
@@ -324,8 +326,11 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   const arrivesAt = t('arrives ~')
   const fogTitle = t('unknown (fog of war)')
 
-  const { cells, gridW, gridH } = useMemo(() => {
-    const empty = { cells: null as React.ReactNode, gridW: 0, gridH: 0 }
+  const { cells, gridW, gridH, focusX, focusY, fitW, fitH, fitCX, fitCY } = useMemo(() => {
+    const empty = {
+      cells: null as React.ReactNode, gridW: 0, gridH: 0,
+      focusX: 0, focusY: 0, fitW: 0, fitH: 0, fitCX: 0, fitCY: 0,
+    }
     if (!data) return empty
     // Placed = echte Orte + platzierte Klone passierbarer Templates (keine
     // unplatzierten Terrain-Definitionen).
@@ -337,12 +342,19 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     // an empty world (no bounds) falls back to the delivered locations.
     const bounds = data.grid_bounds || null
     if (!placed.length && !bounds) return empty
+    // Extent of the cells actually delivered — under fog that is what the
+    // avatar knows. ONE source of truth for two jobs: the fallback extent for
+    // a world without bounds, and the box the view opens on (below).
     const xs = placed.map((l) => l.grid_x as number)
     const ys = placed.map((l) => l.grid_y as number)
-    const minX = bounds ? bounds.min_x : Math.min(...xs)
-    const maxX = bounds ? bounds.max_x : Math.max(...xs)
-    const minY = bounds ? bounds.min_y : Math.min(...ys)
-    const maxY = bounds ? bounds.max_y : Math.max(...ys)
+    const kMinX = xs.length ? Math.min(...xs) : 0
+    const kMaxX = xs.length ? Math.max(...xs) : 0
+    const kMinY = ys.length ? Math.min(...ys) : 0
+    const kMaxY = ys.length ? Math.max(...ys) : 0
+    const minX = bounds ? bounds.min_x : kMinX
+    const maxX = bounds ? bounds.max_x : kMaxX
+    const minY = bounds ? bounds.min_y : kMinY
+    const maxY = bounds ? bounds.max_y : kMaxY
     const cols = maxX - minX + 1
     const rows = maxY - minY + 1
     const byCell = new Map<string, WLoc>()
@@ -413,10 +425,32 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     const gW = cols * CELL + (cols - 1) * GAP + PAD * 2
     const gH = rows * CELL + (rows - 1) * GAP + PAD * 2
 
-    return { cells: grid, gridW: gW, gridH: gH }
+    // Where the view opens (unscaled content px). Under fog the grid spans the
+    // WHOLE world while the avatar may know two cells in a corner, so the
+    // geometric centre is usually pure fog:
+    //  - the docked panel opens on the avatar's current cell,
+    //  - the autoFit overlay fits the box of the KNOWN cells instead of the
+    //    whole grid, so "Enlarge" enlarges what there is to see.
+    // Without fog both fall back to the old whole-grid behaviour.
+    const here = placed.find((l) => l.id === current)
+    const fX = here ? PAD + ((here.grid_x as number) - minX) * CELL + CELL / 2 : 0
+    const fY = here ? PAD + ((here.grid_y as number) - minY) * CELL + CELL / 2 : 0
+    const fogFit = !!data.fogged && xs.length > 0
+    const kW = (kMaxX - kMinX + 1) * CELL + PAD * 2
+    const kH = (kMaxY - kMinY + 1) * CELL + PAD * 2
+
+    return {
+      cells: grid, gridW: gW, gridH: gH,
+      focusX: here ? fX : 0, focusY: here ? fY : 0,
+      fitW: fogFit ? kW : gW,
+      fitH: fogFit ? kH : gH,
+      fitCX: fogFit ? PAD + (kMinX - minX) * CELL + (kW - PAD * 2) / 2 : gW / 2,
+      fitCY: fogFit ? PAD + (kMinY - minY) * CELL + (kH - PAD * 2) / 2 : gH / 2,
+    }
   }, [data, current, travellingTo, arrivesAt, fogTitle, labelMode])
 
-  // Restore saved scroll once after first load, else center the grid.
+  // Restore saved scroll once after first load, else open on the avatar's own
+  // cell (grid centre when it has none — e.g. a homeless avatar).
   useEffect(() => {
     if (!data || !gridW || restoredRef.current) return
     restoredRef.current = true
@@ -427,36 +461,45 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       if (s && (s.sx || s.sy)) {
         c.scrollLeft = s.sx
         c.scrollTop = s.sy
+      } else if (focusX || focusY) {
+        const z = zoomRef.current
+        c.scrollLeft = focusX * z - c.clientWidth / 2
+        c.scrollTop = focusY * z - c.clientHeight / 2
       } else {
         c.scrollLeft = (c.scrollWidth - c.clientWidth) / 2
         c.scrollTop = (c.scrollHeight - c.clientHeight) / 2
       }
     })
-  }, [data, gridW])
+  }, [data, gridW, focusX, focusY])
 
   // autoFit: Karte in den Container einpassen (und bei Resize nachführen), damit
   // sie im vergrößerten Overlay wirklich größer wird statt nur mehr Leerraum.
+  // Eingepasst wird die Fit-Box: ohne Nebel das ganze Raster, mit Nebel der
+  // Ausschnitt der bekannten Zellen (siehe useMemo).
   useEffect(() => {
-    if (!autoFit || !gridW || !gridH) return
+    if (!autoFit || !fitW || !fitH) return
     const fit = () => {
       if (userZoomedRef.current) return  // Nutzer hat manuell gezoomt → Ansicht nicht zuruecksetzen
       const c = containerRef.current
       if (!c || !c.clientWidth || !c.clientHeight) return
-      const z = Math.min(c.clientWidth / gridW, c.clientHeight / gridH)
+      const z = Math.min(c.clientWidth / fitW, c.clientHeight / fitH)
       if (!isFinite(z) || z <= 0) return
-      setZoom(Math.max(0.2, Math.min(z * 0.98, 6)))
+      const nz = Math.max(0.2, Math.min(z * 0.98, 6))
+      setZoom(nz)
       requestAnimationFrame(() => {
         const cc = containerRef.current
         if (!cc) return
-        cc.scrollLeft = (cc.scrollWidth - cc.clientWidth) / 2
-        cc.scrollTop = (cc.scrollHeight - cc.clientHeight) / 2
+        // Centre on the fit box (for the whole grid this is exactly the old
+        // (scrollWidth - clientWidth) / 2).
+        cc.scrollLeft = fitCX * nz - cc.clientWidth / 2
+        cc.scrollTop = fitCY * nz - cc.clientHeight / 2
       })
     }
     fit()
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null
     if (ro && containerRef.current) ro.observe(containerRef.current)
     return () => ro?.disconnect()
-  }, [autoFit, gridW, gridH])
+  }, [autoFit, fitW, fitH, fitCX, fitCY])
 
   if (!data) return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Loading…')}</div>
   if (!gridW && !data.characters.length) {
@@ -477,11 +520,15 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       // BREITE und Höhe passend zur Zoomstufe setzt (DOM-Messung scheitert, weil
       // die Karte intern scrollt/fittet). gridW/gridH sind ungeskaliert → * zoom.
       // Nur im Grid-Panel (nicht im autoFit-Overlay).
-      {...(!autoFit && gridW ? { 'data-content-w': Math.round(gridW * zoom), 'data-content-h': Math.round(gridH * zoom) + (isAdmin ? HEAD_H : 0) } : {})}>
+      {...(!autoFit && gridW ? {
+        'data-content-w': Math.max(Math.round(gridW * zoom), isAdmin ? HEAD_W : 0),
+        'data-content-h': Math.round(gridH * zoom) + (isAdmin ? HEAD_H : 0),
+      } : {})}>
       {isAdmin ? (
         <label style={{
           display: 'flex', alignItems: 'center', gap: 6, height: HEAD_H,
           fontSize: '0.78em', opacity: 0.75, cursor: 'pointer', userSelect: 'none',
+          whiteSpace: 'nowrap',
         }} onMouseDown={(e) => e.stopPropagation()}>
           <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
           {t('Show all locations (admin)')}
