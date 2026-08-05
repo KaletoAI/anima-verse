@@ -118,6 +118,9 @@ GLASS_THICKNESS_FACTOR = 0.6
 # Contour doors (ground floor only): a room exit closer than 0.45 m to the
 # contour punches a ±0.4 m gap; wall pieces below 0.06 m are dropped.
 DOOR_SNAP_M = 0.45
+# Two wall faces count as ONE wall line when their directions are (anti)parallel
+# within ~1° — the same slack ``room_recipe._mirrored_openings`` uses.
+_WALL_PARALLEL = 0.98
 DOOR_HALF_GAP_M = 0.4
 MIN_WALL_PIECE_M = 0.06
 # Anything shorter/lower than this is not worth a primitive.
@@ -757,13 +760,12 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
     ``width_m × k`` for anyone to recompute, and ``base_y`` is the foot of the
     wall the gap belongs to. The consumer rule is: nothing is recalculated.
 
-    ONE gap in the wall = ONE entry. The identity rule is the position of the
-    opening CENTRE before the edge clamp: two openings on the same level whose
-    centres lie within ``SHARE_TOL_M`` REAL metres of each other (× k for
-    world metres, plus the rounding a mirrored ``at`` carries — 4 decimals of
-    a plate fraction) are the same hole, because that is the distance at which
-    the mirror still calls two faces one wall AND at which ``_subtract`` melts
-    the overlapping spans into a single gap. Three cases run through it:
+    ONE gap in the wall = ONE entry. Two candidates are the same hole when all
+    three of ``_same_gap`` hold: same wall DIRECTION, the two wall faces no
+    further apart than the mirror's own ``SHARE_TOL_M`` (REAL metres × k, plus
+    the rounding a mirrored ``at`` carries — 4 decimals of a plate fraction),
+    and clamped spans that actually meet on that line. Three cases run through
+    it:
 
     * the neighbour's mirrored copy (``room_recipe._mirrored_openings``) — it
       contributes only its room id;
@@ -829,28 +831,62 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
                 else:
                     owned.append((entry, centre))
 
-    kept: List[Tuple[Dict[str, Any], List[float]]] = []
+    def _same_gap(kept_entry: Dict[str, Any], kept_centre: List[float],
+                  entry: Dict[str, Any], centre: List[float]) -> bool:
+        """Are these two candidates the same hole in the same wall?
+
+        Three questions, all of them geometric. The DIRECTION comes first: a
+        door clamped into a corner has its unclamped centre exactly ON the
+        corner, so two doors meeting there are zero metres apart while lying
+        on two different walls — without this test the south threshold of an
+        L-corner would be swallowed by the east one.
+        """
+        if kept_entry["level"] != entry["level"]:
+            return False
+        ux, uz = kept_entry["along"]
+        vx, vz = entry["along"]
+        # Same wall LINE: parallel or antiparallel within the slack the mirror
+        # itself uses to call two faces one wall (~1°). Perpendicular walls
+        # score 0 here and never meet again.
+        if abs(ux * vx + uz * vz) < _WALL_PARALLEL:
+            return False
+        # ...and the two lines have to be the same line: the two faces of one
+        # wall lie at most SHARE_TOL_M REAL metres apart, which is exactly the
+        # offset the mirror accepted.
+        dx, dz = centre[0] - kept_centre[0], centre[1] - kept_centre[1]
+        if abs(dx * uz - dz * ux) > tol:
+            return False
+        # ...and the CLAMPED spans have to MEET on that line. Two doors pushed
+        # into the same corner from the two stretches of one straight line
+        # share a point, not a gap — they stay two thresholds.
+        t = ((entry["at_world"][0] - kept_entry["at_world"][0]) * ux
+             + (entry["at_world"][1] - kept_entry["at_world"][1]) * uz)
+        return (kept_entry["width_m"] + entry["width_m"]) / 2 - abs(t) > 1e-9
+
+    kept: List[List[Any]] = []  # [entry, unclamped centre of its opening]
     for entry, centre in owned + mirrored:
-        base_entry: Optional[Dict[str, Any]] = None
+        base: Optional[List[Any]] = None
         best_d = 0.0
-        for cand, cand_centre in kept:
-            if cand["level"] != entry["level"]:
+        for pair in kept:
+            if not _same_gap(pair[0], pair[1], entry, centre):
                 continue
-            d = math.hypot(cand_centre[0] - centre[0],
-                           cand_centre[1] - centre[1])
+            d = math.hypot(pair[1][0] - centre[0], pair[1][1] - centre[1])
             # Ties keep the FIRST candidate — the room order of the payload.
-            if d <= tol and (base_entry is None or d < best_d):
-                base_entry, best_d = cand, d
-        if base_entry is None:
-            kept.append((entry, centre))
-        elif entry["width_m"] > base_entry["width_m"] + 1e-9:
+            if base is None or d < best_d:
+                base, best_d = pair, d
+        if base is None:
+            kept.append([entry, centre])
+            continue
+        base_entry = base[0]
+        if entry["width_m"] > base_entry["width_m"] + 1e-9:
             # The gap is the union of the overlapping spans, so the wider
-            # entry is the one that describes it — geometry AND the leading
-            # room move over with it.
+            # entry is the one that describes it — geometry, leading room and
+            # the centre later candidates are measured against all move over.
             rooms = entry["rooms"] + [r for r in base_entry["rooms"]
                                       if r not in entry["rooms"]]
             base_entry.update(entry)
             base_entry["rooms"] = rooms
+            base[1] = centre
         else:
             for room_id in entry["rooms"]:
                 if room_id not in base_entry["rooms"]:
