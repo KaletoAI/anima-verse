@@ -1,6 +1,8 @@
-"""Authentication-Routes (Multiuser Phase 1).
+"""Authentication routes (multiuser phase 1).
 
-Cookie-basierte Sessions. Login setzt HttpOnly-Cookie, Logout loescht es.
+Cookie-based sessions. Login sets the HttpOnly cookie, logout clears it; the
+cookie helpers live in ``app.core.sessions`` because the middleware re-issues
+the cookie on every sliding refresh.
 """
 from typing import Dict, Any
 from fastapi import APIRouter, Request, Response, HTTPException, Depends, status
@@ -15,24 +17,9 @@ logger = get_logger("auth")
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        key=sessions.SESSION_COOKIE_NAME,
-        value=token,
-        max_age=sessions.SESSION_TTL_HOURS * 3600,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
-
-
-def _clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(sessions.SESSION_COOKIE_NAME, path="/")
-
-
 @router.post("/login")
 async def login(request: Request, response: Response) -> Dict[str, Any]:
-    """Loggt einen User ein und setzt Session-Cookie."""
+    """Logs a user in and sets the session cookie."""
     data = await request.json()
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
@@ -45,11 +32,11 @@ async def login(request: Request, response: Response) -> Dict[str, Any]:
 
     token = sessions.create_session(user["id"])
     users.touch_last_login(user["id"])
-    _set_session_cookie(response, token)
+    sessions.set_session_cookie(response, token)
     logger.info("Login: %s (role=%s)", user["username"], user["role"])
 
-    # Avatar-only Presence: Avatar materialisieren + (falls offmap) zurueckholen,
-    # sonst bleibt er nach Logout/Reaper "ohne Raum". Siehe plan-avatar-only-presence.md.
+    # Avatar-only presence: materialize the avatar and (if offmap) bring it back,
+    # otherwise it stays "roomless" after logout/reaper. See plan-avatar-only-presence.md.
     try:
         from app.models.account import restore_avatar_on_login
         restore_avatar_on_login(user)
@@ -69,9 +56,9 @@ async def login(request: Request, response: Response) -> Dict[str, Any]:
 
 @router.post("/logout")
 def logout(request: Request, response: Response) -> Dict[str, Any]:
-    """Loggt aus — Session serverseitig loeschen + Cookie clearen."""
-    # Avatar freigeben (avatar-only Characters verschwinden dadurch von der Karte).
-    # Vor delete_session, solange der User noch im Request-Context steht.
+    """Logs out — deletes the session server-side and clears the cookie."""
+    # Release the avatar (avatar-only characters vanish from the map with it).
+    # Before delete_session, while the user is still in the request context.
     try:
         from app.models.account import release_active_character
         release_active_character()
@@ -80,7 +67,7 @@ def logout(request: Request, response: Response) -> Dict[str, Any]:
     token = request.cookies.get(sessions.SESSION_COOKIE_NAME)
     if token:
         sessions.delete_session(token)
-    _clear_session_cookie(response)
+    sessions.clear_session_cookie(response)
     return {"status": "success"}
 
 
