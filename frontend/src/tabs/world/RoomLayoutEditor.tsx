@@ -30,7 +30,8 @@ import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
-import type { Map3D, Room, RoomLayout, RoomOpening, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
+import type { Map3D, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
+import { GROUND_ROOM_ID } from './worldTypes'
 
 const CANVAS_W = 420
 
@@ -299,7 +300,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   }, [])
 
   const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
-  const unplaced = rooms.filter((r) => !r.layout)
+  // The ground room carries NO layout by contract (plan-grundflaeche.md) —
+  // it is the area no room occupies. Offering it for drawing would invite
+  // exactly the layout it must never have.
+  const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID)
+
+  /** One server finding in the editor's language: a kind this build knows gets
+   *  a translatable wording, anything else falls back to the server's own
+   *  English message. Named rooms are prefixed, so the reader sees WHERE. */
+  const problemText = (p: SceneProblem) => {
+    const text = p.kind === 'no_building_entrance'
+      ? t('No outside door: this building cannot be entered. Draw a door leading outside on one of its rooms.')
+      : p.message
+    const room = p.room_id
+      ? (rooms.find((r) => r.id === p.room_id)?.name || p.room_id) : ''
+    return room ? `${room}: ${text}` : text
+  }
   const placedRooms = rooms.filter((r) => r.layout && r.id)
   const levels = Array.from(
     new Set(rooms.filter((r) => r.layout).map((r) => r.layout!.level || 0)),
@@ -2151,6 +2167,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       </div>
       </div>
       <PlanScaleBar planWidthM={planW} canvasPx={canvasPx} />
+      {/* Findings of the SERVER about this floor plan (§ 4.3,
+          plan-betreten-und-tueren.md): the composer states them, the editor
+          only shows them — at the room it names, otherwise at the location. */}
+      {(scene?.problems || []).length ? (
+        <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
+          {(scene?.problems || []).map((p, i) => (
+            <div key={`${p.kind}-${p.room_id || ''}-${i}`}
+              className="ga-anchor-banner">
+              <span>⚠ {problemText(p)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {/* Boundary pass-throughs (plan-area-detail-scenes.md): building-level
           data, so the rows live under the plan, not in the room panel. An
           ordinary means of every location, not a speciality of area/detail

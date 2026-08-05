@@ -339,11 +339,14 @@ export function Hud({ avatar, username, role }: {
   // Toast bridge (E3-T3): the vanilla app renders no text of its own, so a
   // refused step (403 with the server's reason) is shown through the package
   // toast that already lives inside this island.
+  // The English source string is the translation key, so a scene finding
+  // (§ 4.3) reaches the player in their language; a text the server has
+  // already localized simply passes through.
   const { toast } = useToast();
   useEffect(() => {
-    uiActions.toast = (msg: string) => toast(msg, 'error');
+    uiActions.toast = (msg: string) => toast(t(msg), 'error');
     return () => { uiActions.toast = undefined; };
-  }, [toast]);
+  }, [toast, t]);
 
   // Talking (E3-T5): F next to a character — and the plaque's Talk button —
   // bring the chat panel up. The composer is deliberately NOT focused: a key

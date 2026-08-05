@@ -1081,6 +1081,7 @@ async function startApp(username: string, role: string) {
       updatePins(map);
       refreshSelection(map);
       reconcileAvatarCell(map);   // server moved the avatar? (E3-T3)
+      announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch {
       hud.setOnline(false);
       return;
@@ -2022,6 +2023,27 @@ async function startApp(username: string, role: string) {
     walkGoal.set(x, roomFloorY(tileAtCell(here)) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal);
   });
+
+  /** Findings the SERVER made about a location (plan-betreten-und-tueren.md
+   *  § 4.3, today: a building whose hull has no door leading outside — the
+   *  automatic door in the south wall is gone, so a sealed building says so
+   *  instead of quietly getting one). Display only: the message is the
+   *  server's, nothing here re-derives the rule or repairs anything.
+   *
+   *  Every VISIBLE location ships its own findings, so only the one the avatar
+   *  stands in is worth the player's attention; each is shown once. */
+  const announcedProblems = new Set<string>();
+  function announceSceneProblems(map: WorldMap) {
+    const locId = map.characters.find((c) => c.name === avatarName)?.location_id;
+    if (!locId) return;
+    for (const problem of scenes.get(locId)?.problems ?? []) {
+      const key = `${locId}|${problem.kind}|${problem.room_id ?? ''}`;
+      if (announcedProblems.has(key)) continue;
+      announcedProblems.add(key);
+      console.warn(`[scene] ${locId}: ${problem.kind} — ${problem.message}`);
+      uiActions.toast?.(problem.message);
+    }
+  }
 
   /** Authority check: while the player steers, the SERVER can still move the
    *  avatar (teleport, party pull, admin). Such a move is a jump — the figure

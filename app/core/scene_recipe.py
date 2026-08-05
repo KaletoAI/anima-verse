@@ -115,13 +115,11 @@ WALL_THICKNESS = 0.07
 WALL_MIN_HEIGHT = 0.6
 WALL_HEAD_ROOM = 0.15
 GLASS_THICKNESS_FACTOR = 0.6
-# Contour doors (ground floor only): a room exit closer than 0.45 m to the
-# contour punches a ±0.4 m gap; wall pieces below 0.06 m are dropped.
-DOOR_SNAP_M = 0.45
 # Two wall faces count as ONE wall line when their directions are (anti)parallel
 # within ~1° — the same slack ``room_recipe._mirrored_openings`` uses.
 _WALL_PARALLEL = 0.98
-DOOR_HALF_GAP_M = 0.4
+# Contour wall pieces below 0.06 m are dropped (the gap a door leaves is the
+# door's own clear width — there is no constant for it any more, § 4.2).
 MIN_WALL_PIECE_M = 0.06
 # Anything shorter/lower than this is not worth a primitive.
 MIN_SEGMENT_M = 0.02
@@ -537,22 +535,91 @@ def _colinear_span(a: List[float], ux: float, uz: float, length: float,
     return (lo, hi)
 
 
+def _contour_hit(pts: List[List[float]], at: List[float],
+                 normal: List[float]) -> Optional[Tuple[int, float]]:
+    """The nearest contour spot IN FRONT of a door — index of the contour edge
+    the ray ``at + s·normal`` meets first and the position ``t`` of that hit
+    along the edge. ``None`` when the ray meets no edge at all (a door drawn
+    outside the floor plan).
+
+    "In front of" is the door's own outward direction, not the shortest
+    distance to the polygon: a door in a set-back room opens the hull ahead of
+    itself, not on whatever wall happens to be nearest (§ 4.2, "Dome
+    Morgenröte"). A door whose wall sits ON the contour line hits at s = 0;
+    the colinear slack keeps the rounding of such a wall in front of it.
+    """
+    px, pz = at
+    nx, nz = normal
+    best: Optional[Tuple[int, float]] = None
+    best_s = math.inf
+    for i, a in enumerate(pts):
+        b = pts[(i + 1) % len(pts)]
+        frame = _edge_frame(a, b)
+        if not frame:
+            continue
+        ux, uz, length = frame
+        # at + s·n = a + t·u, solved by crossing the equation with u and n.
+        den = nx * uz - nz * ux
+        if abs(den) < 1e-9:
+            continue            # the ray runs along this edge, it never meets
+        rx, rz = a[0] - px, a[1] - pz
+        s = (rx * uz - rz * ux) / den
+        t = (rx * nz - rz * nx) / den
+        if s < -COLINEAR_TOL_M or s >= best_s:
+            continue
+        if t < -1e-9 or t > length + 1e-9:
+            continue
+        best, best_s = (i, min(max(t, 0.0), length)), s
+    return best
+
+
+def _door_outward(entry: Dict[str, Any],
+                  hull: Optional[List[List[float]]]) -> List[float]:
+    """Unit normal of a doorway pointing AWAY from the room it was cut out of.
+
+    ``along`` leaves two perpendiculars; which of them is outward is decided
+    by the room's own centre, not by a winding convention — an author-drawn
+    hull may run either way round.
+    """
+    ux, uz = entry["along"]
+    nx, nz = uz, -ux
+    if hull:
+        cx = sum(p[0] for p in hull) / len(hull)
+        cz = sum(p[1] for p in hull) / len(hull)
+        at = entry["at_world"]
+        if nx * (at[0] - cx) + nz * (at[1] - cz) < 0:
+            nx, nz = -nx, -nz
+    return [nx, nz]
+
+
 def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
-                   extent: float, exits: List[List[float]],
+                   extent: float, doors: List[Dict[str, Any]],
                    room_hulls: Optional[Dict[int, List[List[List[float]]]]] = None,
                    ) -> List[Dict[str, Any]]:
     """The building contour as walls, per used level (§ A6).
 
-    The ground floor gets a door gap wherever a room exit projects onto the
-    contour closer than 0.45 m; without a single such exit ONE central door
-    is punched into the southernmost wall piece, so a building is never
-    sealed shut.
+    THE HULL TAKES ITS HOLE FROM THE DOOR (plan-betreten-und-tueren.md § 4.2):
+    every outside doorway is projected forward onto the contour and opens it
+    there, in the DOOR's clear width. ``doors`` carries one dict per outside
+    doorway — ``level``, ``at`` (middle of the clear opening), ``normal`` (the
+    door's outward unit normal) and ``width`` — all of it derived from the
+    ``doorways`` block the payload itself ships, never a second time from the
+    openings. The hole lands on the door's OWN storey: a hull opens where a
+    door is, and a building without one stays shut and is reported instead
+    (``_problems``). The old fallback — one 0.8 m door mid in the southernmost
+    piece whenever no room exit projected close enough — is gone.
+
+    The hole is the door's CLEAR width measured along the contour edge: a door
+    meeting the hull at an angle keeps its own width there instead of being
+    stretched, and one clamped against a corner loses the part that runs past
+    the edge rather than wrapping onto the next one.
 
     ONE wall, one owner (finding 2026-07-27, "Haus von Kai": 27 colinear
     pairs, 16.5 m doubled → z-fighting the moment a wall texture landed on
     the room side): wherever an INDOOR room hull runs on the contour line,
-    the contour piece yields — the room wall carries texture and openings.
-    ``room_hulls`` maps level → list of room outlines in world metres.
+    the contour piece yields — the room wall carries texture and openings, and
+    its own wall gap IS the entrance there. ``room_hulls`` maps level → list of
+    room outlines in world metres.
 
     ``map3d.wall_kind`` textures the whole shell: every emitted piece carries
     it as ``texture_kind``, the same field a room wall gets from its own
@@ -569,27 +636,16 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         area2 += x1 * z2 - x2 * z1
     ccw = area2 > 0
 
-    doors: Dict[int, List[float]] = {}
-    for i, a in enumerate(pts):
-        b = pts[(i + 1) % len(pts)]
-        frame = _edge_frame(a, b)
-        if not frame:
+    # (level, edge index) → the spans the doors of that storey cut out of it.
+    cuts: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+    for door in doors:
+        hit = _contour_hit(pts, door["at"], door["normal"])
+        if not hit:
             continue
-        ux, uz, length = frame
-        for ex, ez in exits:
-            t = min(length, max(0.0, (ex - a[0]) * ux + (ez - a[1]) * uz))
-            if math.hypot(ex - (a[0] + ux * t), ez - (a[1] + uz * t)) < DOOR_SNAP_M:
-                doors.setdefault(i, []).append(t)
-    if not doors:
-        best, best_z = 0, -math.inf
-        for i, a in enumerate(pts):
-            b = pts[(i + 1) % len(pts)]
-            mid_z = (a[1] + b[1]) / 2
-            if mid_z > best_z:
-                best_z, best = mid_z, i
-        a = pts[best]
-        b = pts[(best + 1) % len(pts)]
-        doors[best] = [math.hypot(b[0] - a[0], b[1] - a[1]) / 2]
+        i, t = hit
+        half = _num(door.get("width")) / 2
+        cuts.setdefault((int(door.get("level") or 0), i), []).append(
+            (t - half, t + half))
 
     height = _wall_height(storey)
     wall_kind = str((map3d or {}).get("wall_kind") or "").strip()
@@ -602,12 +658,8 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         ux, uz, length = frame
         nx = (uz if ccw else -uz)
         nz = (-ux if ccw else ux)
-        holes = sorted((t - DOOR_HALF_GAP_M, t + DOOR_HALF_GAP_M)
-                       for t in doors.get(i, []))
         for level in levels:
-            # Door gaps stay a level-0 thing: the building entrance sits on
-            # the terrain storey even when a basement exists below it.
-            lvl_holes = list(holes) if level == 0 else []
+            lvl_holes = list(cuts.get((level, i), []))
             # Room-hull spans on this contour edge: colinear within roughly
             # a wall thickness → the room wall owns that stretch.
             for hull in (room_hulls or {}).get(level, []):
@@ -901,6 +953,40 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
         # therefore a proper exterior door, not a doorway to nowhere.
         entry["outside"] = len(entry["rooms"]) == 1
     out.sort(key=lambda e: (e["level"], e["at_world"], e["rooms"]))
+    return out
+
+
+# ── Problems ────────────────────────────────────────────────────────────
+
+def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
+              shell_levels: Set[int],
+              doorways: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Findings instead of silent repairs (plan-betreten-und-tueren.md § 4.3).
+
+    ``no_building_entrance`` — ALL of:
+
+    * the location has a floor-plan contour, so there is a hull to be sealed;
+    * at least one room WITH A SHELL stands on level 0 (``shell_levels``) —
+      that is what makes the hull a building. A contour holding nothing but
+      outdoor zones or ``no_walls`` rooms is not one: such a room cannot carry
+      a door at all, so there would be nothing for the author to fix;
+    * not ONE doorway on level 0 leads outside.
+
+    Then nobody can get in, and since the "one door mid in the south wall"
+    fallback is gone (§ 4.2) nothing hides it any more. The composer only
+    states it; the floor-plan editor and the 3D client display it.
+    """
+    out: List[Dict[str, Any]] = []
+    if (len(_outline_world(map3d, extent)) >= 3
+            and 0 in shell_levels
+            and not any(d.get("outside") and int(d.get("level") or 0) == 0
+                        for d in doorways)):
+        out.append({
+            "kind": "no_building_entrance",
+            "location_id": str(location.get("id") or ""),
+            "message": "No outside door: this building cannot be entered. "
+                       "Draw a door leading outside on one of its rooms.",
+        })
     return out
 
 
@@ -1720,15 +1806,17 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             entry["derived"] = True
         exits.append(entry)
 
-    # Ground-floor exits feed the contour's door gaps — the DERIVED exits
-    # count too (a room with a door is never walled in).
-    ground_exits = [e["at_world"] for e in exits
-                    if int((by_room.get(e["room_id"], {}).get("layout")
-                            or {}).get("level") or 0) == 0]
+    # Thresholds as finished primitives (plan-betreten-und-tueren.md § 4.1) —
+    # composed BEFORE the shell, because the shell takes its holes from them
+    # (§ 4.2). One derivation, two consumers: this block and the payload.
+    doorways = _doorways(recipes, storey, k, extent)
 
     # Indoor room hulls per level, world metres — where they run on the
-    # contour line, the contour wall yields (one wall, one owner).
+    # contour line, the contour wall yields (one wall, one owner). By room id
+    # as well: the outward side of a door is decided by its room's centre.
     room_hulls: Dict[int, List[List[List[float]]]] = {}
+    hull_of: Dict[str, List[List[float]]] = {}
+    shell_levels: Set[int] = set()
     for recipe in recipes:
         # A room that emits no walls of its own cannot own a contour stretch
         # either — letting the contour yield to it would leave a gap with no
@@ -1737,10 +1825,22 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             continue
         hull = _room_outline_world(recipe, extent)
         if hull:
-            room_hulls.setdefault(int(recipe.get("level") or 0), []).append(hull)
+            level = int(recipe.get("level") or 0)
+            room_hulls.setdefault(level, []).append(hull)
+            hull_of[str(recipe.get("room_id") or "")] = hull
+            shell_levels.add(level)
+
+    # Every OUTSIDE door as a hole for the hull: middle, outward normal and
+    # clear width, straight off the doorway — the contour projects them, it
+    # does not measure a door of its own (§ 4.2).
+    outside_doors = [{"level": d["level"], "at": d["at_world"],
+                      "width": d["width_m"],
+                      "normal": _door_outward(
+                          d, hull_of.get(d["rooms"][0] if d["rooms"] else ""))}
+                     for d in doorways if d.get("outside")]
 
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey, extent,
-                                                 ground_exits, room_hulls)
+                                                 outside_doors, room_hulls)
     models: List[Dict[str, Any]] = []
     markers: List[Dict[str, Any]] = []
     building = _building_model(location, map3d, building_meta, k, extent)
@@ -1922,9 +2022,13 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # Thresholds as finished primitives (plan-betreten-und-tueren.md
         # § 4.1) — from the same spans the walls are split by, so no consumer
         # ever measures a door back out of the geometry again.
-        "doorways": _doorways(recipes, storey, k, extent),
+        "doorways": doorways,
         "outdoor_rooms": [r.get("room_id") or "" for r in recipes
                           if r.get("always_visible")],
+        # What the composer found wrong and did NOT repair behind the
+        # author's back (§ 4.3). Always present, empty when all is well;
+        # editor and 3D client only display it.
+        "problems": _problems(location, map3d, extent, shell_levels, doorways),
     }
     if boundary:
         out["boundary_openings"] = boundary

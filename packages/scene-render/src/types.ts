@@ -271,6 +271,22 @@ export interface SceneDoorway {
   outside: boolean
 }
 
+/** A finding the SERVER made about this location (plan-betreten-und-tueren.md
+ *  § 4.3) — something it refused to repair silently. Both surfaces only
+ *  DISPLAY it: the floor-plan editor at the affected place, the 3D client as a
+ *  hint. Neither re-derives the rule, and neither invents a repair.
+ *
+ *  `kind` is the stable key (today: `no_building_entrance` = a hull with
+ *  rooms but no door leading outside — the old "one door mid in the south
+ *  wall" fallback is gone). `message` is the server's English wording; a
+ *  surface may translate a kind it knows and falls back to this text. */
+export interface SceneProblem {
+  kind: string
+  location_id?: string
+  room_id?: string
+  message: string
+}
+
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and
  *  leaves the cell. Pure geometry + room link, WORLD metres around the tile
  *  centre like every other scene coordinate; `inward` is the inward normal in
@@ -333,6 +349,9 @@ export interface ScenePayload {
   /** Every walkable threshold of the location (§ 4.1) — always present, empty
    *  when the location has no door at all. */
   doorways: SceneDoorway[]
+  /** What the server found wrong and did NOT repair (§ 4.3) — always present,
+   *  empty when the location is sound. */
+  problems: SceneProblem[]
   outdoor_rooms: string[]
   /** Pass-throughs at the location edge (§ B1 Nr. 13) — only when authored. */
   boundary_openings?: SceneBoundaryOpening[]

@@ -213,6 +213,7 @@ export interface Map3D {
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
+  SceneProblem,
 } from '@anima/scene-render'
 
 /** What the preview POSTs to /play/scene-preview: the editor draft as it

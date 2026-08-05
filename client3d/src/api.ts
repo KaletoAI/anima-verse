@@ -3,7 +3,8 @@ import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types'
 // outwards, the parsing helpers here need them in their own scope.
 import type {
   SceneBoundaryOpening, SceneDoorway, SceneExit, SceneExtra, SceneMarker,
-  SceneModelSpec, ScenePayload, ScenePlate, SceneRoom, SceneTerrain, SceneWall,
+  SceneModelSpec, ScenePayload, ScenePlate, SceneProblem, SceneRoom,
+  SceneTerrain, SceneWall,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
 // the choosing side and the fetching side cannot drift apart (E4-T5).
@@ -275,7 +276,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneTerrain,
   SceneMarker, SceneExit, SceneStyle, SceneRoom, ModelTier, SceneBoundaryOpening,
-  SceneDoorway,
+  SceneDoorway, SceneProblem,
   /** hiess hier frueher ApiOpening */
   SceneOpening,
 } from '@anima/scene-render';
@@ -314,6 +315,9 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     // they pass through untouched — nothing here clamps, scales or measures a
     // door, that is the whole point of the block.
     doorways: arr<SceneDoorway>(data.doorways),
+    // Findings of the composer (plan-betreten-und-tueren.md § 4.3) — the
+    // client SHOWS them, it never re-derives or repairs one.
+    problems: arr<SceneProblem>(data.problems),
     outdoor_rooms: arr<string>(data.outdoor_rooms),
     // Boundary pass-throughs (§ B1 Nr. 13) — the entry proximity of the
     // "Betreten" offer reads them; absent stays absent (no empty-array alias).
