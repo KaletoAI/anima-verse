@@ -952,8 +952,9 @@ async function startApp(username: string, role: string) {
   // keys: while the focus sits in a form field Esc belongs to that field (the
   // chat clears/blurs with it), not to the camera.
   //
-  // OVERLAYS OWN ESCAPE: an open lightbox (`.lb-overlay`) or a portalled modal
-  // (`.ga-modal-backdrop`, e.g. the gift/gallery pickers) closes on Esc itself,
+  // OVERLAYS OWN ESCAPE: an open lightbox (`.lb-overlay`), a portalled modal
+  // (`.ga-modal-backdrop`, e.g. the gift/gallery pickers) or the gallery's own
+  // detail view (`.player-gallery-overlay`) closes on Esc itself,
   // and one key press must not do both — close the picture AND throw the player
   // out of the mode. Listening in the CAPTURE phase is what makes the check
   // reliable: the overlay's own window listener runs in the bubble phase, and
@@ -961,7 +962,8 @@ async function startApp(username: string, role: string) {
   // listener sees the event.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || isTypingTarget(e)) return;
-    if (document.querySelector('.lb-overlay, .ga-modal-backdrop')) return;
+    if (document.querySelector(
+      '.lb-overlay, .ga-modal-backdrop, .player-gallery-overlay')) return;
     // The storey choice comes FIRST: it is part of the HUD's bottom stack and
     // not a document.body overlay, so the guard above cannot see it — and Esc
     // must close the choice one has just opened, not throw the player out of

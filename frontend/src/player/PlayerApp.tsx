@@ -629,7 +629,22 @@ export function PlayerApp() {
     <div key="gallery" className="player-panel" style={{ zIndex: zOf('gallery') }} onMouseDownCapture={() => bringToFront('gallery')}>
       <div className="player-panel-head">{headIcon('gallery')}{t('Gallery')}{headerControls('gallery', true)}</div>
       <div className="player-panel-body" style={{ padding: 10, overflow: 'hidden' }}>
-        <GalleryPanel />
+        {/* regenDialog: the regenerate image-generation dialog belongs to the
+            game-admin UI, not to the shared panel package — /play slots it in,
+            the 3D HUD deliberately leaves it out (no button there). */}
+        <GalleryPanel regenDialog={(ctl) => (
+          <ImageGenDialog
+            open
+            title={t('Regenerate image')}
+            defaultPrompt={ctl.prompt}
+            sourceImageUrl={ctl.sourceImageUrl}
+            mode="regenerate"
+            showRoomReference
+            characterOptions={{ detected: ctl.detected, available: ctl.available }}
+            onSubmit={ctl.onSubmit}
+            onClose={ctl.onClose}
+          />
+        )} />
       </div>
     </div>
   )

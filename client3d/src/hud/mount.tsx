@@ -21,7 +21,7 @@
  * login error inline and has no toast consumer.
  */
 import { createRoot, type Root } from 'react-dom/client';
-import { I18nProvider, ToastProvider } from '@anima/player-ui';
+import { I18nProvider, LightboxProvider, ToastProvider } from '@anima/player-ui';
 import { Hud } from './Hud';
 // After `Hud`, deliberately: Hud pulls panels.css -> hud.css ->
 // theme-fantasy.css in that order, and the title screen's own imports of the
@@ -80,6 +80,10 @@ export function mountHud(opts: { username: string; avatar: string; role: string 
   root = createRoot(host);
   // ToastProvider is mandatory: ScenePanel calls useToast() and throws on
   // mount without it. Same provider nesting as /play (frontend player/main).
+  // LightboxProvider mounts the ONE host the package's `openLightbox`
+  // singleton hands its item to — without it every call is silently a no-op
+  // (ScenePanel opens chat images through it). It portals to document.body,
+  // so its position in the chain only decides that it exists.
   // `opts.username` is not shown anywhere (the vanilla top bar already carries
   // the login name) — it is the identity `/tts/speak` is asked with (E4-T6).
   // `opts.role` gates the admin entry of the game menu (Etappe 5): a switch
@@ -87,7 +91,9 @@ export function mountHud(opts: { username: string; avatar: string; role: string 
   root.render(
     <I18nProvider>
       <ToastProvider>
-        <Hud avatar={opts.avatar} username={opts.username} role={opts.role} />
+        <LightboxProvider>
+          <Hud avatar={opts.avatar} username={opts.username} role={opts.role} />
+        </LightboxProvider>
       </ToastProvider>
     </I18nProvider>
   );

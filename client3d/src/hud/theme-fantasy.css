@@ -228,8 +228,13 @@
   box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(242, 205, 110, 0.14);
 }
 
-/* ---- Buttons and chips: struck brass ---------------------------------- */
-#hud .player-btn-primary {
+/* ---- Buttons and chips: struck brass ----------------------------------
+ * The `#hud ~ …` twins reach the PORTALLED dialogs: a modal renders into
+ * document.body as a SIBLING of #hud, so the `#hud …` pass above cannot see
+ * it. Without the twin the photo dialog's Generate button stayed plain blue
+ * next to a brass Cancel (.ga-btn already had its twin). */
+#hud .player-btn-primary,
+#hud ~ .ga-modal-backdrop .player-btn-primary {
   background: var(--hud-brass);
   border-color: rgba(255, 232, 170, 0.6);
   color: var(--hud-ink);
@@ -239,8 +244,25 @@
   text-shadow: 0 1px 0 rgba(255, 240, 200, 0.35);
   box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.55), inset 0 -2px 4px rgba(120, 84, 24, 0.45), 0 2px 6px rgba(0, 0, 0, 0.45);
 }
-#hud .player-btn-primary:disabled {
+#hud .player-btn-primary:disabled,
+#hud ~ .ga-modal-backdrop .player-btn-primary:disabled {
   filter: saturate(0.45);
+}
+/* The photo dialog's subject chips — the round selectors next to Generate.
+   Same brass as the rail chips, so the dialog reads as one surface. */
+#hud ~ .ga-modal-backdrop .player-photo-chip {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.06), rgba(0, 0, 0, 0.2));
+  border-color: rgba(242, 205, 110, 0.28);
+  color: #d5cbb4;
+}
+#hud ~ .ga-modal-backdrop .player-photo-chip:hover:not(:disabled) {
+  border-color: rgba(242, 205, 110, 0.6);
+  color: var(--hud-gold);
+}
+#hud ~ .ga-modal-backdrop .player-photo-chip.on {
+  background: linear-gradient(180deg, rgba(242, 205, 110, 0.24), rgba(242, 205, 110, 0.1));
+  border-color: rgba(242, 205, 110, 0.7);
+  color: var(--hud-gold);
 }
 #hud .player-chip {
   background: linear-gradient(180deg, rgba(242, 205, 110, 0.06), rgba(0, 0, 0, 0.2));

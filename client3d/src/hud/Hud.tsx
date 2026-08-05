@@ -17,8 +17,10 @@
  * in /play): ScenePanel receives data + refresh as props and never polls
  * itself. The `photoDialog` slot is filled with `PlayerPhotoDialog` (stage 6),
  * the package's slim player-side dialog — the big game-admin `ImageGenDialog`
- * that /play slots in stays where it is. Gallery/instagram still depend on
- * that admin dialog and remain open.
+ * that /play slots in stays where it is. The gallery panel followed in stage 6
+ * part 2 WITHOUT its `regenDialog` slot: regenerating an image needs that same
+ * admin dialog, so the HUD simply does not offer the button. Instagram is
+ * still open for the same reason.
  *
  * The CHAT panel additionally runs in an auto mode (E3 acceptance) — it shows
  * itself when something is said and withdraws when the room stays silent; see
@@ -29,6 +31,7 @@ import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
+  GalleryPanel,
   PlayerPhotoDialog,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
@@ -55,7 +58,7 @@ import './hud.css';
 import './theme-fantasy.css';
 
 type PanelId = 'chat' | 'self' | 'others' | 'menu'
-  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests';
+  | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests' | 'gallery';
 
 /** `requires` = the skill id the panel is bound to, exactly as in /play's
  *  PANEL_META: without the skill package the button is gone, so removing a
@@ -66,6 +69,9 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
   { id: 'others', icon: 'others', title: 'Others' },
   { id: 'belongings', icon: 'backpack', title: 'Inventory' },
   { id: 'mind', icon: 'brain', title: 'Mind' },
+  // Like /play's PANEL_META, the gallery carries no `requires`: looking at the
+  // avatar's own images is not bound to a skill package.
+  { id: 'gallery', icon: 'gallery', title: 'Gallery' },
   { id: 'phone', icon: 'phone', title: 'Phone', requires: 'send_message' },
   { id: 'news', icon: 'news', title: 'News' },
   { id: 'quests', icon: 'scroll', title: 'Quests' },
@@ -80,7 +86,7 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
  *  would silently spill past the bottom edge. Opening one therefore closes
  *  the other five; self/others/menu keep stacking freely as before. */
 const CONTENT_PANELS = new Set<PanelId>([
-  'belongings', 'mind', 'phone', 'news', 'tasks', 'quests']);
+  'belongings', 'mind', 'phone', 'news', 'tasks', 'quests', 'gallery']);
 
 /** Panels that need more than the dock's 320px (user finding, acceptance of
  *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
@@ -89,8 +95,11 @@ const CONTENT_PANELS = new Set<PanelId>([
  *  the dock to 480 (half again) is what makes both readable; only one content
  *  panel is ever open, so the column can follow the one that is. The quest
  *  book joins them: a beat row is a timestamp column NEXT to its text, and in
- *  320px the text side is down to a couple of words per line. */
-const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests']);
+ *  320px the text side is down to a couple of words per line. The gallery is
+ *  the fourth: its thumbnail grid fills 72px columns, so a 320px dock is three
+ *  pictures per row and 480px is five — the same wall, half again as much of
+ *  it visible at once. */
+const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests', 'gallery']);
 
 /** The prefs fields that are a volume. Each is named exactly like the audio
  *  bus it drives, so applying one is a lookup and not a mapping table. */
@@ -117,7 +126,7 @@ export function Hud({ avatar, username, role }: {
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
     belongings: false, mind: false, phone: false, news: false, tasks: false,
-    quests: false,
+    quests: false, gallery: false,
   });
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
@@ -563,7 +572,7 @@ export function Hud({ avatar, username, role }: {
       )}
 
       {(open.self || open.others || open.menu || open.belongings || open.mind
-        || open.phone || open.news || open.tasks || open.quests) && (
+        || open.phone || open.news || open.tasks || open.quests || open.gallery) && (
         <div className={'hud-dock'
           + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}>
           {/* Esc and M are handled HERE as well, not only in main.ts: the
@@ -632,6 +641,18 @@ export function Hud({ avatar, username, role }: {
               {panelHead('mind', 'brain', t('Mind'))}
               <div className="hud-panel-body">
                 <ErrorBoundary inline label="Mind"><MindPanel character={avatarName} /></ErrorBoundary>
+              </div>
+            </section>
+          )}
+          {open.gallery && (
+            <section className="hud-panel">
+              {panelHead('gallery', 'gallery', t('Gallery'))}
+              <div className="hud-panel-body">
+                {/* No `regenDialog`: the regenerate flow needs the game-admin
+                    image dialog, which is not part of the package — without
+                    the slot the button is simply not there. Browsing, paging
+                    and deleting work in full. */}
+                <ErrorBoundary inline label="Gallery"><GalleryPanel /></ErrorBoundary>
               </div>
             </section>
           )}
