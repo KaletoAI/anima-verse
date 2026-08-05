@@ -2041,7 +2041,7 @@ async function startApp(username: string, role: string) {
       if (announcedProblems.has(key)) continue;
       announcedProblems.add(key);
       console.warn(`[scene] ${locId}: ${problem.kind} — ${problem.message}`);
-      uiActions.toast?.(problem.message);
+      uiActions.toast?.(problem.message, true);
     }
   }
 

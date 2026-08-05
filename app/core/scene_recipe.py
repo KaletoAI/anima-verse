@@ -573,23 +573,22 @@ def _contour_hit(pts: List[List[float]], at: List[float],
     return best
 
 
-def _door_outward(entry: Dict[str, Any],
-                  hull: Optional[List[List[float]]]) -> List[float]:
+def _door_outward(entry: Dict[str, Any]) -> List[float]:
     """Unit normal of a doorway pointing AWAY from the room it was cut out of.
 
-    ``along`` leaves two perpendiculars; which of them is outward is decided
-    by the room's own centre, not by a winding convention — an author-drawn
-    hull may run either way round.
+    ``along`` leaves two perpendiculars, and the room hull decides which one:
+    it is wound CLOCKWISE by contract (the editor's ``planGeometry``: the
+    interior lies to the RIGHT of every edge), so the outward side of the edge
+    direction (ux, uz) is (uz, −ux) — the very number ``_room_walls`` puts on
+    each wall piece as ``outward_normal``.
+
+    No centre is measured for it. A room centroid answers a different question
+    and gets it wrong on a concave hull: the vertex average of an L-shaped room
+    lies in the cut-out corner, i.e. OUTSIDE the room, and would flip the
+    normal of every door on the two walls facing that corner.
     """
     ux, uz = entry["along"]
-    nx, nz = uz, -ux
-    if hull:
-        cx = sum(p[0] for p in hull) / len(hull)
-        cz = sum(p[1] for p in hull) / len(hull)
-        at = entry["at_world"]
-        if nx * (at[0] - cx) + nz * (at[1] - cz) < 0:
-            nx, nz = -nx, -nz
-    return [nx, nz]
+    return [uz, -ux]
 
 
 def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
@@ -984,8 +983,12 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
         out.append({
             "kind": "no_building_entrance",
             "location_id": str(location.get("id") or ""),
-            "message": "No outside door: this building cannot be entered. "
-                       "Draw a door leading outside on one of its rooms.",
+            # The GROUND FLOOR is what the rule is about: a door on an upper
+            # storey opens the hull up there and still leaves nobody a way in
+            # from outside, so the wording must not claim there is no door.
+            "message": "No outside door on the ground floor: this building "
+                       "cannot be entered from outside. Draw a door leading "
+                       "outside on one of its ground-floor rooms.",
         })
     return out
 
@@ -1812,10 +1815,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     doorways = _doorways(recipes, storey, k, extent)
 
     # Indoor room hulls per level, world metres — where they run on the
-    # contour line, the contour wall yields (one wall, one owner). By room id
-    # as well: the outward side of a door is decided by its room's centre.
+    # contour line, the contour wall yields (one wall, one owner).
     room_hulls: Dict[int, List[List[List[float]]]] = {}
-    hull_of: Dict[str, List[List[float]]] = {}
     shell_levels: Set[int] = set()
     for recipe in recipes:
         # A room that emits no walls of its own cannot own a contour stretch
@@ -1827,16 +1828,13 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         if hull:
             level = int(recipe.get("level") or 0)
             room_hulls.setdefault(level, []).append(hull)
-            hull_of[str(recipe.get("room_id") or "")] = hull
             shell_levels.add(level)
 
     # Every OUTSIDE door as a hole for the hull: middle, outward normal and
     # clear width, straight off the doorway — the contour projects them, it
     # does not measure a door of its own (§ 4.2).
     outside_doors = [{"level": d["level"], "at": d["at_world"],
-                      "width": d["width_m"],
-                      "normal": _door_outward(
-                          d, hull_of.get(d["rooms"][0] if d["rooms"] else ""))}
+                      "width": d["width_m"], "normal": _door_outward(d)}
                      for d in doorways if d.get("outside")]
 
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey, extent,

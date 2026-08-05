@@ -82,8 +82,11 @@ export interface HudGameActions {
 export interface HudUiActions {
   openChat?: () => void;
   /** show a short message to the player (Hud.tsx wires the package toast) —
-   *  the vanilla side renders no text of its own (E3-T3) */
-  toast?: (msg: string) => void;
+   *  the vanilla side renders no text of its own (E3-T3). ``translate`` marks
+   *  an ENGLISH source string that still needs the HUD's i18n (a finding of
+   *  the scene composer, § 4.3); a server text is already localized and goes
+   *  out as it is. */
+  toast?: (msg: string, translate?: boolean) => void;
   /** M opens and closes the game menu (E4-T4) */
   toggleMenu?: () => void;
   /** Esc: close the menu IF it is open, and say whether it was — the caller

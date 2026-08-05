@@ -339,12 +339,13 @@ export function Hud({ avatar, username, role }: {
   // Toast bridge (E3-T3): the vanilla app renders no text of its own, so a
   // refused step (403 with the server's reason) is shown through the package
   // toast that already lives inside this island.
-  // The English source string is the translation key, so a scene finding
-  // (§ 4.3) reaches the player in their language; a text the server has
-  // already localized simply passes through.
   const { toast } = useToast();
   useEffect(() => {
-    uiActions.toast = (msg: string) => toast(t(msg), 'error');
+    // Only a caller that says so gets translated: a scene finding (§ 4.3) is
+    // English source text and its own key, while the server's refusal texts
+    // arrive localized already and must not be looked up a second time.
+    uiActions.toast = (msg: string, translate?: boolean) =>
+      toast(translate ? t(msg) : msg, 'error');
     return () => { uiActions.toast = undefined; };
   }, [toast, t]);
 

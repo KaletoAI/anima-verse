@@ -305,16 +305,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // exactly the layout it must never have.
   const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID)
 
-  /** One server finding in the editor's language: a kind this build knows gets
-   *  a translatable wording, anything else falls back to the server's own
-   *  English message. Named rooms are prefixed, so the reader sees WHERE. */
+  /** One server finding in the editor's language. The SERVER owns the wording
+   *  — its message is English source text, so it goes straight through `t()`
+   *  as its own translation key. Repeating the sentence here would give it two
+   *  owners and let them drift apart silently. Named rooms are prefixed, so
+   *  the reader sees WHERE. */
   const problemText = (p: SceneProblem) => {
-    const text = p.kind === 'no_building_entrance'
-      ? t('No outside door: this building cannot be entered. Draw a door leading outside on one of its rooms.')
-      : p.message
     const room = p.room_id
       ? (rooms.find((r) => r.id === p.room_id)?.name || p.room_id) : ''
-    return room ? `${room}: ${text}` : text
+    return room ? `${room}: ${t(p.message)}` : t(p.message)
   }
   const placedRooms = rooms.filter((r) => r.layout && r.id)
   const levels = Array.from(
