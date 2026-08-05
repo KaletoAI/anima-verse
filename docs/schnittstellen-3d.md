@@ -178,20 +178,22 @@
 >     Übergang mehr, und eine Location ohne jede Opening ist überhaupt nicht
 >     betretbar (403 `no_entrance`, Entscheidung 2026-08-04: sonst wäre ein
 >     Ort ohne Autoren-Öffnung heimlich über jede Kante begehbar). Der
->     Eintritt routet in den verknüpften Raum (`room`); eine Opening OHNE
->     `room` ist trotzdem gültig — sie sagt dann nichts über den Raum, und
->     es entscheidet die Ankunftsregel (`world.get_arrival_room_id`: der
->     erklärte `entry_room`, sonst die Grundfläche). Seit § A13 kommt
->     niemand mehr raumlos an.
+>     Eintritt routet in den verknüpften Raum (der Verweis heißt `room` in
+>     den Autoren-Daten unter `map3d` und `room_id` im gelieferten Payload —
+>     dasselbe Feld, zwei Namen); eine Opening OHNE ihn ist trotzdem gültig
+>     — sie sagt dann nichts über den Raum, und es entscheidet die
+>     Ankunftsregel (`world.get_arrival_room_id`: der erklärte `entry_room`,
+>     sonst die Grundfläche). Seit § A13 kommt niemand mehr raumlos an.
 >     **Das Verlassen entscheidet EINE Funktion**
->     (`boundary_entry.may_leave`), in dieser Reihenfolge: über eine
->     autorisierte Öffnung DIESER Kante aus dem Raum heraus, den sie
->     verknüpft — ohne Verknüpfung führt sie auf die Grundfläche, also ist
->     die Grundfläche der Raum, aus dem sie herauslässt (der Rundweg
->     derselben Öffnung); sonst aus dem `entry_room`, dem Gameplay-Gate
->     jeder anderen Kante; und von überall, wenn die Location keinen
->     `entry_room` erklärt. Dieselbe Funktion beantwortet den Kompass:
->     `GET /world/avatar-neighbors` trägt `may_leave` **pro Richtung** in
+>     (`boundary_entry.may_leave`). Drei Wege hinaus, und es genügt, dass
+>     EINER zutrifft: über eine autorisierte Öffnung DIESER Kante aus dem
+>     Raum heraus, den sie verknüpft — ohne Verknüpfung führt sie auf die
+>     Grundfläche, also ist die Grundfläche der Raum, aus dem sie
+>     herauslässt (der Rundweg derselben Öffnung); aus dem `entry_room`,
+>     dem Gameplay-Gate jeder anderen Kante; und von überall, wenn die
+>     Location keinen `entry_room` erklärt.
+>     Dieselbe Funktion beantwortet den Kompass:
+>     `GET /world/avatar/neighbors` trägt `may_leave` **pro Richtung** in
 >     jedem Nachbar-Eintrag; das frühere Wurzelfeld `at_entry_room` ist
 >     ersatzlos weg — es rechnete eine zweite, ältere Regel nach und
 >     blendete Richtungen aus, die der Server erlaubt.
