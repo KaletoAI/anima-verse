@@ -1038,6 +1038,35 @@ async function startApp(username: string, role: string) {
   };
   gameActions.enterEmbodied = () => enterEmbodied(embody);
   gameActions.exitEmbodied = () => exitEmbodied(embody);
+  // "Take control" from the HUD's Self panel: the way back into the avatar that
+  // does NOT need a clickable figure. Since a character in a closed room is not
+  // drawn at all (see `computeNpcStates`) — the avatar included — the plaque
+  // route can be unreachable, so the HUD offers the same step off the panel one
+  // always has. Three moves, in the order the player would make them by hand:
+  // fly to the avatar's place, open its detail view (the very path the info
+  // panel's "look inside" takes) and hand the figure over. Entering is the
+  // registered action, not a second call of `enterEmbodied`, so there stays ONE
+  // way into the mode — the camera ride, the storey following and the takeover
+  // all come with it.
+  gameActions.takeControl = () => {
+    const me = lastMap?.characters.find((c) => c.name === lastMap!.avatar);
+    const tile = me ? tiles.get(me.location_id) : undefined;
+    // Fog edge case: the place is not (yet) built on the map, so there is
+    // nothing to fly to and nothing to open. Say so instead of doing half of it.
+    if (!tile) {
+      uiActions.toast?.('Your avatar is not on the map yet.', true);
+      return;
+    }
+    engine.flyTo(tile.center.clone(), flyInDist());
+    openLocation(tile.loc.id);
+    gameActions.enterEmbodied?.();
+    // No figure on the map yet (the model is still loading): entering is a
+    // no-op then, and the view has already flown in — the same message says
+    // what happened, and pressing again once the figure is there works.
+    if (getGameState().mode !== 'embodied') {
+      uiActions.toast?.('Your avatar is not on the map yet.', true);
+    }
+  };
   engine.addFrameHook(() => checkExit(embody));
   // Esc leaves the mode — THE one binding for it. Guarded like the engine's own
   // keys: while the focus sits in a form field Esc belongs to that field (the
@@ -1422,15 +1451,15 @@ async function startApp(username: string, role: string) {
         // So it simply is not drawn until the interior opens; then the room
         // placement and the exit routing take over unchanged (`inRoom` flips,
         // `shownRoom` sees the transition and walks the figure in through the
-        // door). Untouched: characters without a room, always-visible rooms,
-        // travellers (they returned above) and THE AVATAR — the last one by
-        // name, not via `playerDriven`: that flag is only set inside the
-        // embodied mode, so in the overview this rule hid the player's own
-        // figure, and with it the only way back in (`characterAt` raycasts
-        // visible roots only, so the plaque and its "take control" were
-        // unreachable). The storey filter below still applies to it.
-        const roomIsClosed = !inRoom && !!room && !!roomCenter
-          && c.name !== map.avatar;
+        // door). Untouched: characters without a room, always-visible rooms and
+        // travellers (they returned above).
+        // THE AVATAR IS NOT AN EXCEPTION: it used to be exempt so it stayed
+        // clickable (`characterAt` raycasts visible roots only, and the plaque
+        // was the only way back into the mode) — which drew the player's own
+        // figure standing outside the building it is in. The way back is the
+        // Self panel's "Take control" now (`gameActions.takeControl`), which
+        // needs no figure to click on, so the exemption is gone.
+        const roomIsClosed = !inRoom && !!room && !!roomCenter;
         const hidden = wrongStorey || roomIsClosed;
         if (hidden) hiddenChars.add(c.name);
         states.push({

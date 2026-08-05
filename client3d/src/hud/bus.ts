@@ -60,6 +60,11 @@ export interface HudGameActions {
    *  the only way the two meet. Unknown names are dropped by the scene. */
   sayBubble?: (charName: string, text: string) => void;
   enterEmbodied?: () => void;
+  /** take control of the avatar from anywhere: fly to its place, open that
+   *  location's detail view and enter the embodied mode. The figure-less way
+   *  in — a character inside a closed room is not drawn, the avatar included,
+   *  so there is nothing to click on for the plaque. */
+  takeControl?: () => void;
   exitEmbodied?: () => void;
   /** ride to that storey: enter its room on the server, then walk the figure
    *  to the holding point of the target storey */

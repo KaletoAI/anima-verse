@@ -115,6 +115,9 @@
   font-weight: 400;
   opacity: 0.6;
 }
+/* An action in the panel head (Self: "Take control") takes the free space, so
+   the close button keeps sitting at the very edge behind it. */
+#hud .hud-panel-head .player-chip { margin-left: auto; flex: 0 0 auto; }
 #hud .hud-panel-close {
   margin-left: auto;
   flex: 0 0 auto;

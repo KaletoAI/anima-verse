@@ -519,6 +519,16 @@ export function Hud({ avatar, username, role }: {
           {present.length ? `· ${present.join(', ')}` : `· ${t('You are alone here.')}`}
         </span>
       )}
+      {/* Taking control lives in the panel CHROME, not in the shared SelfPanel
+          (/play has no 3D view to fly). Only while one is not embodied — in the
+          mode the chip above is the way out. It is the only way back in when the
+          avatar sits in a closed room: it is not drawn there, so there is no
+          figure to click a plaque out of. */}
+      {id === 'self' && game.mode !== 'embodied' && (
+        <button className="player-chip" onClick={() => gameActions.takeControl?.()}>
+          {t('Take control')}
+        </button>
+      )}
       <button className="hud-panel-close" onClick={() => toggle(id)}
         title={t('Close')} aria-label={t('Close')}>
         <Icon name="close" size={14} />
