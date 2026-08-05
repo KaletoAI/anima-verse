@@ -1038,6 +1038,17 @@ async def play_others(user=Depends(get_current_user)):
         present = ([c for c in _list_characters_in_room(loc, room) if c and c != avatar]
                    if loc else [])
         out["characters"] = [_state_block(c) for c in present]
+        # Relationship of the avatar TO each present character. Built ONCE
+        # per request, then looked up per character.
+        try:
+            from app.core.world_ops import build_relation_map
+            relations = build_relation_map(avatar)
+            for blk in out["characters"]:
+                blk["relation"] = relations.get(blk["name"])
+        except Exception as e:
+            logger.debug("play_others relations failed: %s", e)
+            for blk in out["characters"]:
+                blk.setdefault("relation", None)
         # Party-Hervorhebung: markiere Anwesende, die zur Party des Avatars gehoeren.
         try:
             from app.core.party_engine import get_party_of
@@ -1050,6 +1061,15 @@ async def play_others(user=Depends(get_current_user)):
     except Exception as e:
         logger.debug("play_others failed: %s", e)
     return out
+
+
+@router.get("/play/story-arcs")
+async def play_story_arcs(user=Depends(get_current_user)):
+    """The avatar's quest book: running arcs first, then the last finished
+    ones. Spoiler-free by construction — see build_player_story_arcs."""
+    from app.core.world_ops import build_player_story_arcs
+    from app.models.account import get_active_character
+    return build_player_story_arcs(get_active_character() or "")
 
 
 @router.get("/play/notices")

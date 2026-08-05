@@ -3599,3 +3599,88 @@ def wake_world() -> Dict[str, Any]:
     logger.info("World sleep DEAKTIVIERT: %d aufgeweckt (%d schlafen natuerlich weiter)",
                 len(woken), len(prior))
     return {"sleeping": False, "woken": woken, "still_asleep": sorted(prior)}
+
+
+# === Player quest book + relationship summary (Others panel) ===
+
+# Fields the player payload of a story arc may EVER carry. Everything the
+# arc knows beyond this stays on the server: seed, next_beat_hint,
+# character_outcomes and sequel_seed are the plot the player is supposed to
+# discover by playing, not to read in a panel.
+_ARC_PUBLIC_FIELDS = ("id", "title", "status", "current_state", "tension",
+                      "participants", "updated_at")
+_ARC_BEAT_FIELDS = ("beat", "timestamp", "summary")
+
+# How many finished arcs the quest book keeps as a chronicle.
+_RESOLVED_LIMIT = 10
+
+
+def _public_arc(arc: Dict[str, Any]) -> Dict[str, Any]:
+    """Whitelist one arc for the player. Building UP from the allowed keys
+    (instead of deleting the forbidden ones) means a new model field can
+    never leak by omission."""
+    out: Dict[str, Any] = {}
+    for key in _ARC_PUBLIC_FIELDS:
+        out[key] = arc.get(key, "")
+    out["tension"] = arc.get("tension", 1)
+    out["participants"] = list(arc.get("participants") or [])
+    out["beats"] = [
+        {field: beat.get(field, "") for field in _ARC_BEAT_FIELDS}
+        for beat in (arc.get("beats") or []) if isinstance(beat, dict)
+    ]
+    if arc.get("status") != "active" and arc.get("resolution"):
+        out["resolution"] = arc.get("resolution")
+    return out
+
+
+def build_player_story_arcs(avatar: str) -> Dict[str, Any]:
+    """The quest book of the avatar: its running arcs first (newest change
+    first), then the last finished ones as a chronicle."""
+    avatar = (avatar or "").strip()
+    if not avatar:
+        return {"arcs": []}
+    from app.models.story_arcs import get_all_arcs
+    try:
+        arcs = get_all_arcs()
+    except Exception as e:
+        logger.warning("build_player_story_arcs: %s", e)
+        return {"arcs": []}
+    mine = [a for a in arcs if avatar in (a.get("participants") or [])]
+    mine.sort(key=lambda a: a.get("updated_at", ""), reverse=True)
+    active = [a for a in mine if a.get("status") == "active"]
+    resolved = [a for a in mine if a.get("status") != "active"]
+    return {"arcs": [_public_arc(a)
+                     for a in active + resolved[:_RESOLVED_LIMIT]]}
+
+
+def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
+    """Partner -> the short relationship summary the Others panel shows.
+
+    ONE relationship build per request; the caller looks the present
+    characters up in the returned dict."""
+    avatar = (avatar or "").strip()
+    if not avatar:
+        return {}
+    from app.core.character_ops import build_memory_relationships
+    try:
+        items = build_memory_relationships(avatar, history_limit=1).get("items", [])
+    except Exception as e:
+        logger.warning("build_relation_map(%s): %s", avatar, e)
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for item in items:
+        partner = (item.get("partner") or "").strip()
+        if not partner:
+            continue
+        out[partner] = {
+            "type": item.get("type", "neutral"),
+            "strength": item.get("strength", 0),
+            "sentiment": item.get("sentiment_self_to_other", 0.0),
+        }
+    return out
+
+
+def relation_summary(avatar: str, other: str) -> Optional[Dict[str, Any]]:
+    """The avatar's relationship to ONE other character, or None if there is
+    none. For a whole room use build_relation_map."""
+    return build_relation_map(avatar).get((other or "").strip())
