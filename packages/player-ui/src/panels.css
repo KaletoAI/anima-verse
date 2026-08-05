@@ -252,8 +252,11 @@
    from the host's `.ga-modal*`/`.ga-input`/`.ga-btn` rules, like the other
    portalled package modals — only the parts that exist nowhere else live here.
    The subject chips get their OWN class instead of reusing `.player-chip`:
-   that family stays in the host stylesheets, and client3d themes it under
-   `#hud`, which a document.body portal is not inside. */
+   that family is host-owned (player.css for /play, a hand-kept copy in
+   hud.css for client3d), so borrowing it would mean every host has to keep
+   defining it for this dialog. Defined here, the dialog brings its own look
+   and needs no cooperation — the ornamental theme pass may still reach it,
+   but nothing breaks without one. */
 .player-photo-chips {
   display: flex;
   flex-wrap: wrap;
@@ -276,6 +279,14 @@
   background: color-mix(in srgb, var(--accent, #6aa9ff) 22%, transparent);
 }
 .player-photo-chip:disabled { opacity: 0.5; cursor: default; }
+
+/* Why Generate is disabled — see the "nobody is not expressible" note in
+   PlayerPhotoDialog.tsx. */
+.player-photo-hint {
+  margin-top: 5px;
+  font-size: 0.78em;
+  color: var(--danger, #e05656);
+}
 
 .player-photo-check {
   display: flex;

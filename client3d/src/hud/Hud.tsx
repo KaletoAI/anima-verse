@@ -551,9 +551,13 @@ export function Hud({ avatar, username, role }: {
           className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}>
           {panelHead('chat', 'chat', avatarName || '—')}
           <ErrorBoundary inline label="Chat">
+            {/* photoDialog `key`: a second prepared payload is a NEW dialog,
+                not the old one with new props — without the key the edited
+                prompt and the chip selection of the previous 📷 press would
+                survive into it. */}
             <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
               hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
-              photoDialog={(ctl) => <PlayerPhotoDialog {...ctl} />} />
+              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />} />
           </ErrorBoundary>
         </section>
       )}
