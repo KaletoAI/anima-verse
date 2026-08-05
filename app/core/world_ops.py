@@ -3688,26 +3688,45 @@ def build_player_story_arcs(avatar: str) -> Dict[str, Any]:
 def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:
     """Partner -> the short relationship summary the Others panel shows.
 
-    ONE relationship build per request; the caller looks the present
-    characters up in the returned dict."""
+    ONE relationship read per request; the caller looks the present
+    characters up in the returned dict.
+
+    Reads the relationship rows directly instead of going through the Mind
+    panel's `build_memory_relationships`: that one additionally loads the
+    WHOLE memory table (only to count memories per partner, a field nobody
+    here wants) and scans the character list to drop ghost partners — far
+    too much for a path `/play/others` polls every 5 seconds.
+
+    No ghost filter is needed here: this returns a map, and the caller only
+    looks up characters that are PRESENT in the room. A relationship row
+    pointing at a deleted character therefore has no key anyone asks for.
+    """
     avatar = (avatar or "").strip()
     if not avatar:
         return {}
-    from app.core.character_ops import build_memory_relationships
+    from app.models.relationship import get_character_relationships
     try:
-        items = build_memory_relationships(avatar, history_limit=1).get("items", [])
+        rels = get_character_relationships(avatar)
     except Exception as e:
         logger.warning("build_relation_map(%s): %s", avatar, e)
         return {}
     out: Dict[str, Dict[str, Any]] = {}
-    for item in items:
-        partner = (item.get("partner") or "").strip()
+    for r in rels:
+        # Partner = the other side. _row_to_rel fills character_a/b with
+        # from_char/to_char (DB order); we want the non-self name.
+        a = r.get("character_a") or ""
+        b = r.get("character_b") or ""
+        partner = (b if a == avatar else a).strip()
         if not partner:
             continue
+        # a_to_b is the sentiment from a towards b — flip it to the avatar's
+        # point of view when the avatar is the b side.
+        sentiment = (r.get("sentiment_a_to_b", 0.0) if a == avatar
+                     else r.get("sentiment_b_to_a", 0.0))
         out[partner] = {
-            "type": item.get("type", "neutral"),
-            "strength": item.get("strength", 0),
-            "sentiment": item.get("sentiment_self_to_other", 0.0),
+            "type": r.get("type", "neutral"),
+            "strength": r.get("strength", 10),
+            "sentiment": round(sentiment, 3),
         }
     return out
 

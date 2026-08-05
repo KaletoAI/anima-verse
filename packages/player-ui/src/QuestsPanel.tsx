@@ -18,7 +18,8 @@ import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 
 interface ArcBeat {
-  beat: string
+  /** Running number of the beat inside the arc, 1-based — the server sends an int. */
+  beat: number
   timestamp: string
   summary: string
 }
@@ -118,7 +119,9 @@ export function QuestsPanel({ pollIntervalMs = 15000 }: { pollIntervalMs?: numbe
             {!done && arc.beats.map((b, i) => (
               <div key={`${arc.id}-${i}`} className="player-quest-beat">
                 <div className="player-quest-beat-time">{fmtTime(b.timestamp)}</div>
-                <div className="player-quest-beat-text">{b.summary || b.beat}</div>
+                <div className="player-quest-beat-text">
+                  {b.summary || `${t('Beat')} ${b.beat}`}
+                </div>
               </div>
             ))}
           </div>
