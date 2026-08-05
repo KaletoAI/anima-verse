@@ -42,11 +42,13 @@ is read through ``room_recipe`` exactly as the room recipe does it.
 """
 
 import math
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import (Any, Callable, Dict, Iterator, List, Optional, Set,
+                    Tuple)
 
 from app.core.log import get_logger
 from app.core.model_store import DEFAULT_TIER
-from app.core.room_recipe import compose_recipe
+from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
+                                  compose_recipe)
 from app.core.scatter_curves import (relief_cells, terrain_grid,
                                      terrain_height, variant_mix)
 
@@ -631,6 +633,48 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     return walls
 
 
+def _room_wall_edges(recipe: Dict[str, Any], extent: float, k: float
+                     ) -> Iterator[Tuple[int, List[float], float, float,
+                                         float, List[Tuple[float, float,
+                                                           Dict[str, Any]]]]]:
+    """Every edge of a room that HAS a shell, as
+    ``(index, a, ux, uz, length, spans)`` in world metres — ``spans`` are the
+    ``(s0, s1, opening)`` triples the openings cut out of that edge, sorted
+    along it.
+
+    The ONE place an opening becomes geometry: the wall splitter below
+    subtracts these spans, and ``_doorways`` turns the walkable ones into
+    threshold primitives. Neither derives the clamp a second time. A room
+    without a shell (outdoor zone, ``no_walls``, degenerate hull) yields
+    nothing — no wall is cut there, so there is no doorway there either.
+    """
+    if recipe.get("always_visible") or recipe.get("no_walls"):
+        return
+    outline = [[_w(p[0], extent), _w(p[1], extent)]
+               for p in recipe.get("outline") or []]
+    if len(outline) < 3:
+        return
+    for i, a in enumerate(outline):
+        b = outline[(i + 1) % len(outline)]
+        frame = _edge_frame(a, b)
+        if not frame:
+            continue
+        ux, uz, length = frame
+        spans: List[Tuple[float, float, Dict[str, Any]]] = []
+        for op in recipe.get("openings") or []:
+            try:
+                if int(op.get("edge") or 0) != i:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            half = min(_num(op.get("width_m")) * k / 2, length / 2)
+            centre = min(max(_num(op.get("at")), 0.0), 1.0) * length
+            spans.append((max(0.0, centre - half),
+                          min(length, centre + half), op))
+        spans.sort(key=lambda s: s[0])
+        yield i, a, ux, uz, length, spans
+
+
 def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
                 extent: float, ground_level: int) -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
@@ -647,12 +691,6 @@ def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
     openings in the ``rooms`` block (the 2D editor keeps drawing them), its
     markers and its diorama. The BUILDING's contour walls are untouched.
     """
-    if recipe.get("always_visible") or recipe.get("no_walls"):
-        return []
-    outline = [[_w(p[0], extent), _w(p[1], extent)]
-               for p in recipe.get("outline") or []]
-    if len(outline) < 3:
-        return []
     level = int(recipe.get("level") or 0)
     # Room shell walls stand on the ROOM plate (0.10), the contour walls on
     # the level plate (0.08) — § A4/A6.
@@ -663,27 +701,9 @@ def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
     role = _opacity_role(level, ground_level)
     walls: List[Dict[str, Any]] = []
 
-    for i, a in enumerate(outline):
-        b = outline[(i + 1) % len(outline)]
-        frame = _edge_frame(a, b)
-        if not frame:
-            continue
-        ux, uz, length = frame
+    for _i, a, ux, uz, length, spans in _room_wall_edges(recipe, extent, k):
         # Clockwise hull → the outward normal of (ux, uz) is (uz, −ux).
         normal = [_r(uz), _r(-ux)]
-
-        spans: List[Tuple[float, float, Dict[str, Any]]] = []
-        for op in recipe.get("openings") or []:
-            try:
-                if int(op.get("edge") or 0) != i:
-                    continue
-            except (TypeError, ValueError):
-                continue
-            half = min(_num(op.get("width_m")) * k / 2, length / 2)
-            centre = min(max(_num(op.get("at")), 0.0), 1.0) * length
-            spans.append((max(0.0, centre - half),
-                          min(length, centre + half), op))
-        spans.sort(key=lambda s: s[0])
 
         def _emit(s0: float, s1: float, y: float, h: float,
                   thickness: float, glass: bool = False) -> None:
@@ -722,6 +742,108 @@ def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
             _emit(s0, s1, sill, top - sill,
                   WALL_THICKNESS * GLASS_THICKNESS_FACTOR, glass=True)
     return walls
+
+
+# ── Doorways ────────────────────────────────────────────────────────────
+
+def _doorways(recipes: List[Dict[str, Any]], storey: float, k: float,
+              extent: float) -> List[Dict[str, Any]]:
+    """Every walkable threshold of the location as a finished primitive
+    (plan-betreten-und-tueren.md § 4.1).
+
+    A doorway is EXACTLY the gap an opening cuts out of a wall — same source,
+    same clamp (``_room_wall_edges``), no second derivation. Hence ``width_m``
+    is the CLEAR width in world metres after the edge clamp, not
+    ``width_m × k`` for anyone to recompute, and ``base_y`` is the foot of the
+    wall the gap belongs to. The consumer rule is: nothing is recalculated.
+
+    One physical opening on a shared wall = ONE entry. It is authored in one
+    room and mirrored into the neighbour (``room_recipe._mirrored_openings``),
+    so it arrives twice: the mirrored copy carries ``mirrored`` and names its
+    owner in ``to``. The pair is recognized by the owner plus the position of
+    the opening CENTRE on the two wall faces — the same faces the mirror
+    accepted as one wall, i.e. at most ``SHARE_TOL_M`` REAL metres apart
+    (× k for world metres), plus the rounding the mirrored ``at`` carries
+    (4 decimals of a plate fraction). The neighbour then only contributes its
+    room id.
+
+    ``rooms[0]`` is the room whose wall this entry was cut out of; the
+    neighbour follows. The GROUND room never appears — it has no walls, and
+    ``outside`` already says the door leads onto the ground.
+
+    A window is no way out (``_WALKABLE_TYPES``), a room without a shell has
+    no threshold, and the order is deterministic (level, position, rooms):
+    consumers diff whole payloads.
+    """
+    from app.models.world import GROUND_ROOM_ID
+
+    def _rooms_of(room_id: str, to: str) -> List[str]:
+        out = [room_id]
+        if to and to.lower() != "outside" and to != GROUND_ROOM_ID \
+                and to != room_id:
+            out.append(to)
+        return out
+
+    tol = SHARE_TOL_M * k + 1e-4 * extent
+    # (entry, unclamped centre) of the openings on their OWN room's wall, and
+    # the neighbour's copies with the id of the room that owns them.
+    owned: List[Tuple[Dict[str, Any], List[float]]] = []
+    mirrored: List[Tuple[Dict[str, Any], List[float], str]] = []
+    for recipe in recipes:
+        room_id = str(recipe.get("room_id") or "")
+        level = int(recipe.get("level") or 0)
+        # The wall's own foot — the same number _room_walls stands its
+        # full-height pieces on (room plate, storey and level included).
+        base = _r(_room_floor_y(recipe, storey, k) + ROOM_PLATE_TOP)
+        for _i, a, ux, uz, length, spans in _room_wall_edges(recipe, extent, k):
+            for s0, s1, op in spans:
+                if str(op.get("type") or "door").lower() not in _WALKABLE_TYPES:
+                    continue
+                if s1 - s0 < MIN_SEGMENT_M:
+                    continue  # a hole the splitter does not open is no way out
+                to = str(op.get("to") or "").strip()
+                entry = {
+                    "level": level,
+                    "at_world": [_r(a[0] + ux * (s0 + s1) / 2),
+                                 _r(a[1] + uz * (s0 + s1) / 2)],
+                    "along": [_r(ux), _r(uz)],
+                    "width_m": _r(s1 - s0),
+                    "base_y": base,
+                    "rooms": _rooms_of(room_id, to),
+                    "outside": to.lower() == "outside" or to == GROUND_ROOM_ID,
+                }
+                # The CENTRE before the edge clamp: that point is identical on
+                # both faces of a shared wall (up to the wall's own offset),
+                # while the clamped middle moves in a corner.
+                t = min(max(_num(op.get("at")), 0.0), 1.0) * length
+                centre = [a[0] + ux * t, a[1] + uz * t]
+                if op.get("mirrored"):
+                    mirrored.append((entry, centre, to))
+                else:
+                    owned.append((entry, centre))
+
+    out = [entry for entry, _c in owned]
+    for entry, centre, owner in mirrored:
+        best: Optional[Dict[str, Any]] = None
+        best_d = 0.0
+        for cand, cand_centre in owned:
+            if cand["level"] != entry["level"] or cand["rooms"][0] != owner:
+                continue
+            d = math.hypot(cand_centre[0] - centre[0],
+                           cand_centre[1] - centre[1])
+            # Ties keep the FIRST candidate — the room order of the payload.
+            if d <= tol and (best is None or d < best_d):
+                best, best_d = cand, d
+        if best is None:
+            # The owner emits no walls of its own (open zone): the gap in THIS
+            # room's wall is real all the same, so it stays — as its entry.
+            out.append(entry)
+            continue
+        for room_id in entry["rooms"]:
+            if room_id not in best["rooms"]:
+                best["rooms"].append(room_id)
+    out.sort(key=lambda e: (e["level"], e["at_world"], e["rooms"]))
+    return out
 
 
 # ── Extras (elevator) ───────────────────────────────────────────────────
@@ -1420,6 +1542,16 @@ def _rotate_scene(out: Dict[str, Any], k: int, extent: float) -> Dict[str, Any]:
         if entry.get("at_world"):
             entry["at_world"] = pt_world(entry["at_world"])
 
+    for door in out.get("doorways") or []:
+        # The same matrix serves both: ``at_world`` is a point around the tile
+        # centre, ``along`` a direction — and the origin IS the centre, so
+        # there is no translation to leave out. Width, foot and rooms are
+        # rotation-invariant.
+        if door.get("at_world"):
+            door["at_world"] = pt_world(door["at_world"])
+        if door.get("along"):
+            door["along"] = pt_world(door["along"])
+
     for block in out.get("rooms") or []:
         if block.get("outline"):
             block["outline"] = poly_frac(block["outline"])
@@ -1729,6 +1861,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "figures": _figures(k),
         "markers": markers,
         "exits": exits,
+        # Thresholds as finished primitives (plan-betreten-und-tueren.md
+        # § 4.1) — from the same spans the walls are split by, so no consumer
+        # ever measures a door back out of the geometry again.
+        "doorways": _doorways(recipes, storey, k, extent),
         "outdoor_rooms": [r.get("room_id") or "" for r in recipes
                           if r.get("always_visible")],
     }

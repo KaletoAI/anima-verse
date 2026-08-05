@@ -244,6 +244,33 @@ export interface SceneRoom {
   }
 }
 
+/** ONE walkable threshold — a door or passage, served as a finished
+ *  primitive (plan-betreten-und-tueren.md § 4.1). It is exactly the gap the
+ *  opening cuts out of the wall, in WORLD metres around the tile centre and
+ *  with the tile rotation already applied, like every other scene coordinate.
+ *
+ *  The consumer rule is: **recompute nothing.** No edge clamp, no
+ *  `width_m × k`, no measuring a contour gap back out of two wall pieces.
+ *  Whoever draws a threshold, walks a figure through one or samples the floor
+ *  at a door reads THIS. */
+export interface SceneDoorway {
+  level: number
+  /** Middle of the CLEAR opening. */
+  at_world: [number, number]
+  /** Unit direction of the wall — the threshold runs ALONG it. */
+  along: [number, number]
+  /** Clear width, already clamped to the wall edge. */
+  width_m: number
+  /** Foot of the wall the gap belongs to. */
+  base_y: number
+  /** The rooms it connects: 2 = party wall, 1 = door to the outside.
+   *  `rooms[0]` owns the wall this entry was cut out of. The GROUND room
+   *  never appears — it has no walls, and `outside` already says so. */
+  rooms: string[]
+  /** true = leads out of the building (onto the ground). */
+  outside: boolean
+}
+
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and
  *  leaves the cell. Pure geometry + room link, WORLD metres around the tile
  *  centre like every other scene coordinate; `inward` is the inward normal in
@@ -286,12 +313,12 @@ export interface SceneTerrain {
 export interface ScenePayload {
   signature: string
   rooms: SceneRoom[]
-  /** Welt-Größe des Bezugsquadrats: die EINE Zahl, die jede Fraktion dieses
-   *  Payloads in Meter verwandelt (Default 10 = eine Kachel). Nie durch eine
-   *  Konstante ersetzen — genau das war die 8, die Grundriss und Modell
-   *  auseinanderlaufen ließ. */
+  /** World size of the reference square: the ONE number that turns every
+   *  fraction of this payload into metres (default 10 = one tile). Never
+   *  replace it with a constant — that was exactly the 8 that let floor plan
+   *  and model drift apart. */
   extent_m: number
-  /** Welt-Meter je Real-Meter (extent_m / plan_width_m; 1 = Legacy) */
+  /** World metres per REAL metre (extent_m / plan_width_m; 1 = legacy) */
   k: number
   storey_m: number
   levels: { level: number; floor_y: number }[]
@@ -303,15 +330,18 @@ export interface ScenePayload {
   figures: { base_height_m_world: number; stand_clearance: number }
   markers: SceneMarker[]
   exits: SceneExit[]
+  /** Every walkable threshold of the location (§ 4.1) — always present, empty
+   *  when the location has no door at all. */
+  doorways: SceneDoorway[]
   outdoor_rooms: string[]
-  /** Durchgänge an der Location-Grenze (§ B1 Nr. 13) — nur wenn autorisiert. */
+  /** Pass-throughs at the location edge (§ B1 Nr. 13) — only when authored. */
   boundary_openings?: SceneBoundaryOpening[]
-  /** Höhenfeld der Detailszene — nur wenn `map3d.relief` gesetzt ist. */
+  /** Height field of the detail scene — only when `map3d.relief` is set. */
   terrain?: SceneTerrain
-  /** Detail-Modus der LOCATION (v5.2 Nr. 10) — unabhängig davon, ob ein
-   *  Location-Modell existiert: Backstop-Platte, Fade-Gate und Zonen-Regeln
-   *  hängen hieran; `display: shell_area` am Gebäude-Spec ist nur die
-   *  Modell-Konsequenz. */
+  /** Detail mode of the LOCATION (v5.2 Nr. 10) — independent of whether a
+   *  location model exists: backstop plate, fade gate and zone rules hang off
+   *  this; `display: shell_area` on the building spec is merely its
+   *  per-model consequence. */
   area_detail?: boolean
 }
 
