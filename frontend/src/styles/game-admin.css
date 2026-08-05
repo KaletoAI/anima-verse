@@ -566,6 +566,12 @@ html, * {
   line-height: 1.4;
 }
 
+/* A field value that decides nothing — amber, not red: the value is saved
+   and readable, it simply matches no entry, so a default takes over. */
+.ga-field-warn {
+  color: #d29922;
+}
+
 .ga-list {
   list-style: none;
   margin: 0;

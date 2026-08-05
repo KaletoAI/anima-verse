@@ -348,16 +348,41 @@ def room_exit_world(recipe: Dict[str, Any], room: Dict[str, Any],
 
 # ── Plates ──────────────────────────────────────────────────────────────
 
+def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
+    """The texture kind ONE storey plate carries (plan-grundflaeche.md § 5).
+
+    Three words in a fixed order:
+
+    1. ``map3d.level_floors["<level>"]`` — the author naming this storey's
+       floor outright. It always wins, on every storey.
+    2. ``ground_kind`` on storey 0 — the ground OUTSIDE, resolved from the
+       location's ``terrain`` against the surface library. Storey 0 is the
+       terrain storey by definition, so this applies there and nowhere else:
+       a first-storey plank floor is not terrain, and a cellar is none either.
+    3. ``DEFAULT_FLOOR_KIND`` otherwise.
+
+    Room plates lie ON TOP of the level plate and keep overriding their own
+    area with their own ``surfaces.floor`` — untouched by this.
+    """
+    if isinstance(level_floors, dict):
+        declared = str(level_floors.get(str(level)) or "").strip()
+        if declared:
+            return declared
+    if level == 0 and ground_kind:
+        return ground_kind
+    return DEFAULT_FLOOR_KIND
+
+
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             levels: List[int], storey: float, k: float, extent: float,
-            relief_rooms: Optional[Set[str]] = None) -> List[Dict[str, Any]]:
+            relief_rooms: Optional[Set[str]] = None,
+            ground_kind: str = "") -> List[Dict[str, Any]]:
     """One contour plate per used level + one floor plate per room.
 
-    The level plate carries the storey's floor kind (``map3d.level_floors``,
-    else the global ``floor`` kind); the rooms lay their own plates ON TOP,
-    so a room floor overrides only its own area. Outdoor rooms (§ A5) get NO
-    body — they appear as a plate of thickness 0, i.e. a pure texture surface
-    on the ground below.
+    The level plate carries the storey's floor kind (``level_plate_kind``);
+    the rooms lay their own plates ON TOP, so a room floor overrides only its
+    own area. Outdoor rooms (§ A5) get NO body — they appear as a plate of
+    thickness 0, i.e. a pure texture surface on the ground below.
 
     ``relief_rooms`` are the room ids whose ground follows the terrain field
     (v5.2 Nr. 14): their plate gets ``relief: true``, which is the renderers'
@@ -370,15 +395,13 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     ground = min(levels)
     if contour:
         for level in levels:
-            kind = ""
-            if isinstance(level_floors, dict):
-                kind = str(level_floors.get(str(level)) or "").strip()
             plates.append({
                 "level": level,
                 "outline": contour,
                 "top_y": _r(level * storey + LEVEL_PLATE_TOP),
                 "thickness": LEVEL_PLATE_THICKNESS,
-                "texture_kind": kind or DEFAULT_FLOOR_KIND,
+                "texture_kind": level_plate_kind(level, level_floors,
+                                                 ground_kind),
                 "opacity_role": _opacity_role(level, ground),
             })
     for recipe in recipes:
@@ -1169,17 +1192,23 @@ def _figures(k: float) -> Dict[str, Any]:
 
 def _signature(location: Dict[str, Any], plan_width_m: float,
                recipes: List[Dict[str, Any]], building_meta: Dict[str, Any],
-               room_metas: Dict[str, Dict[str, Any]]) -> str:
+               room_metas: Dict[str, Dict[str, Any]],
+               ground_kind: str = "") -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
-    height_m, width_m, walk_y, rotation, offsets). Polling it is enough."""
+    height_m, width_m, walk_y, rotation, offsets). Polling it is enough.
+
+    ``ground_kind`` is in here as the RESOLVED kind, not as the raw
+    ``terrain`` text: it is what the payload carries, and it also moves when
+    the library gains or loses the entry a terrain names."""
     import hashlib
     import json
     payload = {
         "map3d": location.get("map3d") or {},
         "map_rotation_2d": location.get("map_rotation_2d") or 0,
         "plan_width_m": round(float(plan_width_m or 0), 3),
+        "ground_kind": ground_kind,
         "rooms": {str(r.get("room_id") or ""): r.get("signature") or ""
                   for r in recipes},
         "building_meta": building_meta or {},
@@ -1447,15 +1476,25 @@ def _rotate_scene(out: Dict[str, Any], k: int, extent: float) -> Dict[str, Any]:
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                   building_meta: Optional[Dict[str, Any]] = None,
                   room_metas: Optional[Dict[str, Dict[str, Any]]] = None,
+                  surface_kinds: Optional[Set[str]] = None,
                   ) -> Dict[str, Any]:
     """The whole scene of ONE location as finished primitives (§ B1).
 
     ``plan_width_m`` is the resolved scale anchor (see
     ``location_model3d.derive_plan_width_m``), ``building_meta`` the building
-    model's client meta and ``room_metas`` the room models' client metas by
-    room id — the route loads all three, the composer only computes.
+    model's client meta, ``room_metas`` the room models' client metas by
+    room id and ``surface_kinds`` the ids the surface library holds — the
+    route loads all four, the composer only computes. Without the library
+    the location's ``terrain`` resolves to nothing and the ground keeps the
+    default kind.
     """
     map3d = location.get("map3d") or {}
+    # The ground OUTSIDE (plan-grundflaeche.md § 5): the location's terrain,
+    # resolved against the library HERE so the world map and the detail
+    # scene cannot disagree about it any more.
+    from app.core.surface_textures import resolve_terrain_kind
+    ground_kind = resolve_terrain_kind(location.get("terrain"),
+                                       surface_kinds or ())
     rooms = [r for r in (location.get("rooms") or []) if isinstance(r, dict)]
     # A copy placed on the map owns ONE number; it is mixed into every seed
     # this location inherits from its template, so two copies stop looking
@@ -1661,7 +1700,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 
     out = {
         "signature": _signature(location, plan_width_m, recipes,
-                                building_meta, room_metas),
+                                building_meta, room_metas, ground_kind),
         "rooms": room_blocks,
         # extent_m = the world size of the reference square: the ONE number
         # that turns every fraction in this payload into metres. Consumers
@@ -1677,7 +1716,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # that is how a drawn area becomes a lake (_overlay_plates).
         "plates": (_plates(map3d, [r for r in recipes
                                    if str(r.get("room_id") or "") not in overlay_rooms],
-                           levels, storey, k, extent, relief_rooms)
+                           levels, storey, k, extent, relief_rooms,
+                           ground_kind)
                    + _overlay_plates(recipes, overlay_rooms, min(levels), extent)),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey, k, extent),

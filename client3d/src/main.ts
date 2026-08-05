@@ -724,7 +724,7 @@ async function startApp(username: string, role: string) {
   // Layout-Live-Refresh: Grundrisse/Marker/Meta-Justierungen/Terrain aus dem
   // Admin erscheinen ohne Browser-Reload — Kachel wird bei Änderung neu gebaut
   const sigOf = (l: Partial<WorldLocation>) => JSON.stringify([
-    l.map3d, l.entry_room, l.terrain || '',
+    l.map3d, l.entry_room, l.terrain || '', l.surface_kind || '',
     (l.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
   ]);
   // Signaturen aus DERSELBEN Quelle wie der Poll (/world/locations): die
@@ -786,7 +786,12 @@ async function startApp(username: string, role: string) {
         const sig = sigOf(detail);
         if (locSig.get(id) === sig) continue;
         locSig.set(id, sig);
-        if ((detail.terrain || '') !== (tile.loc.terrain || '')) terrainChanged = true;
+        // The neighbourhood grid is built from `surface_kind`, the tile style
+        // from `terrain` — a change in EITHER has to repaint.
+        if ((detail.terrain || '') !== (tile.loc.terrain || '')
+            || (detail.surface_kind || '') !== (tile.loc.surface_kind || '')) {
+          terrainChanged = true;
+        }
         // map3d aus dem Detail, aber ohne die abgeleiteten floors zu
         // verlieren: die trägt nur die Worldmap-Variante (Kachel vom Boot) —
         // sonst schrumpfte die prozedurale Hülle beim ersten echten Rebuild.
@@ -798,6 +803,7 @@ async function startApp(username: string, role: string) {
           map3d: m3 && floors !== undefined ? { ...m3, floors } : m3,
           entry_room: detail.entry_room ?? tile.loc.entry_room,
           terrain: detail.terrain ?? tile.loc.terrain,
+          surface_kind: detail.surface_kind ?? tile.loc.surface_kind,
         }]);
       }
       if (terrainChanged) {

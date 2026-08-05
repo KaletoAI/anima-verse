@@ -22,7 +22,8 @@ const DEBOUNCE_MS = 300
 
 export function useScenePreview(locationId: string, rooms: Room[],
                                 map3d: Map3D | undefined,
-                                fallbackYawDeg: number) {
+                                fallbackYawDeg: number,
+                                terrain: string) {
   const [scene, setScene] = useState<ScenePayload | null>(null)
   const [error, setError] = useState('')
   const [modelVer, setModelVer] = useState(0)
@@ -39,6 +40,10 @@ export function useScenePreview(locationId: string, rooms: Room[],
       postScenePreview<ScenePayload>({
         id: locationId,
         map_rotation_2d: fallbackYawDeg,
+        // The ground outside is the server's call too (plan-grundflaeche.md
+        // § 5) — the draft terrain travels along so an edited ground shows
+        // up here exactly as the 3D client will render it.
+        terrain,
         map3d: map3d || {},
         rooms: rooms.map((r) => ({ id: r.id || '', name: r.name || '',
                                    layout: r.layout })),
@@ -57,7 +62,7 @@ export function useScenePreview(locationId: string, rooms: Room[],
         })
     }, DEBOUNCE_MS)
     return () => { stale = true; window.clearTimeout(timer) }
-  }, [locationId, rooms, map3d, fallbackYawDeg, modelVer])
+  }, [locationId, rooms, map3d, fallbackYawDeg, terrain, modelVer])
 
   return { scene, error }
 }

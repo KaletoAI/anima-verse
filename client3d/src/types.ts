@@ -90,6 +90,10 @@ export interface WorldLocation {
   indoor?: string;
   background_images?: string[];
   terrain?: string;   // AV3D-7: grass | forest | road | water | ...
+  /** The surface-library kind the server resolved `terrain` to — '' when it
+   *  names no entry. THE ground kind of this location; the client does not
+   *  look the mapping up itself (plan-grundflaeche.md § 5). */
+  surface_kind?: string;
   map3d?: Map3dMeta;  // AV3D-1
 }
 
@@ -102,6 +106,8 @@ export interface MapLocation {
   template_location_id?: string;
   map_rotation_2d?: number;
   terrain?: string;   // AV3D-7
+  /** Server-resolved library kind of `terrain` — see WorldLocation. */
+  surface_kind?: string;
   map3d?: Map3dMeta;  // AV3D-1 (nur emittiert, wenn gesetzt)
 }
 

@@ -629,6 +629,7 @@ def play_location_scene(location_id: str):
     rendering the location procedurally as before."""
     from app.models.world import get_location_by_id
     from app.core.scene_recipe import compose_scene
+    from app.core.surface_textures import library_kinds
     loc = get_location_by_id(location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
@@ -640,7 +641,8 @@ def play_location_scene(location_id: str):
             and not building_meta:
         raise HTTPException(status_code=404, detail="No scene")
     return compose_scene(loc, plan_width_m=plan_width_m,
-                         building_meta=building_meta, room_metas=room_metas)
+                         building_meta=building_meta, room_metas=room_metas,
+                         surface_kinds=library_kinds())
 
 
 @router.post("/play/scene-preview")
@@ -656,6 +658,7 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
     in, so the preview matches what the client will see."""
     from app.models.world import get_location_by_id
     from app.core.scene_recipe import compose_scene
+    from app.core.surface_textures import library_kinds
     from app.core.world_ops import _sanitize_map3d, _sanitize_rooms_layout
     data = await request.json()
     if not isinstance(data, dict):
@@ -671,6 +674,10 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
     draft = {
         "id": str(data.get("id") or ""),
         "map_rotation_2d": rotation_2d,
+        # The ground outside is part of the draft: an edited terrain must
+        # change the preview's ground plate, or the editor would show one
+        # ground and the client another — the very split § 5 closes.
+        "terrain": str(data.get("terrain") or "").strip(),
         "map3d": _sanitize_map3d(data.get("map3d")),
         "rooms": _sanitize_rooms_layout(rooms),
     }
@@ -678,7 +685,8 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
     plan_width_m, building_meta, room_metas = _scene_inputs(
         draft, draft["id"] if known else "")
     return compose_scene(draft, plan_width_m=plan_width_m,
-                         building_meta=building_meta, room_metas=room_metas)
+                         building_meta=building_meta, room_metas=room_metas,
+                         surface_kinds=library_kinds())
 
 
 def _party_block(avatar: str):

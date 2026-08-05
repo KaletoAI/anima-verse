@@ -63,6 +63,13 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           .sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => setTerrainKinds([]))
   }, [])
+  // A terrain that names no library entry decides nothing: the server
+  // resolves it to '' and the ground keeps its default kind. That used to be
+  // silent — a typo just fell through to the procedural fallback and looked
+  // like every other value. It is marked now (plan-grundflaeche.md § 5).
+  const terrainText = (draft.terrain || '').trim().toLowerCase()
+  const terrainEntry = terrainKinds.find((k) => k.kind === terrainText)
+  const terrainUnknown = !!terrainText && terrainKinds.length > 0 && !terrainEntry
 
   useEffect(() => {
     setDraft({ ...location })
@@ -385,7 +392,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   // building placement spec, so the model tab and the floor plan cannot show
   // the same model differently (user finding 2026-07-28).
   const { scene, error: sceneError } = useScenePreview(
-    location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0)
+    location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0,
+    draft.terrain || '')
 
   const tab3d = (
     <div className="ga-form">
@@ -398,8 +406,14 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           figure-scale field, the remaining fields flow around it. */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'start' }}>
         <Field label={t('Terrain')}
-          hint={terrainKinds.find((k) => k.kind === (draft.terrain || '').trim())?.name
-            || t('Ground type of this map cell — a surface-texture id. Free text; without it, clients guess from the name.')}>
+          hint={terrainUnknown
+            ? (
+              <span className="ga-field-warn">
+                {t('No surface-texture entry with this id — the ground falls back to the default kind. Pick a listed id or create the surface in Assets.')}
+              </span>
+            )
+            : terrainEntry?.name
+              || t('Ground type of this map cell — a surface-texture id. Free text; without it, clients guess from the name.')}>
           <input
             className="ga-input"
             list="terrain-type-options"

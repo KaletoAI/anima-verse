@@ -285,6 +285,8 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
         locations = filtered
 
     from app.core.boundary_entry import has_entrance
+    from app.core.surface_textures import library_kinds, resolve_terrain_kind
+    known_kinds = library_kinds()
     for loc in locations:
         loc_id = loc.get("id", "")
         loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
@@ -292,6 +294,11 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
         # all (decision 2026-08-04). The rule lives in ONE function; the
         # editor only displays what it says.
         loc["has_entrance"] = has_entrance(loc)
+        # The ground outside, resolved (plan-grundflaeche.md § 5): '' means
+        # the terrain names no library entry — the renderers keep their
+        # procedural ground for it and the editor marks the miss.
+        loc["surface_kind"] = resolve_terrain_kind(loc.get("terrain"),
+                                                   known_kinds)
     return {"locations": locations}
 
 
@@ -319,7 +326,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     )
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
+    from app.core.surface_textures import library_kinds, resolve_terrain_kind
 
+    # The library is read ONCE for the whole payload — the resolution itself
+    # is a pure lookup per location (plan-grundflaeche.md § 5).
+    known_kinds = library_kinds()
     avatar = (avatar_name or "").strip()
     fogged = not show_all
     # The fog predicate runs once per placed location on a 3-second poll —
@@ -361,6 +372,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "template_location_id": (loc.get("template_location_id") or ""),
             "map_rotation_2d": int(loc.get("map_rotation_2d") or 0),
             "terrain": (loc.get("terrain") or ""),
+            # The ground outside as the SERVER resolves it ('' = the terrain
+            # names no library entry). Delivered wherever `terrain` is, so a
+            # client never has to look the mapping up itself.
+            "surface_kind": resolve_terrain_kind(loc.get("terrain"),
+                                                 known_kinds),
         }
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:

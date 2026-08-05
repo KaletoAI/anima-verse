@@ -575,7 +575,12 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   Figuren-Maßstab.
 - `map3d.level_floors?: {"<level>": "<kind>"}`: Etagenplatte mit der
   aktiven Textur des Kinds kacheln (`size_m × k`); Raum-Böden liegen
-  darüber. Ohne Eintrag: globales `floor`-Kind, sonst Default-Material.
+  darüber. Ohne Eintrag: auf **Etage 0** das aus `terrain` aufgelöste
+  Kind (§ A9 — die Etage 0 IST die Terrain-Etage, der Boden draußen), auf
+  jeder anderen Etage das globale `floor`-Kind; trifft `terrain` nichts,
+  gilt `floor` auch auf Etage 0. Ein `level_floors`-Eintrag schlägt beides,
+  auf jeder Etage — ein Dielenboden im ersten Stock ist kein Terrain.
+  Die Reihenfolge steht in `scene_recipe.level_plate_kind`.
 - `map3d.elevator`: `[x, y]`-Fraktion, gilt für alle Etagen. Rezept:
   Schacht 1,8 m², Ecksäulen 0,14, Glas 3 Seiten (offene Seite Richtung
   Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles reale
@@ -653,6 +658,16 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Nicht-toward-Nachbar-Art). 404/leer/unbekannt → eingebaute prozedurale
   Fallbacks. 2D-Map-Icons werden NICHT als Boden verwendet
   (`map-icon-2d` ist für den 3D-Pfad tot — README-Verweis streichen).
+- **Die Zuordnung `terrain` → Bibliotheks-Kind macht der SERVER**
+  (2026-08-05, plan-grundflaeche.md § 5). Jede Location-Auslieferung, die
+  `terrain` trägt (`/world/locations`, Worldmap-Payload), trägt daneben
+  `surface_kind`: die aufgelöste ID, oder `""`, wenn `terrain` keinen
+  Eintrag trifft. Regel: kleinschreiben, trimmen, nachschlagen — ein
+  Fehlgriff wird nie geraten. Clients lesen `surface_kind` und schlagen
+  NICHTS selbst nach; bei `""` bleibt ihr prozeduraler Boden stehen, genau
+  wie bei einer Location ganz ohne `terrain`. (Vorher tat das nur der
+  3D-Client und nur für die Weltkarte — die Detailszene bekam ihre Platte
+  vom Server, also zwei Wege mit zwei Ergebnissen.)
 - **`kind` ist die ID, `name` der Anzeigetext** (2026-07-28). Jeder
   Eintrag — Fläche wie Zusammenstellung — trägt `name`; gespeichert und
   referenziert (terrain, `level_floors`, Raum-Boden-/Wandarten,
@@ -1026,7 +1041,7 @@ auf (Diorama-Sofa ≠ Prop-Stuhl ≠ Figur).
 
 ```
 POST /play/scene-preview        # Body: location-Draft (map3d + rooms
-                                # inkl. ungespeicherter layouts)
+                                # inkl. ungespeicherter layouts + terrain)
                                 # → identischer Payload wie /scene
 ```
 

@@ -266,17 +266,15 @@ export function setTerrainGrid(entries: { gx: number; gy: number; kind: string }
   for (const e of entries) terrainGrid.set(`${e.gx},${e.gy}`, e.kind);
 }
 
-/** Oberflächen-Art fürs Nachbarschafts-Grid (Zusammenstellungen). */
+/** Surface kind of a location for the neighbourhood grid (compositions).
+ *
+ *  `surface_kind` is what the SERVER resolved the location's `terrain` to
+ *  (plan-grundflaeche.md § 5) — this client no longer looks the mapping up
+ *  itself, so the world map and the detail scene cannot disagree about the
+ *  ground. Empty = the terrain names no library entry; then the procedural
+ *  style stands, exactly as it does for a location with no terrain at all. */
 export function gridSurfaceKind(loc: WorldLocation): string {
-  return surfaceKindOf(loc, detectStyle(loc));
-}
-
-/** Oberflächen-Art einer Location: terrain als Bibliotheks-kind (offenes
- *  Vokabular) vor dem normalisierten Legacy-Vokabular. */
-export function surfaceKindOf(loc: WorldLocation, style: string): string {
-  const raw = (loc.terrain || '').toLowerCase().trim();
-  if (raw && serverSurfaces.has(raw)) return raw;
-  return style;   // Legacy: road/grass/water/forest (prozedurale Fallbacks)
+  return loc.surface_kind || detectStyle(loc);
 }
 
 /** Kachelbare Oberflächen-Textur für einen Terrain-Typ: Server-Bibliothek
@@ -678,7 +676,7 @@ export function buildTile(loc: WorldLocation): Tile {
   // Zusammenstellungen (blend, z.B. Küste) werden asynchron gebacken und
   // ersetzen die Start-Textur, sobald fertig.
   const groundPlateFor = (): THREE.Mesh => {
-    const kind = surfaceKindOf(loc, style);
+    const kind = loc.surface_kind || style;
     const entry = serverSurfaces.get(kind);
     const plate = groundPlate(loc, surfaceTexture(kind, fallbackFor(style)),
                               surfaceMaterialSpec(kind));
@@ -725,12 +723,15 @@ export function buildTile(loc: WorldLocation): Tile {
     tile.height = style === 'forest' ? 3 : 0.6;
     addLabel();
   } else {
-    // Sockel-Platte unter Gebäuden: deklariertes Terrain der Location
-    // (z.B. grass beim Campus) vor dem Pflaster-Default — "Terrain = grass"
-    // soll auch in der Raumansicht Gras zeigen, nicht Steine
-    const tKind = terrainKind(loc.terrain);
+    // Socle plate under a building: the location's declared ground (e.g.
+    // grass on a campus) before the paving default — "terrain = grass" is
+    // meant to show grass in the room view too, not stones. The kind is the
+    // server's (`surface_kind`); the legacy style vocabulary only picks the
+    // procedural fallback texture for a terrain the library has no entry for.
+    const tStyle = terrainKind(loc.terrain);
+    const tKind = loc.surface_kind || tStyle;
     const plinthTex = tKind
-      ? surfaceTexture(surfaceKindOf(loc, tKind), fallbackFor(tKind))
+      ? surfaceTexture(tKind, fallbackFor(tStyle || ''))
       : paversTexture();
     const plinth = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: plinthTex }));
     plinth.rotation.x = -Math.PI / 2;

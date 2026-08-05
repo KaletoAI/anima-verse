@@ -399,6 +399,44 @@ def list_textures() -> List[Dict[str, Any]]:
     return out
 
 
+def library_kinds() -> set:
+    """Every kind the library knows — texture files and compositions alike.
+
+    The disk-reading half of the terrain resolution; the deciding half is
+    ``resolve_terrain_kind`` and stays pure. Callers that compose a payload
+    read this ONCE and hand the set down (the composer computes, the route
+    loads — same split as the model metas).
+
+    Deliberately NOT ``_files_by_kind()``: that sorts every version of every
+    kind by created_at and therefore opens one sidecar per file. The ids alone
+    need one directory scan, and this runs on the worldmap poll."""
+    kinds = set(_read_blends())
+    d = _dir()
+    if d.is_dir():
+        for p in d.iterdir():
+            if not p.is_file() or p.suffix.lower() not in TEXTURE_EXTS:
+                continue
+            kind = _stem_kind(p.stem)
+            if kind:
+                kinds.add(kind)
+    return kinds
+
+
+def resolve_terrain_kind(terrain: Any, known) -> str:
+    """The library kind a location's ``terrain`` field names — '' when it
+    names none.
+
+    THE one place this mapping happens (plan-grundflaeche.md § 5). It used to
+    live in the 3D client (``tiles.ts surfaceKindOf``) and therefore only
+    reached the world map, while the detail scene got its plate kind from the
+    server — two ways, two results. The rule itself is unchanged: lowercase
+    and trim, then ask the library. A miss is '' and never a guess: the
+    renderers keep their procedural ground for it, and the editor marks it.
+    """
+    raw = str(terrain or "").strip().lower()
+    return raw if raw and raw in set(known or ()) else ""
+
+
 def admin_list() -> List[Dict[str, Any]]:
     """Admin listing — ALL versions per kind (newest first) incl. HOW each
     was made: [{kind, name, description, versions: [{filename, url, size_m,
