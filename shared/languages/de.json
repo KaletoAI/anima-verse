@@ -1301,6 +1301,7 @@
     "The tier this file was generated or uploaded for.": "Die Stufe, für die diese Datei erzeugt oder hochgeladen wurde.",
     "The travel pace belongs to the world — an administrator sets it in the admin settings.": "Das Reisetempo gehört zur Welt — ein Administrator stellt es in den Admin-Einstellungen ein.",
     "The ground of this location — the area no room takes up": "Die Fläche dieses Orts — der Bereich, den kein Raum einnimmt",
+    "This is the ground of the location — the area no room takes up. Every location has one; it can be named, but not removed.": "Das ist die Fläche des Orts — der Bereich, den kein Raum einnimmt. Jeder Ort hat eine; sie kann benannt, aber nicht entfernt werden.",
     "Theme": "Theme",
     "Then click inside the room to drop the marker — figures with this animation snap to it.": "Danach in den Raum klicken, um den Marker zu setzen — Figuren mit dieser Animation rasten dort ein.",
     "Then click inside the room to move this marker there.": "Danach in den Raum klicken, um den Marker dorthin zu verschieben.",

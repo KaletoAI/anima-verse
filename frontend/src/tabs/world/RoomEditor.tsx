@@ -5,7 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { type ItemRef } from '../../lib/refs'
-import { type Location, type Room } from './worldTypes'
+import { GROUND_ROOM_ID, type Location, type Room } from './worldTypes'
 import { RoomItems } from './RoomItems'
 import { BuildingModelPanel } from './BuildingModelPanel'
 
@@ -67,14 +67,24 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
     }
   }, [location, room, onDeleted, t, toast])
 
+  // The ground is brought by the server and belongs to every location — the
+  // author names it, but never creates or deletes it (plan-grundflaeche § 3).
+  // The server puts it back anyway; offering the button would just lie.
+  const isGround = room.id === GROUND_ROOM_ID
+
   return (
     <>
       <DetailToolbar
         title={`${location.name} / ${room.name || room.id || t('room')}`}
         onSave={save}
-        onDelete={remove}
+        onDelete={isGround ? undefined : remove}
         deleteLabel={t('Remove room')}
       />
+      {isGround ? (
+        <p className="ga-form-hint" style={{ margin: '4px 8px 0' }}>
+          {t('This is the ground of the location — the area no room takes up. Every location has one; it can be named, but not removed.')}
+        </p>
+      ) : null}
       <nav className="ga-subtabs">
         {([
           { id: 'general', label: 'General' },

@@ -266,8 +266,19 @@ def _read_state_meta_row(conn, character_name: str):
         (character_name,)).fetchone()
 
 
-def _room_name_row(conn, room_id: str):
-    """Raw name row for a room id (or None)."""
+def _room_name_row(conn, room_id: str, location_id: str = ""):
+    """Raw name row for a room id (or None).
+
+    Room ids are unique per LOCATION, not globally — every location owns a
+    room with the reserved ground id — so the location has to be part of the
+    lookup. Without it the query would answer with an arbitrary location's
+    ground name. The bare-id form is the last resort for a caller that
+    genuinely has no location; no caller here needs it.
+    """
+    if location_id:
+        return conn.execute(
+            "SELECT name FROM rooms WHERE id=? AND location_id=?",
+            (room_id, location_id)).fetchone()
     return conn.execute(
         "SELECT name FROM rooms WHERE id=?", (room_id,)).fetchone()
 
@@ -1105,12 +1116,16 @@ def clear_movement_target(character_name: str) -> None:
     set_movement_target(character_name, "")
 
 
-def _room_name_for(room_id: str) -> str:
-    """Display name of a room (or the id as fallback)."""
+def _room_name_for(room_id: str, location_id: str = "") -> str:
+    """Display name of a room (or the id as fallback).
+
+    ``location_id`` is what makes the answer unambiguous — room ids repeat
+    across locations (every one of them owns the reserved ground room).
+    """
     if not room_id:
         return ""
     try:
-        row = _room_name_row(get_connection(), room_id)
+        row = _room_name_row(get_connection(), room_id, location_id)
         if row and row[0]:
             return row[0]
     except Exception:
@@ -1480,7 +1495,7 @@ def save_character_current_room(character_name: str, room_id: str,
     if room_id and room_id != old_room:
         room_name = room_id
         try:
-            row = _room_name_row(get_connection(), room_id)
+            row = _room_name_row(get_connection(), room_id, cur_loc)
             if row and row[0]:
                 room_name = row[0]
         except Exception:
@@ -1493,7 +1508,7 @@ def save_character_current_room(character_name: str, room_id: str,
         # zum alten Ort) NICHT fälschlich als Raumwechsel getrackt.
         if old_room and _room_in_location(old_room, cur_loc) \
                 and _room_in_location(room_id, cur_loc):
-            _old_rn = _room_name_for(old_room)
+            _old_rn = _room_name_for(old_room, cur_loc)
             _movement_trace(character_name, cur_loc, old_room,
                             f"{character_name} verlässt {_old_rn} (Richtung {room_name}).")
             _movement_trace(character_name, cur_loc, room_id,

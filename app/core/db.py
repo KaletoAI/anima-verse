@@ -213,6 +213,78 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("summaries partner-Migration fehlgeschlagen: %s", e)
 
+    # One-shot migration: rooms.PRIMARY KEY from (id) to (location_id, id).
+    # Room ids are unique per LOCATION (plan-grundflaeche.md § 3) — the global
+    # key let a save of location A steal the physical row of location B, which
+    # is exactly what ONE reserved ground-room id in every location runs into.
+    # SQLite cannot change a primary key in place, so the table is rebuilt.
+    # Runs inside init_schema and therefore BEFORE migrate_ground_rooms_once,
+    # which only writes ground rooms in the lifespan. Idempotent via
+    # schema_meta flag AND via the pk shape itself.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='rooms_composite_pk_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            from app.core.world_db_schema import (
+                ROOMS_COLUMNS, ROOMS_TABLE_SQL, rooms_rebuild_needed,
+            )
+            cols = ", ".join(ROOMS_COLUMNS)
+            if rooms_rebuild_needed(
+                    conn.execute("PRAGMA table_info(rooms)").fetchall()):
+                logger.info("rooms: PRIMARY KEY wird auf (location_id, id) "
+                            "umgebaut")
+                conn.execute("ALTER TABLE rooms RENAME TO rooms_old_v1")
+                conn.execute(ROOMS_TABLE_SQL)
+                conn.execute(f"INSERT INTO rooms ({cols}) "
+                             f"SELECT {cols} FROM rooms_old_v1")
+                conn.execute("DROP TABLE rooms_old_v1")
+
+            # Heal what the old key had already destroyed. The rooms table is
+            # a PROJECTION of locations.meta (that blob is what _load_world_data
+            # reads whenever it carries an id), so re-project it: every room a
+            # location's blob knows gets its row back. Rows of locations
+            # without such a blob are left untouched — those are the only ones
+            # for which the table itself is the truth.
+            import json as _json
+            healed = 0
+            for loc_id, meta_raw in conn.execute(
+                    "SELECT id, meta FROM locations").fetchall():
+                try:
+                    meta = _json.loads(meta_raw or "{}")
+                except Exception:
+                    continue
+                if not isinstance(meta, dict) or "id" not in meta:
+                    continue
+                for room in (meta.get("rooms") or []):
+                    if not isinstance(room, dict) or not room.get("id"):
+                        continue
+                    cur = conn.execute(
+                        "SELECT 1 FROM rooms WHERE location_id=? AND id=?",
+                        (loc_id, room["id"])).fetchone()
+                    if cur:
+                        continue
+                    conn.execute(
+                        f"INSERT INTO rooms ({cols}) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (room["id"], loc_id, room.get("name", "") or "",
+                         room.get("outfit_type", "") or "",
+                         room.get("decency", "") or "",
+                         room.get("style_hint", "") or "",
+                         1 if room.get("swim_allowed") else 0,
+                         room.get("activity_hint", "") or "",
+                         _json.dumps(room, ensure_ascii=False)))
+                    healed += 1
+            if healed:
+                logger.info("rooms: %d Raum-Zeile(n) aus locations.meta "
+                            "wiederhergestellt", healed)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('rooms_composite_pk_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("rooms composite-PK-Migration fehlgeschlagen: %s", e)
+
     # One-shot Backfill: known_locations-Feld auf jedem Character verpflichtend
     # machen. Frueher bedeutete "Feld fehlt" → unrestricted (Legacy-Bypass);
     # der Bypass ist raus und Read-Pfade liefern jetzt immer eine Liste.

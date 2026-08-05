@@ -280,7 +280,12 @@ def _save_world_data(data: Dict[str, Any]):
                 ).fetchall()}
                 new_room_ids = {r.get("id") for r in rooms if r.get("id")}
                 for rid in existing_room_ids - new_room_ids:
-                    conn.execute("DELETE FROM rooms WHERE id=?", (rid,))
+                    # Room ids are unique per LOCATION — without the second
+                    # condition this deletes another location's room of the
+                    # same id (every location has the ground room).
+                    conn.execute(
+                        "DELETE FROM rooms WHERE id=? AND location_id=?",
+                        (rid, lid))
 
                 for room in rooms:
                     rid = room.get("id")
@@ -291,8 +296,7 @@ def _save_world_data(data: Dict[str, Any]):
                                            decency, style_hint, swim_allowed,
                                            activity_hint)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            location_id=excluded.location_id,
+                        ON CONFLICT(location_id, id) DO UPDATE SET
                             name=excluded.name,
                             outfit_type=excluded.outfit_type,
                             meta=excluded.meta,
@@ -983,6 +987,36 @@ def ground_room_target(current_room: str, room_ids: List[str]) -> str:
     return GROUND_ROOM_ID
 
 
+def ensure_ground_room(rooms: List[Dict[str, Any]],
+                       previous: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Keep the reserved ground room in a location's room list, in place.
+
+    The server brings the ground, the author never creates or deletes it
+    (plan-grundflaeche.md § 3) — but the editor submits WHOLE room lists, so
+    a delete arrives as a list that simply lacks it. This puts it back, with
+    the name the location had for it (``previous`` = the stored room list),
+    and appends it LAST so the "entry_room defaults to the first room" rule
+    keeps pointing at a real room.
+
+    It is also what gives a location created AFTER the one-time migration its
+    ground: the migration runs once, this runs on every write.
+
+    A list that still carries the id is left untouched — including a
+    location where an author put their own room on that id, which the
+    migration reports as a collision rather than overwriting.
+    """
+    if any(str(r.get("id") or "") == GROUND_ROOM_ID
+           for r in rooms if isinstance(r, dict)):
+        return
+    name = ""
+    for r in (previous or []):
+        if isinstance(r, dict) and str(r.get("id") or "") == GROUND_ROOM_ID:
+            name = str(r.get("name") or "")
+            break
+    rooms.append({"id": GROUND_ROOM_ID, "name": name,
+                  "description": "", "activities": []})
+
+
 def migrate_ground_rooms_once() -> Dict[str, int]:
     """One-time, idempotent: give every location its ground room and move
     everything that stood in no room onto it.
@@ -1188,6 +1222,9 @@ def add_location(name: str, description: str,
                         # Neuer Raum — Flag setzen wenn Prompts vorhanden
                         if room.get("image_prompt_day") or room.get("image_prompt_night"):
                             room.setdefault("prompt_changed", True)
+                # The ground is not the author's to delete — a submitted list
+                # without it gets it back, keeping the name it had.
+                ensure_ground_room(rooms, list(old_rooms_by_id.values()))
                 location["rooms"] = rooms
                 location.pop("activities", None)
             if image_prompt_day is not None:
@@ -1226,11 +1263,15 @@ def add_location(name: str, description: str,
         for room in rooms:
             if room.get("image_prompt_day") or room.get("image_prompt_night"):
                 room.setdefault("prompt_changed", True)
+    # Every location has a ground, including one created after the one-time
+    # migration has already run.
+    new_rooms = list(rooms or [])
+    ensure_ground_room(new_rooms)
     new_location = {
         "id": _generate_location_id(),
         "name": name,
         "description": description,
-        "rooms": rooms or [],
+        "rooms": new_rooms,
         "image_prompt_day": image_prompt_day or "",
         "image_prompt_night": image_prompt_night or "",
         "image_prompt_map": image_prompt_map or "",

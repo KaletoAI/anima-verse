@@ -15,6 +15,50 @@ Konventionen:
 SCHEMA_VERSION = 7
 
 
+# Room ids are unique PER LOCATION, not globally — that is the documented
+# model (plan-grundflaeche.md § 3) and what makes ONE reserved ground-room id
+# work in every location. The table said something else for a long time
+# (`id TEXT PRIMARY KEY`), which let a save of location A steal the physical
+# row of location B. Defined as its own constant because db.py needs the very
+# same statement to rebuild existing worlds — one definition, no drift.
+ROOMS_TABLE_SQL = """CREATE TABLE IF NOT EXISTS rooms (
+        id            TEXT NOT NULL,
+        location_id   TEXT NOT NULL,
+        name          TEXT NOT NULL,
+        outfit_type   TEXT DEFAULT '',
+        decency       TEXT DEFAULT '',
+        style_hint    TEXT DEFAULT '',
+        swim_allowed  INTEGER NOT NULL DEFAULT 0,
+        activity_hint TEXT DEFAULT '',
+        meta          TEXT DEFAULT '{}',
+        PRIMARY KEY (location_id, id),
+        FOREIGN KEY(location_id) REFERENCES locations(id) ON DELETE CASCADE
+    )"""
+
+# The columns the rebuild copies over, in one place: the CREATE above and the
+# INSERT ... SELECT in db.py have to agree.
+ROOMS_COLUMNS = ("id", "location_id", "name", "outfit_type", "decency",
+                 "style_hint", "swim_allowed", "activity_hint", "meta")
+
+
+def rooms_rebuild_needed(table_info) -> bool:
+    """Whether the ``rooms`` table still carries the OLD single-column key.
+
+    ``table_info`` are the rows of ``PRAGMA table_info(rooms)``:
+    ``(cid, name, type, notnull, dflt_value, pk)``, where ``pk`` is the
+    1-based position of the column in the PRIMARY KEY and 0 means "not part
+    of it". The key has to be exactly (location_id, id); anything else is the
+    old shape. No columns at all means there is no such table yet — nothing
+    to rebuild.
+
+    Pure, so ``scripts/smoke_ground_room.py`` can check it by hand.
+    """
+    pk_cols = {str(row[1]) for row in table_info if int(row[5] or 0) > 0}
+    if not pk_cols:
+        return False
+    return pk_cols != {"location_id", "id"}
+
+
 SCHEMA_STATEMENTS = [
     # ── Kern / Welt ────────────────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS world_kv (
@@ -42,18 +86,7 @@ SCHEMA_STATEMENTS = [
         created_at       TEXT NOT NULL,
         updated_at       TEXT NOT NULL
     )""",
-    """CREATE TABLE IF NOT EXISTS rooms (
-        id            TEXT PRIMARY KEY,
-        location_id   TEXT NOT NULL,
-        name          TEXT NOT NULL,
-        outfit_type   TEXT DEFAULT '',
-        decency       TEXT DEFAULT '',
-        style_hint    TEXT DEFAULT '',
-        swim_allowed  INTEGER NOT NULL DEFAULT 0,
-        activity_hint TEXT DEFAULT '',
-        meta          TEXT DEFAULT '{}',
-        FOREIGN KEY(location_id) REFERENCES locations(id) ON DELETE CASCADE
-    )""",
+    ROOMS_TABLE_SQL,
     """CREATE TABLE IF NOT EXISTS rules (
         id       TEXT PRIMARY KEY,
         text     TEXT NOT NULL,
