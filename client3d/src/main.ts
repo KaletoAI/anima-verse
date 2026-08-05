@@ -18,6 +18,7 @@ import {
   type TierCounts, type TierSample,
 } from './game/perfstats';
 import { loadPrefs, PREFS_KEY } from './game/prefs';
+import { fogQuadRects, SHOW_ALL_KEY, unknownCells } from './game/fog';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -182,8 +183,8 @@ async function boot() {
     clear: () => status.remove(),
   });
 
-  const start = (username: string) => {
-    void startApp(username).catch((e) => {
+  const start = (username: string, role: string) => {
+    void startApp(username, role).catch((e) => {
       console.error('[boot] start failed', e);
       setBootNote({ kind: 'failed' });
     });
@@ -200,19 +201,26 @@ async function boot() {
     onLogin: async (u, p) => {
       void getAudio().unlock();
       const user = await api.login(u, p);
-      start(user.username);
+      start(user.username, user.role);
     },
     // Same gesture for the session that is already signed in. This case used
     // to have no click at all: the old boot went straight into `startApp` and
     // the audio context stayed suspended for the whole session.
     onEnter: () => {
       void getAudio().unlock();
-      start(auth.user!.username);
+      start(auth.user!.username, auth.user!.role);
     },
   });
 }
 
-async function startApp(username: string) {
+async function startApp(username: string, role: string) {
+  // --- Fog of war (Etappe 5): the ONE switch that decides which view is
+  // fetched. Only an administrator may see the unfiltered map — a stored `1`
+  // in anybody else's browser is ignored here (the server would answer 403,
+  // and a client that asked would break its own boot for a setting it is not
+  // allowed to have). It is read once: the menu applies a change by reloading.
+  const isAdmin = role === 'admin';
+  const showAll = isAdmin && localStorage.getItem(SHOW_ALL_KEY) === '1';
   const engine = new Engine(app);
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
@@ -223,7 +231,7 @@ async function startApp(username: string) {
   const figuresReady = figures.load();
   const [allLocs, firstMap, surfaces] = await retryBoot('world data', () => Promise.all([
     api.getLocations(),
-    api.getWorldMap(),
+    api.getWorldMap(showAll),
     api.getSurfaceTextures(),
   ]), titleSink);
   reportBootStage('world');
@@ -260,31 +268,52 @@ async function startApp(username: string) {
   };
   gameActions.backToTitle = () => void backToTitle();
   const hud = createHud({ username, avatar: firstMap.avatar, onLogout: backToTitle });
-  mountHud({ username, avatar: firstMap.avatar });   // React HUD island (E2-T5)
+  mountHud({ username, avatar: firstMap.avatar, role });   // React HUD island (E2-T5)
   npcs.setAvatar(firstMap.avatar);
 
   // Worldmap ist autoritativ für Grid/Passable/Template; /world/locations liefert
   // Räume, Beschreibung, entry_room. Templates (Vorlagen für Klone) nicht rendern.
   const detailById = new Map(allLocs.map((l) => [l.id, l]));
-  const templateIds = new Set(
-    firstMap.locations.map((l) => l.template_location_id).filter(Boolean) as string[]
-  );
-  const placeable: WorldLocation[] = firstMap.locations
-    .filter((l) => l.grid_x != null && l.grid_y != null && !templateIds.has(l.id))
-    .map((l) => {
-      const detail = detailById.get(l.id) ?? detailById.get(l.template_location_id || '');
-      return {
-        ...detail,
-        ...l,
-        rooms: detail?.rooms ?? [],
-        description: detail?.description ?? '',
-        entry_room: detail?.entry_room,
-      } as WorldLocation;
-    });
+  /**
+   * The placeable locations of a worldmap snapshot. ONE function, because
+   * since the fog of war (Etappe 5) locations arrive not only at boot: a place
+   * the avatar discovers appears in a later poll and has to become a tile the
+   * very same way — same template filter, same merge of map entry and detail.
+   */
+  function placeableOf(map: WorldMap, details: Map<string, WorldLocation>): WorldLocation[] {
+    const templateIds = new Set(
+      map.locations.map((l) => l.template_location_id).filter(Boolean) as string[]
+    );
+    return map.locations
+      .filter((l) => l.grid_x != null && l.grid_y != null && !templateIds.has(l.id))
+      .map((l) => {
+        const detail = details.get(l.id) ?? details.get(l.template_location_id || '');
+        return {
+          ...detail,
+          ...l,
+          rooms: detail?.rooms ?? [],
+          description: detail?.description ?? '',
+          entry_room: detail?.entry_room,
+        } as WorldLocation;
+      });
+  }
+  /** Every location that HAS a tile. Grows while the fog lifts
+   *  (`revealLocations` below) — the derived structures are rebuilt from this
+   *  one list. */
+  const placeable: WorldLocation[] = placeableOf(firstMap, detailById);
 
   // Boden + Kacheln
+  //
+  // The frame comes from `grid_bounds` (§ A12) and NOT from the delivered
+  // locations: those are only what the avatar knows, so a map centred on them
+  // would jump sideways with every place discovered. The bounds are computed
+  // over ALL placed locations and stay still. Fallback (no location placed at
+  // all, `null`): the old min/max over what we have.
   const xs = placeable.map((l) => l.grid_x!), ys = placeable.map((l) => l.grid_y!);
-  const center = gridToWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
+  const center = firstMap.grid_bounds
+    ? gridToWorld((firstMap.grid_bounds.min_x + firstMap.grid_bounds.max_x) / 2,
+      (firstMap.grid_bounds.min_y + firstMap.grid_bounds.max_y) / 2)
+    : gridToWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
   const groundTex = grassTexture();
   groundTex.repeat.set(60, 60);
   const ground = new THREE.Mesh(
@@ -337,7 +366,12 @@ async function startApp(username: string) {
 
   // Nachbarschafts-Grid der Oberflächen-Arten (für Zusammenstellungen
   // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
-  setTerrainGrid(placeable.map((l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) })));
+  /** Publish the surface-kind neighbourhood of every known location. Called at
+   *  boot and again whenever a discovered place joins the map — a new cell is
+   *  a new neighbour for the coast blends around it. */
+  const publishTerrainGrid = () => setTerrainGrid(
+    placeable.map((l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) })));
+  publishTerrainGrid();
 
   // Szenen-Rezept (Vertrag Teil B): der Server liefert die komplette Szene
   // einer Location als fertige Primitive + Platzierungs-Specs. Wo es eins
@@ -569,14 +603,75 @@ async function startApp(username: string) {
     });
   }
 
-  for (const loc of placeable) {
+  /** Build a location's tile and hang it in the scene. Boot walks every
+   *  placeable location through here, the reveal path (Etappe 5) the newly
+   *  discovered ones — the pickables are refreshed by the CALLER, once per
+   *  batch. */
+  function addTile(loc: WorldLocation) {
     const tile = buildTile(loc);
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
     if (scene) mountWithDoors(tile, scene);
   }
+  for (const loc of placeable) addTile(loc);
   engine.setPickables([...tiles.values()].map((t) => t.group));
+
+  // --- The veil over what the avatar does not know (Etappe 5) --------------
+  //
+  // The server decides WHAT is known (§ A12) and sends only that; here the
+  // rest of the frame is covered. WHICH cells that are is pure maths in
+  // `game/fog.ts` (hand-checked in scripts/smoke_walk_math.mjs) — this is only
+  // the mesh side: one quad per row run, all of them in ONE group that is
+  // thrown away and built again whenever the set of known locations moves.
+  // Rebuilding wholesale is what keeps it honest: there is no incremental
+  // state that could end up showing a veil over a place one already stands in.
+  //
+  // It is an OVERLAY like the door thresholds: unlit (a veil that took the
+  // sun would read as a surface), never written into the depth buffer, and
+  // unpickable — a click belongs to the world underneath.
+  const FOG_MAT = new THREE.MeshBasicMaterial({
+    color: 0x080b12, transparent: true, opacity: 0.82, depthWrite: false,
+  });
+  /** A hand's breadth above the world's grass plane: unknown cells carry no
+   *  tile, so that plane is the only thing under the veil. */
+  const FOG_Y = ground.position.y + 0.05;
+  const fogGroup = new THREE.Group();
+  engine.scene.add(fogGroup);
+  /** The frame and the switch of the CURRENT payload — both move only with a
+   *  poll, and `fogged: false` (the admin's unfiltered view) means there is no
+   *  veil at all. */
+  let fogBounds = firstMap.grid_bounds;
+  let fogged = firstMap.fogged;
+  /** What the veil currently standing was built from. The poll runs every
+   *  three seconds and nearly always finds the same three inputs — rebuilding
+   *  regardless would throw away and re-allocate a dozen geometries per poll
+   *  for a picture that does not change. */
+  let fogKey = ' ';
+  function rebuildFog() {
+    const frame = fogBounds
+      ? `${fogBounds.min_x},${fogBounds.min_y},${fogBounds.max_x},${fogBounds.max_y}` : '';
+    const key = `${fogged}|${frame}|${[...tiles.keys()].sort().join(' ')}`;
+    if (key === fogKey) return;
+    fogKey = key;
+    for (const child of fogGroup.children) {
+      (child as THREE.Mesh).geometry.dispose();
+    }
+    fogGroup.clear();
+    if (!fogged) return;
+    const known = [...tiles.values()].map((t) => ({ x: t.loc.grid_x!, y: t.loc.grid_y! }));
+    for (const r of fogQuadRects(unknownCells(fogBounds, known))) {
+      const quad = new THREE.Mesh(
+        new THREE.PlaneGeometry(r.w * CELL, r.h * CELL).rotateX(-Math.PI / 2), FOG_MAT);
+      // A rectangle covers the cells x … x+w-1, and a cell's centre is its grid
+      // position: the middle therefore sits half a cell run further along.
+      quad.position.set((r.x + (r.w - 1) / 2) * CELL, FOG_Y, (r.y + (r.h - 1) / 2) * CELL);
+      quad.renderOrder = 1;   // under the thresholds (3) and the pins
+      quad.raycast = () => {};
+      fogGroup.add(quad);
+    }
+  }
+  rebuildFog();
   // Last stage: the map stands and can be clicked. The title screen fades on
   // this one — the scene models behind the tiles keep streaming in afterwards
   // (`mountWithDoors` is deliberately not awaited), and holding the screen
@@ -703,16 +798,25 @@ async function startApp(username: string) {
   setInterval(pollLocations, 10_000);
 
   // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
-  const pathGrid = new PathGrid(
-    placeable.map((l) => ({
-      x: l.grid_x!, y: l.grid_y!,
-      passable: !!(l.passable || l.template_location_id),
-    }))
-  );
-  npcs.setPathGrid(pathGrid);
-  // Debug-Hooks: laufendes Grid + Klasse, um Wegfindung zu vermessen
-  (window as unknown as { __pathGrid: PathGrid }).__pathGrid = pathGrid;
-  (window as unknown as { __PathGrid: typeof PathGrid }).__PathGrid = PathGrid;
+  //
+  // The grid is IMMUTABLE by design (it caches its answers, see pathfind.ts),
+  // so a map that grew gets a NEW one — the reason this binding is a `let`:
+  // a discovered location adds a cell, and every user of the grid has to be
+  // looking at the same one.
+  let pathGrid = publishPathGrid();
+  function publishPathGrid(): PathGrid {
+    const grid = new PathGrid(
+      placeable.map((l) => ({
+        x: l.grid_x!, y: l.grid_y!,
+        passable: !!(l.passable || l.template_location_id),
+      }))
+    );
+    npcs.setPathGrid(grid);
+    // Debug-Hooks: laufendes Grid + Klasse, um Wegfindung zu vermessen
+    (window as unknown as { __pathGrid: PathGrid }).__pathGrid = grid;
+    (window as unknown as { __PathGrid: typeof PathGrid }).__PathGrid = PathGrid;
+    return grid;
+  }
   engine.target.copy(center);
   engine.dist = engine.targetDist = 70;
 
@@ -923,16 +1027,31 @@ async function startApp(username: string) {
   }
 
   async function pollWorldMap() {
+    let map: WorldMap;
     try {
-      lastMap = await api.getWorldMap();
+      map = await api.getWorldMap(showAll);
+      lastMap = map;
       mapStamp += 1;
       hud.setOnline(true);
-      takeRoomsFrom(lastMap);
-      updatePins(lastMap);
-      refreshSelection(lastMap);
-      reconcileAvatarCell(lastMap);   // server moved the avatar? (E3-T3)
+      takeRoomsFrom(map);
+      updatePins(map);
+      refreshSelection(map);
+      reconcileAvatarCell(map);   // server moved the avatar? (E3-T3)
     } catch {
       hud.setOnline(false);
+      return;
+    }
+    // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
+    // just discovered is simply in the payload from one poll to the next. The
+    // frame and the switch travel with it — the frame is computed unfiltered
+    // and does not move, but a world can gain a location at any time.
+    fogBounds = map.grid_bounds;
+    fogged = map.fogged;
+    rebuildFog();   // a no-op unless the frame, the switch or the known set moved
+    if (map.locations.some((l) => l.grid_x != null && l.grid_y != null && !tiles.has(l.id))) {
+      // Deliberately not awaited: the reveal fetches and mounts, and the poll
+      // must not be held up by it (it guards itself against a second run).
+      void revealLocations(map);
     }
   }
   takeRoomsFrom(firstMap);
@@ -1210,6 +1329,82 @@ async function startApp(username: string) {
   function tileAtCell(c: Cell): Tile | null {
     const id = locIdAtCell.get(`${c.gx},${c.gy}`);
     return id ? tiles.get(id) ?? null : null;
+  }
+
+  /**
+   * A place the avatar has just discovered joins the map (Etappe 5).
+   *
+   * The fog lifts DURING play — the server starts delivering a location the
+   * moment it becomes known — so this walks a newcomer through everything the
+   * boot path does for a location, in the same order and out of the same
+   * functions: the surface neighbourhood first (the coast blends of the tiles
+   * around it read from it), then the tile itself, then the structures that
+   * answer questions about cells (pathfinding, passability, which location is
+   * where) and finally the veil, which is one cell smaller now.
+   *
+   * The rooms come from a FRESH `/world/locations`: the boot snapshot was
+   * taken while this place was still fogged, and a location created after boot
+   * would not be in it at all. That endpoint is unfiltered, one call covers
+   * however many appeared at once, and a failed call simply leaves the work to
+   * the next poll — `tiles` is what says "already built", so nothing is done
+   * twice.
+   *
+   * ONE DIRECTION ONLY. In play a place once known stays known, so nothing has
+   * to be taken away again. The only thing that can shrink the map is the
+   * administrator's "show all" switch, and that one is applied by reloading
+   * the view (see the game menu) rather than by unbuilding half a world.
+   */
+  let revealBusy = false;
+  async function revealLocations(map: WorldMap): Promise<void> {
+    // One reveal at a time: the run awaits twice, and two overlapping runs
+    // would both pass the `tiles.has` filter and mount the same location
+    // twice. Whatever a skipped run would have found is found by the next
+    // poll — three seconds later, and the payload says it again.
+    if (revealBusy) return;
+    revealBusy = true;
+    try {
+      await revealBatch(map);
+    } finally {
+      revealBusy = false;
+    }
+  }
+  async function revealBatch(map: WorldMap): Promise<void> {
+    let details: Map<string, WorldLocation>;
+    try {
+      details = new Map((await api.getLocations()).map((l) => [l.id, l]));
+    } catch {
+      return;   // server briefly away — the next poll tries again
+    }
+    for (const [id, loc] of details) detailById.set(id, loc);
+    const fresh = placeableOf(map, details).filter((l) => !tiles.has(l.id));
+    if (!fresh.length) return;
+    placeable.push(...fresh);
+    publishTerrainGrid();
+    // Neighbours FIRST, and only then the newcomers: a tile bakes its coast
+    // blend from the grid at build time (the ordering finding of 2026-07-29),
+    // so the four neighbours of a new cell have to be rebuilt against the
+    // grid that already knows about it.
+    const revealedCells = new Set(fresh.map((l) => `${l.grid_x},${l.grid_y}`));
+    for (const tile of [...tiles.values()]) {
+      const near = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+      if (near.some(([dx, dy]) => revealedCells.has(`${tile.loc.grid_x! + dx},${tile.loc.grid_y! + dy}`))) {
+        rebuildTile(tile, tile.loc);
+      }
+    }
+    // The scene recipes before the tiles, exactly as at boot: a tile built
+    // without its payload would stand as the procedural shell and only swap
+    // once the sweep noticed it.
+    await scenes.prime(fresh.map((l) => l.id));
+    for (const loc of fresh) {
+      addTile(loc);
+      locSig.set(loc.id, sigOf(details.get(loc.id) ?? loc));
+      const cell = `${loc.grid_x},${loc.grid_y}`;
+      if (loc.passable || loc.template_location_id) passableCells.add(cell);
+      locIdAtCell.set(cell, loc.id);
+    }
+    engine.setPickables([...tiles.values()].map((t) => t.group));
+    pathGrid = publishPathGrid();
+    rebuildFog();
   }
 
   // --- Soundtrack: music by daylight, ambience by ground (E4-T5) ------------

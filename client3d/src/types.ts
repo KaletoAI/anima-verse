@@ -142,12 +142,28 @@ export interface MapEvent {
   text: string;
 }
 
+/** Extent of the grid over ALL placed locations (contract § A12) — computed
+ *  BEFORE the fog filter, so the map frame does not move while one discovers.
+ *  Inclusive on both ends; `null` when no location is placed. */
+export interface GridBounds {
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+}
+
 export interface WorldMap {
   avatar: string;
   current_location_id: string;
+  /** Only what the avatar knows — unless `fogged` is false (§ A12). */
   locations: MapLocation[];
   characters: MapCharacter[];
   events_by_location: Record<string, MapEvent[]>;
+  /** § A12; `null` when nothing is placed */
+  grid_bounds: GridBounds | null;
+  /** `true` = this is the filtered view, so unknown cells get the veil.
+   *  `false` = the admin's unfiltered view (`?all=1`), no fog at all. */
+  fogged: boolean;
 }
 
 export interface AtLocationChar {

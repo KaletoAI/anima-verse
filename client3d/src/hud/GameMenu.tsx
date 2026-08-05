@@ -33,6 +33,14 @@ export interface GameMenuProps {
    *  object and its storage key are the AUDIO settings, this is a view one. */
   perfOn: boolean;
   onPerfChange: (on: boolean) => void;
+  /** the signed-in account may see the unfiltered map (Etappe 5) — the entry
+   *  below exists only for one, and the server refuses the view for anybody
+   *  else anyway */
+  isAdmin: boolean;
+  /** the fog of war is currently switched off for this browser */
+  showAll: boolean;
+  /** store the switch and apply it — `Hud.tsx` reloads the view */
+  onShowAllChange: (on: boolean) => void;
   /** sign out and go back to the title screen (main.ts owns the flow) */
   onBackToTitle: () => void;
 }
@@ -79,7 +87,9 @@ function Choice<T extends string | boolean>({ label, value, options, onPick }: {
   );
 }
 
-export function GameMenu({ prefs, onChange, perfOn, onPerfChange, onBackToTitle }: GameMenuProps) {
+export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
+                           isAdmin, showAll, onShowAllChange,
+                           onBackToTitle }: GameMenuProps) {
   const { t } = useI18n();
 
   const volumes: Array<{ field: VolumeField; label: string }> = [
@@ -125,6 +135,21 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange, onBackToTitle 
           {t('Frame rate, draw calls and how many models stand on the full or the low resolution.')}
         </p>
       </section>
+
+      {/* The one entry that is not a player setting: it lifts the fog of war
+          for an administrator, which is a different VIEW of the world and not
+          a matter of taste. Hence its own section, and hence the note about
+          the reload — the whole map is built from that view at start-up. */}
+      {isAdmin && (
+        <section className="hud-menu-section">
+          <h3 className="hud-menu-head">{t('Administration')}</h3>
+          <Choice label={t('Show all locations (admin)')} value={showAll} options={onOff}
+            onPick={onShowAllChange} />
+          <p className="hud-menu-hint">
+            {t('Shows the whole map, including places your character has not discovered yet. Reloads the view.')}
+          </p>
+        </section>
+      )}
 
       <section className="hud-menu-section">
         <h3 className="hud-menu-head">{t('Session')}</h3>

@@ -37,6 +37,7 @@ import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
 import { loadPrefs, savePrefs, PREFS_KEY, type Prefs } from '../game/prefs';
+import { SHOW_ALL_KEY } from '../game/fog';
 import {
   afterOwnLine, createVoiceover, newSceneLines, roomChanged, sceneStampOf,
   speakableLines, type SceneSnapshot, type Voiceover,
@@ -100,7 +101,9 @@ const PERF_KEY = 'av3d.perf.v1';
  *  or one of its picker modals open) — look again after this. */
 const CHAT_BUSY_RECHECK_MS = 5000;
 
-export function Hud({ avatar, username }: { avatar: string; username: string }) {
+export function Hud({ avatar, username, role }: {
+  avatar: string; username: string; role: string;
+}) {
   const { t } = useI18n();
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
@@ -214,6 +217,25 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
     setPerfEnabled(perfOn);
     localStorage.setItem(PERF_KEY, perfOn ? '1' : '0');
   }, [perfOn]);
+
+  /**
+   * "Show all locations" (Etappe 5) — the administrator's way past the fog of
+   * war. A LOCAL switch like the two above, but it decides which VIEW the
+   * client fetches (`/play/worldmap?all=1`), and that choice is made once at
+   * boot: every tile, the pathfinding grid and the veil are built from it. So
+   * it is applied by reloading rather than by unbuilding half the world at
+   * runtime — the menu says as much next to the switch.
+   *
+   * Only offered to role `admin`, and `main.ts` reads the stored value under
+   * the same condition: a value left behind in somebody else's browser (a
+   * demoted account, a shared machine) must not make the client ask for a view
+   * the server answers with 403.
+   */
+  const showAll = localStorage.getItem(SHOW_ALL_KEY) === '1';
+  const setShowAll = useCallback((on: boolean) => {
+    localStorage.setItem(SHOW_ALL_KEY, on ? '1' : '0');
+    location.reload();
+  }, []);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
     'play-scene', () => apiGet<SceneData>('/play/scene'), { intervalMs: 5000 });
@@ -501,6 +523,7 @@ export function Hud({ avatar, username }: { avatar: string; username: string }) 
                 <ErrorBoundary inline label="Menu">
                   <GameMenu prefs={prefs} onChange={setPrefs}
                     perfOn={perfOn} onPerfChange={setPerfOn}
+                    isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
                     onBackToTitle={() => gameActions.backToTitle?.()} />
                 </ErrorBoundary>
               </div>

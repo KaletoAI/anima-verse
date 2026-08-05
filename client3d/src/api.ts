@@ -40,8 +40,11 @@ export async function getLocations(): Promise<WorldLocation[]> {
   return data.locations;
 }
 
-export async function getWorldMap(): Promise<WorldMap> {
-  return json(await fetch('/play/worldmap'));
+/** The player's map. `all` asks for the UNFILTERED view (contract § A12) — it
+ *  is the admin switch of the game menu and answers 403 for anybody else, so
+ *  callers must only pass it for role `admin`. */
+export async function getWorldMap(all = false): Promise<WorldMap> {
+  return json(await fetch(all ? '/play/worldmap?all=1' : '/play/worldmap'));
 }
 
 /** Error of a game call that carries the server's own reason. `message` is the
