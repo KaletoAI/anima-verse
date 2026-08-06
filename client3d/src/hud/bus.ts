@@ -47,6 +47,12 @@ export interface HudGameState {
    *  at render/interaction time — it is per avatar and per moment, so it never
    *  goes into a cached scene payload (§ 3 decision 2). */
   lockedRooms: Record<string, string>;
+  /** The location `lockedRooms` was answered for. Room ids are NOT unique
+   *  across locations — a clone inherits its template's rooms with their ids —
+   *  so a lock may only ever be bound to the rooms of THIS location. Published
+   *  together with the map, never derived from another poll, or the two could
+   *  disagree for a moment and paint a lock onto a stranger's door. */
+  lockedLoc: string;
   /** Neighbour LOCATIONS the step would be refused for, id -> reason (the
    *  `neighbors` block of the same poll). Only the four cells around the
    *  avatar can appear here — which is exactly the range in which a locked way
@@ -119,7 +125,7 @@ export interface HudUiActions {
 const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '',
-  lockedRooms: {}, lockedLocations: {},
+  lockedRooms: {}, lockedLocations: {}, lockedLoc: '',
   elevator: null, elevatorOpen: false, enterOffer: null,
 };
 const listeners = new Set<() => void>();

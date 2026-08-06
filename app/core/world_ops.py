@@ -20,6 +20,7 @@ if TYPE_CHECKING:  # type-only — the composer is imported where it is used
 logger = get_logger("world")
 
 from app.models.world import (
+    GROUND_ROOM_ID,
     list_locations, add_location, location_visible_to_character,
     visibility_context,
     rename_location, resolve_location, get_location_by_id,
@@ -1326,11 +1327,22 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
 
 def _sanitize_rooms_layout(rooms: Any) -> Any:
     """Apply the layout sanitizer to every room dict in place (rooms pass
-    through add_location verbatim otherwise). Invalid layouts are dropped."""
+    through add_location verbatim otherwise). Invalid layouts are dropped.
+
+    THE GROUND ROOM NEVER CARRIES A LAYOUT. It is the location's open surface,
+    and its geometry comes from the scene recipe, not from a floor plan — a
+    layout on it would put ``GROUND_ROOM_ID`` into the recipe's rooms and give
+    it walls and doorways, which the contract says it has none of. The
+    floor-plan editor already refuses to draw one; this is the same refusal for
+    a hand-made API call.
+    """
     if not isinstance(rooms, list):
         return rooms
     for room in rooms:
         if not isinstance(room, dict) or "layout" not in room:
+            continue
+        if room.get("id") == GROUND_ROOM_ID:
+            room.pop("layout", None)
             continue
         lay = _sanitize_room_layout(room.get("layout"))
         if lay:

@@ -12,7 +12,7 @@ import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState 
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
-import { doorwayLock, isLocked, lockReason, unlockedRooms } from './game/locks';
+import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
 import { getAudio } from './game/audio';
 import {
   newFpsMeter, pushFrame, tierCounts, visibleVertices,
@@ -659,10 +659,14 @@ async function startApp(username: string, role: string) {
    *  visible from the cell next door. Same overlay rules as the door marks —
    *  own bookkeeping, own group in `engine.scene`, nothing in `tile.group`. */
   const boundaryMarks = new Map<string, THREE.Group>();
-  /** What the locked look was last painted for: the published lock map and the
-   *  avatar's room. Starts as "nothing", so the first frame paints once. */
-  let lockPainted: { locks: Record<string, string> | null; room: string } = {
-    locks: null, room: '',
+  /** What the locked look was last painted for: the published lock map, the
+   *  location it was answered for and the avatar's room. Starts as "nothing",
+   *  so the first frame paints once. The LOCATION belongs in here — walking
+   *  from one clone into another can leave both the map and the room id
+   *  unchanged (clones share their template's room ids), and without it the
+   *  place left behind would keep the red doors. */
+  let lockPainted: { locks: Record<string, string> | null; loc: string; room: string } = {
+    locks: null, loc: '', room: '',
   };
 
   /** Both threshold overlays of a tile — they are built together and a tile
@@ -752,7 +756,7 @@ async function startApp(username: string, role: string) {
     // Fresh markers wear the open look; the next frame paints the locks (see
     // the frame hook). Repainting HERE would run during boot, where the
     // avatar's name and room are not in scope yet.
-    lockPainted = { locks: null, room: '' };
+    lockPainted = { locks: null, loc: '', room: '' };
   }
 
   /**
@@ -765,17 +769,19 @@ async function startApp(username: string, role: string) {
    * room the avatar is standing in is left out of that judgement, or every door
    * of a room one may not re-enter would read as a cage.
    *
-   * The map holds the rooms of the avatar's CURRENT location and matching is by
-   * id alone — no location filter. Room ids are 8-hex uuid slices
-   * (`_generate_room_id`), so another place's room does not answer to one of
-   * them, and the ONE id that repeats across locations (`__ground__`) never
-   * appears in a doorway.
+   * ONLY the avatar's own location is painted locked. The lock state is per
+   * avatar and answered for exactly one place (`lockedLoc`, published with the
+   * map), and room ids do NOT identify a room across the map: a clone inherits
+   * its template's rooms WITH their ids, so binding by id alone would paint the
+   * same doorway red in every other clone of that template — a lie about
+   * places the avatar is not in. Every other tile is painted open.
    */
   function applyDoorLocks(locId: string) {
     const root = doorMarks.get(locId);
     if (!root) return;
     const tile = tiles.get(locId);
-    const locks = getGameState().lockedRooms;
+    const state = getGameState();
+    const locks = locId === state.lockedLoc ? state.lockedRooms : NO_LOCKS;
     const here = tile ? avatarRoomId(tile) ?? '' : '';
     for (const storey of root.children) {
       for (const mesh of storey.children) {
@@ -3318,14 +3324,19 @@ async function startApp(username: string, role: string) {
     }
 
     // The LOCKED look of a threshold is bound here, not at build time: it
-    // follows the avatar's `/play/scene` poll and the room the avatar stands
-    // in, and both change long after a tile was built (task C2). Repainted
-    // only when one of the two actually changed — Hud.tsx publishes a new map
-    // object only on a real change, so identity is the whole comparison.
+    // follows the avatar's `/play/scene` poll — its lock map, the location that
+    // answer belongs to — and the room the avatar stands in, all of which
+    // change long after a tile was built (task C2). Repainted only when one of
+    // the three actually changed; Hud.tsx publishes a new map object only on a
+    // real change, so identity is the whole comparison for the map.
     const lockState = getGameState();
     const roomNow = roomOf.get(avatarName) ?? '';
-    if (lockState.lockedRooms !== lockPainted.locks || roomNow !== lockPainted.room) {
-      lockPainted = { locks: lockState.lockedRooms, room: roomNow };
+    if (lockState.lockedRooms !== lockPainted.locks
+      || lockState.lockedLoc !== lockPainted.loc
+      || roomNow !== lockPainted.room) {
+      lockPainted = { locks: lockState.lockedRooms, loc: lockState.lockedLoc, room: roomNow };
+      // Every tile, not just the avatar's: `applyDoorLocks` paints a foreign
+      // location OPEN, and the place just left has to lose its red doors.
       for (const locId of doorMarks.keys()) applyDoorLocks(locId);
     }
     // Boundary thresholds exist ONLY to show a barred way in: a location the
