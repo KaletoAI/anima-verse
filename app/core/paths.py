@@ -117,11 +117,6 @@ def get_expression_presets_dir() -> Path:
     return get_shared_dir() / "templates" / "expression"
 
 
-def get_pose_presets_dir() -> Path:
-    """Pose-Presets fuer Bild-Generierung."""
-    return get_shared_dir() / "templates" / "pose"
-
-
 def get_schemas_dir() -> Path:
     """World-dev schemas are shared across all worlds."""
     return get_shared_dir() / "world_dev_schemas"

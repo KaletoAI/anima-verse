@@ -317,7 +317,7 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     # NOTE prompt layering: use-case styles carry camera/quality/framing/
     # lighting/background ONLY. Pose comes exclusively from the pose layer
-    # (pose presets / default_pose_prompt / tpose_prompt), expression from
+    # (pose catalog / default_pose_prompt / tpose_prompt), expression from
     # the expression layer — never from a style. Keep styles pose-free.
     "outfit": {
         "keywords": {
