@@ -56,6 +56,12 @@ export interface EntryTile {
    *  since the strictness decision of 2026-08-04 only an authored opening is
    *  an entrance (the server refuses the step as well). */
   openings: { x: number; z: number; edge: Edge }[];
+  /** the server refuses the step into this location for THIS avatar
+   *  (`neighbors[dir].enterable === false`, task C1). It stays a candidate:
+   *  the offer must not be silent about a locked place one is standing at —
+   *  it only loses to every open one. The REASON is not needed here, the
+   *  caller looks it up by id when it has to show it. */
+  locked?: boolean;
 }
 
 export interface EntryOffer { locId: string; cell: Cell; dist: number }
@@ -71,6 +77,11 @@ export interface EntryOffer { locId: string; cell: Cell; dist: number }
  *   offering it would promise something it does not grant.
  * - A tile offers entry within `radius` of such an opening; a tile with no
  *   opening on the crossed edge offers nothing.
+ * - An OPEN tile always beats a locked one, however much farther away it is
+ *   (task C2): standing between a locked gate and an open one, the offer the
+ *   player can act on is the one worth showing. Among equals the nearest wins,
+ *   so a lone locked tile is still the answer — the caller turns it into the
+ *   server's refusal instead of a "press F" that leads nowhere.
  */
 export function entryOfferNear(
   pos: { x: number; z: number },
@@ -79,6 +90,7 @@ export function entryOfferNear(
   radius: number = ENTER_RADIUS,
 ): EntryOffer | null {
   let best: EntryOffer | null = null;
+  let bestLocked = true;
   for (const t of tiles) {
     const entryEdge = entryEdgeBetween(cell, t.cell);
     if (!entryEdge) continue;   // not 4-adjacent: no single step gets there
@@ -88,8 +100,13 @@ export function entryOfferNear(
       const d = Math.hypot(o.x - pos.x, o.z - pos.z);
       if (d <= radius && (dist === null || d < dist)) dist = d;
     }
-    if (dist !== null && (!best || dist < best.dist)) {
+    if (dist === null) continue;
+    const locked = t.locked === true;
+    const better = !best || (bestLocked && !locked)
+      || (bestLocked === locked && dist < best.dist);
+    if (better) {
       best = { locId: t.locId, cell: t.cell, dist };
+      bestLocked = locked;
     }
   }
   return best;

@@ -33,13 +33,30 @@ export type { SceneLine }
 /** One room of the current location as `/play/scene` lists it. `is_ground`
  *  marks the location's ground — a room like any other, entered by its id;
  *  the flag only exists so a client can label it without knowing the
- *  reserved id. */
-export interface RoomInfo { id: string; name: string; is_entry: boolean; is_ground: boolean }
+ *  reserved id.
+ *
+ *  `enterable` + `reason` are the server's verdict for THIS avatar, from the
+ *  same `check_access` `/play/enter-room` refuses with (task C1): a client may
+ *  not offer a room the route would turn away. `reason` is the rule's own
+ *  sentence, already localized — it is shown as it is, never translated again,
+ *  and it is empty exactly when the room is enterable. */
+export interface RoomInfo {
+  id: string; name: string; is_entry: boolean; is_ground: boolean
+  enterable: boolean; reason: string
+}
 /** A neighbour location of the avatar's cell. `may_leave` is the server's own
  *  departure decision FOR THIS DIRECTION (`boundary_entry.may_leave`): an
  *  authored pass-through opens exactly its own edge, so the answer differs
- *  from arrow to arrow and no client recomputes it. */
-export interface Neighbor { id: string; name: string; may_leave: boolean }
+ *  from arrow to arrow and no client recomputes it.
+ *
+ *  `enterable` is the verdict on the whole STEP (entry edge, leave rules,
+ *  `accessible_when`, the rule on the arrival room) with `reason` as its
+ *  localized sentence — `may_leave` stays pure geometry beside it, so an arrow
+ *  at a wall and a locked way are two different pictures. */
+export interface Neighbor {
+  id: string; name: string; may_leave: boolean
+  enterable: boolean; reason: string
+}
 export type Dir = 'north' | 'south' | 'east' | 'west'
 
 export interface SceneData {

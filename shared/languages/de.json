@@ -664,6 +664,7 @@
     "LLM-composed": "LLM-komponiert",
     "LLM-composed (cached)": "LLM-komponiert (aus dem Cache)",
     "LLM-generated entry. It was created when this activity first showed up.": "Vom LLM erzeugter Eintrag — angelegt, als diese Aktivität zum ersten Mal auftrat.",
+    "locked": "verschlossen",
     "Load older message": "Ältere Nachricht laden",
     "Loading current status…": "Lade aktuellen Status…",
     "Loading daily schedule…": "Lade Tagesablauf…",

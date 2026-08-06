@@ -12,12 +12,25 @@
  * server's own `may_leave` for its direction (`boundary_entry.may_leave`),
  * because an authored pass-through opens exactly its own edge — the pad used
  * to hold a copy of an older rule and greyed out steps the server allows.
+ *
+ * Locks are the server's word too (task C2): `enterable === false` with the
+ * rule's own `reason` marks a room chip or a direction as barred. The reason is
+ * LOCALIZED BY THE SERVER and shown as it is — running it through `t()` would
+ * look up a sentence no translation file has. Two different pictures on
+ * purpose: `may_leave` is geometry ("not through this wall"), `enterable` is
+ * the rule ("you may not go there, and here is why").
  */
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 
-interface RoomInfo { id: string; name: string; is_entry: boolean; is_ground: boolean }
-interface Neighbor { id: string; name: string; may_leave: boolean }
+interface RoomInfo {
+  id: string; name: string; is_entry: boolean; is_ground: boolean
+  enterable: boolean; reason: string
+}
+interface Neighbor {
+  id: string; name: string; may_leave: boolean
+  enterable: boolean; reason: string
+}
 type Dir = 'north' | 'south' | 'east' | 'west'
 type Neighbors = Partial<Record<Dir, Neighbor | null>>
 
@@ -68,25 +81,35 @@ export function MovePad({
   const cell = (dir: Dir, glyph: string) => {
     const dest = neighbors[dir] || null
     const barred = !!dest && dest.may_leave === false
-    const disabled = !dest || busy || barred
+    // Locked = the server would refuse the step and says why. `barred` keeps
+    // its own picture (the geometry has no sentence to show), so a direction
+    // that is both shows the wall first.
+    const locked = !!dest && !barred && dest.enterable === false
+    const disabled = !dest || busy || barred || locked
     return (
       <button onClick={() => onStep(dir)} disabled={disabled}
         title={dest
           ? (barred
             ? `${dest.name} — ${t('not from this room')}`
-            : dest.name)
+            : locked
+              ? `${dest.name} — ${dest.reason || t('locked')}`
+              : dest.name)
           : ''}
         style={{
           width: '100%', height: '100%', padding: '2px 3px', borderRadius: 6,
           boxSizing: 'border-box', overflow: 'hidden',
           cursor: disabled ? 'default' : 'pointer',
-          border: '1px solid var(--border, #30363d)',
+          // A locked way gets the colour of a refusal, not just less ink —
+          // the same distinction the 3D client draws with its red threshold.
+          border: locked
+            ? '1px solid var(--danger, #da3633)'
+            : '1px solid var(--border, #30363d)',
           background: disabled ? 'transparent' : 'var(--bg-hover, #1f2937)',
-          color: 'inherit', opacity: dest ? (barred ? 0.4 : 1) : 0.25,
+          color: 'inherit', opacity: dest ? (barred || locked ? 0.4 : 1) : 0.25,
           display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', lineHeight: 1.1,
         }}>
-        <span style={{ fontSize: '1.1em' }}>{glyph}</span>
+        <span style={{ fontSize: '1.1em' }}>{locked ? '🔒' : glyph}</span>
         {dest && !compact && (
           <span style={{ fontSize: '0.68em', opacity: 0.7, maxWidth: CW - 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dest.name}</span>
         )}
@@ -158,19 +181,30 @@ export function MovePad({
         }}>
           {rooms.map((r) => {
             const cur = r.id === currentRoomId
+            // The server refuses this room for this avatar — the same verdict
+            // `/play/enter-room` would answer with, so the chip is dead before
+            // it is clicked and carries the rule's own sentence. The room one
+            // is IN is never locked away from itself.
+            const locked = !cur && r.enterable === false
             return (
-              <button key={r.id} disabled={cur || busy} onClick={() => onEnterRoom(r.id)}
-                title={r.is_ground
-                  ? t('The ground of this location — the area no room takes up')
-                  : r.is_entry ? t('Entry / exit room') : ''}
+              <button key={r.id} disabled={cur || busy || locked} onClick={() => onEnterRoom(r.id)}
+                title={locked
+                  ? (r.reason || t('locked'))
+                  : r.is_ground
+                    ? t('The ground of this location — the area no room takes up')
+                    : r.is_entry ? t('Entry / exit room') : ''}
                 style={{
                   padding: '2px 8px', borderRadius: 10, fontSize: '0.8em', height: 'fit-content',
-                  cursor: cur ? 'default' : 'pointer',
-                  border: '1px solid var(--border, #30363d)',
+                  cursor: cur || locked ? 'default' : 'pointer',
+                  border: locked
+                    ? '1px solid var(--danger, #da3633)'
+                    : '1px solid var(--border, #30363d)',
                   background: cur ? 'var(--accent, #6aa9ff)' : 'transparent',
-                  color: cur ? '#fff' : 'inherit', opacity: cur ? 1 : 0.85,
+                  color: cur ? '#fff' : 'inherit',
+                  opacity: locked ? 0.45 : cur ? 1 : 0.85,
+                  textDecoration: locked ? 'line-through' : 'none',
                 }}>
-                {r.is_ground ? '🌐 ' : ''}{r.name}{r.is_entry ? ' ⌂' : ''}
+                {locked ? '🔒 ' : r.is_ground ? '🌐 ' : ''}{r.name}{r.is_entry ? ' ⌂' : ''}
               </button>
             )
           })}

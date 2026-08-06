@@ -12,6 +12,7 @@ import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState 
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
+import { doorwayLock, isLocked, lockReason, unlockedRooms } from './game/locks';
 import { getAudio } from './game/audio';
 import {
   newFpsMeter, pushFrame, tierCounts, visibleVertices,
@@ -112,6 +113,13 @@ const DOOR_MARK_GEO = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 /** The gold of the UI (`--gold` of the HUD), at the opacity of a hint. */
 const DOOR_MARK_MAT = new THREE.MeshBasicMaterial({
   color: 0xf2d98c, transparent: true, opacity: 0.35, depthWrite: false,
+});
+/** The same threshold, LOCKED (task C2): iron red instead of gold, and denser,
+ *  so a barred way reads as a closed door at a glance and not as a dimmer
+ *  invitation. Which one a marker wears is pure VIEW state — the server says
+ *  WHAT is locked (`/play/scene`), the client says how it looks. */
+const DOOR_MARK_LOCKED_MAT = new THREE.MeshBasicMaterial({
+  color: 0x9b3b2f, transparent: true, opacity: 0.6, depthWrite: false,
 });
 /** Depth of the threshold ACROSS the wall, as a share of the doorway's width —
  *  never thinner than the wall it fills, or it would vanish inside it. */
@@ -645,12 +653,27 @@ async function startApp(username: string, role: string) {
    *  payload wants its own bookkeeping — the same reason the event pins and the
    *  wall-segment cache keep theirs. */
   const doorMarks = new Map<string, THREE.Group>();
+  /** Thresholds at the AUTHORED BOUNDARY OPENINGS of a location, one group per
+   *  tile (task C2). They exist only to be shown LOCKED: an open way in needs
+   *  no marker (walking through it is the offer), a barred one has to be
+   *  visible from the cell next door. Same overlay rules as the door marks —
+   *  own bookkeeping, own group in `engine.scene`, nothing in `tile.group`. */
+  const boundaryMarks = new Map<string, THREE.Group>();
+  /** What the locked look was last painted for: the published lock map and the
+   *  avatar's room. Starts as "nothing", so the first frame paints once. */
+  let lockPainted: { locks: Record<string, string> | null; room: string } = {
+    locks: null, room: '',
+  };
 
+  /** Both threshold overlays of a tile — they are built together and a tile
+   *  that goes away takes both with it. */
   function dropDoorMarks(locId: string) {
-    const old = doorMarks.get(locId);
-    if (!old) return;
-    engine.scene.remove(old);
-    doorMarks.delete(locId);
+    for (const map of [doorMarks, boundaryMarks]) {
+      const old = map.get(locId);
+      if (!old) continue;
+      engine.scene.remove(old);
+      map.delete(locId);
+    }
   }
 
   /**
@@ -704,6 +727,11 @@ async function startApp(username: string, role: string) {
       storey.userData.level = level;
       for (const m of marks) {
         const mesh = new THREE.Mesh(DOOR_MARK_GEO, DOOR_MARK_MAT);
+        // The rooms ride along so the lock look can be bound LATER, by id: the
+        // verdict is per avatar and arrives with its own poll, while this
+        // geometry comes from the shared, signature-cached recipe. Nothing
+        // about a lock is stored in the payload (§ 3 decision 2).
+        mesh.userData.rooms = m.roomIds;
         mesh.scale.set(m.width, 1, Math.max(m.width * DOOR_MARK_DEPTH, thickness));
         // World +x turned onto the wall direction: a rotation by φ about Y maps
         // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x).
@@ -721,6 +749,81 @@ async function startApp(username: string, role: string) {
     if (!root.children.length) return;
     engine.scene.add(root);
     doorMarks.set(tile.loc.id, root);
+    // Fresh markers wear the open look; the next frame paints the locks (see
+    // the frame hook). Repainting HERE would run during boot, where the
+    // avatar's name and room are not in scope yet.
+    lockPainted = { locks: null, room: '' };
+  }
+
+  /**
+   * The look of a locked threshold (task C2, § 3 decision 2: "a ban is
+   * visible"). The material is the ONLY thing that changes — geometry,
+   * position and visibility stay exactly what the recipe made them.
+   *
+   * A doorway wears the locked look when a room BEHIND it is barred for this
+   * avatar (`game/locks.ts`, hand-checked in scripts/smoke_walk_math.mjs); the
+   * room the avatar is standing in is left out of that judgement, or every door
+   * of a room one may not re-enter would read as a cage.
+   *
+   * The map holds the rooms of the avatar's CURRENT location and matching is by
+   * id alone — no location filter. Room ids are 8-hex uuid slices
+   * (`_generate_room_id`), so another place's room does not answer to one of
+   * them, and the ONE id that repeats across locations (`__ground__`) never
+   * appears in a doorway.
+   */
+  function applyDoorLocks(locId: string) {
+    const root = doorMarks.get(locId);
+    if (!root) return;
+    const tile = tiles.get(locId);
+    const locks = getGameState().lockedRooms;
+    const here = tile ? avatarRoomId(tile) ?? '' : '';
+    for (const storey of root.children) {
+      for (const mesh of storey.children) {
+        const rooms = (mesh.userData.rooms as string[] | undefined) ?? [];
+        // `null` = open; a locked room WITHOUT a sentence is still locked.
+        const locked = doorwayLock(rooms, locks, here) !== null;
+        (mesh as THREE.Mesh).material = locked ? DOOR_MARK_LOCKED_MAT : DOOR_MARK_MAT;
+      }
+    }
+  }
+
+  /**
+   * Thresholds at the authored boundary openings of one location — built for
+   * every tile, SHOWN only while the server refuses this avatar the step into
+   * it (the per-frame loop below reads `lockedLocations`).
+   *
+   * An open way in draws nothing: walking through it is the offer, and a
+   * marker on every edge of every neighbour would litter the map. A locked one
+   * has to be visible from the cell next door, which is the whole point of
+   * "before you walk there".
+   */
+  function buildBoundaryMarks(tile: Tile, scene: ScenePayload) {
+    const openings = scene.boundary_openings ?? [];
+    if (!openings.length) return;
+    const root = new THREE.Group();
+    root.visible = false;
+    for (const o of openings) {
+      const width = Number(o.width_m);
+      if (!Number.isFinite(width) || width <= 0) continue;
+      // Payload coordinates are TILE-LOCAL (world metres around the tile
+      // centre, rotation applied) — the centre is added here, exactly as the
+      // entry offer and the walk-in add it.
+      const x = tile.center.x + o.at_world[0];
+      const z = tile.center.z + o.at_world[1];
+      const mesh = new THREE.Mesh(DOOR_MARK_GEO, DOOR_MARK_LOCKED_MAT);
+      mesh.scale.set(width, 1, Math.max(width * DOOR_MARK_DEPTH, 0.3));
+      // The threshold runs ALONG the edge, i.e. across the inward normal:
+      // rotating (1,0,0) by φ about Y gives (cos φ, 0, -sin φ), and the
+      // direction perpendicular to `inward` is (inward.z, -inward.x).
+      mesh.rotation.y = Math.atan2(o.inward[0], o.inward[1]);
+      mesh.position.set(x, groundY(x, z) + 0.05, z);
+      mesh.renderOrder = 3;
+      mesh.raycast = () => {};
+      root.add(mesh);
+    }
+    if (!root.children.length) return;
+    engine.scene.add(root);
+    boundaryMarks.set(tile.loc.id, root);
   }
 
   /** Mount a payload and lay its thresholds afterwards. `finally` and not
@@ -735,7 +838,9 @@ async function startApp(username: string, role: string) {
     buildingTierByLoc.set(tile.loc.id, building);
     interiorTierByLoc.set(tile.loc.id, interior);
     void mountScene(tile, scene, { building, interior }).finally(() => {
-      if (tiles.get(tile.loc.id) === tile) buildDoorMarks(tile, scene);
+      if (tiles.get(tile.loc.id) !== tile) return;
+      buildDoorMarks(tile, scene);
+      buildBoundaryMarks(tile, scene);
     });
   }
 
@@ -2706,8 +2811,15 @@ async function startApp(username: string, role: string) {
     // With the interior still closed (an area location seen from farther out)
     // only the ALWAYS-VISIBLE rooms are on screen: switching into a hidden
     // indoor room there would move the avatar somewhere the player cannot see.
-    const rooms = interiorRooms(tile).filter(
-      (r) => interiorUp || tile.alwaysVisibleRooms.has(r.id));
+    // A room the server refuses this avatar is no candidate at all (task C2):
+    // walking across its threshold must not post the avatar into a room
+    // `/play/enter-room` would turn away — the figure would be asked to move
+    // and bounce back on the next poll. The room the avatar is ALREADY in
+    // survives the filter (`unlockedRooms`), or standing still inside it would
+    // make the nearest other room the best candidate.
+    const rooms = unlockedRooms(interiorRooms(tile).filter(
+      (r) => interiorUp || tile.alwaysVisibleRooms.has(r.id)),
+    state.lockedRooms, current ?? '');
     // The ground is a TARGET, not a gap (plan-grundflaeche.md § 8, stage 2).
     // The rooms of a place do not cover it, so whoever steps out of a room
     // stands outside every rectangle — and that used to mean "no candidate",
@@ -2725,7 +2837,11 @@ async function startApp(username: string, role: string) {
     // Only where there ARE rooms: a tile whose scene has not arrived (no
     // rectangles, no centres) proposes nothing at all, exactly as before —
     // adopting a room out of nothing is what the guard above prevents.
-    const ground = getGameState().groundRoomId;
+    // …and a LOCKED ground is no fallback either: it is a room like every
+    // other one, so a rule on it bars the step out onto it just the same.
+    const groundId = getGameState().groundRoomId;
+    const ground = (groundId === current || !isLocked(state.lockedRooms, groundId))
+      ? groundId : '';
     const inside = rooms.filter((r) => insideRoomRect(tile, r.id, pos));
     const candidates = inside.length ? inside
       : (rooms.length && ground
@@ -2870,8 +2986,14 @@ async function startApp(username: string, role: string) {
   // authored boundary opening (§ B1 Nr. 13) ON THE EDGE THE STEP CROSSES, of
   // a 4-adjacent location — a location without such an opening offers no
   // entry (2026-08-04), exactly as the server refuses that step.
-  /** the standing offer, resolved to the cell the step must aim at */
-  let enterOffer: { locId: string; cell: Cell } | null = null;
+  //
+  // A LOCKED location makes no offer (task C2, § 3 decision 2: the hint does
+  // not appear in the first place), but it is not forgotten either: the offer
+  // is kept with the server's reason, so pressing F says why instead of doing
+  // nothing at all. An open neighbour always wins over a locked one.
+  /** the standing offer, resolved to the cell the step must aim at.
+   *  `locked` = the server's own refusal sentence; empty for a real offer. */
+  let enterOffer: { locId: string; cell: Cell; locked: string } | null = null;
 
   function updateEnterOffer() {
     const state = getGameState();
@@ -2905,11 +3027,21 @@ async function startApp(username: string, role: string) {
         locId: t.loc.id,
         cell: { gx: t.loc.grid_x!, gy: t.loc.grid_y! },
         openings,
+        // The verdict of the neighbour poll, bound by ID at this moment — it
+        // is per avatar and never travels in the cached payload above.
+        locked: isLocked(state.lockedLocations, t.loc.id),
       });
     }
     const offer = entryOfferNear({ x: pos.x, z: pos.z }, here, candidates);
     if (!offer) return clear();
-    enterOffer = { locId: offer.locId, cell: offer.cell };
+    const locked = lockReason(state.lockedLocations, offer.locId);
+    enterOffer = { locId: offer.locId, cell: offer.cell, locked };
+    // Locked: no "Press F to enter" at all — the barred threshold is what the
+    // player sees, and the key answers with the server's sentence.
+    if (locked) {
+      if (state.enterOffer) setGameState({ enterOffer: null });
+      return;
+    }
     const name = tiles.get(offer.locId)?.loc.name ?? '';
     if (state.enterOffer?.name !== name) setGameState({ enterOffer: { name } });
   }
@@ -2922,11 +3054,19 @@ async function startApp(username: string, role: string) {
 
   /** Perform the offered entry: the entry-room chain of the location one is
    *  LEAVING first (the same 2D gate the walking hook walks), then the one
-   *  step request, then the walk-in towards the nearest boundary opening. */
+   *  step request, then the walk-in towards the nearest boundary opening.
+   *
+   *  A locked place is answered instead of entered: the server's own sentence,
+   *  passed through untranslated (it is localized already), so the key is never
+   *  silent at a barred gate. */
   async function enterOfferedLocation() {
     const offer = enterOffer;
     const state = getGameState();
     if (!offer || state.mode !== 'embodied' || state.movementLocked) return;
+    if (offer.locked) {
+      uiActions.toast?.(offer.locked);
+      return;
+    }
     // The one step/room machine: nothing may overlap a running request or a
     // guided movement — the same interlocks the walking hook honours.
     if (stepInFlight || roomRequestInFlight || elevatorRide || walkIn) return;
@@ -3057,8 +3197,10 @@ async function startApp(username: string, role: string) {
       return;
     }
     // Entering an adjacent location (Etappe 3) — last in the F priority,
-    // exactly the order the HUD shows the offers in.
-    if (state.enterOffer) {
+    // exactly the order the HUD shows the offers in. A LOCKED neighbour shows
+    // no prompt (task C2) and is still answered here: the key explains itself
+    // with the server's refusal rather than staying silent.
+    if (state.enterOffer || enterOffer) {
       gameActions.enterLocation?.();
       return;
     }
@@ -3173,6 +3315,25 @@ async function startApp(username: string, role: string) {
     // Räume samt Diorama und Props winkelabhängig verschwinden.
     for (const tile of tiles.values()) {
       if (tile.roomGroups.size) applyRoomVisibility(tile);
+    }
+
+    // The LOCKED look of a threshold is bound here, not at build time: it
+    // follows the avatar's `/play/scene` poll and the room the avatar stands
+    // in, and both change long after a tile was built (task C2). Repainted
+    // only when one of the two actually changed — Hud.tsx publishes a new map
+    // object only on a real change, so identity is the whole comparison.
+    const lockState = getGameState();
+    const roomNow = roomOf.get(avatarName) ?? '';
+    if (lockState.lockedRooms !== lockPainted.locks || roomNow !== lockPainted.room) {
+      lockPainted = { locks: lockState.lockedRooms, room: roomNow };
+      for (const locId of doorMarks.keys()) applyDoorLocks(locId);
+    }
+    // Boundary thresholds exist ONLY to show a barred way in: a location the
+    // server refuses this avatar the step into shows them, every other one
+    // shows nothing. `lockedLocations` holds at most the four cells around the
+    // avatar, so this is the neighbour one is walking towards.
+    for (const [locId, root] of boundaryMarks) {
+      root.visible = isLocked(lockState.lockedLocations, locId);
     }
 
     // Doorway thresholds: a hint for the room view, nothing for the map. Shown

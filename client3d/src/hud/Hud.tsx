@@ -432,6 +432,30 @@ export function Hud({ avatar, username, role }: {
     setGameState({ groundRoomId });
   }, [groundRoomId]);
 
+  // What this avatar may NOT walk into (task C2, plan-betreten-und-tueren.md
+  // § 3 decision 2). The same poll already carries both verdicts — the rooms
+  // of the current place and the four neighbour locations — so the lock state
+  // costs no extra request, and it stays OUT of the cached scene payloads: the
+  // scene binds it by id when it draws and when the player presses a key.
+  //
+  // Published only on a real CHANGE, keyed by the serialised maps: `usePoll`
+  // hands out a fresh object every five seconds, and pushing that through the
+  // bus would re-render the whole HUD island for an unchanged answer.
+  const lockedKey = JSON.stringify([
+    (data?.rooms || []).filter((r) => r.enterable === false)
+      .map((r) => [r.id, r.reason || '']),
+    (['north', 'south', 'east', 'west'] as const)
+      .map((d) => data?.neighbors?.[d]).filter((n) => n && n.enterable === false)
+      .map((n) => [n!.id, n!.reason || '']),
+  ]);
+  useEffect(() => {
+    const [rooms, locations] = JSON.parse(lockedKey) as [string[][], string[][]];
+    setGameState({
+      lockedRooms: Object.fromEntries(rooms),
+      lockedLocations: Object.fromEntries(locations),
+    });
+  }, [lockedKey]);
+
   // Toast bridge (E3-T3): the vanilla app renders no text of its own, so a
   // refused step (403 with the server's reason) is shown through the package
   // toast that already lives inside this island.

@@ -14,7 +14,8 @@
  * owning a disjoint set of fields: `main.ts` with its mode helper
  * `game/embody.ts` (mode, selection, talk target, elevator), `CharacterPlaque.tsx` (one
  * field — clearing the selection) and `Hud.tsx` (what the `/play/scene` poll
- * says: `movementLocked` + `partyLeader` (E3-T3) and `groundRoomId`).
+ * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId` and the two
+ * lock maps of task C2).
  */
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
@@ -40,6 +41,17 @@ export interface HudGameState {
    *  walk cannot find it by distance; it reads the id here instead of knowing
    *  the server's reserved constant. */
   groundRoomId: string;
+  /** Rooms of the CURRENT location the server refuses this avatar, id -> its
+   *  localized reason (`/play/scene → rooms[].enterable === false`, task C1).
+   *  A key exists exactly for what is locked. The scene code binds it by id
+   *  at render/interaction time — it is per avatar and per moment, so it never
+   *  goes into a cached scene payload (§ 3 decision 2). */
+  lockedRooms: Record<string, string>;
+  /** Neighbour LOCATIONS the step would be refused for, id -> reason (the
+   *  `neighbors` block of the same poll). Only the four cells around the
+   *  avatar can appear here — which is exactly the range in which a locked way
+   *  has to be visible before one walks to it. */
+  lockedLocations: Record<string, string>;
   /** elevator the avatar is standing at (embodied mode), or null. The talk
    *  prompt WINS over it: with someone in range only that prompt shows, so one
    *  F press is never two offers at once. */
@@ -107,6 +119,7 @@ export interface HudUiActions {
 const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '',
+  lockedRooms: {}, lockedLocations: {},
   elevator: null, elevatorOpen: false, enterOffer: null,
 };
 const listeners = new Set<() => void>();
