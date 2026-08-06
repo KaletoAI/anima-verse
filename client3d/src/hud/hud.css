@@ -394,6 +394,50 @@
 #hud .hud-dock.hud-dock-wide {
   width: 480px;
 }
+
+/* ---- The dock width is the user's (acceptance finding) ----
+   320/480 are two guesses at a screen, and neither is right on all of them.
+   The handle on the LEFT edge drags the column between 280 and 720px and the
+   value is kept in `localStorage`; Hud.tsx writes it as an INLINE width, so a
+   dragged width beats `.hud-dock-wide` above — that class is only left to
+   decide as long as nobody has said anything. The `max-width` on .hud-dock
+   still applies to both, so no width reaches past the window.
+
+   The strip is 14px wide and lies almost entirely OUTSIDE the dock (3px in):
+   it must be grabbable without stealing clicks from the panels behind it, and
+   an absolutely positioned child paints over its static siblings — every pixel
+   it reaches inward is a pixel of panel one cannot hit. To the left there is
+   only the scene. It shows nothing until the pointer is on it and then draws
+   the short grip line below. `touch-action: none` because the drag is
+   pointer-captured — without it a touch drag scrolls instead.
+   `pointer-events: auto` because the dock column itself is drag-through. */
+#hud .hud-dock-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -11px;
+  width: 14px;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+#hud .hud-dock-grip::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 44px;
+  margin: -22px 0 0 -1.5px;
+  border-radius: 2px;
+  background: var(--text-muted, #8b949e);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+#hud .hud-dock-grip:hover::before,
+#hud .hud-dock-grip:active::before {
+  opacity: 0.85;
+}
 #hud .hud-dock .hud-panel {
   flex: 1 1 0;
   min-height: 120px;

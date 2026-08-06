@@ -108,6 +108,26 @@ const CONTENT_PANELS = new Set<PanelId>([
 const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests', 'gallery',
   'instagram']);
 
+/** Storage key of the dock width the user dragged for themselves. Absent =
+ *  the widths above decide, which is what every fresh browser starts with. */
+const DOCK_WIDTH_KEY = 'av3d.dockWidth';
+/** Narrower than this and MindPanel folds its navigation to bare icons again
+ *  (the very finding WIDE_PANELS exists for), wider and the dock is most of a
+ *  laptop screen with the world reduced to a strip. Both ends are also what a
+ *  stored value is checked against: a hand-edited or stale number outside them
+ *  is dropped rather than honoured. */
+const DOCK_MIN = 280;
+const DOCK_MAX = 720;
+
+/** The stored dock width, or null for "let the panels decide". Anything that
+ *  is not a number inside the range counts as absent — the column must never
+ *  come up unusable because of one bad entry in `localStorage`. */
+function readDockWidth(): number | null {
+  const raw = Number(localStorage.getItem(DOCK_WIDTH_KEY));
+  if (!Number.isFinite(raw) || raw < DOCK_MIN || raw > DOCK_MAX) return null;
+  return Math.round(raw);
+}
+
 /** The prefs fields that are a volume. Each is named exactly like the audio
  *  bus it drives, so applying one is a lookup and not a mapping table. */
 const VOLUME_FIELDS = ['master', 'music', 'ambient', 'tts'] as const;
@@ -282,6 +302,77 @@ export function Hud({ avatar, username, role }: {
     localStorage.setItem(SHOW_ALL_KEY, on ? '1' : '0');
     setShowAllState(on);
     gameActions.setShowAll?.(on);
+  }, []);
+
+  /**
+   * The width of the dock column — the user's, once they have said so.
+   *
+   * A LOCAL view setting like the readout and the minimap above, but it is
+   * dragged rather than switched, so it is written at the END of a gesture and
+   * not on every state change: a drag produces a value per frame, and an
+   * effect on the state would put a hundred writes into `localStorage` for one
+   * pull of the handle. `widthRef` carries the last value alongside the state
+   * for exactly that — the pointer-up handler needs the number, not a render.
+   *
+   * `null` means "nothing stored": the panel-driven widths of WIDE_PANELS
+   * apply, which is what a fresh browser and a double-clicked reset both give.
+   * A stored width WINS over them, because it is an inline style and the wide
+   * class is a class — the person who dragged has said what they want, and a
+   * panel must not take it back on opening. `max-width` in the stylesheet
+   * still caps it against a narrow window, so no width can push the column
+   * off-screen.
+   */
+  const [dockWidth, setDockWidth] = useState<number | null>(readDockWidth);
+  const widthRef = useRef<number | null>(dockWidth);
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  /** The running drag: where it started, how wide the dock was then, and
+   *  whether it has actually moved yet. Null while nothing is being dragged.
+   *  `moved` is what keeps a plain click on the handle from storing the
+   *  current width — a click is not an adjustment, and the double-click reset
+   *  is made of two of them. */
+  const dragRef = useRef<{ x: number; w: number; moved: boolean } | null>(null);
+
+  const onGripDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    // The MEASURED width, not the stored one: with nothing stored the drag has
+    // to continue from whatever the panels are currently giving (320 or 480),
+    // or the first pixel of movement would jump the column.
+    const w = dockRef.current?.getBoundingClientRect().width ?? DOCK_MIN;
+    dragRef.current = { x: e.clientX, w, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  const onGripMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // The dock is anchored on the RIGHT, so dragging the handle left widens
+    // it — the delta is inverted on purpose.
+    const next = Math.round(Math.min(DOCK_MAX, Math.max(DOCK_MIN,
+      drag.w + (drag.x - e.clientX))));
+    drag.moved = true;
+    widthRef.current = next;
+    setDockWidth(next);
+  }, []);
+
+  const onGripUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    if (!drag?.moved || widthRef.current == null) return;
+    localStorage.setItem(DOCK_WIDTH_KEY, String(widthRef.current));
+  }, []);
+
+  /** Double-click on the handle = forget the width. Not "back to 320": with
+   *  the entry gone the dock follows the open panel again, which is the
+   *  behaviour someone who never touched the handle has. */
+  const onGripReset = useCallback(() => {
+    dragRef.current = null;
+    widthRef.current = null;
+    setDockWidth(null);
+    localStorage.removeItem(DOCK_WIDTH_KEY);
   }, []);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
@@ -600,8 +691,21 @@ export function Hud({ avatar, username, role }: {
       {(open.self || open.others || open.menu || open.belongings || open.mind
         || open.phone || open.news || open.tasks || open.quests || open.gallery
         || open.instagram) && (
-        <div className={'hud-dock'
-          + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}>
+        <div ref={dockRef}
+          className={'hud-dock'
+            + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}
+          style={dockWidth != null ? { width: dockWidth } : undefined}>
+          {/* The width handle sits ON the dock's left edge and is taken out of
+              the column's flex flow by `position: absolute` — a flex child
+              would eat a share of the height the panels divide between them.
+              Pointer events (not mouse) with capture, so the drag survives the
+              cursor leaving the 14px strip, which at speed it always does. */}
+          <div className="hud-dock-grip" role="separator" aria-orientation="vertical"
+            title={t('Drag to resize · double-click to reset')}
+            aria-label={t('Drag to resize · double-click to reset')}
+            onPointerDown={onGripDown} onPointerMove={onGripMove}
+            onPointerUp={onGripUp} onPointerCancel={onGripUp}
+            onDoubleClick={onGripReset} />
           {/* Esc and M are handled HERE as well, not only in main.ts: the
               global key path ignores anything typed into a form control, and a
               volume slider is one — so after touching a slider the keys would
