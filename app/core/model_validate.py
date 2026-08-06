@@ -453,6 +453,62 @@ def glb_bounds(data: bytes) -> Optional[Tuple[List[float], List[float]]]:
     return (lo, hi)
 
 
+def rig_frames_preserved(before: bytes, after: bytes,
+                         tol_deg: float = 5.0) -> Dict[str, Any]:
+    """Whether a refinement kept every skin joint's LOCAL ROTATION frame.
+
+    ``{ok, errors}``. The invariant behind it: none of our mesh steps
+    (re-encode, reduce, normalize) has any business changing a joint's local
+    rotation. A Blender round trip CAN rewrite all of them consistently — the
+    rest pose still binds perfectly, so ordinary validation passes — but the
+    clients apply the shared Mixamo clips INTO those local frames, and a rig
+    in a re-derived convention animates broken (2026-08-06: hips pitched
+    ~90-180° on 57 store files). Joints are matched by node name; a joint
+    that disappeared is an error, a ``before`` without skins passes (nothing
+    to preserve). Never raises — an unreadable file yields ok with a warning
+    in ``errors``-free form, because only a POSITIVE finding may block.
+    """
+    def _joint_rots(data: bytes) -> Optional[Dict[str, List[float]]]:
+        try:
+            gltf = parse_glb(data)["gltf"]
+            nodes = gltf.get("nodes") or []
+            out: Dict[str, List[float]] = {}
+            for skin in gltf.get("skins") or []:
+                for j in skin.get("joints") or []:
+                    if isinstance(j, int) and 0 <= j < len(nodes):
+                        n = nodes[j]
+                        name = str(n.get("name") or f"joint{j}")
+                        out[name] = [float(v) for v in
+                                     (n.get("rotation") or [0, 0, 0, 1])]
+            return out
+        except (ValueError, KeyError, IndexError, TypeError, struct.error,
+                json.JSONDecodeError):
+            return None
+
+    b = _joint_rots(before)
+    if not b:
+        return {"ok": True, "errors": []}     # no skins / unreadable: no claim
+    a = _joint_rots(after)
+    if a is None:
+        return {"ok": True, "errors": []}
+    errors: List[str] = []
+    for name, qb in b.items():
+        qa = a.get(name)
+        if qa is None:
+            errors.append(f"joint '{name}' disappeared")
+            continue
+        dot = abs(sum(x * y for x, y in zip(qa, qb)))
+        ang = math.degrees(2 * math.acos(min(1.0, dot)))
+        if ang > tol_deg:
+            errors.append(f"joint '{name}' frame rotated {ang:.1f}°")
+    if errors:
+        head = errors[:3]
+        if len(errors) > 3:
+            head.append(f"... and {len(errors) - 3} more")
+        return {"ok": False, "errors": head}
+    return {"ok": True, "errors": []}
+
+
 # ── Geometry: walkable floor height (contract § B6 no. 7) ───────────────
 def _check_embedded_textures(info: Dict[str, Any], subject: str,
                              errors: List[str], warnings: List[str]) -> None:

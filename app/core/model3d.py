@@ -482,6 +482,13 @@ def _purge_combination(out_dir: Path, signature: str) -> None:
         for old in (out_dir / tier).glob(f"{signature}.*"):
             if old.suffix.lower() in keep:
                 old.unlink()
+    # And the raw/ backup: it is the untouched ORIGINAL of the file being
+    # replaced. Left behind, it would block the backup of the NEW original
+    # (refine.apply_script backs up only the first time) — the incident of
+    # 2026-08-06: a fresh bake's pristine copy was silently never kept.
+    from app.blender.refine import RAW_DIR_NAME
+    for old in (out_dir / RAW_DIR_NAME).glob(f"{signature}.*"):
+        old.unlink()
 
 
 def save_uploaded_model(character_name: str, original_filename: str,
@@ -808,6 +815,14 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
             return {"ok": False,
                     "error": "reduced mesh failed validation: "
                              + "; ".join(verdict.get("errors") or [])}
+        # Same fifth gate as refine.apply_script: the distance mesh must keep
+        # the full mesh's joint frames, or the shared clips deform it.
+        from app.core.model_validate import rig_frames_preserved
+        frames = rig_frames_preserved(path.read_bytes(), blob)
+        if not frames.get("ok"):
+            return {"ok": False,
+                    "error": "reduced mesh rewrote the rig frames: "
+                             + "; ".join(frames.get("errors") or [])}
         target = out_dir / path.name
         target.write_bytes(blob)
     side = {

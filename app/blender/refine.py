@@ -112,6 +112,20 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
                 logger.warning("%s: %s — Original behalten", path.name,
                                out["error"])
                 return out
+        # The fifth gate, for rigged models: the joint frames must be the
+        # SAME frames. A Blender round trip can rewrite them consistently —
+        # rest pose and joint count stay valid, but the clients apply the
+        # shared clips into these local frames and the figure animates
+        # broken. Only a refinement that preserves them may swap in.
+        if path.suffix.lower() == ".glb":
+            from app.core.model_validate import rig_frames_preserved
+            frames = rig_frames_preserved(path.read_bytes(), blob)
+            if not frames.get("ok"):
+                out["error"] = ("refined model rewrote the rig frames: "
+                                + "; ".join(frames.get("errors") or []))
+                logger.warning("%s: %s — Original behalten", path.name,
+                               out["error"])
+                return out
 
         if keep_original:
             backup = raw_backup_path(path)

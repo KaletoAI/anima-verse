@@ -53,12 +53,18 @@ def main(fn):
 def import_model(path):
     """Loads a model into the EMPTY current scene, by extension.
 
-    glTF: ``bone_heuristic="TEMPERANCE"`` on purpose. The default (BLENDER)
-    creates an Icosphere MESH OBJECT in the scene as the bones' display shape
-    — a measuring script would count its triangles and its ±1 m bounds as if
-    they were the model's (a radius-1 sphere around the origin reads as
-    "min_z = -1, does not stand on the ground"). Belt and braces, any object
-    that only serves as a bone custom shape is unlinked after import.
+    glTF: the importer keeps its DEFAULT bone heuristic (BLENDER) on purpose —
+    it is the one that PRESERVES the source's joint orientations through an
+    import/export round trip. TEMPERANCE looked attractive because it creates
+    no display objects, but it RE-DERIVES every bone frame from the child
+    positions: positions and bind stay consistent (rest pose looks right),
+    while the exported joint rotations land in a different convention — and
+    the clients apply the shared Mixamo clips INTO those local frames, so a
+    rig whose source frames do not match the heuristic animates broken
+    (2026-08-06 incident: 57 of 83 store files, hips pitched ~90-180°).
+    The one real problem of the BLENDER heuristic — the Icosphere display
+    object that falsified measurements — is solved by DELETING the bone
+    custom shapes after import instead.
     """
     import bpy
     ext = Path(path).suffix.lower()
@@ -66,11 +72,7 @@ def import_model(path):
     if not kind:
         raise ValueError(f"unsupported model format: {ext}")
     if kind == "gltf":
-        try:
-            bpy.ops.import_scene.gltf(filepath=str(path),
-                                      bone_heuristic="TEMPERANCE")
-        except TypeError:
-            bpy.ops.import_scene.gltf(filepath=str(path))
+        bpy.ops.import_scene.gltf(filepath=str(path))
         _drop_bone_shape_objects(bpy)
     elif kind == "fbx":
         # global_scale stays 1.0 on purpose: many rigs (Mixamo among them) are
