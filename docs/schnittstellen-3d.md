@@ -609,8 +609,12 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   opak (`opacity_role: "ground"`) ist die UNTERSTE genutzte Etage, alles
   darüber ist `"upper"` — bei einem Keller (`level -1`) ghostet also auch
   die Terrain-Etage 0, sonst läge der Keller unsichtbar unter opakem
-  Boden. Türen bleiben eine Level-0-Sache (realer Gebäudeeingang), auch
-  wenn ein Keller existiert. Enum unverändert, Clients unverändert.
+  Boden. Enum unverändert, Clients unverändert. **Nicht mehr gültig seit
+  2026-08-05:** „Türen sind eine Level-0-Sache" — das Loch folgt der Etage
+  SEINER Tür (Schnitt je `(Tür-Etage, Kante)`). Nur der Befund
+  `no_building_entrance` fragt weiterhin nach Etage 0: eine Tür im ersten
+  Stock öffnet die Hülle dort und lässt von außen trotzdem niemanden
+  hinein.
 - **Raum-Ebene (Klarstellung v4):** Raum-Bodenplatte Oberkante
   `level × storey + 0,10` (liegt damit AUF der Etagen-Platte; Dicke
   0,02), Raumhüllen-Wände Basis 0,10; Props auf Platte + 0,01 (§ A2);
