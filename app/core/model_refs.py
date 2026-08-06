@@ -40,13 +40,21 @@ logger = get_logger(__name__)
 # into the torso geometry and confuses the mesher's silhouette segmentation.
 # Length-NEUTRAL on purpose — the identity layer says how long the hair is;
 # "hanging down the back" here gave short-haired characters long hair.
+#
+# Upper-body garments are worn CLOSED: an open jacket or a loose layer
+# hanging in front of the body is a separate surface floating next to the
+# torso, and the img2mesh bake fuses it with the arms and chest instead of
+# reconstructing it (D8 / P13, a documented case in the session plan).
+# The admin override image_generation.tpose_prompt stays untouched — whoever
+# replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms raised straight out "
     "to the sides at exact shoulder height, fully extended and parallel to "
     "the floor, body and arms forming the letter T, palms facing down toward "
     "the floor, fingers straight, extended and slightly spread apart, thumbs "
     "pointing forward, legs straight and slightly apart, hair tucked behind "
-    "the shoulders"
+    "the shoulders, all upper-body garments worn closed, no open jacket and "
+    "no loose fabric layers hanging in front of the body"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
