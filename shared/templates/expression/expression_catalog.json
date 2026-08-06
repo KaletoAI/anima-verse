@@ -1,0 +1,159 @@
+{
+  "_comment": "Curated expression catalog - the ONLY render/cache key axis for facial expression / mood. Grows only via the candidate approval flow in the Poses admin tab.",
+  "entries": {
+    "neutral": {
+      "prompt": "calm neutral face, relaxed brow, soft mouth, attentive eyes",
+      "synonyms": [
+        "focused",
+        "thoughtful",
+        "curious",
+        "determined",
+        "calm",
+        "relaxed",
+        "creative",
+        "in control",
+        "chatting",
+        "ready",
+        "responsible",
+        "talkative",
+        "expectant",
+        "wachsam",
+        "aufmerksam",
+        "hilfsbereit"
+      ],
+      "_default": true
+    },
+    "positive": {
+      "prompt": "warm genuine smile, bright eyes, raised cheeks, relaxed brow",
+      "synonyms": [
+        "happy",
+        "amused",
+        "content",
+        "excited",
+        "playful",
+        "proud",
+        "grateful",
+        "loving",
+        "cheerful",
+        "satisfied",
+        "hopeful",
+        "confident",
+        "relieved",
+        "euphoric",
+        "fulfilled",
+        "exuberant",
+        "flattered",
+        "moved",
+        "adventurous",
+        "loved",
+        "freudig"
+      ]
+    },
+    "sad": {
+      "prompt": "downcast eyes, slightly drawn mouth corners, low gaze, subdued posture of the face",
+      "synonyms": [
+        "unhappy",
+        "melancholic",
+        "disappointed",
+        "grieving",
+        "lonely",
+        "bored",
+        "embarrassed",
+        "vulnerable",
+        "guilty",
+        "desperate",
+        "hurt",
+        "niedergeschlagen",
+        "betruebt",
+        "betrübt",
+        "gelangweilt"
+      ]
+    },
+    "angry": {
+      "prompt": "tense jaw, narrowed eyes, drawn eyebrows, firm pressed lips",
+      "synonyms": [
+        "furious",
+        "annoyed",
+        "irritated",
+        "frustrated",
+        "grim",
+        "disgusted",
+        "jealous",
+        "manipulative",
+        "dominant",
+        "wuetend",
+        "wütend",
+        "sauer",
+        "aergerlich",
+        "ärgerlich"
+      ]
+    },
+    "nervous": {
+      "prompt": "uneasy darting eyes, slightly raised brows, tense mouth, guarded look",
+      "synonyms": [
+        "anxious",
+        "worried",
+        "insecure",
+        "uncertain",
+        "scared",
+        "startled",
+        "shy",
+        "fearful",
+        "panicked",
+        "concerned",
+        "cautious",
+        "overwhelmed",
+        "besorgt",
+        "unsicher"
+      ]
+    },
+    "tired": {
+      "prompt": "heavy eyelids, soft unfocused gaze, slack facial muscles",
+      "synonyms": [
+        "exhausted",
+        "sleepy",
+        "drained",
+        "weary",
+        "drowsy",
+        "hungry",
+        "drunk",
+        "betrunken",
+        "müde",
+        "muede",
+        "erschoepft",
+        "erschöpft"
+      ]
+    },
+    "aroused": {
+      "prompt": "half-lidded eyes, parted lips, flushed cheeks, intent gaze",
+      "synonyms": [
+        "flirty",
+        "passionate",
+        "seductive",
+        "longing",
+        "horny",
+        "provocative",
+        "geil",
+        "erregt",
+        "nass",
+        "schwitzen",
+        "begehrend",
+        "begehrt",
+        "verführerisch",
+        "verfuehrerisch"
+      ]
+    },
+    "surprised": {
+      "prompt": "wide open eyes, raised eyebrows, slightly open mouth",
+      "synonyms": [
+        "astonished",
+        "amazed",
+        "shocked",
+        "confused",
+        "ueberrascht",
+        "erstaunt",
+        "verdutzt"
+      ]
+    }
+  }
+}
