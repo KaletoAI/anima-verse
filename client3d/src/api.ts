@@ -246,6 +246,10 @@ export interface ApiModel {
   rig: 'mixamo' | 'generic' | string;
   /** FBX case only: the texture, stored separately */
   textureUrl?: string;
+  /** true = the file already stands its real height on the ground (server-side
+   *  normalisation). The client must NOT rescale it by the bounding box —
+   *  hair above the crown would shrink the body again. */
+  normalized?: boolean;
 }
 
 /** Maßstabs-Anker (backend-note-scale-anchors.md, v3): 0 = nicht deklariert. */
@@ -287,6 +291,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     format: (m.format ?? 'glb') as 'glb' | 'fbx',
     rig: m.rig ?? data.rig ?? 'mixamo',
     textureUrl: m.texture_url ?? undefined,
+    normalized: !!m.normalized,
   };
 }
 

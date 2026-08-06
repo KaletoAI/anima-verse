@@ -59,6 +59,8 @@ _SHRINK_KEY_PREFIX = "shrink:"
 
 _lock = threading.Lock()
 _generating: set = set()  # "<owner>:<stem>:<source image>" running job keys
+# Subjects ("<owner>:<room_id>") whose distance mesh is being built right now.
+_lod_building: set = set()
 
 
 def _stem(room_id: str = "") -> str:
@@ -658,7 +660,77 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     select_model(location_id, target.name, room_id, tier)
     logger.info("Location model %s%s: uploaded (%d bytes) -> %s", owner,
                 f"/{room_id}" if room_id else "", len(contents), target.name)
+    if (tier or DEFAULT_TIER) == DEFAULT_TIER:
+        _build_low_tier(location_id, room_id)
     return meta
+
+
+def _build_low_tier(location_id: str, room_id: str = "") -> None:
+    """Builds the subject's missing distance mesh in the BACKGROUND (CPU).
+
+    The GPU route fills the low tier only when the alias delivered LOD stages
+    (``lod_faces``); a generation without stages and every upload used to
+    leave the tier to a batch run. Same manner as the prop store: one build
+    per subject, the reduced mesh must pass the static validation, an
+    existing low tier is left alone."""
+    from app.blender import refine
+    if not refine.auto_lod_enabled():
+        return
+    owner = _owner_id(location_id)
+    if not owner:
+        return
+    g = _gallery(owner, room_id)
+    src = g.find(DEFAULT_TIER, fallback=False)
+    if not src or src.suffix.lower() != ".glb":
+        return
+    if LOW_TIER in g.tiers():
+        return
+    key = f"{owner}:{room_id}"
+    with _lock:
+        if key in _lod_building:
+            return
+        _lod_building.add(key)
+
+    def _run() -> None:
+        try:
+            ratio = refine.lod_ratio("room" if room_id else "building")
+            res = refine.build_static_lod(src, ratio)
+            if not res.get("ok"):
+                logger.debug("Location model %s%s: distance mesh not built "
+                             "(%s)", owner, f"/{room_id}" if room_id else "",
+                             res.get("error"))
+                return
+            gallery = _gallery(owner, room_id)
+            target = gallery.new_path()
+            target.write_bytes(res["blob"])
+            meta: Dict[str, Any] = {
+                "created_at": utc_now_iso(),
+                "source": "lod",
+                "format": "glb",
+                "rig": "none",
+                "tier": LOW_TIER,
+                "source_file": src.name,
+                "lod_ratio": float(ratio),
+                "tris": res.get("tris"),
+                "tris_before": res.get("tris_before"),
+                "location": owner,
+            }
+            if room_id:
+                meta["room"] = room_id
+            write_sidecar(target, meta)
+            select_model(location_id, target.name, room_id, LOW_TIER)
+            logger.info("Location model %s%s: distance mesh %s (%s -> %s "
+                        "tris)", owner, f"/{room_id}" if room_id else "",
+                        target.name, res.get("tris_before"), res.get("tris"))
+        except Exception as e:                              # noqa: BLE001
+            logger.warning("Location model %s: distance-mesh build failed: %s",
+                           owner, e)
+        finally:
+            with _lock:
+                _lod_building.discard(key)
+
+    threading.Thread(target=_run, daemon=True,
+                     name=f"locmodel-lod-{owner}").start()
 
 
 def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
@@ -804,6 +876,10 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             select_model(location_id, low, room_id, LOW_TIER)
             logger.info("Location model %s: LOD stage %s selected as low "
                         "variant", owner, low)
+        elif (tier or DEFAULT_TIER) == DEFAULT_TIER:
+            # The alias delivered no stages — build the distance mesh locally
+            # (CPU, seconds) instead of leaving the tier to a batch run.
+            _build_low_tier(location_id, room_id)
         return {"ok": True, "path": str(path), "meta": meta}
     finally:
         if task_id:

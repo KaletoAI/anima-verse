@@ -341,6 +341,21 @@ export class NpcManager {
     this.selectRing = ring;
   }
 
+  /** Distanz-Stufe je Figur wählen (view state): innerhalb `near` full,
+   *  jenseits `far` low; das Band dazwischen hält den letzten Zustand
+   *  (Hysterese wie bei den Gebäude-Modellen in main.ts). Die Umschaltung
+   *  selbst — Cache-Treffer oder Nachladen + Rebuild — ist Sache der
+   *  FigureLibrary; Figuren ohne Server-Modell ignoriert sie. */
+  tickFigureTiers(cameraPos: THREE.Vector3, near: number, far: number) {
+    if (!this.figures) return;
+    for (const [name, npc] of this.npcs) {
+      if (!npc.figure) continue;
+      const d = cameraPos.distanceTo(npc.root.position);
+      if (d < near) this.figures.setFigureTier(name, 'full');
+      else if (d > far) this.figures.setFigureTier(name, 'low');
+    }
+  }
+
   /** NPC verwerfen, damit er beim nächsten update() neu gebaut wird —
    *  z.B. wenn sein 3D-Modell vom Server nachgeladen wurde. */
   rebuild(charName: string) {

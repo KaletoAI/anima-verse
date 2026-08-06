@@ -72,6 +72,11 @@ const OPEN_FLY_DIST = 15;
  *  swaps. Boot overview distance is 70 (> FAR), so the map starts light. */
 const BUILDING_TIER_NEAR = 45;
 const BUILDING_TIER_FAR = 60;
+/** Character figures: same hysteresis idea, tighter band — a 1.70 m figure
+ *  carries its detail only up close, and the swap re-downloads a mesh, so the
+ *  10 m band keeps a strolling camera from flapping at the line. */
+const FIGURE_TIER_NEAR = 25;
+const FIGURE_TIER_FAR = 35;
 /** Tier re-evaluation cadence — second-scale like the talk target: a swap
  *  loads a GLB anyway, per-frame checks would buy nothing. */
 const LOD_TICK_MS = 1000;
@@ -576,6 +581,8 @@ async function startApp(username: string, role: string) {
         void setSceneModelTier(tile, 'interior', i);
       }
     }
+    // Same tick, third driver: character figures by camera distance.
+    npcs.tickFigureTiers(engine.camera.position, FIGURE_TIER_NEAR, FIGURE_TIER_FAR);
   }
   // --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ---------
   //

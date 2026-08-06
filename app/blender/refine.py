@@ -187,6 +187,77 @@ def auto_retexture_enabled() -> bool:
     return bool(config.get("image_generation.blender_auto_retexture", True))
 
 
+def auto_normalize_enabled() -> bool:
+    """Whether a freshly stored character mesh is normalised without being
+    asked (plan-blender-veredelung.md § 2 — permanent pipeline step, not a
+    one-off batch)."""
+    from app.core import config
+    return bool(config.get("image_generation.blender_auto_normalize", True))
+
+
+def normalize(path: Path, target_height_m: float,
+              validator: Optional[Callable[[bytes], Dict[str, Any]]] = None
+              ) -> Dict[str, Any]:
+    """Scales a model to its real height, grounds it and bakes the transforms.
+
+    The four gates of ``apply_script`` hold, minus the size gate — a
+    normalisation moves vertices, it does not shrink files. The height basis
+    (crown joint vs bounding box) is the script's call; what comes back in
+    ``data`` (basis, scale, before/after) is what the sidecar keeps against a
+    second run.
+    """
+    from app.core import config
+    return apply_script(path, "normalize",
+                        {"target_height_m": float(target_height_m)},
+                        validator=validator, require_smaller=False,
+                        keep_original=bool(config.get(
+                            "image_generation.blender_keep_original", True)))
+
+
+def auto_lod_enabled() -> bool:
+    """Whether a missing distance mesh is built without being asked — the
+    "Build distance meshes on demand" switch; shared by every store."""
+    from app.core import config
+    return bool(config.get("image_generation.blender_auto_lod", True))
+
+
+def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
+    """Reduces a static GLB to ``ratio`` of its triangles on the CPU.
+
+    Returns ``{"ok", "blob", "tris", "tris_before", "error"}`` — storage is
+    the caller's, because every gallery names, sidecars and selects its files
+    itself. The reduced mesh must pass the same validation as a freshly
+    delivered static model or nothing is returned (the 2.2 rule, unchanged).
+    """
+    import tempfile
+    from app.blender import runner
+    from app.core.model_validate import validate_static_glb
+    out: Dict[str, Any] = {"ok": False, "blob": b"", "tris": None,
+                           "tris_before": None, "error": ""}
+    path = Path(path)
+    if path.suffix.lower() != ".glb":
+        out["error"] = f"LOD handles GLB, not {path.suffix}"
+        return out
+    with tempfile.TemporaryDirectory(prefix="av-lod-") as tmp:
+        res = runner.run("lod", inputs={"model": path},
+                         params={"ratios": [float(ratio)]}, out_dir=Path(tmp),
+                         timeout_s=600)
+        if not res.get("ok") or not res.get("outputs"):
+            out["error"] = (unavailable_reason() or res.get("error")
+                            or "no stage produced")
+            return out
+        stage = (res["data"].get("stages") or [{}])[0]
+        blob = Path(next(iter(res["outputs"].values()))).read_bytes()
+    verdict = validate_static_glb(blob)
+    if not verdict.get("ok"):
+        out["error"] = ("reduced mesh failed validation: "
+                        + "; ".join(verdict.get("errors") or []))
+        return out
+    out.update(ok=True, blob=blob, tris=stage.get("tris"),
+               tris_before=stage.get("tris_before"))
+    return out
+
+
 def unavailable_reason() -> str:
     """Why measuring is not possible right now, "" when it is.
 

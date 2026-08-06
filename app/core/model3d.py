@@ -423,6 +423,15 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 # measuring costs a subprocess.
                 if meta.get("measured"):
                     info["measured"] = meta["measured"]
+                # Cached defect indicators (diagnose_model) — display only.
+                if meta.get("diagnosis"):
+                    info["diagnosis"] = meta["diagnosis"]
+                # Normalised = the file already stands its real height on the
+                # ground; a client must NOT rescale it by the bounding box
+                # (hair above the crown would shrink the body again).
+                if "normalize" in ((meta.get("blender") or {}).get("steps")
+                                   or []):
+                    info["normalized"] = True
                 if meta.get("rig"):
                     info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):
@@ -504,9 +513,11 @@ def save_uploaded_model(character_name: str, original_filename: str,
         "pieces": dict(pieces or {}),
         "items": list(items or []),
     }
-    # An upload takes the same route as a generated model: re-encode first,
-    # then measure, so the numbers describe what will be served.
+    # An upload takes the same route as a generated model: re-encode and
+    # normalise first, then measure, so the numbers describe what will be
+    # served.
     _auto_retexture(character_name, target, meta)
+    _auto_normalize(character_name, target, meta)
     _attach_measurement(meta, target)
     request_lod(character_name, target)
     target.with_suffix(".json").write_text(
@@ -532,6 +543,56 @@ def _validator_for(rig: str):
     humanoid check would reject every refinement of it out of hand."""
     from app.core.model_validate import validate_glb, validate_static_glb
     return validate_glb if rig == "mixamo" else validate_static_glb
+
+
+def _target_height_m(character_name: str) -> float:
+    """The height the stored mesh must have, in metres: the profile height,
+    else the contract's base figure (schnittstellen-3d.md § A3, 1.70 m)."""
+    from app.core.height import height_cm
+    from app.models.character import get_character_profile
+    cm = height_cm(get_character_profile(character_name) or {})
+    return (cm / 100.0) if cm else 1.70
+
+
+def _auto_normalize(character_name: str, path: Path,
+                    meta: Dict[str, Any]) -> None:
+    """Scales the fresh mesh to the character's height and grounds it, if
+    switched on (plan-blender-veredelung.md § 2, decided 2026-08-06).
+
+    A Mixamo rig is measured at the crown joint — hair and hats above it no
+    longer shrink the body, which the old client-side bounding-box scale did.
+    ``meta["blender"].steps`` is the idempotence guard (§ 2.3): a normalised
+    file is never normalised again; the gates in ``refine.apply_script`` keep
+    the original whenever the export fails the delivery validation (§ 2.2).
+    """
+    from app.blender import refine, runner
+    if not refine.auto_normalize_enabled() or path.suffix.lower() != ".glb":
+        return
+    done = list((meta.get("blender") or {}).get("steps") or [])
+    if "normalize" in done:
+        return
+    target = _target_height_m(character_name)
+    res = refine.normalize(path, target,
+                           validator=_validator_for(meta.get("rig") or ""))
+    data = res.get("data") or {}
+    if not res.get("applied"):
+        if res.get("error"):
+            logger.info("Model3D %s: normalisation not applied (%s)",
+                        character_name, res.get("error"))
+        return
+    meta["blender"] = {
+        "version": runner.version(),
+        "steps": done + ["normalize"],
+        "at": utc_now_iso(),
+        "height_basis": data.get("height_basis", ""),
+        "scale": data.get("scale"),
+        "target_height_m": data.get("target_height_m"),
+        "before": data.get("before") or {},
+        "after": data.get("after") or {},
+    }
+    logger.info("Model3D %s: normalised to %.2f m (%s basis, scale %.4f)",
+                character_name, target, data.get("height_basis", "?"),
+                float(data.get("scale") or 0))
 
 
 def _auto_retexture(character_name: str, path: Path,
@@ -594,6 +655,64 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
     except OSError as e:
         logger.warning("Model3D %s: Messung nicht gespeichert: %s", path.name, e)
     return {"ok": True, "cached": False, "measured": meta["measured"]}
+
+
+def diagnose_model(character_name: str, signature: Optional[str] = None, *,
+                   force: bool = False) -> Dict[str, Any]:
+    """Geometry-defect indicators of a stored model, cached in the sidecar.
+
+    Display only (plan-blender-veredelung.md § 5a.4): the one known defect —
+    a bake that turned a garment into flat wings and dissolved the limbs into
+    it — separates cleanly when THREE markers fire together (skin spread > 5,
+    fewer than 40 of the 52 joints owning vertices, more than 100 floating
+    fragments). Each marker alone is a false-alarm generator (a mermaid tail
+    or a long dress looks like spread), and the rule is calibrated on exactly
+    one case — so the panel SHOWS the finding and nothing acts on it.
+
+    Cached against the file size like the measurement; reads only.
+    """
+    path = (find_model3d(character_name, signature) if signature
+            else find_model3d_serving(character_name)[0])
+    if not path:
+        return {"ok": False, "error": "no_model"}
+    meta_path = path.with_suffix(".json")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) \
+            if meta_path.exists() else {}
+    except (OSError, ValueError):
+        meta = {}
+    cached = meta.get("diagnosis") or {}
+    if cached and not force and cached.get("file_bytes") == path.stat().st_size:
+        return {"ok": True, "cached": True, "diagnosis": cached}
+    from app.blender import runner
+    from app.blender.refine import unavailable_reason
+    res = runner.run("diagnose", inputs={"model": path})
+    if not res.get("ok"):
+        return {"ok": False,
+                "error": unavailable_reason() or res.get("error")
+                or "diagnosis failed"}
+    data = dict(res["data"])
+    flags = {
+        "skin_spread": float(data.get("skin_spread_max") or 0) > 5.0,
+        "bones_missing": 0 < int(data.get("bones_with_verts") or 0) < 40,
+        "fragments": int(data.get("tiny_parts") or 0) > 100,
+    }
+    diagnosis = {
+        "at": utc_now_iso(),
+        "blender": runner.version(),
+        "file_bytes": path.stat().st_size,
+        "data": data,
+        "flags": flags,
+        # Suspect ONLY when all three fire together — see the docstring.
+        "suspect": all(flags.values()),
+    }
+    meta["diagnosis"] = diagnosis
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    except OSError as e:
+        logger.warning("Model3D %s: diagnosis not stored: %s", path.name, e)
+    return {"ok": True, "cached": False, "diagnosis": diagnosis}
 
 
 def retexture_model(character_name: str,
@@ -927,8 +1046,10 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # source of truth is copied rather than derived a second time.
         meta.update(_ref_manifest(src))
         _auto_retexture(character_name, path, meta)
-        # AFTER the re-encode: the numbers have to describe the file that is
-        # actually served, not the one the backend handed over.
+        _auto_normalize(character_name, path, meta)
+        # AFTER the re-encode and the normalisation: the numbers have to
+        # describe the file that is actually served, not the one the backend
+        # handed over.
         _attach_measurement(meta, path)
         # And the distance mesh right away — waiting for someone to ask means
         # the first viewer at range gets the full mesh for nothing, and the

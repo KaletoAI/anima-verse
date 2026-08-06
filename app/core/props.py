@@ -99,6 +99,8 @@ _lock = threading.Lock()
 # serializes on its own GPU channel); only the same prop+backend double-click
 # is rejected.
 _generating: set = set()
+# Props whose distance mesh is being built right now (one build per prop).
+_lod_building: set = set()
 # Models whose bbox extraction already failed, keyed by (prop_id, model mtime)
 # — keeps the lazy backfill from re-parsing an unmeasurable GLB on every
 # listing. A restart or a re-upload retries.
@@ -653,6 +655,69 @@ def _auto_retexture(prop_id: str) -> None:
     _retexture_file(model_path(prop_id), f"Prop {prop_id}")
 
 
+def _build_low_tier(prop_id: str) -> None:
+    """Builds the prop's missing distance mesh in the BACKGROUND.
+
+    Without this, the ``low`` tier of a NEW prop only ever appears through a
+    batch run and a client asking for it keeps getting the full mesh. Same
+    manner as the character store (``model3d.request_lod``): serving never
+    waits, one build per prop at a time, and the reduced mesh must pass the
+    static validation before it is stored. A gallery that already HAS a low
+    tier is left alone — the admin's choice (or an earlier build) wins."""
+    from app.blender import refine
+    if not refine.auto_lod_enabled():
+        return
+    pid = safe_prop_id(prop_id)
+    g = model_gallery(pid)
+    if not g:
+        return
+    src = g.find(DEFAULT_TIER, fallback=False)
+    if not src or src.suffix.lower() != ".glb":
+        return
+    if "low" in g.tiers():
+        return
+    with _lock:
+        if pid in _lod_building:
+            return
+        _lod_building.add(pid)
+
+    def _run() -> None:
+        try:
+            ratio = refine.lod_ratio("prop")
+            res = refine.build_static_lod(src, ratio)
+            if not res.get("ok"):
+                logger.debug("Prop %s: distance mesh not built (%s)", pid,
+                             res.get("error"))
+                return
+            gallery = model_gallery(pid)
+            if not gallery:
+                return
+            target = gallery.new_path()
+            target.write_bytes(res["blob"])
+            write_model_sidecar(target, {
+                "created_at": utc_now_iso(),
+                "source": "lod",
+                "format": "glb",
+                "rig": "none",
+                "tier": "low",
+                "source_file": src.name,
+                "lod_ratio": float(ratio),
+                "tris": res.get("tris"),
+                "tris_before": res.get("tris_before"),
+            })
+            gallery.select(target.name, "low")
+            logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
+                        target.name, res.get("tris_before"), res.get("tris"))
+        except Exception as e:                              # noqa: BLE001
+            logger.warning("Prop %s: distance-mesh build failed: %s", pid, e)
+        finally:
+            with _lock:
+                _lod_building.discard(pid)
+
+    threading.Thread(target=_run, daemon=True,
+                     name=f"prop-lod-{pid}").start()
+
+
 def _store_bbox(prop_id: str) -> None:
     """Everything that happens once a model has landed: re-encode its
     textures, measure it, persist ``bbox`` on the sidecar (one
@@ -662,6 +727,7 @@ def _store_bbox(prop_id: str) -> None:
     Called from all three ingest paths (generate, shrink variant, upload), so
     this is the one place a post-ingest step has to be added."""
     _auto_retexture(prop_id)
+    _build_low_tier(prop_id)
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return

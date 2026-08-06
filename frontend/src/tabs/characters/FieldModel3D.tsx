@@ -34,6 +34,22 @@ interface Model3DMeasured {
   at?: string
 }
 
+/** Geometry-defect indicators (display only). The suspect verdict needs all
+ *  three markers together — each alone is a false-alarm generator, and the
+ *  rule is calibrated on one known case. Nothing acts on this. */
+interface Model3DDiagnosis {
+  data?: {
+    skin_spread_max?: number
+    skin_spread_bone?: string
+    bones_with_verts?: number
+    tiny_parts?: number
+    loose_parts?: number
+  }
+  flags?: { skin_spread?: boolean; bones_missing?: boolean; fragments?: boolean }
+  suspect?: boolean
+  at?: string
+}
+
 interface Model3DInfo {
   filename?: string
   /** signature of the SERVED file (nearest match: another combination's) */
@@ -50,6 +66,7 @@ interface Model3DInfo {
   source?: string
   source_filename?: string
   measured?: Model3DMeasured
+  diagnosis?: Model3DDiagnosis
   /** Resolutions that exist for this file: always 'full', plus 'low' once a
    *  reduced version has been built. */
   tiers?: string[]
@@ -319,6 +336,21 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }, [enc, load, t, toast])
 
+  // Runs the geometry-defect indicators. Reads only, like measuring — the
+  // finding is shown, never acted on.
+  const diagnose = useCallback(async () => {
+    setBusy(true)
+    try {
+      await apiPost(`/characters/${enc}/model3d/diagnose?force=1`, {})
+      await load()
+      toast(t('Geometry checked'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [enc, load, t, toast])
+
   // Re-encodes the textures. Writes the model, so it is offered only for a
   // model this outfit actually owns.
   const retexture = useCallback(async () => {
@@ -548,6 +580,22 @@ export function FieldModel3D({ character }: { character: string }) {
                 : ''}
             </div>
           ) : null}
+          {/* Defect indicators (display only): the verdict needs all three
+              markers together; single markers are listed as numbers so a
+              mermaid tail does not read as a defect. */}
+          {model.diagnosis ? (
+            <div className="ga-hint" style={model.diagnosis.suspect ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>
+              {model.diagnosis.suspect
+                ? `⚠ ${t('Geometry looks broken (all three markers fire): garment surfaces far off their bones, most joints without vertices, many floating fragments. Regenerating with a better T-pose render usually fixes this.')}`
+                : `${t('geometry check')}: ${t('no defect pattern')}`}
+              {model.diagnosis.data
+                ? ` · ${t('spread')} ${(model.diagnosis.data.skin_spread_max ?? 0).toFixed(1)}`
+                  + `${model.diagnosis.data.skin_spread_bone ? ` (${model.diagnosis.data.skin_spread_bone})` : ''}`
+                  + ` · ${model.diagnosis.data.bones_with_verts ?? 0} ${t('joints with mesh')}`
+                  + ` · ${model.diagnosis.data.tiny_parts ?? 0} ${t('fragments')}`
+                : ''}
+            </div>
+          ) : null}
           {/* The distance mesh, once one exists — the client serves it at
               range and the full model up close. */}
           {model.tiers?.includes('low') ? (
@@ -660,6 +708,18 @@ export function FieldModel3D({ character }: { character: string }) {
             title={t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')}
           >
             {t('Measure')}
+          </button>
+        ) : null}
+        {/* Also read-only: the defect indicators of the served mesh. */}
+        {model && canMeasure ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={pending}
+            onClick={diagnose}
+            title={t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}
+          >
+            {t('Check geometry')}
           </button>
         ) : null}
         {/* Only for a GLB this outfit owns — it rewrites the stored file. */}

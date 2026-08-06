@@ -41,6 +41,9 @@ interface Manifest {
   clipFiles?: Record<string, string>;
 }
 
+/** Auflösungs-Stufe eines Server-Modells (Vertragswerte von ?tier=). */
+export type FigureTier = 'full' | 'low';
+
 interface LoadedModel {
   name: string;
   template: THREE.Group;
@@ -49,6 +52,8 @@ interface LoadedModel {
   height: number; // Welthöhe nach Skalierung
   assignOnly: boolean;
   noClips: boolean;
+  /** Stufe, mit der das Modell geladen wurde (Manifest-Modelle: full). */
+  tier: FigureTier;
 }
 
 /** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
@@ -422,6 +427,10 @@ export class FigureLibrary {
   /** Signatur des geladenen Modells je Charakter (Outfit-Wechsel erkennen) */
   private apiSignature = new Map<string, string>();
   private pending = new Set<string>();
+  /** Gewünschte Auflösungs-Stufe je Charakter (view state, Default full). */
+  private tierWanted = new Map<string, FigureTier>();
+  /** Bereits geladene Stufen je Charakter — Rückwechsel ist damit sofort. */
+  private tierCache = new Map<string, Map<FigureTier, LoadedModel>>();
   /** Server-Clips: kind -> (set|'' -> Clip) */
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
   /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
@@ -498,7 +507,7 @@ export class FigureLibrary {
         // Auch statische Meshes (ohne Skelett/Clips) zulassen — Interimszustand,
         // bis ein geriggtes Modell vorliegt; solche Figuren gleiten ohne Laufanimation.
         console.info(`[figures] ${m.name}: rawHeight=${rawHeight.toFixed(3)} -> scale=${(height / rawHeight).toFixed(3)}, clips=${usable.length}, bones=${boneNames(template).size}`);
-        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly, noClips: !!m.noClips };
+        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly, noClips: !!m.noClips, tier: 'full' as FigureTier };
       })
     );
     for (const r of results) {
@@ -579,8 +588,61 @@ export class FigureLibrary {
     console.info(`[figures] ${charName}: Modell geändert (${known} -> ${info.signature}) — lade neu`);
     this.apiModels.delete(charName);
     this.apiSignature.delete(charName);
+    this.tierCache.delete(charName);   // beide Stufen gehören zum alten Mesh
     this.fetchCharacterModel(charName);
     return true;
+  }
+
+  /** Gewünschte Distanz-Stufe einer Figur setzen (view state — WANN full/low
+   *  gilt, entscheidet der Aufrufer; die Hysterese steckt in dessen Bändern).
+   *  Aktiviert sofort aus dem Stufen-Cache oder lädt die fehlende Stufe nach;
+   *  bis dahin bleibt die stehende Figur unverändert sichtbar. */
+  setFigureTier(charName: string, tier: FigureTier) {
+    if ((this.tierWanted.get(charName) ?? 'full') === tier) return;
+    this.tierWanted.set(charName, tier);
+    this.syncTier(charName);
+  }
+
+  /** Aktives Modell auf die gewünschte Stufe bringen: Cache-Treffer sofort,
+   *  sonst EIN Nachladelauf; danach erneut prüfen (der Wunsch kann sich
+   *  während des Ladens geändert haben). Ein Ladefehler gibt auf — der
+   *  nächste Stufen-Wechsel versucht es wieder. */
+  private syncTier(charName: string) {
+    const want = this.tierWanted.get(charName) ?? 'full';
+    const active = this.apiModels.get(charName);
+    if (!active || active.tier === want || this.pending.has(charName)) return;
+    const cached = this.tierCache.get(charName)?.get(want);
+    if (cached) {
+      this.apiModels.set(charName, cached);
+      this.onModelReady?.(charName);
+      return;
+    }
+    this.pending.add(charName);
+    void (async () => {
+      let built = false;
+      try {
+        const info = await getCharacterModel(charName);
+        if (info) {
+          const model = await this.buildModel(charName, info, want);
+          this.cacheTier(charName, model);
+          built = true;
+        }
+      } catch (e) {
+        console.warn(`[figures] ${charName}: ${want}-Stufe nicht ladbar`, e);
+      } finally {
+        this.pending.delete(charName);
+      }
+      if (built) this.syncTier(charName);
+    })();
+  }
+
+  private cacheTier(charName: string, model: LoadedModel) {
+    let byTier = this.tierCache.get(charName);
+    if (!byTier) {
+      byTier = new Map();
+      this.tierCache.set(charName, byTier);
+    }
+    byTier.set(model.tier, model);
   }
 
   /** Körpergröße eines Charakters merken (cm -> m); wirkt beim nächsten Bau. */
@@ -619,10 +681,12 @@ export class FigureLibrary {
           this.apiModels.set(charName, null);   // Server hat keins -> Portrait
           return;
         }
-        const model = await this.buildModel(charName, info);
+        const tier = this.tierWanted.get(charName) ?? 'full';
+        const model = await this.buildModel(charName, info, tier);
+        this.cacheTier(charName, model);
         this.apiModels.set(charName, model);
         if (info.signature) this.apiSignature.set(charName, info.signature);
-        console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
+        console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}/${tier}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
       } catch (e) {
         // Transienter Fehler (Netzwerk, 5xx, Textur): nicht als "hat keins"
@@ -631,14 +695,18 @@ export class FigureLibrary {
         window.setTimeout(() => this.fetchCharacterModel(charName), 30_000);
       } finally {
         this.pending.delete(charName);
+        this.syncTier(charName);   // Wunsch kann sich beim Laden geändert haben
       }
     })();
   }
 
   /** Modell laden, aufrichten, normalisieren; Clips nur bei Mixamo-Rig.
-   *  FBX-Modelle (generic/Tiere) bekommen ihre Textur separat. */
-  private async buildModel(name: string, info: ApiModel): Promise<LoadedModel> {
-    const gltf = await this.loadFile(info.url, info.format === 'fbx');
+   *  FBX-Modelle (generic/Tiere) bekommen ihre Textur separat.
+   *  `tier=low` fordert die Distanzfassung an — existiert sie (noch) nicht,
+   *  liefert der Server das volle Mesh unter derselben Stufe aus. */
+  private async buildModel(name: string, info: ApiModel, tier: FigureTier = 'full'): Promise<LoadedModel> {
+    const url = tier === 'low' ? `${info.url}?tier=low` : info.url;
+    const gltf = await this.loadFile(url, info.format === 'fbx');
     const template = gltf.scene;
     if (info.textureUrl) {
       const tex = await new THREE.TextureLoader().loadAsync(info.textureUrl);
@@ -688,11 +756,16 @@ export class FigureLibrary {
     }
     const bbox = new THREE.Box3().setFromObject(template);
     const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
+    // A server-normalised file already stands its real height on the ground;
+    // rescaling it by the box would shrink a figure by its hair/hat again
+    // (the crown-joint basis puts those ABOVE the target height on purpose).
+    // Legacy models keep the runtime measure until they are re-generated.
     const height = this.charHeight.get(name) ?? this.defaultHeight;
+    const scale = info.normalized ? 1 : height / rawHeight;
     const model: LoadedModel = {
       name, template,
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
-      scale: height / rawHeight, height, assignOnly: true, noClips: false,
+      scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
     };
     // Clips gemäß der Set-Kette des Charakters (female/male/animal/custom).
     // "generic"-Rigs (eigene Skelette) bleiben clip-los -> prozedurales Idle.

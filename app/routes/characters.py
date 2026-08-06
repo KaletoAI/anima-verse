@@ -1552,6 +1552,23 @@ def measure_character_model3d(character_name: str,
     return res
 
 
+@router.post("/{character_name}/model3d/diagnose")
+def diagnose_character_model3d(character_name: str,
+                               force: bool = False) -> Dict[str, Any]:
+    """Runs the geometry-defect indicators over the served model and caches
+    them in the sidecar. Reads only, and DISPLAY only: the suspect verdict
+    needs all three markers together and is calibrated on one known case —
+    the panel shows the finding, nothing acts on it.
+    """
+    from app.core.model3d import diagnose_model
+    res = diagnose_model(character_name, force=force)
+    if not res.get("ok"):
+        err = res.get("error", "")
+        raise HTTPException(status_code=404 if err == "no_model" else 503,
+                            detail=err or "diagnosis failed")
+    return res
+
+
 @router.post("/{character_name}/model3d/lod")
 def build_character_model3d_lod(character_name: str,
                                 ratio: float = 0) -> Dict[str, Any]:

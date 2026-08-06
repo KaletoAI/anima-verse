@@ -51,14 +51,27 @@ def main(fn):
 
 
 def import_model(path):
-    """Loads a model into the EMPTY current scene, by extension."""
+    """Loads a model into the EMPTY current scene, by extension.
+
+    glTF: ``bone_heuristic="TEMPERANCE"`` on purpose. The default (BLENDER)
+    creates an Icosphere MESH OBJECT in the scene as the bones' display shape
+    — a measuring script would count its triangles and its ±1 m bounds as if
+    they were the model's (a radius-1 sphere around the origin reads as
+    "min_z = -1, does not stand on the ground"). Belt and braces, any object
+    that only serves as a bone custom shape is unlinked after import.
+    """
     import bpy
     ext = Path(path).suffix.lower()
     kind = IMPORTERS.get(ext)
     if not kind:
         raise ValueError(f"unsupported model format: {ext}")
     if kind == "gltf":
-        bpy.ops.import_scene.gltf(filepath=str(path))
+        try:
+            bpy.ops.import_scene.gltf(filepath=str(path),
+                                      bone_heuristic="TEMPERANCE")
+        except TypeError:
+            bpy.ops.import_scene.gltf(filepath=str(path))
+        _drop_bone_shape_objects(bpy)
     elif kind == "fbx":
         # global_scale stays 1.0 on purpose: many rigs (Mixamo among them) are
         # authored in centimetres, and silently rescaling on import would hide
@@ -70,6 +83,23 @@ def import_model(path):
         bpy.ops.wm.ply_import(filepath=str(path))
     elif kind == "stl":
         bpy.ops.wm.stl_import(filepath=str(path))
+
+
+def _drop_bone_shape_objects(bpy):
+    """Removes objects that exist only as bone display shapes.
+
+    They are visual aids for a human in the viewport; in a headless pipeline
+    they only falsify counts and bounds."""
+    shapes = set()
+    for obj in list(bpy.context.scene.objects):
+        if obj.type != "ARMATURE" or obj.pose is None:
+            continue
+        for pb in obj.pose.bones:
+            if pb.custom_shape is not None:
+                shapes.add(pb.custom_shape.name)
+    for obj in list(bpy.context.scene.objects):
+        if obj.name in shapes:
+            bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def reset_scene():
