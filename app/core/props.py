@@ -655,6 +655,30 @@ def _auto_retexture(prop_id: str) -> None:
     _retexture_file(model_path(prop_id), f"Prop {prop_id}")
 
 
+def _auto_bake_vc(prop_id: str) -> None:
+    """Converts a vertex-colour (Triposplat) model to a textured one, if
+    switched on. Runs BEFORE the re-encode on purpose: the baked texture is a
+    fresh PNG, and the retexture step turns it into JPEG in the same ingest.
+    Without this step the model can neither be re-encoded nor reduced
+    (``MeshNotShrinkable``) — the whole alias family was a dead end."""
+    from app.blender import refine
+    from app.core.model_validate import validate_static_glb
+    path = model_path(prop_id)
+    if (not refine.auto_bake_vc_enabled() or not path
+            or not refine.needs_vc_bake(path)):
+        return
+    res = refine.bake_vertex_colors(path, validator=validate_static_glb)
+    if res.get("applied"):
+        d = res.get("data") or {}
+        logger.info("Prop %s: vertex colours baked to a %d px texture "
+                    "(%s -> %s boundary edges)", safe_prop_id(prop_id),
+                    d.get("texture_size", 0), d.get("boundary_before"),
+                    d.get("boundary_after"))
+    elif res.get("error"):
+        logger.info("Prop %s: vertex-colour bake not applied (%s)",
+                    safe_prop_id(prop_id), res.get("error"))
+
+
 def _build_low_tier(prop_id: str) -> None:
     """Builds the prop's missing distance mesh in the BACKGROUND.
 
@@ -726,6 +750,7 @@ def _store_bbox(prop_id: str) -> None:
 
     Called from all three ingest paths (generate, shrink variant, upload), so
     this is the one place a post-ingest step has to be added."""
+    _auto_bake_vc(prop_id)
     _auto_retexture(prop_id)
     _build_low_tier(prop_id)
     bbox = _extract_bbox(prop_id)

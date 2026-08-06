@@ -214,6 +214,46 @@ def normalize(path: Path, target_height_m: float,
                             "image_generation.blender_keep_original", True)))
 
 
+def auto_bake_vc_enabled() -> bool:
+    """Whether a vertex-colour mesh (Triposplat) is converted to a textured
+    one on arrival — the step that makes the whole alias family usable."""
+    from app.core import config
+    return bool(config.get("image_generation.blender_auto_bake_vc", True))
+
+
+def needs_vc_bake(path: Path) -> bool:
+    """The Triposplat signature, read from the GLB header: colour in the
+    vertices and no UVs. Only a positive finding answers True — an unreadable
+    or non-GLB file is not this step's business."""
+    if Path(path).suffix.lower() != ".glb":
+        return False
+    from app.core.model_validate import shrink_capability
+    caps = (shrink_capability(Path(path)) or {}).get("caps") or {}
+    return bool(caps.get("vertex_colors")) and not caps.get("uv")
+
+
+def bake_vertex_colors(path: Path,
+                       validator: Optional[Callable[[bytes], Dict[str, Any]]] = None,
+                       texture_size: int = 1024) -> Dict[str, Any]:
+    """UV-unwraps a vertex-colour mesh and bakes the colours to a texture.
+
+    Decimates to the configured triangle budget FIRST — a splat bake carries
+    hundreds of thousands of triangles, and unwrapping those splits every
+    island seam and quadruples the file. After the step the mesh is a normal
+    textured model — re-encodable, reducible, engine-usable. Size gate off:
+    the texture ADDS bytes by design. The original is kept under ``raw/``
+    like every refinement."""
+    from app.core import config
+    target = int(config.get("image_generation.blender_bake_vc_target_tris",
+                            40000) or 0)
+    return apply_script(path, "bake_vc",
+                        {"texture_size": int(texture_size),
+                         "target_tris": target},
+                        validator=validator, require_smaller=False,
+                        keep_original=bool(config.get(
+                            "image_generation.blender_keep_original", True)))
+
+
 def auto_lod_enabled() -> bool:
     """Whether a missing distance mesh is built without being asked — the
     "Build distance meshes on demand" switch; shared by every store."""
