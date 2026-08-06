@@ -52,9 +52,10 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
     differs from arrow to arrow. One rule, one place — the pad used to carry
     its own copy of an older one and greyed out steps the server allows.
 
-    ``enterable`` + ``reason`` are the ARRIVAL side of the same idea
-    (``neighbor_access``): may the avatar set foot on that neighbour at all,
-    and if not, in one player-facing sentence, why not.
+    ``enterable`` + ``reason`` are the verdict on the STEP as a whole
+    (``neighbor_access``): would the avatar end up standing there, and if not,
+    in one player-facing sentence, why not — the leave rules of the place it
+    stands in included, because the step route refuses on those too.
     """
     from app.core.boundary_entry import (
         EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave)
@@ -62,6 +63,7 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
     from app.models.character import (
         get_character_current_location, get_character_current_room,
         get_character_language)
+    from app.models.rules import check_leave
 
     out: Dict[str, Any] = {
         "north": None, "south": None, "east": None, "west": None,
@@ -94,13 +96,21 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
     targets = {(cx + dx, cy + dy): direction
                for direction, (dx, dy) in deltas.items()}
     lang = get_character_language(avatar) or "de"
+    # The leave rules (action="leave", the event-coupled danger blocks among
+    # them) are what the step route refuses with FIRST of the two rule gates,
+    # and they know nothing about a direction: check_leave reads the avatar's
+    # current location and room, which is the same for all four arrows. So it
+    # is asked ONCE here and folded into every direction's verdict — without
+    # it the pad shows a green arrow the step then turns away.
+    ok_leave, leave_msg = check_leave(avatar)
+    leave_block = "" if ok_leave else leave_msg
     for loc in list_locations():
         key = (int(loc.get("grid_x") or 0), int(loc.get("grid_y") or 0))
         direction = targets.get(key)
         if direction and not out[direction]:
             exit_edge = EDGE_OF_DIRECTION[direction]
             enterable, reason = neighbor_access(
-                avatar, loc, OPPOSITE_EDGE[exit_edge], lang)
+                avatar, loc, OPPOSITE_EDGE[exit_edge], lang, leave_block)
             out[direction] = {
                 "id": loc.get("id", "") or "",
                 "name": loc.get("name", "") or "",
@@ -112,19 +122,25 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
 
 
 def neighbor_access(avatar: str, target: Dict[str, Any], entry_edge: str,
-                    lang: str = "") -> Tuple[bool, str]:
-    """May ``avatar`` enter location ``target`` across ``entry_edge``?
+                    lang: str = "", leave_block: str = "") -> Tuple[bool, str]:
+    """Would a step onto ``target`` across ``entry_edge`` succeed for ``avatar``?
 
     Returns ``(enterable, reason)``; the reason is empty exactly when the
-    answer is yes, and otherwise one player-facing sentence. Three gates, in
-    the order the arrival applies them (plan-betreten-und-tueren.md § 5):
+    answer is yes, and otherwise one player-facing sentence. Four gates, in
+    the order ``move_avatar_step`` applies them (plan-betreten-und-tueren.md
+    § 5) — the cheapest first, so the wording the player sees is the first
+    refusal, not the last:
 
     1. the crossed edge — without an authored opening there is no way in
        (the sentence is the one ``move_avatar_step`` refuses with, so pad and
        refusal never word the same "no" differently),
-    2. ``accessible_when`` at the location — the same condition the world map
+    2. ``leave_block`` — the message of a refusing ``check_leave``, or empty.
+       The caller passes it in because that check reads the avatar's CURRENT
+       place and is therefore the same for all four directions: one call for
+       the whole pad instead of one per arrow.
+    3. ``accessible_when`` at the location — the same condition the world map
        greys a place out with (``build_locations_payload``),
-    3. the block rules, via the very ``check_access`` the step decides with;
+    4. the block rules, via the very ``check_access`` the step decides with;
        the room asked about is where the arrival would land.
 
     Per avatar and changing with events, therefore NEVER part of the
@@ -137,6 +153,8 @@ def neighbor_access(avatar: str, target: Dict[str, Any], entry_edge: str,
 
     if not opening_on_edge(target, entry_edge):
         return False, t("There is no way in on this side.", lang)
+    if leave_block:
+        return False, leave_block
     target_id = target.get("id", "") or ""
     if not _conditions_pass(target.get("accessible_when") or [],
                             avatar, target_id):

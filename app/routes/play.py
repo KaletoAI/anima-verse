@@ -508,6 +508,11 @@ def play_test_figure_meta():
 
 # --- Room models (AV3D-2) — same contract as the building model, addressed
 # by room id alone (room ids are template-identical across clones).
+# ⚠ These three routes cannot address the GROUND room: its id is reserved and
+# every location owns one, so the bare-id lookup (find_location_by_room) would
+# answer with whichever location comes first. Deferred by design (C1) — the
+# ground has neither a room model nor a room layout, its geometry comes from
+# the location's scene recipe, so nothing asks for it today.
 
 @router.get("/play/rooms/{room_id}/model")
 def play_room_model(room_id: str, request: Request, tier: str = ""):
