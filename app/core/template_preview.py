@@ -619,14 +619,6 @@ def _drive_animation_prompt(agent: str, avatar: str) -> PreviewResult:
                      "passed in — sample used here).")}
 
 
-def _drive_expression_map(agent: str, avatar: str) -> PreviewResult:
-    from app.core.expression_pose_maps import _llm_generate_prompt
-    task, sys, user = _capture_render(
-        lambda: _llm_generate_prompt("expression", "wistful"))
-    return {"ok": True, "output": _format(task, sys, user),
-            "note": "Production: expression_pose_maps._llm_generate_prompt('expression', 'wistful')."}
-
-
 def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
     """The chat-state extractor is nested deep inside chat.py and runs
     asynchronously. It's invoked per request — for preview we'd need
@@ -793,7 +785,6 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/image_analysis.md": _drive_image_analysis,
     "tasks/instagram_caption.md": _drive_instagram_caption,
     "tasks/animation_prompt.md": _drive_animation_prompt,
-    "tasks/expression_map.md": _drive_expression_map,
 }
 
 

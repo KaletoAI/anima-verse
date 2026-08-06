@@ -88,11 +88,13 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 
     ctx: Dict[str, Any] = {
         "character_name": character_name,
-        # Sprach-Instruktion des Characters (z.B. "Always respond in German.")
-        # — sonst erzeugt der Thought-Turn englische Spontan-Aeusserungen.
+        # The character's language instruction (e.g. "Always respond in
+        # German.") — otherwise the thought turn produces English asides.
         "lang_instruction": get_character_language_instruction(character_name),
         "personality": (profile.get("character_personality", "") or "").strip(),
         "location_name": location_name,
+        # DISPLAY text, not a render key: the sanitized flavor if there is
+        # one, else the bare catalog key. Cleaned and capped at the write path.
         "activity": ("Sleeping" if profile.get("is_sleeping")
                      else (profile.get("pose_flavor")
                            or profile.get("pose_key") or "")) or "None",

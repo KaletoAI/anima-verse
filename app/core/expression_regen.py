@@ -1,8 +1,12 @@
 """Expression Regeneration — generates outfit images with expression/pose variants.
 
 Lazy on-demand: the frontend requests an expression image via the endpoint,
-and this module generates it if not cached. Results are cached per mood+pose
-combination in outfits/expressions/.
+and this module generates it if not cached. Results live in the character's
+outfits/ directory, keyed by CATALOG KEYS: the cache-key space is
+|pose catalog| x |expression catalog| x outfit x state fingerprint — finite
+and lazily filled. Free text never reaches this module: callers pass the pose
+catalog key (``get_effective_pose_key``), the mood is mapped onto its
+expression key here (``resolve_expression_key``).
 """
 
 import hashlib
@@ -16,13 +20,10 @@ from typing import Any, Dict, Optional, Set
 
 from app.core.log import get_logger
 from app.core.expression_pose_maps import (
-    default_expression_prompt,
-    default_pose_prompt,
+    get_expression_prompt,
+    get_pose_prompt,
     is_partner_activity,
-    mood_bucket,
-    resolve_expression_prompt,
-    resolve_pose_key,
-    resolve_pose_prompt)
+    resolve_expression_key)
 
 logger = get_logger(__name__)
 
@@ -50,7 +51,7 @@ def _get_char_mutex(character_name: str) -> threading.Lock:
 
 
 def _cleanup_stale_temps(expr_dir: Path) -> None:
-    """Entfernt liegen gebliebene .tmp_ / _temp_ Dateien aus dem Expressions-Dir."""
+    """Removes leftover .tmp_ / _temp_ files from the expressions directory."""
     count = 0
     for f in expr_dir.iterdir():
         if not f.is_file():
@@ -62,37 +63,20 @@ def _cleanup_stale_temps(expr_dir: Path) -> None:
             except OSError:
                 pass
     if count:
-        logger.info("Cleanup: %d veraltete temp Dateien entfernt", count)
+        logger.info("Cleanup: %d stale temp files removed", count)
 
 
 def _get_expressions_dir(character_name: str) -> Path:
     """Returns the expressions cache directory for a character.
 
-    Frueher war das ein 'variants/' Unterordner — seit dem Refactor liegen
-    die Variant-Bilder direkt im outfits/ Ordner (Outfit-Bilder gibt es nicht
-    mehr, Variants partitionieren sich via Cache-Key aus Character + Equipped +
-    Pose + Expression).
+    The variant images live directly in the outfits/ folder (there are no
+    outfit images any more); variants partition themselves via the cache key
+    of character + equipped + pose key + expression key + state.
     """
     from app.models.character import get_character_outfits_dir
     expr_dir = get_character_outfits_dir(character_name)
     expr_dir.mkdir(parents=True, exist_ok=True)
     return expr_dir
-
-
-def _normalize_activity(activity: str) -> str:
-    """Reduce verbose activity text to a short canonical form for stable cache keys.
-
-    Long, detailed activity descriptions change with every LLM response,
-    causing permanent cache misses.  We keep only the first 4 words
-    (lowercased, stripped of punctuation) so that similar activities
-    like 'kneeling on the floor' and 'kneeling on the floor looking up'
-    map to the same bucket.
-    """
-    text = activity.strip().lower()
-    # Remove punctuation except hyphens
-    text = re.sub(r"[^\w\s-]", "", text)
-    words = text.split()[:4]
-    return " ".join(words)
 
 
 def _safe_name(name: str) -> str:
@@ -103,14 +87,14 @@ def _safe_name(name: str) -> str:
 def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
                         equipped_items: Optional[list] = None,
                         equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
-    """Stable signature der getragenen Items (Pieces + sonstige Ausruestung).
+    """Stable signature of the worn items (pieces + other equipment).
 
-    Slot-Reihenfolge fix sortiert, damit gleiche Equip-Sets immer den
-    gleichen Hash erzeugen. Items alphabetisch.
+    Slot order is sorted so the same equip set always produces the same hash;
+    items alphabetically.
 
-    equipped_pieces_meta-Parameter bleibt aus Kompatibilitaet bestehender
-    Aufrufer in der Signatur, wird aber ignoriert — Farb-Overrides wurden
-    in Schritt 3 (May 2026) abgeschafft (Plan §5).
+    The equipped_pieces_meta parameter stays in the signature for existing
+    callers but is ignored — colour overrides were dropped in step 3
+    (May 2026, plan §5).
     """
     parts = []
     if equipped_pieces:
@@ -136,48 +120,49 @@ def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
     return "|".join(parts)
 
 
-def _cache_key(mood: str, activity: str,
+def _canonical_pose_key(pose_key: str) -> str:
+    """The pose axis of the cache key: an EXACT catalog key.
+
+    Unknown or empty input collapses onto the catalog's default key — the
+    same entry ``get_pose_prompt`` renders for it, so key and image agree.
+    """
+    from app.core.pose_catalog import get_catalog, get_default_key
+    key = (pose_key or "").strip().lower()
+    if key and key in get_catalog("pose"):
+        return key
+    if key:
+        logger.debug("cache key: pose '%s' is not a catalog key → default", key)
+    return get_default_key("pose")
+
+
+def _cache_key(mood: str, pose_key: str,
                character_name: str = "",
                equipped_pieces: Optional[Dict[str, str]] = None,
                equipped_items: Optional[list] = None,
                equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
-               pose_variant_id: Optional[int] = None,
                state_fp: Optional[str] = None) -> str:
     """Build a deterministic cache key.
 
-    Step 5 (May 2026): when pose_variant_id is given it replaces the
-    activity-normalization path — images are cached against consolidated
-    pose variants per character instead of free activity text. Falls back
-    automatically to the old pose-preset path when no variant_id exists
-    (the migration runs incrementally).
-
-    Mood is reduced to a coarse body-language bucket — finer mood
-    differences are irrelevant for variant reuse.
+    Two catalog axes and nothing else: ``resolve_expression_key(mood)`` and
+    the exact pose catalog key the caller passed
+    (``character.get_effective_pose_key``). Together with the outfit
+    signature and the state fingerprint that makes the key space finite —
+    |pose catalog| x |expression catalog| x outfit x state — instead of
+    growing with every phrasing an LLM invents.
 
     ``state_fp``: fingerprint of the triggered image-modifier state
     (model_refs.state_fingerprint). ``None`` = look it up live for
     ``character_name`` — every caller passes the character's CURRENT
     mood/outfit anyway, the state belongs to that same snapshot. Pass ""
-    explicitly for a deliberately neutral render. No active state keeps
-    the historic key, so existing variants stay valid.
+    explicitly for a deliberately neutral render.
     """
-    # No variant id from the caller but a character_name: try to read it
-    # from state / lazy migration.
-    if pose_variant_id is None and character_name:
-        pose_variant_id = _resolve_variant_for_cache(character_name, activity)
-    if pose_variant_id is not None and pose_variant_id > 0:
-        act = f"v{pose_variant_id}"
-    else:
-        # Legacy path: activity text → pose-preset key
-        act_filtered = _normalize_activity_for_trigger(activity, mood)
-        act_canonical = resolve_pose_key(act_filtered) if act_filtered else ""
-        act = act_canonical or _normalize_activity(act_filtered)
-    bucket = mood_bucket(mood) if mood else ""
+    expression_key = resolve_expression_key(mood)
+    pose = _canonical_pose_key(pose_key)
     eq = _equipped_signature(equipped_pieces, equipped_items, equipped_pieces_meta)
     if state_fp is None and character_name:
         from app.core.model_refs import state_fingerprint
         state_fp = state_fingerprint(character_name)
-    raw = f"{bucket}:{act}:{eq}"
+    raw = f"{expression_key}:{pose}:{eq}"
     if state_fp:
         raw += f":state={state_fp}"
     h = hashlib.md5(raw.encode()).hexdigest()[:12]
@@ -186,45 +171,8 @@ def _cache_key(mood: str, activity: str,
     return h
 
 
-def _resolve_variant_for_cache(character_name: str,
-                                activity: str) -> Optional[int]:
-    """Returns the pose_variant_id for the current character.
-
-    Order:
-      1. character_state.pose_variant_id (written by the canonical setter)
-      2. If only an activity string is at hand: resolve it to a catalog key and
-         match/create the variant for that key — same mapping the setter uses,
-         but WITHOUT writing the pose (the caller's text may be a display value
-         like "Sleeping", not the character's actual pose).
-      3. None → _cache_key falls back to the legacy path
-
-    Returns variant_id (int) or None.
-    """
-    if not character_name:
-        return None
-    try:
-        from app.models.character import get_character_profile
-        prof = get_character_profile(character_name) or {}
-        vid = prof.get("pose_variant_id")
-        if vid and int(vid) > 0:
-            return int(vid)
-        # Lazy: an activity string but no variant yet — match/create the
-        # variant of its catalog key. Only when the caller supplies a value,
-        # never in the hot path.
-        if activity:
-            from app.core.pose_catalog import resolve_to_catalog
-            from app.core.pose_variants import get_or_create_variant
-            key, _how = resolve_to_catalog(activity, "pose")
-            variant = get_or_create_variant(character_name, key)
-            if variant:
-                return int(variant["id"])
-    except Exception as e:
-        logger.debug("_resolve_variant_for_cache(%s): %s", character_name, e)
-    return None
-
-
 def get_cached_expression(character_name: str,
-                          mood: str, activity: str,
+                          mood: str, pose_key: str,
                           equipped_pieces: Optional[Dict[str, str]] = None,
                           equipped_items: Optional[list] = None,
                           equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Path]:
@@ -235,7 +183,7 @@ def get_cached_expression(character_name: str,
     variants to evict when a character exceeds its cap.
     """
     expr_dir = _get_expressions_dir(character_name)
-    key = _cache_key(mood, activity, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)
+    key = _cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)
     for ext in (".png", ".jpg", ".webp"):
         path = expr_dir / f"{key}{ext}"
         if path.exists():
@@ -244,14 +192,15 @@ def get_cached_expression(character_name: str,
     return None
 
 
-def peek_cached_expression(character_name: str, mood: str, activity: str,
+def peek_cached_expression(character_name: str, mood: str, pose_key: str,
                            equipped_pieces: Optional[Dict[str, str]] = None,
                            equipped_items: Optional[list] = None,
                            equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Path]:
-    """Wie get_cached_expression, aber OHNE Seiteneffekt (kein Sidecar-Touch) —
-    für Versions-/Existenz-Checks bei jedem Poll, ohne use_count/LRU zu verfälschen."""
+    """Like get_cached_expression but WITHOUT the side effect (no sidecar
+    touch) — for version/existence checks on every poll, so use_count/LRU
+    stay honest."""
     expr_dir = _get_expressions_dir(character_name)
-    key = _cache_key(mood, activity, character_name, equipped_pieces,
+    key = _cache_key(mood, pose_key, character_name, equipped_pieces,
                      equipped_items, equipped_pieces_meta)
     for ext in (".png", ".jpg", ".webp"):
         path = expr_dir / f"{key}{ext}"
@@ -266,15 +215,14 @@ def find_nearest_expression(character_name: str, mood: str,
     """Serving fallback: the cached variant whose recorded outfit is CLOSEST
     to the given equipped state (app/core/outfit_match.py), so a character in
     a never-rendered combination shows a near-matching image instead of an
-    arbitrary one. Outfit similarity dominates; the mood bucket breaks ties,
-    then recency. Read-only — no sidecar touch, no generation trigger. None
-    when no variant records an outfit (legacy sidecars without the fields)."""
+    arbitrary one. Outfit similarity dominates; an EQUAL expression key breaks
+    ties, then recency. Read-only — no sidecar touch, no generation trigger.
+    None when no variant records an outfit (sidecars without the fields)."""
     from app.core.outfit_match import outfit_similarity
-    from app.core.expression_pose_maps import mood_bucket
     expr_dir = _get_expressions_dir(character_name)
     if not expr_dir.is_dir():
         return None
-    want_bucket = mood_bucket(mood) if mood else ""
+    want_key = resolve_expression_key(mood)
     best = None
     for sidecar in expr_dir.glob(f"{_safe_name(character_name)}_*.json"):
         img = next((sidecar.with_suffix(ext)
@@ -291,9 +239,10 @@ def find_nearest_expression(character_name: str, mood: str,
         score = outfit_similarity(equipped_pieces, equipped_items,
                                   meta.get("equipped_pieces"),
                                   meta.get("equipped_items") or [])
-        bucket_hit = bool(want_bucket) and \
-            mood_bucket(str(meta.get("mood") or "")) == want_bucket
-        key = (score, bucket_hit, img.stat().st_mtime)
+        # Exact key equality — the sidecar records the key the image was
+        # rendered under, so no free text is re-resolved while serving.
+        expression_hit = str(meta.get("expression_key") or "") == want_key
+        key = (score, expression_hit, img.stat().st_mtime)
         if best is None or key > best[0]:
             best = (key, img)
     return best[1] if best is not None else None
@@ -380,7 +329,7 @@ def prune_variants(character_name: str, max_per_char: Optional[int] = None) -> i
         except OSError as e:
             logger.debug("prune %s failed: %s", sidecar.name, e)
     if removed:
-        logger.info("Variant-Pruning %s: %d Paare entfernt (cap=%d)",
+        logger.info("Variant pruning %s: %d pairs removed (cap=%d)",
                      character_name, removed, cap)
     return removed
 
@@ -400,44 +349,43 @@ def prune_variants_all(max_per_char: Optional[int] = None) -> int:
     return total
 
 
-def is_generating(character_name: str, mood: str, activity: str,
+def is_generating(character_name: str, mood: str, pose_key: str,
                   equipped_pieces: Optional[Dict[str, str]] = None,
                   equipped_items: Optional[list] = None,
                   equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
-    """True wenn Generation laeuft ODER im Coalesce-Fenster wartet.
+    """True while a generation runs OR waits inside the coalesce window.
 
-    Coalesce-Pending zaehlt als generating, damit das FE-Polling nicht fuer
-    jeden Poll einen neuen Trigger absetzt (was den Debounce-Timer resetten
-    wuerde) und stattdessen 202 bekommt bis das Bild tatsaechlich da ist.
+    A pending coalesce counts as generating so the frontend polling does not
+    fire a new trigger per poll (which would reset the debounce timer) and
+    gets a 202 until the image is actually there.
     """
-    key = f"{character_name}:{_cache_key(mood, activity, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
     with _generating_lock:
         if key in _generating:
             return True
         pending = _pending_triggers.get(character_name)
         if pending:
-            pending_key = f"{character_name}:{_cache_key(pending.get('mood', ''), pending.get('activity', ''), character_name, pending.get('equipped_pieces'), pending.get('equipped_items'), pending.get('equipped_pieces_meta'))}"
+            pending_key = f"{character_name}:{_cache_key(pending.get('mood', ''), pending.get('pose_key', ''), character_name, pending.get('equipped_pieces'), pending.get('equipped_items'), pending.get('equipped_pieces_meta'))}"
             if pending_key == key:
                 return True
     return False
 
 
-def has_failed(character_name: str, mood: str, activity: str,
+def has_failed(character_name: str, mood: str, pose_key: str,
                equipped_pieces: Optional[Dict[str, str]] = None,
                equipped_items: Optional[list] = None,
                equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
     """Check if generation recently failed for this combo (avoids retry loops)."""
-    key = f"{character_name}:{_cache_key(mood, activity, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
     with _generating_lock:
         return key in _failed
 
 
 def invalidate_variants_for_item(item_id: str) -> int:
-    """Loescht gezielt die Variant-Dateien, die das geaenderte Item in ihrem
-    equipped_pieces/items enthielten — via Sidecar-JSON neben dem PNG.
+    """Deletes exactly those variant files whose equipped_pieces/items
+    contained the changed item — read from the .json sidecar next to the PNG.
 
-    Variants ohne Sidecar (z.B. aus alten Generationen vor dem Sidecar-Feld)
-    werden uebersprungen, nicht pauschal mitgeloescht.
+    Variants without a sidecar are skipped, not deleted wholesale.
     """
     if not item_id:
         return 0
@@ -462,7 +410,7 @@ def invalidate_variants_for_item(item_id: str) -> int:
                 in_items = item_id in eq_items
                 if not (in_pieces or in_items):
                     continue
-                # Zugehoeriges Bild + Sidecar loeschen
+                # Delete the image and its sidecar together
                 for ext in (".png", ".jpg", ".webp"):
                     img = sidecar.with_suffix(ext)
                     if img.exists():
@@ -478,17 +426,17 @@ def invalidate_variants_for_item(item_id: str) -> int:
         except Exception as e:
             logger.debug("invalidate_variants_for_item %s/%s: %s", char_name, e)
     if total:
-        logger.info("Variant-Invalidierung wegen Item %s: %d Dateien geloescht", item_id, total)
+        logger.info("Variant invalidation for item %s: %d files deleted", item_id, total)
     return total
 
 
-def clear_failed_marker(character_name: str, mood: str, activity: str,
+def clear_failed_marker(character_name: str, mood: str, pose_key: str,
                          equipped_pieces: Optional[Dict[str, str]] = None,
                          equipped_items: Optional[list] = None,
                          equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
-    """Entfernt den failed-Marker fuer eine bestimmte Kombination,
-    damit die Generation erneut versucht werden kann."""
-    key = f"{character_name}:{_cache_key(mood, activity, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    """Removes the failed marker for one combination so the generation can be
+    attempted again."""
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
     with _generating_lock:
         _failed.discard(key)
 
@@ -508,30 +456,31 @@ def clear_expression_cache(character_name: str) -> int:
         stale = {k for k in _failed if k.startswith(prefix)}
         _failed.difference_update(stale)
     if count or stale:
-        logger.info("Expression-Cache geleert: %d Dateien, %d Failed-Marker (%s)",
+        logger.info("Expression cache cleared: %d files, %d failed markers (%s)",
                      count, len(stale), character_name)
     return count
 
 
-# Bildendungen, unter denen ein Variant-Bild neben seinem .json-Sidecar liegt.
+# Image extensions a variant image can carry next to its .json sidecar.
 _VARIANT_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 
 def list_expressions(character_name: str) -> list:
-    """Listet alle gecachten Expression-Variants eines Characters mit ihren
-    Parametern (aus dem .json-Sidecar). Neueste zuerst.
+    """Lists all cached expression variants of a character with their
+    parameters (from the .json sidecar). Newest first.
 
-    Jeder Eintrag: ``{file, mood, activity, equipped_pieces, equipped_items,
+    Each entry: ``{file, mood, activity, equipped_pieces, equipped_items,
     model, seed, provider, service, workflow, prompt, created_at, use_count,
-    last_used_at}``. Bilder ohne Sidecar oder Sidecars ohne Bild werden
-    uebersprungen (nur vollstaendige Paare sind anzeigbar).
+    last_used_at}`` — ``activity`` carries the pose catalog key. Images
+    without a sidecar (or sidecars without an image) are skipped; only
+    complete pairs are displayable.
     """
     expr_dir = _get_expressions_dir(character_name)
     if not expr_dir.exists():
         return []
-    # Item-IDs -> lesbare Namen aufloesen (Sidecar speichert nur IDs wie
-    # "item_936518eb"). Pro Aufruf gecacht, damit nicht jedes Bild dieselbe
-    # ID neu aus der DB zieht. Unbekannte IDs fallen auf die ID zurueck.
+    # Resolve item ids to readable names (the sidecar only stores ids like
+    # "item_936518eb"). Cached per call so not every image pulls the same id
+    # from the DB again. Unknown ids fall back to the id.
     from app.models.inventory import get_item
     _name_cache: Dict[str, str] = {}
 
@@ -569,7 +518,7 @@ def list_expressions(character_name: str) -> list:
             "file": img.name,
             "mood": meta.get("mood", "") or "",
             "activity": meta.get("activity", "") or "",
-            # slot -> Item-NAME (statt roher ID); Liste der Item-Namen.
+            # slot -> item NAME (instead of the raw id); list of item names.
             "equipped_pieces": {slot: _item_name(iid)
                                 for slot, iid in _pieces.items()} if isinstance(_pieces, dict) else {},
             "equipped_items": [_item_name(i) for i in _items] if isinstance(_items, list) else [],
@@ -584,26 +533,25 @@ def list_expressions(character_name: str) -> list:
             "last_used_at": meta.get("last_used_at") or 0.0,
             "_sort": meta.get("created_at", "") or mtime,
         })
-    # Neueste zuerst: created_at (ISO-String sortiert lexikografisch korrekt)
-    # bzw. mtime als Fallback. Gemischte Typen -> auf String normalisieren.
+    # Newest first: created_at (an ISO string sorts lexicographically) with
+    # mtime as the fallback. Mixed types -> normalize to string.
     out.sort(key=lambda e: str(e.pop("_sort")), reverse=True)
     return out
 
 
 def delete_expression(character_name: str, filename: str) -> bool:
-    """Loescht ein einzelnes Variant-Bild + sein .json-Sidecar.
+    """Deletes a single variant image + its .json sidecar.
 
-    Path-Traversal-sicher: ``filename`` muss ein reiner Dateiname im
-    Expressions-Verzeichnis sein. Returns True wenn mindestens eine Datei
-    entfernt wurde.
+    Path-traversal safe: ``filename`` must be a plain file name inside the
+    expressions directory. Returns True if at least one file was removed.
     """
     expr_dir = _get_expressions_dir(character_name)
-    # Nur den Basisnamen zulassen — keine Pfadanteile.
+    # Only the base name is allowed — no path components.
     if not filename or filename != Path(filename).name:
         return False
     img = expr_dir / filename
     try:
-        # Aufgeloester Pfad MUSS im Expressions-Dir liegen (Symlink-/.. -Schutz).
+        # The resolved path MUST stay inside the expressions dir (symlink/.. guard).
         if img.resolve().parent != expr_dir.resolve():
             return False
     except OSError:
@@ -617,66 +565,29 @@ def delete_expression(character_name: str, filename: str) -> bool:
         except OSError as e:
             logger.debug("delete_expression %s failed: %s", p.name, e)
     if removed:
-        logger.info("Expression geloescht: %s (%s)", filename, character_name)
+        logger.info("Expression deleted: %s (%s)", filename, character_name)
     return removed
 
 
-_EXPRESSION_COOLDOWN = 300  # Sekunden zwischen Expression-Generierungen pro Character
+_EXPRESSION_COOLDOWN = 300  # seconds between expression generations per character
 _last_expression_time: Dict[str, float] = {}  # character_name -> timestamp
 
-# Coalesce-Fenster: Triggers die in dieser Zeit fuer denselben Character kommen
-# werden gebuendelt (latest state wins). Verhindert dass ein einzelner Chat-Turn
-# mehrere Varianten erzeugt (Mood-Change → Outfit-Unequip → Activity-Classify).
+# Coalesce window: triggers arriving for the same character inside it are
+# bundled (latest state wins). Keeps a single chat turn from producing several
+# variants (mood change → outfit unequip → pose extraction).
 #
-# Groesse: das Classify-LLM (2-LLM-Hops intent+extraction) braucht in Praxis
-# 6-12s bis es den kanonischen Activity-Namen liefert. Mit einem Fenster < 12s
-# feuert der Mood-getriggerte Variant noch mit der alten/unklassifizierten
-# Activity, bevor der Classify-Trigger uebernehmen kann. 12s ist der Kompromiss
-# zwischen "Chat-Ende bis Variant sichtbar" und "alle Triggers gebuendelt".
+# Size: the extraction LLM (2 hops, intent + extraction) needs 6-12s in
+# practice to deliver the pose. With a window < 12s the mood-triggered variant
+# still fires with the old/unclassified pose before the extraction trigger can
+# take over. It is the compromise between "chat end until variant visible" and
+# "all triggers bundled".
 _COALESCE_WINDOW = 10.0
 _pending_triggers: Dict[str, Dict[str, Any]] = {}   # character → request dict
 _pending_timers: Dict[str, threading.Timer] = {}    # character → scheduled Timer
 
-# Aktivitaets-Strings, die KEINE echte Aktivitaet sind und Expression-Variants
-# nicht eigenstaendig triggern duerfen. Kommen typisch aus LLM-Extractoren die
-# manchmal die Mood, einen Negativ-Marker ("nichts geaendert"), oder einen
-# leeren String in den Activity-Slot schreiben. Wuerden sonst pro Variante
-# einen eigenen Cache-Eintrag und damit einen kompletten Image-Gen-Cycle
-# erzeugen (~60s GPU-Zeit pro Garbage-Activity).
-_GARBAGE_ACTIVITIES = frozenset({
-    "", "none", "n/a", "null", "nothing", "no",
-    "no clothing changes", "no outfit changes", "no changes",
-    "unchanged", "no change", "keine aenderung", "keine aktivitaet",
-    "no activity", "no action", "idle",
-    # UI-Events ohne Pose-Aussage — frueher landeten die als eigene Variants
-    # (z.B. "outfitchange" 4×, "setlocation" 1×). Sie sollen auf den Idle-
-    # Bucket kollabieren statt einen Image-Gen-Cycle zu triggern.
-    "outfitchange", "outfit_change", "outfit change",
-    "changing clothes / outfit", "changing clothes", "wechseln",
-    "setlocation", "set_location", "set location",
-})
-
-
-def _normalize_activity_for_trigger(activity: str, mood: str) -> str:
-    """Filtert Garbage-Activities und Mood-Leakage. Liefert "" wenn Activity
-    nicht als eigenstaendiger Trigger zaehlen sollte.
-    """
-    a = (activity or "").strip()
-    if not a:
-        return ""
-    a_low = a.lower()
-    if a_low in _GARBAGE_ACTIVITIES:
-        return ""
-    # Mood-Leakage: LLM schreibt manchmal "feels suspicious" oder "is angry"
-    # in den Activity-Slot, obwohl das die Stimmung ist.
-    m_low = (mood or "").strip().lower()
-    if m_low and a_low in (f"feels {m_low}", f"is {m_low}", f"feeling {m_low}", m_low):
-        return ""
-    return a
-
 
 def trigger_expression_generation(character_name: str,
-                                  mood: str, activity: str,
+                                  mood: str, pose_key: str,
                                   equipped_pieces: Optional[Dict[str, str]] = None,
                                   equipped_items: Optional[list] = None,
                                   equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -684,24 +595,26 @@ def trigger_expression_generation(character_name: str,
                                   ignore_feature_gate: bool = False,
                                   prompt_prefix: Optional[str] = None,
                                   coalesce: bool = True) -> bool:
-    """Queue oder starte Expression-Generation.
+    """Queue or start an expression generation.
 
-    Per Default werden Triggers in einem kurzen Fenster gebuendelt
-    (_COALESCE_WINDOW): ein Chat-Turn feuert typischerweise 3 Triggers hinter-
-    einander (Mood, Outfit-Unequip, Activity-Classify), von denen nur der
-    letzte den finalen State hat. Statt 3 Bilder zu generieren wartet der
-    Trigger auf das Ende des Bursts und feuert dann einmal mit dem neusten
-    State.
+    ``pose_key`` is a pose CATALOG key (``character.get_effective_pose_key``),
+    never free text — the garbage/mood-leakage filter this function used to
+    run is obsolete: text that means nothing never becomes a key here, it is
+    absorbed by the catalog resolution at the write path.
 
-    coalesce=False umgeht den Debounce — fuer Aufrufer die garantiert nur ein
-    einzelnes, sofortiges Bild wollen (Test-Hilfsmittel). Produktions-Pfade
-    (Auto-Regen, Chat-Extraction, Garderobe-Preview, Skills) lassen coalesce
-    auf True: die Vorschau-Pfade triggern typischerweise nur einmal, und der
-    Preis ist die Debounce-Wartezeit die in der Praxis nicht stoert.
+    By default triggers are bundled inside a short window
+    (_COALESCE_WINDOW): a chat turn typically fires three triggers in a row
+    (mood, outfit unequip, pose extraction), of which only the last carries
+    the final state. Instead of generating three images the trigger waits for
+    the end of the burst and then fires once with the newest state.
 
-    Returns True wenn ein Trigger (oder pending Trigger) registriert wurde.
+    coalesce=False bypasses the debounce — for callers that want exactly one
+    immediate image (test helpers). Production paths (auto regen, chat
+    extraction, wardrobe preview, skills) leave coalesce at True.
+
+    Returns True if a trigger (or a pending trigger) was registered.
     """
-    # Style/Framing kommen aus dem "expression"-Use-Case (kein Env-Prefix mehr).
+    # Style/framing come from the "expression" use case (no env prefix).
     if prompt_prefix is None:
         prompt_prefix = ""
 
@@ -713,42 +626,31 @@ def trigger_expression_generation(character_name: str,
         except Exception:
             pass
 
-    # Garbage-Activities (Mood-Leakage, "none", "No clothing changes", ...)
-    # auf "" normalisieren — sonst landet jeder Quatsch-String als eigener
-    # Cache-Key und triggert einen vollen Image-Gen-Cycle.
-    _normalized = _normalize_activity_for_trigger(activity, mood)
-    if _normalized != activity:
+    # Partner poses (kissing, embracing, ...) are skipped entirely. The
+    # pipeline injects only ONE character, so the image model duplicates the
+    # subject to satisfy the "two people" implication of the pose prompt.
+    # Instead of generating a broken variant the avatar keeps its last good
+    # frame. Tagged via ``"solo": false`` in the pose catalog — no heuristic.
+    if is_partner_activity(pose_key):
         logger.info(
-            "Expression-Trigger [%s]: activity '%s' -> '%s' normalisiert (Garbage-Filter)",
-            character_name, activity, _normalized)
-        activity = _normalized
-
-    # Partner-Activities (kissing, embracing, ...) ueberspringen wir komplett.
-    # Der Pipeline injizieren wir nur EINEN Character, das Bildmodell dupliziert
-    # daraufhin das Subjekt um die "two people"-Implikation des Pose-Prompts zu
-    # erfuellen → "Rosi umarmt sich selbst". Statt einen kaputten Variant zu
-    # generieren bleibt das Avatar auf dem letzten guten Frame stehen. Tagged
-    # via ``"solo": false`` in pose_presets*.json — keine Heuristik.
-    if is_partner_activity(activity):
-        logger.info(
-            "Expression-Trigger [%s]: activity '%s' ist Partner-Pose (solo:false) → Skip",
-            character_name, activity)
+            "Expression trigger [%s]: pose '%s' is a partner pose (solo:false) → skip",
+            character_name, pose_key)
         return False
 
     if not coalesce:
         return _do_trigger_expression_generation(
-            character_name, mood, activity,
+            character_name, mood, pose_key,
             equipped_pieces=equipped_pieces,
             equipped_items=equipped_items,
             equipped_pieces_meta=equipped_pieces_meta,
             ignore_cooldown=ignore_cooldown,
             prompt_prefix=prompt_prefix)
 
-    new_key = _cache_key(mood, activity, character_name,
+    new_key = _cache_key(mood, pose_key, character_name,
                          equipped_pieces, equipped_items, equipped_pieces_meta)
     request = {
         "mood": mood,
-        "activity": activity,
+        "pose_key": pose_key,
         "equipped_pieces": equipped_pieces,
         "equipped_items": equipped_items,
         "equipped_pieces_meta": equipped_pieces_meta,
@@ -760,18 +662,18 @@ def trigger_expression_generation(character_name: str,
         existing = _pending_triggers.get(character_name)
         if existing:
             existing_key = _cache_key(existing.get("mood", ""),
-                                       existing.get("activity", ""),
+                                       existing.get("pose_key", ""),
                                        character_name,
                                        existing.get("equipped_pieces"),
                                        existing.get("equipped_items"),
                                        existing.get("equipped_pieces_meta"))
             if existing_key == new_key:
-                # Identische Anfrage — Timer NICHT resetten (FE-Polling-Schutz)
-                # aber ignore_cooldown hochziehen falls neuer Caller es setzt
+                # Identical request — do NOT reset the timer (frontend-polling
+                # protection), but raise ignore_cooldown if the new caller set it
                 if ignore_cooldown and not existing.get("ignore_cooldown"):
                     existing["ignore_cooldown"] = True
                 return True
-            # State geaendert → alten Timer canceln, neuen setzen
+            # State changed → cancel the old timer, set a new one
             old_timer = _pending_timers.pop(character_name, None)
             if old_timer:
                 try:
@@ -790,7 +692,7 @@ def trigger_expression_generation(character_name: str,
 
 
 def _fire_coalesced_trigger(character_name: str) -> None:
-    """Feuer der pending Trigger fuer einen Character am Ende des Coalesce-Fensters."""
+    """Fires the pending trigger of a character at the end of the coalesce window."""
     with _generating_lock:
         request = _pending_triggers.pop(character_name, None)
         _pending_timers.pop(character_name, None)
@@ -799,21 +701,21 @@ def _fire_coalesced_trigger(character_name: str) -> None:
     try:
         _do_trigger_expression_generation(character_name, **request)
     except Exception as e:
-        logger.error("Coalesced Expression-Trigger fuer %s fehlgeschlagen: %s",
+        logger.error("Coalesced expression trigger for %s failed: %s",
                       character_name, e)
 
 
 def _do_trigger_expression_generation(character_name: str,
-                                       mood: str, activity: str,
+                                       mood: str, pose_key: str,
                                        equipped_pieces: Optional[Dict[str, str]] = None,
                                        equipped_items: Optional[list] = None,
                                        equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
                                        ignore_cooldown: bool = False,
                                        prompt_prefix: str = "") -> bool:
-    """Eigentliche Trigger-Logik: Cooldown-Check, Dedup, Thread-Spawn.
+    """The actual trigger logic: cooldown check, dedup, thread spawn.
 
-    Wird entweder direkt aufgerufen (coalesce=False) oder vom Timer am Ende
-    des Coalesce-Fensters. Feature-Gate wurde schon im Wrapper geprueft.
+    Called either directly (coalesce=False) or by the timer at the end of the
+    coalesce window. The feature gate was already checked in the wrapper.
     """
     import time as _time
 
@@ -821,46 +723,46 @@ def _do_trigger_expression_generation(character_name: str,
         now = _time.monotonic()
         last = _last_expression_time.get(character_name, 0)
         if now - last < _EXPRESSION_COOLDOWN:
-            logger.debug("Expression cooldown aktiv fuer %s (noch %ds)",
+            logger.debug("Expression cooldown active for %s (%ds left)",
                          character_name, int(_EXPRESSION_COOLDOWN - (now - last)))
             return False
     else:
         now = _time.monotonic()
     _last_expression_time[character_name] = now
 
-    key = f"{character_name}:{_cache_key(mood, activity, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
     with _generating_lock:
         if key in _generating:
             return False
         _generating.add(key)
 
     def _run():
-        # Pending-Eintrag im Panel waehrend Mutex-Wait, damit gestapelte
-        # Expression-Triggers sichtbar sind.
+        # Pending entry in the panel while waiting for the mutex, so stacked
+        # expression triggers are visible.
         _pending_track_id = None
         try:
             from app.core.task_queue import get_task_queue
             _pending_track_id = get_task_queue().track_start(
                 "expression_regen",
-                f"Variant: {character_name} ({activity or 'idle'})",
+                f"Variant: {character_name} ({pose_key or 'idle'})",
                 agent_name=character_name,
                 start_running=False)
         except Exception:
             _pending_track_id = None
         try:
-            # Per-Character-Mutex: gleicher Character seriell, verschiedene
-            # Characters parallel (koennen auf unterschiedliche Backends/GPUs
-            # verteilt werden).
+            # Per-character mutex: the same character serially, different
+            # characters in parallel (they can go to different backends/GPUs).
             with _get_char_mutex(character_name):
                 if _pending_track_id:
-                    # Platzhalter loeschen statt canceln — sonst landet jeder
-                    # Expression-Trigger als "Manuell abgebrochen" in Recently.
+                    # Discard the placeholder instead of cancelling it —
+                    # otherwise every expression trigger shows up as
+                    # "cancelled manually" in Recently.
                     try:
                         get_task_queue().track_discard(_pending_track_id)
                     except Exception:
                         pass
                     _pending_track_id = None
-                result = generate_expression_image(character_name, mood, activity,
+                result = generate_expression_image(character_name, mood, pose_key,
                                                     equipped_pieces, equipped_items,
                                                     prompt_prefix=prompt_prefix)
             if result is None:
@@ -882,7 +784,7 @@ def _do_trigger_expression_generation(character_name: str,
 
 
 def generate_expression_image(character_name: str,
-                              mood: str, activity: str,
+                              mood: str, pose_key: str,
                               equipped_pieces: Optional[Dict[str, str]] = None,
                               equipped_items: Optional[list] = None,
                               prompt_prefix: str = "",
@@ -896,7 +798,9 @@ def generate_expression_image(character_name: str,
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
-    image generation. No outfit reference image needed.
+    image generation. No outfit reference image needed. ``mood`` is free text
+    (resolved to its expression catalog key), ``pose_key`` is a pose CATALOG
+    key — both prompt and cache key come from the same two keys.
 
     Prompt layering: the use-case style (camera/framing/lighting/background)
     is prepended by the image service; THIS function composes the content
@@ -905,7 +809,7 @@ def generate_expression_image(character_name: str,
 
     Reference-render extras (model_refs, AV3D):
     - ``pose_prompt_override`` uses the given pose text verbatim (bypasses
-      activity resolution and the default pose).
+      the catalog lookup and the default pose).
     - ``expression_prompt_override`` uses the given expression text verbatim
       (``""`` omits the expression layer entirely).
     - ``image_use_case`` picks the style use case (default "expression").
@@ -927,7 +831,7 @@ def generate_expression_image(character_name: str,
         postprocess_outfit_image)
     from app.core.outfit_renderer import render_outfit
 
-    # Equipped-State auflaufen lassen falls nicht mitgegeben
+    # Load the equipped state if it was not handed in
     if equipped_pieces is None or equipped_items is None:
         try:
             from app.models.inventory import get_equipped_pieces, get_equipped_items
@@ -939,9 +843,8 @@ def generate_expression_image(character_name: str,
             equipped_pieces = equipped_pieces or {}
             equipped_items = equipped_items or []
 
-    # Outfit-Text via zentralem Renderer (Plan §4). Inputs:
-    # equipped_pieces/items mitgeben damit Set-Vorschauen funktionieren
-    # (Override gegen Status-Quo im Profil).
+    # Outfit text via the central renderer (plan §4). equipped_pieces/items
+    # are passed in so set previews work (override against the profile state).
     from app.models.character import get_character_profile as _gcp_render
     _render_profile = _gcp_render(character_name) or {}
     _rendered = render_outfit(
@@ -960,12 +863,16 @@ def generate_expression_image(character_name: str,
         _state_fp = state_fingerprint(character_name)
     else:
         _state_fp = ""
-    cache_key = _cache_key(mood, activity, character_name,
+    # The two catalog axes — the same values go into the key, the prompt and
+    # the sidecar, so an image can never disagree with the key it hangs under.
+    _pose_key = (pose_key or "").strip().lower()
+    _expression_key = resolve_expression_key(mood)
+    cache_key = _cache_key(mood, _pose_key, character_name,
                             equipped_pieces, equipped_items,
                             state_fp=_state_fp)
 
-    logger.info("Expression-Generierung: %s mood='%s' activity='%s' equipped=%d/%d",
-                character_name, mood, activity,
+    logger.info("Expression generation: %s expression='%s' pose='%s' equipped=%d/%d",
+                character_name, _expression_key, _pose_key or "-",
                 len(equipped_pieces or {}), len(equipped_items or []))
 
     # Resolve prompts via PromptBuilder — separated for correct ordering
@@ -973,10 +880,10 @@ def generate_expression_image(character_name: str,
     if expression_prompt_override is not None:
         expression_prompt = expression_prompt_override.strip()
     else:
-        expression_prompt = resolve_expression_prompt(mood) if mood else default_expression_prompt()
-    # Pose presets ("The person is seated…") are human-centric. Apply them
-    # only for humanoid characters; animals get the raw activity text as the
-    # pose ("sleeping", "lying down") — the image model maps that onto their
+        expression_prompt = get_expression_prompt(_expression_key)
+    # Catalog pose prompts ("The person is seated…") are human-centric. Apply
+    # them only for humanoid characters; animals get the bare key as their
+    # pose text ("sleeping", "lying") — the image model maps that onto their
     # anatomy without a human pose template.
     _humanoid = True
     try:
@@ -986,10 +893,11 @@ def generate_expression_image(character_name: str,
         pass
     if pose_prompt_override is not None:
         pose_prompt = pose_prompt_override.strip()
-    elif activity:
-        pose_prompt = resolve_pose_prompt(activity) if _humanoid else activity.strip()
+    elif _humanoid:
+        # Empty/unknown key → the default pose prompt (admin override wins).
+        pose_prompt = get_pose_prompt(_pose_key)
     else:
-        pose_prompt = default_pose_prompt() if _humanoid else ""
+        pose_prompt = _pose_key
 
     # Active states (drunk, aroused, ...) flow into the appearance via
     # prompt_filters.apply_image_modifiers (PromptBuilder person path) —
@@ -1002,16 +910,16 @@ def generate_expression_image(character_name: str,
     appearance = persons[0].appearance if persons else get_character_appearance(character_name)
     actor_label = persons[0].actor_label if persons else character_name
 
-    # Prompt-Prefix: nur bei expliziter Vorschau (Garderobe) uebergeben,
-    # bei automatischen Expression-Regens bleibt er leer.
+    # Prompt prefix: only passed for an explicit preview (wardrobe); it stays
+    # empty for automatic expression regens.
     _prompt_prefix = (prompt_prefix or "").strip()
 
-    # Separate Prompts: prefix, character (Appearance), outfit, pose, expression
+    # Separate prompts: prefix, character (appearance), outfit, pose, expression
     character_prompt = f"{actor_label}, {appearance}"
-    # outfit_desc / items_desc / _fallback_text kommen aus render_outfit()
-    # weiter oben — Single-Source aus app.core.outfit_renderer (Plan §4).
+    # outfit_desc / items_desc / _fallback_text come from render_outfit()
+    # above — single source in app.core.outfit_renderer (plan §4).
 
-    # "is wearing" nur wenn mindestens ein Piece-Slot belegt ist.
+    # "is wearing" only when at least one piece slot is filled.
     if outfit_desc:
         if _fallback_text:
             outfit_prompt = f"{_fallback_text}, {actor_label} is wearing {outfit_desc}"
@@ -1020,9 +928,9 @@ def generate_expression_image(character_name: str,
     else:
         outfit_prompt = _fallback_text
 
-    # Equipped Non-Piece-Items (Spells, Tools, ...) als eigene Phrase anhaengen,
-    # so dass z.B. prompt_fragment="holding a glowing recall stone" als
-    # "{actor} holding a glowing recall stone" erscheint, nicht "is wearing".
+    # Equipped non-piece items (spells, tools, ...) get their own phrase, so
+    # prompt_fragment="holding a glowing recall stone" reads as
+    # "{actor} holding a glowing recall stone", not as "is wearing".
     if items_desc:
         if outfit_prompt:
             outfit_prompt = f"{outfit_prompt}. {actor_label} {items_desc}"
@@ -1069,7 +977,7 @@ def generate_expression_image(character_name: str,
                                             has_input_image=_has_ref)
         if not backend:
             logger.warning(
-                "Character-Render-Override '%s' matcht kein verfuegbares Backend",
+                "Character render override '%s' matches no available backend",
                 char_render_override)
     if not backend:
         _expr_default = os.environ.get("EXPRESSION_IMAGEGEN_DEFAULT", "").strip()
@@ -1081,10 +989,10 @@ def generate_expression_image(character_name: str,
         backend = image_skill._wait_for_backend(character_name,
                                                 has_input_image=_has_ref)
     if not backend:
-        logger.warning("Kein Backend fuer Expression-Regen verfuegbar")
+        logger.warning("No backend available for the expression regen")
         return None
     backend_name = backend.name
-    logger.info("Expression-Regen: backend=%s (char-override=%s)",
+    logger.info("Expression regen: backend=%s (char override=%s)",
                 backend_name, "yes" if char_render_override else "no")
 
     # Resolution from admin config (image_generation.outfit_image_width/height)
@@ -1152,14 +1060,14 @@ def generate_expression_image(character_name: str,
             payload_fb.pop("model_override", None)
             payload_fb.pop("loras", None)
             logger.warning(
-                "Expression-Regen: Backend '%s' offline — nutze Auto-Backend",
+                "Expression regen: backend '%s' offline — using auto backend",
                 backend_name)
             img_result = image_skill.generate_from_input(json.dumps(payload_fb))
 
         # Extract filename from result
         match = re.search(r'/images/([^?)\n]+)', img_result)
         if not match:
-            logger.warning("Konnte Dateiname nicht extrahieren: %s", img_result[:200])
+            logger.warning("Could not extract the file name: %s", img_result[:200])
             return None
 
         image_filename = match.group(1)
@@ -1167,7 +1075,7 @@ def generate_expression_image(character_name: str,
         src_path = images_dir / image_filename
 
         if not src_path.exists():
-            logger.warning("Generiertes Bild nicht gefunden: %s", src_path)
+            logger.warning("Generated image not found: %s", src_path)
             return None
 
         # Post-process (rembg + crop) in a temporary path, then move into
@@ -1187,7 +1095,7 @@ def generate_expression_image(character_name: str,
         try:
             final_tmp = postprocess_outfit_image(tmp_path)
         except Exception as pp_err:
-            logger.warning("Post-Processing fehlgeschlagen, nutze Original: %s", pp_err)
+            logger.warning("Post-processing failed, using the original: %s", pp_err)
             final_tmp = tmp_path
 
         # Rename atomically into the target path
@@ -1206,11 +1114,11 @@ def generate_expression_image(character_name: str,
         # Cleanup: remove any leftover temp files
         _cleanup_stale_temps(out_dir)
 
-        # Metadaten-JSON neben das Bild speichern. equipped_pieces/items werden
-        # hier festgehalten, damit invalidate_variants_for_item gezielt nur die
-        # Variants loescht, die das geaenderte Item tatsaechlich enthielten.
-        # Thread-lokales Meta lesen — verhindert Kollision wenn parallele
-        # Expression-Regens fuer verschiedene Characters laufen.
+        # Metadata JSON next to the image. equipped_pieces/items are recorded
+        # so invalidate_variants_for_item can delete exactly the variants that
+        # actually contained the changed item. The generation meta is read
+        # thread-locally — prevents collisions when expression regens for
+        # different characters run in parallel.
         _tls = getattr(image_skill, '_meta_tls', None)
         _gen_meta = getattr(_tls, 'last_image_meta', None) if _tls is not None else None
         if _gen_meta is None:
@@ -1228,8 +1136,13 @@ def generate_expression_image(character_name: str,
             "created_at": _gen_meta.get("created_at", ""),
             "duration_s": _gen_meta.get("duration_s", 0),
             "workflow": _gen_meta.get("workflow", ""),
+            # Free-text mood for the admin listing, the KEYS for every
+            # machine-side comparison (find_nearest_expression).
             "mood": mood,
-            "activity": activity,
+            "expression_key": _expression_key,
+            # The variant list in the admin UI shows this as "activity".
+            "activity": _pose_key,
+            "pose_key": _pose_key,
             "equipped_pieces": equipped_pieces or {},
             "equipped_items": equipped_items or [],
             "state_fingerprint": _state_fp,
@@ -1238,34 +1151,34 @@ def generate_expression_image(character_name: str,
             _meta_path = final_path.with_suffix(".json")
             _meta_path.write_text(json.dumps(_expr_meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as _me:
-            logger.warning("Expression-Meta schreiben fehlgeschlagen: %s", _me)
+            logger.warning("Writing the expression meta failed: %s", _me)
 
-        logger.info("Expression-Bild generiert: %s", final_path.name)
+        logger.info("Expression image generated: %s", final_path.name)
 
         # Trigger visual analysis for fresh pose variants (step 5e).
         # Idempotent via example_image: only when empty (= never analyzed)
         # → the worker fills in the path later. Not applicable to reference
         # renders stored outside the variant cache.
         try:
-            variant_id = None if output_stem is not None else \
-                _resolve_variant_for_cache(character_name, activity)
-            if variant_id:
+            if output_stem is None and _pose_key:
                 from app.core.pose_variants import (
-                    get_variant, set_example_image,
+                    get_or_create_variant, set_example_image,
                 )
                 from app.core.pose_engine import enqueue_visual_analysis
-                v = get_variant(variant_id)
+                # Same lookup the canonical setter uses: the variant row of
+                # this catalog key (exact string match, no embedding).
+                v = get_or_create_variant(character_name, _pose_key)
                 if v and not (v.get("example_image") or "").strip():
-                    # Sofort markieren damit parallele Saves nicht doppelt analysieren
-                    set_example_image(variant_id, str(final_path))
-                    enqueue_visual_analysis(variant_id, str(final_path))
+                    # Mark immediately so parallel saves do not analyze twice
+                    set_example_image(v["id"], str(final_path))
+                    enqueue_visual_analysis(v["id"], str(final_path))
         except Exception as _va_err:
-            logger.debug("Visual-Analyse-Trigger fehlgeschlagen: %s", _va_err)
+            logger.debug("Visual analysis trigger failed: %s", _va_err)
 
         return final_path
 
     except Exception as e:
-        logger.error("Expression-Generierung fehlgeschlagen: %s", e)
+        logger.error("Expression generation failed: %s", e)
         return None
 
 
@@ -1395,5 +1308,5 @@ def migrate_variant_filenames() -> int:
                     _update_refs_in_json(json_file, global_rename_map, _oid_to_safe)
 
     if renamed:
-        logger.info("Variant-Migration: %d Dateien umbenannt (CharName-Prefix)", renamed)
+        logger.info("Variant migration: %d files renamed (character-name prefix)", renamed)
     return renamed

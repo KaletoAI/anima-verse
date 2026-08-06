@@ -457,7 +457,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.models.events import list_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
-        get_effective_activity, get_movement_target, get_character_profile_image,
+        get_effective_activity, get_effective_pose_key, get_movement_target,
+        get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.expression_pose_maps import resolve_pose_animation
@@ -571,10 +572,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         mt = get_movement_target(name) or ""
         prof = get_character_profile_image(name) or ""
         activity = get_effective_activity(name) or ""
-        # AV3D-6: which clip a 3D figure plays. The KIND comes from the
-        # activity (via the pose preset's `animation`), the SET from the
-        # character (its clip family: lady/man/dog/…). Both may be empty —
-        # then the client keeps guessing from the text, exactly as before.
+        # The DISPLAY text above, the render KEY here — the animation is
+        # resolved from the catalog key, never from the free-text flavor.
+        pose_key = get_effective_pose_key(name) or ""
+        # AV3D-6: which clip a 3D figure plays. The KIND comes from the pose
+        # catalog entry's `animation`, the SET from the character (its clip
+        # family: lady/man/dog/…). Both may be empty — then the client keeps
+        # guessing from the text, exactly as before.
         # Travel is deliberately NOT forced to "walk": the activity is
         # reported honestly, the client has movement_target_id anyway.
         # The set chain, most specific first: explicit attribute, then the one
@@ -640,7 +644,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "height_cm": cm,
             "room_id": get_character_current_room(name) or "",
             "activity": activity,
-            "activity_animation": resolve_pose_animation(activity),
+            "activity_animation": resolve_pose_animation(pose_key),
             "animation_set": (anim_sets[0] if anim_sets else ""),
             "animation_sets": anim_sets,
             "mood": get_character_current_feeling(name) or "",

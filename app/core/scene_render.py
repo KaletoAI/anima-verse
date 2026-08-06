@@ -220,19 +220,19 @@ def _person_image_path(name: str) -> Optional[Path]:
     variant image (renders proved better than the profile portrait; user
     decision 2026-07-07). Preference:
 
-    1. Variant for the exact current state (mood + effective activity +
+    1. Variant for the exact current state (mood + effective pose key +
        equipped — same key as /outfit-expression); on a miss the missing
        variant is triggered in the background (coalesced/cooldowned).
-    2. Variant with the SAME activity/pose but any mood (sidecar match) —
-       the exact key misses on every mood shift.
+    2. Variant with the SAME pose key but any mood (sidecar match) — the
+       exact key misses on every mood shift.
     3. Newest cached variant. 4. Profile image.
     """
-    mood = activity = ""
+    mood = pose_key = ""
     try:
         from app.models.character import (get_character_current_feeling,
-                                          get_effective_activity)
+                                          get_effective_pose_key)
         mood = get_character_current_feeling(name) or ""
-        activity = get_effective_activity(name) or ""
+        pose_key = get_effective_pose_key(name) or ""
     except Exception as e:
         logger.debug("scene: state lookup failed for %s: %s", name, e)
     try:
@@ -240,20 +240,21 @@ def _person_image_path(name: str) -> Optional[Path]:
                                                trigger_expression_generation)
         from app.models.inventory import get_equipped_items, get_equipped_pieces
         cached = get_cached_expression(
-            name, mood, activity,
+            name, mood, pose_key,
             equipped_pieces=get_equipped_pieces(name),
             equipped_items=get_equipped_items(name))
         if cached and Path(cached).exists():
             return Path(cached)
         # Exact variant missing — generate it for the NEXT render (fire and
         # forget; coalesce + cooldown keep this from spamming the queue).
-        trigger_expression_generation(name, mood, activity)
+        trigger_expression_generation(name, mood, pose_key)
     except Exception as e:
         logger.debug("scene: expression lookup failed for %s: %s", name, e)
     try:
         from app.core.expression_regen import _get_expressions_dir
         expr_dir = _get_expressions_dir(name)
-        want = activity.strip().lower()
+        # The sidecar records the pose key the image was rendered under.
+        want = pose_key.strip().lower()
         pose_match = None
         newest = None
         if expr_dir.exists():
@@ -294,37 +295,18 @@ def _person_image_path(name: str) -> Optional[Path]:
 
 
 def _pose_hint(name: str, skip_activity: bool = False) -> str:
-    """Compact pose/activity hint for the scene prompt.
-
-    Preference: a short effective activity as-is (covers "Sleeping" etc.),
-    else the stored pose variant's canonical form (the pose catalog key,
-    short + English), else the first sentence hard-trimmed with quoted
-    speech removed.
-
-    ``skip_activity``: ignore the activity text entirely (used for
-    characters with a pending movement target — the travel system writes
-    transit prose like "returning to Edwins Berg" into the activity, which
-    doesn't belong in a static scene; the pose variant still fits).
-    """
-    from app.models.character import get_character_profile, get_effective_activity
-    act = "" if skip_activity else (get_effective_activity(name) or "").strip()
-    if act and len(act) <= 60 and "\n" not in act:
-        return act
-    try:
-        variant_id = (get_character_profile(name) or {}).get("pose_variant_id")
-        if variant_id:
-            from app.core.pose_variants import get_variant
-            canonical = ((get_variant(int(variant_id)) or {})
-                         .get("canonical_pose") or "").strip()
-            if canonical:
-                return canonical
-    except Exception as e:
-        logger.debug("scene: pose variant lookup failed for %s: %s", name, e)
-    if not act:
+    """Pose hint for the scene prompt: catalog prompt + sanitized flavor.
+    Both are bounded at the source now - no emergency trimming here."""
+    from app.models.character import get_effective_pose_key, get_character_pose_flavor
+    from app.core.expression_pose_maps import get_pose_prompt
+    key = get_effective_pose_key(name)
+    if not key:
         return ""
-    act = re.sub(r'["„“»].*?["“”«]', "", act).strip()
-    act = re.split(r"(?<=[.!?])\s", act, 1)[0].strip()
-    return act[:80]
+    parts = [get_pose_prompt(key)]
+    flavor = "" if skip_activity else get_character_pose_flavor(name)
+    if flavor:
+        parts.append(flavor)
+    return ", ".join(p for p in parts if p)
 
 
 def _appearance_text(name: str) -> str:

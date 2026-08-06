@@ -22,6 +22,7 @@ from app.core.log import get_logger
 from app.models.character import (
     get_character_config,
     get_effective_activity,
+    get_effective_pose_key,
     get_character_current_feeling,
     get_character_current_location,
     get_character_current_room,
@@ -758,18 +759,18 @@ class PromptBuilder:
                     return str(candidate)
             return ""
 
-        # Character: Prio 1: Expression-Variante (Equipped + Mood + Activity)
+        # Character: prio 1: expression variant (equipped + mood + pose key)
         try:
             from app.core.expression_regen import get_cached_expression
             from app.models.inventory import get_equipped_pieces, get_equipped_items
             mood = get_character_current_feeling(person.name) or ""
-            activity = get_effective_activity(person.name) or ""
+            pose_key = get_effective_pose_key(person.name) or ""
             try:
                 eq_p = get_equipped_pieces(person.name)
                 eq_i = get_equipped_items(person.name)
             except Exception:
                 eq_p, eq_i = None, None
-            cached = get_cached_expression(person.name, mood, activity,
+            cached = get_cached_expression(person.name, mood, pose_key,
                 equipped_pieces=eq_p, equipped_items=eq_i)
             if cached and cached.exists():
                 logger.debug("RefImage [%s]: Expression-Variante", person.name)

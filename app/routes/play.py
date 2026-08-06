@@ -25,21 +25,21 @@ _SHELL = Path("static/game_admin/play.html")
 
 
 def _expr_version(name: str) -> str:
-    """Cache-Buster-Token für das Expression-Bild: ändert sich bei Mood-, Activity-
-    oder Outfit-Wechsel UND wenn eine neue Variante fertig generiert wurde (Mtime
-    der gecachten Variante). Frontend hängt ihn an die outfit-expression-URL →
-    Bild lädt nur bei echter Änderung neu (event-getrieben, kein Blind-Polling)."""
+    """Cache-buster token for the expression image: changes on a mood, pose or
+    outfit change AND when a new variant finished generating (mtime of the
+    cached variant). The frontend appends it to the outfit-expression URL, so
+    the image only reloads on a real change (event-driven, no blind polling)."""
     import hashlib
     import os
     from app.models.character import (get_character_current_feeling,
-                                      get_effective_activity)
+                                      get_effective_pose_key)
     from app.models.inventory import get_equipped_pieces, get_equipped_items
-    mood = activity = ""
+    mood = pose_key = ""
     eqp: dict = {}
     eqi: list = []
     try:
         mood = get_character_current_feeling(name) or ""
-        activity = get_effective_activity(name) or ""
+        pose_key = get_effective_pose_key(name) or ""
         eqp = get_equipped_pieces(name) or {}
         eqi = get_equipped_items(name) or []
     except Exception:
@@ -47,14 +47,14 @@ def _expr_version(name: str) -> str:
     mtime = ""
     try:
         from app.core.expression_regen import peek_cached_expression
-        p = peek_cached_expression(name, mood, activity,
+        p = peek_cached_expression(name, mood, pose_key,
                                    equipped_pieces=eqp, equipped_items=eqi)
         if p:
             mtime = str(int(os.path.getmtime(p)))
     except Exception:
         pass
     eq_sig = ",".join(f"{k}:{v}" for k, v in sorted(eqp.items())) + "|" + ",".join(sorted(eqi))
-    return hashlib.md5(f"{mood}|{activity}|{eq_sig}|{mtime}".encode("utf-8")).hexdigest()[:10]
+    return hashlib.md5(f"{mood}|{pose_key}|{eq_sig}|{mtime}".encode("utf-8")).hexdigest()[:10]
 
 
 def _bg_version(location_id: str, room: str) -> str:

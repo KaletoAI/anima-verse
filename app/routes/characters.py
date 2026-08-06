@@ -714,41 +714,45 @@ async def update_default_outfit(character_name: str, request: Request) -> Dict[s
 # --- Expression Image (mood + pose variants) ---
 
 @router.get("/{character_name}/outfit-expression")
-def get_outfit_expression(character_name: str, mood: str = "", activity: str = "",
+def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "",
                           pieces: str = "", items: str = "",
                           piece_colors: str = "",
                           override: int = 0, trigger: int = 0, force: int = 0,
                           fallback: str = ""):
-    """Returns the expression/pose variant for current mood + activity + equipped.
+    """Returns the expression/pose variant for current mood + pose + equipped.
 
-    Variant = Character-Appearance + angelegte Items (Pieces + Equipped-Items) +
-    Pose (aus activity, Default wenn leer) + Expression (aus mood, Default wenn
-    leer). Cache-Key haengt NICHT mehr von einem Outfit-Objekt ab — es gibt
-    kein Basis-Outfitbild mehr.
+    Variant = character appearance + worn items (pieces + equipped items) +
+    pose (from the pose CATALOG KEY, default when empty) + expression (from
+    the mood, resolved to its catalog key). The cache key does not depend on
+    an outfit object — there is no base outfit image any more.
 
     Query params:
-        pieces: Optional "slot1:itemId1,slot2:itemId2" — ueberschreibt den
-                real-equipped Piece-State (z.B. Wardrobe-Preview eines Sets
-                das noch nicht angezogen ist).
-        items: Optional "id1,id2" — ueberschreibt equipped_items.
-        override: 1 erzwingt Verwendung von pieces/items auch wenn leer
-                  (= "leerer Equipped-State"); ohne override werden leere
-                  pieces/items als "nicht mitgegeben" interpretiert und der
-                  Real-State aus dem Profil geladen.
-        fallback: "default" — wenn keine Variant im Cache (aber Generierung
-                  laeuft), wird das Profilbild als Platzhalter zurueckgegeben
-                  (200 statt 202). Frontend zeigt damit ein sinnvolles Bild
-                  bis der echte Variant fertig ist.
+        pose_key: Optional pose catalog key (see /poses). Empty = the
+                character's effective pose key; an unknown key falls back to
+                the catalog default.
+        pieces: Optional "slot1:itemId1,slot2:itemId2" — overrides the
+                really equipped piece state (e.g. a wardrobe preview of a set
+                that is not worn yet).
+        items: Optional "id1,id2" — overrides equipped_items.
+        override: 1 forces the use of pieces/items even when empty
+                  (= "empty equipped state"); without override, empty
+                  pieces/items mean "not supplied" and the real state is
+                  loaded from the profile.
+        fallback: "default" — when no variant is cached (but a generation is
+                  running), a placeholder image is returned (200 instead of
+                  202) so the frontend shows something sensible until the real
+                  variant is ready.
 
-    Antworten: 200 mit Bild, 202 wenn Generierung laeuft, 404 wenn fehl-
-    geschlagen / kein Generator verfuegbar.
+    Responses: 200 with the image, 202 while a generation runs, 404 on
+    failure / when no generator is available.
     """
     from app.core.expression_regen import (
         get_cached_expression, trigger_expression_generation, is_generating, has_failed)
 
-    # Mood/Activity: Wenn nicht explizit uebergeben, Character-State als Default
-    # nehmen — damit Frontend den zu Chat/Scheduler passenden Variant-Cache
-    # findet. Override-Modus laesst Leer-Params zu (Set-Vorschau ist generisch).
+    # Mood/pose: when not passed explicitly, take the character state as the
+    # default — so the frontend finds the variant cache that matches
+    # chat/scheduler. Override mode allows empty params (a set preview is
+    # generic).
     _is_override = bool(override or pieces or items or piece_colors)
     if not _is_override:
         if not mood:
@@ -757,15 +761,15 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
                 mood = get_character_current_feeling(character_name) or ""
             except Exception:
                 mood = ""
-        if not activity:
+        if not pose_key:
             try:
-                # Effektive Aktivitaet (B1): spiegelt den is_sleeping-Flag → ein
-                # schlafender Char bekommt die Sleeping-Pose/Expression, passend
-                # zur _expr_version in /play/scene.
-                from app.models.character import get_effective_activity
-                activity = get_effective_activity(character_name) or ""
+                # Effective pose key (B1): mirrors the is_sleeping flag → a
+                # sleeping character gets the sleeping pose/expression, in
+                # step with _expr_version in /play/scene.
+                from app.models.character import get_effective_pose_key
+                pose_key = get_effective_pose_key(character_name) or ""
             except Exception:
-                activity = ""
+                pose_key = ""
 
     # Equipped-State: Override-Params haben Prioritaet, sonst Real-State aus Profil.
     # Override-Modus ist read-only: es wird nur im Cache gesucht, keine Generierung
@@ -806,7 +810,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
             _eq_pieces, _eq_items, _eq_meta = None, None, None
 
     # Check cache
-    cached = get_cached_expression(character_name, mood, activity,
+    cached = get_cached_expression(character_name, mood, pose_key,
                                     equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                                     equipped_pieces_meta=_eq_meta)
     if cached and force:
@@ -828,16 +832,18 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
             media_type=media_type,
             headers={"Cache-Control": "public, max-age=3600"})
 
-    # Helper: Fallback-Bild wenn die gesuchte Variant noch nicht bereit ist.
-    # Profilbild ist NIE eine Option — Profilbild = Roster-Avatar, nicht Scene.
-    # Reihenfolge:
-    #   1) Variant mit der AEHNLICHSTEN Outfit-Kombination (Mood-Bucket als
-    #      Tie-Break) — deckt auch die Default-Variant des gleichen Outfits ab.
-    #   2) Default-Variant (mood="" + activity="") mit aktuellem Equipped-State
-    #      (greift nur noch, wenn Sidecars kein Outfit aufzeichnen).
-    #   3) Neuestes beliebiges Expression-Variant des Characters.
-    # Wenn alles fehlt: None → Aufrufer liefert 202 (Generierung laeuft) und
-    # FE pollt weiter bis das echte Variant kommt.
+    # Helper: fallback image while the requested variant is not ready yet.
+    # The profile image is NEVER an option — that is the roster avatar, not a
+    # scene. Order:
+    #   1) The variant with the MOST SIMILAR outfit combination (equal
+    #      expression key as tie-break) — covers the default variant of the
+    #      same outfit as well.
+    #   2) The default variant (mood="" + pose_key="", i.e. the catalog
+    #      defaults) with the current equipped state — only bites when
+    #      sidecars record no outfit.
+    #   3) The newest expression variant of the character, whatever it shows.
+    # If all of that is missing: None → the caller answers 202 (generation
+    # running) and the frontend keeps polling until the real variant lands.
     def _serve_fallback():
         from app.core.expression_regen import (_get_expressions_dir, _safe_name,
                                                find_nearest_expression)
@@ -852,7 +858,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
                     "X-Variant-Status": status,
                 })
 
-        # 1) Nearest-Outfit-Variant (app/core/outfit_match.py)
+        # 1) Nearest outfit variant (app/core/outfit_match.py)
         try:
             nearest = find_nearest_expression(character_name, mood,
                                               _eq_pieces, _eq_items)
@@ -861,7 +867,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         if nearest is not None:
             return _serve_file(nearest, "fallback-nearest")
 
-        # 2) Default-Variant: gleicher Equipped-State, mood+activity leer
+        # 2) Default variant: same equipped state, mood + pose key empty
         try:
             default_cached = get_cached_expression(
                 character_name, "", "",
@@ -873,7 +879,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         if default_cached and default_cached.exists():
             return _serve_file(default_cached, "fallback-default")
 
-        # 3) Neuestes beliebiges Expression-Variant des Characters
+        # 3) Newest expression variant of the character, whatever it is
         try:
             expr_dir = _get_expressions_dir(character_name)
             prefix = _safe_name(character_name)
@@ -887,7 +893,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         except Exception:
             pass
 
-        # KEIN Profilbild-Fallback — lieber nichts als das falsche Bild.
+        # NO profile-image fallback — better nothing than the wrong image.
         return None
 
     _want_fallback = (fallback or "").strip().lower() == "default"
@@ -897,7 +903,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
     # (z.B. Wardrobe-Vorschau-Button, der fuer das ausgewaehlte Set die
     # Variant vorberechnen soll ohne vorher anzuziehen).
     if _is_override and not trigger:
-        if is_generating(character_name, mood, activity,
+        if is_generating(character_name, mood, pose_key,
                          equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                          equipped_pieces_meta=_eq_meta):
             if _want_fallback:
@@ -907,22 +913,22 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=202,
-                content={"status": "generating", "mood": mood, "activity": activity})
+                content={"status": "generating", "mood": mood, "pose_key": pose_key})
         raise HTTPException(status_code=404, detail="Keine Variant im Cache")
 
-    if has_failed(character_name, mood, activity,
+    if has_failed(character_name, mood, pose_key,
                   equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                   equipped_pieces_meta=_eq_meta):
         if force or trigger:
             # Force/Trigger: failed-Marker loeschen damit ein Retry moeglich ist
             from app.core.expression_regen import clear_failed_marker
-            clear_failed_marker(character_name, mood, activity,
+            clear_failed_marker(character_name, mood, pose_key,
                                 equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                                 equipped_pieces_meta=_eq_meta)
         else:
             raise HTTPException(status_code=404, detail="Variant-Generierung fehlgeschlagen")
 
-    if is_generating(character_name, mood, activity,
+    if is_generating(character_name, mood, pose_key,
                      equipped_pieces=_eq_pieces, equipped_items=_eq_items):
         if _want_fallback:
             fb = _serve_fallback()
@@ -931,7 +937,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=202,
-            content={"status": "generating", "mood": mood, "activity": activity})
+            content={"status": "generating", "mood": mood, "pose_key": pose_key})
 
     # Prefix uebernimmt trigger_expression_generation per Default aus dem Env
     # (OUTFIT_IMAGE_PROMPT_PREFIX) — Auto-Regen + Vorschau identisch.
@@ -940,7 +946,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
     # Explizit-Trigger (trigger=1, Garderobe-Preview-Button): kein Debounce,
     # User erwartet sofortige Generierung. Auto-Pfade (cache-miss beim Render)
     # coalescen, damit ein Chat-Turn nicht 3 Varianten erzeugt.
-    started = trigger_expression_generation(character_name, mood, activity,
+    started = trigger_expression_generation(character_name, mood, pose_key,
                                              equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                                              equipped_pieces_meta=_eq_meta,
                                              ignore_cooldown=True,
@@ -954,9 +960,9 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=202,
-            content={"status": "generating", "mood": mood, "activity": activity})
+            content={"status": "generating", "mood": mood, "pose_key": pose_key})
     # Konkurrierender Request: andere Anfrage hat gerade schon gestartet → 202 statt 404
-    if is_generating(character_name, mood, activity,
+    if is_generating(character_name, mood, pose_key,
                      equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                      equipped_pieces_meta=_eq_meta):
         if _want_fallback:
@@ -966,7 +972,7 @@ def get_outfit_expression(character_name: str, mood: str = "", activity: str = "
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=202,
-            content={"status": "generating", "mood": mood, "activity": activity})
+            content={"status": "generating", "mood": mood, "pose_key": pose_key})
     raise HTTPException(status_code=404, detail="Keine Variant verfuegbar")
 
 

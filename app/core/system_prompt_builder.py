@@ -74,6 +74,10 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     location_id = profile.get("current_location", "")
     data["location_id"] = location_id
     data["location_name"] = get_location_name(location_id) if location_id else "Unknown"
+    # Prompt line "Activity": DISPLAY text, not a render key — the sanitized
+    # flavor when the character has one, otherwise the bare catalog key. Both
+    # are already cleaned and length-capped at the write path (pose_catalog.
+    # sanitize_flavor), so nothing is trimmed here.
     data["activity"] = ("Sleeping" if profile.get("is_sleeping")
                         else (profile.get("pose_flavor")
                               or profile.get("pose_key") or "")) or "None"
@@ -210,6 +214,8 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         )
 
     for other in others_in_room:
+        # Display text again (flavor or catalog key, "Sleeping" when asleep) —
+        # what the others SEE, never the key an image or clip is picked with.
         other_act = get_effective_activity(other) or ""
         suffix = f" ({other_act})" if other_act else ""
         lines.append(f"- {other} is here{suffix}")

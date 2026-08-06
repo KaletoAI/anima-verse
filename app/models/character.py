@@ -1068,9 +1068,9 @@ def set_known_locations(character_name: str, location_ids: List[str]) -> List[st
 
 
 def _schedule_background_variant(character_name: str) -> None:
-    """Triggert Expression-Variant fuer aktuelle Mood/Activity/Equipped im
-    Hintergrund — damit beim naechsten Character-Wechsel bereits ein
-    frisches Bild im Cache liegt. Kein Fehler wenn nicht moeglich.
+    """Triggers an expression variant for the current mood/pose/equipped state
+    in the background — so the next character switch already finds a fresh
+    image in the cache. Never raises.
     """
     if not character_name:
         return
@@ -1079,15 +1079,17 @@ def _schedule_background_variant(character_name: str) -> None:
         from app.models.inventory import get_equipped_pieces, get_equipped_items
         profile = get_character_profile(character_name) or {}
         mood = profile.get("current_feeling", "") or ""
-        activity = get_effective_activity(character_name)
+        # The image cache is keyed by CATALOG KEYS — the display text
+        # (get_effective_activity) never reaches it.
+        pose_key = get_effective_pose_key(character_name)
         eq_p = get_equipped_pieces(character_name)
         eq_i = get_equipped_items(character_name)
         trigger_expression_generation(
-            character_name, mood, activity,
+            character_name, mood, pose_key,
             equipped_pieces=eq_p, equipped_items=eq_i,
-            ignore_cooldown=False)  # Cooldown respektieren
+            ignore_cooldown=False)  # respect the cooldown
     except Exception as _e:
-        logger.debug("Background-Variant-Trigger fuer %s fehlgeschlagen: %s",
+        logger.debug("Background variant trigger for %s failed: %s",
                      character_name, _e)
 
 

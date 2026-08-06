@@ -388,7 +388,7 @@ def generate_model_ref_images(character_name: str,
             _tpose = kind == "tpose"
             _w, _h = _tpose_size() if _tpose else (None, None)
             path = generate_expression_image(
-                character_name, mood="", activity="",
+                character_name, mood="", pose_key="",
                 equipped_pieces=pieces, equipped_items=items,
                 prompt_prefix=prompts[kind] if _tpose else "",
                 pose_prompt_override="" if _tpose else prompts[kind],
