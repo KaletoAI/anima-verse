@@ -169,7 +169,12 @@ def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
             if score > best_score:
                 best_alias, best_score = alias, score
         if best_alias and best_score >= get_catalog_threshold():
-            return index[best_alias], "embedding"
+            # A catalog edit racing the embedding warm-up can leave the alias
+            # embeddings holding aliases this fresh index no longer knows —
+            # fall through to the fallback rather than break "never raises".
+            hit = index.get(best_alias)
+            if hit:
+                return hit, "embedding"
         record_candidate(axis, cleaned, index.get(best_alias, ""), 1.0 - best_score)
         return get_default_key(axis), "fallback"
     # no embedding available at all: fall back, still record the miss

@@ -76,13 +76,32 @@ def _synonyms(raw: Any) -> List[str]:
     return [str(s).strip().lower() for s in raw if str(s).strip()]
 
 
-def _alias_owner(axis: str, alias: str) -> str:
-    """Entry key that already claims this alias ("" = free)."""
+def _alias_owner(axis: str, alias: str, exclude_key: str = "") -> str:
+    """Entry key that already claims this alias ("" = free).
+
+    ``exclude_key`` skips exactly one entry — an update re-saving an entry with
+    the synonyms it already owns is not a collision with itself.
+    """
     alias = (alias or "").strip().lower()
     for key, entry in pose_catalog.get_catalog(axis).items():
+        if exclude_key and key == exclude_key:
+            continue
         if alias == key or alias in entry.get("synonyms", []):
             return key
     return ""
+
+
+def _require_free_aliases(axis: str, aliases: List[str], exclude_key: str = "") -> None:
+    """409 (naming the owning entry) as soon as one alias is already claimed.
+
+    Every write path goes through this — an alias must point at exactly one
+    entry, otherwise the resolver's alias index silently drops one of them.
+    """
+    for alias in aliases:
+        owner = _alias_owner(axis, alias, exclude_key=exclude_key)
+        if owner:
+            raise HTTPException(status_code=409,
+                                detail=f"'{alias}' already belongs to '{owner}'")
 
 
 @router.get("")
@@ -126,8 +145,10 @@ async def create_entry(request: Request,
     data = _read(axis)
     if key in data["entries"]:
         raise HTTPException(status_code=409, detail="Entry already exists")
+    synonyms = _synonyms(body.get("synonyms") or [])
+    _require_free_aliases(axis, [key] + synonyms)
 
-    entry: Dict[str, Any] = {"prompt": prompt, "synonyms": _synonyms(body.get("synonyms") or [])}
+    entry: Dict[str, Any] = {"prompt": prompt, "synonyms": synonyms}
     if axis == "pose":
         entry["animation"] = animation
         entry["solo"] = bool(body.get("solo", True))
@@ -150,7 +171,11 @@ async def update_entry(key: str, request: Request, axis: str = Query("pose"),
     if "prompt" in body:
         entry["prompt"] = str(body["prompt"] or "").strip()
     if "synonyms" in body:
-        entry["synonyms"] = _synonyms(body["synonyms"] or [])
+        synonyms = _synonyms(body["synonyms"] or [])
+        # The entry's OWN key is excluded: re-saving it with the synonyms it
+        # already holds must stay legal.
+        _require_free_aliases(axis, synonyms, exclude_key=key)
+        entry["synonyms"] = synonyms
     if "animation" in body and axis == "pose":
         anim = str(body["animation"] or "").strip().lower()
         if not anim:
@@ -249,11 +274,7 @@ async def approve_candidate(request: Request,
         for alias in _synonyms(body.get("synonyms") or []) + [raw_text]:
             if alias != key and alias not in synonyms:
                 synonyms.append(alias)
-        for alias in [key] + synonyms:
-            owner = _alias_owner(axis, alias)
-            if owner:
-                raise HTTPException(status_code=409,
-                                    detail=f"'{alias}' already belongs to '{owner}'")
+        _require_free_aliases(axis, [key] + synonyms)
         entry = {"prompt": prompt, "synonyms": synonyms}
         if axis == "pose":
             entry["animation"] = animation
