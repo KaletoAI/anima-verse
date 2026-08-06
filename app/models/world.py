@@ -1302,6 +1302,46 @@ def migrate_room_exits_once() -> Dict[str, int]:
     return counts
 
 
+def migrate_clear_entry_rooms_once() -> Dict[str, int]:
+    """One-time, idempotent: no location declares an entry room any more.
+
+    ``entry_room`` used to be filled everywhere, mostly with the first room —
+    a value nobody had authored, which behaved like a gate one had to walk to.
+    The default is now "arrive on the ground" (plan-grundflaeche.md § 6), so
+    every stored value is cleared, the deliberate ones included: the field
+    stays in the editor and an author who really means "here one arrives
+    indoors" sets it again by hand.
+
+    The count comes back so the boot log can state it: ``locations`` were
+    cleared. Guarded by a world_kv marker, so a second boot returns zero
+    without touching a row — and even without the marker the pass would find
+    nothing left to clear.
+    """
+    counts = {"locations": 0}
+    if get_world_setting("migration.clear_entry_room_v1", "") == "done":
+        return counts
+    try:
+        data = _load_world_data()
+        changed = False
+        for loc in data.get("locations", []):
+            if not isinstance(loc, dict):
+                continue
+            if not str(loc.get("entry_room") or "").strip():
+                continue
+            loc["entry_room"] = ""
+            counts["locations"] += 1
+            changed = True
+        if changed:
+            _save_world_data(data)
+        set_world_setting("migration.clear_entry_room_v1", "done")
+        logger.info(
+            "entry-room migration: %d location(s) cleared — arrivals land on "
+            "the ground now", counts["locations"])
+    except Exception as e:
+        logger.warning("entry-room migration failed: %s", e)
+    return counts
+
+
 def get_location_name(location_id: str) -> str:
     """Gibt den Namen eines Ortes anhand seiner ID zurueck.
 

@@ -255,6 +255,19 @@ async def lifespan(app: FastAPI):
     except Exception as _rxe:
         logger.debug("exit-door migration failed: %s", _rxe)
 
+    # Migration: every location drops its entry room — arriving on the ground
+    # is the default now, and a declared entry room is the deliberate
+    # exception an author sets by hand (plan-grundflaeche.md § 6). Runs after
+    # the ground-room migration, which is what makes that ground exist.
+    # Idempotent, world_kv-marked.
+    try:
+        from app.models.world import migrate_clear_entry_rooms_once
+        _er = migrate_clear_entry_rooms_once()
+        if any(_er.values()):
+            logger.info("Entry-room migration: %s", _er)
+    except Exception as _ere:
+        logger.debug("entry-room migration failed: %s", _ere)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()
