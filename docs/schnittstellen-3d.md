@@ -139,7 +139,7 @@
 >     (`next()/2³²`; yaw × 360) über der Outline-Bbox. Akzeptiert wird ein
 >     Kandidat im Raum-Polygon, außerhalb aller Keep-outs (Nachbar-Hüllen
 >     gleicher Etage — tesselliert —, Quadrate um Openings ±(width/2 +
->     0,6 m), Exit/Marker ±0,5 m) und mit Mittelpunktsabstand ≥
+>     0,6 m), Marker ±0,5 m) und mit Mittelpunktsabstand ≥
 >     `scatter_spacing_m` zu den Kopien DERSELBEN Platzierung.
 >     `scatter_spacing_m` ist die GANZE Dichteregel: 0 = Kopien dürfen
 >     überlappen (Baumkronen tun das) — die frühere Footprint-Untergrenze
@@ -268,12 +268,12 @@
 >     `(u, v) → (1 − v, u)` (dieselbe Drehung im Einheitsquadrat, dessen
 >     Mitte 0,5 ist). Daraus folgt der Rest:
 >     - `plates[].outline`, `walls[].from|to`, `models[].anchor` /
->       `clip_outline` / `cutouts`, `markers[].at_world`, `exits[].at_world`,
+>       `clip_outline` / `cutouts`, `markers[].at_world`,
+>       `doorways[].at_world` **und `doorways[].along`**,
 >       `rooms[].overlay.centre|rect` → Welt-Regel; `rooms[].outline` →
->       Fraktions-Regel. `rooms[].exit` wird **nur bei `exit_derived`**
->       gedreht (absolute Plan-Fraktion); ein EXPLIZITER Exit ist eine
->       Fraktion des RAUM-RECHTECKS und gehört dem 2D-Editor, der die
->       unrotierte Vorlage zeigt — er bleibt stehen.
+>       Fraktions-Regel. Bei den Türschwellen trägt dieselbe Matrix beides
+>       (Punkt UND Richtung, Ursprung ist die Kachelmitte); `width_m`,
+>       `base_y`, `rooms` und `outside` sind drehinvariant.
 >     - `models[].yaw_deg` = `(yaw + 90·k) % 360`. Ein `extras`-Kasten behält
 >       seine Höhe, tauscht bei ungeradem k w/d und dreht sein `side`-Wort
 >       N→E→S→W.
@@ -357,11 +357,11 @@ Der Vertrag hat zwei Teile:
 
 Die Geometrie-Regeln dieses Vertrags sind heute **dreifach implementiert**:
 
-1. Backend: `app/core/room_recipe.py` (Spiegelung, Exit-Ableitung,
+1. Backend: `app/core/room_recipe.py` (Spiegelung, Öffnungs-Normalisierung,
    Marker-Komposition), `app/core/location_model3d.py` (Anker-Meta).
 2. Game-Admin-Vorschau: `frontend/src/tabs/world/FloorPlanPreview.tsx`
    (1841 Zeilen raw three.js) + `planGeometry.ts` — reimplementiert
-   Öffnungs-Normalisierung, Spiegelung und Exit-Ableitung als gepflegtes
+   Öffnungs-Normalisierung und Spiegelung als gepflegtes
    „Spiegelbild" des Backend-Codes und **ruft `/play/rooms/{id}/recipe`
    nirgends auf**.
 3. 3D-Client: `src/scene/tiles.ts`, `roomShell.ts`, `propPlace.ts`,
@@ -389,7 +389,7 @@ sondern erster Konsument derselben Vertragsfläche (§ B5).
 - **Kachel** = 10 × 10 Welt-Meter, eine Location. **Referenzquadrat** =
   festes **8 × 8 m**, kachelzentriert — die Bezugsfläche ALLER Fraktionen
   (`layout.x/y/w/d`, `map3d.outline`, `map3d.elevator`, Rezept-`outline`,
-  `placements.at`, `exit`, Marker-`at`). +x = Ost; +Fraktion-y → +z = Süd.
+  `placements.at`, Marker-`at`). +x = Ost; +Fraktion-y → +z = Süd.
 - **Anker-Kette (v3):** `k = 8 / plan_width_m(effektiv)` — Welt-Meter pro
   Real-Meter der Location. Effektiv = explizites `map3d.plan_width_m`,
   sonst Auto-Ableitung `height_m × (größte XZ-Seite / Y des Meshes, nach
@@ -494,7 +494,7 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   surfaces?: { floor?, wall? },       # Surface-Texture-Kinds
   openings: [{ edge, at, width_m, height_m, sill_m, type, to?,
                mirrored?, prop_id? }],
-  exit?, exit_derived?, markers?,
+  markers?,
   placements: [{ prop_id, at: [x, y], yaw, offset_y,
                  dims: {width_m, depth_m, height_m}, has_model, missing? }],
   prop_markers: [{ placement, animation, offset_m: [dx, dz],
@@ -506,7 +506,7 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
                                       # einem Area-Modell): keine Segmente,
                                       # keine Fenster-Brüstung/-Sturz, kein
                                       # Glas. Öffnungen bleiben Editor-Daten,
-                                      # Platte/Exit/Marker unberührt; die
+                                      # Platte/Marker unberührt; die
                                       # Konturwände des Gebäudes ebenfalls
                                       # (der Raum gibt auch keine
                                       # Kontur-Strecke mehr frei).
@@ -537,10 +537,21 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   eigenem Kanten-Index und gespiegeltem `at` fertig geliefert; exakt wie
   eigene behandeln, nichts umrechnen. `mirrored: true` ist rein
   informativ. Gilt für Türen, Passagen und Fenster.
-- **Abgeleiteter Exit:** fehlt `layout.exit`, liefert das Rezept bei
-  vorhandenen Türen/Passagen trotzdem `exit` (+ `exit_derived: true`) —
-  Öffnung mit `to == "outside"` gewinnt, sonst erste Tür/Passage (stabile
-  Ordnung Kanten-Index, dann `at`); Punkt = Öffnungsmitte 0,3 m nach innen.
+- **Kein Exit-Punkt mehr (2026-08-06, `plan-betreten-und-tueren.md` § 4/§ 6):**
+  `layout.exit` und `exit_derived` sind ersatzlos weg — aus Rezept, Payload,
+  Editor und Speicher. **Die Tür IST der Weg hinein und hinaus**; wo ein Raum
+  betreten wird, sagt allein seine begehbare Öffnung (`door`/`passage`), und
+  fertig komponiert steht sie als `doorways[]` im Szenen-Rezept (§ B1).
+  Kein Fallback-Reader liest das alte Feld: eine **Einmal-Migration beim
+  Boot** (`world.migrate_room_exits_once`, `world_kv`-Marker
+  `migration.room_exit_doors_v1`) projiziert jeden gespeicherten Exit-Punkt
+  auf die nächste Hüllenkante und legt dort eine Tür in der Editor-Vorgabe an
+  (1,0 m breit, 2,1 m hoch, `sill_m` 0 — dieselbe `OPENING_DEFAULT` wie beim
+  Zeichnen). Nichts wird erfunden: übersprungen wird, wo diese Kante schon
+  eine begehbare Öffnung trägt, gekrümmt ist oder schmaler als die Tür.
+  Danach ist `exit` aus dem Layout entfernt — das ist die Idempotenz —, und
+  der Boot-Log nennt die Zahlen (Räume mit Exit, erzeugte Türen,
+  übersprungen, ohne brauchbare Hülle).
 - **Marker:** `prop_markers` sind FERTIG komponiert (Fix → Real-Size →
   Yaw durchgerechnet) — eine Zeile beim Konsumenten:
   `marker = platzierungspunkt + [dx,dz] × k`, Höhe = Etagenboden +
@@ -580,9 +591,21 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
 - Rezeptwerte (heute Client-seitig, v4 → Server, § B3): Etagen-Platte nach
   unten extrudiert, Oberkante `level × storey + 0,08`, Dicke 0,14;
   Kontur-Wände Basis 0,08; Wand-Höhe `max(0,6; storey − 0,15)`, Dicke
-  0,07; Türen nur EG an Raum-Exits mit Kantenabstand < 0,45 (Lücke ±0,4;
-  Reststücke < 0,06 entfallen), sonst mittige Tür im südlichsten
-  Wandstück; Obergeschosse halbtransparent. **Klarstellung 2026-07-26:**
+  0,07; Reststücke < 0,06 entfallen;
+  Obergeschosse halbtransparent. **Die Hülle nimmt ihr Loch von der Tür**
+  (2026-08-05, `plan-betreten-und-tueren.md` § 4.2): jede Außen-Türschwelle
+  (`doorways[].outside`) wird entlang ihrer EIGENEN Normale nach vorn auf die
+  Kontur projiziert und öffnet sie dort in ihrer LICHTEN Breite, auf ihrer
+  eigenen Etage. „Nach vorn" ist die Türrichtung, nicht der kürzeste Abstand
+  zum Polygon — ein zurückgesetzter Raum öffnet die Hülle vor sich, nicht an
+  der zufällig nächsten Wand. Eine schräg auftreffende Tür behält ihre
+  Breite, eine in die Ecke geklemmte verliert den überstehenden Teil, statt
+  auf die Nachbarkante zu wandern. Quelle ist ausschließlich der gelieferte
+  `doorways`-Block, nie ein zweites Mal die Öffnungen.
+  **Die frühere Fallback-Tür** (0,8 m mittig im südlichsten Wandstück, wenn
+  keine Tür nah genug lag) **ist ersatzlos weg** — ein Gebäude ohne Außentür
+  bleibt zu und wird als `problems[]`-Befund gemeldet (§ B1).
+  **Klarstellung 2026-07-26:**
   opak (`opacity_role: "ground"`) ist die UNTERSTE genutzte Etage, alles
   darüber ist `"upper"` — bei einem Keller (`level -1`) ghostet also auch
   die Terrain-Etage 0, sonst läge der Keller unsichtbar unter opakem
@@ -605,7 +628,7 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
 - `map3d.elevator`: `[x, y]`-Fraktion, gilt für alle Etagen. Rezept:
   Schacht 1,8 m², Ecksäulen 0,14, Glas 3 Seiten (offene Seite Richtung
   Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles reale
-  Meter × k. Figuren-Routing: Raum-Exit → Fahrstuhl → vertikal → weiter.
+  Meter × k. Figuren-Routing: Türschwelle → Fahrstuhl → vertikal → weiter.
   Treppen gibt es nicht.
 - Legacy: prozedurale Innen-Wände + Auto-Grid NUR, wenn kein Raum der
   Location ein Layout hat.
@@ -908,6 +931,44 @@ der Autor legt ihn nie an und kann ihn nicht löschen, nur benennen.
 
 ---
 
+## A14. Der Sperr-Zustand kommt vom Server — neu 2026-08-06
+
+`plan-betreten-und-tueren.md` § 5. **Der Server sagt WAS gesperrt ist, der
+Client sagt WIE es aussieht.** Beide Spieler-Payloads tragen den Zustand
+fertig, samt der Begründung in der Sprache des Spielers; kein Renderer leitet
+je eine Sperre selbst ab.
+
+- **`GET /play/scene` → `rooms[]`** (der Spieler-Payload, § A13) — jeder
+  Eintrag `{id, name, is_entry, is_ground, enterable, reason}`. `enterable`
+  kommt aus demselben `check_access`, mit dem `POST /play/enter-room`
+  ablehnt (`world_ops.build_avatar_rooms`), also können angebotener und
+  akzeptierter Raum nicht auseinanderlaufen; `reason` ist der Satz der Regel
+  und leer genau dann, wenn der Raum offen ist.
+- **`GET /world/avatar/neighbors`** — jeder Himmelsrichtungs-Eintrag trägt
+  `may_leave` (das Abgangs-Gate dieser Kante, § B1 Nr. 13) **und**
+  `enterable` + `reason`: das Urteil über den SCHRITT als Ganzes
+  (`world_ops.neighbor_access`), in genau der Reihenfolge, in der
+  `move_avatar_step` prüft — gekreuzte Kante ohne autorisierte Öffnung →
+  Verlassen-Regeln (`check_leave`, einmal für alle vier Pfeile) →
+  `accessible_when` des Ziels → Block-Regeln (`check_access`) auf dem
+  ANKUNFTS-Raum. Der Spieler liest also die erste Absage, nicht die letzte.
+- **Trennlinie:** der Sperr-Zustand gehört EINEM Avatar in EINEM Moment und
+  steht deshalb **niemals** im signatur-gecachten Szenen-Rezept (§ B1) — das
+  ist für alle dieselbe Geometrie. Clients binden ihn zur Render-/
+  Interaktionszeit **über die Id**.
+- **Was die Renderer daraus machen** (reiner Sicht-Zustand, bewusst nicht
+  geteilt): client3d zeichnet eine Türschwelle verschlossen, wenn ein Raum
+  auf der ANDEREN Seite gesperrt ist — die Zuordnung läuft über
+  `doorways[].rooms`, und der Raum, in dem der Avatar gerade steht, ist von
+  der Beurteilung ausgenommen (eine Regel gegen das Betreten sagt nichts über
+  das Verlassen, sonst wirkte jeder eigene Raum als Käfig). Die
+  Raumwechsel-Heuristik schlägt gesperrte Räume nicht vor (der eigene bleibt
+  Kandidat, sonst liefe die Figur im Stehen hinaus), und das
+  „Betreten"-Angebot nennt beim gesperrten Ziel den Server-Satz, statt zu
+  schweigen.
+
+---
+
 # Teil B — Ziel-Vertrag v4: das Szenen-Rezept
 
 Kern des Umbaus: EIN Endpoint liefert die komplette darstellbare Szene
@@ -928,7 +989,7 @@ keine einzige eigene Geometrie-Entscheidung mehr.
            upper_wall_opacity, upper_floor_opacity, room_palette: [...],
            elevator_frame_color, elevator_pad_color, elevator_cabin_color,
            elevator_cabin_opacity, elevator_glass_opacity },
-           # Editor-Overlays (Marker/Exit/Lineal) bleiben bewusst lokal —
+           # Editor-Overlays (Marker/Lineal) bleiben bewusst lokal —
            # Vorschau-AIDs, keine Vertragsgeometrie
 
   # --- fertige Primitive (Reihenfolge egal, alles Welt-Koordinaten) ---
@@ -999,9 +1060,6 @@ keine einzige eigene Geometrie-Entscheidung mehr.
                openings,                   # normalisiert INKL. gespiegelter —
                                            # Ghost-Öffnungen kommen von HIER,
                                            # nie aus lokaler Spiegel-Logik
-               exit, exit_derived,         # Rezept-Rahmen: explizit = Raum-
-                                           # Rechteck-Fraktion, abgeleitet =
-                                           # absolute Platten-Fraktion
                overlay? } ],               # NUR Flächen-Locations: Outdoor-Raum
                                            # AUSSERHALB des Grundrisses = Zone
                                            # AUF dem Modell — {centre:[x,z],
@@ -1017,18 +1075,69 @@ keine einzige eigene Geometrie-Entscheidung mehr.
              stand_clearance: 0.12 },      # Welt-Meter, Konstante
   markers: [ { room_id, at_world: [x,z], y_world, animation, facing?,
                source: "room"|"prop" } ],  # ALLE fertig in Welt-Koordinaten
-  exits:   [ { room_id, at_world: [x,z], derived? } ],
+
+  # --- Türschwellen & Befunde (2026-08-05) ---
+  doorways: [ { level, at_world: [x,z], along: [ux,uz], width_m,
+                base_y, rooms: [room_id, …], outside } ],
+                                           # IMMER da, leer = keine Tür
+  problems: [ { kind, location_id?, room_id?, message } ],
+                                           # IMMER da, leer = alles sauber
   outdoor_rooms: [ room_id, … ]
 }
 ```
 
+**`doorways[]` — jede begehbare Schwelle der Location als fertiges
+Primitiv** (`plan-betreten-und-tueren.md` § 4.1). Eine Schwelle ist EXAKT die
+Lücke, die eine Öffnung aus einer Wand schneidet: dieselbe Quelle, dieselbe
+Klemmung wie das Wand-Splitting (`scene_recipe._room_wall_edges`), keine
+zweite Ableitung.
+
+- **Konsumentenregel: nichts nachrechnen.** `width_m` ist die LICHTE Breite
+  in Welt-Metern NACH der Kantenklemmung — kein `width_m × k`, das jemand
+  noch skalieren müsste; `at_world` ist die Mitte dieser lichten Lücke,
+  `along` die Einheitsrichtung der Wand (die Schwelle läuft ENTLANG davon),
+  `base_y` der Fuß genau der Wand, zu der die Lücke gehört.
+- **Eine Lücke in der Wand = EIN Eintrag.** Zwei Kandidaten sind dasselbe
+  Loch, wenn drei geometrische Fragen zugleich mit Ja beantwortet werden:
+  gleiche Wand-RICHTUNG (zuerst — zwei in dieselbe Ecke geklemmte Türen
+  liegen null Meter auseinander und trotzdem auf zwei Wänden), gleiche
+  Wand-LINIE (die beiden Wandflächen höchstens `SHARE_TOL_M` reale Meter × k
+  auseinander, plus die Rundung eines gespiegelten `at`), und geklemmte
+  Spannen, die sich auf dieser Linie wirklich TREFFEN. So verschmelzen die
+  gespiegelte Kopie des Nachbarn, eine von beiden Räumen gezeichnete
+  Trennwand-Tür und dieselbe Tür doppelt im selben Raum. Die breitere Spanne
+  gewinnt die Geometrie und den ersten Platz: **`rooms[0]` besitzt immer die
+  Wand, aus der der Eintrag geschnitten wurde.**
+- **`outside` ist GEOMETRIE, kein Autorentext:** nach der Deduplizierung
+  heißt genau ein Raum, dass keine zweite Raumwand an dieser Lücke steht —
+  sie führt also aus dem Gebäude, auf die Grundfläche. Eine unbeschriftete
+  Tür ist damit eine richtige Außentür, kein Durchgang ins Nichts. Die
+  GRUNDFLÄCHE steht nie in `rooms`: sie hat keine Wände, und `outside` sagt
+  es bereits.
+- Ein Fenster ist kein Weg hinaus, ein Raum ohne Hülle (Outdoor-Zone,
+  `no_walls`, entartete Kontur) hat keine Schwelle, und die Reihenfolge ist
+  deterministisch (Etage, Position, Räume) — Konsumenten diffen ganze
+  Payloads.
+
+**`problems[]` — Befunde statt stiller Reparatur** (§ 4.3). Der Composer
+stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
+— keiner leitet die Regel nach, keiner erfindet eine Reparatur. `kind` ist
+der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
+darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
+zurück). Heute gibt es einen: **`no_building_entrance`** — die Location hat
+eine Kontur, mindestens ein Raum MIT HÜLLE steht auf Etage 0 (eine Kontur
+über lauter Outdoor-/`no_walls`-Räumen ist kein Gebäude, dort könnte der
+Autor gar keine Tür setzen), und **keine einzige** Türschwelle auf Etage 0
+führt nach draußen. Dann kommt niemand hinein, und seit die Fallback-Tür weg
+ist (§ A6) verdeckt das auch nichts mehr.
+
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
 Fenster-Brüstung/-Sturz/Glas als eigene `walls`-Einträge, Türlücken der
-Außenkontur, südlichste-Wand-Fallback-Tür, Spiegelungen, Exit-Ableitung,
+Außenkontur (aus den Schwellen projiziert, § A6), Spiegelungen,
 Fahrstuhl-Primitive, Etagenplatten, Raum-Platten, alle Konstanten
-(0,07 / 0,14 / 0,96 / 0,92 / 0,12 / ±0,4 / < 0,45 / < 0,06 /
-max(0,6; storey−0,15)), Farben und Opacities (`style`), Marker- und
-Exit-Kompositionen in Weltkoordinaten, Figuren-Maßstab.
+(0,07 / 0,14 / 0,96 / 0,92 / 0,12 / < 0,06 /
+max(0,6; storey−0,15)), Farben und Opacities (`style`),
+Marker-Kompositionen und Türschwellen in Weltkoordinaten, Figuren-Maßstab.
 
 **Was der Client noch tut:** GLB/FBX laden, BBox messen, die EINE
 place()-Routine (§ B2) ausführen, Primitive als Box/ExtrudeGeometry
@@ -1110,8 +1219,8 @@ POST /play/scene-preview        # Body: location-Draft (map3d + rooms
 
 Gleicher Composer, keine Persistenz. Damit konsumiert die
 Game-Admin-Vorschau (`FloorPlanPreview`) dieselbe Vertragsfläche wie der
-Client; `planGeometry.ts`-Duplikate (Spiegelung, Edge-Normalisierung,
-Exit-Ableitung) und die Konstanten-Kopien entfallen ersatzlos.
+Client; `planGeometry.ts`-Duplikate (Spiegelung, Edge-Normalisierung) und
+die Konstanten-Kopien entfallen ersatzlos.
 `floorplan.html` des Clients bleibt Debug-Werkzeug und rendert dann
 automatisch identisch.
 

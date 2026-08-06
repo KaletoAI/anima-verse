@@ -618,8 +618,9 @@ def _scene_inputs(location: dict, location_id: str) -> tuple:
 @router.get("/play/locations/{location_id}/scene")
 def play_location_scene(location_id: str):
     """The whole location as a ready-to-render scene: plates, walls, extras,
-    model placement specs, figures, markers and exits — all in world metres
-    around the tile centre (contract § B1). Poll ``signature`` for changes.
+    model placement specs, figures, markers, doorways and problems — all in
+    world metres around the tile centre (contract § B1). Poll ``signature``
+    for changes.
 
     404 = nothing to compose (no building outline, no room with a layout and
     no building model) — that is the legacy auto-grid case, the client keeps

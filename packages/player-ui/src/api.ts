@@ -108,11 +108,11 @@ export async function apiDelete<T = unknown>(path: string): Promise<T> {
 }
 
 /**
- * Scene recipe of an UNSAVED location draft (shared/schnittstellen-3d.md
+ * Scene recipe of an UNSAVED location draft (docs/schnittstellen-3d.md
  * § B3): the server composes the complete 3D scene — plates, walls, extras,
- * model placement specs, figures, markers, exits — and the caller only
- * renders it. Same payload as GET /play/locations/{id}/scene, nothing is
- * persisted. Admin-only.
+ * model placement specs, figures, markers, doorways, problems — and the
+ * caller only renders it. Same payload as GET /play/locations/{id}/scene,
+ * nothing is persisted. Admin-only.
  */
 export async function postScenePreview<T = unknown>(draft: unknown): Promise<T> {
   return apiPost<T>('/play/scene-preview', draft)
