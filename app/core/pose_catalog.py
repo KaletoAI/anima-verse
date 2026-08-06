@@ -132,14 +132,19 @@ def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
     # takes the same (non-reentrant) lock and would deadlock on itself.
     aliases = _alias_index(axis)
     with _lock:
-        if axis not in _embed_cache:
-            vecs = {}
-            for alias in aliases:
-                v = embed_fn(alias)
-                if v:
-                    vecs[alias] = v
-            _embed_cache[axis] = vecs
-        return _embed_cache[axis]
+        cached = _embed_cache.get(axis)
+    if cached is not None:
+        return cached
+    # The warm-up runs OUTSIDE the lock: with an external embedding backend it
+    # is one HTTP call per alias, and _lock is the same lock every catalog
+    # reader takes. Two threads racing here just embed twice — harmless.
+    vecs = {}
+    for alias in aliases:
+        v = embed_fn(alias)
+        if v:
+            vecs[alias] = v
+    with _lock:
+        return _embed_cache.setdefault(axis, vecs)
 
 
 def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
@@ -228,7 +233,8 @@ def sanitize_flavor(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
         return ""
-    raw = re.sub(r'["“„][^"“”„]*["”]', "", raw)
+    # German pairs are „…“ — the closing class must contain “ as well.
+    raw = re.sub(r'["“„][^"“”„]*["”“]', "", raw)
     try:
         from app.models.character import list_available_characters
         names = list_available_characters()
