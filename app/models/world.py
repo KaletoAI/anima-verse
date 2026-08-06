@@ -157,19 +157,28 @@ def _load_world_data() -> Dict[str, Any]:
                                                   else (val or ""))
                         rooms.append(room_dict)
                     loc["rooms"] = rooms
-                # Column-Fallback: Decency-Felder die im meta-Blob fehlen
-                # aus den Spalten nachziehen (auch wenn Spalte default-leer
-                # ist, damit Default-Werte konsistent sind: '' statt None,
-                # False statt None).
+                # Column fallback: fields missing from the meta blob are
+                # pulled in from the columns (even when the column holds the
+                # default, so defaults stay consistent: '' instead of None,
+                # False instead of None, 0.0 instead of None). yaw_deg is
+                # part of this: the contract says every location dict carries
+                # a float rotation, and the blob only gets the key once a
+                # rotation was actually set.
                 for key, col_idx, cast in (
                     ("decency",       13, str),
                     ("style_hint",    14, str),
                     ("swim_allowed",  15, bool),
                     ("activity_hint", 16, str),
+                    ("yaw_deg",       17, float),
                 ):
                     if key not in loc:
                         val = r[col_idx]
-                        loc[key] = (bool(val) if cast is bool else (val or ""))
+                        if cast is bool:
+                            loc[key] = bool(val)
+                        elif cast is float:
+                            loc[key] = float(val or 0.0)
+                        else:
+                            loc[key] = val or ""
                 locations.append(loc)
             data = {"locations": locations}
             _migrate_room_image_prompts(data)
@@ -2187,15 +2196,24 @@ def cleanup_orphan_clones() -> Dict[str, int]:
         if tid not in existing_ids:
             delete_ids.add(loc.get("id"))
             continue
-        # Off-map: no metre position
+        # Off-map: no metre position. A clone that still carries the legacy
+        # grid keys predates the metre model (no data was migrated, by
+        # decision) — it is stale, not off-map, and boot must never delete
+        # it. Only clones born on the metre model are cleaned up here.
         if loc.get("pos_x") is None or loc.get("pos_z") is None:
+            if "grid_x" in loc or "grid_y" in loc:
+                continue
             delete_ids.add(loc.get("id"))
             continue
 
-    # Second pass: duplicates per (template, position)
+    # Second pass: duplicates per (template, position). Unplaced survivors of
+    # the first pass (legacy grid clones) share the spot key (None, None) —
+    # they are not duplicates of each other and stay out of this.
     for loc in locations:
         tid = (loc.get("template_location_id") or "").strip()
         if not tid or loc.get("id") in delete_ids:
+            continue
+        if loc.get("pos_x") is None or loc.get("pos_z") is None:
             continue
         spot = (tid, loc.get("pos_x"), loc.get("pos_z"))
         if spot in seen_spots:
