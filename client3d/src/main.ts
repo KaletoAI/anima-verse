@@ -19,6 +19,7 @@ import {
 } from './game/perfstats';
 import { loadPrefs, PREFS_KEY } from './game/prefs';
 import { fogQuadRects, SHOW_ALL_KEY, unknownCells } from './game/fog';
+import { createFogClouds } from './game/fogClouds';
 import type { MinimapCell } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
@@ -758,9 +759,13 @@ async function startApp(username: string, role: string) {
   // It is an OVERLAY like the door thresholds: unlit (a veil that took the
   // sun would read as a surface), never written into the depth buffer, and
   // unpickable — a click belongs to the world underneath.
-  const FOG_MAT = new THREE.MeshBasicMaterial({
-    color: 0x080b12, transparent: true, opacity: 0.82, depthWrite: false,
-  });
+  //
+  // WHAT it looks like is `game/fogClouds.ts`: an overcast cloud layer, opaque
+  // inside and torn at the rim. The first version was a flat dark quad and
+  // read as an empty box (user finding); the material, the texture and the
+  // overhang that makes the soft border all live in that module, so this file
+  // keeps doing nothing but placing rectangles.
+  const clouds = createFogClouds();
   /** A hand's breadth above the world's grass plane: unknown cells carry no
    *  tile, so that plane is the only thing under the veil. */
   const FOG_Y = ground.position.y + 0.05;
@@ -790,8 +795,11 @@ async function startApp(username: string, role: string) {
     if (!fogged) return;
     const known = [...tiles.values()].map((t) => ({ x: t.loc.grid_x!, y: t.loc.grid_y! }));
     for (const r of fogQuadRects(unknownCells(fogBounds, known))) {
-      const quad = new THREE.Mesh(
-        new THREE.PlaneGeometry(r.w * CELL, r.h * CELL).rotateX(-Math.PI / 2), FOG_MAT);
+      // The geometry comes out LARGER than the rectangle — the cloud edge
+      // needs room to fade, and neighbouring runs overlap into each other so
+      // no seam opens between them (see `fogClouds.ts`). The centre is
+      // unaffected: the overhang is symmetric.
+      const quad = new THREE.Mesh(clouds.quadGeometry(r.w * CELL, r.h * CELL), clouds.material);
       // A rectangle covers the cells x … x+w-1, and a cell's centre is its grid
       // position: the middle therefore sits half a cell run further along.
       quad.position.set((r.x + (r.w - 1) / 2) * CELL, FOG_Y, (r.y + (r.h - 1) / 2) * CELL);
@@ -801,6 +809,12 @@ async function startApp(username: string, role: string) {
     }
   }
   rebuildFog();
+  // The cover drifts and takes the time of day. Both are one uniform each, so
+  // this rides in the engine's frame loop rather than bringing a timer: with
+  // no fog standing there is nothing to advance at all.
+  engine.addFrameHook((dt) => {
+    if (fogGroup.children.length) clouds.advance(dt, engine.nightFactor);
+  });
   // Last stage: the map stands and can be clicked. The title screen fades on
   // this one — the scene models behind the tiles keep streaming in afterwards
   // (`mountWithDoors` is deliberately not awaited), and holding the screen
