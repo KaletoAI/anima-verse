@@ -317,6 +317,16 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
     if not ok_leave:
         raise HTTPException(status_code=403,
             detail={"reason": "block_leave", "message": leave_msg})
+    # ``accessible_when`` at the target — the very condition the world map
+    # greys a place out with and the compass refuses on. Same reader, same
+    # sentence, same position in the gate order as ``neighbor_access``: what
+    # the pad promises, the step keeps.
+    if not _conditions_pass(target.get("accessible_when") or [],
+                            avatar, target_id):
+        raise HTTPException(status_code=403, detail={
+            "reason": "not_accessible",
+            "message": _t("This place is not accessible to you.", _lang)})
+
     ok_enter, enter_msg = check_access(avatar, target_id, room_id=target_entry_room)
     if not ok_enter:
         raise HTTPException(status_code=403,
