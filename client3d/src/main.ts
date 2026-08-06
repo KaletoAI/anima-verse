@@ -2781,10 +2781,25 @@ async function startApp(username: string, role: string) {
     // was at takeover — a map-sized avatar inside a room, or a room-sized one
     // back out on the map. Same rule as `computeNpcStates`, only fed from the
     // drawn position instead of the placement pass.
+    //
+    // `current` is the SERVER'S room and arrives a request plus a poll after
+    // the figure walked through the door — for that stretch a map-sized
+    // avatar stood inside the small diorama (factor ~1/k, found at the lake).
+    // The drawn SIZE is pure view state, so it may follow the geometry
+    // immediately: standing inside a visible room rectangle counts, whether
+    // the server has confirmed the room yet or not. Room membership for the
+    // game (rules, chat, perception) stays the server's alone.
     let scale = 1;
-    if (tile && current && tile.roomCenters.has(current)
-      && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(current))) {
-      scale = sceneFigureScale(tile.loc.id) ?? roomFigureScale(tile.loc);
+    if (tile) {
+      const confirmed = !!current && tile.roomCenters.has(current)
+        && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(current));
+      const geometric = !confirmed && (tile.fadeTarget === 1 || tile.modelIsShellArea)
+        && tile.loc.rooms.some((r) =>
+          (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(r.id))
+          && insideRoomRect(tile, r.id, pos));
+      if (confirmed || geometric) {
+        scale = sceneFigureScale(tile.loc.id) ?? roomFigureScale(tile.loc);
+      }
     }
     npcs.setPlayerScale(avatarName, scale);
 
