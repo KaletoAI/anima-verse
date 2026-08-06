@@ -37,10 +37,12 @@ router = APIRouter(prefix="/world", tags=["world"])
 def avatar_neighbors_route() -> Dict[str, Any]:
     """Return the avatar's neighbor locations for each compass direction.
 
-    Response: { "north": {id, name, may_leave} | null, "south": ..., "east":
-    ..., "west": ... }. Lets the direction pad hide unreachable directions
-    instead of reacting to the 404 response, and grey out exactly the ones
-    the departure gate refuses (``may_leave``, the step route's own rule).
+    Response: { "north": {id, name, may_leave, enterable, reason} | null,
+    "south": ..., "east": ..., "west": ... }. Lets the direction pad hide
+    unreachable directions instead of reacting to the 404 response, and grey
+    out exactly the ones the departure gate refuses (``may_leave``, the step
+    route's own rule) or the arrival side turns away (``enterable`` +
+    ``reason``, one player-facing sentence).
     """
     return world_ops.compute_avatar_neighbors()
 

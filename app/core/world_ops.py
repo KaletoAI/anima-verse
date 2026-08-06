@@ -41,10 +41,10 @@ from app.models.world import (
 def compute_avatar_neighbors() -> Dict[str, Any]:
     """Return the avatar's neighbor locations for each compass direction.
 
-    Response: { "north": {id, name, may_leave} | null, "south": ..., "east":
-    ..., "west": ..., "current_location_id", "current_location_name",
-    "entry_room_name" }. Lets the direction pad hide unreachable directions
-    instead of reacting to the 404 response.
+    Response: { "north": {id, name, may_leave, enterable, reason} | null,
+    "south": ..., "east": ..., "west": ..., "current_location_id",
+    "current_location_name", "entry_room_name" }. Lets the direction pad hide
+    unreachable directions instead of reacting to the 404 response.
 
     ``may_leave`` is the departure gate PER DIRECTION and comes from the very
     function the step route decides with (``boundary_entry.may_leave``): an
