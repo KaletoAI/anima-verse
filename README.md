@@ -338,7 +338,7 @@ endpoint, so it slots straight into Anima Verse as a normal `openai` provider. W
   - a **chat / RP** model (e.g. `rocinante-12b-v1.1`) for `chat_stream`, `story_stream`,
     `group_chat_stream`, `talk_to`, `send_message`, `thought`;
   - a small **vision-capable** model (e.g. `qwen3-vl-4b`) for everything else — `extraction`,
-    `intent`, `expression_map`, `image_prompt`, `image_analysis`, `image_recognition`, summaries,
+    `intent`, `image_prompt`, `image_analysis`, `image_recognition`, summaries,
     `translation`. One model that can both reason over tools *and* see images keeps the
     utility + vision tasks on a single endpoint.
 - **Embeddings: built-in.** Set the embedding backend to *Internal* — Anima Verse runs a small ONNX
@@ -373,7 +373,7 @@ different fine-tunes:
   | Tasks | Model | temp |
   |---|---|---|
   | `chat_stream`, `story_stream`, `group_chat_stream`, `storyteller`, `send_message`, `talk_to`, `thought`, `thought_greeting` | `TheDrummer-Anubis-70B-v1.1-FP8-Dynamic` | 0.7 |
-  | `social_reaction`, `random_event`, `secret_generation`, `outfit_generation`, `intent`, `spell_detect`, `expression_map`, `extraction`, `pose_normalize`, `memory_consolidation`, `consolidation`, `relationship_summary`, `image_prompt`, `image_comment`, `translation`, `extraction_chat_state` | `Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic` | 0.1 |
+  | `social_reaction`, `random_event`, `secret_generation`, `outfit_generation`, `intent`, `spell_detect`, `extraction`, `memory_consolidation`, `consolidation`, `relationship_summary`, `image_prompt`, `image_comment`, `translation`, `extraction_chat_state` | `Sao10K-72B-Qwen2.5-Kunou-v1-FP8-Dynamic` | 0.1 |
   | `instagram_caption`, `image_recognition`, `image_analysis` *(vision)* | `Llama-3.2-11B-Vision-Instruct` | 0.3 |
 
   In short: one **RP fine-tune** for the in-character prose (Anubis-70B), one **tool/reasoning**

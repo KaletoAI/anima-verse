@@ -56,7 +56,6 @@ _SELECT = [
     ("relationship_summary", 3),
     ("image_prompt", 3),
     ("consolidation", 3),
-    ("expression_map", 3),
     ("image_analysis", 2),
 ]
 _TOOL_REPEATS = 3

@@ -80,7 +80,6 @@ shared/templates/llm/
 | `image_analysis.md` | `image_analysis` | `instagram_skill._analyze_image` | Vision-LLM objective image description |
 | `instagram_caption.md` | `instagram_caption` | `instagram_skill._generate_caption` | Vision-LLM Instagram post caption |
 | `animation_prompt.md` | `instagram_caption` | `routes/instagram` + `routes/characters` (suggest-animate) | Image-to-video motion prompt |
-| `expression_map.md` | `expression_map` | `expression_pose_maps._llm_generate_prompt` | Generate expression OR pose prompt fragment for unknown values |
 
 ### Skills (agent-callable)
 

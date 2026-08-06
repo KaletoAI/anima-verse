@@ -35,7 +35,7 @@ PRESETS = {
         "random_event", "thought", "secret_generation",
         "consolidation", "relationship_summary",
         "instagram_caption", "image_comment", "image_prompt", "image_recognition",
-        "image_analysis", "outfit_generation", "expression_map",
+        "image_analysis", "outfit_generation",
     ],
     "chat_only": [
         # everything except chat_stream, group_chat_stream and extraction

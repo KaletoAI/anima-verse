@@ -56,10 +56,9 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # any more — use one of the intent_* sub-tasks instead.
     "intent":             {"label": "Intent (Fallback)",        "priority": Priority.NORMAL, "category": "tool"},
     "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool"},
-    # Pose consolidation (step 5, May 2026, plan-outfit-system-rethink.md §6.3)
-    # pose_normalize:  free text "sitzt am Tisch und blaettert" → "sitting at table, reading"
-    # pose_embedding:  vector for the similarity match against existing variants
-    "pose_normalize":     {"label": "Pose Normalize",            "priority": Priority.NORMAL, "category": "helper"},
+    # Pose consolidation: vector for the similarity match against existing
+    # variants (the free-text normalizer is gone — poses come from the catalog,
+    # plan-pose-katalog.md).
     "pose_embedding":     {"label": "Pose Embedding",            "priority": Priority.LOW,    "category": "embedding"},
     # `world_dev_validate` removed: validator model is now picked
     # dynamically in the World Dev UI right next to the chat model — no
@@ -90,7 +89,6 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Misc
     "intro_memory":       {"label": "Intro Memory (Fresh Import)", "priority": Priority.NORMAL, "category": "helper"},
     "translation":        {"label": "Translation",              "priority": Priority.NORMAL, "category": "helper"},
-    "expression_map":     {"label": "Expression Map",           "priority": Priority.LOW,    "category": "tool",   "gate": "image_generation.enabled"},
 }
 
 
@@ -297,11 +295,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": True, "latency_sensitive": True,
     },
-    "pose_normalize": {
-        "tools": False, "vision": False, "json": False, "min_context": 4096,
-        "model_class": "small", "arch": "any", "hallucination_risk": "low",
-        "creative": False, "language_de": False, "latency_sensitive": False,
-    },
 
     # --- Room furnishing ----------------------------------------------------
     "furnish_select": {
@@ -381,11 +374,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": False, "min_context": 4096,
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": True, "latency_sensitive": True,
-    },
-    "expression_map": {
-        "tools": False, "vision": False, "json": True, "min_context": 2048,
-        "model_class": "small", "arch": "any", "hallucination_risk": "low",
-        "creative": False, "language_de": False, "latency_sensitive": False,
     },
 }
 

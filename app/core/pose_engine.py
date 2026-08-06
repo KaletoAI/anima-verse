@@ -5,9 +5,9 @@ longer runs through this module: ``set_pose_intent`` resolves the free text to
 a catalog key (``app.core.pose_catalog``) and asks ``pose_variants`` for the
 variant of that key directly — no LLM normalization, no per-pose embedding.
 
-What is left here:
-    compute_embedding(text) -> list[float] | None   (visual analysis)
-    normalize_pose(raw_pose, activity_hint="") -> str  (dies in task 5)
+What is left here is the visual-analysis path only:
+    compute_embedding(text) -> list[float] | None
+    enqueue_visual_analysis(variant_id, image_path) -> None
 """
 from typing import List, Optional
 
@@ -15,113 +15,28 @@ from app.core.log import get_logger
 
 logger = get_logger("pose_engine")
 
-# Completion budget for the pose_normalize call. The template demands 2-6
-# English words, i.e. roughly 8-12 tokens; 24 leaves about double that for
-# tokenizer variance and punctuation while cutting a rambling answer off early
-# instead of paying for a whole paragraph.
-_MAX_ANSWER_TOKENS = 24
-
-# Garbage gate for the LLM answer. The value is stored as canonical_pose and
-# goes verbatim into the image prompt, so an answer that is obviously not a
-# pose must not be stored at all — the raw fallback is the better value.
-# 80 chars = the storage cap the DB value has always had; 12 words = double the
-# template's ceiling of 6, so a wordy but genuine pose ("sitting on a couch
-# reading a book by the window", 10 words) still passes while a prose sentence
-# ("Sure! Here is the canonical pose you asked for: …", 13 words) does not.
-_MAX_ANSWER_CHARS = 80
-_MAX_ANSWER_WORDS = 12
-
-
-def _is_pose_shaped(text: str) -> bool:
-    """True if the cleaned LLM answer can plausibly be a pose at all.
-
-    Deliberately NOT a content judgement — only a length/word-count filter
-    against obviously broken output (prose, explanations, refusals).
-    """
-    return len(text) <= _MAX_ANSWER_CHARS and len(text.split()) <= _MAX_ANSWER_WORDS
-
-
-def normalize_pose(raw_pose: str, activity_hint: str = "") -> str:
-    """Call the pose_normalize LLM and return the canonical short form.
-
-    On error / routing conflict: falls back to the raw_pose (lowercased,
-    truncated) — never a hard failure.
-    """
-    raw = (raw_pose or "").strip()
-    if not raw:
-        return ""
-    # Very short inputs are already "normal" — BUT only if they carry no
-    # location/scene preposition. "standing at mountain" / "standing in lobby"
-    # carry the PLACE along; without normalization they embed differently and
-    # identical body poses are never merged. Such cases therefore go through
-    # the normalizer (which strips the place → exact match → merge).
-    _low = raw.lower()
-    _has_location = any(
-        f" {p} " in f" {_low} "
-        for p in ("at", "in", "on", "near", "by", "inside", "outside",
-                  "next to", "in front of", "behind", "beside", "around")
-    )
-    if not _has_location and len(raw.split()) <= 4 and len(raw) <= 40:
-        return _low
-
-    try:
-        from app.core.prompt_templates import render_task
-        from app.core.llm_router import llm_call
-        sys_prompt, user_prompt = render_task(
-            "pose_normalize",
-            raw_pose=raw,
-            activity_hint=(activity_hint or "").strip(),
-        )
-        response = llm_call(
-            task="pose_normalize",
-            system_prompt=sys_prompt,
-            user_prompt=user_prompt,
-            max_tokens=_MAX_ANSWER_TOKENS,
-        )
-        # FIRST line, THEN quotes/whitespace. The other way round a multi-line
-        # answer keeps a stray closing quote ('"standing at window"\nBecause…'
-        # would become 'standing at window"') and that lands verbatim in the
-        # image prompt.
-        lines = (response.content or "").splitlines()
-        first = lines[0].strip() if lines else ""
-        if first.startswith("```"):
-            # Fenced answer — the pose is not on the first line. Discard the
-            # whole answer instead of guessing which line carries it.
-            first = ""
-        # One strip pass over quotes AND trailing punctuation: stripping the
-        # quote alone leaves '"standing at window".' as 'standing at window".'
-        # — the same stray quote, just behind a period.
-        norm = first.strip(" .,\"'").lower()
-        if norm and _is_pose_shaped(norm):
-            return norm
-    except Exception as e:
-        logger.debug("normalize_pose LLM call failed: %s", e)
-
-    # Fallback: truncate the raw text to 80 characters
-    return raw.lower()[:80]
-
 
 def compute_embedding(text: str) -> Optional[List[float]]:
-    """Berechnet ein Embedding fuer den Text.
+    """Compute an embedding for the text.
 
-    Delegiert an ``app.core.embedding.embed`` — das waehlt je nach
-    ``config.embedding.backend`` zwischen dem eingebauten ONNX-Modell
-    (fastembed, CPU) und einem gerouteten externen ``/v1/embeddings``-Provider.
+    Delegates to ``app.core.embedding.embed`` — depending on
+    ``config.embedding.backend`` that picks either the built-in ONNX model
+    (fastembed, CPU) or a routed external ``/v1/embeddings`` provider.
 
-    Returns ``None`` wenn kein Modell verfuegbar ist oder der Aufruf
-    fehlschlaegt → das Match-Modul faellt auf String-Equality der normalisierten
-    Pose zurueck (kein Crash, kein Queue-Block).
+    Returns ``None`` when no model is available or the call fails → the match
+    module falls back to string equality of the normalized pose (no crash, no
+    queue block).
     """
     from app.core.embedding import embed
     return embed(text)
 
 
 def enqueue_visual_analysis(variant_id: int, image_path: str) -> None:
-    """Triggert asynchrone Visual-LLM-Analyse fuer einen frisch erzeugten
-    Pose-Variant. Aktualisiert canonical_pose + embedding falls erfolgreich.
+    """Trigger the asynchronous visual-LLM analysis for a freshly generated
+    pose variant. Updates canonical_pose + embedding on success.
 
-    Laeuft in einem Daemon-Thread mit niedriger Priority. Schluckt alle
-    Fehler — kein Crash bei Provider-Aussetzern, kein Block der GPU-Queue.
+    Runs in a low-priority daemon thread. Swallows every error — no crash on
+    provider outages, no block of the GPU queue.
     """
     if not variant_id or not image_path:
         return
@@ -141,7 +56,7 @@ def _run_visual_analysis(variant_id: int, image_path: str) -> None:
         from pathlib import Path
         p = Path(image_path)
         if not p.exists():
-            logger.debug("Visual-Analyse skip: %s existiert nicht", image_path)
+            logger.debug("Visual analysis skipped: %s does not exist", image_path)
             return
         # image_recognition task: "Describe what the person is doing in this image"
         try:
@@ -168,7 +83,7 @@ def _run_visual_analysis(variant_id: int, image_path: str) -> None:
                 image_paths=[str(p)],
             )
         except Exception as e:
-            logger.debug("Visual-Analyse LLM-Call fehlgeschlagen (variant %s): %s",
+            logger.debug("Visual analysis LLM call failed (variant %s): %s",
                          variant_id, e)
             return
         canonical = (response or "").strip().strip('"').strip("'")
@@ -184,9 +99,9 @@ def _run_visual_analysis(variant_id: int, image_path: str) -> None:
         from app.core.pose_variants import update_variant_canonical
         if update_variant_canonical(variant_id, canonical, embedding=new_embedding):
             logger.info(
-                "Visual-Analyse [variant %s]: canonical=%r",
+                "Visual analysis [variant %s]: canonical=%r",
                 variant_id, canonical,
             )
     except Exception as e:
-        logger.debug("Visual-Analyse Worker-Fehler (variant %s): %s",
+        logger.debug("Visual analysis worker error (variant %s): %s",
                      variant_id, e)
