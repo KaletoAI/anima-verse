@@ -75,7 +75,8 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     data["location_id"] = location_id
     data["location_name"] = get_location_name(location_id) if location_id else "Unknown"
     data["activity"] = ("Sleeping" if profile.get("is_sleeping")
-                        else (profile.get("pose_intent") or "")) or "None"
+                        else (profile.get("pose_flavor")
+                              or profile.get("pose_key") or "")) or "None"
     data["feeling"] = profile.get("current_feeling", "") or "Neutral"
     from app.core.timeutils import game_local_now as _lnow
     data["time_of_day"] = _lnow().strftime("%H:%M")  # in-game clock (world TZ)

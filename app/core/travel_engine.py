@@ -262,6 +262,12 @@ def advance_all_journeys() -> None:
                 save_character_current_location(name, j["target"],
                                                 _preserve_movement_target=True)
                 try:
+                    from app.models.character import clear_pose_intent
+                    clear_pose_intent(name)   # D6: arrival = location change
+                except Exception:
+                    logger.debug("clear pose on arrival failed for %s", name,
+                                 exc_info=True)
+                try:
                     from app.models.rules import check_discover_rules
                     check_discover_rules(name)
                 except Exception:

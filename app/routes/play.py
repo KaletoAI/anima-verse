@@ -1361,8 +1361,8 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
     if not spell:
         raise HTTPException(status_code=404, detail="not a spell or not in inventory")
     # Off the event loop: execute_cast sets the spell's cast activity via
-    # set_pose_intent, which can call the pose_normalize LLM and block on the
-    # provider queue. The result is used below, so it is awaited.
+    # set_pose_intent, which resolves it against the pose catalog and may
+    # block on an embedding call. The result is used below, so it is awaited.
     res = await asyncio.to_thread(execute_cast, avatar, avatar, spell)
     # Make the effect visible as a storyteller line (location_id explicit — the
     # storyteller has no own location, otherwise the fan-out goes nowhere).
@@ -1625,9 +1625,9 @@ async def play_set_activity(request: Request, user=Depends(get_current_user)):
             wake_from_offmap(avatar)
         except Exception:
             pass
-    # Off the event loop: set_pose_intent resolves a pose variant, which calls
-    # the pose_normalize LLM and blocks on the provider queue (up to 3 attempts
-    # x 300 s worker timeout). Running that inline would stall every SSE stream.
+    # Off the event loop: set_pose_intent resolves the text against the pose
+    # catalog, which may embed it (a routed external embedding endpoint is a
+    # blocking HTTP call) and writes the DB — that would stall every SSE stream.
     await asyncio.to_thread(set_pose_intent, avatar, activity)
     return {"ok": True, "activity": activity}
 

@@ -217,9 +217,10 @@ def _evaluate_single_condition_inner(
             logger.debug("state-flag-Check fehlgeschlagen: %s", e)
             return False, f"{fname}-Check fehlgeschlagen"
 
-    # --- current_activity:X (freie Pose des Characters, Substring-Match) ---
-    # Activity-Library entfernt: Match gegen get_effective_activity (pose_intent
-    # bzw. "Sleeping" via is_sleeping-Flag), per Substring in beide Richtungen.
+    # --- current_activity:X (the character's pose, substring match) ---
+    # Activity library removed: match against get_effective_activity (pose
+    # flavor/catalog key resp. "Sleeping" via the is_sleeping flag), by
+    # substring in both directions.
     cact_match = re.match(r"current_activity:(.+)", cond)
     if cact_match:
         target = cact_match.group(1).strip().lower()

@@ -313,7 +313,8 @@ class ThoughtRunner:
         location_id = profile.get("current_location", "")
         location_name = get_location_name(location_id) if location_id else "Unbekannt"
         activity = ("Sleeping" if profile.get("is_sleeping")
-                    else (profile.get("pose_intent") or "")) or "Keine"
+                    else (profile.get("pose_flavor")
+                          or profile.get("pose_key") or "")) or "Keine"
         feeling = profile.get("current_feeling", "") or "Neutral"
         now = utc_now()
         time_of_day = now.strftime("%H:%M")

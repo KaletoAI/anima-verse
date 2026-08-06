@@ -409,50 +409,34 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("outfit_intent-Migration fehlgeschlagen: %s", e)
 
-    # One-shot Migration: current_activity → pose_intent (Schritt 8, Plan §9).
-    # Nur fuer Chars mit aktivem Activity-Text aber noch leerem pose_intent.
-    # Erzeugt parallel einen pose_variant (String-Match-Fallback) damit das
-    # Expression-Cache-Key-System sofort den Variant nutzen kann.
+    # One-shot migration: pose free text → pose catalog fields
+    # (plan-pose-katalog.md). The old pose_intent column held whatever the LLM
+    # wrote; pose_key/pose_flavor replace it. A clean cut, no conversion: the
+    # pose is volatile — every location/room change clears it anyway — and the
+    # stored pose_variant_id points at variants that were keyed by the old
+    # free-text normalization, so it is dropped with it.
     flag = conn.execute(
-        "SELECT value FROM schema_meta WHERE key='activity_to_pose_v1'"
+        "SELECT value FROM schema_meta WHERE key='pose_catalog_fields_v1'"
     ).fetchone()
     if not flag:
         try:
-            rows = conn.execute(
-                "SELECT character_name, current_activity, pose_intent "
-                "FROM character_state"
-            ).fetchall()
-            migrated = 0
-            for char_name, cur_act, pose_int in rows:
-                cur_act = (cur_act or "").strip()
-                if not cur_act:
-                    continue
-                if (pose_int or "").strip():
-                    continue  # pose_intent schon gesetzt — nicht ueberschreiben
-                # In-process resolve_pose_variant: legt ggf. variant an
-                variant_id = None
-                try:
-                    from app.core.pose_engine import resolve_pose_variant
-                    variant = resolve_pose_variant(char_name, cur_act)
-                    if variant:
-                        variant_id = variant["id"]
-                except Exception:
-                    pass
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(character_state)").fetchall()}
+            if "pose_intent" in cols:
                 conn.execute(
-                    "UPDATE character_state SET pose_intent=?, pose_variant_id=? "
-                    "WHERE character_name=?",
-                    (cur_act, variant_id, char_name),
+                    "ALTER TABLE character_state DROP COLUMN pose_intent")
+                conn.execute(
+                    "UPDATE character_state SET pose_key='', pose_flavor='', "
+                    "pose_variant_id=NULL"
                 )
-                migrated += 1
-            if migrated:
-                logger.info("current_activity → pose_intent: %d Chars migriert",
-                            migrated)
+                logger.info("pose catalog fields: pose_intent column dropped, "
+                            "stale pose variants cleared")
             conn.execute(
                 "INSERT INTO schema_meta (key, value) VALUES "
-                "('activity_to_pose_v1', '1')"
+                "('pose_catalog_fields_v1', '1')"
             )
         except Exception as e:
-            logger.warning("current_activity → pose_intent fehlgeschlagen: %s", e)
+            logger.warning("pose catalog field migration failed: %s", e)
 
     # One-shot Migration: Legacy-Keys aus character_state.meta entfernen.
     # Plan §8 (Schritt 8 Cleanup, May 2026):

@@ -1735,11 +1735,10 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
 
 
 def _extract_activity(agent_name: str, response: str) -> Optional[str]:
-    """Extrahiert die freie Pose aus der LLM-Antwort (Marker ``**I do X**``).
+    """Extracts the free pose from the LLM answer (marker ``**I do X**``).
 
-    Setzt ``pose_intent`` direkt (es gibt keine Activity-Library mehr — die
-    Pose ist freier Text, der Pose-Variant wird via pose_engine resolved).
-    Returns die gesetzte Pose oder None.
+    Hands the text to the canonical setter, which maps it onto a pose catalog
+    key + sanitized flavor. Returns the extracted text or None.
     """
     match = re.search(r'\*\*I\s+do\s+(.+?)\*\*', response, re.IGNORECASE)
     if not match:
@@ -1834,9 +1833,9 @@ def _apply_removed_pieces(character_name: str,
                 from app.core.expression_regen import trigger_expression_generation
                 from app.models.inventory import get_equipped_pieces, get_equipped_items
                 from app.models.character import (
-                    get_character_current_feeling, get_character_profile)
+                    get_character_current_feeling, get_effective_activity)
                 _mood = get_character_current_feeling(character_name) or ""
-                _act = (get_character_profile(character_name) or {}).get("pose_intent") or ""
+                _act = get_effective_activity(character_name) or ""
                 _eqp = get_equipped_pieces(character_name)
                 _eqi = get_equipped_items(character_name)
                 trigger_expression_generation(character_name, _mood, _act,
@@ -1924,7 +1923,7 @@ def _extract_context_from_last_chat(agent_name: str,
         """Ein LLM-Call fuer EINEN Character aus EINER Quelle.
 
         - is_avatar=False: Quelle = Character-Antwort. Extrahiert Agent-Outfit,
-          Pose (pose_intent) und Stat-Deltas (status_effects).
+          Pose (pose_key/pose_flavor) und Stat-Deltas (status_effects).
         - is_avatar=True:  Quelle = User-Eingabe. Extrahiert nur Avatar-Outfit.
 
         Laeuft unter der Tool-LLM-Config von target_name — Logs + LLM-Wahl
@@ -2047,28 +2046,14 @@ def _extract_context_from_last_chat(agent_name: str,
         # is_player_controlled-Check faengt das ab.
         from app.models.account import is_player_controlled as _is_pc
         if not is_avatar and not _is_pc(target_name):
-            # Pose: pose_intent + Variant aktualisieren (ersetzt current_activity)
+            # Pose: through the canonical setter — it resolves the catalog key,
+            # sanitizes the flavor and no-ops when neither changed.
             extracted_pose = (data.get("pose") or "").strip()
             if extracted_pose:
-                from app.models.character import (
-                    get_character_profile as _gcp2,
-                    save_character_profile as _scp2)
-                _prof2 = _gcp2(target_name) or {}
-                old_pose = (_prof2.get("pose_intent") or "").strip()
-                if extracted_pose.lower() != old_pose.lower():
-                    try:
-                        from app.core.pose_engine import resolve_pose_variant
-                        variant = resolve_pose_variant(target_name, extracted_pose)
-                    except Exception as _pe:
-                        variant = None
-                        logger.debug("resolve_pose_variant [%s]: %s", target_name, _pe)
-                    _prof2 = _gcp2(target_name) or {}
-                    _prof2["pose_intent"] = extracted_pose
-                    if variant:
-                        _prof2["pose_variant_id"] = variant["id"]
-                    _scp2(target_name, _prof2)
-                    logger.info("Chat-Kontext [%s]: Pose '%s' -> '%s'",
-                                 target_name, old_pose, extracted_pose)
+                from app.models.character import set_pose_intent
+                set_pose_intent(target_name, extracted_pose)
+                logger.info("Chat context [%s]: pose -> %r", target_name,
+                            extracted_pose[:80])
 
             # Stats: Malus/Bonus dieser Szene auf status_effects anwenden
             stats_raw = data.get("stats")
@@ -2192,7 +2177,8 @@ def _build_full_system_prompt(character_name: str,
                 _p_feeling = (partner_profile.get("current_feeling") or "").strip()
                 if _p_feeling:
                     _partner_lines.append(f"Current mood: {_p_feeling}")
-                _p_activity = (partner_profile.get("pose_intent") or "").strip()
+                _p_activity = (partner_profile.get("pose_flavor")
+                               or partner_profile.get("pose_key") or "").strip()
                 if _p_activity:
                     _partner_lines.append(f"Currently doing: {_p_activity}")
             except Exception:
@@ -2339,8 +2325,8 @@ def _build_full_system_prompt(character_name: str,
                     situation_parts.append(f"Room: {room_name}")
 
     if _has("activities_enabled") and current_activity:
-        # current_activity == pose_intent (freier Text, schon beschreibend) bzw.
-        # "Sleeping" via Flag. Keine Library-Beschreibung mehr.
+        # current_activity == the display pose (flavor or catalog key) resp.
+        # "Sleeping" via the flag. No library description any more.
         situation_parts.append(f"Activity: {current_activity}")
 
     if len(situation_parts) == 1:

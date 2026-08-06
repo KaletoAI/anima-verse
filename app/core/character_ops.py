@@ -256,7 +256,7 @@ def build_memory_today(character_name: str) -> Dict[str, Any]:
             prev = ev.get("value")
         return last_ts
 
-    current_activity = profile.get("pose_intent") or ""
+    current_activity = profile.get("pose_flavor") or profile.get("pose_key") or ""
     current_location_id = profile.get("current_location") or ""
     current_room_id = profile.get("current_room") or ""
     current_mood = profile.get("current_feeling") or profile.get("current_mood") or ""

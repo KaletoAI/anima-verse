@@ -207,11 +207,14 @@ def _replace_last_state_entry(character_name: str, change_type: str, value: str,
 _STATE_COLS = ("current_location", "current_room", "current_activity",
                "current_feeling", "location_changed_at", "activity_changed_at")
 
-# Typisierte State-Spalten — werden separat persistiert (eigene Casts).
+# Typed state columns — persisted separately (own casts).
 # (name, sql_type, cast_for_read, cast_for_write)
-# Schritt 5/6 (May 2026): pose_intent + pose_variant_id + drei boolean-Flags
+# Step 5/6 (May 2026): pose fields + pose_variant_id + three boolean flags.
+# Pose catalog (Aug 2026): pose_key = catalog key (the ONE render key),
+# pose_flavor = sanitized free text next to it.
 _STATE_TYPED_COLS = (
-    ("pose_intent",     "TEXT",    lambda v: v or "",             lambda v: (v or "") if isinstance(v, str) else ""),
+    ("pose_key",        "TEXT",    lambda v: v or "",             lambda v: (v or "") if isinstance(v, str) else ""),
+    ("pose_flavor",     "TEXT",    lambda v: v or "",             lambda v: (v or "") if isinstance(v, str) else ""),
     ("pose_variant_id", "INTEGER", lambda v: int(v) if v is not None else None,
                                     lambda v: int(v) if v not in (None, "") else None),
     ("is_sleeping",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
@@ -301,7 +304,7 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
         row = conn.execute(
             "SELECT current_location, current_room, current_activity, "
             "current_feeling, location_changed_at, activity_changed_at, meta, "
-            "pose_intent, pose_variant_id, "
+            "pose_key, pose_flavor, pose_variant_id, "
             "is_sleeping, is_wet, is_intimate, decency_exempt "
             "FROM character_state WHERE character_name=?",
             (character_name,),
@@ -314,12 +317,13 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
                 "current_feeling": row[3] or "",
                 "location_changed_at": row[4] or "",
                 "activity_changed_at": row[5] or "",
-                "pose_intent": row[7] or "",
-                "pose_variant_id": int(row[8]) if row[8] is not None else None,
-                "is_sleeping": bool(row[9]),
-                "is_wet": bool(row[10]),
-                "is_intimate": bool(row[11]),
-                "decency_exempt": bool(row[12]),
+                "pose_key": row[7] or "",
+                "pose_flavor": row[8] or "",
+                "pose_variant_id": int(row[9]) if row[9] is not None else None,
+                "is_sleeping": bool(row[10]),
+                "is_wet": bool(row[11]),
+                "is_intimate": bool(row[12]),
+                "decency_exempt": bool(row[13]),
             })
             try:
                 meta = json.loads(row[6] or "{}")
@@ -1263,15 +1267,16 @@ def save_character_current_location(character_name: str = "", location: str = ""
         from app.models.world import get_location_by_id, get_arrival_room_id
         _new_loc = get_location_by_id(location)
         profile["current_room"] = get_arrival_room_id(_new_loc) if _new_loc else ""
-    # Aktivitaet (pose_intent) bei echtem Location-Wechsel leeren — sie gilt fuer
-    # den alten Ort und wird sonst stale ("casting a spell" bleibt nach dem
-    # Weggehen haengen). Greift fuer ALLE Bewegungswege zentral: Move-Skill,
-    # SetLocation, Teleport-Spell, Scheduler, Drag&Drop. Teleport bewusst NICHT
-    # auf "walking" setzen — man ist nicht gelaufen, also einfach leeren.
-    old_pose = (profile.get("pose_intent") or "")
+    # Clear the pose on a real location change — it belongs to the old place
+    # and would go stale otherwise ("casting a spell" stays stuck after
+    # walking away). Central for ALL movement paths: Move skill, SetLocation,
+    # teleport spell, scheduler, drag&drop. A teleport deliberately does NOT
+    # become "walking" — nobody walked, so just clear it.
+    old_pose = (profile.get("pose_flavor") or profile.get("pose_key") or "")
     if location_changed:
-        profile["pose_intent"] = ""
-        profile["pose_variant_id"] = None  # = None, nicht pop (sonst Save-Skip → alter Variant bleibt)
+        profile["pose_key"] = ""
+        profile["pose_flavor"] = ""
+        profile["pose_variant_id"] = None  # = None, not pop (pop is skipped on save → stale variant stays)
     # Intent.forbidden_slots zuruecksetzen bei echtem Location-Wechsel: die
     # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
@@ -1378,84 +1383,100 @@ def get_location_changed_at(character_name: str = "") -> str:
     return profile.get("location_changed_at", "")
 
 
-def get_character_pose_intent(character_name: str) -> str:
-    """Gibt die aktuelle freie Pose/Taetigkeit (pose_intent) zurueck.
+def get_character_pose_key(character_name: str) -> str:
+    """Current pose CATALOG KEY — the one render/animation key.
 
-    Ersetzt das fruehere current_activity-Feld als kanonische Quelle dafuer,
-    "was der Character gerade tut" (Freitext, vom Chat-Extraktor / SetPose-Skill
-    gesetzt). Fuer Anzeige/Render inkl. Schlaf-Zustand: get_effective_activity.
+    Written by ``set_pose_intent`` only; every image/animation lookup keys off
+    this value, never off free text. For the display text (incl. the sleep
+    state) use ``get_effective_activity``.
     """
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
-    return (profile.get("pose_intent") or "") if profile else ""
+    return (profile.get("pose_key") or "") if profile else ""
+
+
+def get_character_pose_flavor(character_name: str) -> str:
+    """Sanitized free-text flavor next to the pose key (may be empty).
+
+    Prompt spice only — never a cache key, never an animation lookup.
+    """
+    if not character_name:
+        return ""
+    profile = get_character_profile(character_name)
+    return (profile.get("pose_flavor") or "") if profile else ""
 
 
 def set_pose_intent(character_name: str, pose: str) -> None:
-    """Setzt die freie Pose (pose_intent) + resolved den Pose-Variant.
-
-    Kanonischer Setter fuer "Character/Avatar macht jetzt X" (manuelle Wahl,
-    Spell, TalkTo). Ersetzt das fruehere save_character_current_activity.
-    Leerer pose => Pose zuruecksetzen.
-    """
+    """Canonical setter for 'character does X now'. Resolves the free text to
+    a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets."""
     if not character_name:
         return
-    pose = (pose or "").strip()
+    raw = (pose or "").strip()
+    key, flavor = "", ""
     variant = None
-    if pose:
+    if raw:
+        from app.core.pose_catalog import resolve_to_catalog, sanitize_flavor
+        key, _how = resolve_to_catalog(raw, "pose")
+        flavor = sanitize_flavor(raw)
+        if flavor.lower() == key.lower():
+            flavor = ""          # flavor that adds nothing is noise
         try:
-            from app.core.pose_engine import resolve_pose_variant
-            variant = resolve_pose_variant(character_name, pose)
+            from app.core.pose_variants import get_or_create_variant
+            variant = get_or_create_variant(character_name, key)
         except Exception:
             variant = None
     profile = get_character_profile(character_name) or {}
-    old_pose = (profile.get("pose_intent") or "")
-    profile["pose_intent"] = pose
-    if variant:
-        profile["pose_variant_id"] = variant["id"]
-    elif not pose:
-        profile["pose_variant_id"] = None  # = None, nicht pop (sonst Save-Skip → alter Variant bleibt)
+    if (profile.get("pose_key") or "") == key and (profile.get("pose_flavor") or "") == flavor:
+        return
+    old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
+    profile["pose_key"] = key
+    profile["pose_flavor"] = flavor
+    profile["pose_variant_id"] = variant["id"] if variant else None
     save_character_profile(character_name, profile)
-    _publish_activity_changed(character_name, pose, old_pose)
+    _publish_activity_changed(character_name, flavor or key, old_display, key)
 
 
 def clear_pose_intent(character_name: str) -> None:
-    """Leert die freie Pose (z.B. nach Orts-/Raumwechsel — Pose wird stale)."""
+    """Clears the pose (e.g. after a location/room change — it goes stale)."""
     if not character_name:
         return
     profile = get_character_profile(character_name) or {}
-    if profile.get("pose_intent") or profile.get("pose_variant_id"):
-        old_pose = (profile.get("pose_intent") or "")
-        profile["pose_intent"] = ""
-        profile.pop("pose_variant_id", None)
+    if profile.get("pose_key") or profile.get("pose_flavor") \
+            or profile.get("pose_variant_id"):
+        old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
+        profile["pose_key"] = ""
+        profile["pose_flavor"] = ""
+        profile["pose_variant_id"] = None  # = None, not pop (pop is skipped on save)
         save_character_profile(character_name, profile)
-        _publish_activity_changed(character_name, "", old_pose)
+        _publish_activity_changed(character_name, "", old_display, "")
 
 
-def _publish_activity_changed(character_name: str, pose: str, old_pose: str) -> None:
+def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
+                              pose_key: str) -> None:
     """AV3D-3: push an activity change to the SSE state stream — carries the
     animation kind the worldmap would deliver, so a streaming client swaps
     the figure's clip without waiting for its next poll. No-op when the
-    activity did not actually change."""
+    activity did not actually change. ``pose`` is the display text,
+    ``pose_key`` the catalog key the animation is resolved from."""
     if pose == old_pose:
         return
     try:
         from app.core.state_events import publish as _publish_state
         from app.core.expression_pose_maps import resolve_pose_animation
         _publish_state("activity_changed", character_name,
-                       activity=pose, animation=resolve_pose_animation(pose))
+                       activity=pose, animation=resolve_pose_animation(pose_key))
     except Exception:
         pass
 
 
 def get_effective_activity(character_name: str) -> str:
-    """Anzeige-/Render-Taetigkeit — spiegelt den ``is_sleeping``-Flag (B1).
+    """Display activity — mirrors the ``is_sleeping`` flag (B1).
 
-    Der Flag ist die Autoritaet fuer den Schlaf-Zustand; die freie
-    ``pose_intent`` bleibt davon entkoppelt. EINE Read-seitige Aufloesung,
-    die sowohl die Spieler-Anzeige als auch die Expression-Bild-Version/-
-    Generierung nutzen → "Sleeping" erscheint ueberall konsistent und das Bild
-    wechselt, ohne den Pose-String an den Flag zu koppeln.
+    The flag is the authority for the sleep state; the stored pose stays
+    decoupled from it. ONE read-side resolution used by the player display and
+    the expression-image generation alike → "Sleeping" shows up consistently
+    everywhere without coupling the pose fields to the flag.
     """
     if not character_name:
         return ""
@@ -1464,7 +1485,25 @@ def get_effective_activity(character_name: str) -> str:
             return "Sleeping"
     except Exception:
         pass
-    return get_character_pose_intent(character_name)
+    profile = get_character_profile(character_name) or {}
+    return profile.get("pose_flavor") or profile.get("pose_key") or ""
+
+
+def get_effective_pose_key(character_name: str) -> str:
+    """Render/animation key — mirrors the ``is_sleeping`` flag like
+    ``get_effective_activity`` does for the display text.
+
+    Sleeping resolves to the catalog key ``sleeping`` (its animation is the
+    lying clip), otherwise the stored ``pose_key``.
+    """
+    if not character_name:
+        return ""
+    try:
+        if is_character_sleeping(character_name):
+            return "sleeping"
+    except Exception:
+        pass
+    return get_character_pose_key(character_name)
 
 
 def get_character_current_room(character_name: str) -> str:
@@ -3264,11 +3303,12 @@ def wake_from_offmap(character_name: str) -> bool:
         profile["current_room"] = return_room
     profile.pop("_offmap_return_location", None)
     profile.pop("_offmap_return_room", None)
-    # Pose beim Aufwachen zuruecksetzen — sonst zeigt das Expression-Bild
-    # weiter die Schlaf-/Alt-Pose (wake laeuft direkt ueber das Profil, also
-    # ohne das Pose-Reset von save_character_current_location).
-    profile["pose_intent"] = ""
-    profile["pose_variant_id"] = None  # = None, nicht pop: pop wird beim Save uebersprungen
+    # Reset the pose on waking — otherwise the expression image keeps showing
+    # the sleep/old pose (wake writes the profile directly, i.e. without the
+    # pose reset of save_character_current_location).
+    profile["pose_key"] = ""
+    profile["pose_flavor"] = ""
+    profile["pose_variant_id"] = None  # = None, not pop: pop is skipped on save
     save_character_profile(character_name, profile)
     # AV3D-3: bypass path — publish the reappearance explicitly.
     try:
@@ -3436,7 +3476,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # expression image stays stuck on "sleeping". (wake_from_offmap does the
     # same, but only applies to off-map sleepers.)
     if was and not value:
-        profile["pose_intent"] = ""
+        profile["pose_key"] = ""
+        profile["pose_flavor"] = ""
         profile["pose_variant_id"] = None  # = None, not pop: pop is skipped on save
     save_character_profile(character_name, profile)
     # Schlaf-Längen-Messung für die Tages-Konsolidierung (plan-history-

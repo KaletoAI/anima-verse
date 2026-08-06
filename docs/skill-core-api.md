@@ -148,11 +148,13 @@ Movement-Skills). Das party-Paket ist nur der Auslöser.
 | `add_to_party(leader, name)` / `leave_party(name)` | Beitritt / Austritt (Follower steigt aus, Leader = Auflösung) |
 | `create_pending_invite(inviter, avatar)` / `clear_invites_for(name)` | Avatar-Einladung als UI-Frage; offene Einladungen räumen |
 
-## Pose-Engine — `app.core.pose_engine` ✅ (set_pose-Paket)
+## Pose — `app.models.character` ✅ (set_pose-Paket)
 
 | Funktion | Semantik |
 |---|---|
-| `resolve_pose_variant(name, raw_pose, activity_hint="")` | End-to-End: roher `pose_intent` → Variant-Dict (`{id, canonical_pose, …}`), normalisiert + gegen bestehende Bild-Varianten gematcht; `None` bei leerem Input. Die Engine bleibt Core (R5 — 5+ weitere `pose_intent`-Schreiber). Das set_pose-Paket schreibt danach `pose_intent`/`pose_variant_id` ins Profil |
+| `set_pose_intent(name, pose)` | Kanonischer Setter „Character macht jetzt X": ordnet den Freitext dem Pose-Katalog zu (`pose_key`), bereinigt die Würze (`pose_flavor`), matcht die Bild-Variante des Keys und schreibt alles ins Profil. No-op wenn Key und Flavor unverändert; leerer Text setzt zurück. Bleibt Core (R5 — mehrere weitere Pose-Schreiber) |
+| `get_character_pose_key(name)` / `get_character_pose_flavor(name)` | Gespeicherter Katalog-Key bzw. bereinigter Freitext |
+| `get_effective_pose_key(name)` / `get_effective_activity(name)` | Render-Key bzw. Anzeigetext, beide inkl. Schlaf-Override |
 
 ## Instagram — `app.models.instagram` ✅ (instagram-Paket) / ⚠ (Rest)
 

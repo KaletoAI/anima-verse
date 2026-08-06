@@ -296,11 +296,9 @@ def _person_image_path(name: str) -> Optional[Path]:
 def _pose_hint(name: str, skip_activity: bool = False) -> str:
     """Compact pose/activity hint for the scene prompt.
 
-    The raw pose_intent is often a whole RP paragraph (the tool LLM copies
-    prose into SetPose) — useless as an image hint. Preference: a short
-    effective activity as-is (covers "Sleeping" etc.), else the stored pose
-    variant's canonical form (normalize_pose result, short + English, no
-    extra LLM call), else the first sentence hard-trimmed with quoted
+    Preference: a short effective activity as-is (covers "Sleeping" etc.),
+    else the stored pose variant's canonical form (the pose catalog key,
+    short + English), else the first sentence hard-trimmed with quoted
     speech removed.
 
     ``skip_activity``: ignore the activity text entirely (used for

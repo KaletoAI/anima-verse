@@ -1,21 +1,15 @@
-"""Pose-Pipeline (Schritt 5, May 2026, plan-outfit-system-rethink.md §6).
+"""Pose helpers (step 5, May 2026, plan-outfit-system-rethink.md §6).
 
-Verbindet:
-  1. free-text pose_intent (vom Chat-LLM gesetzt)
-  2. pose_normalize (Tool-LLM → kanonische Kurzform)
-  3. compute_embedding (via app.core.embedding: intern fastembed/ONNX
-     oder extern gerouteter /v1/embeddings-Provider) → Vektor zum Match
-  4. character_pose_variants (DB-Match oder neuer Variant)
+Since the pose catalog (Aug 2026, plan-pose-katalog.md) the write path no
+longer runs through this module: ``set_pose_intent`` resolves the free text to
+a catalog key (``app.core.pose_catalog``) and asks ``pose_variants`` for the
+variant of that key directly — no LLM normalization, no per-pose embedding.
 
-Wenn kein Embedding-Modell verfuegbar ist: Match-Modul faellt auf reine
-String-Equality der normalisierten Pose zurueck.
-
-API:
-    resolve_pose_variant(char, raw_pose) -> variant_dict | None
-    compute_embedding(text) -> list[float] | None
-    normalize_pose(raw_pose, activity_hint="") -> str
+What is left here:
+    compute_embedding(text) -> list[float] | None   (visual analysis)
+    normalize_pose(raw_pose, activity_hint="") -> str  (dies in task 5)
 """
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from app.core.log import get_logger
 
@@ -120,30 +114,6 @@ def compute_embedding(text: str) -> Optional[List[float]]:
     """
     from app.core.embedding import embed
     return embed(text)
-
-
-def resolve_pose_variant(character_name: str,
-                          raw_pose: str,
-                          activity_hint: str = "") -> Optional[Dict[str, Any]]:
-    """End-to-End: rohen pose_intent → Variant-Dict (mit id).
-
-    Steps:
-      1. normalize_pose → kanonische Kurzform (LLM oder Fallback)
-      2. compute_embedding → Vektor (oder None)
-      3. get_or_create_variant → existierender oder neuer Variant
-
-    Returns das Variant-Dict (inkl. id, canonical_pose, ...) oder None
-    bei leerem Input. Bei DB-Fehlern: ebenfalls None.
-    """
-    raw = (raw_pose or "").strip()
-    if not (character_name and raw):
-        return None
-    normalized = normalize_pose(raw, activity_hint=activity_hint)
-    if not normalized:
-        return None
-    embedding = compute_embedding(normalized)
-    from app.core.pose_variants import get_or_create_variant
-    return get_or_create_variant(character_name, normalized, embedding=embedding)
 
 
 def enqueue_visual_analysis(variant_id: int, image_path: str) -> None:

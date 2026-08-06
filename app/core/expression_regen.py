@@ -188,15 +188,17 @@ def _cache_key(mood: str, activity: str,
 
 def _resolve_variant_for_cache(character_name: str,
                                 activity: str) -> Optional[int]:
-    """Liefert die pose_variant_id fuer den aktuellen Char.
+    """Returns the pose_variant_id for the current character.
 
-    Reihenfolge:
-      1. character_state.pose_variant_id (vom Chat-Pfad gesetzt)
-      2. Wenn nur ein Activity-String existiert: pose_engine.resolve_pose_variant
-         (normalisiert + matched + speichert Variant) — lazy migration
-      3. None → _cache_key faellt auf Legacy-Pfad zurueck
+    Order:
+      1. character_state.pose_variant_id (written by the canonical setter)
+      2. If only an activity string is at hand: resolve it to a catalog key and
+         match/create the variant for that key — same mapping the setter uses,
+         but WITHOUT writing the pose (the caller's text may be a display value
+         like "Sleeping", not the character's actual pose).
+      3. None → _cache_key falls back to the legacy path
 
-    Returns variant_id (int) oder None.
+    Returns variant_id (int) or None.
     """
     if not character_name:
         return None
@@ -206,22 +208,15 @@ def _resolve_variant_for_cache(character_name: str,
         vid = prof.get("pose_variant_id")
         if vid and int(vid) > 0:
             return int(vid)
-        # Lazy: wenn ein Activity-String existiert aber noch keine Variant —
-        # einen neuen anlegen / matchen. Nicht in den heissen Pfad einbauen,
-        # nur wenn der Caller einen Wert mitgibt.
+        # Lazy: an activity string but no variant yet — match/create the
+        # variant of its catalog key. Only when the caller supplies a value,
+        # never in the hot path.
         if activity:
-            from app.core.pose_engine import resolve_pose_variant
-            variant = resolve_pose_variant(character_name, activity)
+            from app.core.pose_catalog import resolve_to_catalog
+            from app.core.pose_variants import get_or_create_variant
+            key, _how = resolve_to_catalog(activity, "pose")
+            variant = get_or_create_variant(character_name, key)
             if variant:
-                # pose_variant_id im State persistieren — naechster Lookup
-                # springt direkt in Schritt 1.
-                try:
-                    from app.models.character import save_character_profile
-                    prof["pose_variant_id"] = variant["id"]
-                    prof["pose_intent"] = activity
-                    save_character_profile(character_name, prof)
-                except Exception as _e:
-                    logger.debug("pose_variant_id persistieren: %s", _e)
                 return int(variant["id"])
     except Exception as e:
         logger.debug("_resolve_variant_for_cache(%s): %s", character_name, e)

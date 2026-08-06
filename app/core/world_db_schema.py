@@ -129,7 +129,8 @@ SCHEMA_STATEMENTS = [
         current_room      TEXT DEFAULT '',
         current_activity  TEXT DEFAULT '',
         current_feeling   TEXT DEFAULT '',
-        pose_intent       TEXT DEFAULT '',
+        pose_key          TEXT DEFAULT '',
+        pose_flavor       TEXT DEFAULT '',
         pose_variant_id   INTEGER,
         location_changed_at TEXT DEFAULT '',
         activity_changed_at TEXT DEFAULT '',
@@ -562,11 +563,10 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )""",
 
-    # ── Pose-Variants (Schritt 5, May 2026) ──────────────────────────────
-    # Konsolidierte Pose-Varianten pro Character — Expression-Bilder werden
-    # gegen diese Tabelle gecached statt gegen freie pose_intent-Strings.
-    # canonical_pose ist die normalisierte Beschreibung (vom Tool-LLM
-    # gemacht oder spaeter durch Visual-LLM verbessert).
+    # ── Pose variants (step 5, May 2026) ─────────────────────────────────
+    # Consolidated pose variants per character — expression images are cached
+    # against this table instead of against free pose text. canonical_pose is
+    # the pose catalog key since Aug 2026 (plan-pose-katalog.md).
     """CREATE TABLE IF NOT EXISTS character_pose_variants (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name  TEXT NOT NULL,
@@ -714,10 +714,14 @@ ALTER_MIGRATIONS = [
     ("rooms",     "swim_allowed",  "INTEGER NOT NULL DEFAULT 0"),
     ("rooms",     "activity_hint", "TEXT DEFAULT ''"),
     # Step 5 (May 2026): the pose concept replaces the activity library.
-    # pose_intent is the free text "what is the character doing" chosen by the
-    # LLM; pose_variant_id points at character_pose_variants and becomes part
-    # of the expression-image cache key.
-    ("character_state", "pose_intent",     "TEXT DEFAULT ''"),
+    # Pose catalog (Aug 2026, plan-pose-katalog.md): what the character is
+    # doing is stored as pose_key (catalog key, the ONE render/animation key)
+    # plus pose_flavor (sanitized free text, prompt spice only). They replace
+    # the free-text pose_intent column, which the pose_catalog_fields_v1
+    # migration in db.py drops. pose_variant_id points at
+    # character_pose_variants and becomes part of the expression-image cache key.
+    ("character_state", "pose_key",        "TEXT DEFAULT ''"),
+    ("character_state", "pose_flavor",     "TEXT DEFAULT ''"),
     ("character_state", "pose_variant_id", "INTEGER"),
     # Step 6 (May 2026): three orthogonal state flags replace the activity
     # effects. Compliance reads them:

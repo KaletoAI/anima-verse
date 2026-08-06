@@ -217,10 +217,10 @@ async def update_character_current_activity(character_name: str, request: Reques
 
         # Set the free-text pose (no library matching, no auto room move —
         # room/location stay unchanged, the pose is free text).
-        # Off the event loop: set_pose_intent resolves a pose variant, which
-        # calls the pose_normalize LLM and blocks on the provider queue (up to
-        # 3 attempts x 300 s worker timeout). Running that inline would stall
-        # every SSE stream.
+        # Off the event loop: set_pose_intent resolves the text against the
+        # pose catalog, which may embed the text (a routed external embedding
+        # endpoint is a blocking HTTP call) and writes the DB. Running that
+        # inline would stall every SSE stream.
         await _aio.to_thread(set_pose_intent, character_name, activity)
 
         return {"status": "success", "character": character_name,

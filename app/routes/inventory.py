@@ -711,8 +711,8 @@ async def cast_spell_on_self_route(
         raise HTTPException(status_code=404,
             detail="Item ist kein Spell oder nicht im Inventar")
     # Off the event loop: execute_cast sets the spell's cast activity via
-    # set_pose_intent, which can call the pose_normalize LLM and block on the
-    # provider queue. The result is used below, so it is awaited.
+    # set_pose_intent, which resolves it against the pose catalog and may
+    # block on an embedding call. The result is used below, so it is awaited.
     result = await asyncio.to_thread(execute_cast, character_name, character_name, spell)
     return {"ok": True,
             "spell_id": spell["id"],
