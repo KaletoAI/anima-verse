@@ -1,21 +1,20 @@
-"""Pose-Variant-Konsolidierung pro Character (Plan §6.3).
+"""Per-character pose variant consolidation (plan §6.3).
 
-Statt jede freie pose-Beschreibung als eigenen Bild-Cache-Key zu nutzen,
-matchen wir neue Posen gegen bestehende Varianten desselben Characters.
-Match-Schwelle (Cosine-Similarity der Embeddings, Default 0.75) bestimmt
-ob ein bestehendes Bild wiederverwendet wird oder ein neuer Variant
-angelegt wird.
+Instead of using every free pose description as its own image cache key, new
+poses are matched against existing variants of the same character. The match
+threshold (cosine similarity of the embeddings, default 0.75) decides whether
+an existing image is reused or a new variant is created.
 
-Fallback wenn kein Embedding verfuegbar (kein Provider konfiguriert):
-String-Equality der normalisierten Pose. Konvergiert langsamer aber
-stuerzt nicht ab.
+Fallback when no embedding is available (no provider configured): string
+equality of the normalized pose. Converges more slowly but never crashes.
 
 API:
     get_or_create_variant(char, normalized_pose, embedding=None) -> dict
     get_variant(variant_id) -> dict | None
     update_variant_canonical(variant_id, canonical_pose, embedding) -> None
     list_variants_for_char(char, limit=20) -> list[dict]
-    prune_lru(char, keep=20) -> int   # entfernt aelteste ueber dem Limit
+    prune_lru(char, keep=20) -> int   # removes the oldest above the limit
+    clear_all_variants() -> int       # world-wide reset of the variant cache
 """
 import json
 import struct
@@ -37,7 +36,7 @@ DEFAULT_MAX_VARIANTS    = 20
 
 
 def get_match_threshold() -> float:
-    """Cosine-Threshold ab dem ein bestehender Variant wiederverwendet wird."""
+    """Cosine threshold from which an existing variant is reused."""
     from app.models.world import get_world_setting
     try:
         raw = get_world_setting("pose.variant_match_threshold", "")
@@ -59,16 +58,16 @@ def get_max_variants_per_char() -> int:
     return DEFAULT_MAX_VARIANTS
 
 
-# ----- Embedding-Hilfen -----
+# ----- Embedding helpers -----
 
 def _pack_embedding(vec: Optional[List[float]]) -> Optional[bytes]:
-    """Packt einen Embedding-Vektor in einen kompakten BLOB."""
+    """Packs an embedding vector into a compact BLOB."""
     if not vec:
         return None
     try:
         return struct.pack(f"{len(vec)}f", *(float(x) for x in vec))
     except Exception as e:
-        logger.debug("Embedding-Pack fehlgeschlagen: %s", e)
+        logger.debug("embedding pack failed: %s", e)
         return None
 
 
@@ -79,12 +78,12 @@ def _unpack_embedding(blob: Optional[bytes]) -> Optional[List[float]]:
         n = len(blob) // 4
         return list(struct.unpack(f"{n}f", blob))
     except Exception as e:
-        logger.debug("Embedding-Unpack fehlgeschlagen: %s", e)
+        logger.debug("embedding unpack failed: %s", e)
         return None
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Cosine-Similarity zweier Vektoren. Returns 0.0 bei Inkonsistenzen."""
+    """Cosine similarity of two vectors. Returns 0.0 on any inconsistency."""
     if not a or not b or len(a) != len(b):
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
@@ -152,7 +151,7 @@ def _create_variant(character_name: str,
                      canonical_pose: str,
                      embedding: Optional[List[float]],
                      example_image: str = "") -> Optional[int]:
-    """Schreibt einen neuen Variant. Returns neue ID oder None."""
+    """Writes a new variant. Returns the new id or None."""
     now = utc_now_iso()
     blob = _pack_embedding(embedding)
     try:
@@ -167,13 +166,13 @@ def _create_variant(character_name: str,
             )
             return cur.lastrowid
     except Exception as e:
-        logger.warning("create_variant [%s] fehlgeschlagen: %s",
+        logger.warning("create_variant [%s] failed: %s",
                        character_name, e)
         return None
 
 
 def _touch_variant(variant_id: int) -> None:
-    """Aktualisiert last_used_at + use_count fuer den Variant."""
+    """Updates last_used_at + use_count of the variant."""
     now = utc_now_iso()
     try:
         with transaction() as conn:
@@ -191,10 +190,10 @@ def update_variant_canonical(variant_id: int,
                               canonical_pose: str,
                               embedding: Optional[List[float]] = None
                               ) -> bool:
-    """Ueberschreibt canonical_pose + (optional) embedding.
+    """Overwrites canonical_pose + (optionally) the embedding.
 
-    Wird vom Visual-LLM-Background-Job aufgerufen, nachdem das echte
-    Bild analysiert wurde.
+    Called by the vision-LLM background job once the real image has been
+    analyzed.
     """
     if not variant_id or not canonical_pose:
         return False
@@ -235,22 +234,22 @@ def set_example_image(variant_id: int, image_path: str) -> bool:
         return False
 
 
-# ----- Hauptlogik: Match oder neuer Variant -----
+# ----- Main logic: match or new variant -----
 
 def get_or_create_variant(
     character_name: str,
     normalized_pose: str,
     embedding: Optional[List[float]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Sucht einen passenden Variant oder legt einen neuen an.
+    """Finds a matching variant or creates a new one.
 
-    Match-Strategie:
-        - Wenn embedding gegeben: Cosine gegen alle Variants mit embedding.
-          Bestes Match >= threshold → wiederverwenden.
-        - Sonst: exakte String-Match auf canonical_pose (case-insensitive).
+    Match strategy:
+        - With an embedding: cosine against every variant that has one.
+          Best match >= threshold → reuse.
+        - Otherwise: exact string match on canonical_pose (case-insensitive).
 
-    Bei Match: use_count++ und last_used_at aktualisieren. Sonst: neuer
-    Variant. Returns das Variant-Dict (mit id).
+    On a match: use_count++ and last_used_at refreshed. Otherwise a new
+    variant. Returns the variant dict (with its id).
     """
     if not (character_name and normalized_pose):
         return None
@@ -274,7 +273,7 @@ def get_or_create_variant(
                 best_score = score
                 best_match = v
     else:
-        # String-Equality-Fallback — case-insensitive
+        # String-equality fallback — case-insensitive
         norm_lower = normalized.lower()
         for v in variants:
             if (v.get("canonical_pose") or "").strip().lower() == norm_lower:
@@ -286,30 +285,30 @@ def get_or_create_variant(
         _touch_variant(best_match["id"])
         best_match["use_count"] = (best_match.get("use_count") or 0) + 1
         logger.debug(
-            "Pose-Match [%s] %s -> variant %s (score=%.3f)",
+            "pose match [%s] %s -> variant %s (score=%.3f)",
             character_name, normalized[:40], best_match["id"], best_score,
         )
         return best_match
 
-    # Kein Match — neuer Variant
+    # No match — new variant
     new_id = _create_variant(character_name, normalized, embedding)
     if not new_id:
         return None
-    # Pruning falls Limit ueberschritten
+    # Prune if the limit is exceeded
     try:
         prune_lru(character_name, keep=get_max_variants_per_char())
     except Exception as e:
-        logger.debug("prune_lru nach create: %s", e)
+        logger.debug("prune_lru after create: %s", e)
     logger.info(
-        "Pose-Variant neu [%s] id=%s pose=%r",
+        "new pose variant [%s] id=%s pose=%r",
         character_name, new_id, normalized[:60],
     )
     return get_variant(new_id)
 
 
 def prune_lru(character_name: str, keep: int = 20) -> int:
-    """Loescht aelteste Variants ueber dem `keep`-Limit. Returns Anzahl
-    geloeschter Rows.
+    """Deletes the oldest variants above the `keep` limit. Returns the
+    number of deleted rows.
     """
     if keep < 1 or not character_name:
         return 0
@@ -328,9 +327,35 @@ def prune_lru(character_name: str, keep: int = 20) -> int:
                 "DELETE FROM character_pose_variants WHERE id=?",
                 [(i,) for i in to_delete],
             )
-        logger.info("Pose-LRU [%s]: %d Variants entfernt",
+        logger.info("pose LRU [%s]: %d variants removed",
                     character_name, len(to_delete))
         return len(to_delete)
     except Exception as e:
         logger.warning("prune_lru(%s): %s", character_name, e)
+        return 0
+
+
+def clear_all_variants() -> int:
+    """Deletes ALL pose variants of the world (one-time cache reset when the
+    key scheme changes). Returns the number of deleted rows.
+
+    The stored ``character_state.pose_variant_id`` values are nulled in the
+    same transaction — they would otherwise point at rows that no longer
+    exist (same reasoning as the pose-catalog migration in ``db.py``).
+    """
+    try:
+        with transaction() as conn:
+            # Counted explicitly: a DELETE without WHERE hits SQLite's
+            # truncate optimization, whose reported rowcount is not a
+            # dependable row count.
+            total = conn.execute(
+                "SELECT COUNT(*) FROM character_pose_variants").fetchone()[0]
+            conn.execute("DELETE FROM character_pose_variants")
+            conn.execute(
+                "UPDATE character_state SET pose_variant_id=NULL "
+                "WHERE pose_variant_id IS NOT NULL")
+        logger.info("pose variant cache cleared: %d rows", total)
+        return int(total or 0)
+    except Exception as e:
+        logger.warning("clear_all_variants failed: %s", e)
         return 0

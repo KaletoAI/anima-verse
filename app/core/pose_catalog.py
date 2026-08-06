@@ -25,7 +25,9 @@ _lock = threading.Lock()
 _cache: Dict[str, Dict[str, dict]] = {}
 
 
-def _catalog_path(axis: str) -> Path:
+def catalog_path(axis: str) -> Path:
+    """File the catalog of this axis lives in — the ONE place the admin
+    editor writes to as well. Raises KeyError on an unknown axis."""
     from app.core.paths import get_shared_dir
     sub, name = _FILES[axis]
     return get_shared_dir() / "templates" / sub / name
@@ -33,7 +35,7 @@ def _catalog_path(axis: str) -> Path:
 
 def _load(axis: str) -> Dict[str, dict]:
     try:
-        data = json.loads(_catalog_path(axis).read_text(encoding="utf-8"))
+        data = json.loads(catalog_path(axis).read_text(encoding="utf-8"))
         entries = data.get("entries") or {}
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning("catalog %s unreadable: %s", axis, e)
@@ -207,6 +209,26 @@ def list_candidates(axis: str, status: str = "open") -> List[dict]:
     except Exception as e:
         logger.debug("list_candidates failed: %s", e)
         return []
+
+
+def delete_candidate(axis: str, raw_text: str) -> bool:
+    """Removes a candidate row for good.
+
+    Used when a candidate was APPROVED into the catalog: the text now resolves
+    exactly, so it will not come back — and if the approval was imperfect (a
+    synonym that still misses), the miss has to surface as a fresh candidate
+    instead of hiding behind a terminal status.
+    """
+    from app.core.db import transaction
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "DELETE FROM pose_candidates WHERE axis=? AND raw_text=?",
+                (axis, raw_text))
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("delete_candidate failed: %s", e)
+        return False
 
 
 def set_candidate_status(axis: str, raw_text: str, status: str) -> bool:
