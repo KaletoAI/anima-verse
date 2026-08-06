@@ -2279,6 +2279,8 @@ def get_background_path(location_identifier: str, room: str = "",
     - room unset OR room has no images → one of the location images
       (not room-tagged, day/night preferred) — except with ``strict_room=True``
       and except for the ground room (see below)
+    - ground room without its own images → the location's EXTERIOR images
+      (gallery type "building"), never the untagged interior default
     - location unset OR location has no images → None
 
     Args:
@@ -2300,25 +2302,21 @@ def get_background_path(location_identifier: str, room: str = "",
     if not loc_id:
         return None
 
-    # Neue Liste oder Fallback auf altes Einzelfeld
+    # New list, or fallback to the old single field
     bg_images = loc.get("background_images", [])
     if not bg_images and loc.get("background_image"):
         bg_images = [loc["background_image"]]
-    if not bg_images:
-        return None
 
-    # Klone teilen das Bildmaterial des Templates — Lookups laufen ueber
-    # die Owner-ID (Template-ID bei Klonen, sonst eigene ID).
+    # Clones share the template's image material — lookups run over the owner
+    # ID (the template ID for clones, the own ID otherwise).
     owner_id = _gallery_owner_id(location_identifier) or loc_id
     gallery_base = get_storage_dir() / "world_gallery" / owner_id
 
-    # Nur existierende Bilder beruecksichtigen
+    # Only consider images that exist on disk
     valid = [img for img in bg_images if (gallery_base / img).exists()]
-    if not valid:
-        return None
 
-    image_rooms = get_gallery_image_rooms(owner_id)
-    image_types = get_gallery_image_types(owner_id)
+    image_rooms = get_gallery_image_rooms(owner_id) or {}
+    image_types = get_gallery_image_types(owner_id) or {}
 
     def _not_map(img: str) -> bool:
         # Map tiles are never room backgrounds. "map" is the legacy type,
@@ -2334,38 +2332,54 @@ def get_background_path(location_identifier: str, room: str = "",
     candidates: List[str] = []
     if room:
         candidates = [img for img in valid if image_rooms.get(img, "") == room and _not_map(img)]
-        if not candidates and (strict_room or room == GROUND_ROOM_ID):
+        if not candidates and room == GROUND_ROOM_ID:
+            # The ground room is the outdoors. The untagged location images are
+            # the inside, so it must not fall back to them — it falls back to
+            # the location's EXTERIOR renders instead: gallery images of type
+            # "building", the same marker location_model3d.py reads for the 3D
+            # building. Two details make this its own lookup:
+            #   * building renders are deliberately never flagged as background
+            #     images (world_ops skips the flag for them), so they are not
+            #     in `valid` — they come straight from the gallery type map.
+            #   * only LOCATION-level ones count; a room-tagged building image
+            #     is that room's model source, an interior cutaway.
+            # The pick itself (day/night, stable/random) is the shared tail
+            # below — the ground uses the very same mechanism as every room.
+            candidates = [img for img, tp in image_types.items()
+                          if tp == "building" and not image_rooms.get(img, "")
+                          and (gallery_base / img).exists()]
+            if not candidates:
+                # No exterior at all: None is the ground's normal state and the
+                # caller must tolerate a missing background.
+                return None
+        elif not candidates and strict_room:
             # Strict mode: the user picked the room deliberately — NO fallback.
-            # The ground room is always strict: it is the outdoors, and the
-            # untagged location images are interiors, so falling back would
-            # show a living room to someone standing outside. The ground can
-            # never own a tagged image of its own, hence None is its normal
-            # state and the caller must tolerate a missing background.
+            # Used by the regenerate path (see docstring).
             return None
     if not candidates:
         candidates = [img for img in valid if image_rooms.get(img, "") == "" and _not_map(img)]
     if not candidates:
         return None
 
-    # Auswahl innerhalb einer Kategorie: zufaellig (Standard, Variety) oder
-    # deterministisch (stable=True, fuer /play — sonst wuerde das angezeigte Bild
-    # bei jedem Poll springen und die daran gekoppelten Figuren-Positionen mit).
+    # Pick inside a category: random (default, variety) or deterministic
+    # (stable=True, for /play — otherwise the displayed image would jump on
+    # every poll and the figure positions keyed to it would jump along).
     def _pick(lst: List[str]) -> str:
         return sorted(lst)[0] if stable else _random.choice(lst)
 
-    # Tageszeit bestimmen
+    # Determine the time of day
     time_type = ""
     if 0 <= hour <= 23:
         time_type = "day" if 6 <= hour < 18 else "night"
 
-    # Tag/Nacht bevorzugen
+    # Prefer day/night
     if time_type:
         timed = [img for img in candidates if image_types.get(img, "") == time_type]
         if timed:
             return gallery_base / _pick(timed)
 
-    # Bilder ohne Tageszeit-Zuordnung (neutral) bevorzugen gegenueber dem
-    # jeweils unpassenden Typ.
+    # Images without a time-of-day assignment (neutral) are preferred over the
+    # one that does not fit the current time.
     untyped = [img for img in candidates if not image_types.get(img, "")]
     if untyped:
         return gallery_base / _pick(untyped)
