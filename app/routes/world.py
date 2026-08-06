@@ -103,22 +103,29 @@ async def update_location_route(location_id: str, request: Request) -> Dict[str,
 
 @router.post("/locations/{template_id}/clone")
 async def clone_location_route(template_id: str, request: Request) -> Dict[str, Any]:
-    """Erzeugt eine Klon-Instanz eines (passable) Templates an einer Grid-
-    Position. Aufgerufen vom Worldmap-Drag&Drop, wenn der User ein passable
-    Template aus dem Tray auf die Karte zieht.
+    """Create a clone instance of a (passable) template at a metre position.
+
+    Called by the worldmap drag&drop when the user pulls a passable template
+    out of the tray onto the map.
     """
     try:
         data = await request.json()
-        grid_x = data.get("grid_x")
-        grid_y = data.get("grid_y")
-        if grid_x is None or grid_y is None:
+        pos_x = data.get("pos_x")
+        pos_z = data.get("pos_z")
+        if pos_x is None or pos_z is None:
             raise HTTPException(status_code=400,
-                detail="grid_x/grid_y fehlen")
+                detail="pos_x/pos_z missing")
+        try:
+            pos_x = float(pos_x)
+            pos_z = float(pos_z)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                detail="pos_x/pos_z must be numbers")
         from app.models.world import clone_location as _clone
-        clone = _clone(template_id, int(grid_x), int(grid_y))
+        clone = _clone(template_id, pos_x, pos_z)
         if not clone:
             raise HTTPException(status_code=404,
-                detail="Template nicht gefunden")
+                detail="Template not found")
         return {"status": "success", "location": clone}
     except HTTPException:
         raise
@@ -245,18 +252,28 @@ async def put_world_settings(request: Request) -> Dict[str, Any]:
 
 @router.patch("/locations/{location_id}/position")
 async def update_location_position_route(location_id: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert die Raster-Position eines Ortes."""
+    """Place a location on the world map (metres) or unplace it.
+
+    Body: ``{"pos_x": float|null, "pos_z": float|null, "yaw_deg": float?}``.
+    A null or missing coordinate unplaces the location; a missing ``yaw_deg``
+    leaves the stored rotation untouched.
+    """
     try:
         data = await request.json()
-        user_id = data.get("user_id", "").strip()
-        grid_x = data.get("grid_x")
-        grid_y = data.get("grid_y")
-        if grid_x is None or grid_y is None:
-            raise HTTPException(status_code=400, detail="grid_x und grid_y erforderlich")
+        pos_x = data.get("pos_x")
+        pos_z = data.get("pos_z")
+        yaw_deg = data.get("yaw_deg")
+        try:
+            pos_x = None if pos_x is None else float(pos_x)
+            pos_z = None if pos_z is None else float(pos_z)
+            yaw_deg = None if yaw_deg is None else float(yaw_deg)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail="pos_x/pos_z must be numbers or null")
 
-        loc = update_location_position(location_id, int(grid_x), int(grid_y))
+        loc = update_location_position(location_id, pos_x, pos_z, yaw_deg)
         if not loc:
-            raise HTTPException(status_code=404, detail="Ort nicht gefunden")
+            raise HTTPException(status_code=404, detail="Location not found")
         return {"status": "success", "location": loc}
     except HTTPException:
         raise

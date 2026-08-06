@@ -12,7 +12,7 @@ Konventionen:
 - Foreign Keys: AN, ON DELETE CASCADE wo sinnvoll
 """
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8  # 8: seamless world — metre positions, terrain tables
 
 
 # Room ids are unique PER LOCATION, not globally — that is the documented
@@ -69,8 +69,9 @@ SCHEMA_STATEMENTS = [
         id               TEXT PRIMARY KEY,
         name             TEXT NOT NULL,
         description      TEXT DEFAULT '',
-        grid_x           INTEGER,
-        grid_y           INTEGER,
+        pos_x            REAL,
+        pos_z            REAL,
+        yaw_deg          REAL NOT NULL DEFAULT 0,
         outfit_type      TEXT DEFAULT '',
         decency          TEXT DEFAULT '',
         style_hint       TEXT DEFAULT '',
@@ -735,6 +736,14 @@ ALTER_MIGRATIONS = [
     # presence/strangers. Settable via toggle (UI), the set_flags rule and an
     # LLM skill — the manual/rule-based counterpart to is_intimate.
     ("character_state", "decency_exempt", "INTEGER NOT NULL DEFAULT 0"),
+    # Seamless world (Aug 2026, plan-freie-weltkarte.md): a location sits at a
+    # free metre position with its own rotation instead of on a grid cell.
+    # Deliberately NO migration of the old grid_x/grid_y values — a grid world
+    # is not converted, it is re-placed. The orphaned grid columns stay behind
+    # in old DBs (SQLite cannot drop them cheaply) and no SQL touches them.
+    ("locations", "pos_x",   "REAL"),
+    ("locations", "pos_z",   "REAL"),
+    ("locations", "yaw_deg", "REAL NOT NULL DEFAULT 0"),
 ]
 
 

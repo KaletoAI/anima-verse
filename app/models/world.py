@@ -61,10 +61,10 @@ def _load_world_data() -> Dict[str, Any]:
     try:
         conn = get_connection()
         rows = conn.execute(
-            "SELECT id, name, description, grid_x, grid_y, outfit_type, "
+            "SELECT id, name, description, pos_x, pos_z, outfit_type, "
             "image_prompt_day, image_prompt_night, image_prompt_map, "
             "visible_when, accessible_when, background_images, meta, "
-            "decency, style_hint, swim_allowed, activity_hint "
+            "decency, style_hint, swim_allowed, activity_hint, yaw_deg "
             "FROM locations ORDER BY name ASC"
         ).fetchall()
         if rows:
@@ -84,8 +84,9 @@ def _load_world_data() -> Dict[str, Any]:
                         "id": r[0],
                         "name": r[1] or "",
                         "description": r[2] or "",
-                        "grid_x": r[3],
-                        "grid_y": r[4],
+                        "pos_x": r[3],
+                        "pos_z": r[4],
+                        "yaw_deg": float(r[17] or 0.0),
                         "outfit_type": r[5] or "",
                         "image_prompt_day": r[6] or "",
                         "image_prompt_night": r[7] or "",
@@ -221,17 +222,18 @@ def _save_world_data(data: Dict[str, Any]):
                 # get_entry_room_id, which reads it as "none declared".
                 conn.execute("""
                     INSERT INTO locations
-                        (id, name, description, grid_x, grid_y, outfit_type,
+                        (id, name, description, pos_x, pos_z, yaw_deg, outfit_type,
                          image_prompt_day, image_prompt_night, image_prompt_map,
                          visible_when, accessible_when, background_images, meta,
                          decency, style_hint, swim_allowed, activity_hint,
                          created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         name=excluded.name,
                         description=excluded.description,
-                        grid_x=excluded.grid_x,
-                        grid_y=excluded.grid_y,
+                        pos_x=excluded.pos_x,
+                        pos_z=excluded.pos_z,
+                        yaw_deg=excluded.yaw_deg,
                         outfit_type=excluded.outfit_type,
                         image_prompt_day=excluded.image_prompt_day,
                         image_prompt_night=excluded.image_prompt_night,
@@ -249,8 +251,9 @@ def _save_world_data(data: Dict[str, Any]):
                     lid,
                     loc.get("name", ""),
                     loc.get("description", ""),
-                    loc.get("grid_x"),
-                    loc.get("grid_y"),
+                    loc.get("pos_x"),
+                    loc.get("pos_z"),
+                    float(loc.get("yaw_deg") or 0.0),
                     loc.get("outfit_type", ""),
                     loc.get("image_prompt_day", ""),
                     loc.get("image_prompt_night", ""),
@@ -724,13 +727,13 @@ _CLONE_TEMPLATE_ONLY_KEYS = ("background_images",)
 
 
 def _resolve_clones(locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merged passable Klone mit ihrem Template.
+    """Merge passable clones with their template.
 
-    Klone speichern minimal: id, template_location_id, grid_x, grid_y und
-    optional name. Beim Lesen werden alle uebrigen Felder vom Template
-    geerbt, sodass Aenderungen am Template automatisch fuer alle Klone gelten.
-    Behaelt template_location_id im Output, damit das Frontend sie aus dem
-    Welt-Tree filtern kann.
+    A clone stores the bare minimum: id, template_location_id, pos_x, pos_z
+    (plus yaw_deg) and optionally a name. On read every remaining field is
+    inherited from the template, so template edits apply to all its clones
+    automatically. template_location_id stays in the output so the frontend
+    can filter clones out of the world tree.
     """
     by_id = {l.get("id"): l for l in locations if l.get("id")}
     resolved: List[Dict[str, Any]] = []
@@ -747,19 +750,22 @@ def _resolve_clones(locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         merged = {**tmpl, **{
             k: v for k, v in loc.items()
-            if k in ("id", "grid_x", "grid_y", "template_location_id")
+            if k in ("id", "pos_x", "pos_z", "yaw_deg", "template_location_id")
             or (k not in _CLONE_TEMPLATE_ONLY_KEYS and v not in (None, "", [], {}))
         }}
-        # Template-Identitaet vergessen, sonst nimmt der Klon die ID des
-        # Templates an. Override mit dem ECHTEN Klon-Identifier:
+        # Forget the template identity, or the clone would take on the
+        # template's id. Override with the REAL clone identifier:
         merged["id"] = loc.get("id")
         merged["template_location_id"] = tmpl_id
-        merged["grid_x"] = loc.get("grid_x")
-        merged["grid_y"] = loc.get("grid_y")
-        # Galerie-bezogene Felder kommen IMMER vom Template — der Galerie-
-        # Pfad geht ohnehin ueber _gallery_owner_id (= Template-ID), und
-        # Klone behalten sonst stale Listen wenn das Template neue Bilder
-        # bekommt oder alte loescht.
+        # The placement is the clone's OWN — never the template's, or an
+        # unplaced clone would silently sit on top of its template.
+        merged["pos_x"] = loc.get("pos_x")
+        merged["pos_z"] = loc.get("pos_z")
+        merged["yaw_deg"] = float(loc.get("yaw_deg") or 0.0)
+        # Gallery-related fields ALWAYS come from the template — the gallery
+        # path goes through _gallery_owner_id (= template id) anyway, and
+        # clones would otherwise keep stale lists when the template gains or
+        # loses images.
         for k in _CLONE_TEMPLATE_ONLY_KEYS:
             if k in tmpl:
                 merged[k] = tmpl[k]
@@ -1649,17 +1655,29 @@ def find_path_through_known(start_id: str, target_id: str,
     return None
 
 
-def update_location_position(location_id: str, grid_x: int, grid_y: int) -> Optional[Dict[str, Any]]:
-    """Setzt die Raster-Position eines Ortes. grid_x/grid_y < 0 entfernt die Position."""
+def update_location_position(location_id: str, pos_x: Optional[float],
+                             pos_z: Optional[float],
+                             yaw_deg: Optional[float] = None
+                             ) -> Optional[Dict[str, Any]]:
+    """Place a location on the free world map (metres) or unplace it.
+
+    ``pos_x``/``pos_z`` in world metres; either being None unplaces the
+    location (and resets the rotation — an unplaced location has no
+    orientation). ``yaw_deg`` None leaves the stored rotation untouched,
+    so moving never silently re-orients.
+    """
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
-            if grid_x < 0 or grid_y < 0:
-                loc.pop("grid_x", None)
-                loc.pop("grid_y", None)
+            if pos_x is None or pos_z is None:
+                loc.pop("pos_x", None)
+                loc.pop("pos_z", None)
+                loc.pop("yaw_deg", None)
             else:
-                loc["grid_x"] = grid_x
-                loc["grid_y"] = grid_y
+                loc["pos_x"] = round(float(pos_x), 2)
+                loc["pos_z"] = round(float(pos_z), 2)
+                if yaw_deg is not None:
+                    loc["yaw_deg"] = round(float(yaw_deg), 1) % 360.0
             _save_world_data(data)
             return loc
     return None
@@ -2144,50 +2162,46 @@ def move_orphan_gallery_files() -> Dict[str, int]:
 
 
 def cleanup_orphan_clones() -> Dict[str, int]:
-    """Bereinigt Klon-Datensaetze:
+    """Clean up clone records:
 
-    - Klone ohne Grid-Position (off-map) -> loeschen.
-    - Klone mit nicht-existierendem template_location_id -> loeschen.
-    - Mehrere Klone an derselben Grid-Zelle (gleiches Template) -> nur den
-      ersten behalten, Rest loeschen.
+    - Clones without a position (off-map) -> delete.
+    - Clones with a non-existent template_location_id -> delete.
+    - Several clones of the same template on the exact same spot -> keep only
+      the first, delete the rest.
 
-    Idempotent. Returns Stats-Dict.
+    Idempotent. Returns a stats dict.
     """
     data = _load_world_data()
     locations = data.get("locations", [])
     existing_ids = {l.get("id") for l in locations if l.get("id")}
 
     delete_ids: set = set()
-    seen_cells: set = set()  # (template_id, grid_x, grid_y)
+    seen_spots: set = set()  # (template_id, pos_x, pos_z)
 
-    # Erste Schleife: Off-Map und Waisen markieren
+    # First pass: mark off-map clones and orphans
     for loc in locations:
         tid = (loc.get("template_location_id") or "").strip()
         if not tid:
             continue
-        # Waise: Template existiert nicht mehr
+        # Orphan: the template no longer exists
         if tid not in existing_ids:
             delete_ids.add(loc.get("id"))
             continue
-        gx = loc.get("grid_x")
-        gy = loc.get("grid_y")
-        # Off-Map: kein Grid oder negativ
-        if gx is None or gy is None or gx < 0 or gy < 0:
+        # Off-map: no metre position
+        if loc.get("pos_x") is None or loc.get("pos_z") is None:
             delete_ids.add(loc.get("id"))
             continue
 
-    # Zweite Schleife: Duplikate pro (Template, Grid-Zelle)
+    # Second pass: duplicates per (template, position)
     for loc in locations:
         tid = (loc.get("template_location_id") or "").strip()
         if not tid or loc.get("id") in delete_ids:
             continue
-        gx = loc.get("grid_x")
-        gy = loc.get("grid_y")
-        cell = (tid, gx, gy)
-        if cell in seen_cells:
+        spot = (tid, loc.get("pos_x"), loc.get("pos_z"))
+        if spot in seen_spots:
             delete_ids.add(loc.get("id"))
         else:
-            seen_cells.add(cell)
+            seen_spots.add(spot)
 
     if not delete_ids:
         return {"removed": 0, "off_map": 0, "duplicates": 0,
@@ -2197,16 +2211,15 @@ def cleanup_orphan_clones() -> Dict[str, int]:
     data["locations"] = new_locations
     _save_world_data(data)
 
-    # Stats unterscheiden
+    # Break the removals down by reason
     off_map = duplicates = orphan = 0
     for loc in locations:
         if loc.get("id") not in delete_ids:
             continue
         tid = (loc.get("template_location_id") or "").strip()
-        gx, gy = loc.get("grid_x"), loc.get("grid_y")
         if tid not in existing_ids:
             orphan += 1
-        elif gx is None or gy is None or gx < 0 or gy < 0:
+        elif loc.get("pos_x") is None or loc.get("pos_z") is None:
             off_map += 1
         else:
             duplicates += 1
@@ -2220,23 +2233,22 @@ def cleanup_orphan_clones() -> Dict[str, int]:
             "kept": len(new_locations)}
 
 
-def clone_location(template_id: str, grid_x: int, grid_y: int) -> Optional[Dict[str, Any]]:
-    """Create a new clone instance of a (passable) template.
+def clone_location(template_id: str, pos_x: float,
+                   pos_z: float) -> Optional[Dict[str, Any]]:
+    """Create a new clone instance of a (passable) template at a metre position.
 
-    A clone stores the bare minimum: id, template_location_id, grid_x, grid_y
+    A clone stores the bare minimum: id, template_location_id, pos_x, pos_z
     plus its own ``variant_seed``. Every other field is merged in from the
     template at read time.
     Returns the resolved dict of the clone, or None on error.
     """
     if not template_id:
         return None
-    # Guard: clones without a valid grid position never reach the DB.
+    # Guard: clones without a valid position never reach the DB.
     try:
-        gx = int(grid_x)
-        gy = int(grid_y)
+        px = round(float(pos_x), 2)
+        pz = round(float(pos_z), 2)
     except (TypeError, ValueError):
-        return None
-    if gx < 0 or gy < 0:
         return None
     data = _load_world_data()
     template = None
@@ -2246,20 +2258,20 @@ def clone_location(template_id: str, grid_x: int, grid_y: int) -> Optional[Dict[
             break
     if not template:
         return None
-    # Avoid duplicate clones of the same template cell — the first clone
-    # wins, further drops onto the same cell are discarded.
+    # Avoid duplicate clones of the same template at the very same spot — the
+    # first clone wins, a second drop on the identical position is discarded.
     for loc in data.get("locations", []):
         if (loc.get("template_location_id") or "") == template_id \
-                and loc.get("grid_x") == gx and loc.get("grid_y") == gy:
-            logger.info("clone_location: existing clone at (%d,%d) for "
-                        "template %s, no new entry", gx, gy, template_id)
+                and loc.get("pos_x") == px and loc.get("pos_z") == pz:
+            logger.info("clone_location: existing clone at (%.2f,%.2f) for "
+                        "template %s, no new entry", px, pz, template_id)
             return loc
     new_id = _generate_location_id()
     clone = {
         "id": new_id,
         "template_location_id": template_id,
-        "grid_x": gx,
-        "grid_y": gy,
+        "pos_x": px,
+        "pos_z": pz,
         "rooms": [],
         # The one number this copy owns. Every seed it inherits from the
         # template (prop scattering, ground relief) is mixed with it, so two
