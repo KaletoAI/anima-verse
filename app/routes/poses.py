@@ -243,11 +243,18 @@ async def approve_candidate(request: Request,
             raise HTTPException(status_code=400, detail="animation missing")
         if key in data["entries"]:
             raise HTTPException(status_code=409, detail="Entry already exists")
-        owner = _alias_owner(axis, key)
-        if owner:
-            raise HTTPException(status_code=409,
-                                detail=f"'{key}' already belongs to '{owner}'")
-        entry = {"prompt": prompt, "synonyms": [] if raw_text == key else [raw_text]}
+        # The candidate text itself becomes a synonym unless it IS the key —
+        # on top of whatever the admin typed into the form.
+        synonyms: List[str] = []
+        for alias in _synonyms(body.get("synonyms") or []) + [raw_text]:
+            if alias != key and alias not in synonyms:
+                synonyms.append(alias)
+        for alias in [key] + synonyms:
+            owner = _alias_owner(axis, alias)
+            if owner:
+                raise HTTPException(status_code=409,
+                                    detail=f"'{alias}' already belongs to '{owner}'")
+        entry = {"prompt": prompt, "synonyms": synonyms}
         if axis == "pose":
             entry["animation"] = animation
             entry["solo"] = bool(body.get("solo", True))
