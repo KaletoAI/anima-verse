@@ -146,7 +146,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        get_character_current_room)
-    from app.models.world import get_entry_room_id, get_location_by_id
+    from app.models.world import get_location_by_id
 
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
@@ -176,24 +176,17 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     # Bewegungs-Kontext: Räume des Orts + aktueller Raumname
     loc_obj = get_location_by_id(loc) if loc else None
     location_name = (loc_obj.get("name", "") if loc_obj else "")
-    entry_id = get_entry_room_id(loc_obj) if loc_obj else ""
-    from app.models.world import GROUND_ROOM_ID, get_ground_name
+    from app.core.world_ops import build_avatar_rooms
     from app.models.character import get_character_language
-    rooms_out, room_name = [], ""
-    for r in ((loc_obj.get("rooms") if loc_obj else None) or []):
-        rid = r.get("id", "") or ""
-        rn = r.get("name", "") or ""
-        if rid == GROUND_ROOM_ID and not rn:
-            # The ground room may stay unnamed — then it falls back to the
-            # same translated word in every location.
-            rn = get_ground_name(loc, get_character_language(avatar) or "de")
-        # is_ground marks the location's ground so a client can label it
-        # without knowing the reserved id. It is a room like any other:
-        # addressed by this id, entered through /play/enter-room.
-        rooms_out.append({"id": rid, "name": rn, "is_entry": rid == entry_id,
-                          "is_ground": rid == GROUND_ROOM_ID})
-        if room and (rid == room or rn == room):
-            room_name = rn
+    lang = get_character_language(avatar) or "de"
+    # Each room carries its lock state FOR THIS AVATAR (enterable + reason) —
+    # the same check /play/enter-room refuses with, so the UI never offers a
+    # room the route would turn away (plan-betreten-und-tueren.md § 5 C).
+    rooms_out = build_avatar_rooms(avatar, loc_obj, lang)
+    room_name = ""
+    for r in rooms_out:
+        if room and (r["id"] == room or r["name"] == room):
+            room_name = r["name"]
 
     # Neighbour locations + the per-direction departure gate, reused from the
     # existing route function.
@@ -246,9 +239,8 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     # value stays the canonical STORYTELLER_SPEAKER; only the display shows the
     # translated name (the localized German label). SceneView renders meta.speaker.
     try:
-        from app.models.character import get_character_language
         from app.core.i18n import t as _t
-        _st_label = _t("Storyteller", get_character_language(avatar) or "de")
+        _st_label = _t("Storyteller", lang)
         if _st_label != STORYTELLER_SPEAKER:
             for _ln in scene:
                 _m = _ln.get("meta")

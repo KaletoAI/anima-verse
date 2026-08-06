@@ -9,7 +9,7 @@ import os
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from app.core.log import get_logger
 from app.core.scatter_curves import curve_map, tessellate
 from app.imagegen.base import BackendBusyError
@@ -51,11 +51,17 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
     authored opening lets one out over its own edge only, so the answer
     differs from arrow to arrow. One rule, one place — the pad used to carry
     its own copy of an older one and greyed out steps the server allows.
+
+    ``enterable`` + ``reason`` are the ARRIVAL side of the same idea
+    (``neighbor_access``): may the avatar set foot on that neighbour at all,
+    and if not, in one player-facing sentence, why not.
     """
-    from app.core.boundary_entry import EDGE_OF_DIRECTION, may_leave
+    from app.core.boundary_entry import (
+        EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave)
     from app.models.account import get_active_character
     from app.models.character import (
-        get_character_current_location, get_character_current_room)
+        get_character_current_location, get_character_current_room,
+        get_character_language)
 
     out: Dict[str, Any] = {
         "north": None, "south": None, "east": None, "west": None,
@@ -87,16 +93,98 @@ def compute_avatar_neighbors() -> Dict[str, Any]:
     deltas = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
     targets = {(cx + dx, cy + dy): direction
                for direction, (dx, dy) in deltas.items()}
+    lang = get_character_language(avatar) or "de"
     for loc in list_locations():
         key = (int(loc.get("grid_x") or 0), int(loc.get("grid_y") or 0))
         direction = targets.get(key)
         if direction and not out[direction]:
+            exit_edge = EDGE_OF_DIRECTION[direction]
+            enterable, reason = neighbor_access(
+                avatar, loc, OPPOSITE_EDGE[exit_edge], lang)
             out[direction] = {
                 "id": loc.get("id", "") or "",
                 "name": loc.get("name", "") or "",
-                "may_leave": may_leave(cur, cur_room, cur_entry,
-                                       EDGE_OF_DIRECTION[direction]),
+                "may_leave": may_leave(cur, cur_room, cur_entry, exit_edge),
+                "enterable": enterable,
+                "reason": reason,
             }
+    return out
+
+
+def neighbor_access(avatar: str, target: Dict[str, Any], entry_edge: str,
+                    lang: str = "") -> Tuple[bool, str]:
+    """May ``avatar`` enter location ``target`` across ``entry_edge``?
+
+    Returns ``(enterable, reason)``; the reason is empty exactly when the
+    answer is yes, and otherwise one player-facing sentence. Three gates, in
+    the order the arrival applies them (plan-betreten-und-tueren.md § 5):
+
+    1. the crossed edge — without an authored opening there is no way in
+       (the sentence is the one ``move_avatar_step`` refuses with, so pad and
+       refusal never word the same "no" differently),
+    2. ``accessible_when`` at the location — the same condition the world map
+       greys a place out with (``build_locations_payload``),
+    3. the block rules, via the very ``check_access`` the step decides with;
+       the room asked about is where the arrival would land.
+
+    Per avatar and changing with events, therefore NEVER part of the
+    signature-cached scene recipe.
+    """
+    from app.core.boundary_entry import opening_entry_room, opening_on_edge
+    from app.core.i18n import t
+    from app.models.rules import check_access
+    from app.models.world import get_arrival_room_id
+
+    if not opening_on_edge(target, entry_edge):
+        return False, t("There is no way in on this side.", lang)
+    target_id = target.get("id", "") or ""
+    if not _conditions_pass(target.get("accessible_when") or [],
+                            avatar, target_id):
+        return False, t("This place is not accessible to you.", lang)
+    target_room = (opening_entry_room(target, entry_edge)
+                   or get_arrival_room_id(target))
+    ok, message = check_access(avatar, target_id, room_id=target_room)
+    if not ok:
+        return False, message or t("This place is not accessible to you.", lang)
+    return True, ""
+
+
+# === Rooms of a location, as the avatar sees them ===
+
+def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
+                       lang: str = "") -> List[Dict[str, Any]]:
+    """The rooms of ``location`` with the lock state for ONE avatar.
+
+    Entry: ``{id, name, is_entry, is_ground, enterable, reason}``. ``is_ground``
+    marks the location's ground so a client can label it without knowing the
+    reserved id — it is a room like any other: addressed by this id, entered
+    through ``/play/enter-room``, and CHECKED like any other, so a rule may
+    lock it too.
+
+    ``enterable`` comes from the same ``check_access`` that route refuses
+    with, so a room the UI offers and a room the server accepts can never
+    drift apart; ``reason`` is the rule's own message and empty when the room
+    is open. Per avatar and changing with events, therefore NEVER part of the
+    signature-cached scene recipe (plan-betreten-und-tueren.md § 5).
+    """
+    from app.models.rules import check_access
+    from app.models.world import (
+        GROUND_ROOM_ID, get_entry_room_id, get_ground_name)
+
+    loc_id = (location or {}).get("id", "") or ""
+    entry_id = get_entry_room_id(location) if location else ""
+    out: List[Dict[str, Any]] = []
+    for room in ((location.get("rooms") if location else None) or []):
+        rid = room.get("id", "") or ""
+        name = room.get("name", "") or ""
+        if rid == GROUND_ROOM_ID and not name:
+            # The ground room may stay unnamed — then it falls back to the
+            # same translated word in every location.
+            name = get_ground_name(loc_id, lang)
+        enterable, reason = check_access(avatar, loc_id, room_id=rid)
+        out.append({"id": rid, "name": name, "is_entry": rid == entry_id,
+                    "is_ground": rid == GROUND_ROOM_ID,
+                    "enterable": enterable, "reason": reason})
     return out
 
 
@@ -256,6 +344,28 @@ def move_avatar_step(direction: str) -> Dict[str, Any]:
 
 # === Locations ===
 
+def _conditions_pass(conditions: Any, character_name: str,
+                     location_id: str) -> bool:
+    """Do ALL authored conditions hold for this character (AND semantics)?
+
+    Takes a list or a single string; an empty entry is skipped, an empty list
+    passes. Used for both ``visible_when`` and ``accessible_when`` — the map
+    filter and the entry gate must read the same field the same way.
+    """
+    from app.core.activity_engine import evaluate_condition
+    if not conditions:
+        return True
+    if isinstance(conditions, str):
+        conditions = [conditions]
+    for c in conditions:
+        if not c:
+            continue
+        ok, _ = evaluate_condition(str(c), character_name, location_id)
+        if not ok:
+            return False
+    return True
+
+
 def build_locations_payload(character_name: str) -> Dict[str, Any]:
     """List locations from a character's point of view.
 
@@ -269,29 +379,15 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
     locations = list_locations()
 
     if character_name:
-        from app.core.activity_engine import evaluate_condition
-
-        def _all_pass(conditions, char: str, loc_id: str) -> bool:
-            if not conditions:
-                return True
-            if isinstance(conditions, str):
-                conditions = [conditions]
-            for c in conditions:
-                if not c:
-                    continue
-                ok, _ = evaluate_condition(str(c), char, loc_id)
-                if not ok:
-                    return False
-            return True
-
         filtered = []
         for loc in locations:
             loc_id = loc.get("id", "")
             vw = loc.get("visible_when") or []
-            if vw and not _all_pass(vw, character_name, loc_id):
+            if vw and not _conditions_pass(vw, character_name, loc_id):
                 continue  # location not visible
             aw = loc.get("accessible_when") or []
-            loc["accessible"] = _all_pass(aw, character_name, loc_id) if aw else True
+            loc["accessible"] = (_conditions_pass(aw, character_name, loc_id)
+                                 if aw else True)
             filtered.append(loc)
         locations = filtered
 
