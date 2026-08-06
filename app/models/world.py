@@ -1314,11 +1314,16 @@ def migrate_clear_entry_rooms_once() -> Dict[str, int]:
 
     The count comes back so the boot log can state it: ``locations`` were
     cleared. Guarded by a world_kv marker, so a second boot returns zero
-    without touching a row — and even without the marker the pass would find
-    nothing left to clear.
+    without touching a row. Every cleared value is logged with its location
+    BEFORE it goes — the clear is irreversible, and the log is the only place
+    an authored arrival room can be read back from.
     """
     counts = {"locations": 0}
     if get_world_setting("migration.clear_entry_room_v1", "") == "done":
+        return counts
+    # The ground must exist before arrivals are sent to it — if the ground
+    # migration did not finish, this one waits for the next boot.
+    if get_world_setting("migration.ground_room_v1", "") != "done":
         return counts
     try:
         data = _load_world_data()
@@ -1328,6 +1333,10 @@ def migrate_clear_entry_rooms_once() -> Dict[str, int]:
                 continue
             if not str(loc.get("entry_room") or "").strip():
                 continue
+            logger.info(
+                "entry-room migration: location %s (%s) had entry room %r — "
+                "cleared", loc.get("id", ""), loc.get("name", ""),
+                loc["entry_room"])
             loc["entry_room"] = ""
             counts["locations"] += 1
             changed = True
