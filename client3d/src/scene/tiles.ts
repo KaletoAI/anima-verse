@@ -89,8 +89,6 @@ export interface Tile {
   roofParts: THREE.Object3D[];
   roofMats: THREE.MeshStandardMaterial[];
   roomCenters: Map<string, THREE.Vector3>;
-  /** Ausgangspunkt pro Raum (Welt-Koordinaten; Schlüssel: ID und Name) */
-  roomExits: Map<string, THREE.Vector3>;
   /** THE door of a room, in world coordinates (key: room ID): its outside
    *  door, else its first — read from the payload's `doorways[]`, never
    *  derived (plan-betreten-und-tueren.md § 4.1). The floor sampling shoots
@@ -667,7 +665,7 @@ export function buildTile(loc: WorldLocation): Tile {
   const tile: Tile = {
     loc, group, center, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
-    roomCenters: new Map(), roomExits: new Map(), roomDoors: new Map(),
+    roomCenters: new Map(), roomDoors: new Map(),
     roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
@@ -898,9 +896,8 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
     if (lie.length) tile.roomLieSpots.set(key, lie);
   }
   if (spots.length) {
-    // Mitte/Ausgang auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
+    // Mitte auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
     center?.setY(floor + 0.01);
-    tile.roomExits.get(roomId)?.setY(floor + 0.01);
   }
 
   // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker:

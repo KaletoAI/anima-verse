@@ -5,7 +5,7 @@
  * The server ships a 17 × 17 grid of support points over the location's
  * reference square and has ALREADY lifted everything that stands in a
  * non-flat room: prop `bottom_y`, diorama `bottom_y`, marker `y_world`,
- * exit points. A renderer must therefore never sample an object height
+ * doorway feet. A renderer must therefore never sample an object height
  * again — it would count the lift twice. What is left for the renderers is
  * exactly two things:
  *

@@ -794,9 +794,9 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
 
     Consumed by external 3D clients; the 2D UI stores/edits but never renders
     it. A layout counts as set when x/y/w/d are all valid (fractions of the
-    building footprint, top-left corner + size); ``level`` defaults to 0,
-    ``rotation`` (degrees yaw) and ``exit`` ([x, y] as fractions of the ROOM
-    rectangle) are optional. Optional too: ``markers`` (figure snap spots),
+    building footprint, top-left corner + size); ``level`` defaults to 0 and
+    ``rotation`` (degrees yaw) is optional. Optional too: ``markers``
+    (figure snap spots),
     ``surfaces`` ({floor?, wall?} surface-texture kinds), ``openings``
     (doors / windows / passages, see _sanitize_opening), ``outline``
     (drawn room hull) and ``props`` (prop-library placements). Empty result
@@ -948,16 +948,9 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # No recipe walls for this room: open zones, pavilions, areas inside an
     # area model. The server then emits no `walls` entries for it at all, so
     # both renderers follow without knowing the flag. Openings stay editor
-    # data (the 2D plan keeps drawing them), plate and exit are unaffected.
+    # data (the 2D plan keeps drawing them), the plate is unaffected.
     if raw.get("no_walls"):
         out["no_walls"] = True
-    ex = raw.get("exit")
-    if isinstance(ex, (list, tuple)) and len(ex) == 2:
-        try:
-            out["exit"] = [round(min(max(float(ex[0]), 0.0), 1.0), 4),
-                           round(min(max(float(ex[1]), 0.0), 1.0), 4)]
-        except (TypeError, ValueError):
-            pass
     # Diorama-model placement IN THE PLAN (2026-07-24): the room's 3D model
     # is positioned like a prop — ``model_at`` = anchor point as fractions of
     # the room rectangle (absent = centred, today's behaviour) and
@@ -983,7 +976,7 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # into a LOCATION model — terrain is not flat, so the hut halfway up the
     # slope needs its floor at the height the ground has THERE (user finding
     # 2026-07-28, Willowbrook). Everything in the room rides along: plate,
-    # walls, props, markers, exit and the diorama.
+    # walls, props, markers and the diorama.
     fo = raw.get("floor_offset_y")
     if fo is not None and f"{fo}".strip() != "":
         try:

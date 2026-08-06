@@ -21,8 +21,8 @@
  *     wall entry over its span at all;
  *   - a WINDOW keeps a sill piece below it, a head piece above it and fills
  *     the hole with a glass pane — three entries that all span the opening;
- *   - the building CONTOUR is walls too, with a gap punched where a room exit
- *     projects onto it (or one central door in the southernmost piece), so
+ *   - the building CONTOUR is walls too, with a gap punched where an outside
+ *     doorway projects onto it, so
  *     "out of the building only through the door" needs no extra rule either.
  *
  * So: everything left in `walls` blocks, the gaps are the doors. There is
@@ -91,7 +91,7 @@ export function bodyRadius(k: number): number {
  * tile-LOCAL — `scene_recipe._w()` yields world metres around the centre of
  * the tile, which is why every other consumer adds `tile.center` (room rects,
  * room centres, overlay zones, wall mids for the culling, elevator stops,
- * exits, markers). Positions the clamp is compared against come from
+ * doorways, markers). Positions the clamp is compared against come from
  * `npcs.positionOf()` and are absolute, so without the offset the segments of
  * a building on grid (4,2) sit 45 m away from it and nothing ever blocks.
  *

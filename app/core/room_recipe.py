@@ -11,7 +11,6 @@ the COMPOSED conveniences so the client renders without re-deriving them:
   neighbours' openings that sit on a shared wall: one physical door is edited
   only in the room that owns it but has to be a hole in BOTH rooms' walls, so
   the recipe mirrors it geometrically (see ``_mirrored_openings``),
-- ``exit`` derived from the doors when the room has no explicit one,
 - ``placements`` joined with each prop's real dims + its mesh tiers (REAL-SIZE
   rule: a placement never scales a prop — its own dims × the plan factor k
   do), and
@@ -102,10 +101,8 @@ def _normalize_opening(op: Dict[str, Any]) -> Dict[str, Any]:
 SHARE_TOL_M = 0.15
 MIN_SHARE_M = 0.8
 _UNANCHORED_PLAN_WIDTH_M = 8.0
-# How far the derived exit sits inside the room, measured from the opening.
-EXIT_INSET_M = 0.3
 # Scatter keep-outs (plan-area-detail-scenes.md): clearance in REAL metres in
-# front of an opening (beyond its half width) and around exit / markers /
+# front of an opening (beyond its half width) and around markers /
 # model-less manual props. Axis-aligned squares on purpose — § B5a wants the
 # arithmetic hand-checkable.
 SCATTER_OPENING_CLEAR_M = 0.6
@@ -268,45 +265,6 @@ def _mirrored_openings(lay: Dict[str, Any], siblings: List[Dict[str, Any]],
     return out
 
 
-def _derive_exit(outline: List[List[float]], openings: List[Dict[str, Any]],
-                 plan_width_m: float) -> Optional[List[float]]:
-    """Where a character enters/leaves when the room has no explicit exit.
-
-    An opening to ``outside`` wins; otherwise the first door/passage in a
-    stable order (edge index, then ``at``) — so the derived exit does not
-    jump around as openings are added elsewhere. The point is the opening's
-    centre pushed EXIT_INSET_M into the room: with clockwise hulls the
-    interior lies to the right of every directed edge, i.e. along (-uy, ux).
-    """
-    walkable = [op for op in openings
-                if str(op.get("type") or "door").lower() in _WALKABLE_TYPES]
-    if not walkable:
-        return None
-
-    def _order(op: Dict[str, Any]) -> tuple:
-        try:
-            return (int(op.get("edge") or 0), float(op.get("at") or 0))
-        except (TypeError, ValueError):
-            return (0, 0.0)
-
-    walkable.sort(key=_order)
-    pick = next((op for op in walkable
-                 if str(op.get("to") or "").strip().lower() == "outside"),
-                walkable[0])
-    try:
-        i = int(pick.get("edge") or 0) % len(outline)
-        at = float(pick.get("at") or 0)
-    except (TypeError, ValueError, ZeroDivisionError):
-        return None
-    px, py = _point_on_edge(outline, i, at)
-    edge = _unit_edge(outline, i)
-    if not edge:
-        return [_r(px), _r(py)]
-    _, _, ux, uy, _ = edge
-    inset = EXIT_INSET_M / (plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M)
-    return [_r(px - uy * inset), _r(py + ux * inset)]
-
-
 def compose_prop_marker(*, bbox: List[float], rotation: Any,
                         dims: List[float], frac: List[float],
                         facing: Optional[float], placement_yaw: float,
@@ -366,10 +324,10 @@ def compose_recipe(room: Dict[str, Any],
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
     level contribute their openings on shared walls (see
-    ``_mirrored_openings``) and thereby also feed the exit derivation.
+    ``_mirrored_openings``).
     ``plan_width_m`` is the location's scale anchor — only the tolerances of
-    the shared-wall test and the exit inset use it; 0 means "assume the 8 m
-    reference plate", the same fallback the editor uses.
+    the shared-wall test use it; 0 means "assume the 8 m reference plate",
+    the same fallback the editor uses.
     ``variant_seed`` is the one number a copy placed on the map owns; it is
     mixed into every stored scatter seed so two copies of one template stop
     looking identical. 0 means "not a copy" and leaves every seed untouched.
@@ -473,9 +431,8 @@ def compose_recipe(room: Dict[str, Any],
     # GEOMETRIC zones only (sibling hulls, openings, markers) —
     # ``scatter_spacing_m`` alone rules the density (0 = copies may
     # overlap; the old footprint minimum kept every tree a crown apart).
-    # The exit point is NOT among them any more: the openings already are
-    # the doorways (plan-betreten-und-tueren.md § 4.1), and a square around
-    # a point that is not on a wall kept trees off an arbitrary spot.
+    # The openings ARE the doorways (plan-betreten-und-tueren.md § 4.1), so
+    # their keep-outs already free every threshold.
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
     if scatter_sources:
@@ -561,16 +518,6 @@ def compose_recipe(room: Dict[str, Any],
     }
     if lay.get("surfaces"):
         payload["surfaces"] = lay["surfaces"]
-    if lay.get("exit"):
-        payload["exit"] = lay["exit"]
-    else:
-        # No explicit exit: derive one from the doors so a room with a door is
-        # never "unreachable". An explicit exit always wins (it is the
-        # override), and ``exit_derived`` tells the client which it got.
-        derived = _derive_exit(outline, openings, plan_width_m)
-        if derived:
-            payload["exit"] = derived
-            payload["exit_derived"] = True
     if lay.get("markers"):
         payload["markers"] = lay["markers"]
     # Outdoor rooms (terraces, gardens): the client builds NO shell walls

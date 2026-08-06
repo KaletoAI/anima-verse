@@ -25,8 +25,8 @@ attaches the scene to its tile):
 - ``style``   — the colours/opacities both renderers used to keep as copies,
 - ``models``  — ONE spec form for building, room diorama and prop; the client
                 runs the single ``place()`` routine of § B2 over it,
-- ``figures``/``markers``/``exits`` — the figure scale and every anchor point
-                already resolved into world coordinates,
+- ``figures``/``markers`` — the figure scale and every anchor point already
+                resolved into world coordinates,
 - ``terrain`` — the optional height field of a detail scene; the composer has
                 already lifted every object standing on it, so the renderers
                 only drape their ground and sample figure heights.
@@ -154,9 +154,9 @@ OVERLAY_SURFACE_LIFT = 0.01
 DEFAULT_FLOOR_KIND = "floor"
 
 # The renderers' colour vocabulary — ONE place for both of them (§ B1 style).
-# Editor-only overlay colours (markers, exit dots, ruler) are deliberately
-# NOT here: they are preview aids, not contract geometry. The elevator IS
-# contract geometry (extras), so its colours are.
+# Editor-only overlay colours (markers, ruler) are deliberately NOT here:
+# they are preview aids, not contract geometry. The elevator IS contract
+# geometry (extras), so its colours are.
 STYLE: Dict[str, Any] = {
     "wall_color": "#cfc4b2",
     "floor_color": "#d8d0c2",
@@ -292,8 +292,8 @@ def _room_floor_y(recipe: Dict[str, Any], storey: float, k: float) -> float:
     where a room cuts a hole into a LOCATION model: terrain is not flat, so a
     hut on the slope needs its floor where the ground actually is — otherwise
     it floats over or sinks into the hole it made (user finding 2026-07-28).
-    Everything in the room derives from here, so plate, walls, props, markers,
-    exit and diorama move as one.
+    Everything in the room derives from here, so plate, walls, props, markers
+    and diorama move as one.
     """
     return (int(recipe.get("level") or 0) * storey
             + _num(recipe.get("floor_offset_y")) * k)
@@ -327,26 +327,6 @@ def room_size_m(location: Dict[str, Any],
     if plan_w <= 0:
         return None
     return (round(w * plan_w, 2), round(d * plan_w, 2))
-
-
-def room_exit_world(recipe: Dict[str, Any], room: Dict[str, Any],
-                    extent: float) -> Optional[List[float]]:
-    """A room's entry/exit point in WORLD metres, or None.
-
-    Two frames meet here: an EXPLICIT ``layout.exit`` is a fraction of the
-    room RECTANGLE (that is how the 2D editor stores it), while the recipe's
-    DERIVED exit already comes in absolute plate fractions (it is projected
-    off the absolute hull). Resolving that is exactly what a world-coordinate
-    payload is for — the consumer never sees the difference again.
-    """
-    exit_pt = recipe.get("exit")
-    if not isinstance(exit_pt, (list, tuple)) or len(exit_pt) != 2:
-        return None
-    ex, ey = _num(exit_pt[0]), _num(exit_pt[1])
-    if recipe.get("exit_derived"):
-        return [_r(_w(ex, extent)), _r(_w(ey, extent))]
-    x, y, w, d = _room_rect(recipe, room)
-    return [_r(_w(x + ex * w, extent)), _r(_w(y + ey * d, extent))]
 
 
 # ── Plates ──────────────────────────────────────────────────────────────
@@ -606,7 +586,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     openings. The hole lands on the door's OWN storey: a hull opens where a
     door is, and a building without one stays shut and is reported instead
     (``_problems``). The old fallback — one 0.8 m door mid in the southernmost
-    piece whenever no room exit projected close enough — is gone.
+    piece whenever no door projected close enough — is gone.
 
     The hole is the door's CLEAR width measured along the contour edge: a door
     meeting the hull at an angle keeps its own width there instead of being
@@ -741,9 +721,9 @@ def _room_walls(recipe: Dict[str, Any], storey: float, k: float,
 
     ``no_walls`` is the per-room opt-out (open zone, pavilion, an area inside
     an area model): NOTHING is emitted — no segments, no window sill or head,
-    no glass. Everything else about the room stays: its plate, its exit, its
-    openings in the ``rooms`` block (the 2D editor keeps drawing them), its
-    markers and its diorama. The BUILDING's contour walls are untouched.
+    no glass. Everything else about the room stays: its plate, its openings
+    in the ``rooms`` block (the 2D editor keeps drawing them), its markers
+    and its diorama. The BUILDING's contour walls are untouched.
     """
     level = int(recipe.get("level") or 0)
     # Room shell walls stand on the ROOM plate (0.10), the contour walls on
@@ -1357,7 +1337,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float, k: float,
     return out
 
 
-# ── Markers, exits, figures ─────────────────────────────────────────────
+# ── Markers, figures ────────────────────────────────────────────────────
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
              k: float, extent: float,
@@ -1586,12 +1566,6 @@ def _rotate_scene(out: Dict[str, Any], k: int, extent: float) -> Dict[str, Any]:
       south-facing figure west, so ``compass_new = (compass + 270 · k) % 360``.
     * A box in ``extras`` keeps its height and swaps its w/d extents on an odd
       number of steps; its ``side`` word rotates N→E→S→W like an edge letter.
-    * ``rooms[].exit`` is rotated ONLY when ``exit_derived``: a derived exit is
-      an ABSOLUTE plan fraction and belongs to the turned scene, while an
-      EXPLICIT exit is a fraction of the ROOM RECTANGLE and its consumer is
-      the 2D editor, which shows the UNROTATED template. Turning it would move
-      the handle the author is dragging. The world-metre ``exits[]`` entry
-      carries the rotated truth for the renderers either way.
     * ``terrain.grid`` is resampled instead of transformed: the field is
       indexed ``grid[j][i]`` at plan fraction ``(i/n, j/n)``, and the rotated
       field must answer ``h_new(u, v) = h_old(rot⁻¹(u, v))`` with the INVERSE
@@ -1685,10 +1659,6 @@ def _rotate_scene(out: Dict[str, Any], k: int, extent: float) -> Dict[str, Any]:
             if marker.get(key) is not None:
                 marker[key] = _r((_num(marker[key]) + 270 * steps) % 360, 1)
 
-    for entry in out.get("exits") or []:
-        if entry.get("at_world"):
-            entry["at_world"] = pt_world(entry["at_world"])
-
     for door in out.get("doorways") or []:
         # The same matrix serves both: ``at_world`` is a point around the tile
         # centre, ``along`` a direction — and the origin IS the centre, so
@@ -1702,10 +1672,6 @@ def _rotate_scene(out: Dict[str, Any], k: int, extent: float) -> Dict[str, Any]:
     for block in out.get("rooms") or []:
         if block.get("outline"):
             block["outline"] = poly_frac(block["outline"])
-        exit_pt = block.get("exit")
-        if block.get("exit_derived") and isinstance(exit_pt, (list, tuple)) \
-                and len(exit_pt) == 2:
-            block["exit"] = poly_frac([exit_pt])[0]
         overlay = block.get("overlay")
         if isinstance(overlay, dict):
             if overlay.get("centre"):
@@ -1797,17 +1763,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         recipes.append(recipe)
         by_room[str(room.get("id") or "")] = room
     levels = _used_levels(recipes)
-
-    exits: List[Dict[str, Any]] = []
-    for recipe in recipes:
-        room = by_room.get(str(recipe.get("room_id") or ""))
-        point = room_exit_world(recipe, room, extent) if room else None
-        if not point:
-            continue
-        entry = {"room_id": recipe.get("room_id") or "", "at_world": point}
-        if recipe.get("exit_derived"):
-            entry["derived"] = True
-        exits.append(entry)
 
     # Thresholds as finished primitives (plan-betreten-und-tueren.md § 4.1) —
     # composed BEFORE the shell, because the shell takes its holes from them
@@ -1964,11 +1919,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         markers.extend(_markers(recipe, room, storey, k, extent, lift))
 
     # Per-room recipe vocabulary in PLAN FRACTIONS — the 2D editor's ghost
-    # openings and derived-exit dot draw from here instead of re-deriving
-    # mirroring/exit locally (v4: no geometry twice). Pure pass-through of
-    # the room recipe: openings are already normalized AND mirrored in,
-    # ``exit`` keeps the recipe's dual frame (explicit = room-rect fraction,
-    # derived = absolute plate fraction, flagged by ``exit_derived``).
+    # openings draw from here instead of re-deriving the mirroring locally
+    # (v4: no geometry twice). Pure pass-through of the room recipe: the
+    # openings are already normalized AND mirrored in.
     room_blocks = []
     for r in recipes:
         block: Dict[str, Any] = {
@@ -1977,8 +1930,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             "always_visible": bool(r.get("always_visible")),
             "outline": r.get("outline") or [],
             "openings": r.get("openings") or [],
-            "exit": r.get("exit"),
-            "exit_derived": bool(r.get("exit_derived")),
         }
         # Zone on the model surface instead of a built room — the consumer
         # takes centre/rect/y from HERE, because there is no plate to read
@@ -2016,7 +1967,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "models": models,
         "figures": _figures(k),
         "markers": markers,
-        "exits": exits,
         # Thresholds as finished primitives (plan-betreten-und-tueren.md
         # § 4.1) — from the same spans the walls are split by, so no consumer
         # ever measures a door back out of the geometry again.

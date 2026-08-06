@@ -3,8 +3,8 @@
  * location editor's "Floor plan" tab. The pane is three columns:
  * [PlanToolbar 44px] [canvas 420px] [PlanSidePanel]. Rooms are drawn as
  * polygon hulls on the building footprint: drag to move, corner handle to
- * resize; the icon toolbar rotates in 90° steps, places the exit and
- * animation markers (spots a figure with a matching animation snaps to —
+ * resize; the icon toolbar rotates in 90° steps, places animation markers
+ * (spots a figure with a matching animation snaps to —
  * kinds from the OPEN clip vocabulary, nothing hardcoded) with one click
  * inside the room, and draws the building outline / places the elevator
  * (AV3D-12). Everything edits the LOCATION draft (rooms[].layout) and is
@@ -86,8 +86,8 @@ interface RoomLayoutEditorProps {
   onSelectRoom?: (roomId: string) => void
   /** The server-composed scene of the current draft (useScenePreview in the
    *  parent, shared with the 3D preview). Its per-room block delivers the
-   *  neighbours' shared-wall openings and the derived exit in plan
-   *  fractions — the editor DRAWS them, it does not derive them. */
+   *  neighbours' shared-wall openings in plan fractions — the editor DRAWS
+   *  them, it does not derive them. */
   scene?: ScenePayload | null
   /** While the calibration figure is on for this room, a plain click inside
    *  it moves the figure (fraction of the room rectangle, UI state only). */
@@ -129,9 +129,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     setElevatorSel(false)
     onSelectRoom?.(id)
   }, [onSelectRoom])
-  // Click-to-place modes: the next click inside the room sets the exit point,
-  // drops an animation marker of the chosen kind, or places a wall opening on
-  // the nearest edge.
+  // Click-to-place modes: the next click inside the room drops an animation
+  // marker of the chosen kind, or places a wall opening on the nearest edge.
   const [clickMode, setClickMode] = useState<PlanMode>('')
   // Prop palette open in the side panel (🪑 tool) — presentation only, the
   // placement logic is not part of this editor yet. The armed prop is just
@@ -387,9 +386,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const anchorMissing = planW <= 0 && (
     rooms.some((r) => r.layout) || !!map3d?.outline?.length)
   // ── Server-composed room vocabulary (contract § B1 `rooms`) ──────────
-  // Shared-wall openings and the derived exit are TRUTH, not cosmetics —
-  // they come from the same scene payload the 3D preview renders, in plan
-  // fractions. The editor draws them; it never re-derives them.
+  // Shared-wall openings are TRUTH, not cosmetics — they come from the same
+  // scene payload the 3D preview renders, in plan fractions. The editor
+  // draws them; it never re-derives them.
   const sceneRooms = useMemo(
     () => new Map((scene?.rooms || []).map((r) => [r.room_id, r] as [string, SceneRoom])),
     [scene])
@@ -629,8 +628,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Close a drawn room hull: bbox becomes x/y/w/d (the legacy client keeps
   // reading only those), the points renormalize to bbox-local [0,1]² with
   // clockwise winding — mirroring the server sanitizer. Redrawing clears the
-  // openings (their edge indices point into the OLD hull); exit and markers
-  // stay (still valid room fractions, one click to adjust).
+  // openings (their edge indices point into the OLD hull); the markers stay
+  // (still valid room fractions, one click to adjust).
   const commitRoomDraft = useCallback(() => {
     if (!drawTarget || outlineDraft.length < 3) return
     const xs = outlineDraft.map((p) => p[0])
@@ -898,9 +897,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     return hits
   }, [propDims])
 
-  // Click-to-place: one click inside a room sets the exit point, drops an
-  // animation marker or a prop placement — all as fractions of the ROOM
-  // rectangle (contract).
+  // Click-to-place: one click inside a room drops an animation marker or a
+  // prop placement — both as fractions of the ROOM rectangle (contract).
   const onRoomClick = useCallback((e: React.MouseEvent, room: Room) => {
     if ((!clickMode && !armedProp && !calibrationRoomId) || !room.id || !room.layout) return
     e.stopPropagation()
@@ -1055,7 +1053,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   }, [selected, updateLayout])
 
   // Rotate the room AS A UNIT (clockwise on the plan): the rectangle swaps
-  // w/d around its centre, exit and markers turn with the content
+  // w/d around its centre, the markers turn with the content
   // ((x,y) -> (1-y, x)), rotation yaws the room MODEL inside the rectangle.
   const rotateSelected = () => {
     const lay = selectedRoom?.layout
@@ -1068,9 +1066,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       d,
       x: r4(clamp(lay.x + (lay.w - w) / 2, 0, 1 - w)),
       y: r4(clamp(lay.y + (lay.d - d) / 2, 0, 1 - d)),
-      ...(lay.exit
-        ? { exit: [r4(1 - lay.exit[1]), r4(lay.exit[0])] as [number, number] }
-        : {}),
       ...(lay.model_at
         ? { model_at: [r4(1 - lay.model_at[1]), r4(lay.model_at[0])] as [number, number] }
         : {}),
@@ -1333,7 +1328,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             deterministic, so a relief without a seed has no identity. */}
         {onMap3d && map3d?.area_detail ? (
           <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Terrain relief: swing of the ground in real metres (0 = flat). A deterministic height field rolls the whole location; the server lifts props, markers and exits onto it, indoor rooms stay level. Outdoor rooms can opt out per room ("Keep flat").')}>
+            title={t('Terrain relief: swing of the ground in real metres (0 = flat). A deterministic height field rolls the whole location; the server lifts props and markers onto it, indoor rooms stay level. Outdoor rooms can opt out per room ("Keep flat").')}>
             ⛰
             <span>{t('Relief (m)')}</span>
             <input
@@ -1480,7 +1475,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         mode={clickMode}
         hasSelection={!!selectedRoom}
         selectionRotation={selectedRoom?.layout?.rotation || 0}
-        hasExit={!!selectedRoom?.layout?.exit}
         hasOutline={!!map3d?.outline?.length}
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
@@ -1495,7 +1489,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onMode={armMode}
         onRotate={rotateSelected}
         onUnplace={() => { updateLayout(selectedRoom?.id || '', null); setSelected('') }}
-        onRemoveExit={() => updateLayout(selectedRoom?.id || '', { exit: undefined })}
         onRemoveOutline={() => onMap3d?.('outline', undefined)}
         onRemoveElevator={() => onMap3d?.('elevator', undefined)}
         onCommitOutline={commitOutline}
@@ -1839,41 +1832,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   {fmtM(lay.w * planW)} × {fmtM(lay.d * planW)} m
                 </span>
               ) : null}
-              {lay.exit ? (
-                <span
-                  title={t('Exit point (override)')}
-                  style={{
-                    position: 'absolute',
-                    left: `calc(${lay.exit[0] * 100}% - 5px)`,
-                    top: `calc(${lay.exit[1] * 100}% - 5px)`,
-                    width: 10, height: 10, borderRadius: '50%',
-                    background: '#e0a356', border: '1px solid #0d1117',
-                    pointerEvents: 'none',
-                  }}
-                />
-              ) : (() => {
-                // No explicit exit: the payload's DERIVED one — an absolute
-                // plate fraction (exit_derived flags the frame), converted
-                // into the room-local fractions this markup positions with.
-                const src = sceneRoom?.exit_derived ? sceneRoom.exit : null
-                const auto: [number, number] | null = src
-                  ? [clamp((src[0] - lay.x) / (lay.w || 1), 0, 1),
-                     clamp((src[1] - lay.y) / (lay.d || 1), 0, 1)]
-                  : null
-                return auto ? (
-                  <span
-                    title={t('Exit (auto — derived from the door)')}
-                    style={{
-                      position: 'absolute',
-                      left: `calc(${auto[0] * 100}% - 5px)`,
-                      top: `calc(${auto[1] * 100}% - 5px)`,
-                      width: 10, height: 10, borderRadius: '50%',
-                      border: '2px dashed #e0a356', boxSizing: 'border-box',
-                      opacity: 0.8, pointerEvents: 'none',
-                    }}
-                  />
-                ) : null
-              })()}
               {/* Diorama-model anchor: positioned in the PLAN like a prop
                   (layout.model_at, default = centre). Drag moves it; the
                   strip below fine-tunes X/Y/height. */}
@@ -2512,7 +2470,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 outdoor rooms too: an open zone with window openings in the
                 plan should still be able to render wall-less. */}
             <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor, exit and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
+              title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
               <input type="checkbox"
                 checked={!lay.no_walls}
                 onChange={(e) => updateLayout(selectedRoom.id || '', {

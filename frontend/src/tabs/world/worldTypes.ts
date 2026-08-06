@@ -1,7 +1,6 @@
 // Floor-plan placement of a room inside its building (AV3D-2). x/y = top-left
 // corner, w/d = width/depth — all fractions of the building footprint; level
-// is the floor (0 = ground, negative = basement); exit is the walk-in/out
-// point as fractions of the ROOM rectangle. Absent = client auto-grid.
+// is the floor (0 = ground, negative = basement). Absent = client auto-grid.
 export interface RoomLayout {
   level?: number
   x: number
@@ -9,7 +8,6 @@ export interface RoomLayout {
   w: number
   d: number
   rotation?: number
-  exit?: [number, number]
   /** Diorama-model anchor as fractions of the room rect (absent = centred)
    *  — the room's 3D model is positioned in the PLAN like a prop. */
   model_at?: [number, number]
@@ -29,13 +27,13 @@ export interface RoomLayout {
    *  ends at the room. Ignored for outdoor rooms. */
   clip_model?: boolean
   /** No recipe walls for this room: the server emits no `walls` entries for
-   *  it at all (open zone, pavilion, an area inside an area model). Plate,
-   *  exit and openings stay; the building outline is unaffected. Absent =
+   *  it at all (open zone, pavilion, an area inside an area model). Plate
+   *  and openings stay; the building outline is unaffected. Absent =
    *  walls, so the editor shows the inverse ("Render walls"). */
   no_walls?: boolean
   /** Height offset of the ROOM in REAL metres, relative to its storey (± ,
    *  × k at render time). Everything in the room rides along: plate, walls,
-   *  props, markers, exit and the diorama. 0 inside a building; it is for
+   *  props, markers and the diorama. 0 inside a building; it is for
    *  rooms that cut a hole into a location model, where the terrain is not
    *  at storey level. */
   floor_offset_y?: number
@@ -212,7 +210,7 @@ export interface Map3D {
 // Re-exported so every existing importer keeps working unchanged.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
-  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
+  SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
   SceneProblem,
 } from '@anima/scene-render'
 

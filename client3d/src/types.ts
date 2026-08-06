@@ -17,7 +17,6 @@ export interface RoomLayout {
   level?: number;          // Etage: 0 = EG, negativ = Keller
   /** Drehung des Raum-Inhalts um die Hochachse in Grad */
   rotation?: number;
-  exit?: [number, number]; // Ausgangspunkt (Fraktion der Raum-Grundfläche)
   markers?: RoomMarker[];  // AV3D-11
   /** Anker des Diorama-Modells als Fraktionen des Raum-Rechtecks
    *  (Nachtrag 2026-07-24); fehlt = zentriert */

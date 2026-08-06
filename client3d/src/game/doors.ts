@@ -104,7 +104,7 @@ export function doorMarkers(payload: ScenePayload | null | undefined,
 /**
  * THE door of one room: the one leading outside, else the first one listed.
  *
- * That is the answer the single exit point used to give badly — it was one
+ * That is the answer the removed single exit point used to give badly — one
  * point per room whatever its doors, and for a room set back from the shell it
  * was not even on a wall. Two consumers ask this: the floor probe of a diorama
  * (`tiles.ts` — a generated mesh has holes in hidden places but not at its

@@ -1497,7 +1497,7 @@ async function startApp(username: string, role: string) {
         // `else` branch above lines it up in FRONT of the building — the whole
         // tavern standing on the doorstep, which is the acceptance finding.
         // So it simply is not drawn until the interior opens; then the room
-        // placement and the exit routing take over unchanged (`inRoom` flips,
+        // placement and the door routing take over unchanged (`inRoom` flips,
         // `shownRoom` sees the transition and walks the figure in through the
         // door). Untouched: characters without a room, always-visible rooms and
         // travellers (they returned above).
@@ -1936,22 +1936,21 @@ async function startApp(username: string, role: string) {
    *  chose, which the room walk then pays for with a second
    *  `/play/enter-room`. The elevator section further down owns the writes. */
   let elevatorRide: { goal: THREE.Vector3; until: number } | null = null;
-  /** Deadline of a doorway walk (E3 acceptance, "walking on the roof"). Same
+  /** Deadline of a walk-in (E3 acceptance, "walking on the roof"). Same
    *  safety net as the ride's, and generous for the same reason: the pace the
    *  figure keeps during it is whatever it walked in with. */
-  const DOOR_WALK_MS = 4000;
-  /** Distance that counts as "arrived at the door" — XZ only. Unlike the lift
-   *  there is no vertical ride to wait for: the goal already carries the room
-   *  floor and `tick()` blends the height while the figure walks. */
-  const DOOR_ARRIVE = 0.3;
-  /** The running doorway walk, and it owns the figure exactly as the ride
-   *  does: a granted step into a building puts the avatar in that building's
-   *  entry room (the server says so in its answer), and the figure has to
-   *  arrive there through the door instead of walking on across the shell.
-   *  One steering frame would overwrite the goal, so the hook keeps its hands
-   *  off until the figure stands at the door point. Written below in
-   *  `enterThroughDoor`. */
-  let doorWalk: { goal: THREE.Vector3; until: number } | null = null;
+  const WALK_IN_MS = 4000;
+  /** Distance that counts as "arrived" — XZ only. Unlike the lift there is no
+   *  vertical ride to wait for: the goal already carries the ground height and
+   *  `tick()` blends it while the figure walks. */
+  const WALK_IN_ARRIVE = 0.3;
+  /** The running walk-in, and it owns the figure exactly as the ride does: an
+   *  entry granted at a boundary opening leaves the figure short of the cell
+   *  line, and it has to walk in THROUGH the opening instead of lingering
+   *  where the authority check snaps it back from. One steering frame would
+   *  overwrite the goal, so the hook keeps its hands off until the figure
+   *  stands at the point. Written below in `enterOfferedLocation`. */
+  let walkIn: { goal: THREE.Vector3; until: number } | null = null;
   /** Cell our own step aims at (or came back to after a refusal) — the
    *  authority check must not read it as foreign movement. It is consumed by
    *  the FIRST worldmap poll after the request ended (see
@@ -2003,12 +2002,8 @@ async function startApp(username: string, role: string) {
       // step back out then earns a `not_at_entry_room` 403.
       // An empty room_id is the location's GROUND, not a missing answer — it
       // must overwrite roomOf unconditionally, or the avatar keeps the room
-      // of the location it just left. `enterThroughDoor` stays gated on an
-      // actual room, since there is no door onto the ground to walk through.
+      // of the location it just left.
       roomOf.set(avatarName, moved.room_id ?? '');
-      if (moved.room_id) {
-        enterThroughDoor(to, moved.room_id);
-      }
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
       rejectedUntil.set(`${to.gx},${to.gy}`, performance.now() + REJECT_MEMORY_MS);
@@ -2057,36 +2052,6 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  /**
-   * Walk into a building through its DOOR (E3 acceptance, "Zur Rosinante").
-   *
-   * A granted step into another location puts the avatar in that location's
-   * entry room — the server's answer names it. The figure, though, is standing
-   * on the cell boundary and would keep walking straight ahead: over the
-   * building's shell, past every wall, into a room from the wrong side. The
-   * entry room's exit point is where the door is (`tile.roomExits`, the same
-   * point the NPC exit routing walks through, `computeNpcStates`), so the
-   * figure is sent there and the walking hook keeps its hands off until it
-   * arrives — the ownership the lift ride already needs, for the same reason.
-   *
-   * A tile without a layout for that room (no scene, an outdoor location)
-   * keeps the old behaviour: nothing to enter through, nothing to own.
-   */
-  function enterThroughDoor(cell: Cell, roomId: string) {
-    const tile = tileAtCell(cell);
-    // Only where there is an interior to enter — the same condition the view
-    // opens one on. Walking onto passable ground (a street, a park with
-    // zones) must not take the steering away for a second: there the avatar
-    // is simply outdoors, wherever the player walks.
-    if (!tile?.isBuilding || !tile.interior) return;
-    // Centre as the fallback: an entry room without a derived exit (an outdoor
-    // room, an overlay zone) still has a place the avatar belongs at.
-    const point = tile.roomExits.get(roomId) ?? tile.roomCenters.get(roomId);
-    if (!point) return;
-    npcs.setPlayerTarget(avatarName, point.clone());
-    doorWalk = { goal: point.clone(), until: performance.now() + DOOR_WALK_MS };
-  }
-
   // --- Click to walk (E3-T4) ------------------------------------------------
   // A ground click plans a route ONCE (game/clickmove.ts); walking it is the
   // same frame hook, the same cell boundaries and the same step requests as
@@ -2126,11 +2091,11 @@ async function startApp(username: string, role: string) {
   engine.onGroundClick = (x, y) => {
     const state = getGameState();
     // Overview mode is untouched: there a click stays a tile pick. A running
-    // lift ride or doorway walk owns the figure, so no new order is planned
-    // during those either — a route planned from the old position would walk
-    // the figure back out of the door it just came through.
+    // lift ride or walk-in owns the figure, so no new order is planned during
+    // those either — a route planned from the old position would walk the
+    // figure back out of the opening it just came through.
     if (state.mode !== 'embodied' || state.movementLocked
-      || elevatorRide || doorWalk) return false;
+      || elevatorRide || walkIn) return false;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return false;
     // The click is read against the plane the FIGURE stands on, not against
@@ -2193,7 +2158,7 @@ async function startApp(username: string, role: string) {
       askedEdge = null;
       expectedCell = null;
       elevatorRide = null;   // ditto for a ride nobody is in any more
-      doorWalk = null;       // …and for a doorway nobody is walking through
+      walkIn = null;         // …and for a walk-in nobody is walking
       return;
     }
     // Party follower: the leader carries the avatar along; the server refuses
@@ -2217,16 +2182,16 @@ async function startApp(username: string, role: string) {
       if (!arrived && performance.now() <= elevatorRide.until) return;
       elevatorRide = null;
     }
-    // A doorway walk owns the figure the same way: the step was granted, the
-    // avatar is in the building's entry room, and the figure walks to that
-    // room's door point. Steering during it is what put the avatar on the
-    // shell — the very finding this exists for. XZ only, the height is the
-    // room floor and `tick()` blends it on the way.
-    if (doorWalk) {
-      const arrived = Math.hypot(doorWalk.goal.x - pos.x, doorWalk.goal.z - pos.z)
-        < DOOR_ARRIVE;
-      if (!arrived && performance.now() <= doorWalk.until) return;
-      doorWalk = null;
+    // A walk-in owns the figure the same way: the entry was granted and the
+    // figure walks in through the boundary opening. Steering during it is
+    // what left the avatar on the cell line — the very finding this exists
+    // for. XZ only, the height is the ground and `tick()` blends it on the
+    // way.
+    if (walkIn) {
+      const arrived = Math.hypot(walkIn.goal.x - pos.x, walkIn.goal.z - pos.z)
+        < WALK_IN_ARRIVE;
+      if (!arrived && performance.now() <= walkIn.until) return;
+      walkIn = null;
     }
     // Pace of the SIZE the figure is drawn at (E3 fix): indoors it stands at
     // the room scale, where a world metre is not a figure metre — unscaled,
@@ -2552,7 +2517,7 @@ async function startApp(username: string, role: string) {
     if (!segments) {
       // The payload is TILE-LOCAL (world metres around the tile centre), the
       // figure position is absolute — so the centre is baked in here, exactly
-      // as `mountScene` bakes it into room centres, exits, markers and the
+      // as `mountScene` bakes it into room centres, doorways, markers and the
       // wall mids of the culling. Without it the segments of a building on
       // grid (4,2) sit 45 m from the figure and nothing ever blocks.
       segments = wallSegments(scene, level,
@@ -2927,7 +2892,7 @@ async function startApp(username: string, role: string) {
       if (!t || t.loc.id === myLoc || !openable(t)) continue;
       // Openings come TILE-LOCAL from the payload (world metres around the
       // tile centre, § B1 Nr. 13) — the centre is added here exactly as the
-      // exits and markers get it added in mountScene. The EDGE rides along:
+      // doorways and markers get it added in mountScene. The EDGE rides along:
       // only the one the step crosses is a way in, and the rule filters on
       // it (the payload's letter is already the world edge, rotation
       // applied).
@@ -2957,16 +2922,14 @@ async function startApp(username: string, role: string) {
 
   /** Perform the offered entry: the entry-room chain of the location one is
    *  LEAVING first (the same 2D gate the walking hook walks), then the one
-   *  step request, then the walk-in — through the door for buildings
-   *  (requestStep already routes that via the answered room), towards the
-   *  nearest opening for an area location (it has no door point). */
+   *  step request, then the walk-in towards the nearest boundary opening. */
   async function enterOfferedLocation() {
     const offer = enterOffer;
     const state = getGameState();
     if (!offer || state.mode !== 'embodied' || state.movementLocked) return;
     // The one step/room machine: nothing may overlap a running request or a
     // guided movement — the same interlocks the walking hook honours.
-    if (stepInFlight || roomRequestInFlight || elevatorRide || doorWalk) return;
+    if (stepInFlight || roomRequestInFlight || elevatorRide || walkIn) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     const here = cellOf(pos.x, pos.z, CELL);
@@ -2983,10 +2946,9 @@ async function startApp(username: string, role: string) {
     // Granted, but the figure still stands short of the boundary — unlike a
     // WASD step, where it is already walking. Without a walk-in the figure
     // would linger on the old cell and the authority check would snap it to
-    // the tile centre two polls later. Buildings got their door walk from
-    // requestStep; everything else aims at the nearest opening, one step
-    // inward (`inward` is the payload's unit normal), or the cell centre.
-    if (!doorWalk) {
+    // the tile centre two polls later. It aims at the nearest opening, one
+    // step inward (`inward` is the payload's unit normal), or the cell centre.
+    if (!walkIn) {
       const target = tiles.get(offer.locId);
       if (!target) return;
       let goal: { x: number; z: number } | null = null;
@@ -3000,7 +2962,7 @@ async function startApp(username: string, role: string) {
       goal = goal ?? { x: target.center.x, z: target.center.z };
       const g = new THREE.Vector3(goal.x, groundY(goal.x, goal.z), goal.z);
       npcs.setPlayerTarget(avatarName, g);
-      doorWalk = { goal: g.clone(), until: performance.now() + DOOR_WALK_MS };
+      walkIn = { goal: g.clone(), until: performance.now() + WALK_IN_MS };
     }
   }
 

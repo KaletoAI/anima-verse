@@ -35,7 +35,7 @@ const tierOf = (spec: SceneModelSpec, tiers: SceneTiers): ModelTier =>
  * ONE endpoint delivers the complete scene of a location as finished
  * primitives (plates/walls/extras) and placement specs (models). This module
  * renders them and makes not a single geometry decision of its own: no
- * opening split, no mirroring, no exit derivation, no elevator dimensions, no
+ * opening split, no mirroring, no door measuring, no elevator dimensions, no
  * constants (0.07 / 0.14 / 0.12 / ±0.4 …) and no colours. All of that comes
  * from the payload.
  *
@@ -631,16 +631,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     }
   }
 
-  // ── Ausgänge & Marker: fertig in Weltkoordinaten ────────────────────────
-  for (const exit of scene.exits) {
-    const id = exit.room_id;
-    if (!id) continue;
-    const y = (roomPlateTop.get(id) ?? floorYof.get(roomLevel.get(id) ?? 0) ?? 0) + 0.01;
-    const world = tile.center.clone().add(new THREE.Vector3(exit.at_world[0], y, exit.at_world[1]));
-    tile.roomExits.set(id, world);
-    const name = nameOf.get(id);
-    if (name) tile.roomExits.set(name, world);
-  }
+  // ── Türen & Marker: fertig in Weltkoordinaten ───────────────────────────
   // THE door of each room, for the floor sampling's reference ray: the one
   // leading outside, else the first the payload lists (`roomDoor`, the same
   // rule the walk uses). Read, never derived (plan-betreten-und-tueren.md
@@ -1084,7 +1075,6 @@ export function unmountScene(tile: Tile): void {
   tile.interiorLabels = [];
   tile.roomGroups.clear();
   tile.roomCenters.clear();
-  tile.roomExits.clear();
   tile.roomDoors.clear();
   tile.roomSlots.clear();
   tile.roomSpots.clear();

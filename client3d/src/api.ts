@@ -2,7 +2,7 @@ import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types'
 // Imported locally as well: the re-export further down only exposes the types
 // outwards, the parsing helpers here need them in their own scope.
 import type {
-  SceneBoundaryOpening, SceneDoorway, SceneExit, SceneExtra, SceneMarker,
+  SceneBoundaryOpening, SceneDoorway, SceneExtra, SceneMarker,
   SceneModelSpec, ScenePayload, ScenePlate, SceneProblem, SceneRoom,
   SceneTerrain, SceneWall,
 } from '@anima/scene-render';
@@ -308,7 +308,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 // gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneTerrain,
-  SceneMarker, SceneExit, SceneStyle, SceneRoom, ModelTier, SceneBoundaryOpening,
+  SceneMarker, SceneStyle, SceneRoom, ModelTier, SceneBoundaryOpening,
   SceneDoorway, SceneProblem,
   /** hiess hier frueher ApiOpening */
   SceneOpening,
@@ -343,7 +343,6 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     models: arr<SceneModelSpec>(data.models),
     figures: data.figures ?? { base_height_m_world: 1.7, stand_clearance: 0.12 },
     markers: arr<SceneMarker>(data.markers),
-    exits: arr<SceneExit>(data.exits),
     // Thresholds as finished primitives (plan-betreten-und-tueren.md § 4.1):
     // they pass through untouched — nothing here clamps, scales or measures a
     // door, that is the whole point of the block.

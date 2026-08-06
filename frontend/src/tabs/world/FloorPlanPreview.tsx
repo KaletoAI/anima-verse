@@ -3,8 +3,8 @@
  * to the floor-plan editor. Since v4 it is CONSUMER No. 1 of the server's
  * scene recipe (shared/schnittstellen-3d.md part B): the current editor
  * draft goes to POST /play/scene-preview and what comes back is rendered as
- * it is — plates, walls, extras, model placement specs, figures, markers and
- * exits, all in world metres around the tile centre.
+ * it is — plates, walls, extras, model placement specs, figures and markers,
+ * all in world metres around the tile centre.
  *
  * That means: NO geometry decision lives here any more. Wall thickness, door
  * gaps, fit factors, storey heights, figure scale and the colour vocabulary
@@ -45,7 +45,6 @@ const DEFAULT_STOREY_REAL_M = 3
 // walls, floors, glass and the room palette): these paint things only the
 // admin preview shows. Elevator colours come from the payload's style block.
 const AID = {
-  exit: 0xe0a356,
   marker: 0x3fb950,
   markerLabel: '#7ee2a0',
   placeholder: 0xd29922,
@@ -122,7 +121,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   const [showBuilding, setShowBuilding] = useState(false)
   // "Walls & floor" overlay — the client's render recipe (schnittstellen
   // → "Render-Rezept Wände & Boden"): outline floor plates + outer walls
-  // with door gaps at the ground-floor exits.
+  // with door gaps at the ground-floor doors.
   // Plates and walls ARE the scene — having them off by default meant the
   // preview opened without the room floors, which is the reference you dial
   // heights against (user finding 2026-07-28).
@@ -833,22 +832,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       boxes.add(roomGroup)
     })
 
-    // ── Exits and markers (payload, world coordinates) ─────────────────
-    // Exit points: the payload resolves explicit AND derived exits into one
-    // frame — the preview only draws the dot.
+    // ── Markers (payload, world coordinates) ──────────────────────────
     const levelOfRoom = new Map<string, number>(
       current.filter((r) => r.id && r.layout)
         .map((r) => [r.id as string, r.layout!.level || 0]))
-    for (const exit of sc?.exits || []) {
-      const lv = levelOfRoom.get(exit.room_id)
-      if (lv === undefined || !visibleLevel(lv)) continue
-      const dot = new THREE.Mesh(
-        new THREE.SphereGeometry(0.16, 12, 12),
-        new THREE.MeshBasicMaterial({ color: AID.exit }),
-      )
-      dot.position.set(exit.at_world[0], lv * lhEff + 0.25, exit.at_world[1])
-      boxes.add(dot)
-    }
     // Calibration figure (§ B2a): the FIXED 1.70 m reference INSIDE the room
     // — the admin dials width_m until the furniture matches it, and walk_y
     // until it stands on the visible floor. It never scales with either.
@@ -1525,7 +1512,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           type="button"
           className={`ga-btn ga-btn-sm${showWalls ? ' ga-btn-primary' : ''}`}
           onClick={() => setShowWalls((v) => !v)}
-          title={t('Walls & floor — render the outline floor plates and outer walls exactly like the game client (doors at the ground-floor exits; walls facing the camera hide). Needs a drawn outline.')}
+          title={t('Walls & floor — render the outline floor plates and outer walls exactly like the game client (doors at the ground-floor doorways; walls facing the camera hide). Needs a drawn outline.')}
         >
           🧱
         </button>

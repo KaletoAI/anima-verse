@@ -43,7 +43,6 @@ interface PlanToolbarProps {
   /** A room WITH a layout is selected — the room tools work on it. */
   hasSelection: boolean
   selectionRotation: number
-  hasExit: boolean
   /** The building outline exists in the map3d draft. */
   hasOutline: boolean
   /** Points collected in the running draft (room hull or building outline). */
@@ -65,7 +64,6 @@ interface PlanToolbarProps {
   onRotate: () => void
   onFitToModel: () => void
   onUnplace: () => void
-  onRemoveExit: () => void
   onRemoveOutline: () => void
   onRemoveElevator: () => void
   onCommitOutline: () => void
@@ -76,10 +74,10 @@ interface PlanToolbarProps {
 }
 
 export function PlanToolbar({
-  mode, hasSelection, selectionRotation, hasExit, hasOutline,
+  mode, hasSelection, selectionRotation, hasOutline,
   outlineDraftLen, hasElevator, building, noAnchor, canSuggest,
   canFitToModel, canCurve, onFitToModel,
-  propsOpen, onMode, onRotate, onUnplace, onRemoveExit,
+  propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
 }: PlanToolbarProps) {
@@ -161,14 +159,14 @@ export function PlanToolbar({
           disabled={!hasSelection || noAnchor}
           onClick={() => onMode('draw-room')}
           title={noAnchor ? anchorTip
-            : t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, exit and markers stay.')}
+            : t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, markers stay.')}
         />
       )}
       <Tool
         icon="↻"
         disabled={!hasSelection}
         onClick={onRotate}
-        title={t('Rotate the room 90° clockwise — hull, exit point and 3D model turn together. Now: {deg}°')
+        title={t('Rotate the room 90° clockwise — hull, markers and 3D model turn together. Now: {deg}°')
           .replace('{deg}', String(selectionRotation))}
       />
       <Tool
@@ -190,7 +188,7 @@ export function PlanToolbar({
         active={mode === 'door'}
         disabled={!hasSelection}
         onClick={() => onMode('door')}
-        title={t('Door — then click a room edge; on a shared wall it opens BOTH rooms, and the exit derives from it automatically. Drag it along the edge, edit it below.')}
+        title={t('Door — then click a room edge; on a shared wall it opens BOTH rooms. Drag it along the edge, edit it below.')}
       />
       <Tool
         icon="🪟"
@@ -199,14 +197,6 @@ export function PlanToolbar({
         onClick={() => onMode('window')}
         title={t('Window — then click a room edge (sill 0.9 m, edit below). Exterior walls open to the outside.')}
       />
-      {hasExit ? (
-        <Tool
-          icon="🗑"
-          danger
-          onClick={onRemoveExit}
-          title={t('Remove the exit override — the exit derives from the doors again (or the client falls back without any).')}
-        />
-      ) : null}
       <Tool
         icon="✨"
         disabled={!canSuggest || noAnchor}

@@ -44,6 +44,6 @@ export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
-  SceneMarker, SceneExit, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
+  SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
   SceneBoundaryOpening, SceneDoorway, SceneProblem,
 } from './types'

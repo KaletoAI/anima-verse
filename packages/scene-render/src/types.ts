@@ -174,12 +174,6 @@ export interface SceneMarker {
   source: 'room' | 'prop'
 }
 
-export interface SceneExit {
-  room_id: string
-  at_world: [number, number]
-  derived?: boolean
-}
-
 /** Gemeinsames Farb-Vokabular beider Renderer — keine Hex-Konstanten hier. */
 export interface SceneStyle {
   wall_color: string
@@ -221,18 +215,13 @@ export interface SceneOpening {
 }
 
 /** Raum-Vokabular in PLAN-FRAKTIONEN — was der 2D-Editor zum ZEICHNEN
- *  braucht; im 3D-Client nur als Raum-Verzeichnis (Etage, Outdoor-Flag).
- *  `exit` trägt den Doppelrahmen des Rezepts: explizit = Fraktion des
- *  Raum-RECHTECKS, abgeleitet = absolute Plattenfraktion (`exit_derived`
- *  sagt, welcher gilt). */
+ *  braucht; im 3D-Client nur als Raum-Verzeichnis (Etage, Outdoor-Flag). */
 export interface SceneRoom {
   room_id: string
   level: number
   always_visible: boolean
   outline: [number, number][]
   openings?: SceneOpening[]
-  exit?: [number, number] | null
-  exit_derived?: boolean
   /** Flächen-Locations: dieser Outdoor-Raum liegt AUF der Modelloberfläche
    *  statt gebaut zu werden — es gibt weder Platte noch Wände, also kommen
    *  Mitte, Rechteck und Höhe (alles Welt-Meter) von hier. Fehlt = normaler
@@ -345,7 +334,6 @@ export interface ScenePayload {
   models: SceneModelSpec[]
   figures: { base_height_m_world: number; stand_clearance: number }
   markers: SceneMarker[]
-  exits: SceneExit[]
   /** Every walkable threshold of the location (§ 4.1) — always present, empty
    *  when the location has no door at all. */
   doorways: SceneDoorway[]
