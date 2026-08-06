@@ -350,17 +350,30 @@ export class NpcManager {
     if (!this.figures) return;
     for (const [name, npc] of this.npcs) {
       if (!npc.figure) continue;
+      // The steered figure is the one thing the player looks at permanently,
+      // and the follow camera hovers right around the band — distance
+      // switching would rebuild it over and over. Always full.
+      if (name === this.playerDriven) {
+        this.figures.setFigureTier(name, 'full');
+        continue;
+      }
       const d = cameraPos.distanceTo(npc.root.position);
       if (d < near) this.figures.setFigureTier(name, 'full');
       else if (d > far) this.figures.setFigureTier(name, 'low');
     }
   }
 
+  /** Scale to seed a REBUILT figure with, so a model swap (outfit, tier)
+   *  does not restart the scale lerp at 1 — the visible "grows, then
+   *  shrinks back" pump on every rebuild. */
+  private rebuildScale = new Map<string, number>();
+
   /** NPC verwerfen, damit er beim nächsten update() neu gebaut wird —
    *  z.B. wenn sein 3D-Modell vom Server nachgeladen wurde. */
   rebuild(charName: string) {
     const npc = this.npcs.get(charName);
     if (!npc) return;
+    this.rebuildScale.set(charName, npc.root.scale.x);
     this.group.remove(npc.root);
     if (npc.travelLine) this.group.remove(npc.travelLine);
     npc.label.element.remove();
@@ -378,6 +391,14 @@ export class NpcManager {
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
+        // A REBUILT figure (model swap) inherits its predecessor's scale, so
+        // the lerp toward targetScale continues instead of restarting at 1 —
+        // the visible size pump on every swap.
+        const seed = this.rebuildScale.get(st.char.name);
+        if (seed !== undefined) {
+          npc.root.scale.setScalar(seed);
+          this.rebuildScale.delete(st.char.name);
+        }
         // The figure only arrived now, but the player has been steering since
         // before it existed — `setPlayerDriven` found nothing to write then.
         if (st.char.name === this.playerDriven) this.takeOver(npc);
