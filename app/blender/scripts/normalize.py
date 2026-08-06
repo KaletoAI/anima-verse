@@ -11,7 +11,14 @@ rule behind ``scene_recipe.py``: geometry lives in exactly one place.
 Height basis (plan-blender-veredelung.md § 2.0, decided 2026-08-06): a Mixamo
 rig is measured at its CROWN JOINT (``HeadTop_End``) — hair, hats and horns
 above the crown must not shrink the body, which is exactly what a bounding-box
-scale does. Anything without that joint (generic rigs, props) keeps the box.
+scale does. The gateway's 52-joint rigs END AT ``Head`` (no crown joint), so
+for them the crown is ESTIMATED: measured over the whole store (73 models,
+2026-08-07), the head joint sits at median 0.877 of the visual height with a
+0.82..0.92 spread — the estimate ``(head - floor) / 0.875`` is therefore only
+trusted when the box is CLEARLY taller than anatomy allows (head ratio below
+0.80, i.e. headwear adds more than ~9 %); inside the normal band the box is
+exact and anatomy would only add noise. Anything without a head joint
+(generic rigs, props) keeps the box.
 
 Steps, in order:
 
@@ -77,19 +84,31 @@ def _joints():
                if o.type == "ARMATURE")
 
 
-def _crown_z():
-    """World height of the Mixamo crown joint, or None without one.
+# The head joint's anatomical share of standing height, and the band below
+# which a bounding box is considered inflated by headwear — both derived from
+# the 2026-08-07 store survey (see the module docstring).
+HEAD_SHARE = 0.875
+HEAD_RATIO_TRUSTED = 0.80
 
-    ``HeadTop_End`` sits on top of the skull in the Mixamo-52 skeleton — the
-    body ends there; whatever the box holds above it is hair or headgear."""
+
+def _head_joints():
+    """(crown_z, head_z) world heights — either may be None.
+
+    ``HeadTop_End`` is the exact crown where a rig has one; ``Head`` (the
+    skull base) is what the gateway's 52-joint rigs end at and feeds the
+    estimate."""
+    crown = head = None
     for arm in bpy.context.scene.objects:
         if arm.type != "ARMATURE":
             continue
         for bone in arm.data.bones:
             name = bone.name.lower().replace(":", "").replace("_", "")
+            z = (arm.matrix_world @ bone.head_local).z
             if "headtopend" in name:
-                return (arm.matrix_world @ bone.head_local).z
-    return None
+                crown = z
+            elif name.endswith("head"):
+                head = z
+    return crown, head
 
 
 def _snapshot(bounds):
@@ -121,9 +140,18 @@ def normalize(args):
     before = _snapshot(bounds)
     lo, hi = bounds
 
-    crown = _crown_z()
-    basis = "crown" if crown is not None and crown > lo.z + 1e-6 else "bbox"
-    height_now = (crown - lo.z) if basis == "crown" else (hi.z - lo.z)
+    crown, head = _head_joints()
+    box_height = hi.z - lo.z
+    if crown is not None and crown > lo.z + 1e-6:
+        basis, height_now = "crown", crown - lo.z
+    elif (head is not None and box_height > 1e-6
+          and (head - lo.z) / box_height < HEAD_RATIO_TRUSTED):
+        # The box is taller than anatomy allows — headwear. Estimate the
+        # crown from the head joint instead of letting the box shrink the
+        # body (the Ondina case: box 2.33 m, head at 0.65 of it).
+        basis, height_now = "head-est", (head - lo.z) / HEAD_SHARE
+    else:
+        basis, height_now = "bbox", box_height
     if height_now <= 1e-6:
         raise ValueError("model has no measurable height")
     scale = target / height_now
