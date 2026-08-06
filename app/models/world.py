@@ -1145,6 +1145,163 @@ def migrate_ground_rooms_once() -> Dict[str, int]:
     return counts
 
 
+# === Exit point -> door opening (plan-betreten-und-tueren.md § 6) ===
+# The editor's standard door — OPENING_DEFAULT in
+# frontend/src/tabs/world/planGeometry.ts. Change both or neither.
+EXIT_DOOR_WIDTH_M = 1.0
+EXIT_DOOR_HEIGHT_M = 2.1
+
+
+def project_exit_to_opening(
+        layout: Any,
+        plan_width_m: float = 0.0) -> Optional[Dict[str, Any]]:
+    """The door a stored ``layout.exit`` becomes — or None.
+
+    A pure function. ``exit`` is a point in fractions of the room RECTANGLE;
+    it is clamped into that rectangle, converted to ABSOLUTE plate fractions
+    (the frame of x/y/w/d, in which a distance is proportional to real metres
+    — the bbox-local frame is not, it stretches u by w and v by d) and
+    projected onto the nearest edge of the room hull. The hull is the drawn
+    ``outline`` or, absent that, the implicit unit square with the edge
+    indices 0=N, 1=E, 2=S, 3=W; the result carries the edge INDEX, the way
+    the editor writes openings.
+
+    None — nothing is invented — when:
+    - the layout has no usable rectangle or no ``exit``,
+    - the target edge already carries a walkable opening (door/passage; a
+      window is not a way out), letters and indices read alike,
+    - the target edge is curved (openings on curved edges are rejected on
+      save, and a neighbouring edge would be the wrong wall),
+    - the target edge is shorter than the standard door.
+
+    ``plan_width_m`` is the location's scale anchor (``map3d.plan_width_m``);
+    without it the recipe's unanchored assumption applies. It decides how wide
+    the door is IN PLATE FRACTIONS, hence whether it fits and how far its
+    centre is pushed off a corner.
+    """
+    from app.core.room_recipe import (  # local: keeps world.py import-light
+        _UNANCHORED_PLAN_WIDTH_M, _WALKABLE_TYPES, _abs_outline,
+        _normalize_opening, _unit_edge)
+
+    if not isinstance(layout, dict):
+        return None
+    ex = layout.get("exit")
+    if not isinstance(ex, (list, tuple)) or len(ex) != 2:
+        return None
+    try:
+        u = min(max(float(ex[0]), 0.0), 1.0)
+        v = min(max(float(ex[1]), 0.0), 1.0)
+        px = float(layout["x"]) + u * float(layout["w"])
+        py = float(layout["y"]) + v * float(layout["d"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    outline = _abs_outline(layout)
+    if len(outline) < 3:
+        return None
+
+    best = None  # (distance², edge index, at, edge length)
+    for i in range(len(outline)):
+        edge = _unit_edge(outline, i)
+        if not edge:
+            continue
+        ax, ay, ux, uy, length = edge
+        t = min(max((px - ax) * ux + (py - ay) * uy, 0.0), length)
+        qx, qy = ax + ux * t, ay + uy * t
+        dist2 = (px - qx) ** 2 + (py - qy) ** 2
+        if best is None or dist2 < best[0]:
+            best = (dist2, i, t / length, length)
+    if best is None:
+        return None
+    _, index, at, span = best
+
+    for curve in layout.get("outline_curves") or []:
+        if isinstance(curve, dict) and curve.get("edge") == index:
+            return None
+    for op in layout.get("openings") or []:
+        if not isinstance(op, dict) or op.get("type") not in _WALKABLE_TYPES:
+            continue
+        if _normalize_opening(op).get("edge") == index:
+            return None
+
+    planw = float(plan_width_m or 0) or _UNANCHORED_PLAN_WIDTH_M
+    door = EXIT_DOOR_WIDTH_M / planw
+    if span < door:
+        return None
+    half = (door / 2) / span
+    return {
+        "edge": index,
+        "at": round(min(max(at, half), 1.0 - half), 4),
+        "type": "door",
+        "width_m": EXIT_DOOR_WIDTH_M,
+        "height_m": EXIT_DOOR_HEIGHT_M,
+        "sill_m": 0.0,
+    }
+
+
+def migrate_room_exits_once() -> Dict[str, int]:
+    """One-time, idempotent: every stored exit point becomes a door.
+
+    The doors are the way in and out (plan-betreten-und-tueren.md § 4/§ 6),
+    so a room that only had an exit point gets a door where that point sat.
+    Afterwards ``exit`` is REMOVED from the layout — that is the idempotency,
+    a second run finds nothing left to migrate — and no reader falls back to
+    it.
+
+    The counts come back so the boot log can state them: ``rooms`` carried an
+    exit, ``openings`` were created, ``skipped`` had a walkable opening on
+    that wall already (or no wall with room for a door), ``broken`` had no
+    usable hull at all. Guarded by a world_kv marker.
+    """
+    counts = {"rooms": 0, "openings": 0, "skipped": 0, "broken": 0}
+    if get_world_setting("migration.room_exit_doors_v1", "") == "done":
+        return counts
+    try:
+        from app.core.room_recipe import _abs_outline
+
+        data = _load_world_data()
+        changed = False
+        for loc in data.get("locations", []):
+            map3d = loc.get("map3d")
+            plan_width_m = 0.0
+            if isinstance(map3d, dict):
+                try:
+                    plan_width_m = float(map3d.get("plan_width_m") or 0)
+                except (TypeError, ValueError):
+                    plan_width_m = 0.0
+            for room in loc.get("rooms") or []:
+                if not isinstance(room, dict):
+                    continue
+                layout = room.get("layout")
+                if not isinstance(layout, dict) or layout.get("exit") is None:
+                    continue
+                counts["rooms"] += 1
+                opening = project_exit_to_opening(layout, plan_width_m)
+                if opening:
+                    layout.setdefault("openings", []).append(opening)
+                    counts["openings"] += 1
+                elif len(_abs_outline(layout)) < 3:
+                    counts["broken"] += 1
+                    logger.warning(
+                        "exit-door migration: room %s of location %s has an "
+                        "exit but no usable hull — dropped",
+                        room.get("id", ""), loc.get("id", ""))
+                else:
+                    counts["skipped"] += 1
+                layout.pop("exit", None)
+                changed = True
+        if changed:
+            _save_world_data(data)
+        set_world_setting("migration.room_exit_doors_v1", "done")
+        logger.info(
+            "exit-door migration: %d room(s) with an exit point, %d door(s) "
+            "created, %d skipped, %d without a hull",
+            counts["rooms"], counts["openings"], counts["skipped"],
+            counts["broken"])
+    except Exception as e:
+        logger.warning("exit-door migration failed: %s", e)
+    return counts
+
+
 def get_location_name(location_id: str) -> str:
     """Gibt den Namen eines Ortes anhand seiner ID zurueck.
 

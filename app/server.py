@@ -243,6 +243,18 @@ async def lifespan(app: FastAPI):
     except Exception as _gre:
         logger.debug("ground-room migration failed: %s", _gre)
 
+    # Migration: a stored exit point becomes a door opening on the nearest
+    # wall — the doors are the way in and out now
+    # (plan-betreten-und-tueren.md § 6). Idempotent (the exit is removed),
+    # world_kv-marked.
+    try:
+        from app.models.world import migrate_room_exits_once
+        _rx = migrate_room_exits_once()
+        if any(_rx.values()):
+            logger.info("Exit-door migration: %s", _rx)
+    except Exception as _rxe:
+        logger.debug("exit-door migration failed: %s", _rxe)
+
     # Initialisiere Multi-Channel Support
     logger.info("Initialisiere Multi-Channel Support...")
     initialize_channels()
