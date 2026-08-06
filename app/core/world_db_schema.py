@@ -581,6 +581,22 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_cpv_char ON character_pose_variants (character_name)",
     "CREATE INDEX IF NOT EXISTS idx_cpv_lru ON character_pose_variants (character_name, last_used_at)",
 
+    # ── Pose/Expression catalog candidates (plan-pose-katalog.md) ─────────
+    # Free text that could NOT be mapped onto a catalog entry is logged here
+    # instead of silently becoming a render key. The admin reviews the list
+    # and either extends the catalog or dismisses the entry.
+    """CREATE TABLE IF NOT EXISTS pose_candidates (
+        axis        TEXT NOT NULL CHECK(axis IN ('pose','expression')),
+        raw_text    TEXT NOT NULL,
+        nearest_key TEXT NOT NULL DEFAULT '',
+        distance    REAL,
+        count       INTEGER NOT NULL DEFAULT 1,
+        status      TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','dismissed')),
+        first_seen  TEXT NOT NULL,
+        last_seen   TEXT NOT NULL,
+        PRIMARY KEY (axis, raw_text)
+    )""",
+
     # ── LLM Call Statistik (fuer Dauer-Schaetzung + Admin-Auswertung) ──
     """CREATE TABLE IF NOT EXISTS llm_call_stats (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
