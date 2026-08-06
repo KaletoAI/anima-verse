@@ -33,6 +33,27 @@ def get_current_user_from_ctx() -> Optional[Dict[str, Any]]:
     return current_user_ctx.get()
 
 
+def _sets_session_cookie(response) -> bool:
+    """Does this response already carry a Set-Cookie for the session cookie?
+
+    The route runs BEFORE the sliding re-issue below, so whatever it wrote for
+    that cookie would be followed by a second Set-Cookie of the same name — and
+    the browser keeps the LAST one. On /auth/logout that turns the route's
+    delete into a re-issue of the token the server has just destroyed: the
+    browser holds a cookie no session row backs any more, so the next request
+    is a guaranteed 401.
+
+    Whoever writes the cookie in the response owns it, and the slide steps
+    aside. Deliberately generic — a name check, not a list of paths that would
+    have to learn about every future route that logs out or rotates a token.
+    """
+    prefix = f"{sessions.SESSION_COOKIE_NAME}="
+    return any(
+        raw.lstrip().startswith(prefix)
+        for raw in response.headers.getlist("set-cookie")
+    )
+
+
 def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
     """Resolves the session cookie to a user.
 
@@ -151,7 +172,7 @@ async def user_context_middleware(request: Request, call_next):
         # exactly SESSION_TTL_HOURS after login — mid-session. Authenticated
         # requests only; an anonymous request never gets a cookie.
         refresh_token = getattr(request.state, "session_refresh_token", "")
-        if user and refresh_token:
+        if user and refresh_token and not _sets_session_cookie(response):
             sessions.set_session_cookie(response, refresh_token)
         return response
     finally:

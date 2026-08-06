@@ -1641,12 +1641,20 @@ async function startApp(username: string, role: string) {
     }
   }
   async function revealBatch(map: WorldMap): Promise<void> {
+    // The same guard the poll carries (`viewRev`), and for the same reason: a
+    // reveal that is in flight when the administrator switches "show all" OFF
+    // would mount exactly the tiles `dropVanished` has just taken away. Read
+    // once at entry and checked after EVERY await — both halves of this run
+    // (the locations, then their scene payloads) describe the OLD view once
+    // the counter has moved, and the switch publishes its own snapshot.
+    const rev = viewRev;
     let details: Map<string, WorldLocation>;
     try {
       details = new Map((await api.getLocations()).map((l) => [l.id, l]));
     } catch {
       return;   // server briefly away — the next poll tries again
     }
+    if (rev !== viewRev) return;
     for (const [id, loc] of details) detailById.set(id, loc);
     const fresh = placeableOf(map, details).filter((l) => !tiles.has(l.id));
     if (!fresh.length) return;
@@ -1667,6 +1675,7 @@ async function startApp(username: string, role: string) {
     // without its payload would stand as the procedural shell and only swap
     // once the sweep noticed it.
     await scenes.prime(fresh.map((l) => l.id));
+    if (rev !== viewRev) return;
     for (const loc of fresh) {
       addTile(loc);
       // Seeded from the SAME source the boot path seeds from, template
