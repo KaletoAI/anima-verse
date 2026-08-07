@@ -453,7 +453,7 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `pos_x` | `float \| null` | Welt-Meter; `null` = unplatziert |
 | `pos_z` | `float \| null` | Welt-Meter; `null` = unplatziert |
 | `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
-| `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. `null`, wenn die Geometrie keinen brauchbaren Anker hat (fehlend, ≤ 0 oder unlesbar) — Eintrag und Fußabdruck-Regel können nicht auseinanderlaufen |
+| `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. Der Wert stammt aus demselben Fußabdruck, den auch `world_bounds` benutzt — Eintrag und Fußabdruck-Regel können also nicht auseinanderlaufen. `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** (dann hat er keinen Fußabdruck, egal wie gut sein Anker ist) ODER seine Geometrie hat keinen brauchbaren Anker (`map3d.plan_width_m` fehlt, ist ≤ 0 oder unlesbar). Ein Client, der die Kantenlänge eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d`; E2 (Drag-Ghost) darf den rohen Anker unplatzierter Orte später zusätzlich als eigenes Feld liefern |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
 | `layout_sig` | `str` | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat (AV3D-2⁺) |
 
@@ -566,12 +566,12 @@ Vollständig in § A12. Für die Kartengeometrie zählt:
 ### A1.7 Editor-CRUD (Game-Admin, E2)
 
 Schreibseite der beiden neuen Datenbestände; alle Antworten `{"status":
-"success", …}`, ungültige Eingaben **400**. **404 antworten nur die
-beiden DELETEs** — die PUTs sind Upserts: ein `PUT` auf eine unbekannte
-Id **legt neu an** statt abzulehnen (die Route setzt die Pfad-Id in den
-Rumpf, der Speicher schreibt `INSERT … ON CONFLICT DO UPDATE`). Ein
-Editor darf aus einem erfolgreichen `PUT` also nicht schließen, dass das
-Ziel vorher existierte — eine gerade gelöschte Fläche kommt so wieder.
+"success", …}`, ungültige Eingaben **400**. Angelegt wird ausschließlich
+über `POST` (die Id vergibt der Server); ein `PUT` auf eine unbekannte
+Id antwortet **404**, legt also nichts an — ein wiederholter alter `PUT`
+kann eine gelöschte Fläche nicht zurückholen. Bei den Terrain-Typen ist
+der `PUT` dagegen bewusst ein Upsert: dort IST der Pfad-`kind` die
+fachliche Id, und „Override setzen“ heißt anlegen-oder-ersetzen.
 Dieselbe Auth-Lage wie die übrigen Location-Schreibrouten desselben
 Routers.
 
@@ -582,7 +582,7 @@ Routers.
 | `DELETE /world/terrain-types/{kind}` | Entfernt nur den Override (der geteilte Eintrag kommt zurück); **404**, wenn es keinen gab |
 | `GET /world/terrain-areas` | `{areas (unten→oben), sig}` |
 | `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
-| `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` → `{status, area}`. **Upsert:** unbekannte Id legt die Fläche unter genau dieser Id an, kein 404 |
+| `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche; **404**, wenn es sie nicht gab |
 
 Geprüft wird **beim Schreiben**, nicht beim Lesen (die Leser scheitern
