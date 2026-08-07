@@ -675,6 +675,20 @@ SCHEMA_STATEMENTS = [
         meta         TEXT DEFAULT '{}',
         updated_at   TEXT NOT NULL
     )""",
+
+    # One painted terrain polygon on the free world map: a `kind` from the
+    # catalog above plus its outline in world metres (JSON [[x, z], ...]).
+    # Areas may overlap; z_order (then paint order = created_at) decides
+    # which one answers a point query. See app/models/terrain.py.
+    """CREATE TABLE IF NOT EXISTS terrain_areas (
+        id         TEXT PRIMARY KEY,
+        kind       TEXT NOT NULL,
+        polygon    TEXT NOT NULL,
+        z_order    INTEGER NOT NULL DEFAULT 0,
+        meta       TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
 ]
 
 

@@ -315,6 +315,52 @@ def delete_terrain_type_route(kind: str) -> Dict[str, Any]:
     return {"status": "success"}
 
 
+# === Terrain areas (seamless world) ===
+
+@router.get("/terrain-areas")
+def get_terrain_areas_route() -> Dict[str, Any]:
+    """All painted areas bottom-to-top, plus the change signature."""
+    from app.models import terrain
+    return {"areas": terrain.list_areas(), "sig": terrain.terrain_sig()}
+
+
+@router.post("/terrain-areas")
+async def post_terrain_area_route(request: Request) -> Dict[str, Any]:
+    """Paint a new area; the id is assigned by the server."""
+    from app.models import terrain
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    data.pop("id", None)
+    try:
+        return {"status": "success", "area": terrain.save_area(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/terrain-areas/{area_id}")
+async def put_terrain_area_route(area_id: str, request: Request) -> Dict[str, Any]:
+    """Replace one existing area (kind, outline, z_order, meta)."""
+    from app.models import terrain
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    data["id"] = area_id
+    try:
+        return {"status": "success", "area": terrain.save_area(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/terrain-areas/{area_id}")
+def delete_terrain_area_route(area_id: str) -> Dict[str, Any]:
+    """Erase one painted area."""
+    from app.models import terrain
+    if not terrain.delete_area(area_id):
+        raise HTTPException(status_code=404, detail="terrain area not found")
+    return {"status": "success"}
+
+
 @router.delete("/locations/{location_name}")
 def delete_location_route(
     location_name: str,
