@@ -11,6 +11,7 @@ from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_now_iso
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
+import math
 import random
 import uuid
 
@@ -1224,9 +1225,16 @@ def _suggest_follow_after_move(leaver: str, from_loc: str, from_room: str,
 def save_character_current_location(character_name: str = "", location: str = "",
                                     _skip_compliance: bool = False,
                                     _preserve_movement_target: bool = False,
-                                    _party_drag: bool = False):
+                                    _party_drag: bool = False,
+                                    sync_pos: bool = True):
     """Persists the character's current location.
 
+    sync_pos: True (default) drags the metre position along to the target
+    location's centre — a teleport (skill, admin, scheduler, drag&drop)
+    must not leave the character's point standing at the old place.
+    ``set_character_pos`` passes False: there the POINT is the given truth
+    and the location is derived from it, so a sync would snap the character
+    back to the centre.
     _skip_compliance: if True, skips outfit-type compliance
     (e.g. for the avatar, which keeps its manual outfit choice).
     _preserve_movement_target: True only for a programmed travel step.
@@ -1284,6 +1292,20 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
     # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
     save_character_profile(character_name, profile)
+    # Seamless world (Aug 2026): the metre position is the truth for WHERE a
+    # character stands, so a location write drags it along — the character
+    # lands at the centre of the target location. A location without a metre
+    # position (never placed, off-map sleep sentinel, unknown id) has no
+    # centre to stand on: both columns go NULL.
+    if sync_pos:
+        _cx = _cz = None
+        if location:
+            from app.models.world import get_location_by_id as _glbi
+            _tloc = _glbi(location) or {}
+            _px, _pz = _tloc.get("pos_x"), _tloc.get("pos_z")
+            if _px is not None and _pz is not None:
+                _cx, _cz = float(_px), float(_pz)
+        _write_character_pos(character_name, _cx, _cz)
     # AV3D-3: push the movement to connected map clients (SSE state stream) —
     # polling /play/worldmap stays the baseline, the event just arrives
     # instantly. The location-change pose reset above is pushed too, so a
@@ -1375,6 +1397,84 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # zusaetzliche sichere Bremse. Nur bei echtem Location-Wechsel.
     if location_changed and not _party_drag:
         _drag_party_followers_to_location(character_name, location)
+
+
+def get_character_pos(character_name: str = "") -> Optional[Dict[str, float]]:
+    """Free metre position of a character — ``{"x": ..., "z": ...}`` or None.
+
+    None means the character has no point on the map: never positioned, or
+    standing in a location that itself is unplaced. Both columns are always
+    written together, so a half-filled row counts as "no position".
+    """
+    if not character_name:
+        return None
+    try:
+        row = get_connection().execute(
+            "SELECT pos_x, pos_z FROM character_state WHERE character_name=?",
+            (character_name,)).fetchone()
+    except Exception as e:
+        logger.error("get_character_pos DB error for %s: %s", character_name, e)
+        return None
+    if not row or row[0] is None or row[1] is None:
+        return None
+    return {"x": float(row[0]), "z": float(row[1])}
+
+
+def _write_character_pos(character_name: str, x: Optional[float],
+                         z: Optional[float]) -> None:
+    """Raw write of the two position columns (None/None clears the position).
+
+    Upserts because a character can be positioned before anything else ever
+    touched its state row.
+    """
+    if not character_name:
+        return
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "UPDATE character_state SET pos_x=?, pos_z=? "
+                "WHERE character_name=?", (x, z, character_name))
+            if cur.rowcount == 0:
+                conn.execute(
+                    "INSERT INTO character_state (character_name, pos_x, pos_z) "
+                    "VALUES (?, ?, ?)", (character_name, x, z))
+    except Exception as e:
+        logger.error("_write_character_pos DB error for %s: %s",
+                     character_name, e)
+
+
+def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]:
+    """Put a character at a free metre point; the location is DERIVED from it.
+
+    The point is the truth — ``current_location`` follows from
+    ``location_at_point`` (inside a footprint: its id, outside: ""), which
+    makes wilderness a legal state instead of an error. The location is only
+    re-written when it actually differs, so stepping around WITHIN a location
+    does not fire the location-change side effects (events, history,
+    compliance, party drag) on every step.
+    """
+    if not character_name:
+        raise ValueError("character_name is required")
+    try:
+        fx, fz = float(x), float(z)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"position must be numeric, got {x!r}/{z!r}")
+    if not (math.isfinite(fx) and math.isfinite(fz)):
+        # A NaN would sail through any range check (every NaN comparison is
+        # False) and poison every later JSON response (allow_nan=False).
+        raise ValueError(f"position must be finite, got {x!r}/{z!r}")
+    fx, fz = round(fx, 2), round(fz, 2)
+    from app.core.world_geometry import location_at_point
+    from app.models.world import list_locations
+    loc = location_at_point(fx, fz, list_locations())
+    location_id = (loc.get("id") or "") if loc else ""
+    if location_id != get_character_current_location(character_name):
+        # sync_pos=False — the location setter would otherwise snap the
+        # character back to the location centre and undo this very move.
+        save_character_current_location(character_name, location_id,
+                                        sync_pos=False)
+    _write_character_pos(character_name, fx, fz)
+    return {"pos": {"x": fx, "z": fz}, "location_id": location_id}
 
 
 def get_location_changed_at(character_name: str = "") -> str:

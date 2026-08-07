@@ -136,6 +136,8 @@ SCHEMA_STATEMENTS = [
         location_changed_at TEXT DEFAULT '',
         activity_changed_at TEXT DEFAULT '',
         last_thought_at   TEXT DEFAULT '',
+        pos_x             REAL,            -- free metre position (seamless world)
+        pos_z             REAL,            -- NULL = no position yet / unplaced location
         meta              TEXT DEFAULT '{}',
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
@@ -773,6 +775,12 @@ ALTER_MIGRATIONS = [
     ("locations", "pos_x",   "REAL"),
     ("locations", "pos_z",   "REAL"),
     ("locations", "yaw_deg", "REAL NOT NULL DEFAULT 0"),
+    # Seamless world (Aug 2026): a character stands at a free metre point,
+    # its current_location is DERIVED from it (location_at_point). NULL means
+    # "no metre position" — either never set or the character sits in an
+    # unplaced location, which has no centre to stand on.
+    ("character_state", "pos_x", "REAL"),
+    ("character_state", "pos_z", "REAL"),
 ]
 
 
