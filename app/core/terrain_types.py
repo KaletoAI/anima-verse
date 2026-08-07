@@ -16,6 +16,7 @@ link is a convention, never enforced here.
 """
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -67,6 +68,11 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     try:
         speed = float(raw.get("speed_factor", 1.0))
     except (TypeError, ValueError):
+        speed = 1.0
+    # NaN/inf must never reach the clamp: every NaN comparison is False, so
+    # min/max hand it straight through and the un-renderable value poisons
+    # every later JSON response. Non-finite is junk — fall back to the default.
+    if not math.isfinite(speed):
         speed = 1.0
     speed = min(max(speed, SPEED_MIN), SPEED_MAX)
     meta = raw.get("meta")
