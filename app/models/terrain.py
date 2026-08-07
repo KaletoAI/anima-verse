@@ -31,11 +31,12 @@ def _sanitize_polygon(raw: Any) -> List[List[float]]:
     pts: List[List[float]] = []
     for pt in raw:
         # A vertex may be any 2-element sequence of numbers. Everything else
-        # is junk — including dicts, which raise KeyError on pt[0] and would
-        # otherwise escape as a 500 instead of a 400.
+        # is junk — including dicts, which raise KeyError on pt[0], and huge
+        # integer literals (a JSON body may carry 400 digits), which raise
+        # OverflowError. Both would otherwise escape as a 500 instead of a 400.
         try:
             x, z = float(pt[0]), float(pt[1])
-        except (TypeError, ValueError, IndexError, KeyError):
+        except (TypeError, ValueError, IndexError, KeyError, OverflowError):
             raise ValueError("polygon points must be [x, z] numbers")
         # isfinite first: every NaN comparison is False, so a plain range
         # check would wave NaN through and poison every later JSON response
@@ -57,9 +58,12 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
     if kind not in effective_catalog():
         raise ValueError(f"unknown terrain kind: {kind!r}")
     area_id = str(raw.get("id") or "").strip() or f"ta_{secrets.token_hex(4)}"
+    # OverflowError included: stdlib json accepts the `Infinity` literal, and
+    # int(inf) raises it — that happens BEFORE the clamp below, so without the
+    # catch the body would 500 instead of falling back to the default layer.
     try:
         z_order = int(raw.get("z_order") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         z_order = 0
     # Clamped so an absurd layer number cannot blow past SQLite's 64-bit
     # INTEGER on insert.
