@@ -566,7 +566,12 @@ Vollständig in § A12. Für die Kartengeometrie zählt:
 ### A1.7 Editor-CRUD (Game-Admin, E2)
 
 Schreibseite der beiden neuen Datenbestände; alle Antworten `{"status":
-"success", …}`, ungültige Eingaben **400**, unbekannte Ziele **404**.
+"success", …}`, ungültige Eingaben **400**. **404 antworten nur die
+beiden DELETEs** — die PUTs sind Upserts: ein `PUT` auf eine unbekannte
+Id **legt neu an** statt abzulehnen (die Route setzt die Pfad-Id in den
+Rumpf, der Speicher schreibt `INSERT … ON CONFLICT DO UPDATE`). Ein
+Editor darf aus einem erfolgreichen `PUT` also nicht schließen, dass das
+Ziel vorher existierte — eine gerade gelöschte Fläche kommt so wieder.
 Dieselbe Auth-Lage wie die übrigen Location-Schreibrouten desselben
 Routers.
 
@@ -577,8 +582,8 @@ Routers.
 | `DELETE /world/terrain-types/{kind}` | Entfernt nur den Override (der geteilte Eintrag kommt zurück); **404**, wenn es keinen gab |
 | `GET /world/terrain-areas` | `{areas (unten→oben), sig}` |
 | `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
-| `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` → `{status, area}` |
-| `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche |
+| `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` → `{status, area}`. **Upsert:** unbekannte Id legt die Fläche unter genau dieser Id an, kein 404 |
+| `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche; **404**, wenn es sie nicht gab |
 
 Geprüft wird **beim Schreiben**, nicht beim Lesen (die Leser scheitern
 still): Art muss im Katalog stehen · Polygon 3–256 endliche
@@ -623,7 +628,11 @@ E1 unberührt:
   Gelände kommt aus `GET /play/terrain`; § A9 gilt weiter für die
   Detailszene und `/world/locations`).
 - Die Kachelbild-Felder `map_rotation_2d`, `map_image_off`,
-  `map_patch_2d`, `map_patch_span`.
+  `map_patch_2d`, `map_patch_span` — **im Weltkarten-Eintrag**. Die
+  Felder selbst leben weiter: `map_rotation_2d` steht in der Yaw-Kette
+  der Szene (A1.8) und reist im Rezept/der Draft-Vorschau mit, die
+  Kachelbild-Maschinerie (`map_patch_*`, Blending, Outpainting) wird
+  erst mit **E7** ausgebaut.
 
 Der **Reise-Payload (§ A11) ist in E1 unverändert** — er trägt weiter
 Zellen-Felder (`path` als Location-Kette, `progress_cells`,
@@ -1002,9 +1011,14 @@ Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
 
 > **In E1 unverändert.** Der Block trägt weiter Zellen-Felder
 > (`path` als Location-Kette, `seg`/`frac`, `progress_cells`,
-> `cell_seconds_real`), obwohl die Karte in Metern rechnet. **Wird mit E3
-> auf eine Meter-Polyline umgestellt** (Wegpunkte in Welt-Metern, Tempo in
-> m/s); die Kachelmitten-Formel unten fällt damit weg.
+> `cell_seconds_real`), obwohl die Karte in Metern rechnet.
+> **Praktisch startet in E1 aber gar keine Reise mehr:** die
+> Zellen-Pfadfindung (`get_neighbor_location_ids` →
+> `find_path_through_known`) findet ohne Raster keine Nachbarn, also
+> bleibt `travel` **`null`**. Wer gegen diesen Abschnitt baut, baut gegen
+> totes Verhalten. **Mit E3 wird der Block auf eine Meter-Polyline
+> umgestellt** (Wegpunkte in Welt-Metern, Tempo in m/s); die
+> Mittelpunkt-Formel unten fällt damit weg.
 
 Ein Charakter wechselt die Location nicht mehr schlagartig, sondern reist
 über die Kachel-Kette. `GET /play/worldmap` liefert dafür pro Charakter das
