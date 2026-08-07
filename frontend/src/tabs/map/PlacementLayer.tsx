@@ -3,13 +3,26 @@
  * the `MapCanvas` SVG.
  *
  * A location is a square of edge `map3d.plan_width_m` centred on its metre
- * position and turned by `yaw_deg` (contract § A1.1). The turn happens in SVG
- * (`<g transform="rotate(yaw cx cy)">`) around exactly the point
- * `worldToScreen` returns for the centre, so this layer does NOT re-derive the
- * corner arithmetic of `footprintScreenCorners`: same centre, same angle, same
- * sign — they agree by construction, and there is one place that could be
- * wrong instead of two. `yaw_deg` is written through unchanged; no editor-side
- * sign conversion exists (decision 2026-08-07).
+ * position and turned by `yaw_deg` (contract § A1.1). The turn happens in SVG,
+ * around exactly the point `worldToScreen` returns for the centre — but with
+ * the OPPOSITE sign: `rotate(−yaw)`. SVG's `rotate(+deg)` turns clockwise on a
+ * screen whose y grows downwards, which is the TRANSPOSE of the § A1.1 matrix,
+ * not the same rotation. The two are a mirror image of each other, so the sign
+ * is derived here and not guessed (mapMath's § B5a case, hand-checked):
+ *
+ *   loc (pos 10/20, width 10, yaw 90), view {cx:10, cz:20, pxPerM:1}, 200×200.
+ *   Local corner (+5,+5) -> § A1.1 -> world (15, 15) -> screen (105, 95).
+ *   Unrotated that corner is drawn at (105, 105); around the centre (100, 100)
+ *     SVG rotate(+90) gives (95, 105)  — mirrored, WRONG
+ *     SVG rotate(−90) gives (105, 95)  — the contract's corner
+ *   Sanity check without arithmetic: at yaw 90 the local +x axis points to
+ *   world −z (north), so the local north edge must sit WEST of the centre.
+ *
+ * `yaw_deg` itself is stored and written through unchanged — the sign lives in
+ * the RENDERING only, never in the data (decision 2026-08-07). This layer does
+ * not re-derive the corner arithmetic of `footprintScreenCorners`; both are
+ * pinned to the same verified case, and a change to one is a lie about the
+ * other until it is re-run.
  *
  * Without a scale anchor a location has NO area (§ A1.3). It is still drawn —
  * as a dashed NO_ANCHOR_WIDTH_M placeholder — because an editor that hides a
@@ -70,7 +83,9 @@ export function mapIconUrl(locId: string, ver: number): string {
  * One footprint square: fill, optional map icon, outline — all inside the yaw
  * rotation. The icon carries its own 90°-step display rotation
  * (`map_rotation_2d`), which turns the ARTWORK inside the square and is not
- * the location's rotation in the world.
+ * the location's rotation in the world — it keeps SVG's own sign, because it
+ * always was a screen rotation (the legacy CSS `rotate()` on the tile image),
+ * never a § A1.1 world angle.
  */
 function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconRot }: {
   p: ScreenPt
@@ -84,7 +99,10 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
 }) {
   const half = size / 2
   return (
-    <g transform={`rotate(${yaw} ${p.x} ${p.y})`}>
+    // NEGATED yaw: SVG turns clockwise on a y-down screen, § A1.1 does not —
+    // see the module docstring for the hand-checked case (yaw 90, local (+5,+5)
+    // must land on screen (105, 95), which only rotate(−yaw) produces).
+    <g transform={`rotate(${-yaw} ${p.x} ${p.y})`}>
       <rect x={p.x - half} y={p.y - half} width={size} height={size}
         fill="rgba(139,148,158,0.14)" stroke="none" />
       {iconHref ? (

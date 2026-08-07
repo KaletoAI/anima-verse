@@ -147,6 +147,10 @@ export function MapTab() {
   // Escape cancels the armed ghost, then the selection.
   const ghostRef = useRef<GhostSpec | null>(null)
   ghostRef.current = ghost
+  // The loaded list as the write handlers see it — they run long after the
+  // render that armed them, so they must not read a captured copy.
+  const locationsRef = useRef<EditorLocation[]>([])
+  locationsRef.current = locations || []
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
@@ -156,11 +160,17 @@ export function MapTab() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const snapV = useCallback((v: number) => (
+    snapOn ? Math.round(v / SNAP_M) * SNAP_M : Math.round(v * 100) / 100
+  ), [snapOn])
+
   // Only an armed ghost cares where the cursor is; without one this must not
-  // re-render the tab on every mouse move.
+  // re-render the tab on every mouse move. The point is SNAPPED here, not only
+  // on the click: a preview that shows a spot the placement will not use is
+  // worse than none (with the 10 m grid it can be off by up to 7.07 m).
   const onWorldMove = useCallback((x: number, z: number) => {
-    if (ghostRef.current) setGhostPt({ x, z })
-  }, [])
+    if (ghostRef.current) setGhostPt({ x: snapV(x), z: snapV(z) })
+  }, [snapV])
 
   const { placed, unplaced, templates } = useMemo(() => {
     const pl: EditorLocation[] = []
@@ -185,10 +195,6 @@ export function MapTab() {
     setYawDraft(selected ? String(normYaw(selected.yaw_deg || 0)) : '')
     setDelArmed('')
   }, [selected])
-
-  const snapV = useCallback((v: number) => (
-    snapOn ? Math.round(v / SNAP_M) * SNAP_M : Math.round(v * 100) / 100
-  ), [snapOn])
 
   // ── Writes ───────────────────────────────────────────────────────────────
 
@@ -256,10 +262,20 @@ export function MapTab() {
     const z = snapV(wz)
     try {
       if (g.kind === 'clone') {
+        // The server refuses a second clone of the same template on the very
+        // same point and answers 200 with the EXISTING one — with the 10 m
+        // snap two clicks land there easily, and without this the placement
+        // would look like it simply did nothing. An id we already knew means
+        // no new copy was made; say so and show which one is in the way.
+        const knownBefore = new Set(locationsRef.current.map((l) => l.id))
         const r = await apiPost<{ location?: EditorLocation }>(
           `/world/locations/${encodeURIComponent(g.id)}/clone`, { pos_x: x, pos_z: z })
+        const newId = r?.location?.id || ''
         await reload()
-        setSelId(r?.location?.id || '')
+        setSelId(newId)
+        if (newId && knownBefore.has(newId)) {
+          toast(t('A copy already stands here'), 'error')
+        }
       } else {
         await apiPatch(`/world/locations/${encodeURIComponent(g.id)}/position`,
           { pos_x: x, pos_z: z })
