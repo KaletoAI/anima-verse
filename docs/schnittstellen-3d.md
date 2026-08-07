@@ -46,6 +46,11 @@
 > wo eine 8, eine 0,92, ein `scale_mode`, `height_m`, `floors` oder
 > `level_height` auftaucht, gilt die Liste oben.
 >
+> *Stage-Hinweis 2026-08-07: `extent_m`, `k` und der Kachelbezug des
+> Bezugsquadrats („Default 10 = genau eine Kachel") leben bis **E4** — dann
+> liefert Teil B `k = 1`, und Innen wie Außen rechnen in echten Metern
+> (§ A1.8). Das Bezugsquadrat selbst bleibt, nur sein Kachel-Maßstab geht.*
+>
 > **Nachtrag v5.1 (2026-07-28, aus der ersten echten Nutzung):**
 >
 > 4. **Objektgrößen sind drehungsunabhängig.** `measure: "xz"`/`"xyz"`
@@ -355,6 +360,10 @@ Der Vertrag hat zwei Teile:
 
 ## 0. Warum v4 — Analysebefund 2026-07-24
 
+*⚠️ Historischer Befund — der beschriebene Dreifach-Zustand ist seit
+`@anima/scene-render` und § B3 überholt; gültig bleibt allein das
+Leitprinzip am Ende des Abschnitts. Ausbau in E7.*
+
 Die Geometrie-Regeln dieses Vertrags sind heute **dreifach implementiert**:
 
 1. Backend: `app/core/room_recipe.py` (Spiegelung, Öffnungs-Normalisierung,
@@ -423,6 +432,11 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
   Karten-Yaw-Kette** (`map3d.rotation`, A1.8: `rotation.y = −rad(yaw)`).
   Die beiden Felder sind verschiedene Dinge; wer sie verwechselt,
   spiegelt die Location.
+  **Entschieden 2026-08-07:** Dieser Drehsinn ist ab jetzt DER Standard
+  dieses Vertrags — für jede Rotation, Karte wie Szene. Die gegenläufige
+  Szenen-Kette (§ A1.8) wird beim Szenen-Umbau in **E4** darauf
+  angeglichen, zusammen mit `k = 1`; bis dahin bleiben es zwei Felder mit
+  zwei Vorzeichen.
 - **Überlappung ist legal** (die Hütte auf dem Dorfplatz). Bei der Frage,
   in welcher Location ein Punkt liegt, gewinnt der **kleinste** treffende
   Fußabdruck — die spezifischste Antwort (`location_at_point`).
@@ -606,6 +620,10 @@ E1 unberührt:
 - **Yaw-Kette der Szene:** `yaw = map3d.rotation` (explizite 0 zählt) →
   `map_rotation_2d` → 0; three.js `rotation.y = −rad(yaw)`. Das ist
   **nicht** `yaw_deg` der Weltkarte (A1.1).
+  **Entschieden 2026-08-07:** Das Minus ist eine Ausnahme auf Abruf —
+  verbindlicher Drehsinn ist `yaw_deg` (§ A1.1). **E4** gleicht diese
+  Kette daran an (`rotation.y = +rad(yaw)`), im selben Zug, in dem `k`
+  entfällt; bis dahin rechnet der Szenen-Pfad hier unverändert weiter.
 - **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**, in
   Grad, VOR jeder Messung anwenden. Yaw (y) außen, Tilt (x) und Roll (z)
   im schon gedrehten Rahmen — „nach vorn kippen" heißt damit unabhängig
@@ -639,6 +657,12 @@ Zellen-Felder (`path` als Location-Kette, `progress_cells`,
 `cell_seconds_real`). **Wird mit E3 auf eine Meter-Polyline umgestellt.**
 
 ## A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)
+
+*⚠️ Kachel-Ära — die Gebäude-Kette unten rechnet in Kachel-Maßen
+(`10 × 0,92 × size`, „Kachelmitte", Terrain-/Template-Kacheln) und hat auf
+Meter-Welten keine Funktion; § A1 und der v5-Kopf gelten (die 0,92 ist dort
+ersatzlos gestrichen). Die Prop- und Diorama-Ketten leben als Legacy neben
+der EINEN Routine in § B2 weiter, ihr `× k` fällt mit E4. Ausbau in E7.*
 
 **Gebäudemodell** (`/play/locations/{id}/model` + Meta):
 1. Meta-Rotations-Fix (innere Gruppe).
@@ -716,6 +740,11 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   beseitigt.
 
 ## A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`
+
+*Stage-Hinweis: der Abschnitt gilt unverändert; nur das `× k` an allen
+`_m`-Feldern (und die Lesart „Fraktionen des 8×8-Quadrats") ist
+Anchored-Mode und fällt mit **E4** weg, wenn Teil B `k = 1` liefert
+(§ A1.8).*
 
 404 = Raum ohne Layout (Auto-Grid-Fallback). Sonst:
 
@@ -1237,6 +1266,12 @@ Geometrie-Routinen — „Primitiv bauen" und „Modell platzieren" — und
 keine einzige eigene Geometrie-Entscheidung mehr.
 
 ## B1. `GET /play/locations/{location_id}/scene`
+
+*Stage-Hinweis: der Payload ist tragend und bleibt. Befristet ist allein
+das Skalar `k` (samt `storey_m` als sein Produkt) — mit **E4** liefert der
+Composer `k = 1`, und jedes `_m`-Feld ist dann direkt ein Welt-Meter
+(§ A1.8). Konsumenten rechnen bis dahin weiter mit dem gelieferten `k`,
+nie mit einer eigenen Konstante.*
 
 ```
 {
