@@ -95,6 +95,21 @@ def list_areas() -> List[Dict[str, Any]]:
     return out
 
 
+def area_exists(area_id: str) -> bool:
+    """True when an area with this id is stored.
+
+    ``save_area`` is an upsert, so the PUT route needs this ONE cheap lookup
+    to answer 404 instead of resurrecting a just-deleted area under its old id.
+    """
+    area_id = (area_id or "").strip()
+    if not area_id:
+        return False
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM terrain_areas WHERE id=?",
+                       (area_id,)).fetchone()
+    return row is not None
+
+
 def save_area(raw: Any) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one area; returns the
     sanitized entry. Raises ValueError when the area is not usable."""

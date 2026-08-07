@@ -11,6 +11,7 @@ Aktivitaeten sind als Objekte {name, description} in den Raeumen eingebettet.
 Galerie-Bilder werden Raeumen zugeordnet (statt direkt Aktivitaeten).
 """
 import json
+import math
 import random as _random
 import re
 import threading
@@ -1664,6 +1665,26 @@ def find_path_through_known(start_id: str, target_id: str,
     return None
 
 
+def _finite_number(value: Any, label: str) -> float:
+    """Coerce one metre/angle value and reject everything non-finite.
+
+    Same shape as the guard in ``app/models/terrain.py``: isfinite BEFORE
+    any rounding, because every NaN comparison is False and ``round(nan)``
+    is still NaN. One NaN reaching the DB poisons the world map for every
+    client afterwards — Starlette encodes responses with ``allow_nan=False``,
+    so ``GET /play/worldmap`` would 500 until someone edits the DB by hand.
+    OverflowError is caught as well: a JSON body may legitimately carry a
+    400-digit integer literal, and ``float()`` on that raises it.
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{label} must be a number")
+    if not math.isfinite(num):
+        raise ValueError(f"{label} must be a finite number")
+    return num
+
+
 def update_location_position(location_id: str, pos_x: Optional[float],
                              pos_z: Optional[float],
                              yaw_deg: Optional[float] = None
@@ -1674,6 +1695,9 @@ def update_location_position(location_id: str, pos_x: Optional[float],
     location (and resets the rotation — an unplaced location has no
     orientation). ``yaw_deg`` None leaves the stored rotation untouched,
     so moving never silently re-orients.
+
+    Raises ValueError on a non-finite coordinate or angle (the caller turns
+    that into a 400) — nothing is written in that case.
     """
     data = _load_world_data()
     for loc in data.get("locations", []):
@@ -1683,10 +1707,16 @@ def update_location_position(location_id: str, pos_x: Optional[float],
                 loc.pop("pos_z", None)
                 loc.pop("yaw_deg", None)
             else:
-                loc["pos_x"] = round(float(pos_x), 2)
-                loc["pos_z"] = round(float(pos_z), 2)
-                if yaw_deg is not None:
-                    loc["yaw_deg"] = round(float(yaw_deg), 1) % 360.0
+                # Validate BOTH values before the first write, so a junk
+                # pos_z cannot leave a half-moved location behind.
+                _px = round(_finite_number(pos_x, "pos_x"), 2)
+                _pz = round(_finite_number(pos_z, "pos_z"), 2)
+                _yaw = (None if yaw_deg is None
+                        else round(_finite_number(yaw_deg, "yaw_deg"), 1) % 360.0)
+                loc["pos_x"] = _px
+                loc["pos_z"] = _pz
+                if _yaw is not None:
+                    loc["yaw_deg"] = _yaw
             _save_world_data(data)
             return loc
     return None
@@ -2258,16 +2288,15 @@ def clone_location(template_id: str, pos_x: float,
     A clone stores the bare minimum: id, template_location_id, pos_x, pos_z
     plus its own ``variant_seed``. Every other field is merged in from the
     template at read time.
-    Returns the resolved dict of the clone, or None on error.
+    Returns the resolved dict of the clone, or None when there is no such
+    template. Raises ValueError on a non-numeric/non-finite position — a
+    clone dropped at NaN would poison every later worldmap response.
     """
     if not template_id:
         return None
     # Guard: clones without a valid position never reach the DB.
-    try:
-        px = round(float(pos_x), 2)
-        pz = round(float(pos_z), 2)
-    except (TypeError, ValueError):
-        return None
+    px = round(_finite_number(pos_x, "pos_x"), 2)
+    pz = round(_finite_number(pos_z, "pos_z"), 2)
     data = _load_world_data()
     template = None
     for loc in data.get("locations", []):

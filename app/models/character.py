@@ -3385,28 +3385,34 @@ OFFMAP_SLEEP_SENTINEL = "__offmap__"
 
 
 def enter_offmap_sleep(character_name: str) -> bool:
-    """Character verschwindet von der Karte (offmap-Schlafstaette).
+    """The character vanishes from the map (off-map sleeping quarters).
 
-    Speichert die aktuelle Location/Raum als ``_offmap_return_location`` /
-    ``_offmap_return_room`` im Profil, damit beim Aufwachen via
-    :func:`wake_from_offmap` der vorherige Standort wiederhergestellt wird.
-    Setzt aktuelle Location/Raum auf "" — der Character ist auf der Karte
-    nicht mehr sichtbar (landet im "Ohne Ort"-Tray) und Pathfinder hat
-    nichts mehr zu routen.
+    Stores the current location/room as ``_offmap_return_location`` /
+    ``_offmap_return_room`` in the profile, so waking up via
+    :func:`wake_from_offmap` restores the previous whereabouts. Sets the
+    current location/room to "" and clears the metre position — the character
+    is no longer on the map (it lands in the "no location" tray) and the
+    pathfinder has nothing left to route.
 
-    Returns True wenn etwas geaendert wurde.
+    Returns True when something changed.
     """
     profile = get_character_profile(character_name) or {}
     current_loc = (profile.get("current_location") or "").strip()
     current_room = (profile.get("current_room") or "").strip()
     if not current_loc and not current_room:
-        # Schon offmap (oder noch nie zugewiesen) — nichts zu speichern.
+        # Already off-map (or never assigned) — nothing to store.
         return False
     profile["_offmap_return_location"] = current_loc
     profile["_offmap_return_room"] = current_room
     profile["current_location"] = ""
     profile["current_room"] = ""
     save_character_profile(character_name, profile)
+    # Seamless world (§ A1.4): the worldmap reads "no location + a metre
+    # point" as WILDERNESS. Leaving the old point behind would therefore put
+    # the sleeper in the open field instead of off the map — so the point goes
+    # with the location. Direct state write like _clear_location_and_room,
+    # because this path deliberately bypasses the location setter.
+    _write_character_pos(character_name, None, None)
     # AV3D-3: this path intentionally bypasses save_character_current_location
     # — publish the disappearance explicitly (empty to_id = off the map).
     try:
@@ -3450,6 +3456,20 @@ def wake_from_offmap(character_name: str) -> bool:
     profile["pose_flavor"] = ""
     profile["pose_variant_id"] = None  # = None, not pop: pop is skipped on save
     save_character_profile(character_name, profile)
+    # Seamless world: enter_offmap_sleep cleared the metre point, so waking has
+    # to put one back — a character with a location but no point has no place
+    # on the map. Replicated here instead of routing through
+    # save_character_current_location, in the style of the rest of this
+    # function: it writes the profile directly (pose reset, return markers) and
+    # must NOT fire the setter's location-change machinery (compliance, party
+    # drag, history, journey abort) for what is only a return from sleep.
+    # A return location that is unplaced has no centre — both columns stay NULL.
+    from app.models.world import get_location_by_id as _glbi
+    _rloc = _glbi(return_loc) or {}
+    _rx, _rz = _rloc.get("pos_x"), _rloc.get("pos_z")
+    _write_character_pos(character_name,
+                         float(_rx) if _rx is not None else None,
+                         float(_rz) if _rz is not None else None)
     # AV3D-3: bypass path — publish the reappearance explicitly.
     try:
         from app.core.state_events import publish as _publish_state

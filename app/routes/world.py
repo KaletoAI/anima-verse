@@ -129,6 +129,10 @@ async def clone_location_route(template_id: str, request: Request) -> Dict[str, 
         return {"status": "success", "location": clone}
     except HTTPException:
         raise
+    except ValueError as e:
+        # Rejected position (NaN/Infinity — json.loads accepts both literals).
+        # Nothing was written; a bad body is the client's fault, not a 500.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -277,6 +281,11 @@ async def update_location_position_route(location_id: str, request: Request) -> 
         return {"status": "success", "location": loc}
     except HTTPException:
         raise
+    except ValueError as e:
+        # The model rejects non-finite values (NaN/Infinity pass the float()
+        # above unharmed and would otherwise be persisted, after which every
+        # worldmap response 500s under allow_nan=False). Nothing was written.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -340,11 +349,18 @@ async def post_terrain_area_route(request: Request) -> Dict[str, Any]:
 
 @router.put("/terrain-areas/{area_id}")
 async def put_terrain_area_route(area_id: str, request: Request) -> Dict[str, Any]:
-    """Replace one existing area (kind, outline, z_order, meta)."""
+    """Replace one EXISTING area (kind, outline, z_order, meta); 404 otherwise.
+
+    The store is an upsert, so without this check a PUT on an unknown id would
+    silently create the area — and a client repeating a stale PUT would bring a
+    just-deleted area back. Creating is POST's job (which assigns the id).
+    """
     from app.models import terrain
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
+    if not terrain.area_exists(area_id):
+        raise HTTPException(status_code=404, detail="terrain area not found")
     data["id"] = area_id
     try:
         return {"status": "success", "area": terrain.save_area(data)}
