@@ -281,6 +281,40 @@ async def update_location_position_route(location_id: str, request: Request) -> 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# === Terrain types (seamless world) ===
+
+@router.get("/terrain-types")
+def get_terrain_types_route() -> Dict[str, Any]:
+    """Effective terrain-type catalog (shared overlaid by world rows)."""
+    from app.core import terrain_types
+    catalog = terrain_types.effective_catalog()
+    return {"types": sorted(catalog.values(), key=lambda t: t["kind"]),
+            "sources": terrain_types.sources()}
+
+
+@router.put("/terrain-types/{kind}")
+async def put_terrain_type_route(kind: str, request: Request) -> Dict[str, Any]:
+    """Create/replace the WORLD override of one terrain kind."""
+    from app.core import terrain_types
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    data["kind"] = kind
+    try:
+        return {"status": "success", "type": terrain_types.save_world_type(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/terrain-types/{kind}")
+def delete_terrain_type_route(kind: str) -> Dict[str, Any]:
+    """Remove the world override; a shared entry of the same kind returns."""
+    from app.core import terrain_types
+    if not terrain_types.delete_world_type(kind):
+        raise HTTPException(status_code=404, detail="no world override")
+    return {"status": "success"}
+
+
 @router.delete("/locations/{location_name}")
 def delete_location_route(
     location_name: str,

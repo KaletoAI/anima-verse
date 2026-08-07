@@ -660,6 +660,21 @@ SCHEMA_STATEMENTS = [
         created_at  TEXT NOT NULL,
         updated_at  TEXT NOT NULL
     )""",
+
+    # ── Seamless world / terrain ─────────────────────────────────────────
+    # Per-world overrides of the terrain-type catalog. The shared seed lives
+    # in shared/terrain/types.json; a row here REPLACES the whole shared
+    # entry of the same kind (override-replace, the activity-library rule).
+    # Deleting a row brings the shared entry back. See app/core/terrain_types.py.
+    """CREATE TABLE IF NOT EXISTS terrain_types (
+        kind         TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        color        TEXT DEFAULT '',
+        passable     INTEGER NOT NULL DEFAULT 1,
+        speed_factor REAL NOT NULL DEFAULT 1.0,
+        meta         TEXT DEFAULT '{}',
+        updated_at   TEXT NOT NULL
+    )""",
 ]
 
 
