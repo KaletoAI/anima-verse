@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
-import { fmtM } from '../world/planGeometry'
+import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
 import { MapCanvas } from './MapCanvas'
-import { FIT_FALLBACK_PX_PER_M, fitBounds, type MapBounds, type View } from './mapMath'
+import {
+  FIT_FALLBACK_PX_PER_M, fitBounds, pointInPolygon, type MapBounds, type View,
+} from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
 } from './PlacementLayer'
-import type { EditorLocation, WorldmapPayload } from './mapTypes'
+import { TerrainLayer, typeColor } from './TerrainLayer'
+import {
+  MAX_COORD, MAX_POINTS, MAX_Z_ORDER, MIN_POINTS, TerrainAreaChip,
+  TerrainToolbar, type TerrainMode,
+} from './TerrainTools'
+import type {
+  EditorLocation, TerrainArea, TerrainPayload, TerrainType, TerrainTypesResp,
+  WorldmapPayload,
+} from './mapTypes'
 
 /**
  * Map tab — the editor of the free metre world.
@@ -36,6 +46,25 @@ import type { EditorLocation, WorldmapPayload } from './mapTypes'
  * Placing is click-arm-click, never HTML5 drag&drop: a tray entry arms a
  * ghost footprint that follows the cursor, the next click on the map commits
  * it, Escape cancels. The gesture works at any zoom and needs no drop target.
+ *
+ * The ground is edited on the same canvas, in three exclusive MODES: `select`
+ * is everything above, `paint` collects vertices into a new terrain area and
+ * `edit-area` works on the polygon of one existing area. A click on the map
+ * means something different in each — which is precisely why the mode is a
+ * visible switch and not something guessed from what happens to sit under the
+ * cursor. Switching modes drops whatever the previous one had armed (ghost,
+ * draft, selection), so no mode can act on the other's leftovers.
+ *
+ * Terrain reads from two endpoints and writes to one:
+ *   - `GET /world/terrain-types` — the effective catalog, fetched ONCE. It is
+ *     the single source of every colour and every palette entry here; the
+ *     `types` block of `/play/terrain` carries the same catalog and stays
+ *     unused, because two copies of one truth drift.
+ *   - `GET /play/terrain` — `areas` (bottom-to-top) plus `default_kind`. Its
+ *     `sig` is carried along and logged into the state, never polled: it is
+ *     the signal a WATCHING client uses, and the hand that paints already
+ *     knows when it changed something.
+ *   - `POST/PUT/DELETE /world/terrain-areas` — one refetch after each write.
  */
 
 interface GalleryResp {
@@ -51,6 +80,14 @@ const YAW_QUARTER = 90
 const SNAP_M = 10
 
 const normYaw = (deg: number): number => ((deg % 360) + 360) % 360
+
+/** The metre grid the server stores terrain vertices on (2 decimals). */
+const r2 = (v: number): number => Math.round(v * 100) / 100
+
+/** Mirror of the server's coordinate range — a point outside it is refused
+ *  here so the user hears why instead of losing a click to a 400. */
+const inRange = (x: number, z: number): boolean =>
+  Math.abs(x) <= MAX_COORD && Math.abs(z) <= MAX_COORD
 
 /** A world coordinate for the chip. `fmtM` decides its precision by
  *  magnitude, which a negative metre would defeat (−50 would print with two
@@ -84,6 +121,16 @@ export function MapTab() {
   const [ghostPt, setGhostPt] = useState<{ x: number; z: number } | null>(null)
   const [yawDraft, setYawDraft] = useState('')
   const [delArmed, setDelArmed] = useState('')
+
+  // Terrain: the mode of the canvas, the catalog, the painted areas, the
+  // running draft and the selected area.
+  const [mode, setMode] = useState<TerrainMode>('select')
+  const [terrainTypes, setTerrainTypes] = useState<TerrainType[]>([])
+  const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
+  const [paintKind, setPaintKind] = useState('')
+  const [draft, setDraft] = useState<Array<[number, number]>>([])
+  const [draftCursor, setDraftCursor] = useState<{ x: number; z: number } | null>(null)
+  const [selArea, setSelArea] = useState('')
 
   // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
@@ -129,7 +176,38 @@ export function MapTab() {
     } catch { /* keep the current frame */ }
   }, [t, toast])
 
+  /** The painted ground. Called on mount, by the reload button and after every
+   *  terrain write — never on a timer. */
+  const reloadTerrain = useCallback(async () => {
+    try {
+      setTerrain(await apiGet<TerrainPayload>('/play/terrain'))
+    } catch (e) {
+      toast(t('Failed to load terrain') + ': ' + (e as Error).message, 'error')
+    }
+  }, [t, toast])
+
   useEffect(() => { void reload() }, [reload])
+  useEffect(() => { void reloadTerrain() }, [reloadTerrain])
+
+  // The catalog is fetched once: it changes only when someone edits the types,
+  // and that surface reloads it itself.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await apiGet<TerrainTypesResp>('/world/terrain-types')
+        setTerrainTypes(r.types || [])
+      } catch (e) {
+        toast(t('Failed to load terrain types') + ': ' + (e as Error).message, 'error')
+      }
+    })()
+  }, [t, toast])
+
+  /** The catalog by kind — what every colour lookup goes through. */
+  const typeMap = useMemo(() => {
+    const m: Record<string, TerrainType> = {}
+    for (const ty of terrainTypes) m[ty.kind] = ty
+    return m
+  }, [terrainTypes])
 
   // First frame: as soon as bounds AND a measured pane exist. Later reloads
   // keep the user's view — refitting under an edit would move the world away.
@@ -144,20 +222,42 @@ export function MapTab() {
     setView(fitBounds(bounds, pane.w, pane.h))
   }, [bounds, pane])
 
-  // Escape cancels the armed ghost, then the selection.
+  // Escape cancels the armed ghost, then the running draft, then the selection.
   const ghostRef = useRef<GhostSpec | null>(null)
   ghostRef.current = ghost
+  const draftRef = useRef<Array<[number, number]>>([])
+  draftRef.current = draft
   // The loaded list as the write handlers see it — they run long after the
   // render that armed them, so they must not read a captured copy.
   const locationsRef = useRef<EditorLocation[]>([])
   locationsRef.current = locations || []
+  const modeRef = useRef<TerrainMode>(mode)
+  modeRef.current = mode
+  const areasRef = useRef<TerrainArea[]>([])
+  areasRef.current = terrain?.areas || []
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      if (ghostRef.current) { setGhost(null); setGhostPt(null) } else { setSelId('') }
+      if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (draftRef.current.length) {
+        setDraft([])
+        setDraftCursor(null)
+      } else { setSelId(''); setSelArea('') }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  /** Switching modes drops everything the previous mode had armed — an
+   *  abandoned draft or a selection whose chip is no longer reachable would
+   *  keep acting on clicks that now mean something else. */
+  const switchMode = useCallback((m: TerrainMode) => {
+    setMode(m)
+    setGhost(null)
+    setGhostPt(null)
+    setDraft([])
+    setDraftCursor(null)
+    if (m !== 'select') setSelId('')
+    if (m !== 'edit-area') setSelArea('')
   }, [])
 
   const snapV = useCallback((v: number) => (
@@ -170,6 +270,9 @@ export function MapTab() {
   // worse than none (with the 10 m grid it can be off by up to 7.07 m).
   const onWorldMove = useCallback((x: number, z: number) => {
     if (ghostRef.current) setGhostPt({ x: snapV(x), z: snapV(z) })
+    // Only a running draft needs the rubber band; without one this must not
+    // re-render the tab on every mouse move.
+    else if (draftRef.current.length) setDraftCursor({ x, z })
   }, [snapV])
 
   const { placed, unplaced, templates } = useMemo(() => {
@@ -287,19 +390,180 @@ export function MapTab() {
     }
   }, [reload, snapV, t, toast])
 
+  // ── Terrain writes ───────────────────────────────────────────────────────
+
+  const selectedArea = useMemo(
+    () => (terrain?.areas || []).find((a) => a.id === selArea) || null,
+    [terrain, selArea],
+  )
+
+  /** Optimistic patch of one area, so an edited outline does not snap back to
+   *  its old shape for the length of the round trip. */
+  const patchAreaLocal = useCallback((id: string, fields: Partial<TerrainArea>) => {
+    setTerrain((tp) => (tp
+      ? { ...tp, areas: tp.areas.map((a) => (a.id === id ? { ...a, ...fields } : a)) }
+      : tp))
+  }, [])
+
+  /** Replace one existing area. The route is a FULL replace (kind, polygon,
+   *  z_order, meta), so every field travels along — a body carrying only the
+   *  changed one would blank the rest. The refetch afterwards runs whether the
+   *  write worked or not: on 404 (someone else erased it) it is the repair. */
+  const putArea = useCallback(async (area: TerrainArea, patch: Partial<TerrainArea>) => {
+    const body = {
+      kind: area.kind, polygon: area.polygon, z_order: area.z_order,
+      meta: area.meta || {}, ...patch,
+    }
+    try {
+      await apiPut(`/world/terrain-areas/${encodeURIComponent(area.id)}`, body)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+    await reloadTerrain()
+  }, [reloadTerrain, t, toast])
+
+  /** Close the running ring into a new area. */
+  const commitDraft = useCallback(async (pts: Array<[number, number]>) => {
+    if (pts.length < MIN_POINTS) {
+      toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
+      return
+    }
+    setDraft([])
+    setDraftCursor(null)
+    try {
+      await apiPost('/world/terrain-areas', { kind: paintKind, polygon: pts })
+      await reloadTerrain()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [paintKind, reloadTerrain, t, toast])
+
+  /** One click while painting: close the ring, or drop another vertex. */
+  const addDraftPoint = useCallback((wx: number, wz: number) => {
+    if (!paintKind) { toast(t('Pick a terrain type first'), 'error'); return }
+    const x = r2(wx)
+    const z = r2(wz)
+    if (!inRange(x, z)) {
+      toast(t('That point lies outside the world (±{n} m)')
+        .replace('{n}', String(MAX_COORD)), 'error')
+      return
+    }
+    const cur = draftRef.current
+    // Closing is a click ON the first vertex, measured in PIXELS: the ring must
+    // be equally easy to close at every zoom, and a metre tolerance would be
+    // unreachable when zoomed out and hair-trigger when zoomed in.
+    if (cur.length >= MIN_POINTS) {
+      const tolM = CLOSE_TOL_PX / view.pxPerM
+      if (Math.hypot(x - cur[0][0], z - cur[0][1]) <= tolM) {
+        void commitDraft(cur)
+        return
+      }
+    }
+    if (cur.length >= MAX_POINTS) {
+      toast(t('An area holds at most {n} points').replace('{n}', String(MAX_POINTS)), 'error')
+      return
+    }
+    setDraft([...cur, [x, z]])
+  }, [commitDraft, paintKind, t, toast, view.pxPerM])
+
+  const moveVertex = useCallback((i: number, x: number, z: number) => {
+    const a = selectedArea
+    if (!a || i < 0 || i >= a.polygon.length) return
+    if (!inRange(x, z)) {
+      // Nothing was patched locally yet, so refusing is the whole undo — the
+      // layer's drag preview ended with the pointer that raised this.
+      toast(t('That point lies outside the world (±{n} m)')
+        .replace('{n}', String(MAX_COORD)), 'error')
+      return
+    }
+    const poly = a.polygon.map((p, k) => (k === i ? [x, z] as [number, number] : p))
+    patchAreaLocal(a.id, { polygon: poly })
+    void putArea(a, { polygon: poly })
+  }, [patchAreaLocal, putArea, selectedArea, t, toast])
+
+  const deleteVertex = useCallback((i: number) => {
+    const a = selectedArea
+    if (!a || i < 0 || i >= a.polygon.length) return
+    if (a.polygon.length <= MIN_POINTS) {
+      toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
+      return
+    }
+    const poly = a.polygon.filter((_, k) => k !== i)
+    patchAreaLocal(a.id, { polygon: poly })
+    void putArea(a, { polygon: poly })
+  }, [patchAreaLocal, putArea, selectedArea, t, toast])
+
+  const insertVertex = useCallback((i: number, x: number, z: number) => {
+    const a = selectedArea
+    if (!a) return
+    if (a.polygon.length >= MAX_POINTS) {
+      toast(t('An area holds at most {n} points').replace('{n}', String(MAX_POINTS)), 'error')
+      return
+    }
+    const poly = [...a.polygon]
+    poly.splice(i, 0, [x, z])
+    patchAreaLocal(a.id, { polygon: poly })
+    void putArea(a, { polygon: poly })
+  }, [patchAreaLocal, putArea, selectedArea, t, toast])
+
+  const setAreaKind = useCallback((kind: string) => {
+    const a = selectedArea
+    if (!a || a.kind === kind) return
+    patchAreaLocal(a.id, { kind })
+    void putArea(a, { kind })
+  }, [patchAreaLocal, putArea, selectedArea])
+
+  /** "Bring forward" / "send back" is one layer, not a jump to the top: the
+   *  areas around it keep their order relative to each other. */
+  const bumpAreaZ = useCallback((delta: number) => {
+    const a = selectedArea
+    if (!a) return
+    const z = Math.min(MAX_Z_ORDER, Math.max(-MAX_Z_ORDER, (a.z_order || 0) + delta))
+    if (z === a.z_order) return
+    void putArea(a, { z_order: z })
+  }, [putArea, selectedArea])
+
+  const deleteArea = useCallback(async () => {
+    const a = selectedArea
+    if (!a) return
+    setSelArea('')
+    try {
+      await apiDelete(`/world/terrain-areas/${encodeURIComponent(a.id)}`)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+    await reloadTerrain()
+  }, [reloadTerrain, selectedArea, t, toast])
+
   const onBackgroundClick = useCallback((wx: number, wz: number) => {
     if (ghostRef.current) { void placeGhost(wx, wz); return }
+    const m = modeRef.current
+    if (m === 'paint') { addDraftPoint(wx, wz); return }
+    if (m === 'edit-area') {
+      // The list arrives bottom-to-top, so the TOPMOST area under the cursor
+      // is the last one that contains the point — walk it from the end.
+      const areas = areasRef.current
+      for (let i = areas.length - 1; i >= 0; i--) {
+        if (pointInPolygon(wx, wz, areas[i].polygon)) { setSelArea(areas[i].id); return }
+      }
+      setSelArea('')
+      return
+    }
     setSelId('')
-  }, [placeGhost])
+  }, [addDraftPoint, placeGhost])
 
+  /** Arming a tray entry is a location gesture — it takes the canvas back to
+   *  the location mode instead of leaving a ghost that the next click, meant
+   *  for the ground, would place by accident. */
   const armGhost = useCallback((loc: EditorLocation, kind: 'place' | 'clone') => {
+    switchMode('select')
     const anchor = anchorWidthM(loc)
     setGhost({
       kind, id: loc.id, name: loc.name,
       widthM: anchor ?? NO_ANCHOR_WIDTH_M, anchored: anchor != null,
     })
     setGhostPt(null)
-  }, [])
+  }, [switchMode])
 
   /** Open the location in the World tab. A clone has no editable data of its
    *  own — everything lives on its template, so that is what gets opened. */
@@ -447,6 +711,15 @@ export function MapTab() {
   const selAnchor = selected ? anchorWidthM(selected) : null
   const selIsClone = !!(selected && (selected.template_location_id || '').trim())
 
+  // The unpainted ground: the default kind's colour, and nothing at all until
+  // both the payload and the catalog have answered.
+  const groundColor = typeMap[terrain?.default_kind || '']?.color || ''
+  // Will the next click close the ring? The same pixel tolerance the click
+  // handler uses — the highlight must not promise a close that will not happen.
+  const draftWillClose = !!(draftCursor && draft.length >= MIN_POINTS
+    && Math.hypot(draftCursor.x - draft[0][0], draftCursor.z - draft[0][1])
+      <= CLOSE_TOL_PX / view.pxPerM)
+
   const trayEntry = (loc: EditorLocation, kind: 'place' | 'clone') => {
     const anchor = anchorWidthM(loc)
     return (
@@ -500,20 +773,34 @@ export function MapTab() {
 
       <div className="ga-map-main">
         <div className="ga-map-toolbar">
-          <button type="button" className="ga-btn ga-btn-sm" onClick={() => { void reload() }}>
+          <button type="button" className="ga-btn ga-btn-sm"
+            onClick={() => { void reload(); void reloadTerrain() }}>
             ↻ {t('Reload')}
           </button>
           <button type="button" className="ga-btn ga-btn-sm" onClick={fitView}
             disabled={!bounds}>
             {t('Fit view')}
           </button>
-          <label className="ga-map-toolbar-check"
-            title={t('Placing and moving snap the centre onto a {n} m grid')
-              .replace('{n}', String(SNAP_M))}>
-            <input type="checkbox" checked={snapOn}
-              onChange={(e) => setSnapOn(e.target.checked)} />
-            {t('Snap {n} m').replace('{n}', String(SNAP_M))}
-          </label>
+          <TerrainToolbar
+            mode={mode}
+            onMode={switchMode}
+            types={terrainTypes}
+            paintKind={paintKind}
+            onPaintKind={setPaintKind}
+            draftLen={draft.length}
+            onCloseDraft={() => { void commitDraft(draft) }}
+            onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
+            areaCount={terrain?.areas.length || 0}
+          />
+          {mode === 'select' ? (
+            <label className="ga-map-toolbar-check"
+              title={t('Placing and moving snap the centre onto a {n} m grid')
+                .replace('{n}', String(SNAP_M))}>
+              <input type="checkbox" checked={snapOn}
+                onChange={(e) => setSnapOn(e.target.checked)} />
+              {t('Snap {n} m').replace('{n}', String(SNAP_M))}
+            </label>
+          ) : null}
           <span className="ga-map-toolbar-info">
             {t('{n} placed').replace('{n}', String(placed.length))}
           </span>
@@ -540,19 +827,53 @@ export function MapTab() {
             onViewChange={setView}
             onBackgroundClick={onBackgroundClick}
             onPointerWorldMove={onWorldMove}
-            cursor={ghost ? 'crosshair' : undefined}
+            cursor={ghost || mode !== 'select' ? 'crosshair' : undefined}
           >
-            <PlacementLayer
-              locations={placed}
-              selectedId={selId}
-              onSelect={setSelId}
-              onMove={(id, x, z) => { void commitMove(id, x, z) }}
-              snapM={snapOn ? SNAP_M : 0}
-              iconVer={iconVer}
-              ghost={ghost}
-              ghostPt={ghostPt}
+            <TerrainLayer
+              areas={terrain?.areas || []}
+              types={typeMap}
+              groundColor={groundColor}
+              editing={mode === 'edit-area'}
+              selectedId={selArea}
+              draft={draft}
+              draftCursor={draftCursor}
+              draftColor={typeColor(typeMap, paintKind)}
+              draftWillClose={draftWillClose}
+              onVertexMove={moveVertex}
+              onVertexDelete={deleteVertex}
+              onEdgeInsert={insertVertex}
             />
+            {/* Outside the location mode the footprints must let clicks
+                through: a terrain click has to reach the canvas, which is
+                where the point-in-polygon test lives. The layer's own root
+                sets no pointer-events when nothing is armed, so it inherits
+                this. */}
+            <g pointerEvents={mode === 'select' ? undefined : 'none'}>
+              <PlacementLayer
+                locations={placed}
+                selectedId={selId}
+                onSelect={setSelId}
+                onMove={(id, x, z) => { void commitMove(id, x, z) }}
+                snapM={snapOn ? SNAP_M : 0}
+                iconVer={iconVer}
+                ghost={ghost}
+                ghostPt={ghostPt}
+              />
+            </g>
           </MapCanvas>
+
+          {selectedArea ? (
+            <TerrainAreaChip
+              key={selectedArea.id}
+              area={selectedArea}
+              types={typeMap}
+              typeList={terrainTypes}
+              onKind={setAreaKind}
+              onZOrder={bumpAreaZ}
+              onDelete={() => { void deleteArea() }}
+              onClose={() => setSelArea('')}
+            />
+          ) : null}
 
           {selected ? (
             <div className="ga-map-chip">

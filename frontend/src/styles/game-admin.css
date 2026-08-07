@@ -2072,6 +2072,47 @@ html, * {
 .ga-map-chip-yaw { width: 68px; padding: 2px 6px; font-size: 12px; }
 .ga-map-chip-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* Terrain: the three canvas modes and the type palette. */
+.ga-terrain-modes {
+  display: inline-flex;
+  gap: 4px;
+  padding-left: 8px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border, #30363d);
+}
+.ga-terrain-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ga-terrain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 12px;
+  background: var(--bg-container, #161b22);
+  color: var(--text, #c9d1d9);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ga-terrain-chip:hover { border-color: var(--accent, #58a6ff); }
+/* The armed kind — the next painted area gets it. */
+.ga-terrain-chip.armed {
+  border-color: var(--accent, #58a6ff);
+  background: rgba(88, 166, 255, 0.14);
+}
+.ga-terrain-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
 /* Map image picker dialog. */
 .ga-map-imgpicker { max-width: 480px; }
 .ga-map-imgpicker-group { display: flex; flex-direction: column; gap: 6px; }

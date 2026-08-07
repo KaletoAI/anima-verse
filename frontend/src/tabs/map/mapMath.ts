@@ -37,6 +37,18 @@
  *     view {cx: 7, cz: 7, pxPerM: 4}.
  *   zoomAt({cx:0, cz:0, pxPerM: PX_PER_M_MAX}, 2, 0, 0, 800, 600) returns the
  *     SAME view object (clamped, nothing moves).
+ *
+ * `pointInPolygon` answers the SAME question as the server's
+ * `world_geometry.point_in_polygon`, so it is pinned to the server smoke's
+ * numbers (`scripts/smoke_world_geometry.py`) — the editor must not disagree
+ * with the engine about which area a click hit. Triangle [(0,0), (10,0),
+ * (0,10)]:
+ *
+ *   (2, 2)  -> true    (inside)
+ *   (8, 8)  -> false   (past the hypotenuse x + z = 10)
+ *   (20, 0) -> false   (far outside, on the horizontal edge's ray)
+ *   pointInPolygon(0, 0, [[0,0], [1,1]]) -> false  (fewer than 3 points is
+ *     not an area at all — the server fails closed the same way)
  */
 
 /** Viewport state: world point at the canvas centre + zoom. */
@@ -194,10 +206,20 @@ export function worldPolyToPath(points: Array<[number, number]>, view: View,
   return parts.join(' ') + (close ? ' Z' : '')
 }
 
-/** Point-in-polygon in WORLD metres (ray casting) — which painted area a
- *  click hit. The topmost hit wins; that ordering is the caller's (§ A1.5). */
+/**
+ * Point-in-polygon in WORLD metres (ray casting) — which painted area a click
+ * hit. The topmost hit wins; that ordering is the caller's (§ A1.5).
+ *
+ * The algorithm is the server's (`app/core/world_geometry.point_in_polygon`),
+ * INCLUDING its fail-closed guard: fewer than three points enclose nothing, so
+ * a half-drawn draft can never swallow a click. The ray-casting loop alone
+ * would already return false for a two-point "polygon" (it walks the single
+ * edge twice and toggles twice), but relying on that coincidence would leave
+ * the two implementations agreeing by accident instead of by rule.
+ */
 export function pointInPolygon(x: number, z: number,
   poly: Array<[number, number]>): boolean {
+  if (poly.length < 3) return false
   let inside = false
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const [xi, zi] = poly[i]
