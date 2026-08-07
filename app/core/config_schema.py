@@ -697,6 +697,13 @@ SECTIONS = {
                 "description": "Game seconds one journey cell takes. Existing journeys "
                                "keep the pace they started with.",
             },
+            "default_terrain_kind": {
+                "type": "str",
+                "label": "Default terrain kind",
+                "default": "grass",
+                "description": "Ground of the unpainted world — a kind from the "
+                               "terrain-type catalog.",
+            },
         },
     },
     "ui": {

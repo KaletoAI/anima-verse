@@ -601,8 +601,8 @@ def build_memory_locations(character_name: str) -> Dict[str, Any]:
         items.append({
             "id": lid,
             "name": loc.get("name", ""),
-            "grid_x": loc.get("grid_x"),
-            "grid_y": loc.get("grid_y"),
+            "pos_x": loc.get("pos_x"),
+            "pos_z": loc.get("pos_z"),
             "map_rotation_2d": loc.get("map_rotation_2d", 0),
             "passable": bool(loc.get("passable")),
             "danger_level": loc.get("danger_level"),

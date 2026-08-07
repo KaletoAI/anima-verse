@@ -1448,6 +1448,46 @@ def _write_character_pos(character_name: str, x: Optional[float],
                      character_name, e)
 
 
+def _shift_location_occupants(location_id: str,
+                              old_cx: Optional[float], old_cz: Optional[float],
+                              new_cx: Optional[float],
+                              new_cz: Optional[float]) -> None:
+    """Re-placing a location in the editor takes its occupants along (E2).
+
+    Every character whose ``current_location`` is this location keeps its
+    RELATIVE offset to the centre: the delta (new centre − old centre) is
+    added to its point. Two cases have no delta to apply and land the
+    character on the new centre instead: it has no point at all, or the
+    location was unplaced before (no old centre existed).
+
+    Unplacing (``new_*`` None) leaves every point untouched — the occupants
+    then stand in the open wilderness, which is deliberate: the editor
+    unplaces, gameplay cleanup is not its job.
+    """
+    if not location_id or new_cx is None or new_cz is None:
+        return
+    try:
+        rows = get_connection().execute(
+            "SELECT character_name FROM character_state WHERE current_location=?",
+            (location_id,)).fetchall()
+    except Exception as e:
+        logger.error("_shift_location_occupants DB error for %s: %s",
+                     location_id, e)
+        return
+    has_delta = old_cx is not None and old_cz is not None
+    for row in rows:
+        name = row[0]
+        if not name:
+            continue
+        pos = get_character_pos(name)
+        if pos is None or not has_delta:
+            _write_character_pos(name, new_cx, new_cz)
+            continue
+        _write_character_pos(name,
+                             round(pos["x"] + (new_cx - old_cx), 2),
+                             round(pos["z"] + (new_cz - old_cz), 2))
+
+
 def _clear_location_and_room(character_name: str) -> None:
     """Put a character nowhere: current_location AND current_room empty.
 

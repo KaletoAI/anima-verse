@@ -1698,10 +1698,15 @@ def update_location_position(location_id: str, pos_x: Optional[float],
 
     Raises ValueError on a non-finite coordinate or angle (the caller turns
     that into a 400) — nothing is written in that case.
+
+    Re-placing takes the occupants along (E2 decision): every character
+    standing in this location is shifted by the same delta, so the scene
+    keeps its shape. Unplacing leaves the characters' points untouched.
     """
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
+            _old_x, _old_z = loc.get("pos_x"), loc.get("pos_z")
             if pos_x is None or pos_z is None:
                 loc.pop("pos_x", None)
                 loc.pop("pos_z", None)
@@ -1718,6 +1723,14 @@ def update_location_position(location_id: str, pos_x: Optional[float],
                 if _yaw is not None:
                     loc["yaw_deg"] = _yaw
             _save_world_data(data)
+            # Occupant sync AFTER the position write — local import, like the
+            # other character cross-references in this module.
+            from app.models.character import _shift_location_occupants
+            _shift_location_occupants(
+                location_id,
+                None if _old_x is None else float(_old_x),
+                None if _old_z is None else float(_old_z),
+                loc.get("pos_x"), loc.get("pos_z"))
             return loc
     return None
 
