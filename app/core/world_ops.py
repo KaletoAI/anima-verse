@@ -442,32 +442,38 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
 
 def build_worldmap_payload(avatar_name: Optional[str] = None,
                            show_all: bool = False) -> Dict[str, Any]:
-    """Aggregated 2D world map: locations (grid/passable/rotation + optional
-    terrain/map3d metadata), character positions (+avatar/activity/room/mood/
-    travel target) and active disruption/danger events. One request instead of
-    N fetches — read-only, for the player map panel and external map clients.
+    """Aggregated world map in METRES: locations (centre/rotation/footprint
+    edge + optional map3d metadata), character positions (+avatar/activity/
+    room/mood/travel target) and active disruption/danger events. One request
+    instead of N fetches — read-only, for the player map panel and external
+    map clients.
+
+    Payload v2 (Seamless World, E1): the grid is gone. A location is a square
+    of edge ``plan_width_m`` centred on (``pos_x``, ``pos_z``) and rotated by
+    ``yaw_deg``; every character carries its free metre point in ``pos``.
+    Painted terrain is deliberately NOT in here — clients fetch
+    ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
 
     Fog of war (§ A12): with ``show_all=False`` the payload only carries what
     the avatar knows — placed locations pass through
     ``location_visible_to_character``, characters and events follow their
-    location. ``show_all=True`` is the unfiltered admin view. ``grid_bounds``
-    is always computed over ALL placed locations, so the map keeps its extent
-    (and its cell scale) no matter how much of it is still dark.
+    location. ``show_all=True`` is the unfiltered admin view. ``world_bounds``
+    is always computed over ALL placed footprints, so the map keeps its extent
+    no matter how much of it is still dark.
     """
     from app.models.events import list_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
+        get_character_pos,
         get_effective_activity, get_effective_pose_key, get_movement_target,
         get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
-    from app.core.surface_textures import library_kinds, resolve_terrain_kind
+    from app.core.world_geometry import placed_footprint
+    from app.models.terrain import terrain_sig
 
-    # The library is read ONCE for the whole payload — the resolution itself
-    # is a pure lookup per location (plan-grundflaeche.md § 5).
-    known_kinds = library_kinds()
     avatar = (avatar_name or "").strip()
     fogged = not show_all
     # The fog predicate runs once per placed location on a 3-second poll —
@@ -476,11 +482,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     _vis_ctx = visibility_context(avatar) if (fogged and avatar) else None
 
     def _visible(loc: Dict[str, Any]) -> bool:
-        """Fog predicate. An unplaced location (no grid cell) is not on the map
-        at all — template placeholders always pass, they hide nothing."""
+        """Fog predicate. An unplaced location (no metre position) is not on
+        the map at all — template placeholders always pass, they hide
+        nothing."""
         if not fogged:
             return True
-        if loc.get("grid_x") is None or loc.get("grid_y") is None:
+        if loc.get("pos_x") is None or loc.get("pos_z") is None:
             return True
         if not avatar:
             return False
@@ -489,31 +496,39 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     locations = []
     name_by_id = {}
     visible_ids = set()
-    # Map extent over ALL placed locations — computed before the fog filter.
-    _xs, _ys = [], []
+    # Map extent in metres over ALL placed footprints (centre ± half the
+    # footprint edge) — computed BEFORE the fog filter, so the map keeps its
+    # extent no matter how much of it is still dark. Deliberately the
+    # axis-aligned box of the UNROTATED square: the extent is a viewport hint,
+    # not a collision volume.
+    _min_x = _min_z = _max_x = _max_z = None
     for loc in list_locations():
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
-        if loc.get("grid_x") is not None and loc.get("grid_y") is not None:
-            _xs.append(int(loc["grid_x"]))
-            _ys.append(int(loc["grid_y"]))
+        _fp = placed_footprint(loc)
+        if _fp is not None:
+            _cx, _cz, _w, _ = _fp
+            _half = _w / 2.0
+            _min_x = _cx - _half if _min_x is None else min(_min_x, _cx - _half)
+            _max_x = _cx + _half if _max_x is None else max(_max_x, _cx + _half)
+            _min_z = _cz - _half if _min_z is None else min(_min_z, _cz - _half)
+            _max_z = _cz + _half if _max_z is None else max(_max_z, _cz + _half)
         if not _visible(loc):
             continue
         visible_ids.add(lid)
+        # The footprint edge is hoisted out of map3d: it is the scale anchor
+        # every map client needs, and none of them should have to dig for it.
+        try:
+            _width = float((loc.get("map3d") or {}).get("plan_width_m"))
+        except (TypeError, ValueError):
+            _width = None
         entry = {
             "id": lid,
             "name": loc.get("name") or "",
-            "grid_x": loc.get("grid_x"),
-            "grid_y": loc.get("grid_y"),
-            "passable": bool(loc.get("passable")),
-            "template_location_id": (loc.get("template_location_id") or ""),
-            "map_rotation_2d": int(loc.get("map_rotation_2d") or 0),
-            "terrain": (loc.get("terrain") or ""),
-            # The ground outside as the SERVER resolves it ('' = the terrain
-            # names no library entry). Delivered wherever `terrain` is, so a
-            # client never has to look the mapping up itself.
-            "surface_kind": resolve_terrain_kind(loc.get("terrain"),
-                                                 known_kinds),
+            "pos_x": loc.get("pos_x"),
+            "pos_z": loc.get("pos_z"),
+            "yaw_deg": float(loc.get("yaw_deg") or 0.0),
+            "plan_width_m": _width,
         }
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:
@@ -529,14 +544,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             _top = max([l for l in _levels if l >= 0], default=None)
             if _top is not None:
                 entry["map3d"] = {**(entry.get("map3d") or {}), "floors": _top + 1}
-        # Multi-tile patch (drawn UNDER the per-cell tiles, centred on this
-        # cell) + the per-cell "own tile hidden" switch. Clients load the
-        # patch via /world/locations/{id}/map-patch-2d.
-        if loc.get("map_image_off"):
-            entry["map_image_off"] = True
-        if (loc.get("map_patch_2d") or "").strip():
-            entry["map_patch_2d"] = True
-            entry["map_patch_span"] = int(loc.get("map_patch_span") or 3)
         # Room-layout signature (AV3D-2 addendum): a running client loads
         # /world/locations only once — this bump tells it a room layout of
         # this location changed, so it can re-fetch specifically.
@@ -550,8 +557,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 _lay_rooms, sort_keys=True, default=str).encode()).hexdigest()[:10]
         locations.append(entry)
 
-    grid_bounds = {"min_x": min(_xs), "min_y": min(_ys),
-                   "max_x": max(_xs), "max_y": max(_ys)} if _xs else None
+    world_bounds = ({"min_x": round(_min_x, 2), "min_z": round(_min_z, 2),
+                     "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}
+                    if _min_x is not None else None)
 
     # Journeys are a pure function of the GAME clock — read it ONCE for the
     # whole payload so every character in one response shares the same now.
@@ -563,11 +571,19 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     characters = []
     for name in list_available_characters():
         loc_id = get_character_current_location(name) or ""
-        if not loc_id:
+        pos = get_character_pos(name)
+        if not loc_id and pos is None:
             continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
+        if not loc_id:
+            # Wilderness: a free point outside every footprint is a legal
+            # place to be. Under fog only the avatar itself is shown there —
+            # the sight-radius rule that lets it see OTHERS out in the open
+            # lands with E6.
+            if fogged and name != avatar:
+                continue
         # The avatar always sees itself; everyone else only where the avatar
         # can look. Standing in an unknown place hides a character entirely.
-        if fogged and name != avatar and loc_id not in visible_ids:
+        elif fogged and name != avatar and loc_id not in visible_ids:
             continue
         mt = get_movement_target(name) or ""
         prof = get_character_profile_image(name) or ""
@@ -641,6 +657,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         characters.append({
             "name": name,
             "location_id": loc_id,
+            # Free metre point, or null when the character has none (its
+            # location is unplaced). Clients place the figure by `pos` and
+            # only fall back to the location centre when it is null.
+            "pos": pos,
             "height_cm": cm,
             "room_id": get_character_current_room(name) or "",
             "activity": activity,
@@ -677,7 +697,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         "locations": locations,
         "characters": characters,
         "events_by_location": events_by_location,
-        "grid_bounds": grid_bounds,
+        "world_bounds": world_bounds,
+        # Signature of the painted terrain (areas + world type rows), read
+        # ONCE per payload: when it changes, clients refetch /play/terrain.
+        "terrain_sig": terrain_sig(),
         "fogged": fogged,
     }
 

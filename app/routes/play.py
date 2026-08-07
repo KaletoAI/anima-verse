@@ -1524,6 +1524,26 @@ async def play_worldmap(user=Depends(get_current_user),
     return build_worldmap_payload(avatar, show_all=bool(show_all) and is_admin)
 
 
+@router.get("/play/terrain")
+def get_terrain_route(user=Depends(get_current_user)):
+    """Painted terrain for map clients: areas + effective type catalog.
+
+    Never fogged by design — terrain is always visible, only locations
+    hide. Clients poll /play/worldmap and refetch this when terrain_sig
+    changes.
+    """
+    from app.core.terrain_types import effective_catalog
+    from app.models import terrain
+    from app.core import config
+    return {
+        "default_kind": str(config.get("game.default_terrain_kind", "grass")),
+        "types": sorted(effective_catalog().values(),
+                        key=lambda t: t["kind"]),
+        "areas": terrain.list_areas(),
+        "sig": terrain.terrain_sig(),
+    }
+
+
 @router.get("/play/scenes")
 async def play_scenes(user=Depends(get_current_user), limit: int = 5):
     """„Was bisher geschah" — zuletzt konsolidierte Szenen, an denen der Avatar
