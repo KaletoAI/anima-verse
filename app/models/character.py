@@ -1293,18 +1293,23 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
     save_character_profile(character_name, profile)
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
-    # character stands, so a location write drags it along — the character
-    # lands at the centre of the target location. A location without a metre
-    # position (never placed, off-map sleep sentinel, unknown id) has no
-    # centre to stand on: both columns go NULL.
-    if sync_pos:
+    # character stands, so a REAL location change drags it along — the
+    # character lands at the centre of the target location. A target location
+    # without a metre position (never placed, unknown id) has no centre to
+    # stand on: both columns go NULL.
+    # Gated on location_changed like every other effect here, for two reasons:
+    # a room-/status-only update re-saves the SAME location and must not
+    # re-centre a freely positioned character, and the off-map sleep path
+    # (periodic_jobs) resolves the sentinel to an EMPTY location — clearing
+    # the free point there would lose it irrecoverably. Empty or unchanged
+    # location therefore leaves the position untouched.
+    if sync_pos and location_changed:
         _cx = _cz = None
-        if location:
-            from app.models.world import get_location_by_id as _glbi
-            _tloc = _glbi(location) or {}
-            _px, _pz = _tloc.get("pos_x"), _tloc.get("pos_z")
-            if _px is not None and _pz is not None:
-                _cx, _cz = float(_px), float(_pz)
+        from app.models.world import get_location_by_id as _glbi
+        _tloc = _glbi(location) or {}
+        _px, _pz = _tloc.get("pos_x"), _tloc.get("pos_z")
+        if _px is not None and _pz is not None:
+            _cx, _cz = float(_px), float(_pz)
         _write_character_pos(character_name, _cx, _cz)
     # AV3D-3: push the movement to connected map clients (SSE state stream) —
     # polling /play/worldmap stays the baseline, the event just arrives
@@ -1443,6 +1448,26 @@ def _write_character_pos(character_name: str, x: Optional[float],
                      character_name, e)
 
 
+def _clear_location_and_room(character_name: str) -> None:
+    """Put a character nowhere: current_location AND current_room empty.
+
+    The wilderness counterpart of the location setter — outside every
+    footprint there is no place and no room to be in. A direct state write,
+    because the setter's machinery is keyed on a non-empty location.
+    """
+    if not character_name:
+        return
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "UPDATE character_state SET current_location='', "
+                "current_room='', location_changed_at=? WHERE character_name=?",
+                (utc_now_iso(), character_name))
+    except Exception as e:
+        logger.error("_clear_location_and_room DB error for %s: %s",
+                     character_name, e)
+
+
 def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]:
     """Put a character at a free metre point; the location is DERIVED from it.
 
@@ -1469,10 +1494,23 @@ def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]
     loc = location_at_point(fx, fz, list_locations())
     location_id = (loc.get("id") or "") if loc else ""
     if location_id != get_character_current_location(character_name):
-        # sync_pos=False — the location setter would otherwise snap the
-        # character back to the location centre and undo this very move.
-        save_character_current_location(character_name, location_id,
-                                        sync_pos=False)
+        if location_id:
+            # sync_pos=False — the location setter would otherwise snap the
+            # character back to the location centre and undo this very move.
+            save_character_current_location(character_name, location_id,
+                                            sync_pos=False)
+        else:
+            # Stepping OUT of every footprint. The normal setter cannot do
+            # this: its location_changed is False for an empty location
+            # (bool("") is False), so it would leave current_room pointing at
+            # the room just left — and room-filtered perception/chat would
+            # keep the character in there. Outside means no location AND no
+            # room, so this writes the two state columns directly.
+            # Deliberately minimal for E1: the heavy departure side effects
+            # (pose reset, SSE push, movement traces, compliance) stay out of
+            # scope here — the reverse step back INTO a location still runs
+            # through the normal setter and gets all of them.
+            _clear_location_and_room(character_name)
     _write_character_pos(character_name, fx, fz)
     return {"pos": {"x": fx, "z": fz}, "location_id": location_id}
 
