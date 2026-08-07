@@ -65,6 +65,13 @@ export interface EditorLocation extends MapGeometry {
   is_template?: boolean
   template_location_id?: string
   description?: string
+  /** Chosen gallery file for the flat map icon (`PATCH .../map-image`); empty
+   *  falls back to the first `map_2d` image of the gallery owner. */
+  map_image_2d?: string
+  /** 90°-step display rotation of that ICON (`PATCH .../map-rotation`) — it
+   *  turns the artwork inside the footprint and is NOT `yaw_deg`, which turns
+   *  the location itself in the world. */
+  map_rotation_2d?: number
 }
 
 /** A character on the worldmap (§ A1.4). `pos` is the truth; `location_id` is

@@ -2,168 +2,338 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { ExportButton, ImportButton } from '../../components/ImportExport'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
-import { FitDialog } from './FitDialog'
-import { EdgeDialog } from './EdgeDialog'
+import { fmtM } from '../world/planGeometry'
+import { MapCanvas } from './MapCanvas'
+import { FIT_FALLBACK_PX_PER_M, fitBounds, type MapBounds, type View } from './mapMath'
+import {
+  NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
+} from './PlacementLayer'
+import type { EditorLocation, WorldmapPayload } from './mapTypes'
 
 /**
- * Map tab — replaces the placement UI that used to live on the main
- * worldmap. The list-detail layout matches the other tabs: a tray on
- * the left with unplaced + passable templates, a 2D grid on the right
- * where locations are dropped onto cells.
+ * Map tab — the editor of the free metre world.
  *
- * Drag payloads:
- *   "tmpl:<id>"  – passable template, drop on grid → POST clone at (x,y)
- *   "loc:<id>"   – existing location, drop on grid → PATCH position
- *                  (drop on tray → PATCH to (-1,-1) or DELETE if clone)
+ * The grid is gone (Seamless World, E1/E2): a location is a square of edge
+ * `map3d.plan_width_m` standing on a continuous plane at (`pos_x`, `pos_z`),
+ * turned by `yaw_deg`. Placing means naming a point in METRES, not choosing a
+ * cell, so nothing here counts columns and nothing drops onto a tile.
+ *
+ * Two reads, both one-shot (an editor that polls fights the hand that edits):
+ *   - `GET /world/locations` — the full dicts. The tray lives off them: an
+ *     unplaced location still carries its scale anchor in `map3d`, which the
+ *     worldmap payload would report as `null`, and only these dicts know
+ *     about templates and clones.
+ *   - `GET /play/worldmap?all=1` — for `world_bounds` alone, to frame the
+ *     first view. The reload button refetches both.
+ *
+ * Writing goes through three routes only: `PATCH .../position` (place, move,
+ * turn, and — with null coordinates — unplace), `POST .../clone` (a template
+ * instance at a point) and `DELETE /world/locations/{id}` (clones only, as
+ * before). Re-placing shifts the occupants server-side, so the editor moves a
+ * location without thinking about who stands inside it.
+ *
+ * Placing is click-arm-click, never HTML5 drag&drop: a tray entry arms a
+ * ghost footprint that follows the cursor, the next click on the map commits
+ * it, Escape cancels. The gesture works at any zoom and needs no drop target.
  */
-
-interface Location {
-  id: string
-  name: string
-  passable?: boolean
-  is_template?: boolean
-  template_location_id?: string
-  grid_x?: number | null
-  grid_y?: number | null
-  map_image_2d?: string
-  map_rotation_2d?: number
-  /** Multi-tile ground patch anchored (centred) on this cell — a gallery
-   *  file of type map_3x3, drawn UNDER the per-cell tiles. */
-  map_patch_2d?: string
-  map_patch_span?: number
-  /** The cell's own tile is switched off (no first-image fallback either). */
-  map_image_off?: boolean
-  description?: string
-  image_prompt_map_2d?: string
-}
 
 interface GalleryResp {
   images?: string[]
   image_types?: Record<string, string>
 }
 
-const COLS = 10
-const ROWS = 10
-const CELL = 88
+/** Yaw controls: the fine step and the quarter turn. */
+const YAW_FINE = 15
+const YAW_QUARTER = 90
 
-// Flat 2D map tile, hidden if none exists. The Map tab is a flat grid, so the 2D
-// tiles are the natural fit. `cacheKey` lets a caller force a reload after the
-// per-cell image was changed. Rotation is a display-only transform.
-function MapIcon({ locId, className, cacheKey, rotation }: { locId: string; className: string; cacheKey?: string; rotation?: number }) {
+/** Snap step of the placement grid when the toggle is on (§ E2 brief). */
+const SNAP_M = 10
+
+const normYaw = (deg: number): number => ((deg % 360) + 360) % 360
+
+/** A world coordinate for the chip. `fmtM` decides its precision by
+ *  magnitude, which a negative metre would defeat (−50 would print with two
+ *  decimals, +50 with none) — the sign is therefore split off first. */
+const fmtPos = (v: number): string => (v < 0 ? '-' : '') + fmtM(Math.abs(v))
+
+/** Flat 2D map icon as an HTML thumbnail (tray). Hidden when the location has
+ *  none — a broken image would claim the entry is misconfigured. The map
+ *  itself draws the same URL as an SVG `<image>`, which needs no such guard. */
+function MapIcon({ locId, className, cacheKey }: {
+  locId: string; className: string; cacheKey?: string
+}) {
   const [hidden, setHidden] = useState(false)
   useEffect(() => { setHidden(false) }, [cacheKey, locId])
   if (hidden) return null
   const base = `/world/locations/${encodeURIComponent(locId)}/map-icon-2d`
   const src = cacheKey ? `${base}?v=${encodeURIComponent(cacheKey)}` : base
-  const style = rotation ? { transform: `rotate(${rotation}deg)` } : undefined
-  return <img className={className} src={src} alt="" style={style} onError={() => setHidden(true)} />
-}
-
-// Multi-tile ground patch (gallery type map_3x3), drawn UNDER the cell grid.
-// Hidden on 404; never intercepts the drag&drop pointers.
-function MapPatchImg({ locId, left, top, size, cacheKey }: {
-  locId: string; left: number; top: number; size: number; cacheKey?: string
-}) {
-  const [hidden, setHidden] = useState(false)
-  useEffect(() => { setHidden(false) }, [cacheKey, locId])
-  if (hidden) return null
-  const base = `/world/locations/${encodeURIComponent(locId)}/map-patch-2d`
-  const src = cacheKey ? `${base}?v=${encodeURIComponent(cacheKey)}` : base
-  return (
-    <img src={src} alt="" onError={() => setHidden(true)}
-      style={{ position: 'absolute', left, top, width: size, height: size,
-        objectFit: 'cover', borderRadius: 4, pointerEvents: 'none' }} />
-  )
+  return <img className={className} src={src} alt="" onError={() => setHidden(true)} />
 }
 
 export function MapTab() {
   const { t } = useI18n()
   const { toast } = useToast()
-  const [locations, setLocations] = useState<Location[] | null>(null)
-  const [dragPayload, setDragPayload] = useState<string | null>(null)
-  const [dragOverCell, setDragOverCell] = useState<string | null>(null)
-  const [trayDragOver, setTrayDragOver] = useState(false)
-  const gridRef = useRef<HTMLDivElement | null>(null)
 
-  // Per-cell image picker: which placed location's picker is open, its gallery,
-  // and a per-location cache-buster so the icon reloads after a change.
-  const [picker, setPicker] = useState<Location | null>(null)
-  const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
+  const [locations, setLocations] = useState<EditorLocation[] | null>(null)
+  const [bounds, setBounds] = useState<MapBounds | null>(null)
+  const [view, setView] = useState<View>({ cx: 0, cz: 0, pxPerM: FIT_FALLBACK_PX_PER_M })
+  const [selId, setSelId] = useState('')
+  const [snapOn, setSnapOn] = useState(true)
+  const [ghost, setGhost] = useState<GhostSpec | null>(null)
+  const [ghostPt, setGhostPt] = useState<{ x: number; z: number } | null>(null)
+  const [yawDraft, setYawDraft] = useState('')
+  const [delArmed, setDelArmed] = useState('')
+
+  // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
-  // Globaler Refresh-Tick: erzwingt EINMAL ein Neuladen ALLER Tiles (z.B. nach
-  // Edge-Match, das auch den Nachbarn aendert). Pro Loc bleibt iconVer fuer
-  // gezielte Refreshes (normale Gen / Fit).
-  const [refreshTick, setRefreshTick] = useState(0)
-  // Welche Galerie-Datei steht gerade zum Loeschen an (Inline-Bestaetigung, kein confirm()).
+  // Image picker: which location's picker is open plus its gallery, and which
+  // gallery file is armed for deletion (inline confirmation, no confirm()).
+  const [picker, setPicker] = useState<EditorLocation | null>(null)
+  const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
   const [delConfirm, setDelConfirm] = useState<string | null>(null)
+  const [gen, setGen] = useState<EditorLocation | null>(null)
 
-  // Image generation from the cell-image dialog: ✨ = normal ImageGenDialog,
-  // ⊞ = hardwired FitDialog (backend comes from the config).
-  const [gen, setGen] = useState<{ loc: Location; type: 'map_2d' | 'map_3x3' } | null>(null)
-  const [fit, setFit] = useState<{ loc: Location } | null>(null)
-  const [edge, setEdge] = useState<{ loc: Location; available: Record<string, string> } | null>(null)
-  // Inpaint backends (category=="inpaint") for the Fit/Edge selection + the
-  // mapfit default prompts per family (prefill the prompt field).
-  const [inpaintBackends, setInpaintBackends] = useState<{ name: string; family: string; prompt: string; terrainHint: boolean }[]>([])
-  const [mapfitPrompts, setMapfitPrompts] = useState<Record<string, string>>({})
-  const [mapfitDefault, setMapfitDefault] = useState('')
+  // The canvas pane is measured here as well: `fitBounds` needs the pixel size
+  // BEFORE the first view exists, and the size the canvas measures for itself
+  // lives inside its own context.
+  const paneRef = useRef<HTMLDivElement | null>(null)
+  const [pane, setPane] = useState({ w: 0, h: 0 })
+  const fittedRef = useRef(false)
+
   useEffect(() => {
-    apiGet<{
-      mapfit_prompts?: Record<string, string>
-      mapfit_imagegen_default?: string
-      options?: Array<{ name?: string; category?: string; image_family?: string; prompt?: string; terrain_hint?: boolean }>
-    }>('/world/imagegen-options')
-      .then((d) => {
-        setMapfitPrompts(d.mapfit_prompts || {})
-        setMapfitDefault(d.mapfit_imagegen_default || '')
-        // Inpaint targets: backends with category=="inpaint". terrain_hint decides
-        // whether the dialog appends the dynamic terrain hint to the prompt.
-        const inp = (d.options || [])
-          .filter((o) => o.category === 'inpaint' && o.name)
-          .map((o) => ({
-            name: o.name as string,
-            family: o.image_family || '', prompt: o.prompt || '',
-            terrainHint: !!o.terrain_hint,
-          }))
-        setInpaintBackends(inp)
-      })
-      .catch(() => { /* ignore */ })
+    const el = paneRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const read = () => {
+      const r = el.getBoundingClientRect()
+      setPane({ w: Math.round(r.width), h: Math.round(r.height) })
+    }
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [])
 
   const reload = useCallback(async () => {
     try {
-      const data = await apiGet<{ locations?: Location[] }>('/world/locations')
+      const data = await apiGet<{ locations?: EditorLocation[] }>('/world/locations')
       setLocations(data.locations || [])
     } catch (e) {
       toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
+      return
     }
+    // The frame is a nicety — a world without bounds still edits fine.
+    try {
+      const wm = await apiGet<WorldmapPayload>('/play/worldmap?all=1')
+      setBounds(wm.world_bounds || null)
+    } catch { /* keep the current frame */ }
   }, [t, toast])
 
+  useEffect(() => { void reload() }, [reload])
+
+  // First frame: as soon as bounds AND a measured pane exist. Later reloads
+  // keep the user's view — refitting under an edit would move the world away.
   useEffect(() => {
-    reload()
-  }, [reload])
+    if (fittedRef.current || !bounds || !pane.w || !pane.h) return
+    fittedRef.current = true
+    setView(fitBounds(bounds, pane.w, pane.h))
+  }, [bounds, pane])
 
-  // Clones share their template's gallery — load images from the owner
-  // (template_location_id when a clone, else the location itself). The chosen
-  // image is stored on the placed location/clone (loc.id) so each cell differs.
-  const ownerOf = (loc: Location) => (loc.template_location_id || '').trim() || loc.id
+  const fitView = useCallback(() => {
+    if (!bounds || !pane.w || !pane.h) return
+    setView(fitBounds(bounds, pane.w, pane.h))
+  }, [bounds, pane])
 
-  const openPicker = useCallback(async (loc: Location) => {
+  // Escape cancels the armed ghost, then the selection.
+  const ghostRef = useRef<GhostSpec | null>(null)
+  ghostRef.current = ghost
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (ghostRef.current) { setGhost(null); setGhostPt(null) } else { setSelId('') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Only an armed ghost cares where the cursor is; without one this must not
+  // re-render the tab on every mouse move.
+  const onWorldMove = useCallback((x: number, z: number) => {
+    if (ghostRef.current) setGhostPt({ x, z })
+  }, [])
+
+  const { placed, unplaced, templates } = useMemo(() => {
+    const pl: EditorLocation[] = []
+    const un: EditorLocation[] = []
+    const tm: EditorLocation[] = []
+    for (const loc of locations || []) {
+      const isClone = !!(loc.template_location_id || '').trim()
+      // A template is a stamp, never a place on the map: passable templates
+      // (their clones get placed) and explicitly flagged template locations.
+      if ((!!loc.passable && !isClone) || loc.is_template) { tm.push(loc); continue }
+      if (isPlaced(loc)) pl.push(loc)
+      else un.push(loc)
+    }
+    return { placed: pl, unplaced: un, templates: tm }
+  }, [locations])
+
+  const selected = useMemo(
+    () => (locations || []).find((l) => l.id === selId) || null,
+    [locations, selId],
+  )
+  useEffect(() => {
+    setYawDraft(selected ? String(normYaw(selected.yaw_deg || 0)) : '')
+    setDelArmed('')
+  }, [selected])
+
+  const snapV = useCallback((v: number) => (
+    snapOn ? Math.round(v / SNAP_M) * SNAP_M : Math.round(v * 100) / 100
+  ), [snapOn])
+
+  // ── Writes ───────────────────────────────────────────────────────────────
+
+  /** Optimistic patch of one location in the loaded list. */
+  const patchLocal = useCallback((id: string, fields: Partial<EditorLocation>) => {
+    setLocations((ls) => (ls || []).map((l) => (l.id === id ? { ...l, ...fields } : l)))
+  }, [])
+
+  const commitMove = useCallback(async (id: string, x: number, z: number) => {
+    patchLocal(id, { pos_x: x, pos_z: z })
+    try {
+      await apiPatch(`/world/locations/${encodeURIComponent(id)}/position`,
+        { pos_x: x, pos_z: z })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      void reload()
+    }
+  }, [patchLocal, reload, t, toast])
+
+  /** Turning re-sends the position: the route reads a missing coordinate as
+   *  "unplace", so a yaw-only body would take the location off the map. */
+  const commitYaw = useCallback(async (loc: EditorLocation, deg: number) => {
+    const yaw = normYaw(deg)
+    if (!isPlaced(loc)) return
+    patchLocal(loc.id, { yaw_deg: yaw })
+    setYawDraft(String(yaw))
+    try {
+      await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/position`,
+        { pos_x: loc.pos_x, pos_z: loc.pos_z, yaw_deg: yaw })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      void reload()
+    }
+  }, [patchLocal, reload, t, toast])
+
+  const unplace = useCallback(async (loc: EditorLocation) => {
+    try {
+      await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/position`,
+        { pos_x: null, pos_z: null })
+      setSelId('')
+      await reload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [reload, t, toast])
+
+  const removeClone = useCallback(async (loc: EditorLocation) => {
+    try {
+      await apiDelete(`/world/locations/${encodeURIComponent(loc.id)}`)
+      setSelId('')
+      await reload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [reload, t, toast])
+
+  /** The armed tray entry lands here: place the location itself, or stamp a
+   *  clone of the template at the clicked point. */
+  const placeGhost = useCallback(async (wx: number, wz: number) => {
+    const g = ghostRef.current
+    if (!g) return
+    setGhost(null)
+    setGhostPt(null)
+    const x = snapV(wx)
+    const z = snapV(wz)
+    try {
+      if (g.kind === 'clone') {
+        const r = await apiPost<{ location?: EditorLocation }>(
+          `/world/locations/${encodeURIComponent(g.id)}/clone`, { pos_x: x, pos_z: z })
+        await reload()
+        setSelId(r?.location?.id || '')
+      } else {
+        await apiPatch(`/world/locations/${encodeURIComponent(g.id)}/position`,
+          { pos_x: x, pos_z: z })
+        await reload()
+        setSelId(g.id)
+      }
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [reload, snapV, t, toast])
+
+  const onBackgroundClick = useCallback((wx: number, wz: number) => {
+    if (ghostRef.current) { void placeGhost(wx, wz); return }
+    setSelId('')
+  }, [placeGhost])
+
+  const armGhost = useCallback((loc: EditorLocation, kind: 'place' | 'clone') => {
+    const anchor = anchorWidthM(loc)
+    setGhost({
+      kind, id: loc.id, name: loc.name,
+      widthM: anchor ?? NO_ANCHOR_WIDTH_M, anchored: anchor != null,
+    })
+    setGhostPt(null)
+  }, [])
+
+  /** Open the location in the World tab. A clone has no editable data of its
+   *  own — everything lives on its template, so that is what gets opened. */
+  const editLocation = useCallback((loc: EditorLocation) => {
+    const target = (loc.template_location_id || '').trim() || loc.id
+    sessionStorage.setItem('ga:world:select',
+      JSON.stringify({ kind: 'location', locationId: target }))
+    window.location.hash = '#/world'
+  }, [])
+
+  /** 90° step of the ICON inside the footprint (display transform), not the
+   *  location's rotation in the world. */
+  const rotateIcon = useCallback(async (loc: EditorLocation) => {
+    const next = ((loc.map_rotation_2d || 0) + 90) % 360
+    patchLocal(loc.id, { map_rotation_2d: next })
+    try {
+      await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-rotation`,
+        { rotation: next })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      void reload()
+    }
+  }, [patchLocal, reload, t, toast])
+
+  // ── Image picker (kept from the grid tab, cell mechanics removed) ─────────
+
+  // Clones share their template's gallery — images are read from the owner,
+  // the CHOICE is stored on the clone, so two copies can show two pictures.
+  const ownerOf = (loc: EditorLocation) => (loc.template_location_id || '').trim() || loc.id
+
+  const bumpIcon = useCallback((id: string) => {
+    setIconVer((v) => ({ ...v, [id]: (v[id] || 0) + 1 }))
+  }, [])
+
+  const openPicker = useCallback(async (loc: EditorLocation) => {
     setPicker(loc)
     setPickerGallery(null)
     setDelConfirm(null)
     try {
-      const g = await apiGet<GalleryResp>(`/world/locations/${encodeURIComponent(ownerOf(loc))}/gallery`)
+      const g = await apiGet<GalleryResp>(
+        `/world/locations/${encodeURIComponent(ownerOf(loc))}/gallery`)
       setPickerGallery(g)
-      // Kein „Auto"-Modus: hat die Zelle noch kein festes Map-Bild, sofort das
-      // erste verfuegbare zuordnen — so ist die Auswahl immer konkret (Zaehlung).
+      // No "auto" mode: without an explicit choice the first map image is
+      // assigned right away, so what the map shows is always a named file.
       if (!(loc.map_image_2d || '').trim()) {
         const firstMap = (g.images || []).find((f) => (g.image_types || {})[f] === 'map_2d')
         if (firstMap) {
-          await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`, { type: 'map_2d', file: firstMap })
-          setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
+          await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`,
+            { type: 'map_2d', file: firstMap })
+          bumpIcon(loc.id)
           setPicker((p) => (p && p.id === loc.id ? { ...p, map_image_2d: firstMap } : p))
           void reload()
         }
@@ -172,98 +342,46 @@ export function MapTab() {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setPickerGallery({ images: [], image_types: {} })
     }
-  }, [reload, t, toast])
+  }, [bumpIcon, reload, t, toast])
 
-  const chooseImage = useCallback(
-    async (loc: Location, type: 'map_2d', file: string) => {
-      try {
-        await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`, { type, file })
-        setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
-        await reload()
-        setPicker(null)
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [reload, t, toast],
-  )
+  const chooseImage = useCallback(async (loc: EditorLocation, file: string) => {
+    try {
+      await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`,
+        { type: 'map_2d', file })
+      bumpIcon(loc.id)
+      await reload()
+      setPicker(null)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [bumpIcon, reload, t, toast])
 
-  // Set/clear the 3x3 patch anchored at this cell. The backend toggles the
-  // own tile of every covered same-template cell (off on set, back on when
-  // cleared) — refresh everything, several tiles change at once.
-  const choosePatch = useCallback(
-    async (loc: Location, file: string) => {
-      try {
-        const r = await apiPatch<{ affected?: string[] }>(
-          `/world/locations/${encodeURIComponent(loc.id)}/map-patch`, { file, span: 3 })
-        const n = (r.affected || []).length
-        toast(file
-          ? t('Patch set — {n} covered tiles hidden').replace('{n}', String(n))
-          : t('Patch removed — {n} tiles restored').replace('{n}', String(n)))
-        setRefreshTick((k) => k + 1)
-        await reload()
-        setPicker(null)
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [reload, t, toast],
-  )
+  // The backend clears dangling map_image_2d references itself; the gallery
+  // and the locations are re-read so the selection marker stays honest.
+  const deleteImage = useCallback(async (owner: string, file: string) => {
+    try {
+      await apiDelete(
+        `/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(file)}`)
+      const g = await apiGet<GalleryResp>(
+        `/world/locations/${encodeURIComponent(owner)}/gallery`)
+      setPickerGallery(g)
+      const data = await apiGet<{ locations?: EditorLocation[] }>('/world/locations')
+      const locs = data.locations || []
+      setLocations(locs)
+      setPicker((p) => (p ? locs.find((l) => l.id === p.id) || p : p))
+      toast(t('Image deleted'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [t, toast])
 
-  // Per-cell switch: hide/show the cell's own tile (map_image_off).
-  const toggleImageOff = useCallback(
-    async (loc: Location, off: boolean) => {
-      try {
-        await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image-off`, { off })
-        setIconVer((v) => ({ ...v, [loc.id]: (v[loc.id] || 0) + 1 }))
-        await reload()
-        setPicker((p) => (p && p.id === loc.id ? { ...p, map_image_off: off } : p))
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [reload, t, toast],
-  )
-
-  // Galerie-Bild loeschen (Backend raeumt haengende map_image_2d-Referenzen selbst
-  // auf). Danach Galerie + Locations neu laden und den offenen Picker auffrischen,
-  // damit die Auswahl-Markierung stimmt, falls das geloeschte Bild gewaehlt war.
-  const deleteImage = useCallback(
-    async (owner: string, file: string) => {
-      try {
-        await apiDelete(`/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(file)}`)
-        const g = await apiGet<GalleryResp>(`/world/locations/${encodeURIComponent(owner)}/gallery`)
-        setPickerGallery(g)
-        const data = await apiGet<{ locations?: Location[] }>('/world/locations')
-        const locs = data.locations || []
-        setLocations(locs)
-        setPicker((p) => (p ? locs.find((l) => l.id === p.id) || p : p))
-        toast(t('Image deleted'))
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [t, toast],
-  )
-
-  // The map-icon prompt comes from /world/compose-preview (subject chain +
-  // style + guard live on the server) — the dialog prefills from there.
-
-  // Kein PERIODISCHER Auto-Refresh (stört das Editieren). Stattdessen: nach einer
-  // erfolgreichen Generierung EINMAL gezielt das/die betroffene(n) Tile(s) neu
-  // laden. Die Gen ist fire-and-forget (POST liefert track_id, Bild kommt async)
-  // → den Track via /queue/status bis Endzustand pollen, dann Cache-Buster bumpen.
-  const bumpIcons = useCallback((ids: string[]) => {
-    setIconVer((v) => {
-      const next = { ...v }
-      for (const id of ids) next[id] = (next[id] || 0) + 1
-      return next
-    })
-  }, [])
-
-  const watchAndRefresh = useCallback(async (trackId: string, locIds: string[], all = false) => {
+  // Generation is fire-and-forget (the POST returns a track id, the image
+  // arrives asynchronously) — poll the track until it reaches a terminal
+  // state, then bust the icon cache ONCE. No periodic refresh: it would fight
+  // the editing hand.
+  const watchAndRefresh = useCallback(async (trackId: string, locId: string) => {
     if (!trackId) return
-    const deadline = Date.now() + 4 * 60 * 1000  // Map-Gens koennen dauern
+    const deadline = Date.now() + 4 * 60 * 1000  // map generations can take a while
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 2500))
       let status: string | null = null
@@ -272,423 +390,243 @@ export function MapTab() {
           recent?: Array<{ task_id: string; status: string }>
           recent_tasks?: Array<{ task_id: string; status: string }>
         }>('/queue/status')
-        const hit = [...(s.recent || []), ...(s.recent_tasks || [])].find((x) => x.task_id === trackId)
+        const hit = [...(s.recent || []), ...(s.recent_tasks || [])]
+          .find((x) => x.task_id === trackId)
         if (hit) status = hit.status
-      } catch { /* weiter pollen */ }
-      if (status) {  // Endzustand erreicht
-        if (status === 'completed') {
-          if (all) setRefreshTick((n) => n + 1)
-          else bumpIcons(locIds)
-        }
+      } catch { /* keep polling */ }
+      if (status) {  // terminal state reached
+        if (status === 'completed') bumpIcon(locId)
         return
       }
     }
-  }, [bumpIcons])
+  }, [bumpIcon])
 
-  // ✨ Normale Generierung aus dem Cell-image-Dialog. POST an die ZELLE (loc.id),
-  // Klone speichern ins geteilte Template, die Auswahl bleibt pro Zelle.
-  const submitGen = useCallback(
-    async (payload: ImageGenSubmit, target: { loc: Location; type: 'map_2d' | 'map_3x3' }) => {
-      const body: Record<string, unknown> = { prompt_type: target.type, prompt: payload.prompt }
-      if (payload.backend) body.backend = payload.backend
-      if (payload.loras) body.loras = payload.loras
-      if (payload.prompt_settings_applied) body.settings_applied = true
-      // Composed negative (carries what the guard moved out of the subject).
-      if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
-      if (payload.llm_composed) {
-        body.llm_composed = true
-        body.cache_hit = !!payload.cache_hit
-      }
-      try {
-        const r = await apiPost<{ track_id?: string }>(
-          `/world/locations/${encodeURIComponent(target.loc.id)}/gallery`, body)
-        toast(t('Image queued'))
-        void watchAndRefresh(r?.track_id || '', [target.loc.id])
-      } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
-    },
-    [t, toast, watchAndRefresh],
-  )
-
-  // ⊞ Fit to neighbors — prompt_type/fit + the edited directional prompt.
-  // settings_applied=true: the server appends neither style suffix nor hint again.
-  const submitFit = useCallback(
-    async (prompt: string, backend: string, loc: Location) => {
-      const body: Record<string, unknown> = { prompt_type: 'map_2d', prompt, fit_neighbors: true, settings_applied: true }
-      // Chosen inpaint backend (category=="inpaint"); empty = server default.
-      if (backend) body.backend = backend
-      try {
-        const r = await apiPost<{ track_id?: string }>(
-          `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
-        toast(t('Image queued'))
-        void watchAndRefresh(r?.track_id || '', [loc.id])
-      } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
-    },
-    [t, toast, watchAndRefresh],
-  )
-
-  // ⧉ Match edges — same mapfit inpaint backend, but frame mask + transition
-  // prompt only for the selected sides. Center = existing tile.
-  const submitEdge = useCallback(
-    async (sides: string[], prompt: string, backend: string, loc: Location) => {
-      const body: Record<string, unknown> = {
-        prompt_type: 'map_2d', prompt, edge_match: true, edge_sides: sides, settings_applied: true,
-      }
-      if (backend) body.backend = backend
-      try {
-        const r = await apiPost<{ track_id?: string }>(
-          `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
-        toast(t('Image queued'))
-        // Edge betrifft auch den Nachbarn → alle Tiles einmal refreshen.
-        void watchAndRefresh(r?.track_id || '', [loc.id], true)
-      } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
-    },
-    [t, toast, watchAndRefresh],
-  )
-
-  // Rotate the cell's 2D icon by +90° (0→90→180→270→0). Display-only.
-  const rotateCell = useCallback(
-    async (loc: Location) => {
-      const next = ((loc.map_rotation_2d || 0) + 90) % 360
-      try {
-        await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-rotation`, { rotation: next })
-        await reload()
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [reload, t, toast],
-  )
-
-  const { placedByCell, unplaced, passableTemplates, patchAnchors, coveredCells } = useMemo(() => {
-    const byCell = new Map<string, Location>()
-    const unp: Location[] = []
-    const tmpls: Location[] = []
-    for (const loc of locations || []) {
-      const isClone = !!(loc.template_location_id || '').trim()
-      const isPassableTemplate = !!loc.passable && !isClone
-      if (isPassableTemplate) {
-        tmpls.push(loc)
-        continue
-      }
-      if (
-        loc.grid_x != null &&
-        loc.grid_y != null &&
-        loc.grid_x >= 0 &&
-        loc.grid_y >= 0
-      ) {
-        byCell.set(`${loc.grid_x},${loc.grid_y}`, loc)
-      } else {
-        unp.push(loc)
-      }
+  const submitGen = useCallback(async (payload: ImageGenSubmit, loc: EditorLocation) => {
+    const body: Record<string, unknown> = { prompt_type: 'map_2d', prompt: payload.prompt }
+    if (payload.backend) body.backend = payload.backend
+    if (payload.loras) body.loras = payload.loras
+    if (payload.prompt_settings_applied) body.settings_applied = true
+    // Composed negative (carries what the guard moved out of the subject).
+    if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
+    if (payload.llm_composed) {
+      body.llm_composed = true
+      body.cache_hit = !!payload.cache_hit
     }
-    // 3x3 patches: anchors sorted stably (y, then x) so overlapping patches
-    // paint deterministically; covered cells render transparent so the patch
-    // below shows through.
-    const anchors = Array.from(byCell.values())
-      .filter((l) => (l.map_patch_2d || '').trim())
-      .sort((a, b) => ((a.grid_y as number) - (b.grid_y as number))
-        || ((a.grid_x as number) - (b.grid_x as number)))
-    const covered = new Set<string>()
-    for (const l of anchors) {
-      const r = Math.floor(Math.max(1, l.map_patch_span || 3) / 2)
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          covered.add(`${(l.grid_x as number) + dx},${(l.grid_y as number) + dy}`)
-        }
-      }
-    }
-    return { placedByCell: byCell, unplaced: unp, passableTemplates: tmpls,
-      patchAnchors: anchors, coveredCells: covered }
-  }, [locations])
-
-  const onDropOnCell = useCallback(
-    async (gridX: number, gridY: number) => {
-      const payload = dragPayload
-      setDragPayload(null)
-      setDragOverCell(null)
-      if (!payload) return
-      const cellKey = `${gridX},${gridY}`
-      const occupant = placedByCell.get(cellKey)
-      try {
-        if (payload.startsWith('tmpl:')) {
-          if (occupant) return
-          const templateId = payload.slice(5)
-          await apiPost(
-            `/world/locations/${encodeURIComponent(templateId)}/clone`,
-            { grid_x: gridX, grid_y: gridY },
-          )
-        } else if (payload.startsWith('loc:')) {
-          const locId = payload.slice(4)
-          if (occupant && occupant.id !== locId) return
-          await apiPatch(
-            `/world/locations/${encodeURIComponent(locId)}/position`,
-            { grid_x: gridX, grid_y: gridY },
-          )
-        }
-        await reload()
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [dragPayload, placedByCell, reload, t, toast],
-  )
-
-  const onDropOnTray = useCallback(async () => {
-    const payload = dragPayload
-    setDragPayload(null)
-    setTrayDragOver(false)
-    if (!payload || !payload.startsWith('loc:')) return
-    const locId = payload.slice(4)
-    const loc = (locations || []).find((l) => l.id === locId)
-    if (!loc) return
-    const isClone = !!(loc.template_location_id || '').trim()
     try {
-      if (isClone) {
-        await apiDelete(`/world/locations/${encodeURIComponent(locId)}`)
-      } else {
-        await apiPatch(
-          `/world/locations/${encodeURIComponent(locId)}/position`,
-          { grid_x: -1, grid_y: -1 },
-        )
-      }
-      await reload()
+      const r = await apiPost<{ track_id?: string }>(
+        `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
+      toast(t('Image queued'))
+      void watchAndRefresh(r?.track_id || '', loc.id)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [dragPayload, locations, reload, t, toast])
+  }, [t, toast, watchAndRefresh])
 
-  const onCellDragOver = useCallback(
-    (e: React.DragEvent, gridX: number, gridY: number) => {
-      if (!dragPayload) return
-      const cellKey = `${gridX},${gridY}`
-      const occupant = placedByCell.get(cellKey)
-      // Block drop if cell occupied by someone else (template clone target)
-      if (dragPayload.startsWith('tmpl:') && occupant) return
-      if (dragPayload.startsWith('loc:')) {
-        const draggedId = dragPayload.slice(4)
-        if (occupant && occupant.id !== draggedId) return
-      }
-      e.preventDefault()
-      e.dataTransfer.dropEffect = dragPayload.startsWith('tmpl:') ? 'copy' : 'move'
-      setDragOverCell(cellKey)
-    },
-    [dragPayload, placedByCell],
-  )
-
-  const startDragLoc = useCallback((e: React.DragEvent, loc: Location) => {
-    const payload = `loc:${loc.id}`
-    e.dataTransfer.setData('text/plain', payload)
-    e.dataTransfer.effectAllowed = 'move'
-    setDragPayload(payload)
-  }, [])
-
-  const startDragTmpl = useCallback((e: React.DragEvent, loc: Location) => {
-    const payload = `tmpl:${loc.id}`
-    e.dataTransfer.setData('text/plain', payload)
-    e.dataTransfer.effectAllowed = 'copy'
-    setDragPayload(payload)
-  }, [])
-
-  const onTrayDragOver = useCallback(
-    (e: React.DragEvent) => {
-      if (!dragPayload || !dragPayload.startsWith('loc:')) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      setTrayDragOver(true)
-    },
-    [dragPayload],
-  )
+  // ── Render ───────────────────────────────────────────────────────────────
 
   if (locations == null) {
     return <div className="ga-empty">{t('Loading…')}</div>
   }
 
+  const selAnchor = selected ? anchorWidthM(selected) : null
+  const selIsClone = !!(selected && (selected.template_location_id || '').trim())
+
+  const trayEntry = (loc: EditorLocation, kind: 'place' | 'clone') => {
+    const anchor = anchorWidthM(loc)
+    return (
+      <button
+        key={loc.id}
+        type="button"
+        className={'ga-map-tray-item' + (ghost && ghost.id === loc.id ? ' armed' : '')
+          + (kind === 'clone' ? ' ga-map-tray-template' : '')}
+        onClick={() => armGhost(loc, kind)}
+        title={kind === 'clone'
+          ? t('Click, then click the map to place a copy')
+          : t('Click, then click the map to place it')}
+      >
+        <MapIcon locId={loc.id} className="ga-map-tray-icon"
+          cacheKey={String(iconVer[loc.id] || 0)} />
+        <span className="ga-map-tray-name">{loc.name}</span>
+        <span className="ga-map-tray-stamp">
+          {anchor ? fmtM(anchor) + ' m' : '?'}
+        </span>
+      </button>
+    )
+  }
+
   return (
     <div className="ga-map-layout">
-      <aside
-        className={'ga-map-tray' + (trayDragOver ? ' drag-over' : '')}
-        onDragOver={onTrayDragOver}
-        onDragLeave={() => setTrayDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault()
-          onDropOnTray()
-        }}
-      >
-        <div className="ga-map-tray-section">
-          <div
-            className="ga-map-tray-title"
-            style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' }}
-          >
-            <span>{t('Layout')}</span>
-            <span style={{ display: 'flex', gap: 4 }}>
-              <ExportButton
-                endpoint="/world/map/export"
-                filename="map_layout.zip"
-                title={t('Download grid positions as a ZIP')}
-              />
-              <ImportButton
-                endpoint="/world/map/import"
-                onImported={() => reload()}
-                title={t('Apply a saved layout to the current world')}
-              />
-            </span>
-          </div>
-        </div>
+      <aside className="ga-map-tray">
         <div className="ga-map-tray-section">
           <div className="ga-map-tray-title">{t('Unplaced')}</div>
           {unplaced.length === 0 ? (
             <div className="ga-map-tray-empty">{t('None')}</div>
           ) : (
             <div className="ga-map-tray-items">
-              {unplaced.map((loc) => (
-                <div
-                  key={loc.id}
-                  className="ga-map-tray-item"
-                  draggable
-                  onDragStart={(e) => startDragLoc(e, loc)}
-                  onDragEnd={() => setDragPayload(null)}
-                  title={loc.name}
-                >
-                  <MapIcon locId={loc.id} className="ga-map-tray-icon" />
-                  <span className="ga-map-tray-name">{loc.name}</span>
-                </div>
-              ))}
+              {unplaced.map((loc) => trayEntry(loc, 'place'))}
             </div>
           )}
         </div>
         <div className="ga-map-tray-section">
-          <div className="ga-map-tray-title">{t('Passable templates')}</div>
-          {passableTemplates.length === 0 ? (
+          <div className="ga-map-tray-title">{t('Templates')}</div>
+          {templates.length === 0 ? (
             <div className="ga-map-tray-empty">{t('None')}</div>
           ) : (
             <div className="ga-map-tray-items">
-              {passableTemplates.map((loc) => (
-                <div
-                  key={loc.id}
-                  className="ga-map-tray-item ga-map-tray-template"
-                  draggable
-                  onDragStart={(e) => startDragTmpl(e, loc)}
-                  onDragEnd={() => setDragPayload(null)}
-                  title={t('Drag onto map to place a copy')}
-                >
-                  <MapIcon locId={loc.id} className="ga-map-tray-icon" />
-                  <span className="ga-map-tray-name">{loc.name}</span>
-                  <span className="ga-map-tray-stamp">∞</span>
-                </div>
-              ))}
+              {templates.map((loc) => trayEntry(loc, 'clone'))}
             </div>
           )}
         </div>
         <div className="ga-map-tray-hint">
-          {t('Drop a placed location here to remove it from the grid.')}
+          {t('Click an entry, then click the map to place it. Escape cancels.')}
         </div>
       </aside>
 
-      <div className="ga-map-grid-wrap" ref={gridRef}>
-        {/* Relative wrapper: the 3x3 patches sit absolutely BELOW the grid
-            (DOM order) and span cell+gap strides; covered cells go
-            transparent so the patch shows through. */}
-        <div style={{ position: 'relative', width: 'max-content' }}>
-          {patchAnchors.map((l) => {
-            const span = Math.max(1, l.map_patch_span || 3)
-            const r = Math.floor(span / 2)
-            return (
-              <MapPatchImg
-                key={`patch-${l.id}`}
-                locId={l.id}
-                left={((l.grid_x as number) - r) * (CELL + 2)}
-                top={((l.grid_y as number) - r) * (CELL + 2)}
-                size={span * CELL + (span - 1) * 2}
-                cacheKey={`${iconVer[l.id] || 0}.${refreshTick}`}
-              />
-            )
-          })}
-        <div
-          className="ga-map-grid"
-          style={{
-            gridTemplateColumns: `repeat(${COLS}, ${CELL}px)`,
-            gridTemplateRows: `repeat(${ROWS}, ${CELL}px)`,
-          }}
-        >
-          {Array.from({ length: ROWS }).map((_, y) =>
-            Array.from({ length: COLS }).map((__, x) => {
-              const cellKey = `${x},${y}`
-              const loc = placedByCell.get(cellKey)
-              const isClone = !!(loc && (loc.template_location_id || '').trim())
-              const dragOver = dragOverCell === cellKey
-              const covered = coveredCells.has(cellKey)
-              const cls = [
-                'ga-map-cell',
-                loc ? 'occupied' : '',
-                loc?.passable ? 'passable' : '',
-                isClone ? 'clone' : '',
-                dragOver ? 'drag-over' : '',
-              ]
-                .filter(Boolean)
-                .join(' ')
-              return (
-                <div
-                  key={cellKey}
-                  className={cls}
-                  style={covered ? { background: 'transparent' } : undefined}
-                  onDragOver={(e) => onCellDragOver(e, x, y)}
-                  onDragLeave={() => {
-                    if (dragOverCell === cellKey) setDragOverCell(null)
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    onDropOnCell(x, y)
-                  }}
-                >
-                  {loc ? (
-                    <div
-                      className="ga-map-tile"
-                      draggable
-                      onDragStart={(e) => startDragLoc(e, loc)}
-                      onDragEnd={() => setDragPayload(null)}
-                      title={loc.name + (isClone ? ' (' + t('copy') + ')' : '')}
-                    >
-                      {loc.map_image_off ? null : (
-                        <MapIcon locId={loc.id} className="ga-map-tile-bg" cacheKey={`${iconVer[loc.id] || 0}.${refreshTick}`} rotation={loc.map_rotation_2d || 0} />
-                      )}
-                      <span className="ga-map-tile-name">{loc.name}</span>
-                      <button
-                        type="button"
-                        className="ga-map-tile-rotbtn"
-                        title={t('Rotate the 2D icon 90°')}
-                        draggable={false}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          rotateCell(loc)
-                        }}
-                      >
-                        ↻
-                      </button>
-                      <button
-                        type="button"
-                        className="ga-map-tile-imgbtn"
-                        title={t('Choose which image this cell shows')}
-                        draggable={false}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openPicker(loc)
-                        }}
-                      >
-                        🖼
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="ga-map-cell-coord">
-                      {x},{y}
-                    </span>
-                  )}
-                </div>
-              )
-            }),
-          )}
+      <div className="ga-map-main">
+        <div className="ga-map-toolbar">
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => { void reload() }}>
+            ↻ {t('Reload')}
+          </button>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={fitView}
+            disabled={!bounds}>
+            {t('Fit view')}
+          </button>
+          <label className="ga-map-toolbar-check"
+            title={t('Placing and moving snap the centre onto a {n} m grid')
+              .replace('{n}', String(SNAP_M))}>
+            <input type="checkbox" checked={snapOn}
+              onChange={(e) => setSnapOn(e.target.checked)} />
+            {t('Snap {n} m').replace('{n}', String(SNAP_M))}
+          </label>
+          <span className="ga-map-toolbar-info">
+            {t('{n} placed').replace('{n}', String(placed.length))}
+          </span>
+          {ghost ? (
+            <span className={'ga-map-arm' + (ghost.anchored ? '' : ' warn')}>
+              {(ghost.kind === 'clone'
+                ? t('Placing a copy of “{name}” — click the map')
+                : t('Placing “{name}” — click the map')).replace('{name}', ghost.name)}
+              {ghost.anchored
+                ? ' · ' + fmtM(ghost.widthM) + ' m'
+                : ' · ' + t('no scale anchor, {n} m placeholder')
+                  .replace('{n}', String(NO_ANCHOR_WIDTH_M))}
+              <button type="button" className="ga-btn ga-btn-sm"
+                onClick={() => { setGhost(null); setGhostPt(null) }}>
+                {t('Cancel')}
+              </button>
+            </span>
+          ) : null}
         </div>
+
+        <div className="ga-map-canvas-pane" ref={paneRef}>
+          <MapCanvas
+            view={view}
+            onViewChange={setView}
+            onBackgroundClick={onBackgroundClick}
+            onPointerWorldMove={onWorldMove}
+            cursor={ghost ? 'crosshair' : undefined}
+          >
+            <PlacementLayer
+              locations={placed}
+              selectedId={selId}
+              onSelect={setSelId}
+              onMove={(id, x, z) => { void commitMove(id, x, z) }}
+              snapM={snapOn ? SNAP_M : 0}
+              iconVer={iconVer}
+              ghost={ghost}
+              ghostPt={ghostPt}
+            />
+          </MapCanvas>
+
+          {selected ? (
+            <div className="ga-map-chip">
+              <div className="ga-map-chip-head">
+                <strong>{selected.name}</strong>
+                {selIsClone ? <span className="ga-map-chip-tag">{t('copy')}</span> : null}
+                <button type="button" className="ga-modal-close"
+                  title={t('Clear selection')} onClick={() => setSelId('')}>×</button>
+              </div>
+              <div className="ga-map-chip-row">
+                <span className={selAnchor ? '' : 'ga-map-chip-warn'}>
+                  {selAnchor
+                    ? fmtM(selAnchor) + ' × ' + fmtM(selAnchor) + ' m'
+                    : t('No scale anchor — drawn as a {n} m placeholder')
+                      .replace('{n}', String(NO_ANCHOR_WIDTH_M))}
+                </span>
+                <span className="ga-map-chip-pos">
+                  x {fmtPos(selected.pos_x || 0)} · z {fmtPos(selected.pos_z || 0)}
+                </span>
+              </div>
+              <div className="ga-map-chip-row">
+                <span className="ga-map-chip-label">{t('Rotation')}</span>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Turn left {n}°').replace('{n}', String(YAW_FINE))}
+                  onClick={() => { void commitYaw(selected, (selected.yaw_deg || 0) - YAW_FINE) }}>
+                  ⟲{YAW_FINE}°
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Turn right {n}°').replace('{n}', String(YAW_FINE))}
+                  onClick={() => { void commitYaw(selected, (selected.yaw_deg || 0) + YAW_FINE) }}>
+                  ⟳{YAW_FINE}°
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => { void commitYaw(selected, (selected.yaw_deg || 0) - YAW_QUARTER) }}>
+                  −{YAW_QUARTER}°
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => { void commitYaw(selected, (selected.yaw_deg || 0) + YAW_QUARTER) }}>
+                  +{YAW_QUARTER}°
+                </button>
+                <input
+                  className="ga-input ga-map-chip-yaw"
+                  type="number" step={1} value={yawDraft}
+                  onChange={(e) => setYawDraft(e.target.value)}
+                  onBlur={() => {
+                    const v = parseFloat(yawDraft)
+                    if (Number.isFinite(v)) void commitYaw(selected, v)
+                    else setYawDraft(String(normYaw(selected.yaw_deg || 0)))
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                />
+                <span className="ga-map-chip-label">°</span>
+              </div>
+              <div className="ga-map-chip-actions">
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Choose which image this location shows on the map')}
+                  onClick={() => { void openPicker(selected) }}>
+                  🖼 {t('Image')}
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Rotate the map icon 90° inside the footprint')}
+                  onClick={() => { void rotateIcon(selected) }}>
+                  ↻ {t('Icon')}
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => editLocation(selected)}>
+                  {t('Edit location')}
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Take it off the map — it keeps all its data')}
+                  onClick={() => { void unplace(selected) }}>
+                  {t('Unplace')}
+                </button>
+                {selIsClone ? (
+                  delArmed === selected.id ? (
+                    <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                      onClick={() => { void removeClone(selected) }}>
+                      {t('Really delete')}
+                    </button>
+                  ) : (
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      title={t('Delete this copy')}
+                      onClick={() => setDelArmed(selected.id)}>
+                      {t('Delete copy')}
+                    </button>
+                  )
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -696,156 +634,73 @@ export function MapTab() {
         <div className="ga-modal-backdrop" onMouseDown={() => setPicker(null)}>
           <div className="ga-modal ga-map-imgpicker" onMouseDown={(e) => e.stopPropagation()}>
             <div className="ga-modal-header">
-              <span>{t('Cell image')} — {picker.name}</span>
+              <span>{t('Map image')} — {picker.name}</span>
               <button className="ga-modal-close" onClick={() => setPicker(null)}>×</button>
             </div>
             <div className="ga-modal-body">
               {pickerGallery == null ? (
                 <div className="ga-empty">{t('Loading…')}</div>
               ) : (
-                ([
-                  { type: 'map_2d' as const, label: t('2D icon'), chosen: picker.map_image_2d || '' },
-                  { type: 'map_3x3' as const, label: t('3×3 patch'), chosen: picker.map_patch_2d || '' },
-                ]).map(({ type, label, chosen }) => {
-                  const imgs = (pickerGallery.images || []).filter(
-                    (f) => (pickerGallery.image_types || {})[f] === type,
-                  )
-                  // Own tile picks the cell image; the 3x3 group anchors/clears
-                  // the patch centred on this cell.
-                  const pick = (f: string) =>
-                    type === 'map_3x3' ? choosePatch(picker, f) : chooseImage(picker, type, f)
-                  return (
-                    <div key={type} className="ga-map-imgpicker-group">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                        <div className="ga-map-imgpicker-label" style={{ marginBottom: 0 }}>{label}</div>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                          {type === 'map_2d' ? (
-                            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.8em' }}
-                              title={t('Off: the cell shows no own tile (an underlying 3×3 patch shows instead).')}>
-                              <input
-                                type="checkbox"
-                                checked={!picker.map_image_off}
-                                onChange={(e) => { void toggleImageOff(picker, !e.target.checked) }}
-                              />
-                              {t('Own tile')}
-                            </label>
-                          ) : null}
-                          {type === 'map_3x3' && chosen ? (
-                            <button
-                              type="button"
-                              className="ga-btn ga-btn-sm"
-                              onClick={() => { void choosePatch(picker, '') }}
-                              title={t('Remove the patch — covered tiles of this template are shown again.')}
-                            >
-                              ✕ {t('Remove patch')}
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="ga-btn ga-btn-sm"
-                            onClick={() => setGen({ loc: picker, type })}
-                            title={t('Generate a new image for this cell')}
-                          >
-                            ✨ {t('Generate')}
-                          </button>
-                          {type === 'map_2d' ? (
-                            <button
-                              type="button"
-                              className="ga-btn ga-btn-sm"
-                              onClick={() => {
-                                // Dialog SOFORT oeffnen — der (langsame, vision-
-                                // basierte) Terrain-Hint wird im Dialog asynchron
-                                // nachgeladen, sonst wirkt es, als ginge er nicht auf.
-                                setFit({ loc: picker })
-                              }}
-                              title={t('Fit to neighbors: inpaint the tile so its edges continue the adjacent map cells')}
-                            >
-                              ⊞ {t('Fit to neighbors')}
-                            </button>
-                          ) : null}
-                          {type === 'map_2d' ? (
-                            <button
-                              type="button"
-                              className="ga-btn ga-btn-sm"
-                              onClick={async () => {
-                                // Verfügbare Nachbar-Seiten holen → Edge-Dialog (Seiten klickbar).
-                                try {
-                                  const r = await apiGet<{ sides?: Record<string, string> }>(
-                                    `/world/locations/${encodeURIComponent(picker.id)}/edges`)
-                                  const sides = r.sides || {}
-                                  if (!Object.keys(sides).length) {
-                                    toast(t('No neighbors with a tile.'), 'error')
-                                    return
-                                  }
-                                  setEdge({ loc: picker, available: sides })
-                                } catch (e) {
-                                  toast(t('Error') + ': ' + (e as Error).message, 'error')
-                                }
-                              }}
-                              title={t('Match edges: blend the tile edges into selected neighbors')}
-                            >
-                              ⧉ {t('Match edges')}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                      {imgs.length === 0 ? (
-                        <div className="ga-map-tray-empty">{t('No images of this type.')}</div>
-                      ) : (
-                        <div className="ga-map-imgpicker-grid">
-                          {imgs.map((f) => {
-                            const owner = ownerOf(picker)
-                            return (
-                              <div key={f} className="ga-map-imgpicker-cell">
-                                <button
-                                  type="button"
-                                  className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
-                                  onClick={() => { void pick(f) }}
-                                  title={f}
-                                >
-                                  <img
-                                    src={`/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(f)}`}
-                                    alt=""
-                                  />
-                                </button>
-                                {delConfirm === f ? (
-                                  <div className="ga-map-imgpicker-confirm">
-                                    <span>{t('Delete?')}</span>
-                                    <div className="ga-map-imgpicker-confirm-row">
-                                      <button
-                                        type="button"
-                                        className="ga-btn ga-btn-sm ga-btn-danger"
-                                        onClick={() => { setDelConfirm(null); deleteImage(owner, f) }}
-                                      >
-                                        {t('Delete')}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="ga-btn ga-btn-sm"
-                                        onClick={() => setDelConfirm(null)}
-                                      >
-                                        {t('Cancel')}
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    className="ga-map-imgpicker-del"
-                                    title={t('Delete image')}
-                                    onClick={() => setDelConfirm(f)}
-                                  >
-                                    ×
-                                  </button>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
+                <div className="ga-map-imgpicker-group">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                    <div className="ga-map-imgpicker-label" style={{ marginBottom: 0 }}>
+                      {t('2D icon')}
                     </div>
-                  )
-                })
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      onClick={() => setGen(picker)}
+                      title={t('Generate a new map image for this location')}>
+                      ✨ {t('Generate')}
+                    </button>
+                  </div>
+                  {(() => {
+                    const imgs = (pickerGallery.images || []).filter(
+                      (f) => (pickerGallery.image_types || {})[f] === 'map_2d')
+                    if (imgs.length === 0) {
+                      return <div className="ga-map-tray-empty">{t('No images of this type.')}</div>
+                    }
+                    const owner = ownerOf(picker)
+                    const chosen = picker.map_image_2d || ''
+                    return (
+                      <div className="ga-map-imgpicker-grid">
+                        {imgs.map((f) => (
+                          <div key={f} className="ga-map-imgpicker-cell">
+                            <button
+                              type="button"
+                              className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
+                              onClick={() => { void chooseImage(picker, f) }}
+                              title={f}
+                            >
+                              <img
+                                src={`/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(f)}`}
+                                alt=""
+                              />
+                            </button>
+                            {delConfirm === f ? (
+                              <div className="ga-map-imgpicker-confirm">
+                                <span>{t('Delete?')}</span>
+                                <div className="ga-map-imgpicker-confirm-row">
+                                  <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                                    onClick={() => { setDelConfirm(null); void deleteImage(owner, f) }}>
+                                    {t('Delete')}
+                                  </button>
+                                  <button type="button" className="ga-btn ga-btn-sm"
+                                    onClick={() => setDelConfirm(null)}>
+                                    {t('Cancel')}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button type="button" className="ga-map-imgpicker-del"
+                                title={t('Delete image')} onClick={() => setDelConfirm(f)}>
+                                ×
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })()}
+                </div>
               )}
             </div>
           </div>
@@ -855,42 +710,13 @@ export function MapTab() {
       {gen ? (
         <ImageGenDialog
           open
-          title={(gen.type === 'map_3x3'
-            ? t('Generate 3×3 map tile — {name}')
-            : t('Generate 2D icon — {name}')).replace('{name}', gen.loc.name)}
+          title={t('Generate map image — {name}').replace('{name}', gen.name)}
           defaultPrompt=""
-          // The server composes style + subject + guard (same composer the
+          // The server composes style + subject + guard (the same composer the
           // batch path uses) and decides the use case itself.
-          composeRequest={{ location_id: gen.loc.id, prompt_type: gen.type }}
+          composeRequest={{ location_id: gen.id, prompt_type: 'map_2d' }}
           onSubmit={(payload) => submitGen(payload, gen)}
           onClose={() => setGen(null)}
-        />
-      ) : null}
-
-      {fit ? (
-        <FitDialog
-          title={t('Fit to neighbors — {name}').replace('{name}', fit.loc.name)}
-          locId={fit.loc.id}
-          canvasUrl={`/world/locations/${encodeURIComponent(fit.loc.id)}/fit-canvas`}
-          backends={inpaintBackends}
-          defaultBackend={mapfitDefault}
-          mapfitPrompts={mapfitPrompts}
-          onSubmit={(prompt, backend) => submitFit(prompt, backend, fit.loc)}
-          onClose={() => setFit(null)}
-        />
-      ) : null}
-
-      {edge ? (
-        <EdgeDialog
-          locId={edge.loc.id}
-          locName={edge.loc.name}
-          available={edge.available}
-          rotation={edge.loc.map_rotation_2d || 0}
-          backends={inpaintBackends}
-          defaultBackend={mapfitDefault}
-          mapfitPrompts={mapfitPrompts}
-          onSubmit={(sides, prompt, backend) => submitEdge(sides, prompt, backend, edge.loc)}
-          onClose={() => setEdge(null)}
         />
       ) : null}
     </div>

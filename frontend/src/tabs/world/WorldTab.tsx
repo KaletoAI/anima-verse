@@ -71,6 +71,25 @@ export function WorldTab() {
     loadItems().then(setItems).catch(() => setItems([]))
   }, [reload])
 
+  // One-shot deep link from the Map tab: it stores the location it wants
+  // opened and jumps to #/world. Read ONCE on mount and dropped immediately —
+  // a later visit must not re-apply a stale selection. Nothing can be dirty
+  // at mount time, so this bypasses the unsaved-changes guard by design.
+  useEffect(() => {
+    let raw: string | null = null
+    try {
+      raw = sessionStorage.getItem('ga:world:select')
+      if (raw) sessionStorage.removeItem('ga:world:select')
+    } catch { return }  // storage disabled — no deep link, no harm
+    if (!raw) return
+    try {
+      const want = JSON.parse(raw) as { kind?: string; locationId?: string }
+      if (want?.kind === 'location' && want.locationId) {
+        setSelection({ kind: 'location', locationId: want.locationId })
+      }
+    } catch { /* malformed key — ignore */ }
+  }, [])
+
   const newLocation = useCallback(async () => {
     const name = window.prompt(t('Name of the new location'))
     if (!name?.trim()) return
