@@ -20,7 +20,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { fmtM, niceDown, niceUp } from '../world/planGeometry'
-import { screenToWorld, visibleWorldRect, zoomAt, type View } from './mapMath'
+import { FIT_FALLBACK_PX_PER_M, screenToWorld, visibleWorldRect, zoomAt, type View } from './mapMath'
 
 const AID_COLOR = '#f0f6fc'
 const GRID_COLOR = '#8b949e'
@@ -54,9 +54,11 @@ export interface MapViewInfo {
 }
 
 /** What children read to place themselves. Outside a canvas the size is 0,
- *  which every consumer already has to survive (first paint). */
+ *  which every consumer already has to survive (first paint); the default zoom
+ *  is the same one `fitBounds` falls back to, so there is one "no information
+ *  yet" zoom in the codebase, not two. */
 export const MapViewCtx = createContext<MapViewInfo>({
-  view: { cx: 0, cz: 0, pxPerM: 4 }, w: 0, h: 0,
+  view: { cx: 0, cz: 0, pxPerM: FIT_FALLBACK_PX_PER_M }, w: 0, h: 0,
 })
 
 export const useMapView = (): MapViewInfo => useContext(MapViewCtx)
