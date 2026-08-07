@@ -496,32 +496,43 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     locations = []
     name_by_id = {}
     visible_ids = set()
-    # Map extent in metres over ALL placed footprints (centre ± half the
-    # footprint edge) — computed BEFORE the fog filter, so the map keeps its
-    # extent no matter how much of it is still dark. Deliberately the
-    # axis-aligned box of the UNROTATED square: the extent is a viewport hint,
-    # not a collision volume.
+    # Map extent in metres over ALL placed locations — computed BEFORE the fog
+    # filter, so the map keeps its extent no matter how much of it is still
+    # dark. With a scale anchor a location contributes its whole footprint
+    # (centre ± half the edge), deliberately the axis-aligned box of the
+    # UNROTATED square: the extent is a viewport hint, not a collision volume.
+    # A placed location WITHOUT a scale anchor stretches the bounds by its
+    # centre point, so the map extent never misses a location it shows.
     _min_x = _min_z = _max_x = _max_z = None
+
+    def _stretch(x0: float, x1: float, z0: float, z1: float) -> None:
+        nonlocal _min_x, _max_x, _min_z, _max_z
+        _min_x = x0 if _min_x is None else min(_min_x, x0)
+        _max_x = x1 if _max_x is None else max(_max_x, x1)
+        _min_z = z0 if _min_z is None else min(_min_z, z0)
+        _max_z = z1 if _max_z is None else max(_max_z, z1)
+
     for loc in list_locations():
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
+        # ONE geometry source: the footprint decides both the extent and the
+        # scale anchor reported in the entry — never a second hand-parse of
+        # map3d.plan_width_m (which would disagree on a width <= 0).
         _fp = placed_footprint(loc)
         if _fp is not None:
             _cx, _cz, _w, _ = _fp
             _half = _w / 2.0
-            _min_x = _cx - _half if _min_x is None else min(_min_x, _cx - _half)
-            _max_x = _cx + _half if _max_x is None else max(_max_x, _cx + _half)
-            _min_z = _cz - _half if _min_z is None else min(_min_z, _cz - _half)
-            _max_z = _cz + _half if _max_z is None else max(_max_z, _cz + _half)
+            _stretch(_cx - _half, _cx + _half, _cz - _half, _cz + _half)
+        elif loc.get("pos_x") is not None and loc.get("pos_z") is not None:
+            _cx, _cz = float(loc["pos_x"]), float(loc["pos_z"])
+            _stretch(_cx, _cx, _cz, _cz)
         if not _visible(loc):
             continue
         visible_ids.add(lid)
         # The footprint edge is hoisted out of map3d: it is the scale anchor
         # every map client needs, and none of them should have to dig for it.
-        try:
-            _width = float((loc.get("map3d") or {}).get("plan_width_m"))
-        except (TypeError, ValueError):
-            _width = None
+        # None whenever the geometry has no usable anchor.
+        _width = _fp[2] if _fp is not None else None
         entry = {
             "id": lid,
             "name": loc.get("name") or "",

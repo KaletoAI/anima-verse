@@ -1532,11 +1532,14 @@ def get_terrain_route(user=Depends(get_current_user)):
     hide. Clients poll /play/worldmap and refetch this when terrain_sig
     changes.
     """
+    from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     from app.models import terrain
-    from app.core import config
     return {
-        "default_kind": str(config.get("game.default_terrain_kind", "grass")),
+        # ONE source of truth for the unpainted ground: the same resolver the
+        # point queries use, so the map never paints a different default than
+        # the walk rules apply.
+        "default_kind": default_kind(),
         "types": sorted(effective_catalog().values(),
                         key=lambda t: t["kind"]),
         "areas": terrain.list_areas(),
