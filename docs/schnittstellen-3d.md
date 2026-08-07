@@ -384,32 +384,250 @@ sondern erster Konsument derselben Vertragsfläche (§ B5).
 
 # Teil A — Ist-Vertrag (konsolidiert)
 
-## A1. Vokabular, Koordinaten, Maßstab
+## A1. Freie Weltkarte (Meter) — neu geschrieben 2026-08-07
 
-- **Kachel** = 10 × 10 Welt-Meter, eine Location. **Referenzquadrat** =
-  festes **8 × 8 m**, kachelzentriert — die Bezugsfläche ALLER Fraktionen
-  (`layout.x/y/w/d`, `map3d.outline`, `map3d.elevator`, Rezept-`outline`,
-  `placements.at`, Marker-`at`). +x = Ost; +Fraktion-y → +z = Süd.
-- **Anker-Kette (v3):** `k = 8 / plan_width_m(effektiv)` — Welt-Meter pro
-  Real-Meter der Location. Effektiv = explizites `map3d.plan_width_m`,
-  sonst Auto-Ableitung `height_m × (größte XZ-Seite / Y des Meshes, nach
-  Rotations-Fix)`, sonst Legacy (kein k; `level_height`-Formeln).
-- **Etagenhöhe** `storey = height_m / floors × k` (wenn Gebäude-Meta beides
-  deklariert), sonst `map3d.level_height`, sonst 3. Etagenboden von
-  Level n = `n × storey`.
-- **Yaw-Kette:** `yaw = map3d.rotation` (explizite 0 zählt) →
-  `map_rotation_2d` → 0. Yaw dreht im Uhrzeigersinn in der Draufsicht;
-  three.js `rotation.y = −rad(yaw)`.
-- **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**
-  (2026-07-28), in Grad, VOR jeder Messung anwenden. Yaw (y) liegt außen,
-  Tilt (x) und Roll (z) wirken im schon gedrehten Rahmen — „nach vorn
-  kippen" heißt damit unabhängig von der Blickrichtung dasselbe, und die
-  Marker-Neigung benutzt dieselbe Reihenfolge. Bei nur EINER belegten Achse
-  ist das identisch zum früheren 'XYZ'.
+`development_instructions/plan-freie-weltkarte.md`, Etappe **E1**
+(Commits `dc85876`…`6e773d2`). **Das Kachelraster ist ersatzlos
+gestrichen.** Die Welt ist eine durchgehende Ebene in Metern, Locations
+sind Inseln darauf, das Gelände dazwischen wird gemalt. Wo der Rest des
+Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
+`grid_bounds` spricht, gilt dieser Abschnitt.
+
+### A1.1 Koordinaten und Fußabdruck
+
+- **EIN Maßstab: 1 Welt-Meter = 1 realer Meter.** Keine Zelle, kein
+  `CELL`, keine Nachbarschaft aus Ganzzahl-Arithmetik. Entfernung ist
+  Strecke, Nachbarschaft ist Nähe.
+- **Achsen:** `x` wächst nach **Osten**, `z` nach **Süden** — die
+  Bodenebene beider Renderer. `y` ist keine Koordinate der Wahrheit
+  (A1.2).
+- **Eine Location ist ein Quadrat**: Kantenlänge `plan_width_m`
+  (der Maßstabsanker aus `map3d.plan_width_m`), Mittelpunkt
+  (`pos_x`, `pos_z`), gedreht um `yaw_deg` um die Hochachse.
+  **Unplatziert** = `pos_x`/`pos_z` `null` — sie steht auf keiner Karte
+  und verrät nichts (Template-Stellvertreter). **Ohne positiven Anker**
+  (`plan_width_m` fehlt oder ≤ 0) hat sie keine Fläche und kann keinen
+  Punkt für sich beanspruchen; sie hat dann nur einen Mittelpunkt.
+- **Die Transformation ist Server-Code** (`app/core/world_geometry.py`),
+  beide Renderer rechnen sie identisch nach:
+
+  ```
+  x = cx + lx·cos(yaw) + lz·sin(yaw)
+  z = cz − lx·sin(yaw) + lz·cos(yaw)
+  ```
+
+  `world_to_local` ist die Umkehrung (Drehung um −yaw). **Verbindlich ist
+  diese Abbildung, nicht ein Richtungswort:** bei `yaw_deg` 90 zeigt die
+  lokale +x-Achse auf Welt **−z**. In three.js ist das
+  `rotation.y = +rad(yaw_deg)` — **umgekehrtes Vorzeichen zur alten
+  Karten-Yaw-Kette** (`map3d.rotation`, A1.8: `rotation.y = −rad(yaw)`).
+  Die beiden Felder sind verschiedene Dinge; wer sie verwechselt,
+  spiegelt die Location.
+- **Überlappung ist legal** (die Hütte auf dem Dorfplatz). Bei der Frage,
+  in welcher Location ein Punkt liegt, gewinnt der **kleinste** treffende
+  Fußabdruck — die spezifischste Antwort (`location_at_point`).
+- Das lokale Szenen-Koordinatensystem der Innenansicht (Teil B) bleibt
+  unverändert; (pos, yaw) setzt es in die Welt.
+
+### A1.2 `ground_y(x, z)` — die Höhen-Reservierung (bindend)
+
+Bodenhöhe ist eine **Funktion**, kein Feld. v1 liefert konstant `0.0`.
+
+- **Keine Position in irgendeinem Payload trägt ein `y`** — weder ein
+  Charakterpunkt noch eine Fläche noch eine Reise-Polyline.
+- Jeder Konsument leitet `y` **immer** über die Funktion ab und
+  persistiert es **nie**.
+- Das Höhenrelief (E8) tauscht **ausschließlich** diese Implementierung.
+  Wer sich daran hält, sieht die Welt einfach hügelig werden; wer ein y
+  gespeichert hat, hängt in der Luft.
+
+### A1.3 `GET /play/worldmap` — Payload v2
+
+Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
+3D-Metadaten, die sie schon immer hatte:
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `id` | `str` | |
+| `name` | `str` | |
+| `pos_x` | `float \| null` | Welt-Meter; `null` = unplatziert |
+| `pos_z` | `float \| null` | Welt-Meter; `null` = unplatziert |
+| `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
+| `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. `null`, wenn die Geometrie keinen brauchbaren Anker hat (fehlend, ≤ 0 oder unlesbar) — Eintrag und Fußabdruck-Regel können nicht auseinanderlaufen |
+| `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
+| `layout_sig` | `str` | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat (AV3D-2⁺) |
+
+Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
+`locations` · `characters` · `events_by_location` · `world_bounds` ·
+`terrain_sig` · `fogged`.
+
+| Wurzelfeld | Typ | Bedeutung |
+|---|---|---|
+| `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
+| `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
+| `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
+
+**`world_bounds` — die Regel samt ihrer zwei Randfälle.** Gerechnet wird
+über ALLE Locations mit numerischem `pos_x`/`pos_z`, und zwar:
+
+1. **mit Maßstabsanker** → der volle achsparallele Kasten des
+   **UNGEDREHTEN** Quadrats, `cx ± w/2` / `cz ± w/2`. Bewusst ungedreht:
+   die Ausdehnung ist ein Viewport-Hinweis, kein Kollisionsvolumen.
+2. **ohne Maßstabsanker** → der **blanke Mittelpunkt** `(cx, cz)`, ohne
+   ±w/2.
+
+Daraus folgt die Invariante: **keine Location, die der Payload zeigt,
+liegt außerhalb von `world_bounds`.** `null` ist es genau dann, wenn
+überhaupt nichts platziert ist. **Der Kasten DARF entartet sein**
+(`min == max`, wenn nur ankerlose Locations platziert sind oder nur eine
+einzige) — wer die Ausdehnung als Divisor benutzt (Zoom-Anschlag,
+Minimap-Maßstab), muss das abfangen.
+
+### A1.4 Charaktere: freier Punkt und Wildnis
+
+Der Charakter-Eintrag ist unverändert bis auf **ein** neues Feld; die
+Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
+`room_id`, `activity`, `activity_animation`, `animation_set`,
+`animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
+`travel`, `avatar_url`.
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
+
+- **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
+  mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim
+  Übertritt nach draußen räumt der Server neben der Location auch
+  `current_room` — sonst hörte die Figur weiter in den Raum hinein, den
+  sie gerade verlassen hat.
+- Weder Location noch `pos` ⇒ der Charakter steht gar nicht auf der
+  Karte und fehlt im Payload (unverändert).
+- **Im gefoggten Payload sind Wildnis-Charaktere unsichtbar**, der Avatar
+  selbst ausgenommen (§ A12). Die Sicht-/Hörweiten-Regel, die sie
+  einander sehen lässt, kommt mit **E6**.
+
+### A1.5 `GET /play/terrain` — gemaltes Gelände
+
+Ein eigener Endpoint, damit die 3-Sekunden-Abfrage der Weltkarte das
+Gelände nicht jedes Mal mitschleppt. Auth wie die Weltkarte
+(`get_current_user`), **kein** Admin-Gate, **nie gefoggt** — Gelände ist
+immer sichtbar, nur Locations verstecken sich.
+
+```
+{ default_kind: str,          # Boden der unbemalten Welt
+  types:  [ {kind, name, color, passable, speed_factor, meta}, … ],
+  areas:  [ {id, kind, polygon, z_order, meta}, … ],
+  sig:    str }               # identisch mit worldmap.terrain_sig
+```
+
+- `types` ist der **wirksame** Katalog, nach `kind` sortiert.
+- `areas` kommen **von unten nach oben**: `z_order` aufsteigend, bei
+  Gleichstand die Malreihenfolge. Der LETZTE Eintrag liegt oben.
+- `polygon` = `[[x, z], …]` in Welt-Metern, auf 2 Stellen gerundet, 3–256
+  Punkte, automatisch geschlossen.
+- `sig` ist dieselbe Signatur wie `terrain_sig` in der Weltkarte: einmal
+  holen, bei Signaturwechsel neu holen.
+
+**Geländeregeln (für beide Renderer gleich):**
+
+- **Die oberste Fläche gewinnt.** Ein Punkt gehört der letzten Fläche,
+  die ihn enthält (`z_order`, dann Malreihenfolge) — genau so, wie der
+  Editor malt.
+- **Unbemalt = `default_kind`.** Der Wert kommt aus der Welt-Einstellung
+  `game.default_terrain_kind`, und zwar über EINE Auflösung
+  (`terrain_query.default_kind()`): fehlender ODER leerer Schlüssel
+  ergibt `"grass"`. Der Endpoint darf nie eine andere Vorgabe melden, als
+  die Laufregeln anwenden.
+- **`passable` und `speed_factor` kommen AUSSCHLIESSLICH aus dem
+  Typen-Katalog** — nie aus der Fläche, nie aus einer Client-Tabelle,
+  nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ nachträglich
+  gelöscht) gilt als begehbar mit Faktor 1,0: ein Loch im Katalog darf
+  niemanden stranden lassen.
+- Der Katalog ist **datengetrieben**: der geteilte Grundstock
+  `shared/terrain/types.json` plus Welt-Zeilen, die pro `kind` den ganzen
+  Eintrag **ersetzen** (Override-Replace wie die Aktivitäten-Bibliothek).
+  Eine Welt-Zeile löschen holt den geteilten Eintrag zurück.
+- `kind` ist die ID (klein, ohne Leerzeichen), `name` der Anzeigetext,
+  `color` (`#rrggbb`) die Farbe der 2D-Schemakarte. `kind` SOLL auf eine
+  Oberflächen-Art (§ A9) passen, damit der 3D-Boden eine echte Textur
+  bekommt — Konvention, nicht erzwungen.
+
+### A1.6 Fog: was gefiltert wird und was nicht
+
+Vollständig in § A12. Für die Kartengeometrie zählt:
+
+- **Platzierte** Locations laufen durch `location_visible_to_character`;
+  **unplatzierte** passieren immer (sie stehen auf keiner Karte).
+- `world_bounds` wird **vor** dem Filter gerechnet: der Kartenrahmen darf
+  nicht springen, sobald der Avatar etwas entdeckt.
+- **Gelände wird nie gefoggt** — `GET /play/terrain` kennt keinen
+  Fog-Modus.
+
+### A1.7 Editor-CRUD (Game-Admin, E2)
+
+Schreibseite der beiden neuen Datenbestände; alle Antworten `{"status":
+"success", …}`, ungültige Eingaben **400**, unbekannte Ziele **404**.
+Dieselbe Auth-Lage wie die übrigen Location-Schreibrouten desselben
+Routers.
+
+| Route | Antwort / Wirkung |
+|---|---|
+| `GET /world/terrain-types` | `{types (nach kind sortiert), sources}` — `sources` sagt pro `kind` `"shared"` oder `"world"` |
+| `PUT /world/terrain-types/{kind}` | Legt/ersetzt den **Welt-Override** einer Art → `{status, type}` |
+| `DELETE /world/terrain-types/{kind}` | Entfernt nur den Override (der geteilte Eintrag kommt zurück); **404**, wenn es keinen gab |
+| `GET /world/terrain-areas` | `{areas (unten→oben), sig}` |
+| `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
+| `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` → `{status, area}` |
+| `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche |
+
+Geprüft wird **beim Schreiben**, nicht beim Lesen (die Leser scheitern
+still): Art muss im Katalog stehen · Polygon 3–256 endliche
+`[x, z]`-Punkte, Betrag ≤ 100 000, auf 2 Stellen gerundet · `z_order`
+geklemmt auf ±10 000 · `speed_factor` geklemmt auf 0…2 (nicht-endlich →
+1,0) · `color` genau `#rrggbb` · `kind` klein, 1–40 Zeichen aus
+`[a-z0-9_-]`.
+
+### A1.8 Was aus dem alten § A1 weitergilt (Innenszene, bis E4)
+
+Diese Konventionen gehören zur **Szene**, nicht zur Karte, und sind von
+E1 unberührt:
+
+- **Referenzquadrat / Anker-Kette:** `k = extent_m / plan_width_m`
+  (v5-Kopf) — Welt-Meter pro Real-Meter der Location. **`k` entfällt mit
+  E4**, dann liefert Teil B `k = 1` und Innen wie Außen rechnen in echten
+  Metern.
+- **Etagenhöhe** `storey = height_m / floors × k`, sonst
+  `map3d.level_height`, sonst 3. Etagenboden von Level n = `n × storey`.
+- **Yaw-Kette der Szene:** `yaw = map3d.rotation` (explizite 0 zählt) →
+  `map_rotation_2d` → 0; three.js `rotation.y = −rad(yaw)`. Das ist
+  **nicht** `yaw_deg` der Weltkarte (A1.1).
+- **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**, in
+  Grad, VOR jeder Messung anwenden. Yaw (y) außen, Tilt (x) und Roll (z)
+  im schon gedrehten Rahmen — „nach vorn kippen" heißt damit unabhängig
+  von der Blickrichtung dasselbe, und die Marker-Neigung benutzt dieselbe
+  Reihenfolge. Bei nur EINER belegten Achse identisch zum früheren
+  'XYZ'.
 - **Kompass für Blickrichtungen** (`facing`, Marker-`rotation`): 0 = Süd,
   90 = Ost, 180 = Nord, 270 = West; Figur `rotation.y = +rad(facing)`.
 - Alle Felder mit Suffix `_m` sind REALE Meter → im Anchored-Mode ×k.
   `offset_x/y/z` sind dagegen immer WELT-Meter (kein ×k).
+
+### A1.9 Ersatzlos gestrichen (keine Aliase, keine Fallback-Leser)
+
+- **Kachel 10 × 10** als Location-Fläche, `CELL`, `gridToWorld`,
+  Zellen-Nachbarschaft.
+- `grid_x`, `grid_y` an der Location; `grid_bounds` im Payload (→
+  `world_bounds`).
+- `passable` und `template_location_id` im Weltkarten-Eintrag.
+- `terrain` und `surface_kind` **im Weltkarten-Eintrag** (das gemalte
+  Gelände kommt aus `GET /play/terrain`; § A9 gilt weiter für die
+  Detailszene und `/world/locations`).
+- Die Kachelbild-Felder `map_rotation_2d`, `map_image_off`,
+  `map_patch_2d`, `map_patch_span`.
+
+Der **Reise-Payload (§ A11) ist in E1 unverändert** — er trägt weiter
+Zellen-Felder (`path` als Location-Kette, `progress_cells`,
+`cell_seconds_real`). **Wird mit E3 auf eine Meter-Polyline umgestellt.**
 
 ## A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)
 
@@ -477,9 +695,16 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   bzw. Rezept-Platte); die Konstante verankert nur Modelle/Platten.
   Outdoor-Räume haben keine Platte — Figuren stehen auf Level-/
   Terrain-Höhe.
-- **Figuren-Basishöhe: 1,70 m × k** (anchored; Legacy `1,7 × storey/3`).
-  Der Client-Default 1,75 m ist eine bekannte Divergenz → auf 1,70
-  angleichen (§ B6). `height_cm` der Charaktere skaliert relativ dazu.
+- **Figuren-Basishöhe: 1,70 m** — überall, in **Welt-Metern**. Auf der
+  freien Weltkarte gilt sie unverändert (ein Maßstab, § A1.1); in der
+  Innenszene reist sie übergangsweise noch mit `× k` (anchored; Legacy
+  `1,7 × storey/3`). **Der k-Faktor entfällt mit E4** — dann liefert
+  Teil B `k = 1` und die Umrechnung fällt ersatzlos weg. Der
+  Client-Default 1,75 m ist eine bekannte Divergenz → auf 1,70 angleichen
+  (§ B6). `height_cm` der Charaktere skaliert relativ dazu.
+- Es gibt **keinen Kachelbezug mehr**: „Figur relativ zur 10-m-Kachel"
+  war die Doppelmaßstab-Quelle, die die Seamless-World-Umstellung
+  beseitigt.
 
 ## A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`
 
@@ -708,7 +933,9 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   (`map-icon-2d` ist für den 3D-Pfad tot — README-Verweis streichen).
 - **Die Zuordnung `terrain` → Bibliotheks-Kind macht der SERVER**
   (2026-08-05, plan-grundflaeche.md § 5). Jede Location-Auslieferung, die
-  `terrain` trägt (`/world/locations`, Worldmap-Payload), trägt daneben
+  `terrain` trägt (`/world/locations`; **seit E1 NICHT mehr der
+  Weltkarten-Payload** — dessen Boden kommt aus den gemalten Flächen,
+  § A1.5), trägt daneben
   `surface_kind`: die aufgelöste ID, oder `""`, wenn `terrain` keinen
   Eintrag trifft. Regel: kleinschreiben, trimmen, nachschlagen — ein
   Fehlgriff wird nie geraten. Clients lesen `surface_kind` und schlagen
@@ -773,6 +1000,12 @@ Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
 
 ## A11. Reise-Payload (server-autoritative Bewegung) — neu 2026-07-27
 
+> **In E1 unverändert.** Der Block trägt weiter Zellen-Felder
+> (`path` als Location-Kette, `seg`/`frac`, `progress_cells`,
+> `cell_seconds_real`), obwohl die Karte in Metern rechnet. **Wird mit E3
+> auf eine Meter-Polyline umgestellt** (Wegpunkte in Welt-Metern, Tempo in
+> m/s); die Kachelmitten-Formel unten fällt damit weg.
+
 Ein Charakter wechselt die Location nicht mehr schlagartig, sondern reist
 über die Kachel-Kette. `GET /play/worldmap` liefert dafür pro Charakter das
 Feld **`travel`** — `null`, solange keine Reise läuft:
@@ -791,8 +1024,9 @@ Feld **`travel`** — `null`, solange keine Reise läuft:
 
 - **Die Position ist eine reine Funktion der Spieluhr.** Server und alle
   Clients rechnen aus demselben Payload dieselbe Position:
-  `pos = lerp(Kachelmitte(path[seg]), Kachelmitte(path[seg+1]), frac)`
-  (Kachelmitten aus `grid_x`/`grid_y`, Kachel = 10 m, § A1). Es gibt kein
+  `pos = lerp(Mittelpunkt(path[seg]), Mittelpunkt(path[seg+1]), frac)`
+  (Mittelpunkte seit E1 aus `pos_x`/`pos_z` der Location in Welt-Metern,
+  § A1.3 — vorher Kachelmitten aus `grid_x`/`grid_y`). Es gibt kein
   client-eigenes Pathfinding und keine eigene Reisezeit.
 - **`location_id` = nächstgelegene Zelle**, Rundung „halb abwärts": genau
   zwischen zwei Kacheln zählt die bereits verlassene. Der Spielzustand
@@ -860,28 +1094,35 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 
 | Feld | Gefiltert? | Regel |
 |---|---|---|
-| `locations[]` | ja | **platzierte** Orte (beide `grid_x`/`grid_y` gesetzt) nur wenn sichtbar. Orte OHNE Rasterposition passieren immer — sie stehen nicht auf der Karte und verraten nichts (Template-Stellvertreter) |
-| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett |
+| `locations[]` | ja | **platzierte** Orte (beide `pos_x`/`pos_z` gesetzt) nur wenn sichtbar. Orte OHNE Meterposition passieren immer — sie stehen nicht auf der Karte und verraten nichts (Template-Stellvertreter) |
+| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): unter Fog nur der Avatar selbst — bis die Sicht-/Hörweiten-Regel mit **E6** kommt, ist draußen niemand sonst zu sehen |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
 | `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
-| `grid_bounds` | **nein** | siehe unten |
+| `world_bounds` | **nein** | siehe unten |
+| `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |
 | `avatar`, `current_location_id` | nein | der Avatar sieht sich selbst |
 
-Rasterlose Orte gelten dabei als **sichtbar** — sie passieren den Filter, und
+Unplatzierte Orte gelten dabei als **sichtbar** — sie passieren den Filter, und
 damit werden auch die Charaktere und Events, die an ihnen hängen, mitgeliefert
-(sie stehen auf keiner Zelle und verraten keine Kartenposition).
+(sie stehen auf keiner Karte und verraten keine Position).
+
+**Gelände ist nie gefoggt.** `GET /play/terrain` kennt keinen Fog-Modus und
+kein `all`-Flag: die gemalte Landschaft ist immer sichtbar, verdeckt wird nur,
+was in ihr steht. Damit bleibt die Karte auch im Nebel eine Landschaft statt
+einer leeren Fläche.
 
 **Neue Wurzelfelder**
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `grid_bounds` | `{"min_x", "min_y", "max_x", "max_y"} \| null` | Ausdehnung des Rasters über ALLE platzierten Orte, **vor** dem Filter berechnet. `null`, wenn kein Ort platziert ist |
+| `world_bounds` | `{"min_x", "min_z", "max_x", "max_z"} \| null` | Ausdehnung der Welt in METERN über ALLE platzierten Orte, **vor** dem Filter berechnet. `null`, wenn kein Ort platziert ist. Regel und Randfälle: § A1.3 |
 | `fogged` | `bool` | `true` = gefilterte Sicht (`= not show_all`). Clients zeigen daran „hier ist noch Nebel" an, statt eine leere Karte zu vermuten |
 
-`grid_bounds` ist bewusst UNGEFILTERT: Kartenrahmen, Zoom-Anschlag und
+`world_bounds` ist bewusst UNGEFILTERT: Kartenrahmen, Zoom-Anschlag und
 Mini-Map-Maßstab dürfen nicht springen, sobald der Avatar einen Ort entdeckt.
 Die Ausdehnung verrät nur, wie groß die Welt ist — nicht, was in ihr steht.
+Sie darf entartet sein (`min == max`), also nie ungeprüft als Divisor dienen.
 
 **Admin-Override:** `GET /play/worldmap?all=1` liefert die ungefilterte Sicht
 (`fogged: false`). Nur für Rolle `admin` — sonst **403**. Ohne aktiven Avatar
@@ -1275,14 +1516,14 @@ noch als Regressionsschutz. Verbindlich ab v4:
 
 | # | Befund | Fix |
 |---|---|---|
-| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | Client auf 1,70 × k (bzw. `figures.base_height_m_world`) |
+| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Erledigt durch Seamless World (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), mit E4 fällt das `× k` weg. Client-Fix bleibt: 1,70 statt 1,75 |
 | 2 | „0,12 × k" in §2e der Rezept-Note | Zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
 | 3 | `activityToClipKind`-Keyword-Heuristik im Client | `activity_animation` server-authoritativ; Heuristik entfernen, sobald alle Aktivitäten gemappt liefern |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | Doku/Dead-Code entfernen |
 | 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | Realität ist `GET /characters/{name}/model3d` (JSON) — Doku angleichen |
 | 6 | `placements[].model_url` | Deprecated, fällt mit `/scene` weg |
 | 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar (Wishlist 2026-07-24) | Angenommen: `walk_y` (Meter über Modell-Unterkante) als Raum-Sidecar-Anker, ausgeliefert in `/scene` `plates[].top_y` bzw. Raum-Meta; Admin-Regler wie übrige Anker |
-| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | Behoben durch § B2a: Diorama skaliert real-size über `width_m × k` (measure_axes xz); Rechteck-Fit nur noch Fallback |
+| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | Behoben durch § B2a: Diorama skaliert real-size über `width_m × k` (measure_axes xz); Rechteck-Fit nur noch Fallback. **Endgültig erledigt durch Seamless World (E1/E4):** mit `k = 1` ist „real-size" und „Welt-Maßstab" dasselbe, der letzte Doppelmaßstab verschwindet |
 
 Rückfragen wie immer über die Wishlist.
 
