@@ -229,3 +229,145 @@ export function pointInPolygon(x: number, z: number,
   }
   return inside
 }
+
+/** A join is bevelled once the miter would stick out further than this many
+ *  stroke widths — 2 widths means only a near-hairpin (turn > 151°) bevels. */
+export const STROKE_MITER_LIMIT_WIDTHS = 2
+
+/** Two stroke points closer than this are the same click, not a segment. */
+const STROKE_EPS = 1e-9
+
+/** Metres are stored with 2 decimals (server side), so the ribbon rounds too. */
+const round2 = (v: number): number => Math.round(v * 100) / 100 + 0
+
+/**
+ * A centre LINE plus a width becomes the AREA polygon the world actually
+ * stores (`meta.stroke` is only the recipe; `terrain_areas.polygon` stays the
+ * truth). Offset by `widthM / 2` to both sides, walk side A forward and side B
+ * backward, and the ring closes itself — the result is an ordinary painted
+ * area that nothing downstream has to know was drawn as a line.
+ *
+ * Conventions, all decided here and nowhere else:
+ *   - a segment direction `d = (dx, dz)` has side normals `A = (dz, −dx)` and
+ *     `B = (−dz, dx)`. With x east / z south (§ A1.1) side A is the northern
+ *     side of a west→east line.
+ *   - joins use the miter: the averaged unit normal `m̂ = normalize(n1 + n2)`
+ *     and `cos(θ/2) = m̂·n1`, so the corner sits at `p + m̂ · offset/cos(θ/2)`.
+ *     Once that length passes `STROKE_MITER_LIMIT_WIDTHS × widthM` the spike is
+ *     cut off by a BEVEL: the two segment-end offset points instead of one.
+ *   - caps are flat (endpoint ± normal, no round/square extension), so a stroke
+ *     never covers ground the user did not click over.
+ *   - consecutive duplicate clicks are dropped BEFORE any direction is taken.
+ *
+ * Point count: `2n` with every join mitered, `+2` per bevelled join (both sides
+ * bevel together — the limit is symmetric), i.e. `2n + 2b`. Callers must size
+ * the centre line against the server's 256-point polygon limit, not against
+ * their own click count.
+ *
+ * Verification cases (hand-derived, § B5a — arithmetic, not screenshots):
+ *
+ *   straight [(0,0),(10,0)], width 4: offset 2, nA = (0,−1), nB = (0,1)
+ *     -> [(0,−2),(10,−2),(10,2),(0,2)]
+ *   90° bend [(0,0),(10,0),(10,10)], width 4: at (10,0) side A joins
+ *     n1 = (0,−1) with n2 = (1,0), m̂ = (0.7071,−0.7071),
+ *     cos(θ/2) = 0.7071, miter len = 2/0.7071 = 2.8284 <= 2×4 = 8
+ *     -> (10,0) + (2,−2) = (12,−2); side B mirrors to (8,2)
+ *     -> [(0,−2),(12,−2),(12,10),(8,10),(8,2),(0,2)]
+ *   collinear [(0,0),(5,0),(10,0)], width 4: cos(θ/2) = 1, miter len = offset
+ *     -> [(0,−2),(5,−2),(10,−2),(10,2),(5,2),(0,2)]   (2n = 6 points)
+ *   hairpin [(0,0),(10,0),(0.4,2.8)], width 4: d2 = (−0.96,0.28) is a unit
+ *     vector (0.9216+0.0784 = 1), cos θ = −0.96, cos(θ/2) = sqrt(0.02)
+ *     = 0.141421, miter len = 2/0.141421 = 14.142 > 8 -> bevel:
+ *     A gets (10,0)+2(0,−1) = (10,−2) and (10,0)+2(0.28,0.96) = (10.56,1.92),
+ *     B gets (10,2) and (9.44,−1.92); end caps (0.4,2.8) ± 2·n2
+ *     -> [(0,−2),(10,−2),(10.56,1.92),(0.96,4.72),
+ *         (−0.16,0.88),(9.44,−1.92),(10,2),(0,2)]     (2n+2 = 8 points)
+ *   [(0,0),(0,0),(10,0),(10,0)] width 4 -> the straight case (dupes dropped)
+ *   [(0,0),(3.14159,0)] width 1.111 -> [(0,−0.56),(3.14,−0.56),(3.14,0.56),
+ *     (0,0.56)]                                        (2 decimals, always)
+ *
+ * `null` — never a half-polygon — for: fewer than 2 distinct points, a width
+ * that is not positive, a non-finite coordinate, and the one case rounding
+ * creates on its own: a line shorter than the 2-decimal grid
+ * ([(0,0),(0.001,0)], width 4) collapses to 2 distinct points and would be a
+ * zero-area "area", so it is refused like any other degenerate input.
+ */
+export function strokeToPolygon(points: Array<[number, number]>,
+  widthM: number): Array<[number, number]> | null {
+  if (!Number.isFinite(widthM) || widthM <= 0) return null
+
+  // 1. clean the centre line: finite coordinates, no repeated click.
+  const line: Array<[number, number]> = []
+  for (const p of points) {
+    if (!p || p.length < 2) return null
+    const [x, z] = p
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null
+    const prev = line[line.length - 1]
+    if (prev && Math.abs(prev[0] - x) < STROKE_EPS
+      && Math.abs(prev[1] - z) < STROKE_EPS) continue
+    line.push([x, z])
+  }
+  if (line.length < 2) return null
+
+  // 2. per-segment unit direction and side-A normal (dz, −dx).
+  const dir: Array<[number, number]> = []
+  const nrm: Array<[number, number]> = []
+  for (let i = 1; i < line.length; i++) {
+    const dx = line[i][0] - line[i - 1][0]
+    const dz = line[i][1] - line[i - 1][1]
+    const len = Math.hypot(dx, dz)
+    dir.push([dx / len, dz / len])
+    nrm.push([dz / len, -dx / len])
+  }
+
+  const off = widthM / 2
+  const miterMax = STROKE_MITER_LIMIT_WIDTHS * widthM
+
+  /** One offset side; `s` is +1 for side A and −1 for side B. */
+  const buildSide = (s: number): Array<[number, number]> => {
+    const out: Array<[number, number]> = []
+    const push = (px: number, pz: number, nx: number, nz: number) =>
+      out.push([px + s * off * nx, pz + s * off * nz])
+
+    push(line[0][0], line[0][1], nrm[0][0], nrm[0][1])           // flat start cap
+    for (let i = 1; i < line.length - 1; i++) {
+      const [px, pz] = line[i]
+      const [n1x, n1z] = nrm[i - 1]
+      const [n2x, n2z] = nrm[i]
+      const mx = n1x + n2x
+      const mz = n1z + n2z
+      const mlen = Math.hypot(mx, mz)
+      let mitered = false
+      if (mlen > STROKE_EPS) {
+        const cosHalf = (mx / mlen) * n1x + (mz / mlen) * n1z
+        const miterLen = off / cosHalf
+        if (cosHalf > STROKE_EPS && miterLen <= miterMax) {
+          out.push([px + s * (mx / mlen) * miterLen,
+            pz + s * (mz / mlen) * miterLen])
+          mitered = true
+        }
+      }
+      if (!mitered) {                                            // bevel: 2 points
+        push(px, pz, n1x, n1z)
+        push(px, pz, n2x, n2z)
+      }
+    }
+    const last = nrm[nrm.length - 1]
+    push(line[line.length - 1][0], line[line.length - 1][1], last[0], last[1])
+    return out
+  }
+
+  // 3. side A forward + side B backward, rounded, without repeated points.
+  const ring = [...buildSide(1), ...buildSide(-1).reverse()]
+    .map(([x, z]): [number, number] => [round2(x), round2(z)])
+  const poly: Array<[number, number]> = []
+  for (const [x, z] of ring) {
+    const prev = poly[poly.length - 1]
+    if (prev && prev[0] === x && prev[1] === z) continue
+    poly.push([x, z])
+  }
+  const first = poly[0]
+  const tail = poly[poly.length - 1]
+  if (poly.length > 1 && first[0] === tail[0] && first[1] === tail[1]) poly.pop()
+  return poly.length >= 3 ? poly : null
+}
