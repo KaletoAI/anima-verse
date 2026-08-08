@@ -63,11 +63,15 @@ export interface TerrainToolbarProps {
   onCloseDraft: () => void
   onDiscardDraft: () => void
   areaCount: number
+  /** Open the type manager. It sits IN the palette because that is where the
+   *  vocabulary is missing something — and it is the only surface that can
+   *  answer "there is no kind for this" with anything but a shrug. */
+  onManageTypes: () => void
 }
 
 export function TerrainToolbar({
   mode, onMode, types, paintKind, onPaintKind, draftLen,
-  onCloseDraft, onDiscardDraft, areaCount,
+  onCloseDraft, onDiscardDraft, areaCount, onManageTypes,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const btn = (m: TerrainMode, icon: string, label: string, title: string) => (
@@ -103,6 +107,11 @@ export function TerrainToolbar({
               <TypeChip key={ty.kind} type={ty} armed={ty.kind === paintKind}
                 onPick={() => onPaintKind(ty.kind)} />
             ))}
+            <button type="button" className="ga-btn ga-btn-sm"
+              title={t('Add terrain types or change colour, passability and speed')}
+              onClick={onManageTypes}>
+              {t('Manage…')}
+            </button>
           </span>
           <span className={'ga-map-arm' + (paintKind ? '' : ' warn')}>
             {!paintKind

@@ -16,6 +16,7 @@ import {
   MAX_COORD, MAX_POINTS, MAX_Z_ORDER, MIN_POINTS, TerrainAreaChip,
   TerrainToolbar, type TerrainMode,
 } from './TerrainTools'
+import { TerrainTypesDialog } from './TerrainTypesDialog'
 import type {
   EditorLocation, TerrainArea, TerrainPayload, TerrainType, TerrainTypesResp,
   WorldmapPayload,
@@ -126,6 +127,10 @@ export function MapTab() {
   // running draft and the selected area.
   const [mode, setMode] = useState<TerrainMode>('select')
   const [terrainTypes, setTerrainTypes] = useState<TerrainType[]>([])
+  // Where each effective kind comes from — only the type manager needs it, and
+  // it arrives in the same answer as the catalog, so it is kept here too.
+  const [typeSources, setTypeSources] = useState<Record<string, 'shared' | 'world'>>({})
+  const [typesOpen, setTypesOpen] = useState(false)
   const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
   const [paintKind, setPaintKind] = useState('')
   const [draft, setDraft] = useState<Array<[number, number]>>([])
@@ -189,18 +194,20 @@ export function MapTab() {
   useEffect(() => { void reload() }, [reload])
   useEffect(() => { void reloadTerrain() }, [reloadTerrain])
 
-  // The catalog is fetched once: it changes only when someone edits the types,
-  // and that surface reloads it itself.
-  useEffect(() => {
-    void (async () => {
-      try {
-        const r = await apiGet<TerrainTypesResp>('/world/terrain-types')
-        setTerrainTypes(r.types || [])
-      } catch (e) {
-        toast(t('Failed to load terrain types') + ': ' + (e as Error).message, 'error')
-      }
-    })()
+  /** The catalog. Read on mount and after every write of the type manager —
+   *  never on a timer: it changes only when someone edits the types, and the
+   *  palette plus every area colour follow from this one state. */
+  const reloadTypes = useCallback(async () => {
+    try {
+      const r = await apiGet<TerrainTypesResp>('/world/terrain-types')
+      setTerrainTypes(r.types || [])
+      setTypeSources(r.sources || {})
+    } catch (e) {
+      toast(t('Failed to load terrain types') + ': ' + (e as Error).message, 'error')
+    }
   }, [t, toast])
+
+  useEffect(() => { void reloadTypes() }, [reloadTypes])
 
   /** The catalog by kind — what every colour lookup goes through. */
   const typeMap = useMemo(() => {
@@ -208,6 +215,12 @@ export function MapTab() {
     for (const ty of terrainTypes) m[ty.kind] = ty
     return m
   }, [terrainTypes])
+
+  // A kind the type manager just removed must not stay armed — the next
+  // painted ring would be posted with a kind the server no longer knows.
+  useEffect(() => {
+    if (paintKind && !typeMap[paintKind]) setPaintKind('')
+  }, [paintKind, typeMap])
 
   // First frame: as soon as bounds AND a measured pane exist. Later reloads
   // keep the user's view — refitting under an edit would move the world away.
@@ -825,6 +838,7 @@ export function MapTab() {
             onCloseDraft={() => { void commitDraft(draft) }}
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
             areaCount={terrain?.areas.length || 0}
+            onManageTypes={() => setTypesOpen(true)}
           />
           {mode === 'select' ? (
             <label className="ga-map-toolbar-check"
@@ -1001,6 +1015,15 @@ export function MapTab() {
           ) : null}
         </div>
       </div>
+
+      {typesOpen ? (
+        <TerrainTypesDialog
+          types={terrainTypes}
+          sources={typeSources}
+          onChanged={reloadTypes}
+          onClose={() => setTypesOpen(false)}
+        />
+      ) : null}
 
       {picker ? (
         <div className="ga-modal-backdrop" onMouseDown={() => setPicker(null)}>

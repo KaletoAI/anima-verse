@@ -2113,6 +2113,66 @@ html, * {
   flex-shrink: 0;
 }
 
+/* Terrain-type manager dialog. Wider than the default modal because seven
+   columns of controls do not fold usefully — the body scrolls instead. */
+.ga-tt-modal { max-width: 760px; }
+.ga-tt-hint {
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  line-height: 1.4;
+}
+.ga-tt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ga-tt-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted, #8b949e);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border, #30363d);
+  white-space: nowrap;
+}
+.ga-tt-table td {
+  padding: 3px 6px;
+  vertical-align: middle;
+}
+.ga-tt-table tfoot tr:first-child td {
+  border-top: 1px solid var(--border, #30363d);
+  padding-top: 8px;
+}
+.ga-tt-center { text-align: center; }
+.ga-tt-kind {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+.ga-tt-input { padding: 3px 6px; font-size: 12px; min-width: 90px; }
+.ga-tt-speed { padding: 3px 6px; font-size: 12px; width: 72px; }
+/* A value the server would refuse — marked where it is typed, not as a toast
+   after a round trip. */
+.ga-tt-invalid { border-color: var(--danger, #f85149); }
+.ga-tt-color {
+  width: 34px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.ga-tt-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.ga-tt-newhint {
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  padding-top: 0;
+}
+
 /* Map image picker dialog. */
 .ga-map-imgpicker { max-width: 480px; }
 .ga-map-imgpicker-group { display: flex; flex-direction: column; gap: 6px; }
