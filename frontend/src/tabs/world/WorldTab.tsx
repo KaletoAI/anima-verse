@@ -45,7 +45,7 @@ export function WorldTab() {
     try {
       const data = await apiGet<{ locations?: Location[] }>('/world/locations')
       // Show templates (and normal locations); hide their thin clone
-      // placements. Clones only carry grid_x/grid_y plus a pointer to
+      // placements. Clones only carry pos_x/pos_z plus a pointer to
       // the template — all editable data (description, prompts, rooms)
       // lives on the template. Editing happens here in the World tab;
       // placement (clones) lives in the Map tab.
@@ -319,7 +319,6 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
           <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {location.name}
           </strong>
-          {location.is_template ? <span className="ga-source ga-source-shared">tpl</span> : null}
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto', marginLeft: 8 }}>
           {danger > 0 ? (

@@ -2179,8 +2179,14 @@ html, * {
   padding-top: 0;
 }
 
-/* Map image picker dialog. */
-.ga-map-imgpicker { max-width: 480px; }
+/* Map image picker dialog. Narrower than the default modal — the thumbnail
+   grid auto-fills, so at 560 px a handful of icons spread out into a sparse
+   row instead of forming a compact block.
+
+   The selector needs BOTH classes: `.ga-modal` sets `max-width: 560px` and is
+   declared FURTHER DOWN in this file, so a single `.ga-map-imgpicker` of equal
+   specificity loses the tie-break and the narrowing is silently dead. */
+.ga-modal.ga-map-imgpicker { max-width: 480px; }
 .ga-map-imgpicker-group { display: flex; flex-direction: column; gap: 6px; }
 .ga-map-imgpicker-group + .ga-map-imgpicker-group { margin-top: 10px; }
 .ga-map-imgpicker-label {

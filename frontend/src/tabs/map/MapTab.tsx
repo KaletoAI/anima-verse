@@ -303,9 +303,9 @@ export function MapTab() {
     const tm: EditorLocation[] = []
     for (const loc of locations || []) {
       const isClone = !!(loc.template_location_id || '').trim()
-      // A template is a stamp, never a place on the map: passable templates
-      // (their clones get placed) and explicitly flagged template locations.
-      if ((!!loc.passable && !isClone) || loc.is_template) { tm.push(loc); continue }
+      // A template is a stamp, never a place on the map: a passable location
+      // that is not itself a clone — its clones are what gets placed.
+      if (!!loc.passable && !isClone) { tm.push(loc); continue }
       if (isPlaced(loc)) pl.push(loc)
       else un.push(loc)
     }

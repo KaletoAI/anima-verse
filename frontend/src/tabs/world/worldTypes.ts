@@ -250,10 +250,13 @@ export interface Location {
   image_prompt_map_2d?: string
   image_prompt_building?: string
   image_count?: number
-  is_template?: boolean
   template_location_id?: string
-  grid_x?: number | null
-  grid_y?: number | null
+  /** World position in METRES, `null` when the location is unplaced. */
+  pos_x?: number | null
+  pos_z?: number | null
+  /** § A1.1 rotation of the location itself — NOT `map_rotation_2d`, which
+   *  only turns the flat icon artwork inside the footprint. */
+  yaw_deg?: number
   map_image_2d?: string
   map_rotation_2d?: number
   /** Multi-tile patch anchored (centred) on this placed cell — gallery file

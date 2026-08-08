@@ -4,18 +4,25 @@ import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
 /**
- * Known-locations editor (Characters → Locations): die echte 2D-Welt-Karte
- * (map-icon-2d Kacheln im Grid wie MapPanel), unbekannte Orte als Fog-of-War
- * abgedunkelt. Klick auf eine Kachel schaltet "bekannt" um; Speichern schreibt
- * den vollen Soll-Stand.
+ * Known-locations editor (Characters → Locations): every placed location as a
+ * map-icon-2d tile, unknown ones darkened as fog of war. Clicking a tile
+ * toggles "known"; saving writes the full target state.
  *   GET /characters/{c}/memory/locations
  *   PUT /characters/{c}/known-locations  ({known_locations: [...]})
+ *
+ * The tiles are a plain WRAP LIST, not a map. This used to be a CSS grid over
+ * the old integer cell coordinates; with free world metres a faithful layout
+ * would mean a real projected canvas, and this surface is pure selection UI —
+ * it never showed distances or routes. Deliberate simplification: the map
+ * itself lives in the Map tab, here the tiles only need to be recognisable.
+ * They are ordered by world position (z, then x) so neighbours on the map stay
+ * neighbours in the list and the order is stable across reloads.
  */
 interface LocItem {
   id: string
   name: string
-  grid_x?: number | null
-  grid_y?: number | null
+  pos_x?: number | null
+  pos_z?: number | null
   map_rotation_2d?: number
   passable: boolean
   is_known: boolean
@@ -27,8 +34,10 @@ const CELL = 78
 const GAP = 4
 const PAD = 6
 
+/** Placed = it stands somewhere on the world map. Metres are signed — there is
+ *  no ">= 0" test, negative coordinates are ordinary positions. */
 function isPlaced(l: LocItem): boolean {
-  return l.grid_x != null && l.grid_y != null && (l.grid_x as number) >= 0 && (l.grid_y as number) >= 0
+  return l.pos_x != null && l.pos_z != null
 }
 
 export function KnownLocationsEditor({ character }: { character: string }) {
@@ -84,27 +93,16 @@ export function KnownLocationsEditor({ character }: { character: string }) {
     }
   }
 
-  const grid = useMemo(() => {
+  const tiles = useMemo(() => {
     const placed = items.filter(isPlaced)
     if (!placed.length) return null
-    const xs = placed.map((l) => l.grid_x as number)
-    const ys = placed.map((l) => l.grid_y as number)
-    const minX = Math.min(...xs), maxX = Math.max(...xs)
-    const minY = Math.min(...ys), maxY = Math.max(...ys)
-    const cols = maxX - minX + 1
-    const byCell = new Map<string, LocItem>()
-    placed.forEach((l) => byCell.set(`${l.grid_x},${l.grid_y}`, l))
-    const els: React.ReactNode[] = []
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        const l = byCell.get(`${x},${y}`)
-        if (!l) { els.push(<div key={`${x},${y}`} style={{ width: CELL, height: CELL }} />); continue }
-        els.push(<MapCell key={l.id} loc={l} isKnown={known.has(l.id)} onClick={() => toggle(l.id)} t={t} />)
-      }
-    }
+    placed.sort((a, b) => ((a.pos_z as number) - (b.pos_z as number))
+      || ((a.pos_x as number) - (b.pos_x as number)))
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, ${CELL}px)`, gap: GAP, padding: PAD }}>
-        {els}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: GAP, padding: PAD }}>
+        {placed.map((l) => (
+          <MapCell key={l.id} loc={l} isKnown={known.has(l.id)} onClick={() => toggle(l.id)} t={t} />
+        ))}
       </div>
     )
   }, [items, known, t])
@@ -134,14 +132,14 @@ export function KnownLocationsEditor({ character }: { character: string }) {
         {t('Click a tile to toggle whether the character knows that place. Darkened = unknown (fog of war); entering a location also reveals it automatically.')}
       </div>
 
-      {grid ? (
+      {tiles ? (
         <div style={{ overflow: 'auto', maxHeight: '60vh', border: '1px solid var(--border, #30363d)',
                       borderRadius: 8, background: 'var(--bg, #0d1117)' }}>
-          {grid}
+          {tiles}
         </div>
-      ) : null}
-
-      {!grid && <div className="ga-placeholder">{t('No places')}</div>}
+      ) : (
+        <div className="ga-placeholder">{t('No places')}</div>
+      )}
     </div>
   )
 }
@@ -163,22 +161,22 @@ function MapCell({ loc, isKnown, onClick, t }: {
         background: 'var(--bg, #0d1117)',
       }}
     >
-      {/* Karten-Kachel */}
+      {/* Map tile */}
       {!imgFail && (
         <img src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`} alt={loc.name}
           onError={() => setImgFail(true)}
           style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
             transform: rot ? `rotate(${rot}deg)` : undefined,
-            // Fog-of-War: unbekannt → entsaettigt + abgedunkelt.
+            // Fog of war: unknown → desaturated + darkened.
             filter: isKnown ? undefined : 'grayscale(0.85) brightness(0.4)',
           }} />
       )}
-      {/* Fog-Schleier zusaetzlich (auch ohne Bild) */}
+      {/* Extra fog veil (also without an image) */}
       {!isKnown && (
         <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} />
       )}
-      {/* Name */}
+      {/* Location name */}
       <div style={{
         position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.58em', lineHeight: 1.15,
         textAlign: 'center', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '1px 2px',

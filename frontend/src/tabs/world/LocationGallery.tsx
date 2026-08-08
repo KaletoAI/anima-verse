@@ -250,14 +250,14 @@ export function LocationGallery({
   const types = data?.image_types || {}
   const metas = data?.image_metas || {}
 
-  // How often each map image is currently used on the map: placed cells
+  // How often each map image is currently used on the map: placed locations
   // whose gallery owner is this location (clones share the template gallery) and
   // that picked exactly this file as the 2D tile — or as the 3x3 patch
   // anchored there. File -> count.
   const mapUsage = useMemo(() => {
     const m: Record<string, number> = {}
     for (const l of placements) {
-      if (l.grid_x == null || l.grid_y == null || l.grid_x < 0 || l.grid_y < 0) continue
+      if (l.pos_x == null || l.pos_z == null) continue
       if (((l.template_location_id || '').trim() || l.id) !== locationId) continue
       const f = (l.map_image_2d || '').trim()
       if (f) m[f] = (m[f] || 0) + 1

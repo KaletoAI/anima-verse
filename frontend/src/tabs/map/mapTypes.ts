@@ -9,9 +9,9 @@
  * ONE TYPE PER ENDPOINT. The two location sources look alike and are not:
  * `GET /play/worldmap` rows carry only the § A1.3 fields, `GET /world/locations`
  * dicts carry the full record. Blending them into one optional-everything
- * interface would let a filter on `is_template` compile against worldmap rows
- * and silently return nothing. They share their geometry through `MapGeometry`
- * and part ways after it.
+ * interface would let a filter on `template_location_id` compile against
+ * worldmap rows and silently return nothing. They share their geometry through
+ * `MapGeometry` and part ways after it.
  */
 import type { MapBounds } from './mapMath'
 import type { Map3D } from '../world/worldTypes'
@@ -62,7 +62,6 @@ export interface WorldmapLocationRow extends MapGeometry {
  */
 export interface EditorLocation extends MapGeometry {
   passable?: boolean
-  is_template?: boolean
   template_location_id?: string
   description?: string
   /** Chosen gallery file for the flat map icon (`PATCH .../map-image`); empty
