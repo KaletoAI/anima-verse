@@ -91,6 +91,12 @@ export interface TerrainLayerProps {
   groundColor: string
   /** Vertex handles are live only while the edit-area mode is on. */
   editing: boolean
+  /** The selected area may be RESHAPED. False for an area whose kind the
+   *  catalog no longer knows: every write is a full replace and the server
+   *  rejects the unknown kind before it reads the polygon, so offering
+   *  handles would only produce a 400 per drag. The selection outline still
+   *  shows — the area is selectable, just not editable until its kind is. */
+  editable: boolean
   selectedId: string
   /** The polygon being painted (world metres) and the cursor it follows. */
   draft: Array<[number, number]>
@@ -108,7 +114,7 @@ export interface TerrainLayerProps {
 }
 
 export function TerrainLayer({
-  areas, types, groundColor, editing, selectedId, draft, draftCursor,
+  areas, types, groundColor, editing, editable, selectedId, draft, draftCursor,
   draftColor, draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
@@ -216,8 +222,12 @@ export function TerrainLayer({
           const cp = worldToScreen(c[0], c[1], view, w, h)
           return (
             <g key={a.id}>
+              // evenodd, not SVG's nonzero default: the engine answers point
+              // queries by ray casting (`world_geometry.point_in_polygon`),
+              // which IS the even-odd rule. On a bow tie the two disagree —
+              // nonzero would paint a centre the engine calls OUTSIDE.
               <path d={worldPolyToPath(a.polygon, view, w, h)}
-                fill={color} fillOpacity={FILL_OPACITY}
+                fill={color} fillOpacity={FILL_OPACITY} fillRule="evenodd"
                 stroke={isSel ? COL_SELECTED : color}
                 strokeWidth={isSel ? 2 : 1}
                 strokeOpacity={isSel ? 1 : 0.75}
@@ -238,7 +248,7 @@ export function TerrainLayer({
               well be buried under later ones. */}
           <path d={worldPolyToPath(editPoly, view, w, h)} fill="none"
             stroke={COL_SELECTED} strokeWidth={2} pointerEvents="none" />
-          {editPoly.map((a, i) => {
+          {editable ? editPoly.map((a, i) => {
             const b = editPoly[(i + 1) % editPoly.length]
             const pa = worldToScreen(a[0], a[1], view, w, h)
             const pb = worldToScreen(b[0], b[1], view, w, h)
@@ -257,8 +267,8 @@ export function TerrainLayer({
                   onEdgeInsert(i + 1, r2(on[0]), r2(on[1]))
                 }} />
             )
-          })}
-          {editPoly.map((p, i) => {
+          }) : null}
+          {editable ? editPoly.map((p, i) => {
             const s = worldToScreen(p[0], p[1], view, w, h)
             return (
               <circle key={`v${i}`} cx={s.x} cy={s.y} r={HANDLE_R}
@@ -268,7 +278,7 @@ export function TerrainLayer({
                 onPointerDown={(e) => startDrag(e, i, p)}
                 onDoubleClick={(e) => { e.stopPropagation(); onVertexDelete(i) }} />
             )
-          })}
+          }) : null}
         </g>
       ) : null}
 
@@ -276,9 +286,12 @@ export function TerrainLayer({
           when the click actually closes it. */}
       {draft.length ? (
         <g pointerEvents="none">
+          {/* Same even-odd rule as a saved area: the preview must show the
+              shape the engine will read back, self-crossings included. */}
           <path d={worldPolyToPath(draftPts, view, w, h, draft.length >= 3)}
             fill={draft.length >= 3 ? draftColor : 'none'}
             fillOpacity={draft.length >= 3 ? FILL_OPACITY * 0.6 : 0}
+            fillRule="evenodd"
             stroke={COL_DRAFT} strokeWidth={2} strokeDasharray="6 3" />
           {draft.map((p, i) => {
             const s = worldToScreen(p[0], p[1], view, w, h)

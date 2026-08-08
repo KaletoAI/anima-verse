@@ -148,6 +148,13 @@ export interface TerrainAreaChipProps {
  * location selection uses. Deleting arms an inline confirmation row (no
  * `window.confirm`); the state is local because the chip is remounted per area
  * (`key`), so a fresh selection is never half-armed.
+ *
+ * An area whose kind the catalog no longer knows can only do ONE thing: get a
+ * kind. Every other write is a full replace whose unknown `kind` the server
+ * rejects before it reads anything else, so reshaping and re-layering are shut
+ * off — and the chip SAYS why instead of leaving three dead buttons to be
+ * discovered by clicking them. Deleting stays open: erasing needs no kind, and
+ * it is the other honest answer to an area nobody can name any more.
  */
 export function TerrainAreaChip({
   area, types, typeList, onKind, onZOrder, onDelete, onClose,
@@ -184,12 +191,12 @@ export function TerrainAreaChip({
         ))}
       </div>
       <div className="ga-map-chip-actions">
-        <button type="button" className="ga-btn ga-btn-sm"
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!known}
           title={t('Draw this area over the ones around it')}
           onClick={() => onZOrder(1)}>
           {t('Bring forward')}
         </button>
-        <button type="button" className="ga-btn ga-btn-sm"
+        <button type="button" className="ga-btn ga-btn-sm" disabled={!known}
           title={t('Draw this area under the ones around it')}
           onClick={() => onZOrder(-1)}>
           {t('Send back')}
@@ -213,8 +220,10 @@ export function TerrainAreaChip({
           </button>
         )}
       </div>
-      <div className="ga-map-chip-row ga-map-chip-label">
-        {t('Drag a point to move it · double-click removes it · click an edge to add one')}
+      <div className={'ga-map-chip-row ' + (known ? 'ga-map-chip-label' : 'ga-map-chip-warn')}>
+        {known
+          ? t('Drag a point to move it · double-click removes it · click an edge to add one')
+          : t('Pick a terrain type first')}
       </div>
     </div>
   )

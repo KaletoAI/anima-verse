@@ -408,11 +408,25 @@ export function MapTab() {
   /** Replace one existing area. The route is a FULL replace (kind, polygon,
    *  z_order, meta), so every field travels along — a body carrying only the
    *  changed one would blank the rest. The refetch afterwards runs whether the
-   *  write worked or not: on 404 (someone else erased it) it is the repair. */
+   *  write worked or not: on 404 (someone else erased it) it is the repair.
+   *
+   *  That full body is why an area whose kind the catalog no longer knows
+   *  cannot be reshaped: the server sanitizer checks `kind` FIRST and rejects
+   *  the whole body before it ever looks at the polygon
+   *  (`terrain.sanitize_area`). Every write therefore carries a KNOWN kind or
+   *  does not leave. The surfaces disable themselves as well — this is the net
+   *  under them, not the only guard, and it says what to do instead of
+   *  letting a 400 come back as a stack trace. Changing the kind is exactly
+   *  the write that rescues such an area, so the patch's kind wins. */
   const putArea = useCallback(async (area: TerrainArea, patch: Partial<TerrainArea>) => {
     const body = {
       kind: area.kind, polygon: area.polygon, z_order: area.z_order,
       meta: area.meta || {}, ...patch,
+    }
+    if (!typeMap[body.kind]) {
+      toast(t('Pick a terrain type first'), 'error')
+      await reloadTerrain()
+      return
     }
     try {
       await apiPut(`/world/terrain-areas/${encodeURIComponent(area.id)}`, body)
@@ -420,26 +434,43 @@ export function MapTab() {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
     await reloadTerrain()
-  }, [reloadTerrain, t, toast])
+  }, [reloadTerrain, t, toast, typeMap])
 
-  /** Close the running ring into a new area. */
+  /**
+   * Close the running ring into a new area.
+   *
+   * The draft is dropped only once the server has it. A polygon is a dozen
+   * deliberate clicks; a connection blip or an expired session must not cost
+   * them, so on failure the ring stays standing and `Close` can simply be
+   * pressed again. The in-flight flag is what makes that safe: with the draft
+   * still on screen a second close-click would otherwise post the same area
+   * twice.
+   */
+  const draftBusyRef = useRef(false)
   const commitDraft = useCallback(async (pts: Array<[number, number]>) => {
+    if (draftBusyRef.current) return
     if (pts.length < MIN_POINTS) {
       toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
       return
     }
-    setDraft([])
-    setDraftCursor(null)
+    draftBusyRef.current = true
     try {
       await apiPost('/world/terrain-areas', { kind: paintKind, polygon: pts })
+      setDraft([])
+      setDraftCursor(null)
       await reloadTerrain()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      draftBusyRef.current = false
     }
   }, [paintKind, reloadTerrain, t, toast])
 
   /** One click while painting: close the ring, or drop another vertex. */
   const addDraftPoint = useCallback((wx: number, wz: number) => {
+    // While the ring is being saved the draft still stands (it is only dropped
+    // once the server has it) — a vertex added now would be dropped with it.
+    if (draftBusyRef.current) return
     if (!paintKind) { toast(t('Pick a terrain type first'), 'error'); return }
     const x = r2(wx)
     const z = r2(wz)
@@ -714,6 +745,9 @@ export function MapTab() {
   // The unpainted ground: the default kind's colour, and nothing at all until
   // both the payload and the catalog have answered.
   const groundColor = typeMap[terrain?.default_kind || '']?.color || ''
+  // An area the catalog cannot name is selectable but not reshapeable — see
+  // `putArea`. The chip says so; here the handles simply stay away.
+  const selAreaEditable = !!(selectedArea && typeMap[selectedArea.kind])
   // Will the next click close the ring? The same pixel tolerance the click
   // handler uses — the highlight must not promise a close that will not happen.
   const draftWillClose = !!(draftCursor && draft.length >= MIN_POINTS
@@ -834,6 +868,7 @@ export function MapTab() {
               types={typeMap}
               groundColor={groundColor}
               editing={mode === 'edit-area'}
+              editable={selAreaEditable}
               selectedId={selArea}
               draft={draft}
               draftCursor={draftCursor}
