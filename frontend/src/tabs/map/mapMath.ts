@@ -237,7 +237,9 @@ export const STROKE_MITER_LIMIT_WIDTHS = 2
 /** Two stroke points closer than this are the same click, not a segment. */
 const STROKE_EPS = 1e-9
 
-/** Metres are stored with 2 decimals (server side), so the ribbon rounds too. */
+/** Metres are stored with 2 decimals (server side), so the ribbon rounds too.
+ *  The `+ 0` normalizes −0 to 0 — otherwise a mirrored side produces "-0",
+ *  which `===` calls equal but JSON writes out as a different number. */
 const round2 = (v: number): number => Math.round(v * 100) / 100 + 0
 
 /**
@@ -256,13 +258,17 @@ const round2 = (v: number): number => Math.round(v * 100) / 100 + 0
  *     Once that length passes `STROKE_MITER_LIMIT_WIDTHS × widthM` the spike is
  *     cut off by a BEVEL: the two segment-end offset points instead of one.
  *   - caps are flat (endpoint ± normal, no round/square extension), so a stroke
- *     never covers ground the user did not click over.
+ *     ENDS at the last click instead of running past it. Sideways it does
+ *     reach further: the ribbon is half a width wide on either side, and a
+ *     miter join sticks out up to `STROKE_MITER_LIMIT_WIDTHS × widthM` beyond
+ *     the corner it rounds. A stroke covers ground the user did not click on —
+ *     that is the point of a width.
  *   - consecutive duplicate clicks are dropped BEFORE any direction is taken.
  *
  * Point count: `2n` with every join mitered, `+2` per bevelled join (both sides
- * bevel together — the limit is symmetric), i.e. `2n + 2b`. Callers must size
- * the centre line against the server's 256-point polygon limit, not against
- * their own click count.
+ * bevel together — the limit is symmetric), i.e. `2n + 2b`, worst case `4n − 4`
+ * when EVERY join bevels. Callers must size the RESULT against the server's
+ * 256-point polygon limit — the click count alone does not bound it.
  *
  * Verification cases (hand-derived, § B5a — arithmetic, not screenshots):
  *
@@ -309,14 +315,13 @@ export function strokeToPolygon(points: Array<[number, number]>,
   }
   if (line.length < 2) return null
 
-  // 2. per-segment unit direction and side-A normal (dz, −dx).
-  const dir: Array<[number, number]> = []
+  // 2. per-segment side-A normal (dz, −dx), unit length. The direction itself
+  //    is never needed on its own — the normal carries it.
   const nrm: Array<[number, number]> = []
   for (let i = 1; i < line.length; i++) {
     const dx = line[i][0] - line[i - 1][0]
     const dz = line[i][1] - line[i - 1][1]
     const len = Math.hypot(dx, dz)
-    dir.push([dx / len, dz / len])
     nrm.push([dz / len, -dx / len])
   }
 

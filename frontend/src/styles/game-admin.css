@@ -2112,6 +2112,23 @@ html, * {
   border: 1px solid rgba(255, 255, 255, 0.25);
   flex-shrink: 0;
 }
+/* The stroke width, in the toolbar (next line) and in the chip (this line).
+   The unit stands next to the number instead of inside the label: a metre
+   field whose metres are only implied is exactly the "Maß ohne Bezug" the
+   editor avoids elsewhere. */
+.ga-terrain-width {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text, #c9d1d9);
+  user-select: none;
+}
+.ga-terrain-width input {
+  width: 72px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
 
 /* Terrain-type manager dialog. Wider than the default modal because seven
    columns of controls do not fold usefully — at 560 px the row with `Reset`

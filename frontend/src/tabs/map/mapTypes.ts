@@ -120,6 +120,26 @@ export interface TerrainType {
   meta?: Record<string, unknown>
 }
 
+/**
+ * The RECIPE of an area drawn as a line: a centre line in world metres plus a
+ * width. It lives in `meta.stroke` and is exactly that — a recipe. The polygon
+ * stays the truth for the server, for point queries and for every renderer;
+ * this only lets the editor put the handles back on the line the user drew.
+ *
+ * `meta` is free-form JSON the server passes through verbatim, so nothing
+ * guarantees a stored `stroke` has this shape — read it through a check, never
+ * by trusting the declaration.
+ */
+export interface TerrainStroke {
+  points: Array<[number, number]>
+  width_m: number
+}
+
+/** An area's `meta`. Free-form by contract — the known key is named, the rest
+ *  stays open, and a foreign key written by anything else survives a round
+ *  trip through the editor untouched. */
+export type TerrainMeta = { stroke?: TerrainStroke } & Record<string, unknown>
+
 /** A painted polygon in world metres (§ A1.5). Points are `[x, z]`, 3–256 of
  *  them, auto-closed by the server. */
 export interface TerrainArea {
@@ -127,7 +147,7 @@ export interface TerrainArea {
   kind: string
   polygon: Array<[number, number]>
   z_order: number
-  meta?: Record<string, unknown>
+  meta?: TerrainMeta
 }
 
 /** `GET /play/terrain`. `areas` arrive BOTTOM to TOP — the last entry is on

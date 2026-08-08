@@ -6,20 +6,22 @@ import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDi
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
 import { MapCanvas } from './MapCanvas'
 import {
-  FIT_FALLBACK_PX_PER_M, fitBounds, pointInPolygon, type MapBounds, type View,
+  FIT_FALLBACK_PX_PER_M, fitBounds, pointInPolygon, strokeToPolygon,
+  type MapBounds, type View,
 } from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
 } from './PlacementLayer'
 import { TerrainLayer, typeColor } from './TerrainLayer'
 import {
-  MAX_COORD, MAX_POINTS, MAX_Z_ORDER, MIN_POINTS, TerrainAreaChip,
-  TerrainToolbar, type TerrainMode,
+  MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
+  MIN_STROKE_POINTS, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainToolbar,
+  type PaintShape, type TerrainMode,
 } from './TerrainTools'
 import { TerrainTypesDialog } from './TerrainTypesDialog'
 import type {
-  EditorLocation, TerrainArea, TerrainPayload, TerrainType, TerrainTypesResp,
-  WorldmapPayload,
+  EditorLocation, TerrainArea, TerrainMeta, TerrainPayload, TerrainStroke,
+  TerrainType, TerrainTypesResp, WorldmapPayload,
 } from './mapTypes'
 
 /**
@@ -66,6 +68,15 @@ import type {
  *     the signal a WATCHING client uses, and the hand that paints already
  *     knows when it changed something.
  *   - `POST/PUT/DELETE /world/terrain-areas` — one refetch after each write.
+ *
+ * Paint has TWO gestures and one result. `area` clicks an outline; `line`
+ * clicks a centre line that `strokeToPolygon` widens into the very same kind
+ * of polygon. The line survives the write only as a RECIPE in `meta.stroke`
+ * (points + width) — the polygon stays the truth for the server, for point
+ * queries and for every renderer. That is why every stroke edit regenerates
+ * the polygon and PUTs both together: a recipe that no longer produces the
+ * stored shape is worse than no recipe at all. `Convert to area` is the exit —
+ * it drops the recipe, keeps the polygon, and does not come back.
  */
 
 interface GalleryResp {
@@ -89,6 +100,55 @@ const r2 = (v: number): number => Math.round(v * 100) / 100
  *  here so the user hears why instead of losing a click to a 400. */
 const inRange = (x: number, z: number): boolean =>
   Math.abs(x) <= MAX_COORD && Math.abs(z) <= MAX_COORD
+
+/**
+ * How far apart the two clicks of a DOUBLE-click may land, in pixels.
+ *
+ * The canvas has no double-click of its own: both presses arrive as ordinary
+ * background clicks and each drops a point, so by the time `dblclick` fires the
+ * line already carries one point too many. The browser only fires `dblclick`
+ * when the two presses are within its own (small) distance, so a trailing point
+ * this close to its predecessor IS the second press and is dropped again —
+ * anything further apart was a deliberate click and stays.
+ */
+const DBLCLICK_MERGE_PX = 8
+
+/** Shoelace area in m² — the ground a generated ring encloses, counting an
+ *  overlap as many times as it is walked. It is a size check, not a parity
+ *  check: see `strokePolygon` for what that does and does not buy. */
+const polygonArea = (poly: Array<[number, number]>): number => {
+  let s = 0
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    s += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1])
+  }
+  return Math.abs(s) / 2
+}
+
+/**
+ * `meta.stroke` as the editor may act on it — or null.
+ *
+ * `meta` is free-form JSON the server passes through verbatim, so the
+ * declaration in `mapTypes` is a description of what WE write, never a promise
+ * about what is stored. Every field is therefore checked before a single
+ * handle is hung on it: a foreign or half-written `stroke` makes the area an
+ * ordinary one, which is always editable, instead of crashing the tab.
+ */
+function readStroke(area: TerrainArea | null): TerrainStroke | null {
+  const raw: unknown = area?.meta?.stroke
+  if (!raw || typeof raw !== 'object') return null
+  const { points, width_m: width } = raw as { points?: unknown; width_m?: unknown }
+  if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) return null
+  if (!Array.isArray(points) || points.length < MIN_STROKE_POINTS) return null
+  const pts: Array<[number, number]> = []
+  for (const p of points as unknown[]) {
+    if (!Array.isArray(p) || p.length < 2) return null
+    const [x, z] = p as unknown[]
+    if (typeof x !== 'number' || !Number.isFinite(x)) return null
+    if (typeof z !== 'number' || !Number.isFinite(z)) return null
+    pts.push([x, z])
+  }
+  return { points: pts, width_m: width }
+}
 
 /** A world coordinate for the chip. `fmtM` decides its precision by
  *  magnitude, which a negative metre would defeat (−50 would print with two
@@ -138,6 +198,12 @@ export function MapTab() {
   const [typesOpen, setTypesOpen] = useState(false)
   const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
   const [paintKind, setPaintKind] = useState('')
+  // The paint gesture and the width the next LINE gets. Both live here, not in
+  // the toolbar: the toolbar is unmounted whenever the mode is not `paint`, and
+  // a width that resets itself every time the user looks at a location would be
+  // a setting in name only.
+  const [paintShape, setPaintShape] = useState<PaintShape>('area')
+  const [strokeWidthM, setStrokeWidthM] = useState(STROKE_WIDTH_DEFAULT_M)
   const [draft, setDraft] = useState<Array<[number, number]>>([])
   const [draftCursor, setDraftCursor] = useState<{ x: number; z: number } | null>(null)
   const [selArea, setSelArea] = useState('')
@@ -307,6 +373,15 @@ export function MapTab() {
     if (m !== 'edit-area') setSelArea('')
   }, [])
 
+  /** Switching the paint gesture drops the running draft for the same reason
+   *  switching the mode does: an outline is not a centre line. Reading the one
+   *  as the other would paint ground nobody drew. */
+  const switchShape = useCallback((s: PaintShape) => {
+    setPaintShape(s)
+    setDraft([])
+    setDraftCursor(null)
+  }, [])
+
   const snapV = useCallback((v: number) => (
     snapOn ? Math.round(v / SNAP_M) * SNAP_M : Math.round(v * 100) / 100
   ), [snapOn])
@@ -444,6 +519,10 @@ export function MapTab() {
     [terrain, selArea],
   )
 
+  /** The selected area's stroke recipe, checked — null when it was painted as
+   *  an ordinary outline (and then everything below edits the polygon). */
+  const selStroke = useMemo(() => readStroke(selectedArea), [selectedArea])
+
   /** Optimistic patch of one area, so an edited outline does not snap back to
    *  its old shape for the length of the round trip. */
   const patchAreaLocal = useCallback((id: string, fields: Partial<TerrainArea>) => {
@@ -484,6 +563,47 @@ export function MapTab() {
   }, [noKindMsg, reloadTerrain, t, toast, typeMap])
 
   /**
+   * A centre line plus a width becomes the polygon that will be stored — or
+   * nothing, with a sentence saying which of the three ways it failed.
+   *
+   * The checks are on the GENERATED polygon, never on the click count: a
+   * mitered join costs 2 points but a bevelled one costs 4, so a bendy line can
+   * multiply its clicks by four (`4n − 4` worst case) and blow through the
+   * server's 256-point limit that 100 clicks look safely under.
+   *
+   * The area floor is `widthM²/100` — a hundredth of the smallest honest
+   * ribbon, the square of one width. What it catches is the blob: two clicks
+   * less than a hundredth of a width apart, which is a dab of paint and not a
+   * line (0.3 m at width 50 gives 15 m², under the 25 m² floor). What it does
+   * NOT catch, measured and not assumed, is a line retraced back over itself:
+   * `[(0,0),(10,0),(0,0)]` at width 4 produces the corridor walked TWICE, 80 m²
+   * of shoelace — while even-odd, the rule the engine answers point queries
+   * with, calls its middle OUTSIDE. That is not a hole in the floor, it is the
+   * self-overlap rule this tool accepts everywhere (the same thing happens
+   * inside any hairpin, deliberately, so that render and query agree). No
+   * cheap test separates the two, and the one that would — probing the centre
+   * line against the ring — rejects the legitimate hairpin as well.
+   */
+  const strokePolygon = useCallback((pts: Array<[number, number]>,
+    widthM: number): Array<[number, number]> | null => {
+    const poly = strokeToPolygon(pts, widthM)
+    if (!poly) {
+      toast(t('This line is too short to become an area'), 'error')
+      return null
+    }
+    if (poly.length > MAX_POINTS) {
+      toast(t('This line makes {n} outline points, more than the {max} allowed — use fewer or gentler bends')
+        .replace('{n}', String(poly.length)).replace('{max}', String(MAX_POINTS)), 'error')
+      return null
+    }
+    if (polygonArea(poly) < (widthM * widthM) / 100) {
+      toast(t('This line covers too little ground for its width — set the points further apart, or make it narrower'), 'error')
+      return null
+    }
+    return poly
+  }, [t, toast])
+
+  /**
    * Close the running ring into a new area.
    *
    * The draft is dropped only once the server has it. A polygon is a dozen
@@ -513,6 +633,43 @@ export function MapTab() {
     }
   }, [paintKind, reloadTerrain, t, toast])
 
+  /** Finish the running centre line into a new area. Same rules as
+   *  `commitDraft` — the draft survives a failed write — plus the recipe: the
+   *  clicked line and its width travel along in `meta.stroke`, so the area can
+   *  be dragged back into shape later. */
+  const commitStroke = useCallback(async (pts: Array<[number, number]>,
+    widthM: number) => {
+    if (draftBusyRef.current) return
+    if (pts.length < MIN_STROKE_POINTS) {
+      toast(t('A line needs at least {n} points')
+        .replace('{n}', String(MIN_STROKE_POINTS)), 'error')
+      return
+    }
+    const poly = strokePolygon(pts, widthM)
+    if (!poly) return
+    draftBusyRef.current = true
+    try {
+      await apiPost('/world/terrain-areas', {
+        kind: paintKind, polygon: poly,
+        meta: { stroke: { points: pts, width_m: widthM } },
+      })
+      setDraft([])
+      setDraftCursor(null)
+      await reloadTerrain()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      draftBusyRef.current = false
+    }
+  }, [paintKind, reloadTerrain, strokePolygon, t, toast])
+
+  /** What the Close/Finish button does — which depends on what is being drawn
+   *  and on nothing else. */
+  const closeDraft = useCallback(() => {
+    if (paintShape === 'line') void commitStroke(draft, strokeWidthM)
+    else void commitDraft(draft)
+  }, [commitDraft, commitStroke, draft, paintShape, strokeWidthM])
+
   /** One click while painting: close the ring, or drop another vertex. */
   const addDraftPoint = useCallback((wx: number, wz: number) => {
     // While the ring is being saved the draft still stands (it is only dropped
@@ -527,26 +684,96 @@ export function MapTab() {
       return
     }
     const cur = draftRef.current
+    const line = paintShape === 'line'
     // Closing is a click ON the first vertex, measured in PIXELS: the ring must
     // be equally easy to close at every zoom, and a metre tolerance would be
-    // unreachable when zoomed out and hair-trigger when zoomed in.
-    if (cur.length >= MIN_POINTS) {
+    // unreachable when zoomed out and hair-trigger when zoomed in. A LINE has
+    // no such click — it is open, so coming back to its start is a legitimate
+    // move and must stay one.
+    if (!line && cur.length >= MIN_POINTS) {
       const tolM = CLOSE_TOL_PX / view.pxPerM
       if (Math.hypot(x - cur[0][0], z - cur[0][1]) <= tolM) {
         void commitDraft(cur)
         return
       }
     }
-    if (cur.length >= MAX_POINTS) {
-      toast(t('An area holds at most {n} points').replace('{n}', String(MAX_POINTS)), 'error')
+    const cap = line ? MAX_STROKE_POINTS : MAX_POINTS
+    if (cur.length >= cap) {
+      toast((line
+        ? t('A line holds at most {n} points')
+        : t('An area holds at most {n} points')).replace('{n}', String(cap)), 'error')
       return
     }
     setDraft([...cur, [x, z]])
-  }, [commitDraft, noKindMsg, paintKind, t, toast, view.pxPerM])
+  }, [commitDraft, noKindMsg, paintKind, paintShape, t, toast, view.pxPerM])
+
+  /** Write a changed centre line (or width): regenerate the polygon and send
+   *  BOTH. Polygon and recipe never travel apart — an area whose `meta.stroke`
+   *  no longer produces its own outline would put the handles somewhere the
+   *  shape is not. A regeneration that fails the checks writes nothing, and
+   *  the area keeps the shape it had. */
+  const putStroke = useCallback((a: TerrainArea, pts: Array<[number, number]>,
+    widthM: number) => {
+    const poly = strokePolygon(pts, widthM)
+    if (!poly) return
+    const meta: TerrainMeta = { ...a.meta, stroke: { points: pts, width_m: widthM } }
+    patchAreaLocal(a.id, { polygon: poly, meta })
+    void putArea(a, { polygon: poly, meta })
+  }, [patchAreaLocal, putArea, strokePolygon])
+
+  // The three point handlers below work on the CENTRE LINE of a stroke area
+  // and on the POLYGON of every other one — same gestures, same indices, two
+  // different lists. The layer hangs its handles on whichever it was given.
+
+  /**
+   * Enter finishes a line.
+   *
+   * It cannot ride along on the Escape handler: that one is bound ONCE for the
+   * lifetime of the tab and reads everything through refs, while this key is
+   * live for exactly one gesture and has to see the draft it is finishing. It
+   * keeps out of the way of an open dialog and of every text field — the width
+   * next to it is committed with the very same key.
+   */
+  useEffect(() => {
+    if (mode !== 'paint' || paintShape !== 'line') return
+    if (draft.length < MIN_STROKE_POINTS) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || modalRef.current) return
+      const tag = document.activeElement?.tagName || ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      e.preventDefault()
+      void commitStroke(draft, strokeWidthM)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [commitStroke, draft, mode, paintShape, strokeWidthM])
+
+  /**
+   * Double-click finishes a line too — and has to undo half of itself first.
+   *
+   * The canvas knows only single clicks (it turns a press without travel into
+   * one, on `pointerup`), so both presses of a double-click have already
+   * dropped a point by the time `dblclick` arrives. The browser fires that
+   * event only for two presses close together, so a trailing point within
+   * `DBLCLICK_MERGE_PX` of its predecessor IS the second press and goes again;
+   * a point further away was meant and stays. Never below two points.
+   */
+  const finishLineByDoubleClick = useCallback(() => {
+    if (modeRef.current !== 'paint' || paintShape !== 'line') return
+    const cur = draftRef.current
+    if (cur.length < MIN_STROKE_POINTS) return
+    const pts = [...cur]
+    if (pts.length > MIN_STROKE_POINTS) {
+      const [ax, az] = pts[pts.length - 2]
+      const [bx, bz] = pts[pts.length - 1]
+      if (Math.hypot(ax - bx, az - bz) * view.pxPerM <= DBLCLICK_MERGE_PX) pts.pop()
+    }
+    void commitStroke(pts, strokeWidthM)
+  }, [commitStroke, paintShape, strokeWidthM, view.pxPerM])
 
   const moveVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedArea
-    if (!a || i < 0 || i >= a.polygon.length) return
+    if (!a) return
     if (!inRange(x, z)) {
       // Nothing was patched locally yet, so refusing is the whole undo — the
       // layer's drag preview ended with the pointer that raised this.
@@ -554,14 +781,32 @@ export function MapTab() {
         .replace('{n}', String(MAX_COORD)), 'error')
       return
     }
+    if (selStroke) {
+      if (i < 0 || i >= selStroke.points.length) return
+      putStroke(a, selStroke.points.map(
+        (p, k) => (k === i ? [x, z] as [number, number] : p)), selStroke.width_m)
+      return
+    }
+    if (i < 0 || i >= a.polygon.length) return
     const poly = a.polygon.map((p, k) => (k === i ? [x, z] as [number, number] : p))
     patchAreaLocal(a.id, { polygon: poly })
     void putArea(a, { polygon: poly })
-  }, [patchAreaLocal, putArea, selectedArea, t, toast])
+  }, [patchAreaLocal, putArea, putStroke, selStroke, selectedArea, t, toast])
 
   const deleteVertex = useCallback((i: number) => {
     const a = selectedArea
-    if (!a || i < 0 || i >= a.polygon.length) return
+    if (!a) return
+    if (selStroke) {
+      if (i < 0 || i >= selStroke.points.length) return
+      if (selStroke.points.length <= MIN_STROKE_POINTS) {
+        toast(t('A line needs at least {n} points')
+          .replace('{n}', String(MIN_STROKE_POINTS)), 'error')
+        return
+      }
+      putStroke(a, selStroke.points.filter((_, k) => k !== i), selStroke.width_m)
+      return
+    }
+    if (i < 0 || i >= a.polygon.length) return
     if (a.polygon.length <= MIN_POINTS) {
       toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
       return
@@ -569,11 +814,22 @@ export function MapTab() {
     const poly = a.polygon.filter((_, k) => k !== i)
     patchAreaLocal(a.id, { polygon: poly })
     void putArea(a, { polygon: poly })
-  }, [patchAreaLocal, putArea, selectedArea, t, toast])
+  }, [patchAreaLocal, putArea, putStroke, selStroke, selectedArea, t, toast])
 
   const insertVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedArea
     if (!a) return
+    if (selStroke) {
+      if (selStroke.points.length >= MAX_STROKE_POINTS) {
+        toast(t('A line holds at most {n} points')
+          .replace('{n}', String(MAX_STROKE_POINTS)), 'error')
+        return
+      }
+      const pts = [...selStroke.points]
+      pts.splice(i, 0, [x, z])
+      putStroke(a, pts, selStroke.width_m)
+      return
+    }
     if (a.polygon.length >= MAX_POINTS) {
       toast(t('An area holds at most {n} points').replace('{n}', String(MAX_POINTS)), 'error')
       return
@@ -582,7 +838,27 @@ export function MapTab() {
     poly.splice(i, 0, [x, z])
     patchAreaLocal(a.id, { polygon: poly })
     void putArea(a, { polygon: poly })
-  }, [patchAreaLocal, putArea, selectedArea, t, toast])
+  }, [patchAreaLocal, putArea, putStroke, selStroke, selectedArea, t, toast])
+
+  /** A new width for the selected stroke — same line, wider ribbon. */
+  const setStrokeAreaWidth = useCallback((widthM: number) => {
+    const a = selectedArea
+    if (!a || !selStroke || widthM === selStroke.width_m) return
+    putStroke(a, selStroke.points, widthM)
+  }, [putStroke, selStroke, selectedArea])
+
+  /** Drop the recipe, keep the shape. The polygon is already the truth, so
+   *  nothing about the area changes on the map — it simply stops being edited
+   *  by a line and hands its outline to the point editor. There is no way
+   *  back: a polygon cannot be reduced to the line that once made it. */
+  const convertToArea = useCallback(() => {
+    const a = selectedArea
+    if (!a || !selStroke) return
+    const meta: TerrainMeta = { ...a.meta }
+    delete meta.stroke
+    patchAreaLocal(a.id, { meta })
+    void putArea(a, { meta })
+  }, [patchAreaLocal, putArea, selStroke, selectedArea])
 
   const setAreaKind = useCallback((kind: string) => {
     const a = selectedArea
@@ -796,8 +1072,10 @@ export function MapTab() {
   // `putArea`. The chip says so; here the handles simply stay away.
   const selAreaEditable = !!(selectedArea && typeMap[selectedArea.kind])
   // Will the next click close the ring? The same pixel tolerance the click
-  // handler uses — the highlight must not promise a close that will not happen.
-  const draftWillClose = !!(draftCursor && draft.length >= MIN_POINTS
+  // handler uses — the highlight must not promise a close that will not happen,
+  // and a LINE never closes at all.
+  const paintingLine = mode === 'paint' && paintShape === 'line'
+  const draftWillClose = !paintingLine && !!(draftCursor && draft.length >= MIN_POINTS
     && Math.hypot(draftCursor.x - draft[0][0], draftCursor.z - draft[0][1])
       <= CLOSE_TOL_PX / view.pxPerM)
 
@@ -871,8 +1149,12 @@ export function MapTab() {
             types={terrainTypes}
             paintKind={paintKind}
             onPaintKind={setPaintKind}
+            shape={paintShape}
+            onShape={switchShape}
+            widthM={strokeWidthM}
+            onWidth={setStrokeWidthM}
             draftLen={draft.length}
-            onCloseDraft={() => { void commitDraft(draft) }}
+            onCloseDraft={closeDraft}
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
             areaCount={terrain?.areas.length || 0}
             onManageTypes={() => setTypesOpen(true)}
@@ -907,7 +1189,12 @@ export function MapTab() {
           ) : null}
         </div>
 
-        <div className="ga-map-canvas-pane" ref={setPaneEl}>
+        {/* The double-click that ends a line is caught HERE, on the pane: the
+            canvas deals in single clicks only, and it is not this feature's
+            business to teach it a second gesture. The handler checks the mode
+            itself, so a double-click anywhere else stays inert. */}
+        <div className="ga-map-canvas-pane" ref={setPaneEl}
+          onDoubleClick={finishLineByDoubleClick}>
           <MapCanvas
             view={view}
             onViewChange={setView}
@@ -922,8 +1209,12 @@ export function MapTab() {
               editing={mode === 'edit-area'}
               editable={selAreaEditable}
               selectedId={selArea}
+              centerline={selStroke ? selStroke.points : null}
+              centerlineWidthM={selStroke ? selStroke.width_m : 0}
               draft={draft}
               draftCursor={draftCursor}
+              draftLine={paintingLine}
+              draftWidthM={strokeWidthM}
               draftColor={typeColor(typeMap, paintKind)}
               draftWillClose={draftWillClose}
               onVertexMove={moveVertex}
@@ -956,8 +1247,11 @@ export function MapTab() {
               types={typeMap}
               typeList={terrainTypes}
               typesError={typesError}
+              stroke={selStroke}
               onKind={setAreaKind}
               onZOrder={bumpAreaZ}
+              onWidth={setStrokeAreaWidth}
+              onConvert={convertToArea}
               onDelete={() => { void deleteArea() }}
               onClose={() => setSelArea('')}
             />

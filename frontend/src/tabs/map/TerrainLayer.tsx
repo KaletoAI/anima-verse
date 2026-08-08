@@ -19,6 +19,12 @@
  * answers point queries, and an editor that draws nothing there would invite
  * painting a second area on top of a problem the user cannot see.
  *
+ * An area drawn as a LINE is not a second kind of thing: it is an ordinary
+ * polygon that happens to carry its recipe (`meta.stroke`) along. It is filled
+ * and outlined like every other area; only when it is SELECTED does the centre
+ * line appear, dashed, and the handles move onto it — because a ribbon is
+ * reshaped by its line and its width, never by its own outline.
+ *
  * All fills — the painted areas AND the default ground — share ONE opacity.
  * The metre grid is drawn by the canvas BEFORE its children, so an opaque
  * ground rectangle would swallow the scale aids ("kein Maß ohne Maßstab");
@@ -34,7 +40,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { useMapView } from './MapCanvas'
-import { screenToWorld, worldPolyToPath, worldToScreen } from './mapMath'
+import { screenToWorld, strokeToPolygon, worldPolyToPath, worldToScreen } from './mapMath'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
 /** One opacity for every fill — see the module docstring. */
@@ -98,24 +104,42 @@ export interface TerrainLayerProps {
    *  shows — the area is selectable, just not editable until its kind is. */
   editable: boolean
   selectedId: string
+  /** The CENTRE LINE of the selected area, when it was drawn as a line
+   *  (`meta.stroke`, already checked by the caller) — null for an ordinary
+   *  painted area. It is what the handles edit, and it is drawn dashed
+   *  whenever the area is selected: the polygon is the truth, the line is the
+   *  recipe, and only the recipe can be dragged back into shape. */
+  centerline: Array<[number, number]> | null
+  /** Width of that stroke in metres — the outline preview is regenerated from
+   *  it while a line point is being dragged. */
+  centerlineWidthM: number
   /** The polygon being painted (world metres) and the cursor it follows. */
   draft: Array<[number, number]>
   draftCursor: { x: number; z: number } | null
+  /** The running draft is a centre LINE, not an outline: it is drawn open and
+   *  the ribbon it would become is previewed underneath it. */
+  draftLine: boolean
+  /** Width the line draft would get, in metres. */
+  draftWidthM: number
   /** Colour of the armed paint kind. */
   draftColor: string
   /** The cursor sits inside the close tolerance of the first vertex — the
-   *  next click will close the ring. */
+   *  next click will close the ring. Always false for a line draft, which has
+   *  no first point to come back to. */
   draftWillClose: boolean
-  /** A finished vertex drag, in world metres. */
+  /** A finished vertex drag, in world metres. Indices are into whatever the
+   *  handles sit on — the centre line when there is one, the polygon
+   *  otherwise. */
   onVertexMove: (index: number, x: number, z: number) => void
   onVertexDelete: (index: number) => void
-  /** Insert a vertex AT `index` (the position it takes in the polygon). */
+  /** Insert a vertex AT `index` (the position it takes in that list). */
   onEdgeInsert: (index: number, x: number, z: number) => void
 }
 
 export function TerrainLayer({
-  areas, types, groundColor, editing, editable, selectedId, draft, draftCursor,
-  draftColor, draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
+  areas, types, groundColor, editing, editable, selectedId, centerline,
+  centerlineWidthM, draft, draftCursor, draftLine, draftWidthM, draftColor,
+  draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
   const [drag, setDrag] = useState<{ i: number; x: number; z: number } | null>(null)
@@ -189,18 +213,38 @@ export function TerrainLayer({
     }
   }, [])
 
+  /** The draft as it is drawn: the clicked points plus, while the cursor is
+   *  over the canvas, the point the next click would add. */
+  const draftPts = useMemo(() => (draftCursor
+    ? [...draft, [draftCursor.x, draftCursor.z] as [number, number]]
+    : draft), [draft, draftCursor])
+
+  /** The ribbon a LINE draft would become — regenerated on every click and on
+   *  every cursor move. The centre line alone is not a preview: the width is
+   *  what actually gets painted, and only the generated outline shows it. */
+  const draftRibbon = useMemo(() => (
+    draftLine && draftPts.length >= 2 ? strokeToPolygon(draftPts, draftWidthM) : null
+  ), [draftLine, draftPts, draftWidthM])
+
   if (!w || !h) return null
 
-  // The selected polygon as it is being edited: the dragged vertex follows the
+  // What the handles sit on as it is being edited: the CENTRE LINE of a stroke
+  // area, the polygon of an ordinary one. The dragged point follows the
   // cursor, everything else stays where the server has it.
-  const editPoly: Array<[number, number]> = selected
-    ? selected.polygon.map((p, i) => (
+  const editPts: Array<[number, number]> = selected
+    ? (centerline || selected.polygon).map((p, i) => (
       drag && drag.i === i ? [drag.x, drag.z] as [number, number] : p))
     : []
-
-  const draftPts = draftCursor
-    ? [...draft, [draftCursor.x, draftCursor.z] as [number, number]]
-    : draft
+  // A centre line is OPEN: no wrap-around edge, and two points already make
+  // one — a polygon needs three and closes.
+  const editClosed = !centerline
+  const editMin = centerline ? 2 : 3
+  // While a line point is dragged the OUTLINE follows it live; the filled area
+  // underneath only catches up once the write comes back. Should the dragged
+  // line degenerate on the way, the stored polygon is shown instead of nothing.
+  const editOutline: Array<[number, number]> = centerline
+    ? (strokeToPolygon(editPts, centerlineWidthM) || selected?.polygon || [])
+    : editPts
 
   return (
     <g>
@@ -241,15 +285,28 @@ export function TerrainLayer({
         })}
       </g>
 
+      {/* The centre line of the selected stroke area, dashed — the recipe is
+          not the shape, so it is drawn as a hint over it and stays visible
+          even where no handles are offered. */}
+      {selected && centerline && editPts.length >= 2 ? (
+        <path d={worldPolyToPath(editPts, view, w, h, false)} fill="none"
+          stroke={COL_SELECTED} strokeWidth={1.5} strokeDasharray="7 4"
+          strokeOpacity={0.9} pointerEvents="none" />
+      ) : null}
+
       {/* Handles of the selected area — the only interactive part. */}
-      {editing && selected && editPoly.length >= 3 ? (
+      {editing && selected && editPts.length >= editMin ? (
         <g>
           {/* Its outline again, on top of every fill: the selected area may
               well be buried under later ones. */}
-          <path d={worldPolyToPath(editPoly, view, w, h)} fill="none"
+          <path d={worldPolyToPath(editOutline, view, w, h)} fill="none"
             stroke={COL_SELECTED} strokeWidth={2} pointerEvents="none" />
-          {editable ? editPoly.map((a, i) => {
-            const b = editPoly[(i + 1) % editPoly.length]
+          {editable ? editPts.map((a, i) => {
+            // The closing edge exists only on a ring; a line ends where the
+            // last point is, and an "edge" back to the start would insert
+            // points into a segment that is not there.
+            if (!editClosed && i === editPts.length - 1) return null
+            const b = editPts[(i + 1) % editPts.length]
             const pa = worldToScreen(a[0], a[1], view, w, h)
             const pb = worldToScreen(b[0], b[1], view, w, h)
             return (
@@ -268,7 +325,7 @@ export function TerrainLayer({
                 }} />
             )
           }) : null}
-          {editable ? editPoly.map((p, i) => {
+          {editable ? editPts.map((p, i) => {
             const s = worldToScreen(p[0], p[1], view, w, h)
             return (
               <circle key={`v${i}`} cx={s.x} cy={s.y} r={HANDLE_R}
@@ -283,16 +340,30 @@ export function TerrainLayer({
       ) : null}
 
       {/* The polygon being painted: an OPEN line to the cursor, closed only
-          when the click actually closes it. */}
+          when the click actually closes it. A LINE draft never closes — what
+          it fills is the generated ribbon under the centre line. */}
       {draft.length ? (
         <g pointerEvents="none">
           {/* Same even-odd rule as a saved area: the preview must show the
               shape the engine will read back, self-crossings included. */}
-          <path d={worldPolyToPath(draftPts, view, w, h, draft.length >= 3)}
-            fill={draft.length >= 3 ? draftColor : 'none'}
-            fillOpacity={draft.length >= 3 ? FILL_OPACITY * 0.6 : 0}
-            fillRule="evenodd"
-            stroke={COL_DRAFT} strokeWidth={2} strokeDasharray="6 3" />
+          {draftLine ? (
+            <>
+              {draftRibbon ? (
+                <path d={worldPolyToPath(draftRibbon, view, w, h)}
+                  fill={draftColor} fillOpacity={FILL_OPACITY * 0.6}
+                  fillRule="evenodd"
+                  stroke={draftColor} strokeWidth={1} strokeOpacity={0.8} />
+              ) : null}
+              <path d={worldPolyToPath(draftPts, view, w, h, false)} fill="none"
+                stroke={COL_DRAFT} strokeWidth={2} strokeDasharray="6 3" />
+            </>
+          ) : (
+            <path d={worldPolyToPath(draftPts, view, w, h, draft.length >= 3)}
+              fill={draft.length >= 3 ? draftColor : 'none'}
+              fillOpacity={draft.length >= 3 ? FILL_OPACITY * 0.6 : 0}
+              fillRule="evenodd"
+              stroke={COL_DRAFT} strokeWidth={2} strokeDasharray="6 3" />
+          )}
           {draft.map((p, i) => {
             const s = worldToScreen(p[0], p[1], view, w, h)
             const first = i === 0
