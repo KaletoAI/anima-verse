@@ -129,7 +129,7 @@ export function KnownLocationsEditor({ character }: { character: string }) {
       </div>
 
       <div style={{ fontSize: '0.8em', opacity: 0.55, marginBottom: 8 }}>
-        {t('Click a tile to toggle whether the character knows that place. Darkened = unknown (fog of war); entering a location also reveals it automatically.')}
+        {t('Click a location to toggle whether the character knows it. Darkened = unknown (fog of war); entering a location also reveals it automatically.')}
       </div>
 
       {tiles ? (
