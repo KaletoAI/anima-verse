@@ -259,12 +259,15 @@ export interface Location {
   yaw_deg?: number
   map_image_2d?: string
   map_rotation_2d?: number
-  /** Multi-tile patch anchored (centred) on this placed cell — gallery file
-   *  of type map_3x3, drawn UNDER the per-cell tiles. */
+  /** Grid-era wide ground patch centred on this location — gallery file of
+   *  type map_3x3, drawn UNDER the per-location map images. The metre map
+   *  editor neither reads nor writes it; the server still stores it and the
+   *  player MapPanel still draws it (grid), until the ground-image rework. */
   map_patch_2d?: string
   map_patch_span?: number
-  /** True hides the cell's own 2D tile entirely (no first-image fallback) so
-   *  an underlying patch shows through. */
+  /** Grid-era switch that hid the location's own 2D map image entirely (no
+   *  first-image fallback) so an underlying patch showed through. Same status
+   *  as `map_patch_2d`: stored, but nothing in the metre editor sets it. */
   map_image_off?: boolean
   event_settings?: EventSettings
   terrain?: string

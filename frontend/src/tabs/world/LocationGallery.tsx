@@ -76,7 +76,7 @@ const GalleryCard = memo(function GalleryCard({
         {type === 'map_2d' || type === 'map_3x3' ? (
           <span
             className="ga-gallery-usage"
-            title={t('How many map cells currently use this image')}
+            title={t('How many placed locations currently show this image on the map')}
           >
             {mapUsage}
           </span>
@@ -252,8 +252,8 @@ export function LocationGallery({
 
   // How often each map image is currently used on the map: placed locations
   // whose gallery owner is this location (clones share the template gallery) and
-  // that picked exactly this file as the 2D tile — or as the 3x3 patch
-  // anchored there. File -> count.
+  // that picked exactly this file as their 2D map image — or as the wide ground
+  // patch anchored on them (grid-era, see worldTypes.map_patch_2d). File -> count.
   const mapUsage = useMemo(() => {
     const m: Record<string, number> = {}
     for (const l of placements) {
@@ -540,7 +540,7 @@ export function LocationGallery({
               className="ga-btn ga-btn-sm"
               disabled={!!busy}
               onClick={() => setDialogType('map_3x3')}
-              title={t('Generate a seamless ground image spanning 3×3 map cells — placed per cell in the map editor.')}
+              title={t('Generate a seamless ground image for a wide patch of ground around this location — the metre map editor does not place these yet.')}
             >
               🟩 {t('Generate 3×3 tile')}
             </button>
