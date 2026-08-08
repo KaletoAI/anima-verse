@@ -2130,6 +2130,57 @@ html, * {
   font-size: 12px;
 }
 
+/* The layer model, said out loud while painting. Its own block UNDER the
+   toolbar, not another item inside it: the toolbar wraps, and a sentence that
+   ends up in a two-word column between the palette and a button is not read. */
+.ga-terrain-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ga-terrain-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #8b949e);
+}
+.ga-terrain-help-btn {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 50%;
+  background: var(--bg-container, #161b22);
+  color: var(--text-muted, #8b949e);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ga-terrain-help-btn:hover {
+  border-color: var(--accent, #58a6ff);
+  color: var(--text, #c9d1d9);
+}
+.ga-terrain-help-btn[aria-expanded='true'] {
+  border-color: var(--accent, #58a6ff);
+  background: rgba(88, 166, 255, 0.14);
+  color: var(--text, #c9d1d9);
+}
+.ga-terrain-help {
+  max-width: 780px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-container, #161b22);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text, #c9d1d9);
+}
+.ga-terrain-help p { margin: 0 0 6px; }
+.ga-terrain-help p:last-child { margin-bottom: 0; }
+
 /* Terrain-type manager dialog. Wider than the default modal because seven
    columns of controls do not fold usefully — at 560 px the row with `Reset`
    armed (Save · Really reset · Cancel) pushes the table into sideways

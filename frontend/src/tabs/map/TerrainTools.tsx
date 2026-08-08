@@ -71,18 +71,27 @@ function clampStrokeWidth(v: number): number {
  * knob, not a form. Enter is stopped here: the paint mode listens for it to
  * finish a line, and finishing the drawing while the cursor sits in a number
  * field is not what that key means here.
+ *
+ * `commit` NEVER writes the field. It hands the number to the parent and asks
+ * for a resync; what the box then shows is `widthM` — the width the thing
+ * actually has. That matters because the parent may refuse: a width that makes
+ * an unusable outline is toasted and dropped without `widthM` ever moving, and
+ * a field that had written the refused number itself would be the last place
+ * in the editor still claiming it. The token is what makes the effect run in
+ * that case at all, since `widthM` did not change.
  */
 function WidthField({ widthM, onWidth }: {
   widthM: number; onWidth: (m: number) => void
 }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState(String(widthM))
-  useEffect(() => { setDraft(String(widthM)) }, [widthM])
+  const [resync, setResync] = useState(0)
+  useEffect(() => { setDraft(String(widthM)) }, [widthM, resync])
   const commit = () => {
+    setResync((n) => n + 1)
     const v = parseFloat(draft)
-    if (!Number.isFinite(v)) { setDraft(String(widthM)); return }
+    if (!Number.isFinite(v)) return
     const c = clampStrokeWidth(v)
-    setDraft(String(c))
     if (c !== widthM) onWidth(c)
   }
   return (
@@ -265,6 +274,62 @@ export function TerrainToolbar({
         </>
       ) : null}
     </>
+  )
+}
+
+export interface TerrainLayerHintProps {
+  /** The kind unpainted ground has, named for a reader: the catalog's name for
+   *  `terrain.default_kind`, or the bare kind when the catalog has no entry
+   *  for it. Empty until both answers are in — the sentence then drops the
+   *  clause instead of naming a kind nobody confirmed. */
+  defaultKindName: string
+  /** The long explanation, open or not. The state lives in `MapTab` on
+   *  purpose: this block is unmounted whenever the mode is not `paint`, and
+   *  help that closed itself every time the user looked at a location would
+   *  have to be found a second time. */
+  open: boolean
+  onOpen: (open: boolean) => void
+}
+
+/**
+ * What painting DOES to the ground, said out loud — a line under the toolbar,
+ * plus the long version behind the "?".
+ *
+ * It belongs to the paint mode and nowhere else: this is the one place where
+ * the layer model becomes an actual decision, because the next ring will sit
+ * ON something. Its own block under the toolbar rather than another item in
+ * it — a sentence wedged between a palette and a button reflows into a column
+ * two words wide and is not read.
+ *
+ * Read-only, all of it: nothing in here changes the map.
+ */
+export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayerHintProps) {
+  const { t } = useI18n()
+  return (
+    <div className="ga-terrain-guide">
+      <div className="ga-terrain-hint">
+        <span>
+          {defaultKindName
+            ? t('Areas may overlap — the topmost wins; unpainted ground is {kind}. Reorder via the selection chip.')
+              .replace('{kind}', defaultKindName)
+            : t('Areas may overlap — the topmost wins. Reorder via the selection chip.')}
+        </span>
+        <button type="button" className="ga-terrain-help-btn"
+          aria-expanded={open}
+          title={t('How terrain layers and the line tool work')}
+          onClick={() => onOpen(!open)}>
+          ?
+        </button>
+      </div>
+      {open ? (
+        <div className="ga-terrain-help">
+          <p>{t('Every area sits on a layer of its own: where two of them overlap, only the topmost one counts — for the colour on the map and for the answer the server gives about that spot.')}</p>
+          <p>{t('Ground nobody painted keeps the default kind, so there is no need to paint a base layer under everything else.')}</p>
+          <p>{t('Select an area and use “Bring forward” or “Send back” in its chip to move it one layer at a time.')}</p>
+          <p>{t('The Line tool reads your clicks as a centre line and turns it into an area of the width you set; you then edit that area by its centre-line points and its width, not by its outline, until you convert it into an ordinary area.')}</p>
+        </div>
+      ) : null}
+    </div>
   )
 }
 

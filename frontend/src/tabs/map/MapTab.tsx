@@ -15,8 +15,8 @@ import {
 import { TerrainLayer, typeColor } from './TerrainLayer'
 import {
   MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
-  MIN_STROKE_POINTS, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainToolbar,
-  type PaintShape, type TerrainMode,
+  MIN_STROKE_POINTS, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainLayerHint,
+  TerrainToolbar, type PaintShape, type TerrainMode,
 } from './TerrainTools'
 import { TerrainTypesDialog } from './TerrainTypesDialog'
 import type {
@@ -196,6 +196,11 @@ export function MapTab() {
   // a different click.
   const [typesError, setTypesError] = useState(false)
   const [typesOpen, setTypesOpen] = useState(false)
+  // The long layer explanation, open or not. Here rather than in the hint
+  // block itself, which only exists while painting — help that closed itself
+  // whenever the user looked at a location would have to be reopened after
+  // every trip to the other modes.
+  const [helpOpen, setHelpOpen] = useState(false)
   const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
   const [paintKind, setPaintKind] = useState('')
   // The paint gesture and the width the next LINE gets. Both live here, not in
@@ -248,19 +253,23 @@ export function MapTab() {
     paneObsRef.current = ro
   }, [])
 
+  /** The three loaders return whether they got what they came for. Only the
+   *  Reload button reads it — a silent success reads as a dead button, and a
+   *  "reloaded" toast on top of a "failed to load" one would be a lie. */
   const reload = useCallback(async () => {
     try {
       const data = await apiGet<{ locations?: EditorLocation[] }>('/world/locations')
       setLocations(data.locations || [])
     } catch (e) {
       toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
-      return
+      return false
     }
     // The frame is a nicety — a world without bounds still edits fine.
     try {
       const wm = await apiGet<WorldmapPayload>('/play/worldmap?all=1')
       setBounds(wm.world_bounds || null)
     } catch { /* keep the current frame */ }
+    return true
   }, [t, toast])
 
   /** The painted ground. Called on mount, by the reload button and after every
@@ -270,7 +279,9 @@ export function MapTab() {
       setTerrain(await apiGet<TerrainPayload>('/play/terrain'))
     } catch (e) {
       toast(t('Failed to load terrain') + ': ' + (e as Error).message, 'error')
+      return false
     }
+    return true
   }, [t, toast])
 
   useEffect(() => { void reload() }, [reload])
@@ -288,10 +299,27 @@ export function MapTab() {
     } catch (e) {
       toast(t('Failed to load terrain types') + ': ' + (e as Error).message, 'error')
       setTypesError(true)
+      return false
     }
+    return true
   }, [t, toast])
 
   useEffect(() => { void reloadTypes() }, [reloadTypes])
+
+  /** The Reload button: all three answers at once, and one word back when they
+   *  all arrived. The three fetches are independent, so they run together; a
+   *  failed one has already said so itself, which is why the success line only
+   *  appears when nothing did. */
+  const reloadAll = useCallback(async () => {
+    const ok = await Promise.all([reload(), reloadTerrain(), reloadTypes()])
+    if (ok.every(Boolean)) toast(t('Map reloaded'), 'success')
+  }, [reload, reloadTerrain, reloadTypes, t, toast])
+
+  /** What the type manager gets: the same reload, minus the boolean it now
+   *  returns. The dialog AWAITS this — it closes on the refreshed catalog, not
+   *  on the request — so the wrapper has to stay a promise, and stable, or the
+   *  dialog's own callbacks would be rebuilt on every render of this tab. */
+  const onTypesChanged = useCallback(async () => { await reloadTypes() }, [reloadTypes])
 
   /** Why a write has no usable kind. A catalog that never arrived is not the
    *  user picking the wrong thing, and "pick a type first" is unactionable
@@ -1068,6 +1096,12 @@ export function MapTab() {
   // The unpainted ground: the default kind's colour, and nothing at all until
   // both the payload and the catalog have answered.
   const groundColor = typeMap[terrain?.default_kind || '']?.color || ''
+  // The same kind, named for the hint: the catalog's name, the bare kind when
+  // the catalog does not know it, and nothing at all before the payload has
+  // answered — the sentence then says less rather than something invented.
+  const defaultKindName = terrain?.default_kind
+    ? (typeMap[terrain.default_kind]?.name || terrain.default_kind)
+    : ''
   // An area the catalog cannot name is selectable but not reshapeable — see
   // `putArea`. The chip says so; here the handles simply stay away.
   const selAreaEditable = !!(selectedArea && typeMap[selectedArea.kind])
@@ -1136,7 +1170,7 @@ export function MapTab() {
               failed type fetch, and everything the ground editor can do hangs
               off that one answer. */}
           <button type="button" className="ga-btn ga-btn-sm"
-            onClick={() => { void reload(); void reloadTerrain(); void reloadTypes() }}>
+            onClick={() => { void reloadAll() }}>
             ↻ {t('Reload')}
           </button>
           <button type="button" className="ga-btn ga-btn-sm" onClick={fitView}
@@ -1188,6 +1222,13 @@ export function MapTab() {
             </span>
           ) : null}
         </div>
+
+        {/* Only while painting: this is where the layer model turns into a
+            decision, and it is the mode whose two gestures need explaining. */}
+        {mode === 'paint' ? (
+          <TerrainLayerHint defaultKindName={defaultKindName}
+            open={helpOpen} onOpen={setHelpOpen} />
+        ) : null}
 
         {/* The double-click that ends a line is caught HERE, on the pane: the
             canvas deals in single clicks only, and it is not this feature's
@@ -1353,7 +1394,7 @@ export function MapTab() {
         <TerrainTypesDialog
           types={terrainTypes}
           sources={typeSources}
-          onChanged={reloadTypes}
+          onChanged={onTypesChanged}
           onClose={() => setTypesOpen(false)}
         />
       ) : null}
