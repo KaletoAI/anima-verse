@@ -178,6 +178,11 @@ export function MapCanvas({
 
   const dragRef = useRef<{
     sx: number; sy: number; cx: number; cz: number; moved: boolean
+    /** The button that STARTED this gesture. Only the left one may end as a
+     *  click — the pointerup event carries the released button, which on a
+     *  pointercancel is not even meaningful, so the decision is taken where
+     *  the gesture began. */
+    btn: number
   } | null>(null)
 
   // Measured size: the aids are stated in PIXELS, so they measure the element
@@ -236,7 +241,10 @@ export function MapCanvas({
       dragRef.current = null
       setPanning(false)
       const el = boxRef.current
-      if (d.moved || !el || !clickRef.current) return
+      // Middle-button drags PAN, but they never click: a middle press that
+      // happens not to move would otherwise drop a terrain vertex (or place
+      // an armed ghost) — a click nobody asked for.
+      if (d.btn !== 0 || d.moved || !el || !clickRef.current) return
       const r = el.getBoundingClientRect()
       const p = screenToWorld(e.clientX - r.left, e.clientY - r.top,
         viewRef.current, r.width, r.height)
@@ -256,7 +264,10 @@ export function MapCanvas({
     // Only the ground pans: a child with its own drag stops propagation.
     if (e.button !== 0 && e.button !== 1) return
     const v = viewRef.current
-    dragRef.current = { sx: e.clientX, sy: e.clientY, cx: v.cx, cz: v.cz, moved: false }
+    dragRef.current = {
+      sx: e.clientX, sy: e.clientY, cx: v.cx, cz: v.cz, moved: false,
+      btn: e.button,
+    }
   }, [])
 
   const onPointerMove = useCallback((e: ReactPointerEvent) => {

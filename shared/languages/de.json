@@ -1425,6 +1425,7 @@
     "Tension": "Spannung",
     "Terrain": "Gelände",
     "Terrain types": "Geländetypen",
+    "Terrain types could not be loaded — retry via Reload": "Geländetypen konnten nicht geladen werden — über Neu laden erneut versuchen",
     "Text appended to effects_block. Placeholder {avatar} is replaced with the active avatar name.": "Text der an effects_block angehängt wird. Platzhalter {avatar} wird durch den aktiven Avatar-Namen ersetzt.",
     "Text missing": "Text fehlt",
     "Text to translate…": "Zu übersetzender Text…",

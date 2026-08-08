@@ -130,6 +130,11 @@ export function MapTab() {
   // Where each effective kind comes from — only the type manager needs it, and
   // it arrives in the same answer as the catalog, so it is kept here too.
   const [typeSources, setTypeSources] = useState<Record<string, 'shared' | 'world'>>({})
+  // Did the catalog FAIL to load? Without this an empty `typeMap` is
+  // indistinguishable from "you have not picked a type yet", and every write
+  // gets refused with a hint the user cannot act on — the fix is Reload, not
+  // a different click.
+  const [typesError, setTypesError] = useState(false)
   const [typesOpen, setTypesOpen] = useState(false)
   const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
   const [paintKind, setPaintKind] = useState('')
@@ -149,21 +154,32 @@ export function MapTab() {
   // The canvas pane is measured here as well: `fitBounds` needs the pixel size
   // BEFORE the first view exists, and the size the canvas measures for itself
   // lives inside its own context.
-  const paneRef = useRef<HTMLDivElement | null>(null)
+  //
+  // A CALLBACK REF, not a mount effect — and that is the whole point of it:
+  // this tab renders a "Loading…" placeholder while `locations` is null, which
+  // it ALWAYS is on the first commit, so the pane div does not exist yet when a
+  // `useEffect(…, [])` would run. That effect read `null`, never attached the
+  // observer and never ran again — `pane` stayed {0,0} forever, which killed
+  // BOTH the initial auto-fit and the "Fit view" button (an enabled no-op).
+  // A callback ref fires when the element actually enters the DOM, whenever
+  // that is, and again with `null` on unmount.
   const [pane, setPane] = useState({ w: 0, h: 0 })
   const fittedRef = useRef(false)
+  const paneObsRef = useRef<ResizeObserver | null>(null)
 
-  useEffect(() => {
-    const el = paneRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return
+  const setPaneEl = useCallback((el: HTMLDivElement | null) => {
+    paneObsRef.current?.disconnect()
+    paneObsRef.current = null
+    if (!el) return
     const read = () => {
       const r = el.getBoundingClientRect()
       setPane({ w: Math.round(r.width), h: Math.round(r.height) })
     }
     read()
+    if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(read)
     ro.observe(el)
-    return () => ro.disconnect()
+    paneObsRef.current = ro
   }, [])
 
   const reload = useCallback(async () => {
@@ -202,12 +218,21 @@ export function MapTab() {
       const r = await apiGet<TerrainTypesResp>('/world/terrain-types')
       setTerrainTypes(r.types || [])
       setTypeSources(r.sources || {})
+      setTypesError(false)
     } catch (e) {
       toast(t('Failed to load terrain types') + ': ' + (e as Error).message, 'error')
+      setTypesError(true)
     }
   }, [t, toast])
 
   useEffect(() => { void reloadTypes() }, [reloadTypes])
+
+  /** Why a write has no usable kind. A catalog that never arrived is not the
+   *  user picking the wrong thing, and "pick a type first" is unactionable
+   *  when there is no palette to pick from — say what actually helps. */
+  const noKindMsg = useCallback(() => (typesError
+    ? t('Terrain types could not be loaded — retry via Reload')
+    : t('Pick a terrain type first')), [t, typesError])
 
   /** The catalog by kind — what every colour lookup goes through. */
   const typeMap = useMemo(() => {
@@ -446,7 +471,7 @@ export function MapTab() {
       meta: area.meta || {}, ...patch,
     }
     if (!typeMap[body.kind]) {
-      toast(t('Pick a terrain type first'), 'error')
+      toast(noKindMsg(), 'error')
       await reloadTerrain()
       return
     }
@@ -456,7 +481,7 @@ export function MapTab() {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
     await reloadTerrain()
-  }, [reloadTerrain, t, toast, typeMap])
+  }, [noKindMsg, reloadTerrain, t, toast, typeMap])
 
   /**
    * Close the running ring into a new area.
@@ -493,7 +518,7 @@ export function MapTab() {
     // While the ring is being saved the draft still stands (it is only dropped
     // once the server has it) — a vertex added now would be dropped with it.
     if (draftBusyRef.current) return
-    if (!paintKind) { toast(t('Pick a terrain type first'), 'error'); return }
+    if (!paintKind) { toast(noKindMsg(), 'error'); return }
     const x = r2(wx)
     const z = r2(wz)
     if (!inRange(x, z)) {
@@ -517,7 +542,7 @@ export function MapTab() {
       return
     }
     setDraft([...cur, [x, z]])
-  }, [commitDraft, paintKind, t, toast, view.pxPerM])
+  }, [commitDraft, noKindMsg, paintKind, t, toast, view.pxPerM])
 
   const moveVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedArea
@@ -829,8 +854,11 @@ export function MapTab() {
 
       <div className="ga-map-main">
         <div className="ga-map-toolbar">
+          {/* Reload re-reads the CATALOG too — it is the only way back from a
+              failed type fetch, and everything the ground editor can do hangs
+              off that one answer. */}
           <button type="button" className="ga-btn ga-btn-sm"
-            onClick={() => { void reload(); void reloadTerrain() }}>
+            onClick={() => { void reload(); void reloadTerrain(); void reloadTypes() }}>
             ↻ {t('Reload')}
           </button>
           <button type="button" className="ga-btn ga-btn-sm" onClick={fitView}
@@ -848,6 +876,7 @@ export function MapTab() {
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
             areaCount={terrain?.areas.length || 0}
             onManageTypes={() => setTypesOpen(true)}
+            typesError={typesError}
           />
           {mode === 'select' ? (
             <label className="ga-map-toolbar-check"
@@ -878,7 +907,7 @@ export function MapTab() {
           ) : null}
         </div>
 
-        <div className="ga-map-canvas-pane" ref={paneRef}>
+        <div className="ga-map-canvas-pane" ref={setPaneEl}>
           <MapCanvas
             view={view}
             onViewChange={setView}
@@ -926,6 +955,7 @@ export function MapTab() {
               area={selectedArea}
               types={typeMap}
               typeList={terrainTypes}
+              typesError={typesError}
               onKind={setAreaKind}
               onZOrder={bumpAreaZ}
               onDelete={() => { void deleteArea() }}

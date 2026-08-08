@@ -1700,13 +1700,16 @@ def update_location_position(location_id: str, pos_x: Optional[float],
     that into a 400) — nothing is written in that case.
 
     Re-placing takes the occupants along (E2 decision): every character
-    standing in this location is shifted by the same delta, so the scene
-    keeps its shape. Unplacing leaves the characters' points untouched.
+    standing in this location keeps its place in the location's LOCAL
+    frame, so the scene keeps its shape — turning the location turns its
+    occupants with it instead of leaving them outside the footprint they
+    are recorded in. Unplacing leaves the characters' points untouched.
     """
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
             _old_x, _old_z = loc.get("pos_x"), loc.get("pos_z")
+            _old_yaw = loc.get("yaw_deg")
             if pos_x is None or pos_z is None:
                 loc.pop("pos_x", None)
                 loc.pop("pos_z", None)
@@ -1730,7 +1733,9 @@ def update_location_position(location_id: str, pos_x: Optional[float],
                 location_id,
                 None if _old_x is None else float(_old_x),
                 None if _old_z is None else float(_old_z),
-                loc.get("pos_x"), loc.get("pos_z"))
+                None if _old_yaw is None else float(_old_yaw),
+                loc.get("pos_x"), loc.get("pos_z"),
+                loc.get("yaw_deg"))
             return loc
     return None
 

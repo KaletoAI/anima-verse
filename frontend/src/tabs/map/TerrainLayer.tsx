@@ -222,10 +222,10 @@ export function TerrainLayer({
           const cp = worldToScreen(c[0], c[1], view, w, h)
           return (
             <g key={a.id}>
-              // evenodd, not SVG's nonzero default: the engine answers point
-              // queries by ray casting (`world_geometry.point_in_polygon`),
-              // which IS the even-odd rule. On a bow tie the two disagree —
-              // nonzero would paint a centre the engine calls OUTSIDE.
+              {/* evenodd, not SVG's nonzero default: the engine answers point
+                  queries by ray casting (`world_geometry.point_in_polygon`),
+                  which IS the even-odd rule. On a bow tie the two disagree —
+                  nonzero would paint a centre the engine calls OUTSIDE. */}
               <path d={worldPolyToPath(a.polygon, view, w, h)}
                 fill={color} fillOpacity={FILL_OPACITY} fillRule="evenodd"
                 stroke={isSel ? COL_SELECTED : color}

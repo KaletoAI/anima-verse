@@ -1450,15 +1450,24 @@ def _write_character_pos(character_name: str, x: Optional[float],
 
 def _shift_location_occupants(location_id: str,
                               old_cx: Optional[float], old_cz: Optional[float],
-                              new_cx: Optional[float],
-                              new_cz: Optional[float]) -> None:
+                              old_yaw: Optional[float],
+                              new_cx: Optional[float], new_cz: Optional[float],
+                              new_yaw: Optional[float]) -> None:
     """Re-placing a location in the editor takes its occupants along (E2).
 
-    Every character whose ``current_location`` is this location keeps its
-    RELATIVE offset to the centre: the delta (new centre − old centre) is
-    added to its point. Two cases have no delta to apply and land the
-    character on the new centre instead: it has no point at all, or the
-    location was unplaced before (no old centre existed).
+    Every character whose ``current_location`` is this location keeps the
+    place it had INSIDE the location: its point is read back into the old
+    local frame (``world_to_local`` around the old centre and the old yaw)
+    and re-emitted from the new one (``local_to_world``). That one path
+    covers moving, turning and both at once — occupants rotate WITH the
+    location, so the scene really keeps its shape instead of being left
+    behind outside a footprint it was recorded in.
+
+    Two cases have no old frame to read and land the character on the new
+    centre instead: it has no point at all, or the location was unplaced
+    before (no old centre existed). The first one also applies to a
+    yaw-ONLY edit — a point-less occupant has nothing to turn, so it lands
+    on the centre.
 
     Unplacing (``new_*`` None) leaves every point untouched — the occupants
     then stand in the open wilderness, which is deliberate: the editor
@@ -1474,18 +1483,20 @@ def _shift_location_occupants(location_id: str,
         logger.error("_shift_location_occupants DB error for %s: %s",
                      location_id, e)
         return
-    has_delta = old_cx is not None and old_cz is not None
+    from app.core.world_geometry import local_to_world, world_to_local
+    has_old = old_cx is not None and old_cz is not None
     for row in rows:
         name = row[0]
         if not name:
             continue
         pos = get_character_pos(name)
-        if pos is None or not has_delta:
+        if pos is None or not has_old:
             _write_character_pos(name, new_cx, new_cz)
             continue
-        _write_character_pos(name,
-                             round(pos["x"] + (new_cx - old_cx), 2),
-                             round(pos["z"] + (new_cz - old_cz), 2))
+        lx, lz = world_to_local(pos["x"], pos["z"], old_cx, old_cz,
+                                old_yaw or 0.0)
+        nx, nz = local_to_world(lx, lz, new_cx, new_cz, new_yaw or 0.0)
+        _write_character_pos(name, round(nx, 2), round(nz, 2))
 
 
 def _clear_location_and_room(character_name: str) -> None:

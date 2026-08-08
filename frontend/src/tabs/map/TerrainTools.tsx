@@ -67,11 +67,14 @@ export interface TerrainToolbarProps {
    *  vocabulary is missing something — and it is the only surface that can
    *  answer "there is no kind for this" with anything but a shrug. */
   onManageTypes: () => void
+  /** The catalog fetch FAILED — an empty palette then means "not loaded",
+   *  not "nothing defined", and the way out is Reload, not another click. */
+  typesError?: boolean
 }
 
 export function TerrainToolbar({
   mode, onMode, types, paintKind, onPaintKind, draftLen,
-  onCloseDraft, onDiscardDraft, areaCount, onManageTypes,
+  onCloseDraft, onDiscardDraft, areaCount, onManageTypes, typesError,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const btn = (m: TerrainMode, icon: string, label: string, title: string) => (
@@ -102,7 +105,11 @@ export function TerrainToolbar({
         <>
           <span className="ga-terrain-palette">
             {types.length === 0 ? (
-              <span className="ga-map-tray-empty">{t('No terrain types')}</span>
+              <span className="ga-map-tray-empty">
+                {typesError
+                  ? t('Terrain types could not be loaded — retry via Reload')
+                  : t('No terrain types')}
+              </span>
             ) : types.map((ty) => (
               <TypeChip key={ty.kind} type={ty} armed={ty.kind === paintKind}
                 onPick={() => onPaintKind(ty.kind)} />
@@ -115,7 +122,9 @@ export function TerrainToolbar({
           </span>
           <span className={'ga-map-arm' + (paintKind ? '' : ' warn')}>
             {!paintKind
-              ? t('Pick a terrain type first')
+              ? (typesError
+                ? t('Terrain types could not be loaded — retry via Reload')
+                : t('Pick a terrain type first'))
               : draftLen === 0
                 ? t('Click the map to set the first point')
                 : t('{n} of {max} points — click the first one to close, Escape discards')
@@ -145,6 +154,9 @@ export interface TerrainAreaChipProps {
   types: Record<string, TerrainType>
   /** The catalog in display order, for the kind palette. */
   typeList: TerrainType[]
+  /** The catalog fetch FAILED — then NO area can be named and the hint must
+   *  say that, instead of blaming every single one of them on the user. */
+  typesError?: boolean
   onKind: (kind: string) => void
   /** Move one layer up (+1) or down (−1). */
   onZOrder: (delta: number) => void
@@ -166,7 +178,7 @@ export interface TerrainAreaChipProps {
  * it is the other honest answer to an area nobody can name any more.
  */
 export function TerrainAreaChip({
-  area, types, typeList, onKind, onZOrder, onDelete, onClose,
+  area, types, typeList, typesError, onKind, onZOrder, onDelete, onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
   const [armed, setArmed] = useState(false)
@@ -232,7 +244,9 @@ export function TerrainAreaChip({
       <div className={'ga-map-chip-row ' + (known ? 'ga-map-chip-label' : 'ga-map-chip-warn')}>
         {known
           ? t('Drag a point to move it · double-click removes it · click an edge to add one')
-          : t('Pick a terrain type first')}
+          : (typesError
+            ? t('Terrain types could not be loaded — retry via Reload')
+            : t('Pick a terrain type first'))}
       </div>
     </div>
   )
