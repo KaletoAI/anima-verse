@@ -248,9 +248,18 @@ export function MapTab() {
   modeRef.current = mode
   const areasRef = useRef<TerrainArea[]>([])
   areasRef.current = terrain?.areas || []
+  // Is a modal covering the canvas? The handler is bound once, so this cannot
+  // be read from the state directly.
+  const modalRef = useRef(false)
+  modalRef.current = typesOpen || !!picker || !!gen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // While a dialog is open, Escape is the reflex for CLOSING IT — and the
+      // type manager is only reachable from paint mode, so acting on the
+      // canvas here would silently throw away a half-drawn polygon behind a
+      // window that stays open regardless. Not this handler's key.
+      if (modalRef.current) return
       if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (draftRef.current.length) {
         setDraft([])
         setDraftCursor(null)
