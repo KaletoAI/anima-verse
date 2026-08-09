@@ -760,7 +760,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       const ph = buildPlaceholder(THREE, spec.placeholder_dims, placeholderMaterial());
       ph.receiveShadow = true;
       ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
-      ph.rotation.y = -deg(spec.yaw_deg);
+      // `+rad` since E4 — the same sign `placeModelSpec` turns a real mesh by
+      // (§ A1.1). A placeholder that turned the other way would stand mirrored
+      // against the mesh it stands in for.
+      ph.rotation.y = deg(spec.yaw_deg);
       const parent = parentFor(spec.room_id);
       parent.add(ph);
       placements.push({ spec, url, object: ph, parent, placeholder: true });

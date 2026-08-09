@@ -78,6 +78,18 @@ export function buildWall(THREE: typeof import('three'),
   mesh.position.set((wall.from[0] + wall.to[0]) / 2,
                     wall.base_y + wall.height / 2,
                     (wall.from[1] + wall.to[1]) / 2)
+  // THIS MINUS STAYS, and it is NOT the yaw sign of § A1.1.
+  //
+  // It is the inverse of the very rotation the yaw flip settled on. Under
+  // `rotation.y = θ` three.js maps the box's own +x axis to the world direction
+  // (cos θ, 0, −sin θ). The segment has to run along (dx, dz) = to − from, so
+  //     cos θ = dx/len   and   −sin θ = dz/len   ⇒   θ = −atan2(dz, dx).
+  // Nothing here reads a delivered ANGLE whose convention could be changed:
+  // `from`/`to` are payload COORDINATES, unchanged by E4, and the angle is
+  // derived from them. Flipping the sign would mirror every wall that is not
+  // axis-parallel about the segment's midpoint (an axis-parallel one would look
+  // unchanged — a box is symmetric under 180° — which is exactly why this had to
+  // be derived and not eyeballed).
   mesh.rotation.y = -Math.atan2(wall.to[1] - wall.from[1], wall.to[0] - wall.from[0])
   return mesh
 }

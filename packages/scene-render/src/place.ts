@@ -64,7 +64,18 @@ export function placeModelSpec(THREE: typeof import('three'),
 
   const yawG = new THREE.Group()
   yawG.add(fix)
-  yawG.rotation.y = -deg(spec.yaw_deg)
+  // PLUS, since E4 (§ A1.1, decided 2026-08-07): the world map's turning sense
+  // is THE turning sense of this contract, for map and scene alike. three.js'
+  // Ry(+θ) maps a local point to
+  //     x = lx·cos θ + lz·sin θ,   z = −lx·sin θ + lz·cos θ
+  // which IS the server's `world_geometry.local_to_world` — so `+rad` is what
+  // makes both renderers reproduce the server's own maths instead of mirroring
+  // it. The old minus was the map-yaw chain of § A1.8 (`map3d.rotation`), and
+  // it flipped here, in `sceneRecipe.ts` and in the admin's model viewer in ONE
+  // commit: two renderers disagreeing about a sign is a mirrored world.
+  // Old `map3d.rotation` values of old worlds now turn mirrored — accepted, no
+  // migration (plan-freie-weltkarte-e4-3d-client.md).
+  yawG.rotation.y = deg(spec.yaw_deg)
   yawG.updateMatrixWorld(true)
   // Das Gebäude füllt seinen Rahmen NACH dem YAW — dort ist die gedrehte Hülle
   // genau die richtige Messung (ein schräg gestelltes Haus soll auf sein

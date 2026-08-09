@@ -547,7 +547,12 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             place.rotation.set(0, 0, 0)
             place.scale.setScalar(1)
             place.position.set(0, 0, 0)
-            place.rotation.y = -_deg(spec ? spec.yaw_deg : p.yawDeg)
+            // `+rad` since E4 (§ A1.1): the THIRD renderer of `spec.yaw_deg`,
+            // next to `placeModelSpec` (@anima/scene-render) and the 3D client.
+            // This viewer has its own placement maths, so it needs the sign
+            // separately — with the old minus it would show every model turned
+            // the other way round from the scene it is being tuned for.
+            place.rotation.y = _deg(spec ? spec.yaw_deg : p.yawDeg)
             // How BIG a model is must not depend on how it is TURNED: the
             // axis-aligned hull of a tilted box is larger than the box, so a
             // fine-angle orientation fix made the model shrink as it was

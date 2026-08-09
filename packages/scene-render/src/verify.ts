@@ -80,7 +80,15 @@ export class SpecVerifier {
     for (const t of targets) this.check(name, t.field, t.actual(box), t.target)
   }
 
-  /** Platziertes Modell gegen seine Spec prüfen. */
+  /** Platziertes Modell gegen seine Spec prüfen.
+   *
+   *  SIGN-BLIND BY CONSTRUCTION, and deliberately left that way by the E4 yaw
+   *  flip (§ A1.1): every target here is invariant under the turning sense.
+   *  `bottom_y` and the anchor are set AFTER the rotation (place() shifts the
+   *  result's box onto them, whichever way it turned), and the `max_m` check
+   *  only runs for axis-parallel yaw, where ±90° give the same axis-aligned
+   *  box. The sign therefore has to be pinned somewhere else — that is what
+   *  section 6 of `scripts/smoke_place_rotation.mjs` is for. */
   placement(obj: Object3D, spec: SceneModelSpec, origin: Vector3): void {
     if (!this.active) return
     obj.updateWorldMatrix(true, true)
