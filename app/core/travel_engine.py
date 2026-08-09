@@ -427,37 +427,20 @@ def _game_now():
 # Lateral spacing of party followers next to their leader, in metres.
 _FOLLOWER_SPACING_M = 1.2
 
-# How far IN FRONT of a closed door a blocked journey comes to rest, in metres.
+# Arc-length step for walking a blocked journey back off the target, in metres.
 _DOOR_STANDOFF_M = 0.5
 
 
-def _standoff_point(waypoints: Sequence[Sequence[float]],
-                    fallback: Point) -> Point:
-    """The route's end pulled ``_DOOR_STANDOFF_M`` back along the way it came.
+def _point_back_along(pts: Sequence[Point], distance: float) -> Point:
+    """The point ``distance`` metres back from the END of the polyline ``pts``.
 
-    Where a blocked journey ends. The goal point of a route is the target's
-    OPENING, and that point lies ON the target's footprint (the footprint test
-    is inclusive) — a character parked there would be standing in the very
-    location the rule just refused it, and the next ordinary position write
-    would derive exactly that and walk it in through the closed door. Half a
-    metre back along the last segment is outside by construction, so "in front
-    of the door" needs no special casing anywhere else: the position derives
-    the open terrain all by itself.
-
-    Degenerate geometry is walked over, not divided by: zero-length segments
-    are skipped, a last segment shorter than the standoff continues the step
-    back into the segment before it, and a whole route shorter than the
-    standoff ends at its own first waypoint (the character never really left).
+    UNROUNDED — the caller decides when to snap, because rounding is what can
+    push a point back onto a footprint boundary. Degenerate geometry is walked
+    over, not divided by: zero-length segments are skipped (``segment_costs``
+    legitimately produces them), a distance longer than the polyline ends at
+    its first point.
     """
-    pts: List[Point] = []
-    for wp in waypoints or []:
-        try:
-            pts.append((float(wp[0]), float(wp[1])))
-        except (TypeError, ValueError, IndexError):
-            continue
-    if not pts:
-        return fallback
-    remaining = _DOOR_STANDOFF_M
+    remaining = distance
     for i in range(len(pts) - 1, 0, -1):
         start, end = pts[i - 1], pts[i]
         length = math.dist(start, end)
@@ -465,10 +448,76 @@ def _standoff_point(waypoints: Sequence[Sequence[float]],
             continue
         if length >= remaining:
             frac = remaining / length
-            return (round(end[0] + (start[0] - end[0]) * frac, 2),
-                    round(end[1] + (start[1] - end[1]) * frac, 2))
+            return (end[0] + (start[0] - end[0]) * frac,
+                    end[1] + (start[1] - end[1]) * frac)
         remaining -= length
-    return (round(pts[0][0], 2), round(pts[0][1], 2))
+    return pts[0]
+
+
+def _standoff_point(waypoints: Sequence[Sequence[float]], fallback: Point,
+                    target_id: str) -> Optional[Point]:
+    """Where a REFUSED journey comes to rest — or None when there is no such
+    point on the whole route.
+
+    The route's goal is the target's OPENING, and that point lies ON the
+    target's footprint (the footprint test is inclusive): a character parked
+    there stands in the very location the rule just refused it, and the next
+    ordinary position write derives exactly that and walks it in through the
+    closed door.
+
+    "One step back is outside" is FALSE, so nothing here is by construction —
+    every candidate is VERIFIED. Two geometries put a fixed back-step inside
+    the target: a final segment running collinear with a footprint wall (the
+    nav grid's cell centre lines fall on the walls for common placements, so
+    A* plus smoothing walks straight down one), and a route that legally cuts
+    through the target's own footprint (the grid exempts it for its own
+    route), which puts every approach from behind or beside it inside. So the
+    walk continues backwards in ``_DOOR_STANDOFF_M`` steps until a point no
+    longer DERIVES the target — measured the way the consumer measures it,
+    with ``location_at_point`` over all locations. Landing inside a foreign
+    third footprint on the way is accepted: that character really is standing
+    in that place, and pretending otherwise would be the dishonest answer.
+
+    Rounding is part of the test, not an afterthought: 94.997 snaps onto an
+    inclusive boundary at 95.0, so a candidate is checked unrounded AND after
+    the snap, and a snap that lands inside costs one more step back.
+
+    None means not one point of the polyline lies outside the target (a route
+    running entirely within its footprint — possible, see the exemption
+    above). The caller owns that case; there is no honest "in front of the
+    door" to report.
+    """
+    from app.core.world_geometry import location_at_point
+    from app.models.world import list_locations
+
+    pts: List[Point] = []
+    for wp in waypoints or []:
+        try:
+            pts.append((float(wp[0]), float(wp[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    if not pts:
+        pts = [(float(fallback[0]), float(fallback[1]))]
+    locations = list_locations()
+
+    def outside(point: Point) -> bool:
+        at = location_at_point(point[0], point[1], locations)
+        return ((at.get("id") or "") if at else "") != target_id
+
+    total = sum(math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+    distance = _DOOR_STANDOFF_M
+    while distance <= total + 1e-9:
+        raw = _point_back_along(pts, distance)
+        if outside(raw):
+            snapped = (round(raw[0], 2), round(raw[1], 2))
+            if outside(snapped):
+                return snapped
+            # The snap pushed it back onto the footprint — one more step.
+        distance += _DOOR_STANDOFF_M
+    # The steps may not have reached the very first waypoint (the polyline is
+    # rarely a multiple of the step); it is the last candidate there is.
+    start = (round(pts[0][0], 2), round(pts[0][1], 2))
+    return start if outside(start) else None
 
 
 def _follower_offsets(count: int) -> List[float]:
@@ -535,14 +584,6 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
     locations = list_locations()
     for follower, offset in zip(followers, _follower_offsets(len(followers))):
         try:
-            # A follower that joined WHILE travelling keeps its own journey,
-            # and the ticker would then advance that journey and write the
-            # formation offset in the same pass — which of the two lands last
-            # depends on the character order. The formation wins: a follower
-            # does not travel on its own account, it lost SetLocation/Move
-            # when it joined.
-            if get_journey(follower) is not None:
-                cancel_journey(follower)
             fx = round(pos[0] + px * offset, 2)
             fz = round(pos[1] + pz * offset, 2)
             at = location_at_point(fx, fz, locations)
@@ -554,6 +595,23 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
             set_character_pos(follower, fx, fz, preserve_movement_target=True)
         except Exception as e:
             logger.debug("party follow failed for %s: %s", follower, e)
+
+
+def _cancel_follower_journeys(leader: str) -> None:
+    """Followers do not travel on their own account.
+
+    A follower that joined WHILE travelling keeps its own journey, and the
+    ticker would otherwise advance it beside the formation write (which of the
+    two lands last depending on the character order) and, worse, keep walking
+    it after the party has long arrived somewhere else. A character loses
+    SetLocation/Move when it joins a party, so it loses the journey with them
+    — on every tick the leader is on the road AND on the tick it arrives.
+    """
+    from app.core.party_engine import party_followers
+    for follower in party_followers(leader):
+        if follower and follower != leader \
+                and get_journey(follower) is not None:
+            cancel_journey(follower)
 
 
 def _leave_still_allowed(name: str) -> bool:
@@ -611,15 +669,30 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
 
     ok, reason = check_access(name, target_id, room_id=entry_room)
     if not ok:
-        # Blocked at the door: the journey ends half a metre IN FRONT of the
-        # opening instead of on it (see _standoff_point). Cancel first, then
-        # write the position the ordinary way — the journey is over, so this
-        # is no travel step any more, and letting the write derive the
-        # location is exactly the point: "in front of the door" is a fact of
-        # the geometry here, not a special case anyone has to maintain.
-        stand = _standoff_point(journey.get("waypoints") or [], st["pos"])
+        # Blocked at the door: the journey ends on the last point of its route
+        # that does not lie in the refused location (see _standoff_point).
+        # Cancel first, then write the position the ORDINARY way — the journey
+        # is over, so this is no travel step any more, and letting the write
+        # derive the location is the point: the standoff was verified against
+        # the same reader, so it cannot walk anyone through the closed door.
+        stand = _standoff_point(journey.get("waypoints") or [], st["pos"],
+                                target_id)
         cancel_journey(name)
-        set_character_pos(name, stand[0], stand[1])
+        if stand is not None:
+            set_character_pos(name, stand[0], stand[1])
+        else:
+            # Not ONE point of the route lies outside the target — the whole
+            # polyline runs within its footprint (the nav grid exempts a
+            # route's own start/target footprints, so this is reachable, not
+            # theoretical). There is no honest "in front of the door" to
+            # stand on, so this is the one place a RAW position write is
+            # right: the figure keeps the door point it walked to, and
+            # location + room are cleared explicitly — the refusal must never
+            # be readable as an entry, and no deriving write may re-invent one.
+            from app.models.character import (_clear_location_and_room,
+                                              _write_character_pos)
+            _write_character_pos(name, st["pos"][0], st["pos"][1])
+            _clear_location_and_room(name)
         try:
             record_access_denied(name, target_id,
                                  get_location_name(target_id) or target_id,
@@ -709,6 +782,9 @@ def advance_all_journeys() -> None:
             if current_id and current_id != j["target"] \
                     and not _leave_still_allowed(name):
                 continue
+            # Before the branch, so the ARRIVAL tick is covered too: a
+            # follower that joined mid-journey must not walk on afterwards.
+            _cancel_follower_journeys(name)
             if not st["arrived"]:
                 set_character_pos(name, st["pos"][0], st["pos"][1],
                                   preserve_movement_target=True)
