@@ -642,16 +642,103 @@ def _leave_still_allowed(name: str) -> bool:
     return False
 
 
+# How close to the journey's LAST waypoint a settling point still counts as
+# "walked to the authored opening", in metres. Only within this distance does
+# the opening's room link apply: an EARLY arrival (a derived crossing halfway
+# down the route, see advance_all_journeys) entered the building somewhere
+# else entirely, and claiming the door's room for it would be a lie.
+_GOAL_TOLERANCE_M = 0.5
+
+
+def _arrival_gate(name: str, target_id: str, target: Dict[str, Any],
+                  entry_room: str) -> Tuple[bool, str]:
+    """The two walls in front of a journey's target — ``(ok, reason)``.
+
+    ``rules.check_access`` is the rule engine's own gate. ``accessible_when``
+    is the field the world map greys a place out with, and NO rule row backs
+    it: the route (``routes/play.py``) and this arrival are its only
+    enforcement points, so a missing check here would make the condition
+    decoration for every NPC and for every rule that flips while someone is
+    already on the road.
+    """
+    from app.core.world_ops import conditions_pass
+    from app.models.rules import check_access
+
+    ok, reason = check_access(name, target_id, room_id=entry_room)
+    if not ok:
+        return False, reason
+    if not conditions_pass(target.get("accessible_when") or [], name,
+                           target_id):
+        from app.core.i18n import t
+        from app.models.character import get_character_language
+        return False, t("This place is not accessible to you.",
+                        get_character_language(name) or "de")
+    return True, ""
+
+
+def _walked_prefix(journey: Dict[str, Any],
+                   st: Dict[str, Any]) -> List[List[float]]:
+    """The route as far as it has actually been WALKED, ending on ``st['pos']``.
+
+    The standoff of a refused arrival must never teleport anyone FORWARD: an
+    EARLY arrival (the derived crossing, see ``advance_all_journeys``) is
+    refused in the middle of the route, and stepping back from the polyline's
+    END would drop the character next to a door it has not reached yet.
+    Waypoints 0..``seg`` are behind the walker, ``pos`` is where it stands.
+
+    For a real arrival this reproduces the full polyline exactly (``seg`` is
+    then the last segment and ``pos`` its end point), so both paths share one
+    standoff computation.
+    """
+    waypoints = journey.get("waypoints") or []
+    try:
+        seg = int(st.get("seg") or 0)
+    except (TypeError, ValueError):
+        seg = 0
+    prefix: List[List[float]] = []
+    for wp in waypoints[:max(seg, 0) + 1]:
+        try:
+            prefix.append([float(wp[0]), float(wp[1])])
+        except (TypeError, ValueError, IndexError):
+            continue
+    prefix.append([float(st["pos"][0]), float(st["pos"][1])])
+    return prefix
+
+
+def _at_goal(journey: Dict[str, Any], st: Dict[str, Any]) -> bool:
+    """Is the settling point the journey's own goal point (within tolerance)?
+
+    True for every ordinary arrival; false for an early derived crossing that
+    happens metres away from the authored opening.
+    """
+    waypoints = journey.get("waypoints") or []
+    if not waypoints:
+        return False
+    try:
+        last = (float(waypoints[-1][0]), float(waypoints[-1][1]))
+    except (TypeError, ValueError, IndexError):
+        return False
+    return math.dist(last, (float(st["pos"][0]),
+                            float(st["pos"][1]))) <= _GOAL_TOLERANCE_M
+
+
 def _settle_arrival(name: str, journey: Dict[str, Any],
                     st: Dict[str, Any]) -> None:
-    """The journey reached its last waypoint: entry gate, then the crossing."""
+    """The journey reaches its target: entry gate, then the crossing.
+
+    Called for BOTH ways into the target — the ordinary arrival at the last
+    waypoint AND the early derived crossing the ticker catches in flight (see
+    ``advance_all_journeys``). Everything that differs between the two is
+    derived from ``st`` here: which room the arrival lands in (the opening's
+    only when the walker really stands at that opening) and how far back the
+    standoff of a refusal may step (only over the walked prefix).
+    """
     from app.core.boundary_entry import opening_entry_room
     from app.models.character import (clear_pose_intent, get_movement_target,
                                       record_access_denied,
                                       save_character_current_location,
                                       save_character_current_room,
                                       set_character_pos)
-    from app.models.rules import check_access
     from app.models.world import (get_arrival_room_id, get_location_by_id,
                                   get_location_name)
 
@@ -661,13 +748,16 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
     # question by itself, and the journey remembers which opening it walked to
     # — a location with several doors therefore routes into the right room.
     # Everything else falls back to the one arrival rule (declared entry room,
-    # otherwise the ground).
+    # otherwise the ground) — including a crossing that did NOT happen at that
+    # opening, which has no claim on the room behind it.
     entry_edge = str(journey.get("entry_edge") or "")
-    entry_room = opening_entry_room(target, entry_edge) if entry_edge else ""
+    at_goal = _at_goal(journey, st)
+    entry_room = (opening_entry_room(target, entry_edge)
+                  if entry_edge and at_goal else "")
     if not entry_room:
         entry_room = get_arrival_room_id(target)
 
-    ok, reason = check_access(name, target_id, room_id=entry_room)
+    ok, reason = _arrival_gate(name, target_id, target, entry_room)
     if not ok:
         # Blocked at the door: the journey ends on the last point of its route
         # that does not lie in the refused location (see _standoff_point).
@@ -675,7 +765,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         # is over, so this is no travel step any more, and letting the write
         # derive the location is the point: the standoff was verified against
         # the same reader, so it cannot walk anyone through the closed door.
-        stand = _standoff_point(journey.get("waypoints") or [], st["pos"],
+        stand = _standoff_point(_walked_prefix(journey, st), st["pos"],
                                 target_id)
         cancel_journey(name)
         if stand is not None:
@@ -761,10 +851,26 @@ def advance_all_journeys() -> None:
     of a journey, not an error), and only the preserving variant survives the
     moment that derived location changes — the plain write would pop
     ``movement_target`` and the journey with it.
+
+    **An in-flight point may never derive the journey's own TARGET.** The nav
+    grid exempts the target's footprint for the target's own route, so a route
+    to an opening that faces away legally crosses the building — and the first
+    tick inside it would otherwise write the target as an ordinary derived
+    location: entry cascade without the access gate, the ground room instead
+    of the opening's, and the journey silently cleared halfway (the setter
+    clears target + journey exactly when the new location IS the target).
+    Such a tick is therefore treated as an EARLY ARRIVAL and settled through
+    the same gate as the ordinary one — the crossing happens at most one tick
+    late and never ungated. The check is skipped when the character already
+    STANDS in the target: nothing is crossed then, and the write changes no
+    location.
     """
+    from app.core.world_geometry import location_at_point
     from app.models.character import (get_character_current_location,
                                       list_available_characters,
                                       set_character_pos)
+    from app.models.world import list_locations
+    locations: Optional[List[Dict[str, Any]]] = None
     now = _game_now()
     for name in list_available_characters():
         try:
@@ -786,6 +892,17 @@ def advance_all_journeys() -> None:
             # follower that joined mid-journey must not walk on afterwards.
             _cancel_follower_journeys(name)
             if not st["arrived"]:
+                if current_id != j["target"]:
+                    # ONE snapshot per tick — the locations do not move while
+                    # the ticker walks, and this is the same reader the write
+                    # below would derive the location with.
+                    if locations is None:
+                        locations = list_locations()
+                    at = location_at_point(st["pos"][0], st["pos"][1],
+                                           locations)
+                    if ((at.get("id") or "") if at else "") == j["target"]:
+                        _settle_arrival(name, j, st)   # early, but gated
+                        continue
                 set_character_pos(name, st["pos"][0], st["pos"][1],
                                   preserve_movement_target=True)
                 # Read the location back AFTER the write: it is what the

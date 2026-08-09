@@ -1127,9 +1127,23 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   Vorlauf aus v1 gibt es nicht mehr). Solange kann `progress_m == total_m`
   stehen bleiben. Clients verzweigen auf **„Feld weg"**, niemals auf
   `progress_m == total_m` oder auf das Erreichen von `eta_game`.
+
+  **Ausnahme mit derselben Wirkung — die Route KREUZT das Ziel.** Der
+  Wegfinder nimmt den Footprint des Ziels für dessen eigene Route aus (sonst
+  wäre eine abgewandte Tür unerreichbar), die Route läuft also mitunter durch
+  das Gebäude. Steht der interpolierte Punkt eines Takts INNERHALB des Ziels,
+  ist die Figur dort — der Server verbucht diesen Takt als Ankunft und schickt
+  ihn durch dasselbe Zugangs-Gate (`check_access` + `accessible_when`).
+  `travel` verschwindet dann vor `eta_game`. Für Clients ändert das nichts:
+  die Regel bleibt „Feld weg = angekommen", und `location_id` folgt wie immer
+  dem Punkt. Der Raum ist in diesem Fall der ANKUNFTSRAUM des Ziels, nicht der
+  Raum hinter der angepeilten Tür (die Figur steht nicht an ihr).
 - **Ankunft ist nicht garantiert.** Verweigert die Zugangsregel am Ziel den
-  Eintritt, endet die Reise auf dem letzten Routenpunkt VOR dem Ziel
-  („Standoff") — auch dann verschwindet `travel` einfach.
+  Eintritt — `rules.check_access` ODER das `accessible_when` des Ziels —,
+  endet die Reise auf dem letzten Routenpunkt VOR dem Ziel („Standoff");
+  bei einer vorzeitigen Ankunft (s. o.) auf dem letzten Punkt des BEREITS
+  GELAUFENEN Stücks, nie einem weiter vorn. Auch dann verschwindet `travel`
+  einfach.
 - **Freeze:** steht die Spieluhr, stehen alle Reisen. `progress_m` bleibt
   konstant, `speed_m_s_real` ist `null` — genau dann darf nicht
   extrapoliert werden.

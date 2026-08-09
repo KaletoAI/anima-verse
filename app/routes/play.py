@@ -389,10 +389,12 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
       3. ``rules.check_leave`` — may the avatar leave where it stands,
       4. ``accessible_when`` at the target — the condition the world map
          greys a place out with. A WALL, not a hint (backend-status-3d.md,
-         commit bdd8598): no rule engine reads that field, so if this gate
-         is not here, nothing enforces it at all. The SetLocation skill has
-         never had it — an NPC therefore still walks past it (ledgered
-         separately), and so does the ticker's arrival gate,
+         commit bdd8598): no rule engine reads that field, so it is enforced
+         exactly twice — here, and at the ticker's arrival gate
+         (``travel_engine._arrival_gate``, which is what makes it bite for
+         NPCs and for conditions that flip while someone is on the road).
+         The SetLocation skill still does not ask before it sets off; the
+         arrival gate refuses at the door (ledgered separately),
       5. ``danger_system.check_location_access`` — may it enter the target.
          The skill asks ``rules.check_access`` a second time right after;
          that is the very predicate the danger façade delegates to, so it is
