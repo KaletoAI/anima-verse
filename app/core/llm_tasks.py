@@ -286,30 +286,99 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "creative": True, "language_de": True, "latency_sensitive": False,
     },
     "intent": {
+        # A3: language_de False -> True. The tool INPUTS are German: of 1255
+        # extracted TalkTo/SendMessage/SetActivity inputs 1151 were
+        # classifiable — 1115 German, 36 English (104 too short to decide).
+        # In a thought turn the prose is thrown away and a
+        # spoken line reaches the room ONLY through the speech verb, verbatim
+        # (streaming.py:265-279); SetActivity's free-text pose is stored and
+        # displayed. creative stays False all the same — the model re-describes
+        # what the prose already said, it must not embellish.
+        # min_context: the log under-reports this task. `task=intent` is 213 of
+        # 974 calls; the thought turn's tool phase logs as task="thought" /
+        # llm_role="Tool-LLM" (A3.1 § 0). Over the FULL population P90 is 6513
+        # tokens, max 7075 -> 8192 confirmed.
+        # latency_sensitive True per the definition above ("the tool phase of a
+        # reply"), mixed case like `consolidation`, all three callers: in
+        # `single` mode the entry is resolved only as a mode discriminator
+        # (chat_engine.py:367 -> dependencies.determine_mode) and never called,
+        # the chat tool phase runs after the visible answer (chat_engine.py:604)
+        # and the thought one blocks only a background turn — but either way
+        # the world state the player is watching waits for it: chat path P50
+        # 21 s / P90 99 s, thought path P50 60 s / P90 105 s (August).
+        # hallucination_risk stays high: an invented call EXECUTES (19 of 283
+        # SetLocation targets were outside the catalog, invented dialogue lands
+        # in the room as if spoken). model_class stays medium: format
+        # discipline was perfect over 974 answers, and the content failures
+        # traced to the hard-wired action mapping fixed in 37e2214 — nothing
+        # measured argues for large.
         "tools": True, "vision": False, "json": False, "min_context": 8192,
         "model_class": "medium", "arch": "any", "hallucination_risk": "high",
-        "creative": False, "language_de": False, "latency_sensitive": True,
+        "creative": False, "language_de": True, "latency_sensitive": True,
     },
     "spell_detect": {
+        # A3: all ten confirmed. latency_sensitive True is hard — both call
+        # sites await the call before the turn continues AND hold the player's
+        # own words back, because chat_substitute replaces them in the room
+        # (play.py:1064, chat.py:811); measured 5.6/5.9 s. small stays: the
+        # prefilter (every incantation token verbatim, spell_engine.py:128)
+        # reduces the job to picking among the avatar's own spell items, and
+        # small + German prose is an established pair here (translation,
+        # intro_memory, image_comment). hallucination_risk medium, not low: an
+        # invented spell_id cannot fire (catalog check :199, confidence < 60
+        # discarded), but chat_substitute is unvalidated German prose that
+        # REPLACES the player's line and is what the room then reacts to.
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": True, "latency_sensitive": True,
     },
 
     # --- Room furnishing ----------------------------------------------------
+    # A3: two decisions are shared by all three. (1) latency_sensitive stays
+    # False: the job is a daemon thread tracked in the TaskQueue, it survives a
+    # restart (_resume_phase), it ends in a notification, and the admin UI polls
+    # at 3 s while the dialog is open and 15 s while it is CLOSED, precisely so
+    # the dialog may be closed while it runs (FurnishDialog.tsx:70-125). Between
+    # the LLM stages the chain waits up to 30 min on mesh generation, so seconds
+    # of LLM latency are not what anyone waits on. (2) hallucination_risk is low
+    # wherever the output is checked against a catalog AND against the admin —
+    # nothing reaches the room without passing a validator and the review gate
+    # (confirm/accept, room_furnish.py:869/888).
     "furnish_select": {
+        # A3: hallucination_risk high -> low. An invented prop_id is dropped by
+        # _valid_existing against the filtered library (:522-525) — it reaches
+        # neither the admin nor the room; the cost is a missing pick. medium
+        # stays because the footprint budget is NOT enforced at select time
+        # (the solver only catches the overflow later as "area budget
+        # exhausted"), so the arithmetic is the model's job. min_context stays
+        # 4096 with no measurement (n=0): the user prompt carries the WHOLE
+        # filtered library, one line per prop, and the library only grows —
+        # furnish_new writes its inventions back into it (create_prop, :567).
         "tools": False, "vision": False, "json": True, "min_context": 4096,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "high",
+        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": False,
     },
     "furnish_new": {
+        # A3: the only one of the three whose main output is checked against
+        # NOTHING — name/description are free text, and after the confirm gate
+        # the description becomes the prop's image prompt (props.py:1061-1067)
+        # and a mesh in the shared library, so hallucination_risk stays medium.
+        # creative True confirmed (inventing pieces is the job); language_de
+        # False for the same reason every image prompt is English.
         "tools": False, "vision": False, "json": True, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": False, "latency_sensitive": False,
     },
     "furnish_place": {
+        # A3: hallucination_risk medium -> low. No invented value can place a
+        # piece: unknown prop, unknown anchor and an unresolved ref all come
+        # back as `unplaced` with a reason, feed the ONE re-plan round and end
+        # in the review UI; count is clamped to 1..12 and an unknown `facing`
+        # is not rejected but simply falls through to the room-facing branch
+        # (furnish_solver.solve :390-423). Measured 509/541 input tokens including the re-plan errors
+        # block; 2048 is the bottom rung and holds even for a 20-piece plan.
         "tools": False, "vision": False, "json": True, "min_context": 2048,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": False,
     },
 
