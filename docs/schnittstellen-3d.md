@@ -499,8 +499,9 @@ Minimap-Maßstab), muss das abfangen.
 
 ### A1.4 Charaktere: freier Punkt und Wildnis
 
-Der Charakter-Eintrag ist unverändert bis auf **ein** neues Feld; die
-Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
+Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
+(E1), und **`travel`** hat mit E3 eine andere INNERE Form bekommen (§ A11).
+Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `avatar_url`.
@@ -508,6 +509,7 @@ Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird) |
 
 - **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
   mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim
@@ -652,9 +654,10 @@ E1 unberührt:
   Kachelbild-Maschinerie (`map_patch_*`, Blending, Outpainting) wird
   erst mit **E7** ausgebaut.
 
-Der **Reise-Payload (§ A11) ist in E1 unverändert** — er trägt weiter
-Zellen-Felder (`path` als Location-Kette, `progress_cells`,
-`cell_seconds_real`). **Wird mit E3 auf eine Meter-Polyline umgestellt.**
+Der **Reise-Payload (§ A11) war in E1 unverändert** (Zellen-Felder auf einer
+Meter-Karte, praktisch aber `travel: null`, weil ohne Raster keine Reise
+startete). **Mit E3 ist er eine Meter-Polyline** — die Zellen-Felder sind
+ersatzlos gestrichen, siehe § A11.
 
 ## A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)
 
@@ -1036,90 +1039,125 @@ Rad = Zoom auf Cursor (`dist *= exp(ΔY·0,0012)`), Klick = Auswahl bei
 < 0,15 Einheiten Bewegung. Q/E ±45°, +/− Zoom-Stufen, WASD Pan.
 Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
 
-## A11. Reise-Payload (server-autoritative Bewegung) — neu 2026-07-27
+## A11. Reise-Payload (server-autoritative Bewegung) — Meter-Polyline seit E3 (2026-08-09)
 
-> **In E1 unverändert.** Der Block trägt weiter Zellen-Felder
-> (`path` als Location-Kette, `seg`/`frac`, `progress_cells`,
-> `cell_seconds_real`), obwohl die Karte in Metern rechnet.
-> **Praktisch startet in E1 aber gar keine Reise mehr:** die
-> Zellen-Pfadfindung (`get_neighbor_location_ids` →
-> `find_path_through_known`) findet ohne Raster keine Nachbarn, also
-> bleibt `travel` **`null`**. Wer gegen diesen Abschnitt baut, baut gegen
-> totes Verhalten. **Mit E3 wird der Block auf eine Meter-Polyline
-> umgestellt** (Wegpunkte in Welt-Metern, Tempo in m/s); die
-> Mittelpunkt-Formel unten fällt damit weg.
+Ein Charakter wechselt die Location nicht schlagartig, sondern **läuft eine
+Polylinie in Welt-Metern ab**. `GET /play/worldmap` liefert dafür pro
+Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 
-Ein Charakter wechselt die Location nicht mehr schlagartig, sondern reist
-über die Kachel-Kette. `GET /play/worldmap` liefert dafür pro Charakter das
-Feld **`travel`** — `null`, solange keine Reise läuft:
+> **Die Zellen-Ära ist vorbei.** `path` (Location-Kette), `seg`, `frac`,
+> `progress_cells` und `cell_seconds_real` sind **ersatzlos gestrichen**;
+> die Welt-Einstellung heißt `game.travel_speed_m_s` (Meter pro SPIEL-Sekunde,
+> Default 1,4, geklemmt auf 0,1…20), nicht mehr `travel_seconds_per_cell`.
+> Ein Client, der noch gegen die alten Felder baut, sieht ab E3 nur
+> `undefined`.
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `path` | `[locationId, …]` | Zellenkette der Reise, **inkl. Start- und Zielkachel** |
-| `target_id` | `str` | Zielkachel (= `path[-1]`, identisch mit `movement_target_id`) |
-| `seg` | `int` | Index des zuletzt passierten Knotens, 0-basiert, max `len(path)−2` |
-| `frac` | `float` | Fortschritt 0..1 von `path[seg]` nach `path[seg+1]` |
-| `progress_cells` | `float` | `seg + frac` — Gesamtfortschritt in Zellen |
+| `target_id` | `str` | Ziel-Location (identisch mit `movement_target_id`) |
+| `waypoints` | `[[x, z], …]` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne Zeiten** — die beim Start gebackenen Zeitmarken (`t_cum`) bleiben serverintern, der Client rechnet über die STRECKE. Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg) |
+| `progress_m` | `float` | bereits gelaufene Strecke **entlang der Polylinie**, in Metern |
+| `total_m` | `float` | Gesamtlänge der Polylinie in Metern |
 | `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit |
-| `cell_seconds_real` | `float \| null` | wie viele ECHTE Sekunden eine Zelle dauert (`seconds_per_cell / Zeitfaktor`); `null` bei eingefrorener Welt bzw. Faktor 0 |
+| `speed_m_s_real` | `float \| null` | Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null` bei eingefrorener Welt bzw. Faktor 0 |
 
 **Semantik**
 
 - **Die Position ist eine reine Funktion der Spieluhr.** Server und alle
-  Clients rechnen aus demselben Payload dieselbe Position:
-  `pos = lerp(Mittelpunkt(path[seg]), Mittelpunkt(path[seg+1]), frac)`
-  (Mittelpunkte seit E1 aus `pos_x`/`pos_z` der Location in Welt-Metern,
-  § A1.3 — vorher Kachelmitten aus `grid_x`/`grid_y`). Es gibt kein
-  client-eigenes Pathfinding und keine eigene Reisezeit.
-- **`location_id` = nächstgelegene Zelle**, Rundung „halb abwärts": genau
-  zwischen zwei Kacheln zählt die bereits verlassene. Der Spielzustand
-  (Regeln, Wahrnehmung, Raum) springt also bei `frac 0,5`, während `frac`
-  stetig läuft — beide Felder widersprechen sich nicht, sie beschreiben
-  verschiedene Dinge (Spielzustand vs. Darstellung). **`location_id` wird
-  nur im Ticker-Takt (5 s) nachgeführt** — bei hohem Zeitfaktor kann es dem
-  `frac` um mehrere Zellen nachlaufen. Die Render-Position kommt IMMER aus
-  `path`/`seg`/`frac`, nie aus `location_id`.
-- **Ankunft wird eine halbe Zelle früher verbucht.** Sobald die nächst-
-  gelegene Zelle das Ziel ist, setzt der Ticker die Ankunft und löscht die
-  Reise. Folge: `frac` erreicht in der Praxis nie 1,0, und `travel` kann
-  bis zu `0,5 × cell_seconds_real` VOR `eta_game` zwischen zwei Polls
-  verschwinden. Clients verzweigen auf „Feld weg" (Ankunft), niemals auf
-  `frac == 1,0` oder auf das Erreichen von `eta_game`.
-- **Freeze:** steht die Spieluhr, stehen alle Reisen. `frac`/`progress_cells`
-  bleiben konstant, `cell_seconds_real` ist `null` — genau dann darf nicht
+  Clients rechnen aus demselben Payload dieselbe Position — es gibt kein
+  client-eigenes Pathfinding und keine eigene Reisezeit. Aus `progress_m`
+  wird der Punkt durch **Ablaufen der Strecke** gewonnen:
+
+  ```
+  d = progress_m
+  für i = 0 … n−2:
+      L = |waypoints[i+1] − waypoints[i]|
+      wenn d ≤ L:  pos = lerp(waypoints[i], waypoints[i+1], d / L); fertig
+      d −= L
+  sonst:           pos = waypoints[n−1]
+  ```
+
+  Das ist die EINE Formel; ein Segmentindex steht bewusst nicht im Payload
+  (er wäre eine zweite Wahrheit neben `progress_m`).
+- **`speed_m_s` ist Meter pro SPIEL-Sekunde und steht auf der Reise.** Sie
+  wird beim START aus `game.travel_speed_m_s` (Admin → Game) gelesen und
+  festgeschrieben — laufende Reisen behalten ihr Tempo, eine geänderte
+  Einstellung re-timet niemanden. Der Client bekommt sie nur in
+  Realzeit-Form (`speed_m_s_real`) und rechnet ausschließlich damit.
+  **Faktor-Richtung:** eine DAUER wird durch den Zeitfaktor geteilt (so
+  rechnete v1 `cell_seconds_real`), ein TEMPO mit ihm multipliziert —
+  Faktor 2 heißt doppelt so viele Meter pro echter Sekunde.
+- **`pos` (§ A1.4) und `travel` widersprechen sich nicht.** `pos` ist der vom
+  Reise-Ticker geschriebene Punkt und wird nur im **Ticker-Takt (5 s)**
+  nachgeführt; `travel` erlaubt die stetige Ableitung dazwischen. Für einen
+  Charakter MIT `travel` ist die Render-Position die aus `waypoints` +
+  `progress_m` abgeleitete, ohne `travel` ist es `pos`. Beide stammen aus
+  derselben Funktion und stimmen im Ticker-Takt exakt überein.
+- **`location_id` folgt dem Punkt, nicht der Route.** Unterwegs steht ein
+  Reisender meist in der **Wildnis** (`location_id: ""`, § A1.4) — das ist
+  der Normalzustand einer Reise, kein Fehler. Die Ziel-Location wird erst
+  bei der Ankunft gesetzt.
+- **Ankunft erkennt der Client daran, dass `travel` verschwindet.** Der
+  Ticker verbucht sie, sobald die Spielzeit `eta_game` erreicht hat — also
+  bis zu einem Ticker-Takt (5 s echt) SPÄTER, nicht früher (die halbe Zelle
+  Vorlauf aus v1 gibt es nicht mehr). Solange kann `progress_m == total_m`
+  stehen bleiben. Clients verzweigen auf **„Feld weg"**, niemals auf
+  `progress_m == total_m` oder auf das Erreichen von `eta_game`.
+- **Ankunft ist nicht garantiert.** Verweigert die Zugangsregel am Ziel den
+  Eintritt, endet die Reise auf dem letzten Routenpunkt VOR dem Ziel
+  („Standoff") — auch dann verschwindet `travel` einfach.
+- **Freeze:** steht die Spieluhr, stehen alle Reisen. `progress_m` bleibt
+  konstant, `speed_m_s_real` ist `null` — genau dann darf nicht
   extrapoliert werden.
-- `seconds_per_cell` ist die Welt-Einstellung `game.travel_seconds_per_cell`
-  (Admin → Game, Default 60 SPIEL-Sekunden pro Zelle, geklemmt auf 1…3600).
-  Sie wird beim START einer Reise auf die Reise geschrieben — laufende Reisen
-  behalten ihr Tempo. Kein Client-Wissen; der Client rechnet ausschließlich mit
-  `cell_seconds_real`.
 - **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Restzeit-
-  Anzeigen rechnen daher `(len(path)−1 − progress_cells) × cell_seconds_real`
-  — NICHT `eta_game` gegen eine lokale Uhr (die Spieluhr läuft mit Faktor und
-  kann springen; `eta_game` ist eine Spielzeit-Marke für Texte/Logs).
+  Anzeigen rechnen daher `(total_m − progress_m) / speed_m_s_real` in
+  ECHTEN Sekunden — NICHT `eta_game` gegen eine lokale Uhr (die Spieluhr
+  läuft mit Faktor und kann springen; `eta_game` ist eine Spielzeit-Marke
+  für Texte/Logs).
+- **Fog (§ A12) gilt auch für Reisende:** ein Charakter in einer dem Avatar
+  unbekannten Location fehlt komplett — mitsamt seiner Reise. Der
+  `target_id` im eigenen Block wird NICHT verschwiegen (wie
+  `movement_target_id`), wohl aber der Name: `movement_target_name` bleibt
+  leer, solange der Avatar das Ziel nicht kennt.
 
 **Client-Erwartung**
 
-1. Figur auf der Server-Position rendern (Formel oben), nicht auf der
-   Kachelmitte von `location_id`.
-2. Zwischen zwei Polls darf mit `cell_seconds_real` extrapoliert werden:
-   `progress_cells += Δt_real / cell_seconds_real` (bei `null`: einfrieren).
-   **Extrapoliert wird `progress_cells`, nicht `frac`** — `seg` und `frac`
-   leitet der Client daraus neu ab:
-   `seg = clamp(floor(progress_cells), 0, len(path)−2)`,
-   `frac = progress_cells − seg`. Wer nur `frac` im aktuellen Segment
-   hochzählt, bleibt an jedem Knoten stehen, bis der nächste Poll kommt.
-3. Beim nächsten Poll: Abweichung `|progress_cells_client −
-   progress_cells_server| > 0,5` Zellen ⇒ hart auf den Server-Wert
-   schnappen. Darunter weich nachziehen.
+1. Figur auf der Server-Position rendern (Formel oben), nicht auf dem
+   Mittelpunkt von `location_id` und nicht auf `pos`, solange `travel` da ist.
+2. Zwischen zwei Polls darf mit `speed_m_s_real` extrapoliert werden:
+   `progress_m += Δt_real × speed_m_s_real`, geklemmt auf `total_m`
+   (bei `null`: einfrieren). Extrapoliert wird **`progress_m`** — der
+   Punkt wird daraus jedes Frame neu abgelaufen, nie ein Segment einzeln
+   hochgezählt (sonst bleibt die Figur an jedem Knick stehen, bis der
+   nächste Poll kommt).
+3. Beim nächsten Poll: Abweichung `|progress_m_client − progress_m_server|`
+   > 1,0 m ⇒ hart auf den Server-Wert schnappen. Darunter weich nachziehen.
 4. Blickrichtung/Clip bleiben Client-Sache (Laufrichtung aus dem aktuellen
    Segment); `activity_animation` wird bewusst NICHT auf „walk" gezwungen
    (§ A8).
 
+**Ein Vokabular mit dem Spieler-Panel.** `GET /play/scene` trägt für den
+Avatar denselben Block in Ein-Personen-Form: `target_id`, `eta_game`,
+`progress_m` und `total_m` bedeuten dort dasselbe (`eta_game` ebenfalls mit
+Weltzeitzonen-Offset). Zusätzlich nur `target_name`, `eta_hhmm` (fertiges
+Label, weil der Browser die Spielzeitzone nicht kennt) und `arrived`; die
+`waypoints` fehlen — das Panel zeichnet keine Karte. `POST /play/travel`
+antwortet mit genau diesem Block unter `journey`.
+
 **Verifikation** — numerisch nach dem Prinzip § B5a: der Verify-Modus difft
-die Welt-Position der Figur gegen den aus `path`/`seg`/`frac` interpolierten
-Pfadpunkt (Toleranz ε = 0,01 Welt-Meter) und meldet Objekt/Feld/Ist/Soll als
-Zahlen — keine Screenshot-Beurteilung.
+die Welt-Position der Figur gegen den aus `waypoints`/`progress_m`
+abgelaufenen Routenpunkt (Toleranz ε = 0,01 Welt-Meter) und meldet
+Objekt/Feld/Ist/Soll als Zahlen — keine Screenshot-Beurteilung. Der
+Payload selbst ist handgerechnet abgesichert:
+`scripts/smoke_worldmap_travel.py` (Polylinie 30 m + 40 m bei 1,0 m/s,
+eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
+`speed_m_s_real` `null`).
+
+**Divergenz (Stand E3):** die beiden Karten-Clients lesen noch die
+Zellen-Felder — `frontend/src/player/MapPanel.tsx` (Typ `travel` mit
+`progress_cells`/`path`; liest faktisch nur `eta_game`, stürzt also nicht
+ab) und `client3d/src/types.ts` + `main.ts` (`cell_seconds_real`). Beide
+werden mit **E4/E5** auf die Polylinie umgestellt.
 
 ---
 
