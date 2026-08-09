@@ -723,8 +723,12 @@ def _phase_place(room_id: str) -> None:
             room_w_m=geom["w_m"], room_d_m=geom["d_m"], is_rect=geom["is_rect"],
             openings=template_openings, existing=template_existing,
             items=items, errors=errors)
+        # The re-plan round carries its own label — otherwise it is
+        # indistinguishable from the first attempt in the LLM log and reads
+        # as a duplicate submit.
         plan = _llm_json("furnish_place", sys_p, user_p,
-                         f"Furnish place: {room_name}")
+                         f"Furnish place: {room_name}"
+                         + (" (re-plan)" if errors else ""))
         return furnish_solver.solve(
             outline_m=geom["outline_m"], openings=openings,
             existing=existing_solver, plan=_list_field(plan, "plan"),

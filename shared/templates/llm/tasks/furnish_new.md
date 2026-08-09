@@ -12,8 +12,11 @@ placeholders:
   budget_m2: Remaining footprint budget in square metres AFTER stage-1a picks (number)
   max_new: Hard cap for the number of NEW piece kinds (number)
   existing: List of {name, count} — already placed plus the stage-1a picks
-  catalog_names: List of ALL library item names (to avoid duplicates)
-  marker_kinds: List of allowed animation kinds for markers (open clip vocabulary, e.g. sit, lie)
+  catalog_names: Names of the library items OFFERED for this room, to avoid duplicates
+                 (MAY BE EMPTY: a fresh world, or an exclude filter that removed everything)
+  marker_kinds: List of allowed animation kinds for markers (open clip vocabulary, e.g. sit, lie).
+                MAY BE EMPTY when no animation clips are installed — the validator then
+                accepts any kind (room_furnish._valid_marker).
 ---
 ## system
 You complete the furnishing of a room for a life-simulation game. The library picks are already made; you propose the pieces that are still MISSING and do not exist in the library yet. Each proposal must be complete enough to auto-generate a 3D model — nothing may require manual data entry.
@@ -28,7 +31,7 @@ Per proposed piece deliver:
 
 Hard rules:
 - Never propose something whose name (or an obvious synonym) is already in the library list or in the room.
-- Respect the footprint budget (width_m × depth_m × count summed over all proposals) and the cap on new kinds. Proposing nothing is a valid answer.
+- Respect the footprint budget (width_m × depth_m × count summed over all proposals) and the cap on new kinds. Proposing nothing is a valid answer — and the right one when the budget is 0.
 - Dimensions between 0.05 and 5 metres per axis.
 
 Respond with a SINGLE JSON object, no markdown, no explanations:
@@ -40,15 +43,31 @@ Room: {{ room_name }}
 {% endif %}{% if activity_hint %}Typical activity: {{ activity_hint }}
 {% endif %}{% if style_hint %}Style: {{ style_hint }}
 {% endif %}Size: {{ room_w_m }} × {{ room_d_m }} m ({{ area_m2 }} m² floor area)
+{% if budget_m2 > 0 %}
 Footprint budget for new pieces: {{ budget_m2 }} m² · at most {{ max_new }} new piece kinds
+{% else %}
+Footprint budget for new pieces: 0 m² — the room is already as full as it may get, so propose nothing and answer with {"new": []}.
+{% endif %}
 
 Already covered (do not propose again):
 {% for e in existing %}- {{ e.count }}× {{ e.name }}
 {% else %}- nothing
 {% endfor %}
+{% if catalog_names %}
 Library names (do not duplicate these):
 {% for n in catalog_names %}- {{ n }}
 {% endfor %}
+{% else %}
+The furniture library holds no library items for this room — there is nothing you could duplicate.
+{% endif %}
+{% if marker_kinds %}
 Allowed marker animation kinds: {{ marker_kinds | join(', ') }}
+{% else %}
+No animation kinds are installed. Still name the kind you would want (e.g. "sit", "lie") for pieces a character sits or lies on.
+{% endif %}
 
+{% if budget_m2 > 0 %}
 Propose the missing pieces this room still needs.
+{% else %}
+There is no room left for anything new. Answer with {"new": []}.
+{% endif %}

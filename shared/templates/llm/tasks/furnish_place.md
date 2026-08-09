@@ -27,10 +27,19 @@ Placement craft:
 - Seating relates to what it serves: chairs in_front_of or beside tables/desks/machines.
 - Spread pieces over the room instead of piling everything on one wall.
 - Reference pieces must be placed by an EARLIER entry of your plan (or already exist).
+- A non-rectangular floor plan has no guaranteed N/E/S/W wall: the room's outline may simply not have an edge facing that way, and a wall anchor pointing at a wall that is not there fails outright. In that case anchor to "center" or relate the piece to another piece.
 {% if errors %}
-The previous attempt could not place everything. Fix your plan accordingly:
+
+Your PREVIOUS plan failed for these pieces:
 {% for e in errors %}- {{ e }}
-{% endfor %}{% endif %}
+{% endfor %}
+Re-plan them. Submitting the same anchor again for a piece listed above is a wasted attempt — change something concrete:
+- "no free spot" → a different anchor; "center" is the most forgiving, then a corner, then another wall.
+- "no free spot near the reference" / "reference '…' is not placed" → drop the relation and anchor the piece on its own, or place the reference piece FIRST.
+- "area budget exhausted" → lower the count, or leave that piece out entirely.
+Your answer must again contain an entry for EVERY piece in the list below, not just the failed ones — the plan is solved from scratch. Pieces that are not listed above worked; repeat their entries unchanged.
+{% endif %}
+
 Respond with a SINGLE JSON object, no markdown, no explanations:
 {"plan": [{"prop": "<id>", "count": 1, "anchor": "wall_n", "ref": null, "facing": "room"}, ...]}
 

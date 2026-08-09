@@ -27,8 +27,9 @@ Output rules:
 - Reply with ONLY a JSON object. No prose, no markdown.
 - Schema: {"spell_id": "<id from catalog or empty>", "confidence": <int 0-100>, "chat_substitute": "<short observation or empty>"}
 - Use empty spell_id and empty chat_substitute when nothing matches.
-- Confidence 80+ only if the incantation or a near-equivalent description is present.
-- The catalog is authoritative — do not invent ids.
+- Confidence is your honest estimate, not a formality: 80+ only if the incantation or a near-equivalent description is present. Anything below 60 is discarded by the caller anyway — if you are that unsure, return an empty spell_id instead of a low-confidence guess.
+- The catalog is authoritative — do not invent ids. Exactly one spell at most; never several.
+- Keep the JSON flat: three keys, plain string/int values, no nested objects.
 - chat_substitute MUST be in {{ language_name }} and MUST NOT echo the incantation literally.
 
 ## user
