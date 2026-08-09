@@ -566,7 +566,7 @@ export function PlayerApp() {
     <div key="map" className="player-panel" style={{ zIndex: zOf('map') }} onMouseDownCapture={() => bringToFront('map')}>
       <div className="player-panel-head">
         {headIcon('map')}
-        {data?.room_name || data?.location_name || t('Move')}
+        {data?.room_name || data?.location_name || t('Travel')}
         {data?.location_name && data?.room_name
           ? <span className="sub">· {data.location_name}</span> : null}
         {headerControls('map', true)}

@@ -52,7 +52,7 @@ export const PANEL_META: {
 }[] = [
   { id: 'scene', label: 'Chat', icon: 'chat' },
   { id: 'env', label: 'Surroundings', icon: 'surroundings' },
-  { id: 'map', label: 'Move', icon: 'move' },
+  { id: 'map', label: 'Travel', icon: 'move' },
   { id: 'worldmap', label: 'Map', icon: 'worldmap' },
   { id: 'self', label: 'Self', icon: 'self' },
   { id: 'others', label: 'Others', icon: 'others' },
