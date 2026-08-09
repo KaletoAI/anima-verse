@@ -284,8 +284,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                      "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}
                     if _min_x is not None else None)
 
-    # (Task 6 re-adds the game-clock read here: a journey is a pure function
-    # of that clock, and the whole payload has to share ONE `now`.)
+    # Journeys are a pure function of the GAME clock — read it ONCE for the
+    # whole payload so every character in one response shares the same now.
+    from app.core.timeutils import game_now, game_speed_factor, to_world_tz
+    from app.core.travel_engine import get_journey, journey_state
+    _now_game = game_now()
+    _factor = game_speed_factor()
 
     characters = []
     for name in list_available_characters():
@@ -328,13 +332,45 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         except Exception:
             _prof = {}
         anim_sets = resolve_animation_sets(name, profile=_prof)
-        # TODO(Task 6): the v2 travel block ({target_id, waypoints, progress_m,
-        # total_m, eta_game, speed_m_s_real} plus § A11) lands with Task 6 of
-        # E3. Until then the payload reports NO journey at all: every field of
-        # the v1 block described grid cells (path/seg/frac/progress_cells/
-        # cell_seconds_real) and a half-filled successor is worse than none —
-        # a client that finds a `travel` object reads the fields it knows.
+        # Active journey (or None), § A11: the metre polyline plus the walked
+        # distance let a client interpolate the figure between two polls
+        # instead of teleporting it. Reads the profile loaded above — no
+        # second load on this hot endpoint. Isolated like the ticker's
+        # per-character block: one malformed journey dict degrades to
+        # travel=null, it never breaks the whole worldmap.
         travel = None
+        try:
+            _j = get_journey(name, profile=_prof)
+            if _j:
+                _st = journey_state(_j["waypoints"], _j["started_at_game"],
+                                    _now_game)
+                # The pace the journey was STARTED with (world setting at that
+                # moment) — a later setting change never re-times it.
+                _speed = float(_j.get("speed_m_s") or 0.0)
+                travel = {
+                    "target_id": _j["target"],
+                    # x/z ONLY — the baked cumulative game seconds (t_cum) are
+                    # server-internal. A client walks the line by DISTANCE
+                    # (progress_m), never by re-deriving the timing.
+                    "waypoints": [[round(float(w[0]), 2), round(float(w[1]), 2)]
+                                  for w in _j["waypoints"]],
+                    "progress_m": _st["progress_m"],
+                    "total_m": _st["total_m"],
+                    # Same instant, WORLD-timezone offset: clients slice the
+                    # HH:MM out of this, which must be game wall-clock — the
+                    # engine stores the stamp in UTC (§ A11).
+                    "eta_game": to_world_tz(_st["eta_game"]).isoformat(),
+                    # The journey's GAME pace as a REAL-seconds one — null on
+                    # a frozen world (factor 0): nothing moves, so nothing may
+                    # extrapolate. Successor of v1's cell_seconds_real, with
+                    # the factor on the other side: a DURATION divides by it,
+                    # a SPEED (metres per second) multiplies.
+                    "speed_m_s_real": (round(_speed * _factor, 4)
+                                       if _factor > 0 and _speed > 0 else None),
+                }
+        except Exception as e:
+            travel = None
+            logger.warning("travel payload failed for %s: %s", name, e)
         # Body height in cm — the 3D client scales the figures against each
         # other with it (a 155 cm character must not tower over a 190 cm one).
         # None when unset: the client keeps its own default scale.

@@ -334,6 +334,15 @@ def _travel_block(name: str):
     The ETA is formatted as the world's own wall clock: the game clock has a
     timezone of its own and the browser knows nothing about it, so ``HH:MM``
     is produced here and shown verbatim.
+
+    ONE vocabulary with the worldmap block (§ A11): ``target_id``,
+    ``eta_game``, ``progress_m`` and ``total_m`` mean the same thing in both
+    payloads — ``eta_game`` therefore carries the WORLD-timezone offset here
+    too (it used to be the raw UTC stamp), so a client that slices HH:MM out
+    of it gets game wall-clock time either way. ``eta_hhmm``, ``target_name``
+    and ``arrived`` are this block's extras: the single-avatar panel needs a
+    ready-made label, the worldmap has ``movement_target_name`` and reports
+    arrival by dropping the block.
     """
     try:
         from app.core.timeutils import game_now, to_world_tz
@@ -344,11 +353,12 @@ def _travel_block(name: str):
             return None
         st = journey_state(j["waypoints"], j["started_at_game"], game_now())
         target_id = j["target"]
+        eta_world = to_world_tz(st["eta_game"])
         return {
             "target_id": target_id,
             "target_name": get_location_name(target_id) or target_id,
-            "eta_game": st["eta_game"],
-            "eta_hhmm": f"{to_world_tz(st['eta_game']):%H:%M}",
+            "eta_game": eta_world.isoformat(),
+            "eta_hhmm": f"{eta_world:%H:%M}",
             "progress_m": st["progress_m"],
             "total_m": st["total_m"],
             "arrived": st["arrived"],
