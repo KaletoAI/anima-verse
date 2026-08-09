@@ -3,23 +3,27 @@
 > **v5 — EIN Rahmen, EIN Maßstabsfaktor, EIN Anker (2026-07-28).**
 > Drei Änderungen, die alles Folgende überschreiben, wo es widerspricht:
 >
-> 1. **Das Bezugsquadrat ist `map3d.extent_m`** (Welt-Meter, Default 10 =
->    genau eine Kachel), nicht mehr feste 8 m. Es ist zugleich die Box, die
->    das Location-Modell füllt: `max_m = extent_m × map3d.size` mit
->    `size ∈ ]0, 1]`, Default 1. Die 0,92-Kachelmarge entfällt ersatzlos.
->    Damit gilt **Grundriss-Rand = Modell-Rand**; vorher standen Kachel (10),
->    Modell (10 × 0,92 × size) und Grundriss (8) unverbunden nebeneinander und
->    die äußeren 0,6 m eines size-1-Modells waren von keiner Fraktion
->    erreichbar. `k = extent_m / plan_width_m`; `extent_m` reist im Payload
->    mit (`scene.extent_m`) — Konsumenten dürfen KEINE Konstante annehmen.
+> 1. **Das Bezugsquadrat ist der Fußabdruck der Location** — seit **E4**
+>    (2026-08-09) seine Kante `map3d.plan_width_m`, nicht mehr feste 8 m und
+>    nicht mehr der Welt-Meter-Regler `map3d.extent_m` (der Kachel-Ära; wird
+>    nirgends mehr gelesen und beim nächsten Speichern verworfen). Es ist
+>    zugleich die Box, die das Location-Modell füllt:
+>    `max_m = extent_m × map3d.size` mit `size ∈ ]0, 1]`, Default 1. Die
+>    0,92-Kachelmarge entfällt ersatzlos. Damit gilt **Grundriss-Rand =
+>    Modell-Rand**; vorher standen Kachel (10), Modell (10 × 0,92 × size) und
+>    Grundriss (8) unverbunden nebeneinander und die äußeren 0,6 m eines
+>    size-1-Modells waren von keiner Fraktion erreichbar.
+>    **`k = 1`** — ein Welt-Meter IST ein realer Meter, innen wie außen;
+>    `extent_m` reist im Payload mit (`scene.extent_m` = `plan_width_m`) und
+>    Konsumenten dürfen KEINE Konstante annehmen.
 > 2. **Ein Modell wird mit EINEM Faktor auf allen drei Achsen skaliert.**
 >    `scale_mode`/`box`/`scale_axes`/`fit_box` sind weg; jede Spec trägt
 >    `max_m` + `measure` (`yawed_xz` | `xz` | `xyz`), `place()` rechnet
 >    `s = max_m / gemessene Ausdehnung`. Nichts wird mehr in einer Dimension
 >    gestaucht — mit `height_m`/`floors` (Sidecar) und `level_height` (map3d)
 >    verschwinden auch die Regler, die das taten. Etagenhöhe ist
->    `map3d.storey_height_m` in REALEN Metern (× k). Der Y-Morph des Clients
->    (Kachelsicht uniform ↔ Detailsicht `height_m × k`) ist gelöscht: er ließ
+>    `map3d.storey_height_m` in Metern (seit E4 ohne Faktor). Der Y-Morph
+>    des Clients (Kachelsicht uniform ↔ Detailsicht) ist gelöscht: er ließ
 >    dieselbe Location bis zu 1,0 m anders hoch stehen als die Vorschau.
 > 3. **Zwei Anker-Arten, deklariert statt geraten.** `models[].display`
 >    unterscheidet `shell` (Gebäude STEHT auf dem Boden: Unterkante =
@@ -30,7 +34,7 @@
 >    `cutouts.length > 0` geschlossen und lag bei Flächen ohne Grundriss
 >    falsch — der Mondscheinsee verschwand beim Reinzoomen komplett.
 >    **Wo im Mesh die begehbare Fläche liegt, sagt ausschließlich der
->    `walk_y`-Regler** (REALE Meter über der Unterkante, × k; fehlt/0 = die
+>    `walk_y`-Regler** (Meter über der Unterkante; fehlt/0 = die
 >    Unterkante selbst). Die frühere Messung („dominante horizontale Lage",
 >    `walk_frac`/`bbox_fixed`) ist ersatzlos gelöscht: ein Modell
 >    automatisch auszurichten ist genau die Reparatur, die dieser Vertrag
@@ -44,12 +48,14 @@
 >
 > Der Rest des Dokuments beschreibt weiterhin korrekt, WAS komponiert wird;
 > wo eine 8, eine 0,92, ein `scale_mode`, `height_m`, `floors` oder
-> `level_height` auftaucht, gilt die Liste oben.
+> `level_height` auftaucht, gilt die Liste oben. **Wo ein `× k` steht, ist es
+> seit E4 eine Multiplikation mit 1** — die Felder `extent_m`/`k`/`storey_m`
+> bleiben im Payload (Verbraucher-Verträge), `k` ist dokumentiert konstant 1.
 >
-> *Stage-Hinweis 2026-08-07: `extent_m`, `k` und der Kachelbezug des
-> Bezugsquadrats („Default 10 = genau eine Kachel") leben bis **E4** — dann
-> liefert Teil B `k = 1`, und Innen wie Außen rechnen in echten Metern
-> (§ A1.8). Das Bezugsquadrat selbst bleibt, nur sein Kachel-Maßstab geht.*
+> *Stage-Hinweis 2026-08-09 (E4, erledigt): der Kachelbezug des
+> Bezugsquadrats („Default 10 = genau eine Kachel") ist weg. Teil B liefert
+> `k = 1`, `extent_m = plan_width_m`, und Innen wie Außen rechnen in echten
+> Metern (§ A1.8). Ohne Maßstabsanker fällt das Quadrat auf 10 m zurück.*
 >
 > **Nachtrag v5.1 (2026-07-28, aus der ersten echten Nutzung):**
 >
@@ -76,7 +82,7 @@
 >    NACH dem Facing im Figuren-System ('YXZ'). Vorher konnte eine Figur nur
 >    senkrecht stehen — schräg auf dem Sand liegen war nicht ausdrückbar.
 > 8. **Ein Raum hat einen eigenen Höhen-Offset.** `layout.floor_offset_y`
->    (REALE Meter, ±, Default 0, × k) hebt den ganzen Raum gegenüber seiner
+>    (Meter, ±, Default 0) hebt den ganzen Raum gegenüber seiner
 >    Etage: Platte, Wände, Props, Marker, Ausgang und das Diorama. Innerhalb
 >    eines Gebäudes bleibt er 0 — er ist für Räume, die ein Loch in ein
 >    Location-Modell schneiden: dort liegt das Gelände nicht auf Etagenhöhe,
@@ -242,7 +248,7 @@
 >     `scatter_curves.terrain_height` und in `@anima/scene-render`
 >     (`sampleTerrain`), § B5a-prüfbar von Hand.
 >     **Payload:** `scene.terrain = {step, grid, amplitude_m}`, nur wenn
->     `relief` gesetzt ist; `amplitude_m` ist hier bereits × k.
+>     `relief` gesetzt ist; `amplitude_m` steht dort in Welt-Metern.
 >     **Arbeitsteilung:** *der Server hebt alles, was in nicht-flachen Räumen
 >     steht* — Prop-`bottom_y` (manuell wie gestreut), Dioramen-`bottom_y`,
 >     Marker-`y_world`, jeweils um `terrain_height` am EIGENEN Plan-Anker der
@@ -433,10 +439,12 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
   Die beiden Felder sind verschiedene Dinge; wer sie verwechselt,
   spiegelt die Location.
   **Entschieden 2026-08-07:** Dieser Drehsinn ist ab jetzt DER Standard
-  dieses Vertrags — für jede Rotation, Karte wie Szene. Die gegenläufige
-  Szenen-Kette (§ A1.8) wird beim Szenen-Umbau in **E4** darauf
-  angeglichen, zusammen mit `k = 1`; bis dahin bleiben es zwei Felder mit
-  zwei Vorzeichen.
+  dieses Vertrags — für jede Rotation, Karte wie Szene. `k = 1` ist mit E4
+  gelandet (2026-08-09); die gegenläufige Szenen-Kette (§ A1.8) wird im
+  selben Etappenlauf angeglichen — **der Server liefert die Yaw-Werte
+  unverändert, das Vorzeichen kippt in den RENDERERN** (`place.ts`,
+  `sceneRecipe.ts`, `primitives.ts`), und bis dieser Schritt gelandet ist,
+  rechnen sie dort noch mit `−rad`.
 - **Überlappung ist legal** (die Hütte auf dem Dorfplatz). Bei der Frage,
   in welcher Location ein Punkt liegt, gewinnt der **kleinste** treffende
   Fußabdruck — die spezifischste Antwort (`location_at_point`).
@@ -608,24 +616,30 @@ geklemmt auf ±10 000 · `speed_factor` geklemmt auf 0…2 (nicht-endlich →
 1,0) · `color` genau `#rrggbb` · `kind` klein, 1–40 Zeichen aus
 `[a-z0-9_-]`.
 
-### A1.8 Was aus dem alten § A1 weitergilt (Innenszene, bis E4)
+### A1.8 Was aus dem alten § A1 weitergilt (Innenszene)
 
 Diese Konventionen gehören zur **Szene**, nicht zur Karte, und sind von
 E1 unberührt:
 
-- **Referenzquadrat / Anker-Kette:** `k = extent_m / plan_width_m`
-  (v5-Kopf) — Welt-Meter pro Real-Meter der Location. **`k` entfällt mit
-  E4**, dann liefert Teil B `k = 1` und Innen wie Außen rechnen in echten
-  Metern.
-- **Etagenhöhe** `storey = height_m / floors × k`, sonst
-  `map3d.level_height`, sonst 3. Etagenboden von Level n = `n × storey`.
+- **Referenzquadrat / Anker-Kette: `k = 1` seit E4** (2026-08-09).
+  `extent_m` ist kein Regler mehr — das Bezugsquadrat IST der Fußabdruck
+  (`plan_width_m`, § A1.1), Innen wie Außen rechnen in echten Metern. Das
+  Feld `k` bleibt im Payload und ist konstant 1; wer damit multipliziert,
+  rechnet weiterhin richtig.
+- **Etagenhöhe** `storey = map3d.storey_height_m` (Meter), sonst 3.
+  Etagenboden von Level n = `n × storey`.
 - **Yaw-Kette der Szene:** `yaw = map3d.rotation` (explizite 0 zählt) →
   `map_rotation_2d` → 0; three.js `rotation.y = −rad(yaw)`. Das ist
   **nicht** `yaw_deg` der Weltkarte (A1.1).
-  **Entschieden 2026-08-07:** Das Minus ist eine Ausnahme auf Abruf —
-  verbindlicher Drehsinn ist `yaw_deg` (§ A1.1). **E4** gleicht diese
-  Kette daran an (`rotation.y = +rad(yaw)`), im selben Zug, in dem `k`
-  entfällt; bis dahin rechnet der Szenen-Pfad hier unverändert weiter.
+  **Entschieden 2026-08-07, in Umsetzung mit E4:** Das Minus ist eine
+  Ausnahme auf Abruf — verbindlicher Drehsinn ist `yaw_deg` (§ A1.1), also
+  `rotation.y = +rad(yaw)` auch für `map3d.rotation`. Der SERVER ändert
+  dafür nichts: `models[].yaw_deg` und `markers[].facing` werden weiter
+  genau so geliefert wie bisher (§ B1), das Vorzeichen kippt in den beiden
+  Renderern gemeinsam (`packages/scene-render/src/place.ts`,
+  `client3d/src/scene/sceneRecipe.ts`, dazu der eigene Wand-Yaw in
+  `primitives.ts`). Alte `map3d.rotation`-Werte drehen danach gespiegelt —
+  bewusst, ohne Migration.
 - **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**, in
   Grad, VOR jeder Messung anwenden. Yaw (y) außen, Tilt (x) und Roll (z)
   im schon gedrehten Rahmen — „nach vorn kippen" heißt damit unabhängig
@@ -634,8 +648,11 @@ E1 unberührt:
   'XYZ'.
 - **Kompass für Blickrichtungen** (`facing`, Marker-`rotation`): 0 = Süd,
   90 = Ost, 180 = Nord, 270 = West; Figur `rotation.y = +rad(facing)`.
-- Alle Felder mit Suffix `_m` sind REALE Meter → im Anchored-Mode ×k.
-  `offset_x/y/z` sind dagegen immer WELT-Meter (kein ×k).
+  Er wächst damit GEGENSINNIG zum Modell-Yaw — Absicht, und der Yaw-Umbau
+  oben ändert daran nichts.
+- Alle Felder mit Suffix `_m` sind Meter — seit E4 zugleich Welt-Meter
+  (k = 1), es ist nichts mehr umzurechnen. `offset_x/y/z` waren schon immer
+  WELT-Meter.
 
 ### A1.9 Ersatzlos gestrichen (keine Aliase, keine Fallback-Leser)
 
@@ -669,13 +686,14 @@ ersatzlos gestrichen, siehe § A11.
 (`10 × 0,92 × size`, „Kachelmitte", Terrain-/Template-Kacheln) und hat auf
 Meter-Welten keine Funktion; § A1 und der v5-Kopf gelten (die 0,92 ist dort
 ersatzlos gestrichen). Die Prop- und Diorama-Ketten leben als Legacy neben
-der EINEN Routine in § B2 weiter, ihr `× k` fällt mit E4. Ausbau in E7.*
+der EINEN Routine in § B2 weiter; ihr `× k` ist mit E4 gefallen (k = 1).
+Ausbau in E7.*
 
 **Gebäudemodell** (`/play/locations/{id}/model` + Meta):
 1. Meta-Rotations-Fix (innere Gruppe).
 2. Karten-Yaw als eigene ELTERN-Rotation (nie in einem Euler kombinieren).
 3. BBox des rotierten Ganzen messen → `k_xz = (10 × 0,92 × map3d.size) /
-   max(B_x, B_z)`; `k_y = height_m × k / B_y` (ohne height_m: `k_y = k_xz`).
+   max(B_x, B_z)`; `k_y = height_m / B_y` (ohne height_m: `k_y = k_xz`).
    `map3d.size` ∈ ]0, 2] — über 1 ragt bewusst über die Kachel, nicht
    clampen, nicht clippen.
 4. `scale.set(k_xz, k_y, k_xz)` auf WELT-Achsen (achsengetrennt, v2.1).
@@ -695,7 +713,7 @@ der EINEN Routine in § B2 weiter, ihr `× k` fällt mit E4. Ausbau in E7.*
 2. Fit: uniform `min(w/fp_x, d/fp_z) × 0,96`, an der UNROTIERTEN Box.
    ⚠ Diese Rechteck-Einpassung ist ab v4 nur noch der FALLBACK — der
    Größenabgleich mit Props/Figuren läuft über die Real-Size-Regel in
-   § B2a (Diorama skaliert wie ein Prop über `width_m × k`).
+   § B2a (Diorama skaliert wie ein Prop über `width_m`).
 3. Meta-Fix (innere Gruppe) → Layout-Yaw (Eltern-Gruppe).
 4. Rotierte Box NEU messen und NEU erden: Unterkante =
    `Etagenboden + 0,12 + layout.model_offset_y`; XZ-Anker =
@@ -706,11 +724,11 @@ der EINEN Routine in § B2 weiter, ihr `× k` fällt mit E4. Ausbau in E7.*
 **Props — REAL-SIZE-Regel** (`/assets/props`, Rezept-`placements`):
 1. GLB laden, Orientierungs-Fix aus der Bibliothek anwenden.
 2. BBox des GEFIXTEN Meshes messen → maxExtent = max(x, y, z).
-3. `s = max(width_m, depth_m, height_m) × k / maxExtent` (UNIFORM — eine
+3. `s = max(width_m, depth_m, height_m) / maxExtent` (UNIFORM — eine
    Platzierung skaliert nie).
 4. `rotation.y = −rad(yaw)`.
 5. Ergebnis-BBox messen → Unterkante auf **Raumplatten-Oberkante + 0,01**
-   (outdoor: Etagenboden + 0,01) + `offset_y × k`, XZ-Zentrum auf
+   (outdoor: Etagenboden + 0,01) + `offset_y`, XZ-Zentrum auf
    `placements.at`. (Klarstellung v4 — vorher nannten Vorschau/Client/
    Rezept drei verschiedene Werte: 0,05 / 0,11 / 0. Möbel stehen auf dem
    Raumboden; die `prop_markers`-Höhen reiten denselben Hub mit.)
@@ -735,11 +753,9 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   bzw. Rezept-Platte); die Konstante verankert nur Modelle/Platten.
   Outdoor-Räume haben keine Platte — Figuren stehen auf Level-/
   Terrain-Höhe.
-- **Figuren-Basishöhe: 1,70 m** — überall, in **Welt-Metern**. Auf der
-  freien Weltkarte gilt sie unverändert (ein Maßstab, § A1.1); in der
-  Innenszene reist sie übergangsweise noch mit `× k` (anchored; Legacy
-  `1,7 × storey/3`). **Der k-Faktor entfällt mit E4** — dann liefert
-  Teil B `k = 1` und die Umrechnung fällt ersatzlos weg. Der
+- **Figuren-Basishöhe: 1,70 m** — überall, in **Welt-Metern**, Karte wie
+  Innenszene. **Seit E4 ohne jede Umrechnung**: `figures.base_height_m_world`
+  ist konstant 1,70 (kein `× k`, kein Legacy `1,7 × storey/3` mehr). Der
   Client-Default 1,75 m ist eine bekannte Divergenz → auf 1,70 angleichen
   (§ B6). `height_cm` der Charaktere skaliert relativ dazu.
 - Es gibt **keinen Kachelbezug mehr**: „Figur relativ zur 10-m-Kachel"
@@ -748,10 +764,10 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
 
 ## A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`
 
-*Stage-Hinweis: der Abschnitt gilt unverändert; nur das `× k` an allen
-`_m`-Feldern (und die Lesart „Fraktionen des 8×8-Quadrats") ist
-Anchored-Mode und fällt mit **E4** weg, wenn Teil B `k = 1` liefert
-(§ A1.8).*
+*Stage-Hinweis: der Abschnitt gilt unverändert; das `× k` an allen
+`_m`-Feldern ist mit **E4** weggefallen (Teil B liefert `k = 1`, § A1.8),
+und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
+(`plan_width_m`).*
 
 404 = Raum ohne Layout (Auto-Grid-Fallback). Sonst:
 
@@ -791,17 +807,17 @@ Anchored-Mode und fällt mit **E4** weg, wenn Teil B `k = 1` liefert
 - **Koexistenz (geändert 2026-07-25, User-Entscheid):** Die Hülle kommt
   IMMER aus dem Rezept (sobald ein Layout existiert), und das Diorama
   KOEXISTIERT immer — es wird wie ein weiteres Prop behandelt (Anker
-  `model_at`, Maßstab `width_m × k` § B2a, Standhöhe `walk_y`), egal ob
+  `model_at`, Maßstab `width_m` § B2a, Standhöhe `walk_y`), egal ob
   der Raum `placements` trägt. Ein Raum ohne Diorama hat schlicht kein
   Modell. Die alte Weiche „placements verdrängen das Diorama" ist
   aufgehoben; `/scene` emittiert die Diorama-Spec entsprechend immer.
 - **Hülle:** Bodenplatte = `outline`-Fläche; Wände = Kanten × Etagenhöhe,
   in Segmente um die Öffnungen geteilt (kein CSG). Öffnungen referenzieren
   die Kante per INDEX (Kante i = Punkt i → i+1); `at` = MITTE der Öffnung,
-  0..1 entlang der gerichteten Kante; Spanne `at ± width_m × k / 2`, an
-  den Kantenenden geklemmt. Fenster = Brüstung (0..`sill_m×k`) + Glas
-  (`sill_m×k`..`(sill_m+height_m)×k`) + Sturz; Tür/Passage = Lücke.
-  ⚠ `sill_m`/`height_m` real → ×k.
+  0..1 entlang der gerichteten Kante; Spanne `at ± width_m / 2`, an
+  den Kantenenden geklemmt. Fenster = Brüstung (0..`sill_m`) + Glas
+  (`sill_m`..`sill_m+height_m`) + Sturz; Tür/Passage = Lücke.
+  (Bis E3 stand hier überall ein `× k`; seit E4 ist k = 1.)
 - **Gespiegelte Öffnungen:** eine physische Öffnung, im Besitzer-Raum
   definiert, erscheint in BEIDEN Wänden — der Nachbar bekommt sie mit
   eigenem Kanten-Index und gespiegeltem `at` fertig geliefert; exakt wie
@@ -824,8 +840,8 @@ Anchored-Mode und fällt mit **E4** weg, wenn Teil B `k = 1` liefert
   übersprungen, ohne brauchbare Hülle).
 - **Marker:** `prop_markers` sind FERTIG komponiert (Fix → Real-Size →
   Yaw durchgerechnet) — eine Zeile beim Konsumenten:
-  `marker = platzierungspunkt + [dx,dz] × k`, Höhe = Etagenboden +
-  `height_m × k`, `facing` = Welt-Kompass. Objektlokale Fraktionen dürfen
+  `marker = platzierungspunkt + [dx,dz]`, Höhe = Etagenboden +
+  `height_m`, `facing` = Welt-Kompass. Objektlokale Fraktionen dürfen
   −0,5..1,5 (Y: −1..1,5) — nur die Wertebereiche werden größer.
   **Facing-Default (2026-07-25):** `prop_markers` tragen IMMER ein
   `facing` — fehlt es am Objekt-Marker, gilt Prop-Front = Süd im
@@ -888,11 +904,11 @@ Anchored-Mode und fällt mit **E4** weg, wenn Teil B `k = 1` liefert
 - **Raum-Ebene (Klarstellung v4):** Raum-Bodenplatte Oberkante
   `level × storey + 0,10` (liegt damit AUF der Etagen-Platte; Dicke
   0,02), Raumhüllen-Wände Basis 0,10; Props auf Platte + 0,01 (§ A2);
-  Diorama-Unterkante bleibt bei + 0,12 (§ A3). Fahrstuhl im Legacy-Mode
-  (ohne Anker): reale Meter × `storey / 3` statt × k — wie der
-  Figuren-Maßstab.
+  Diorama-Unterkante bleibt bei + 0,12 (§ A3). Der Legacy-Fahrstuhl (ohne
+  Anker: reale Meter × `storey / 3`) ist mit **E4** ersatzlos weg — der
+  Schacht misst seine Vertragsmaße, immer.
 - `map3d.level_floors?: {"<level>": "<kind>"}`: Etagenplatte mit der
-  aktiven Textur des Kinds kacheln (`size_m × k`); Raum-Böden liegen
+  aktiven Textur des Kinds kacheln (`size_m`); Raum-Böden liegen
   darüber. Ohne Eintrag: auf **Etage 0** das aus `terrain` aufgelöste
   Kind (§ A9 — die Etage 0 IST die Terrain-Etage, der Boden draußen), auf
   jeder anderen Etage das globale `floor`-Kind; trifft `terrain` nichts,
@@ -901,8 +917,8 @@ Anchored-Mode und fällt mit **E4** weg, wenn Teil B `k = 1` liefert
   Die Reihenfolge steht in `scene_recipe.level_plate_kind`.
 - `map3d.elevator`: `[x, y]`-Fraktion, gilt für alle Etagen. Rezept:
   Schacht 1,8 m², Ecksäulen 0,14, Glas 3 Seiten (offene Seite Richtung
-  Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles reale
-  Meter × k. Figuren-Routing: Türschwelle → Fahrstuhl → vertikal → weiter.
+  Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles echte
+  Meter. Figuren-Routing: Türschwelle → Fahrstuhl → vertikal → weiter.
   Treppen gibt es nicht.
 - Legacy: prozedurale Innen-Wände + Auto-Grid NUR, wenn kein Raum der
   Location ein Layout hat.
@@ -1064,6 +1080,7 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | `total_m` | `float` | Gesamtlänge der Polylinie in Metern |
 | `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit |
 | `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ) |
+| `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0) |
 
 **Semantik**
 
@@ -1091,25 +1108,30 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   **Faktor-Richtung:** eine DAUER wird durch den Zeitfaktor geteilt (so
   rechnete v1 `cell_seconds_real`), ein TEMPO mit ihm multipliziert —
   Faktor 2 heißt doppelt so viele Meter pro echter Sekunde.
-- **`speed_m_s_real` ist NOMINAL, nicht das Tempo im aktuellen Segment.**
+- **Zwei Tempo-Felder, und `pace_m_s_real` ist das, mit dem gerechnet wird.**
   Der Gelände-`speed_factor` (§ A1.5) steckt ausschließlich in den
   serverinternen Zeitmarken der Reise, nicht in `speed_m_s`. Auf zähem
-  Untergrund (Faktor 0,5) läuft die Figur real halb so schnell, wie das Feld
-  sagt; auf schnellem Untergrund umgekehrt. Zwei Folgen, beide bewusst in
-  Kauf genommen:
-  * Die Extrapolation zwischen zwei Polls ist eine **Näherung** — der
-    Client zieht am nächsten Poll auf den Server-Wert nach (Regel 3 unten).
-  * Die Restzeit-Division unten ist ebenfalls eine Näherung.
+  Untergrund (Faktor 0,5) läuft die Figur real halb so schnell, wie
+  `speed_m_s_real` sagt; auf schnellem Untergrund umgekehrt. Seit **E4**
+  liefert der Server deshalb zusätzlich `pace_m_s_real`, das echte Tempo des
+  aktuellen Segments, aus denselben Zeitmarken:
+
+  ```
+  pace_m_s_real = |w[seg+1] − w[seg]| / (t[seg+1] − t[seg]) × Zeitfaktor
+  ```
+
+  * **Extrapoliert wird mit `pace_m_s_real`**, `speed_m_s_real` ist nur der
+    Rückfall, wenn es `null` ist (Regel 2 unten). Innerhalb eines Segments ist
+    das exakt, nicht genähert; das Schnappen am Poll bleibt nur für den
+    Segmentwechsel dazwischen übrig.
+  * `speed_m_s_real` bleibt der NOMINALE Wert (die Reisegeschwindigkeit, mit
+    der die Reise gestartet wurde) und macht keine Aussage über den
+    Untergrund.
+  * Die Restzeit-Division unten bleibt eine Näherung — sie rechnet mit EINEM
+    Tempo über den ganzen Restweg, der durch beliebiges Gelände führt.
     **Autoritativ für die Ankunft ist `eta_game`** — es kennt die
     Gelände-Zeiten, die Division kennt sie nicht. Ein Countdown darf
     gerechnet werden, ein *Termin* wird angezeigt.
-
-  **NOTE(E4):** geplanter Ausbau ist das **echte Tempo des aktuellen
-  Segments** — weiterhin EIN Skalar im Payload
-  (`|waypoints[seg+1] − waypoints[seg]| / (t[seg+1] − t[seg]) × Zeitfaktor`),
-  serverseitig aus denselben Zeitmarken berechnet. Renderer sollten sich
-  nicht auf die heutige Extrapolationsgenauigkeit festlegen, bevor das
-  gelandet ist.
 - **`pos` (§ A1.4) und `travel` widersprechen sich nicht.** `pos` ist der vom
   Reise-Ticker geschriebene Punkt und wird nur im **Ticker-Takt (5 s)**
   nachgeführt; `travel` erlaubt die stetige Ableitung dazwischen. Für einen
@@ -1136,8 +1158,20 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   ihn durch dasselbe Zugangs-Gate (`check_access` + `accessible_when`).
   `travel` verschwindet dann vor `eta_game`. Für Clients ändert das nichts:
   die Regel bleibt „Feld weg = angekommen", und `location_id` folgt wie immer
-  dem Punkt. Der Raum ist in diesem Fall der ANKUNFTSRAUM des Ziels, nicht der
-  Raum hinter der angepeilten Tür (die Figur steht nicht an ihr).
+  dem Punkt.
+
+  **Welcher RAUM dabei herauskommt, entscheidet der RESTWEG** (seit E4;
+  vorher ein 0,5-m-Umkreis um den letzten Wegpunkt): ist
+  `total_m − progress_m` höchstens ein Ticker-Takt weit (5 s × `speed_m_s`
+  der Reise, in SPIEL-Sekunden gerechnet, also unabhängig vom Zeitfaktor),
+  gilt die Figur als auf dem Schlussanflug und bekommt den Raum hinter der
+  angepeilten Tür (`entry_room` der Öffnung). Sonst ist es der ANKUNFTSRAUM
+  des Ziels — dann ist die Figur irgendwo anders ins Gebäude gelaufen und
+  hat auf den Raum hinter jener Tür keinen Anspruch. Der Umkreis war für die
+  häufigste Geometrie falsch: läuft der Schlussanflug WANDPARALLEL auf die
+  eigene Tür zu (der Wegfinder liefert das laufend), liegt die Route ihre
+  letzten Meter schon im Footprint — der Ticker erwischt die Kreuzung ein
+  paar Meter vor der Tür, und 0,5 m Umkreis nannten das „woanders".
 - **Ankunft ist nicht garantiert.** Verweigert die Zugangsregel am Ziel den
   Eintritt — `rules.check_access` ODER das `accessible_when` des Ziels —,
   endet die Reise auf dem letzten Routenpunkt VOR dem Ziel („Standoff");
@@ -1145,8 +1179,8 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   GELAUFENEN Stücks, nie einem weiter vorn. Auch dann verschwindet `travel`
   einfach.
 - **Freeze:** steht die Spieluhr, stehen alle Reisen. `progress_m` bleibt
-  konstant, `speed_m_s_real` ist `null` — genau dann darf nicht
-  extrapoliert werden.
+  konstant, `speed_m_s_real` und `pace_m_s_real` sind `null` — genau dann
+  darf nicht extrapoliert werden.
 - **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Ein laufender
   Restzeit-Countdown rechnet daher näherungsweise
   `(total_m − progress_m) / speed_m_s_real` in ECHTEN Sekunden — NICHT
@@ -1173,17 +1207,19 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
    Mittelpunkt von `location_id` und nicht auf `pos`, solange `travel` MIT
    `waypoints` da ist. Ohne `waypoints` (Fog, s. o.) bleibt `pos` die
    Position.
-2. Zwischen zwei Polls darf mit `speed_m_s_real` extrapoliert werden:
-   `progress_m += Δt_real × speed_m_s_real`, geklemmt auf `total_m`
-   (bei `null`: einfrieren). Extrapoliert wird **`progress_m`** — der
+2. Zwischen zwei Polls darf extrapoliert werden, mit
+   **`pace_m_s_real ?? speed_m_s_real`** (das Segment-Tempo zuerst, das
+   nominale nur als Rückfall):
+   `progress_m += Δt_real × tempo`, geklemmt auf `total_m`
+   (sind beide `null`: einfrieren). Extrapoliert wird **`progress_m`** — der
    Punkt wird daraus jedes Frame neu abgelaufen, nie ein Segment einzeln
    hochgezählt (sonst bleibt die Figur an jedem Knick stehen, bis der
    nächste Poll kommt).
 3. Beim nächsten Poll: Abweichung `|progress_m_client − progress_m_server|`
    > 1,0 m ⇒ hart auf den Server-Wert schnappen. Darunter weich nachziehen.
-   Auf Gelände mit `speed_factor ≠ 1` ist das der Regelfall, nicht die
-   Ausnahme (Nominal-Absatz oben) — wer sichtbares Schnappen vermeiden
-   will, extrapoliert vorsichtiger oder wartet auf NOTE(E4).
+   Mit `pace_m_s_real` ist das der Ausnahmefall (Segmentwechsel zwischen
+   zwei Polls); wer nur `speed_m_s_real` benutzt, schnappt auf Gelände mit
+   `speed_factor ≠ 1` bei jedem Poll.
 4. Blickrichtung/Clip bleiben Client-Sache (Laufrichtung aus dem aktuellen
    Segment); `activity_animation` wird bewusst NICHT auf „walk" gezwungen
    (§ A8).
@@ -1203,7 +1239,10 @@ Objekt/Feld/Ist/Soll als Zahlen — keine Screenshot-Beurteilung. Der
 Payload selbst ist handgerechnet abgesichert:
 `scripts/smoke_worldmap_travel.py` (Polylinie 30 m + 40 m bei 1,0 m/s,
 eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
-`speed_m_s_real` `null`).
+`speed_m_s_real` `null` · `pace_m_s_real` `null`; dieselbe Linie mit
+80 s statt 40 s auf dem zweiten Schenkel ⇒ bei Faktor 2
+`speed_m_s_real` 2,0 gegen `pace_m_s_real` 1,0 — die beiden Felder sind
+messbar verschieden).
 
 **Divergenz (Stand E3):** beide Karten-Clients deklarieren noch die
 Zellen-Felder und werden erst mit **E4/E5** auf die Polylinie umgestellt.
@@ -1366,11 +1405,12 @@ keine einzige eigene Geometrie-Entscheidung mehr.
 
 ## B1. `GET /play/locations/{location_id}/scene`
 
-*Stage-Hinweis: der Payload ist tragend und bleibt. Befristet ist allein
-das Skalar `k` (samt `storey_m` als sein Produkt) — mit **E4** liefert der
-Composer `k = 1`, und jedes `_m`-Feld ist dann direkt ein Welt-Meter
-(§ A1.8). Konsumenten rechnen bis dahin weiter mit dem gelieferten `k`,
-nie mit einer eigenen Konstante.*
+*Stand E4 (2026-08-09): der Composer liefert **`k = 1`** und
+`extent_m = plan_width_m` — jedes `_m`-Feld IST damit ein Welt-Meter
+(§ A1.8). Die Felder `extent_m`, `k` und `storey_m` bleiben im Payload:
+Konsumenten rechnen weiter mit dem GELIEFERTEN `k` (× 1 ist richtig), nie
+mit einer eigenen Konstante — `extent_m` schon gar nicht, es ist jetzt so
+groß wie die Location.*
 
 ```
 {
@@ -1445,11 +1485,11 @@ nie mit einer eigenen Konstante.*
                                            # Schnittkanten offen → DoubleSide.
                                            # Das Modell fadet bei diesen
                                            # Locations NIE.
-               placeholder_dims? } ],      # dims×k-Box bei missing/has_model=false
+               placeholder_dims? } ],      # dims-Box bei missing/has_model=false
 
   # --- Rezept-Vokabular pro Raum (PLAN-Fraktionen, für den 2D-Editor) ---
   rooms:   [ { room_id, level, always_visible,
-               outline,                    # absolute 8×8-Fraktionen (wie Rezept)
+               outline,                    # absolute Fraktionen des Quadrats
                openings,                   # normalisiert INKL. gespiegelter —
                                            # Ghost-Öffnungen kommen von HIER,
                                            # nie aus lokaler Spiegel-Logik
@@ -1464,7 +1504,7 @@ nie mit einer eigenen Konstante.*
                                            # Label-Positionen kommen von HIER.
 
   # --- Figuren & Marker ---
-  figures: { base_height_m_world,          # = 1,70 × k (bzw. Legacy-Wert)
+  figures: { base_height_m_world,          # = 1,70 (konstant seit E4)
              stand_clearance: 0.12 },      # Welt-Meter, Konstante
   markers: [ { room_id, at_world: [x,z], y_world, animation, facing?,
                source: "room"|"prop" } ],  # ALLE fertig in Welt-Koordinaten
@@ -1486,15 +1526,15 @@ Klemmung wie das Wand-Splitting (`scene_recipe._room_wall_edges`), keine
 zweite Ableitung.
 
 - **Konsumentenregel: nichts nachrechnen.** `width_m` ist die LICHTE Breite
-  in Welt-Metern NACH der Kantenklemmung — kein `width_m × k`, das jemand
-  noch skalieren müsste; `at_world` ist die Mitte dieser lichten Lücke,
+  in Welt-Metern NACH der Kantenklemmung — nicht die autorierte `width_m`,
+  die noch jemand klemmen müsste; `at_world` ist die Mitte dieser lichten Lücke,
   `along` die Einheitsrichtung der Wand (die Schwelle läuft ENTLANG davon),
   `base_y` der Fuß genau der Wand, zu der die Lücke gehört.
 - **Eine Lücke in der Wand = EIN Eintrag.** Zwei Kandidaten sind dasselbe
   Loch, wenn drei geometrische Fragen zugleich mit Ja beantwortet werden:
   gleiche Wand-RICHTUNG (zuerst — zwei in dieselbe Ecke geklemmte Türen
   liegen null Meter auseinander und trotzdem auf zwei Wänden), gleiche
-  Wand-LINIE (die beiden Wandflächen höchstens `SHARE_TOL_M` reale Meter × k
+  Wand-LINIE (die beiden Wandflächen höchstens `SHARE_TOL_M` Meter
   auseinander, plus die Rundung eines gespiegelten `at`), und geklemmte
   Spannen, die sich auf dieser Linie wirklich TREFFEN. So verschmelzen die
   gespiegelte Kopie des Nachbarn, eine von beiden Räumen gezeichnete
@@ -1569,33 +1609,35 @@ maxExtent-Messung in Schritt 2 auf die XZ-Achsen.
 ## B2a. Größenabgleich Diorama ↔ Props ↔ Figuren — EIN Maßstabsgesetz
 
 Befund (2026-07-24): Dioramen skalieren per Rechteck-Einpassung, Props
-und Figuren per `reale Meter × k`. Konsistent ist das nur, solange der
-Editor das Raum-Rechteck auf `width_m / plan_width_m` hält — zur
+und Figuren per reale Meter (× k; k = 1 seit E4). Konsistent ist das nur,
+solange der Editor das Raum-Rechteck auf `width_m / plan_width_m` hält — zur
 Renderzeit erzwingt das niemand; frei gezogene/alte Räume driften, und
 seit Dioramen, Props und NPCs im SELBEN Raum stehen, fällt das sofort
 auf (Diorama-Sofa ≠ Prop-Stuhl ≠ Figur).
 
 **Neue Regel (v4): Das Diorama skaliert wie ein Prop.**
 
-- Anchored-Mode (k vorhanden) UND `width_m` deklariert →
-  `scale_mode "real_size"`, `max_m = width_m × k`,
+- `width_m` deklariert → `scale_mode "real_size"`, `max_m = width_m`,
   `measure_axes: "xz"` (width_m ist die größte XZ-Seite; die Höhe folgt
   uniform). Das Raum-RECHTECK hat damit KEINEN Einfluss mehr auf den
   Diorama-Maßstab — es bleibt Grundriss-Fläche für Platte/Wände/
   Begehbarkeit. Anker/Erdung unverändert (`model_at`,
   Etagenboden + 0,12 + `model_offset_y`).
-- Ohne `width_m` oder ohne k → Fallback `fit_box` (Rechteck-Einpassung
-  × 0,96 wie bisher, § A2) — mit dokumentiert inkonsistentem Maßstab.
+- Ohne `width_m` → Fallback: die reale Breite des Raum-Rechtecks steht ein
+  und die Spec sagt es (`width_estimated`), damit die UI nach einer
+  Kalibrierung fragen kann statt still nach einem anderen Gesetz zu
+  skalieren.
 - Der Editor hält weiterhin (v3) die lange Rechteck-Seite auf
   `width_m / plan_width_m` — jetzt nur noch als AID, damit Platte/Hülle
   optisch mit der Diorama-Kante abschließen; ein Überstehen des
   real-size-Dioramas über sein Rechteck ist legitim und wird über
   `width_m`/`model_at` justiert, nicht über das Rechteck.
-- Damit gilt raumübergreifend EIN Gesetz: **alles reale Meter × k** —
-  Dioramen (`width_m`), Props (`dims`), Figuren (1,70 m + `height_cm`),
-  Öffnungen (`width_m`/`sill_m`/`height_m`), Fahrstuhl. Der einzige
-  Nicht-k-Maßstab bleibt die Gebäude-Hülle (`tile_fit`, Kachel-Optik).
-- **Kalibrierung im Game-Admin:** eine Vergleichsfigur (fix 1,70 × k,
+- Damit gilt raumübergreifend EIN Gesetz: **alles in echten Metern** (seit
+  E4 ohne jeden Faktor) — Dioramen (`width_m`), Props (`dims`), Figuren
+  (1,70 m + `height_cm`), Öffnungen (`width_m`/`sill_m`/`height_m`),
+  Fahrstuhl. Die Gebäude-Hülle füllt weiterhin das Bezugsquadrat
+  (`extent_m × size`) statt eine eigene Realgröße zu tragen.
+- **Kalibrierung im Game-Admin:** eine Vergleichsfigur (fix 1,70 m,
   skaliert NIE mit) wird IN das Diorama gestellt; der Admin stellt
   `width_m` ein, bis die Möbel zur Figur passen, und `walk_y`, bis sie
   auf dem sichtbaren Boden steht. `width_m` ist damit nicht mehr „am
@@ -1664,14 +1706,14 @@ noch als Regressionsschutz. Verbindlich ab v4:
 
 | # | Befund | Fix |
 |---|---|---|
-| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Erledigt durch Seamless World (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), mit E4 fällt das `× k` weg. Client-Fix bleibt: 1,70 statt 1,75 |
+| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Erledigt durch Seamless World (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg. Client-Fix bleibt: 1,70 statt 1,75 |
 | 2 | „0,12 × k" in §2e der Rezept-Note | Zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
 | 3 | `activityToClipKind`-Keyword-Heuristik im Client | `activity_animation` server-authoritativ; Heuristik entfernen, sobald alle Aktivitäten gemappt liefern |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | Doku/Dead-Code entfernen |
 | 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | Realität ist `GET /characters/{name}/model3d` (JSON) — Doku angleichen |
 | 6 | `placements[].model_url` | Deprecated, fällt mit `/scene` weg |
 | 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar (Wishlist 2026-07-24) | Angenommen: `walk_y` (Meter über Modell-Unterkante) als Raum-Sidecar-Anker, ausgeliefert in `/scene` `plates[].top_y` bzw. Raum-Meta; Admin-Regler wie übrige Anker |
-| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | Behoben durch § B2a: Diorama skaliert real-size über `width_m × k` (measure_axes xz); Rechteck-Fit nur noch Fallback. **Endgültig erledigt durch Seamless World (E1/E4):** mit `k = 1` ist „real-size" und „Welt-Maßstab" dasselbe, der letzte Doppelmaßstab verschwindet |
+| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | Behoben durch § B2a: Diorama skaliert real-size über `width_m` (measure xz); Rechteck-Breite nur noch Fallback. **Endgültig erledigt mit E4:** bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe, der letzte Doppelmaßstab ist weg |
 
 Rückfragen wie immer über die Wishlist.
 
