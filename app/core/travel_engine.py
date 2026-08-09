@@ -427,6 +427,49 @@ def _game_now():
 # Lateral spacing of party followers next to their leader, in metres.
 _FOLLOWER_SPACING_M = 1.2
 
+# How far IN FRONT of a closed door a blocked journey comes to rest, in metres.
+_DOOR_STANDOFF_M = 0.5
+
+
+def _standoff_point(waypoints: Sequence[Sequence[float]],
+                    fallback: Point) -> Point:
+    """The route's end pulled ``_DOOR_STANDOFF_M`` back along the way it came.
+
+    Where a blocked journey ends. The goal point of a route is the target's
+    OPENING, and that point lies ON the target's footprint (the footprint test
+    is inclusive) — a character parked there would be standing in the very
+    location the rule just refused it, and the next ordinary position write
+    would derive exactly that and walk it in through the closed door. Half a
+    metre back along the last segment is outside by construction, so "in front
+    of the door" needs no special casing anywhere else: the position derives
+    the open terrain all by itself.
+
+    Degenerate geometry is walked over, not divided by: zero-length segments
+    are skipped, a last segment shorter than the standoff continues the step
+    back into the segment before it, and a whole route shorter than the
+    standoff ends at its own first waypoint (the character never really left).
+    """
+    pts: List[Point] = []
+    for wp in waypoints or []:
+        try:
+            pts.append((float(wp[0]), float(wp[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    if not pts:
+        return fallback
+    remaining = _DOOR_STANDOFF_M
+    for i in range(len(pts) - 1, 0, -1):
+        start, end = pts[i - 1], pts[i]
+        length = math.dist(start, end)
+        if length <= 1e-9:
+            continue
+        if length >= remaining:
+            frac = remaining / length
+            return (round(end[0] + (start[0] - end[0]) * frac, 2),
+                    round(end[1] + (start[1] - end[1]) * frac, 2))
+        remaining -= length
+    return (round(pts[0][0], 2), round(pts[0][1], 2))
+
 
 def _follower_offsets(count: int) -> List[float]:
     """Signed lateral offsets for ``count`` followers, in metres.
@@ -461,31 +504,54 @@ def _segment_perpendicular(waypoints: Sequence[Sequence[float]],
     return (-dz / length, dx / length)
 
 
-def _move_party_followers(leader: str, pos: Point,
+def _move_party_followers(leader: str, leader_location: str, pos: Point,
                           waypoints: Sequence[Sequence[float]],
                           seg: int) -> None:
     """Walk the leader's followers alongside them for this tick.
 
-    Followers keep no journey of their own (they lose SetLocation/Move) — they
-    are a pure function of the leader's position, so nothing has to be settled
-    for them and a follower joining mid-journey simply appears in formation on
-    the next tick. Their LOCATION change is not done here: the arrival's
-    ``_drag_party_followers_to_location`` hook owns that, unchanged.
+    Followers are a pure function of the leader's position, so nothing has to
+    be settled for them and a follower joining mid-journey simply appears in
+    formation on the next tick. Their LOCATION change is not done here: the
+    arrival's ``_drag_party_followers_to_location`` hook owns that, unchanged.
+
+    The formation NEVER puts a follower somewhere the leader is not. The
+    offset point derives its own location like every other position write, and
+    1.2 m beside the route is easily inside a shed the party merely walks
+    past — which would run the whole location-change cascade (events, history,
+    compliance, background renders) for a figure that is gone again on the
+    next tick. When the offset point disagrees with the leader's own location,
+    the formation yields and the follower stands on the leader's point: one
+    deterministic answer, no shrink-until-it-fits search whose result would
+    depend on the step size.
     """
     from app.core.party_engine import party_followers
+    from app.core.world_geometry import location_at_point
     from app.models.character import set_character_pos
+    from app.models.world import list_locations
     followers = [f for f in party_followers(leader) if f and f != leader]
     if not followers:
         return
     px, pz = _segment_perpendicular(waypoints, seg)
+    locations = list_locations()
     for follower, offset in zip(followers, _follower_offsets(len(followers))):
         try:
+            # A follower that joined WHILE travelling keeps its own journey,
+            # and the ticker would then advance that journey and write the
+            # formation offset in the same pass — which of the two lands last
+            # depends on the character order. The formation wins: a follower
+            # does not travel on its own account, it lost SetLocation/Move
+            # when it joined.
+            if get_journey(follower) is not None:
+                cancel_journey(follower)
+            fx = round(pos[0] + px * offset, 2)
+            fz = round(pos[1] + pz * offset, 2)
+            at = location_at_point(fx, fz, locations)
+            if ((at.get("id") or "") if at else "") != leader_location:
+                fx, fz = round(pos[0], 2), round(pos[1], 2)
             # preserve_movement_target=True although a follower has nothing to
             # preserve: this IS a travel step, and the plain write would fire
             # the manual-teleport journey cancel on every single tick.
-            set_character_pos(follower, round(pos[0] + px * offset, 2),
-                              round(pos[1] + pz * offset, 2),
-                              preserve_movement_target=True)
+            set_character_pos(follower, fx, fz, preserve_movement_target=True)
         except Exception as e:
             logger.debug("party follow failed for %s: %s", follower, e)
 
@@ -522,10 +588,11 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
                     st: Dict[str, Any]) -> None:
     """The journey reached its last waypoint: entry gate, then the crossing."""
     from app.core.boundary_entry import opening_entry_room
-    from app.models.character import (_write_character_pos, clear_pose_intent,
-                                      get_movement_target, record_access_denied,
+    from app.models.character import (clear_pose_intent, get_movement_target,
+                                      record_access_denied,
                                       save_character_current_location,
-                                      save_character_current_room)
+                                      save_character_current_room,
+                                      set_character_pos)
     from app.models.rules import check_access
     from app.models.world import (get_arrival_room_id, get_location_by_id,
                                   get_location_name)
@@ -544,14 +611,15 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
 
     ok, reason = check_access(name, target_id, room_id=entry_room)
     if not ok:
-        # Blocked at the door. The position is the last waypoint — the opening
-        # point ITSELF, which lies ON the target's footprint (the footprint
-        # test is inclusive). A location-DERIVING write would therefore walk
-        # the character in through the very door the rule just closed, so the
-        # two position columns are written raw: the figure stands at the door,
-        # its location stays the open terrain in front of it.
-        _write_character_pos(name, st["pos"][0], st["pos"][1])
+        # Blocked at the door: the journey ends half a metre IN FRONT of the
+        # opening instead of on it (see _standoff_point). Cancel first, then
+        # write the position the ordinary way — the journey is over, so this
+        # is no travel step any more, and letting the write derive the
+        # location is exactly the point: "in front of the door" is a fact of
+        # the geometry here, not a special case anyone has to maintain.
+        stand = _standoff_point(journey.get("waypoints") or [], st["pos"])
         cancel_journey(name)
+        set_character_pos(name, stand[0], stand[1])
         try:
             record_access_denied(name, target_id,
                                  get_location_name(target_id) or target_id,
@@ -644,8 +712,12 @@ def advance_all_journeys() -> None:
             if not st["arrived"]:
                 set_character_pos(name, st["pos"][0], st["pos"][1],
                                   preserve_movement_target=True)
-                _move_party_followers(name, st["pos"], j["waypoints"],
-                                      st["seg"])
+                # Read the location back AFTER the write: it is what the
+                # leader's own point just derived, and the formation is not
+                # allowed to put a follower anywhere else.
+                _move_party_followers(
+                    name, (get_character_current_location(name) or "").strip(),
+                    st["pos"], j["waypoints"], st["seg"])
                 continue
             _settle_arrival(name, j, st)
         except Exception as e:
