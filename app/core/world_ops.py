@@ -575,9 +575,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # Journeys are a pure function of the GAME clock — read it ONCE for the
     # whole payload so every character in one response shares the same now.
     from app.core.travel_engine import get_journey, journey_state
-    from app.core.timeutils import game_now, game_speed_factor, to_world_tz
+    from app.core.timeutils import game_now, to_world_tz
     _now_game = game_now()
-    _factor = game_speed_factor()
 
     characters = []
     for name in list_available_characters():
@@ -629,24 +628,19 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         try:
             _j = get_journey(name, profile=_prof)
             if _j:
-                # The pace the journey was STARTED with (world setting at that
-                # moment) — a later setting change never re-times it.
-                _spc = float(_j["seconds_per_cell"])
-                _st = journey_state(_j["path"], _j["started_at_game"],
-                                    _now_game, _spc)
+                # TODO(Task 6): the full v2 travel block (waypoints,
+                # progress_m/total_m, speed_m_s_real) plus § A11 belongs to
+                # Task 6 of E3. Until then the payload reports only what a
+                # client can do nothing wrong with: where the character is
+                # heading and when it gets there.
+                _st = journey_state(_j["waypoints"], _j["started_at_game"],
+                                    _now_game)
                 travel = {
-                    "path": _j["path"],
                     "target_id": _j["target"],
-                    "seg": _st["seg"],
-                    "frac": _st["frac"],
-                    "progress_cells": _st["progress_cells"],
                     # Same instant, WORLD-timezone offset: clients slice the
                     # HH:MM out of this, which must be game wall-clock — the
                     # engine stores the stamp in UTC (§ A11).
                     "eta_game": to_world_tz(_st["eta_game"]).isoformat(),
-                    # GAME seconds per cell in REAL seconds — null on a frozen
-                    # world (factor 0): nothing moves, so nothing extrapolates.
-                    "cell_seconds_real": (_spc / _factor) if _factor > 0 else None,
                 }
         except Exception as e:
             travel = None

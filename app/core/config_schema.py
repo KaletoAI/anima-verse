@@ -688,14 +688,18 @@ SECTIONS = {
         "label": "Game",
         "icon": "🎮",
         "fields": {
-            "travel_seconds_per_cell": {
-                "type": "int",
-                "label": "Journey seconds per cell",
-                "default": 60,
-                "min": 1,
-                "max": 3600,
-                "description": "Game seconds one journey cell takes. Existing journeys "
-                               "keep the pace they started with.",
+            "travel_speed_m_s": {
+                "type": "float",
+                "label": "Travel speed (m/s)",
+                "default": 1.4,
+                "min": 0.1,
+                "max": 20,
+                "step": 0.1,
+                "description": "Walking speed in world metres per GAME second on "
+                               "neutral ground (1.4 m/s ≈ a human walking pace). "
+                               "The terrain type scales it: a journey segment is "
+                               "walked at speed × the terrain's speed_factor. "
+                               "Existing journeys keep the speed they started with.",
             },
             "default_terrain_kind": {
                 "type": "str",

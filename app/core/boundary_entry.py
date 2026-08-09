@@ -27,13 +27,20 @@ expectations by hand and runs without a server or a world.
 
 Tile rotation (contract v5.2 Nr. 15): ``map3d`` stores the openings in the
 TEMPLATE orientation while ``tile_rotation`` turns the composed payload — and
-with it the physical world edges. The step direction is a world edge, so the
-stored edge letters are rotated here with the same N→E→S→W rule the composer
-uses (``scene_recipe._TILE_EDGE_CW``). ``at``/``room`` are unaffected: the
-gate has no sub-cell position (a step crosses the whole edge), and the room
-link names the same room in every orientation.
+with it the physical edges of the location. The step direction is such an
+edge, so the stored edge letters are rotated here with the same N→E→S→W rule
+the composer uses (``scene_recipe._TILE_EDGE_CW``), and ``at`` travels along
+with them (``at → 1 − at`` on the E/W steps, the composer's rule verbatim) —
+it is what gives an opening a POINT, which the travel engine needs to walk to
+(``opening_world_point``). ``room`` is unaffected: the link names the same
+room in every orientation.
+
+An opening's world point takes one more turn: ``tile_rotation`` puts it into
+the LOCATION's own frame, ``yaw_deg`` (§ A1.1) maps that frame into the world.
+The two are different fields and both are applied, in that order.
 """
-from typing import Any, Dict, List
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.world import GROUND_ROOM_ID
 
@@ -42,13 +49,19 @@ from app.models.world import GROUND_ROOM_ID
 EDGE_OF_DIRECTION = {"north": "N", "south": "S", "east": "E", "west": "W"}
 OPPOSITE_EDGE = {"N": "S", "S": "N", "E": "W", "W": "E"}
 
-# One clockwise 90° step — identical to scene_recipe._TILE_EDGE_CW.
+# One clockwise 90° step — identical to scene_recipe._TILE_EDGE_CW/_FLIP.
 _EDGE_CW = {"N": "E", "E": "S", "S": "W", "W": "N"}
+_EDGE_FLIP = {"N": False, "E": True, "S": False, "W": True}
 
 
-def _rotated_openings(location: Dict[str, Any]) -> List[Dict[str, str]]:
-    """The authored openings of a location as ``{edge, room}`` pairs, with the
-    edge letter rotated into WORLD orientation (``map3d.tile_rotation``)."""
+def _rotated_openings(location: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The authored openings of a location as ``{edge, at, room}`` entries,
+    rotated into the location's own orientation (``map3d.tile_rotation``).
+
+    ``at`` is the position ALONG that edge as a fraction (left→right on N/S,
+    top→bottom on E/W, the room-opening convention); a missing or unusable
+    value degrades to the edge midpoint 0.5.
+    """
     map3d = location.get("map3d") if isinstance(location, dict) else None
     if not isinstance(map3d, dict):
         return []
@@ -56,17 +69,81 @@ def _rotated_openings(location: Dict[str, Any]) -> List[Dict[str, str]]:
         steps = int(map3d.get("tile_rotation") or 0) // 90 % 4
     except (TypeError, ValueError):
         steps = 0
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     for op in map3d.get("boundary_openings") or []:
         if not isinstance(op, dict):
             continue
         edge = str(op.get("edge") or "").upper()
         if edge not in _EDGE_CW:
             continue
+        try:
+            at = float(op.get("at"))
+        except (TypeError, ValueError):
+            at = 0.5
+        if not math.isfinite(at):
+            at = 0.5
+        at = min(max(at, 0.0), 1.0)
         for _ in range(steps):
+            if _EDGE_FLIP[edge]:
+                at = 1.0 - at
             edge = _EDGE_CW[edge]
-        out.append({"edge": edge, "room": str(op.get("room") or "").strip()})
+        out.append({"edge": edge, "at": at,
+                    "room": str(op.get("room") or "").strip()})
     return out
+
+
+def opening_world_points(location: Dict[str, Any]
+                         ) -> List[Tuple[str, Tuple[float, float]]]:
+    """Every authored opening as ``(edge, (x, z))`` in WORLD metres.
+
+    Empty for an unplaced location or one without a scale anchor: without a
+    centre and an edge length an opening has no point (``placed_footprint``).
+
+    The point is the ``at`` position on that edge of the footprint square:
+    in the local frame N is ``z = −w/2``, S ``z = +w/2``, W ``x = −w/2``, E
+    ``x = +w/2``, and the free coordinate is ``(at − 0.5)·w``; ``yaw_deg``
+    then maps local→world (§ A1.1). Hand-derived: a location at (50, 50),
+    ``plan_width_m`` 10, yaw 0, opening N at 0.5 → local (0, −5) → (50, 45);
+    the same location at yaw 90 → (45, 50).
+    """
+    from app.core.world_geometry import local_to_world, placed_footprint
+    if not isinstance(location, dict):
+        return []
+    fp = placed_footprint(location)
+    if fp is None:
+        return []
+    cx, cz, width, yaw = fp
+    half = width / 2.0
+    out: List[Tuple[str, Tuple[float, float]]] = []
+    for op in _rotated_openings(location):
+        edge, at = op["edge"], float(op["at"])
+        free = (at - 0.5) * width
+        if edge == "N":
+            lx, lz = free, -half
+        elif edge == "S":
+            lx, lz = free, half
+        elif edge == "W":
+            lx, lz = -half, free
+        else:                                   # "E"
+            lx, lz = half, free
+        x, z = local_to_world(lx, lz, cx, cz, yaw)
+        out.append((edge, (round(x, 2), round(z, 2))))
+    return out
+
+
+def opening_world_point(location: Dict[str, Any],
+                        edge: str) -> Optional[Tuple[float, float]]:
+    """World point of the opening on ``edge``, or None when there is none.
+
+    Several openings on the same edge (a road in and a gate) are legal; the
+    FIRST authored one wins — a deterministic answer, and the caller that
+    needs a specific one iterates :func:`opening_world_points` itself.
+    """
+    wanted = str(edge or "").upper()
+    for op_edge, point in opening_world_points(location):
+        if op_edge == wanted:
+            return point
+    return None
 
 
 def _room_exists(location: Dict[str, Any], room_id: str) -> bool:
