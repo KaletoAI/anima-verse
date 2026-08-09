@@ -340,6 +340,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # travel=null, it never breaks the whole worldmap.
         travel = None
         try:
+            # NOTE: this reader can WRITE — a stored v1 journey (cell path) is
+            # discarded here together with its movement target, once, on the
+            # first read after the format change (travel_engine.get_journey).
             _j = get_journey(name, profile=_prof)
             if _j:
                 _st = journey_state(_j["waypoints"], _j["started_at_game"],
@@ -352,8 +355,17 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # x/z ONLY — the baked cumulative game seconds (t_cum) are
                     # server-internal. A client walks the line by DISTANCE
                     # (progress_m), never by re-deriving the timing.
-                    "waypoints": [[round(float(w[0]), 2), round(float(w[1]), 2)]
-                                  for w in _j["waypoints"]],
+                    #
+                    # FOG (§ A12): the route ENDS at the target's opening, so
+                    # it is a metre-exact map marker for a place the avatar
+                    # may not know — a far worse leak than the opaque
+                    # target_id. Under fog only the avatar gets its own
+                    # waypoints; for everyone else the field is null and the
+                    # figure is drawn at its `pos` (which the fog already
+                    # limits to visible locations).
+                    "waypoints": ([[round(float(w[0]), 2), round(float(w[1]), 2)]
+                                   for w in _j["waypoints"]]
+                                  if (not fogged or name == avatar) else None),
                     "progress_m": _st["progress_m"],
                     "total_m": _st["total_m"],
                     # Same instant, WORLD-timezone offset: clients slice the
@@ -370,7 +382,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 }
         except Exception as e:
             travel = None
-            logger.warning("travel payload failed for %s: %s", name, e)
+            # debug, not warning: this endpoint is polled every few seconds
+            # per client — a broken journey would flood the log at warning
+            # level for as long as it exists.
+            logger.debug("travel payload failed for %s: %s", name, e)
         # Body height in cm — the 3D client scales the figures against each
         # other with it (a 155 cm character must not tower over a 190 cm one).
         # None when unset: the client keeps its own default scale.

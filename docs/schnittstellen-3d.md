@@ -643,7 +643,11 @@ E1 unberührt:
   Zellen-Nachbarschaft.
 - `grid_x`, `grid_y` an der Location; `grid_bounds` im Payload (→
   `world_bounds`).
-- `passable` und `template_location_id` im Weltkarten-Eintrag.
+- `template_location_id` im Weltkarten-Eintrag. (`passable` stand hier
+  auch — es ist mit **E3/Task 5** zurückgekommen: eine Ziel-Liste muss
+  Durchgangs-Kacheln fallen lassen können, und die Karte darf eine Straße
+  anders zeichnen als einen Ort. Der Weltkarten-Eintrag trägt es also
+  wieder.)
 - `terrain` und `surface_kind` **im Weltkarten-Eintrag** (das gemalte
   Gelände kommt aus `GET /play/terrain`; § A9 gilt weiter für die
   Detailszene und `/world/locations`).
@@ -1055,11 +1059,11 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `target_id` | `str` | Ziel-Location (identisch mit `movement_target_id`) |
-| `waypoints` | `[[x, z], …]` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne Zeiten** — die beim Start gebackenen Zeitmarken (`t_cum`) bleiben serverintern, der Client rechnet über die STRECKE. Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg) |
+| `waypoints` | `[[x, z], …] \| null` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne Zeiten** — die beim Start gebackenen Zeitmarken (`t_cum`) bleiben serverintern, der Client rechnet über die STRECKE. Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg). **`null` im gefoggten Payload für JEDEN außer dem Avatar** — siehe Fog-Absatz unten |
 | `progress_m` | `float` | bereits gelaufene Strecke **entlang der Polylinie**, in Metern |
 | `total_m` | `float` | Gesamtlänge der Polylinie in Metern |
 | `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit |
-| `speed_m_s_real` | `float \| null` | Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null` bei eingefrorener Welt bzw. Faktor 0 |
+| `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ) |
 
 **Semantik**
 
@@ -1087,6 +1091,25 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   **Faktor-Richtung:** eine DAUER wird durch den Zeitfaktor geteilt (so
   rechnete v1 `cell_seconds_real`), ein TEMPO mit ihm multipliziert —
   Faktor 2 heißt doppelt so viele Meter pro echter Sekunde.
+- **`speed_m_s_real` ist NOMINAL, nicht das Tempo im aktuellen Segment.**
+  Der Gelände-`speed_factor` (§ A1.5) steckt ausschließlich in den
+  serverinternen Zeitmarken der Reise, nicht in `speed_m_s`. Auf zähem
+  Untergrund (Faktor 0,5) läuft die Figur real halb so schnell, wie das Feld
+  sagt; auf schnellem Untergrund umgekehrt. Zwei Folgen, beide bewusst in
+  Kauf genommen:
+  * Die Extrapolation zwischen zwei Polls ist eine **Näherung** — der
+    Client zieht am nächsten Poll auf den Server-Wert nach (Regel 3 unten).
+  * Die Restzeit-Division unten ist ebenfalls eine Näherung.
+    **Autoritativ für die Ankunft ist `eta_game`** — es kennt die
+    Gelände-Zeiten, die Division kennt sie nicht. Ein Countdown darf
+    gerechnet werden, ein *Termin* wird angezeigt.
+
+  **NOTE(E4):** geplanter Ausbau ist das **echte Tempo des aktuellen
+  Segments** — weiterhin EIN Skalar im Payload
+  (`|waypoints[seg+1] − waypoints[seg]| / (t[seg+1] − t[seg]) × Zeitfaktor`),
+  serverseitig aus denselben Zeitmarken berechnet. Renderer sollten sich
+  nicht auf die heutige Extrapolationsgenauigkeit festlegen, bevor das
+  gelandet ist.
 - **`pos` (§ A1.4) und `travel` widersprechen sich nicht.** `pos` ist der vom
   Reise-Ticker geschriebene Punkt und wird nur im **Ticker-Takt (5 s)**
   nachgeführt; `travel` erlaubt die stetige Ableitung dazwischen. Für einen
@@ -1109,21 +1132,32 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 - **Freeze:** steht die Spieluhr, stehen alle Reisen. `progress_m` bleibt
   konstant, `speed_m_s_real` ist `null` — genau dann darf nicht
   extrapoliert werden.
-- **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Restzeit-
-  Anzeigen rechnen daher `(total_m − progress_m) / speed_m_s_real` in
-  ECHTEN Sekunden — NICHT `eta_game` gegen eine lokale Uhr (die Spieluhr
-  läuft mit Faktor und kann springen; `eta_game` ist eine Spielzeit-Marke
-  für Texte/Logs).
+- **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Ein laufender
+  Restzeit-Countdown rechnet daher näherungsweise
+  `(total_m − progress_m) / speed_m_s_real` in ECHTEN Sekunden — NICHT
+  `eta_game` gegen eine lokale Uhr (die Spieluhr läuft mit Faktor und kann
+  springen). Der ANGEZEIGTE Ankunftszeitpunkt kommt immer aus `eta_game`
+  (siehe Nominal-Absatz oben).
 - **Fog (§ A12) gilt auch für Reisende:** ein Charakter in einer dem Avatar
   unbekannten Location fehlt komplett — mitsamt seiner Reise. Der
   `target_id` im eigenen Block wird NICHT verschwiegen (wie
   `movement_target_id`), wohl aber der Name: `movement_target_name` bleibt
   leer, solange der Avatar das Ziel nicht kennt.
+- **Die ROUTE ist Avatar-Wissen.** Im gefoggten Payload trägt nur der Avatar
+  selbst seine `waypoints`; bei allen anderen Charakteren ist das Feld
+  `null` (der Schlüssel bleibt stehen, damit „nicht mitgeteilt" von „leer"
+  unterscheidbar ist). Grund: die Polylinie endet an der Türöffnung des
+  Ziels — sie wäre eine meter-genaue Kartenmarke für einen Ort, den der
+  Avatar nicht kennt. Eine fremde Figur wird dann an ihrem `pos` gezeichnet
+  (das die Fog-Regel ohnehin auf sichtbare Locations begrenzt), ohne
+  Zwischen-Poll-Interpolation. `show_all=1` (Admin) liefert alle Routen.
 
 **Client-Erwartung**
 
 1. Figur auf der Server-Position rendern (Formel oben), nicht auf dem
-   Mittelpunkt von `location_id` und nicht auf `pos`, solange `travel` da ist.
+   Mittelpunkt von `location_id` und nicht auf `pos`, solange `travel` MIT
+   `waypoints` da ist. Ohne `waypoints` (Fog, s. o.) bleibt `pos` die
+   Position.
 2. Zwischen zwei Polls darf mit `speed_m_s_real` extrapoliert werden:
    `progress_m += Δt_real × speed_m_s_real`, geklemmt auf `total_m`
    (bei `null`: einfrieren). Extrapoliert wird **`progress_m`** — der
@@ -1132,6 +1166,9 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
    nächste Poll kommt).
 3. Beim nächsten Poll: Abweichung `|progress_m_client − progress_m_server|`
    > 1,0 m ⇒ hart auf den Server-Wert schnappen. Darunter weich nachziehen.
+   Auf Gelände mit `speed_factor ≠ 1` ist das der Regelfall, nicht die
+   Ausnahme (Nominal-Absatz oben) — wer sichtbares Schnappen vermeiden
+   will, extrapoliert vorsichtiger oder wartet auf NOTE(E4).
 4. Blickrichtung/Clip bleiben Client-Sache (Laufrichtung aus dem aktuellen
    Segment); `activity_animation` wird bewusst NICHT auf „walk" gezwungen
    (§ A8).
@@ -1153,11 +1190,19 @@ Payload selbst ist handgerechnet abgesichert:
 eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
 `speed_m_s_real` `null`).
 
-**Divergenz (Stand E3):** die beiden Karten-Clients lesen noch die
-Zellen-Felder — `frontend/src/player/MapPanel.tsx` (Typ `travel` mit
-`progress_cells`/`path`; liest faktisch nur `eta_game`, stürzt also nicht
-ab) und `client3d/src/types.ts` + `main.ts` (`cell_seconds_real`). Beide
-werden mit **E4/E5** auf die Polylinie umgestellt.
+**Divergenz (Stand E3):** beide Karten-Clients deklarieren noch die
+Zellen-Felder und werden erst mit **E4/E5** auf die Polylinie umgestellt.
+
+* `frontend/src/player/MapPanel.tsx` — Typ `travel` mit
+  `progress_cells`/`path`, liest faktisch nur `eta_game` über Optional
+  Chaining. Kein Absturz, aber auch keine Interpolation.
+* `client3d/src/types.ts` (`MapTravel` mit `path`/`seg`/`frac`/
+  `cell_seconds_real`) + `client3d/src/main.ts`. Der Reise-Zweig dort las
+  ungeprüft `tr.path.length` und **warf** mit dem v2-Block eine
+  `TypeError` — pro Poll, in einem `setInterval` ohne `try/catch`, was das
+  ganze NPC-Update mitriss. Mit E3 steht dort ein `Array.isArray`-Guard:
+  der Zellen-Zweig ist tot, Reisende werden bis E4 an ihrer Kachel
+  gezeichnet. **Der Guard ist die Notbremse, nicht die Migration.**
 
 ---
 
@@ -1179,6 +1224,7 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): unter Fog nur der Avatar selbst — bis die Sicht-/Hörweiten-Regel mit **E6** kommt, ist draußen niemand sonst zu sehen |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
+| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber `waypoints` ist bei **jedem außer dem Avatar** `null`: die Route endet an der Tür des Ziels und wäre eine meter-genaue Kartenmarke für einen vielleicht unbekannten Ort (§ A11) |
 | `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
 | `world_bounds` | **nein** | siehe unten |
 | `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |

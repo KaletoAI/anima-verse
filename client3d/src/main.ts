@@ -1472,7 +1472,13 @@ async function startApp(username: string, role: string) {
         // tile centre of location_id, which lags at ticker cadence. The
         // NpcManager keeps extrapolating between polls via cellSecondsReal.
         const tr = c.travel;
-        if (tr && tr.path.length >= 2) {
+        // GUARD, not a migration: since E3 the travel block is a METRE
+        // polyline (§ A11) and carries no `path` at all — reading .length off
+        // it threw once per poll and took the whole NPC update with it (this
+        // loop runs in a bare setInterval). The cell branch below is dead
+        // until E4 rebuilds it on `waypoints`/`progress_m`; the guard keeps
+        // travellers rendering at their tile until then.
+        if (tr && Array.isArray(tr.path) && tr.path.length >= 2) {
           const points = tr.path.map((id) => {
             const t = tiles.get(id);
             if (t) return t.center.clone().setY(tileGroundY(t, t.center));
