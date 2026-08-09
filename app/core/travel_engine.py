@@ -51,6 +51,11 @@ DEFAULT_SPEED_M_S = 1.4
 _MIN_SPEED_M_S = 0.1
 _MAX_SPEED_M_S = 20.0
 
+# How often the TravelTicker settles journeys, in REAL seconds. It doubles as
+# the arrival tolerance's unit (``_at_goal``): read there as GAME seconds, so
+# the goal test never depends on the world's clock factor.
+_TICK_SECONDS = 5.0
+
 
 def get_travel_speed_m_s() -> float:
     """Walking speed in metres per GAME second, from the world setting
@@ -171,6 +176,39 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
     return {"pos": (round(last[0], 2), round(last[1], 2)),
             "seg": max(len(pts) - 2, 0), "arrived": True,
             "eta_game": eta_game, "progress_m": total_m, "total_m": total_m}
+
+
+def segment_pace_m_s(waypoints: Sequence[Sequence[float]],
+                     st: Dict[str, Any]) -> Optional[float]:
+    """The REAL pace of the segment being walked right now, in metres per
+    GAME second — or ``None`` when there is no such segment.
+
+    ``speed_m_s`` on the journey is the NOMINAL pace; the terrain's
+    ``speed_factor`` (§ A1.5) lives only in the baked ``t_cum`` stamps, so the
+    pace a figure actually keeps is read back out of them:
+
+        |w[seg+1] − w[seg]| / (t[seg+1] − t[seg])
+
+    ``None`` for an arrived journey (there is no current segment any more) and
+    for degenerate geometry (a zero-length or zero-time segment — both legal,
+    ``segment_costs`` produces them). The caller turns it into REAL seconds
+    with the clock factor, exactly like ``speed_m_s_real``.
+    """
+    if st.get("arrived"):
+        return None
+    try:
+        seg = int(st.get("seg") or 0)
+        x0, z0, t0 = (float(waypoints[seg][0]), float(waypoints[seg][1]),
+                      float(waypoints[seg][2]))
+        x1, z1, t1 = (float(waypoints[seg + 1][0]), float(waypoints[seg + 1][1]),
+                      float(waypoints[seg + 1][2]))
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    span = t1 - t0
+    length = math.dist((x0, z0), (x1, z1))
+    if span <= 0 or length <= 0:
+        return None
+    return length / span
 
 
 def get_journey(character_name: str,
@@ -642,14 +680,6 @@ def _leave_still_allowed(name: str) -> bool:
     return False
 
 
-# How close to the journey's LAST waypoint a settling point still counts as
-# "walked to the authored opening", in metres. Only within this distance does
-# the opening's room link apply: an EARLY arrival (a derived crossing halfway
-# down the route, see advance_all_journeys) entered the building somewhere
-# else entirely, and claiming the door's room for it would be a lie.
-_GOAL_TOLERANCE_M = 0.5
-
-
 def _arrival_gate(name: str, target_id: str, target: Dict[str, Any],
                   entry_room: str) -> Tuple[bool, str]:
     """The two walls in front of a journey's target — ``(ok, reason)``.
@@ -706,20 +736,41 @@ def _walked_prefix(journey: Dict[str, Any],
 
 
 def _at_goal(journey: Dict[str, Any], st: Dict[str, Any]) -> bool:
-    """Is the settling point the journey's own goal point (within tolerance)?
+    """Is the settling point on the FINAL APPROACH to the journey's own goal?
 
-    True for every ordinary arrival; false for an early derived crossing that
-    happens metres away from the authored opening.
+    Measured as REMAINING ROUTE (``total_m − progress_m``) against one
+    ticker's worth of travel at the journey's own speed — not as the
+    Euclidean distance to the last waypoint (E3 residual, decided in E4).
+
+    The Euclidean radius was wrong for exactly the geometry the pathfinder
+    produces most often: a final approach that runs COLLINEAR with the
+    target's own wall. The footprint test is inclusive, so the route's last
+    metres already lie IN the target, the ticker catches the crossing a few
+    metres before the door — and a 0.5 m radius then called that "somewhere
+    else entirely" and handed out the arrival room, although the traveller is
+    walking to that very opening.
+
+    One tick's travel is the honest bound: the ticker can never catch the
+    crossing closer than the distance one tick covers, so anything within it
+    IS the last leg. It is measured in GAME seconds × the journey's speed, so
+    the answer never depends on the world's clock factor.
+
+    False for an early derived crossing far from the end (the route legally
+    cuts through the target's footprint on its way to a door facing away):
+    that figure entered the building somewhere else, and claiming the door's
+    room for it would be a lie.
     """
-    waypoints = journey.get("waypoints") or []
-    if not waypoints:
+    if not (journey.get("waypoints") or []):
         return False
     try:
-        last = (float(waypoints[-1][0]), float(waypoints[-1][1]))
-    except (TypeError, ValueError, IndexError):
+        speed = float(journey.get("speed_m_s") or 0.0)
+        remaining = (float(st.get("total_m") or 0.0)
+                     - float(st.get("progress_m") or 0.0))
+    except (TypeError, ValueError):
         return False
-    return math.dist(last, (float(st["pos"][0]),
-                            float(st["pos"][1]))) <= _GOAL_TOLERANCE_M
+    if speed <= 0:                      # a journey without a usable speed
+        speed = DEFAULT_SPEED_M_S       # still walks at the default pace
+    return remaining <= _TICK_SECONDS * speed
 
 
 def _settle_arrival(name: str, journey: Dict[str, Any],
@@ -815,6 +866,22 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
     # would be re-settled on every single tick, forever.
     if get_movement_target(name):
         cancel_journey(name)
+    # The party ARRIVES in formation, not in a stack. The location write above
+    # dragged every follower into the target and put them on its centre, i.e.
+    # exactly on top of the leader — the same offsets the road used are the
+    # honest end of the journey. Perpendicular to the LAST segment: the party
+    # keeps facing the way it came in.
+    try:
+        from app.models.character import get_character_pos
+        pos = get_character_pos(name)
+        waypoints = journey.get("waypoints") or []
+        if pos is not None and len(waypoints) >= 2:
+            _move_party_followers(name, target_id,
+                                  (float(pos["x"]), float(pos["z"])),
+                                  waypoints, len(waypoints) - 2)
+    except Exception:
+        logger.debug("party arrival formation failed for %s", name,
+                     exc_info=True)
     try:
         clear_pose_intent(name)   # D6: arrival = location change
     except Exception:
@@ -915,9 +982,6 @@ def advance_all_journeys() -> None:
             _settle_arrival(name, j, st)
         except Exception as e:
             logger.warning("advance journey failed for %s: %s", name, e)
-
-
-_TICK_SECONDS = 5.0
 
 
 class TravelTicker:

@@ -287,7 +287,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # Journeys are a pure function of the GAME clock — read it ONCE for the
     # whole payload so every character in one response shares the same now.
     from app.core.timeutils import game_now, game_speed_factor, to_world_tz
-    from app.core.travel_engine import get_journey, journey_state
+    from app.core.travel_engine import (get_journey, journey_state,
+                                        segment_pace_m_s)
     _now_game = game_now()
     _factor = game_speed_factor()
 
@@ -350,6 +351,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 # The pace the journey was STARTED with (world setting at that
                 # moment) — a later setting change never re-times it.
                 _speed = float(_j.get("speed_m_s") or 0.0)
+                # …and the pace this very segment is baked at (terrain).
+                _pace = segment_pace_m_s(_j["waypoints"], _st)
                 travel = {
                     "target_id": _j["target"],
                     # x/z ONLY — the baked cumulative game seconds (t_cum) are
@@ -379,6 +382,15 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # a SPEED (metres per second) multiplies.
                     "speed_m_s_real": (round(_speed * _factor, 4)
                                        if _factor > 0 and _speed > 0 else None),
+                    # The pace of the segment being walked RIGHT NOW (§ A11,
+                    # E4): the terrain speed_factor sits in the baked stamps,
+                    # not in speed_m_s, so THIS is what a client extrapolates
+                    # with; speed_m_s_real above stays the nominal fallback.
+                    # null on a frozen clock, after the arrival and for a
+                    # degenerate segment — the three cases where the number
+                    # would be a lie.
+                    "pace_m_s_real": (round(_pace * _factor, 4)
+                                      if _factor > 0 and _pace else None),
                 }
         except Exception as e:
             travel = None
@@ -482,8 +494,9 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # rotation = yaw in degrees (explicit 0 is meaningful — absent falls back
     # to map_rotation_2d on the client), size = the model's share of the
     # location's reference square (]0, 1]; 1 = edge to edge, absent = 1).
-    # A model can no longer be LARGER than its location — that is what
-    # extent_m is for, and it keeps the promise "plan edge == model edge".
+    # A model can no longer be LARGER than its location — a location that
+    # needs more room is WIDER (plan_width_m), which keeps the promise
+    # "plan edge == model edge".
     rot = raw.get("rotation")
     if rot is not None and f"{rot}".strip() != "":
         try:
@@ -513,23 +526,16 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             snapped = 0
         if snapped in (90, 180, 270):
             out["tile_rotation"] = snapped
-    # How wide the location is in WORLD metres — the reference square every
-    # plan fraction lives in AND the box the model fills. 10 = exactly one
-    # map tile (the default); more overlaps the neighbours on purpose
-    # (a village, a lake). Replaces the former fixed 8 m square.
-    ext = raw.get("extent_m")
-    if ext is not None and f"{ext}".strip() != "":
-        try:
-            v = float(ext)
-            if 1.0 <= v <= 40.0:
-                out["extent_m"] = round(v, 2)
-        except (TypeError, ValueError):
-            pass
-    # Real-world width the reference square represents (metres) — THE scale
-    # anchor, and since 2026-07-28 the ONLY one: k = extent_m / plan_width_m
-    # sizes room rects (from the room models' width_m), figures (1.70 m × k),
-    # props and the storey height. Absent = no anchor; floor-plan geometry
-    # cannot be saved (see _require_scale_anchor).
+    # ``extent_m`` — the world-metre size of the reference square — is GONE
+    # with E4: the reference square IS the footprint, so its edge is
+    # ``plan_width_m`` and k = 1 (scene_recipe.derive_scalars). Nothing reads
+    # the field any more, and it is not kept here either: a location saved
+    # once drops it.
+    # The width of the location in metres — THE scale anchor and the ONE
+    # length everything derives from: the footprint on the world map
+    # (§ A1.1), the reference square of the scene, room rects, figures
+    # (1.70 m), props and the storey height. Absent = no anchor; floor-plan
+    # geometry cannot be saved (see _require_scale_anchor).
     pw = raw.get("plan_width_m")
     if pw is not None and f"{pw}".strip() != "":
         try:
