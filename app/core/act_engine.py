@@ -116,11 +116,8 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
     actor_room = (get_character_current_room(actor) or "").strip()
     location = get_location_by_id(actor_loc) or {}
     loc_name = get_location_name(actor_loc) or actor_loc
-    room_name = ""
-    if actor_room and location:
-        room_obj = get_room_by_id(location, actor_room)
-        if room_obj:
-            room_name = room_obj.get("name", "") or ""
+    room_obj = get_room_by_id(location, actor_room) if (actor_room and location) else None
+    room_name = (room_obj.get("name", "") or "") if room_obj else ""
 
     # Recipients (other people at scope, excluding actor)
     recipients = resolve_recipients(scope, actor)
@@ -131,8 +128,8 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
     # Storyteller-Agent (StreamingAgent w/ Storyteller-config + tools)
     narration, tools_fired = await _run_storyteller_agent(
         actor=actor, scope=scope, location_name=loc_name,
-        room_name=room_name, location=location, active_events=active,
-        recipients=recipients, user_action_text=text)
+        room_name=room_name, location=location, room=room_obj,
+        active_events=active, recipients=recipients, user_action_text=text)
 
     # Extract [EVENT_RESOLVED:…] marker
     marker = ""
@@ -165,7 +162,7 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
     # Stream entry: the storyteller narration into the room log (utterances/
     # perceptions), so acts appear in the /play chat + observer — like spoken
     # utterances (TalkTo). Before this they were only in
-    # LLM-Log/Memory, nirgends im Stream sichtbar.
+    # the LLM log / memory, invisible in the stream.
     _record_act_to_stream(
         narration=narration, location_id=actor_loc, room_id=actor_room,
         scope=scope, resolved=resolved_flag, event_id=resolved_event_id,
@@ -189,12 +186,17 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
 async def _run_storyteller_agent(
     actor: str, scope: str, location_name: str,
     room_name: str, location: Dict[str, Any],
+    room: Optional[Dict[str, Any]],
     active_events: List[Dict[str, Any]],
     recipients: List[str], user_action_text: str
 ) -> Tuple[str, List[str]]:
     """Run the Storyteller via the same ``StreamingAgent`` infrastructure
     used by chat, but with the per-world storyteller config (chat mode,
     enabled skills).
+
+    ``room`` is the actor's already-resolved room record (or ``None`` when the
+    actor is not in a room) — the caller has it, so it is passed in instead of
+    being looked up a second time. Only used for the indoor/outdoor flag.
 
     Returns (narration, tools_fired).
     """
@@ -216,24 +218,24 @@ async def _run_storyteller_agent(
     enabled_skill_ids = {sid for sid, on
                           in (cfg.get("enabled_skills") or {}).items() if on}
 
-    # ── Sprache ────────────────────────────────────────────────────────
-    # Sprache des handelnden Characters (NICHT die User-UI-Sprache) — die
-    # Narration spricht aus der Welt heraus, nicht aus dem Admin-Interface.
+    # ── Language ───────────────────────────────────────────────────────
+    # The acting character's language (NOT the user's UI language) — the
+    # narration speaks out of the world, not out of the admin interface.
     from app.models.character import get_character_language
     _lang = (get_character_language(actor) or "de")
     LANG_NAMES = {"de": "German", "en": "English", "fr": "French",
                   "es": "Spanish", "it": "Italian", "ja": "Japanese"}
     lang_name = LANG_NAMES.get(_lang, _lang)
 
-    # ── Subject-Kontext ────────────────────────────────────────────────
+    # ── Subject context ────────────────────────────────────────────────
     subject_profile = _short_subject_profile(actor)
     subject_outfit = _subject_outfit_text(actor)
     subject_mood = _subject_mood_text(actor)
 
-    # ── Anwesende Personen mit Outfits ─────────────────────────────────
+    # ── People present, with their outfits ─────────────────────────────
     present_people_block = _build_present_people_block(recipients[:RECIPIENT_CAP])
 
-    # ── Active Events Block ────────────────────────────────────────────
+    # ── Active-events block ────────────────────────────────────────────
     ev_lines = []
     for evt in active_events or []:
         if evt.get("resolved"):
@@ -246,7 +248,7 @@ async def _run_storyteller_agent(
 
     # ── Setting (Indoor/Outdoor) — room flag wins over the location's ──
     from app.models.world import resolve_indoor_flag
-    indoor_flag = resolve_indoor_flag(location, room_obj if actor_room and location else None)
+    indoor_flag = resolve_indoor_flag(location, room)
     if indoor_flag == "indoor":
         setting_block = ("Setting: Indoor (enclosed place — keep narration "
                           "coherent with an interior space).")
@@ -271,7 +273,7 @@ async def _run_storyteller_agent(
     else:
         time_of_day = "night"
 
-    # ── Template rendern ───────────────────────────────────────────────
+    # ── Render the template ────────────────────────────────────────────
     sys_prompt, user_prompt = render_task(
         "storyteller_react",
         subject_name=actor,
@@ -289,7 +291,7 @@ async def _run_storyteller_agent(
         user_action_text=user_action_text,
         language_name=lang_name)
 
-    # ── LLMs aufloesen ─────────────────────────────────────────────────
+    # ── Resolve the LLMs ───────────────────────────────────────────────
     st_inst = resolve_llm(llm_task, agent_name=actor) \
         or resolve_llm("chat_stream", agent_name=actor)
     if st_inst is None:
@@ -304,7 +306,7 @@ async def _run_storyteller_agent(
     tool_model_name = (tool_inst.model if tool_inst else "") or ""
     tool_format = get_format_for_model(tool_model_name) if tool_model_name else "tag"
 
-    # ── Tools-Dict aus skill_manager, gefiltert per Storyteller-Config ─
+    # ── Tools dict from skill_manager, filtered by storyteller config ──
     sm = get_skill_manager()
     tools_dict: Dict[str, Any] = {}
     tool_specs: List[Any] = []
@@ -315,8 +317,8 @@ async def _run_storyteller_agent(
             sid = getattr(skill, "SKILL_ID", "")
             if not sid or sid not in enabled_skill_ids:
                 continue
-            # Per-Character-Limits ueberschreiben: Storyteller-Tools haben
-            # ``skip_daily_limit=True`` (sonst greift z.B. das outfit-cap).
+            # Override per-character limits: storyteller tools carry
+            # ``skip_daily_limit=True`` (otherwise e.g. the outfit cap hits).
             t_spec = skill.as_tool(character_name=actor)
             t_name = t_spec.name
             t_orig = t_spec.func
@@ -340,10 +342,10 @@ async def _run_storyteller_agent(
             if getattr(skill, "CONTENT_TOOL", False):
                 _content_tools.add(t_name)
 
-    # ── Tool-System-Prompt: voller Format-Block wie im Chat ────────────
-    # Ohne diese Tool-Format-Hinweise weiss der Tool-LLM nicht, WIE er
-    # ein Tool aufrufen soll (z.B. <ChangeOutfit>…</ChangeOutfit>-Syntax)
-    # und antwortet bei Trigger-Erkennung trotzdem mit NONE.
+    # ── Tool system prompt: the full format block, same as in chat ─────
+    # Without these tool-format hints the tool LLM does not know HOW to call
+    # a tool (e.g. the <ChangeOutfit>…</ChangeOutfit> syntax) and answers
+    # NONE even when it did recognise a trigger.
     if tool_specs:
         from app.core.tool_formats import build_tool_instruction
         tool_instr_block = build_tool_instruction(
@@ -351,10 +353,10 @@ async def _run_storyteller_agent(
             model_name=tool_model_name,
             is_roleplay=False)
 
-        # Outfit-Kontext: WICHTIG die echten Item-NAMEN aus der DB liefern,
-        # nicht die Prompt-Fragmente von build_equipped_outfit_prompt. Die
-        # ChangeOutfit-Skill macht in unequip_items Name-Matching gegen
-        # item.name — Prompt-Fragmente wuerden nie matchen.
+        # Outfit context: IMPORTANT — supply the real item NAMES from the DB,
+        # not the prompt fragments from build_equipped_outfit_prompt. The
+        # ChangeOutfit skill name-matches unequip_items against item.name —
+        # prompt fragments would never match.
         equipped = _equipped_item_names(actor)
         outfit_block = (f"\n{actor} currently wears: {equipped}"
                          if equipped else "")
@@ -394,7 +396,7 @@ async def _run_storyteller_agent(
         mode=chat_mode,
         constrained_tools=True)
 
-    # ── Stream konsumieren ─────────────────────────────────────────────
+    # ── Consume the stream ─────────────────────────────────────────────
     narration_chunks: List[str] = []
     tools_fired: List[str] = []
     # Register as chat_active in the provider queue → the storyteller call
@@ -418,9 +420,9 @@ async def _run_storyteller_agent(
             if isinstance(event, ContentEvent):
                 narration_chunks.append(event.content or "")
             elif isinstance(event, ExtractionEvent):
-                # Marker (EVENT_RESOLVED) an Narration anhaengen, damit der
-                # spaetere _try_resolve den Marker findet, egal ob er aus
-                # dem Storyteller-Output oder dem Tool-LLM-Pass kommt.
+                # Append the EVENT_RESOLVED marker to the narration so the
+                # later _try_resolve finds it, no matter whether it came from
+                # the storyteller output or from the tool-LLM pass.
                 if event.markers:
                     narration_chunks.append("\n" + event.markers)
             elif isinstance(event, ToolStartEvent):
@@ -437,7 +439,7 @@ async def _run_storyteller_agent(
             elif isinstance(event, (HeartbeatEvent, ToolEndEvent,
                                      DeferredToolEvent, RetryHintEvent,
                                      LoopInfoEvent)):
-                # nicht relevant fuer Narration
+                # not relevant for the narration
                 pass
     except Exception as e:
         logger.error("Storyteller agent.stream failed: %s", e)

@@ -261,7 +261,7 @@ async def act_route(character_name: str, request: Request) -> Dict[str, Any]:
         if scope not in ("here", "location"):
             raise HTTPException(status_code=400, detail="scope must be 'here' or 'location'")
 
-        from app.skills.act_skill import perform_act
+        from app.core.act_engine import perform_act
         result = await perform_act(character_name, text, scope)
 
         return {
