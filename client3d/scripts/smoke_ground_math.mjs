@@ -14,9 +14,10 @@
  * `groundAreas.ts` takes `three` as a PARAMETER (package rule) and imports it
  * only as a type, so the transpiled module has no runtime import at all and
  * can be loaded here directly — the same esbuild transpile the walk smoke
- * uses. Only `buildAreaGeometry` needs a THREE namespace; everything this file
- * checks (`signedArea`, `polygonArea`, `cleanRing`, `shapePoints`) is pure
- * arithmetic on number pairs.
+ * uses. `signedArea`, `polygonArea`, `cleanRing` and `shapePoints` are pure
+ * arithmetic on number pairs; `buildAreaGeometry` gets a four-member stand-in
+ * for the THREE namespace at the end of the file, because what is checked
+ * there is the shape of its RETURN VALUE, not Three's triangulator.
  *
  * --- The coordinate convention ---------------------------------------------
  * A terrain polygon is a list of WORLD points `[x, z]` in metres (the payload
@@ -184,7 +185,8 @@ const COLLINEAR = [[0, 0], [5, 0], [10, 0]];
 const POND = [[0, 0], [12, 0], [12, 8], [2, 8], [0, 6]];
 
 async function main() {
-  const { signedArea, polygonArea, cleanRing, shapePoints } = await loadGroundAreas();
+  const { signedArea, polygonArea, cleanRing, shapePoints, buildAreaGeometry }
+    = await loadGroundAreas();
 
   console.log('signedArea — the shoelace, sign carries the winding');
   check('(T) triangle, counter-clockwise in world XZ', signedArea(TRIANGLE), 30);
@@ -242,6 +244,51 @@ async function main() {
   // Round trip: the shape ring describes the same figure, so its area in
   // shape space must equal the world area.
   check('(P) shape ring keeps the pond area', polygonArea(shapePoints(POND)), 94);
+
+  // --- buildAreaGeometry: the CLEANED ring comes back out --------------------
+  //
+  // The wrapper needs a THREE namespace, and the four members it touches are
+  // small enough to stand in for here. That is the point: what is checked is
+  // the CONTRACT of the return value, not Three's triangulator.
+  //
+  // `ring` exists because every caller that measures the area afterwards (the
+  // scatter's bounding box, its point-in-polygon test, the LOD centre) must
+  // measure the ring the MESH was built from. Reading the raw payload instead
+  // let a single non-finite corner poison the bounding box with NaN — and NaN
+  // fails silently: no scatter and a NaN distance, which both just look like
+  // "this kind scatters nothing".
+  const fakeThree = {
+    Vector2: class { constructor(x, y) { this.x = x; this.y = y; } },
+    Shape: class { constructor(points) { this.points = points; } },
+    ShapeGeometry: class {
+      constructor(shape) { this.shape = shape; this.rotatedX = null; }
+      rotateX(a) { this.rotatedX = a; return this; }
+      computeBoundingSphere() { this.sphered = true; return this; }
+    },
+  };
+
+  console.log('\nbuildAreaGeometry — geometry, area and the ring it was built from');
+  const junkPond = [[0, 0], [12, 0], [12, 8], [2, 8], [NaN, 3], [0, 6], [0, 0]];
+  const builtPond = buildAreaGeometry(fakeThree, junkPond);
+  check('the junk corner and the closing duplicate are gone from the ring',
+    builtPond.ring, POND);
+  check('and the area is the hand-derived 94 m2 of the cleaned ring',
+    builtPond.areaM2, 94);
+  check('the geometry was turned onto the XZ plane, normals up',
+    builtPond.geometry.rotatedX, -Math.PI / 2);
+  check('…and got its bounding sphere', builtPond.geometry.sphered, true);
+  check('the shape ring has as many points as the cleaned world ring',
+    builtPond.geometry.shape.points.length, POND.length);
+  check('a reversed ring builds just the same area',
+    buildAreaGeometry(fakeThree, L_SHAPE_REV).areaM2, 18);
+  check('…and its ring keeps the order it was given',
+    buildAreaGeometry(fakeThree, L_SHAPE_REV).ring, L_SHAPE_REV);
+  check('a ring that encloses nothing builds nothing',
+    buildAreaGeometry(fakeThree, COLLINEAR), null);
+  check('and neither does a two-point one',
+    buildAreaGeometry(fakeThree, [[0, 0], [1, 1]]), null);
+  check('nor an empty polygon', buildAreaGeometry(fakeThree, []), null);
+  check('nor a missing one', buildAreaGeometry(fakeThree, null), null);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

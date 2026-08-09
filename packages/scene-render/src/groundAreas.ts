@@ -137,6 +137,18 @@ export interface AreaGeometry {
   geometry: BufferGeometry
   /** enclosed ground in square metres — the scatter density reads it */
   areaM2: number
+  /**
+   * The ring the geometry was actually built from, in WORLD `[x, z]`: the
+   * payload polygon after `cleanRing` (junk and duplicates gone), winding
+   * untouched.
+   *
+   * Handed out because every caller that measures the area afterwards — a
+   * bounding box, a point-in-polygon test for scattering — must measure the
+   * SAME ring the mesh shows. Reading the raw payload instead lets a single
+   * non-finite corner poison a bounding box with NaN, which fails silently:
+   * no scatter, and a NaN distance in the LOD.
+   */
+  ring: Point2[]
 }
 
 /**
@@ -155,7 +167,11 @@ export interface AreaGeometry {
 export function buildAreaGeometry(T: THREE,
                                   polygon: readonly Point2[] | null | undefined
 ): AreaGeometry | null {
-  const pts = shapePoints(polygon)
+  // Cleaned ONCE, then used for everything below and handed to the caller —
+  // the mesh, the area and whatever the caller measures afterwards all speak
+  // about the same ring.
+  const ring = cleanRing(polygon)
+  const pts = shapePoints(ring)
   if (!pts.length) return null
   const shape = new T.Shape(pts.map(([x, y]) => new T.Vector2(x, y)))
   const geometry = new T.ShapeGeometry(shape)
@@ -163,5 +179,5 @@ export function buildAreaGeometry(T: THREE,
   // world height of this area is set on the MESH by the caller (`ground_y`).
   geometry.rotateX(-Math.PI / 2)
   geometry.computeBoundingSphere()
-  return { geometry, areaM2: polygonArea(cleanRing(polygon)) }
+  return { geometry, areaM2: polygonArea(ring), ring }
 }

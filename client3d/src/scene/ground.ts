@@ -29,7 +29,7 @@
  */
 import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry, surfaceMaterial } from '@anima/scene-render';
-import type { SurfaceMaterialSpec } from '@anima/scene-render';
+import type { Point2, SurfaceMaterialSpec } from '@anima/scene-render';
 import { fetchTerrain } from '../api';
 import type { TerrainArea, TerrainPayload, TerrainScatterMeta, TerrainType, WorldBounds } from '../types';
 import { preloadSurfaceTexture, surfaceFor, surfaceMaterialSpec } from './tiles';
@@ -106,8 +106,13 @@ export interface Ground {
   dispose(): void;
 }
 
-/** Bounding box of a ring: `[minX, minZ, maxX, maxZ]`. */
-function ringBounds(polygon: [number, number][]): [number, number, number, number] {
+/** Bounding box of a ring: `[minX, minZ, maxX, maxZ]`.
+ *
+ *  Takes the CLEANED ring of `buildAreaGeometry`, never the raw payload
+ *  polygon: one non-finite corner would make every bound NaN, and NaN fails
+ *  quietly here — the scatter would find no point inside its own box and the
+ *  LOD would compare a NaN distance, both of which just look like "no props". */
+function ringBounds(polygon: Point2[]): [number, number, number, number] {
   let minX = Infinity; let minZ = Infinity; let maxX = -Infinity; let maxZ = -Infinity;
   for (const [x, z] of polygon) {
     if (x < minX) minX = x;
@@ -121,7 +126,7 @@ function ringBounds(polygon: [number, number][]): [number, number, number, numbe
 /** Even-odd ray crossing: is `(x, z)` inside the ring? Used for the scatter
  *  rejection sampling only — a point on the edge may fall either way, which
  *  moves at most one tuft by a hair. */
-function pointInRing(x: number, z: number, polygon: [number, number][]): boolean {
+function pointInRing(x: number, z: number, polygon: Point2[]): boolean {
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
     const [xi, zi] = polygon[i];
@@ -223,6 +228,13 @@ export function createGround(): Ground {
       drain(baseOwned);
     }
     baseKey = key;
+    // TODO(E4-Task 3): this plane needs the `groundHole` shader patch when the
+    // tiles come back. The basement view cuts a hole into the world ground so
+    // one can look down into a cellar — that patch sits on the OLD grass plane
+    // (`main.ts`, `groundMat.onBeforeCompile`), which task 3 deletes. Until
+    // then the hole still works, because the grass plane is still there; the
+    // moment it goes, the cellar is roofed by THIS plane unless the patch
+    // moves along.
     const geo = new THREE.PlaneGeometry(w, d);
     geo.rotateX(-Math.PI / 2);
     // The base tiles over its WHOLE edge, so one UV unit is `w` metres wide
@@ -252,7 +264,8 @@ export function createGround(): Ground {
    * from rejection sampling inside the ring's bounding box; a concave area
    * simply misses more often, which the try budget caps.
    */
-  function buildScatter(area: TerrainArea, areaM2: number): THREE.InstancedMesh | null {
+  function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number
+  ): THREE.InstancedMesh | null {
     const type = catalog.get((area.kind || '').toLowerCase());
     const scatter: TerrainScatterMeta | undefined = type?.meta?.scatter;
     const density = Number(scatter?.density_per_100m2 ?? 0);
@@ -260,7 +273,7 @@ export function createGround(): Ground {
     const wanted = Math.min(Math.round((areaM2 / 100) * density), SCATTER_MAX_PER_AREA);
     if (wanted < 1) return null;
 
-    const [minX, minZ, maxX, maxZ] = ringBounds(area.polygon);
+    const [minX, minZ, maxX, maxZ] = ringBounds(ring);
     const rnd = seededRandom(`terrain:scatter:${area.id}`);
     const points: [number, number, number][] = [];   // x, z, yaw
     let tries = wanted * SCATTER_TRIES_PER_POINT;
@@ -268,7 +281,7 @@ export function createGround(): Ground {
       tries -= 1;
       const x = minX + rnd() * (maxX - minX);
       const z = minZ + rnd() * (maxZ - minZ);
-      if (!pointInRing(x, z, area.polygon)) continue;
+      if (!pointInRing(x, z, ring)) continue;
       points.push([x, z, rnd() * Math.PI * 2]);
     }
     if (!points.length) return null;
@@ -369,8 +382,9 @@ export function createGround(): Ground {
       mesh.userData.terrainAreaId = area.id;
       group.add(mesh);
 
-      const [minX, minZ, maxX, maxZ] = ringBounds(area.polygon);
-      const scatter = buildScatter(area, built.areaM2);
+      // The CLEANED ring, the one the mesh was built from — see `ringBounds`.
+      const [minX, minZ, maxX, maxZ] = ringBounds(built.ring);
+      const scatter = buildScatter(area, built.ring, built.areaM2);
       if (scatter) group.add(scatter);
       areaMeshes.push({
         mesh,

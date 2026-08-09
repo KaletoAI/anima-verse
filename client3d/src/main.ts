@@ -27,7 +27,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, gridToWorld, roomFigureScale, setSurfaceTextures, setTerrainGrid, terrainLiftAt, tileGroundY, CELL, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, roomFigureScale, setSurfaceTextures, setTerrainGrid, terrainLiftAt, tileGroundY, CELL, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, sceneFigureScale, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
@@ -66,7 +66,18 @@ type V1Grid = {
   grid_bounds: { min_x: number; min_y: number; max_x: number; max_y: number } | null;
   template_location_id?: string;
 };
-/** TODO(E4-Task 3 tiles/camera, Task 6 fog): remove with the last cell reader. */
+/**
+ * RULE: never hand `v1()` an optional chain (`v1(tile?.loc)`).
+ *
+ * The cast intersects the argument type with `V1Grid`, and that swallows the
+ * `undefined` branch: the compiler then sees a value that has `grid_x`, stays
+ * silent, and the read throws at runtime. Guard the optional FIRST, cast the
+ * narrowed value. That mistake cost one poll-killing TypeError already
+ * (`reconcileAvatarCell`), and `tiles` being empty until task 3 made it fire
+ * on every single poll.
+ *
+ * TODO(E4-Task 3 tiles/camera, Task 6 fog): remove with the last cell reader.
+ */
 const v1 = <T>(o: T): T & V1Grid => o as T & V1Grid;
 type V1Travel = {
   path?: string[]; seg: number; frac: number; cell_seconds_real: number | null;
@@ -459,17 +470,22 @@ async function startApp(username: string, role: string) {
 
   // Boden + Kacheln
   //
-  // The frame comes from `grid_bounds` (§ A12) and NOT from the delivered
+  // The frame comes from `world_bounds` (§ A12) and NOT from the delivered
   // locations: those are only what the avatar knows, so a map centred on them
   // would jump sideways with every place discovered. The bounds are computed
-  // over ALL placed locations and stay still. Fallback (no location placed at
-  // all, `null`): the old min/max over what we have.
-  const xs = placeable.map((l) => v1(l).grid_x!), ys = placeable.map((l) => v1(l).grid_y!);
-  const v1Bounds = v1(firstMap).grid_bounds;
-  const center = v1Bounds
-    ? gridToWorld((v1Bounds.min_x + v1Bounds.max_x) / 2,
-      (v1Bounds.min_y + v1Bounds.max_y) / 2)
-    : gridToWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
+  // over ALL placed locations, in metres, and stay still.
+  //
+  // `null` (nothing placed at all) is the world ORIGIN. The v1 fallback here
+  // was a min/max over the placed grid cells — and with the metre payload
+  // `placeable` is empty, so `Math.min()` of nothing gave `Infinity` and the
+  // camera target became NaN: a world one could not see at all.
+  // TODO(E4-Task 3): the camera work proper (fit the frame, not just centre on
+  // it) belongs with the tile loop this still shares its centre with.
+  const center = firstMap.world_bounds
+    ? new THREE.Vector3(
+      (firstMap.world_bounds.min_x + firstMap.world_bounds.max_x) / 2, 0,
+      (firstMap.world_bounds.min_z + firstMap.world_bounds.max_z) / 2)
+    : new THREE.Vector3(0, 0, 0);
   const groundTex = grassTexture();
   groundTex.repeat.set(60, 60);
   const ground = new THREE.Mesh(
@@ -2539,9 +2555,15 @@ async function startApp(username: string, role: string) {
     if (!pos) return;
     const me = map.characters.find((c) => c.name === avatarName);
     const tile = me ? tiles.get(me.location_id) ?? null : null;
-    const gx = v1(tile?.loc).grid_x;
-    const gy = v1(tile?.loc).grid_y;
-    if (!tile || gx == null || gy == null) return;
+    // The tile guard comes FIRST — see the `v1()` rule in the bridge block:
+    // casting an optional chain hides the `undefined` from the compiler and
+    // throws at runtime. `tiles` is empty until task 3, so this ran on every
+    // single poll, and the throw landed in the poll's catch: a red "offline"
+    // dot over a healthy backend, and the terrain refetch below it skipped.
+    if (!tile) return;
+    const gx = v1(tile.loc).grid_x;
+    const gy = v1(tile.loc).grid_y;
+    if (gx == null || gy == null) return;
     const server: Cell = { gx, gy };
     const local = cellOf(pos.x, pos.z, CELL);
     if (server.gx === local.gx && server.gy === local.gy) {
