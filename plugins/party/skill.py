@@ -138,6 +138,17 @@ class PartySkill(PluginSkill):
             P.clear_invites_for(character_name)
         except Exception:
             pass
+        # A follower does not travel on its own account — it is dragged along
+        # by the leader. Its own journey has to end HERE: the travel ticker
+        # only cancels follower journeys while the LEADER is on the road, so a
+        # joiner whose leader stands still would keep walking away from the
+        # party it just joined.
+        try:
+            from app.core.travel_engine import cancel_journey, get_journey
+            if get_journey(character_name) is not None:
+                cancel_journey(character_name)
+        except Exception as _je:
+            self.ctx.logger.debug("join_party journey cancel failed: %s", _je)
         # Make the join visible in the room (narrator line); the character's own
         # RP reply runs separately via the reply turn.
         try:

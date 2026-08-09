@@ -1249,28 +1249,28 @@ class AgentLoop:
             # low, now at home) flips the character to sleeping.
             # Guard: if a journey home is already running, leave it alone —
             # restarting would reset started_at_game on every loop pick
-            # (~30s) and the character would never finish a 60-game-second
-            # cell. journeying toward somewhere ELSE is re-pointed home.
+            # (~30s) and the character would never walk a single metre.
+            # Journeying toward somewhere ELSE is re-pointed home.
             from app.core.travel_engine import get_journey, start_journey
             j = get_journey(character_name)
             if j and j.get("target") == home_loc:
                 return {"outcome": "auto_sleep_walking",
                         "preview": f"exhausted (stamina={stamina}) → journey home in progress",
                         "tools": []}
-            j = start_journey(character_name, home_loc)
+            j, reason = start_journey(character_name, home_loc)
             if j is None:
-                # No known path home: sleep in place instead of pacing the
-                # loop forever (behaviour change vs. the old inline step,
-                # which retried every tick without ever sleeping).
+                # No way home at all — unknown, unplaced or unwalkable target
+                # (the reason is logged, the outcome is the same): sleep in
+                # place instead of pacing the loop forever.
                 set_is_sleeping(character_name, True)
                 logger.warning(
-                    "Auto-sleep: no path home for %s — sleeping in place",
-                    character_name)
+                    "Auto-sleep: no way home for %s (%s) — sleeping in place",
+                    character_name, reason)
                 return {"outcome": "auto_sleep_no_path",
                         "preview": f"exhausted (stamina={stamina}) → no path home, sleeping in place",
                         "tools": ["Sleep"]}
-            logger.info("Auto-sleep: %s journeys home to %s (%d cells)",
-                        character_name, home_loc, len(j["path"]) - 1)
+            logger.info("Auto-sleep: %s journeys home to %s (%d waypoints)",
+                        character_name, home_loc, len(j["waypoints"]))
             return {"outcome": "auto_sleep_walking",
                     "preview": f"exhausted (stamina={stamina}) → journeying home",
                     "tools": ["SetLocation"]}

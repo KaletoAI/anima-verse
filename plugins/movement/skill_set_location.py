@@ -20,12 +20,10 @@ from app.models.character import (
     save_character_current_room,
     get_character_current_location,
     get_character_config,
-    get_movement_target,
-    get_known_locations)
+    get_movement_target)
 from app.models.world import (
     list_locations, get_location_rooms, get_room_by_name,
-        get_location_by_id,
-        find_path_through_known)
+    get_location_by_id)
 
 
 class SetLocationSkill(PluginSkill):
@@ -264,48 +262,47 @@ class SetLocationSkill(PluginSkill):
         # (start_journey; the travel ticker advances it as game time
         # passes). Same-location moves (room change only) stay instant.
         current_loc_id_now = get_character_current_location(character_name) or ""
-        known_list = get_known_locations(character_name)
         is_cross_location = bool(current_loc_id_now and current_loc_id_now != location_id)
-        # Journeys apply to NPCs only — the player avatar moves directly/
-        # instantly; timed travel for avatars is a stage-3 decision still
-        # pending.
+        # Journeys apply to NPCs only — the player avatar still moves
+        # instantly here; timed avatar travel runs over the /play route
+        # (Seamless World, E3 Task 5).
         from app.models.account import is_player_controlled as _is_player
         if is_cross_location and not _is_player(character_name):
-            path = find_path_through_known(current_loc_id_now, location_id, known_list)
-            if not path:
-                logger.info("Kein bekannter Pfad %s -> %s fuer %s",
-                            current_loc_id_now, location_id, character_name)
-                # Tagebuch-Eintrag: gescheiterter Reise-Versuch
+            from app.core.travel_engine import start_journey, journey_state
+            from app.core.timeutils import game_now, to_world_tz
+            j, reason = start_journey(character_name, location_id)
+            if j is None:
+                logger.info("No journey %s -> %s for %s: %s",
+                            current_loc_id_now, location_id, character_name,
+                            reason)
+                # Diary entry: a failed travel attempt. The REASON is
+                # recorded verbatim, the TEXT is not: a character cannot
+                # tell "I have never been told about this place" from "the
+                # place stands on no map at all", so both read alike.
                 try:
                     from app.models.character import _record_state_change
                     _record_state_change(character_name, "travel_failed",
                         location_name,
                         metadata={"location_id": location_id,
-                                  "reason": "no_known_path"})
+                                  "reason": reason})
                 except Exception:
                     logger.debug("travel_failed record failed", exc_info=True)
-                return (f"Du kennst den Weg nach {location_name} (noch) nicht. "
-                        f"Du musst zuerst dorthin gefuehrt werden oder einen "
-                        f"angrenzenden Ort entdecken.")
-            from app.core.travel_engine import start_journey, journey_state
-            from app.core.timeutils import game_now, to_world_tz
-            j = start_journey(character_name, location_id)
-            if not j:
-                # Path vanished between the check above and here — treat like
-                # the no-path case (same wording as the known-path guard).
-                return (f"Du kennst den Weg nach {location_name} (noch) nicht. "
-                        f"Du musst zuerst dorthin gefuehrt werden oder einen "
-                        f"angrenzenden Ort entdecken.")
-            st = journey_state(j["path"], j["started_at_game"], game_now(),
-                               j["seconds_per_cell"])
+                if reason == "no_route":
+                    return (f"There is no passable route to {location_name} "
+                            f"from here — water, cliffs or walls block every "
+                            f"way. You have to find another approach.")
+                return (f"You do not know the way to {location_name} (yet). "
+                        f"You have to be led there first or discover a place "
+                        f"nearby.")
+            st = journey_state(j["waypoints"], j["started_at_game"], game_now())
             eta_local = to_world_tz(st["eta_game"])
-            steps = len(j["path"]) - 1
-            logger.info("Journey: %s -> %s (%d Zellen, ETA %s)",
-                        character_name, location_name, steps, st["eta_game"])
-            return (f"Du machst dich auf den Weg nach {location_name} "
-                    f"({steps} Wegzelle(n)). Voraussichtliche Ankunft: "
-                    f"{eta_local:%H:%M} (Spielzeit). Die Reise laeuft "
-                    f"automatisch weiter.")
+            logger.info("Journey: %s -> %s (%.0f m, ETA %s)",
+                        character_name, location_name, st["total_m"],
+                        st["eta_game"])
+            return (f"You set off for {location_name} "
+                    f"({st['total_m']:.0f} m of road). Estimated arrival: "
+                    f"{eta_local:%H:%M} (game time). The journey continues "
+                    f"automatically.")
 
         rooms = get_location_rooms(matched_location)
 
@@ -539,14 +536,14 @@ class CancelTravelSkill(PluginSkill):
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
-            return "CancelTravel Skill ist deaktiviert."
+            return "The CancelTravel skill is disabled."
         ctx = self._parse_base_input(raw_input)
         character_name = (ctx.get("agent_name") or "").strip()
         if not character_name:
-            return "Fehler: character_name fehlt."
+            return "Error: character_name missing."
         target_id = get_movement_target(character_name)
         if not target_id:
-            return "Du bist auf keiner Reise — nichts abzubrechen."
+            return "You are on no journey — there is nothing to cancel."
         target_name = target_id
         try:
             from app.models.world import get_location_name
@@ -555,10 +552,10 @@ class CancelTravelSkill(PluginSkill):
             pass
         from app.core.travel_engine import cancel_journey
         cancel_journey(character_name)
-        logger.info("Reise abgebrochen: %s (Ziel war %s)",
+        logger.info("Journey cancelled: %s (target was %s)",
                     character_name, target_name)
-        return (f"Du hast deine Reise nach {target_name} abgebrochen "
-                f"und bleibst hier.")
+        return (f"You have called off your journey to {target_name} "
+                f"and stay where you are.")
 
     def as_tool(self, **kwargs) -> ToolSpec:
         return ToolSpec(name=self.name, description=self.description,
