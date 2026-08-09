@@ -173,10 +173,16 @@
 >     width_m, type: "passage", room_id?, inward: [±1|0, ±1|0]}]`, Punkt
 >     über den Rahmen des Bezugsquadrats (`at` wie Raum-Openings:
 >     links→rechts auf N/S, oben→unten auf E/W), `inward` = einwärtige
->     Normale in Weltachsen. **Konsum (Etappe 3, 2026-08-03,
->     plan-3d-lod-und-betreten.md):** client3d liest die Openings für die
->     Eintritts-Nähe des „Betreten"-Angebots — Weltposition = Kachelzentrum
->     + `at_world`, mehr rechnet kein Renderer (der Server hat auch die
+>     Normale in Weltachsen. **`at`-Degradierung (eine Regel für beide
+>     Verbraucher, seit E4):** fehlendes, nicht-numerisches oder nicht-endliches
+>     `at` ist die KANTENMITTE 0,5, Werte außerhalb werden auf [0, 1] geklemmt —
+>     `scene_recipe._boundary_openings` und `boundary_entry` liefern damit
+>     denselben Punkt (vorher stand hier 0, also die Ecke, und der Renderer bot
+>     einen Eingang an, den das Eintritts-Gate ablehnte).
+>     **Konsum (Etappe 3, 2026-08-03, plan-3d-lod-und-betreten.md):**
+>     client3d liest die Openings für die Eintritts-Nähe des
+>     „Betreten"-Angebots — Weltposition = Kachelzentrum + `at_world`, mehr
+>     rechnet kein Renderer (der Server hat auch die
 >     `tile_rotation` nach Nr. 15 bereits eingerechnet). Dabei zählen
 >     **nur die Öffnungen der Kante, die der Schritt kreuzt**: eine Öffnung
 >     an der Nordkante ist kein Eingang für den, der von Westen her tritt,
@@ -726,7 +732,7 @@ Ausbau in E7.*
 2. BBox des GEFIXTEN Meshes messen → maxExtent = max(x, y, z).
 3. `s = max(width_m, depth_m, height_m) / maxExtent` (UNIFORM — eine
    Platzierung skaliert nie).
-4. `rotation.y = −rad(yaw)`.
+4. `rotation.y = −rad(yaw)`. (Legacy-Vorzeichen; mit E4 `+rad` — § B2.)
 5. Ergebnis-BBox messen → Unterkante auf **Raumplatten-Oberkante + 0,01**
    (outdoor: Etagenboden + 0,01) + `offset_y`, XZ-Zentrum auf
    `placements.at`. (Klarstellung v4 — vorher nannten Vorschau/Client/
@@ -1598,6 +1604,12 @@ place(mesh, spec):
                              scale.set(k_xz, k_y, k_xz) auf Welt-Achsen
      scale_axes gesetzt:     scale.set(xz, y, xz) direkt (Welt-Achsen)
   3. rotation.y = −rad(yaw_deg) als Eltern-Rotation
+     ⚠ Das Vorzeichen kippt mit **E4** auf `+rad(yaw_deg)` — verbindlicher
+     Drehsinn ist die Weltkarten-Konvention (§ A1.1). Der Server liefert
+     `yaw_deg` unverändert; umgestellt wird in BEIDEN Renderern gemeinsam
+     (`packages/scene-render/src/place.ts`, `client3d/src/scene/
+     sceneRecipe.ts`, dazu der eigene Wand-Yaw in `primitives.ts`).
+     `markers[].facing` bleibt davon unberührt (Kompass, § A1.8).
   4. Ergebnis-BBox messen → Unterkante = bottom_y, XZ-Zentrum = anchor
 ```
 
