@@ -80,7 +80,11 @@ function rebuild(loc: WorldLocation) {
   // CSS2D-Label-Reste des alten Baus entfernen (der Renderer räumt sie nicht ab)
   document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
 
-  const shown: WorldLocation = { ...loc, grid_x: 0, grid_y: 0, rooms: loc.rooms ?? [] };
+  // The preview shows ONE location, at the world origin: `buildTile` still
+  // places by grid cell (E4 task 3 puts it on the footprint), and cell 0/0 is
+  // the origin either way — so the payload coordinates below are already world
+  // coordinates and the verify table can compare them 1:1 against the spec.
+  const shown: WorldLocation = { ...loc, pos_x: 0, pos_z: 0, rooms: loc.rooms ?? [] };
   tile = buildTile(shown);
   tile.fade = 1;
   tile.fadeTarget = 1;   // Innenansicht dauerhaft aufgedeckt

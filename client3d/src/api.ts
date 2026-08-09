@@ -1,4 +1,6 @@
-import type { AtLocationChar, AuthUser, WorldLocation, WorldMap } from './types';
+import type {
+  AtLocationChar, AuthUser, TerrainPayload, WorldLocation, WorldMap,
+} from './types';
 // Imported locally as well: the re-export further down only exposes the types
 // outwards, the parsing helpers here need them in their own scope.
 import type {
@@ -108,23 +110,22 @@ async function refusal(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message, typeof obj?.reason === 'string' ? obj.reason : '');
 }
 
-export type StepDirection = 'north' | 'south' | 'east' | 'west';
+// `avatarStep` lived here: one compass step of the avatar over
+// `POST /world/avatar/step`. The route was deleted with the grid world (E3),
+// so the call had been answering 404 ever since — free walking on the metre
+// plane replaces it (`POST /play/pos`, E4 task 5). `StepDirection` went with
+// it; `game/walk.ts` has its own, which is the one the walking hook uses.
 
-/** One grid step of the avatar. Throws an `ApiError`: 403 = party follower,
- *  entry-room gate or block rule (message written for the player), 404 = no
- *  location in that direction. `signal` lets the caller put a deadline on the
- *  request — the client allows only ONE step in flight, so a request that
- *  never answers would bar every cell boundary until the page is reloaded. */
-export async function avatarStep(direction: StepDirection, signal?: AbortSignal
-): Promise<{ location_id: string; room_id?: string }> {
-  const res = await fetch('/world/avatar/step', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ direction }),
-    signal,
-  });
-  if (!res.ok) throw await refusal(res);
-  return res.json();
+/** The painted terrain of the world (`GET /play/terrain`): the areas plus the
+ *  effective type catalog they name. NEVER fogged — terrain is always
+ *  visible, only locations hide, so this is fetched ONCE and refetched when
+ *  the worldmap poll reports a different `terrain_sig`.
+ *
+ *  Throws like every other game call: the ground is not decoration, and a
+ *  client that swallowed the failure would paint the whole world in the
+ *  default kind and look right while being wrong. */
+export async function fetchTerrain(): Promise<TerrainPayload> {
+  return json<TerrainPayload>(await fetch('/play/terrain'));
 }
 
 /** Move the avatar into another room of its current location — the same call

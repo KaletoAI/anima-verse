@@ -9,6 +9,17 @@ import {
 
 export const CELL = 10;
 
+// --- E4 BRIDGE (task 2) ------------------------------------------------------
+//
+// `types.ts` is on the metre world: a location has `pos_x`/`pos_z`/`yaw_deg`
+// and no grid cell. This file still builds CELL tiles and is rebuilt in task 3
+// (footprint groups from `plan_width_m`, position from `pos`, group rotated by
+// `yaw_deg`). The cast keeps it compiling without reviving the v1 fields in the
+// payload types — delete it and every cell reader here lights up.
+// TODO(E4-Task 3): remove together with CELL and `gridToWorld`.
+type V1Grid = { grid_x: number | null; grid_y: number | null };
+const v1 = (l: WorldLocation): WorldLocation & V1Grid => l as WorldLocation & V1Grid;
+
 export function gridToWorld(gx: number, gy: number): THREE.Vector3 {
   return new THREE.Vector3(gx * CELL, 0, gy * CELL);
 }
@@ -382,7 +393,7 @@ function makeNoise(seed: string): (x: number, y: number) => number {
 async function bakeBlendTexture(
   loc: WorldLocation, blend: SurfaceBlend, fallbackFor: (kind: string) => THREE.Texture
 ): Promise<{ tex: THREE.CanvasTexture; mask: THREE.CanvasTexture | null }> {
-  const gx = loc.grid_x!, gy = loc.grid_y!;
+  const gx = v1(loc).grid_x ?? 0, gy = v1(loc).grid_y ?? 0;
   // Richtungen der toward-Nachbarn (4er-Nachbarschaft; +y = Süden)
   const dirs: [number, number][] = [];
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -651,7 +662,7 @@ export function buildTile(loc: WorldLocation): Tile {
 
   const style = detectStyle(loc);
   const isBuilding = !(loc.passable || loc.template_location_id);
-  const center = gridToWorld(loc.grid_x!, loc.grid_y!);
+  const center = gridToWorld(v1(loc).grid_x ?? 0, v1(loc).grid_y ?? 0);
   const group = new THREE.Group();
   group.position.copy(center);
   group.userData.locationId = loc.id;

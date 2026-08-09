@@ -79,8 +79,14 @@ export interface WorldLocation {
   id: string;
   name: string;
   description?: string;
-  grid_x: number | null;
-  grid_y: number | null;
+  /** Free metre position of the location's CENTRE on the world plane
+   *  (seamless world, E1). `null` = unplaced, i.e. not on the map at all —
+   *  the grid cell it used to sit in no longer exists. */
+  pos_x: number | null;
+  pos_z: number | null;
+  /** Rotation of the location's footprint about the up axis, in degrees,
+   *  world-map convention (§ A1.1). Always present, 0 when unrotated. */
+  yaw_deg?: number;
   rooms: Room[];
   passable?: boolean;
   entry_room?: string;
@@ -96,35 +102,65 @@ export interface WorldLocation {
   map3d?: Map3dMeta;  // AV3D-1
 }
 
+/** One row of `/play/worldmap → locations` (§ A12, metre world).
+ *
+ *  Deliberately SLIM: the map builds a footprint from it and nothing else.
+ *  Everything the detail scene needs comes from the scene recipe, and the
+ *  fields the grid world carried here (terrain/surface_kind, map_rotation_2d,
+ *  template_location_id) are not in the payload any more. */
 export interface MapLocation {
   id: string;
   name: string;
-  grid_x: number | null;
-  grid_y: number | null;
+  /** Centre of the footprint in world metres; `null` = unplaced. */
+  pos_x: number | null;
+  pos_z: number | null;
+  /** Footprint rotation in degrees (world-map convention, § A1.1). */
+  yaw_deg: number;
+  /** Edge length of the footprint square in world metres — the ONE scale
+   *  anchor of the location, hoisted out of `map3d` by the server. `null`
+   *  when the geometry declares none. */
+  plan_width_m: number | null;
+  /** A transit place (a road) is walked THROUGH, never travelled TO. */
   passable?: boolean;
-  template_location_id?: string;
-  map_rotation_2d?: number;
-  terrain?: string;   // AV3D-7
-  /** Server-resolved library kind of `terrain` — see WorldLocation. */
-  surface_kind?: string;
-  map3d?: Map3dMeta;  // AV3D-1 (nur emittiert, wenn gesetzt)
+  map3d?: Map3dMeta;  // AV3D-1 (only emitted when set)
+  /** Bumps when a room layout of this location changes — a running client
+   *  loads `/world/locations` once and refetches on this. */
+  layout_sig?: string;
 }
 
-/** Server-authoritative journey along the tile chain (contract § A11). */
+/** Server-authoritative journey along a METRE polyline (contract § A11).
+ *
+ *  The client walks the line by DISTANCE (`progress_m`), never by re-deriving
+ *  the timing: the baked cumulative game seconds stay server-internal. */
 export interface MapTravel {
-  path: string[];
   target_id: string;
-  seg: number;
-  frac: number;
-  progress_cells: number;
+  /** The route as world points `[x, z]`, start to goal. `null` under the fog
+   *  (§ A12): a metre-exact line to a place the avatar may not know would
+   *  leak more than the opaque `target_id` — then the figure is drawn at its
+   *  `pos` and no line is shown. */
+  waypoints: [number, number][] | null;
+  /** metres already walked, and the whole length of the polyline */
+  progress_m: number;
+  total_m: number;
+  /** arrival in GAME wall-clock time (world timezone, ISO) */
   eta_game: string;
-  /** real seconds per cell for client-side extrapolation; null = frozen */
-  cell_seconds_real: number | null;
+  /** NOMINAL pace of the journey in metres per REAL second; `null` on a
+   *  frozen world. The fallback when the segment pace is missing. */
+  speed_m_s_real: number | null;
+  /** Pace of the segment being walked RIGHT NOW (terrain `speed_factor` is
+   *  baked into the stamps, not into `speed_m_s`), metres per REAL second.
+   *  `null` on a frozen clock, after arrival and for a degenerate segment —
+   *  the three cases where the number would be a lie. */
+  pace_m_s_real: number | null;
 }
 
 export interface MapCharacter {
   name: string;
   location_id: string;
+  /** Free metre point of the figure, or `null` when it has none (its
+   *  location is unplaced). Clients place the figure BY `pos` and only fall
+   *  back to the location centre when it is null. */
+  pos: { x: number; z: number } | null;
   /** AV3D-6: Animations-Kategorie der aktuellen Aktivität (autoritativ) */
   activity_animation?: string;
   /** Fallback-Kette der Clip-Sets, z.B. ["lady","female"] */
@@ -147,14 +183,15 @@ export interface MapEvent {
   text: string;
 }
 
-/** Extent of the grid over ALL placed locations (contract § A12) — computed
- *  BEFORE the fog filter, so the map frame does not move while one discovers.
- *  Inclusive on both ends; `null` when no location is placed. */
-export interface GridBounds {
+/** Extent of the world in METRES over ALL placed locations (contract § A12) —
+ *  computed BEFORE the fog filter, so the map frame does not move while one
+ *  discovers. A location with a scale anchor contributes its whole footprint
+ *  box, one without it only its centre point. `null` when nothing is placed. */
+export interface WorldBounds {
   min_x: number;
-  min_y: number;
+  min_z: number;
   max_x: number;
-  max_y: number;
+  max_z: number;
 }
 
 export interface WorldMap {
@@ -165,10 +202,74 @@ export interface WorldMap {
   characters: MapCharacter[];
   events_by_location: Record<string, MapEvent[]>;
   /** § A12; `null` when nothing is placed */
-  grid_bounds: GridBounds | null;
-  /** `true` = this is the filtered view, so unknown cells get the veil.
+  world_bounds: WorldBounds | null;
+  /** Signature of the painted terrain (areas + world type rows). When it
+   *  changes, `/play/terrain` is refetched — the poll carries the sig so the
+   *  terrain itself needs no polling of its own. */
+  terrain_sig: string;
+  /** `true` = this is the filtered view, so unknown places stay hidden.
    *  `false` = the admin's unfiltered view (`?all=1`), no fog at all. */
   fogged: boolean;
+}
+
+// --- Painted terrain (`GET /play/terrain`) -----------------------------------
+// The ground of the seamless world: areas drawn on the metre plane plus the
+// effective type catalog they reference. NEVER fogged — terrain is always
+// visible, only locations hide.
+
+/** One entry of the terrain-type catalog (`app/core/terrain_types.py`). No
+ *  ground property is ever hardcoded in a client: colour, passability and
+ *  pace all come from here. */
+export interface TerrainType {
+  /** the id — follows the surface-texture kind rule, so a kind that names a
+   *  library entry gets a real texture on the 3D ground */
+  kind: string;
+  /** display name; falls back to the kind */
+  name: string;
+  /** `#rrggbb`, the schematic fill of this kind (2D map, minimap, and the
+   *  3D fallback when the surface library has no texture for it) */
+  color: string;
+  passable: boolean;
+  /** walking-pace multiplier, 0..2 */
+  speed_factor: number;
+  /** open bag of extras. `scatter` drives the prop scatter of the 3D ground
+   *  (`scene/ground.ts`); everything else is ignored by this client. */
+  meta?: TerrainMeta;
+}
+
+/** Prop scatter of a kind — absent means NO scatter (never a default). */
+export interface TerrainScatterMeta {
+  /** instances per 100 m2 of area; absent/0 = nothing is scattered */
+  density_per_100m2?: number;
+  /** URL of a model to instance; absent = the built-in tuft */
+  model?: string;
+  /** metre height of the built-in tuft (ignored with `model`) */
+  height_m?: number;
+}
+
+export interface TerrainMeta {
+  scatter?: TerrainScatterMeta;
+  [key: string]: unknown;
+}
+
+/** One painted area. `polygon` is a ring of world points `[x, z]` in metres;
+ *  the list is sorted BOTTOM TO TOP by the server (z_order, then paint
+ *  order), so the LAST entry is drawn on top. */
+export interface TerrainArea {
+  id: string;
+  kind: string;
+  polygon: [number, number][];
+  z_order: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface TerrainPayload {
+  /** the kind of the unpainted ground — the same resolver the walk rules use */
+  default_kind: string;
+  types: TerrainType[];
+  areas: TerrainArea[];
+  /** matches `WorldMap.terrain_sig`; a change means refetch */
+  sig: string;
 }
 
 export interface AtLocationChar {

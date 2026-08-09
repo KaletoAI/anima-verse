@@ -189,11 +189,13 @@ export function perfEnabled(): boolean { return perfOn; }
 // rail with every step. Here it re-renders one canvas and nothing else.
 //
 // `main.ts` is the only writer and it publishes only on a real CHANGE (the
-// avatar's cell, the quantised yaw, the set of known cells or the frame) — so
-// a subscriber can treat every notification as "redraw", and standing still
-// costs nothing at all.
+// avatar's metre position, the quantised yaw, the painted ground or the world
+// frame) — so a subscriber can treat every notification as "redraw", and
+// standing still costs nothing at all.
 
-const emptyMinimap: MinimapState = { cells: [], avatar: null, yaw: 0, bounds: null };
+const emptyMinimap: MinimapState = {
+  areas: [], locations: [], avatar: null, yaw: 0, bounds: null,
+};
 let minimap: MinimapState = emptyMinimap;
 const minimapListeners = new Set<() => void>();
 

@@ -28,6 +28,12 @@ export type { CutoutHandle } from './cutouts'
 
 export { sampleTerrain, drapeGeometry, TERRAIN_CELLS } from './terrain'
 
+export {
+  buildAreaGeometry, signedArea, polygonArea, cleanRing, shapePoints,
+  AREA_EPS_M2, AREA_POLYGON_OFFSET,
+} from './groundAreas'
+export type { AreaGeometry, Point2 } from './groundAreas'
+
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'
 

@@ -4,9 +4,9 @@
  * ONE canvas, top right, showing the WHOLE world frame at once — north up, no
  * scrolling and no zoom. That is the point of it in a stage about the fog of
  * war: a map that panned along with the avatar would say where one is looking
- * but never how much of the world is still dark. Known cells are terrain
- * squares, everything else stays the dark backdrop, and the backdrop is the
- * fog.
+ * but never how much of the world is still dark. The painted terrain is filled
+ * polygons, the known places are dots on top of it, everything else stays the
+ * dark backdrop — and the backdrop is the fog.
  *
  * PRESENTATIONAL, and cheap by construction. It owns no state and asks the
  * scene nothing: `main.ts` publishes a finished slice on the minimap store of
@@ -20,9 +20,7 @@
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
-import {
-  cellToPx, minimapLayout, terrainColor, yawToCompassDeg, MINIMAP_SIZE_PX,
-} from '../game/minimap';
+import { minimapLayout, worldToPx, yawToCompassDeg, MINIMAP_SIZE_PX } from '../game/minimap';
 import { getMinimap, subscribeMinimap } from './bus';
 
 /** Canvas backdrop — everything the avatar does not know about stays this.
@@ -35,6 +33,11 @@ const AVATAR_FILL = '#f2cd6e';
 /** Half opening angle of the view wedge, in degrees. Roughly the camera's own
  *  horizontal field of view, so the wedge covers what is on screen. */
 const WEDGE_HALF_DEG = 26;
+/** A known place, drawn over the painted ground. Pale stone, so it reads
+ *  against both a meadow and a lake without being the accent colour — that
+ *  one belongs to the avatar alone. */
+const LOCATION_FILL = 'rgba(232, 226, 214, 0.9)';
+const LOCATION_R = 2.5;
 /** Compass rose in the top-right corner of the canvas. */
 const ROSE_R = 14;
 
@@ -69,19 +72,34 @@ export function Minimap() {
 
     const layout = minimapLayout(state.bounds, size);
     if (layout.scale > 0) {
-      // At least one pixel per cell, and cells are drawn edge to edge: a world
-      // of a hundred cells across gives 1.6 px each, and a gap between them
-      // would leave more fog on the map than there is in the world.
-      const s = Math.max(layout.scale, 1);
-      for (const cell of state.cells) {
-        const { px, py } = cellToPx(cell, layout);
-        ctx.fillStyle = terrainColor(cell.terrain);
-        ctx.fillRect(px - s / 2, py - s / 2, s, s);
+      // The painted ground first, in the order it was published — that order
+      // IS the layering (`z_order`, then paint order), so a path drawn over a
+      // meadow covers it here exactly as it does in the world.
+      for (const area of state.areas) {
+        if (area.polygon.length < 3) continue;
+        ctx.beginPath();
+        area.polygon.forEach(([x, z], i) => {
+          const { px, py } = worldToPx({ x, z }, layout);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+        ctx.fillStyle = area.color;
+        ctx.fill();
+      }
+      // The known places on top of the ground: a dot each, big enough to find
+      // on a 160-pixel canvas and small enough not to be a floor plan.
+      ctx.fillStyle = LOCATION_FILL;
+      for (const loc of state.locations) {
+        const { px, py } = worldToPx(loc, layout);
+        ctx.beginPath();
+        ctx.arc(px, py, LOCATION_R, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
     if (state.avatar && layout.scale > 0) {
-      const { px, py } = cellToPx(state.avatar, layout);
+      const { px, py } = worldToPx(state.avatar, layout);
       const bearing = yawToCompassDeg(state.yaw);
       const mid = canvasAngle(bearing);
       const half = WEDGE_HALF_DEG * Math.PI / 180;

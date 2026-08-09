@@ -5,7 +5,7 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, walkSpeedScale, type Cell } from './game/walk';
+import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, walkSpeedScale, type Cell, type StepDirection } from './game/walk';
 import { planRoute, type ClickRoute } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
@@ -21,7 +21,8 @@ import {
 import { loadPrefs, PREFS_KEY } from './game/prefs';
 import { fogQuadRects, SHOW_ALL_KEY, unknownCells } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
-import type { MinimapCell } from './game/minimap';
+import type { MinimapArea, MinimapDot } from './game/minimap';
+import { terrainColor } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -41,7 +42,51 @@ import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
-import type { MapCharacter, WorldLocation, WorldMap } from './types';
+import { createGround } from './scene/ground';
+import type { MapCharacter, MapTravel, WorldLocation, WorldMap } from './types';
+
+// --- E4 BRIDGE (task 2) ------------------------------------------------------
+//
+// `types.ts` is on the metre world since task 2: the payload has `pos_x`/
+// `pos_z`/`yaw_deg`/`world_bounds` and a metre travel polyline, and the v1
+// grid keys are GONE. Everything in this file that still speaks CELLS is
+// rebuilt by later tasks of the same plan — the tile loop and the camera frame
+// in task 3, the travel interpolation in task 4, the step machine in task 5,
+// the fog rectangles in task 6.
+//
+// Until then these two casts keep those blocks compiling WITHOUT reviving the
+// v1 fields in the payload types. They are the whole bridge: delete them and
+// every remaining cell reader lights up, which is exactly how the later tasks
+// find their work. Nothing is added to the runtime — a `grid_x` read through
+// `v1()` yields `undefined` today, and the blocks that do it are already dead
+// (the server stopped sending cells in E3).
+type V1Grid = {
+  grid_x: number | null;
+  grid_y: number | null;
+  grid_bounds: { min_x: number; min_y: number; max_x: number; max_y: number } | null;
+  template_location_id?: string;
+};
+/** TODO(E4-Task 3 tiles/camera, Task 6 fog): remove with the last cell reader. */
+const v1 = <T>(o: T): T & V1Grid => o as T & V1Grid;
+type V1Travel = {
+  path?: string[]; seg: number; frac: number; cell_seconds_real: number | null;
+};
+/** TODO(E4-Task 4): remove — the journey is a metre polyline (`waypoints`). */
+const v1travel = (t: MapTravel): MapTravel & V1Travel => t as MapTravel & V1Travel;
+/**
+ * The compass step, as dead as the route behind it.
+ *
+ * `POST /world/avatar/step` was removed with the grid world in E3 and
+ * `api.avatarStep` followed it in task 2, so the step machine further down has
+ * been talking to a 404 for a release. It stays readable — and fails the way
+ * it already did — until task 5 replaces the whole machine with free walking
+ * over `POST /play/pos`.
+ * TODO(E4-Task 5): delete together with `requestStep` and its callers.
+ */
+async function deadAvatarStep(_direction: StepDirection, _signal?: AbortSignal
+): Promise<{ location_id: string; room_id?: string }> {
+  throw new api.ApiError(404, 'compass step: the route died with the grid world');
+}
 
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
@@ -392,12 +437,12 @@ async function startApp(username: string, role: string) {
    */
   function placeableOf(map: WorldMap, details: Map<string, WorldLocation>): WorldLocation[] {
     const templateIds = new Set(
-      map.locations.map((l) => l.template_location_id).filter(Boolean) as string[]
+      map.locations.map((l) => v1(l).template_location_id).filter(Boolean) as string[]
     );
     return map.locations
-      .filter((l) => l.grid_x != null && l.grid_y != null && !templateIds.has(l.id))
+      .filter((l) => v1(l).grid_x != null && v1(l).grid_y != null && !templateIds.has(l.id))
       .map((l) => {
-        const detail = details.get(l.id) ?? details.get(l.template_location_id || '');
+        const detail = details.get(l.id) ?? details.get(v1(l).template_location_id || '');
         return {
           ...detail,
           ...l,
@@ -419,10 +464,11 @@ async function startApp(username: string, role: string) {
   // would jump sideways with every place discovered. The bounds are computed
   // over ALL placed locations and stay still. Fallback (no location placed at
   // all, `null`): the old min/max over what we have.
-  const xs = placeable.map((l) => l.grid_x!), ys = placeable.map((l) => l.grid_y!);
-  const center = firstMap.grid_bounds
-    ? gridToWorld((firstMap.grid_bounds.min_x + firstMap.grid_bounds.max_x) / 2,
-      (firstMap.grid_bounds.min_y + firstMap.grid_bounds.max_y) / 2)
+  const xs = placeable.map((l) => v1(l).grid_x!), ys = placeable.map((l) => v1(l).grid_y!);
+  const v1Bounds = v1(firstMap).grid_bounds;
+  const center = v1Bounds
+    ? gridToWorld((v1Bounds.min_x + v1Bounds.max_x) / 2,
+      (v1Bounds.min_y + v1Bounds.max_y) / 2)
     : gridToWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
   const groundTex = grassTexture();
   groundTex.repeat.set(60, 60);
@@ -443,6 +489,25 @@ async function startApp(username: string, role: string) {
   ground.position.y = -0.5;
   ground.receiveShadow = true;
   engine.scene.add(ground);
+
+  // --- The ground of the metre world (E4 task 2) -----------------------------
+  //
+  // One base plane over `world_bounds` in the default kind's look, plus the
+  // painted areas of `/play/terrain` on top of it. Terrain is never fogged, so
+  // it is fetched ONCE and again only when a poll reports a different
+  // `terrain_sig` — `sync` decides that itself.
+  //
+  // The grass plane above is the LAST of the grid world's ground and goes with
+  // the tile loop in task 3; until then it sits half a metre under everything
+  // and is simply invisible beneath the terrain.
+  const terrainGround = createGround();
+  engine.scene.add(terrainGround.group);
+  /** The map payload's own METRE data, kept for the pieces that already speak
+   *  metres (the terrain frame, the minimap) while the tile loop waits for
+   *  task 3. Both move with every poll. */
+  let worldBounds = firstMap.world_bounds;
+  let mapLocations = firstMap.locations;
+  void terrainGround.sync(firstMap.terrain_sig, worldBounds);
 
   // Basement view: the global ground plane sits at height 0 across the whole
   // map, so a storey below ground would stay hidden even after the tile's own
@@ -476,31 +541,17 @@ async function startApp(username: string, role: string) {
 
   // Nachbarschafts-Grid der Oberflächen-Arten (für Zusammenstellungen
   // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
-  /** The known cells for the minimap (Etappe 5, task 3), out of the SAME list
-   *  and the SAME surface-kind function the tiles are built from — so the map
-   *  in the corner can never show a colour the world does not have. Rebuilt
-   *  only when the set of known locations changes, which is what lets the
-   *  4 Hz publisher below hand the very same array out again. */
-  let minimapCells: MinimapCell[] = [];
-  /** Counts every rebuild of the cells above. The publisher compares it
-   *  instead of the array's contents: the list is a few hundred entries at
-   *  most, but comparing it four times a second for a picture that changes
-   *  once an hour would be work for nothing. */
-  let minimapCellsRev = 0;
-  /** The minimap cells out of the SAME kind list the tiles are built from —
-   *  taking the terrain from anywhere else is how the two pictures drift. */
-  function setMinimapCells(kinds: { gx: number; gy: number; kind: string }[]) {
-    minimapCells = kinds.map((k) => ({ x: k.gx, y: k.gy, terrain: k.kind }));
-    minimapCellsRev += 1;
-  }
   /** Publish the surface-kind neighbourhood of every known location. Called at
    *  boot and again whenever a discovered place joins the map — a new cell is
-   *  a new neighbour for the coast blends around it. */
+   *  a new neighbour for the coast blends around it.
+   *
+   *  The minimap no longer rides along here: it draws the PAINTED terrain of
+   *  `/play/terrain` (E4 task 2), which is the world's own ground and not a
+   *  per-cell style. */
   const publishTerrainGrid = () => {
     const kinds = placeable.map(
-      (l) => ({ gx: l.grid_x!, gy: l.grid_y!, kind: gridSurfaceKind(l) }));
+      (l) => ({ gx: v1(l).grid_x!, gy: v1(l).grid_y!, kind: gridSurfaceKind(l) }));
     setTerrainGrid(kinds);
-    setMinimapCells(kinds);
   };
   publishTerrainGrid();
 
@@ -591,6 +642,12 @@ async function startApp(username: string, role: string) {
     }
     // Same tick, third driver: character figures by camera distance.
     npcs.tickFigureTiers(engine.camera.position, FIGURE_TIER_NEAR, FIGURE_TIER_FAR);
+    // …and fourth: the prop scatter of the painted ground (E4 task 2). It
+    // shares the far distance of the building tiers — a world where the tufts
+    // vanish at another line than the houses reads as two worlds. No
+    // hysteresis of its own: this is a visibility flag, not a mesh swap, so
+    // flapping at the line costs nothing.
+    terrainGround.tickScatterLod(engine.camera.position, BUILDING_TIER_FAR);
   }
   // --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ---------
   //
@@ -892,7 +949,7 @@ async function startApp(username: string, role: string) {
   /** The frame and the switch of the CURRENT payload — both move only with a
    *  poll, and `fogged: false` (the admin's unfiltered view) means there is no
    *  veil at all. */
-  let fogBounds = firstMap.grid_bounds;
+  let fogBounds = v1(firstMap).grid_bounds;
   let fogged = firstMap.fogged;
   /** What the veil currently standing was built from. The poll runs every
    *  three seconds and nearly always finds the same three inputs — rebuilding
@@ -911,7 +968,7 @@ async function startApp(username: string, role: string) {
     }
     fogGroup.clear();
     if (!fogged) return;
-    const known = [...tiles.values()].map((t) => ({ x: t.loc.grid_x!, y: t.loc.grid_y! }));
+    const known = [...tiles.values()].map((t) => ({ x: v1(t.loc).grid_x!, y: v1(t.loc).grid_y! }));
     for (const r of fogQuadRects(unknownCells(fogBounds, known))) {
       // The geometry comes out LARGER than the rectangle — the cloud edge
       // needs room to fade, and neighbouring runs overlap into each other so
@@ -1042,20 +1099,17 @@ async function startApp(username: string, role: string) {
         const nextLoc = new Map(dirty.map(([tl, loc]) => [tl.loc.id, loc]));
         const kinds = [...tiles.values()].map((tl) => {
           const loc = nextLoc.get(tl.loc.id) ?? tl.loc;
-          return { gx: loc.grid_x!, gy: loc.grid_y!, kind: gridSurfaceKind(loc) };
+          return { gx: v1(loc).grid_x!, gy: v1(loc).grid_y!, kind: gridSurfaceKind(loc) };
         });
         setTerrainGrid(kinds);
-        // The minimap follows the same repaint: a terrain edited in the admin
-        // must change the colour in the corner, not only the ground.
-        setMinimapCells(kinds);
         // Die 4-Nachbarn jeder Terrain-Änderung mit neu bauen: deren
         // Zusammenstellungen (Küste) beziehen ihre Wasserrichtung aus dem
         // Grid — gemaltes Wasser muss die Küste daneben umbacken.
-        const byCell = new Map([...tiles.values()].map((tl) => [`${tl.loc.grid_x},${tl.loc.grid_y}`, tl]));
+        const byCell = new Map([...tiles.values()].map((tl) => [`${v1(tl.loc).grid_x},${v1(tl.loc).grid_y}`, tl]));
         for (const [tl, loc] of [...dirty]) {
           if ((loc.terrain || '') === (tl.loc.terrain || '')) continue;
           for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-            const nb = byCell.get(`${tl.loc.grid_x! + dx},${tl.loc.grid_y! + dy}`);
+            const nb = byCell.get(`${v1(tl.loc).grid_x! + dx},${v1(tl.loc).grid_y! + dy}`);
             if (nb && !nextLoc.has(nb.loc.id)) {
               nextLoc.set(nb.loc.id, nb.loc);
               dirty.push([nb, nb.loc]);
@@ -1078,7 +1132,7 @@ async function startApp(username: string, role: string) {
   function publishPathGrid(): PathGrid {
     const grid = new PathGrid(
       placeable.map((l) => ({
-        x: l.grid_x!, y: l.grid_y!,
+        x: v1(l).grid_x!, y: v1(l).grid_y!,
         passable: !!(l.passable || l.template_location_id),
       }))
     );
@@ -1366,9 +1420,16 @@ async function startApp(username: string, role: string) {
     // just discovered is simply in the payload from one poll to the next. The
     // frame and the switch travel with it — the frame is computed unfiltered
     // and does not move, but a world can gain a location at any time.
-    fogBounds = map.grid_bounds;
+    fogBounds = v1(map).grid_bounds;
     fogged = map.fogged;
     rebuildFog();   // a no-op unless the frame, the switch or the known set moved
+    // The metre side of the same payload: the world frame, the places as the
+    // minimap knows them, and the terrain signature that decides whether the
+    // ground has to be refetched (E4 task 2). `sync` is a no-op on an
+    // unchanged signature — terrain is never fogged and never polled.
+    worldBounds = map.world_bounds;
+    mapLocations = map.locations;
+    void terrainGround.sync(map.terrain_sig, worldBounds);
     // The trigger asks the SAME question the reveal answers — `placeableOf`,
     // not a hand-written filter next to it. A cheaper test that forgot the
     // template rule would fire on every single poll in a world whose template
@@ -1471,15 +1532,13 @@ async function startApp(username: string, role: string) {
         // render): position = lerp along the path cells at seg/frac — NEVER the
         // tile centre of location_id, which lags at ticker cadence. The
         // NpcManager keeps extrapolating between polls via cellSecondsReal.
-        const tr = c.travel;
-        // GUARD, not a migration: since E3 the travel block is a METRE
-        // polyline (§ A11) and carries no `path` at all — reading .length off
-        // it threw once per poll and took the whole NPC update with it (this
-        // loop runs in a bare setInterval). The cell branch below is dead
-        // until E4 rebuilds it on `waypoints`/`progress_m`; the guard keeps
-        // travellers rendering at their tile until then.
+        // BRIDGE(E4-Task 4): the travel block has been a METRE polyline since
+        // E3 (§ A11) and carries no `path` at all — the cell branch below is
+        // dead, the guard keeps travellers rendering at their tile, and task 4
+        // rebuilds the whole block on `waypoints`/`progress_m`/`pace_m_s_real`.
+        const tr = c.travel ? v1travel(c.travel) : null;
         if (tr && Array.isArray(tr.path) && tr.path.length >= 2) {
-          const points = tr.path.map((id) => {
+          const points = tr.path.map((id: string) => {
             const t = tiles.get(id);
             if (t) return t.center.clone().setY(tileGroundY(t, t.center));
             return null;
@@ -1666,32 +1725,32 @@ async function startApp(username: string, role: string) {
    *  what makes a cell enterable. */
   const passableCells = new Set(placeable
     .filter((l) => l.passable || l.template_location_id)
-    .map((l) => `${l.grid_x},${l.grid_y}`));
+    .map((l) => `${v1(l).grid_x},${v1(l).grid_y}`));
   /** Which location sits on a cell. Also the enterable-check: the server's step
    *  (`world_ops.move_avatar_step`) has NO passability check — it gates on the
    *  entry room and the block rules and otherwise moves the avatar into the
    *  neighbouring location, so a plot or a building can be walked into and the
    *  client must let the server decide. A cell with no location stays a wall;
    *  there the server would answer 404. */
-  const locIdAtCell = new Map(placeable.map((l) => [`${l.grid_x},${l.grid_y}`, l.id]));
+  const locIdAtCell = new Map(placeable.map((l) => [`${v1(l).grid_x},${v1(l).grid_y}`, l.id]));
   function tileAtCell(c: Cell): Tile | null {
     const id = locIdAtCell.get(`${c.gx},${c.gy}`);
     return id ? tiles.get(id) ?? null : null;
   }
 
-  // --- Minimap slice (Etappe 5, task 3) --------------------------------------
+  // --- Minimap slice (Etappe 5 task 3; metre world since E4 task 2) ----------
   //
   // The HUD draws the map, this publishes what it draws — and it publishes ONLY
-  // ON A CHANGE. The signature below is the whole rule: the cell revision, the
-  // avatar's cell and the camera yaw in whole degrees. Everything smaller than
-  // that (a step across a cell, a fraction of a degree of orbit) would redraw a
-  // 160-pixel canvas and re-render React for a picture nobody could tell apart.
+  // ON A CHANGE. The signature below is the whole rule: the ground revision,
+  // the number of known places, the avatar's position to the metre and the
+  // camera yaw in whole degrees. Everything smaller than that (a step of a few
+  // centimetres, a fraction of a degree of orbit) would redraw a 160-pixel
+  // canvas and re-render React for a picture nobody could tell apart — the map
+  // is 160 px wide, so a sub-metre move cannot even reach a pixel of it.
   //
-  // The avatar's CELL comes from `cellOf` — the very function the step machine
-  // above asks, so the dot stands on the cell the server is being told about
-  // and never on a neighbouring one. Leaving the mode publishes the empty slice
-  // once: the minimap belongs to the embodied view, and a map left standing
-  // with a dot from minutes ago would be worse than none.
+  // Leaving the mode publishes the empty slice once: the minimap belongs to
+  // the embodied view, and a map left standing with a dot from minutes ago
+  // would be worse than none.
   let minimapSig = '';
   setInterval(() => {
     if (getGameState().mode !== 'embodied') {
@@ -1701,22 +1760,36 @@ async function startApp(username: string, role: string) {
       return;
     }
     const pos = npcs.positionOf(avatarName);
-    const cell = pos ? cellOf(pos.x, pos.z, CELL) : null;
     // Whole degrees: the compass needle turns in 45° steps (Q/E) plus the free
     // orbit, and a degree is finer than the needle can show anyway.
     const yawDeg = Math.round(engine.yaw * 180 / Math.PI);
-    const frame = fogBounds
-      ? `${fogBounds.min_x},${fogBounds.min_y},${fogBounds.max_x},${fogBounds.max_y}` : '';
-    const sig = `${minimapCellsRev}|${cell ? `${cell.gx},${cell.gy}` : ''}|${yawDeg}|${frame}`;
+    const frame = worldBounds
+      ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
+    const spot = pos ? `${Math.round(pos.x)},${Math.round(pos.z)}` : '';
+    const sig = `${terrainGround.revision()}|${mapLocations.length}|${spot}|${yawDeg}|${frame}`;
     if (sig === minimapSig) return;
     minimapSig = sig;
+    // The colours come from the world's OWN terrain catalog, never from a
+    // table in the client — a kind an admin invented this morning is on the
+    // map this afternoon.
+    const terrain = terrainGround.payload();
+    const colors = new Map((terrain?.types ?? [])
+      .map((t) => [t.kind.toLowerCase(), t.color] as const));
+    const areas: MinimapArea[] = (terrain?.areas ?? []).map((a) => ({
+      polygon: a.polygon,
+      color: terrainColor(a.kind, colors),
+    }));
+    const dots: MinimapDot[] = mapLocations
+      .filter((l) => l.pos_x != null && l.pos_z != null)
+      .map((l) => ({ x: l.pos_x as number, z: l.pos_z as number }));
     setMinimap({
-      cells: minimapCells,
-      avatar: cell ? { x: cell.gx, y: cell.gy } : null,
+      areas,
+      locations: dots,
+      avatar: pos ? { x: pos.x, z: pos.z } : null,
       // The published yaw is the QUANTISED one, so the drawn wedge and the
       // signature can never disagree about where the avatar looks.
       yaw: yawDeg * Math.PI / 180,
-      bounds: fogBounds,
+      bounds: worldBounds,
     });
   }, MINIMAP_MS);
 
@@ -1781,10 +1854,10 @@ async function startApp(username: string, role: string) {
     // blend from the grid at build time (the ordering finding of 2026-07-29),
     // so the four neighbours of a new cell have to be rebuilt against the
     // grid that already knows about it.
-    const revealedCells = new Set(fresh.map((l) => `${l.grid_x},${l.grid_y}`));
+    const revealedCells = new Set(fresh.map((l) => `${v1(l).grid_x},${v1(l).grid_y}`));
     for (const tile of [...tiles.values()]) {
       const near = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
-      if (near.some(([dx, dy]) => revealedCells.has(`${tile.loc.grid_x! + dx},${tile.loc.grid_y! + dy}`))) {
+      if (near.some(([dx, dy]) => revealedCells.has(`${v1(tile.loc).grid_x! + dx},${v1(tile.loc).grid_y! + dy}`))) {
         rebuildTile(tile, tile.loc);
       }
     }
@@ -1801,7 +1874,7 @@ async function startApp(username: string, role: string) {
       // first poll's and rebuild the fresh tile for nothing.
       locSig.set(loc.id, sigOf(
         details.get(loc.id) ?? details.get(loc.template_location_id || '') ?? loc));
-      const cell = `${loc.grid_x},${loc.grid_y}`;
+      const cell = `${v1(loc).grid_x},${v1(loc).grid_y}`;
       if (loc.passable || loc.template_location_id) passableCells.add(cell);
       locIdAtCell.set(cell, loc.id);
     }
@@ -1843,7 +1916,7 @@ async function startApp(username: string, role: string) {
     locSig.delete(id);
     buildingTierByLoc.delete(id);
     interiorTierByLoc.delete(id);
-    const cell = `${tile.loc.grid_x},${tile.loc.grid_y}`;
+    const cell = `${v1(tile.loc).grid_x},${v1(tile.loc).grid_y}`;
     passableCells.delete(cell);
     locIdAtCell.delete(cell);
     engine.scene.remove(tile.group);
@@ -1921,7 +1994,7 @@ async function startApp(username: string, role: string) {
       viewRev += 1;
       lastMap = map;
       mapStamp += 1;
-      fogBounds = map.grid_bounds;
+      fogBounds = v1(map).grid_bounds;
       fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);
@@ -2098,14 +2171,14 @@ async function startApp(username: string, role: string) {
    */
   let askedEdge: { from: Cell; to: Cell; granted: boolean } | null = null;
 
-  async function requestStep(direction: api.StepDirection, from: Cell, to: Cell,
+  async function requestStep(direction: StepDirection, from: Cell, to: Cell,
     edge: { granted: boolean }) {
     stepInFlight = true;
     expectedCell = to;
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), STEP_TIMEOUT_MS);
     try {
-      const moved = await api.avatarStep(direction, abort.signal);
+      const moved = await deadAvatarStep(direction, abort.signal);
       // The boundary is open now: the figure walks over it in the next frames
       // WITHOUT another request. No snap — the server is already there and the
       // worldmap confirms it within a poll.
@@ -2466,8 +2539,10 @@ async function startApp(username: string, role: string) {
     if (!pos) return;
     const me = map.characters.find((c) => c.name === avatarName);
     const tile = me ? tiles.get(me.location_id) ?? null : null;
-    if (!tile || tile.loc.grid_x == null || tile.loc.grid_y == null) return;
-    const server: Cell = { gx: tile.loc.grid_x, gy: tile.loc.grid_y };
+    const gx = v1(tile?.loc).grid_x;
+    const gy = v1(tile?.loc).grid_y;
+    if (!tile || gx == null || gy == null) return;
+    const server: Cell = { gx, gy };
     const local = cellOf(pos.x, pos.z, CELL);
     if (server.gx === local.gx && server.gy === local.gy) {
       expectedCell = null;                 // in sync, nothing outstanding
@@ -3052,7 +3127,7 @@ async function startApp(username: string, role: string) {
       }));
       candidates.push({
         locId: t.loc.id,
-        cell: { gx: t.loc.grid_x!, gy: t.loc.grid_y! },
+        cell: { gx: v1(t.loc).grid_x!, gy: v1(t.loc).grid_y! },
         openings,
         // The verdict of the neighbour poll, bound by ID at this moment — it
         // is per avatar and never travels in the cached payload above.
