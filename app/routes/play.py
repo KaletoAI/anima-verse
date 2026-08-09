@@ -150,8 +150,8 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
 
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
-             "scene": [], "rooms": [], "neighbors": {},
-             "entry_room_name": "", "avatar_expr_version": "", "bg_version": "",
+             "scene": [], "rooms": [], "travel": None,
+             "avatar_expr_version": "", "bg_version": "",
              "bg_id": "", "capabilities": []}
     avatar = (get_active_character() or "").strip()
     if not avatar:
@@ -187,15 +187,6 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
     for r in rooms_out:
         if room and (r["id"] == room or r["name"] == room):
             room_name = r["name"]
-
-    # Neighbour locations + the per-direction departure gate, reused from the
-    # existing route function.
-    nb = {}
-    try:
-        from app.routes.world import avatar_neighbors_route
-        nb = avatar_neighbors_route() or {}
-    except Exception:
-        nb = {}
 
     # C2a: Folgen-Vorschläge — kürzlich aktive Gesprächspartner, die den Raum
     # gerade verlassen haben (gleiche Location, anderer Raum). Avatar folgt per
@@ -260,8 +251,11 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         "bg_version": _bg_version(loc, room) if loc else "",
         "bg_id": _bg_id(loc, room) if loc else "",
         "rooms": rooms_out,
-        "neighbors": {k: nb.get(k) for k in ("north", "south", "east", "west")},
-        "entry_room_name": nb.get("entry_room_name", "") or "",
+        # The avatar's own journey — the travel panel's poll channel (it is
+        # already polling this route for the room chips). Null while standing
+        # still. The worldmap payload carries the same journey for EVERY
+        # character, in metres, for the map to draw (E3 Task 6).
+        "travel": _travel_block(avatar),
         "capabilities": _player_capabilities(avatar),
     }
 
@@ -324,6 +318,165 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
         set_is_sleeping(avatar, False)
         logger.info("enter-room: %s woke up by moving to %s", avatar, room_id)
     return {"ok": True, "room_id": room_id}
+
+
+def _travel_block(name: str):
+    """The character's running journey for the player UI, or None.
+
+    Derived from the STORED journey and the game clock (``journey_state`` is
+    a pure function of it) — nothing is recomputed, no route is walked here.
+    The ETA is formatted as the world's own wall clock: the game clock has a
+    timezone of its own and the browser knows nothing about it, so ``HH:MM``
+    is produced here and shown verbatim.
+    """
+    try:
+        from app.core.timeutils import game_now, to_world_tz
+        from app.core.travel_engine import get_journey, journey_state
+        from app.models.world import get_location_name
+        j = get_journey(name)
+        if not j:
+            return None
+        st = journey_state(j["waypoints"], j["started_at_game"], game_now())
+        target_id = j["target"]
+        return {
+            "target_id": target_id,
+            "target_name": get_location_name(target_id) or target_id,
+            "eta_game": st["eta_game"],
+            "eta_hhmm": f"{to_world_tz(st['eta_game']):%H:%M}",
+            "progress_m": st["progress_m"],
+            "total_m": st["total_m"],
+            "arrived": st["arrived"],
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.debug("travel block failed for %s: %s", name, e)
+        return None
+
+
+@router.post("/play/travel")
+async def play_travel(request: Request, user=Depends(get_current_user)):
+    """The avatar sets off for a named location (Seamless World, E3).
+
+    Body: ``{"target_id": "<location-id>"}``. The avatar walks the same
+    timed journey an NPC walks — the position is a pure function of the game
+    clock and the travel ticker settles the arrival. Nothing moves here.
+
+    The gate sequence is the one the SetLocation skill applies before it
+    journeys (its twin: ``plugins/movement/skill_set_location.py``,
+    "Leave-Check" → "Restrictions-Check" → "Rules-Engine"), copied rather
+    than shared because the skill's gates sit in the middle of its name
+    matching and its LLM-facing wording:
+
+      1. a party FOLLOWER owns no movement at all (the hard backstop behind
+         the panel's hint — the leader drags it along),
+      2. transit tiles are no destinations (the skill refuses them too; the
+         pathfinder still walks THROUGH them),
+      3. ``rules.check_leave`` — may the avatar leave where it stands,
+      4. ``danger_system.check_location_access`` — may it enter the target.
+         The skill asks ``rules.check_access`` a second time right after;
+         that is the very predicate the danger façade delegates to, so it is
+         asked ONCE here.
+
+    A rule refusal is a 403 with the rule's own sentence (like every other
+    blocked move in the player UI). The engine's own reasons — the target is
+    unknown, unplaced, or no walkable route exists — are ANSWERS, not
+    errors: 200 with ``journey: null`` and the reason, which the UI words.
+    The ticker's arrival gate stays the second net: rules can change while
+    someone is on the road.
+    """
+    from app.core.travel_engine import start_journey
+    from app.models.account import get_active_character
+    from app.models.character import is_character_sleeping, set_is_sleeping
+    from app.models.world import get_location_by_id
+
+    body = await request.json()
+    target_id = (str(body.get("target_id") or "").strip()
+                 if isinstance(body, dict) else "")
+    if not target_id:
+        raise HTTPException(status_code=400, detail="target_id required")
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+
+    from app.core.party_engine import is_party_follower
+    if is_party_follower(avatar):
+        raise HTTPException(status_code=403, detail={
+            "reason": "party_follower",
+            "message": "You are part of a party and travel with your leader "
+                       "— no movement of your own."})
+
+    target = get_location_by_id(target_id)
+    if not target:
+        # Reported like an unknown place, not as a 404: from inside the world
+        # "there is no such place" and "you were never told about it" are the
+        # same statement, and the UI has one sentence for both.
+        return {"journey": None, "reason": "unknown_target"}
+    if target.get("passable"):
+        return {"journey": None, "reason": "passable_target"}
+
+    from app.models.rules import check_leave
+    leave_ok, leave_reason = check_leave(avatar, target_location_id=target_id)
+    if not leave_ok:
+        logger.info("Travel refused (leave rule): %s -> %s: %s",
+                    avatar, target_id, leave_reason)
+        raise HTTPException(status_code=403, detail={
+            "reason": "block_leave", "message": leave_reason})
+
+    from app.core.danger_system import check_location_access
+    enter_ok, enter_reason = check_location_access(avatar, target)
+    if not enter_ok:
+        logger.info("Travel refused (access rule): %s -> %s: %s",
+                    avatar, target_id, enter_reason)
+        raise HTTPException(status_code=403, detail={
+            "reason": "block_enter", "message": enter_reason})
+
+    # The mechanics — OFF the event loop. Measured (E3 Task 5 report): a
+    # straight run over open ground is cheap (100 m ≈ 13 ms, 1300 m ≈ 0.5 s),
+    # but the A* pays for OBSTACLES, and buildings are obstacles: in a 1 km²
+    # world with 30 placed locations the same call took 2.7 s (730 m) and
+    # 7.0 s (1290 m). That is CPU work inside an async handler, so run
+    # synchronously it would stall every other request of the server, not
+    # just this one. No timeout: the thread finishes and writes its journey
+    # either way, and a half-started journey is worse than a slow answer.
+    import asyncio
+    journey, reason = await asyncio.to_thread(start_journey, avatar, target_id)
+    if journey is None:
+        logger.info("No journey for avatar %s -> %s: %s",
+                    avatar, target_id, reason)
+        return {"journey": None, "reason": reason}
+
+    # Setting off is player-driven movement, and that is the clearest wake
+    # signal there is — the same rule ``/play/enter-room`` applies (a
+    # sleeping avatar must not walk a road in its sleep).
+    if is_character_sleeping(avatar):
+        set_is_sleeping(avatar, False)
+        logger.info("travel: %s woke up by setting off for %s",
+                    avatar, target_id)
+    return {"journey": _travel_block(avatar), "reason": ""}
+
+
+@router.post("/play/travel/cancel")
+async def play_travel_cancel(user=Depends(get_current_user)):
+    """The avatar calls off its journey and stays where it is.
+
+    Idempotent: without a running journey nothing happens and
+    ``cancelled`` is false — a double click is not an error.
+    """
+    from app.core.travel_engine import cancel_journey, get_journey
+    from app.models.account import get_active_character
+    from app.models.world import get_location_name
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+    j = get_journey(avatar)
+    if not j:
+        return {"ok": True, "cancelled": False, "target_id": "",
+                "target_name": ""}
+    target_id = j.get("target") or ""
+    cancel_journey(avatar)
+    logger.info("Travel cancelled by the player: %s (target was %s)",
+                avatar, target_id)
+    return {"ok": True, "cancelled": True, "target_id": target_id,
+            "target_name": get_location_name(target_id) or target_id}
 
 
 @router.post("/play/scene-photo/prepare")

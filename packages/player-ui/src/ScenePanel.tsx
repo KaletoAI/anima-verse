@@ -59,6 +59,21 @@ export interface Neighbor {
 }
 export type Dir = 'north' | 'south' | 'east' | 'west'
 
+/** The avatar's running journey (E3): where it is headed, when it gets there
+ *  and how far it still has to walk. `eta_hhmm` is the arrival on the GAME
+ *  world's own wall clock, formatted by the server — the game clock has a
+ *  timezone of its own that no browser knows, so it is shown as it is.
+ *  Null/absent = standing still. */
+export interface TravelInfo {
+  target_id: string
+  target_name: string
+  eta_game: string
+  eta_hhmm: string
+  progress_m: number
+  total_m: number
+  arrived: boolean
+}
+
 export interface SceneData {
   avatar: string
   location_id: string
@@ -72,8 +87,13 @@ export interface SceneData {
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
   party_invites?: Array<{ invite_id: string; inviter: string }>
   rooms: RoomInfo[]
-  neighbors: Partial<Record<Dir, Neighbor | null>>
-  entry_room_name: string
+  travel?: TravelInfo | null
+  /** GONE since E3 Task 5 — the grid compass they described does not exist
+   *  any more and the server stopped sending both fields. Optional, not
+   *  deleted, only because the 3D client still reads them; that reader dies
+   *  with E4 and the two fields (and `Neighbor`/`Dir`) go with it. */
+  neighbors?: Partial<Record<Dir, Neighbor | null>>
+  entry_room_name?: string
   avatar_expr_version?: string
   bg_version?: string
   bg_id?: string

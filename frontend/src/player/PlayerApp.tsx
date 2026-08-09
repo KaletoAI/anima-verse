@@ -17,10 +17,10 @@ import { useAvatarSwitch } from './AvatarGate'
 import { apiDelete, apiGet, apiPost, apiPut, ApiError } from '../lib/api'
 import { usePoll } from './usePolling'
 import { useToast } from '../lib/Toast'
-import { ScenePanel, type SceneData, type Dir } from './ScenePanel'
+import { ScenePanel, type SceneData } from './ScenePanel'
 import { ImageGenDialog } from '../components/ImageGenDialog'
 import { AnimateDialog } from '../components/AnimateDialog'
-import { MovePad } from './MovePad'
+import { TravelPanel } from './TravelPanel'
 import { EnvironmentPanel } from './EnvironmentPanel'
 import { MapPanel, type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
 import { TaskPanel } from './TaskPanel'
@@ -440,18 +440,55 @@ export function PlayerApp() {
   usePoll('play-badges', refreshBadges, { intervalMs: 20000 })
 
   const [moving, setMoving] = useState(false)
-  const handleStep = useCallback(async (dir: Dir) => {
+  // Why the server refused a trip, in one player-facing sentence. An unknown
+  // and an unplaced target read ALIKE on purpose: from inside the world
+  // "I was never told about this place" and "this place is on no map" are the
+  // same statement, and the server keeps them apart only in its log (the same
+  // decision the SetLocation skill made for NPCs).
+  const travelReason = useCallback((reason: string) => {
+    switch (reason) {
+      case 'unknown_target':
+      case 'unplaced_target':
+        return t('You do not know the way there.')
+      case 'no_route':
+        return t('There is no passable route — water, cliffs or walls block every way.')
+      case 'passable_target':
+        return t('That is a place you pass through, not a destination.')
+      default:
+        return t('You cannot travel there right now.')
+    }
+  }, [t])
+  const handleTravel = useCallback(async (locationId: string) => {
     if (moving) return
     setMoving(true)
-    try { await apiPost('/world/avatar/step', { direction: dir }); await load() }
-    catch (e) {
-      // 403 = a leave/enter rule blocked the move → surface the reason so
-      // the player knows WHY (e.g. missing key item). 404 = no neighbor in
-      // that direction → stay silent (the pad already hides those).
+    try {
+      const res = await apiPost<{ journey: { target_name: string } | null; reason: string }>(
+        '/play/travel', { target_id: locationId })
+      if (res?.journey) toast(`${t('On your way to')} ${res.journey.target_name}`)
+      else toast(travelReason(res?.reason || ''), 'error')
+      await load()
+    } catch (e) {
+      // 403 = a leave/enter rule blocked the trip → surface the rule's own
+      // (already localized) sentence, so the player knows WHY.
       const err = e as ApiError
       const detail = err?.detail as { message?: string } | string | undefined
-      const msg = detail && typeof detail === 'object' ? detail.message : undefined
-      if (err?.status === 403 && msg) toast(msg, 'error')
+      const msg = typeof detail === 'string'
+        ? detail
+        : (detail && typeof detail === 'object' ? detail.message : undefined)
+      if (msg) toast(msg, 'error')
+    } finally { setMoving(false) }
+  }, [moving, load, toast, t, travelReason])
+  const handleCancelTravel = useCallback(async () => {
+    if (moving) return
+    setMoving(true)
+    try { await apiPost('/play/travel/cancel', {}); await load() }
+    catch (e) {
+      const err = e as ApiError
+      const detail = err?.detail as { message?: string } | string | undefined
+      const msg = typeof detail === 'string'
+        ? detail
+        : (detail && typeof detail === 'object' ? detail.message : undefined)
+      if (msg) toast(msg, 'error')
     } finally { setMoving(false) }
   }, [moving, load, toast])
   const handleEnterRoom = useCallback(async (roomId: string) => {
@@ -535,13 +572,13 @@ export function PlayerApp() {
         {headerControls('map', true)}
       </div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 8 }}>
-        <MovePad
+        <TravelPanel
           rooms={data?.rooms || []}
           currentRoomId={data?.room_id || ''}
-          neighbors={data?.neighbors || {}}
-          entryRoomName={data?.entry_room_name || ''}
+          travel={data?.travel || null}
           busy={moving}
-          onStep={handleStep}
+          onTravel={handleTravel}
+          onCancelTravel={handleCancelTravel}
           onEnterRoom={handleEnterRoom}
           partyFollower={data?.party?.role === 'follower'}
           partyLeaderName={data?.party?.leader || ''}

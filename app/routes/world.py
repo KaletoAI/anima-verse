@@ -31,34 +31,10 @@ from app.core import world_ops
 router = APIRouter(prefix="/world", tags=["world"])
 
 
-# === Avatar-Movement (Direction-Pad) ===
-
-@router.get("/avatar/neighbors")
-def avatar_neighbors_route() -> Dict[str, Any]:
-    """Return the avatar's neighbor locations for each compass direction.
-
-    Response: { "north": {id, name, may_leave, enterable, reason} | null,
-    "south": ..., "east": ..., "west": ... }. Lets the direction pad hide
-    unreachable directions instead of reacting to the 404 response, and grey
-    out exactly the ones the departure gate refuses (``may_leave``, the step
-    route's own rule) or the arrival side turns away (``enterable`` +
-    ``reason``, one player-facing sentence).
-    """
-    return world_ops.compute_avatar_neighbors()
-
-
-@router.post("/avatar/step")
-async def avatar_step_route(request: Request) -> Dict[str, Any]:
-    """Bewegt den Avatar um einen Grid-Schritt in die angegebene Richtung.
-
-    Body: { "direction": "north"|"south"|"east"|"west" }
-
-    Sucht die Nachbar-Location anhand der Grid-Koordinaten der aktuellen
-    Avatar-Position. Gibt 404 zurueck wenn dort keine Location liegt.
-    """
-    data = await request.json()
-    direction = (data.get("direction") or "").strip().lower()
-    return world_ops.move_avatar_step(direction)
+# Avatar movement lives at POST /play/travel (app/routes/play.py): the world
+# is a metre plane since E1, so the avatar walks a timed journey to a NAMED
+# place instead of stepping from grid cell to grid cell. The two compass
+# routes that used to sit here are gone without replacement.
 
 
 # === Orte ===

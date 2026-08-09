@@ -2,9 +2,8 @@
 
 A ``boundary_opening`` on ``map3d`` is an authored pass-through at the
 LOCATION edge (a road crossing the cell). Since Etappe 3 of
-``plan-3d-lod-und-betreten.md`` it is not only geometry any more: the avatar
-step (``world_ops.move_avatar_step``) accepts an opening as a legitimate
-crossing point —
+``plan-3d-lod-und-betreten.md`` it is not only geometry any more: a location
+change accepts an opening as a legitimate crossing point —
 
 - ENTERING is only possible across an edge that carries an authored opening
   (decision 2026-08-04: a location without one cannot be entered at all). The

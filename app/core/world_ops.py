@@ -9,7 +9,7 @@ import os
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
 from app.core.scatter_curves import curve_map, tessellate
 from app.imagegen.base import BackendBusyError
@@ -24,7 +24,6 @@ from app.models.world import (
     list_locations, add_location, location_visible_to_character,
     visibility_context,
     rename_location, resolve_location, get_location_by_id,
-    get_entry_room_id,
     get_background_path, get_background_file_path,
     get_background_images, remove_background_image,
     get_gallery_dir, list_gallery_images,
@@ -35,137 +34,6 @@ from app.models.world import (
     get_room_by_id,
     toggle_background_image,
     clear_room_prompt_changed, clear_location_prompt_changed)
-
-
-# === Avatar movement (direction pad) ===
-
-def compute_avatar_neighbors() -> Dict[str, Any]:
-    """Return the avatar's neighbor locations for each compass direction.
-
-    Response: { "north": {id, name, may_leave, enterable, reason} | null,
-    "south": ..., "east": ..., "west": ..., "current_location_id",
-    "current_location_name", "entry_room_name" }. Lets the direction pad hide
-    unreachable directions instead of reacting to the 404 response.
-
-    ``may_leave`` is the departure gate PER DIRECTION and comes from the very
-    function the step route decides with (``boundary_entry.may_leave``): an
-    authored opening lets one out over its own edge only, so the answer
-    differs from arrow to arrow. One rule, one place — the pad used to carry
-    its own copy of an older one and greyed out steps the server allows.
-
-    ``enterable`` + ``reason`` are the verdict on the STEP as a whole
-    (``neighbor_access``): would the avatar end up standing there, and if not,
-    in one player-facing sentence, why not — the leave rules of the place it
-    stands in included, because the step route refuses on those too.
-    """
-    from app.core.boundary_entry import (
-        EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave)
-    from app.models.account import get_active_character
-    from app.models.character import (
-        get_character_current_location, get_character_current_room,
-        get_character_language)
-    from app.models.rules import check_leave
-
-    out: Dict[str, Any] = {
-        "north": None, "south": None, "east": None, "west": None,
-        "current_location_id": "", "current_location_name": "",
-        "entry_room_name": ""}
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        return out
-    cur_loc_id = (get_character_current_location(avatar) or "").strip()
-    if not cur_loc_id:
-        return out
-    cur = get_location_by_id(cur_loc_id)
-    if not cur:
-        return out
-    out["current_location_id"] = cur.get("id", "") or ""
-    out["current_location_name"] = cur.get("name", "") or ""
-
-    # The name is what the hint text says one has to walk to; whether one has
-    # to is decided per direction below.
-    cur_entry = get_entry_room_id(cur)
-    cur_room = (get_character_current_room(avatar) or "").strip()
-    for _r in (cur.get("rooms") or []):
-        if isinstance(_r, dict) and _r.get("id") == cur_entry:
-            out["entry_room_name"] = _r.get("name", "") or ""
-            break
-
-    cx = int(cur.get("grid_x") or 0)
-    cy = int(cur.get("grid_y") or 0)
-    deltas = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
-    targets = {(cx + dx, cy + dy): direction
-               for direction, (dx, dy) in deltas.items()}
-    lang = get_character_language(avatar) or "de"
-    # The leave rules (action="leave", the event-coupled danger blocks among
-    # them) are what the step route refuses with FIRST of the two rule gates,
-    # and they know nothing about a direction: check_leave reads the avatar's
-    # current location and room, which is the same for all four arrows. So it
-    # is asked ONCE here and folded into every direction's verdict — without
-    # it the pad shows a green arrow the step then turns away.
-    ok_leave, leave_msg = check_leave(avatar)
-    leave_block = "" if ok_leave else leave_msg
-    for loc in list_locations():
-        key = (int(loc.get("grid_x") or 0), int(loc.get("grid_y") or 0))
-        direction = targets.get(key)
-        if direction and not out[direction]:
-            exit_edge = EDGE_OF_DIRECTION[direction]
-            enterable, reason = neighbor_access(
-                avatar, loc, OPPOSITE_EDGE[exit_edge], lang, leave_block)
-            out[direction] = {
-                "id": loc.get("id", "") or "",
-                "name": loc.get("name", "") or "",
-                "may_leave": may_leave(cur, cur_room, cur_entry, exit_edge),
-                "enterable": enterable,
-                "reason": reason,
-            }
-    return out
-
-
-def neighbor_access(avatar: str, target: Dict[str, Any], entry_edge: str,
-                    lang: str = "", leave_block: str = "") -> Tuple[bool, str]:
-    """Would a step onto ``target`` across ``entry_edge`` succeed for ``avatar``?
-
-    Returns ``(enterable, reason)``; the reason is empty exactly when the
-    answer is yes, and otherwise one player-facing sentence. Four gates, in
-    the order ``move_avatar_step`` applies them (plan-betreten-und-tueren.md
-    § 5) — the cheapest first, so the wording the player sees is the first
-    refusal, not the last:
-
-    1. the crossed edge — without an authored opening there is no way in
-       (the sentence is the one ``move_avatar_step`` refuses with, so pad and
-       refusal never word the same "no" differently),
-    2. ``leave_block`` — the message of a refusing ``check_leave``, or empty.
-       The caller passes it in because that check reads the avatar's CURRENT
-       place and is therefore the same for all four directions: one call for
-       the whole pad instead of one per arrow.
-    3. ``accessible_when`` at the location — the same condition the world map
-       greys a place out with (``build_locations_payload``),
-    4. the block rules, via the very ``check_access`` the step decides with;
-       the room asked about is where the arrival would land.
-
-    Per avatar and changing with events, therefore NEVER part of the
-    signature-cached scene recipe.
-    """
-    from app.core.boundary_entry import opening_entry_room, opening_on_edge
-    from app.core.i18n import t
-    from app.models.rules import check_access
-    from app.models.world import get_arrival_room_id
-
-    if not opening_on_edge(target, entry_edge):
-        return False, t("There is no way in on this side.", lang)
-    if leave_block:
-        return False, leave_block
-    target_id = target.get("id", "") or ""
-    if not _conditions_pass(target.get("accessible_when") or [],
-                            avatar, target_id):
-        return False, t("This place is not accessible to you.", lang)
-    target_room = (opening_entry_room(target, entry_edge)
-                   or get_arrival_room_id(target))
-    ok, message = check_access(avatar, target_id, room_id=target_room)
-    if not ok:
-        return False, message or t("This place is not accessible to you.", lang)
-    return True, ""
 
 
 # === Rooms of a location, as the avatar sees them ===
@@ -205,170 +73,6 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
                     "is_ground": rid == GROUND_ROOM_ID,
                     "enterable": enterable, "reason": reason})
     return out
-
-
-def move_avatar_step(direction: str) -> Dict[str, Any]:
-    """Move the avatar one grid step in the given direction.
-
-    Looks up the neighbor location via the grid coordinates of the current
-    avatar position. Raises 404 if no location lies there.
-    """
-    deltas = {
-        "north": (0, -1),  # screen-up = decreasing grid_y
-        "south": (0, 1),
-        "east": (1, 0),
-        "west": (-1, 0),
-    }
-    if direction not in deltas:
-        raise HTTPException(status_code=400, detail="invalid direction")
-
-    from app.models.account import get_active_character
-    from app.models.character import (
-        get_character_current_location,
-        get_character_current_room,
-        clear_pose_intent,
-        save_character_current_location,
-        save_character_current_room,
-    )
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
-
-    # Party follower: the avatar follows the leader and cannot move on its
-    # own (the UI hides the compass, this is the hard backstop).
-    from app.core.party_engine import is_party_follower
-    if is_party_follower(avatar):
-        raise HTTPException(status_code=403, detail={
-            "reason": "party_follower",
-            "message": "Du bist Teil einer Party und wirst vom Leader mitgenommen — eigene Bewegung gesperrt."})
-
-    cur_loc_id = (get_character_current_location(avatar) or "").strip()
-    if not cur_loc_id:
-        raise HTTPException(status_code=400, detail="avatar has no current location")
-
-    cur = get_location_by_id(cur_loc_id)
-    if not cur:
-        raise HTTPException(status_code=404, detail="current location not found")
-
-    # Departure gate: the avatar may only leave a location via the entry room
-    # — or across an authored boundary opening while standing in the room
-    # that opening links to, the location's ground when it links to none
-    # (contract § B1 Nr. 13; the road that crosses the cell is a legitimate
-    # way out at exactly its pass-throughs).
-    from app.core.boundary_entry import (
-        EDGE_OF_DIRECTION, OPPOSITE_EDGE, may_leave, opening_entry_room,
-        opening_on_edge,
-    )
-    from app.core.i18n import t as _t
-    from app.models.character import get_character_language
-    from app.models.world import get_arrival_room_id
-    _lang = get_character_language(avatar) or "de"
-    exit_edge = EDGE_OF_DIRECTION[direction]
-    cur_entry = get_entry_room_id(cur)
-    cur_room = (get_character_current_room(avatar) or "").strip()
-    if not may_leave(cur, cur_room, cur_entry, exit_edge):
-        # Fetch the entry-room name for the message
-        _entry_name = ""
-        for _r in (cur.get("rooms") or []):
-            if isinstance(_r, dict) and _r.get("id") == cur_entry:
-                _entry_name = _r.get("name", "") or ""
-                break
-        # Same sentence the compass shows next to the pad — one refusal, one
-        # wording, translated like every other player-facing text.
-        _hint = _t("To leave the place, go to the entry room:", _lang)
-        raise HTTPException(status_code=403,
-            detail={"reason": "not_at_entry_room",
-                    "message": f"{_hint} {_entry_name or cur_entry}"})
-
-    cur_x = int(cur.get("grid_x") or 0)
-    cur_y = int(cur.get("grid_y") or 0)
-    dx, dy = deltas[direction]
-    target_x, target_y = cur_x + dx, cur_y + dy
-
-    # Find the neighbor location
-    target = None
-    for loc in list_locations():
-        if int(loc.get("grid_x") or 0) == target_x and int(loc.get("grid_y") or 0) == target_y:
-            target = loc
-            break
-    if not target:
-        raise HTTPException(status_code=404, detail="no location in that direction")
-
-    target_id = target.get("id") or ""
-
-    # Entering (decision 2026-08-04): an authored boundary opening is the ONLY
-    # way onto a location. No opening on the crossed edge, no entry — and a
-    # location without any opening cannot be entered at all. That is reported
-    # (``has_entrance`` feeds the editor's warning), never silently repaired.
-    # The opening's room link routes the avatar; WITHOUT one it says nothing
-    # about the room and the arrival rule decides (plan-grundflaeche.md § 6:
-    # the declared entry room, otherwise the location's ground room).
-    entry_edge = OPPOSITE_EDGE[exit_edge]
-    if not opening_on_edge(target, entry_edge):
-        raise HTTPException(status_code=403, detail={
-            "reason": "no_entrance",
-            "message": _t("There is no way in on this side.", _lang)})
-    target_entry_room = (opening_entry_room(target, entry_edge)
-                         or get_arrival_room_id(target))
-
-    # Block rules: the avatar is subject to the same restrictions as NPCs.
-    from app.models.rules import check_leave, check_access
-    ok_leave, leave_msg = check_leave(avatar)
-    if not ok_leave:
-        raise HTTPException(status_code=403,
-            detail={"reason": "block_leave", "message": leave_msg})
-    # ``accessible_when`` at the target — the very condition the world map
-    # greys a place out with and the compass refuses on. Same reader, same
-    # sentence, same position in the gate order as ``neighbor_access``: what
-    # the pad promises, the step keeps.
-    if not _conditions_pass(target.get("accessible_when") or [],
-                            avatar, target_id):
-        raise HTTPException(status_code=403, detail={
-            "reason": "not_accessible",
-            "message": _t("This place is not accessible to you.", _lang)})
-
-    ok_enter, enter_msg = check_access(avatar, target_id, room_id=target_entry_room)
-    if not ok_enter:
-        raise HTTPException(status_code=403,
-            detail={"reason": "block_enter", "message": enter_msg})
-
-    save_character_current_location(avatar, target_id)
-    # Write the room explicitly: the opening may route somewhere other than
-    # the arrival room the location write picks by itself, and only an
-    # explicit write clears the room the avatar came from.
-    save_character_current_room(avatar, target_entry_room)
-    # A location change interrupts the running pose (otherwise the old one
-    # persists at the new place). The avatar is player-controlled → clear,
-    # do not reassign.
-    clear_pose_intent(avatar)
-
-    # Uncovering the map = entering + discover rules (§ A12). The journey
-    # ticker rolls them on arrival; the step API is the OTHER way a character
-    # arrives somewhere and the primary one in embodied mode, so it rolls them
-    # too. Only on a real location change — a step that ends where it started
-    # must not hand out a free roll.
-    if target_id and target_id != cur_loc_id:
-        try:
-            from app.models.rules import check_discover_rules
-            check_discover_rules(avatar)
-        except Exception:
-            logger.debug("discover check failed for %s", avatar, exc_info=True)
-
-    # Roll-on-entry: on entering a location, immediately roll whether an
-    # event arises for the avatar (e.g. "wolves block the path").
-    try:
-        from app.core.random_events import try_roll_on_entry
-        try_roll_on_entry(avatar, target_id, target)
-    except Exception as _re:
-        logger.debug("try_roll_on_entry fehlgeschlagen: %s", _re)
-
-    return {
-        "ok": True,
-        "direction": direction,
-        "location_id": target_id,
-        "location_name": target.get("name", ""),
-        "room_id": target_entry_room,
-    }
 
 
 # === Locations ===
@@ -540,6 +244,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "pos_z": loc.get("pos_z"),
             "yaw_deg": float(loc.get("yaw_deg") or 0.0),
             "plan_width_m": _width,
+            # A transit tile (a road cell) is walked THROUGH, never travelled
+            # TO — the flag lets a client's destination list drop them, the
+            # way the LLM's target list does (movement/blocks.py). Same field
+            # for the map itself: a road may be drawn differently to a place.
+            "passable": bool(loc.get("passable")),
         }
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:
