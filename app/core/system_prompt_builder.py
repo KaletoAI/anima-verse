@@ -491,11 +491,19 @@ def build_recent_activity_section(character_name: str,
                 lines.append(f"• {time_str}  {verb} {val}{suffix}")
             elif t == "travel_failed":
                 reason_raw = (e.get("reason") or "").strip()
+                # The travel_failed vocabulary of the travel engine, rendered
+                # in-fiction. A character cannot tell "nobody ever told me
+                # about this place" from "this place stands on no map", so
+                # unplaced_target reads exactly like unknown_target — the
+                # distinction lives in the record, not in what the character
+                # gets to know. An unmapped reason is dropped rather than
+                # leaked: a raw engine token in the prompt is worse than no
+                # detail at all.
                 human = {
-                    "path_lost_in_transit": "path lost in transit",
-                    "no_path": "no path available",
-                    "blocked": "blocked",
-                }.get(reason_raw, reason_raw)
+                    "unknown_target": "you do not know the way there",
+                    "unplaced_target": "you do not know the way there",
+                    "no_route": "there is no passable route",
+                }.get(reason_raw, "")
                 suffix = f" — {human}" if human else ""
                 lines.append(f"• {time_str}  travel to {val} failed{suffix}")
             else:

@@ -427,19 +427,23 @@ def _render_room(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[str
     return {"type": "room", "content": f"Raum: {room_name}", "timestamp": ts, "metadata": meta}
 
 
+# The travel_failed vocabulary of the travel engine. unplaced_target reads
+# like unknown_target on purpose: a character cannot tell "nobody ever told
+# me about this place" from "this place stands on no map", and the diary is
+# written from the character's point of view (the raw reason stays in the
+# entry's metadata for anyone debugging the world).
 _TRAVEL_FAILED_REASONS = {
-    "path_lost_in_transit": "Pfad waehrend der Reise verloren",
-    "no_known_path": "Ort nicht bekannt — kein Weg ueber bekannte Orte",
-    "no_path": "kein Weg verfuegbar",
-    "blocked": "Weg blockiert",
+    "unknown_target": "does not know the way there",
+    "unplaced_target": "does not know the way there",
+    "no_route": "no passable route",
 }
 
 
 def _render_travel_failed(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[str, Any]]:
-    reason = (meta.get("reason") or "").strip()
-    content = f"Reise nach {value} abgebrochen"
+    reason = _TRAVEL_FAILED_REASONS.get((meta.get("reason") or "").strip(), "")
+    content = f"Journey to {value} called off"
     if reason:
-        content += f" — {_TRAVEL_FAILED_REASONS.get(reason, reason)}"
+        content += f" — {reason}"
     return {"type": "travel_failed", "content": content, "timestamp": ts, "metadata": meta}
 
 

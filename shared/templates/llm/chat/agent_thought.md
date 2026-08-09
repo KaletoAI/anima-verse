@@ -66,7 +66,8 @@ Current situation:
 {% endif %}
 {% if elsewhere_block %}
 - Elsewhere at this location (NOT with you — they cannot see or hear you;
-  go to their room via Move/SetLocation, or use SendMessage to reach them):
+  go to their room with SetLocation, which takes a room of your current
+  location as its target, or use SendMessage to reach them):
 {{ elsewhere_block }}
 {% endif %}
 {% if recent_thoughts %}

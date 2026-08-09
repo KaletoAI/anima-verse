@@ -147,7 +147,21 @@ def add_to_party(leader: str, member: str) -> Optional[str]:
         if member not in members:
             members.append(member)
     _save_party(party_id, leader, members, created)
-    logger.info("Party %s: %s wird Follower von %s (members=%s)",
+    # A follower does not travel on its own account — it is dragged along by
+    # the leader, and it loses SetLocation with the join. Its own journey has
+    # to end HERE, at the one choke point every join passes (the JoinParty
+    # verb AND the avatar's accepted invite): the travel ticker only cancels
+    # follower journeys while the LEADER is on the road, so a joiner whose
+    # leader stands still would keep walking away from the party it just
+    # joined.
+    try:
+        from app.core.travel_engine import cancel_journey, get_journey
+        if get_journey(member) is not None:
+            cancel_journey(member)
+    except Exception as e:
+        logger.debug("journey cancel on party join failed for %s: %s",
+                     member, e)
+    logger.info("Party %s: %s becomes a follower of %s (members=%s)",
                 party_id, member, leader, members)
     return party_id
 
