@@ -425,7 +425,16 @@ def advance_all_journeys() -> None:
                 continue
             st = journey_state(j["waypoints"], j["started_at_game"], now)
             if not st["arrived"]:
-                # TODO(Task 3): write st["pos"] via set_character_pos here.
+                # TODO(Task 3): write st["pos"] here — but NOT with a plain
+                # ``set_character_pos``: as soon as the interpolated point
+                # enters ANY footprint, that function routes through
+                # ``save_character_current_location`` without
+                # ``_preserve_movement_target``, which clears movement_target
+                # and the journey with it — the journey would kill itself on
+                # the first tick it touches a building. Task 3 needs a
+                # preserve-aware write (a ``preserve_movement_target``
+                # passthrough on set_character_pos, or a dedicated ticker
+                # writer) before it can move anyone in flight.
                 continue
             try:
                 from app.models.rules import check_leave

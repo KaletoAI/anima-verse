@@ -572,11 +572,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                      "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}
                     if _min_x is not None else None)
 
-    # Journeys are a pure function of the GAME clock — read it ONCE for the
-    # whole payload so every character in one response shares the same now.
-    from app.core.travel_engine import get_journey, journey_state
-    from app.core.timeutils import game_now, to_world_tz
-    _now_game = game_now()
+    # (Task 6 re-adds the game-clock read here: a journey is a pure function
+    # of that clock, and the whole payload has to share ONE `now`.)
 
     characters = []
     for name in list_available_characters():
@@ -619,32 +616,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         except Exception:
             _prof = {}
         anim_sets = resolve_animation_sets(name, profile=_prof)
-        # Active journey (or None): path + progress let clients interpolate the
-        # figure between two polls instead of teleporting it cell by cell.
-        # Reads the profile loaded above — no second load on this hot endpoint.
-        # Isolated like the ticker's per-character block: one malformed journey
-        # dict degrades to travel=null, it never breaks the whole worldmap.
+        # TODO(Task 6): the v2 travel block ({target_id, waypoints, progress_m,
+        # total_m, eta_game, speed_m_s_real} plus § A11) lands with Task 6 of
+        # E3. Until then the payload reports NO journey at all: every field of
+        # the v1 block described grid cells (path/seg/frac/progress_cells/
+        # cell_seconds_real) and a half-filled successor is worse than none —
+        # a client that finds a `travel` object reads the fields it knows.
         travel = None
-        try:
-            _j = get_journey(name, profile=_prof)
-            if _j:
-                # TODO(Task 6): the full v2 travel block (waypoints,
-                # progress_m/total_m, speed_m_s_real) plus § A11 belongs to
-                # Task 6 of E3. Until then the payload reports only what a
-                # client can do nothing wrong with: where the character is
-                # heading and when it gets there.
-                _st = journey_state(_j["waypoints"], _j["started_at_game"],
-                                    _now_game)
-                travel = {
-                    "target_id": _j["target"],
-                    # Same instant, WORLD-timezone offset: clients slice the
-                    # HH:MM out of this, which must be game wall-clock — the
-                    # engine stores the stamp in UTC (§ A11).
-                    "eta_game": to_world_tz(_st["eta_game"]).isoformat(),
-                }
-        except Exception as e:
-            travel = None
-            logger.warning("travel payload failed for %s: %s", name, e)
         # Body height in cm — the 3D client scales the figures against each
         # other with it (a 155 cm character must not tower over a 190 cm one).
         # None when unset: the client keeps its own default scale.
