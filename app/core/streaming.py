@@ -412,7 +412,7 @@ class StreamingAgent:
         self.deferred_tools = deferred_tools or set()
         self.content_tools = content_tools or set()
         self.mode = mode
-        # A (plan-follow-room-conversation-bug): True → suppress Move/SetLocation
+        # A (plan-follow-room-conversation-bug): True → suppress SetLocation
         # coming out of this (in-person) conversation turn. Whoever answers does
         # not walk away in the same turn. Set only for in-person chat, NOT for
         # autonomous thought turns (legitimate movement).
@@ -1359,7 +1359,7 @@ class StreamingAgent:
                 continue
 
             # A: Wer in einem in-person-Gespräch gerade geantwortet hat, geht
-            # nicht im selben Turn weg (Move/SetLocation aus der RP-Prosa). Teleport
+            # nicht im selben Turn weg (SetLocation aus der RP-Prosa). Teleport
             # (Spell) ist davon NICHT betroffen.
             if self.suppress_move_in_conversation and tool_name in _suppress_in_person_tool_names():
                 logger.info("%s unterdrueckt — Antwort im selben in-person-Turn "

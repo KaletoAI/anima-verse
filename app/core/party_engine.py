@@ -1,7 +1,7 @@
 """Party-System — gemeinsam reisen.
 
 Eine Party hat genau einen *Leader* und N *Follower*. Nur der Leader bewegt sich
-selbst; Follower verlieren SetLocation/Move (NPC) bzw. den Kompass (Avatar) und
+selbst; Follower verlieren SetLocation (NPC) bzw. den Kompass (Avatar) und
 werden beim Zug des Leaders mitgezogen (siehe ``save_character_current_location``
 / ``save_character_current_room`` in app/models/character.py). Verlassen ist
 jederzeit moeglich; verlaesst der Leader, loest sich die Party auf.

@@ -121,7 +121,8 @@ class TalkToSkill(PluginSkill):
             return (
                 f"{target_name} is at this location but in another room "
                 f"({room_label}) — they cannot hear you from here. Go to "
-                f"them first (Move/SetLocation) or use SendMessage."
+                f"them first with SetLocation (a room of your current "
+                f"location is a valid target) or use SendMessage."
             )
 
         # Sleep check

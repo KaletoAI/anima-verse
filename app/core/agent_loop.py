@@ -387,7 +387,7 @@ class AgentLoop:
                        to_loc: str, to_room: str, to_label: str) -> None:
         """C2b: when a conversation partner leaves the room, nudge (hint) the
         NPCs actively involved there so they decide THEMSELVES whether to
-        follow (Move/SetLocation) or stay — no forced movement, the NPC may
+        follow (SetLocation) or stay — no forced movement, the NPC may
         say "no", which ends the pursuit naturally. Light per-pair cooldown
         against spam. The C1 movement trace is already in their perception;
         the hint makes the follow choice explicit."""
@@ -409,8 +409,8 @@ class AgentLoop:
                     continue
                 self._follow_cooldown[ck] = now
                 self.bump(npc, hint=(
-                    f"{leaver} ist gerade nach {to_label} gegangen. Du kannst folgen "
-                    f"(SetLocation/Move) oder hierbleiben — entscheide selbst."))
+                    f"{leaver} has just left for {to_label}. You can follow "
+                    f"with SetLocation or stay here — decide for yourself."))
         except Exception as e:  # noqa: BLE001
             logger.debug("suggest_follow failed: %s", e)
 

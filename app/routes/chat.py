@@ -1218,7 +1218,7 @@ async def chat(request: Request) -> StreamingResponse:
         content_tools=_content_tools,
         mode=mode,
         # A (plan-follow-room-conversation-bug): im in-person-Gespräch keinen
-        # Move/SetLocation im selben Antwort-Turn — man geht nicht weg, während
+        # SetLocation im selben Antwort-Turn — man geht nicht weg, während
         # man spricht. Remote (messaging/phone) bleibt unberührt.
         suppress_move_in_conversation=(medium == "in_person"))
 
@@ -1714,8 +1714,8 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                 return None  # Schon im Raum
 
     # 2. Location-Match — DEAKTIVIERT (Lösung C, 2026-06): Orts-Bewegung läuft
-    # AUSSCHLIESSLICH über den SetLocation-Skill / Move (mit Wegfinder
-    # find_path_through_known). Der narrative RP-Pfad darf NICHT cross-location
+    # AUSSCHLIESSLICH über den SetLocation-Skill (als getaktete Reise über die
+    # Meter-Karte). Der narrative RP-Pfad darf NICHT cross-location
     # setzen — das umging den Wegfinder und teleportierte den Char zu Orten/Wegen,
     # die er gar nicht kennt (Bug seit Initial Release, durch den aktiven Loop-RP
     # sichtbar geworden). Raumwechsel am AKTUELLEN Ort (Section 1 oben) bleibt
@@ -1724,7 +1724,7 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
     if loc_obj and loc_obj.get("id") and loc_obj["id"] != old_loc:
         logger.info(
             "Narrativer Orts-Wechsel fuer %s ignoriert: '%s' (%s) — Bewegung nur "
-            "ueber SetLocation/Move mit Wegfinder, kein Teleport via RP-Text.",
+            "ueber SetLocation als getaktete Reise, kein Teleport via RP-Text.",
             agent_name, new_name, loc_obj.get("name", new_name))
     else:
         # Weder Raum am aktuellen Ort noch eine (andere) Welt-Location.

@@ -604,8 +604,8 @@ def _cancel_follower_journeys(leader: str) -> None:
     ticker would otherwise advance it beside the formation write (which of the
     two lands last depending on the character order) and, worse, keep walking
     it after the party has long arrived somewhere else. A character loses
-    SetLocation/Move when it joins a party, so it loses the journey with them
-    — on every tick the leader is on the road AND on the tick it arrives.
+    SetLocation when it joins a party, so it loses the journey with it — on
+    every tick the leader is on the road AND on the tick it arrives.
     """
     from app.core.party_engine import party_followers
     for follower in party_followers(leader):

@@ -152,7 +152,8 @@ def _format_presence_block(location_name: str, presence_lines: list,
         parts.extend(elsewhere_lines)
         parts.append(
             "To reach someone elsewhere at this location: go to them first "
-            "(Move/SetLocation) or use SendMessage — TalkTo does NOT reach "
+            "with SetLocation, which takes a room of your current location "
+            "as its target, or use SendMessage — TalkTo does NOT reach "
             "other rooms.")
     return "\n".join(parts)
 
