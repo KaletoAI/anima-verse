@@ -268,6 +268,7 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     other and runs through the same check — a rule may lock the ground too."""
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
+                                       get_character_language,
                                        clear_pose_intent,
                                        is_character_sleeping,
                                        save_character_current_room,
@@ -283,13 +284,18 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
-    # Party-Follower kann sich nicht selbst bewegen (auch keinen Raum wechseln) —
-    # er wird vom Leader mitgezogen. UI versteckt den Kompass; harter Backstop hier.
+    # A party follower cannot move on its own (not even between rooms) — the
+    # leader drags it along. The UI hides the controls; this is the hard
+    # backstop. Same sentence as the travel route's refusal, translated the
+    # same way: one refusal, one wording.
+    from app.core.i18n import t
     from app.core.party_engine import is_party_follower
     if is_party_follower(avatar):
+        lang = get_character_language(avatar) or "de"
         raise HTTPException(status_code=403, detail={
             "reason": "party_follower",
-            "message": "Du bist Teil einer Party und wirst vom Leader mitgenommen — eigene Bewegung gesperrt."})
+            "message": t("You are part of a party and your leader takes you "
+                         "along — you cannot move on your own.", lang)})
     loc = (get_character_current_location(avatar) or "").strip()
     loc_obj = get_location_by_id(loc) if loc else None
     valid = {(r.get("id") or "") for r in ((loc_obj.get("rooms") if loc_obj else None) or [])}
@@ -371,7 +377,13 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
       2. transit tiles are no destinations (the skill refuses them too; the
          pathfinder still walks THROUGH them),
       3. ``rules.check_leave`` — may the avatar leave where it stands,
-      4. ``danger_system.check_location_access`` — may it enter the target.
+      4. ``accessible_when`` at the target — the condition the world map
+         greys a place out with. A WALL, not a hint (backend-status-3d.md,
+         commit bdd8598): no rule engine reads that field, so if this gate
+         is not here, nothing enforces it at all. The SetLocation skill has
+         never had it — an NPC therefore still walks past it (ledgered
+         separately), and so does the ticker's arrival gate,
+      5. ``danger_system.check_location_access`` — may it enter the target.
          The skill asks ``rules.check_access`` a second time right after;
          that is the very predicate the danger façade delegates to, so it is
          asked ONCE here.
@@ -383,9 +395,11 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
     The ticker's arrival gate stays the second net: rules can change while
     someone is on the road.
     """
+    from app.core.i18n import t
     from app.core.travel_engine import start_journey
     from app.models.account import get_active_character
-    from app.models.character import is_character_sleeping, set_is_sleeping
+    from app.models.character import (get_character_language,
+                                      is_character_sleeping, set_is_sleeping)
     from app.models.world import get_location_by_id
 
     body = await request.json()
@@ -396,13 +410,17 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
+    # Every player-facing sentence below is translated into the avatar's
+    # language — a rule's own message arrives localized from the rule engine,
+    # the ones this route words itself go through t().
+    lang = get_character_language(avatar) or "de"
 
     from app.core.party_engine import is_party_follower
     if is_party_follower(avatar):
         raise HTTPException(status_code=403, detail={
             "reason": "party_follower",
-            "message": "You are part of a party and travel with your leader "
-                       "— no movement of your own."})
+            "message": t("You are part of a party and your leader takes you "
+                         "along — you cannot move on your own.", lang)})
 
     target = get_location_by_id(target_id)
     if not target:
@@ -420,6 +438,19 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
                     avatar, target_id, leave_reason)
         raise HTTPException(status_code=403, detail={
             "reason": "block_leave", "message": leave_reason})
+
+    # ``accessible_when`` — the same field the world map greys a place out
+    # with, read by the same reader (``world_ops.conditions_pass``). It is
+    # the ONLY enforcement point there is: no rule row backs it, so a missing
+    # check here means the condition is decoration.
+    from app.core.world_ops import conditions_pass
+    if not conditions_pass(target.get("accessible_when") or [],
+                           avatar, target_id):
+        logger.info("Travel refused (accessible_when): %s -> %s",
+                    avatar, target_id)
+        raise HTTPException(status_code=403, detail={
+            "reason": "not_accessible",
+            "message": t("This place is not accessible to you.", lang)})
 
     from app.core.danger_system import check_location_access
     enter_ok, enter_reason = check_location_access(avatar, target)

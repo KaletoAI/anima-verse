@@ -77,13 +77,16 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
 
 # === Locations ===
 
-def _conditions_pass(conditions: Any, character_name: str,
-                     location_id: str) -> bool:
+def conditions_pass(conditions: Any, character_name: str,
+                    location_id: str) -> bool:
     """Do ALL authored conditions hold for this character (AND semantics)?
 
     Takes a list or a single string; an empty entry is skipped, an empty list
     passes. Used for both ``visible_when`` and ``accessible_when`` — the map
-    filter and the entry gate must read the same field the same way.
+    filter and the entry gate must read the same field the same way, and the
+    travel route reads it as the ENTRY gate (``accessible_when`` is a wall,
+    not a hint: backend-status-3d.md, commit bdd8598). Public because that
+    consumer lives in another module.
     """
     from app.core.activity_engine import evaluate_condition
     if not conditions:
@@ -116,10 +119,10 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
         for loc in locations:
             loc_id = loc.get("id", "")
             vw = loc.get("visible_when") or []
-            if vw and not _conditions_pass(vw, character_name, loc_id):
+            if vw and not conditions_pass(vw, character_name, loc_id):
                 continue  # location not visible
             aw = loc.get("accessible_when") or []
-            loc["accessible"] = (_conditions_pass(aw, character_name, loc_id)
+            loc["accessible"] = (conditions_pass(aw, character_name, loc_id)
                                  if aw else True)
             filtered.append(loc)
         locations = filtered

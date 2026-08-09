@@ -40,6 +40,8 @@ interface RoomInfo {
 interface WorldMapLocation {
   id: string; name: string
   pos_x: number | null; pos_z: number | null
+  /** The location's edge in metres — null when it has no scale anchor. */
+  plan_width_m: number | null
   passable?: boolean
 }
 interface WorldMapLite {
@@ -81,8 +83,12 @@ export function TravelPanel({
     const me = (world?.characters || []).find((c) => c.name === world?.avatar)
     const from = me?.pos || null
     return (world?.locations || [])
+      // Placed AND anchored: `start_journey` needs a `placed_footprint`, and
+      // that is exactly position + scale anchor (`plan_width_m`). A location
+      // with a point but no anchor stands on no walkable map — offering it
+      // would only ever produce an `unplaced_target` refusal.
       .filter((l) => l.id && l.id !== here && !l.passable
-        && l.pos_x !== null && l.pos_z !== null)
+        && l.pos_x !== null && l.pos_z !== null && l.plan_width_m !== null)
       .map((l) => ({
         id: l.id,
         name: l.name || l.id,
