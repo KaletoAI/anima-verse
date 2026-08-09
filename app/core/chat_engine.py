@@ -150,9 +150,19 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
             + outfit_block)
 
 
-def _rp_tool_decision_input(user_input: str, rp_response: str) -> str:
-    """Tool-Entscheidungs-Prompt (gekürzte Übernahme aus streaming._stream_rp_first):
-    narrative Aktion → Tool, plus Fallback-Marker."""
+def _rp_tool_decision_input(user_input: str, rp_response: str,
+                            tools_dict: Dict[str, Any],
+                            in_person: bool = False) -> str:
+    """Tool decision prompt for the character-to-character chat turn.
+
+    The action→tool mapping, the speech note and the anti-hallucination rules
+    come from the SAME source as the streaming path (app.core.streaming), so
+    both prompts always offer exactly the tools this character actually has —
+    minus the movement verbs an in-person turn would discard anyway.
+    """
+    from app.core.streaming import (action_mapping_lines, decision_tools,
+                                    speech_turn_note, tool_decision_guardrails)
+    tools_dict = decision_tools(tools_dict, suppress_in_person=in_person)
     return (
         f"The user said: {user_input}\n\n"
         f"The character responded:\n{rp_response}\n\n"
@@ -160,24 +170,13 @@ def _rp_tool_decision_input(user_input: str, rp_response: str) -> str:
         f"triggers. The character NEVER writes tool calls themselves; you do that. "
         f"Fire the tool whenever the narrative shows the action, even if phrased "
         f"indirectly (\"she goes to change\", \"puts on a dress\", \"heads to the kitchen\", "
-        f"\"let's go to the forest edge\"):\n"
-        f"  - changes/puts on/takes off clothes/outfit/dress → ChangeOutfit\n"
-        f"  - takes a photo / makes an image → ImageGenerator\n"
-        f"  - posts to Instagram → Instagram\n"
-        f"  - moves to a different location or room ON THEIR OWN → SetLocation\n"
-        f"  - agrees to go somewhere TOGETHER with the person who invited them, i.e. "
-        f"travels ALONG WITH them as a group (the user/another says \"let's go to X\" "
-        f"and the character agrees, or follows them) → JoinParty (leader = the name of "
-        f"who invited them). Prefer this over SetLocation whenever the character goes "
-        f"WITH someone rather than by themselves.\n"
-        f"  - invites the user or another present character to come along / travel "
-        f"together as a group → InviteToParty (target = that character's name)\n"
-        f"  - wants to split off / no longer travel with the group → LeaveParty\n"
-        f"  - changes what they're physically doing (pose/activity) → SetPose\n"
-        f"  - looks something up / searches → SearchKnowledge or WebSearch\n"
-        f"  - relays info to a third party not in the conversation → TalkTo\n"
+        f"\"let's go to the forest edge\"). This list is the character's COMPLETE tool "
+        f"inventory — never call a tool that is not on it:\n"
+        f"{action_mapping_lines(tools_dict)}\n"
+        f"{speech_turn_note(tools_dict, False)}"
         f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "
         f"the action was \"only described\" narratively — that IS the signal.\n"
+        f"{tool_decision_guardrails(tools_dict)}"
         f"Also emit fallback markers the character forgot (only if NOT already wrapped "
         f"in **...** in the RP): **I feel <emotion>**, **I do <activity>**, and "
         f"**I am at <location>** ONLY when the RP explicitly describes physically moving "
@@ -591,30 +590,32 @@ def run_chat_turn(
             logger.info("run_chat_turn: %s klinkt sich nicht ein (SKIP)", responder)
             return ""
 
-    # rp_first Tool-Phase (Feature-Parität): zweiter Tool-LLM-Call erkennt
-    # narrative Aktionen im RP-Text ("zieht sich Shorts an", "los zum Waldrand")
-    # und führt die Tools aus (ChangeOutfit/SetLocation/SetActivity/…). Plus
-    # Fallback-Marker (Mood/Location/Activity), die ins Post-Processing fließen.
-    # Klassifikation wie streaming._stream_rp_first: Seiteneffekt-Tools laufen
-    # sofort, DEFERRED-Tools (ImageGenerator/Instagram/Video) nach der Antwort
-    # im Hintergrund mit RP-Kontext-Injektion. CONTENT_TOOLs bräuchten einen
-    # Chat-Retry (Ergebnis fließt zurück ins RP) — den gibt es in diesem Pfad
-    # (noch) nicht, daher werden sie geloggt und ausgelassen.
-    # Läuft NICHT mehr vor dem return: der Aufrufer bekommt die Antwort sofort
-    # (siehe _bg_after_reply unten) — der Tool-LLM-Call kostete sonst ~8 s
-    # sichtbare Antwortlatenz vor der Utterance-Aufzeichnung.
+    # rp_first tool phase (feature parity): a second tool-LLM call spots the
+    # narrative actions in the RP text ("puts on shorts", "off to the forest
+    # edge") and runs the matching tools, plus the fallback markers (mood,
+    # location, activity) that feed post-processing.
+    # Classification as in streaming._stream_rp_first: side-effect tools run
+    # immediately, DEFERRED tools run after the reply in the background with
+    # RP context injected. CONTENT_TOOLs would need a chat retry (the result
+    # flows back into the RP) — this path does not have one (yet), so they are
+    # logged and skipped.
+    # It no longer runs BEFORE the return: the caller gets the answer right
+    # away (see _bg_after_reply below) — otherwise the tool-LLM call added
+    # ~8 s of visible latency before the utterance was recorded.
     _needs_tool_phase = bool(
         ctx.get("mode") == "rp_first" and ctx.get("tool_system_content")
         and ctx.get("tool_llm") is not None and ctx.get("tools_dict"))
 
     def _run_tool_phase() -> str:
-        """rp_first-Tool-Phase — gibt die extrahierten Fallback-Marker zurück."""
+        """rp_first tool phase — returns the extracted fallback markers."""
         try:
             from app.core.tool_formats import find_tool_calls
             from app.core.streaming import _extract_markers, _inject_rp_context
             _tool_msgs = [
                 {"role": "system", "content": ctx["tool_system_content"]},
-                {"role": "user", "content": _rp_tool_decision_input(incoming_message, clean)},
+                {"role": "user", "content": _rp_tool_decision_input(
+                    incoming_message, clean, ctx["tools_dict"],
+                    in_person=(ctx.get("medium") == "in_person"))},
             ]
             _tresp = get_llm_queue().submit(
                 task_type="intent", priority=Priority.CHAT, llm=ctx["tool_llm"],

@@ -33,8 +33,8 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
             "- The tool name must be EXACTLY one of the available tool names\n"
             "- Write your input between the opening and closing tags\n"
             "- Do NOT add any text after the closing </tool> tag\n"
-            "- WRONG: I will use ImageGenerator to create...\n"
-            "- RIGHT: <tool name=\"ImageGenerator\">[image description]</tool>"
+            "- WRONG: I will use ToolName to create...\n"
+            "- RIGHT: <tool name=\"ToolName\">[your detailed input]</tool>"
         ),
         "example": '<tool name="{tool_name}">{input}</tool>',
         "pattern": r'<tool\s+name="(\w+)">([\s\S]*?)</tool>',
@@ -51,7 +51,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
             "RULES:\n"
             "- Write EXACTLY 'Use' then the tool name then 'for:' WITH COLON\n"
             "- Then the details. Do NOT use brackets [] in real tool calls.\n"
-            "- Example: Use ImageGenerator for: a beautiful sunset at the beach"
+            "- Example: Use ToolName for: your detailed input here"
         ),
         "example": "Use {tool_name} for: {input}",
         "pattern": r"(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)(?:\n|$)",
@@ -69,8 +69,8 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
             "- Schreibe GENAU 'Ich nutze' gefolgt vom Tool-Namen (ein Wort)\n"
             "- Dann 'für:' MIT DOPPELPUNKT\n"
             "- Dann die Details/Beschreibung\n"
-            "- FALSCH: Ich nutze die Skills des ImageGenerator für Dich\n"
-            "- RICHTIG: Ich nutze ImageGenerator für: [Bildbeschreibung]"
+            "- FALSCH: Ich nutze die Skills des ToolName für Dich\n"
+            "- RICHTIG: Ich nutze ToolName für: [deine Eingabe]"
         ),
         "example": "Ich nutze {tool_name} für: {input}",
         "pattern": r"(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)(?:\n|$)",
@@ -170,14 +170,19 @@ def format_example(format_name: str, tool_name: str, example_input: str) -> str:
     return fmt["example"].format(tool_name=tool_name, input=example_input)
 
 
+# No tool names here: the AVAILABLE TOOLS block above the instruction already
+# lists exactly the tools this character has, and a hard-wired name list
+# contradicts it as soon as a tool is renamed or unavailable (A3.2b — the old
+# text still advertised "ImageGenerator", a name that has not existed since the
+# rename to TakePhoto).
 _DEFAULT_TOOL_INSTRUCTION = (
     "WHEN TO USE TOOLS:\n"
-    "- The user asks about current events, news, real-world facts, what happened recently, "
-    "or anything requiring up-to-date information → you MUST call WebSearch. "
-    "Do NOT answer from memory, do NOT make up information.\n"
-    "- The user asks for an image or picture → use ImageGenerator\n"
-    "- The user asks for a search or to look something up → use WebSearch or SearchKnowledge\n"
-    "- The user asks to go somewhere or change location → use the location tool\n"
+    "- Only the tools listed under AVAILABLE TOOLS above exist. Never call a tool that is "
+    "not on that list and never invent a tool name.\n"
+    "- Whenever the user asks for something one of those tools does — up-to-date information "
+    "about current events, news or real-world facts; an image or a picture; looking something "
+    "up; going somewhere or changing location — you MUST call that tool. Do NOT answer from "
+    "memory, do NOT make up information.\n"
     "HOW: Write your in-character response, then add the tool call at the end. "
     "The system will execute the tool automatically.\n"
     "TOOL INPUT RULES: When a tool expects JSON input, field values must be plain text — "
@@ -189,6 +194,21 @@ _ROLEPLAY_TOOL_NOUSE_CLAUSE = (
     "WHEN NOT TO USE TOOLS:\n"
     "- The user is just chatting, asking about your feelings, or discussing fiction/roleplay."
 )
+
+
+def _image_tool_names() -> frozenset:
+    """Tool names of skills that produce an image (PROGRESS_TYPE 'image').
+
+    The appearance / photographer hints only make sense for those. Declared by
+    the skill, never named in the core (F7/R1).
+    """
+    try:
+        from app.core.dependencies import get_skill_manager
+        return frozenset(
+            s.name for s in get_skill_manager().skills
+            if getattr(s, "PROGRESS_TYPE", "") == "image")
+    except Exception:
+        return frozenset()
 
 
 def _get_tool_instruction_for_model(model_name: str) -> str:
@@ -269,9 +289,12 @@ def build_tool_instruction(format_name: str, tools: List[Any],
             "If two actions happen, write two such lines, one per line."
         )
 
-    # Appearance-Hinweis fuer ImageGenerator
+    # Appearance hint for image-producing tools. Which tool produces an image
+    # is declared by the skill (PROGRESS_TYPE "image"), never named here
+    # (F7/R1) — the former `if "ImageGenerator" in tool_names` had been dead
+    # since the rename to TakePhoto and silently dropped both hints.
     tool_names = [t.name for t in tools]
-    if "ImageGenerator" in tool_names:
+    if any(n in _image_tool_names() for n in tool_names):
         if photographer_mode:
             # Photographer-Modus: Agent ist Fotograf, nicht im Bild
             photographer_hint = (

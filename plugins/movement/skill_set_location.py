@@ -407,11 +407,11 @@ class SetLocationSkill(PluginSkill):
         return format_example(fmt, self.name, "Büro, Küche, kaffee_kochen")
 
     def _build_locations_hint(self, character_name: str) -> str:
-        """Baut eine Liste der verfuegbaren Locations fuer die Tool-Beschreibung.
+        """Builds the list of available locations for the tool description.
 
-        Bei aktiver Leave-Blockade (Pinning/Confine-Rule) wird dem LLM nur
-        der aktuelle Ort angeboten — Hard-Gate bleibt zusaetzlich aktiv,
-        falls das LLM trotzdem halluziniert.
+        While a leave block is active (pinning/confine rule) only the current
+        place is offered to the LLM — the hard gate stays in place on top, in
+        case the LLM hallucinates anyway.
         """
         try:
             # Soft-Hint: Wenn der Char gar nicht weg darf, nur aktuellen Ort anbieten.
@@ -456,11 +456,21 @@ class SetLocationSkill(PluginSkill):
             locations = list_locations()
             if not locations:
                 return ""
+            # Same display name = same travel target for the LLM: the input is
+            # matched by NAME (_execute_inner, first exact hit wins), so only
+            # the first entry of a name is reachable anyway. Terrain tiles of
+            # the metre world share their names and blew the line up to
+            # several times its length (A3.1: 51 entries, 15 distinct names).
             hints = []
+            seen = set()
             for loc in locations:
                 name = loc.get("name", "")
                 if not name:
                     continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
                 rooms = get_location_rooms(loc)
                 room_names = [r.get("name", "") for r in rooms if r.get("name")]
                 if room_names:
@@ -468,7 +478,10 @@ class SetLocationSkill(PluginSkill):
                 else:
                     hints.append(name)
             if hints:
-                return " Available locations: " + "; ".join(hints) + "."
+                return (" Available locations: " + "; ".join(hints) + "."
+                        " The location name is only the part BEFORE the"
+                        " parenthesis — never copy the '(rooms: ...)' listing"
+                        " into your input.")
             return ""
         except Exception:
             return ""

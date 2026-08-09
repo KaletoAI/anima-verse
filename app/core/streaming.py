@@ -195,6 +195,125 @@ def _speech_tool_names() -> frozenset:
         return frozenset()
 
 
+def _remote_comm_tool_names() -> frozenset:
+    """Tools declared REMOTE_COMM — verbs that reach characters NOT present."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        return get_skill_manager().tool_names_with_flag("REMOTE_COMM")
+    except Exception:
+        return frozenset()
+
+
+# ----------------------------------------------------------------------
+# rp_first tool-decision prompt — ONE source for both paths
+# (streaming._stream_rp_first and chat_engine._rp_tool_decision_input).
+# Everything below is derived from the character's ACTUAL tool inventory;
+# the core never names a skill (R1).
+# ----------------------------------------------------------------------
+
+def decision_tools(tools: Dict[str, Any], *, suppress_in_person: bool) -> Dict[str, Any]:
+    """The tools the decision prompt may offer for THIS turn.
+
+    In an in-person conversation the SUPPRESS_IN_PERSON verbs (movement) are
+    discarded on execution — whoever answers does not walk away mid-sentence.
+    The decision is made per turn by the caller (medium == "in_person") and
+    never changes while the turn runs, so offering those verbs in the prompt
+    can only produce calls that are thrown away. Same reasoning as the party
+    follower who has no movement verb at all: what cannot run is not offered.
+    They stay in tools_dict — the execution-side gate is the hard guarantee,
+    this is only the prompt.
+    """
+    if not suppress_in_person:
+        return tools
+    suppressed = _suppress_in_person_tool_names()
+    return {k: v for k, v in (tools or {}).items() if k not in suppressed}
+
+
+def action_mapping_lines(tools: Dict[str, Any]) -> str:
+    """Action→tool hint lines for exactly the tools the character has.
+
+    The hints are declared by the skills themselves (skill meta frontmatter
+    `action_hint:`, exposed via the skill manager). Fallback for a hint-less
+    tool: a generic trigger line.
+    """
+    try:
+        from app.core.dependencies import get_skill_manager
+        sm = get_skill_manager()
+    except Exception:
+        sm = None
+    lines = []
+    for name in (tools or {}):
+        hint = (sm.get_action_hint(name) if sm else "") \
+            or f"Character triggers {name}"
+        lines.append(f"  - {hint} → {name}")
+    return "\n".join(lines) if lines else "  (no tools available)"
+
+
+def _room_speech_tools(tools: Dict[str, Any]) -> List[str]:
+    """Available verbs that deliver spoken words to someone in the SAME room
+    (DELIVERS_SPEECH without REMOTE_COMM)."""
+    speech = _speech_tool_names()
+    remote = _remote_comm_tool_names()
+    return [n for n in (tools or {}) if n in speech and n not in remote]
+
+
+def speech_turn_note(tools: Dict[str, Any], is_thought: bool) -> str:
+    """Turn-kind note about the room-speech verb ('' when none is available).
+
+    Speech handling differs by turn kind. In a CHAT turn the RP prose IS the
+    reply (recorded/streamed to the addressee), so the speech verb is only for
+    a THIRD person. In a THOUGHT turn the prose is discarded after this
+    decision — spoken dialogue reaches the room ONLY through the speech verb,
+    otherwise it is silently dropped (plan-thought-speech-dropped.md).
+    """
+    verbs = _room_speech_tools(tools)
+    if not verbs:
+        return ""
+    verb = " / ".join(verbs)
+    if is_thought:
+        return (
+            f"   SPEECH IN THIS AUTONOMOUS TURN: the character's prose is NOT delivered to "
+            f"anyone — quoted dialogue, a called-out line or a whisper reaches a person in "
+            f"the room ONLY through {verb}. Route every line the character speaks through it, "
+            f"using the JSON input its tool description specifies (the spoken words verbatim, "
+            f"plus the volume when the prose says whispering/shouting). NEVER drop dialogue.\n")
+    return (
+        f"   SPEECH IN THIS CHAT TURN: the character's prose already reaches the person they "
+        f"are talking to — use {verb} ONLY to pass something on to a THIRD person present in "
+        f"the room, never for the conversation partner.\n")
+
+
+def tool_decision_guardrails(tools: Dict[str, Any],
+                             *, with_markers: bool = True) -> str:
+    """Anti-hallucination rules for the tool-decision prompt (A3.2b/F2).
+
+    Measured failure modes: whole invented dialogues (the replies of OTHER
+    figures turned into own speech calls) and several contradictory
+    state-setting calls in one answer. Both are addressed in the prompt, not
+    in the parser.
+    """
+    lines = []
+    verbs = _room_speech_tools(tools)
+    if verbs:
+        lines.append(
+            f"  - Only lines the character SPEAKS THEMSELVES in the text above become "
+            f"{' / '.join(verbs)} calls — verbatim. Never turn another figure's reply into "
+            f"a call of your own, and never continue or invent dialogue beyond the prose.")
+    singles = [n for n in (tools or {}) if n in _singleton_tool_names()]
+    if singles:
+        lines.append(
+            f"  - At most ONE call per answer for each of: {', '.join(singles)}. Each of them "
+            f"SETS a state the character ends the turn in, so contradicting calls cancel each "
+            f"other out — decide on the final state and call it exactly once.")
+    if with_markers:
+        lines.append(
+            "  - At most ONE **I am at ...** marker per answer, for the destination the "
+            "character actually reaches.")
+    if not lines:
+        return ""
+    return "   HARD RULES:\n" + "\n".join(lines) + "\n"
+
+
 # Quote pairs recognized by the B-lite speech net: „…“/„…”/„…" · “…” · "…" ·
 # «…» · »…« · ‚…‘ — RP models close a German „-quote with a straight " often
 # enough that the first pair accepts it too.
@@ -403,10 +522,10 @@ class StreamingAgent:
         # to the LLMQueue so the admin queue panel can show "iter N/M".
         self.chat_task_id = chat_task_id
         self.user_id = ""
-        # constrained_tools=True signalisiert: das tools_dict ist bewusst auf
-        # eine Whitelist eingeschraenkt (z.B. forced_thought mit tool_whitelist).
-        # Dann: tool_decision_input wird minimiert — nur Action→Tool-Mapping
-        # fuer die verfuegbaren Tools, KEINE EXTRACTION/FALLBACK-MARKER-Sektion.
+        # constrained_tools=True means: tools_dict is deliberately narrowed to a
+        # whitelist (e.g. forced_thought with tool_whitelist). The tool decision
+        # prompt is then minimal — action→tool mapping only, no EXTRACTION and
+        # no FALLBACK MARKER section.
         self.constrained_tools = constrained_tools
         self.log_task = log_task  # z.B. "chat_stream", "thought"
         self.deferred_tools = deferred_tools or set()
@@ -421,25 +540,6 @@ class StreamingAgent:
         # Tool-LLM phase suppresses ContentEvents, so callers (e.g. the agent
         # loop's "Recent turns" panel) can only see it through this attribute.
         self.last_tool_response = ""
-
-    # Mapping: Tool-Name → Action-Trigger-Beschreibung (fuer constrained Mode).
-    def _action_mapping_for_available_tools(self) -> str:
-        """Action→tool hint lines for the currently available tools.
-
-        Hints are declared by the skills themselves (skill meta frontmatter
-        `action_hint:`, exposed via the skill manager) — no tool names in
-        this code (F7/R1). Fallback: a generic trigger line."""
-        try:
-            from app.core.dependencies import get_skill_manager
-            sm = get_skill_manager()
-        except Exception:
-            sm = None
-        lines = []
-        for name in self.tools_dict.keys():
-            hint = (sm.get_action_hint(name) if sm else "") \
-                or f"Character triggers {name}"
-            lines.append(f"  - {hint} → {name}")
-        return "\n".join(lines) if lines else "  (no tools available)"
 
     # ------------------------------------------------------------------
     # Search-intent detection (user input)
@@ -604,22 +704,146 @@ class StreamingAgent:
     # Mode: rp_first — Chat-LLM antwortet, Tool-LLM entscheidet danach
     # ------------------------------------------------------------------
 
+    def build_tool_decision_input(self, user_input: str,
+                                  rp_response: str) -> str:
+        """The rp_first tool-decision prompt (user message for the tool LLM).
+
+        The action→tool mapping ALWAYS comes from the character's real
+        inventory (A3.2b): a hard-wired list used to offer tools the character
+        does not have — party followers lose the move verb, yet the prompt kept
+        offering it, which produced 3 % dead calls. The instruction frame
+        (narrative action IS the trigger, indirect phrasings, multiple tools
+        are fine, EXTRACTION and FALLBACK MARKER steps) is unchanged; only the
+        mapping, the speech note and the hard rules are derived from the tools.
+
+        With constrained_tools (forced_thought with a whitelist) the prompt is
+        minimal: no EXTRACTION (intent/assignment/event-resolved are chat
+        concepts, not reactor concepts) and no FALLBACK MARKERS (marker
+        synthesis needs the full context, not the restricted reactor set).
+        """
+        _is_thought = (self.log_task or "").startswith("thought")
+        _tools = decision_tools(
+            self.tools_dict,
+            suppress_in_person=self.suppress_move_in_conversation)
+        _action_lines = action_mapping_lines(_tools)
+        _guardrails = tool_decision_guardrails(
+            _tools, with_markers=not self.constrained_tools)
+        if self.constrained_tools:
+            return (
+                f"The user said: {user_input}\n\n"
+                f"The character responded:\n{rp_response}\n\n"
+                f"Base your decision ONLY on what the CHARACTER actually did in the response above — "
+                f"never on what the user said, and never invent an action that is not in the text.\n"
+                f"Call any tool that the character's narrative action triggers. "
+                f"The character NEVER writes tool calls themselves; you do that.\n\n"
+                f"Available action → tool mapping (these are the ONLY tools this character has — "
+                f"never call anything that is not listed):\n"
+                f"{_action_lines}\n"
+                f"{_guardrails}\n"
+                f"Call every tool that genuinely applies; multiple tools are fine. "
+                f"But pure talk, a feeling, or a trivial gesture is NOT an action — do not call a tool for it. "
+                f"If the response is purely conversational/observational and triggers "
+                f"none of these actions, respond with: NONE"
+            )
+
+        # Speech handling differs by turn kind — the note is built from the
+        # character's own speech verbs (speech_turn_note), so it disappears
+        # when the character has none.
+        _speech_note = speech_turn_note(_tools, _is_thought)
+        if _is_thought:
+            _pure_talk_rule = (
+                "   BUT a feeling or a trivial gesture alone (shaking their head, smiling, "
+                "waving something in their hand) is NOT a tool action — do not call a tool "
+                "for it. SPOKEN DIALOGUE however IS an action here (see the speech note "
+                "above). Agreeing to travel together with someone is an action too — use "
+                "the party verb from the mapping instead of moving there alone. Emotions "
+                "and small gestures are carried by the markers in step 3, never by tools.\n\n")
+        else:
+            _pure_talk_rule = (
+                "   BUT if the character ONLY talks, shows a feeling, or makes a trivial gesture "
+                "(shaking their head, smiling, waving something in their hand) — that is NOT a "
+                "tool action. Do NOT call any tool for it. Agreeing to travel together with "
+                "someone, though, IS an action — use the party verb from the mapping instead "
+                "of moving there alone. Emotions and small gestures are carried by the "
+                "markers in step 3, never by tools.\n\n")
+        return (
+            f"The user said: {user_input}\n\n"
+            f"The character responded:\n{rp_response}\n\n"
+            f"Base EVERY decision ONLY on what the CHARACTER actually did in 'The character "
+            f"responded' text above. NEVER call a tool because of what the user said or asked "
+            f"for, and NEVER invent an action (an outfit, location, or activity) that is not "
+            f"literally in the character's text.\n\n"
+            f"Do THREE things:\n\n"
+            f"1. TOOLS: The character's narrative actions ARE the trigger — you execute the tools "
+            f"that enact those actions. The character NEVER writes tool calls themselves; that is your job.\n"
+            f"   Action → Tool mapping (fire the tool whenever the character's text shows the action, "
+            f"even if phrased indirectly like \"she goes to change\", \"puts on a dress\", \"takes a photo\", "
+            f"\"heads to the kitchen\"). This list is the character's COMPLETE tool inventory — "
+            f"never call a tool that is not on it:\n"
+            f"{_action_lines}\n"
+            f"{_speech_note}"
+            f"   For a REAL action listed above, narrative description IS the signal — do not skip the "
+            f"tool just because it was only described. Call every tool that genuinely applies; "
+            f"multiple tools are fine.\n"
+            f"{_guardrails}"
+            f"{_pure_talk_rule}"
+            f"2. EXTRACTION: Check the character's response for:\n"
+            f"   - Intent: If the character commits to a concrete action (posting something, "
+            f"sending a message, doing something at a specific time), output:\n"
+            f"   [INTENT: <type> | delay=<0/30m/2h/1d> | key=value]\n"
+            f"   Types: instagram_post, send_message, remind\n"
+            f"   For anything the character can do NOW, use its <tool> tag from step 1 — "
+            f"NEVER write [INTENT: execute_tool ...] to run a tool.\n"
+            f"   - Assignment: If the user gave a task/mission, output:\n"
+            f"   [NEW_ASSIGNMENT: <title> | <role> | <description> | <priority 1-5> | <duration_minutes>]\n"
+            f"   - Event resolved: If the character actively resolved/fixed a disruption or danger "
+            f"event (repaired something, helped someone, fixed a problem), output:\n"
+            f"   [EVENT_RESOLVED: <short description of what they did>]\n\n"
+            f"3. FALLBACK MARKERS — CRITICAL: Your job here is to EMIT markers the character forgot. "
+            f"Plain prose like 'I feel happy' or 'Ich fuehle mich gluecklich' WITHOUT double-asterisks "
+            f"means the marker is MISSING — you MUST emit it. A marker only counts as already-present "
+            f"when it is wrapped in '**...**' literally in the text.\n"
+            f"   Decision rule:\n"
+            f"     - Emotion clearly shown in RP AND no '**I feel <X>**' in RP → EMIT **I feel <emotion>**\n"
+            f"     - New activity clearly started AND no '**I do <X>**' in RP → EMIT **I do <activity>**\n"
+            f"     - Location marker: ONLY emit **I am at <location>** when the RP text EXPLICITLY "
+            f"describes the character PHYSICALLY MOVING to a NEW location (verbs like 'I walk to', "
+            f"'ich gehe in', 'arriving at', 'ankommen in'). Do NOT emit it when the character simply "
+            f"STAYS at their current location — even if props, furniture, or scene details suggest "
+            f"another place. If in doubt: do NOT emit the location marker. Props on a stage do not "
+            f"mean the location changed.\n"
+            f"   Examples (study carefully):\n"
+            f"     RP ends with 'Ich fuehle mich... gluecklich.' (no asterisks) → EMIT **I feel gluecklich**\n"
+            f"     RP ends with 'I feel manipulative.' (no asterisks) → EMIT **I feel manipulative**\n"
+            f"     RP ends with '**I feel happy**' (has asterisks) → do NOT emit (already present)\n"
+            f"     RP mentions 'sits on a chair' without walking/moving → do NOT emit any location marker\n"
+            f"     RP says 'I walk to the kitchen' without '**I am at ...**' → EMIT **I am at Küche**\n"
+            f"   Use the SAME language as the character's RP response (German → German word, English → English).\n"
+            f"   For activity/location: match the EXACT name from the Known locations / Available activities "
+            f"lists provided in your system prompt. Do NOT invent names.\n"
+            f"   Do NOT skip this step just because the text mentions the emotion in prose — that is "
+            f"EXACTLY when you must emit the marker. The prose mention is the SIGNAL.\n\n"
+            f"If the character performed no real tool action, respond with NONE for step 1. "
+            f"NONE must never appear next to a <tool> tag — it means 'no tool'. The marker lines from "
+            f"step 3 are NOT tools, so you may still output them together with NONE."
+        )
+
     async def _stream_rp_first(
         self, system_content: str, history: List, user_input: str) -> AsyncGenerator[StreamEvent, None]:
-        """RP zuerst, Tools danach.
+        """RP first, tools afterwards.
 
-        Phase 1: Chat-LLM antwortet (sauberes RP, OHNE Tool-Instruktionen)
-        Phase 2: Tool-LLM bekommt User-Input + RP-Antwort → Tool-Entscheidung
-        Phase 3 (nur bei CONTENT_TOOL): Chat-LLM nochmal MIT Tool-Ergebnissen
+        Phase 1: the chat LLM answers (clean RP, WITHOUT tool instructions)
+        Phase 2: the tool LLM gets user input + RP answer → tool decision
+        Phase 3 (only for CONTENT_TOOL): chat LLM again, WITH the tool results
 
-        Tool-Kategorien:
-          DEFERRED (Post-RP): ausfuehren, Ergebnis anhaengen (Image, Video, Instagram)
-          CONTENT_TOOL: ausfuehren, RP verwerfen, Chat-LLM Retry (WebSearch, SearchKnowledge)
-          Seiteneffekt: ausfuehren, nichts weiter (SetActivity, Outfit, TalkTo, ...)
+        Tool categories:
+          DEFERRED (post-RP): run it, append the result (image, video, post)
+          CONTENT_TOOL: run it, discard the RP, retry with the chat LLM (search)
+          side effect: run it, nothing further (activity, outfit, speech, ...)
         """
         _start = time.monotonic()
 
-        # Phase 1: Chat-LLM RP (ohne Tools im Prompt)
+        # Phase 1: chat LLM RP (no tools in the prompt)
         state_rp = _StreamState()
         async for event in self._stream_llm_response(
             state_rp, self.llm, system_content, list(history), user_input,
@@ -631,140 +855,16 @@ class StreamingAgent:
             logger.info("rp_first: leere RP-Antwort, beendet")
             return
 
-        # SKIP (Gedanken-Modus)
+        # SKIP (thought mode)
         if rp_response.upper() == "SKIP":
             logger.info("rp_first: SKIP → keine Aktion, %.2fs", time.monotonic() - _start)
             return
 
-        # Phase 2: Tool-LLM entscheidet + extrahiert (Intent, Assignment, Fallback-Marker).
-        # Bei constrained_tools (forced_thought mit Whitelist): minimaler Prompt —
-        # kein Action→Tool-Mapping fuer Tools die gar nicht verfuegbar sind, keine
-        # EXTRACTION (Intent/Assignment/Event-Resolved sind Chat-Konzepte, nicht
-        # Reactor-Konzepte), keine FALLBACK MARKER (Markersynthese braucht den
-        # vollen Kontext, nicht das eingeschraenkte Reactor-Set).
-        if self.constrained_tools:
-            _action_lines = self._action_mapping_for_available_tools()
-            tool_decision_input = (
-                f"The user said: {user_input}\n\n"
-                f"The character responded:\n{rp_response}\n\n"
-                f"Base your decision ONLY on what the CHARACTER actually did in the response above — "
-                f"never on what the user said, and never invent an action that is not in the text.\n"
-                f"Call any tool that the character's narrative action triggers. "
-                f"The character NEVER writes tool calls themselves; you do that.\n\n"
-                f"Available action → tool mapping:\n"
-                f"{_action_lines}\n\n"
-                f"Call every tool that genuinely applies; multiple tools are fine. "
-                f"But pure talk, a feeling, or a trivial gesture is NOT an action — do not call a tool for it. "
-                f"If the response is purely conversational/observational and triggers "
-                f"none of these actions, respond with: NONE"
-            )
-        else:
-            # Speech handling differs by turn kind. In a CHAT turn the RP prose
-            # IS the reply (recorded/streamed to the addressee), so pure talk
-            # must NOT fire a tool. In a THOUGHT turn the prose is discarded
-            # after this decision — spoken dialogue reaches the room ONLY if it
-            # is mapped to TalkTo, otherwise it is silently dropped
-            # (plan-thought-speech-dropped.md).
-            _is_thought = (self.log_task or "").startswith("thought")
-            if _is_thought:
-                _speech_map_line = (
-                    "     - Character SPEAKS OUT LOUD — quoted dialogue, a called-out line, "
-                    "whispering to someone — → TalkTo with JSON input "
-                    '{"name": "<addressed person>", "message": "<the spoken words, verbatim>"}. '
-                    'When the character whispers, add "volume": "whisper" (only the addressee '
-                    'hears the words); when they shout/call out loudly, add "volume": "shout". '
-                    "In this autonomous turn the character's prose is NOT delivered to anyone: "
-                    "spoken words reach others ONLY through TalkTo. NEVER drop dialogue.\n")
-                _pure_talk_rule = (
-                    "   BUT a feeling or a trivial gesture alone (shaking their head, smiling, "
-                    "waving something in their hand) is NOT a tool action — do not call a tool "
-                    "for it. SPOKEN DIALOGUE however IS an action here: map it to TalkTo (see "
-                    "above). (Agreeing to travel together, though, IS "
-                    "JoinParty — see above.) Emotions and small gestures are carried by the "
-                    "markers in step 3, never by tools.\n\n")
-            else:
-                _speech_map_line = (
-                    "     - Character relays info to a third party not in chat → TalkTo\n")
-                _pure_talk_rule = (
-                    "   BUT if the character ONLY talks, shows a feeling, or makes a trivial gesture "
-                    "(shaking their head, smiling, waving something in their hand) — that is NOT a "
-                    "tool action. Do NOT call any tool for it. (Agreeing to travel together, though, IS "
-                    "JoinParty — see above.) Emotions and small gestures are carried by the "
-                    "markers in step 3, never by tools.\n\n")
-            tool_decision_input = (
-                f"The user said: {user_input}\n\n"
-                f"The character responded:\n{rp_response}\n\n"
-                f"Base EVERY decision ONLY on what the CHARACTER actually did in 'The character "
-                f"responded' text above. NEVER call a tool because of what the user said or asked "
-                f"for, and NEVER invent an action (an outfit, location, or activity) that is not "
-                f"literally in the character's text.\n\n"
-                f"Do THREE things:\n\n"
-                f"1. TOOLS: The character's narrative actions ARE the trigger — you execute the tools "
-                f"that enact those actions. The character NEVER writes tool calls themselves; that is your job.\n"
-                f"   Action → Tool mapping (fire the tool whenever the character's text shows the action, "
-                f"even if phrased indirectly like \"she goes to change\", \"puts on a dress\", \"takes a photo\", "
-                f"\"heads to the kitchen\"):\n"
-                f"     - Character changes/puts on/takes off clothes, outfit, dress, shirt, etc. → ChangeOutfit\n"
-                f"     - Character takes a photo / makes an image / shows a picture → ImageGenerator\n"
-                f"     - Character posts to Instagram / shares a photo publicly → Instagram\n"
-                f"     - Character moves to a different location or room ON THEIR OWN → SetLocation\n"
-                f"     - Character agrees to go somewhere TOGETHER with whoever invited them / travels "
-                f"along with them as a group → JoinParty (leader = the inviter's name); prefer this over "
-                f"SetLocation when the character goes WITH someone rather than by themselves\n"
-                f"     - Character invites the user or another present character to come along / travel "
-                f"together as a group → InviteToParty (target = that character's name)\n"
-                f"     - Character wants to split off / no longer travel with the group → LeaveParty\n"
-                f"     - Character changes what they're physically doing (pose) → SetPose\n"
-                f"     - Character looks something up / searches / checks facts → SearchKnowledge or WebSearch\n"
-                f"{_speech_map_line}"
-                f"     - Character sends a remote/text message to someone NOT present → SendMessage. "
-                f"SendMessage carries TEXT ONLY — NEVER write placeholder text like '[image attached]'. "
-                f"Only when the character sends along a photo they take/took THIS turn, use JSON input: "
-                f'{{"to": "Name", "message": "...", "attach_image": true}}\n'
-                f"   For a REAL action listed above, narrative description IS the signal — do not skip the "
-                f"tool just because it was only described. Call every tool that genuinely applies; "
-                f"multiple tools are fine.\n"
-                f"{_pure_talk_rule}"
-                f"2. EXTRACTION: Check the character's response for:\n"
-                f"   - Intent: If the character commits to a concrete action (posting something, "
-                f"sending a message, doing something at a specific time), output:\n"
-                f"   [INTENT: <type> | delay=<0/30m/2h/1d> | key=value]\n"
-                f"   Types: instagram_post, send_message, remind\n"
-                f"   For anything the character can do NOW, use its <tool> tag from step 1 — "
-                f"NEVER write [INTENT: execute_tool ...] to run a tool.\n"
-                f"   - Assignment: If the user gave a task/mission, output:\n"
-                f"   [NEW_ASSIGNMENT: <title> | <role> | <description> | <priority 1-5> | <duration_minutes>]\n"
-                f"   - Event resolved: If the character actively resolved/fixed a disruption or danger "
-                f"event (repaired something, helped someone, fixed a problem), output:\n"
-                f"   [EVENT_RESOLVED: <short description of what they did>]\n\n"
-                f"3. FALLBACK MARKERS — CRITICAL: Your job here is to EMIT markers the character forgot. "
-                f"Plain prose like 'I feel happy' or 'Ich fuehle mich gluecklich' WITHOUT double-asterisks "
-                f"means the marker is MISSING — you MUST emit it. A marker only counts as already-present "
-                f"when it is wrapped in '**...**' literally in the text.\n"
-                f"   Decision rule:\n"
-                f"     - Emotion clearly shown in RP AND no '**I feel <X>**' in RP → EMIT **I feel <emotion>**\n"
-                f"     - New activity clearly started AND no '**I do <X>**' in RP → EMIT **I do <activity>**\n"
-                f"     - Location marker: ONLY emit **I am at <location>** when the RP text EXPLICITLY "
-                f"describes the character PHYSICALLY MOVING to a NEW location (verbs like 'I walk to', "
-                f"'ich gehe in', 'arriving at', 'ankommen in'). Do NOT emit it when the character simply "
-                f"STAYS at their current location — even if props, furniture, or scene details suggest "
-                f"another place. If in doubt: do NOT emit the location marker. Props on a stage do not "
-                f"mean the location changed.\n"
-                f"   Examples (study carefully):\n"
-                f"     RP ends with 'Ich fuehle mich... gluecklich.' (no asterisks) → EMIT **I feel gluecklich**\n"
-                f"     RP ends with 'I feel manipulative.' (no asterisks) → EMIT **I feel manipulative**\n"
-                f"     RP ends with '**I feel happy**' (has asterisks) → do NOT emit (already present)\n"
-                f"     RP mentions 'sits on a chair' without walking/moving → do NOT emit any location marker\n"
-                f"     RP says 'I walk to the kitchen' without '**I am at ...**' → EMIT **I am at Küche**\n"
-                f"   Use the SAME language as the character's RP response (German → German word, English → English).\n"
-                f"   For activity/location: match the EXACT name from the Known locations / Available activities "
-                f"lists provided in your system prompt. Do NOT invent names.\n"
-                f"   Do NOT skip this step just because the text mentions the emotion in prose — that is "
-                f"EXACTLY when you must emit the marker. The prose mention is the SIGNAL.\n\n"
-                f"If the character performed no real tool action, respond with NONE for step 1. "
-                f"NONE must never appear next to a <tool> tag — it means 'no tool'. The marker lines from "
-                f"step 3 are NOT tools, so you may still output them together with NONE."
-            )
+        # Phase 2: the tool LLM decides + extracts (intent, assignment,
+        # fallback markers).
+        _is_thought = (self.log_task or "").startswith("thought")
+        tool_decision_input = self.build_tool_decision_input(
+            user_input, rp_response)
 
         tool_system = self.tool_system_content or system_content
 
@@ -1271,6 +1371,27 @@ class StreamingAgent:
         if state.tool_matches:
             state.tool_matches = _dedupe_singleton_tools(state.tool_matches)
             logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
+            self._warn_dead_tool_calls(state.tool_matches)
+
+    def _warn_dead_tool_calls(self, matches: List[Tuple[str, str]]) -> None:
+        """Warn about parsed calls this character has no executor for.
+
+        Same finding as the chat path (chat_engine._run_tool_phase). Without
+        it these calls vanish silently: deferred ones are skipped without a
+        word in _run_deferred_tools, so 'tool call in the log but never
+        executed' had no trace at all. What happens downstream differs per
+        bucket (side effect/content: error result + retry hint; deferred:
+        skipped), hence the neutral wording. Logging only — no behaviour
+        change.
+        """
+        for name, _ in matches:
+            if name in self.tools_dict:
+                continue
+            logger.warning(
+                "Tool-Entscheidung[%s]: Tool-Call '%s' ohne Executor "
+                "(nicht verfuegbar/Name-Mismatch) — der Call bewirkt nichts "
+                "(verfuegbar: %s)", self.agent_name or "?", name,
+                ", ".join(sorted(self.tools_dict.keys())))
 
     async def _ensure_speech_mapped(
         self,
