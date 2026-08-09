@@ -1472,6 +1472,12 @@ def _shift_location_occupants(location_id: str,
     Unplacing (``new_*`` None) leaves every point untouched — the occupants
     then stand in the open wilderness, which is deliberate: the editor
     unplaces, gameplay cleanup is not its job.
+
+    A running journey of a shifted occupant is cancelled: this is a pure
+    position shift, no location changes, so the movement-target lifecycle in
+    ``save_character_current_location`` never fires — and the travel ticker
+    would put the character straight back onto its (pre-shift) polyline on
+    the next tick.
     """
     if not location_id or new_cx is None or new_cz is None:
         return
@@ -1489,6 +1495,7 @@ def _shift_location_occupants(location_id: str,
         name = row[0]
         if not name:
             continue
+        _cancel_journey_for_manual_write(name)
         pos = get_character_pos(name)
         if pos is None or not has_old:
             _write_character_pos(name, new_cx, new_cz)
@@ -1497,6 +1504,30 @@ def _shift_location_occupants(location_id: str,
                                 old_yaw or 0.0)
         nx, nz = local_to_world(lx, lz, new_cx, new_cz, new_yaw or 0.0)
         _write_character_pos(name, round(nx, 2), round(nz, 2))
+
+
+def _cancel_journey_for_manual_write(character_name: str) -> None:
+    """A position write that is NOT a travel step ends a running journey.
+
+    The travel ticker derives the position from the journey's baked polyline,
+    so a surviving journey would drag the character back onto its route on the
+    very next tick — an editor re-place, a teleport spell or an admin move
+    would visibly undo itself. ``save_character_current_location`` already
+    cancels on a real location CHANGE; this covers the writes that change no
+    location at all (a shift inside the same footprint, a step in the open).
+    """
+    if not character_name:
+        return
+    profile = get_character_profile(character_name) or {}
+    if not ((profile.get("movement_target") or "").strip()
+            or isinstance(profile.get("journey"), dict)):
+        return
+    try:
+        from app.core.travel_engine import cancel_journey
+        cancel_journey(character_name)
+    except Exception as e:
+        logger.debug("cancel journey on manual position write failed for %s: %s",
+                     character_name, e)
 
 
 def _clear_location_and_room(character_name: str) -> None:
@@ -1519,7 +1550,8 @@ def _clear_location_and_room(character_name: str) -> None:
                      character_name, e)
 
 
-def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]:
+def set_character_pos(character_name: str, x: float, z: float,
+                      preserve_movement_target: bool = False) -> Dict[str, Any]:
     """Put a character at a free metre point; the location is DERIVED from it.
 
     The point is the truth — ``current_location`` follows from
@@ -1528,6 +1560,16 @@ def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]
     re-written when it actually differs, so stepping around WITHIN a location
     does not fire the location-change side effects (events, history,
     compliance, party drag) on every step.
+
+    ``preserve_movement_target``: only a programmed TRAVEL step (the journey
+    ticker, and the party followers it drags along) passes True. A derived
+    location change would otherwise run the manual-teleport branch of
+    ``save_character_current_location``, which pops ``movement_target`` and
+    the stored journey with it — a journey would kill itself on the first
+    tick its interpolated point touches a footprint.
+    False, the default, is the honest opposite: an editor re-place, a teleport
+    spell or an admin move ENDS a running journey, because the ticker would
+    pull the character back onto its baked polyline on the next tick.
     """
     if not character_name:
         raise ValueError("character_name is required")
@@ -1540,6 +1582,11 @@ def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]
         # False) and poison every later JSON response (allow_nan=False).
         raise ValueError(f"position must be finite, got {x!r}/{z!r}")
     fx, fz = round(fx, 2), round(fz, 2)
+    if not preserve_movement_target:
+        # Cancel BEFORE the location write: the setter only ends a journey on
+        # a real location change, and this write may well change none at all
+        # (a shift inside the same footprint, a step in the open).
+        _cancel_journey_for_manual_write(character_name)
     from app.core.world_geometry import location_at_point
     from app.models.world import list_locations
     loc = location_at_point(fx, fz, list_locations())
@@ -1548,8 +1595,9 @@ def set_character_pos(character_name: str, x: float, z: float) -> Dict[str, Any]
         if location_id:
             # sync_pos=False — the location setter would otherwise snap the
             # character back to the location centre and undo this very move.
-            save_character_current_location(character_name, location_id,
-                                            sync_pos=False)
+            save_character_current_location(
+                character_name, location_id, sync_pos=False,
+                _preserve_movement_target=preserve_movement_target)
         else:
             # Stepping OUT of every footprint. The normal setter cannot do
             # this: its location_changed is False for an empty location

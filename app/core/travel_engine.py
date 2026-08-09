@@ -15,7 +15,14 @@ POLYLINE with baked times:
                                              # (waypoint 0 carries 0.0)
         "started_at_game": "<iso>",          # GAME clock stamp
         "speed_m_s": 1.4,                    # world setting at journey start
+        "entry_edge": "W",                   # WORLD edge of the target's
+                                             # opening the route aims at
+                                             # ('' = footprint-edge fallback)
     }
+
+``entry_edge`` is what lets the ARRIVAL route into the right room: a location
+with several doors links each of them to its own room, and only the journey
+knows which one it walked to. Baked at the start like ``t_cum``.
 
 ``t_cum`` is baked ONCE at the start from ``nav_grid.segment_costs`` (which
 already carries the terrain ``speed_factor``) divided by the travel speed —
@@ -232,25 +239,38 @@ def _footprint_edge_point(loc: Dict[str, Any],
     return best
 
 
-def _opening_point(loc: Dict[str, Any], toward: Point) -> Optional[Point]:
-    """The authored opening of ``loc`` nearest to ``toward``, or None when the
-    location has none (or is unplaced)."""
+def _opening_point(loc: Dict[str, Any],
+                   toward: Point) -> Optional[Tuple[str, Point]]:
+    """``(edge, point)`` of the authored opening of ``loc`` nearest to
+    ``toward``, or None when the location has none (or is unplaced).
+
+    The EDGE travels with the point because the arrival needs it: an opening's
+    room link is what routes the arriving character, and only the edge
+    identifies which of several openings the route aimed at.
+    """
     from app.core.boundary_entry import opening_world_points
-    points = [pt for _edge, pt in opening_world_points(loc)]
+    points = opening_world_points(loc)
     if not points:
         return None
-    return min(points, key=lambda p: math.dist(p, toward))
+    return min(points, key=lambda ep: math.dist(ep[1], toward))
 
 
-def _arrival_point(loc: Dict[str, Any], toward: Point) -> Optional[Point]:
-    """Where a journey ENDS on ``loc``: the authored opening nearest to
-    ``toward``, else the footprint edge midpoint facing it.
+def _arrival_point(loc: Dict[str, Any],
+                   toward: Point) -> Optional[Tuple[str, Point]]:
+    """Where a journey ENDS on ``loc``, as ``(entry_edge, point)``: the
+    authored opening nearest to ``toward``, else the footprint edge midpoint
+    facing it — the latter with an EMPTY edge, because a made-up geometric
+    point is no authored entrance and makes no statement about the room.
 
     A location without an opening cannot be entered by the gameplay rules
     (``boundary_entry.has_entrance``), but the journey still needs a goal
     point — the gate belongs to the arrival check, not to the geometry.
     """
-    return _opening_point(loc, toward) or _footprint_edge_point(loc, toward)
+    found = _opening_point(loc, toward)
+    if found is not None:
+        return found
+    edge_point = _footprint_edge_point(loc, toward)
+    return None if edge_point is None else ("", edge_point)
 
 
 def start_journey(character_name: str,
@@ -317,14 +337,16 @@ def start_journey(character_name: str,
                     "no journey", character_name, current_id or "")
         return None, "no_route"
 
-    goal = _arrival_point(target, start)
-    if goal is None:                        # placement was checked above
+    arrival = _arrival_point(target, start)
+    if arrival is None:                     # placement was checked above
         return None, "no_route"
+    entry_edge, goal = arrival
 
     ctx = build_nav_context()               # ONE context for the whole start
     legs: List[List[Point]] = []
-    exit_point = (_opening_point(current_loc, goal)
-                  if current_loc is not None else None)
+    own_opening = (_opening_point(current_loc, goal)
+                   if current_loc is not None else None)
+    exit_point = None if own_opening is None else own_opening[1]
     if exit_point is not None and math.dist(exit_point, start) > 1e-9:
         # Leave through the own opening first. A location WITHOUT an opening
         # gets no such waypoint — the character then simply walks off its own
@@ -367,7 +389,8 @@ def start_journey(character_name: str,
                           round(t_cum, 3)])
 
     journey = {"target": target_id, "waypoints": waypoints,
-               "started_at_game": game_now_iso(), "speed_m_s": speed}
+               "started_at_game": game_now_iso(), "speed_m_s": speed,
+               "entry_edge": entry_edge}
     profile = get_character_profile(character_name)
     profile["journey"] = journey
     profile["movement_target"] = target_id
@@ -401,22 +424,206 @@ def _game_now():
     return game_now()
 
 
+# Lateral spacing of party followers next to their leader, in metres.
+_FOLLOWER_SPACING_M = 1.2
+
+
+def _follower_offsets(count: int) -> List[float]:
+    """Signed lateral offsets for ``count`` followers, in metres.
+
+    Index-based and deterministic — no shuffling, no per-tick randomness: the
+    first follower walks 1.2 m to one side, the second the same distance to
+    the other, the third 2.4 m out, and so on. A small marching column that
+    every client derives identically, because it derives it from the index.
+    """
+    return [_FOLLOWER_SPACING_M * (i // 2 + 1) * (1 if i % 2 == 0 else -1)
+            for i in range(count)]
+
+
+def _segment_perpendicular(waypoints: Sequence[Sequence[float]],
+                           seg: int) -> Point:
+    """Unit vector perpendicular (left-hand) to segment ``seg``.
+
+    Falls back to the +x axis when there is no direction to be perpendicular
+    to: a zero-length segment is legal (``segment_costs`` returns 0.0 for
+    waypoints closer than a millimetre) and a standing party still has to
+    stand NEXT to its leader instead of inside them.
+    """
+    try:
+        x0, z0 = float(waypoints[seg][0]), float(waypoints[seg][1])
+        x1, z1 = float(waypoints[seg + 1][0]), float(waypoints[seg + 1][1])
+    except (IndexError, TypeError, ValueError):
+        return (1.0, 0.0)
+    dx, dz = x1 - x0, z1 - z0
+    length = math.hypot(dx, dz)
+    if length <= 1e-9:
+        return (1.0, 0.0)
+    return (-dz / length, dx / length)
+
+
+def _move_party_followers(leader: str, pos: Point,
+                          waypoints: Sequence[Sequence[float]],
+                          seg: int) -> None:
+    """Walk the leader's followers alongside them for this tick.
+
+    Followers keep no journey of their own (they lose SetLocation/Move) — they
+    are a pure function of the leader's position, so nothing has to be settled
+    for them and a follower joining mid-journey simply appears in formation on
+    the next tick. Their LOCATION change is not done here: the arrival's
+    ``_drag_party_followers_to_location`` hook owns that, unchanged.
+    """
+    from app.core.party_engine import party_followers
+    from app.models.character import set_character_pos
+    followers = [f for f in party_followers(leader) if f and f != leader]
+    if not followers:
+        return
+    px, pz = _segment_perpendicular(waypoints, seg)
+    for follower, offset in zip(followers, _follower_offsets(len(followers))):
+        try:
+            # preserve_movement_target=True although a follower has nothing to
+            # preserve: this IS a travel step, and the plain write would fire
+            # the manual-teleport journey cancel on every single tick.
+            set_character_pos(follower, round(pos[0] + px * offset, 2),
+                              round(pos[1] + pz * offset, 2),
+                              preserve_movement_target=True)
+        except Exception as e:
+            logger.debug("party follow failed for %s: %s", follower, e)
+
+
+def _leave_still_allowed(name: str) -> bool:
+    """Leave re-check for a traveller that has not left its start location yet.
+
+    Returns False after cancelling the journey and recording the denial — the
+    old walk step wrote it to state_history too, so diary and recent-activity
+    surface the aborted trip in the next thought turn.
+    """
+    try:
+        from app.models.rules import check_leave
+        ok, reason = check_leave(name)
+    except Exception:
+        return True
+    if ok:
+        return True
+    cancel_journey(name)
+    try:
+        from app.models.character import (get_character_current_location,
+                                          record_access_denied)
+        from app.models.world import get_location_name
+        cur = (get_character_current_location(name) or "").strip()
+        record_access_denied(name, cur, get_location_name(cur) or cur,
+                             reason, action="leave")
+    except Exception:
+        logger.debug("record_access_denied(travel-leave) failed", exc_info=True)
+    logger.info("Journey blocked (leave rule): %s — %s", name, reason)
+    return False
+
+
+def _settle_arrival(name: str, journey: Dict[str, Any],
+                    st: Dict[str, Any]) -> None:
+    """The journey reached its last waypoint: entry gate, then the crossing."""
+    from app.core.boundary_entry import opening_entry_room
+    from app.models.character import (_write_character_pos, clear_pose_intent,
+                                      get_movement_target, record_access_denied,
+                                      save_character_current_location,
+                                      save_character_current_room)
+    from app.models.rules import check_access
+    from app.models.world import (get_arrival_room_id, get_location_by_id,
+                                  get_location_name)
+
+    target_id = journey["target"]
+    target = get_location_by_id(target_id) or {}
+    # The arrival room: an authored opening WITH a room link answers the
+    # question by itself, and the journey remembers which opening it walked to
+    # — a location with several doors therefore routes into the right room.
+    # Everything else falls back to the one arrival rule (declared entry room,
+    # otherwise the ground).
+    entry_edge = str(journey.get("entry_edge") or "")
+    entry_room = opening_entry_room(target, entry_edge) if entry_edge else ""
+    if not entry_room:
+        entry_room = get_arrival_room_id(target)
+
+    ok, reason = check_access(name, target_id, room_id=entry_room)
+    if not ok:
+        # Blocked at the door. The position is the last waypoint — the opening
+        # point ITSELF, which lies ON the target's footprint (the footprint
+        # test is inclusive). A location-DERIVING write would therefore walk
+        # the character in through the very door the rule just closed, so the
+        # two position columns are written raw: the figure stands at the door,
+        # its location stays the open terrain in front of it.
+        _write_character_pos(name, st["pos"][0], st["pos"][1])
+        cancel_journey(name)
+        try:
+            record_access_denied(name, target_id,
+                                 get_location_name(target_id) or target_id,
+                                 reason, action="enter")
+        except Exception:
+            logger.debug("record_access_denied(travel-enter) failed",
+                         exc_info=True)
+        try:
+            from app.core.state_events import publish as _publish_state
+            _publish_state("travel_blocked", name, target_id=target_id,
+                           reason=reason)
+        except Exception:
+            pass
+        logger.info("Journey blocked at the door: %s -> %s (%s)",
+                    name, target_id, reason)
+        return
+
+    # The crossing. _preserve_movement_target=True marks it as a PROGRAMMED
+    # step: the setter clears target + journey precisely because the new
+    # location IS the target, and drags the party followers along on the way.
+    save_character_current_location(name, target_id,
+                                    _preserve_movement_target=True)
+    # Write the room explicitly: the opening may route somewhere other than
+    # the arrival room the location write picks by itself, and only an
+    # explicit write clears the room the character came from.
+    save_character_current_room(name, entry_room)
+    # The one case the setter cannot clear: the character ALREADY stood in the
+    # target (an editor moved the location onto it mid-journey), so nothing
+    # changed and the clearing branch never ran — without this the arrival
+    # would be re-settled on every single tick, forever.
+    if get_movement_target(name):
+        cancel_journey(name)
+    try:
+        clear_pose_intent(name)   # D6: arrival = location change
+    except Exception:
+        logger.debug("clear pose on arrival failed for %s", name, exc_info=True)
+    # Roll-on-entry, exactly like the avatar step: arriving somewhere is what
+    # rolls for an event ("wolves block the path"). The v1 asymmetry (the step
+    # rolled, the journey did not) is resolved in favour of the step.
+    try:
+        from app.core.random_events import try_roll_on_entry
+        try_roll_on_entry(name, target_id, target)
+    except Exception:
+        logger.debug("try_roll_on_entry failed for %s", name, exc_info=True)
+    # check_discover_rules is deliberately NOT called: it walks GRID
+    # neighbours, which the seamless world no longer has — dead until E6
+    # rebuilds discovery on the metre map.
+    try:
+        from app.core.agent_loop import get_agent_loop
+        get_agent_loop().bump(name)    # think at the destination
+    except Exception:
+        pass
+    logger.info("Journey arrived: %s @ %s (room %s)", name, target_id,
+                entry_room)
+
+
 def advance_all_journeys() -> None:
-    """Apply elapsed game time to every active journey and settle arrivals.
+    """Apply elapsed game time to every active journey: write the in-flight
+    position, keep the party together, settle arrivals.
 
     Called by the TravelTicker; each call is cheap when no one travels.
 
-    TODO(Task 3): this is the v1 ticker minimally adapted to v2 — it only
-    settles ARRIVALS. The in-flight position write is missing: v2 walks over
-    free terrain, so the ticker has to write the interpolated point via
-    ``set_character_pos`` every tick (the v1 intermediate hop through
-    ``save_character_current_location`` had grid cells to hop between and is
-    meaningless now). Task 3 also moves the leave re-check to the phase where
-    it still means something (before the character has left its start
-    location), drops the dead ``check_discover_rules`` call (grid neighbours,
-    dead until E6) and adds the party-follower offsets.
+    The in-flight write goes through ``set_character_pos(...,
+    preserve_movement_target=True)``: the point DERIVES the location (walking
+    over open terrain with an empty ``current_location`` is the normal state
+    of a journey, not an error), and only the preserving variant survives the
+    moment that derived location changes — the plain write would pop
+    ``movement_target`` and the journey with it.
     """
-    from app.models.character import list_available_characters
+    from app.models.character import (get_character_current_location,
+                                      list_available_characters,
+                                      set_character_pos)
     now = _game_now()
     for name in list_available_characters():
         try:
@@ -424,65 +631,23 @@ def advance_all_journeys() -> None:
             if not j:
                 continue
             st = journey_state(j["waypoints"], j["started_at_game"], now)
+            current_id = (get_character_current_location(name) or "").strip()
+            # Leave re-check — ONLY while the character still stands in the
+            # location it set off from. A leave rule forbids stepping OUT of a
+            # place; once the point has left that footprint (current_location
+            # '', the wilderness that a journey spends most of its time in)
+            # there is nothing left to leave, and asking again would strand
+            # travellers halfway across the map whenever a rule flips.
+            if current_id and current_id != j["target"] \
+                    and not _leave_still_allowed(name):
+                continue
             if not st["arrived"]:
-                # TODO(Task 3): write st["pos"] here — but NOT with a plain
-                # ``set_character_pos``: as soon as the interpolated point
-                # enters ANY footprint, that function routes through
-                # ``save_character_current_location`` without
-                # ``_preserve_movement_target``, which clears movement_target
-                # and the journey with it — the journey would kill itself on
-                # the first tick it touches a building. Task 3 needs a
-                # preserve-aware write (a ``preserve_movement_target``
-                # passthrough on set_character_pos, or a dedicated ticker
-                # writer) before it can move anyone in flight.
+                set_character_pos(name, st["pos"][0], st["pos"][1],
+                                  preserve_movement_target=True)
+                _move_party_followers(name, st["pos"], j["waypoints"],
+                                      st["seg"])
                 continue
-            try:
-                from app.models.rules import check_leave
-                leave_ok, leave_reason = check_leave(name)
-            except Exception:
-                leave_ok, leave_reason = True, ""
-            if not leave_ok:
-                cancel_journey(name)
-                # Make the cancel visible to the character: the old walk-step
-                # recorded the denial into state_history, diary/recent-activity
-                # surface it in the next thought turn.
-                try:
-                    from app.models.character import (
-                        get_character_current_location, record_access_denied)
-                    from app.models.world import get_location_name
-                    cur = (get_character_current_location(name) or "").strip()
-                    cur_name = get_location_name(cur) or cur
-                    record_access_denied(name, cur, cur_name,
-                                         leave_reason, action="leave")
-                except Exception:
-                    logger.debug("record_access_denied(travel-leave) failed",
-                                 exc_info=True)
-                logger.info("Journey blocked (leave rule): %s — %s",
-                            name, leave_reason)
-                continue
-            # Arrival: save_… clears movement_target (location == target) and
-            # the journey dict with it; the arrival room is decided inside.
-            from app.models.character import save_character_current_location
-            save_character_current_location(name, j["target"],
-                                            _preserve_movement_target=True)
-            try:
-                from app.models.character import clear_pose_intent
-                clear_pose_intent(name)   # D6: arrival = location change
-            except Exception:
-                logger.debug("clear pose on arrival failed for %s", name,
-                             exc_info=True)
-            try:
-                from app.models.rules import check_discover_rules
-                check_discover_rules(name)
-            except Exception:
-                logger.debug("discover check failed for %s", name,
-                             exc_info=True)
-            try:
-                from app.core.agent_loop import get_agent_loop
-                get_agent_loop().bump(name)    # think at the destination
-            except Exception:
-                pass
-            logger.info("Journey arrived: %s @ %s", name, j["target"])
+            _settle_arrival(name, j, st)
         except Exception as e:
             logger.warning("advance journey failed for %s: %s", name, e)
 
