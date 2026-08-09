@@ -509,7 +509,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
-| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird) |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11) bleibt `pos` die Position |
 
 - **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
   mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim
@@ -1113,8 +1113,9 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 - **`pos` (§ A1.4) und `travel` widersprechen sich nicht.** `pos` ist der vom
   Reise-Ticker geschriebene Punkt und wird nur im **Ticker-Takt (5 s)**
   nachgeführt; `travel` erlaubt die stetige Ableitung dazwischen. Für einen
-  Charakter MIT `travel` ist die Render-Position die aus `waypoints` +
-  `progress_m` abgeleitete, ohne `travel` ist es `pos`. Beide stammen aus
+  Charakter MIT `travel` UND `waypoints` ist die Render-Position die aus
+  `waypoints` + `progress_m` abgeleitete; ohne `travel` — und ebenso bei
+  `waypoints: null` (Fog, s. u.) — ist es `pos`. Beide stammen aus
   derselben Funktion und stimmen im Ticker-Takt exakt überein.
 - **`location_id` folgt dem Punkt, nicht der Route.** Unterwegs steht ein
   Reisender meist in der **Wildnis** (`location_id: ""`, § A1.4) — das ist
