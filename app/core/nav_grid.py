@@ -34,8 +34,9 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from app.core.world_geometry import (footprint_corners, placed_footprint,
-                                     point_in_footprint)
+from app.core.world_geometry import (footprint_corners, footprint_hits_aabb,
+                                     placed_footprint, point_in_footprint,
+                                     segment_hits_footprint)
 
 Point = Tuple[float, float]
 Cell = Tuple[int, int]
@@ -89,6 +90,9 @@ class NavContext:
     footprints: List[Tuple[str, float, float, float, float]]
     data_bounds: Optional[Tuple[float, float, float, float]]
     sig: Tuple[str, str]
+    # The ground of every unpainted point, resolved ONCE — the hot loop must
+    # not read the config per sample.
+    default_kind: str = "grass"
     # Best speed factor of the catalog (>= 1.0) — the A* heuristic divides
     # by it so it stays admissible on fast terrain.
     best_factor: float = 1.0
@@ -100,7 +104,8 @@ class NavContext:
     def terrain_at(self, x: float, z: float) -> Tuple[bool, float]:
         """(passable, speed_factor) of a POINT, from prefetched data."""
         from app.core.terrain_query import passability_at
-        return passability_at(x, z, areas=self.areas, catalog=self.catalog)
+        return passability_at(x, z, areas=self.areas, catalog=self.catalog,
+                              default_kind=self.default_kind)
 
     def cell_terrain(self, cell: Cell) -> Tuple[bool, float]:
         """Terrain of a CELL, sampled once at its centre and memoized."""
@@ -151,6 +156,7 @@ def build_nav_context() -> NavContext:
     if cached is not None and cached[0] == key:
         return cached[1]
 
+    from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     areas = list_areas()
     catalog = effective_catalog()
@@ -162,7 +168,7 @@ def build_nav_context() -> NavContext:
 
     ctx = NavContext(areas=areas, catalog=catalog, footprints=footprints,
                      data_bounds=_data_bounds(areas, footprints), sig=key,
-                     best_factor=best)
+                     default_kind=default_kind(), best_factor=best)
     _CACHE = (key, ctx)
     return ctx
 
@@ -199,6 +205,12 @@ def cell_of(x: float, z: float) -> Cell:
 def cell_centre(cell: Cell) -> Point:
     """World centre of a cell in metres."""
     return ((cell[0] + 0.5) * NAV_CELL_M, (cell[1] + 0.5) * NAV_CELL_M)
+
+
+def cell_box(cell: Cell) -> Tuple[float, float, float, float]:
+    """(min_x, min_z, max_x, max_z) of a cell square in metres."""
+    return (cell[0] * NAV_CELL_M, cell[1] * NAV_CELL_M,
+            (cell[0] + 1) * NAV_CELL_M, (cell[1] + 1) * NAV_CELL_M)
 
 
 def _finite_point(raw: Any, label: str) -> Point:
@@ -253,27 +265,24 @@ class _Search:
         return (self.min_i <= cell[0] <= self.max_i
                 and self.min_j <= cell[1] <= self.max_j)
 
-    def point_blocked(self, x: float, z: float) -> bool:
-        """A world POINT is blocked by impassable terrain or a foreign
-        footprint. Used by the line-of-sight smoothing."""
-        if not self.ctx.terrain_at(x, z)[0]:
-            return True
-        for _lid, cx, cz, width, yaw in self.blocking:
-            if point_in_footprint(x, z, cx, cz, width, yaw):
-                return True
-        return False
-
     def blocked(self, cell: Cell) -> bool:
-        """A CELL is blocked when its centre is — cells outside the search
-        box count as blocked so A* cannot wander off."""
+        """A CELL is blocked by impassable terrain at its centre or by a
+        foreign footprint OVERLAPPING it — cells outside the search box
+        count as blocked so A* cannot wander off.
+
+        Footprints are tested against the whole cell square, not against
+        its centre: a building may cover most of a cell without touching
+        the centre, and a step between two such cells would walk through
+        the wall.
+        """
         hit = self._blocked.get(cell)
         if hit is None:
             if not self.in_bounds(cell):
                 hit = True
             else:
-                cx, cz = cell_centre(cell)
+                box = cell_box(cell)
                 hit = (not self.ctx.cell_terrain(cell)[0]
-                       or any(point_in_footprint(cx, cz, fcx, fcz, w, yaw)
+                       or any(footprint_hits_aabb(fcx, fcz, w, yaw, *box)
                               for _lid, fcx, fcz, w, yaw in self.blocking))
             self._blocked[cell] = hit
         return hit
@@ -299,14 +308,24 @@ class _Search:
         return best
 
     def line_clear(self, a: Point, b: Point) -> bool:
-        """Whether the straight segment a→b is walkable, sampled every
-        ``LOS_STEP_M`` metres (both endpoints included)."""
+        """Whether the straight segment a→b is walkable.
+
+        Foreign footprints are tested EXACTLY (segment vs. rotated
+        rectangle) — sampling misses the sub-metre corner clip that a
+        straightened segment produces. Terrain is sampled every
+        ``LOS_STEP_M`` metres (both endpoints included), the same
+        resolution the raster itself works at.
+        """
+        for _lid, cx, cz, width, yaw in self.blocking:
+            if segment_hits_footprint(a[0], a[1], b[0], b[1], cx, cz, width,
+                                      yaw):
+                return False
         length = math.dist(a, b)
         steps = max(1, int(math.ceil(length / LOS_STEP_M)))
         for k in range(steps + 1):
             t = k / steps
-            if self.point_blocked(a[0] + (b[0] - a[0]) * t,
-                                  a[1] + (b[1] - a[1]) * t):
+            if not self.ctx.terrain_at(a[0] + (b[0] - a[0]) * t,
+                                       a[1] + (b[1] - a[1]) * t)[0]:
                 return False
         return True
 
@@ -369,6 +388,24 @@ def _astar(search: _Search, start_cell: Cell,
     return None
 
 
+def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
+    """Game-seconds for one straight segment at 1 m/s — the sampling rule
+    documented on :func:`segment_costs` (midpoints of ``n`` equal parts)."""
+    length = math.dist(a, b)
+    if length <= 0.0:
+        return 0.0
+    n = max(1, int(math.ceil(length / COST_STEP_M)))
+    part = length / n
+    total = 0.0
+    for k in range(n):
+        t = (k + 0.5) / n
+        factor = max(ctx.terrain_at(a[0] + (b[0] - a[0]) * t,
+                                    a[1] + (b[1] - a[1]) * t)[1],
+                     MIN_SPEED_FACTOR)
+        total += part / factor
+    return total
+
+
 def _dedupe(points: List[Point]) -> List[Point]:
     out: List[Point] = []
     for pt in points:
@@ -378,20 +415,38 @@ def _dedupe(points: List[Point]) -> List[Point]:
 
 
 def _smooth(search: _Search, points: List[Point]) -> List[Point]:
-    """String-pulling: drop a waypoint whenever the straight line from its
-    predecessor to its successor is walkable. Repeated until stable, so a
-    corridor of cell centres collapses to the few real corners."""
+    """String-pulling: drop a waypoint when the straight line from its
+    predecessor to its successor is walkable AND not more expensive than
+    the two segments it replaces. Repeated until stable, so a corridor of
+    cell centres collapses to the few real corners.
+
+    The cost guard is what keeps A*'s terrain work: a shortcut is always
+    SHORTER, but a shortcut through a swamp can still cost more time than
+    the detour around it — a purely geometric string-pull would silently
+    undo every detour the search made for a slow-but-passable area.
+    """
+    ctx = search.ctx
     out = list(points)
     changed = True
     while changed and len(out) > 2:
         changed = False
         i = 0
         while i + 2 < len(out):
+            # line_clear first: it exits at the first blocked sample, while
+            # the cost guard always samples the whole segment. In a maze
+            # most candidates are blocked, so the order is worth an order
+            # of magnitude.
             if search.line_clear(out[i], out[i + 2]):
-                del out[i + 1]
-                changed = True
-            else:
-                i += 1
+                detour = (_segment_cost(ctx, out[i], out[i + 1])
+                          + _segment_cost(ctx, out[i + 1], out[i + 2]))
+                shortcut = _segment_cost(ctx, out[i], out[i + 2])
+                # Relative epsilon: collinear points must still collapse
+                # despite float noise in the sampling sums.
+                if shortcut <= detour * (1.0 + 1e-9) + 1e-9:
+                    del out[i + 1]
+                    changed = True
+                    continue
+            i += 1
     return out
 
 
@@ -404,6 +459,12 @@ def route(start_xz: Any, goal_xz: Any,
     stands where it stands). Everything in between are the corners left
     after the line-of-sight smoothing. ``None`` means unreachable: no
     passable cell near an endpoint, or no route inside the search box.
+
+    Resolution caveat: TERRAIN is judged at cell centres (and at 1 m
+    samples along a smoothed segment), so a painted obstacle thinner than
+    roughly a cell can slip between the samples — building footprints do
+    not, they are tested exactly against the cell square and the segment.
+    Sub-cell terrain detail is below what a 2 m raster can represent.
     """
     start = _finite_point(start_xz, "start")
     goal = _finite_point(goal_xz, "goal")
@@ -423,7 +484,10 @@ def route(start_xz: Any, goal_xz: Any,
     # Real endpoints + every cell centre; the smoothing throws away what the
     # straight line covers anyway (in an empty world: everything).
     points = _dedupe([start] + [cell_centre(c) for c in cells] + [goal])
-    points = _smooth(search, points)
+    # Dedupe again: smoothing a start==goal route collapses to two identical
+    # points, and "already there" must be ONE waypoint, not a zero-length
+    # segment the journey engine would have to special-case.
+    points = _dedupe(_smooth(search, points))
     return [(round(x, 2), round(z, 2)) for x, z in points]
 
 
@@ -443,20 +507,7 @@ def segment_costs(waypoints: Sequence[Point],
         ctx = build_nav_context()
     costs: List[float] = []
     for i in range(len(waypoints) - 1):
-        (x0, z0) = _finite_point(waypoints[i], "waypoint")
-        (x1, z1) = _finite_point(waypoints[i + 1], "waypoint")
-        length = math.hypot(x1 - x0, z1 - z0)
-        if length <= 0.0:
-            costs.append(0.0)
-            continue
-        n = max(1, int(math.ceil(length / COST_STEP_M)))
-        part = length / n
-        total = 0.0
-        for k in range(n):
-            t = (k + 0.5) / n
-            factor = max(ctx.terrain_at(x0 + (x1 - x0) * t,
-                                        z0 + (z1 - z0) * t)[1],
-                         MIN_SPEED_FACTOR)
-            total += part / factor
-        costs.append(total)
+        a = _finite_point(waypoints[i], "waypoint")
+        b = _finite_point(waypoints[i + 1], "waypoint")
+        costs.append(_segment_cost(ctx, a, b))
     return costs
