@@ -199,6 +199,14 @@ html, body, #app {
 .panel-zoom:hover { background: rgba(242, 205, 110, 0.25); }
 
 /* Offene Detail-Ansicht (Etappe 3): schwebender Schließen-Badge oben mittig */
+/* `display` on the class BEATS the browser's `[hidden] { display: none }` —
+   both are one class/attribute selector, and the author sheet wins over the
+   user-agent one. So the badge was on screen from the moment it was appended:
+   in embodied mode (where its own rule says it must be hidden, findings B3/B4)
+   and before any location was ever chosen, then as a bare ✕ with an empty
+   name. Every hidden-by-attribute element in this file needs this counterpart
+   — `.info-panel` sets no `display` at all and is therefore fine. */
+.open-view-badge[hidden] { display: none; }
 .open-view-badge {
   position: fixed;
   top: 46px;

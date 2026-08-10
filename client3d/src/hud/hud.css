@@ -912,3 +912,15 @@
 #hud:has(.hud-minimap) .hud-dock {
   top: 238px;
 }
+/* …and the minimap dodges the open info panel, exactly as the dock does
+   (acceptance finding B6). `.info-panel` is fixed at top 56 / right 12 and
+   300px wide, plus 16px padding and a 1px border on each side = 334, so its
+   left edge sits 346px from the right — right on top of the map, which
+   occupies 62..236. And the map is the one DRAWN OVER: #hud is z 20, the panel
+   z 10. So one overlap showed up as two findings — the selection panel covered
+   AND a map that "shows nothing", the nothing being its own dark backdrop over
+   the panel. 356px clears the panel with a 10px gap; the clamp is the dock's,
+   so a narrow window shifts as little as the dock does and never more. */
+#hud:has(~ .info-panel:not([hidden])) .hud-minimap {
+  right: clamp(62px, 100vw - 1184px, 356px);
+}

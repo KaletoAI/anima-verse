@@ -155,7 +155,14 @@ export class OpenViewBadge {
     document.body.appendChild(this.el);
   }
 
+  /** Show the badge for a named location. WITHOUT a name there is nothing to
+   *  close by name and the badge would be a bare ✕ floating over the HUD
+   *  (finding B4) — so an empty name hides it instead. */
   show(name: string) {
+    if (!name.trim()) {
+      this.hide();
+      return;
+    }
     this.nameEl.textContent = name;
     this.el.hidden = false;
   }
