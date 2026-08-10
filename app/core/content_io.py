@@ -913,6 +913,10 @@ def import_prop_from_zip(
     silently duplicated: without ``overwrite`` the import reports
     ``{"status": "exists"}`` and changes nothing, with it the directory is
     replaced wholesale (stale meshes of the old prop must not survive).
+
+    Every failure mode is a ``ValueError`` and every one of them happens
+    BEFORE the first byte on disk changes — a broken ZIP never costs the
+    prop that is already there.
     """
     from app.core.props import _prop_dir, read_sidecar, safe_prop_id
 
@@ -926,10 +930,27 @@ def import_prop_from_zip(
         pid = safe_prop_id(raw_id)
         if not pid:
             raise ValueError(f"invalid prop id in manifest: {raw_id!r}")
-        # The master record is what MAKES a prop — checked BEFORE anything is
-        # deleted, so a truncated ZIP can never wipe an existing prop and
-        # leave a record-less ghost directory behind.
-        if "files/sidecar.json" not in zf.namelist():
+        # The whole payload is decoded BEFORE anything on disk is touched: an
+        # overwrite deletes the existing prop, and a ZIP that only fails
+        # halfway through reading (CRC error, truncated member) would leave a
+        # partial directory — possibly without the sidecar, i.e. a prop that
+        # is no longer a prop. Nothing here is streamed, the archive already
+        # sits in memory anyway.
+        payload: Dict[str, bytes] = {}
+        try:
+            for member in zf.namelist():
+                if not member.startswith("files/"):
+                    continue
+                safe = _safe_relpath(member[len("files/"):])
+                if not safe:
+                    continue                      # Zip-Slip / directory entry
+                payload[safe] = zf.read(member)
+        except (zipfile.BadZipFile, OSError, RuntimeError) as e:
+            # RuntimeError = encrypted member; both mean the ZIP cannot be
+            # trusted. ValueError keeps the routes' 400 mapping intact.
+            raise ValueError(f"unreadable ZIP member: {e}")
+        # The master record is what MAKES a prop.
+        if "sidecar.json" not in payload:
             raise ValueError("files/sidecar.json missing — not a prop export")
 
         dst = _prop_dir(pid)
@@ -939,17 +960,11 @@ def import_prop_from_zip(
             shutil.rmtree(dst, ignore_errors=True)
 
         dst = _prop_dir(pid, create=True)
-        count = 0
-        for member in zf.namelist():
-            if not member.startswith("files/"):
-                continue
-            safe = _safe_relpath(member[len("files/"):])
-            if not safe:
-                continue
-            target = dst / safe
+        for rel, blob in payload.items():
+            target = dst / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(zf.read(member))
-            count += 1
+            target.write_bytes(blob)
+        count = len(payload)
     finally:
         zf.close()
 
