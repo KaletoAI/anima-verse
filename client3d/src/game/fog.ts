@@ -24,6 +24,15 @@
  * metres further out. Cutting the true rotated polygon would need a general
  * polygon difference, and it would buy a picture nobody can see.
  *
+ * HOW MANY RECTANGLES. `n` known places cut the frame into at most `2n + 1`
+ * bands with at most `n + 1` runs each; what a real map costs was measured
+ * (review of this task, randomised footprints): `n = 100` known locations give
+ * about **750** rectangles on average — one shared material, one draw call
+ * each, and only rebuilt when something moves. That is comfortable, and it is
+ * also where the next lever sits if a world ever gets big enough to feel it:
+ * merging vertically adjacent bands with identical runs. It is deliberately
+ * NOT done here (see the algorithm note in `fogRects`).
+ *
  * PURE like `walk.ts` and `soundtrack.ts`: no `three`, no DOM, no imports and
  * no module state. That is what lets `scripts/smoke_walk_math.mjs` check every
  * case by hand — the caller in `main.ts` only turns the rectangles into quads.
@@ -144,7 +153,8 @@ export function footprintBox(fp: FogFootprint): FogBox | null {
  * Bands are NOT merged with each other afterwards, exactly as the grid version
  * did not merge rows into columns: two stacked bands with identical runs are
  * rare on the shapes a discovered map makes, and every rectangle costs the
- * same one draw call either way.
+ * same one draw call either way. The measured count is in the module header —
+ * that merge is the lever to pull if it ever stops being comfortable.
  *
  * Deterministic: bands ascending in z, runs ascending in x, and the input
  * order of `known` cannot change the result (the caller iterates a Map).

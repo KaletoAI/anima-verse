@@ -80,30 +80,43 @@ export function openingWorldPoints(fp: Footprint, openings: LocalOpening[]
 
 /**
  * Does a location let one in ANYWHERE — the client's mirror of the server's
- * free-boundary rule (`app/routes/play.py`: "no authored openings at all = a
+ * free-boundary rule (`app/routes/play.py`: "NO AUTHORED OPENINGS AT ALL = a
  * free boundary")?
  *
- * The argument is the location's SCENE PAYLOAD as the client's cache answers
- * it, and all THREE of its states mean something different:
+ * TWO inputs, because the client has two sources and the server has one.
  *
+ * `scene` is the location's SCENE PAYLOAD as the client's cache answers it,
+ * and all three of its states mean something different:
+ *
+ *  - a payload — its own `boundary_openings` decide. Empty = free, and one
+ *    authored opening makes the openings the only way in.
  *  - `undefined` — still in flight, nothing is known. The honest answer is
  *    the closed one: reading "not loaded" as "no openings" would open every
  *    unloaded footprint for the seconds until it arrives, and the figure would
  *    walk into a place the server then refuses.
- *  - `null` — the scene endpoint answered 404: no floor plan, no room layout,
- *    no building model, and therefore no authored opening either. That is
- *    exactly the class the free boundary exists for (a painted meadow, a
- *    village square, a transit place), and treating it as a wall was the one
- *    place where the client was STRICTER than the server — a walker bounced
- *    off a location the server would have let it stroll into.
- *  - a payload — its own `boundary_openings` decide. Empty = free, and one
- *    authored opening makes that opening the only way in.
+ *  - `null` — the scene endpoint answered 404. That means "no building
+ *    outline, no room with a layout and no building model" and NOTHING ELSE:
+ *    the server reads the openings from `map3d.boundary_openings`, which the
+ *    world editor lets an author draw BEFORE any layout exists. So a 404 does
+ *    not imply "no openings", and `authoredOpenings` is what decides here.
+ *
+ * `authoredOpenings` is the raw `map3d.boundary_openings` count of that
+ * location (the worldmap row carries it, § A12), and it only ever matters in
+ * the `null` case — with a payload the composed list is the better answer,
+ * with nothing loaded we do not walk anyway.
+ *
+ * BOTH divergences are what this closes. Reading 404 as a wall bounced the
+ * walker off a painted meadow the server would have let it stroll into
+ * (task-5 ledger finding); reading 404 as free would have let it stroll into
+ * a place whose author HAD drawn a gate — straight into a `no_opening` 403
+ * and a snap back, on every attempt.
  */
 export function freeBoundaryOf(
   scene: { boundary_openings?: unknown[] | null } | null | undefined,
+  authoredOpenings: number,
 ): boolean {
   if (scene === undefined) return false;
-  if (scene === null) return true;
+  if (scene === null) return authoredOpenings <= 0;
   return (scene.boundary_openings ?? []).length === 0;
 }
 

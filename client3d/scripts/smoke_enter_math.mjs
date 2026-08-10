@@ -113,22 +113,31 @@
  * open ground (only `accessible_when` and the access rules still judge it);
  * one WITH openings is entered at those and nowhere else, within 1.5 m.
  *
- * The client asks the question of its scene cache, and that cache has three
- * states — which is the whole content of this function:
+ * The client has TWO sources where the server has one: the COMPOSED scene
+ * payload (its cache has three states) and the RAW `map3d.boundary_openings`
+ * of the location, which the worldmap row carries (§ A12).
  *
  *   payload with openings -> false: the openings are the way in
  *   payload without any   -> true : free, the server says so too
- *   null (404 on /scene)  -> true : "no floor plan, no room layout, no
- *                                   building model" (the endpoint's own
- *                                   docstring) — so no authored opening
- *                                   either. THE LEDGER FINDING of task 5: the
- *                                   client read this as a wall and bounced the
- *                                   walker off a meadow the server would have
- *                                   let it stroll into.
  *   undefined (in flight) -> false: nothing is known yet, and the conservative
  *                                   answer is the closed one — the opposite
  *                                   would open every footprint for the seconds
- *                                   its payload needs to arrive.
+ *                                   its payload needs to arrive
+ *   null (404 on /scene)  -> the AUTHORED count decides
+ *
+ * The 404 case is the one that needs both. `/play/locations/{id}/scene`
+ * answers 404 for "no building outline, no room with a layout and no building
+ * model" — and NOTHING ELSE. The server reads the openings from
+ * `map3d.boundary_openings` (`boundary_entry._rotated_openings`), which the
+ * world editor lets an author draw before any layout exists. So the two
+ * mistakes are symmetric and both are wrong:
+ *   - 404 as a WALL bounced the walker off a painted meadow the server would
+ *     have let it stroll into (the task-5 ledger finding);
+ *   - 404 as FREE would let it stroll into a place whose author HAD drawn a
+ *     gate — the server answers `no_opening` 403 and the figure snaps back,
+ *     on every single attempt.
+ * With openings authored, entering is the ordinary walk to the opening point
+ * (`entryOfferNear` above), exactly as for a location that has a scene.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -288,18 +297,31 @@ async function main() {
   check('the far locked gate is out of reach either way',
     entryOfferNear({ x: 50, z: 43.5 }, '', [CLOSER_LOCKED]), null);
 
-  console.log('\nfreeBoundaryOf — the three states of the scene cache');
+  console.log('\nfreeBoundaryOf — the scene cache and the authored openings');
+  const COMPOSED = { boundary_openings: [{ edge: 'N', at_world: { x: 0, z: -5 } }] };
   check('a payload with an opening is entered THERE, not anywhere',
-    freeBoundaryOf({ boundary_openings: [{ edge: 'N', at_world: { x: 0, z: -5 } }] }),
-    false);
+    freeBoundaryOf(COMPOSED, 1), false);
   check('a payload with an empty opening list is a free boundary',
-    freeBoundaryOf({ boundary_openings: [] }), true);
+    freeBoundaryOf({ boundary_openings: [] }, 0), true);
   check('a payload that states no openings at all is one too',
-    freeBoundaryOf({}), true);
-  check('404 (no plan, no layout, no model) is a free boundary',
-    freeBoundaryOf(null), true);
+    freeBoundaryOf({}, 0), true);
+  //   with a payload the COMPOSED list is the better answer and the raw count
+  //   has no say — the two can only disagree while a save is in flight
+  check('a payload beats the authored count (composed wins)',
+    freeBoundaryOf({ boundary_openings: [] }, 3), true);
+  check('...in the other direction too', freeBoundaryOf(COMPOSED, 0), false);
+  //   404 + nothing authored: the meadow of the task-5 ledger finding
+  check('404 and no authored opening is a free boundary',
+    freeBoundaryOf(null, 0), true);
+  //   404 + a gate drawn before any layout exists: still the gate, not a stroll
+  check('404 with an authored opening stays closed',
+    freeBoundaryOf(null, 1), false);
+  check('...however many are drawn', freeBoundaryOf(null, 4), false);
+  //   in flight: neither source is asked, the answer is the closed one
   check('a payload still in flight stays closed (the conservative answer)',
-    freeBoundaryOf(undefined), false);
+    freeBoundaryOf(undefined, 0), false);
+  check('...and stays closed with openings authored as well',
+    freeBoundaryOf(undefined, 2), false);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;

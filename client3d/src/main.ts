@@ -996,12 +996,16 @@ async function startApp(username: string, role: string) {
   function rebuildFog() {
     const frame = worldBounds
       ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
+    // Read ONCE: the key and the geometry have to describe the same instant,
+    // and walking the tiles twice per poll for the same answer is work for
+    // nothing.
+    const holeList = fogFootprints();
     // The key carries the FOOTPRINTS, not just the location ids: a place
     // resized or turned in the admin keeps its id, and a veil keyed on ids
     // alone would go on covering the metres the tile has just grown into
     // until some other location appeared. Centimetres are enough — nothing
     // finer is visible under a cloud edge that is metres wide.
-    const holes = fogFootprints()
+    const holes = holeList
       .map((f) => `${f.x.toFixed(2)},${f.z.toFixed(2)},${f.width.toFixed(2)},${f.yaw.toFixed(3)}`)
       .sort().join(' ');
     const key = `${fogged}|${frame}|${holes}`;
@@ -1012,7 +1016,7 @@ async function startApp(username: string, role: string) {
     }
     fogGroup.clear();
     if (!fogged) return;
-    for (const r of fogRects(worldBounds, fogFootprints(), BASE_MARGIN_M)) {
+    for (const r of fogRects(worldBounds, holeList, BASE_MARGIN_M)) {
       // The geometry comes out LARGER than the rectangle — the cloud edge
       // needs room to fade, and neighbouring rectangles overlap into each
       // other so no seam opens between them (see `fogClouds.ts`). The centre
@@ -1838,10 +1842,12 @@ async function startApp(username: string, role: string) {
    *    walk-in it starts bypasses this check by owning the figure. A location
    *    that draws NO opening has a free boundary on both sides (`freeBoundary`
    *    — the server's own rule since the task-5 review) and is walked into
-   *    like open ground, and since task 6 a location with no SCENE at all
-   *    (404: no plan, no layout, no model) counts as exactly that class —
-   *    a painted meadow used to be a wall to the walker and open ground to
-   *    the server;
+   *    like open ground. Since task 6 a location with no SCENE at all (404:
+   *    no plan, no layout, no model) is judged by its AUTHORED openings
+   *    (`map3d.boundary_openings`, which is where the server reads them too):
+   *    without any it is that same open ground — a painted meadow used to be
+   *    a wall to the walker — and with one it stays closed, because an author
+   *    may draw a gate long before the place has a layout;
    *  - a point the server JUST refused (see above).
    *
    * `mine` is the footprint the avatar stands in, passed in because the
@@ -1852,7 +1858,7 @@ async function startApp(username: string, role: string) {
   function blockedFor(mine: Tile | null, x: number, z: number): boolean {
     if (!terrainGround.passableAt(x, z)) return true;
     const at = tileAt(x, z);
-    if (at && at !== mine && !freeBoundary(at.loc.id)) return true;
+    if (at && at !== mine && !freeBoundary(at)) return true;
     const now = performance.now();
     for (const r of refusedPoints) {
       if (r.until > now && Math.hypot(r.x - x, r.z - z) < REFUSED_RADIUS_M) return true;
@@ -1862,12 +1868,19 @@ async function startApp(username: string, role: string) {
 
   /**
    * Does that location let anyone in anywhere (the server's free-boundary
-   * rule)? The three states of the scene cache and what each of them means are
-   * `enterLocation.freeBoundaryOf`, hand-checked in
-   * `client3d/scripts/smoke_enter_math.mjs`; this is the lookup.
+   * rule)? The rule itself is `enterLocation.freeBoundaryOf`, hand-checked in
+   * `client3d/scripts/smoke_enter_math.mjs`; this is the lookup of its two
+   * inputs.
+   *
+   * The authored openings come off the TILE's own location record, not out of
+   * a second dictionary: `placeableOf` merges the `/world/locations` detail
+   * and the worldmap row into it, and both carry the sanitised `map3d`. It is
+   * therefore the same list the server judges the crossing with, for exactly
+   * the locations that have a tile — and the caller always holds one.
    */
-  function freeBoundary(locId: string): boolean {
-    return freeBoundaryOf(scenes.get(locId));
+  function freeBoundary(tile: Tile): boolean {
+    const authored = tile.loc.map3d?.boundary_openings ?? [];
+    return freeBoundaryOf(scenes.get(tile.loc.id), authored.length);
   }
 
   /** `blockedFor` from where the avatar stands right now. */

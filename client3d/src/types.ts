@@ -73,6 +73,29 @@ export interface Map3dMeta {
   /** Bodentextur-Kind je Etage für die Grundriss-Platten (Raum-Rezept §7),
    *  Level-Schlüssel als String: {"0": "parquet", "-1": "stone"} */
   level_floors?: Record<string, string>;
+  /** Authored pass-throughs at the LOCATION edge (§ B1 Nr. 13), as the world
+   *  editor stores them and the server sanitises them
+   *  (`world_ops._sanitize_map3d`): the key exists only when at least one
+   *  valid entry survived, so a present, non-empty list IS the statement
+   *  "this place has authored ways in".
+   *
+   *  The scene payload delivers the same openings COMPOSED (world edge letter
+   *  after `tile_rotation`, plus a tile-local point) — but only for a
+   *  location that HAS a scene. This raw list is the one source that also
+   *  answers for a location the scene endpoint 404s on, which is why the free
+   *  boundary is judged from it (`enterLocation.freeBoundaryOf`). */
+  boundary_openings?: BoundaryOpeningMeta[];
+}
+
+/** One authored boundary opening as `map3d` stores it — TEMPLATE orientation
+ *  (`tile_rotation` is applied by the server when it composes the scene), `at`
+ *  a fraction along that edge, `width_m` in world metres. */
+export interface BoundaryOpeningMeta {
+  edge: 'N' | 'E' | 'S' | 'W';
+  at: number;
+  width_m: number;
+  type?: string;
+  room?: string;
 }
 
 export interface WorldLocation {
