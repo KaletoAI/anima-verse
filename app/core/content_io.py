@@ -857,6 +857,113 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Props
+# ---------------------------------------------------------------------------
+
+def export_prop_to_zip(prop_id: str) -> bytes:
+    """Export ONE prop of the active world as a ZIP.
+
+    A prop is a pure file entity (``props/<prop_id>/``, no DB row), so the
+    export is the whole directory under ``files/`` plus the manifest: the
+    master ``sidecar.json``, every mesh with its own sidecar, the selection
+    and the source render.
+    """
+    from app.core.props import _prop_dir, get_prop, safe_prop_id
+
+    pid = safe_prop_id(prop_id)
+    if not pid:
+        raise ValueError(f"invalid prop id: {prop_id!r}")
+    prop = get_prop(pid)
+    if not prop:
+        raise ValueError(f"prop not found: {prop_id!r}")
+    src = _prop_dir(pid)
+    if src is None or not src.is_dir():
+        raise ValueError(f"prop directory missing: {pid!r}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        files: List[str] = []
+        for fp in sorted(src.rglob("*")):
+            if not fp.is_file():
+                continue
+            rel = fp.relative_to(src).as_posix()
+            zf.write(fp, f"files/{rel}")
+            files.append(rel)
+        manifest = {
+            "version": MANIFEST_VERSION,
+            "type": "prop",
+            "prop_id": pid,
+            "prop_name": prop.get("name") or pid,
+            "exported_at": utc_now_iso(),
+            "files": sorted(files),
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    return buf.getvalue()
+
+
+def import_prop_from_zip(
+    content: bytes,
+    *,
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """Import a single-prop ZIP into the active world.
+
+    The prop id is KEPT — room placements reference it by id, so a renamed
+    prop would arrive orphaned. An id that already exists is therefore never
+    silently duplicated: without ``overwrite`` the import reports
+    ``{"status": "exists"}`` and changes nothing, with it the directory is
+    replaced wholesale (stale meshes of the old prop must not survive).
+    """
+    from app.core.props import _prop_dir, read_sidecar, safe_prop_id
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"invalid ZIP: {e}")
+    try:
+        manifest = _read_manifest(zf, "prop")
+        raw_id = (manifest.get("prop_id") or "").strip()
+        pid = safe_prop_id(raw_id)
+        if not pid:
+            raise ValueError(f"invalid prop id in manifest: {raw_id!r}")
+        # The master record is what MAKES a prop — checked BEFORE anything is
+        # deleted, so a truncated ZIP can never wipe an existing prop and
+        # leave a record-less ghost directory behind.
+        if "files/sidecar.json" not in zf.namelist():
+            raise ValueError("files/sidecar.json missing — not a prop export")
+
+        dst = _prop_dir(pid)
+        if dst is not None and dst.is_dir():
+            if not overwrite:
+                return {"status": "exists", "prop_id": pid}
+            shutil.rmtree(dst, ignore_errors=True)
+
+        dst = _prop_dir(pid, create=True)
+        count = 0
+        for member in zf.namelist():
+            if not member.startswith("files/"):
+                continue
+            safe = _safe_relpath(member[len("files/"):])
+            if not safe:
+                continue
+            target = dst / safe
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(member))
+            count += 1
+    finally:
+        zf.close()
+
+    name = read_sidecar(pid).get("name") or manifest.get("prop_name") or pid
+    logger.info("Prop import: %s (%s, files=%d)", pid, name, count)
+    return {
+        "status": "success",
+        "prop_id": pid,
+        "prop_name": name,
+        "files_imported": count,
+    }
+
+
+# ---------------------------------------------------------------------------
 # States (prompt-filters block)
 # ---------------------------------------------------------------------------
 
@@ -1217,6 +1324,13 @@ def preview_import_zip(content: bytes) -> Dict[str, Any]:
                 ),
                 "exists": False,
             })
+        elif mtype == "prop":
+            pid = (manifest.get("prop_id") or "").strip()
+            from app.core.props import _prop_dir
+            d = _prop_dir(pid)
+            elements.append({"kind": "prop", "id": pid,
+                             "name": manifest.get("prop_name") or pid,
+                             "exists": bool(d is not None and d.is_dir())})
         elif mtype == "map_layout":
             elements.append({"kind": "map_layout", "id": "map_layout",
                              "name": f"Map layout ({manifest.get('count', '?')} positions)",

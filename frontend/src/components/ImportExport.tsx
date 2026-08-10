@@ -132,7 +132,7 @@ export function PublishButton({
   defaultName,
   label,
 }: {
-  packType: 'character' | 'item' | 'rule' | 'states' | 'location'
+  packType: 'character' | 'item' | 'rule' | 'states' | 'location' | 'prop'
   entityId?: string
   defaultName?: string
   label?: string
@@ -403,7 +403,15 @@ export function ImportButton({
       const res = await fetch('/api/content/import', { method: 'POST', credentials: 'same-origin', body: fd })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
-      toast(t('Imported'))
+      // An importer may answer "this is already here, nothing was touched"
+      // (a prop keeps its id, so it is never duplicated) — saying "Imported"
+      // there would claim a change that did not happen.
+      const status = (body as { result?: { status?: string } }).result?.status
+      if (status === 'exists') {
+        toast(t('Already present — nothing changed. Tick the entry to overwrite.'), 'error')
+      } else {
+        toast(t('Imported'))
+      }
       onImported?.(body)
       // A location import lists every prop its placements name that is neither
       // bundled nor already known here — those placements render as "missing",

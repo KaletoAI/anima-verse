@@ -55,6 +55,7 @@ const PRETTY_TYPE: Record<string, string> = {
   rule: 'Rule',
   states: 'States',
   location: 'Location',
+  prop: 'Prop',
   collection: 'Collection',
   skill_package: 'Skill Package',
 }

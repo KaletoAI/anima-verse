@@ -35,7 +35,8 @@ logger = get_logger("content_packs")
 router = APIRouter(prefix="/api/content", tags=["marketplace"],
                    dependencies=[Depends(require_admin)])
 
-SUPPORTED_TYPES = {"character", "item", "item_bundle", "rule", "states", "location", "collection", "skill_package"}
+SUPPORTED_TYPES = {"character", "item", "item_bundle", "rule", "states", "location", "prop",
+                   "collection", "skill_package"}
 
 # Pack types that install EXECUTABLE CODE — the UI must show a trust
 # confirmation and the install runs the package's Python on the next skill
@@ -421,6 +422,9 @@ def _dispatch_install(pack_type: str, content: bytes) -> Dict[str, Any]:
     if pack_type == "location":
         from app.core.content_io import import_location_from_zip
         return import_location_from_zip(content)
+    if pack_type == "prop":
+        from app.core.content_io import import_prop_from_zip
+        return import_prop_from_zip(content, overwrite=False)
     if pack_type == "collection":
         return _install_collection(content)
     if pack_type == "skill_package":
@@ -607,7 +611,7 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
 @router.post("/install_upload")
 async def install_pack_upload(
     file: UploadFile = File(...),
-    pack_type: str = Query(..., description="character / item / item_bundle / rule / states / location"),
+    pack_type: str = Query(..., description="character / item / item_bundle / rule / states / location / prop"),
 ) -> Dict[str, Any]:
     """Offline path: upload a pack ZIP directly."""
     if pack_type not in SUPPORTED_TYPES:
@@ -659,6 +663,9 @@ def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool,
     if mtype == "location":
         from app.core.content_io import import_location_from_zip
         return import_location_from_zip(content)
+    if mtype == "prop":
+        from app.core.content_io import import_prop_from_zip
+        return import_prop_from_zip(content, overwrite=overwrite)
     if mtype == "map_layout":
         from app.core.content_io import import_map_layout_from_zip
         return import_map_layout_from_zip(content)
@@ -907,6 +914,9 @@ def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
     if pack_type == "location":
         from app.core.content_io import export_location_to_zip
         return export_location_to_zip(entity_id)
+    if pack_type == "prop":
+        from app.core.content_io import export_prop_to_zip
+        return export_prop_to_zip(entity_id)
     if pack_type == "states":
         from app.core.content_io import export_states_to_zip
         return export_states_to_zip()
@@ -925,7 +935,7 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
 
     Body:
       catalog_id   – which catalog to push to
-      pack_type    – character | item | rule | states | location
+      pack_type    – character | item | rule | states | location | prop
       entity_id    – id of the thing being exported (ignored for states)
       name         – display name in the catalog
       description  – optional

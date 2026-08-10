@@ -1038,6 +1038,45 @@ async def prop_create(request: Request) -> Dict[str, Any]:
     return {"status": "ok", "prop": prop}
 
 
+# ── Prop Import / Export ──
+# Registered BEFORE the /props/{prop_id} routes: "import" is a literal path
+# and would otherwise be swallowed by the id placeholder.
+
+@router.post("/props/import")
+async def import_prop_route(
+    file: UploadFile = File(...),
+    overwrite: bool = Form(False),
+) -> Dict[str, Any]:
+    """Import a prop ZIP. The prop id is kept; an existing id answers
+    ``{"status": "exists"}`` unless `overwrite` is set."""
+    from app.core.content_io import import_prop_from_zip
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    content = await file.read()
+    try:
+        return import_prop_from_zip(content, overwrite=overwrite)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/props/{prop_id}/export")
+def export_prop_route(prop_id: str) -> StreamingResponse:
+    """Streams a single-prop ZIP (the whole props/<prop_id>/ directory)."""
+    from app.core.content_io import export_prop_to_zip
+    from app.core.props import safe_prop_id
+    try:
+        zip_bytes = export_prop_to_zip(prop_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    # The normalized id in the header — the raw path segment never reaches it.
+    pid = safe_prop_id(prop_id)
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="prop_{pid}.zip"'},
+    )
+
+
 @router.get("/props/{prop_id}")
 def prop_detail(prop_id: str) -> Dict[str, Any]:
     """Full detail of ONE prop."""

@@ -11,6 +11,7 @@
  * starting state.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ImportButton } from '../../components/ImportExport'
 import { ListHeader } from '../../components/ListHeader'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -128,6 +129,13 @@ export function PropsTab() {
         <ListHeader
           title={t('Props')}
           onNew={() => { setCreating(true); setSelected('') }}
+          extra={
+            <ImportButton
+              endpoint="/world/props/import"
+              overwriteSupported
+              onImported={() => { void load(); setCacheBump((b) => b + 1) }}
+            />
+          }
         />
         <div className="ga-form-row" style={{ padding: '0 8px 8px' }}>
           <input className="ga-input" value={query} placeholder={t('Search…')}

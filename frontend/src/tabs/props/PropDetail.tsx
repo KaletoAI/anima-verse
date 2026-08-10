@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
+import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -337,6 +338,14 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               title={t('Re-render the source image from the stored description (name as fallback) and mesh it again — the new mesh joins the gallery, dims and markers stay.')}>
               🧊 {pending ? t('Generating…') : t('Regenerate')}
             </button>
+            {/* The whole props/<id>/ folder travels: sidecar, meshes,
+                selection and source render. */}
+            <ExportButton
+              endpoint={`/world/props/${encodeURIComponent(prop.id)}/export`}
+              filename={`prop_${prop.id}.zip`}
+              title={t('Download the prop as a ZIP (mesh, source image, dims and markers)')}
+            />
+            <PublishButton packType="prop" entityId={prop.id} defaultName={prop.name} />
           </>
         }
       />
