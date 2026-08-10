@@ -151,9 +151,21 @@ const PERF_UI_MS = 300;
  *  published per frame would re-render React sixty times a second for a dot
  *  that has not moved. Nothing is published unless something changed. */
 const MINIMAP_MS = 250;
-/** How far past an opening the "Betreten" walk-in aims, in world metres —
- *  just inside the cell, so the figure visibly crosses the boundary. */
-const OPENING_WALK_IN_M = 1.5;
+/**
+ * How far past an opening the "Betreten" walk-in aims, in world metres — far
+ * enough inside that the figure visibly crosses the boundary, and WELL under
+ * the server's crossing tolerance of 1.5 m (`_POS_OPENING_TOLERANCE_M`).
+ *
+ * That headroom is the whole point (review finding, E4 task 5). The goal is
+ * measured along the opening's inward normal, but the figure arrives on the
+ * line it walked in on — an oblique approach ends up offset SIDEWAYS as well,
+ * and the two add up as a hypotenuse: at a depth of 1.5 m the crossing point
+ * was already 1.68 m from the opening on a plausible approach, which the
+ * server refuses with `no_opening` although the offer was perfectly correct.
+ * At 0.5 m the same offset leaves ~1.4 m of budget for the sideways part —
+ * more than a body width, and more than the walk-in's own arrival threshold.
+ */
+const OPENING_WALK_IN_M = 0.5;
 
 // --- Doorway markers (E3 acceptance: "you cannot see the doors") ------------
 //
@@ -1829,12 +1841,15 @@ async function startApp(username: string, role: string) {
    *  - IMPASSABLE TERRAIN (`terrainGround.passableAt`, the client's copy of
    *    `terrain_query.passability_at` on the same payload) — water, cliffs,
    *    whatever the world's catalog marks as such;
-   *  - a FOREIGN FOOTPRINT: any location the avatar is not currently in. The
-   *    server lets one in only within 1.5 m of an authored boundary opening
-   *    (`_POS_OPENING_TOLERANCE_M`), so walking into the middle of one would
+   *  - a FOREIGN FOOTPRINT WITH AUTHORED OPENINGS: the server lets one into
+   *    such a place only within 1.5 m of one of them
+   *    (`_POS_OPENING_TOLERANCE_M`), so walking into the middle of it would
    *    earn a `no_opening` refusal and a snap back on every attempt. Entering
    *    is the explicit offer at the opening (`updateEnterOffer`), and the
-   *    walk-in it starts bypasses this check by owning the figure;
+   *    walk-in it starts bypasses this check by owning the figure. A location
+   *    that draws NO opening has a free boundary on both sides (`freeBoundary`
+   *    — the server's own rule since the task-5 review) and is walked into
+   *    like open ground;
    *  - a point the server JUST refused (see above).
    *
    * `mine` is the footprint the avatar stands in, passed in because the
@@ -1845,12 +1860,28 @@ async function startApp(username: string, role: string) {
   function blockedFor(mine: Tile | null, x: number, z: number): boolean {
     if (!terrainGround.passableAt(x, z)) return true;
     const at = tileAt(x, z);
-    if (at && at !== mine) return true;
+    if (at && at !== mine && !freeBoundary(at.loc.id)) return true;
     const now = performance.now();
     for (const r of refusedPoints) {
       if (r.until > now && Math.hypot(r.x - x, r.z - z) < REFUSED_RADIUS_M) return true;
     }
     return false;
+  }
+
+  /**
+   * Does that location let anyone in anywhere (the server's free-boundary
+   * rule)? True only when its scene payload is LOADED and its opening list is
+   * genuinely EMPTY.
+   *
+   * The "loaded" half is not a formality: `scenes.get()` answers `undefined`
+   * for a payload still in flight, and reading that as "no openings" would
+   * open every unloaded footprint for the seconds until it arrives — the
+   * figure would walk into a place the server then refuses, and the honest
+   * answer while we do not know is the closed one.
+   */
+  function freeBoundary(locId: string): boolean {
+    const scene = scenes.get(locId);
+    return !!scene && (scene.boundary_openings ?? []).length === 0;
   }
 
   /** `blockedFor` from where the avatar stands right now. */
@@ -2643,6 +2674,19 @@ async function startApp(username: string, role: string) {
     // No point in the payload = the server has no position for the avatar at
     // all (an unplaced location). Nothing to reconcile against.
     if (!me?.pos) return;
+    // OUR OWN last report is not foreign movement. The payload is up to a
+    // poll old and the report before it took a round trip, so on a remote
+    // client (a documented deployment: `ANIMA_API=http://<host>:8000`) the
+    // figure has walked on by report-lag + poll-lag by the time this sees it
+    // — from ~260 ms of latency that alone exceeds POS_SNAP_M and the figure
+    // would be tugged backwards on every single poll. So the comparison is
+    // against what WE last told the server: if the payload says that point,
+    // it is our own echo and there is nothing to reconcile. This is the
+    // metric successor of the grid world's `expectedCell` grace.
+    if (reportedPos
+      && Math.hypot(me.pos.x - reportedPos.x, me.pos.z - reportedPos.z) < 0.05) {
+      return;
+    }
     const d = Math.hypot(me.pos.x - pos.x, me.pos.z - pos.z);
     if (d <= POS_SNAP_M) return;
     // `correctTo` moves the figure — walking the last few metres, jumping a
