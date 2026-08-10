@@ -657,12 +657,17 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     if not isinstance(loc, dict):
         raise ValueError("db/location.json must be an object")
 
-    # Fresh ids — clones/templates are flattened: the imported location
-    # becomes a standalone copy.
+    # Fresh ids — clones are flattened: the imported location becomes a
+    # STANDALONE copy. `template_location_id` is the clone marker
+    # (app/models/world.py), and an export carries it verbatim; leaving it in
+    # would bind the copy to a template id from the SOURCE world, and then
+    # _gallery_owner_id would serve gallery/models from that id (never from
+    # the files written here), _resolve_clones would merge a foreign template
+    # over the fresh rooms, and cleanup_orphan_clones would delete the record
+    # outright — an unplaced clone counts as off-map.
     new_loc_id = uuid.uuid4().hex[:8]
     loc["id"] = new_loc_id
-    loc.pop("template_id", None)
-    loc.pop("clone_of", None)
+    loc.pop("template_location_id", None)
 
     rooms = loc.get("rooms") or []
     room_id_map: Dict[str, str] = {}

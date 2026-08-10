@@ -407,8 +407,10 @@ export function ImportButton({
       onImported?.(body)
       // A location import lists every prop its placements name that is neither
       // bundled nor already known here — those placements render as "missing",
-      // so the list stays on screen until the user closes it.
-      const missing = (body as { props_missing?: unknown }).props_missing
+      // so the list stays on screen until the user closes it. The route answers
+      // {status, result: <importer dict>}, so the importer's own fields sit
+      // under `result` (app/routes/content_packs.py, /import).
+      const missing = (body as { result?: { props_missing?: unknown } }).result?.props_missing
       const missingIds = Array.isArray(missing) ? missing.map(String).filter(Boolean) : []
       if (missingIds.length > 0) {
         setWarn(t('Missing props (placements will render as missing):')
