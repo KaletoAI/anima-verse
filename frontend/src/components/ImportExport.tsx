@@ -297,6 +297,15 @@ export function PublishButton({
 interface PreviewElement { kind: string; id: string; name: string; exists: boolean }
 interface PreviewResult { type: string; multi: boolean; elements: PreviewElement[] }
 
+/** What an importer answers under `result`. A collection carries one `results`
+ *  row per sub-pack; every other type reports a single `status`. */
+interface ImportResultRow { name?: string; type?: string; status?: string; error?: string }
+interface ImportResult {
+  status?: string
+  results?: ImportResultRow[]
+  props_missing?: unknown
+}
+
 /**
  * File-picker button for ZIP imports. Opens a generic preview dialog: every
  * importable element is listed with a checkbox, and elements that would
@@ -397,26 +406,59 @@ export function ImportButton({
       const res = await fetch('/api/content/import', { method: 'POST', credentials: 'same-origin', body: fd })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
-      // An importer may answer "this is already here, nothing was touched"
-      // (a prop keeps its id, so it is never duplicated) — saying "Imported"
-      // there would claim a change that did not happen.
-      const status = (body as { result?: { status?: string } }).result?.status
-      if (status === 'exists') {
+      // The route answers {status, result: <importer dict>}, so the importer's
+      // own fields sit under `result` (app/routes/content_packs.py, /import).
+      const result = (body as { result?: ImportResult }).result || {}
+      const rows = Array.isArray(result.results) ? result.results : []
+      // A collection installs entry by entry and never aborts, so its outcome
+      // is only in the rows: counting them is what keeps a run in which
+      // NOTHING landed from reading as a green "Imported".
+      const n = (s: string) => rows.filter((r) => r.status === s).length
+      const installed = n('success')
+      const existed = n('exists')
+      const broken = n('failed') + n('skipped')
+      const parts: string[] = []
+      if (installed) parts.push(t('{n} installed').replace('{n}', String(installed)))
+      if (existed) parts.push(t('{n} already there').replace('{n}', String(existed)))
+      if (broken) parts.push(t('{n} failed').replace('{n}', String(broken)))
+      const summary = rows.length > 0 ? parts.join(', ') : ''
+      const wentWrong = rows.length > 0 ? installed === 0 || broken > 0 : result.status === 'failed'
+
+      if (summary) {
+        toast(summary, wentWrong ? 'error' : 'info')
+      } else if (result.status === 'exists') {
+        // An importer may answer "this is already here, nothing was touched"
+        // (a prop keeps its id, so it is never duplicated) — saying "Imported"
+        // there would claim a change that did not happen.
         toast(t('Already present — nothing changed. Tick the entry to overwrite.'), 'error')
+      } else if (result.status === 'failed') {
+        toast(t('Nothing was imported.'), 'error')
       } else {
         toast(t('Imported'))
       }
       onImported?.(body)
+
+      // Everything that must NOT vanish with a 2-second toast stays in the
+      // dialog until the user closes it: a partly failed collection (with the
+      // reason of each entry) and the props a location import could not find.
+      const notes: string[] = []
+      if (wentWrong && summary) {
+        const why = rows
+          .filter((r) => r.status !== 'success')
+          .map((r) => `${r.name || r.type || '?'}: ${r.error || r.status}`)
+        notes.push(t('Import result:') + ' ' + summary
+          + (why.length > 0 ? ' — ' + why.join('; ') : ''))
+      }
       // A location import lists every prop its placements name that is neither
-      // bundled nor already known here — those placements render as "missing",
-      // so the list stays on screen until the user closes it. The route answers
-      // {status, result: <importer dict>}, so the importer's own fields sit
-      // under `result` (app/routes/content_packs.py, /import).
-      const missing = (body as { result?: { props_missing?: unknown } }).result?.props_missing
+      // bundled nor already known here — those placements render as "missing".
+      const missing = result.props_missing
       const missingIds = Array.isArray(missing) ? missing.map(String).filter(Boolean) : []
       if (missingIds.length > 0) {
-        setWarn(t('Missing props (placements will render as missing):')
+        notes.push(t('Missing props (placements will render as missing):')
           + ' ' + missingIds.join(', '))
+      }
+      if (notes.length > 0) {
+        setWarn(notes.join('\n'))
       } else {
         close()
       }
@@ -470,7 +512,8 @@ export function ImportButton({
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
               {warn && (
                 <div style={{ color: '#e0a356', border: '1px solid #e0a356', borderRadius: 6,
-                              padding: '8px 10px', fontSize: '0.85em', wordBreak: 'break-word' }}>
+                              padding: '8px 10px', fontSize: '0.85em', wordBreak: 'break-word',
+                              whiteSpace: 'pre-wrap' }}>
                   {warn}
                 </div>
               )}

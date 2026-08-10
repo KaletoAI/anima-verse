@@ -661,9 +661,21 @@ def _install_collection_selected(content: bytes, *, selected_ids) -> Dict[str, A
             sub_name = entry.get("name") or sub_file or sub_type
             if wanted and sub_file not in wanted:
                 continue
-            if not sub_file or sub_type not in SUPPORTED_TYPES or sub_type == "collection":
+            reason = ""
+            if not sub_file:
+                reason = "entry has no file"
+            elif sub_type not in SUPPORTED_TYPES or sub_type == "collection":
+                reason = f"unsupported type {sub_type!r}"
+            elif sub_type in CODE_PACK_TYPES:
+                # A collection is installed with ONE click and has no trust
+                # gate — executable packages must not ride along inside it.
+                # They are installed on their own, where the admin confirms
+                # the code explicitly (`confirm_code` on /install).
+                reason = (f"{sub_type} installs executable code — install it on "
+                          "its own, with the trust confirmation")
+            if reason:
                 results.append({"name": sub_name, "type": sub_type, "status": "skipped",
-                                "error": "invalid type or missing file"})
+                                "error": reason})
                 fail_count += 1
                 continue
             try:
