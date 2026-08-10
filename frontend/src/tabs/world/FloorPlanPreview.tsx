@@ -734,7 +734,14 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // bottom_y like a placed mesh — the wireframe look stays ours.
         const standIn = buildPlaceholder(THREE, spec.placeholder_dims,
           new THREE.MeshBasicMaterial({ color: AID.placeholder, wireframe: true }))
-        standIn.rotation.y = -deg(spec.yaw_deg)
+        // `+rad` since E4 (§ A1.1) — the FOURTH renderer of `spec.yaw_deg`,
+        // next to `placeModelSpec` (@anima/scene-render), the 3D client's own
+        // placeholder and the model viewer. Its sibling real mesh two lines up
+        // goes through `placeSpec` → `placeModelSpec`, so a minus here would
+        // draw the stand-in of a prop at yaw 30 turned to −30 while the mesh
+        // that replaces it stands at +30 — in the one surface whose whole job
+        // is judging placement.
+        standIn.rotation.y = deg(spec.yaw_deg)
         standIn.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1])
         boxes.add(standIn)
       }

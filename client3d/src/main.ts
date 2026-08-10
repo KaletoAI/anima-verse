@@ -133,11 +133,17 @@ const CLOSE_TARGET_MIN_M = 12;
 const closeTargetDist = (tile: Tile) =>
   Math.max(CLOSE_TARGET_MIN_M, tile.width * CLOSE_TARGET_FOOTPRINTS);
 
-/** How wide the corridor is in which a neighbour counts as standing between
- *  the camera and the open location: `1.05 × plan_width_m` of the NEIGHBOUR,
- *  i.e. a hair more than its own half-width on each side. Again the grid
- *  world's number (`CELL * 1.05`) written as what it always meant — the
- *  neighbour's own size — so a 40 m hall is not judged by a 10 m yardstick. */
+/** Radius around the NEIGHBOUR's centre inside which it counts as standing
+ *  between the camera and the open location, as a factor on its own
+ *  `plan_width_m`: 1.05 × the FULL edge, not the half — deliberately generous,
+ *  and exactly what `CELL * 1.05` was (a radius of one whole cell and a bit
+ *  around a cell centre). It is written against the neighbour's own size now,
+ *  so a 40 m hall is no longer judged by a 10 m yardstick.
+ *  OBSERVATION for task 7: on a very large footprint (a 200 m forest) this
+ *  radius is 210 m, so such a location fades away as an "occluder" from far
+ *  off. Sizing an area location by its half-width — or by the distance to its
+ *  EDGE rather than its centre — is the fix; it needs its own look at the
+ *  shell/ground display rules and does not belong in this task. */
 const OCCLUDER_RADIUS_FACTOR = 1.05;
 /** "Hineinsehen" flies in to this distance — the old panel fly-to, kept. */
 const OPEN_FLY_DIST = 15;
@@ -200,17 +206,19 @@ const DOOR_MARK_LOCKED_MAT = new THREE.MeshBasicMaterial({
 const DOOR_MARK_DEPTH = 0.3;
 
 /**
- * "Zoom to" a figure, for a figure drawn at scale 1. With the camera's 45°
- * vertical FOV the visible height is 2·d·tan(22.5°) ≈ 0.828·d, so 4.5 m frames
- * 3.7 m of world and a 1.70 m character covers ~46% of the picture: full
- * height with air above and below. The distance is multiplied by the scale the
- * figure is actually DRAWN at, so an indoor figure (scale ~0.3, ~0.5 m tall)
- * gets the same framing at ~1.35 m instead of staring at it from 12 m away.
+ * "Zoom to" a figure. With the camera's 45° vertical FOV the visible height is
+ * 2·d·tan(22.5°) ≈ 0.828·d, so 4.5 m frames 3.7 m of world and a 1.70 m
+ * character covers ~46 % of the picture: full height with air above and below.
+ *
+ * ONE distance since E4 (task 3): the multiplication by the scale the figure
+ * was DRAWN at is gone with the second scale itself — a figure is 1.70 m in a
+ * room as well as on the map (k = 1), so the same distance frames it wherever
+ * it stands.
  */
 const ZOOM_TO_BASE_DIST = 4.5;
-/** Upper clamp for the scaled zoom-to: a giant figure must not push the camera
- *  past the old fixed distance, and 12 < EXIT_DIST (34) keeps a zoom-to from
- *  ever tripping the embodied-mode exit. */
+/** Upper clamp of the zoom-to. It no longer has a scale to run away with, but
+ *  the clamp stays as the guarantee it always was: 12 < EXIT_DIST (34) keeps a
+ *  zoom-to from ever tripping the embodied-mode exit. */
 const ZOOM_TO_MAX_DIST = 12;
 
 // --- Framing the world (§ A12, E4 task 3) -----------------------------------
@@ -231,7 +239,8 @@ const CAMERA_HALF_FOV = (22.5 * Math.PI) / 180;
  *  outermost footprint off the edge of the picture. */
 const CAMERA_FIT_MARGIN = 1.15;
 /** The engine's own MAX_DIST (not exported) — a world larger than this simply
- *  starts as far out as the camera can go. */
+ *  starts as far out as the camera can go. The lower end is `MIN_DIST`, which
+ *  the engine DOES export. */
 const CAMERA_FIT_MAX = 150;
 /** Fit distance for a world with nothing placed: the old boot default, so an
  *  empty world looks exactly as it always did. */
@@ -243,13 +252,18 @@ function worldCentre(b: WorldBounds | null | undefined): THREE.Vector3 {
   return new THREE.Vector3((b.min_x + b.max_x) / 2, 0, (b.min_z + b.max_z) / 2);
 }
 
-/** Camera distance at which `world_bounds` fits the picture. */
+/** Camera distance at which `world_bounds` fits the picture, clamped to what
+ *  the camera can actually be set to: the engine snaps anything below
+ *  `MIN_DIST` on its first update anyway, and handing it a smaller number
+ *  would mean the boot distance and the camera's distance disagree from frame
+ *  one — a tiny world (a single 4 m location) is exactly that case. */
 function fitDistance(b: WorldBounds | null | undefined): number {
   if (!b) return CAMERA_FIT_EMPTY;
   const r = Math.hypot(b.max_x - b.min_x, b.max_z - b.min_z) / 2;
   if (!Number.isFinite(r) || r <= 0) return CAMERA_FIT_EMPTY;
-  return Math.min(CAMERA_FIT_MAX,
-                  (r * CAMERA_FIT_MARGIN) / Math.sin(CAMERA_HALF_FOV));
+  return THREE.MathUtils.clamp(
+    (r * CAMERA_FIT_MARGIN) / Math.sin(CAMERA_HALF_FOV),
+    MIN_DIST, CAMERA_FIT_MAX);
 }
 
 const app = document.getElementById('app')!;
@@ -1609,8 +1623,17 @@ async function startApp(username: string, role: string) {
             const m = marked[idx % marked.length];
             pos = m.p.clone();
             if (m.rotation !== undefined) {
+              // `facing` is TILE-LOCAL like every other payload angle, and a
+              // gaze is a DIRECTION: it turns with the footprint but is not
+              // shifted by its centre. The position two lines up went through
+              // `tileToWorld`; without the same turn here a curated figure on
+              // a rotated location sits in the right chair looking off by the
+              // location's yaw. The counter-sense of `facing` itself
+              // (scene_recipe.py `_marker_facing`) is untouched — this changes
+              // the FRAME, not the convention.
               const a = THREE.MathUtils.degToRad(m.rotation);
-              face = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+              const dir = tileDirToWorld(tile, Math.sin(a), Math.cos(a));
+              face = new THREE.Vector3(dir.x, 0, dir.z);
             }
             if (m.tilt || m.roll) lean = { tilt: m.tilt || 0, roll: m.roll || 0 };
           } else if (pool?.length) {

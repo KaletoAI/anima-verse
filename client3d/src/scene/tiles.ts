@@ -222,7 +222,8 @@ export interface Tile {
     offsetY: number; fixed?: boolean }[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
-  /** Raum-Rechtecke in Welt-Koordinaten (Fokus-Erkennung) */
+  /** Room rectangles in TILE-LOCAL metres (E4: a turned rectangle is not a
+   *  rectangle, so readers turn their query point with `worldToTile` instead) */
   roomRects: Map<string, { x: number; z: number; w: number; d: number }>;
   /** Etage je Raum (Schlüssel: ID und Name) */
   roomLevels: Map<string, number>;
