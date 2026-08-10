@@ -104,6 +104,31 @@
  *                    -> HALL still, with `locked` in the caller's hands
  *   avatar exactly between two open ones: the nearer wins;
  *   an open one 2.5 m away beats a locked one 1 m away.
+ *
+ * ---------------------------------------------------------------------------
+ * (4) freeBoundaryOf — WHERE a free walker may cross without an opening
+ * ---------------------------------------------------------------------------
+ * The mirror of the server's rule in `app/routes/play.py`: a location with NO
+ * authored boundary opening at all has a FREE boundary and is walked into like
+ * open ground (only `accessible_when` and the access rules still judge it);
+ * one WITH openings is entered at those and nowhere else, within 1.5 m.
+ *
+ * The client asks the question of its scene cache, and that cache has three
+ * states — which is the whole content of this function:
+ *
+ *   payload with openings -> false: the openings are the way in
+ *   payload without any   -> true : free, the server says so too
+ *   null (404 on /scene)  -> true : "no floor plan, no room layout, no
+ *                                   building model" (the endpoint's own
+ *                                   docstring) — so no authored opening
+ *                                   either. THE LEDGER FINDING of task 5: the
+ *                                   client read this as a wall and bounced the
+ *                                   walker off a meadow the server would have
+ *                                   let it stroll into.
+ *   undefined (in flight) -> false: nothing is known yet, and the conservative
+ *                                   answer is the closed one — the opposite
+ *                                   would open every footprint for the seconds
+ *                                   its payload needs to arrive.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -166,6 +191,7 @@ const EPS = 1e-9;
 async function main() {
   const {
     localToWorld, openingWorldPoints, entryOfferNear, ENTER_RADIUS,
+    freeBoundaryOf,
   } = await loadEnterLocation();
 
   console.log('\nlocalToWorld — § A1.1, the mapping the server uses');
@@ -261,6 +287,19 @@ async function main() {
     'gate');
   check('the far locked gate is out of reach either way',
     entryOfferNear({ x: 50, z: 43.5 }, '', [CLOSER_LOCKED]), null);
+
+  console.log('\nfreeBoundaryOf — the three states of the scene cache');
+  check('a payload with an opening is entered THERE, not anywhere',
+    freeBoundaryOf({ boundary_openings: [{ edge: 'N', at_world: { x: 0, z: -5 } }] }),
+    false);
+  check('a payload with an empty opening list is a free boundary',
+    freeBoundaryOf({ boundary_openings: [] }), true);
+  check('a payload that states no openings at all is one too',
+    freeBoundaryOf({}), true);
+  check('404 (no plan, no layout, no model) is a free boundary',
+    freeBoundaryOf(null), true);
+  check('a payload still in flight stays closed (the conservative answer)',
+    freeBoundaryOf(undefined), false);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;

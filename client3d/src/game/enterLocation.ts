@@ -78,6 +78,35 @@ export function openingWorldPoints(fp: Footprint, openings: LocalOpening[]
   });
 }
 
+/**
+ * Does a location let one in ANYWHERE — the client's mirror of the server's
+ * free-boundary rule (`app/routes/play.py`: "no authored openings at all = a
+ * free boundary")?
+ *
+ * The argument is the location's SCENE PAYLOAD as the client's cache answers
+ * it, and all THREE of its states mean something different:
+ *
+ *  - `undefined` — still in flight, nothing is known. The honest answer is
+ *    the closed one: reading "not loaded" as "no openings" would open every
+ *    unloaded footprint for the seconds until it arrives, and the figure would
+ *    walk into a place the server then refuses.
+ *  - `null` — the scene endpoint answered 404: no floor plan, no room layout,
+ *    no building model, and therefore no authored opening either. That is
+ *    exactly the class the free boundary exists for (a painted meadow, a
+ *    village square, a transit place), and treating it as a wall was the one
+ *    place where the client was STRICTER than the server — a walker bounced
+ *    off a location the server would have let it stroll into.
+ *  - a payload — its own `boundary_openings` decide. Empty = free, and one
+ *    authored opening makes that opening the only way in.
+ */
+export function freeBoundaryOf(
+  scene: { boundary_openings?: unknown[] | null } | null | undefined,
+): boolean {
+  if (scene === undefined) return false;
+  if (scene === null) return true;
+  return (scene.boundary_openings ?? []).length === 0;
+}
+
 export interface EntryTile {
   locId: string;
   footprint: Footprint;

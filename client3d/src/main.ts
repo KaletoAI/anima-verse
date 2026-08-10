@@ -21,9 +21,8 @@ import {
   type TierCounts, type TierSample,
 } from './game/perfstats';
 import { loadPrefs, PREFS_KEY } from './game/prefs';
-import { fogQuadRects, SHOW_ALL_KEY, unknownCells } from './game/fog';
+import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
-import { CELL } from './game/gridLegacy';
 import type { MinimapArea, MinimapDot } from './game/minimap';
 import { terrainColor } from './game/minimap';
 import {
@@ -34,52 +33,27 @@ import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, 
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
-import { entryOfferNear, type EntryTile } from './game/enterLocation';
+import { entryOfferNear, freeBoundaryOf, type EntryTile } from './game/enterLocation';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
-import { createGround, GROUND_Y } from './scene/ground';
+import { BASE_MARGIN_M, createGround, GROUND_Y } from './scene/ground';
 import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
-// --- E4 BRIDGE (task 2) ------------------------------------------------------
+// --- THE CELL WORLD IS GONE (E4, tasks 2–6) ---------------------------------
 //
-// `types.ts` is on the metre world since task 2: the payload has `pos_x`/
-// `pos_z`/`yaw_deg`/`world_bounds` and a metre travel polyline, and the v1
-// grid keys are GONE. What is LEFT of the cell world in this file is the FOG
-// (`rebuildFog` and its `grid_bounds`), which task 6 rewrites in metres — the
-// tile loop and the camera frame went in task 3, the journey bridge in task 4
-// (travellers are interpolated along the metre polyline of § A11) and the step
-// machine in task 5 (free walking over `POST /play/pos`).
-//
-// Until then the cast below keeps that block compiling WITHOUT reviving the
-// v1 fields in the payload types. It is the whole bridge: delete it and every
-// remaining cell reader lights up, which is exactly how the later tasks find
-// their work. Nothing is added to the runtime — a `grid_x` read through `v1()`
-// yields `undefined` today, and the blocks that do it are already dead (the
-// server stopped sending cells in E3).
-type V1Grid = {
-  grid_x: number | null;
-  grid_y: number | null;
-  grid_bounds: { min_x: number; min_y: number; max_x: number; max_y: number } | null;
-  template_location_id?: string;
-};
-/**
- * RULE: never hand `v1()` an optional chain (`v1(tile?.loc)`).
- *
- * The cast intersects the argument type with `V1Grid`, and that swallows the
- * `undefined` branch: the compiler then sees a value that has `grid_x`, stays
- * silent, and the read throws at runtime. Guard the optional FIRST, cast the
- * narrowed value. That mistake cost one poll-killing TypeError already
- * (the old `reconcileAvatarCell`), and `tiles` being empty until task 3 made
- * it fire on every single poll.
- *
- * TODO(E4-Task 6 fog): remove with the last cell reader — `rebuildFog` is it.
- */
-const v1 = <T>(o: T): T & V1Grid => o as T & V1Grid;
+// Nothing in this file reads a grid key any more, and the `v1()` cast that
+// kept the last of them compiling is deleted with the fog (task 6): the tile
+// loop and the camera frame went in task 3, the journey bridge in task 4
+// (travellers are interpolated along the metre polyline of § A11), the step
+// machine in task 5 (free walking over `POST /play/pos`) and the veil in task
+// 6 (`world_bounds` minus the known footprints, `game/fog.ts`). The payload
+// types have carried metres only since task 2 — `pos_x`/`pos_z`/`yaw_deg`/
+// `world_bounds` — so a grid read would not even type-check today.
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
 /** How often the soundtrack driver reconsiders what should be playing (E4-T5).
@@ -975,15 +949,17 @@ async function startApp(username: string, role: string) {
   for (const loc of placeable) addTile(loc);
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
-  // --- The veil over what the avatar does not know (Etappe 5) --------------
+  // --- The veil over what the avatar does not know (E4 task 6) -------------
   //
   // The server decides WHAT is known (§ A12) and sends only that; here the
-  // rest of the frame is covered. WHICH cells that are is pure maths in
-  // `game/fog.ts` (hand-checked in scripts/smoke_walk_math.mjs) — this is only
-  // the mesh side: one quad per row run, all of them in ONE group that is
-  // thrown away and built again whenever the set of known locations moves.
-  // Rebuilding wholesale is what keeps it honest: there is no incremental
-  // state that could end up showing a veil over a place one already stands in.
+  // rest of the world is covered. WHICH part of the plane that is, is pure
+  // maths in `game/fog.ts` (hand-checked in scripts/smoke_walk_math.mjs) —
+  // the world frame grown by the ground's own margin, minus the footprints of
+  // the tiles standing. This is only the mesh side: one quad per rectangle,
+  // all of them in ONE group that is thrown away and built again whenever the
+  // set of known locations moves. Rebuilding wholesale is what keeps it
+  // honest: there is no incremental state that could end up showing a veil
+  // over a place one already stands in.
   //
   // It is an OVERLAY like the door thresholds: unlit (a veil that took the
   // sun would read as a surface), never written into the depth buffer, and
@@ -1000,21 +976,35 @@ async function startApp(username: string, role: string) {
   const FOG_Y = GROUND_Y + 0.05;
   const fogGroup = new THREE.Group();
   engine.scene.add(fogGroup);
-  /** The frame and the switch of the CURRENT payload — both move only with a
-   *  poll, and `fogged: false` (the admin's unfiltered view) means there is no
-   *  veil at all. */
-  let fogBounds = v1(firstMap).grid_bounds;
+  /** The switch of the CURRENT payload: `fogged: false` (the admin's
+   *  unfiltered view) means there is no veil at all. The FRAME is
+   *  `worldBounds` above — one field for the ground, the minimap and the fog,
+   *  because all three cover the same world. */
   let fogged = firstMap.fogged;
   /** What the veil currently standing was built from. The poll runs every
-   *  three seconds and nearly always finds the same three inputs — rebuilding
+   *  three seconds and nearly always finds the same inputs — rebuilding
    *  regardless would throw away and re-allocate a dozen geometries per poll
    *  for a picture that does not change. `null` until the first build: every
    *  string is a possible key, so the sentinel must not be one. */
   let fogKey: string | null = null;
+  /** The known footprints, as the veil is cut around them: the tile's OWN
+   *  centre, edge and rotation — what is DRAWN, so the hole and the tile in it
+   *  can never disagree (a location with no `plan_width_m` is drawn at the
+   *  fallback edge and its hole is that size too). */
+  const fogFootprints = () => [...tiles.values()].map(
+    (t) => ({ x: t.center.x, z: t.center.z, width: t.width, yaw: t.yaw }));
   function rebuildFog() {
-    const frame = fogBounds
-      ? `${fogBounds.min_x},${fogBounds.min_y},${fogBounds.max_x},${fogBounds.max_y}` : '';
-    const key = `${fogged}|${frame}|${[...tiles.keys()].sort().join(' ')}`;
+    const frame = worldBounds
+      ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
+    // The key carries the FOOTPRINTS, not just the location ids: a place
+    // resized or turned in the admin keeps its id, and a veil keyed on ids
+    // alone would go on covering the metres the tile has just grown into
+    // until some other location appeared. Centimetres are enough — nothing
+    // finer is visible under a cloud edge that is metres wide.
+    const holes = fogFootprints()
+      .map((f) => `${f.x.toFixed(2)},${f.z.toFixed(2)},${f.width.toFixed(2)},${f.yaw.toFixed(3)}`)
+      .sort().join(' ');
+    const key = `${fogged}|${frame}|${holes}`;
     if (key === fogKey) return;
     fogKey = key;
     for (const child of fogGroup.children) {
@@ -1022,16 +1012,15 @@ async function startApp(username: string, role: string) {
     }
     fogGroup.clear();
     if (!fogged) return;
-    const known = [...tiles.values()].map((t) => ({ x: v1(t.loc).grid_x!, y: v1(t.loc).grid_y! }));
-    for (const r of fogQuadRects(unknownCells(fogBounds, known))) {
+    for (const r of fogRects(worldBounds, fogFootprints(), BASE_MARGIN_M)) {
       // The geometry comes out LARGER than the rectangle — the cloud edge
-      // needs room to fade, and neighbouring runs overlap into each other so
-      // no seam opens between them (see `fogClouds.ts`). The centre is
-      // unaffected: the overhang is symmetric.
-      const quad = new THREE.Mesh(clouds.quadGeometry(r.w * CELL, r.h * CELL), clouds.material);
-      // A rectangle covers the cells x … x+w-1, and a cell's centre is its grid
-      // position: the middle therefore sits half a cell run further along.
-      quad.position.set((r.x + (r.w - 1) / 2) * CELL, FOG_Y, (r.y + (r.h - 1) / 2) * CELL);
+      // needs room to fade, and neighbouring rectangles overlap into each
+      // other so no seam opens between them (see `fogClouds.ts`). The centre
+      // is unaffected: the overhang is symmetric.
+      const quad = new THREE.Mesh(clouds.quadGeometry(r.w, r.d), clouds.material);
+      // `x`/`z` is the rectangle's MINIMUM corner, the quad hangs on its
+      // middle — half its extents further along, in plain metres.
+      quad.position.set(r.x + r.w / 2, FOG_Y, r.z + r.d / 2);
       quad.renderOrder = 1;   // under the thresholds (3) and the pins
       quad.raycast = () => {};
       fogGroup.add(quad);
@@ -1444,20 +1433,20 @@ async function startApp(username: string, role: string) {
       if (!api.isAuthError(e)) hud.setOnline(false);
       return;
     }
-    // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
-    // just discovered is simply in the payload from one poll to the next. The
-    // frame and the switch travel with it — the frame is computed unfiltered
-    // and does not move, but a world can gain a location at any time.
-    fogBounds = v1(map).grid_bounds;
-    fogged = map.fogged;
-    rebuildFog();   // a no-op unless the frame, the switch or the known set moved
-    // The metre side of the same payload: the world frame, the places as the
+    // The metre side of the payload: the world frame, the places as the
     // minimap knows them, and the terrain signature that decides whether the
     // ground has to be refetched (E4 task 2). `sync` is a no-op on an
     // unchanged signature — terrain is never fogged and never polled.
     worldBounds = map.world_bounds;
     mapLocations = map.locations;
     void terrainGround.sync(map.terrain_sig, worldBounds);
+    // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
+    // just discovered is simply in the payload from one poll to the next. The
+    // switch travels with it, and the frame is the one just taken over — the
+    // bounds are computed unfiltered and do not move while one discovers, but
+    // a world can gain a location anywhere at any time.
+    fogged = map.fogged;
+    rebuildFog();   // a no-op unless the frame, the switch or a footprint moved
     // The trigger asks the SAME question the reveal answers — `placeableOf`,
     // not a hand-written filter next to it. A cheaper test that forgot the
     // template rule would fire on every single poll in a world whose template
@@ -1849,7 +1838,10 @@ async function startApp(username: string, role: string) {
    *    walk-in it starts bypasses this check by owning the figure. A location
    *    that draws NO opening has a free boundary on both sides (`freeBoundary`
    *    — the server's own rule since the task-5 review) and is walked into
-   *    like open ground;
+   *    like open ground, and since task 6 a location with no SCENE at all
+   *    (404: no plan, no layout, no model) counts as exactly that class —
+   *    a painted meadow used to be a wall to the walker and open ground to
+   *    the server;
    *  - a point the server JUST refused (see above).
    *
    * `mine` is the footprint the avatar stands in, passed in because the
@@ -1870,18 +1862,12 @@ async function startApp(username: string, role: string) {
 
   /**
    * Does that location let anyone in anywhere (the server's free-boundary
-   * rule)? True only when its scene payload is LOADED and its opening list is
-   * genuinely EMPTY.
-   *
-   * The "loaded" half is not a formality: `scenes.get()` answers `undefined`
-   * for a payload still in flight, and reading that as "no openings" would
-   * open every unloaded footprint for the seconds until it arrives — the
-   * figure would walk into a place the server then refuses, and the honest
-   * answer while we do not know is the closed one.
+   * rule)? The three states of the scene cache and what each of them means are
+   * `enterLocation.freeBoundaryOf`, hand-checked in
+   * `client3d/scripts/smoke_enter_math.mjs`; this is the lookup.
    */
   function freeBoundary(locId: string): boolean {
-    const scene = scenes.get(locId);
-    return !!scene && (scene.boundary_openings ?? []).length === 0;
+    return freeBoundaryOf(scenes.get(locId));
   }
 
   /** `blockedFor` from where the avatar stands right now. */
@@ -1951,10 +1937,15 @@ async function startApp(username: string, role: string) {
    * The fog lifts DURING play — the server starts delivering a location the
    * moment it becomes known — so this walks a newcomer through everything the
    * boot path does for a location, in the same order and out of the same
-   * functions: the surface neighbourhood first (the coast blends of the tiles
-   * around it read from it), then the tile itself, then the structures that
-   * answer questions about cells (pathfinding, passability, which location is
-   * where) and finally the veil, which is one cell smaller now.
+   * functions. On the metre world that is FOUR steps and no more: the scene
+   * recipe, the tile, the pickables, the veil (which now has one footprint
+   * cut out of it). What went away with the grid: the surface NEIGHBOURHOOD
+   * (a tile baked its coast blend from the four cells around it, so a newcomer
+   * forced its neighbours to be rebuilt — footprints have no neighbours,
+   * § A1.1), the pathfinding grid and the passability map (task 5: the server
+   * judges the reported point, the client walks freely) and the fog's own
+   * cell bookkeeping (task 6: the veil is recomputed from the footprints
+   * standing, so there is nothing to keep in step).
    *
    * The rooms come from a FRESH `/world/locations`: the boot snapshot was
    * taken while this place was still fogged, and a location created after boot
@@ -2001,11 +1992,6 @@ async function startApp(username: string, role: string) {
     const fresh = placeableOf(map, details).filter((l) => !tiles.has(l.id));
     if (!fresh.length) return;
     placeable.push(...fresh);
-    // No neighbour rebuild any more: a tile used to bake its coast blend from
-    // the four cells around it, so a newcomer forced its neighbours to be
-    // rebuilt against the grid that now knew about it. Footprints have no
-    // neighbours (§ A1.1) — a new place changes nothing about the ones that
-    // were already standing.
     // The scene recipes before the tiles, exactly as at boot: a tile built
     // without its payload would stand as the procedural shell and only swap
     // once the sweep noticed it.
@@ -2130,7 +2116,13 @@ async function startApp(username: string, role: string) {
       viewRev += 1;
       lastMap = map;
       mapStamp += 1;
-      fogBounds = v1(map).grid_bounds;
+      // The frame comes over with the switch: `world_bounds` is unfiltered and
+      // therefore the same in both views, but this payload is what the veil
+      // (and the ground, and the minimap) is rebuilt from below, and reading
+      // one field from the new view and another from the old one is how two
+      // pictures of the same world start to disagree.
+      worldBounds = map.world_bounds;
+      mapLocations = map.locations;
       fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);

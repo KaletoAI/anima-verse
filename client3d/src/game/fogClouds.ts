@@ -1,14 +1,15 @@
 /**
  * The LOOK of the fog of war — a cloud cover, not a lid.
  *
- * `game/fog.ts` says WHICH cells are unknown and folds them into row runs; it
- * stays pure and knows nothing about rendering. This module is the other half:
- * it makes the one material and the one texture those runs are drawn with, so
- * `main.ts` only has to place quads. Splitting it this way keeps the maths
- * checkable by `scripts/smoke_walk_math.mjs` (no `three`, no DOM) while the
- * pixels live somewhere they can be read on their own.
+ * `game/fog.ts` says WHICH part of the world plane is unknown and cuts it into
+ * rectangles; it stays pure and knows nothing about rendering. This module is
+ * the other half: it makes the one material and the one texture those
+ * rectangles are drawn with, so `main.ts` only has to place quads. Splitting it
+ * this way keeps the maths checkable by `scripts/smoke_walk_math.mjs` (no
+ * `three`, no DOM) while the pixels live somewhere they can be read on their
+ * own.
  *
- * WHY IT LOOKS LIKE THIS. The first version was a flat dark quad per row run
+ * WHY IT LOOKS LIKE THIS. The first version was a flat dark quad per rectangle
  * and read as what it was: empty boxes laid over the map. Weather is the
  * picture everybody already understands for "you cannot see what is under
  * there", so the veil is an overcast layer:
@@ -17,15 +18,15 @@
  *   sampled in WORLD coordinates. World-space UVs are the reason the cover has
  *   no seams: neighbouring quads of different sizes continue the same pattern
  *   instead of each restarting it at their own corner.
- * - Soft, ragged edges. Each quad is drawn `OVERHANG` metres larger than its
- *   rectangle on every side, and the alpha ramps up across exactly that
+ * - Soft, ragged edges. Each quad is drawn `FOG_OVERHANG_M` metres larger than
+ *   its rectangle on every side, and the alpha ramps up across exactly that
  *   margin, bitten into by the same noise so the border is a lobed cloud edge
  *   and not a straight line.
- * - OPAQUE inside. `FEATHER + RAGGED === OVERHANG` is the load-bearing
- *   identity: alpha reaches 1 at the true rectangle border in the worst case
- *   of the bite, so where two rectangles meet BOTH are fully opaque and the
- *   overdraw can never open a translucent seam through the interior. Nothing
- *   under the cover is ever visible.
+ * - OPAQUE inside. `FOG_FEATHER_M + FOG_RAGGED_M === FOG_OVERHANG_M` is the
+ *   load-bearing identity: alpha reaches 1 at the true rectangle border in the
+ *   worst case of the bite, so where two rectangles meet BOTH are fully opaque
+ *   and the overdraw can never open a translucent seam through the interior.
+ *   Nothing under the cover is ever visible.
  * - Slow drift and a night tint, both driven from the caller's frame loop —
  *   this module owns no timer.
  *
@@ -35,29 +36,15 @@
  * things that are easy to get subtly wrong.
  */
 import * as THREE from 'three';
-// TODO(E4 task 6): these four constants become absolute metres (OVERHANG 3.2,
-// FEATHER 1.8, TEX_METRES 46 — the identity FEATHER + RAGGED = OVERHANG has to
-// survive). Until then they keep their cell anchor, which now lives in
-// `gridLegacy` because `tiles.ts` has no cell any more.
-import { CELL } from './gridLegacy';
+// The four numbers this module is built from live in the PURE half (E4 task
+// 6): they used to be multiples of the grid cell, they are absolute metres
+// now, and `game/fog.ts` is the only place a smoke can read them — this file
+// needs `three` and a canvas and can never be loaded without a browser.
+import { FOG_FEATHER_M, FOG_OVERHANG_M, FOG_RAGGED_M, FOG_TEX_METRES } from './fog';
 import { seededRandom } from '../scene/textures';
 
-/** How far a quad is drawn beyond its rectangle, in metres — the whole soft
- *  border lives in here. A third of a cell: enough for a cloud edge to read as
- *  torn, little enough that the cover only laps over the rim of the first
- *  known tile instead of hiding it. */
-export const OVERHANG = CELL * 0.32;
-/** Width of the alpha ramp in metres. */
-const FEATHER = CELL * 0.18;
-/** How deep the noise may bite into the margin, in metres. Together with
- *  FEATHER this is exactly OVERHANG — see the header. */
-const RAGGED = OVERHANG - FEATHER;
-/** Metres per texture tile. ~4.6 cells: the lobes are bigger than a location
- *  but smaller than a region, so the drift is visible without the repeat
- *  becoming a pattern. */
-const TEX_METRES = CELL * 4.6;
-/** Drift in metres per second (world x / z). A cloud shadow crossing a cell
- *  takes half a minute — movement one notices only by looking twice. */
+/** Drift in metres per second (world x / z). A cloud shadow crossing ten
+ *  metres takes half a minute — movement one notices only by looking twice. */
 const DRIFT_X = 0.28;
 const DRIFT_Z = 0.11;
 
@@ -80,9 +67,9 @@ export function createFogClouds(): FogClouds {
   const tex = cloudTexture(256);
   const uniforms = {
     uDrift: { value: new THREE.Vector2(0, 0) },
-    uInvScale: { value: 1 / TEX_METRES },
-    uFeather: { value: FEATHER },
-    uRagged: { value: RAGGED },
+    uInvScale: { value: 1 / FOG_TEX_METRES },
+    uFeather: { value: FOG_FEATHER_M },
+    uRagged: { value: FOG_RAGGED_M },
     uNight: { value: 0 },
   };
 
@@ -137,8 +124,8 @@ export function createFogClouds(): FogClouds {
   return {
     material,
     quadGeometry(widthM: number, depthM: number) {
-      const hw = widthM / 2 + OVERHANG;
-      const hh = depthM / 2 + OVERHANG;
+      const hw = widthM / 2 + FOG_OVERHANG_M;
+      const hh = depthM / 2 + FOG_OVERHANG_M;
       const geo = new THREE.PlaneGeometry(hw * 2, hh * 2).rotateX(-Math.PI / 2);
       geo.setAttribute('aHalf', new THREE.BufferAttribute(
         new Float32Array([hw, hh, hw, hh, hw, hh, hw, hh]), 2));
@@ -148,8 +135,8 @@ export function createFogClouds(): FogClouds {
       // Wrapped into [0,1): the offset runs for as long as the session does,
       // and a float that grows without bound loses its fractional precision.
       const d = uniforms.uDrift.value;
-      d.x = (d.x + (dt * DRIFT_X) / TEX_METRES) % 1;
-      d.y = (d.y + (dt * DRIFT_Z) / TEX_METRES) % 1;
+      d.x = (d.x + (dt * DRIFT_X) / FOG_TEX_METRES) % 1;
+      d.y = (d.y + (dt * DRIFT_Z) / FOG_TEX_METRES) % 1;
       uniforms.uNight.value = night;
     },
     dispose() {

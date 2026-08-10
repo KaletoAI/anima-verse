@@ -43,8 +43,14 @@ export const GROUND_Y = 0;
 
 /** How far the base plane reaches beyond `world_bounds`, in metres. The bounds
  *  end at the outermost footprint; a player walking out there must not fall off
- *  the visible world. */
-const BASE_MARGIN_M = 60;
+ *  the visible world.
+ *
+ *  Exported because the FOG has to reach exactly as far (E4 task 6): the veil
+ *  is the world frame grown by this very margin, minus the known footprints.
+ *  A cover that stopped at the bounds would leave a ring of bare ground
+ *  glowing around the map, and one that reached further would hang over
+ *  nothing at all. ONE number, one home. */
+export const BASE_MARGIN_M = 60;
 /** Edge length of the base plane when nothing is placed at all (metres). */
 const BASE_FALLBACK_M = 200;
 /** Depth-bias-free hairline lift per stacking level, and its ceiling. Read the
