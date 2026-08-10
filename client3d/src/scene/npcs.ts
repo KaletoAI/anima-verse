@@ -360,8 +360,16 @@ export class NpcManager {
     }
   }
 
-  /** NPC verwerfen, damit er beim nächsten update() neu gebaut wird —
-   *  z.B. wenn sein 3D-Modell vom Server nachgeladen wurde. */
+  /** Drop a figure so the next `update()` builds it again — e.g. when its 3D
+   *  model finished loading on the server.
+   *
+   *  THE ONE DELIBERATE EXCEPTION to the never-remove rule below: this hits
+   *  the player-driven figure too, and it is meant to (a new model has to
+   *  replace the old one). The figure comes back on the next `update()`, at
+   *  the worldmap's point rather than the walked one and re-taken-over there
+   *  (`createNpc` + `takeOver`), so a rebuild mid-walk can set the player back
+   *  by up to one poll. Not what the guard is about — that one is a MISSING
+   *  payload entry, which must never take the figure away at all. */
   rebuild(charName: string) {
     const npc = this.npcs.get(charName);
     if (!npc) return;

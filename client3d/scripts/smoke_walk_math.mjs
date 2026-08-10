@@ -2917,6 +2917,15 @@ async function main() {
     figureTransition(SHOWN('hall', true), SHOWN('hall', true)), 'stay');
   check('standing outside a closed interior is just as quiet',
     figureTransition(SHOWN(null, false), SHOWN(null, false)), 'stay');
+  // The same room means the same placement, whatever the view does — a figure
+  // crossing the open GROUND of a tile must not be teleported onto its spot
+  // because somebody opened the detail view (review finding, fix round 2).
+  check('a GROUND figure is not snapped when the view opens over it',
+    figureTransition(SHOWN(null, false), SHOWN(null, true)), 'stay');
+  check('…nor when it closes again',
+    figureTransition(SHOWN(null, true), SHOWN(null, false)), 'stay');
+  check('a figure inside a room the view keeps showing stays put too',
+    figureTransition(SHOWN('hall', false), SHOWN('hall', true)), 'stay');
   check('a visibility change wins even when the room changes with it',
     figureTransition(SHOWN('hall', false), SHOWN('kitchen', true)), 'snap');
 

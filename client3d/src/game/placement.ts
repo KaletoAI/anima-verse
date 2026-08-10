@@ -71,6 +71,12 @@ export interface ShownPlacement {
 /**
  * What the figure has to do to get from `prev` to `next`.
  *
+ *  - `stay`   the drawn ROOM is the one it was drawn in last time, so nothing
+ *             about the placement moved — whatever the figure is doing keeps
+ *             running. This is the first question asked, and it is what keeps
+ *             a figure walking across the OPEN GROUND from being teleported
+ *             onto its spot every time somebody opens a detail view: the view
+ *             state of the tile changes, its own placement does not.
  *  - `snap`   put it there, no walk. A VISIBILITY change (the detail view
  *             opened or closed, an always-visible room appeared) is not a
  *             move: the character stood where it stands before and after, only
@@ -79,14 +85,13 @@ export interface ShownPlacement {
  *  - `route`  a real room change with the view state unchanged: walk it
  *             through the DOOR (`doorwayBetween`/`roomDoor`), which includes
  *             room ↔ ground inside an open interior.
- *  - `stay`   nothing changed; whatever the figure is doing keeps running.
  */
 export type FigureTransition = 'snap' | 'route' | 'stay';
 
 export function figureTransition(prev: ShownPlacement | null | undefined,
                                  next: ShownPlacement): FigureTransition {
   if (!prev) return 'snap';
+  if (prev.room === next.room) return 'stay';
   if (prev.interiorShown !== next.interiorShown) return 'snap';
-  if (prev.room !== next.room) return 'route';
-  return 'stay';
+  return 'route';
 }

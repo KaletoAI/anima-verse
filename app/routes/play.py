@@ -698,18 +698,27 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             refuse(409, "too_far",
                    t("You cannot get there that quickly.", lang))
 
+    # ONE terrain read for the check AND for the answer. Both functions take
+    # the areas and the catalog as parameters (the nav grid prefetches them the
+    # same way); without hoisting them here the refusal path would re-read
+    # every painted area and rebuild the catalog a second time — on exactly the
+    # pathology of finding B1, where an avatar parked on impassable ground has
+    # every report refused at the client's reporting rate.
     from app.core.terrain_query import kind_at, passability_at
-    if not passability_at(x, z)[0]:
+    from app.core.terrain_types import effective_catalog
+    from app.models.terrain import list_areas
+    _areas = list_areas()
+    _catalog = effective_catalog()
+    if not passability_at(x, z, areas=_areas, catalog=_catalog)[0]:
         # NAME THE GROUND. "You cannot walk there." was true and useless: the
         # player sees a spot that looks like every other one and gets no way to
         # tell a painted rock from a rule, a party lock or a missing opening —
         # and an avatar embodied ON such a spot (E4 acceptance finding B1) then
         # collects the same sentence for every direction. The display name is
-        # the terrain catalog's (`effective_catalog`), the kind slug is the
-        # fallback for an area whose type was deleted.
-        from app.core.terrain_types import effective_catalog
-        kind = kind_at(x, z)
-        entry = effective_catalog().get(kind) or {}
+        # the terrain catalog's, the kind slug is the fallback for an area
+        # whose type was deleted.
+        kind = kind_at(x, z, areas=_areas)
+        entry = _catalog.get(kind) or {}
         ground = str(entry.get("name") or "").strip() or kind
         # …and it LOGS like every other refusal reason. This was the only one
         # without a line, which is exactly why the finding needed the user to

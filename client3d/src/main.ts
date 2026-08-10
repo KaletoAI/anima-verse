@@ -1606,9 +1606,15 @@ async function startApp(username: string, role: string) {
       // answer then, on the open ground plane like a traveller's.
       const placement = placementOf(tiles.has(c.location_id), c.pos);
       if (placement.kind === 'free') {
+        // Straight out of a ROOM into the open is a snap, not a walk: the
+        // straight line from a room spot to a point outside the building runs
+        // through its walls, and there is no door route to the wilderness.
+        // Coming from the open ground the figure keeps walking as before.
+        const wasInRoom = shownPlacement.get(c.name)?.room ?? null;
         states.push({
           char: c,
           pos: new THREE.Vector3(placement.pos.x, GROUND_Y, placement.pos.z),
+          snap: wasInRoom !== null,
         });
         shownPlacement.set(c.name, { room: null, interiorShown: false });
         continue;
