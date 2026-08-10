@@ -18,6 +18,7 @@ import io
 import json
 import shutil
 import zipfile
+import zlib
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
@@ -945,9 +946,14 @@ def import_prop_from_zip(
                 if not safe:
                     continue                      # Zip-Slip / directory entry
                 payload[safe] = zf.read(member)
-        except (zipfile.BadZipFile, OSError, RuntimeError) as e:
-            # RuntimeError = encrypted member; both mean the ZIP cannot be
-            # trusted. ValueError keeps the routes' 400 mapping intact.
+        except (zipfile.BadZipFile, zlib.error, EOFError,
+                OSError, RuntimeError) as e:
+            # The exports are ZIP_DEFLATED, so a corrupt member usually fails
+            # inside zlib (zlib.error) or runs out of stream (EOFError) —
+            # neither is an OSError. RuntimeError = encrypted member. All of
+            # them mean the same thing: the ZIP cannot be trusted. ValueError
+            # keeps the routes' 400 mapping intact (BadZipFile & Co. would be
+            # a 500).
             raise ValueError(f"unreadable ZIP member: {e}")
         # The master record is what MAKES a prop.
         if "sidecar.json" not in payload:
