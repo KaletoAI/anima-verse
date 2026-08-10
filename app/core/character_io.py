@@ -197,8 +197,7 @@ def export_character_to_zip(
         # can restore them WITHOUT overwriting existing world items.
         embedded_item_ids: List[str] = []
         try:
-            from app.models.inventory import get_item
-            from app.core.content_io import _strip_runtime_keys, _item_dir_for
+            from app.core.content_io import embed_world_items
             ref_ids: set = set()
             for r in db_dump.get("inventory_items", []):
                 ref_ids.add((r.get("item_id") or "").strip())
@@ -214,21 +213,7 @@ def export_character_to_zip(
                 except Exception:
                     pass
             ref_ids.discard("")
-            item_rows: List[Dict[str, Any]] = []
-            for iid in sorted(ref_ids):
-                it = get_item(iid)
-                if not it or it.get("_shared"):
-                    continue  # shared-library items ship with every world
-                item_rows.append(_strip_runtime_keys(it))
-                src = _item_dir_for(iid, shared=False)
-                if src.exists():
-                    for fp in sorted(src.rglob("*")):
-                        if fp.is_file():
-                            zf.write(fp, f"item_files/{iid}/{fp.relative_to(src).as_posix()}")
-            if item_rows:
-                zf.writestr("db/items.json",
-                            json.dumps(item_rows, ensure_ascii=False, indent=2))
-                embedded_item_ids = [it["id"] for it in item_rows]
+            embedded_item_ids = embed_world_items(zf, ref_ids)
         except Exception as e:
             logger.warning("export: embedding items for %s failed: %s", character_name, e)
 
@@ -448,44 +433,12 @@ def import_character_from_zip(
     # never overwrite existing items (a character import must not mutate the
     # world's item library). `items` is intentionally NOT in db_tables.
     if "db/items.json" in zf.namelist():
-        try:
-            item_rows = json.loads(zf.read("db/items.json"))
-        except Exception as e:
-            logger.warning("import: items.json invalid JSON: %s", e)
-            item_rows = []
-        if isinstance(item_rows, list) and item_rows:
-            from app.core.content_io import _existing_item_ids, _item_dir_for
-            from app.models.inventory import _save_items
-            existing = _existing_item_ids()
-            # items.json holds the flattened get_item() shape (meta spread to
-            # top level, pieces -> outfit_piece, no updated_at). _save_items is
-            # the inverse writer that rebuilds the meta/pieces/slots columns and
-            # stamps created_at/updated_at — the generic _restore_table would
-            # drop those columns and fail the updated_at NOT NULL constraint.
-            # Keep original ids so outfit/inventory references stay valid.
-            new_items = [
-                it for it in item_rows
-                if (it.get("id") or "").strip()
-                and (it.get("id") or "").strip() not in existing
-            ]
-            if new_items:
-                _save_items(new_items)
-            new_ids: List[str] = [(it.get("id") or "").strip() for it in new_items]
-            for iid in new_ids:
-                dest = _item_dir_for(iid, shared=False)
-                prefix = f"item_files/{iid}/"
-                for member in zf.namelist():
-                    if not member.startswith(prefix):
-                        continue
-                    safe = _safe_relpath(member[len(prefix):])
-                    if not safe:
-                        continue
-                    fp = dest / safe
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    fp.write_bytes(zf.read(member))
-            if new_ids:
-                db_stats["items"] = len(new_ids)
-            logger.info("Import: %s — %d new world item(s) restored", character_name, len(new_ids))
+        from app.core.content_io import restore_embedded_items
+        new_ids = restore_embedded_items(zf)
+        if new_ids:
+            db_stats["items"] = len(new_ids)
+        logger.info("Import: %s — %d new world item(s) restored",
+                    character_name, len(new_ids))
 
     zf.close()
 

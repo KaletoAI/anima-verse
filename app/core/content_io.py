@@ -22,7 +22,7 @@ from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -96,6 +96,85 @@ def _write_item_files(
         zf.write(fp, arcname)
         written.append(f"{item_id}/{rel}")
     return written
+
+
+def embed_world_items(
+    zf: zipfile.ZipFile, item_ids: Iterable[str]
+) -> List[str]:
+    """Write db/items.json + item_files/<id>/ for the given world items.
+
+    Shared-library items are skipped (they ship with every world). Returns
+    the embedded ids. Inverse: restore_embedded_items().
+    """
+    from app.models.inventory import get_item
+
+    wanted = sorted({(iid or "").strip() for iid in item_ids} - {""})
+    item_rows: List[Dict[str, Any]] = []
+    for iid in wanted:
+        it = get_item(iid)
+        if not it or it.get("_shared"):
+            continue  # shared-library items ship with every world
+        item_rows.append(_strip_runtime_keys(it))
+        src = _item_dir_for(iid, shared=False)
+        if src.exists():
+            for fp in sorted(src.rglob("*")):
+                if fp.is_file():
+                    zf.write(fp, f"item_files/{iid}/{fp.relative_to(src).as_posix()}")
+    if item_rows:
+        zf.writestr(
+            "db/items.json",
+            json.dumps(item_rows, ensure_ascii=False, indent=2),
+        )
+    return [it["id"] for it in item_rows]
+
+
+def restore_embedded_items(zf: zipfile.ZipFile) -> List[str]:
+    """Create every item from db/items.json that is missing in this world
+    (existing items are never overwritten — references stay valid) and
+    extract its item_files/. Returns the newly created ids.
+    """
+    from app.models.inventory import _save_items
+
+    if "db/items.json" not in zf.namelist():
+        return []
+    try:
+        item_rows = json.loads(zf.read("db/items.json"))
+    except Exception as e:
+        logger.warning("import: items.json invalid JSON: %s", e)
+        return []
+    if not isinstance(item_rows, list) or not item_rows:
+        return []
+
+    existing = _existing_item_ids()
+    # items.json holds the flattened get_item() shape (meta spread to top
+    # level, pieces -> outfit_piece, no updated_at). _save_items is the
+    # inverse writer that rebuilds the meta/pieces/slots columns and stamps
+    # created_at/updated_at — the generic _restore_table would drop those
+    # columns and fail the updated_at NOT NULL constraint.
+    # Keep original ids so outfit/inventory/room references stay valid.
+    new_items = [
+        it for it in item_rows
+        if (it.get("id") or "").strip()
+        and (it.get("id") or "").strip() not in existing
+    ]
+    if not new_items:
+        return []
+    _save_items(new_items)
+
+    new_ids: List[str] = [(it.get("id") or "").strip() for it in new_items]
+    for iid in new_ids:
+        dest = _item_dir_for(iid, shared=False)
+        prefix = f"item_files/{iid}/"
+        for member in zf.namelist():
+            if not member.startswith(prefix):
+                continue
+            safe = _safe_relpath(member[len(prefix):])
+            if not safe:
+                continue
+            fp = dest / safe
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_bytes(zf.read(member))
+    return new_ids
 
 
 def export_item_to_zip(item_id: str) -> bytes:
@@ -429,7 +508,8 @@ def import_rule_from_zip(
 # ---------------------------------------------------------------------------
 
 def export_location_to_zip(location_id: str) -> bytes:
-    """Export a location (DB row + rooms + gallery) as a ZIP."""
+    """Export a location as a ZIP: DB row + rooms + gallery, plus everything
+    the rooms reference — 3D models, placed props and room items."""
     from app.models.world import (
         get_location_by_id, resolve_location, get_gallery_dir,
     )
@@ -452,6 +532,45 @@ def export_location_to_zip(location_id: str) -> bytes:
                 zf.write(fp, arcname)
                 file_entries.append(f"gallery/{rel}")
 
+        # 3D models (building + per-room GLBs, sidecars, selection.json). Clones
+        # redirect to their template's store, same as the gallery does.
+        from app.core.location_model3d import _model_dir, _owner_id
+        model_dir = _model_dir(_owner_id(canonical_id))
+        model3d_count = 0
+        if model_dir.exists():
+            for fp in sorted(model_dir.rglob("*")):
+                if fp.is_file():
+                    zf.write(fp, f"files/model3d/{fp.relative_to(model_dir).as_posix()}")
+                    model3d_count += 1
+
+        # Referenced props travel as a dependency — a placement without its prop
+        # renders as "missing" forever (room_recipe.py:395).
+        from app.core.props import _prop_dir
+        prop_ids = sorted({
+            (p.get("prop_id") or "").strip()
+            for room in (loc.get("rooms") or [])
+            for p in ((room.get("layout") or {}).get("props") or [])
+            if isinstance(p, dict) and (p.get("prop_id") or "").strip()
+        })
+        bundled_props: List[str] = []
+        for pid in prop_ids:
+            d = _prop_dir(pid)
+            if not d or not d.is_dir():
+                continue
+            for fp in sorted(d.rglob("*")):
+                if fp.is_file():
+                    zf.write(fp, f"props/{pid}/{fp.relative_to(d).as_posix()}")
+            bundled_props.append(pid)
+
+        # Room items (rooms[].items[].item_id) — same embed shape as character ZIPs.
+        item_ids = sorted({
+            (it.get("item_id") or "").strip()
+            for room in (loc.get("rooms") or [])
+            for it in (room.get("items") or [])
+            if isinstance(it, dict) and (it.get("item_id") or "").strip()
+        })
+        embedded_items = embed_world_items(zf, item_ids)
+
         zf.writestr(
             "db/location.json",
             json.dumps(loc, ensure_ascii=False, indent=2),
@@ -468,6 +587,9 @@ def export_location_to_zip(location_id: str) -> bytes:
                     f.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp")
                 )
             ),
+            "model3d_file_count": model3d_count,
+            "prop_ids": bundled_props,
+            "embedded_items": embedded_items,
             "exported_at": utc_now_iso(),
             "files": sorted(file_entries),
         }
