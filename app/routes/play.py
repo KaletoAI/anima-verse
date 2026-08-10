@@ -542,6 +542,14 @@ _POS_STEP_FLOOR_M = 5.0
 #: purpose: this is an ANTI-TELEPORT bound, not a precision anticheat — the
 #: client's own walk is 3.4 m/s and every honest report stays far below.
 _POS_STEP_FACTOR = 3.0
+#: The client's own walking pace in REAL metres per second — a mirror of
+#: ``WALK_SPEED`` in ``client3d/src/scene/npcs.ts``, kept here for one reason:
+#: the travel-speed term above is coupled to the GAME clock, and free walking
+#: is not. In a frozen world (factor 0) or a slow one that term collapses to
+#: nothing while the player still walks 3.4 m every second, and an honest
+#: walker would collect 409s. The allowance is the LARGEST of the three
+#: (floor, game-speed term, real-speed term), so neither clock can strand it.
+_POS_WALK_SPEED_M_S = 3.4
 #: How close to an authored boundary opening a point has to be to count as
 #: crossing THROUGH it (metres). The client offers the entry at 3 m and walks
 #: the figure to the opening point, so an accepted crossing lands well inside.
@@ -586,18 +594,32 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     reported point. Same location, or wilderness → wilderness, is accepted as
     it stands. Otherwise:
 
-      * ENTRY (a different, non-empty location): only across an authored
-        boundary opening — the point must lie within
-        ``_POS_OPENING_TOLERANCE_M`` of one of the target's opening world
-        points (§ A1.1) — and only when ``accessible_when`` and the access
-        rules pass. Those two are the very gates ``/play/travel`` applies
-        before it sets off; a free walker that could stroll past them would
-        make every one of them decoration (E3-C1),
+      * ENTRY (a different, non-empty location): across an authored boundary
+        opening — the point must lie within ``_POS_OPENING_TOLERANCE_M`` of
+        one of the target's opening world points (§ A1.1) — and only when
+        ``accessible_when`` and the access rules pass. Those two are the very
+        gates ``/play/travel`` applies before it sets off; a free walker that
+        could stroll past them would make every one of them decoration
+        (E3-C1). A location with NO authored opening at all has a FREE
+        boundary (decision E4 task 5): it never said where its way in is, the
+        mirror of ``may_leave``'s "no entry room = leave anywhere" — the rule
+        gates still apply,
       * EXIT: ``boundary_entry.may_leave`` with the room the avatar stands in
         — across a NEAR opening from the room it links to, from the entry room
-        over any edge, or freely when the location declares no entry room,
-      * location → location (adjacent footprints) is both: the exit check of
-        the old one, then the entry check of the new one.
+        over any edge, or freely when the location declares no entry room —
+        AND ``rules.check_leave``, the same rule gate every other movement
+        path asks before it moves anybody,
+      * location → location (adjacent or NESTED footprints — a hut on a
+        village square) is both: the exit check of the old one, then the
+        entry check of the new one.
+
+    ONLY THE REPORTED POINT IS JUDGED, never the way to it. That is by
+    design, not an oversight: a client reporting three times a second moves
+    about a metre between reports, which cannot hop anything the world has,
+    and reconstructing the path server-side would be a SECOND movement model
+    beside the one the client walks — the model that would then disagree with
+    the picture. The step-plausibility bound is what keeps the gap small
+    enough for that to hold.
 
     A running journey is cancelled by the first accepted report — free walking
     OVERRIDES travel deliberately (``set_character_pos`` does it for every
@@ -614,7 +636,9 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
                                       get_character_current_room,
                                       get_character_language,
                                       get_character_pos,
+                                      is_character_sleeping,
                                       save_character_current_room,
+                                      set_is_sleeping,
                                       set_character_pos)
 
     body = await request.json()
@@ -663,7 +687,8 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         elapsed = max(0.0, now - last_at)
         allowance = max(_POS_STEP_FLOOR_M,
                         _POS_STEP_FACTOR * get_travel_speed_m_s()
-                        * game_speed_factor() * elapsed)
+                        * game_speed_factor() * elapsed,
+                        _POS_STEP_FACTOR * _POS_WALK_SPEED_M_S * elapsed)
         if math.hypot(x - here["x"], z - here["z"]) > allowance:
             logger.info("pos refused (too far): %s %.2f,%.2f -> %.2f,%.2f "
                         "in %.2fs (allowance %.2f m)", avatar,
@@ -704,15 +729,47 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
                 refuse(403, "leave_blocked",
                        t("You cannot leave the place here — take the way you "
                          "came in.", lang))
+            # ``rules.check_leave`` — the RULE side of leaving, and the one
+            # every other movement path in this world asks: ``/play/travel``
+            # before it sets off, the travel ticker at the arrival, the
+            # SetLocation skill, the scheduler, and the grid step that used to
+            # sit here. Geometry alone is not the gate: a ``confine`` or
+            # danger rule that holds the avatar in place must hold it when it
+            # WALKS out too, or the movement channel quietly undoes what
+            # ``/play/notices`` is telling the player at that very moment.
+            from app.models.rules import check_leave
+            leave_ok, leave_reason = check_leave(avatar,
+                                                 target_location_id=derived_id)
+            if not leave_ok:
+                logger.info("pos refused (leave rule): %s out of %s: %s",
+                            avatar, current_id, leave_reason)
+                refuse(403, "block_leave", leave_reason)
         if derived_id:
-            # ENTERING. Only through an authored opening, and only past the
-            # gates the travel route applies to the very same destination.
+            # ENTERING. Through an authored opening, and past the gates the
+            # travel route applies to the very same destination.
             best_edge, best_dist = "", None
             for edge, (ox, oz) in opening_world_points(derived):
                 dist = math.hypot(ox - x, oz - z)
                 if best_dist is None or dist < best_dist:
                     best_edge, best_dist = edge, dist
-            if best_dist is None or best_dist > _POS_OPENING_TOLERANCE_M:
+            if best_dist is None:
+                # NO AUTHORED OPENINGS AT ALL = a free boundary (controller
+                # decision, E4 task 5 review). The mirror of ``may_leave``'s
+                # third rule: a location that declares no entry room lets one
+                # out anywhere, and a location that draws no opening has not
+                # said where its way in is either. Without this a painted
+                # square, a meadow or any ``passable`` transit place would be
+                # a wall to a free walker, which is the opposite of what those
+                # places are for — and one CANNOT author an opening around
+                # them for every direction a walker may come from.
+                # The rule gates below are untouched: an openingless place is
+                # still subject to ``accessible_when`` and the access rules.
+                # ``opening_entry_room("")`` answers '' and the ordinary
+                # arrival rule decides the room.
+                pass
+            elif best_dist > _POS_OPENING_TOLERANCE_M:
+                # It HAS openings — then those are the ways in, and this is
+                # not one of them (strictness decision 2026-08-04).
                 logger.info("pos refused (no opening): %s into %s at %.2f,%.2f",
                             avatar, derived_id, x, z)
                 refuse(403, "no_opening",
@@ -740,6 +797,13 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     written = set_character_pos(avatar, x, z)
     if entry_room:
         save_character_current_room(avatar, entry_room)
+    # Walking is player-driven movement, and that is the clearest wake signal
+    # there is — the same rule ``/play/enter-room`` and ``/play/travel`` apply
+    # (a sleeping avatar must not walk a road in its sleep). It sits AFTER the
+    # gates on purpose: a refused report moved nobody, so it wakes nobody.
+    if is_character_sleeping(avatar):
+        set_is_sleeping(avatar, False)
+        logger.info("pos: %s woke up by walking", avatar)
     _pos_report_at[avatar] = now
     return {"ok": True, "pos": written["pos"],
             "location_id": written["location_id"],
