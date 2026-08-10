@@ -609,11 +609,36 @@ def _free_location_name(name: str) -> str:
     return f"{name} ({suffix})"
 
 
+def _remap_model3d_basename(name: str, room_id_map: Dict[str, str]) -> str:
+    """``room_<old>…`` -> ``room_<new>…`` (filename OR bare stem).
+
+    The model store names its files after the SUBJECT: ``building[_<ts>]`` for
+    the location shell, ``room_<room_id>[_<ts>]`` for a room — plus a ``.json``
+    sidecar per file and the ``selection.json`` keys, which are bare stems.
+    Import mints new room ids, so every one of those names has to follow;
+    ``building*`` and anything else is left alone.
+    """
+    if not name.startswith("room_"):
+        return name
+    rest = name[len("room_"):]
+    for old, new in room_id_map.items():
+        if old and (rest == old or rest.startswith(old + "_") or rest.startswith(old + ".")):
+            return "room_" + new + rest[len(old):]
+    return name
+
+
 def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     """Import a location ZIP. Always creates a new location (new UUID).
 
-    Gallery files land in a fresh `world_gallery/<new-id>/` directory. The
-    location's known_locations status is NOT auto-granted to existing
+    Everything the rooms reference travels with it: gallery files land in a
+    fresh `world_gallery/<new-id>/` directory, the 3D models in
+    `locations/<new-id>/model3d/` (renamed to the new room ids), bundled props
+    are installed unless the world already has them, and embedded room items
+    are created unless they already exist. A placement whose prop is neither
+    bundled nor present is reported in `props_missing` — never swallowed.
+
+    The location itself lands UNPLACED; the user positions it in the map
+    editor. The known_locations status is NOT auto-granted to existing
     characters — discovery happens organically on entry (memory:
     project_known_locations_strict).
     """
@@ -655,10 +680,11 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     loc["name"] = _free_location_name((loc.get("name") or "Imported location").strip())
     if loc.get("image_prompt_day") or loc.get("image_prompt_night"):
         loc["prompt_changed"] = True
-    # Reset grid position so the importer can place it; the user picks the
-    # final slot on the map.
-    loc.pop("grid_x", None)
-    loc.pop("grid_y", None)
+    # Placement is reset — the import lands unplaced (pos_x IS NULL); the user
+    # places it in the map editor. Without this the copy sits exactly ON the
+    # original. grid_* still appears in pre-E1 ZIPs.
+    for key in ("grid_x", "grid_y", "pos_x", "pos_z", "yaw_deg"):
+        loc.pop(key, None)
 
     data = _load_world_data()
     locations = data.get("locations", [])
@@ -684,7 +710,6 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(zf.read(member))
         file_count += 1
-    zf.close()
 
     # Remap the image→room mapping in gallery_meta.json to the new room ids.
     # The file is copied verbatim and still references the OLD room ids; without
@@ -705,9 +730,104 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("Location import: remap gallery_meta rooms failed: %s", e)
 
+    # 3D models. The import is always a standalone copy, so the model store's
+    # owner is the new location id itself. The files are named after the OLD
+    # room ids — every basename goes through the remap; a tier file may sit in
+    # a subdirectory, so only the basename is touched, never the path.
+    from app.core.location_model3d import _model_dir
+    model_prefix = "files/model3d/"
+    model_dir: Optional[Path] = None
+    model3d_files = 0
+    for member in zf.namelist():
+        if not member.startswith(model_prefix):
+            continue
+        safe = _safe_relpath(member[len(model_prefix):])
+        if not safe:
+            continue
+        if model_dir is None:
+            model_dir = _model_dir(new_loc_id, create=True)
+        head, _sep, base = safe.rpartition("/")
+        new_base = _remap_model3d_basename(base, room_id_map)
+        target = model_dir / (f"{head}/{new_base}" if head else new_base)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(zf.read(member))
+        model3d_files += 1
+
+    # selection.json names the ACTIVE file per stem ({stem: {tier: filename}}) —
+    # both sides carry old room ids and have to follow the rename, or the
+    # imported rooms serve nothing.
+    if model_dir is not None and room_id_map:
+        sel_path = model_dir / "selection.json"
+        if sel_path.exists():
+            try:
+                sel = json.loads(sel_path.read_text(encoding="utf-8"))
+                if isinstance(sel, dict):
+                    sel = {
+                        _remap_model3d_basename(stem, room_id_map): (
+                            {tier: _remap_model3d_basename(str(fn), room_id_map)
+                             for tier, fn in tiers.items()}
+                            if isinstance(tiers, dict) else tiers
+                        )
+                        for stem, tiers in sel.items()
+                    }
+                    sel_path.write_text(
+                        json.dumps(sel, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as e:
+                logger.warning("Location import: remap model3d selection failed: %s", e)
+
+    # Bundled props are a DEPENDENCY, not content of their own: an existing
+    # prop is never overwritten (other locations place the same id), a missing
+    # one is installed, and a placement whose prop is neither is reported.
+    from app.core.props import _prop_dir, safe_prop_id
+    bundled = sorted({m.split("/", 2)[1] for m in zf.namelist()
+                      if m.startswith("props/") and m.count("/") >= 2})
+    props_imported: List[str] = []
+    props_existing: List[str] = []
+    for pid in bundled:
+        if not safe_prop_id(pid):
+            continue
+        dest = _prop_dir(pid)
+        if dest is not None and dest.is_dir():
+            props_existing.append(pid)          # never overwrite an existing prop
+            continue
+        dest = _prop_dir(pid, create=True)
+        prefix = f"props/{pid}/"
+        for member in zf.namelist():
+            if not member.startswith(prefix):
+                continue
+            safe = _safe_relpath(member[len(prefix):])
+            if not safe:
+                continue
+            target = dest / safe
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(member))
+        props_imported.append(pid)
+
+    referenced = {
+        (p.get("prop_id") or "").strip()
+        for room in (loc.get("rooms") or [])
+        for p in ((room.get("layout") or {}).get("props") or [])
+        if isinstance(p, dict) and (p.get("prop_id") or "").strip()
+    }
+    props_missing = sorted(
+        pid for pid in referenced - set(bundled)
+        if not (_prop_dir(pid) and _prop_dir(pid).is_dir()))
+    if props_missing:
+        logger.warning(
+            "Location import: %s (id=%s) places props that are neither bundled "
+            "nor known here — they will render as missing: %s",
+            loc["name"], new_loc_id, ", ".join(props_missing),
+        )
+
+    # Room items — created only when this world does not have the id yet.
+    items_imported = restore_embedded_items(zf)
+    zf.close()
+
     logger.info(
-        "Location import: %s (id=%s, %d gallery files)",
-        loc["name"], new_loc_id, file_count,
+        "Location import: %s (id=%s, %d gallery files, %d model files, "
+        "%d props installed, %d items restored)",
+        loc["name"], new_loc_id, file_count, model3d_files,
+        len(props_imported), len(items_imported),
     )
     return {
         "status": "success",
@@ -715,6 +835,11 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         "location_name": loc["name"],
         "files_imported": file_count,
         "room_count": len(rooms),
+        "model3d_files": model3d_files,
+        "props_imported": props_imported,
+        "props_existing": props_existing,
+        "props_missing": props_missing,
+        "items_imported": items_imported,
     }
 
 
@@ -1065,9 +1190,20 @@ def preview_import_zip(content: bytes) -> Dict[str, Any]:
                     elements.append({"kind": "state", "id": fid, "name": r.get("label") or fid,
                                      "exists": fid in existing})
         elif mtype == "location":
-            # Location import always creates a NEW location (new UUID) — never overwrites.
-            elements.append({"kind": "location", "id": manifest.get("location_id") or "location",
-                             "name": manifest.get("location_name") or "Location", "exists": False})
+            # Location import always creates a NEW location (new UUID) — never
+            # overwrites, so it stays ONE element. What travels with it is
+            # spelled out in the name; old ZIPs simply report zeros.
+            loc_name = manifest.get("location_name") or "Location"
+            elements.append({
+                "kind": "location",
+                "id": manifest.get("location_id") or "location",
+                "name": (
+                    f"{loc_name} ({manifest.get('room_count', 0)} rooms, "
+                    f"{manifest.get('model3d_file_count', 0)} model files, "
+                    f"{len(manifest.get('prop_ids') or [])} props)"
+                ),
+                "exists": False,
+            })
         elif mtype == "map_layout":
             elements.append({"kind": "map_layout", "id": "map_layout",
                              "name": f"Map layout ({manifest.get('count', '?')} positions)",

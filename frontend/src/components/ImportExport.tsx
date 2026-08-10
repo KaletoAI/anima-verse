@@ -337,8 +337,14 @@ export function ImportButton({
   const [mode, setMode] = useState<'full' | 'fresh'>('full')
   const [intro, setIntro] = useState('')
   const [introBusy, setIntroBusy] = useState(false)
+  // Post-import warning that must not vanish with a 2-second toast (a location
+  // import can name props the target world does not have).
+  const [warn, setWarn] = useState<string | null>(null)
 
-  const close = () => { setFile(null); setPreview(null); setPicked({}); setMode('full'); setIntro('') }
+  const close = () => {
+    setFile(null); setPreview(null); setPicked({}); setMode('full'); setIntro('')
+    setWarn(null)
+  }
 
   const regenIntro = async () => {
     if (!file) return
@@ -399,7 +405,17 @@ export function ImportButton({
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`)
       toast(t('Imported'))
       onImported?.(body)
-      close()
+      // A location import lists every prop its placements name that is neither
+      // bundled nor already known here — those placements render as "missing",
+      // so the list stays on screen until the user closes it.
+      const missing = (body as { props_missing?: unknown }).props_missing
+      const missingIds = Array.isArray(missing) ? missing.map(String).filter(Boolean) : []
+      if (missingIds.length > 0) {
+        setWarn(t('Missing props (placements will render as missing):')
+          + ' ' + missingIds.join(', '))
+      } else {
+        close()
+      }
     } catch (e) {
       toast(t('Import failed') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -431,7 +447,7 @@ export function ImportButton({
         }}
       />
 
-      {(loading || preview) && (
+      {(loading || preview || warn) && (
         <div onClick={close} style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -448,11 +464,17 @@ export function ImportButton({
             </div>
 
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 14px' }}>
-              {loading && <div className="ga-loading">{t('Loading…')}</div>}
-              {preview && preview.elements.length === 0 && (
+              {warn && (
+                <div style={{ color: '#e0a356', border: '1px solid #e0a356', borderRadius: 6,
+                              padding: '8px 10px', fontSize: '0.85em', wordBreak: 'break-word' }}>
+                  {warn}
+                </div>
+              )}
+              {!warn && loading && <div className="ga-loading">{t('Loading…')}</div>}
+              {!warn && preview && preview.elements.length === 0 && (
                 <div className="ga-placeholder">{t('No importable elements in this file.')}</div>
               )}
-              {preview && preview.elements.length > 0 && (
+              {!warn && preview && preview.elements.length > 0 && (
                 <>
                   {preview.multi && (
                     <div style={{ display: 'flex', gap: 10, marginBottom: 8, fontSize: '0.8em' }}>
@@ -489,7 +511,7 @@ export function ImportButton({
                 </>
               )}
 
-              {preview && preview.type === 'character' && (
+              {!warn && preview && preview.type === 'character' && (
                 <div style={{ marginTop: 12, borderTop: '1px solid var(--border, #30363d)', paddingTop: 10 }}>
                   <div style={{ fontSize: '0.82em', fontWeight: 600, marginBottom: 6 }}>{t('Import mode')}</div>
                   <label style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '3px 0', cursor: 'pointer' }}>
@@ -522,17 +544,21 @@ export function ImportButton({
 
             <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border, #30363d)',
                           display: 'flex', alignItems: 'center', gap: 10 }}>
-              {preview && overwriteCount > 0 && (
+              {!warn && preview && overwriteCount > 0 && (
                 <span style={{ fontSize: '0.78em', color: '#e0a356' }}>
                   {t('{n} will be overwritten').replace('{n}', String(overwriteCount))}
                 </span>
               )}
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                <button className="ga-btn ga-btn-sm" onClick={close} disabled={busy}>{t('Cancel')}</button>
-                <button className="ga-btn ga-btn-sm ga-btn-primary" onClick={doImport}
-                  disabled={busy || !preview || selCount === 0}>
-                  {busy ? t('Importing…') : t('Import {n}').replace('{n}', String(selCount))}
+                <button className="ga-btn ga-btn-sm" onClick={close} disabled={busy}>
+                  {warn ? t('Close') : t('Cancel')}
                 </button>
+                {!warn && (
+                  <button className="ga-btn ga-btn-sm ga-btn-primary" onClick={doImport}
+                    disabled={busy || !preview || selCount === 0}>
+                    {busy ? t('Importing…') : t('Import {n}').replace('{n}', String(selCount))}
+                  </button>
+                )}
               </div>
             </div>
           </div>
