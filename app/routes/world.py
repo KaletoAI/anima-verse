@@ -1046,6 +1046,7 @@ async def prop_create(request: Request) -> Dict[str, Any]:
 async def import_prop_route(
     file: UploadFile = File(...),
     overwrite: bool = Form(False),
+    _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Import a prop ZIP. The prop id is kept; an existing id answers
     ``{"status": "exists"}`` unless `overwrite` is set."""
@@ -1060,7 +1061,8 @@ async def import_prop_route(
 
 
 @router.get("/props/{prop_id}/export")
-def export_prop_route(prop_id: str) -> StreamingResponse:
+def export_prop_route(prop_id: str,
+                      _: Dict[str, Any] = Depends(require_admin)) -> StreamingResponse:
     """Streams a single-prop ZIP (the whole props/<prop_id>/ directory)."""
     from app.core.content_io import export_prop_to_zip
     from app.core.props import safe_prop_id
@@ -1417,7 +1419,8 @@ async def import_map_layout_route(
 # ── Location Import / Export ──
 
 @router.get("/locations/{location_id}/export")
-def export_location_route(location_id: str) -> StreamingResponse:
+def export_location_route(location_id: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> StreamingResponse:
     """Streams a single-location ZIP (DB row + rooms + gallery files)."""
     from app.core.content_io import export_location_to_zip
     try:
@@ -1434,6 +1437,7 @@ def export_location_route(location_id: str) -> StreamingResponse:
 @router.post("/locations/import")
 async def import_location_route(
     file: UploadFile = File(...),
+    _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Import a location ZIP. Always creates a new location (new UUID)."""
     from app.core.content_io import import_location_from_zip

@@ -299,7 +299,12 @@ interface PreviewResult { type: string; multi: boolean; elements: PreviewElement
 
 /** What an importer answers under `result`. A collection carries one `results`
  *  row per sub-pack; every other type reports a single `status`. */
-interface ImportResultRow { name?: string; type?: string; status?: string; error?: string }
+interface ImportResultRow {
+  name?: string; type?: string; status?: string; error?: string
+  /** A sub-pack's own importer dict — a nested location reports its
+   *  `props_missing` in here, not on the collection's top level. */
+  result?: { props_missing?: unknown }
+}
 interface ImportResult {
   status?: string
   results?: ImportResultRow[]
@@ -451,8 +456,14 @@ export function ImportButton({
       }
       // A location import lists every prop its placements name that is neither
       // bundled nor already known here — those placements render as "missing".
-      const missing = result.props_missing
-      const missingIds = Array.isArray(missing) ? missing.map(String).filter(Boolean) : []
+      // In a collection the location sits one level down, so its list is in
+      // `results[i].result.props_missing` — the union of both levels is shown,
+      // ids deduped.
+      const asIds = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
+      const missingIds = [...new Set([
+        ...asIds(result.props_missing),
+        ...rows.flatMap((r) => asIds(r.result?.props_missing)),
+      ])]
       if (missingIds.length > 0) {
         notes.push(t('Missing props (placements will render as missing):')
           + ' ' + missingIds.join(', '))
