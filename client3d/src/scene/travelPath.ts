@@ -123,6 +123,28 @@ export function advanceProgress(
 }
 
 /**
+ * How far a figure may move TOWARDS its interpolated journey point this frame.
+ *
+ * The rendered figure does not jump onto the point the polyline says; it walks
+ * there, so a poll correction stays a walk. The bound for that walk is the
+ * normal pace OR the journey's own, whichever is greater — a fixed walking
+ * pace is a brake, not a smoother: `pace_m_s_real` carries the game time
+ * factor (§ A11), so on a fast clock the point outruns the figure and it lags
+ * behind its own journey the whole way, then teleports on arrival.
+ *
+ * Never further than `distanceM`, so the step cannot overshoot the point it is
+ * correcting towards.
+ */
+export function catchUpStep(
+  distanceM: number, rateMS: number | null | undefined, dt: number, walkSpeedMS: number
+): number {
+  if (!isNum(distanceM) || distanceM <= 0 || !isNum(dt) || dt <= 0) return 0;
+  const walk = isNum(walkSpeedMS) && walkSpeedMS > 0 ? walkSpeedMS : 0;
+  const pace = isNum(rateMS) && rateMS > 0 ? rateMS : 0;
+  return Math.min(distanceM, Math.max(walk, pace) * dt);
+}
+
+/**
  * Does a freshly polled `progress_m` override the locally extrapolated one?
  *
  * Only past `TRAVEL_SNAP_M`. Both numbers are pre-clamped finite metres (the

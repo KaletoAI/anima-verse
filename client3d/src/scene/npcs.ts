@@ -6,7 +6,7 @@ import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
-import { advanceProgress, pointAtDistance, shouldSnap, type MetrePoint } from './travelPath';
+import { advanceProgress, catchUpStep, pointAtDistance, shouldSnap, type MetrePoint } from './travelPath';
 
 /** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
  *  metre world has one scale, so this number means the same thing on the map
@@ -367,9 +367,29 @@ export class NpcManager {
     const npc = this.npcs.get(charName);
     if (!npc) return;
     this.group.remove(npc.root);
-    if (npc.travelLine) this.group.remove(npc.travelLine);
+    this.dropTravelLine(npc);
     npc.label.element.remove();
     this.npcs.delete(charName);
+  }
+
+  /** Take a figure's travel line out of the scene AND off the GPU.
+   *
+   *  Removing it from the group is not enough: the BufferGeometry keeps its
+   *  buffers until it is disposed, and both callers throw the whole Npc away
+   *  right afterwards, so nothing will ever dispose it later. A rebuild fires
+   *  on every model reload and a removal on every figure that leaves the map —
+   *  and since E4 the line is the whole route (a polyline, not two points),
+   *  so what leaks is bigger than it was. */
+  private dropTravelLine(npc: Npc) {
+    if (!npc.travelLine) return;
+    this.group.remove(npc.travelLine);
+    npc.travelLine.geometry.dispose();
+    // The dashed material is built per line as well (it carries the dash
+    // scale), so it is just as per-line as the geometry — same rule as the
+    // selection and walk-target rings above.
+    (npc.travelLine.material as THREE.Material).dispose();
+    npc.travelLine = null;
+    npc.travelKey = '';
   }
 
   /** Soll-Zustand aus dem Worldmap-Poll übernehmen. */
@@ -481,7 +501,7 @@ export class NpcManager {
     for (const [name, npc] of this.npcs) {
       if (!seen.has(name)) {
         this.group.remove(npc.root);
-        if (npc.travelLine) this.group.remove(npc.travelLine);
+        this.dropTravelLine(npc);
         npc.label.element.remove();
         this.npcs.delete(name);
       }
@@ -569,12 +589,8 @@ export class NpcManager {
   private updateTravelLine(npc: Npc, route: (TravelRoute & { key: string }) | null) {
     const key = route ? route.key : '';
     if (key === npc.travelKey) return;
+    this.dropTravelLine(npc);   // clears travelKey, so the new one goes after
     npc.travelKey = key;
-    if (npc.travelLine) {
-      this.group.remove(npc.travelLine);
-      npc.travelLine.geometry.dispose();
-      npc.travelLine = null;
-    }
     if (route && route.points.length >= 2) {
       const pts = route.points.map((p) => new THREE.Vector3(p[0], GROUND_Y + 0.3, p[1]));
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
@@ -671,8 +687,13 @@ export class NpcManager {
         delta.y = 0;
         const d = delta.length();
         if (d > 0.05) {
-          // catch-up speed: at most WALK_SPEED, so corrections stay a walk
-          const step = Math.min(d, WALK_SPEED * dt);
+          // Catch-up speed: WALK_SPEED, or the JOURNEY's own pace when that is
+          // faster. A fixed WALK_SPEED was a brake, not a smoother — the game
+          // time factor multiplies `pace_m_s_real` (§ A11), so past a factor of
+          // about 2.4 the interpolated point outruns 3.4 m/s and the figure
+          // lags behind its own journey for the whole trip, then teleports on
+          // arrival.
+          const step = catchUpStep(d, r.rateMS, dt, WALK_SPEED);
           const dir = delta.clone().normalize();
           npc.root.position.addScaledVector(dir, step);
           npc.figure?.faceTowards(dir);

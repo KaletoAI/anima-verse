@@ -144,6 +144,32 @@
  *   pointAtDistance(P, advanceProgress(28, 4, 1, 30))
  *     = pointAtDistance(P, 30) = (10, 20)
  *
+ * --- catchUpStep: how far the FIGURE moves towards that point ---------------
+ * The rendered figure does not jump onto the interpolated point, it walks
+ * there, so a poll correction stays a walk:
+ *     step = min(distance, max(walkSpeed, rate) * dt)
+ * `npcs.ts` hands in its own `WALK_SPEED` (3.4 m/s), which is why the constant
+ * appears as a literal here rather than as an import — the module is pure and
+ * knows nothing about the figure library.
+ *
+ * The `max` is the point of it. A fixed 3.4 m/s is a BRAKE, not a smoother:
+ * `pace_m_s_real` already carries the game time factor (§ A11), so with the
+ * demo pace of 1.4 m/s a factor above 3.4 / 1.4 = 2.43 makes the interpolated
+ * point outrun the figure — it would lag behind its own journey for the whole
+ * trip and then teleport when the travel block vanishes.
+ *   catchUpStep(10, null, 1,   3.4) = min(10, max(3.4, 0)*1)   = 3.4
+ *       (frozen world: the figure may still walk off a correction)
+ *   catchUpStep(10, 2,    1,   3.4) = min(10, max(3.4, 2)*1)   = 3.4
+ *       (a SLOW journey does not slow the correction below a walk)
+ *   catchUpStep(10, 5.6,  1,   3.4) = min(10, max(3.4, 5.6)*1) = 5.6
+ *       (1.4 m/s at time factor 4 — the case the fix exists for)
+ *   catchUpStep(10, 5.6,  0.5, 3.4) = min(10, 5.6*0.5)         = 2.8
+ *   catchUpStep(1,  5.6,  1,   3.4) = min(1, 5.6)              = 1
+ *       (never past the point it is correcting towards)
+ *   catchUpStep(10, -5,   1,   3.4) = a junk rate is no rate    = 3.4
+ *   catchUpStep(0,  5.6,  1,   3.4) = nothing to correct        = 0
+ *   catchUpStep(10, 5.6,  0,   3.4) = no time passed            = 0
+ *
  * --- shouldSnap: reconciling with a fresh server number ---------------------
  * The local extrapolation drifts (segment changes between polls, a paused
  * tab, a rate that changed with the terrain). When a genuinely NEW payload
@@ -213,7 +239,10 @@ const S = [[7, -2]];
 
 async function main() {
   const { polylineLength, pointAtDistance, clampProgress, advanceProgress,
-          shouldSnap, TRAVEL_SNAP_M } = await loadTravelPath();
+          catchUpStep, shouldSnap, TRAVEL_SNAP_M } = await loadTravelPath();
+  // What `npcs.ts` hands in as its walking pace; kept as a literal because
+  // this module is pure and must not import the figure code.
+  const WALK = 3.4;
 
   console.log('polylineLength — the sum of the segment lengths, in metres');
   check('(P) 10 + 20', polylineLength(P), 30);
@@ -282,6 +311,29 @@ async function main() {
     pointAtDistance(P, advanceProgress(5, 2, 2.5, 30)), [10, 0]);
   check('a frozen journey stays where it is',
     pointAtDistance(P, advanceProgress(15, null, 1, 30)), [10, 5]);
+
+  console.log('\ncatchUpStep — the walk towards the interpolated point');
+  check('a frozen journey still walks its correction off',
+    catchUpStep(10, null, 1, WALK), 3.4);
+  check('a journey slower than a walk does not slow the correction',
+    catchUpStep(10, 2, 1, WALK), 3.4);
+  check('1.4 m/s at time factor 4: the journey pace wins',
+    catchUpStep(10, 5.6, 1, WALK), 5.6);
+  check('…and it scales with dt like everything else',
+    catchUpStep(10, 5.6, 0.5, WALK), 2.8);
+  check('never past the point it corrects towards',
+    catchUpStep(1, 5.6, 1, WALK), 1);
+  check('a negative rate is junk, the walk stands',
+    catchUpStep(10, -5, 1, WALK), 3.4);
+  check('nothing to correct, no step', catchUpStep(0, 5.6, 1, WALK), 0);
+  check('no time passed, no step', catchUpStep(10, 5.6, 0, WALK), 0);
+  check('a NaN distance moves nothing', catchUpStep(NaN, 5.6, 1, WALK), 0);
+  // The regression this exists for, stated as the inequality it is: at the
+  // demo pace of 1.4 m/s the figure keeps up until the time factor pushes the
+  // journey past a walk, and from there the step must FOLLOW the journey.
+  check('below factor 3.4/1.4 the walk is still the bound',
+    catchUpStep(10, 1.4 * 2, 1, WALK), 3.4);
+  check('above it the journey pace is', catchUpStep(10, 1.4 * 3, 1, WALK), 4.2);
 
   console.log('\nshouldSnap — adopt the server number only past 2 metres');
   check('the threshold is two metres', TRAVEL_SNAP_M, 2);
