@@ -644,7 +644,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     """
     import uuid
     from app.models.world import (
-        _load_world_data, _save_world_data, get_gallery_dir,
+        GROUND_ROOM_ID, _load_world_data, _save_world_data, get_gallery_dir,
     )
 
     try:
@@ -668,7 +668,12 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     room_id_map: Dict[str, str] = {}
     for room in rooms:
         old_id = room.get("id") or ""
-        new_id = uuid.uuid4().hex[:8]
+        # The ground room's id is RESERVED, not authored — every location has
+        # exactly this one and the code addresses it by the constant. Renaming
+        # it would leave the import with a nameless ordinary room and NO
+        # ground. It maps to itself, which makes the model3d remap a no-op for
+        # its files as well.
+        new_id = old_id if old_id == GROUND_ROOM_ID else uuid.uuid4().hex[:8]
         room_id_map[old_id] = new_id
         room["id"] = new_id
         # Rooms can carry prompt_changed flag; re-trigger generation on import.
@@ -779,13 +784,16 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # prop is never overwritten (other locations place the same id), a missing
     # one is installed, and a placement whose prop is neither is reported.
     from app.core.props import _prop_dir, safe_prop_id
+    # An id the prop store would refuse is NOT a dependency this ZIP satisfies:
+    # it is filtered out BEFORE the props_missing subtraction below, so a
+    # bundled-but-invalid id is reported as missing instead of counting as
+    # delivered.
     bundled = sorted({m.split("/", 2)[1] for m in zf.namelist()
-                      if m.startswith("props/") and m.count("/") >= 2})
+                      if m.startswith("props/") and m.count("/") >= 2
+                      and safe_prop_id(m.split("/", 2)[1])})
     props_imported: List[str] = []
     props_existing: List[str] = []
     for pid in bundled:
-        if not safe_prop_id(pid):
-            continue
         dest = _prop_dir(pid)
         if dest is not None and dest.is_dir():
             props_existing.append(pid)          # never overwrite an existing prop
