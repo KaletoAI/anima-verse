@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
+import { downloadBlob } from '../lib/download'
 import { useToast } from '../lib/Toast'
 
 export interface ExportOption {
@@ -46,14 +47,7 @@ export function ExportButton({
         const body = await res.json().catch(() => ({}))
         throw new Error(body.detail || `HTTP ${res.status}`)
       }
-      const blob = await res.blob()
-      const dl = document.createElement('a')
-      dl.href = URL.createObjectURL(blob)
-      dl.download = filename
-      document.body.appendChild(dl)
-      dl.click()
-      dl.remove()
-      URL.revokeObjectURL(dl.href)
+      downloadBlob(await res.blob(), filename)
       toast(t('Exported'))
     } catch (e) {
       toast(t('Export failed') + ': ' + (e as Error).message, 'error')

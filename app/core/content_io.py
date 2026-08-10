@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import zipfile
 import zlib
@@ -1258,6 +1259,121 @@ def import_bundle_from_zip(
 
 
 # ---------------------------------------------------------------------------
+# Collections (ONE ZIP holding N ordinary packs)
+# ---------------------------------------------------------------------------
+
+def export_zip_for(pack_type: str, entity_id: str) -> bytes:
+    """The ONE export dispatcher: pack type + entity id -> pack ZIP bytes.
+
+    Everything that turns an entity of the active world into a distributable
+    pack goes through here — the marketplace publish route, the collection
+    builder below. ``states`` ignores ``entity_id``: there is exactly one
+    world-level block.
+    """
+    if pack_type == "character":
+        # Local import: character_io reaches back into this module, so a
+        # top-level import would close the cycle.
+        from app.core.character_io import export_character_to_zip
+        return export_character_to_zip(entity_id)
+    if pack_type == "item":
+        return export_item_to_zip(entity_id)
+    if pack_type == "rule":
+        return export_rule_to_zip(entity_id)
+    if pack_type == "location":
+        return export_location_to_zip(entity_id)
+    if pack_type == "prop":
+        return export_prop_to_zip(entity_id)
+    if pack_type == "states":
+        return export_states_to_zip()
+    raise ValueError(f"publish not supported for pack type {pack_type!r}")
+
+
+def _pack_slug(text: str) -> str:
+    """Filename-safe lowercase slug; empty input yields ``"pack"``."""
+    base = re.sub(r"[^a-zA-Z0-9._-]+", "-", (text or "").strip()).strip("-_.").lower()
+    return base or "pack"
+
+
+def _pack_display_name(manifest: Dict[str, Any], pack_type: str, entity_id: str) -> str:
+    """Human-readable name of a sub-pack, taken from its OWN manifest.
+
+    The name in the collection index is what the marketplace and the import
+    dialog show, so it must be the pack's real name — not whatever id the
+    caller happened to pass in.
+    """
+    for key in ("character_name", "location_name", "prop_name", "name"):
+        value = (manifest.get(key) or "").strip()
+        if value:
+            return value
+    return entity_id.strip() or pack_type
+
+
+def export_collection_to_zip(name: str, entries: List[Dict[str, str]]) -> bytes:
+    """Bundle N entities into ONE collection pack.
+
+    ``entries`` is ``[{"type": ..., "id": ...}]``. Each entry is exported
+    through :func:`export_zip_for` and stored as ``packs/<slug>.zip``; the
+    slug is ``<type>-<name>`` and a repeated slug is numbered (``-2``, ``-3``)
+    instead of overwriting its predecessor.
+
+    The manifest is the format the installer already consumes
+    (``content_packs._install_collection``, ``scripts/make_collection_pack.py``)::
+
+        {"version": 1, "type": "collection", "name": ...,
+         "contents": [{"type", "name", "file"}, ...]}
+
+    A failing sub-export aborts the whole thing: a collection that silently
+    misses what the user picked is worse than no download at all.
+    """
+    if not entries:
+        raise ValueError("collection needs at least one entry")
+
+    contents: List[Dict[str, str]] = []
+    payload: List[Tuple[str, bytes]] = []
+    used: Set[str] = set()
+
+    for entry in entries:
+        pack_type = (entry.get("type") or "").strip()
+        entity_id = (entry.get("id") or "").strip()
+        if pack_type == "collection":
+            raise ValueError("a collection cannot contain another collection")
+        blob = export_zip_for(pack_type, entity_id)
+        try:
+            with zipfile.ZipFile(io.BytesIO(blob)) as sub:
+                sub_manifest = json.loads(sub.read("manifest.json"))
+        except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as e:
+            raise ValueError(f"{pack_type} {entity_id!r} produced an unreadable pack: {e}")
+        label = _pack_display_name(sub_manifest, pack_type, entity_id)
+
+        slug = f"{_pack_slug(pack_type)}-{_pack_slug(label)}"
+        candidate, n = slug, 1
+        while f"packs/{candidate}.zip" in used:
+            n += 1
+            candidate = f"{slug}-{n}"
+        arcname = f"packs/{candidate}.zip"
+        used.add(arcname)
+
+        contents.append({"type": pack_type, "name": label, "file": arcname})
+        payload.append((arcname, blob))
+
+    manifest = {
+        "version": MANIFEST_VERSION,
+        "type": "collection",
+        "name": (name or "").strip() or "Collection",
+        "contents": contents,
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for arcname, blob in payload:
+            # The inner packs are already deflated — storing them again only
+            # costs CPU.
+            zf.writestr(arcname, blob, compress_type=zipfile.ZIP_STORED)
+    logger.info("Collection export: %s (%d packs)", manifest["name"], len(contents))
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Generic import preview (cross-type element listing + clash flags)
 # ---------------------------------------------------------------------------
 
@@ -1352,6 +1468,18 @@ def preview_import_zip(content: bytes) -> Dict[str, Any]:
             elements.append({"kind": "prop", "id": pid,
                              "name": manifest.get("prop_name") or pid,
                              "exists": bool(d is not None and d.is_dir())})
+        elif mtype == "collection":
+            # A collection lists its SUB-PACKS. The element id is the
+            # ZIP-internal file path — that is what the install dispatch
+            # filters the selection on. `exists` stays False: what a sub-pack
+            # will do is the sub-importer's business, and a collection must
+            # not claim to know it up front.
+            for entry in (manifest.get("contents") or []):
+                if isinstance(entry, dict):
+                    elements.append({"kind": entry.get("type") or "?",
+                                     "id": entry.get("file") or "",
+                                     "name": entry.get("name") or entry.get("file") or "?",
+                                     "exists": False})
         elif mtype == "map_layout":
             elements.append({"kind": "map_layout", "id": "map_layout",
                              "name": f"Map layout ({manifest.get('count', '?')} positions)",

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { CollectionBuilder } from './CollectionBuilder'
 
 /**
  * Marketplace — browse an online catalog of content packs and install them
@@ -86,6 +87,7 @@ export function MarketplaceTab() {
   const [filterType, setFilterType] = useState<string>('')
   const [filterTag, setFilterTag] = useState<string>('')
   const [search, setSearch] = useState<string>('')
+  const [building, setBuilding] = useState(false)
 
   const load = useCallback(
     async (force: boolean, id?: string) => {
@@ -183,6 +185,9 @@ export function MarketplaceTab() {
 
   if (loading && !catalog) return <div className="ga-loading">{t('Loading…')}</div>
 
+  // Building a collection is a purely local export — it must stay reachable
+  // even when no catalog is configured, which is why the button is repeated
+  // in this placeholder.
   if (catalogs.length === 0) {
     return (
       <div className="ga-placeholder" style={{ padding: 24 }}>
@@ -194,6 +199,10 @@ export function MarketplaceTab() {
           <code>content_marketplace.catalogs</code>{' '}
           {t('in admin settings.')}
         </p>
+        <button className="ga-btn ga-btn-sm" onClick={() => setBuilding(true)}>
+          {t('Build collection')}
+        </button>
+        {building ? <CollectionBuilder onClose={() => setBuilding(false)} /> : null}
       </div>
     )
   }
@@ -204,6 +213,13 @@ export function MarketplaceTab() {
         <div className="ga-twocol-header">
           <h3>{t('Marketplace')}</h3>
           <div className="ga-twocol-header-actions">
+            <button
+              className="ga-btn ga-btn-sm"
+              onClick={() => setBuilding(true)}
+              title={t('Pack entities of this world into one collection ZIP')}
+            >
+              ⧉ {t('Build collection')}
+            </button>
             <button
               className="ga-btn ga-btn-sm"
               onClick={() => load(true)}
@@ -439,6 +455,7 @@ export function MarketplaceTab() {
           </div>
         )}
       </section>
+      {building ? <CollectionBuilder onClose={() => setBuilding(false)} /> : null}
     </div>
   )
 }

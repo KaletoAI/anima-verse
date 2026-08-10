@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse, quote
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
+                     Request, Response, UploadFile)
 
 from app.core import config
 from app.core.auth_dependency import require_admin
@@ -443,7 +444,7 @@ def _dispatch_install(pack_type: str, content: bytes) -> Dict[str, Any]:
 
 
 def _install_collection(content: bytes) -> Dict[str, Any]:
-    """Iterate the sub-packs in a collection ZIP and install each one.
+    """Install every sub-pack of a collection ZIP (marketplace path).
 
     Collection layout:
         manifest.json    {version:1, type:"collection", name, contents:[
@@ -451,70 +452,10 @@ def _install_collection(content: bytes) -> Dict[str, Any]:
                          ]}
         packs/<file>.zip — each is a regular pack of its declared type.
 
-    Sub-pack failures don't abort the rest — we collect a per-item result.
+    The whole collection is one pack here, so there is no selection —
+    otherwise identical to the generic import path below.
     """
-    import zipfile as _zf
-    try:
-        zf = _zf.ZipFile(io.BytesIO(content))
-    except _zf.BadZipFile as e:
-        raise ValueError(f"invalid collection ZIP: {e}")
-    try:
-        manifest_raw = zf.read("manifest.json")
-    except KeyError:
-        raise ValueError("collection ZIP has no manifest.json")
-    try:
-        manifest = json.loads(manifest_raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"collection manifest invalid JSON: {e}")
-    if manifest.get("type") != "collection":
-        raise ValueError(f"manifest type mismatch: got {manifest.get('type')!r}, expected 'collection'")
-    sub_packs = manifest.get("contents") or []
-    if not isinstance(sub_packs, list) or not sub_packs:
-        raise ValueError("collection has no contents")
-
-    results: List[Dict[str, Any]] = []
-    ok_count = 0
-    fail_count = 0
-    for entry in sub_packs:
-        if not isinstance(entry, dict):
-            continue
-        sub_type = (entry.get("type") or "").strip()
-        sub_name = entry.get("name") or entry.get("file") or sub_type
-        sub_file = (entry.get("file") or "").strip()
-        if not sub_file or sub_type not in SUPPORTED_TYPES or sub_type == "collection":
-            results.append({"name": sub_name, "type": sub_type, "status": "skipped",
-                            "error": "invalid type or missing file"})
-            fail_count += 1
-            continue
-        try:
-            sub_bytes = zf.read(sub_file)
-        except KeyError:
-            results.append({"name": sub_name, "type": sub_type, "status": "skipped",
-                            "error": f"file {sub_file!r} not in ZIP"})
-            fail_count += 1
-            continue
-        try:
-            sub_result = _dispatch_install(sub_type, sub_bytes)
-            results.append({"name": sub_name, "type": sub_type, "status": "success",
-                            "result": sub_result})
-            ok_count += 1
-        except FileExistsError as e:
-            results.append({"name": sub_name, "type": sub_type, "status": "exists",
-                            "error": str(e)})
-            fail_count += 1
-        except (ValueError, RuntimeError) as e:
-            results.append({"name": sub_name, "type": sub_type, "status": "failed",
-                            "error": str(e)})
-            fail_count += 1
-    zf.close()
-    logger.info("collection install: %d ok, %d failed/skipped", ok_count, fail_count)
-    return {
-        "status": "success" if ok_count > 0 else "failed",
-        "collection_name": manifest.get("name") or "(unnamed)",
-        "installed": ok_count,
-        "failed": fail_count,
-        "results": results,
-    }
+    return _install_collection_selected(content, selected_ids=None)
 
 
 @router.post("/install")
@@ -669,7 +610,99 @@ def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool,
     if mtype == "map_layout":
         from app.core.content_io import import_map_layout_from_zip
         return import_map_layout_from_zip(content)
+    if mtype == "collection":
+        return _install_collection_selected(content, selected_ids=selected_ids)
     raise ValueError(f"unsupported export type: {mtype!r}")
+
+
+def _install_collection_selected(content: bytes, *, selected_ids) -> Dict[str, Any]:
+    """Install the picked sub-packs of a collection ZIP.
+
+    `selected_ids` holds the ZIP-internal file paths the preview listed
+    (`contents[].file`); an empty/None selection means ALL of them. A failing
+    entry never aborts the run — every sub-pack gets its own result row, in
+    the same vocabulary `_install_collection` uses:
+
+        success  installed
+        exists   already there, nothing changed (some importers report this
+                 as a status instead of raising — a prop keeps its id, so it
+                 is never silently duplicated)
+        skipped  unusable entry (bad type, file not in the ZIP)
+        failed   the importer refused it
+    """
+    import zipfile as _zf
+    try:
+        zf = _zf.ZipFile(io.BytesIO(content))
+    except _zf.BadZipFile as e:
+        raise ValueError(f"invalid collection ZIP: {e}")
+    try:
+        try:
+            manifest = json.loads(zf.read("manifest.json"))
+        except KeyError:
+            raise ValueError("collection ZIP has no manifest.json")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"collection manifest invalid JSON: {e}")
+        if manifest.get("type") != "collection":
+            raise ValueError(f"manifest type mismatch: got {manifest.get('type')!r}, "
+                             "expected 'collection'")
+        entries = manifest.get("contents") or []
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("collection has no contents")
+
+        wanted = {s for s in (selected_ids or []) if s}
+        results: List[Dict[str, Any]] = []
+        ok_count = 0
+        fail_count = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            sub_type = (entry.get("type") or "").strip()
+            sub_file = (entry.get("file") or "").strip()
+            sub_name = entry.get("name") or sub_file or sub_type
+            if wanted and sub_file not in wanted:
+                continue
+            if not sub_file or sub_type not in SUPPORTED_TYPES or sub_type == "collection":
+                results.append({"name": sub_name, "type": sub_type, "status": "skipped",
+                                "error": "invalid type or missing file"})
+                fail_count += 1
+                continue
+            try:
+                sub_bytes = zf.read(sub_file)
+            except KeyError:
+                results.append({"name": sub_name, "type": sub_type, "status": "skipped",
+                                "error": f"file {sub_file!r} not in ZIP"})
+                fail_count += 1
+                continue
+            try:
+                sub_result = _dispatch_install(sub_type, sub_bytes)
+            except FileExistsError as e:
+                results.append({"name": sub_name, "type": sub_type, "status": "exists",
+                                "error": str(e)})
+                fail_count += 1
+                continue
+            except (ValueError, RuntimeError) as e:
+                results.append({"name": sub_name, "type": sub_type, "status": "failed",
+                                "error": str(e)})
+                fail_count += 1
+                continue
+            status = "exists" if sub_result.get("status") == "exists" else "success"
+            results.append({"name": sub_name, "type": sub_type, "status": status,
+                            "result": sub_result})
+            if status == "success":
+                ok_count += 1
+            else:
+                fail_count += 1
+    finally:
+        zf.close()
+
+    logger.info("collection import: %d ok, %d failed/skipped", ok_count, fail_count)
+    return {
+        "status": "success" if ok_count > 0 else "failed",
+        "collection_name": manifest.get("name") or "(unnamed)",
+        "installed": ok_count,
+        "failed": fail_count,
+        "results": results,
+    }
 
 
 @router.post("/preview")
@@ -772,6 +805,54 @@ async def character_intro_suggest(
                 "warning": f"Intro suggestion unavailable ({e}) — enter one "
                            f"manually or press Regenerate later."}
     return {"character": char_name, "intro": intro}
+
+
+@router.post("/collection/export")
+async def export_collection_route(request: Request) -> Response:
+    """Build ONE collection ZIP out of the picked entities and stream it back.
+
+    Body: `{"name": "...", "entries": [{"type": ..., "id": ...}, ...]}`.
+    Entries are exported through the same dispatcher the publish route uses;
+    executable packages and nested collections are not exportable content.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    name = (body.get("name") or "").strip()
+    raw_entries = body.get("entries")
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    if not isinstance(raw_entries, list) or not raw_entries:
+        raise HTTPException(status_code=400, detail="entries required")
+
+    exportable = SUPPORTED_TYPES - {"skill_package", "collection"}
+    entries: List[Dict[str, str]] = []
+    for raw in raw_entries:
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="every entry must be an object")
+        pack_type = (raw.get("type") or "").strip()
+        entity_id = (raw.get("id") or "").strip()
+        if pack_type not in exportable:
+            raise HTTPException(status_code=400,
+                                detail=f"unsupported pack type: {pack_type!r}")
+        if pack_type != "states" and not entity_id:
+            raise HTTPException(status_code=400,
+                                detail=f"entry of type {pack_type!r} has no id")
+        entries.append({"type": pack_type, "id": entity_id})
+
+    from app.core.content_io import export_collection_to_zip
+    try:
+        blob = export_collection_to_zip(name, entries)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    filename = f"collection_{_slug_for_pack(name, 'collection')}.zip"
+    logger.info("collection export: %s (%d entries, %d bytes)", name, len(entries), len(blob))
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/types")
@@ -902,25 +983,10 @@ def _ensure_clone(catalog: Dict[str, Any]) -> Tuple[Path, str, str]:
 # ── Export helpers (mirror local UI export, but in-memory) ────────────────
 
 def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
-    if pack_type == "character":
-        from app.core.character_io import export_character_to_zip
-        return export_character_to_zip(entity_id)
-    if pack_type == "item":
-        from app.core.content_io import export_item_to_zip
-        return export_item_to_zip(entity_id)
-    if pack_type == "rule":
-        from app.core.content_io import export_rule_to_zip
-        return export_rule_to_zip(entity_id)
-    if pack_type == "location":
-        from app.core.content_io import export_location_to_zip
-        return export_location_to_zip(entity_id)
-    if pack_type == "prop":
-        from app.core.content_io import export_prop_to_zip
-        return export_prop_to_zip(entity_id)
-    if pack_type == "states":
-        from app.core.content_io import export_states_to_zip
-        return export_states_to_zip()
-    raise ValueError(f"publish not supported for pack type {pack_type!r}")
+    """Delegation only — the dispatcher itself lives in `content_io` so the
+    collection builder and this route cannot drift apart."""
+    from app.core.content_io import export_zip_for
+    return export_zip_for(pack_type, entity_id)
 
 
 def _slug_for_pack(name: str, fallback: str) -> str:

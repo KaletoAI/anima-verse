@@ -55,9 +55,34 @@ export interface ItemRef {
   id: string
   name?: string
   category?: string
+  /** Shared-library item — ships with the game repo, so it is never exported. */
+  _shared?: boolean
 }
 
 export async function loadItems(): Promise<ItemRef[]> {
   const data = await apiGet<{ items?: ItemRef[] }>('/inventory/items?include_shared=1')
   return data.items || []
+}
+
+export interface PropRef {
+  id: string
+  name?: string
+  category?: string
+}
+
+export async function loadProps(): Promise<PropRef[]> {
+  const data = await apiGet<{ props?: PropRef[] }>('/world/props')
+  return data.props || []
+}
+
+export interface RuleRef {
+  id?: string
+  name?: string
+  /** `shared` marks a baseline rule from the repo — not exportable. */
+  _origin?: string
+}
+
+export async function loadRules(): Promise<RuleRef[]> {
+  const data = await apiGet<{ rules?: RuleRef[] }>('/rules')
+  return data.rules || []
 }
