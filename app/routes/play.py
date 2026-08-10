@@ -698,9 +698,27 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             refuse(409, "too_far",
                    t("You cannot get there that quickly.", lang))
 
-    from app.core.terrain_query import passability_at
+    from app.core.terrain_query import kind_at, passability_at
     if not passability_at(x, z)[0]:
-        refuse(409, "impassable", t("You cannot walk there.", lang))
+        # NAME THE GROUND. "You cannot walk there." was true and useless: the
+        # player sees a spot that looks like every other one and gets no way to
+        # tell a painted rock from a rule, a party lock or a missing opening —
+        # and an avatar embodied ON such a spot (E4 acceptance finding B1) then
+        # collects the same sentence for every direction. The display name is
+        # the terrain catalog's (`effective_catalog`), the kind slug is the
+        # fallback for an area whose type was deleted.
+        from app.core.terrain_types import effective_catalog
+        kind = kind_at(x, z)
+        entry = effective_catalog().get(kind) or {}
+        ground = str(entry.get("name") or "").strip() or kind
+        # …and it LOGS like every other refusal reason. This was the only one
+        # without a line, which is exactly why the finding needed the user to
+        # explain the world to us.
+        logger.info("pos refused (impassable): %s at %.2f,%.2f on %s",
+                    avatar, x, z, kind)
+        refuse(409, "impassable",
+               t("You cannot walk there — that is {ground}.", lang)
+               .format(ground=ground))
 
     from app.core.world_geometry import location_at_point
     from app.models.world import get_location_by_id, list_locations

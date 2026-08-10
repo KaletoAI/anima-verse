@@ -1637,6 +1637,7 @@
     "You are now:": "Du bist jetzt:",
     "You are part of a party.": "Du bist Teil einer Party.",
     "You cannot travel there right now.": "Dorthin kannst du gerade nicht reisen.",
+    "You cannot walk there — that is {ground}.": "Da kannst du nicht laufen — das ist {ground}.",
     "You carry spell items, but no model is assigned to spell detection — the words were spoken, no spell was cast.": "Du trägst Zauber-Gegenstände, aber der Zauber-Erkennung ist kein Modell zugewiesen — die Worte wurden gesprochen, gewirkt wurde nichts.",
     "You do not know the way there.": "Du kennst den Weg dorthin nicht.",
     "You follow": "Du folgst",
