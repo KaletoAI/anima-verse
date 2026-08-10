@@ -34,6 +34,7 @@ import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
 import { entryOfferNear, freeBoundaryOf, type EntryTile } from './game/enterLocation';
+import { figureTransition, placementOf, type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
@@ -1376,9 +1377,15 @@ async function startApp(username: string, role: string) {
    *  two payloads describe different worlds. */
   let viewRev = 0;
   const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
-  /** aktuell DARGESTELLTER Raum je Figur (null = Außenansicht) — erkennt
-   *  Betreten/Verlassen/Wechsel für das Exit-Routing */
-  const shownRoom = new Map<string, string | null>();
+  /** How each figure was placed LAST TIME: the room it was drawn in (null = on
+   *  the ground) and whether its location's interior was revealed then. Both
+   *  halves are needed to tell a real room change from a mere visibility
+   *  change — see `game/placement.figureTransition` (finding B5). */
+  const shownPlacement = new Map<string, ShownPlacement>();
+  /** The drawn room of a figure — `null` while it stands outside, and also
+   *  while nothing has been drawn for it yet. */
+  const shownRoomOf = (name: string): string | null =>
+    shownPlacement.get(name)?.room ?? null;
   /** Figures the placement pass left INVISIBLE (a storey that is not shown, a
    *  room whose interior is closed). Rewritten by every `computeNpcStates`
    *  run; read by the talk target, because nobody can be addressed through a
@@ -1589,10 +1596,24 @@ async function startApp(username: string, role: string) {
       const travelling = travellerState(c, mapStamp);
       if (travelling) {
         states.push(travelling);
-        shownRoom.set(c.name, null);
+        shownPlacement.set(c.name, { room: null, interiorShown: false });
         continue;
       }
-      if (!tiles.has(c.location_id)) continue;
+      // WILDERNESS IS A PLACE (finding B2). Standing outside every footprint
+      // is legal since E1, and a character there has no tile to be grouped
+      // under — the old `continue` dropped it from the list and `npcs.update`
+      // removed its figure, the player's own included. `pos` is the whole
+      // answer then, on the open ground plane like a traveller's.
+      const placement = placementOf(tiles.has(c.location_id), c.pos);
+      if (placement.kind === 'free') {
+        states.push({
+          char: c,
+          pos: new THREE.Vector3(placement.pos.x, GROUND_Y, placement.pos.z),
+        });
+        shownPlacement.set(c.name, { room: null, interiorShown: false });
+        continue;
+      }
+      if (placement.kind === 'offmap') continue;
       (byLoc.get(c.location_id) ?? byLoc.set(c.location_id, []).get(c.location_id)!).push(c);
     }
     for (const [locId, chars] of byLoc) {
@@ -1613,9 +1634,13 @@ async function startApp(username: string, role: string) {
         let lean: { tilt: number; roll: number } | undefined;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
-        // dauerhaft sichtbare Räume gelten in jeder Zoomstufe
-        const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(room))
-          ? room : null;
+        // Is the inside of this location REVEALED for this character right
+        // now? Permanently visible rooms count at every zoom level. This is a
+        // pure VIEW state — it says nothing about where the character is, only
+        // about whether the client can draw it there (finding B5).
+        const interiorShown = tile.fade > 0.5
+          || (!!room && tile.alwaysVisibleRooms.has(room));
+        const inRoom = roomCenter && room && interiorShown ? room : null;
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
@@ -1674,28 +1699,40 @@ async function startApp(username: string, role: string) {
           // stellen statt bei y=0 darin zu versinken (Befund Kira).
           pos.setY(tileGroundY(tile, pos));
         }
-        // Door routing: entering, leaving or changing the shown room walks
-        // through the DOOR, not through a wall. Which door is a payload
-        // question, not a heuristic (plan-betreten-und-tueren.md § 4.1): two
-        // rooms that share a wall have ONE doorway naming both, and that is
-        // the whole route. Otherwise the figure leaves through its room's own
-        // door and enters through the other's — which is also the case for
-        // room ↔ ground, where the ground has no doorway of its own and the
-        // room's OUTSIDE door is the way. A storey change adds the lift
-        // (AV3D-12); rooms joined by a doorway are on one storey by
-        // construction, so only the two-door route can need it.
-        const prevShown = shownRoom.get(c.name) ?? null;
-        if (inRoom !== prevShown) {
+        // Door routing: a real room change walks through the DOOR, not through
+        // a wall. Which door is a payload question, not a heuristic
+        // (plan-betreten-und-tueren.md § 4.1): two rooms that share a wall have
+        // ONE doorway naming both, and that is the whole route. Otherwise the
+        // figure leaves through its room's own door and enters through the
+        // other's — which is also the case for room ↔ ground, where the ground
+        // has no doorway of its own and the room's OUTSIDE door is the way. A
+        // storey change adds the lift (AV3D-12); rooms joined by a doorway are
+        // on one storey by construction, so only the two-door route can need it.
+        //
+        // A VISIBILITY change is not a room change (finding B5): opening or
+        // closing the detail view moves nobody, it only decides whether the
+        // client can draw a character in the room it has been standing in all
+        // along. Routed like a room change it walked the figure in from the
+        // outdoor huddle spot through the front door. `figureTransition` keeps
+        // the two apart; a snap places the figure without a walk.
+        const prevShown = shownPlacement.get(c.name);
+        const nextShown: ShownPlacement = { room: inRoom, interiorShown };
+        const transition = figureTransition(prevShown, nextShown);
+        if (transition !== 'stay') shownPlacement.set(c.name, nextShown);
+        if (transition === 'route') {
           const scene = scenes.get(tile.loc.id);
           // Asked in the TILE frame (no origin): `doorStop` turns the marker
           // into the world with the footprint transform. Handing the centre in
           // here as well would apply the offset TWICE — and on a turned
           // location it would also turn an already-absolute point, which is
           // how a doorway ends up on the far side of the map.
-          const from = roomIdOf(tile, prevShown);
+          // `route` implies a previous placement (`figureTransition`), so the
+          // room it was drawn in is the start of the walk.
+          const prevRoom = prevShown?.room ?? null;
+          const from = roomIdOf(tile, prevRoom);
           const to = roomIdOf(tile, inRoom);
           const levelOf = (r: string | null) => (r ? tile.roomLevels.get(r) ?? 0 : 0);
-          const lf = levelOf(prevShown), lt = levelOf(inRoom);
+          const lf = levelOf(prevRoom), lt = levelOf(inRoom);
           const stops: THREE.Vector3[] = [];
           const shared = from && to ? doorwayBetween(scene, from, to) : null;
           if (shared) {
@@ -1713,7 +1750,6 @@ async function startApp(username: string, role: string) {
             if (enter) stops.push(doorStop(tile, enter));            // neuen Raum betreten
           }
           if (stops.length) via = stops;
-          shownRoom.set(c.name, inRoom);
         }
         // A destination without a running journey (the target survived, the
         // journey did not): no line — that belongs to the ROUTE now — but the
@@ -1732,10 +1768,10 @@ async function startApp(username: string, role: string) {
         // `else` branch above lines it up in FRONT of the building — the whole
         // tavern standing on the doorstep, which is the acceptance finding.
         // So it simply is not drawn until the interior opens; then the room
-        // placement and the door routing take over unchanged (`inRoom` flips,
-        // `shownRoom` sees the transition and walks the figure in through the
-        // door). Untouched: characters without a room, always-visible rooms and
-        // travellers (they returned above).
+        // placement takes over unchanged (`inRoom` flips and the figure is
+        // SNAPPED onto its room spot — the interior opening is a visibility
+        // change, not a walk). Untouched: characters without a room,
+        // always-visible rooms and travellers (they returned above).
         // THE AVATAR IS NOT AN EXCEPTION: it used to be exempt so it stayed
         // clickable (`characterAt` raycasts visible roots only, and the plaque
         // was the only way back into the mode) — which drew the player's own
@@ -1752,6 +1788,10 @@ async function startApp(username: string, role: string) {
           face,
           lean,
           hidden,
+          // A visibility change places the figure, it does not walk it
+          // (finding B5) — and the very first placement of a figure has
+          // nowhere to walk from either.
+          snap: transition === 'snap',
         });
       });
     }
@@ -1761,8 +1801,9 @@ async function startApp(username: string, role: string) {
   setInterval(() => {
     if (lastMap) npcs.update(computeNpcStates(lastMap));
     // Talk target (E3-T5): the same 1 Hz tick, and deliberately not a frame
-    // hook — walking up to someone is a second-scale event, and `shownRoom`
-    // is only rewritten here anyway. See the section further down.
+    // hook — walking up to someone is a second-scale event, and
+    // `shownPlacement` is only rewritten here anyway. See the section further
+    // down.
     updateTalkTarget();
     updateElevator();   // standing at the lift is a second-scale event too
     updateEnterOffer(); // …and so is standing at a location entry (Etappe 3)
@@ -3313,14 +3354,14 @@ async function startApp(username: string, role: string) {
   // (`game/proximity.ts`, checked in client3d/scripts/smoke_walk_math.mjs); everything
   // here is the lookup of its arguments.
   //
-  // Rooms come from `shownRoom`, NOT from `roomOf` — but only for the NPCs is
-  // that "the room the view DRAWS". For them the two genuinely differ: a room
-  // resolves only above the fade threshold, so `shownRoom` is null while the
-  // interior is closed, and the prompt cannot fire through a wall one is
-  // looking at.
+  // Rooms come from `shownPlacement`, NOT from `roomOf` — but only for the
+  // NPCs is that "the room the view DRAWS". For them the two genuinely differ:
+  // a room resolves only above the fade threshold, so the drawn room is null
+  // while the interior is closed, and the prompt cannot fire through a wall one
+  // is looking at.
   //
   // For the AVATAR it is still the server's view: its figure is player-driven,
-  // so `npcs.update` ignores every placement field for it, yet its `shownRoom`
+  // so `npcs.update` ignores every placement field for it, yet its placement
   // entry keeps being written from `roomOf` (the worldmap's `room_id`) in
   // `computeNpcStates`. Since T6 that is no longer a second source pulling the
   // other way: the room-walk hook DERIVES the server room from the drawn
@@ -3359,13 +3400,13 @@ async function startApp(username: string, role: string) {
         name: c.name,
         pos: { x: p.x, z: p.z },
         locId: c.location_id,
-        room: shownRoom.get(c.name) ?? null,
+        room: shownRoomOf(c.name),
         scale,
       });
     }
     const target = talkTargetNear(
       { name: avatarName, pos: { x: me.x, z: me.z }, locId: myLoc,
-        room: shownRoom.get(avatarName) ?? null },
+        room: shownRoomOf(avatarName) },
       candidates,
     );
     if (target !== state.talkTarget) setGameState({ talkTarget: target });

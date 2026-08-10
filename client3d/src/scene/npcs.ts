@@ -144,6 +144,12 @@ export interface NpcState {
   hidden?: boolean;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
+  /** Put the figure at `pos` instead of walking it there. Set for placements
+   *  that are not a MOVE at all: the detail view opening or closing (the
+   *  character stood in that room before and after — finding B5) and the first
+   *  placement of a figure. Ignored for the player-driven figure, whose
+   *  position belongs to `main.ts` either way. */
+  snap?: boolean;
   /** Running journey (§ A11) — the METRE polyline and the distance walked
    *  along it, built in `main.ts` from `travel.waypoints`/`progress_m`.
    *  Absent for anyone standing still AND for a traveller whose route is
@@ -479,6 +485,15 @@ export class NpcManager {
       if (!npc.route && !arrived && !npc.target.equals(st.pos)) {
         npc.waypoints = st.via?.length ? st.via.map((v) => v.clone()) : [];
       }
+      // A SNAP is not a move (finding B5): the placement changed because the
+      // view did, so the figure belongs at the new point immediately — walking
+      // it there would send it from the outdoor huddle spot in through the
+      // front door of a room it never left. Handled like the arrival above:
+      // waypoints dropped, position set.
+      if (st.snap && !arrived) {
+        npc.waypoints = [];
+        npc.root.position.copy(st.pos);
+      }
       npc.target.copy(st.pos);
       npc.face = st.face ?? null;
       npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
@@ -495,7 +510,13 @@ export class NpcManager {
       this.updateTravelLine(npc, npc.route);
     }
     for (const [name, npc] of this.npcs) {
-      if (!seen.has(name)) {
+      // THE PLAYER'S OWN FIGURE IS NEVER REMOVED (finding B2). Its position
+      // belongs to the frame hook in main.ts, not to the worldmap, so a poll
+      // that does not mention it (a payload gap, a character list caught
+      // mid-change) must not take it off the map — the player would be left
+      // steering nothing, with no way to get the figure back short of leaving
+      // the mode. Every other figure follows the payload as before.
+      if (!seen.has(name) && name !== this.playerDriven) {
         this.group.remove(npc.root);
         this.dropTravelLine(npc);
         npc.label.element.remove();

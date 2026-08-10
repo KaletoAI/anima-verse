@@ -451,7 +451,7 @@ const SRC_DIR = join(ROOT, 'client3d/src/game');
  *  DOM. */
 const MODULES = ['walk', 'clickmove', 'proximity', 'roomwalk', 'elevator', 'collide',
   'doors', 'prefs', 'boot', 'soundtrack', 'voiceover', 'enterLocation', 'perfstats',
-  'bubble', 'fog', 'minimap', 'locks'];
+  'bubble', 'fog', 'minimap', 'locks', 'placement'];
 
 /**
  * Both files are TypeScript and deliberately free of any runtime dependency
@@ -525,7 +525,7 @@ const SQRT_HALF = Math.SQRT1_2;   // 0.7071067811865476
 async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
-    bubble, fog, minimap, locks } = await loadGameModules();
+    bubble, fog, minimap, locks, placement } = await loadGameModules();
   const { walkDir, slideBlocked } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -549,6 +549,7 @@ async function main() {
     FOG_OVERHANG_M, FOG_FEATHER_M, FOG_RAGGED_M, FOG_TEX_METRES } = fog;
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     MINIMAP_PREF_KEY } = minimap;
+  const { placementOf, figureTransition } = placement;
   // The defaults are spelled out here BY HAND, never read from the module —
   // that is the whole point of pinning them (see the header).
   const DEFAULTS = {
@@ -2814,6 +2815,110 @@ async function main() {
   //   must keep working across versions of this client
   check('the minimap pref key is the documented one',
     MINIMAP_PREF_KEY, 'av3d.minimap');
+
+  /**
+   * --- WHAT A SEEDED SLICE WOULD DRAW (acceptance finding B6, "shows
+   * nothing") -------------------------------------------------------------
+   *
+   * The finding could not say whether the map was BROKEN or merely covered, so
+   * the picture of a small painted world is derived here by hand — pixel by
+   * pixel, out of the same two functions `Minimap.tsx` strokes with.
+   *
+   * The world: two placed locations, (0, 0) and (160, 60), and a 40 x 40 m
+   * rock square painted around the first one. `world_bounds` over both
+   * footprints (10 m edges, so ±5 m) is x ∈ [-5, 165], z ∈ [-5, 65].
+   *
+   *   w = 170, d = 70  ->  scale = min(160/170, 160/70) = 0.9411764705882353
+   *   cx = 80, cz = 30 ->  offX = 80 - 80·scale = 4.705882352941174
+   *                        offY = 80 - 30·scale = 51.76470588235294
+   *
+   * Every number below follows from those three.
+   */
+  console.log('minimap — what a two-location painted world actually draws');
+  const B6_BOUNDS = { min_x: -5, min_z: -5, max_x: 165, max_z: 65 };
+  const b6 = minimapLayout(B6_BOUNDS, 160);
+  check('the frame of the seeded world', b6,
+    { scale: 160 / 170, offX: 80 - 80 * (160 / 170), offY: 80 - 30 * (160 / 170) }, 1e-12);
+  //   the two location dots (radius 2.5 px each)
+  check('the first place lands well inside the canvas',
+    worldToPx({ x: 0, z: 0 }, b6), { px: 4.705882352941174, py: 51.76470588235294 }, 1e-9);
+  check('the second one 150.6 px to the right of it',
+    worldToPx({ x: 160, z: 60 }, b6), { px: 155.29411764705884, py: 108.23529411764706 }, 1e-9);
+  //   the painted square: corners (-20,-20) and (20,20)
+  const b6a = worldToPx({ x: -20, z: -20 }, b6);
+  const b6b = worldToPx({ x: 20, z: 20 }, b6);
+  check('the painted square starts off the left edge',
+    b6a, { px: -14.117647058823529, py: 32.94117647058823 }, 1e-9);
+  check('…and ends 37.6 px further in both axes',
+    b6b, { px: 23.529411764705884, py: 70.58823529411765 }, 1e-9);
+  check('so the fill covers 37.6 px of the 160 px canvas',
+    b6b.px - b6a.px, 40 * (160 / 170), 1e-12);
+  // VERDICT: two dots 150 px apart and a 37.6 x 37.6 px filled square — the
+  // projection is sound and a painted world is NOT drawn empty. What the
+  // finding saw is the overlap: `.info-panel` (z 10) and the minimap (inside
+  // #hud, z 20) share the top-right corner, so the map's own dark backdrop sat
+  // on the panel and each hid the other's content. The CSS dodge in hud.css
+  // separates them; nothing in these functions needed fixing.
+
+  /**
+   * --- PLACEMENT: where a figure is drawn, and whether it walks there -------
+   * (`client3d/src/game/placement.ts`, acceptance findings B2 + B5)
+   *
+   * `placementOf(hasTile, pos)`: a tile places the figure; without one the
+   * free metre point does; without either there is nothing to draw. THE POINT
+   * OF IT is the wilderness — `location_id: ""` has been a legal state since
+   * E1, and the figure list used to drop those characters, which took the
+   * player's own figure off the map mid-walk.
+   */
+  console.log('\nplacement — tile, free point or nothing at all');
+  check('a character on a built tile is placed by the tile',
+    placementOf(true, { x: 12, z: 34 }), { kind: 'tile' });
+  check('…even without a point of its own',
+    placementOf(true, null), { kind: 'tile' });
+  check('WILDERNESS: no tile but a point = a standing figure there',
+    placementOf(false, { x: 12.5, z: -3.25 }),
+    { kind: 'free', pos: { x: 12.5, z: -3.25 } });
+  check('the origin is a point like any other (0 is not "missing")',
+    placementOf(false, { x: 0, z: 0 }), { kind: 'free', pos: { x: 0, z: 0 } });
+  check('no tile and no point: nothing to draw',
+    placementOf(false, null), { kind: 'offmap' });
+  check('an absent point is the same answer',
+    placementOf(false, undefined), { kind: 'offmap' });
+  check('a non-finite coordinate is not a place',
+    placementOf(false, { x: NaN, z: 0 }), { kind: 'offmap' });
+  check('…nor is an infinite one',
+    placementOf(false, { x: 0, z: Infinity }), { kind: 'offmap' });
+
+  /**
+   * `figureTransition(prev, next)`: SNAP on a visibility change, ROUTE on a
+   * room change, STAY otherwise. The finding (B5) is the first line of the
+   * table: opening the detail view flipped the drawn room from null to the
+   * room the character had been standing in all along, and the door routing
+   * read that as "it just walked in" — from the outdoor huddle spot, through
+   * the front door, into the room it never left.
+   */
+  console.log('placement — snap on a view change, route on a room change');
+  const SHOWN = (room, interiorShown) => ({ room, interiorShown });
+  check('the FIRST placement of a figure never walks',
+    figureTransition(null, SHOWN('hall', true)), 'snap');
+  check('…and undefined is the same "nothing drawn yet"',
+    figureTransition(undefined, SHOWN(null, false)), 'snap');
+  check('VIEW OPENS: outside/closed -> in its room = snap, not a walk',
+    figureTransition(SHOWN(null, false), SHOWN('hall', true)), 'snap');
+  check('VIEW CLOSES: in its room -> the outdoor spot = snap as well',
+    figureTransition(SHOWN('hall', true), SHOWN(null, false)), 'snap');
+  check('a real room change inside the open view routes through the door',
+    figureTransition(SHOWN('hall', true), SHOWN('kitchen', true)), 'route');
+  check('room -> ground inside the open view routes too (the outside door)',
+    figureTransition(SHOWN('hall', true), SHOWN(null, true)), 'route');
+  check('…and ground -> room the same way back',
+    figureTransition(SHOWN(null, true), SHOWN('hall', true)), 'route');
+  check('nothing changed: whatever the figure is doing keeps running',
+    figureTransition(SHOWN('hall', true), SHOWN('hall', true)), 'stay');
+  check('standing outside a closed interior is just as quiet',
+    figureTransition(SHOWN(null, false), SHOWN(null, false)), 'stay');
+  check('a visibility change wins even when the room changes with it',
+    figureTransition(SHOWN('hall', false), SHOWN('kitchen', true)), 'snap');
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
