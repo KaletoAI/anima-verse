@@ -133,9 +133,10 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
     for loc in locations:
         loc_id = loc.get("id", "")
         loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
-        # Without an authored pass-through the location cannot be entered at
-        # all (decision 2026-08-04). The rule lives in ONE function; the
-        # editor only displays what it says.
+        # A HINT for the editor, not a reachability verdict: openings channel
+        # entry (with them, they are the only ways in — decision 2026-08-04),
+        # and WITHOUT any the boundary is free (E4 task 5). The rule lives in
+        # ONE function; the editor only displays what it says.
         loc["has_entrance"] = has_entrance(loc)
         # The ground outside, resolved (plan-grundflaeche.md § 5): '' means
         # the terrain names no library entry — the renderers keep their

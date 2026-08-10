@@ -1585,12 +1585,18 @@ def _rotate_scene(out: Dict[str, Any], quarters: int,
 
     Consequences the payload has to carry along:
 
-    * ``models[].yaw_deg`` is a MODEL yaw around +y; a scene turned clockwise
-      turns every model with it → ``(yaw + 90 · quarters) % 360``.
+    * ``models[].yaw_deg`` is a MODEL yaw around +y, rendered as
+      ``rotation.y = +rad(yaw)`` since E4. One clockwise step is the matrix
+      ``(x, z) → (−z, x)``, i.e. ``R_y(−90)``, and it multiplies onto the
+      model's own turn: ``R_y(−90)·R_y(yaw) = R_y(yaw − 90)`` →
+      ``(yaw + 270 · quarters) % 360``. (It read ``+90`` until the final E4
+      review: that was the compensation for the OLD ``rotation.y = −rad(yaw)``
+      and became a double turn when the four render sites were flipped.)
     * ``markers[].facing`` (and a room marker's ``rotation``) is a COMPASS in
-      the figure convention 0 = south, 90 = east — it grows counter-clockwise
-      in world axes, opposite to this rotation. A clockwise scene step turns a
-      south-facing figure west, so
+      the figure convention 0 = south, 90 = east — and since E4 it grows in
+      the SAME sense as the model yaw (§ A1.8), because both go through the
+      same ``rotation.y = +rad(…)``. A clockwise scene step therefore turns a
+      south-facing figure west by the very same amount:
       ``compass_new = (compass + 270 · quarters) % 360``.
     * A box in ``extras`` keeps its height and swaps its w/d extents on an odd
       number of steps; its ``side`` word rotates N→E→S→W like an edge letter.
@@ -1674,7 +1680,7 @@ def _rotate_scene(out: Dict[str, Any], quarters: int,
         if spec.get("anchor"):
             spec["anchor"] = pt_world(spec["anchor"])
         if spec.get("yaw_deg") is not None:
-            spec["yaw_deg"] = _r((_num(spec["yaw_deg"]) + 90 * steps) % 360, 1)
+            spec["yaw_deg"] = _r((_num(spec["yaw_deg"]) + 270 * steps) % 360, 1)
         if spec.get("clip_outline"):
             spec["clip_outline"] = poly_world(spec["clip_outline"])
         if spec.get("cutouts"):

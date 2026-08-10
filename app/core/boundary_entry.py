@@ -186,8 +186,14 @@ def opening_on_edge(location: Dict[str, Any], edge: str) -> bool:
 def has_entrance(location: Dict[str, Any]) -> bool:
     """True when the location carries at least one authored opening.
 
-    The ONE source for both the step gate and the editor's warning: a location
-    nobody can reach is reported, never silently repaired.
+    NOT a reachability verdict — it has not been one since the free-boundary
+    rule (E4 task 5): a location WITHOUT any opening is entered anywhere along
+    its edge, one WITH openings only across them. The old step gate this
+    function once served is gone with the grid, so the two consumers left are
+    an editor hint (the boundary-openings section says which of the two modes
+    the location is in) and the payload flag ``Location.has_entrance`` that
+    carries it there. Nothing decides a crossing by it — that is
+    ``POST /play/pos`` with ``opening_world_points`` / ``may_leave``.
     """
     return bool(_rotated_openings(location))
 

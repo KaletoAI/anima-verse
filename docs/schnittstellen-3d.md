@@ -70,7 +70,7 @@
 >    aber auch dort gerundet drin** (Nachtrag 2026-07-28): gemessen wird der
 >    YAW mit auf 90° gerundetem Fix, gezeichnet mit dem echten. Vorher
 >    schrumpfte auch ein Location-Modell, sobald man seinen Fix fein
->    einstellte. Geprüft in `scripts/smoke_place_rotation.mjs` — und zwar am
+>    einstellte. Geprüft in `client3d/scripts/smoke_place_rotation.mjs` — und zwar am
 >    SKALIERUNGSFAKTOR, nicht an der achsparallelen Hülle: die Hülle eines
 >    gekippten 4-m-Würfels ist bis zu 4·√3 groß, und das ist richtig.
 > 5. **Eine `ground`-Location bringt ihren Boden mit.** Kein Renderer legt
@@ -656,8 +656,22 @@ E1 unberührt:
   'XYZ'.
 - **Kompass für Blickrichtungen** (`facing`, Marker-`rotation`): 0 = Süd,
   90 = Ost, 180 = Nord, 270 = West; Figur `rotation.y = +rad(facing)`.
-  Er wächst damit GEGENSINNIG zum Modell-Yaw — Absicht, und der Yaw-Umbau
-  oben ändert daran nichts.
+  **Seit E4 wächst er im GLEICHEN Drehsinn wie der Modell-Yaw.** Beide gehen
+  durch dieselbe Renderformel `rotation.y = +rad(…)`, also durch dieselbe
+  Matrix `R_y(+a)` — mehr steckt nicht dahinter. Der frühere Satz „er wächst
+  GEGENSINNIG zum Modell-Yaw, und der Yaw-Umbau ändert daran nichts" stammt
+  aus der Zeit VOR dem Umbau (Modelle renderten mit `rotation.y = −rad(yaw)`,
+  Figuren schon mit `+rad(facing)`); mit dem Kippen der vier Renderstellen ist
+  er falsch geworden und wird hiermit zurückgezogen.
+  Konsequenz für jede Stelle, die Facing GEGEN einen Yaw verrechnet:
+  * ein Layout-/Platzierungs-Yaw wird auf das Facing **addiert**
+    (`facing_neu = (facing + yaw) % 360`), nicht abgezogen;
+  * ein zugehöriger Offset-Vektor dreht mit `R_y(+yaw)`, nicht mit `R_y(−yaw)`
+    (§ A2, Prop-Kette);
+  * eine Szenendrehung (`tile_rotation`; EIN Schritt im Uhrzeigersinn ist
+    `(x, z) → (−z, x)`, also `R_y(−90)`) verschiebt beide um denselben
+    Betrag: `R_y(−90)·R_y(a) = R_y(a − 90)`, d. h. Modell-Yaw UND Facing
+    laufen auf `(a + 270 · steps) % 360`.
 - Alle Felder mit Suffix `_m` sind Meter — seit E4 zugleich Welt-Meter
   (k = 1), es ist nichts mehr umzurechnen. `offset_x/y/z` waren schon immer
   WELT-Meter.
@@ -742,10 +756,26 @@ Ausbau in E7.*
    Raumboden; die `prop_markers`-Höhen reiten denselben Hub mit.)
 - `missing: true` → Platzhalter rendern, Platzierung nie verwerfen;
   `has_model: false` → Platzhalter in `dims`-Größe.
-- Zahlenbeispiel zum Diffen: rohe Box [1,0/0,5/2,0], Fix y = 90°, Dims
-  W 1,2/D 0,6/H 0,3 → gefixte Ausdehnung [2,0/0,5/1,0], s = 0,6k; Marker
-  `at [0,5/1,0/0,25]`, facing 90, yaw 90 → `offset_m [0, −0,3]`,
-  `height_m 0,3`, `facing 0`.
+- **Zahlenbeispiel zum Diffen** — rohe Box [1,0/0,5/2,0], Fix y = 90°, Dims
+  W 1,2 / D 0,6 / H 0,3, Marker `at [0,5/1,0/0,25]` mit `facing 90`,
+  Platzierungs-`yaw 90`. Die Rechnung steht ausgeschrieben da, weil das
+  Ergebnis mit E4 gekippt ist (vorher `offset_m [0, −0,3]`, `facing 0` — das
+  war `R_y(−yaw)` und `facing − yaw`, siehe § A1.8):
+  1. Fix `R_y(+90)` auf die Ecken der Box [0, size]: `(x, z) → (z, −x)`, also
+     `x ∈ [0, 1] → z' ∈ [−1, 0]` und `z ∈ [0, 2] → x' ∈ [0, 2]` →
+     gefixte Ausdehnung [2,0/0,5/1,0], `lo = [0/0/−1]`, `hi = [2/0,5/0]`.
+  2. `s = max(dims) / max(extents) = 1,2 / 2,0 = 0,6` (× k, und k = 1).
+  3. Markerpunkt roh `[0,5·1,0 / 1,0·0,5 / 0,25·2,0] = [0,5/0,5/0,5]` →
+     gefixt `[0,5/0,5/−0,5]`. Anker ist die Mitte der Unterkante
+     `[(lo+hi)_x/2 / lo_y / (lo+hi)_z/2] = [1,0/0/−0,5]`, also
+     `pre = 0,6 · [−0,5/0,5/0,0] = [−0,3/0,3/0,0]`.
+  4. Der Platzierungs-Yaw dreht diesen Offset mit **derselben** Matrix, die
+     das Mesh dreht (`rotation.y = +rad(yaw)`, § B2 Schritt 3):
+     `dx = pre_x·cos 90 + pre_z·sin 90 = 0`,
+     `dz = −pre_x·sin 90 + pre_z·cos 90 = +0,3`
+     → `offset_m [0, +0,3]`, `height_m 0,3`.
+  5. Facing im gleichen Drehsinn (§ A1.8):
+     `facing = (90 + 90) % 360 = 180`.
 
 **Verankerung IMMER:** BBox-Unterkante des fertig transformierten Modells,
 gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.

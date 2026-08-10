@@ -39,7 +39,7 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.log import get_logger
-from app.core.timeutils import parse_iso
+from app.core.timeutils import game_speed_factor, parse_iso
 
 logger = get_logger("travel_engine")
 
@@ -52,9 +52,18 @@ _MIN_SPEED_M_S = 0.1
 _MAX_SPEED_M_S = 20.0
 
 # How often the TravelTicker settles journeys, in REAL seconds. It doubles as
-# the arrival tolerance's unit (``_at_goal``): read there as GAME seconds, so
-# the goal test never depends on the world's clock factor.
+# the arrival tolerance's unit (``_at_goal``) — and REAL seconds is exactly
+# what it means there too, so the conversion into walked metres has to go
+# through the game-clock factor (see ``_at_goal``).
 _TICK_SECONDS = 5.0
+
+# Floor for the game-clock factor in the goal window. A frozen world reports
+# 0.0 (no game time passes at all), and a window of zero metres would call
+# every crossing "not the final approach" — including the one the ticker was
+# woken up for when the world thaws or an admin settles a journey by hand.
+# A tenth of a tick's travel is small enough to stay honest and big enough to
+# keep answering the question.
+_GOAL_FACTOR_FLOOR = 0.1
 
 
 def get_travel_speed_m_s() -> float:
@@ -300,9 +309,11 @@ def _arrival_point(loc: Dict[str, Any],
     facing it — the latter with an EMPTY edge, because a made-up geometric
     point is no authored entrance and makes no statement about the room.
 
-    A location without an opening cannot be entered by the gameplay rules
-    (``boundary_entry.has_entrance``), but the journey still needs a goal
-    point — the gate belongs to the arrival check, not to the geometry.
+    A location without an opening has a FREE boundary (E4 task 5) — it can be
+    entered, it just never said where. The geometric midpoint is then as good
+    a goal as any, and the EMPTY edge is what tells the arrival check that no
+    authored opening was walked to (so the ordinary arrival room decides).
+    The rule gates stay where they belong: at the arrival check, not here.
     """
     found = _opening_point(loc, toward)
     if found is not None:
@@ -752,8 +763,19 @@ def _at_goal(journey: Dict[str, Any], st: Dict[str, Any]) -> bool:
 
     One tick's travel is the honest bound: the ticker can never catch the
     crossing closer than the distance one tick covers, so anything within it
-    IS the last leg. It is measured in GAME seconds × the journey's speed, so
-    the answer never depends on the world's clock factor.
+    IS the last leg. That distance is a THREE-factor product, and all three
+    have to be there — the earlier docstring claimed the window was
+    factor-independent, which it never was:
+
+        window_m = _TICK_SECONDS (REAL seconds per tick)
+                 × game_speed_factor() (GAME seconds per REAL second)
+                 × speed_m_s (metres per GAME second)
+
+    A world running at factor 4 walks four times as far between two ticks, so
+    its final approach starts four times earlier; at factor 0.25 the window
+    shrinks the same way. ``_GOAL_FACTOR_FLOOR`` catches the frozen world
+    (factor 0.0), where the product would otherwise be 0 m and no crossing
+    could ever be the goal.
 
     False for an early derived crossing far from the end (the route legally
     cuts through the target's footprint on its way to a door facing away):
@@ -770,7 +792,8 @@ def _at_goal(journey: Dict[str, Any], st: Dict[str, Any]) -> bool:
         return False
     if speed <= 0:                      # a journey without a usable speed
         speed = DEFAULT_SPEED_M_S       # still walks at the default pace
-    return remaining <= _TICK_SECONDS * speed
+    factor = max(game_speed_factor(), _GOAL_FACTOR_FLOOR)
+    return remaining <= _TICK_SECONDS * factor * speed
 
 
 def _settle_arrival(name: str, journey: Dict[str, Any],

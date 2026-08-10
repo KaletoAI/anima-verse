@@ -300,9 +300,14 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
     pre = [s * (p[0] - (lo[0] + hi[0]) / 2),
            s * (p[1] - lo[1]),
            s * (p[2] - (lo[2] + hi[2]) / 2)]
+    # The placement yaw turns the offset with the SAME matrix that turns the
+    # mesh — ``rotation.y = +rad(yaw)`` = R_y(+yaw) since E4 (§ A2 step 4).
+    # Until the final E4 review this was R_y(−yaw), the compensation for the
+    # old ``rotation.y = −rad(yaw)``; with the flipped render sites it sent
+    # every marker of a turned prop to the mirrored side.
     yaw = math.radians(float(placement_yaw or 0))
-    dx = pre[0] * math.cos(yaw) - pre[2] * math.sin(yaw)
-    dz = pre[0] * math.sin(yaw) + pre[2] * math.cos(yaw)
+    dx = pre[0] * math.cos(yaw) + pre[2] * math.sin(yaw)
+    dz = -pre[0] * math.sin(yaw) + pre[2] * math.cos(yaw)
     out: Dict[str, Any] = {
         "offset_m": [_r(dx, 3), _r(dz, 3)],
         "height_m": _r(pre[1] + float(placement_offset_y or 0), 3),
@@ -313,8 +318,11 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
     # whose front is not south gets its marker facing set once at the object
     # (existing mechanism) — without this default every sitter on a rotated
     # chair kept the world default and looked the same way.
+    # Facing grows in the SAME sense as the placement yaw since E4 (§ A1.8 —
+    # both render as ``rotation.y = +rad(…)``), so the yaw is ADDED. The
+    # earlier subtraction was the mirror image of the old model-yaw sign.
     eff_facing = 0.0 if facing is None else float(facing)
-    out["facing"] = _r((eff_facing - float(placement_yaw or 0)) % 360, 1)
+    out["facing"] = _r((eff_facing + float(placement_yaw or 0)) % 360, 1)
     return out
 
 
