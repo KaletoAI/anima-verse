@@ -635,17 +635,19 @@ E1 unberührt:
 - **Etagenhöhe** `storey = map3d.storey_height_m` (Meter), sonst 3.
   Etagenboden von Level n = `n × storey`.
 - **Yaw-Kette der Szene:** `yaw = map3d.rotation` (explizite 0 zählt) →
-  `map_rotation_2d` → 0; three.js `rotation.y = −rad(yaw)`. Das ist
-  **nicht** `yaw_deg` der Weltkarte (A1.1).
-  **Entschieden 2026-08-07, in Umsetzung mit E4:** Das Minus ist eine
-  Ausnahme auf Abruf — verbindlicher Drehsinn ist `yaw_deg` (§ A1.1), also
-  `rotation.y = +rad(yaw)` auch für `map3d.rotation`. Der SERVER ändert
-  dafür nichts: `models[].yaw_deg` und `markers[].facing` werden weiter
-  genau so geliefert wie bisher (§ B1), das Vorzeichen kippt in den beiden
-  Renderern gemeinsam (`packages/scene-render/src/place.ts`,
-  `client3d/src/scene/sceneRecipe.ts`, dazu der eigene Wand-Yaw in
-  `primitives.ts`). Alte `map3d.rotation`-Werte drehen danach gespiegelt —
-  bewusst, ohne Migration.
+  `map_rotation_2d` → 0; three.js **`rotation.y = +rad(yaw)`**.
+  **Erledigt mit E4 (2026-08-09, Task 3):** das frühere Minus ist weg,
+  verbindlicher Drehsinn ist die Weltkarten-Konvention `yaw_deg` (§ A1.1) —
+  für jede Rotation, Karte wie Szene. Der SERVER ändert dafür nichts:
+  `models[].yaw_deg` und `markers[].facing` kommen unverändert (§ B1); das
+  Vorzeichen ist in ALLEN vier Renderstellen gemeinsam gekippt worden
+  (`packages/scene-render/src/place.ts`, `client3d/src/scene/
+  sceneRecipe.ts`, `frontend/src/tabs/characters/Model3DViewer.tsx`,
+  `frontend/src/tabs/world/FloorPlanPreview.tsx`). Der eigene Wand-Yaw in
+  `primitives.ts` wurde geprüft und ist **nicht** gekippt worden — er ist
+  hergeleitet korrekt (eine achsparallele Wand hätte gleich AUSGESEHEN,
+  deshalb war das eine Rechnung, kein Blick). Alte `map3d.rotation`-Werte
+  drehen seitdem gespiegelt — bewusst, ohne Migration.
 - **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**, in
   Grad, VOR jeder Messung anwenden. Yaw (y) außen, Tilt (x) und Roll (z)
   im schon gedrehten Rahmen — „nach vorn kippen" heißt damit unabhängig
@@ -732,7 +734,7 @@ Ausbau in E7.*
 2. BBox des GEFIXTEN Meshes messen → maxExtent = max(x, y, z).
 3. `s = max(width_m, depth_m, height_m) / maxExtent` (UNIFORM — eine
    Platzierung skaliert nie).
-4. `rotation.y = −rad(yaw)`. (Legacy-Vorzeichen; mit E4 `+rad` — § B2.)
+4. `rotation.y = +rad(yaw)`. (Seit E4 — § B2 Schritt 3.)
 5. Ergebnis-BBox messen → Unterkante auf **Raumplatten-Oberkante + 0,01**
    (outdoor: Etagenboden + 0,01) + `offset_y`, XZ-Zentrum auf
    `placements.at`. (Klarstellung v4 — vorher nannten Vorschau/Client/
@@ -762,8 +764,8 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
 - **Figuren-Basishöhe: 1,70 m** — überall, in **Welt-Metern**, Karte wie
   Innenszene. **Seit E4 ohne jede Umrechnung**: `figures.base_height_m_world`
   ist konstant 1,70 (kein `× k`, kein Legacy `1,7 × storey/3` mehr). Der
-  Client-Default 1,75 m ist eine bekannte Divergenz → auf 1,70 angleichen
-  (§ B6). `height_cm` der Charaktere skaliert relativ dazu.
+  frühere Client-Default 1,75 m ist mit E4 angeglichen (§ B6 Nr. 1).
+  `height_cm` der Charaktere skaliert relativ dazu.
 - Es gibt **keinen Kachelbezug mehr**: „Figur relativ zur 10-m-Kachel"
   war die Doppelmaßstab-Quelle, die die Seamless-World-Umstellung
   beseitigt.
@@ -1250,19 +1252,23 @@ eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
 `speed_m_s_real` 2,0 gegen `pace_m_s_real` 1,0 — die beiden Felder sind
 messbar verschieden).
 
-**Divergenz (Stand E3):** beide Karten-Clients deklarieren noch die
-Zellen-Felder und werden erst mit **E4/E5** auf die Polylinie umgestellt.
+**Divergenz (Stand E4, 2026-08-10):** der 3D-Client ist migriert, der
+Spieler-2D-Panel nicht.
 
-* `frontend/src/player/MapPanel.tsx` — Typ `travel` mit
+* `client3d` — **erledigt (E4 Tasks 2 + 4).** `MapTravel` trägt v2
+  (`waypoints`/`progress_m`/`total_m`/`eta_game`/`speed_m_s_real`/
+  `pace_m_s_real`), der Zellen-Zweig samt `path`/`seg`/`frac`/
+  `cell_seconds_real` und dem `Array.isArray`-Notbremsen-Guard ist
+  **ersatzlos gelöscht**. Reisende werden entlang der Polylinie
+  interpoliert (`client3d/src/scene/travelPath.ts`: Bogenlänge,
+  Extrapolation mit `pace_m_s_real ?? speed_m_s_real`, doppelt geklemmt,
+  Ankunfts-Snap ab 2 m) und werden dabei VOR der Ortsgruppierung
+  eingesammelt — vorher fiel jeder Reisende mit leerer `location_id` aus
+  dem NPC-Update und war für die ganze Reise unsichtbar.
+* `frontend/src/player/MapPanel.tsx` — noch Typ `travel` mit
   `progress_cells`/`path`, liest faktisch nur `eta_game` über Optional
-  Chaining. Kein Absturz, aber auch keine Interpolation.
-* `client3d/src/types.ts` (`MapTravel` mit `path`/`seg`/`frac`/
-  `cell_seconds_real`) + `client3d/src/main.ts`. Der Reise-Zweig dort las
-  ungeprüft `tr.path.length` und **warf** mit dem v2-Block eine
-  `TypeError` — pro Poll, in einem `setInterval` ohne `try/catch`, was das
-  ganze NPC-Update mitriss. Mit E3 steht dort ein `Array.isArray`-Guard:
-  der Zellen-Zweig ist tot, Reisende werden bis E4 an ihrer Kachel
-  gezeichnet. **Der Guard ist die Notbremse, nicht die Migration.**
+  Chaining. Kein Absturz, aber auch keine Interpolation. Umstellung mit
+  **E5** (zusammen mit `grid_bounds` dort, § A12).
 
 ---
 
@@ -1401,6 +1407,112 @@ je eine Sperre selbst ab.
 
 ---
 
+## A15. Freies Laufen — `POST /play/pos` — neu 2026-08-09 (E4)
+
+**Die Meter-Welt hat keine Zellen, also auch keinen Kompass-Schritt.** Der
+Client läuft die Figur selbst und **meldet**, wo sie steht; der Server fragt
+nicht mehr pro Kante um Erlaubnis, sondern **beurteilt einen gemeldeten
+Punkt**. `POST /world/avatar/step` ist mit E3 gelöscht und hat hier keinen
+Nachfolger pro Richtung.
+
+**Request** `{"x": <Meter>, "z": <Meter>}` · **Antwort**
+`{ok: true, pos: {x, z}, location_id, room_id}`.
+
+**Meldefrequenz:** ~3/s während der Bewegung plus einmal beim Anhalten.
+Server-Drossel ~4/s.
+
+**Die Gate-Kette, in genau dieser Reihenfolge** (jede Absage trägt
+`{reason, message, pos, location_id}`, wobei `pos` der LETZTE GÜLTIGE Punkt
+ist — der Client snappt die Figur darauf zurück, damit die beiden Sichten nie
+auseinanderstehen):
+
+| # | Prüfung | Absage |
+|---|---|---|
+| 1 | Party-**Follower** besitzt keine eigene Bewegung | 403 `party_follower` |
+| 2 | `x`/`z` sind endliche Zahlen | 400 |
+| 3 | **Drossel** ~4 Meldungen/s — Überschuss wird STILL verworfen, kein Fehler-Toast | 200 `{ok: false, throttled: true}` |
+| 4 | **Schrittweite** gegen die ECHTE Zeit seit der letzten AKZEPTIERTEN Meldung | 409 `too_far` |
+| 5 | Gelände `passability_at` am Punkt (§ A1.5) | 409 `impassable` |
+| 6 | **Location-Übergang** aus dem Punkt abgeleitet (`location_at_point`) — EXIT vor ENTRY | 403 (siehe unten) |
+
+**Die Erlaubnis in Nr. 4 hat DREI Terme**, und der dritte ist keine
+Verzierung:
+
+```
+allowance = max( 5 m,
+                 3 × travel_speed_m_s × Zeitfaktor × elapsed,
+                 3 × 3,4 m/s × elapsed )
+```
+
+Boden, **Spieluhr-Term** und **Echtzeit-Term**. Freies Laufen hängt nicht an
+der Spieluhr: in einer eingefrorenen Welt (Faktor 0) oder einer langsamen
+kollabiert der mittlere Term, während der Spieler weiter 3,4 m pro echter
+Sekunde läuft — ohne den dritten Term sammelte ein ehrlicher Läufer dort
+409er. Das Ganze ist eine **Anti-Teleport-Schranke, kein Präzisions-
+Anticheat**; ohne Basislinie (frische Sitzung, Übernahme, Admin-Move) wird
+der erste Punkt ungeprüft genommen.
+
+**Der Übergang (Nr. 6).** Gleiche Location oder Wildnis → Wildnis ist frei.
+Sonst:
+
+* **EXIT** — `boundary_entry.may_leave` mit dem Raum, in dem der Avatar
+  steht: über eine NAHE Öffnung aus dem Raum, den sie verlinkt, aus dem
+  `entry_room` über jede Kante, oder frei, wenn die Location gar keinen
+  Eintrittsraum deklariert. **UND** `rules.check_leave` — die Regel-Hälfte,
+  die jeder andere Bewegungspfad fragt (`/play/travel`, der Reise-Ticker, der
+  SetLocation-Skill, der Scheduler). Geometrie allein ist nicht das Tor:
+  eine `confine`- oder Gefahr-Regel muss auch gegen die FÜSSE halten, sonst
+  hebt der Bewegungskanal still auf, was `/play/notices` dem Spieler im
+  selben Moment sagt.
+* **ENTRY** — der Punkt muss innerhalb **1,5 m** eines Öffnungs-Weltpunkts
+  des Ziels liegen (§ A1.1 / § B1 Nr. 13), und `accessible_when` +
+  Zugangsregeln (`check_access`) müssen passen. Das sind exakt die Gates, die
+  `/play/travel` vor dem Losgehen anlegt; ein Läufer, der daran vorbeispazieren
+  könnte, machte jedes davon zur Dekoration (E3-C1).
+* **FREIE GRENZE (Entscheidung E4 Task 5).** Eine Location **ohne jede
+  autorisierte Öffnung** hat eine freie Grenze: sie hat nie gesagt, wo ihr Weg
+  hinein ist — das Spiegelbild von `may_leave`s „kein Eintrittsraum = überall
+  hinaus". Ohne diese Regel wäre ein gemalter Platz, eine Wiese oder jeder
+  `passable` Transitort eine Wand, und man KANN um sie herum nicht für jede
+  Anlaufrichtung eine Öffnung zeichnen. **Hat** eine Location Öffnungen, sind
+  genau die ihre Wege hinein und alles andere ist Wand (Strenge-Entscheidung
+  2026-08-04). Die Regel-Gates gelten in beiden Fällen — die freie Grenze
+  nimmt die GEOMETRISCHE Hälfte des Tors weg, nie die Regeln.
+* **Location → Location** (angrenzende oder **verschachtelte** Fußabdrücke —
+  eine Hütte auf einem Dorfplatz) ist beides: EXIT der alten, dann ENTRY der
+  neuen.
+
+**Nur der gemeldete PUNKT wird beurteilt, nie der Weg dorthin.** Das ist
+Absicht: bei ~3 Meldungen/s liegt gut ein Meter dazwischen, was nichts
+überspringen kann, was die Welt hat — und den Pfad serverseitig zu
+rekonstruieren wäre ein ZWEITES Bewegungsmodell neben dem, das der Client
+läuft, also genau das Modell, das dann mit dem Bild streitet. Die
+Schrittschranke (Nr. 4) hält die Lücke klein genug, damit das trägt.
+
+**Nebenwirkungen einer akzeptierten Meldung:** eine laufende Reise wird
+**abgebrochen** (freies Laufen überschreibt Reisen bewusst — sonst zöge der
+Reise-Ticker die Figur beim nächsten Tick auf ihre gebackene Polylinie
+zurück), und ein **schlafender Avatar wacht auf** (dieselbe Regel wie bei
+`/play/enter-room` und `/play/travel`; sie steht NACH den Gates, denn eine
+abgelehnte Meldung hat niemanden bewegt).
+
+**Was der CLIENT dazu tut** (reiner Sicht-/Eingabe-Zustand, nicht Vertrag):
+er hält die Figur selbst aus unpassierbarem Gelände und fremden Fußabdrücken
+(`walk.slideBlocked`, Gleiten statt Anhalten), bietet den Eintritt ab 3 m an
+einer Öffnung an und läuft dann auf den Öffnungspunkt zu, und beantwortet ein
+4xx mit Gleiten (≤ 8 m) oder Sprung auf den zurückgegebenen Punkt plus einem
+Toast pro Grund. **Kein Client-A\*** — Klick-Laufen ist Luftlinie mit
+Wandgleiten (E5+, falls mehr gebraucht wird).
+
+**Verifikation:** `scripts/smoke_play_pos.py` ruft die Handler-Funktion
+direkt (ohne Server) gegen eine Wegwerf-Welt und rechnet alle 19 Fälle von
+Hand vor — Öffnungspunkte, Schrittschranke (inkl. Echtzeit-Term bei
+eingefrorener Uhr, Fall [19]), Gelände und jeden Ast der Übergangs-Gates
+inklusive verschachtelter Fußabdrücke ([16]), `check_leave` ([17]) und
+Aufwachen ([18]).
+
+---
+
 # Teil B — Ziel-Vertrag v4: das Szenen-Rezept
 
 Kern des Umbaus: EIN Endpoint liefert die komplette darstellbare Szene
@@ -1411,12 +1523,18 @@ keine einzige eigene Geometrie-Entscheidung mehr.
 
 ## B1. `GET /play/locations/{location_id}/scene`
 
-*Stand E4 (2026-08-09): der Composer liefert **`k = 1`** und
+*Stand E4 (abgeschlossen 2026-08-10): der Composer liefert **`k = 1`** und
 `extent_m = plan_width_m` — jedes `_m`-Feld IST damit ein Welt-Meter
 (§ A1.8). Die Felder `extent_m`, `k` und `storey_m` bleiben im Payload:
 Konsumenten rechnen weiter mit dem GELIEFERTEN `k` (× 1 ist richtig), nie
 mit einer eigenen Konstante — `extent_m` schon gar nicht, es ist jetzt so
-groß wie die Location.*
+groß wie die Location. **Beide Renderer sind nachgezogen** (E4 Task 3): der
+3D-Client hat seinen eigenen zweiten Maßstab ausgebaut (Figuren-, Raum- und
+Laufgeschwindigkeits-Faktoren gelöscht, `k` wird einmal pro Sitzung gegen 1
+geprüft), Locations stehen auf `(pos_x, pos_z)` mit der Kante
+`plan_width_m`, und der Yaw-Drehsinn ist überall der der Weltkarte.
+`map3d.extent_m` ist auch als ADMIN-REGLER weg (E4 Task 7) — der Sanitizer
+verwirft das Feld, es gibt keinen Schreiber mehr.*
 
 ```
 {
@@ -1603,13 +1721,12 @@ place(mesh, spec):
                              k_y = box.y / B_y (ohne box.y: k_xz);
                              scale.set(k_xz, k_y, k_xz) auf Welt-Achsen
      scale_axes gesetzt:     scale.set(xz, y, xz) direkt (Welt-Achsen)
-  3. rotation.y = −rad(yaw_deg) als Eltern-Rotation
-     ⚠ Das Vorzeichen kippt mit **E4** auf `+rad(yaw_deg)` — verbindlicher
-     Drehsinn ist die Weltkarten-Konvention (§ A1.1). Der Server liefert
-     `yaw_deg` unverändert; umgestellt wird in BEIDEN Renderern gemeinsam
-     (`packages/scene-render/src/place.ts`, `client3d/src/scene/
-     sceneRecipe.ts`, dazu der eigene Wand-Yaw in `primitives.ts`).
-     `markers[].facing` bleibt davon unberührt (Kompass, § A1.8).
+  3. rotation.y = +rad(yaw_deg) als Eltern-Rotation
+     ✔ Seit **E4** (2026-08-09, Task 3): verbindlicher Drehsinn ist die
+     Weltkarten-Konvention (§ A1.1), das frühere Minus ist in allen
+     Renderstellen gekippt (§ A1.8). Der Server liefert `yaw_deg`
+     unverändert. `markers[].facing` bleibt unberührt (Kompass, § A1.8),
+     ebenso der hergeleitete Wand-Yaw in `primitives.ts`.
   4. Ergebnis-BBox messen → Unterkante = bottom_y, XZ-Zentrum = anchor
 ```
 
@@ -1718,7 +1835,7 @@ noch als Regressionsschutz. Verbindlich ab v4:
 
 | # | Befund | Fix |
 |---|---|---|
-| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Erledigt durch Seamless World (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg. Client-Fix bleibt: 1,70 statt 1,75 |
+| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`). Divergenz geschlossen |
 | 2 | „0,12 × k" in §2e der Rezept-Note | Zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
 | 3 | `activityToClipKind`-Keyword-Heuristik im Client | `activity_animation` server-authoritativ; Heuristik entfernen, sobald alle Aktivitäten gemappt liefern |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | Doku/Dead-Code entfernen |

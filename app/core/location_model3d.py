@@ -245,11 +245,11 @@ def migrate_scale_frame_once() -> Dict[str, int]:
 
     What changed and therefore has to be converted once:
 
-    - the reference square is no longer a fixed 8 m but ``map3d.extent_m``
-      (default 10 = one map tile), and the model fills ``size × extent_m``
-      instead of ``10 × 0.92 × size``. A ``size`` above 1 used to mean
-      "overflow the tile" — that is now the job of ``extent_m``, so it moves
-      there and ``size`` becomes 1.
+    - the reference square is no longer a fixed 8 m, and the model fills
+      ``size × the square`` instead of ``10 × 0.92 × size``. A ``size`` above
+      1 used to mean "overflow the tile"; since E4 the square IS the
+      location's footprint (edge = ``plan_width_m``), so there is nothing to
+      overflow into and ``size`` is clamped to 1.
     - ``plan_width_m`` is the ONLY scale anchor. Where it was derived from a
       model's ``height_m`` it is written out explicitly BEFORE that field
       disappears — otherwise the location would silently lose its scale.
@@ -266,7 +266,7 @@ def migrate_scale_frame_once() -> Dict[str, int]:
                                   get_world_setting, set_world_setting)
     if get_world_setting(_SCALE_FRAME_FLAG):
         return {}
-    stats = {"locations": 0, "plan_width": 0, "storey": 0, "extent": 0,
+    stats = {"locations": 0, "plan_width": 0, "storey": 0, "size_clamped": 0,
              "sidecars": 0}
     wdata = _load_world_data()
     changed = False
@@ -313,9 +313,13 @@ def migrate_scale_frame_once() -> Dict[str, int]:
             except (TypeError, ValueError):
                 size = 0.0
             if size > 1:
-                map3d["extent_m"] = round(min(10.0 * size, 40.0), 2)
+                # A legacy "bigger than the tile" model. The reference square
+                # is no dial any more (E4: it IS the footprint, edge =
+                # plan_width_m), so the overflow has nowhere to go and the
+                # share is clamped into its contract range — the same clamp
+                # the sanitizer applies on every save.
                 map3d["size"] = 1.0
-                stats["extent"] += 1
+                stats["size_clamped"] += 1
                 changed = True
             stats["locations"] += 1
 
@@ -423,7 +427,7 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
            # Real-size anchor of a ROOM model (0 = undeclared): the real
            # width of the model's largest side — the diorama scales from it
            # like a prop. Buildings have none: their size follows the
-           # location's own extent (map3d.extent_m × map3d.size), and their
+           # location's own footprint (map3d.plan_width_m × map3d.size), and their
            # former height/floors dials went with the per-axis scaling
            # (2026-07-28).
            "width_m": float(meta.get("width_m") or 0.0),

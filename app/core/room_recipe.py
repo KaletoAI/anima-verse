@@ -23,7 +23,9 @@ the COMPOSED conveniences so the client renders without re-deriving them:
 
 Coordinate frames: XZ positions are fractions of the location's reference
 square (like ``layout.x/y`` and ``map3d.outline``); every length that ends
-in ``_m`` is REAL metres — the consumer converts with k = extent_m/plan_width_m.
+in ``_m`` is REAL metres — and since E4 that is already a world metre, because
+the reference square IS the location's footprint (``extent_m = plan_width_m``,
+k = 1).
 Yaw/facing are degrees; the compass vocabulary of the room markers applies
 (0 = south, 90 = east, …), composed prop facing = ``facing − placement.yaw``
 (the plan yaw turns clockwise in the top view, the compass counts the other

@@ -54,21 +54,19 @@ export interface Map3dMeta {
   /** Anteil des Modells am Bezugsquadrat der Location (0..1, Default 1) */
   size?: number;
   /** AV3D-12: gezeichneter Gebäude-Grundriss — Polygonpunkte als Fraktionen
-   *  des Bezugsquadrats (extent_m), automatisch geschlossen. Der Client
+   *  des Bezugsquadrats (`plan_width_m`), automatisch geschlossen. Der Client
    *  rendert daraus pro genutzter Etage Boden und Wände (Tür im EG). */
   outline?: [number, number][];
   /** AV3D-12: Fahrstuhl-Position (Fraktion des Referenzquadrats) — wird
    *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
    *  Etagenwechsel */
   elevator?: [number, number];
-  /** Breite der Location in WELT-Metern — das Bezugsquadrat, in dem alle
-   *  Fraktionen leben, und die Box, die das Modell füllt. Default 10 =
-   *  genau eine Kachel. Im Szenen-Payload als `extent_m`. */
-  extent_m?: number;
-  /** Etagenhöhe in REALEN Metern (× k zur Renderzeit). Default 3. */
+  /** Etagenhöhe in REALEN Metern. Default 3. */
   storey_height_m?: number;
-  /** Maßstabs-Anker: reale Breite des Bezugsquadrats in Metern („der Ort ist
-   *  ≈ 12 m breit") → k = extent_m / plan_width_m */
+  /** DER Maßstabs-Anker: reale Breite der Location in Metern („der Ort ist
+   *  ≈ 12 m breit"). Seit E4 IST das Bezugsquadrat der Fußabdruck, also
+   *  `extent_m = plan_width_m` und k = 1 — ein Welt-Meter ist ein echter
+   *  Meter. Im Szenen-Payload als `extent_m`. */
   plan_width_m?: number;
   /** Bodentextur-Kind je Etage für die Grundriss-Platten (Raum-Rezept §7),
    *  Level-Schlüssel als String: {"0": "parquet", "-1": "stone"} */

@@ -53,10 +53,10 @@ export interface HudGameState {
    *  together with the map, never derived from another poll, or the two could
    *  disagree for a moment and paint a lock onto a stranger's door. */
   lockedLoc: string;
-  /** Neighbour LOCATIONS the step would be refused for, id -> reason (the
-   *  `neighbors` block of the same poll). Only the four cells around the
-   *  avatar can appear here — which is exactly the range in which a locked way
-   *  has to be visible before one walks to it. */
+  /** Neighbour LOCATIONS entering would be refused for, id -> reason (the
+   *  `neighbors` block of the same poll). Only the places the server counts as
+   *  neighbours of the avatar's own can appear here — which is exactly the
+   *  range in which a locked way has to be visible before one walks to it. */
   lockedLocations: Record<string, string>;
   /** elevator the avatar is standing at (embodied mode), or null. The talk
    *  prompt WINS over it: with someone in range only that prompt shows, so one

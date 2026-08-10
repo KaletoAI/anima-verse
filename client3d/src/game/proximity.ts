@@ -7,17 +7,21 @@
  * with hand-derived numbers.
  *
  * The rule has three parts, and the middle one is the one worth explaining:
- *  1. Same LOCATION. A neighbouring map cell is a different place, however
- *     close the two figures happen to be drawn.
+ *  1. Same LOCATION. The place next door is a different place, however close
+ *     the two figures happen to be drawn — footprints touch in the metre
+ *     world (§ A1.1), so "close" says nothing by itself.
  *  2. Same SHOWN room — the room the 3D view is currently DRAWING (main.ts
  *     `shownRoom`), not the room the worldmap reports. With an interior open
  *     you stand a metre away from someone through a wall you can see, and the
  *     prompt must not fire through it. Outdoors both sides are `null`, which
  *     matches; one side `null` and the other a room does not.
- *  3. Within `TALK_RANGE`, SCALED BY THE FIGURE'S SCALE. Interiors draw their
- *     figures at the room scale, so a world metre in there is not a human
- *     metre — at scale 0.3 the reach is 0.75 world metres. Without the factor
- *     an indoor prompt would cover a third of the room.
+ *  3. Within `TALK_RANGE`, SCALED BY THE FIGURE'S SCALE. This dates from the
+ *     double scale: interiors drew their figures at a room scale, so a world
+ *     metre in there was not a human metre and at scale 0.3 the reach was
+ *     0.75 world metres. SINCE E4 THE FACTOR IS 1 — one world metre is one
+ *     real metre everywhere (k = 1, § B), and `npcs.scaleOf` reads a group
+ *     that nothing scales any more. The parameter is kept because the rule
+ *     survives it unchanged; it is on the cleanup list, not a live dial.
  *
  * Distance is the plain XZ distance (a height difference does not gate a
  * conversation), the comparison is inclusive so the range itself still counts,

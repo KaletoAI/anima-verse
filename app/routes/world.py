@@ -600,7 +600,8 @@ async def location_model3d_offset(location_id: str, request: Request) -> Dict[st
 
 # The former /model3d/floors and /model3d/height endpoints are gone
 # (2026-07-28): both existed to squash a building model in Y. A model is
-# scaled by ONE factor on all three axes now (map3d.size × map3d.extent_m),
+# scaled by ONE factor on all three axes now (map3d.size × the footprint
+# edge map3d.plan_width_m),
 # and the storey height is a location dial in real metres
 # (map3d.storey_height_m).
 

@@ -30,21 +30,23 @@
  * entries that sit above head height are window heads, and a window blocks
  * anyway through its own sill and pane.
  *
- * Collision applies INSIDE the interior view only. Crossing a location border
- * outdoors stays what it was: the cell logic in `main.ts` plus the server's
- * step permission.
+ * Collision applies INSIDE the interior view only. Outdoors the figure walks
+ * freely over the metre plane (E4 task 5): `walk.slideBlocked` holds it out of
+ * impassable terrain and foreign footprints, and the server judges the
+ * reported point (`POST /play/pos`) — there is no per-boundary permission any
+ * more.
  */
 
 import type { ScenePayload } from '../api';
 
 /** Half width of the walking body, in FIGURE metres — which since E4 are world
  *  metres, because `k` is the constant 1 (§ B). The `k` factor is still
- *  threaded through `bodyRadius`/`wallSegments` as the no-op it now is; it goes
- *  with the walk rewrite of E4 task 5, together with the hand-derived cases in
- *  `scripts/smoke_walk_math.mjs` that pin it. 0.25 m is a grown figure's shoulder
- *  half width against the 1.70 m the payload scales figures to (§ A3), and it
- *  is the same number `walk.ts` uses as `EDGE_MARGIN` to hold a figure inside
- *  its cell — one body width, one constant, two boundaries. */
+ *  threaded through `bodyRadius`/`wallSegments` as the no-op it now is, pinned
+ *  as such by the hand-derived cases in `scripts/smoke_walk_math.mjs`. 0.25 m
+ *  is a grown figure's shoulder half width against the 1.70 m the payload
+ *  scales figures to (§ A3); it was also `walk.EDGE_MARGIN`, which went with
+ *  the step machine (E4 task 5), so the body width is now one constant for one
+ *  boundary: the wall. */
 export const BODY_RADIUS_M = 0.25;
 
 /** How much wider than drawn a doorway collides, in FIGURE metres (× k).
@@ -276,7 +278,7 @@ const PUSH_PASSES = 8;
 /**
  * Clamp a steering goal so the way there crosses no wall.
  *
- * Same shape as the cell-boundary clamp in `walk.ts`: the figure does not stop
+ * Same shape as the outdoor slide in `walk.slideBlocked`: the figure does not stop
  * dead at a wall, it SLIDES — the component of the move parallel to the wall
  * survives, only the component into it is dropped.
  *

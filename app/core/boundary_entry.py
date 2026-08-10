@@ -5,8 +5,15 @@ LOCATION edge (a road crossing the cell). Since Etappe 3 of
 ``plan-3d-lod-und-betreten.md`` it is not only geometry any more: a location
 change accepts an opening as a legitimate crossing point —
 
-- ENTERING is only possible across an edge that carries an authored opening
-  (decision 2026-08-04: a location without one cannot be entered at all). The
+- ENTERING a location that HAS authored openings is only possible across one
+  of them (strictness decision 2026-08-04) — its own openings ARE its ways in,
+  and anything else is a wall. A location that draws NO opening at all is the
+  other case and has a FREE boundary (decision E4 task 5, ``POST /play/pos``):
+  it never said where its way in is, the mirror of ``may_leave``'s "no entry
+  room = leave anywhere", and a painted square or a passable transit place
+  cannot author an opening for every direction a walker may arrive from. The
+  rule gates (``accessible_when``, access rules) apply either way — the free
+  boundary drops the GEOMETRIC half of the gate, never the rules. The
   opening's room link routes the avatar; WITHOUT one the opening says nothing
   about the room and the arrival rule decides (``world.get_arrival_room_id``:
   the declared entry room, otherwise the ground);

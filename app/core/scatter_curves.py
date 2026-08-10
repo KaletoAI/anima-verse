@@ -234,8 +234,9 @@ def relief_cells(wave_m: Any, extent_m: Any) -> int:
 
     Both lengths must be in the SAME frame, and the caller owes REAL metres
     on both: the wave width is authored in real metres, so the reference
-    square has to arrive as its real edge length (``extent_m / k``), not as
-    its world extent.
+    square has to arrive as its real edge length — since E4 that is simply
+    the location's ``plan_width_m``, because the square IS the footprint
+    (``extent_m = plan_width_m``, k = 1).
 
     Anything unusable (zero, negative, no extent) falls back to
     ``TERRAIN_CELLS``, which over an 80 m square is a 5 m wave — exactly what

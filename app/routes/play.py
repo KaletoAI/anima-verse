@@ -580,8 +580,10 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
          SILENTLY (200 ``{ok: false, throttled: true}``): a client that reports
          too eagerly must not collect error toasts for it,
       4. plausible step against the real time since the last ACCEPTED report,
-         allowance ``max(5 m, 3 × travel_speed × game_factor × elapsed)``
-         (409 ``too_far``),
+         allowance ``max(5 m, 3 × travel_speed × game_factor × elapsed,
+         3 × 3.4 m/s × elapsed)`` — THREE terms, and the last one is why a
+         frozen or slow world does not strand an honest walker (409
+         ``too_far``),
       5. terrain ``passability_at`` at the point (409 ``impassable``),
       6. the LOCATION TRANSITION derived from the point, through the FULL gate
          (below).

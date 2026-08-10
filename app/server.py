@@ -111,7 +111,8 @@ async def lifespan(app: FastAPI):
     # setzen (idempotent), damit Zaehlung + Generierung eindeutig sind.
     migrate_fixed_map_images()
 
-    # 3D-Massstab: EIN Rahmen (map3d.extent_m) + EIN Skalierungsfaktor.
+    # 3D-Massstab: EIN Rahmen (das Bezugsquadrat = der Fussabdruck der
+    # Location, Kante map3d.plan_width_m) + EIN Skalierungsfaktor.
     # Traegt plan_width_m/storey_height_m aus den alten Modell-Feldern
     # heraus, bevor diese verschwinden (2026-07-28).
     try:
