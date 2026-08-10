@@ -16,8 +16,8 @@
  * therefore switches to night only above `NIGHT_ON` and back to day only below
  * `NIGHT_OFF`; between the two the last decision holds (see `nightForMusic`).
  *
- * TERRAIN IS DEBOUNCED. Walking a cell boundary or panning the camera crosses
- * terrains in a second, and the ambience bed must not restart for a cell one
+ * TERRAIN IS DEBOUNCED. Walking over a boundary or panning the camera crosses
+ * terrains in a second, and the ambience bed must not restart for a strip one
  * passes through. `terrainSwitch` holds a new terrain for `AMBIENT_HOLD_MS`
  * before it counts; the FIRST terrain of a session is taken immediately,
  * because a debounce is there to stop flapping, not to open with silence.
@@ -30,7 +30,7 @@
  * one". The folder is user data — playing something the user did not put
  * there for this situation is worse than playing nothing.
  */
-import type { Cell } from './walk';
+import type { Point } from './walk';
 
 /** What `GET /assets/audio` lists — ready-made URLs, never built from a name
  *  by the client (`app/routes/game_audio.py`). `music` always carries both
@@ -117,14 +117,14 @@ export function pickAmbient(manifest: AudioManifest, terrain: string): string[] 
 /** The two camera modes of the client (`hud/bus.ts`). */
 export type ViewMode = 'overview' | 'embodied';
 
-/** Terrain of a grid cell, as the caller knows it — `main.ts` reads it off the
- *  tile that stands there, so a tile rebuilt with a new terrain takes effect
- *  without any cache here. */
-export type TerrainAt = (cell: Cell) => string;
+/** Terrain at a world POINT, as the caller knows it — `main.ts` reads it off
+ *  the footprint standing there (metres since E4 task 5, cells before), so a
+ *  tile rebuilt with a new terrain takes effect without any cache here. */
+export type TerrainAt = (at: Point) => string;
 
 /**
  * WHOSE surroundings one hears: embodied it is the ground the avatar stands
- * on, in the overview the cell the camera looks at. Both cells may be missing
+ * on, in the overview the point the camera looks at. Both may be missing
  * (no figure yet, nothing under the camera) — that is silence, not a fallback
  * to the other one: hearing the avatar's forest while looking at the coast is
  * exactly the confusion this split avoids.
@@ -134,17 +134,17 @@ export type TerrainAt = (cell: Cell) => string;
  */
 export function ambientTerrainFor(
   mode: ViewMode,
-  avatarCell: Cell | null,
-  cameraCell: Cell | null,
+  avatarAt: Point | null,
+  cameraAt: Point | null,
   terrainAt: TerrainAt,
 ): string {
-  const cell = mode === 'embodied' ? avatarCell : cameraCell;
-  if (!cell) return '';
-  return (terrainAt(cell) || '').trim().toLowerCase();
+  const at = mode === 'embodied' ? avatarAt : cameraAt;
+  if (!at) return '';
+  return (terrainAt(at) || '').trim().toLowerCase();
 }
 
 /** How long a new terrain has to hold before the ambience follows it. Long
- *  enough to walk through a corner cell without the bed restarting, short
+ *  enough to cut a corner of another terrain without the bed restarting, short
  *  enough that arriving somewhere sounds like arriving. */
 export const AMBIENT_HOLD_MS = 5000;
 

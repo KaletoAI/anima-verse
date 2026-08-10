@@ -157,6 +157,18 @@ export interface Ground {
   /** The terrain as delivered, or null before the first successful fetch.
    *  The minimap paints the same areas from this. */
   payload(): TerrainPayload | null;
+  /**
+   * May the avatar walk on that world point (E4 task 5)?
+   *
+   * The COLLISION side of the ground: free walking is the client's, so the
+   * client has to know what the server will refuse (`terrain_query
+   * .passability_at`, 409 `impassable`). Same data, same rule — topmost
+   * painted area wins, unpainted is the default kind, an unknown kind is
+   * walkable. Answering `true` while the terrain is still loading is the
+   * deliberate side to err on: a wall that is not there beats a world one
+   * cannot walk in.
+   */
+  passableAt(x: number, z: number): boolean;
   /** Counts rebuilds — a cheap "has the ground changed" for redraw signatures. */
   revision(): number;
   dispose(): void;
@@ -495,6 +507,22 @@ export function createGround(): Ground {
       }
     },
     payload: () => payload,
+    passableAt(x, z) {
+      // The client's mirror of `app/core/terrain_query.passability_at`, on the
+      // very same data (`GET /play/terrain`): the TOPMOST containing area
+      // wins — `areas` arrives in ascending z_order/paint order, so the LAST
+      // hit is the one on top — and an unpainted point is the default kind.
+      // A kind the catalog does not know is walkable (a painted area whose
+      // type was deleted later must never strand a figure), and so is a world
+      // whose terrain has not arrived yet: an empty payload would otherwise
+      // turn the whole map into a wall for the first seconds.
+      let kind = payload?.default_kind ?? '';
+      for (const a of payload?.areas ?? []) {
+        if (pointInRing(x, z, a.polygon)) kind = a.kind || kind;
+      }
+      const entry = catalog.get((kind || '').toLowerCase());
+      return entry ? entry.passable !== false : true;
+    },
     revision: () => rev,
     dispose() {
       clearAreas();

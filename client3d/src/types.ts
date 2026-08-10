@@ -217,6 +217,30 @@ export interface WorldMap {
   fogged: boolean;
 }
 
+/**
+ * Answer of `POST /play/pos` — the free walker's position report (§ task 5).
+ *
+ * `ok: true` is the accepted report: `pos` is what the server stored (its own
+ * rounding), `location_id`/`room_id` are what the point derived, which is how
+ * a crossing announces itself before the next worldmap poll repeats it.
+ *
+ * `ok: false` with `throttled` is the ONE non-error refusal: the report came
+ * in faster than the server accepts them (~4 a second) and was dropped. It is
+ * not a failure and never reaches the player — the next report carries the
+ * same position anyway.
+ *
+ * Everything else is a 4xx and arrives as an `ApiError` with the server's
+ * `reason`, its player-facing `message` and the LAST VALID point to snap the
+ * figure back onto.
+ */
+export interface PosReport {
+  ok: boolean;
+  throttled?: boolean;
+  pos?: { x: number; z: number };
+  location_id?: string;
+  room_id?: string;
+}
+
 // --- Painted terrain (`GET /play/terrain`) -----------------------------------
 // The ground of the seamless world: areas drawn on the metre plane plus the
 // effective type catalog they reference. NEVER fogged — terrain is always

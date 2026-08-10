@@ -5,8 +5,10 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell, type StepDirection } from './game/walk';
-import { planRoute, type ClickRoute } from './game/clickmove';
+import { slideBlocked, walkDir } from './game/walk';
+import {
+  goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
+} from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
@@ -32,11 +34,7 @@ import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, 
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
-import {
-  entryOfferNear, mayLeaveAcross, EXIT_EDGE_OF,
-  type Edge, type EntryTile,
-} from './game/enterLocation';
-import { PathGrid } from './scene/pathfind';
+import { entryOfferNear, type EntryTile } from './game/enterLocation';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
@@ -51,13 +49,13 @@ import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } fr
 //
 // `types.ts` is on the metre world since task 2: the payload has `pos_x`/
 // `pos_z`/`yaw_deg`/`world_bounds` and a metre travel polyline, and the v1
-// grid keys are GONE. Everything in this file that still speaks CELLS is
-// rebuilt by later tasks of the same plan — the tile loop and the camera frame
-// in task 3, the step machine in task 5, the fog rectangles in task 6. The
-// journey bridge is GONE (task 4): travellers are interpolated along the metre
-// polyline of § A11.
+// grid keys are GONE. What is LEFT of the cell world in this file is the FOG
+// (`rebuildFog` and its `grid_bounds`), which task 6 rewrites in metres — the
+// tile loop and the camera frame went in task 3, the journey bridge in task 4
+// (travellers are interpolated along the metre polyline of § A11) and the step
+// machine in task 5 (free walking over `POST /play/pos`).
 //
-// Until then the cast below keeps those blocks compiling WITHOUT reviving the
+// Until then the cast below keeps that block compiling WITHOUT reviving the
 // v1 fields in the payload types. It is the whole bridge: delete it and every
 // remaining cell reader lights up, which is exactly how the later tasks find
 // their work. Nothing is added to the runtime — a `grid_x` read through `v1()`
@@ -76,27 +74,12 @@ type V1Grid = {
  * `undefined` branch: the compiler then sees a value that has `grid_x`, stays
  * silent, and the read throws at runtime. Guard the optional FIRST, cast the
  * narrowed value. That mistake cost one poll-killing TypeError already
- * (`reconcileAvatarCell`), and `tiles` being empty until task 3 made it fire
- * on every single poll.
+ * (the old `reconcileAvatarCell`), and `tiles` being empty until task 3 made
+ * it fire on every single poll.
  *
- * TODO(E4-Task 3 tiles/camera, Task 6 fog): remove with the last cell reader.
+ * TODO(E4-Task 6 fog): remove with the last cell reader — `rebuildFog` is it.
  */
 const v1 = <T>(o: T): T & V1Grid => o as T & V1Grid;
-/**
- * The compass step, as dead as the route behind it.
- *
- * `POST /world/avatar/step` was removed with the grid world in E3 and
- * `api.avatarStep` followed it in task 2, so the step machine further down has
- * been talking to a 404 for a release. It stays readable — and fails the way
- * it already did — until task 5 replaces the whole machine with free walking
- * over `POST /play/pos`.
- * TODO(E4-Task 5): delete together with `requestStep` and its callers.
- */
-async function deadAvatarStep(_direction: StepDirection, _signal?: AbortSignal
-): Promise<{ location_id: string; room_id?: string }> {
-  throw new api.ApiError(404, 'compass step: the route died with the grid world');
-}
-
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
 /** How often the soundtrack driver reconsiders what should be playing (E4-T5).
@@ -1154,26 +1137,15 @@ async function startApp(username: string, role: string) {
   }
   setInterval(pollLocations, 10_000);
 
-  // Wegfindung: Gebäude blockieren, Straßen/Natur sind begehbar
-  //
-  // The grid is IMMUTABLE by design (it caches its answers, see pathfind.ts),
-  // so a map that grew gets a NEW one — the reason this binding is a `let`:
-  // a discovered location adds a cell, and every user of the grid has to be
-  // looking at the same one.
-  let pathGrid = publishPathGrid();
-  function publishPathGrid(): PathGrid {
-    const grid = new PathGrid(
-      placeable.map((l) => ({
-        x: v1(l).grid_x!, y: v1(l).grid_y!,
-        passable: !!(l.passable || l.template_location_id),
-      }))
-    );
-    npcs.setPathGrid(grid);
-    // Debug-Hooks: laufendes Grid + Klasse, um Wegfindung zu vermessen
-    (window as unknown as { __pathGrid: PathGrid }).__pathGrid = grid;
-    (window as unknown as { __PathGrid: typeof PathGrid }).__PathGrid = PathGrid;
-    return grid;
-  }
+  // The cell PATHFINDER lived here (`publishPathGrid` + `scene/pathfind.ts`):
+  // an A* over the grid so NPCs walked around buildings instead of through
+  // them. Both are DELETED with E4 task 5. It was built from `grid_x`/`grid_y`,
+  // which the server stopped sending in E3 — every cell it planned over was
+  // `undefined` — and E4 walks the free plane: the avatar takes the straight
+  // line and slides (`game/walk.slideBlocked`), NPCs follow the server's own
+  // metre polyline (§ A11). A pathfinder over the free plane is E5+ work
+  // ("Client-A* fürs Klick-Laufen: nach Bedarf"), and it would have to be one
+  // the server's position gate can follow — not this one.
   engine.target.copy(center);
   engine.dist = engine.targetDist = fitDistance(firstMap.world_bounds);
 
@@ -1280,14 +1252,26 @@ async function startApp(username: string, role: string) {
   gameActions.takeControl = () => {
     const me = lastMap?.characters.find((c) => c.name === lastMap!.avatar);
     const tile = me ? tiles.get(me.location_id) : undefined;
-    // Fog edge case: the place is not (yet) built on the map, so there is
-    // nothing to fly to and nothing to open. Say so instead of doing half of it.
-    if (!tile) {
+    // WILDERNESS IS A PLACE (E4 task 5). An avatar without a tile used to be
+    // refused here — in the grid world it meant "no cell, nothing to fly to".
+    // On the metre plane a location is not required to stand somewhere: an
+    // avatar in the open, or one the travel ticker has on the road, has a
+    // POINT and that point is a perfectly good anchor to embody at. Taking
+    // over a traveller also ENDS its journey, and it does so through the
+    // ordinary channel — the first position report the walking hook sends
+    // (free walking overrides travel, `POST /play/pos`).
+    const at = me?.pos ?? (tile ? { x: tile.center.x, z: tile.center.z } : null);
+    // Only now is there really nothing: no tile AND no point (an unplaced
+    // location, a fogged place the map has not built). Say so instead of
+    // doing half of it.
+    if (!at) {
       uiActions.toast?.('Your avatar is not on the map yet.', true);
       return;
     }
-    engine.flyTo(tile.center.clone(), flyInDist());
-    openLocation(tile.loc.id);
+    engine.flyTo(new THREE.Vector3(at.x, groundY(at.x, at.z), at.z), flyInDist());
+    // The detail view belongs to a LOCATION — out in the open there is none
+    // to open, and the camera ride above is the whole of the arrival.
+    if (tile) openLocation(tile.loc.id);
     gameActions.enterEmbodied?.();
     // No figure on the map yet (the model is still loading): entering is a
     // no-op then, and the view has already flown in — the same message says
@@ -1438,7 +1422,7 @@ async function startApp(username: string, role: string) {
       takeRoomsFrom(map);
       updatePins(map);
       refreshSelection(map);
-      reconcileAvatarCell(map);   // server moved the avatar? (E3-T3)
+      reconcileAvatarPos(map);    // server moved the avatar? (E4-T5)
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch (e) {
       // An expired session is not an unreachable server: the dot stays as it
@@ -1780,30 +1764,99 @@ async function startApp(username: string, role: string) {
   }, 1000);
   npcs.update(computeNpcStates(firstMap));
 
-  // --- Walking on foot (E3-T3) ----------------------------------------------
+  // --- Walking on foot (E3-T3; FREE on the metre plane since E4 task 5) -----
   // Two facts carry this: while the mode is on, the avatar's position is OURS
-  // (npcs.setPlayerDriven — update() stops placing it), and every CELL BOUNDARY
-  // belongs to the server (`/world/avatar/step`). Inside a cell the client walks
-  // freely, at a boundary it either asks or slides along the edge. All the
-  // geometry is in game/walk.ts and checked numerically by
-  // scripts/smoke_walk_math.mjs; nothing here recomputes it.
+  // (npcs.setPlayerDriven — update() stops placing it), and the server is not
+  // asked for permission any more but TOLD where the figure stands
+  // (`POST /play/pos`). What stops the figure is geometry, not a round trip:
+  // impassable terrain and foreign footprints outdoors, walls inside an open
+  // interior. The maths is in game/walk.ts + game/clickmove.ts and checked
+  // numerically by scripts/smoke_walk_math.mjs; nothing here recomputes it.
   const avatarName = firstMap.avatar;   // one avatar per session (as everywhere else)
-  /** Same passability rule the pathfinder is built with (buildings block, road
-   *  and nature carry). It says where a route may travel THROUGH — it is NOT
-   *  what makes a cell enterable. */
-  const passableCells = new Set(placeable
-    .filter((l) => l.passable || l.template_location_id)
-    .map((l) => `${v1(l).grid_x},${v1(l).grid_y}`));
-  /** Which location sits on a cell. Also the enterable-check: the server's step
-   *  (`world_ops.move_avatar_step`) has NO passability check — it gates on the
-   *  entry room and the block rules and otherwise moves the avatar into the
-   *  neighbouring location, so a plot or a building can be walked into and the
-   *  client must let the server decide. A cell with no location stays a wall;
-   *  there the server would answer 404. */
-  const locIdAtCell = new Map(placeable.map((l) => [`${v1(l).grid_x},${v1(l).grid_y}`, l.id]));
-  function tileAtCell(c: Cell): Tile | null {
-    const id = locIdAtCell.get(`${c.gx},${c.gy}`);
-    return id ? tiles.get(id) ?? null : null;
+
+  /**
+   * The location whose footprint covers a world point — the client's mirror of
+   * `app/core/world_geometry.location_at_point`, and the successor of the
+   * cell lookup that used to answer this.
+   *
+   * The SMALLEST matching footprint wins: overlaps are legal (a hut on a
+   * village square) and the smallest one is the most specific answer, exactly
+   * as the server resolves it. `worldToTile` turns the point into the tile's
+   * own frame first, so a rotated footprint is tested as the square it is.
+   */
+  function tileAt(x: number, z: number): Tile | null {
+    let best: Tile | null = null;
+    for (const tile of tiles.values()) {
+      const half = tile.width / 2;
+      const p = worldToTile(tile, x, z);
+      if (Math.abs(p.x) > half || Math.abs(p.z) > half) continue;
+      if (!best || tile.width < best.width) best = tile;
+    }
+    return best;
+  }
+
+  /**
+   * Points the SERVER refused, with the time they stop counting
+   * (`performance.now()`, a duration clock). The metre successor of the grid
+   * world's `rejectedUntil` cell memory, and it exists for the same reason:
+   * without it a player leaning into a border the client cannot predict
+   * (`leave_blocked` — the entry-room rule is the server's) would walk into
+   * the same refusal three times a second for as long as the key is held.
+   * A refused point becomes a small blocked disc, so the figure slides along
+   * that border like any other and the channel stays quiet.
+   *
+   * Bounded to a handful of entries: they expire, and a longer list would
+   * make the walk trace a wall out of every attempt the player ever made.
+   */
+  const refusedPoints: { x: number; z: number; until: number }[] = [];
+  /** Radius of such a disc, in metres — a body width of margin around the
+   *  point the server would not have. */
+  const REFUSED_RADIUS_M = 1.2;
+  const REFUSED_MEMORY_MS = 4000;
+  const REFUSED_MAX = 8;
+
+  function rememberRefused(x: number, z: number): void {
+    refusedPoints.push({ x, z, until: performance.now() + REFUSED_MEMORY_MS });
+    if (refusedPoints.length > REFUSED_MAX) refusedPoints.shift();
+  }
+
+  /**
+   * Is that point off limits for the walking avatar (E4 task 5)?
+   *
+   * THREE blockers, and none of them invents a rule — each mirrors something
+   * the server would refuse on the position report:
+   *
+   *  - IMPASSABLE TERRAIN (`terrainGround.passableAt`, the client's copy of
+   *    `terrain_query.passability_at` on the same payload) — water, cliffs,
+   *    whatever the world's catalog marks as such;
+   *  - a FOREIGN FOOTPRINT: any location the avatar is not currently in. The
+   *    server lets one in only within 1.5 m of an authored boundary opening
+   *    (`_POS_OPENING_TOLERANCE_M`), so walking into the middle of one would
+   *    earn a `no_opening` refusal and a snap back on every attempt. Entering
+   *    is the explicit offer at the opening (`updateEnterOffer`), and the
+   *    walk-in it starts bypasses this check by owning the figure;
+   *  - a point the server JUST refused (see above).
+   *
+   * `mine` is the footprint the avatar stands in, passed in because the
+   * answer depends on it: the avatar's OWN location never blocks — inside it
+   * the walls take over, and standing in a place must never be a state one
+   * cannot walk in.
+   */
+  function blockedFor(mine: Tile | null, x: number, z: number): boolean {
+    if (!terrainGround.passableAt(x, z)) return true;
+    const at = tileAt(x, z);
+    if (at && at !== mine) return true;
+    const now = performance.now();
+    for (const r of refusedPoints) {
+      if (r.until > now && Math.hypot(r.x - x, r.z - z) < REFUSED_RADIUS_M) return true;
+    }
+    return false;
+  }
+
+  /** `blockedFor` from where the avatar stands right now. */
+  function blockedForAvatar(x: number, z: number): boolean {
+    const p = npcs.positionOf(avatarName);
+    return blockedFor(p ? tileAt(p.x, p.z) : null, x, z);
   }
 
   // --- Minimap slice (Etappe 5 task 3; metre world since E4 task 2) ----------
@@ -1935,12 +1988,8 @@ async function startApp(username: string, role: string) {
       // first poll's and rebuild the fresh tile for nothing.
       locSig.set(loc.id, sigOf(
         details.get(loc.id) ?? details.get(loc.template_location_id || '') ?? loc));
-      const cell = `${v1(loc).grid_x},${v1(loc).grid_y}`;
-      if (loc.passable || loc.template_location_id) passableCells.add(cell);
-      locIdAtCell.set(cell, loc.id);
     }
     engine.setPickables([...tiles.values()].map((t) => t.group));
-    pathGrid = publishPathGrid();
     rebuildFog();
   }
 
@@ -1977,9 +2026,6 @@ async function startApp(username: string, role: string) {
     locSig.delete(id);
     buildingTierByLoc.delete(id);
     interiorTierByLoc.delete(id);
-    const cell = `${v1(tile.loc).grid_x},${v1(tile.loc).grid_y}`;
-    passableCells.delete(cell);
-    locIdAtCell.delete(cell);
     engine.scene.remove(tile.group);
     // Captured BEFORE the unmount, which clears the ledger: these subtrees are
     // the loader cache's and are only unhooked, never disposed.
@@ -2027,7 +2073,6 @@ async function startApp(username: string, role: string) {
     // close it either way.
     panel.hide();
     engine.setPickables([...tiles.values()].map((t) => t.group));
-    pathGrid = publishPathGrid();
     rebuildFog();
     return true;
   }
@@ -2108,15 +2153,16 @@ async function startApp(username: string, role: string) {
     audio.playMusic(musicOn ? pickMusic(audioManifest, musicNight) : [],
       { crossfadeS: MUSIC_CROSSFADE_S });
     const mode = getGameState().mode;
-    // Embodied the avatar's own cell decides, in the overview the cell the
-    // camera looks at; the terrain is read off the tile standing there, so a
-    // tile rebuilt with a different terrain takes effect without a cache.
+    // Embodied the ground the avatar stands on decides, in the overview the
+    // point the camera looks at; the terrain is read off the footprint
+    // standing there, so a tile rebuilt with a different terrain takes effect
+    // without a cache.
     const pos = mode === 'embodied' ? npcs.positionOf(avatarName) : null;
     const here = ambientTerrainFor(
       mode,
-      pos ? cellOf(pos.x, pos.z, CELL) : null,
-      cellOf(engine.target.x, engine.target.z, CELL),
-      (c) => tileAtCell(c)?.loc.terrain ?? '',
+      pos ? { x: pos.x, z: pos.z } : null,
+      { x: engine.target.x, z: engine.target.z },
+      (at) => tileAt(at.x, at.z)?.loc.terrain ?? '',
     );
     ambience = terrainSwitch(ambience, here, performance.now());
     audio.playAmbient(ambientOn ? pickAmbient(audioManifest, ambience.applied) : []);
@@ -2146,29 +2192,12 @@ async function startApp(username: string, role: string) {
   /** `tick()` only counts a figure as moving from 0.05 units away, and at a
    *  high frame rate ONE step is shorter than that — the avatar would stand
    *  still without a walk animation. So the goal is set a short lead ahead;
-   *  0.15 m reaches a boundary at most ~40 ms early. */
+   *  0.15 m is under a twentieth of a second of walking. */
   const MIN_LEAD = 0.15;
-  /** How long a refused edge is remembered. Without it a held key would fire a
-   *  request per frame against a block rule and bury the player in toasts. */
-  const REJECT_MEMORY_MS = 4000;
-  /** Deadline for one step request. Only ONE may be in flight, so a request
-   *  that never answers (proxy hiccup, server restart mid-step) would bar
-   *  every cell boundary until the page is reloaded — the figure would still
-   *  walk inside its cell and look merely "stuck", which is the worst kind of
-   *  broken. After the deadline the step counts as failed. */
-  const STEP_TIMEOUT_MS = 10_000;
-
-  /** At most ONE step request in flight: a second one could overtake the first
-   *  and the server would end up two cells away from the figure. While it runs,
-   *  the figure clamps at the next boundary instead of crossing again. */
-  let stepInFlight = false;
   /** Companion flag of the room walk (E3-T6), declared here because the two
-   *  INTERLOCK: a cell step and a room change are both "where the avatar is",
-   *  and the entry-room gate judges a step by the room the avatar is in. Let
-   *  them overlap and the NETWORK order decides whether the step through the
-   *  door gets through. So neither starts while the other runs — at a cell
-   *  boundary that is the same clamp a step in flight already causes. The T6
-   *  section further down owns the writes. */
+   *  used to INTERLOCK with the cell step. The step is gone (E4 task 5), so
+   *  what is left is the room walk's own guard: only ONE `/play/enter-room`
+   *  may be in flight. The T6 section further down owns the writes. */
   let roomRequestInFlight = false;
   /** How long a lift ride may take before the figure is handed back even
    *  without arriving. A safety net only: the figure can be held up (a model
@@ -2178,13 +2207,12 @@ async function startApp(username: string, role: string) {
   /** Distance that counts as "arrived at the holding point" — in XZ AND in
    *  height, so the vertical part of the ride has to be over as well. */
   const ELEVATOR_ARRIVE = 0.2;
-  /** The running lift ride, declared here for the same reason as the flag
-   *  above: it INTERLOCKS with the walking hook. While it is set the hook does
-   *  not steer at all — the goal belongs to the lift, and one steering frame
-   *  would overwrite it, walking the figure out of the shaft while its height
-   *  still blends to the other storey (through the ceiling) into a room nobody
-   *  chose, which the room walk then pays for with a second
-   *  `/play/enter-room`. The elevator section further down owns the writes. */
+  /** The running lift ride. It INTERLOCKS with the walking hook: while it is
+   *  set the hook does not steer at all — the goal belongs to the lift, and
+   *  one steering frame would overwrite it, walking the figure out of the
+   *  shaft while its height still blends to the other storey (through the
+   *  ceiling) into a room nobody chose, which the room walk then pays for with
+   *  a second `/play/enter-room`. The elevator section owns the writes. */
   let elevatorRide: { goal: THREE.Vector3; until: number } | null = null;
   /** Deadline of a walk-in (E3 acceptance, "walking on the roof"). Same
    *  safety net as the ride's, and generous for the same reason: the pace the
@@ -2195,145 +2223,205 @@ async function startApp(username: string, role: string) {
    *  `tick()` blends it while the figure walks. */
   const WALK_IN_ARRIVE = 0.3;
   /** The running walk-in, and it owns the figure exactly as the ride does: an
-   *  entry granted at a boundary opening leaves the figure short of the cell
-   *  line, and it has to walk in THROUGH the opening instead of lingering
-   *  where the authority check snaps it back from. One steering frame would
-   *  overwrite the goal, so the hook keeps its hands off until the figure
-   *  stands at the point. Written below in `enterOfferedLocation`. */
+   *  accepted entry offer walks the figure THROUGH the opening it was made at,
+   *  and the pos report that crosses the boundary is the one taken on the way.
+   *  One steering frame would overwrite the goal — and, worse, could steer the
+   *  figure into the footprint anywhere BUT the opening, which the server
+   *  refuses (`no_opening`). Written below in `enterOfferedLocation`. */
   let walkIn: { goal: THREE.Vector3; until: number } | null = null;
-  /** Cell our own step aims at (or came back to after a refusal) — the
-   *  authority check must not read it as foreign movement. It is consumed by
-   *  the FIRST worldmap poll after the request ended (see
-   *  `reconcileAvatarCell`), not by a timer. */
-  let expectedCell: Cell | null = null;
-  /** Until when a `not_at_entry_room` 403 counts as a race and is answered by
-   *  running the entry-room chain instead of by a toast. Bounds it to one
-   *  automatic attempt per memory window — a second refusal in a row is a real
-   *  disagreement with the server and belongs on screen. */
-  let entryRetryUntil = 0;
-  /** cell key -> `performance.now()` stamp until which a refused crossing stays
-   *  refused. The monotonic clock, never the wall clock: this is a DURATION,
-   *  and the same choice the room walk (T6) makes for its own cooldowns. */
-  const rejectedUntil = new Map<string, number>();
-  /**
-   * The ONE cell boundary the server has been asked about. It exists because
-   * the request leaves before the figure reaches the line: the goal runs
-   * MIN_LEAD ahead, so the figure still stands ~0.09 m short when the request
-   * goes out. Without this memory the frames until the answer clamp the figure
-   * in place, the answer arrives while it is STILL in the old cell, and the
-   * very next frame asks again — three requests per edge, latency or not. The
-   * server counts each of them from its own cell and ends up two cells ahead
-   * of the figure: 403s for edges nobody walked at, then a snap-back.
-   *
-   * `granted` is what the answer buys: from then on the figure walks over that
-   * boundary without asking again. The permission belongs to the cell it was
-   * asked from and is dropped as soon as the figure stands somewhere else.
-   */
-  let askedEdge: { from: Cell; to: Cell; granted: boolean } | null = null;
 
-  async function requestStep(direction: StepDirection, from: Cell, to: Cell,
-    edge: { granted: boolean }) {
-    stepInFlight = true;
-    expectedCell = to;
+  // --- Position reporting (E4 task 5) ---------------------------------------
+  //
+  // THE MOVEMENT CHANNEL, and there is only this one. The grid world asked the
+  // server for permission at every cell boundary; the metre world has no
+  // boundaries to ask about, so the client walks the figure and REPORTS where
+  // it stands (`POST /play/pos`). The server judges the point — step
+  // plausibility, terrain, and the full entry/exit gate when the point derives
+  // another location — and answers with what it stored.
+  //
+  // Refusals are not exceptions here, they are how the player learns that a
+  // place is locked: the answer carries the LAST VALID point, the figure is
+  // pulled back onto it and the server's sentence goes into a toast.
+
+  /** How often a MOVING avatar reports, in milliseconds. The server accepts
+   *  about four a second and drops the rest silently, so this stays under that
+   *  ceiling: three a second is roughly one report per metre walked. */
+  const POS_REPORT_MS = 330;
+  /** Deadline for one report. Only ONE may be in flight (a second could
+   *  overtake the first and the server would judge the steps out of order), so
+   *  a request that never answers would silence the channel for the rest of
+   *  the session. */
+  const POS_TIMEOUT_MS = 8000;
+  /** How far the local figure may stand from the server's point before the
+   *  correction is a snap rather than a walk (metres). Below it the figure
+   *  glides there at walking pace, which hides the jitter of a poll; above it
+   *  it is a teleport or a refusal, and pretending otherwise would walk the
+   *  figure through walls. */
+  const POS_SNAP_M = 2;
+  /** How long the SAME refusal stays quiet after it was shown once. A player
+   *  leaning into a locked border would otherwise collect three toasts a
+   *  second saying the same thing. */
+  const REFUSAL_QUIET_MS = 4000;
+
+  let posInFlight = false;
+  /** When the last report went out (`performance.now()`, a DURATION clock). */
+  let lastReportAt = 0;
+  /** The point the last report carried, so a standing figure reports once and
+   *  then stops talking: `null` = nothing reported yet this session. */
+  let reportedPos: { x: number; z: number } | null = null;
+  /** True while the figure moved since the last report — the flag that turns
+   *  the "one final report on stop" into a single call instead of a stream. */
+  let posDirty = false;
+  /** Reason of the last refusal and until when it stays quiet. */
+  let quietReason = '';
+  let quietUntil = 0;
+  /** The location/room the SERVER last confirmed for the avatar through a
+   *  report. Adopted immediately, exactly as the step answer used to be: it is
+   *  the server's own word, up to three seconds before the poll repeats it,
+   *  and without it the room walk would spend a whole poll judging the avatar
+   *  against the place it just left. */
+  function adoptReport(res: { location_id?: string; room_id?: string }): void {
+    // An empty room_id is the location's GROUND, not a missing answer — it
+    // must overwrite `roomOf` unconditionally, or the avatar keeps the room of
+    // the location it just left.
+    roomOf.set(avatarName, res.room_id ?? '');
+  }
+
+  /** How far a correction may be walked instead of jumped (metres). Beyond it
+   *  the server did not correct the figure, it MOVED it — a teleport, a party
+   *  pull, an admin drag — and walking there would take half a minute. */
+  const CORRECT_WALK_M = 8;
+  /** Safety deadline of a walking correction: at WALK_SPEED the 8 m above take
+   *  2.4 s, and a figure held up by a model reload must not keep the keys. */
+  const CORRECT_MS = 3000;
+  /** Distance that counts as "corrected" (metres). */
+  const CORRECT_ARRIVE = 0.2;
+  /** The running correction. It owns the figure exactly as a walk-in does —
+   *  without that the very next steering frame would overwrite the goal and
+   *  the figure would never arrive at the point the server insists on. */
+  let correction: { goal: THREE.Vector3; until: number } | null = null;
+
+  /**
+   * Put the figure where the server says it is.
+   *
+   * Near points are WALKED (at WALK_SPEED, the figure keeps its footing and
+   * its facing — a refusal at a border is a metre or so, and jerking the
+   * figure for that would read as a stutter); a far one is a hard put-back,
+   * because it is not a correction at all but a move the player did not make.
+   */
+  function correctTo(point: { x: number; z: number }): void {
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    const target = new THREE.Vector3(point.x, groundY(point.x, point.z), point.z);
+    if (Math.hypot(point.x - pos.x, point.z - pos.z) > CORRECT_WALK_M) {
+      npcs.snapPlayerTo(avatarName, target);
+      correction = null;
+    } else {
+      npcs.setPlayerTarget(avatarName, target);
+      correction = { goal: target.clone(), until: performance.now() + CORRECT_MS };
+    }
+    // Whatever the figure was walking towards was planned from a position the
+    // server does not share — the plan is void. A WALK-IN too: it aimed
+    // through an opening the server has just refused to let us through, and
+    // leaving it running would fight the correction until its own deadline.
+    cancelRoute();
+    walkIn = null;
+    reportedPos = { x: point.x, z: point.z };
+    posDirty = false;
+  }
+
+  /** Send ONE report. Never throws: every refusal is either a correction plus
+   *  a toast, or (the throttle) nothing at all. */
+  async function reportPos(x: number, z: number): Promise<void> {
+    posInFlight = true;
+    lastReportAt = performance.now();
     const abort = new AbortController();
-    const deadline = setTimeout(() => abort.abort(), STEP_TIMEOUT_MS);
+    const deadline = setTimeout(() => abort.abort(), POS_TIMEOUT_MS);
     try {
-      const moved = await deadAvatarStep(direction, abort.signal);
-      // The boundary is open now: the figure walks over it in the next frames
-      // WITHOUT another request. No snap — the server is already there and the
-      // worldmap confirms it within a poll.
-      edge.granted = true;
-      // A step into another location lands the avatar in that location's ENTRY
-      // room, and the answer says which one that is. Taking it is not a local
-      // anticipation — it is the server's own word, three seconds before the
-      // poll repeats it. Without it the room walk below is blind for a whole
-      // poll and adopts the nearest room centre out of nothing, which walks
-      // the avatar straight out of the entry room it was just placed in; the
-      // step back out then earns a `not_at_entry_room` 403.
-      // An empty room_id is the location's GROUND, not a missing answer — it
-      // must overwrite roomOf unconditionally, or the avatar keeps the room
-      // of the location it just left.
-      roomOf.set(avatarName, moved.room_id ?? '');
+      const res = await api.postPos(x, z, abort.signal);
+      // Throttled: the server took none of it and said so. Not an error, not
+      // a correction — the next report carries the newer position anyway.
+      if (!res.ok) return;
+      reportedPos = { x, z };
+      adoptReport(res);
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
-      rejectedUntil.set(`${to.gx},${to.gy}`, performance.now() + REJECT_MEMORY_MS);
-      expectedCell = from;
-      if (askedEdge === edge) askedEdge = null;
-      // The crossing did NOT happen, so the figure must not be standing past
-      // the line: a hard put-back, not a walk-back — otherwise the local cell
-      // stays the new one and the very next frame walks on into it.
-      const p = npcs.positionOf(avatarName);
-      if (p) {
-        const back = clampToCell(p.x, p.z, from, CELL);
-        npcs.snapPlayerTo(avatarName, new THREE.Vector3(back.x, p.y, back.z));
+      if (!err) {
+        // A dropped request is a network hiccup, not a verdict: the figure
+        // stays where it is and the next report tries again.
+        if (!abort.signal.aborted) console.warn('[walk] position report failed', e);
+        return;
       }
-      // A click route was planned across this edge — it is void now, whatever
-      // the reason. Walking on would only collect the same refusal again.
-      cancelRoute();
-      // The entry-room gate is walked by the client now (`entryRoomToEnter`),
-      // so this 403 is a RACE, not something the player did: the poll moved
-      // the avatar's room between the check and the request. A toast asking
-      // them to walk to a room the client walks to by itself is noise — the
-      // chain is simply run once and the edge is not blocked for it. Once,
-      // though: a second refusal inside the memory window IS worth telling
-      // them about instead of looping silently.
-      // The chain has to REALLY start for that, though: with no room to walk
-      // to (the client already believes it is in the entry room, or that room
-      // is on cooldown) clearing the edge only bought a second request and a
-      // toast one refusal later. Then the refusal counts as an ordinary one
-      // and goes out as it stands.
-      const race = err?.reason === 'not_at_entry_room'
-        && performance.now() > entryRetryUntil
-        ? entryRoomToEnter(tileAtCell(from), EXIT_EDGE_OF[direction]) : null;
-      if (race) {
-        entryRetryUntil = performance.now() + REJECT_MEMORY_MS;
-        rejectedUntil.delete(`${to.gx},${to.gy}`);
-        void enterEntryRoom(race);
+      // The server refused the point. Its answer carries the last one it
+      // vouched for, and that is where the figure belongs — and the refused
+      // point itself becomes a blocked disc, so the next frames slide along
+      // that border instead of running into the same refusal.
+      rememberRefused(x, z);
+      if (err.pos) correctTo(err.pos);
+      const now = performance.now();
+      if (err.message && (err.reason !== quietReason || now > quietUntil)) {
+        quietReason = err.reason;
+        quietUntil = now + REFUSAL_QUIET_MS;
+        uiActions.toast?.(err.message);
       }
-      // 403 = a rule refused it and the server wrote the reason for the
-      // player. 404 = there is simply no location that way, which the edge
-      // already shows — no toast for that.
-      else if (err?.status === 403) uiActions.toast?.(err.message);
-      else if (abort.signal.aborted) console.warn('[walk] step request timed out');
-      else if (!err) console.warn('[walk] step request failed', e);
     } finally {
       clearTimeout(deadline);
-      stepInFlight = false;
+      posInFlight = false;
     }
   }
 
-  // --- Click to walk (E3-T4) ------------------------------------------------
-  // A ground click plans a route ONCE (game/clickmove.ts); walking it is the
-  // same frame hook, the same cell boundaries and the same step requests as
-  // WASD — the route only replaces the direction the hook steers in.
-  /** Reached-a-waypoint threshold. Must stay above the 0.05 that `tick()`
-   *  needs to count a figure as moving, otherwise the last centimetres would
-   *  never be walked and the route would never finish. */
-  const ROUTE_ARRIVE = 0.2;
-  let route: ClickRoute | null = null;
-  let routeAt = 0;                      // index of the waypoint being steered at
+  /**
+   * The reporting tick, called from the walking hook every frame.
+   *
+   * Two rules, and between them they cover both halves of the contract
+   * ("~3/s while moving plus one final on stop"):
+   *  - while the figure MOVES, a report every `POS_REPORT_MS`;
+   *  - when it stops, ONE more report with the point it stopped at — that is
+   *    what `posDirty` is for: it is set by the movement and cleared by the
+   *    report, so a standing figure sends nothing at all.
+   */
+  function tickPosReport(pos: { x: number; z: number }): void {
+    if (posInFlight) return;
+    if (!posDirty) return;
+    if (performance.now() - lastReportAt < POS_REPORT_MS) return;
+    void reportPos(Math.round(pos.x * 100) / 100, Math.round(pos.z * 100) / 100);
+    posDirty = false;
+  }
+
+  /** The figure moved: remember it for the next report. Called with the point
+   *  the frame ended at, so a stopped figure's LAST position is reported too. */
+  function markMoved(pos: { x: number; z: number }): void {
+    if (reportedPos
+      && Math.abs(reportedPos.x - pos.x) < 0.01
+      && Math.abs(reportedPos.z - pos.z) < 0.01) return;
+    posDirty = true;
+  }
+
+  // --- Click to walk (E3-T4; free metres since E4 task 5) -------------------
+  // A ground click plans ONE thing: the point to walk at (game/clickmove.ts).
+  // Walking it is the same frame hook with the same collision as WASD — the
+  // goal only replaces the direction the keys would give. NO CLIENT A* in E4
+  // (plan task 5): the figure takes the straight line and slides along what it
+  // meets; a goal behind a building is not reached and the walk gives up
+  // (`STALL_FRAMES`), which is honest about what a route planner would be.
+  /** The point the click order steers at, or null when none is running. */
+  let route: { x: number; z: number } | null = null;
+  /** Frames in a row in which the walk got nowhere — see `walkStalled`. */
+  let routeStalled = 0;
 
   function cancelRoute() {
     if (!route) return;
     route = null;
+    routeStalled = 0;
     npcs.setWalkTarget(null);
   }
 
-  /** Point the hook currently steers at: cell centres for the waypoints in
-   *  between, the exact planned goal for the last one. */
-  function routeGoal(): { x: number; z: number } | null {
-    if (!route || routeAt >= route.cells.length) return null;
-    if (routeAt === route.cells.length - 1) return route.goal;
-    const c = route.cells[routeAt];
-    return { x: c.gx * CELL, z: c.gy * CELL };
-  }
-
-  /** Ground height at a world point, so marker and walk goal sit on the tile
-   *  instead of on the y=0 plane. */
+  /** Ground height at a world point, so marker and walk goal sit on the
+   *  footprint under them instead of on the y=0 plane. */
   const groundProbe = new THREE.Vector3();
   function groundY(x: number, z: number): number {
-    const tile = tileAtCell(cellOf(x, z, CELL));
-    if (!tile) return 0;
+    const tile = tileAt(x, z);
+    if (!tile) return GROUND_Y;
     groundProbe.set(x, 0, z);
     return tileGroundY(tile, groundProbe);
   }
@@ -2342,7 +2430,7 @@ async function startApp(username: string, role: string) {
     const state = getGameState();
     // Overview mode is untouched: there a click stays a tile pick. A running
     // lift ride or walk-in owns the figure, so no new order is planned during
-    // those either — a route planned from the old position would walk the
+    // those either — a goal planned from the old position would walk the
     // figure back out of the opening it just came through.
     if (state.mode !== 'embodied' || state.movementLocked
       || elevatorRide || walkIn) return false;
@@ -2355,31 +2443,17 @@ async function startApp(username: string, role: string) {
     // the drawn one, so it is right for every storey without a second source.
     const hit = engine.groundPointAt(x, y, pos.y);
     if (!hit) return false;
-    const planned = planRoute(
-      { x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
-      (gx, gy) => passableCells.has(`${gx},${gy}`),
-      (gx, gy) => locIdAtCell.has(`${gx},${gy}`),
-      (a, b) => {
-        const pts = pathGrid.findPath(a.gx, a.gy, b.gx, b.gy);
-        if (!pts.length) return null;
-        return pts.map((p) => {
-          const c = PathGrid.cellOf(p);
-          return { gx: c.x, gy: c.y };
-        });
-      },
-      CELL,
-    );
-    // Nothing walkable under the pointer (a building with no way to it, the
-    // map edge): let the click fall through to the tile's info panel.
-    if (!planned) return false;
-    route = planned;
-    routeAt = 0;
+    const goal = planClickWalk({ x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
+      (bx, bz) => blockedForAvatar(bx, bz));
+    // Nothing walkable under the pointer (a building, water, the point one
+    // already stands on): let the click fall through to the tile's info panel.
+    if (!goal) return false;
+    route = goal;
+    routeStalled = 0;
     // Marker height from the same source the walking uses: the room floor
     // where the avatar's room reaches, the ground skin everywhere else.
-    const goalCell = cellOf(planned.goal.x, planned.goal.z, CELL);
-    npcs.setWalkTarget(new THREE.Vector3(planned.goal.x,
-      roomFloorY(tileAtCell(goalCell)) ?? groundY(planned.goal.x, planned.goal.z),
-      planned.goal.z));
+    npcs.setWalkTarget(new THREE.Vector3(goal.x,
+      roomFloorY(tileAt(goal.x, goal.z)) ?? groundY(goal.x, goal.z), goal.z));
     return true;
   };
 
@@ -2402,17 +2476,14 @@ async function startApp(username: string, role: string) {
     const state = getGameState();
     if (state.mode !== 'embodied') {
       cancelRoute();                      // leaving the mode drops the route
-      // …and with it the whole step machine: a pending permission or an
-      // expected cell from the last walk must not survive into the next
-      // embodied session, where it would belong to a cell nobody stands on.
-      askedEdge = null;
-      expectedCell = null;
       elevatorRide = null;   // ditto for a ride nobody is in any more
       walkIn = null;         // …and for a walk-in nobody is walking
+      correction = null;     // …and for a correction of a figure nobody steers
       return;
     }
     // Party follower: the leader carries the avatar along; the server refuses
-    // every step anyway, so the keys stay dead instead of collecting 403s.
+    // every report anyway (403 `party_follower`), so the keys stay dead
+    // instead of collecting toasts.
     if (state.movementLocked) {
       cancelRoute();
       return;
@@ -2432,16 +2503,30 @@ async function startApp(username: string, role: string) {
       if (!arrived && performance.now() <= elevatorRide.until) return;
       elevatorRide = null;
     }
-    // A walk-in owns the figure the same way: the entry was granted and the
-    // figure walks in through the boundary opening. Steering during it is
-    // what left the avatar on the cell line — the very finding this exists
-    // for. XZ only, the height is the ground and `tick()` blends it on the
-    // way.
+    // A walk-in owns the figure the same way: the offer was accepted and the
+    // figure walks THROUGH the boundary opening, which is what makes the next
+    // position report a legal crossing. Steering during it could put the
+    // figure into the footprint anywhere but at the opening — the very point
+    // the server refuses. XZ only, the height is the ground and `tick()`
+    // blends it on the way. The reports keep running during it: the crossing
+    // IS one of them.
     if (walkIn) {
       const arrived = Math.hypot(walkIn.goal.x - pos.x, walkIn.goal.z - pos.z)
         < WALK_IN_ARRIVE;
+      markMoved({ x: pos.x, z: pos.z });
+      tickPosReport({ x: pos.x, z: pos.z });
       if (!arrived && performance.now() <= walkIn.until) return;
       walkIn = null;
+    }
+    // A correction owns the figure the same way, and for the same reason: the
+    // server insists on a point, and one steering frame would pull the figure
+    // off it again. Nothing is REPORTED while it runs — the point is the
+    // server's own word, and telling it back would be an echo.
+    if (correction) {
+      const arrived = Math.hypot(correction.goal.x - pos.x, correction.goal.z - pos.z)
+        < CORRECT_ARRIVE;
+      if (!arrived && performance.now() <= correction.until) return;
+      correction = null;
     }
     // ONE pace (E4): `WALK_SPEED` is 3.4 metres a second and a metre is a
     // metre, indoors and out. The interior factor that used to sit here (and
@@ -2454,101 +2539,58 @@ async function startApp(username: string, role: string) {
     let dir = keyDir;
     // How far the goal may be pushed ahead this frame. Unlimited for the keys
     // (the direction just carries on), capped at the remaining distance while
-    // a route runs, so the figure stops ON the waypoint instead of past it.
+    // a click order runs, so the figure stops ON the goal instead of past it.
     let reach = Infinity;
-    while (!dir && route) {
-      const wp = routeGoal();
-      if (!wp) { cancelRoute(); break; }   // last waypoint reached: done
-      const dx = wp.x - pos.x;
-      const dz = wp.z - pos.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < ROUTE_ARRIVE) { routeAt += 1; continue; }
-      dir = { x: dx / dist, z: dz / dist };
-      reach = dist;
-    }
-    if (!dir) return;
-    const here = cellOf(pos.x, pos.z, CELL);
-    // A permission belongs to the cell it was asked from; standing anywhere
-    // else means it has been used (or the figure was moved away from it).
-    if (askedEdge && (askedEdge.from.gx !== here.gx || askedEdge.from.gy !== here.gy)) {
-      askedEdge = null;
-    }
-    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
-    let x = pos.x + dir.x * lead;
-    let z = pos.z + dir.z * lead;
-    let next = cellOf(x, z, CELL);
-    // Corner: a goal that crosses BOTH axes has no compass step. Split it into
-    // the single-axis step it really is instead of reading it as blocked —
-    // otherwise an exact 45° heading (the camera's default) sticks to the
-    // corner for good.
-    if (next.gx !== here.gx && next.gy !== here.gy) {
-      ({ x, z } = splitDiagonal(x, z, here, CELL));
-      next = cellOf(x, z, CELL);
-    }
-    if (next.gx !== here.gx || next.gy !== here.gy) {
-      const step = stepDirection(here, next);
-      const key = `${next.gx},${next.gy}`;
-      if (askedEdge && askedEdge.to.gx === next.gx && askedEdge.to.gy === next.gy) {
-        // Exactly this boundary is already asked for: wait for the answer,
-        // then walk over it. Never a second request for the same edge.
-        if (!askedEdge.granted) ({ x, z } = clampToCell(x, z, here, CELL));
+    if (!dir && route) {
+      if (reachedGoal({ x: pos.x, z: pos.z }, route)) {
+        cancelRoute();
       } else {
-        // What bars a crossing is the LOCATION, not the terrain: every known
-        // neighbour is worth a step request, and the server answers whether it
-        // is allowed (403 + toast). Only a cell no location covers is a wall
-        // the client may decide about on its own.
-        const barred = !step || !locIdAtCell.has(key)
-          || (rejectedUntil.get(key) ?? 0) > performance.now();
-        // Room the avatar has to be in before it may leave this location
-        // OVER THIS EDGE (E3 acceptance "the village cannot be left"), null
-        // when it already is, the location has no gate, or an authored
-        // pass-through opens this very edge from the room it stands in.
-        const gateRoom = step
-          ? entryRoomToEnter(tileAtCell(here), EXIT_EDGE_OF[step]) : null;
-        // `roomRequestInFlight` clamps exactly like a step in flight (E3-T6):
-        // a room change and a cell step must not overlap, or the entry-room
-        // gate judges this step against a room that is still moving.
-        if (barred || stepInFlight || roomRequestInFlight) {
-          // A route that runs into a barred edge is void — the plan was made
-          // against the map, so this is a refusal the plan did not know about.
-          // A step merely in flight is NOT that: there the figure just waits
-          // at the boundary for its turn.
-          if (barred) cancelRoute();
-          ({ x, z } = clampToCell(x, z, here, CELL));
-        } else if (gateRoom) {
-          // The entry-room gate is 2D logic — in 3D the client walks it. The
-          // avatar stands in a room that is not the one this location is left
-          // through, so the room change goes FIRST, through the one
-          // room-request machine (`enterRoomOnFoot` sets the interlock flag in
-          // the same frame). The figure waits at the boundary meanwhile,
-          // exactly as it waits for a step: one request, no hail, and the step
-          // follows in the frame after the answer.
-          void enterEntryRoom(gateRoom);
-          ({ x, z } = clampToCell(x, z, here, CELL));
-        } else {
-          askedEdge = { from: here, to: next, granted: false };
-          void requestStep(step, here, next, askedEdge);
-          // Behind the line until the answer comes: asking AND walking on in
-          // the same frame is what used to trigger the repeat requests.
-          ({ x, z } = clampToCell(x, z, here, CELL));
-        }
+        const to = goalDir({ x: pos.x, z: pos.z }, route);
+        if (!to) cancelRoute();
+        else { dir = { x: to.x, z: to.z }; reach = to.dist; }
       }
     }
-    // The clamp pulls the goal to the inset edge, which can be BEHIND the
-    // figure — `tick()` would walk backwards and turn the figure around every
-    // frame. On a blocked axis the goal is the position itself (stand still),
-    // the free axis keeps sliding along the edge.
-    ({ x, z } = keepAhead({ x, z }, pos, dir));
+    if (!dir) {
+      // Standing still is when the FINAL report of a walk goes out — the
+      // server's last word about where the avatar is must be where it really
+      // stopped, not where it happened to be a third of a second earlier.
+      tickPosReport({ x: pos.x, z: pos.z });
+      return;
+    }
+    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
+    const from = { x: pos.x, z: pos.z };
+    // The footprint the figure stands in — looked up ONCE per frame and handed
+    // to both the blocker and the wall/floor lookups below.
+    const here = tileAt(pos.x, pos.z);
+    let { x, z } = { x: pos.x + dir.x * lead, z: pos.z + dir.z * lead };
+    // OUTDOORS the world itself stops the figure: impassable terrain and the
+    // footprints of locations the avatar is not in. Both slide (the movement
+    // keeps the component that runs ALONG the boundary), so walking into a
+    // wall of water follows the shore instead of nailing the figure to it.
+    // This is what the cell clamps used to be — and unlike them it is not a
+    // permission but geometry, which is why it needs no server round trip.
+    ({ x, z } = slideBlocked(from, { x, z }, (bx, bz) => blockedFor(here, bx, bz)));
     // Walls have the LAST word (E3 acceptance: "the avatar walks through
-    // walls"). After the cell logic and after `keepAhead`, because a goal that
-    // is perfectly legal for its cell may still lie in the next room — and a
-    // wall must outrank the anti-vibration rule, not the other way round. The
-    // clamp slides along the wall exactly as the cell clamp slides along a
-    // boundary, so nothing here has to stop the figure dead.
-    const walls = avatarWalls(tileAtCell(here));
+    // walls"), and they apply INSIDE an open interior, where the outdoor
+    // blockers say nothing: a room is inside the avatar's own footprint.
+    const walls = avatarWalls(here);
     if (walls) ({ x, z } = clampAgainstWalls(pos, { x, z }, walls.segments, walls.radius));
-    walkGoal.set(x, roomFloorY(tileAtCell(here)) ?? groundY(x, z), z);
+    // A click order that gets nowhere for a while has run into something the
+    // straight line cannot get round — drop it instead of pressing the figure
+    // against the obstacle for good.
+    if (route) {
+      routeStalled = walkStalled(from, { x, z }) ? routeStalled + 1 : 0;
+      if (routeStalled >= STALL_FRAMES) cancelRoute();
+    }
+    walkGoal.set(x, roomFloorY(here) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal);
+    // The report is about where the figure IS, not where it is being sent:
+    // `setPlayerTarget` only moves the goal, `tick()` walks the figure there.
+    // Reporting the goal would put the server up to one lead ahead of the
+    // picture — and at a boundary that is the difference between a legal
+    // point and a refused one.
+    markMoved({ x: pos.x, z: pos.z });
+    tickPosReport({ x: pos.x, z: pos.z });
   });
 
   /** Findings the SERVER made about a location (plan-betreten-und-tueren.md
@@ -2572,56 +2614,46 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  /** Authority check: while the player steers, the SERVER can still move the
-   *  avatar (teleport, party pull, admin). Such a move is a jump — the figure
-   *  goes to the server's tile and the camera follows. It must NOT fire for
-   *  our own steps, which are briefly out of sync in both directions: the
-   *  request has returned but this payload predates it (server = old cell,
-   *  expected = local), or the payload is already ahead of the walking figure
-   *  (server = expected, local = old cell).
+  /**
+   * Authority check: while the player steers, the SERVER can still move the
+   * avatar (teleport, party pull, admin, a travel arrival). Since E4 task 5
+   * that is a comparison of POINTS, not of cells — the payload carries the
+   * avatar's metre position (§ A12) and so does the local figure.
    *
-   *  That excuse is worth exactly ONE poll: the payload of the first poll
-   *  after the request ended may still have been in flight while the step was
-   *  answered, the next one cannot be. So `expectedCell` is consumed here
-   *  instead of expiring on a timer — a 15-second window used to blind the
-   *  check against real foreign movement for five polls in a row. */
-  function reconcileAvatarCell(map: WorldMap) {
+   * It must not fight our own reports, and it cannot: an accepted report IS
+   * the server's position, so the two agree by construction, and a REFUSED one
+   * has already put the figure back on the point this check would compare it
+   * with. What is left is genuine foreign movement — and the poll's word about
+   * it is up to three seconds old, which is why the threshold is metres and
+   * not centimetres.
+   *
+   * Under `POS_SNAP_M` the difference is the ordinary lag between a walking
+   * figure and the last report, and correcting it would tug the figure
+   * backwards every poll. Above it the figure GLIDES to the server's point
+   * when the distance is still walkable and is put back hard when it is not
+   * (`correctTo`) — a teleport is a jump, not a sprint across the map.
+   */
+  function reconcileAvatarPos(map: WorldMap) {
     if (getGameState().mode !== 'embodied') return;
-    if (stepInFlight) return;
+    // A report in flight would be compared against a payload that predates it.
+    if (posInFlight || walkIn || elevatorRide || correction) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     const me = map.characters.find((c) => c.name === avatarName);
-    const tile = me ? tiles.get(me.location_id) ?? null : null;
-    // The tile guard comes FIRST — see the `v1()` rule in the bridge block:
-    // casting an optional chain hides the `undefined` from the compiler and
-    // throws at runtime. `tiles` is empty until task 3, so this ran on every
-    // single poll, and the throw landed in the poll's catch: a red "offline"
-    // dot over a healthy backend, and the terrain refetch below it skipped.
-    if (!tile) return;
-    const gx = v1(tile.loc).grid_x;
-    const gy = v1(tile.loc).grid_y;
-    if (gx == null || gy == null) return;
-    const server: Cell = { gx, gy };
-    const local = cellOf(pos.x, pos.z, CELL);
-    if (server.gx === local.gx && server.gy === local.gy) {
-      expectedCell = null;                 // in sync, nothing outstanding
-      return;
+    // No point in the payload = the server has no position for the avatar at
+    // all (an unplaced location). Nothing to reconcile against.
+    if (!me?.pos) return;
+    const d = Math.hypot(me.pos.x - pos.x, me.pos.z - pos.z);
+    if (d <= POS_SNAP_M) return;
+    // `correctTo` moves the figure — walking the last few metres, jumping a
+    // real teleport. The camera follows only in the second case: a jump across
+    // the map must not leave the view behind, while a two-metre correction
+    // would fly the camera for nothing.
+    correctTo(me.pos);
+    if (d > CORRECT_WALK_M) {
+      const p = new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z);
+      engine.flyTo(p, engine.targetDist);
     }
-    if (expectedCell
-      && ((expectedCell.gx === local.gx && expectedCell.gy === local.gy)
-        || (expectedCell.gx === server.gx && expectedCell.gy === server.gy))) {
-      expectedCell = null;               // one poll of grace, then it counts
-      return;
-    }
-    const p = tile.center.clone();
-    p.setY(tileGroundY(tile, p));
-    npcs.snapPlayerTo(avatarName, p);
-    engine.flyTo(p, engine.targetDist);
-    expectedCell = null;
-    askedEdge = null;                    // that permission was for another cell
-    // The figure was moved from under the route — the plan started somewhere
-    // else and would now walk back through cells it never chose.
-    cancelRoute();
   }
 
   // --- Changing rooms on foot (E3-T6) ---------------------------------------
@@ -2643,10 +2675,9 @@ async function startApp(username: string, role: string) {
    *  After that the request counts as lost — a confirmation that never arrives
    *  would otherwise bar that room for the rest of the session. */
   const ROOM_CONFIRM_MS = 10_000;
-  /** Deadline for one room request. Same reason as `STEP_TIMEOUT_MS`: only ONE
-   *  may be in flight and it interlocks with the walking steps, so a request
+  /** Deadline for one room request. Only ONE may be in flight, so a request
    *  that never answers (proxy hiccup, server restart) would bar every room
-   *  change AND every cell boundary for the rest of the session. */
+   *  change for the rest of the session. */
   const ROOM_TIMEOUT_MS = 10_000;
   let roomWalk: RoomWalkState = idleRoomWalk();
   /** Room the server was asked for, until `roomOf` confirms it. NOT a local
@@ -2832,56 +2863,16 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  /**
-   * The room the avatar has to be in before it may leave this location over
-   * `exitEdge` — its ENTRY room — or null when there is nothing to do (E3
-   * acceptance: "the village cannot be left, you have to walk to the square
-   * first").
-   *
-   * The gate itself is the server's (`world_ops.move_avatar_step` refuses a
-   * step out of any other room, 403 `not_at_entry_room`). In the 2D UI the
-   * player clicks the room chip themselves; walking a figure through a world
-   * has no such moment, so the client walks the rule instead of reporting it.
-   * The server stays untouched and keeps deciding — this only takes the step
-   * the player would otherwise have to guess at.
-   *
-   * The rule is per EDGE, which is why it needs one: an authored pass-through
-   * lets one out of its own linked room (the ground, when it links to none)
-   * over its own edge, so a detour through the entry room would be a detour
-   * the server never asked for — and one a rule locking that room could make
-   * impossible.
-   */
-  function entryRoomToEnter(tile: Tile | null, exitEdge: Edge): string | null {
-    if (!tile) return null;
-    const entry = (tile.loc.entry_room || '').trim();
-    if (!entry) return null;                       // location without a gate
-    const room = avatarRoomId(tile);
-    // No room resolved at all (outdoors, a payload still on its way): nothing
-    // to correct, and the server decides exactly as before.
-    if (!room || room === entry) return null;
-    // The server's own rule first: standing at an opening of this edge is a
-    // way out on its own.
-    const openings = (scenes.get(tile.loc.id)?.boundary_openings ?? [])
-      .map((o) => ({ edge: o.edge, room_id: o.room_id }));
-    if (mayLeaveAcross(exitEdge, room, entry, openings,
-      getGameState().groundRoomId)) return null;
-    if (!tile.loc.rooms.some((r) => r.id === entry)) return null;
-    // A refused entry room is not walked around in circles: let the ordinary
-    // step go out and let the server say why, in its own words.
-    if ((roomRejectedUntil.get(entry) ?? 0) > performance.now()) return null;
-    return entry;
-  }
-
-  /** Enter the entry room so the next step out may pass. The ONE room-request
-   *  machine, and the server's answer is adopted the same way the step answer
-   *  is: it IS the avatar's room now, three seconds before the poll repeats
-   *  it — without that the gate would fire again in the very next frame. */
-  async function enterEntryRoom(roomId: string): Promise<boolean> {
-    if (!await enterRoomOnFoot(roomId)) return false;
-    roomOf.set(avatarName, roomId);
-    roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
-    return true;
-  }
+  // `entryRoomToEnter` + `enterEntryRoom` lived here: the client walked the
+  // avatar into the location's ENTRY ROOM before it took the step out, because
+  // the grid step refused any other room with a 403 `not_at_entry_room`. Both
+  // are GONE with the step (E4 task 5). Leaving is judged by the server on the
+  // position report now (`boundary_entry.may_leave` with the room the avatar
+  // stands in) and refused with `leave_blocked` — the figure is put back on
+  // the last valid point and the server's sentence goes into a toast. Walking
+  // to the entry room is the player's move again, which is what it is in the
+  // 2D UI as well; anticipating it would mean a second gate beside the one
+  // that decides.
 
   /** Storey the displayed one was last pulled to per tile — the memory that
    *  makes the following EDGE-triggered (see below). */
@@ -2924,7 +2915,7 @@ async function startApp(username: string, role: string) {
     if (!pos) { roomWalk = idleRoomWalk(); return; }
     // The tile the figure STANDS on, not the one the worldmap names — while
     // walking, the two differ for up to one poll.
-    const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
+    const tile = tileAt(pos.x, pos.z);
     const current = tile ? avatarRoomId(tile) : null;
     if (requestedRoom
       && (current === requestedRoom
@@ -3020,10 +3011,9 @@ async function startApp(username: string, role: string) {
     if (!next || next === current) { roomWalk = out.state; return; }
     // A due switch that cannot leave keeps the OLD clock instead of the
     // re-armed one, so it goes out the moment the line is free and does not
-    // cost a second full hold. `stepInFlight` is the interlock: a cell step
-    // and a room change must not overlap (the entry-room gate judges the step
-    // by the room the avatar is in), so whichever started first finishes.
-    const gated = roomRequestInFlight || stepInFlight || next === requestedRoom
+    // cost a second full hold. The cell step it also used to wait for is gone
+    // (E4 task 5): a position report changes no room, so the two cannot race.
+    const gated = roomRequestInFlight || next === requestedRoom
       || (roomRejectedUntil.get(next) ?? 0) > performance.now();
     roomWalk = gated ? before : out.state;
     if (gated) return;
@@ -3063,7 +3053,7 @@ async function startApp(username: string, role: string) {
     if (!pos) return clear();
     // Only inside the OPEN interior of the tile the figure stands on, exactly
     // as the room walk judges it: from the outside there is no lift to use.
-    const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
+    const tile = tileAt(pos.x, pos.z);
     if (!tile || tile.fadeTarget !== 1 || !tile.elevatorStops) return clear();
     const room = avatarRoomId(tile);
     if (!room) return clear();
@@ -3098,18 +3088,17 @@ async function startApp(username: string, role: string) {
     setGameState({ elevatorOpen: false });   // the press closes the choice, always
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    const tile = tileAtCell(cellOf(pos.x, pos.z, CELL));
+    const tile = tileAt(pos.x, pos.z);
     const stop = tile?.elevatorStops?.get(level);
     if (!tile || !stop) return;
     const target = elevatorTargetRoom(level, elevatorStopsOf(tile), interiorRooms(tile));
     if (!target) return;
-    // The ONE room-request machine of the room walk — a ride while a cell step
-    // or another room change is in flight would let the network order decide
-    // where the avatar ends up (the entry-room gate judges a step by the room
-    // the avatar is in). No second enter-room path, and the SAME cooldown: a
-    // room the server just refused stays refused for the ride as well, or
+    // The ONE room-request machine of the room walk — a ride while another
+    // room change is in flight would let the network order decide which room
+    // the avatar ends up in. No second enter-room path, and the SAME cooldown:
+    // a room the server just refused stays refused for the ride as well, or
     // every press would run into the same 403.
-    if (roomRequestInFlight || stepInFlight
+    if (roomRequestInFlight
       || (roomRejectedUntil.get(target) ?? 0) > performance.now()) return;
     // A click order would fight the ride from the next frame on — and it was
     // made for the storey the player is leaving.
@@ -3132,23 +3121,32 @@ async function startApp(username: string, role: string) {
     setGameState({ elevator: { levels: state.elevator.levels, current: level } });
   }
 
-  // --- Entering an adjacent location (Etappe 3, "Betreten") -----------------
-  // The offer is view logic, the ENTRY is the server's: pressing F runs the
-  // very same `/world/avatar/step` flow the walking hook uses — entry-room
-  // chain, one step machine, one interlock set — and then walks the figure
-  // in. The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
-  // numbers in scripts/smoke_walk_math.mjs): within ENTER_RADIUS of an
-  // authored boundary opening (§ B1 Nr. 13) ON THE EDGE THE STEP CROSSES, of
-  // a 4-adjacent location — a location without such an opening offers no
-  // entry (2026-08-04), exactly as the server refuses that step.
+  // --- Entering a location (Etappe 3, "Betreten"; metres since E4 task 5) ---
+  // The offer is view logic, the ENTRY is the server's — and since free
+  // walking it is not a step but the next POSITION REPORT: pressing F walks
+  // the figure THROUGH the authored opening, and the report taken on the way
+  // in is what the server judges (opening tolerance, `accessible_when`,
+  // access rules). No silent auto-entry: the explicit offer stays, exactly as
+  // the old UX had it, because entering a place is a decision.
+  //
+  // The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
+  // numbers in client3d/scripts/smoke_enter_math.mjs): within ENTER_RADIUS of
+  // an authored boundary opening (§ B1 Nr. 13) of a location one is not in —
+  // a location without such an opening offers no entry (2026-08-04), exactly
+  // as the server refuses the crossing. The 4-adjacency and the edge filter
+  // are GONE with the cells: on a free plane there is no crossed edge, only
+  // the distance to the opening, which is what the server measures too.
   //
   // A LOCKED location makes no offer (task C2, § 3 decision 2: the hint does
   // not appear in the first place), but it is not forgotten either: the offer
   // is kept with the server's reason, so pressing F says why instead of doing
   // nothing at all. An open neighbour always wins over a locked one.
-  /** the standing offer, resolved to the cell the step must aim at.
-   *  `locked` = the server's own refusal sentence; empty for a real offer. */
-  let enterOffer: { locId: string; cell: Cell; locked: string } | null = null;
+  /** the standing offer, with the opening WORLD POINT the figure is walked to
+   *  when it is accepted. `locked` = the server's own refusal sentence, empty
+   *  for a real offer. */
+  let enterOffer: {
+    locId: string; point: { x: number; z: number }; locked: string;
+  } | null = null;
 
   function updateEnterOffer() {
     const state = getGameState();
@@ -3159,37 +3157,31 @@ async function startApp(username: string, role: string) {
     if (state.mode !== 'embodied' || state.movementLocked) return clear();
     const pos = npcs.positionOf(avatarName);
     if (!pos) return clear();
-    const here = cellOf(pos.x, pos.z, CELL);
-    const myLoc = locIdAtCell.get(`${here.gx},${here.gy}`);
+    const myLoc = tileAt(pos.x, pos.z)?.loc.id ?? '';
     const candidates: EntryTile[] = [];
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const t = tileAtCell({ gx: here.gx + dx, gy: here.gy + dy });
+    for (const t of tiles.values()) {
       // Only locations with a detail view to enter — walking onto plain
-      // passable ground is ordinary walking and needs no offer.
-      if (!t || t.loc.id === myLoc || !openable(t)) continue;
-      // Openings come TILE-LOCAL from the payload (world metres around the
-      // tile centre, § B1 Nr. 13) — the centre is added here exactly as the
-      // doorways and markers get it added in mountScene. The EDGE rides along:
-      // only the one the step crosses is a way in, and the rule filters on
-      // it (the payload's letter is already the world edge, rotation
-      // applied).
-      const openings = (scenes.get(t.loc.id)?.boundary_openings ?? []).map((o) => {
-        const at = tileToWorld(t, o.at_world[0], o.at_world[1]);
-        return { x: at.x, z: at.z, edge: o.edge };
-      });
+      // ground is ordinary walking and needs no offer. Distance is decided
+      // by `entryOfferNear`; a first cut here would only duplicate its rule.
+      if (!openable(t)) continue;
       candidates.push({
         locId: t.loc.id,
-        cell: { gx: v1(t.loc).grid_x!, gy: v1(t.loc).grid_y! },
-        openings,
+        footprint: { x: t.center.x, z: t.center.z, yaw: t.yaw },
+        // Openings come TILE-LOCAL from the payload (metres around the tile
+        // centre, § B1 Nr. 13, `tile_rotation` already applied by the
+        // server); `openingWorldPoints` turns them with the tile's own yaw,
+        // the § A1.1 mapping `tileToWorld` uses for every other payload point.
+        openings: (scenes.get(t.loc.id)?.boundary_openings ?? [])
+          .map((o) => ({ edge: o.edge, at: { x: o.at_world[0], z: o.at_world[1] } })),
         // The verdict of the neighbour poll, bound by ID at this moment — it
         // is per avatar and never travels in the cached payload above.
         locked: isLocked(state.lockedLocations, t.loc.id),
       });
     }
-    const offer = entryOfferNear({ x: pos.x, z: pos.z }, here, candidates);
+    const offer = entryOfferNear({ x: pos.x, z: pos.z }, myLoc, candidates);
     if (!offer) return clear();
     const locked = lockReason(state.lockedLocations, offer.locId);
-    enterOffer = { locId: offer.locId, cell: offer.cell, locked };
+    enterOffer = { locId: offer.locId, point: offer.point, locked };
     // Locked: no "Press F to enter" at all — the barred threshold is what the
     // player sees, and the key answers with the server's sentence.
     if (locked) {
@@ -3206,9 +3198,16 @@ async function startApp(username: string, role: string) {
 
   gameActions.enterLocation = () => { void enterOfferedLocation(); };
 
-  /** Perform the offered entry: the entry-room chain of the location one is
-   *  LEAVING first (the same 2D gate the walking hook walks), then the one
-   *  step request, then the walk-in towards the nearest boundary opening.
+  /** Perform the offered entry: walk the figure THROUGH the opening the offer
+   *  was made at. There is nothing to ask for — the crossing happens when the
+   *  position report taken on the way in derives the new location, and the
+   *  server's gate decides then (a refusal snaps the figure back and says
+   *  why, like any other refused report).
+   *
+   *  The goal is the opening's world point plus one step INWARD (`inward` is
+   *  the payload's unit normal): far enough inside the footprint to be a real
+   *  entry, close enough to the opening to stay well within the server's
+   *  crossing tolerance of 1.5 m.
    *
    *  A locked place is answered instead of entered: the server's own sentence,
    *  passed through untranslated (it is localized already), so the key is never
@@ -3221,45 +3220,33 @@ async function startApp(username: string, role: string) {
       uiActions.toast?.(offer.locked);
       return;
     }
-    // The one step/room machine: nothing may overlap a running request or a
-    // guided movement — the same interlocks the walking hook honours.
-    if (stepInFlight || roomRequestInFlight || elevatorRide || walkIn) return;
+    // Nothing may overlap a guided movement or a room request — the same
+    // interlocks the walking hook honours.
+    if (roomRequestInFlight || elevatorRide || walkIn) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    const here = cellOf(pos.x, pos.z, CELL);
-    const step = stepDirection(here, offer.cell);
-    if (!step) return;   // offer went stale — the avatar changed cells
-    if ((rejectedUntil.get(`${offer.cell.gx},${offer.cell.gy}`) ?? 0) > performance.now()) return;
+    const target = tiles.get(offer.locId);
+    if (!target) return;
     cancelRoute();
-    const gateRoom = entryRoomToEnter(tileAtCell(here), EXIT_EDGE_OF[step]);
-    if (gateRoom && !await enterEntryRoom(gateRoom)) return;
-    const edge = { from: here, to: offer.cell, granted: false };
-    askedEdge = edge;
-    await requestStep(step, here, offer.cell, edge);
-    if (!edge.granted) return;
-    // Granted, but the figure still stands short of the boundary — unlike a
-    // WASD step, where it is already walking. Without a walk-in the figure
-    // would linger on the old cell and the authority check would snap it to
-    // the tile centre two polls later. It aims at the nearest opening, one
-    // step inward (`inward` is the payload's unit normal), or the cell centre.
-    if (!walkIn) {
-      const target = tiles.get(offer.locId);
-      if (!target) return;
-      let goal: { x: number; z: number } | null = null;
-      let best = Infinity;
-      for (const o of scenes.get(offer.locId)?.boundary_openings ?? []) {
-        const at = tileToWorld(target, o.at_world[0], o.at_world[1]);
-        const inward = tileDirToWorld(target, o.inward[0], o.inward[1]);
-        const ox = at.x + inward.x * OPENING_WALK_IN_M;
-        const oz = at.z + inward.z * OPENING_WALK_IN_M;
-        const d = Math.hypot(ox - pos.x, oz - pos.z);
-        if (d < best) { best = d; goal = { x: ox, z: oz }; }
-      }
-      goal = goal ?? { x: target.center.x, z: target.center.z };
-      const g = new THREE.Vector3(goal.x, groundY(goal.x, goal.z), goal.z);
-      npcs.setPlayerTarget(avatarName, g);
-      walkIn = { goal: g.clone(), until: performance.now() + WALK_IN_MS };
+    // The inward normal of the opening the OFFER names — the nearest one is
+    // what `entryOfferNear` already picked, so this looks up its normal
+    // instead of choosing a second time.
+    let goal = { x: offer.point.x, z: offer.point.z };
+    let best = Infinity;
+    for (const o of scenes.get(offer.locId)?.boundary_openings ?? []) {
+      const at = tileToWorld(target, o.at_world[0], o.at_world[1]);
+      const d = Math.hypot(at.x - offer.point.x, at.z - offer.point.z);
+      if (d >= best) continue;
+      best = d;
+      const inward = tileDirToWorld(target, o.inward[0], o.inward[1]);
+      goal = { x: at.x + inward.x * OPENING_WALK_IN_M,
+               z: at.z + inward.z * OPENING_WALK_IN_M };
     }
+    const g = new THREE.Vector3(goal.x, groundY(goal.x, goal.z), goal.z);
+    npcs.setPlayerTarget(avatarName, g);
+    // From here the walk-in owns the figure: no steering, and the reports
+    // keep running — one of them IS the crossing.
+    walkIn = { goal: g.clone(), until: performance.now() + WALK_IN_MS };
   }
 
   // --- Talking by proximity (E3-T5) -----------------------------------------
@@ -3291,13 +3278,12 @@ async function startApp(username: string, role: string) {
     if (state.mode !== 'embodied' || !lastMap) return clear();
     const me = npcs.positionOf(avatarName);
     if (!me) return clear();
-    // The avatar's cell is LIVE (the player drives it), while its
+    // The avatar's POINT is LIVE (the player drives it), while its
     // `location_id` on the worldmap is up to one poll behind — reading the
     // location off the position means the prompt appears when the player has
-    // arrived, not three seconds later. Only if that cell carries no location
-    // at all does the map's answer stand in.
-    const here = cellOf(me.x, me.z, CELL);
-    const myLoc = locIdAtCell.get(`${here.gx},${here.gy}`)
+    // arrived, not three seconds later. Only if no footprint covers that
+    // point does the map's answer stand in.
+    const myLoc = tileAt(me.x, me.z)?.loc.id
       ?? lastMap.characters.find((c) => c.name === avatarName)?.location_id;
     if (!myLoc) return clear();
     const candidates: TalkCandidate[] = [];
@@ -3377,7 +3363,7 @@ async function startApp(username: string, role: string) {
     if (getGameState().mode === 'embodied') {
       const pos = npcs.positionOf(avatarName);
       if (pos) {
-        const t = tileAtCell(cellOf(pos.x, pos.z, CELL));
+        const t = tileAt(pos.x, pos.z);
         if (t && openable(t)) openLocation(t.loc.id);
         else closeOpenLocation();
       }

@@ -4,7 +4,6 @@ import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
-import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
 import { advanceProgress, catchUpStep, pointAtDistance, shouldSnap, type MetrePoint } from './travelPath';
 
@@ -158,7 +157,6 @@ export class NpcManager {
   group = new THREE.Group();
   private npcs = new Map<string, Npc>();
   private avatarName = '';
-  private grid: PathGrid | null = null;
   /** name of the picked figure (E3-T1) — the ring follows this, not the mesh */
   private selected: string | null = null;
   private selectRing: THREE.Mesh | null = null;
@@ -168,11 +166,6 @@ export class NpcManager {
   private walkTargetRing: THREE.Mesh | null = null;
 
   constructor(private figures: FigureLibrary | null = null) {}
-
-  /** Karten-Grid für die Wegfindung setzen (Gebäude blockieren). */
-  setPathGrid(grid: PathGrid) {
-    this.grid = grid;
-  }
 
   setAvatar(name: string) {
     this.avatarName = name;
@@ -471,17 +464,20 @@ export class NpcManager {
         npc.root.position.copy(st.pos);
         arrived = true;
       }
-      // Zielwechsel -> Weg planen: vorgegebene Zwischenstationen (Raum-
-      // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*). Travellers are
-      // exempt — on a journey the server route alone drives the figure, and
-      // so is the update that ENDS one: the arrival placed the figure where
-      // it belongs, and the door routing of this very update (the traveller
-      // had no shown room, the arrival gives it one) would walk it back out
-      // to the door and in again — the residual walk in another costume.
+      // Zielwechsel -> Zwischenstationen übernehmen (Raum-Ausgänge). The A*
+      // detour around buildings that stood here is GONE with the cell grid
+      // (E4 task 5, `scene/pathfind.ts` deleted): it was built from the v1
+      // grid keys the server stopped sending in E3, so it had been planning
+      // routes over `undefined` cells for a release. Without waypoints the
+      // figure walks the straight line, which is what it already did whenever
+      // the grid answered nothing. Travellers are exempt in any case — on a
+      // journey the server route alone drives the figure, and so is the
+      // update that ENDS one: the arrival placed the figure where it belongs,
+      // and the door routing of this very update (the traveller had no shown
+      // room, the arrival gives it one) would walk it back out to the door
+      // and in again — the residual walk in another costume.
       if (!npc.route && !arrived && !npc.target.equals(st.pos)) {
-        npc.waypoints = st.via?.length
-          ? st.via.map((v) => v.clone())
-          : this.planPath(npc.root.position, st.pos);
+        npc.waypoints = st.via?.length ? st.via.map((v) => v.clone()) : [];
       }
       npc.target.copy(st.pos);
       npc.face = st.face ?? null;
@@ -601,17 +597,6 @@ export class NpcManager {
       this.group.add(line);
       npc.travelLine = line;
     }
-  }
-
-  /** Weg von A nach B über begehbare Zellen; leer = direkte Linie genügt. */
-  private planPath(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3[] {
-    if (!this.grid) return [];
-    if (from.distanceTo(to) < 12) return [];        // im selben Ort: direkt
-    const a = PathGrid.cellOf(from);
-    const b = PathGrid.cellOf(to);
-    const pts = this.grid.findPath(a.x, a.y, b.x, b.y);
-    if (pts.length > 1) console.info(`[path] ${pts.length - 1} Wegpunkte (${a.x},${a.y}) -> (${b.x},${b.y})`);
-    return pts.slice(0, -1);                        // letzter Punkt = Zielzelle, dort gilt st.pos
   }
 
   /** Blickrichtung im Stand: zum Schwerpunkt der nahen Nachbarn schauen

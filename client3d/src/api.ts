@@ -1,5 +1,5 @@
 import type {
-  AtLocationChar, AuthUser, TerrainPayload, WorldLocation, WorldMap,
+  AtLocationChar, AuthUser, PosReport, TerrainPayload, WorldLocation, WorldMap,
 } from './types';
 // Imported locally as well: the re-export further down only exposes the types
 // outwards, the parsing helpers here need them in their own scope.
@@ -85,10 +85,20 @@ export class ApiError extends Error {
   status: number;
   /** machine-readable reason of the server (`party_follower`, `block_enter`, …) */
   reason: string;
-  constructor(status: number, message: string, reason = '') {
+  /** The point the server considers the LAST VALID one, when the refusal
+   *  carries it (`POST /play/pos`). The caller snaps the figure back onto it —
+   *  a refusal that left the two views disagreeing would be worse than the
+   *  refusal itself. `null` whenever the server sent none. */
+  pos: { x: number; z: number } | null;
+  /** The location that point belongs to, '' for the open world. */
+  locationId: string;
+  constructor(status: number, message: string, reason = '',
+              pos: { x: number; z: number } | null = null, locationId = '') {
     super(message);
     this.status = status;
     this.reason = reason;
+    this.pos = pos;
+    this.locationId = locationId;
   }
 }
 
@@ -107,14 +117,54 @@ async function refusal(res: Response): Promise<ApiError> {
   const message = typeof detail === 'string' ? detail
     : typeof obj?.message === 'string' ? obj.message
       : `HTTP ${res.status}`;
-  return new ApiError(res.status, message, typeof obj?.reason === 'string' ? obj.reason : '');
+  const raw = obj?.pos;
+  const pos = raw && typeof raw === 'object'
+    && typeof (raw as Record<string, unknown>).x === 'number'
+    && typeof (raw as Record<string, unknown>).z === 'number'
+    ? { x: (raw as { x: number }).x, z: (raw as { z: number }).z } : null;
+  return new ApiError(res.status, message,
+    typeof obj?.reason === 'string' ? obj.reason : '', pos,
+    typeof obj?.location_id === 'string' ? obj.location_id : '');
 }
 
 // `avatarStep` lived here: one compass step of the avatar over
-// `POST /world/avatar/step`. The route was deleted with the grid world (E3),
-// so the call had been answering 404 ever since — free walking on the metre
-// plane replaces it (`POST /play/pos`, E4 task 5). `StepDirection` went with
-// it; `game/walk.ts` has its own, which is the one the walking hook uses.
+// `POST /world/avatar/step`. The route was deleted with the grid world (E3)
+// and `postPos` below has replaced it (E4 task 5) — the client no longer asks
+// for permission per boundary, it walks and reports.
+
+/**
+ * Report where the avatar is standing (`POST /play/pos`, E4 task 5).
+ *
+ * The whole movement channel of free walking: the client walks the figure
+ * itself and sends the result ~3 times a second while it moves plus once when
+ * it stops. The server judges the point (step plausibility, terrain, and the
+ * FULL entry/exit gate when the point derives another location) and answers
+ * with what it stored.
+ *
+ * Two answers are normal and neither is an error: an accepted report
+ * (`ok: true`) and a throttled one (`ok: false, throttled: true`, the server
+ * takes ~4 a second). Everything else throws an `ApiError` whose `pos` is the
+ * last valid point — the caller snaps the figure back onto it and shows
+ * `message`.
+ *
+ * `signal` puts a deadline on it: reports are frequent and a request that
+ * never answers must not tie the next one up.
+ */
+export async function postPos(x: number, z: number, signal?: AbortSignal
+): Promise<PosReport> {
+  const res = await fetch('/play/pos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x, z }),
+    signal,
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('auth:required'));
+    throw new AuthError();
+  }
+  if (!res.ok) throw await refusal(res);
+  return res.json() as Promise<PosReport>;
+}
 
 /** The painted terrain of the world (`GET /play/terrain`): the areas plus the
  *  effective type catalog they name. NEVER fogged — terrain is always

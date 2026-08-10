@@ -1,211 +1,86 @@
 /**
- * Click-to-walk planning of the embodied mode (plan-3d-game stage 3, task 4).
+ * Click-to-walk of the embodied mode — FREE WALKING since E4 task 5.
  *
  * Pure like `walk.ts`: no Three.js, no DOM, no module state, and the only
- * import is `walk.ts` itself — that is what lets
- * `scripts/smoke_walk_math.mjs` transpile and check it with hand-derived
- * numbers. The pathfinder is NOT imported: the frozen `PathGrid.findPath`
- * needs Three (it returns `Vector3`s), so main.ts hands it in as a closure
- * over cells. Passability comes in the same way, from the one set main.ts
- * also builds the pathfinder with.
+ * import is a type from `walk.ts` itself, which the transpile in
+ * `scripts/smoke_walk_math.mjs` drops — so the file loads there as plain ESM
+ * and is checked with hand-derived numbers.
  *
- * The result is deliberately thin: cell waypoints plus ONE exact goal point.
- * Walking them is the frame hook's job, with the very same boundary logic
- * WASD uses — there is no second movement path in this client.
+ * NO CLIENT A* IN E4 (plan-freie-weltkarte-e4-3d-client.md, task 5). A click
+ * plans exactly one thing: the point to walk at. The figure then heads there
+ * in a straight line and SLIDES along whatever it meets on the way
+ * (`walk.slideBlocked` outdoors, `collide.clampAgainstWalls` inside an open
+ * interior) — the very same movement WASD produces, only with the direction
+ * coming from a goal instead of from the keys.
+ *
+ * That is a deliberate step back from the grid world's route planning, and it
+ * is honest about what it costs: a goal behind a building is not reached, the
+ * figure ends up pressed against the wall and the walk gives up (`walkStalled`
+ * below). A pathfinder over the free plane is E5+ work ("nach Bedarf"), and
+ * inventing one here would mean a second movement model beside the one the
+ * server judges — the client would walk routes the pos reports cannot follow.
  */
-import { cellOf, clampToCell, type Cell } from './walk';
+import type { BlockedFn, Point } from './walk';
 
-/** A planned walk: `cells` are the waypoint cells to steer at in order (the
- *  last one is where the walk ends), `goal` is the exact point inside that
- *  last cell. Waypoints are the pathfinder's CORNERS, not every cell on the
- *  way — the straight run between two corners crosses the cells in between,
- *  and each of those crossings is an ordinary cell boundary that the frame
- *  hook clears with the server. */
-export interface ClickRoute {
-  cells: Cell[];
-  goal: { x: number; z: number };
-}
+/** Reached-the-goal threshold in metres. Must stay above the 0.05 that
+ *  `NpcManager.tick()` needs to count a figure as moving, otherwise the last
+ *  centimetres would never be walked and the walk would never finish. */
+export const GOAL_ARRIVE_M = 0.2;
 
-/** Is that cell WALKING ground (the same rule the pathfinder is built with:
- *  buildings block, road and nature carry, unknown cells are off-map). It
- *  governs the cells a route travels THROUGH. */
-export type PassableFn = (gx: number, gy: number) => boolean;
+/** A step shorter than this counts as NO progress (metres). Well under one
+ *  frame of walking (3.4 m/s × 1/60 s ≈ 0.057 m) and far above floating-point
+ *  noise, so only a figure that really is held up trips it. */
+export const STALL_STEP_M = 0.01;
 
-/** Does a location sit on that cell at all — the question that decides whether
- *  it may be a DESTINATION. The server has no passability check in its step
- *  (`world_ops.move_avatar_step`: entry-room gate and block rules, nothing
- *  else), so a plot or a building is enterable on foot and the client must not
- *  clamp it away; a cell without a location is not, the server answers 404
- *  for a step onto nothing. */
-export type KnownFn = (gx: number, gy: number) => boolean;
-
-/** Cell path from `a` to `b`, EXCLUDING `a` and ending with `b`, or null when
- *  there is no way. Contract of `PathGrid.findPath` (collinear cells in
- *  between are dropped, so what arrives are the corners). */
-export type AstarFn = (a: Cell, b: Cell) => Cell[] | null;
+/** How many stalled frames in a row end the walk. At 60 fps that is a third
+ *  of a second of getting nowhere — long enough to slide around a corner,
+ *  short enough that a marker over an unreachable goal does not sit there. */
+export const STALL_FRAMES = 20;
 
 /**
- * Does the walk only touch cells it is allowed to enter?
+ * The goal a ground click walks at, or null when there is nothing to walk.
  *
- * It has to be asked, because the pathfinder and the walk do NOT share a
- * passability model: `PathGrid.walkable()` blocks only cells it knows as
- * impassable, so a cell with no location at all counts as walkable there
- * (with a cost penalty) — while the walk can never enter it, the server
- * answers 404 for a step onto nothing. Unchecked, such a route dies silently
- * at the first gap: the frame hook bars the crossing and drops the route, and
- * the player sees the marker vanish for no reason.
+ * Three answers, and the null one matters as much as the others: a click that
+ * plans nothing falls through to the tile's info panel, which is how one
+ * inspects a place one cannot walk into.
  *
- * Checked are all cells the figure really enters, not just the corners:
- *  - the cells a straight leg passes through (the corner list skips them),
- *  - for a diagonal leg BOTH orthogonal cells of every step. There is no
- *    diagonal step at all — the server takes ONE compass step (`stepDirection`
- *    knows four), so the frame hook splits a corner crossing into two
- *    single-axis steps and is free to take either cell first. Whichever it
- *    picks, the figure genuinely stands in it.
- * The cell the figure starts in is not checked — it is standing there.
- * A leg that is neither straight nor exactly diagonal cannot come from this
- * pathfinder; it counts as invalid rather than being guessed at.
- *
- * `enterLast` is the ONE exception, and it is exactly one cell wide: the very
- * last cell of the route may be impassable, because a route into a plot or a
- * building ends there on purpose (the server allows that step). Everything
- * before it stays strictly passable — a known cell on the WAY is still a wall.
- * That includes the corner cells of a diagonal LAST step: entering the
- * destination must be one orthogonal step from ordinary ground, or the walk
- * would pass through a third location on the way in — a foreign plot with its
- * own entry-room gate and block rules that the player never clicked at.
+ *  1. the clicked point is BLOCKED (impassable terrain, a foreign footprint):
+ *     null — the figure would only run into it. Entering a location is the
+ *     explicit offer at its opening (`enterLocation.ts`), never a click into
+ *     the middle of it;
+ *  2. the point is where the figure already stands (within `GOAL_ARRIVE_M`):
+ *     null, nothing to do;
+ *  3. otherwise the point itself, unchanged. There is no clamping any more —
+ *     a metre point IS the goal, and the walk stops when it gets there.
  */
-function walkStaysPassable(from: Cell, cells: Cell[], isPassable: PassableFn,
-  enterLast = false): boolean {
-  let at = from;
-  for (let leg = 0; leg < cells.length; leg++) {
-    const dx = cells[leg].gx - at.gx;
-    const dy = cells[leg].gy - at.gy;
-    if (dx && dy && Math.abs(dx) !== Math.abs(dy)) return false;
-    const steps = Math.max(Math.abs(dx), Math.abs(dy));
-    const sx = Math.sign(dx);
-    const sy = Math.sign(dy);
-    for (let i = 1; i <= steps; i++) {
-      const gx = at.gx + sx * i;
-      const gy = at.gy + sy * i;
-      const final = enterLast && leg === cells.length - 1 && i === steps;
-      if (!final && !isPassable(gx, gy)) return false;
-      if (sx && sy) {
-        // The two cells the diagonal step is really taken through — one of
-        // them, and the frame hook decides which. Both are ordinary
-        // travel-through cells, the destination exception never applies here.
-        if (!isPassable(gx, gy - sy) || !isPassable(gx - sx, gy)) return false;
-      }
-    }
-    at = cells[leg];
-  }
-  return true;
+export function planClickWalk(from: Point, to: Point, blocked: BlockedFn
+): Point | null {
+  if (blocked(to.x, to.z)) return null;
+  if (Math.hypot(to.x - from.x, to.z - from.z) < GOAL_ARRIVE_M) return null;
+  return { x: to.x, z: to.z };
 }
 
-/** The 8 cells around `to` that are passable, best approach first: closest to
- *  the clicked cell, ties broken by closeness to the figure and then by
- *  coordinates, so the choice never depends on iteration luck. */
-function approachCells(to: Cell, from: Cell, isPassable: PassableFn): Cell[] {
-  const out: Array<{ cell: Cell; toGoal: number; toFigure: number }> = [];
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dy = -1; dy <= 1; dy++) {
-      if (!dx && !dy) continue;
-      const cell = { gx: to.gx + dx, gy: to.gy + dy };
-      if (!isPassable(cell.gx, cell.gy)) continue;
-      out.push({
-        cell,
-        toGoal: Math.hypot(dx, dy),
-        toFigure: Math.hypot(cell.gx - from.gx, cell.gy - from.gy),
-      });
-    }
-  }
-  out.sort((a, b) => a.toGoal - b.toGoal || a.toFigure - b.toFigure
-    || a.cell.gx - b.cell.gx || a.cell.gy - b.cell.gy);
-  return out.map((c) => c.cell);
+/** Has the figure arrived at its goal? */
+export function reachedGoal(pos: Point, goal: Point): boolean {
+  return Math.hypot(goal.x - pos.x, goal.z - pos.z) < GOAL_ARRIVE_M;
 }
 
-/**
- * Plan the walk for a ground click, or null when there is nothing to walk.
- *
- * Four cases:
- *  1. The click lands in the figure's OWN cell — no pathfinder, the figure
- *     just walks across the cell to the point.
- *  2. The clicked cell is passable — the pathfinder gives the corners.
- *  3. The clicked cell is not passable but a KNOWN location (a plot, a
- *     building): walk to the closest passable cell around it that can be
- *     reached and take ONE more step INTO it. Stands the figure already in one
- *     of those approach cells, the route is exactly that one step — no
- *     pathfinder, and no sidestep along the wall to a "closer" spot. That the
- *     step is allowed at all is the SERVER's call (it may refuse with a block
- *     rule or the entry-room gate); the frame hook asks for every crossing
- *     anyway and handles the refusal.
- *  4. The clicked cell carries no location — nothing to walk to (null), and
- *     the click falls through to the tile panel.
- *
- * In cases 2 and 3 the planned way is validated against the SAME passability
- * the walk uses (`walkStaysPassable`) — the pathfinder's is wider, and a
- * route it invents over unknown ground would die silently on the first step.
- * The target exception of case 3 is one cell wide: the destination itself.
- *
- * The goal point is always the click point CLAMPED into the last cell of the
- * route, so the walk ends safely inside it (see `clampToCell`: clamping to
- * the bare boundary would already read as the neighbour cell).
- *
- * `cellSize` is passed in for the same reason as in `walk.ts`: `tiles.ts`
- * owns the grid anchoring and re-declaring it here would be a second place to
- * get it wrong.
- */
-export function planRoute(
-  fromWorld: { x: number; z: number },
-  toWorld: { x: number; z: number },
-  isPassable: PassableFn,
-  isKnown: KnownFn,
-  astar: AstarFn,
-  cellSize: number,
-): ClickRoute | null {
-  const from = cellOf(fromWorld.x, fromWorld.z, cellSize);
-  const to = cellOf(toWorld.x, toWorld.z, cellSize);
+/** Unit direction from `pos` towards `goal` plus the distance left, or null
+ *  when the two coincide (no direction to speak of). The distance is what
+ *  caps the frame's step, so the figure stops ON the goal instead of walking
+ *  circles around it. */
+export function goalDir(pos: Point, goal: Point
+): { x: number; z: number; dist: number } | null {
+  const dx = goal.x - pos.x;
+  const dz = goal.z - pos.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 1e-6) return null;
+  return { x: dx / dist, z: dz / dist, dist };
+}
 
-  // The goal always belongs to the cell the route really ENDS in, which is
-  // the last one the pathfinder returned — so route and goal cannot drift
-  // apart even if the pathfinder ever answered something unexpected.
-  const routeTo = (cells: Cell[]): ClickRoute => ({
-    cells,
-    goal: clampToCell(toWorld.x, toWorld.z, cells[cells.length - 1], cellSize),
-  });
-
-  if (to.gx === from.gx && to.gy === from.gy) return routeTo([from]);
-
-  if (isPassable(to.gx, to.gy)) {
-    const cells = astar(from, to);
-    if (!cells || !cells.length) return null;
-    return walkStaysPassable(from, cells, isPassable) ? routeTo(cells) : null;
-  }
-
-  if (!isKnown(to.gx, to.gy)) return null;
-
-  // Every route below ends with the step INTO the target cell — that last
-  // cell is the one `walkStaysPassable` is allowed to let through impassable.
-  const enter = (lead: Cell[]): ClickRoute | null => {
-    const cells = [...lead, to];
-    return walkStaysPassable(from, cells, isPassable, true) ? routeTo(cells) : null;
-  };
-  const approaches = approachCells(to, from, isPassable);
-  const standsInFront = approaches.some((c) => c.gx === from.gx && c.gy === from.gy);
-  if (standsInFront) {
-    // Straight in from where the figure stands. May still fail: a diagonal
-    // step is taken through one of its corner cells, so both have to be
-    // ordinary ground — otherwise walking round to an orthogonal neighbour is
-    // the right answer.
-    const direct = enter([]);
-    if (direct) return direct;
-  }
-  for (const cand of approaches) {
-    if (cand.gx === from.gx && cand.gy === from.gy) continue;
-    const lead = astar(from, cand);
-    if (!lead || !lead.length) continue;
-    const route = enter(lead);
-    if (route) return route;
-  }
-  return null;
+/** Did this frame move the figure at all? A walk that answers "no" for
+ *  `STALL_FRAMES` frames in a row is stuck against something the straight
+ *  line cannot get round, and the caller drops it. */
+export function walkStalled(before: Point, after: Point): boolean {
+  return Math.hypot(after.x - before.x, after.z - before.z) < STALL_STEP_M;
 }
