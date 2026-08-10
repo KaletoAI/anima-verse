@@ -94,7 +94,8 @@ const loadClip = (kind: string) => {
 /** Placement of a building model on its map tile — mirrors the worldmap
  *  contract (map3d.rotation / map3d.size in schnittstellen-3d.md). */
 export interface TilePlacement {
-  /** Edge length of the stage in WORLD metres (map3d.extent_m) — the SAME
+  /** Edge length of the stage in WORLD metres (the payload's `extent_m` =
+   *  the footprint edge `plan_width_m`) — the SAME
    *  reference square the floor-plan preview draws, so the blue edge line
    *  means the same thing in both. */
   extentM?: number

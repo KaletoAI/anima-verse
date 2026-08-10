@@ -138,20 +138,17 @@ export interface Map3D {
   rotation?: number
   /** The MODEL's share of the location's reference square (]0, 1]; 1 = edge
    *  to edge). Absent = 1. A model can no longer be bigger than its
-   *  location — for that, raise extent_m. */
+   *  location — for that, widen plan_width_m. */
   size?: number
-  /** How wide the location is in WORLD metres: the reference square every
-   *  plan fraction lives in AND the box the model fills. Absent = 10 =
-   *  exactly one map tile; more overlaps the neighbours on purpose. */
-  extent_m?: number
-  /** Storey height in REAL metres — stacks the floor-plan levels (× k at
-   *  render time). Absent = 3. Replaced the old pair "model height ÷ model
-   *  storeys" and level_height (which counted in world metres). */
+  /** Storey height in REAL metres — stacks the floor-plan levels. Absent = 3.
+   *  Replaced the old pair "model height ÷ model storeys" and level_height
+   *  (which counted in world metres). */
   storey_height_m?: number
-  /** Real-world width the floor-plan reference square represents (m) —
-   *  THE scale anchor: k = extent_m / plan_width_m derives room-rect sizes
-   *  (from width_m), figure size (1.7 × k) and the storey height. Absent =
-   *  no anchor; floor-plan geometry cannot be saved. */
+  /** How wide the location is in REAL metres — THE scale anchor and the ONE
+   *  length everything derives from: the footprint on the world map, the
+   *  reference square of the scene (since E4 they are the same square, so
+   *  k = 1), room-rect sizes (from width_m), figure size (1.70 m) and the
+   *  storey height. Absent = no anchor; floor-plan geometry cannot be saved. */
   plan_width_m?: number
   /** Floor-texture KIND per storey ({"0": "parquet"}) — the client tiles the
    *  level plate with it; a room's surfaces.floor overrides its own area. */
@@ -187,7 +184,7 @@ export interface Map3D {
   boundary_openings?: Array<{ edge: 'N' | 'E' | 'S' | 'W'; at: number
     width_m: number; type?: 'passage'; room?: string }>
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
-   *  location's reference square (extent_m), auto-closed — the client
+   *  location's reference square (plan_width_m), auto-closed — the client
    *  renders floor plates and walls per used level from it. Absent =
    *  rectangle as before. */
   outline?: Array<[number, number]>

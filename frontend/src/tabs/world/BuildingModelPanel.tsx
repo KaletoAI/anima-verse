@@ -319,7 +319,8 @@ export function BuildingModelPanel({
 
   // The former "Model height (m)" and "Model storeys" dials are gone
   // (2026-07-28): both fed a Y-only scaling that no longer exists. A model is
-  // scaled by ONE factor on all three axes (map3d.size × map3d.extent_m), and
+  // scaled by ONE factor on all three axes (map3d.size × the footprint edge
+  // map3d.plan_width_m), and
   // the storey height is a location dial in real metres.
 
   const [widthDraft, setWidthDraft] = useState('')
@@ -506,7 +507,7 @@ export function BuildingModelPanel({
           // Buildings render their SCENE SPEC: same square, same numbers as
           // the floor-plan preview, and the walk-height dial visibly moves
           // the model against the square (which is level 0).
-          : { extentM: scene?.extent_m || map3d?.extent_m || 10,
+          : { extentM: scene?.extent_m || map3d?.plan_width_m || 10,
             spec: buildingSpec, yawDeg: effectiveYaw, size: effectiveSize,
             measure, k: scene?.k, planWidthM: map3d?.plan_width_m,
             storeyWorld: scene?.storey_m,

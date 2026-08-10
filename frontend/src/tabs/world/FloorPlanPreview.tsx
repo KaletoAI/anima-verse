@@ -85,9 +85,6 @@ interface FloorPlanPreviewProps {
   /** When set, the toolbar shows the plan-width anchor field (writes
    *  map3d.plan_width_m on the location draft). */
   onPlanWidth?: (v: number | undefined) => void
-  /** When set, the toolbar shows the extent field (map3d.extent_m) — how
-   *  wide the location is in WORLD metres. */
-  onExtent?: (v: number | undefined) => void
   /** Which metre dial is being edited RIGHT NOW — decides which reference
    *  size the preview shows (measureKit). The preview owns the state for its
    *  own toolbar fields; a parent may override for fields it hosts itself. */
@@ -108,7 +105,7 @@ interface FloorPlanPreviewProps {
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, onPlanWidth, onExtent, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, onPlanWidth, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   // Reference sizes: the toolbar's own fields drive them; a parent may push
   // one in for a field it hosts (the model tab does that).
@@ -1131,8 +1128,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       modelBottomY: sc?.models.find((m) => m.role === 'building')?.bottom_y,
       walkYWorld: sc?.models.find((m) => m.role === 'building')?.walk_y_world,
       levels: usedLevels,
-      words: { ground: t('Level 0'), walk: t('Ground'), tile: t('Tile 10 m'),
-               of: t('of') },
+      words: { ground: t('Level 0'), walk: t('Ground'), of: t('of') },
     })
     boxes.add(aidsRef.current)
 
@@ -1531,32 +1527,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         >
           ✓
         </button>
-        {onExtent ? (
-          <label className="ga-check-row"
-            title={t('Extent (m): how wide this location is in WORLD metres. It is the square the floor plan is drawn in AND the box the location model fills — plan edge and model edge are the same line. 10 = exactly one map tile; more overlaps the neighbours on purpose (a village, a lake).')}>
-            <span>⬜</span>
-            <input
-              className="ga-input"
-              type="number"
-              min={1}
-              max={40}
-              step={0.5}
-              style={{ width: 70 }}
-              value={map3d?.extent_m ?? ''}
-              placeholder="10"
-              {...bindMeasure('extent')}
-              onChange={(e) => {
-                const n = parseFloat(e.target.value)
-                onExtent(Number.isFinite(n) && n > 0 ? n : undefined)
-              }}
-            />
-          </label>
-        ) : null}
         {onPlanWidth ? (
           <label className="ga-check-row"
             title={anchorMissing
               ? t('Plan width (m) is REQUIRED: it is the only scale anchor. Without it nothing has a real size — figures, props and storeys fall back to a meaningless legacy scale and floor-plan geometry cannot be saved.')
-              : t('Plan width (m): how wide this location is in REAL metres — the same edge as the extent, in the other unit. THE scale anchor: k = extent ÷ plan width sizes figures (1.70 m), props, dioramas and storeys.')}>
+              : t('Plan width (m): how wide this location is in REAL metres — the edge of its footprint on the world map AND the square the floor plan is drawn in. THE scale anchor: every other length (figures at 1.70 m, props, dioramas, storeys) is a real metre measured against it.')}>
             <span>{anchorMissing ? '⚠' : '📐'}</span>
             <input
               className="ga-input"

@@ -492,21 +492,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             }}
           />
         </Field>
-        <Field label={t('Extent (m)')} hint={t('How wide this location is in WORLD metres — the square the floor plan is drawn in AND the box the model fills, so plan edge and model edge are the same line. 10 = exactly one map tile; more overlaps the neighbours on purpose.')}>
-          <input
-            className="ga-input"
-            type="number"
-            min={1}
-            max={40}
-            step={0.5}
-            value={draft.map3d?.extent_m ?? ''}
-            placeholder="10"
-            onChange={(e) => {
-              const n = parseFloat(e.target.value)
-              updMap3d('extent_m', Number.isFinite(n) && n > 0 ? n : undefined)
-            }}
-          />
-        </Field>
         <div style={{ gridColumn: 'span 2', gridRow: 'span 2' }}>
           <Field label={t('Building prompt')} help="image_prompt">
             <textarea
@@ -628,7 +613,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           storeyHeightM={draft.map3d?.storey_height_m}
           onStoreyHeight={(v) => updMap3d('storey_height_m', v)}
           onPlanWidth={(v) => updMap3d('plan_width_m', v)}
-          onExtent={(v) => updMap3d('extent_m', v)}
           fallbackYawDeg={location.map_rotation_2d || 0}
           scene={scene}
           sceneError={sceneError}

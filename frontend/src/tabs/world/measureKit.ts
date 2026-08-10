@@ -25,7 +25,7 @@ import type { Group, Object3D } from 'three'
 
 /** Which dial is being edited — decides WHICH ruler shows. */
 export type MeasureKey =
-  | 'extent' | 'plan_width' | 'storey' | 'size'
+  | 'plan_width' | 'storey' | 'size'
   | 'offset_y' | 'walk_y' | null
 
 /** Colours of the aids. Deliberately not the scene style: these are editor
@@ -130,9 +130,10 @@ export function referenceFigure(T: THREE, heightWorld: number): Group {
 export interface MeasureContext {
   /** Which dial is being edited (null = only the base kit). */
   measure: MeasureKey
-  /** Reference square in WORLD metres (map3d.extent_m). */
+  /** Reference square in WORLD metres (payload `extent_m` — the footprint
+   *  edge, so since E4 the same number as `plan_width_m`). */
   extentM: number
-  /** World metres per REAL metre (payload k). */
+  /** World metres per REAL metre (payload k; 1 since E4). */
   k: number
   /** Real width the square represents (map3d.plan_width_m, 0 = unanchored). */
   planWidthM: number
@@ -148,7 +149,7 @@ export interface MeasureContext {
   /** Levels in play — the storey ruler draws a line per level. */
   levels?: number[]
   /** Localized words the labels need (the module has no i18n of its own). */
-  words?: { ground?: string; walk?: string; tile?: string; of?: string }
+  words?: { ground?: string; walk?: string; of?: string }
 }
 
 /**
@@ -184,18 +185,9 @@ export function buildMeasureAids(T: THREE, ctx: MeasureContext): Group {
   }
 
   switch (ctx.measure) {
-    case 'extent': {
-      // The frame itself, plus the map tile for comparison.
-      g.add(square(T, ctx.extentM, 0.02, AID.active))
-      g.add(square(T, 10, 0.015, AID.grid, true))
-      labelAt(`${ctx.extentM.toFixed(2).replace('.', ',')} m`, 0, 0.05, half + 0.25)
-      if (Math.abs(ctx.extentM - 10) > 0.01) {
-        labelAt(w.tile || '10 m', 0, 0.05, -5 - 0.25, AID.grid)
-      }
-      break
-    }
     case 'plan_width': {
-      // The SAME edge in the other unit, over a grid of one REAL metre.
+      // The anchor edge itself, over a grid of one REAL metre (k = 1 since
+      // E4, so one grid step is one world metre too).
       if (ctx.k > 0) {
         const step = ctx.k
         const pts: [number, number, number][] = []
