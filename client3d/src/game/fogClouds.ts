@@ -35,7 +35,11 @@
  * things that are easy to get subtly wrong.
  */
 import * as THREE from 'three';
-import { CELL } from '../scene/tiles';
+// TODO(E4 task 6): these four constants become absolute metres (OVERHANG 3.2,
+// FEATHER 1.8, TEX_METRES 46 — the identity FEATHER + RAGGED = OVERHANG has to
+// survive). Until then they keep their cell anchor, which now lives in
+// `gridLegacy` because `tiles.ts` has no cell any more.
+import { CELL } from './gridLegacy';
 import { seededRandom } from '../scene/textures';
 
 /** How far a quad is drawn beyond its rectangle, in metres — the whole soft

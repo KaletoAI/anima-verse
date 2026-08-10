@@ -11,11 +11,10 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
-import { BASE_FIGURE_HEIGHT_M } from './figures';
 import { loadGlb } from './propAssets';
 import {
-  preloadSurfaceTexture, sampleRoomWalkables, setLocationAnchor, surfaceFor,
-  surfaceMaterialSpec,
+  preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
+  surfaceMaterialSpec, tileDirToWorld, tileToWorld,
   type PlacedSceneModel, type Tile,
 } from './tiles';
 
@@ -206,16 +205,17 @@ class Verifier {
     this.v.check(object, field, actual, target);
   }
 
-  /** Primitiv gegen seine Spec prüfen. `origin` = Weltposition des
-   *  Kachelzentrums (die Spec rechnet um das Kachelzentrum). */
-  primitive(mesh: THREE.Object3D, origin: THREE.Vector3, name: string,
+  /** Primitiv gegen seine Spec prüfen. Bezugsrahmen = die KACHEL: ihr Zentrum
+   *  als Ursprung und ihre Fußabdruck-Drehung als Rahmen-Yaw (§ A1.1) — die
+   *  Spec-Zahlen sind kachel-lokal, die Messung ist es damit auch. */
+  primitive(mesh: THREE.Object3D, tile: Tile, name: string,
             targets: PrimitiveTarget[]): void {
-    this.v.primitive(mesh, origin, name, targets);
+    this.v.primitive(mesh, tile.center, name, targets, tile.yaw);
   }
 
   /** Platziertes Modell gegen seine Spec prüfen. */
-  placement(obj: THREE.Object3D, spec: SceneModelSpec, origin: THREE.Vector3): void {
-    this.v.placement(obj, spec, origin);
+  placement(obj: THREE.Object3D, spec: SceneModelSpec, tile: Tile): void {
+    this.v.placement(obj, spec, tile.center, tile.yaw);
   }
 
 
@@ -251,18 +251,21 @@ class Verifier {
 // chain and the payload's colour vocabulary — the admin preview paints the
 // same primitives in its own preview colours.
 
-/** Tileable surface texture of a kind in WORLD scale (size_m × k). Box and
- *  extrude UVs need a per-piece clone with its own repeat. `use` drives the
- *  fallback chain of surfaceFor: floors fall back to the global "floor" kind,
- *  walls deliberately do not (else floor covering sticks to the wall). */
-function tiledTexture(kind: string | undefined, use: 'floor' | 'wall', k: number,
+/** Tileable surface texture of a kind in WORLD scale. Box and extrude UVs need
+ *  a per-piece clone with its own repeat. `use` drives the fallback chain of
+ *  surfaceFor: floors fall back to the global "floor" kind, walls deliberately
+ *  do not (else floor covering sticks to the wall).
+ *
+ *  The library's `size_m` IS the world tile size since E4: k = 1, so a metre in
+ *  the room is a metre on the map and there is nothing left to convert. */
+function tiledTexture(kind: string | undefined, use: 'floor' | 'wall',
                       repeat: (tileM: number) => [number, number]): THREE.Texture | null {
   const surf = kind ? surfaceFor(kind, use) : null;
   if (!surf) return null;
   const tex = surf.texture.clone();
   tex.needsUpdate = true;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  const [rx, ry] = repeat(surf.sizeM * k);
+  const [rx, ry] = repeat(surf.sizeM);
   tex.repeat.set(rx, ry);
   return tex;
 }
@@ -270,13 +273,13 @@ function tiledTexture(kind: string | undefined, use: 'floor' | 'wall', k: number
 /** Material of a floor plate: the tiled surface texture of its kind, else the
  *  payload's floor colour; upper storeys stay translucent. A body faces
  *  outward only, a bare surface both ways. */
-function plateMaterial(plate: ScenePlate, k: number,
+function plateMaterial(plate: ScenePlate,
                        style: ScenePayload['style']): THREE.MeshStandardMaterial {
   const solid = plate.thickness > 0;
   const upper = plate.opacity_role === 'upper';
   const opacity = upper ? (style.upper_floor_opacity ?? 1) : 1;
   const side = solid ? THREE.FrontSide : THREE.DoubleSide;
-  const tex = tiledTexture(plate.texture_kind, 'floor', k, (tileM) => [1 / tileM, 1 / tileM]);
+  const tex = tiledTexture(plate.texture_kind, 'floor', (tileM) => [1 / tileM, 1 / tileM]);
   // Aussehen der ART kommt aus dem geteilten Paket — matt ist der Default und
   // exakt das bisherige Material.
   return surfaceMaterial(THREE, {
@@ -289,7 +292,7 @@ function plateMaterial(plate: ScenePlate, k: number,
 /** Material of a wall segment: a glass band from the glass vocabulary, else
  *  the tiled wall texture or the wall colour. `len` tiles the texture across
  *  the segment's actual length. */
-function wallMaterial(wall: SceneWall, k: number, style: ScenePayload['style'],
+function wallMaterial(wall: SceneWall, style: ScenePayload['style'],
                       len: number): THREE.MeshStandardMaterial {
   if (wall.glass) {
     return std({ color: hex(style.glass_color), transparent: true,
@@ -297,7 +300,7 @@ function wallMaterial(wall: SceneWall, k: number, style: ScenePayload['style'],
   }
   const upper = wall.opacity_role === 'upper';
   const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
-  const tex = tiledTexture(wall.texture_kind, 'wall', k,
+  const tex = tiledTexture(wall.texture_kind, 'wall',
     (tileM) => [len / tileM, wall.height / tileM]);
   return surfaceMaterial(THREE, {
     material: surfaceMaterialSpec(wall.texture_kind),
@@ -331,18 +334,22 @@ function placeholderMaterial(): THREE.MeshStandardMaterial {
 
 const SCENE_GROUP = 'scene';
 
-/** Figuren-Vorgaben der zuletzt montierten Szene je Location (§ B1 `figures`). */
-const sceneFigureInfo = new Map<string, { scale: number; clearance: number }>();
+// THE FIGURE SCALE IS GONE (E4 task 3). `figures.base_height_m_world` is the
+// constant 1.70 since k = 1 (task 1), which divided by the figure library's own
+// 1.70 is 1 — the room scale and the map scale are THE SAME SCALE now. Every
+// consumer of the old factor went with it: the placement scale of `NpcState`,
+// the scale lerps in `npcs.ts`, the interior pace factor in `walk.ts` and the
+// scaled zoom-to in `main.ts`. A figure is 1.70 m × its `height_cm` factor,
+// indoors and out (`figures.setCharacterHeight`).
 
-/**
- * Figuren-Maßstab einer Szenen-Location: `base_height_m_world` geteilt durch
- * die Basishöhe der Figurenbibliothek — der Faktor, mit dem eine Figur in
- * REALEN Metern zur Weltgröße wird. Kommt aus dem Payload und nicht aus einer
- * eigenen k-Rechnung, weil der Server im Legacy-Mode bewusst anders rechnet
- * (1,7 × storey/3 statt × k). null = keine Szene für diese Location.
- */
-export function sceneFigureScale(locationId: string): number | null {
-  return sceneFigureInfo.get(locationId)?.scale ?? null;
+/** k = 1 is the contract since E4. Complain once, then ignore the field — the
+ *  client does not have a second scale to fall back to any more. */
+let unitScaleWarned = false;
+function assertUnitScale(k: number): void {
+  if (k === 1 || unitScaleWarned) return;
+  unitScaleWarned = true;
+  console.warn(`[scene] payload k = ${k}, but the metre world is k = 1 since E4`
+    + ' (§ B) — the value is ignored and the scene is drawn in real metres');
 }
 
 /** Laufende Mount-Nummer PRO KACHEL: ein während des GLB-Ladens ersetzter
@@ -371,17 +378,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // veraltet = diese Kachel wurde neu montiert ODER ganz aus der Szene genommen
   const stale = () => mountSeq.get(tile) !== seq || tile.group.parent === null;
   const locId = tile.loc.id;
-  const k = scene.k;
   const verify = new Verifier(verifyOn());
-
-  // Maßstabs-Anker der Location auf die Payload-Skalare setzen: alles, was im
-  // Client mit k/Etagenhöhe rechnet (Figuren-Maßstab, Sitzhöhen-Heuristik,
-  // Textur-Kachelung), zieht damit aus derselben Quelle wie die Primitive.
-  setLocationAnchor(locId, { k, storeyWorld: scene.storey_m });
-  sceneFigureInfo.set(locId, {
-    scale: scene.figures.base_height_m_world / BASE_FIGURE_HEIGHT_M,
-    clearance: scene.figures.stand_clearance,
-  });
+  // k IS 1 since E4 (§ B, task 1) — the field stays in the payload for the
+  // consumer contracts and this client no longer multiplies by it anywhere.
+  // Said out loud ONCE per session rather than swallowed: a server that starts
+  // sending something else would otherwise draw a silently wrong-sized world.
+  assertUnitScale(scene.k);
 
   // Surface-Bilder FERTIG laden, bevor Platten/Wände sie klonen (Klone eines
   // noch ladenden Bildes bleiben leer).
@@ -515,7 +517,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   const builtPlates: { mesh: THREE.Mesh; plate: ScenePlate }[] = [];
   const builtWalls: { mesh: THREE.Mesh; wall: SceneWall }[] = [];
   for (const plate of scene.plates) {
-    const mesh = buildPlate(THREE, plate, plateMaterial(plate, k, style));
+    const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
     if (plate.relief && scene.terrain) {
       // Outdoor-Platte eines nicht-flachen Raums: unterteilen und über das
       // Gitter legen (§ B1 Nr. 14). Muss VOR der Begehbarkeits-Abtastung
@@ -559,10 +561,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
     const w = Math.max(maxX - minX, 0.5), d = Math.max(maxZ - minZ, 0.5);
     roomPlateTop.set(id, plate.top_y);
-    tile.roomRects.set(id, { x: tile.center.x + cx, z: tile.center.z + cz, w, d });
+    // `roomRects` stays TILE-LOCAL (it always was, minus the centre offset):
+    // an axis-aligned rectangle only means something in the frame it was
+    // measured in, and the tile may stand turned since E4. Its readers turn
+    // their query point instead (`worldToTile`).
+    tile.roomRects.set(id, { x: cx, z: cz, w, d });
     // Raum-Mitte: eine Instanz, unter ID UND Name — die Abtastung hebt ihr Y
     // später auf die gemessene Bodenhöhe (setY auf der geteilten Instanz).
-    const centre = tile.center.clone().add(new THREE.Vector3(cx, plate.top_y + 0.01, cz));
+    const centre = tileToWorld(tile, cx, cz, plate.top_y + 0.01);
     tile.roomCenters.set(id, centre);
     const name = nameOf.get(id);
     if (name) tile.roomCenters.set(name, centre);
@@ -584,11 +590,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     const ov = room.overlay;
     const id = room.room_id;
     if (!ov || !id) continue;
-    tile.roomRects.set(id, { x: tile.center.x + ov.rect.x,
-                             z: tile.center.z + ov.rect.z,
+    tile.roomRects.set(id, { x: ov.rect.x, z: ov.rect.z,
                              w: ov.rect.w, d: ov.rect.d });
-    const centre = tile.center.clone().add(
-      new THREE.Vector3(ov.centre[0], ov.y + 0.01, ov.centre[1]));
+    const centre = tileToWorld(tile, ov.centre[0], ov.centre[1], ov.y + 0.01);
     tile.roomCenters.set(id, centre);
     const name = nameOf.get(id);
     if (name) tile.roomCenters.set(name, centre);
@@ -600,15 +604,21 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const wall of scene.walls) {
     const len = wallLength(wall);
     if (len < 1e-4) continue;
-    const mesh = buildWall(THREE, wall, wallMaterial(wall, k, style, len));
+    const mesh = buildWall(THREE, wall, wallMaterial(wall, style, len));
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });
     if (!wall.glass) {
+      const mid = tileToWorld(tile, (wall.from[0] + wall.to[0]) / 2,
+                              (wall.from[1] + wall.to[1]) / 2);
+      // The outward normal is a DIRECTION: it turns with the footprint but is
+      // not shifted by its centre — the culling dots it against the camera
+      // offset, so a normal left in the tile frame would cull the wrong walls
+      // on a turned location.
+      const n = tileDirToWorld(tile, wall.outward_normal[0], wall.outward_normal[1]);
       tile.outlineWalls.push({
         mesh, level: wall.level,
-        mid: new THREE.Vector2(tile.center.x + (wall.from[0] + wall.to[0]) / 2,
-                               tile.center.z + (wall.from[1] + wall.to[1]) / 2),
-        normal: new THREE.Vector2(wall.outward_normal[0], wall.outward_normal[1]),
+        mid: new THREE.Vector2(mid.x, mid.z),
+        normal: new THREE.Vector2(n.x, n.z),
       });
       const mats = tile.levelWallMats.get(wall.level);
       const mat = mesh.material as THREE.MeshStandardMaterial;
@@ -626,8 +636,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     elevatorXZ = elevatorXZ ?? new THREE.Vector2(extra.center[0], extra.center[2]);
     if (extra.kind === 'elevator_pad' && extra.level !== undefined) {
       tile.elevatorStops = tile.elevatorStops ?? new Map();
-      tile.elevatorStops.set(extra.level, tile.center.clone().add(new THREE.Vector3(
-        extra.center[0], extra.center[1] + extra.size[1] / 2 + 0.01, extra.center[2])));
+      tile.elevatorStops.set(extra.level, tileToWorld(tile,
+        extra.center[0], extra.center[2],
+        extra.center[1] + extra.size[1] / 2 + 0.01));
     }
   }
 
@@ -637,14 +648,19 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // rule the walk uses). Read, never derived (plan-betreten-und-tueren.md
   // § 4.1) — and kept on the tile rather than looked up per call, because the
   // model-tier swap re-samples a room without having the payload at hand.
-  const doorOrigin = { x: tile.center.x, z: tile.center.z };
+  // Asked in the TILE frame (origin 0/0, `doors.ts` default) and turned into
+  // the world here: the payload is tile-local and the footprint may stand
+  // rotated, so baking the centre in before the turn would misplace every door
+  // of a turned location.
   const roomsWithDoor = new Set<string>();
   for (const doorway of scene.doorways) {
     for (const id of doorway.rooms ?? []) if (id) roomsWithDoor.add(id);
   }
   for (const id of roomsWithDoor) {
-    const door = roomDoor(scene, id, doorOrigin);
-    if (door) tile.roomDoors.set(id, new THREE.Vector3(door.mid.x, door.baseY, door.mid.z));
+    const door = roomDoor(scene, id);
+    if (door) {
+      tile.roomDoors.set(id, tileToWorld(tile, door.mid.x, door.mid.z, door.baseY));
+    }
   }
   for (const marker of scene.markers) {
     const id = marker.room_id;
@@ -669,8 +685,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // rechneten ihn per Hand in den Marker hinein.
     const drop = marker.root_offset ?? 0;
     byKind.set(marker.animation, [...(byKind.get(marker.animation) ?? []), {
-      p: tile.center.clone().add(new THREE.Vector3(
-        marker.at_world[0], marker.y_world - drop, marker.at_world[1])),
+      p: tileToWorld(tile, marker.at_world[0], marker.at_world[1],
+                     marker.y_world - drop),
       rotation: marker.facing,
       tilt: marker.tilt,
       roll: marker.roll,
@@ -694,9 +710,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     el.textContent = name;
     const label = new CSS2DObject(el);
     const floorY = floorYof.get(roomLevel.get(id) ?? 0) ?? 0;
-    label.position.set(rect ? rect.x - tile.center.x : 0,
+    // The label hangs INSIDE the tile group, so it wants the tile-local
+    // rectangle — which is exactly what `roomRects` holds.
+    label.position.set(rect ? rect.x : 0,
                        floorY + Math.min(1.5, scene.storey_m * 0.8),
-                       rect ? rect.z - tile.center.z : 0);
+                       rect ? rect.z : 0);
     rg.add(label);
     tile.interiorLabels.push(label);
   }
@@ -773,7 +791,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       // (dims × k). Ohne diese Prüfung blieb ein Loch in der Abdeckung —
       // an 526cf40b waren das 2 Props / 8 Prüfungen, und die Verify-Summe
       // lag ohne Grund unter dem Soll.
-      verify.placement(ph, spec, tile.center);
+      verify.placement(ph, spec, tile);
       return;
     }
     if (stale()) return;
@@ -807,7 +825,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       const clipped = applyModelClip(tile, placed, spec);
       if (clipped) verify.clipped(spec, clipped);
     }
-    verify.placement(placed, spec, tile.center);
+    verify.placement(placed, spec, tile);
   }));
   if (stale()) return null;
 
@@ -829,11 +847,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   if (verify.active) {
     tile.group.updateMatrixWorld(true);
     for (const { mesh, plate } of builtPlates) {
-      verify.primitive(mesh, tile.center,
+      verify.primitive(mesh, tile,
         `plate:${plate.room_id || 'level'}@${plate.level}`, plateTargets(plate));
     }
     for (const { mesh, wall } of builtWalls) {
-      verify.primitive(mesh, tile.center,
+      verify.primitive(mesh, tile,
         `wall:${wall.room_id || 'contour'}@${wall.level}`, wallTargets(wall));
     }
   }
@@ -862,8 +880,10 @@ function applyBuildingModel(tile: Tile, placed: THREE.Group,
     // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
     tile.cutouts?.dispose();
     tile.cutouts = applyCutouts(THREE, placed, cutouts.map(
-      (poly) => poly.map(([cx, cz]) => [tile.center.x + cx,
-                                        tile.center.z + cz] as [number, number])));
+      (poly) => poly.map(([cx, cz]) => {
+        const w = tileToWorld(tile, cx, cz);
+        return [w.x, w.z] as [number, number];
+      })));
     // Sofort den aktuellen Sichtzustand anlegen: die Kachel kann bereits
     // in der Innenansicht stehen, wenn das Modell nachträglich eintrifft.
     tile.cutouts.setEnabled(tile.fade > 0.03);
@@ -879,7 +899,10 @@ function applyModelClip(tile: Tile, placed: THREE.Object3D,
   const clip = spec.clip_outline;
   if (!clip || clip.length < 3) return 0;
   applyClipOutline(THREE, placed, clip.slice(0, CLIP_MAX_POINTS).map(
-    ([cx, cz]) => [tile.center.x + cx, tile.center.z + cz] as [number, number]));
+    ([cx, cz]) => {
+      const w = tileToWorld(tile, cx, cz);
+      return [w.x, w.z] as [number, number];
+    }));
   return Math.min(clip.length, CLIP_MAX_POINTS);
 }
 

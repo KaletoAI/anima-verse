@@ -12,10 +12,12 @@ import { getAnimationClips, getCharacterModel } from '../api';
  * bleibt dieselbe.
  */
 
-/** Basishöhe einer Figur ohne height_cm, in REALEN Metern.
- *  Vertrag schnittstellen-3d.md § A3 — Welthöhe = dieser Wert x k
- *  (roomFigureScale). Nicht auf 1,75 zurückdrehen: die Admin-Vorschau
- *  und die Prop-/Diorama-Maßstäbe rechnen mit 1,70. */
+/** Base height of a figure without `height_cm`, in REAL metres — and since E4
+ *  in world metres too: k = 1, so a figure is this tall on the map and in a
+ *  room alike (contract schnittstellen-3d.md § A3; the payload's
+ *  `figures.base_height_m_world` is the same 1.70). Only `setCharacterHeight`
+ *  scales a figure at all. Do NOT put it back to 1.75: the admin preview and
+ *  the prop/diorama scales are all worked out against 1.70. */
 export const BASE_FIGURE_HEIGHT_M = 1.70;
 
 interface ManifestModel {

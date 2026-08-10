@@ -6,23 +6,20 @@
  * check it with hand-derived numbers — the file is transpiled and imported as
  * plain ESM, so it must stay IMPORT-FREE as well.
  *
- * The grid anchoring is NOT re-declared here. `tiles.ts` owns it
- * (`gridToWorld(gx, gy) = (gx * CELL, 0, gy * CELL)`, `CELL = 10`) and the
- * caller passes `CELL` in as `cellSize`; the brief's `origin` parameter is
- * gone because that mapping has no offset — cell centres sit on multiples of
- * CELL, so the inverse is a plain rounding and an origin would only be a
- * second place to get it wrong.
+ * The grid anchoring is NOT re-declared here: the caller passes its cell size
+ * in as `cellSize` (`gridToWorld(gx, gy) = (gx·CELL, 0, gy·CELL)`, so cell
+ * centres sit on multiples of CELL and the inverse is a plain rounding). Since
+ * E4 task 3 that anchor is `game/gridLegacy.ts` — `tiles.ts` builds footprints
+ * in metres and has no cell any more.
+ * TODO(E4 task 5): the cell functions here (`cellOf`, `clampToCell`,
+ * `splitDiagonal`, `stepDirection`, `keepAhead`, `EDGE_MARGIN`) go with the
+ * step machine; `walkDir` is the part of this file that survives free walking.
  */
 
 /** Inset used when a figure is held inside its cell. Not cosmetic: clamping
  *  to exactly ±cellSize/2 lands ON the boundary, and `cellOf` breaks that tie
  *  towards the higher cell — the figure would read as already gone over. */
 export const EDGE_MARGIN = 0.25;
-
-/** Slowest pace an interior may impose, as a factor of the outdoor pace. A
- *  room drawn very small would otherwise make the avatar crawl, and a scale of
- *  0 (a figure caught mid-blend) would stop it dead. */
-export const MIN_WALK_SCALE = 0.2;
 
 export interface Cell { gx: number; gy: number }
 export type StepDirection = 'north' | 'south' | 'east' | 'west';
@@ -94,20 +91,10 @@ export function splitDiagonal(x: number, z: number, from: Cell, cellSize: number
   return overX <= overZ ? { x: held.x, z } : { x, z: held.z };
 }
 
-/**
- * Pace of the avatar as a factor of the outdoor pace, from the scale its
- * figure is currently DRAWN at (`npcs.scaleOf`, null = no figure on the map).
- *
- * Interiors draw their figures at the room scale, so a world metre in there is
- * not a figure metre: at scale 0.3 the unscaled pace covers 3.4 world metres a
- * second next to a figure a third the size — eleven figure metres a second,
- * which is the "running far too fast indoors" of the acceptance round. The
- * pace has to follow the size the player sees.
- */
-export function walkSpeedScale(figureScale: number | null): number {
-  if (figureScale == null || !Number.isFinite(figureScale)) return 1;
-  return Math.max(figureScale, MIN_WALK_SCALE);
-}
+// `walkSpeedScale` and `MIN_WALK_SCALE` are GONE (E4 task 3). They slowed the
+// avatar down by the scale its figure was drawn at, because a world metre
+// inside a room used to be a fraction of a human metre. With k = 1 there is no
+// second scale to follow: `WALK_SPEED` is 3.4 metres a second, indoors and out.
 
 /** Camera-relative walk direction (unit length) from the held keys, or null
  *  when nothing is pressed or opposite keys cancel out.

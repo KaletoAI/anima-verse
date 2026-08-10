@@ -67,6 +67,49 @@ const SCATTER_TRIES_PER_POINT = 12;
 const TUFT_RADIUS_M = 0.16;
 const TUFT_HEIGHT_M = 0.55;
 
+/**
+ * THE BASEMENT HOLE (moved here from `main.ts` with E4 task 3).
+ *
+ * A storey below ground lies UNDER the world's ground, so looking into a
+ * cellar means taking the ground away over that location's footprint. The grid
+ * world had one plane to cut and the patch sat on it; the metre world's ground
+ * is a base plane PLUS every painted area, and each one of them would roof the
+ * cellar on its own — so the patch belongs to the module that owns them all.
+ *
+ * Same shader technique as the room clip (@anima/scene-render `clip.ts`), just
+ * inverted: INSIDE the rectangle the fragment is discarded. The two uniform
+ * objects are shared by every ground material, so the frame hook steers the
+ * hole per frame without a single recompile.
+ */
+const holeRect = { value: new THREE.Vector4(0, 0, 0, 0) };  // minX, minZ, maxX, maxZ
+const holeOn = { value: 0 };
+
+/** Give a ground material the hole test. Idempotent per material — each one is
+ *  created once per rebuild and patched right here. */
+function patchHole(mat: THREE.Material): void {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uHole = holeRect;
+    shader.uniforms.uHoleOn = holeOn;
+    shader.vertexShader = `varying vec3 vHoleWorld;\n${shader.vertexShader}`
+      .replace('#include <project_vertex>',
+        '#include <project_vertex>\n\tvHoleWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;');
+    const head = 'uniform vec4 uHole;\nuniform float uHoleOn;\nvarying vec3 vHoleWorld;\n';
+    const test = `
+  if ( uHoleOn > 0.5 &&
+       vHoleWorld.x > uHole.x && vHoleWorld.x < uHole.z &&
+       vHoleWorld.z > uHole.y && vHoleWorld.z < uHole.w ) discard;
+`;
+    const body = head + shader.fragmentShader;
+    shader.fragmentShader = body.includes('#include <clipping_planes_fragment>')
+      ? body.replace('#include <clipping_planes_fragment>', `${test}\n#include <clipping_planes_fragment>`)
+      : body.replace('void main() {', `void main() {\n${test}`);
+  };
+  // One cache key for every ground material: they differ in maps and colours,
+  // not in the patch, and three.js keys the compiled program on this string
+  // PLUS the material's own defines.
+  mat.customProgramCacheKey = () => 'ground-hole';
+}
+
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
 interface AreaMesh {
   mesh: THREE.Mesh;
@@ -98,6 +141,19 @@ export interface Ground {
    *  1 Hz LOD tick of `main.ts` — the hysteresis of the model tiers lives
    *  there, this is a plain visibility switch on top of it. */
   tickScatterLod(cameraPos: THREE.Vector3, farM: number): void;
+  /**
+   * Cut a rectangle out of the ground so one can look into a basement, or
+   * `null` to close it again (world metres, `[minX, minZ, maxX, maxZ]`).
+   *
+   * Steered per FRAME by `main.ts` — the hole grows towards the viewer while a
+   * storey below ground is displayed — which is why it writes shared uniforms
+   * instead of touching materials: nothing recompiles.
+   *
+   * The prop scatter is deliberately NOT cut: a tuft is an object standing on
+   * the ground, not the ground, and a location with a cellar is a building
+   * whose footprint scatters nothing in the first place.
+   */
+  setHole(rect: [number, number, number, number] | null): void;
   /** The terrain as delivered, or null before the first successful fetch.
    *  The minimap paints the same areas from this. */
   payload(): TerrainPayload | null;
@@ -206,6 +262,10 @@ export function createGround(): Ground {
       sink.push(map);
     }
     const mat = surfaceMaterial(THREE, { material: spec, map, color: kindColor(kind) });
+    // EVERY ground material carries the basement hole — base plane and painted
+    // areas alike. Patching only the plane would leave a painted meadow lying
+    // over the open cellar.
+    patchHole(mat);
     sink.push(mat);
     return mat;
   }
@@ -228,13 +288,6 @@ export function createGround(): Ground {
       drain(baseOwned);
     }
     baseKey = key;
-    // TODO(E4-Task 3): this plane needs the `groundHole` shader patch when the
-    // tiles come back. The basement view cuts a hole into the world ground so
-    // one can look down into a cellar — that patch sits on the OLD grass plane
-    // (`main.ts`, `groundMat.onBeforeCompile`), which task 3 deletes. Until
-    // then the hole still works, because the grass plane is still there; the
-    // moment it goes, the cellar is roofed by THIS plane unless the patch
-    // moves along.
     const geo = new THREE.PlaneGeometry(w, d);
     geo.rotateX(-Math.PI / 2);
     // The base tiles over its WHOLE edge, so one UV unit is `w` metres wide
@@ -427,6 +480,10 @@ export function createGround(): Ground {
       }
       inFlight = reload(sig, bounds).finally(() => { inFlight = null; });
       return inFlight;
+    },
+    setHole(rect) {
+      holeOn.value = rect ? 1 : 0;
+      if (rect) holeRect.value.set(rect[0], rect[1], rect[2], rect[3]);
     },
     tickScatterLod(cameraPos, farM) {
       for (const a of areaMeshes) {

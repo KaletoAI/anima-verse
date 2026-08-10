@@ -27,10 +27,13 @@
  * `COLINEAR_TOL_M`, `PARALLEL_EPS`, `MERGE_TOL_M`, `MIN_WIDTH_M`). Merging is
  * gone too: one gap is ONE entry, the server dedupes it.
  *
- * COORDINATES. The payload is TILE-LOCAL: world metres around the tile centre,
- * tile rotation already applied. `origin` bakes the tile centre in, the same
- * way `wallSegments` does — the lesson of the collision round, where segments
- * 45 m away blocked nothing.
+ * COORDINATES. The payload is TILE-LOCAL: metres around the tile centre, the
+ * SCENE's own rotation already applied. `origin` shifts every point by a fixed
+ * offset — nothing more, and since E4 the 3D client no longer uses it for
+ * tiles: a footprint may stand TURNED (§ A1.1), and a turn is not an offset.
+ * Its callers ask in the tile frame (`origin` left at 0/0) and put the result
+ * through `tileToWorld`/`tileDirToWorld`. Passing the tile centre in here and
+ * turning afterwards would be wrong twice over.
  */
 
 import type { ScenePayload, SceneDoorway } from '../api';
@@ -87,8 +90,9 @@ const doorwaysOf = (payload: ScenePayload | null | undefined): SceneDoorway[] =>
 
 /**
  * Every doorway of ONE storey, in payload order. `origin` is added to every
- * point (pass the tile centre to get world coordinates); direction, width and
- * base height are offsets and stay untouched by it.
+ * point; direction, width and base height are offsets and stay untouched by
+ * it. Leave it at 0/0 to stay in the tile frame — see the header on why the
+ * 3D client does exactly that since E4.
  */
 export function doorMarkers(payload: ScenePayload | null | undefined,
   level: number, origin: Point = { x: 0, z: 0 }): DoorMarker[] {

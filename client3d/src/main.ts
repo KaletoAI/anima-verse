@@ -5,7 +5,7 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, walkSpeedScale, type Cell, type StepDirection } from './game/walk';
+import { cellOf, clampToCell, keepAhead, splitDiagonal, stepDirection, walkDir, type Cell, type StepDirection } from './game/walk';
 import { planRoute, type ClickRoute } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
@@ -21,29 +21,30 @@ import {
 import { loadPrefs, PREFS_KEY } from './game/prefs';
 import { fogQuadRects, SHOW_ALL_KEY, unknownCells } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
+import { CELL } from './game/gridLegacy';
 import type { MinimapArea, MinimapDot } from './game/minimap';
 import { terrainColor } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, gridSurfaceKind, roomFigureScale, setSurfaceTextures, setTerrainGrid, terrainLiftAt, tileGroundY, CELL, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileDirToWorld, tileGroundY, tileToWorld, worldToTile, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
-import { mountScene, sceneFigureScale, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
+import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
 import {
   entryOfferNear, mayLeaveAcross, EXIT_EDGE_OF,
   type Edge, type EntryTile,
 } from './game/enterLocation';
 import { PathGrid } from './scene/pathfind';
-import { grassTexture, seededRandom } from './scene/textures';
+import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
-import { createGround } from './scene/ground';
-import type { MapCharacter, MapTravel, WorldLocation, WorldMap } from './types';
+import { createGround, GROUND_Y } from './scene/ground';
+import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
 // --- E4 BRIDGE (task 2) ------------------------------------------------------
 //
@@ -118,9 +119,26 @@ const SOUNDTRACK_TICK_MS = 1000;
  *  never close under an embodied avatar — 60 leaves 26 m of it. */
 const CLOSE_CAM_DIST = 60;
 /** Camera target panned this far off the open tile closes it too — the tile
- *  has left the view. Three cells is generous next to the old 0.75-cell
- *  auto-open gate: looking around inside stays free of surprises. */
-const CLOSE_TARGET_DIST = CELL * 3;
+ *  has left the view.
+ *
+ *  ABSOLUTE METRES since E4, and measured against the OPEN LOCATION'S OWN
+ *  footprint: `3 × plan_width_m`, which on the grid world's 10 m cell is
+ *  exactly the 30 m this used to be. It has to follow the footprint, not a
+ *  fixed number — panning three metres off a 1 m shrine is leaving it, panning
+ *  thirty metres off a 200 m forest is still standing in the middle of it.
+ *  Floored, so a location with a tiny anchor cannot close itself on the first
+ *  nudge of the mouse. */
+const CLOSE_TARGET_FOOTPRINTS = 3;
+const CLOSE_TARGET_MIN_M = 12;
+const closeTargetDist = (tile: Tile) =>
+  Math.max(CLOSE_TARGET_MIN_M, tile.width * CLOSE_TARGET_FOOTPRINTS);
+
+/** How wide the corridor is in which a neighbour counts as standing between
+ *  the camera and the open location: `1.05 × plan_width_m` of the NEIGHBOUR,
+ *  i.e. a hair more than its own half-width on each side. Again the grid
+ *  world's number (`CELL * 1.05`) written as what it always meant — the
+ *  neighbour's own size — so a 40 m hall is not judged by a 10 m yardstick. */
+const OCCLUDER_RADIUS_FACTOR = 1.05;
 /** "Hineinsehen" flies in to this distance — the old panel fly-to, kept. */
 const OPEN_FLY_DIST = 15;
 /** Far-view building models: hysteresis of the camera-distance tier choice
@@ -194,6 +212,45 @@ const ZOOM_TO_BASE_DIST = 4.5;
  *  past the old fixed distance, and 12 < EXIT_DIST (34) keeps a zoom-to from
  *  ever tripping the embodied-mode exit. */
 const ZOOM_TO_MAX_DIST = 12;
+
+// --- Framing the world (§ A12, E4 task 3) -----------------------------------
+//
+// The map camera is an orbit camera with a 45° VERTICAL field of view
+// (`engine.ts`), so a sphere of radius R fits the picture at
+//
+//     d = R / sin(22.5°) = 2.6131 · R
+//
+// and the fit below is exactly that, over the bounding sphere of
+// `world_bounds` — the simplest framing that can be checked by hand, and the
+// one the plan asks for. It is deliberately GENEROUS: the camera looks down at
+// an angle, so the ground it actually covers is wider than the sphere test
+// assumes, and the horizontal field is wider still on a landscape window.
+/** Half the vertical field of view of the map camera, in radians. */
+const CAMERA_HALF_FOV = (22.5 * Math.PI) / 180;
+/** Air around the bounds, as a factor on the fitted radius. 15 % keeps the
+ *  outermost footprint off the edge of the picture. */
+const CAMERA_FIT_MARGIN = 1.15;
+/** The engine's own MAX_DIST (not exported) — a world larger than this simply
+ *  starts as far out as the camera can go. */
+const CAMERA_FIT_MAX = 150;
+/** Fit distance for a world with nothing placed: the old boot default, so an
+ *  empty world looks exactly as it always did. */
+const CAMERA_FIT_EMPTY = 70;
+
+/** Centre of `world_bounds`, or the world origin when nothing is placed. */
+function worldCentre(b: WorldBounds | null | undefined): THREE.Vector3 {
+  if (!b) return new THREE.Vector3(0, 0, 0);
+  return new THREE.Vector3((b.min_x + b.max_x) / 2, 0, (b.min_z + b.max_z) / 2);
+}
+
+/** Camera distance at which `world_bounds` fits the picture. */
+function fitDistance(b: WorldBounds | null | undefined): number {
+  if (!b) return CAMERA_FIT_EMPTY;
+  const r = Math.hypot(b.max_x - b.min_x, b.max_z - b.min_z) / 2;
+  if (!Number.isFinite(r) || r <= 0) return CAMERA_FIT_EMPTY;
+  return Math.min(CAMERA_FIT_MAX,
+                  (r * CAMERA_FIT_MARGIN) / Math.sin(CAMERA_HALF_FOV));
+}
 
 const app = document.getElementById('app')!;
 
@@ -447,19 +504,25 @@ async function startApp(username: string, role: string) {
    * very same way — same template filter, same merge of map entry and detail.
    */
   function placeableOf(map: WorldMap, details: Map<string, WorldLocation>): WorldLocation[] {
-    const templateIds = new Set(
-      map.locations.map((l) => v1(l).template_location_id).filter(Boolean) as string[]
-    );
+    // PLACED = it has a point (§ A1.1). That one test replaces both v1 filters:
+    // the grid keys are gone, and a template stands on no map at all — the
+    // server leaves its `pos_x`/`pos_z` null, which is exactly what "not
+    // placeable" means. The worldmap row no longer carries a template id
+    // either (§ A1.9), so nothing is looked up through one any more.
     return map.locations
-      .filter((l) => v1(l).grid_x != null && v1(l).grid_y != null && !templateIds.has(l.id))
+      .filter((l) => !!footprintCentre(l))
       .map((l) => {
-        const detail = details.get(l.id) ?? details.get(v1(l).template_location_id || '');
+        const detail = details.get(l.id);
         return {
           ...detail,
           ...l,
           rooms: detail?.rooms ?? [],
           description: detail?.description ?? '',
           entry_room: detail?.entry_room,
+          // The footprint anchor comes from the worldmap row (the server
+          // hoists it out of `map3d`); the detail record's own `map3d` is the
+          // fallback for a location the map row states nothing about.
+          plan_width_m: l.plan_width_m ?? detail?.map3d?.plan_width_m ?? null,
         } as WorldLocation;
       });
   }
@@ -468,43 +531,18 @@ async function startApp(username: string, role: string) {
    *  one list. */
   const placeable: WorldLocation[] = placeableOf(firstMap, detailById);
 
-  // Boden + Kacheln
+  // --- The camera frame (§ A12) ---------------------------------------------
   //
-  // The frame comes from `world_bounds` (§ A12) and NOT from the delivered
-  // locations: those are only what the avatar knows, so a map centred on them
-  // would jump sideways with every place discovered. The bounds are computed
-  // over ALL placed locations, in metres, and stay still.
+  // The frame comes from `world_bounds` and NOT from the delivered locations:
+  // those are only what the avatar knows, so a map framed on them would jump
+  // sideways with every place discovered. The bounds are computed over ALL
+  // placed locations, in metres, and stay still.
   //
-  // `null` (nothing placed at all) is the world ORIGIN. The v1 fallback here
-  // was a min/max over the placed grid cells — and with the metre payload
-  // `placeable` is empty, so `Math.min()` of nothing gave `Infinity` and the
+  // `null` (nothing placed at all) is the world ORIGIN at the default
+  // distance — the grid world's fallback was a min/max over the placed cells,
+  // and with the metre payload `Math.min()` of nothing gave `Infinity` and the
   // camera target became NaN: a world one could not see at all.
-  // TODO(E4-Task 3): the camera work proper (fit the frame, not just centre on
-  // it) belongs with the tile loop this still shares its centre with.
-  const center = firstMap.world_bounds
-    ? new THREE.Vector3(
-      (firstMap.world_bounds.min_x + firstMap.world_bounds.max_x) / 2, 0,
-      (firstMap.world_bounds.min_z + firstMap.world_bounds.max_z) / 2)
-    : new THREE.Vector3(0, 0, 0);
-  const groundTex = grassTexture();
-  groundTex.repeat.set(60, 60);
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(600, 600),
-    new THREE.MeshStandardMaterial({ map: groundTex, roughness: 1 })
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.copy(center);
-  // DEUTLICH unter alles Kachel-Eigene (Platten 0,04, Detail-Backstop −0,05,
-  // Relief-Senken): diese Welt-Grasebene lag bei y 0 KOPLANAR mit den
-  // Etage-0-Zonenplatten der Detailszenen und gewann das Z-Fighting in
-  // organischen Flecken — die „grünen Stellen", die jede Platten-Korrektur
-  // überlebten (Raster-Raycast 2026-08-03: Treffer „Mesh<Scene", Canvas-
-  // Gras). Jede Location zeigt ihren eigenen Terrain-Boden; das Gras hier
-  // ist nur noch der Untergrund ZWISCHEN den Kacheln (User-Vorgabe: die
-  // grüne Fallback-Fläche gehört nirgendwohin, wo Terrain konfiguriert ist).
-  ground.position.y = -0.5;
-  ground.receiveShadow = true;
-  engine.scene.add(ground);
+  const center = worldCentre(firstMap.world_bounds);
 
   // --- The ground of the metre world (E4 task 2) -----------------------------
   //
@@ -513,9 +551,10 @@ async function startApp(username: string, role: string) {
   // it is fetched ONCE and again only when a poll reports a different
   // `terrain_sig` — `sync` decides that itself.
   //
-  // The grass plane above is the LAST of the grid world's ground and goes with
-  // the tile loop in task 3; until then it sits half a metre under everything
-  // and is simply invisible beneath the terrain.
+  // The grid world's global GRASS PLANE is gone with the tile loop (task 3):
+  // one 600 x 600 m square of canvas grass under everything, which the painted
+  // ground replaces in full. Its one other job travels with it — see the
+  // basement hole below.
   const terrainGround = createGround();
   engine.scene.add(terrainGround.group);
   /** The map payload's own METRE data, kept for the pieces that already speak
@@ -525,51 +564,15 @@ async function startApp(username: string, role: string) {
   let mapLocations = firstMap.locations;
   void terrainGround.sync(firstMap.terrain_sig, worldBounds);
 
-  // Basement view: the global ground plane sits at height 0 across the whole
-  // map, so a storey below ground would stay hidden even after the tile's own
-  // plate ghosts (applyTileFade). While the interior view of a tile with a
-  // basement is up, a rectangular hole the size of that tile's cell is
-  // discarded out of this plane — same shader technique as the room clip
-  // (@anima/scene-render clip.ts), just inverted: inside the rect goes away.
-  // Uniforms are shared objects, so the frame hook can steer them per frame
-  // without recompiling.
-  const groundHole = { value: new THREE.Vector4(0, 0, 0, 0) }; // minX, minZ, maxX, maxZ
-  const groundHoleOn = { value: 0 };
-  const groundMat = ground.material as THREE.MeshStandardMaterial;
-  groundMat.onBeforeCompile = (shader) => {
-    shader.uniforms.uHole = groundHole;
-    shader.uniforms.uHoleOn = groundHoleOn;
-    shader.vertexShader = `varying vec3 vHoleWorld;\n${shader.vertexShader}`
-      .replace('#include <project_vertex>',
-        '#include <project_vertex>\n\tvHoleWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;');
-    const head = 'uniform vec4 uHole;\nuniform float uHoleOn;\nvarying vec3 vHoleWorld;\n';
-    const test = `
-  if ( uHoleOn > 0.5 &&
-       vHoleWorld.x > uHole.x && vHoleWorld.x < uHole.z &&
-       vHoleWorld.z > uHole.y && vHoleWorld.z < uHole.w ) discard;
-`;
-    const body = head + shader.fragmentShader;
-    shader.fragmentShader = body.includes('#include <clipping_planes_fragment>')
-      ? body.replace('#include <clipping_planes_fragment>', `${test}\n#include <clipping_planes_fragment>`)
-      : body.replace('void main() {', `void main() {\n${test}`);
-  };
-  groundMat.customProgramCacheKey = () => 'ground-hole';
-
-  // Nachbarschafts-Grid der Oberflächen-Arten (für Zusammenstellungen
-  // wie die Küste: Verlauf Richtung Wasser-Nachbarn)
-  /** Publish the surface-kind neighbourhood of every known location. Called at
-   *  boot and again whenever a discovered place joins the map — a new cell is
-   *  a new neighbour for the coast blends around it.
-   *
-   *  The minimap no longer rides along here: it draws the PAINTED terrain of
-   *  `/play/terrain` (E4 task 2), which is the world's own ground and not a
-   *  per-cell style. */
-  const publishTerrainGrid = () => {
-    const kinds = placeable.map(
-      (l) => ({ gx: v1(l).grid_x!, gy: v1(l).grid_y!, kind: gridSurfaceKind(l) }));
-    setTerrainGrid(kinds);
-  };
-  publishTerrainGrid();
+  // Basement view: the world's ground covers height 0 everywhere, so a storey
+  // below ground would stay hidden even after the tile's own plate ghosts
+  // (applyTileFade). While the interior view of a tile with a basement is up, a
+  // rectangle the size of that tile's FOOTPRINT is discarded out of the ground
+  // — the same shader technique as the room clip (@anima/scene-render clip.ts),
+  // just inverted: inside the rect goes away. The frame hook steers it per
+  // frame (`terrainGround.setHole`); the patch itself moved into `ground.ts`
+  // with the plane it belongs to, because the metre world's ground is a base
+  // plane PLUS the painted areas and every one of them would roof the cellar.
 
   // Szenen-Rezept (Vertrag Teil B): der Server liefert die komplette Szene
   // einer Location als fertige Primitive + Platzierungs-Specs. Wo es eins
@@ -633,7 +636,16 @@ async function startApp(username: string, role: string) {
   const buildingTierByLoc = new Map<string, ModelTier>();
   const interiorTierByLoc = new Map<string, ModelTier>();
   function wantedBuildingTier(tile: Tile): ModelTier {
-    const d = engine.camera.position.distanceTo(tile.center);
+    // Distance to the FOOTPRINT, not to its centre (E4 task 3): footprints
+    // have sizes now, and a camera standing on the edge of a 200 m forest is
+    // 100 m from its centre — measured that way the one location filling the
+    // whole picture would be the one drawn at the low tier. Subtracting the
+    // bounding sphere of the square (half its diagonal, `w · 0.7071`) is the
+    // same rule the ground scatter uses. The hysteresis is UNTOUCHED: the
+    // 45/60 band of the landed LOD strand keeps deciding, it is only fed a
+    // distance that means the same thing for every location.
+    const d = engine.camera.position.distanceTo(tile.center)
+      - tile.width * Math.SQRT1_2;
     const cur = buildingTierByLoc.get(tile.loc.id) ?? 'low';
     if (cur === 'low' && d < BUILDING_TIER_NEAR) return 'full';
     if (cur === 'full' && d > BUILDING_TIER_FAR) return 'low';
@@ -769,17 +781,21 @@ async function startApp(username: string, role: string) {
     return y;
   }
 
-  /** Height the threshold QUAD lies at: the floor plus a lift that scales with
-   *  the scene, so it cannot sink into it — at Willowbrook's k = 0.21 a whole
-   *  storey is 0.63 m, and a fixed centimetre offset there is a step. */
-  function doorMarkY(tile: Tile, m: DoorMarker, k: number): number {
-    return doorFloorY(tile, m) + 0.02 * Math.max(k, 0.35);
+  /** Height the threshold QUAD lies at: the floor plus two centimetres, so it
+   *  cannot sink into it. The lift used to be scaled by the scene's `k` (a
+   *  whole storey was 0.63 m at Willowbrook's k = 0.21, where a fixed
+   *  centimetre offset would have been a step) — with k = 1 a storey is three
+   *  real metres and two centimetres is two centimetres. */
+  function doorMarkY(tile: Tile, m: DoorMarker): number {
+    return doorFloorY(tile, m) + 0.02;
   }
 
   /** A doorway as a waypoint for a walking figure: its centre, on the floor a
    *  figure stands on there. */
   function doorStop(tile: Tile, m: DoorMarker): THREE.Vector3 {
-    return new THREE.Vector3(m.mid.x, doorFloorY(tile, m), m.mid.z);
+    // `m.mid` is TILE-LOCAL (the callers ask `doors.ts` without an origin) —
+    // the walk needs it in the world.
+    return tileToWorld(tile, m.mid.x, m.mid.z, doorFloorY(tile, m));
   }
 
   /** (Re)build the thresholds of one tile from its payload. Called after every
@@ -788,14 +804,15 @@ async function startApp(username: string, role: string) {
   function buildDoorMarks(tile: Tile, scene: ScenePayload) {
     dropDoorMarks(tile.loc.id);
     if (!tile.isBuilding) return;
-    // The payload is TILE-LOCAL (world metres around the tile centre) while the
-    // scene is absolute — the C1 lesson of the collision round, where segments
-    // sat 45 m from the figure. `doorMarkers` bakes the centre in for us.
-    const origin = { x: tile.center.x, z: tile.center.z };
+    // The payload is TILE-LOCAL while the scene is absolute — the C1 lesson of
+    // the collision round, where segments sat 45 m from the figure. Asked in
+    // the TILE frame (origin 0/0) and turned into the world below: since E4 the
+    // footprint may stand rotated, so baking the centre in before the turn
+    // would misplace every threshold of a turned location.
     const root = new THREE.Group();
     root.visible = false;
     for (const { level } of scene.levels) {
-      const marks = doorMarkers(scene, level, origin);
+      const marks = doorMarkers(scene, level);
       if (!marks.length) continue;
       // Wall thickness of this storey — the floor is the same for every wall of
       // a recipe, so the first one answers for all of them.
@@ -811,9 +828,13 @@ async function startApp(username: string, role: string) {
         mesh.userData.rooms = m.roomIds;
         mesh.scale.set(m.width, 1, Math.max(m.width * DOOR_MARK_DEPTH, thickness));
         // World +x turned onto the wall direction: a rotation by φ about Y maps
-        // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x).
-        mesh.rotation.y = Math.atan2(-m.along.z, m.along.x);
-        mesh.position.set(m.mid.x, doorMarkY(tile, m, scene.k), m.mid.z);
+        // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x). The
+        // direction is turned into the world first — it is stated in the tile
+        // frame like every other payload vector.
+        const along = tileDirToWorld(tile, m.along.x, m.along.z);
+        mesh.rotation.y = Math.atan2(-along.z, along.x);
+        const at = tileToWorld(tile, m.mid.x, m.mid.z);
+        mesh.position.set(at.x, doorMarkY(tile, m), at.z);
         // Late, so the quad is not swallowed by the fading walls it lies
         // between, and unpickable — the selection-ring lesson: an overlay that
         // catches the ray steals the click that was meant for the tile.
@@ -884,17 +905,19 @@ async function startApp(username: string, role: string) {
     for (const o of openings) {
       const width = Number(o.width_m);
       if (!Number.isFinite(width) || width <= 0) continue;
-      // Payload coordinates are TILE-LOCAL (world metres around the tile
-      // centre, rotation applied) — the centre is added here, exactly as the
-      // entry offer and the walk-in add it.
-      const x = tile.center.x + o.at_world[0];
-      const z = tile.center.z + o.at_world[1];
+      // Payload coordinates are TILE-LOCAL (metres around the tile centre,
+      // the SCENE rotation applied) — the footprint transform is applied here,
+      // exactly as the entry offer and the walk-in apply it.
+      const at = tileToWorld(tile, o.at_world[0], o.at_world[1]);
+      const x = at.x;
+      const z = at.z;
+      const inward = tileDirToWorld(tile, o.inward[0], o.inward[1]);
       const mesh = new THREE.Mesh(DOOR_MARK_GEO, DOOR_MARK_LOCKED_MAT);
       mesh.scale.set(width, 1, Math.max(width * DOOR_MARK_DEPTH, 0.3));
       // The threshold runs ALONG the edge, i.e. across the inward normal:
       // rotating (1,0,0) by φ about Y gives (cos φ, 0, -sin φ), and the
       // direction perpendicular to `inward` is (inward.z, -inward.x).
-      mesh.rotation.y = Math.atan2(o.inward[0], o.inward[1]);
+      mesh.rotation.y = Math.atan2(inward.x, inward.z);
       mesh.position.set(x, groundY(x, z) + 0.05, z);
       mesh.renderOrder = 3;
       mesh.raycast = () => {};
@@ -928,6 +951,15 @@ async function startApp(username: string, role: string) {
    *  discovered ones — the pickables are refreshed by the CALLER, once per
    *  batch. */
   function addTile(loc: WorldLocation) {
+    // Placed or not built at all (§ A1.1). `placeableOf` already filters on
+    // this, so the guard is the second lock on the one door through which a
+    // location without a point could reach the scene — and it SAYS so instead
+    // of quietly stacking such a place on the world origin.
+    if (!footprintCentre(loc)) {
+      console.warn(`[map] ${loc.name || loc.id} has no position (pos_x/pos_z)`
+        + ' — no tile drawn');
+      return;
+    }
     const tile = buildTile(loc);
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
@@ -957,9 +989,9 @@ async function startApp(username: string, role: string) {
   // overhang that makes the soft border all live in that module, so this file
   // keeps doing nothing but placing rectangles.
   const clouds = createFogClouds();
-  /** A hand's breadth above the world's grass plane: unknown cells carry no
-   *  tile, so that plane is the only thing under the veil. */
-  const FOG_Y = ground.position.y + 0.05;
+  /** A hand's breadth above the world's ground: an unknown place carries no
+   *  tile, so the painted ground is the only thing under the veil. */
+  const FOG_Y = GROUND_Y + 0.05;
   const fogGroup = new THREE.Group();
   engine.scene.add(fogGroup);
   /** The frame and the switch of the CURRENT payload — both move only with a
@@ -1080,23 +1112,18 @@ async function startApp(username: string, role: string) {
     try {
       const fresh = await api.getLocations();
       const freshById = new Map(fresh.map((l) => [l.id, l]));
-      // Erst sammeln, dann bauen: eine Terrain-Änderung muss VOR dem Neubau
-      // ins Nachbarschafts-Grid, sonst backt die eigene Kachel noch mit dem
-      // alten Grid (Reihenfolge war der Kern des Küsten-Befunds 2026-07-29).
+      // Collect first, build after. The neighbourhood grid this used to feed
+      // (and the coast blends baked from it) is gone with the cell — the
+      // ground between the places is the painted terrain of `/play/terrain`
+      // now, and a changed `terrain`/`surface_kind` simply repaints the one
+      // tile it belongs to, through the ordinary signature rebuild.
       const dirty: [Tile, WorldLocation][] = [];
-      let terrainChanged = false;
       for (const [id, tile] of tiles) {
         const detail = freshById.get(id) ?? freshById.get(tile.loc.template_location_id || '');
         if (!detail) continue;
         const sig = sigOf(detail);
         if (locSig.get(id) === sig) continue;
         locSig.set(id, sig);
-        // The neighbourhood grid is built from `surface_kind`, the tile style
-        // from `terrain` — a change in EITHER has to repaint.
-        if ((detail.terrain || '') !== (tile.loc.terrain || '')
-            || (detail.surface_kind || '') !== (tile.loc.surface_kind || '')) {
-          terrainChanged = true;
-        }
         // map3d aus dem Detail, aber ohne die abgeleiteten floors zu
         // verlieren: die trägt nur die Worldmap-Variante (Kachel vom Boot) —
         // sonst schrumpfte die prozedurale Hülle beim ersten echten Rebuild.
@@ -1110,28 +1137,6 @@ async function startApp(username: string, role: string) {
           terrain: detail.terrain ?? tile.loc.terrain,
           surface_kind: detail.surface_kind ?? tile.loc.surface_kind,
         }]);
-      }
-      if (terrainChanged) {
-        const nextLoc = new Map(dirty.map(([tl, loc]) => [tl.loc.id, loc]));
-        const kinds = [...tiles.values()].map((tl) => {
-          const loc = nextLoc.get(tl.loc.id) ?? tl.loc;
-          return { gx: v1(loc).grid_x!, gy: v1(loc).grid_y!, kind: gridSurfaceKind(loc) };
-        });
-        setTerrainGrid(kinds);
-        // Die 4-Nachbarn jeder Terrain-Änderung mit neu bauen: deren
-        // Zusammenstellungen (Küste) beziehen ihre Wasserrichtung aus dem
-        // Grid — gemaltes Wasser muss die Küste daneben umbacken.
-        const byCell = new Map([...tiles.values()].map((tl) => [`${v1(tl.loc).grid_x},${v1(tl.loc).grid_y}`, tl]));
-        for (const [tl, loc] of [...dirty]) {
-          if ((loc.terrain || '') === (tl.loc.terrain || '')) continue;
-          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-            const nb = byCell.get(`${v1(tl.loc).grid_x! + dx},${v1(tl.loc).grid_y! + dy}`);
-            if (nb && !nextLoc.has(nb.loc.id)) {
-              nextLoc.set(nb.loc.id, nb.loc);
-              dirty.push([nb, nb.loc]);
-            }
-          }
-        }
       }
       for (const [tile, loc] of dirty) rebuildTile(tile, loc);
     } catch { /* Server kurz weg -> nächster Poll */ }
@@ -1159,7 +1164,7 @@ async function startApp(username: string, role: string) {
     return grid;
   }
   engine.target.copy(center);
-  engine.dist = engine.targetDist = 70;
+  engine.dist = engine.targetDist = fitDistance(firstMap.world_bounds);
 
   // --- Hover & Klick -------------------------------------------------------
   let hovered: Tile | null = null;
@@ -1225,14 +1230,14 @@ async function startApp(username: string, role: string) {
     if (engine.follow) return;
     const p = npcs.positionOf(name);
     if (!p) return;
-    // The drawn scale, not a nominal one: indoors a metre is `scale` human
-    // metres, so both the distance and the aim point have to follow it.
-    const scale = npcs.scaleOf(name) ?? 1;
+    // ONE scale (E4): a figure is 1.70 m indoors and out, so the framing is
+    // the same wherever it stands — the drawn-scale factor this used to carry
+    // was the interior compression, and there is none any more.
     // Aim at the middle of the body, not at the feet — `positionOf` returns the
     // root, i.e. ground level, and from this close the figure would run out of
     // the top of the frame. Half of a 1.70 m character is 0.85 m.
-    p.y += 0.85 * scale;
-    engine.flyTo(p, THREE.MathUtils.clamp(ZOOM_TO_BASE_DIST * scale, MIN_DIST, ZOOM_TO_MAX_DIST));
+    p.y += 0.85;
+    engine.flyTo(p, THREE.MathUtils.clamp(ZOOM_TO_BASE_DIST, MIN_DIST, ZOOM_TO_MAX_DIST));
   };
   // The marker follows the BUS, not the click: closing the plaque happens on
   // the React side without a gameAction, and the ring has to go with it.
@@ -1509,14 +1514,18 @@ async function startApp(username: string, role: string) {
   setInterval(pollRooms, ROOMS_POLL_MS);
 
   // --- NPC-Sollpositionen ----------------------------------------------------
-  function slotOffset(tile: Tile, index: number, count: number): THREE.Vector3 {
+  /** Where a character stands on a tile, in TILE-LOCAL metres — the caller
+   *  turns it into the world with the footprint (`tileToWorld`). The row in
+   *  front of a building scales with the footprint (0.36 of the edge, which is
+   *  the old 3.6 m on a 10 m location); the ring around an open place stays an
+   *  absolute 2.6 m, because it is a huddle of people and not a property line. */
+  function slotOffset(tile: Tile, index: number, count: number): { x: number; z: number } {
     if (tile.isBuilding) {
       // vor dem Gebäude aufreihen (Südseite)
-      const x = (index - (count - 1) / 2) * 2.3;
-      return new THREE.Vector3(x, 0, CELL * 0.36);
+      return { x: (index - (count - 1) / 2) * 2.3, z: tile.width * 0.36 };
     }
     const angle = (index / Math.max(count, 1)) * Math.PI * 2;
-    return new THREE.Vector3(Math.cos(angle) * 2.6, 0, Math.sin(angle) * 2.6);
+    return { x: Math.cos(angle) * 2.6, z: Math.sin(angle) * 2.6 };
   }
 
   // Raum-Mitbewohner im kleinen Kreis anordnen statt aufeinander zu stehen
@@ -1566,7 +1575,6 @@ async function startApp(username: string, role: string) {
             states.push({
               char: c,
               pos,
-              scale: 1,
               route: { points, seg, frac: tr.frac,
                        cellSecondsReal: tr.cell_seconds_real, stamp: mapStamp },
               travelTo: last.clone(),
@@ -1579,15 +1587,11 @@ async function startApp(username: string, role: string) {
         let via: THREE.Vector3[] | undefined;
         let face: THREE.Vector3 | undefined;
         let lean: { tilt: number; roll: number } | undefined;
-        let scale = 1;
         const room = roomOf.get(c.name);
         const roomCenter = room ? tile.roomCenters.get(room) : undefined;
         // dauerhaft sichtbare Räume gelten in jeder Zoomstufe
         const inRoom = roomCenter && room && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(room))
           ? room : null;
-        // Innenraum-Maßstab: bei Szenen-Locations aus dem Payload
-        // (figures.base_height_m_world, § B1), sonst wie bisher aus dem Anker
-        const roomScale = sceneFigureScale(tile.loc.id) ?? roomFigureScale(tile.loc);
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
@@ -1615,9 +1619,10 @@ async function startApp(username: string, role: string) {
             // abgetastete freie Stellfläche im Raum-Modell (nicht in Möbeln)
             pos = spots[idx % spots.length].clone();
           } else {
-            pos = roomCenter.clone().add(
-              roomSlot(idx, mates.length, c.name).multiplyScalar(roomScale)
-            );
+            // No room scale on the offset any anymore: a metre in the room IS a
+            // metre on the map (k = 1), so the huddle radius is the metre
+            // count `roomSlot` states.
+            pos = roomCenter.clone().add(roomSlot(idx, mates.length, c.name));
             // Relief (§ B1 Nr. 14): die Raum-Mitte ist EINE Höhe, der Boden
             // unter der versetzten Figur ist es nicht. Als DIFFERENZ zur
             // Mitte angesetzt, damit es egal bleibt, ob die Mitte selbst
@@ -1629,9 +1634,9 @@ async function startApp(username: string, role: string) {
               - terrainLiftAt(tile, roomCenter.x, roomCenter.z);
             if (rise) pos.setY(pos.y + rise);
           }
-          scale = roomScale;
         } else {
-          pos = tile.center.clone().add(slotOffset(tile, i, chars.length));
+          const slot = slotOffset(tile, i, chars.length);
+          pos = tileToWorld(tile, slot.x, slot.z);
           // Eingebackene Bodenhaut des Gebäude-Meshes: auf die Oberfläche
           // stellen statt bei y=0 darin zu versinken (Befund Kira).
           pos.setY(tileGroundY(tile, pos));
@@ -1649,17 +1654,21 @@ async function startApp(username: string, role: string) {
         const prevShown = shownRoom.get(c.name) ?? null;
         if (inRoom !== prevShown) {
           const scene = scenes.get(tile.loc.id);
-          const origin = { x: tile.center.x, z: tile.center.z };
+          // Asked in the TILE frame (no origin): `doorStop` turns the marker
+          // into the world with the footprint transform. Handing the centre in
+          // here as well would apply the offset TWICE — and on a turned
+          // location it would also turn an already-absolute point, which is
+          // how a doorway ends up on the far side of the map.
           const from = roomIdOf(tile, prevShown);
           const to = roomIdOf(tile, inRoom);
           const levelOf = (r: string | null) => (r ? tile.roomLevels.get(r) ?? 0 : 0);
           const lf = levelOf(prevShown), lt = levelOf(inRoom);
           const stops: THREE.Vector3[] = [];
-          const shared = from && to ? doorwayBetween(scene, from, to, origin) : null;
+          const shared = from && to ? doorwayBetween(scene, from, to) : null;
           if (shared) {
             stops.push(doorStop(tile, shared));
           } else {
-            const leave = from ? roomDoor(scene, from, origin) : null;
+            const leave = from ? roomDoor(scene, from) : null;
             if (leave) stops.push(doorStop(tile, leave));            // alten Raum verlassen
             if (lf !== lt && tile.elevatorStops) {
               const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
@@ -1667,7 +1676,7 @@ async function startApp(username: string, role: string) {
               if (a) stops.push(a.clone());                          // Fahrstuhl einsteigen
               if (b) stops.push(b.clone());                          // Fahrt zur Ziel-Etage
             }
-            const enter = to ? roomDoor(scene, to, origin) : null;
+            const enter = to ? roomDoor(scene, to) : null;
             if (enter) stops.push(doorStop(tile, enter));            // neuen Raum betreten
           }
           if (stops.length) via = stops;
@@ -1705,7 +1714,6 @@ async function startApp(username: string, role: string) {
         states.push({
           char: c,
           pos,
-          scale,
           via,
           face,
           lean,
@@ -1865,18 +1873,11 @@ async function startApp(username: string, role: string) {
     const fresh = placeableOf(map, details).filter((l) => !tiles.has(l.id));
     if (!fresh.length) return;
     placeable.push(...fresh);
-    publishTerrainGrid();
-    // Neighbours FIRST, and only then the newcomers: a tile bakes its coast
-    // blend from the grid at build time (the ordering finding of 2026-07-29),
-    // so the four neighbours of a new cell have to be rebuilt against the
-    // grid that already knows about it.
-    const revealedCells = new Set(fresh.map((l) => `${v1(l).grid_x},${v1(l).grid_y}`));
-    for (const tile of [...tiles.values()]) {
-      const near = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
-      if (near.some(([dx, dy]) => revealedCells.has(`${v1(tile.loc).grid_x! + dx},${v1(tile.loc).grid_y! + dy}`))) {
-        rebuildTile(tile, tile.loc);
-      }
-    }
+    // No neighbour rebuild any more: a tile used to bake its coast blend from
+    // the four cells around it, so a newcomer forced its neighbours to be
+    // rebuilt against the grid that now knew about it. Footprints have no
+    // neighbours (§ A1.1) — a new place changes nothing about the ones that
+    // were already standing.
     // The scene recipes before the tiles, exactly as at boot: a tile built
     // without its payload would stand as the procedural shell and only swap
     // once the sweep noticed it.
@@ -1981,7 +1982,6 @@ async function startApp(username: string, role: string) {
     // location of its own to compare, and a view switch is a fine moment to
     // close it either way.
     panel.hide();
-    publishTerrainGrid();
     engine.setPickables([...tiles.values()].map((t) => t.group));
     pathGrid = publishPathGrid();
     rebuildFog();
@@ -2399,17 +2399,10 @@ async function startApp(username: string, role: string) {
       if (!arrived && performance.now() <= walkIn.until) return;
       walkIn = null;
     }
-    // Pace of the SIZE the figure is drawn at (E3 fix): indoors it stands at
-    // the room scale, where a world metre is not a figure metre — unscaled,
-    // 3.4 m/s next to a figure a third the size reads as eleven metres a
-    // second, which is the "far too fast in rooms" of the acceptance round.
-    // The factor goes to BOTH halves of the pace, the goal below and the
-    // catch-up in `tick()`; see `setPlayerSpeed` for why the goal alone cannot
-    // carry it. `MIN_LEAD` deliberately does not scale — it is not a distance
-    // in figure metres but the floor that keeps tick()'s 0.05 world-unit "is
-    // moving" test true.
-    const speedScale = walkSpeedScale(npcs.scaleOf(avatarName));
-    npcs.setPlayerSpeed(speedScale);
+    // ONE pace (E4): `WALK_SPEED` is 3.4 metres a second and a metre is a
+    // metre, indoors and out. The interior factor that used to sit here (and
+    // in `tick()`'s catch-up) existed only because a room drew its figures
+    // small — with k = 1 there is nothing left to compensate.
     const keyDir = walkDir(engine.keysDown(), engine.yaw);
     // The keys always win: touching WASD is the player taking over from the
     // click order, not fighting it.
@@ -2436,7 +2429,7 @@ async function startApp(username: string, role: string) {
     if (askedEdge && (askedEdge.from.gx !== here.gx || askedEdge.from.gy !== here.gy)) {
       askedEdge = null;
     }
-    const lead = Math.min(Math.max(WALK_SPEED * speedScale * dt, MIN_LEAD), reach);
+    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
     let x = pos.x + dir.x * lead;
     let z = pos.z + dir.z * lead;
     let next = cellOf(x, z, CELL);
@@ -2652,14 +2645,20 @@ async function startApp(username: string, role: string) {
     return rooms;
   }
 
-  /** Whether a point lies inside a room's floor rectangle (world XZ) — the
-   *  same rectangles the focus mode uses, taken from the mounted scene. A room
-   *  the tile has no rectangle for (no plate, no overlay) contains nothing. */
+  /** Whether a point lies inside a room's floor rectangle — the same
+   *  rectangles the labels use, taken from the mounted scene. A room the tile
+   *  has no rectangle for (no plate, no overlay) contains nothing.
+   *
+   *  `roomRects` is TILE-LOCAL (an axis-aligned rectangle only means anything
+   *  in the frame it was measured in), so the WORLD point is turned into that
+   *  frame instead of the rectangle being turned into the world — a turned
+   *  rectangle is not a rectangle. */
   function insideRoomRect(tile: Tile, roomId: string,
                           pos: { x: number; z: number }): boolean {
     const r = tile.roomRects.get(roomId);
     if (!r) return false;
-    return Math.abs(pos.x - r.x) <= r.w / 2 && Math.abs(pos.z - r.z) <= r.d / 2;
+    const p = worldToTile(tile, pos.x, pos.z);
+    return Math.abs(p.x - r.x) <= r.w / 2 && Math.abs(p.z - r.z) <= r.d / 2;
   }
 
   /**
@@ -2729,18 +2728,28 @@ async function startApp(username: string, role: string) {
     }
     let segments = byLevel.get(level);
     if (!segments) {
-      // The payload is TILE-LOCAL (world metres around the tile centre), the
-      // figure position is absolute — so the centre is baked in here, exactly
-      // as `mountScene` bakes it into room centres, doorways, markers and the
-      // wall mids of the culling. Without it the segments of a building on
-      // grid (4,2) sit 45 m from the figure and nothing ever blocks.
-      segments = wallSegments(scene, level,
-        { x: tile.center.x, z: tile.center.z });
+      // The payload is TILE-LOCAL, the figure position is absolute — so the
+      // footprint transform is applied here, exactly as `mountScene` applies
+      // it to room centres, doorways, markers and the wall mids of the
+      // culling. Without it the segments of a building 45 m away sit 45 m from
+      // the figure and nothing ever blocks.
+      //
+      // `wallSegments` is asked in the TILE frame (no origin) and its ends are
+      // turned afterwards: since E4 the footprint may stand rotated, and a
+      // segment is a line, so both ends have to go through the same turn — an
+      // origin baked in before it would place the walls of a turned location
+      // in the wrong direction.
+      segments = wallSegments(scene, level).map((sg) => {
+        const a = tileToWorld(tile, sg.ax, sg.az);
+        const b = tileToWorld(tile, sg.bx, sg.bz);
+        return { ax: a.x, az: a.z, bx: b.x, bz: b.z };
+      });
       byLevel.set(level, segments);
     }
-    // The radius comes from the SCENE's `k`, the same number the doorways are
-    // measured in: walls and body then shrink together and a 0.6 m gap in a
-    // village drawn at k = 0.21 is still a 0.6 m gap for the figure.
+    // The radius comes from the SCENE's `k` — which is the constant 1 since E4
+    // (`assertUnitScale` says so out loud if it ever is not), so this is the
+    // plain 0.25 m body half-width in world metres. The factor stays until the
+    // walk rewrite of task 5 takes `bodyRadius` apart with its smoke.
     return segments.length ? { segments, radius: bodyRadius(scene.k) } : null;
   }
 
@@ -2879,32 +2888,10 @@ async function startApp(username: string, role: string) {
       requestedRoom = null;
     }
     followAvatarStorey(tile, current);
-    // Scale (T5 finding): `update()` skips every placement field for the
-    // player-driven figure, so its scale used to stay frozen at whatever it
-    // was at takeover — a map-sized avatar inside a room, or a room-sized one
-    // back out on the map. Same rule as `computeNpcStates`, only fed from the
-    // drawn position instead of the placement pass.
-    //
-    // `current` is the SERVER'S room and arrives a request plus a poll after
-    // the figure walked through the door — for that stretch a map-sized
-    // avatar stood inside the small diorama (factor ~1/k, found at the lake).
-    // The drawn SIZE is pure view state, so it may follow the geometry
-    // immediately: standing inside a visible room rectangle counts, whether
-    // the server has confirmed the room yet or not. Room membership for the
-    // game (rules, chat, perception) stays the server's alone.
-    let scale = 1;
-    if (tile) {
-      const confirmed = !!current && tile.roomCenters.has(current)
-        && (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(current));
-      const geometric = !confirmed && (tile.fadeTarget === 1 || tile.modelIsShellArea)
-        && tile.loc.rooms.some((r) =>
-          (tile.fade > 0.5 || tile.alwaysVisibleRooms.has(r.id))
-          && insideRoomRect(tile, r.id, pos));
-      if (confirmed || geometric) {
-        scale = sceneFigureScale(tile.loc.id) ?? roomFigureScale(tile.loc);
-      }
-    }
-    npcs.setPlayerScale(avatarName, scale);
+    // The player-driven figure's SCALE used to be pulled to the room scale
+    // here (and back out again on leaving), because a world metre inside a
+    // room was a fraction of a human metre. Gone with k = 1 (E4): the figure
+    // stands at scale 1 wherever it is, so there is nothing to follow.
 
     // The switch runs only while the interior of the avatar's OWN tile is
     // open — the same condition the room placement uses; from the outside
@@ -3142,11 +3129,10 @@ async function startApp(username: string, role: string) {
       // only the one the step crosses is a way in, and the rule filters on
       // it (the payload's letter is already the world edge, rotation
       // applied).
-      const openings = (scenes.get(t.loc.id)?.boundary_openings ?? []).map((o) => ({
-        x: t.center.x + o.at_world[0],
-        z: t.center.z + o.at_world[1],
-        edge: o.edge,
-      }));
+      const openings = (scenes.get(t.loc.id)?.boundary_openings ?? []).map((o) => {
+        const at = tileToWorld(t, o.at_world[0], o.at_world[1]);
+        return { x: at.x, z: at.z, edge: o.edge };
+      });
       candidates.push({
         locId: t.loc.id,
         cell: { gx: v1(t.loc).grid_x!, gy: v1(t.loc).grid_y! },
@@ -3218,8 +3204,10 @@ async function startApp(username: string, role: string) {
       let goal: { x: number; z: number } | null = null;
       let best = Infinity;
       for (const o of scenes.get(offer.locId)?.boundary_openings ?? []) {
-        const ox = target.center.x + o.at_world[0] + o.inward[0] * OPENING_WALK_IN_M;
-        const oz = target.center.z + o.at_world[1] + o.inward[1] * OPENING_WALK_IN_M;
+        const at = tileToWorld(target, o.at_world[0], o.at_world[1]);
+        const inward = tileDirToWorld(target, o.inward[0], o.inward[1]);
+        const ox = at.x + inward.x * OPENING_WALK_IN_M;
+        const oz = at.z + inward.z * OPENING_WALK_IN_M;
         const d = Math.hypot(ox - pos.x, oz - pos.z);
         if (d < best) { best = d; goal = { x: ox, z: oz }; }
       }
@@ -3354,7 +3342,7 @@ async function startApp(username: string, role: string) {
       const off = t
         ? Math.hypot(engine.target.x - t.center.x, engine.target.z - t.center.z)
         : Infinity;
-      if (!t || engine.dist > CLOSE_CAM_DIST || off > CLOSE_TARGET_DIST) {
+      if (!t || engine.dist > CLOSE_CAM_DIST || off > closeTargetDist(t)) {
         closeOpenLocation();
       }
     }
@@ -3388,12 +3376,20 @@ async function startApp(username: string, role: string) {
         if (tile.loc.id === openLocationId && tile.fade > 0.4) open = tile;
       }
     }
-    groundHoleOn.value = basementOpen ? 1 : 0;
-    if (basementOpen) {
-      let minX = basementOpen.center.x - CELL / 2;
-      let minZ = basementOpen.center.z - CELL / 2;
-      let maxX = basementOpen.center.x + CELL / 2;
-      let maxZ = basementOpen.center.z + CELL / 2;
+    if (!basementOpen) {
+      terrainGround.setHole(null);
+    } else {
+      // The hole is the FOOTPRINT of the open location, as an axis-aligned
+      // rectangle: a square of edge w turned by yaw spans
+      // `w/2 · (|cos yaw| + |sin yaw|)` on each axis, which is exactly w/2 at
+      // yaw 0 and grows to w·0.707 at 45°. The ground is cut, not the tile, so
+      // the rectangle has to be stated in world axes.
+      const half = (basementOpen.width / 2)
+        * (Math.abs(Math.cos(basementOpen.yaw)) + Math.abs(Math.sin(basementOpen.yaw)));
+      let minX = basementOpen.center.x - half;
+      let minZ = basementOpen.center.z - half;
+      let maxX = basementOpen.center.x + half;
+      let maxZ = basementOpen.center.z + half;
       // A tile-sized hole is enough to look straight down, but not to look
       // INTO the pit: from an angle its near rim stands between camera and
       // basement. So while a storey BELOW ground is actually displayed, the
@@ -3408,11 +3404,13 @@ async function startApp(username: string, role: string) {
         const ux = dx / len;
         const uz = dz / len;
         // Only the edge FACING the camera moves — the far one stays put, so
-        // the pit does not grow away from the viewer.
-        if (ux > 0) maxX += CELL * ux; else minX += CELL * ux;
-        if (uz > 0) maxZ += CELL * uz; else minZ += CELL * uz;
+        // the pit does not grow away from the viewer. It grows by one whole
+        // footprint at most, the same "up to double the extent" as before.
+        const grow = basementOpen.width;
+        if (ux > 0) maxX += grow * ux; else minX += grow * ux;
+        if (uz > 0) maxZ += grow * uz; else minZ += grow * uz;
       }
-      groundHole.value.set(minX, minZ, maxX, maxZ);
+      terrainGround.setHole([minX, minZ, maxX, maxZ]);
     }
 
     // Verdecker Richtung Kamera: bei offener Innenansicht Nachbar-Kacheln
@@ -3427,7 +3425,8 @@ async function startApp(username: string, role: string) {
         const t = len2 > 1e-6 ? (nx * tx + nz * tz) / len2 : 0;
         if (t > 0.05 && t < 0.92) {
           const px = cam.x + tx * t, pz = cam.z + tz * t;
-          hide = Math.hypot(tile.center.x - px, tile.center.z - pz) < CELL * 1.05;
+          hide = Math.hypot(tile.center.x - px, tile.center.z - pz)
+            < tile.width * OCCLUDER_RADIUS_FACTOR;
         }
       }
       applyTileOcclusion(tile, hide, dt);

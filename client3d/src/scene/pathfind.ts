@@ -1,5 +1,14 @@
 import * as THREE from 'three';
-import { CELL, gridToWorld } from './tiles';
+import { CELL } from '../game/gridLegacy';
+
+/** The grid world's cell anchor, kept alive here alone: `tiles.ts` builds
+ *  footprints now (E4 task 3) and no longer maps cells to the world.
+ *  TODO(E4 task 5): this whole module is up for deletion — E4 has no client
+ *  A* ("Luftlinie + Wand-Gleiten"), so `pathfind.ts` is expected to be
+ *  orphaned by then. */
+function gridToWorld(gx: number, gy: number): THREE.Vector3 {
+  return new THREE.Vector3(gx * CELL, 0, gy * CELL);
+}
 
 /**
  * Wegfindung auf dem Karten-Grid: NPCs sollen um Gebäude herumlaufen statt

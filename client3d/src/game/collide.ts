@@ -37,8 +37,11 @@
 
 import type { ScenePayload } from '../api';
 
-/** Half width of the walking body, in FIGURE metres — multiply by the scene's
- *  `k` to get world metres (`bodyRadius`). 0.25 m is a grown figure's shoulder
+/** Half width of the walking body, in FIGURE metres — which since E4 are world
+ *  metres, because `k` is the constant 1 (§ B). The `k` factor is still
+ *  threaded through `bodyRadius`/`wallSegments` as the no-op it now is; it goes
+ *  with the walk rewrite of E4 task 5, together with the hand-derived cases in
+ *  `scripts/smoke_walk_math.mjs` that pin it. 0.25 m is a grown figure's shoulder
  *  half width against the 1.70 m the payload scales figures to (§ A3), and it
  *  is the same number `walk.ts` uses as `EDGE_MARGIN` to hold a figure inside
  *  its cell — one body width, one constant, two boundaries. */
@@ -87,13 +90,18 @@ export function bodyRadius(k: number): number {
  * The blocking wall lines of ONE storey, in WORLD coordinates, with the door
  * gaps already widened.
  *
- * `origin` is the tile centre and is NOT optional in practice: the payload is
- * tile-LOCAL — `scene_recipe._w()` yields world metres around the centre of
- * the tile, which is why every other consumer adds `tile.center` (room rects,
- * room centres, overlay zones, wall mids for the culling, elevator stops,
- * doorways, markers). Positions the clamp is compared against come from
- * `npcs.positionOf()` and are absolute, so without the offset the segments of
- * a building on grid (4,2) sit 45 m away from it and nothing ever blocks.
+ * The payload is tile-LOCAL — `scene_recipe._w()` yields metres around the
+ * centre of the tile — while the positions the clamp is compared against come
+ * from `npcs.positionOf()` and are absolute. Something has to bridge the two,
+ * or the segments of a building 45 m away block nothing (the collision round's
+ * C1 finding).
+ *
+ * `origin` is that bridge as a plain OFFSET, and since E4 the 3D client no
+ * longer uses it: a footprint may stand TURNED (§ A1.1) and a turn is not an
+ * offset, so the caller asks in the tile frame (`origin` 0/0) and puts both
+ * ends of every segment through `tileToWorld` itself. A line has to be turned
+ * end by end — which is precisely why it cannot be done here, where only one
+ * point at a time is in hand.
  *
  * Apart from the offset the only work done here is the ease: a wall end that
  * no OTHER wall end meets is pulled back by `DOOR_EASE_M * k`. That is a

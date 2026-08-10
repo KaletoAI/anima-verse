@@ -87,6 +87,11 @@ export interface WorldLocation {
   /** Rotation of the location's footprint about the up axis, in degrees,
    *  world-map convention (§ A1.1). Always present, 0 when unrotated. */
   yaw_deg?: number;
+  /** Edge length of the footprint square in world metres — the ONE scale
+   *  anchor (§ A1.1), hoisted out of `map3d` by the server on the worldmap
+   *  row. `null`/absent = the geometry declares none, and the tile falls back
+   *  loudly (`footprintWidth`). */
+  plan_width_m?: number | null;
   rooms: Room[];
   passable?: boolean;
   entry_room?: string;

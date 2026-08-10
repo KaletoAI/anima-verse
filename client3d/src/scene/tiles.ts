@@ -7,21 +7,106 @@ import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
 
-export const CELL = 10;
-
-// --- E4 BRIDGE (task 2) ------------------------------------------------------
+// --- The FOOTPRINT of a location (E4 task 3, § A1.1) -------------------------
 //
-// `types.ts` is on the metre world: a location has `pos_x`/`pos_z`/`yaw_deg`
-// and no grid cell. This file still builds CELL tiles and is rebuilt in task 3
-// (footprint groups from `plan_width_m`, position from `pos`, group rotated by
-// `yaw_deg`). The cast keeps it compiling without reviving the v1 fields in the
-// payload types — delete it and every cell reader here lights up.
-// TODO(E4-Task 3): remove together with CELL and `gridToWorld`.
-type V1Grid = { grid_x: number | null; grid_y: number | null };
-const v1 = (l: WorldLocation): WorldLocation & V1Grid => l as WorldLocation & V1Grid;
+// CELL is gone, and with it `gridToWorld` and every neighbourhood built out of
+// integer arithmetic. A location is a SQUARE: edge length `plan_width_m`,
+// centre (`pos_x`, `pos_z`), turned by `yaw_deg` about the up axis. The tile's
+// group carries exactly that — position and rotation — so everything hanging in
+// it is placed in tile-local metres and lands where the server says it does.
 
-export function gridToWorld(gx: number, gy: number): THREE.Vector3 {
-  return new THREE.Vector3(gx * CELL, 0, gy * CELL);
+/** Edge length of a location whose geometry declares no scale anchor
+ *  (`plan_width_m` missing or ≤ 0), in metres.
+ *
+ *  The old world's cell was 10 m and every location filled one, so 10 keeps
+ *  such a location the size it has always been drawn at — and `footprintWidth`
+ *  says out loud when it had to fall back, because an unanchored location is a
+ *  world-data defect, not a supported state (§ A1.1: without a positive anchor
+ *  a location has no area at all). */
+export const FOOTPRINT_FALLBACK_M = 10;
+
+/** Locations already warned about — the fallback is a per-location fact, and a
+ *  tile is rebuilt on every layout change. */
+const widthWarned = new Set<string>();
+
+/** Edge length of a location's footprint square in world metres. */
+export function footprintWidth(loc: WorldLocation): number {
+  const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
+  if (typeof w === 'number' && Number.isFinite(w) && w > 0) return w;
+  if (!widthWarned.has(loc.id)) {
+    widthWarned.add(loc.id);
+    console.warn(`[tiles] ${loc.name || loc.id}: no plan_width_m — drawing the`
+      + ` footprint at the fallback ${FOOTPRINT_FALLBACK_M} m (§ A1.1)`);
+  }
+  return FOOTPRINT_FALLBACK_M;
+}
+
+/**
+ * Centre of a location's footprint in world metres, or `null` when it is not
+ * placed (§ A1.1 — no point, no tile).
+ *
+ * This is THE test for "may I build a tile for this": `pos_x`/`pos_z` are
+ * nullable on purpose (a template, a place the world editor has not put down
+ * yet), and a `?? 0` anywhere on this path would stack every unplaced location
+ * on the world origin in one silent heap — which reads as one broken tile, not
+ * as missing data.
+ */
+export function footprintCentre(
+  loc: { pos_x?: number | null; pos_z?: number | null }
+): THREE.Vector3 | null {
+  const x = loc.pos_x;
+  const z = loc.pos_z;
+  if (typeof x !== 'number' || !Number.isFinite(x)) return null;
+  if (typeof z !== 'number' || !Number.isFinite(z)) return null;
+  return new THREE.Vector3(x, 0, z);
+}
+
+/** Footprint rotation in RADIANS, the world-map convention of § A1.1 — the
+ *  same sign the tile group is turned by (`rotation.y = +rad(yaw_deg)`). */
+export function footprintYaw(loc: WorldLocation): number {
+  const y = loc.yaw_deg;
+  return typeof y === 'number' && Number.isFinite(y) ? (y * Math.PI) / 180 : 0;
+}
+
+/**
+ * Tile-local (x, z) → world, the contract's own mapping (§ A1.1,
+ * `app/core/world_geometry.local_to_world`):
+ *
+ *     x = cx + lx·cos(yaw) + lz·sin(yaw)
+ *     z = cz − lx·sin(yaw) + lz·cos(yaw)
+ *
+ * This is exactly what three.js' `rotation.y = +rad(yaw)` does to a child of
+ * the tile group, so a point computed here and a mesh hanging in the group end
+ * up in the same place. EVERY local→world conversion goes through this pair:
+ * a scene payload is tile-local, and adding the centre without turning it was
+ * only ever right while every tile stood at yaw 0.
+ */
+export function tileToWorld(tile: Tile, lx: number, lz: number,
+                            ly = 0): THREE.Vector3 {
+  const c = Math.cos(tile.yaw);
+  const s = Math.sin(tile.yaw);
+  return new THREE.Vector3(
+    tile.center.x + lx * c + lz * s,
+    tile.center.y + ly,
+    tile.center.z - lx * s + lz * c);
+}
+
+/** World (x, z) → tile-local — the inverse of `tileToWorld` (a turn by −yaw). */
+export function worldToTile(tile: Tile, x: number, z: number
+): { x: number; z: number } {
+  const c = Math.cos(tile.yaw);
+  const s = Math.sin(tile.yaw);
+  const dx = x - tile.center.x;
+  const dz = z - tile.center.z;
+  return { x: dx * c - dz * s, z: dx * s + dz * c };
+}
+
+/** Turn a tile-local DIRECTION into a world direction (no translation). */
+export function tileDirToWorld(tile: Tile, lx: number, lz: number
+): { x: number; z: number } {
+  const c = Math.cos(tile.yaw);
+  const s = Math.sin(tile.yaw);
+  return { x: lx * c + lz * s, z: -lx * s + lz * c };
 }
 
 type TileStyle = 'forest' | 'road' | 'grass' | 'water' | 'cafe' | 'house' | 'highrise' | 'generic';
@@ -72,7 +157,15 @@ export interface Tile {
   /** Fassaden mit Fensterraster — leuchten nachts (emissive) */
   facadeMats?: THREE.MeshStandardMaterial[];
   group: THREE.Group;
+  /** Centre of the footprint in world metres — `group.position` (§ A1.1). */
   center: THREE.Vector3;
+  /** Edge length of the footprint square in world metres (`plan_width_m`, or
+   *  `FOOTPRINT_FALLBACK_M`). The ONE size this tile is drawn at: plate,
+   *  plinth, selection ring, the occlusion corridor and the basement hole all
+   *  come off it — there is no cell any more. */
+  width: number;
+  /** Footprint rotation in radians — `group.rotation.y`, § A1.1 sign. */
+  yaw: number;
   isBuilding: boolean;
   /** Benannte Natur-Location (Wald, See, Wiese, Straße) — kein Gebäude,
    *  nur Gelände mit Label; Raum-Labels bleiben dort aus. */
@@ -184,39 +277,13 @@ export interface Tile {
   fadeTarget: number;
 }
 
-/** Etagenhöhe der Innenansicht (level * STOREY über dem Boden) */
-const STOREY = 3;
-
-/** Maßstabs-Anker pro Location, gesetzt aus dem Szenen-Payload:
- *  k = Welt-Meter pro Real-Meter (extent_m / plan_width_m); storeyWorld =
- *  Etagenhöhe in Welt-Metern (storey_height_m x k). */
-const locationAnchors = new Map<string, { k: number; storeyWorld: number }>();
-
-/** Anker setzen/aktualisieren; true = Wert hat sich geändert (Tile neu bauen). */
-export function setLocationAnchor(locId: string, anchor: { k: number; storeyWorld: number }): boolean {
-  const prev = locationAnchors.get(locId);
-  if (prev && Math.abs(prev.k - anchor.k) < 1e-4 && Math.abs(prev.storeyWorld - anchor.storeyWorld) < 1e-4) {
-    return false;
-  }
-  locationAnchors.set(locId, anchor);
-  return true;
-}
-
-export function locationAnchor(loc: WorldLocation) {
-  return locationAnchors.get(loc.id);
-}
-
-/** Etagenhöhe einer Location in Welt-Metern: Anker-Wert aus dem Payload,
- *  sonst der prozedurale Default (Location ohne Szene). */
-export function storeyHeight(loc: WorldLocation): number {
-  return locationAnchors.get(loc.id)?.storeyWorld ?? STOREY;
-}
-
-/** Figuren-Maßstab in Räumen: k aus dem Payload (Figuren in Real-Metern ×
- *  Kompressionsfaktor); ohne Szene der prozedurale Default. */
-export function roomFigureScale(loc: WorldLocation): number {
-  return locationAnchors.get(loc.id)?.k ?? 1 / 3;
-}
+// THE SCALE ANCHOR STORE IS GONE (E4 task 3). It held two numbers per
+// location: `k` (world metres per real metre) and the storey height in world
+// metres. Since k = 1 (task 1) the first is the constant 1 and the second is
+// simply `map3d.storey_height_m` — and the accessors that made anything of
+// them (`roomFigureScale`, `storeyHeight`, `locationAnchor`) had no readers
+// left once the double scale went. The payload's `storey_m` is read where it
+// is needed, in `sceneRecipe.ts`, out of the payload itself.
 
 function detectStyle(loc: WorldLocation): TileStyle {
   // Priorität: map3d.style (AV3D-1) > terrain (AV3D-7) > Namens-Heuristik
@@ -243,13 +310,8 @@ let waterTex: THREE.Texture | null = null;
 /** Globale Oberflächen-Bibliothek vom Server (kind -> Fläche ODER
  *  Zusammenstellung); Fallback sind die eingebauten prozeduralen Texturen.
  *  Neuer Boden = neuer Bibliotheks-Eintrag, KEINE Client-Änderung. */
-interface SurfaceBlend {
-  toward: string;
-  zones: { kind: string; until?: number }[];
-  noise?: number;
-}
 interface SurfaceEntry {
-  url?: string; sizeM: number; blend?: SurfaceBlend;
+  url?: string; sizeM: number;
   /** Materialklasse der Art (Bibliothek) — Wasser wird anders beleuchtet als
    *  Gras, und zwar in BEIDEN Renderern gleich (@anima/scene-render). */
   material?: SurfaceMaterialSpec | null;
@@ -257,11 +319,10 @@ interface SurfaceEntry {
 const serverSurfaces = new Map<string, SurfaceEntry>();
 const serverSurfaceCache = new Map<string, THREE.Texture>();
 export function setSurfaceTextures(list: { kind: string; url?: string; size_m?: number;
-                                           blend?: SurfaceBlend;
                                            material?: SurfaceMaterialSpec | null }[]) {
   for (const t of list) {
     serverSurfaces.set(t.kind.toLowerCase(), {
-      url: t.url, sizeM: t.size_m || 3, blend: t.blend, material: t.material ?? null });
+      url: t.url, sizeM: t.size_m || 3, material: t.material ?? null });
   }
 }
 
@@ -274,27 +335,24 @@ export function hasSurfaceTexture(kind: string): boolean {
   return serverSurfaces.has(kind);
 }
 
-/** Terrain-Arten der Nachbar-Kacheln ("gx,gy" -> kind) für Zusammenstellungen. */
-const terrainGrid = new Map<string, string>();
-export function setTerrainGrid(entries: { gx: number; gy: number; kind: string }[]) {
-  terrainGrid.clear();
-  for (const e of entries) terrainGrid.set(`${e.gx},${e.gy}`, e.kind);
-}
+// SURFACE COMPOSITIONS ("blend", e.g. a coast fading towards the water) are
+// GONE with the grid (E4 task 3). They were baked per tile out of the terrain
+// kinds of the FOUR NEIGHBOURING CELLS — a neighbourhood built from integer
+// arithmetic, which § A1.1 strikes: "distance is a distance, neighbourhood is
+// nearness". In the metre world the ground between the locations is the painted
+// terrain of `/play/terrain` (`scene/ground.ts`, task 2), and a shoreline is a
+// polygon an admin draws, not a texture the client guesses from a grid. Gone
+// with it: `setTerrainGrid`, `gridSurfaceKind`, the noise/zone baker and the
+// canvas compositing.
 
-/** Surface kind of a location for the neighbourhood grid (compositions).
+/** Tileable surface texture of a terrain kind, repeated over a footprint
+ *  `widthM` metres wide (server library first, built-in procedural fallback).
  *
- *  `surface_kind` is what the SERVER resolved the location's `terrain` to
- *  (plan-grundflaeche.md § 5) — this client no longer looks the mapping up
- *  itself, so the world map and the detail scene cannot disagree about the
- *  ground. Empty = the terrain names no library entry; then the procedural
- *  style stands, exactly as it does for a location with no terrain at all. */
-export function gridSurfaceKind(loc: WorldLocation): string {
-  return loc.surface_kind || detectStyle(loc);
-}
-
-/** Kachelbare Oberflächen-Textur für einen Terrain-Typ: Server-Bibliothek
- *  vor eingebautem Fallback; Wiederholung im Welt-Maßstab (CELL/size_m). */
-function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
+ *  The base image is cached per kind, the REPEAT is per tile: footprints have
+ *  different edge lengths now, so one shared texture object could not carry all
+ *  of them — a clone is one object per plate and the image is shared. */
+function surfaceTexture(kind: string, fallback: THREE.Texture,
+                        widthM: number): THREE.Texture {
   const entry = serverSurfaces.get(kind);
   if (!entry?.url) return fallback;
   let tex = serverSurfaceCache.get(kind);
@@ -302,10 +360,13 @@ function surfaceTexture(kind: string, fallback: THREE.Texture): THREE.Texture {
     tex = loader.load(entry.url);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(CELL / entry.sizeM, CELL / entry.sizeM);
     serverSurfaceCache.set(kind, tex);
   }
-  return tex;
+  const own = tex.clone();
+  own.needsUpdate = true;
+  own.wrapS = own.wrapT = THREE.RepeatWrapping;
+  own.repeat.set(widthM / entry.sizeM, widthM / entry.sizeM);
+  return own;
 }
 
 // Die Boden-Kachelung der Etagen-/Raumplatten läuft seit dem Szenen-Rezept
@@ -355,142 +416,6 @@ export function surfaceFor(
   return null;
 }
 
-/** Bild einer Art fürs Canvas-Compositing laden (Server-Bild oder das
- *  Canvas der prozeduralen Fallback-Textur). */
-async function surfaceImage(kind: string, fallback: THREE.Texture): Promise<{ img: CanvasImageSource; sizeM: number }> {
-  const entry = serverSurfaces.get(kind);
-  if (entry?.url) {
-    const tex = await loader.loadAsync(entry.url);
-    return { img: tex.image as CanvasImageSource, sizeM: entry.sizeM };
-  }
-  return { img: fallback.image as CanvasImageSource, sizeM: 3 };
-}
-
-/** Wert-Rauschen (deterministisch je Kachel) für organische Zonengrenzen. */
-function makeNoise(seed: string): (x: number, y: number) => number {
-  const rnd = seededRandom('surface:' + seed);
-  const grid: number[] = Array.from({ length: 64 }, () => rnd());
-  const at = (ix: number, iy: number) => grid[((iy & 7) * 8 + (ix & 7))];
-  return (x, y) => {
-    const fx = x * 7, fy = y * 7;
-    const ix = Math.floor(fx), iy = Math.floor(fy);
-    const tx = fx - ix, ty = fy - iy;
-    const lerp = (a: number, b: number, t: number) => a + (b - a) * (t * t * (3 - 2 * t));
-    return lerp(
-      lerp(at(ix, iy), at(ix + 1, iy), tx),
-      lerp(at(ix, iy + 1), at(ix + 1, iy + 1), tx),
-      ty
-    );
-  };
-}
-
-/** Zusammenstellung backen (z.B. Küste): Zonen-Verlauf Richtung der
- *  toward-Nachbarn, Zonengrenzen mit Rauschen, Texturen im Welt-Maßstab.
- *  OHNE toward-Nachbar wird die Landzone pur gebacken (ramp bleibt 0, alle
- *  Blöcke fallen in die letzte Zone): vorher blieb die Basis-Textur stehen,
- *  und eine Art ohne eigenes Bild (coast) fiel damit auf Stil-Gras zurück —
- *  die Kachel sah aus wie ein Loch in der Karte. */
-async function bakeBlendTexture(
-  loc: WorldLocation, blend: SurfaceBlend, fallbackFor: (kind: string) => THREE.Texture
-): Promise<{ tex: THREE.CanvasTexture; mask: THREE.CanvasTexture | null }> {
-  const gx = v1(loc).grid_x ?? 0, gy = v1(loc).grid_y ?? 0;
-  // Richtungen der toward-Nachbarn (4er-Nachbarschaft; +y = Süden)
-  const dirs: [number, number][] = [];
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-    if (terrainGrid.get(`${gx + dx},${gy + dy}`) === blend.toward) dirs.push([dx, dy]);
-  }
-  // Land-Art: häufigste Nachbar-Art, die nicht toward ist
-  const counts = new Map<string, number>();
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-    const k = terrainGrid.get(`${gx + dx},${gy + dy}`);
-    if (k && k !== blend.toward) counts.set(k, (counts.get(k) ?? 0) + 1);
-  }
-  const neighborKind = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'grass';
-
-  const N = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = N;
-  const ctx = canvas.getContext('2d')!;
-  // Zweites Canvas: WO die Materialklasse der Zusammenstellung gilt. Eine
-  // Küste ist eine Platte mit einer Textur — ohne diese Maske kräuselte der
-  // Sandstreifen mit. Die Klasse ist die der `toward`-Art (hier das Wasser,
-  // auf das die Küste zuläuft); maskiert wird auf die Zonen, die dieselbe Art
-  // tragen. Kein neues Feld: `toward` benennt sie bereits.
-  const classKind = blend.toward;
-  let mcanvas: HTMLCanvasElement | null = null;
-  let mctx: CanvasRenderingContext2D | null = null;
-  // Ohne toward-Nachbar gibt es keine Wasserzone — keine Maske bauen, damit
-  // der Aufrufer die Platte matt lässt (Landzone pur kräuselt nicht).
-  if (dirs.length && surfaceMaterialSpec(classKind)) {
-    mcanvas = document.createElement('canvas');
-    mcanvas.width = mcanvas.height = N;
-    mctx = mcanvas.getContext('2d')!;
-    mctx.fillStyle = '#000';
-    mctx.fillRect(0, 0, N, N);
-  }
-  const noise = makeNoise(loc.id);
-  const amp = blend.noise ?? 0.06;
-
-  // Zonen auflösen (kind "neighbor" ersetzen) und Muster vorbereiten.
-  // Die letzte Zone (ohne until) fängt ALLES — das Rauschen hebt d über 1,
-  // mit einer endlichen Grenze blieben einzelne Blöcke am Landrand unbemalt.
-  const zones = blend.zones.map((z) => ({
-    kind: z.kind === 'neighbor' ? neighborKind : z.kind,
-    until: z.until ?? Number.POSITIVE_INFINITY,
-  }));
-  const patterns: CanvasPattern[] = [];
-  for (const z of zones) {
-    const { img, sizeM } = await surfaceImage(z.kind, fallbackFor(z.kind));
-    const px = Math.max(8, Math.round((sizeM / CELL) * N));   // Musterkachel in Pixeln
-    const pc = document.createElement('canvas');
-    pc.width = pc.height = px;
-    pc.getContext('2d')!.drawImage(img, 0, 0, px, px);
-    patterns.push(ctx.createPattern(pc, 'repeat')!);
-  }
-
-  // Pro Zone eine Maske aus dem Abstand zur toward-Kante malen
-  const cell = 4;                                   // Masken-Auflösung (64x64 Blöcke)
-  for (let zi = 0; zi < zones.length; zi++) {
-    const prev = zi === 0 ? -1 : zones[zi - 1].until;
-    // Die Blöcke dieser Zone EINMAL sammeln — Textur und Maske teilen sie
-    // sich, damit die Kante beider Bilder Pixel für Pixel dieselbe ist.
-    const rects: [number, number][] = [];
-    for (let by = 0; by < N; by += cell) {
-      for (let bx = 0; bx < N; bx += cell) {
-        const ux = (bx + cell / 2) / N, uy = (by + cell / 2) / N;
-        let ramp = 0;
-        for (const [dx, dy] of dirs) {
-          const r = dx > 0 ? ux : dx < 0 ? 1 - ux : dy > 0 ? uy : 1 - uy;
-          ramp = Math.max(ramp, r);
-        }
-        const d = 1 - ramp + (noise(ux, uy) - 0.5) * 2 * amp;   // Abstand zur Wasserkante
-        if (d > prev && d <= zones[zi].until) rects.push([bx, by]);
-      }
-    }
-    ctx.save();
-    ctx.beginPath();
-    for (const [bx, by] of rects) ctx.rect(bx, by, cell, cell);
-    ctx.clip();
-    ctx.fillStyle = patterns[zi];
-    ctx.fillRect(0, 0, N, N);
-    ctx.restore();
-    if (mctx && zones[zi].kind === classKind) {
-      mctx.fillStyle = '#fff';
-      for (const [bx, by] of rects) mctx.fillRect(bx, by, cell, cell);
-    }
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  let mask: THREE.CanvasTexture | null = null;
-  if (mcanvas) {
-    mask = new THREE.CanvasTexture(mcanvas);
-    // KEIN sRGB: die Maske ist ein Faktor, kein Bild.
-    mask.needsUpdate = true;
-  }
-  return { tex, mask };
-}
-
 function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02, transparent: true, ...opts });
 }
@@ -502,16 +427,16 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
   return m;
 }
 
-/** Bodenplatte der Zelle — Oberflächen-Textur des Terrain-Typs (Server-
- *  Bibliothek, sonst prozedural). Die 2D-Kartenbilder werden NICHT mehr
- *  als Boden verwendet (Illustrationen mit eingebackenen Schatten/Objekten
- *  passen nicht in die 3D-Szene). */
-function groundPlate(_loc: WorldLocation, tex: THREE.Texture,
+/** Ground plate of the FOOTPRINT — the surface texture of the location's
+ *  terrain kind (server library, else procedural), over the whole
+ *  `plan_width_m` square. The 2D map illustrations are NOT used as ground
+ *  (baked-in shadows and objects do not belong in a 3D scene). */
+function groundPlate(widthM: number, tex: THREE.Texture,
                     material?: SurfaceMaterialSpec | null): THREE.Mesh {
   // Die Kachel-Oberfläche geht durch dieselbe Fabrik wie die Szenen-Platten:
   // eine Wasser-Location soll auf der Karte so aussehen wie im Raum.
   const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), mat);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(widthM, widthM), mat);
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = 0.04;
   plate.receiveShadow = true;
@@ -662,19 +587,34 @@ export function buildTile(loc: WorldLocation): Tile {
 
   const style = detectStyle(loc);
   const isBuilding = !(loc.passable || loc.template_location_id);
-  const center = gridToWorld(v1(loc).grid_x ?? 0, v1(loc).grid_y ?? 0);
+  // THE footprint (§ A1.1): centre at (pos_x, pos_z), edge `plan_width_m`,
+  // turned by `yaw_deg`. Position AND rotation sit on the group, so every
+  // child is placed in tile-local metres — the same frame the scene payload
+  // speaks. The callers filter on `footprintCentre` (`placeableOf`, `addTile`),
+  // so an unplaced location never gets this far; if one ever does it says so
+  // rather than joining a silent heap on the origin.
+  const width = footprintWidth(loc);
+  const yaw = footprintYaw(loc);
+  const placed = footprintCentre(loc);
+  if (!placed) {
+    console.warn(`[tiles] ${loc.name || loc.id}: built without a position`
+      + ' (pos_x/pos_z) — the tile stands on the world origin (§ A1.1)');
+  }
+  const center = placed ?? new THREE.Vector3(0, 0, 0);
   const group = new THREE.Group();
   group.position.copy(center);
+  group.rotation.y = yaw;
   group.userData.locationId = loc.id;
 
   const ringMat = new THREE.MeshBasicMaterial({ color: 0xf2cd6e, transparent: true, opacity: 0.85 });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(CELL * 0.42, CELL * 0.48, 40), ringMat);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(width * 0.42, width * 0.48, 40), ringMat);
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.09;
   ring.visible = false;
 
   const tile: Tile = {
-    loc, group, center, isBuilding, height: 0,
+    loc, group, center, width, yaw, isBuilding, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomDoors: new Map(),
     roomSlots: new Map(), roomSpots: new Map(),
@@ -687,33 +627,13 @@ export function buildTile(loc: WorldLocation): Tile {
   const rnd = seededRandom(loc.id);
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
   // Boden = Oberflächen-Textur des Terrain-Typs (Server-Bibliothek AV3D-13,
-  // sonst prozedural) — 2D-Kartenbilder sind kein Fallback mehr.
-  // Boden: Art auflösen (terrain als Bibliotheks-kind vor Legacy-Stil);
-  // Zusammenstellungen (blend, z.B. Küste) werden asynchron gebacken und
-  // ersetzen die Start-Textur, sobald fertig.
+  // sonst prozedural) — 2D-Kartenbilder sind kein Fallback mehr. Die Art
+  // kommt vom Server (`surface_kind`), der Legacy-Stil wählt nur noch die
+  // prozedurale Ersatztextur.
   const groundPlateFor = (): THREE.Mesh => {
     const kind = loc.surface_kind || style;
-    const entry = serverSurfaces.get(kind);
-    const plate = groundPlate(loc, surfaceTexture(kind, fallbackFor(style)),
-                              surfaceMaterialSpec(kind));
-    if (entry?.blend) {
-      const toward = entry.blend.toward;
-      void bakeBlendTexture(loc, entry.blend, (k) => fallbackFor(k)).then((baked) => {
-        // Das ganze MATERIAL wird getauscht, nicht nur die Textur: eine
-        // Zusammenstellung übernimmt die Klasse ihrer `toward`-Art, und die
-        // mitgebackene Maske sagt, wo sie gilt. Vorher blieb die Kachel matt
-        // und die Küste zeigte gemaltes Wasser ohne eine Spur Bewegung.
-        // OHNE Maske (Landzone pur, kein toward-Nachbar) bleibt sie matt —
-        // die Ersatz-Vollmaske würde sonst die ganze Landfläche kräuseln.
-        const old = plate.material as THREE.Material;
-        plate.material = surfaceMaterial(THREE, {
-          material: baked.mask ? surfaceMaterialSpec(toward) : null,
-          map: baked.tex, mask: baked.mask, transparent: true,
-        }) as THREE.MeshStandardMaterial;
-        old.dispose();
-      });
-    }
-    return plate;
+    return groundPlate(width, surfaceTexture(kind, fallbackFor(style), width),
+                       surfaceMaterialSpec(kind));
   };
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
@@ -747,9 +667,10 @@ export function buildTile(loc: WorldLocation): Tile {
     const tStyle = terrainKind(loc.terrain);
     const tKind = loc.surface_kind || tStyle;
     const plinthTex = tKind
-      ? surfaceTexture(tKind, fallbackFor(tStyle || ''))
+      ? surfaceTexture(tKind, fallbackFor(tStyle || ''), width)
       : paversTexture();
-    const plinth = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), std({ map: plinthTex }));
+    const plinth = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, width), std({ map: plinthTex }));
     plinth.rotation.x = -Math.PI / 2;
     plinth.position.y = 0.045;
     plinth.receiveShadow = true;
@@ -816,8 +737,17 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
   const samples: { p: THREE.Vector3; ix: number; iz: number; uv?: THREE.Vector2; mesh?: THREE.Mesh }[] = [];
   for (let ix = 0; ix < N; ix++) {
     for (let iz = 0; iz < N; iz++) {
-      const ox = (ix / (N - 1) - 0.5) * slot.w * 0.78;
-      const oz = (iz / (N - 1) - 0.5) * slot.d * 0.78;
+      // The slot's w/d are the room's TILE-LOCAL extents, so the raster is
+      // laid out in the tile's frame and only then turned into the world — on
+      // a location standing at an angle a world-axis raster would sample a
+      // square that hangs out of the room on two corners and misses it on the
+      // other two. The rays themselves stay vertical, so the hits are world
+      // points either way; it is the sampled AREA that has to follow the room.
+      const off = tileDirToWorld(tile,
+        (ix / (N - 1) - 0.5) * slot.w * 0.78,
+        (iz / (N - 1) - 0.5) * slot.d * 0.78);
+      const ox = off.x;
+      const oz = off.z;
       ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
       const hit = ray.intersectObjects(roots, true)[0];
       if (hit) samples.push({ p: hit.point.clone(), ix, iz, uv: hit.uv?.clone(), mesh: hit.object as THREE.Mesh });
@@ -965,8 +895,12 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  *  KACHELZENTRUM, die Aufrufer reichen Weltkoordinaten herein. */
 export function terrainLiftAt(tile: Tile, x: number, z: number): number {
   if (!tile.terrain) return 0;
-  return sampleTerrain(tile.terrain, x - tile.center.x, z - tile.center.z,
-                       tile.terrainExtent || CELL);
+  // The height field is TILE-LOCAL, so a world point has to be turned back
+  // into the tile's frame first — subtracting the centre alone was only right
+  // while every tile stood at yaw 0.
+  const local = worldToTile(tile, x, z);
+  return sampleTerrain(tile.terrain, local.x, local.z,
+                       tile.terrainExtent || tile.width);
 }
 
 /** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen

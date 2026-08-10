@@ -6,9 +6,10 @@ import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
 
-/** World units per second (~walking pace on 10-unit cells). Exported because
- *  the player-driven avatar (E3-T3) has to move at exactly the NPC pace — a
- *  second constant would drift. */
+/** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
+ *  metre world has one scale, so this number means the same thing on the map
+ *  and inside a room. Exported because the player-driven avatar (E3-T3) has to
+ *  move at exactly the NPC pace; a second constant would drift. */
 export const WALK_SPEED = 3.4;
 const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
@@ -93,8 +94,6 @@ interface Npc {
   /** `performance.now()` at which the bubble is taken down again (0 = down) */
   bubbleUntil: number;
   target: THREE.Vector3;
-  /** Ziel-Skalierung (1 = Kartengröße; kleiner in Innenräumen) */
-  targetScale: number;
   /** feste Blickrichtung im Stand (Marker) — sonst Nachbarn ansehen */
   face: THREE.Vector3 | null;
   /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
@@ -110,8 +109,6 @@ interface Npc {
 export interface NpcState {
   char: MapCharacter;
   pos: THREE.Vector3;               // Zielposition auf der Karte
-  /** Skalierung der Figur (1 = Kartengröße; kleiner in Innenräumen) */
-  scale?: number;
   /** feste Blickrichtung im Stand (z.B. vom Animations-Marker) */
   face?: THREE.Vector3;
   /** Neigung vom Marker (Grad): Kopf hoch/tief bzw. seitlich kippen — eine
@@ -143,8 +140,6 @@ export class NpcManager {
   private playerDriven: string | null = null;
   /** ground ring at the click target of a running walk (E3-T4) */
   private walkTargetRing: THREE.Mesh | null = null;
-  /** pace of the player-driven figure as a factor of WALK_SPEED (E3 fix) */
-  private playerSpeed = 1;
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -177,11 +172,13 @@ export class NpcManager {
     return this.npcs.get(name)?.root.position.clone() ?? null;
   }
 
-  /** Scale a figure is currently DRAWN at, or null when it is not on the map
-   *  (E3-T5). The live value, not the target: `tick()` blends towards
-   *  `targetScale` when a figure enters or leaves an interior. Callers that
-   *  work in world metres need it — indoors a metre is `scale` human metres,
-   *  so a fixed radius would mean something different in every room. */
+  /** Scale a figure is DRAWN at, or null when it is not on the map (E3-T5).
+   *
+   *  Constant 1 since E4: the metre world has ONE scale, so a figure inside a
+   *  room is the same 1.70 m it is on the map (k = 1, `figures.setCharacterHeight`
+   *  is the only thing that resizes one). It is still read, because the reach
+   *  radii that used to shrink with the room (`proximity.ts`, `elevator.ts`)
+   *  take the drawn size as their unit — and now simply get 1. */
   scaleOf(name: string): number | null {
     return this.npcs.get(name)?.root.scale.x ?? null;
   }
@@ -195,10 +192,7 @@ export class NpcManager {
   setPlayerDriven(name: string | null) {
     if (this.playerDriven === name) return;
     this.playerDriven = name;
-    if (!name) {
-      this.playerSpeed = 1;   // handed back: the next takeover starts outdoors
-      return;
-    }
+    if (!name) return;
     // No figure yet (the model is still loading, or a rebuild threw the group
     // away): nothing to do HERE — `update()` applies the same state the moment
     // it creates the figure, so the takeover is not lost.
@@ -226,34 +220,12 @@ export class NpcManager {
     npc.root.visible = true;
   }
 
-  /** Target scale of the player-driven figure (E3-T6). `update()` skips the
-   *  placement fields for it, so without this it kept whatever scale it had at
-   *  takeover — a map-sized avatar inside a room, or a room-sized one back out
-   *  on the map. `tick()` blends towards it exactly as it does for every other
-   *  figure, so the change is a smooth one and not a pop. */
-  setPlayerScale(name: string, scale: number) {
-    const npc = this.npcs.get(name);
-    if (npc) npc.targetScale = scale;
-  }
-
-  /**
-   * Pace of the player-driven figure, as a factor of `WALK_SPEED` (E3 fix).
-   * Indoors its figure is drawn at the room scale, and a world metre there is
-   * not a figure metre — at scale 0.3 the unscaled pace covers eleven figure
-   * metres a second.
-   *
-   * It has to sit HERE and not only in the goal the frame hook pushes ahead:
-   * the goal runs `MIN_LEAD` (0.15 m) ahead so that `tick()`'s "is moving"
-   * test (0.05 world units) stays true, and 0.15 m is more than the catch-up
-   * of one frame (0.057 m at 60 fps) — so the catch-up, not the goal, is what
-   * decides the speed. A goal placed 0.017 m ahead instead would fall under
-   * the 0.05 threshold and the figure would not move at all
-   * (`scripts/smoke_walk_math.mjs` derives both numbers). NPCs are untouched:
-   * this factor applies to the player-driven figure only.
-   */
-  setPlayerSpeed(factor: number) {
-    this.playerSpeed = factor;
-  }
+  // THE SECOND SCALE IS GONE (E4 task 3). `setPlayerScale` pulled the
+  // player-driven figure to the room scale and `setPlayerSpeed` slowed it down
+  // by the same factor, because a world metre inside a room used to be a
+  // fraction of a human metre. With k = 1 a metre is a metre everywhere:
+  // figures stand at scale 1 indoors and out, and `WALK_SPEED` means 3.4
+  // metres a second wherever the avatar walks.
 
   /** Walk goal of the player-driven figure (E3-T3). Writes `npc.target`, so
    *  `tick()` walks there exactly as it does for any NPC — animation, facing
@@ -363,17 +335,11 @@ export class NpcManager {
     }
   }
 
-  /** Scale to seed a REBUILT figure with, so a model swap (outfit, tier)
-   *  does not restart the scale lerp at 1 — the visible "grows, then
-   *  shrinks back" pump on every rebuild. */
-  private rebuildScale = new Map<string, number>();
-
   /** NPC verwerfen, damit er beim nächsten update() neu gebaut wird —
    *  z.B. wenn sein 3D-Modell vom Server nachgeladen wurde. */
   rebuild(charName: string) {
     const npc = this.npcs.get(charName);
     if (!npc) return;
-    this.rebuildScale.set(charName, npc.root.scale.x);
     this.group.remove(npc.root);
     if (npc.travelLine) this.group.remove(npc.travelLine);
     npc.label.element.remove();
@@ -391,14 +357,6 @@ export class NpcManager {
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
-        // A REBUILT figure (model swap) inherits its predecessor's scale, so
-        // the lerp toward targetScale continues instead of restarting at 1 —
-        // the visible size pump on every swap.
-        const seed = this.rebuildScale.get(st.char.name);
-        if (seed !== undefined) {
-          npc.root.scale.setScalar(seed);
-          this.rebuildScale.delete(st.char.name);
-        }
         // The figure only arrived now, but the player has been steering since
         // before it existed — `setPlayerDriven` found nothing to write then.
         if (st.char.name === this.playerDriven) this.takeOver(npc);
@@ -458,7 +416,6 @@ export class NpcManager {
           : this.planPath(npc.root.position, st.pos);
       }
       npc.target.copy(st.pos);
-      npc.targetScale = st.scale ?? 1;
       npc.face = st.face ?? null;
       npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
       npc.root.visible = !st.hidden;
@@ -543,7 +500,7 @@ export class NpcManager {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
-      target: st.pos.clone(), targetScale: st.scale ?? 1, face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
+      target: st.pos.clone(), face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -668,11 +625,6 @@ export class NpcManager {
           npc.figure?.faceTowards(dir);
         }
         npc.root.position.y += (goalPos.y - npc.root.position.y) * Math.min(1, dt * 4);
-        // blend back to map scale — a journey may start out of an interior
-        const rs = npc.root.scale.x;
-        if (Math.abs(rs - npc.targetScale) > 1e-3) {
-          npc.root.scale.setScalar(rs + (npc.targetScale - rs) * Math.min(1, dt * 5));
-        }
         if (npc.figure) {
           // no 'run' on journeys: the pace comes from the server —
           // walk while the game clock moves, idle on freeze
@@ -698,10 +650,9 @@ export class NpcManager {
       const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // unterwegs = laufen
       const moving = distToGoal > 0.05;
       if (moving) {
-        // The player-driven figure walks at the pace of its own SIZE (E3 fix);
-        // every other figure keeps the map pace.
-        const pace = WALK_SPEED * (npc.name === this.playerDriven ? this.playerSpeed : 1);
-        const step = Math.min(distToGoal, pace * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
+        // ONE pace for every figure, the player's included: `WALK_SPEED` is
+        // metres a second and a metre is a metre (E4).
+        const step = Math.min(distToGoal, WALK_SPEED * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
@@ -710,11 +661,6 @@ export class NpcManager {
       // die vertikale Fahrt zwischen den Haltepunkten (AV3D-12)
       const goalY = npc.waypoints[0]?.y ?? npc.target.y;
       npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
-      // Skalierung weich überblenden (Innenraum-Maßstab vs. Kartengröße)
-      const s = npc.root.scale.x;
-      if (Math.abs(s - npc.targetScale) > 1e-3) {
-        npc.root.scale.setScalar(s + (npc.targetScale - s) * Math.min(1, dt * 5));
-      }
       if (!moving && npc.figure) {
         // Stehend: Marker-Richtung > Nachbarn ansehen > Kamera-Grundrichtung
         const target = faceTo.get(npc.name);
