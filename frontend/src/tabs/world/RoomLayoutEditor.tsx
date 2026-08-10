@@ -78,8 +78,11 @@ interface RoomLayoutEditorProps {
   map3d?: Map3D
   onMap3d?: <K extends keyof Map3D>(key: K, value: Map3D[K] | undefined) => void
   /** Server verdict (Location.has_entrance): does this location carry any
-   *  boundary pass-through at all? Without one it cannot be entered — the
-   *  boundary-openings section warns with it, it does not re-derive the rule. */
+   *  boundary pass-through at all? Since the free-boundary rule (E4 task 5)
+   *  that is a HINT, not a verdict on reachability: a location without any
+   *  opening can be entered anywhere along its edge, one WITH openings only
+   *  across them. The boundary-openings section says so; it does not
+   *  re-derive the rule. */
   hasEntrance?: boolean
   /** Reports the selected room id ('' = none) — the Floor-plan tab shows the
    *  model adjustment strip for it. */
@@ -886,7 +889,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // Canvas units (the plan square is 1×1; the room spans w×d of it).
       const cx = (px - p.at[0]) * (lay.w || 1)
       const cy = (py - p.at[1]) * (lay.d || 1)
-      const rad = ((p.yaw || 0) * Math.PI) / 180
+      // The hit test undoes exactly the rotation the footprint is DRAWN with,
+      // and that one is rotate(−yaw) on a y-down screen (see the prop layer
+      // below / PlacementLayer.tsx:105). With +yaw here the test was the
+      // inverse of the wrong turn — a 90°-turned prop could only be clicked
+      // where it is not.
+      const rad = (-(p.yaw || 0) * Math.PI) / 180
       const cos = Math.cos(rad)
       const sin = Math.sin(rad)
       const lx = cx * cos + cy * sin
@@ -1684,14 +1692,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               <circle key={i} cx={x * 100} cy={y * 100} r={1.1} fill="#e0a356" />
             ))}
             {/* Placement ghost: the armed prop's TRUE footprint (dims / plan
-                width) under the cursor, rotated by the R-key yaw. */}
+                width) under the cursor, rotated by the R-key yaw — NEGATED,
+                because SVG turns clockwise on a y-down screen while § A1.1
+                does not (same reasoning and the same hand-checked case as
+                PlacementLayer.tsx:105). */}
             {armedProp && propGhost ? (() => {
               const dims = propDims[armedProp]
               const planWEff = planW || 8
               const gw = ((dims?.width_m || 1) / planWEff) * 100
               const gd = ((dims?.depth_m || 1) / planWEff) * 100
               return (
-                <g transform={`translate(${propGhost[0] * 100} ${propGhost[1] * 100}) rotate(${ghostYaw})`}
+                <g transform={`translate(${propGhost[0] * 100} ${propGhost[1] * 100}) rotate(${-(ghostYaw || 0)})`}
                   pointerEvents="none">
                   <rect x={-gw / 2} y={-gd / 2} width={gw} height={gd}
                     fill="rgba(210,153,34,0.25)" stroke="#d29922"
@@ -1887,7 +1898,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               ))}
               {/* Placed props: TRUE-size footprints (dims / plan width, never
                   fit-scaled) at their room-local spot, rotated by yaw. Click
-                  selects, drag moves; fine-tuning in the strip below. */}
+                  selects, drag moves; fine-tuning in the strip below.
+                  The yaw is NEGATED for the screen: a plan yaw turns
+                  counter-clockwise in world axes (§ A1.1, and since E4 the
+                  renderers turn a prop with rotation.y = +rad(yaw)), while a
+                  CSS/SVG rotation turns clockwise on a y-down screen. Same
+                  reasoning and the same hand-checked case as
+                  PlacementLayer.tsx:105 — yaw 90 must send the local (+5, +5)
+                  corner to screen (+5, −5), which only rotate(−yaw) does. */}
               {(lay.props || []).map((p, i) => {
                 const dims = propDims[p.prop_id]
                 const planWEff = planW || 8
@@ -1924,7 +1942,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                       position: 'absolute',
                       left: `${p.at[0] * 100}%`, top: `${p.at[1] * 100}%`,
                       width: `${fw}%`, height: `${fd}%`,
-                      transform: `translate(-50%, -50%) rotate(${p.yaw || 0}deg)`,
+                      transform: `translate(-50%, -50%) rotate(${-(p.yaw || 0)}deg)`,
                       border: `1.5px ${dims ? 'solid' : 'dashed'} ${sel ? '#fff' : '#d29922'}`,
                       background: 'rgba(210,153,34,0.22)', borderRadius: 2,
                       boxSizing: 'border-box',
@@ -1958,7 +1976,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                         position: 'absolute',
                         left: `${p.at[0] * 100}%`, top: `${p.at[1] * 100}%`,
                         width: `${fw}%`, height: `${fd}%`,
-                        transform: `translate(-50%, -50%) rotate(${p.yaw || 0}deg)`,
+                        transform: `translate(-50%, -50%) rotate(${-(p.yaw || 0)}deg)`,
                         border: `1.5px dashed ${ghostSel === i ? '#fff' : '#d29922'}`,
                         background: 'rgba(210,153,34,0.14)', borderRadius: 2,
                         boxSizing: 'border-box', opacity: 0.75,
@@ -2149,7 +2167,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           <div className="ga-form-section-label">{t('Boundary pass-throughs')}</div>
           {hasEntrance === false ? (
             <div className="ga-anchor-banner">
-              <span>⚠ {t('No pass-through: this location cannot be entered. Add one below.')}</span>
+              <span>ℹ {t('No pass-through drawn: characters may enter anywhere along the boundary. Draw openings to channel entry.')}</span>
             </div>
           ) : null}
           {(map3d?.boundary_openings || []).map((bo, i) => {

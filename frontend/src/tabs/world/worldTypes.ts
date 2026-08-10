@@ -270,7 +270,10 @@ export interface Location {
   terrain?: string
   map3d?: Map3D
   /** Server verdict: does this location carry any boundary pass-through?
-   *  Without one it cannot be entered — the editor warns, it does not judge. */
+   *  Openings CHANNEL entry — they are the only ways in once a location draws
+   *  any. Without one the boundary is FREE (E4 task 5): entry anywhere along
+   *  the edge, rule gates unchanged. The editor displays the flag, it does not
+   *  judge. */
   has_entrance?: boolean
 }
 
