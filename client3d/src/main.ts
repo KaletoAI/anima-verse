@@ -44,6 +44,7 @@ import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import { createGround, GROUND_Y } from './scene/ground';
+import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
 // --- E4 BRIDGE (task 2) ------------------------------------------------------
@@ -52,15 +53,16 @@ import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } fr
 // `pos_z`/`yaw_deg`/`world_bounds` and a metre travel polyline, and the v1
 // grid keys are GONE. Everything in this file that still speaks CELLS is
 // rebuilt by later tasks of the same plan — the tile loop and the camera frame
-// in task 3, the travel interpolation in task 4, the step machine in task 5,
-// the fog rectangles in task 6.
+// in task 3, the step machine in task 5, the fog rectangles in task 6. The
+// journey bridge is GONE (task 4): travellers are interpolated along the metre
+// polyline of § A11.
 //
-// Until then these two casts keep those blocks compiling WITHOUT reviving the
-// v1 fields in the payload types. They are the whole bridge: delete them and
-// every remaining cell reader lights up, which is exactly how the later tasks
-// find their work. Nothing is added to the runtime — a `grid_x` read through
-// `v1()` yields `undefined` today, and the blocks that do it are already dead
-// (the server stopped sending cells in E3).
+// Until then the cast below keeps those blocks compiling WITHOUT reviving the
+// v1 fields in the payload types. It is the whole bridge: delete it and every
+// remaining cell reader lights up, which is exactly how the later tasks find
+// their work. Nothing is added to the runtime — a `grid_x` read through `v1()`
+// yields `undefined` today, and the blocks that do it are already dead (the
+// server stopped sending cells in E3).
 type V1Grid = {
   grid_x: number | null;
   grid_y: number | null;
@@ -80,11 +82,6 @@ type V1Grid = {
  * TODO(E4-Task 3 tiles/camera, Task 6 fog): remove with the last cell reader.
  */
 const v1 = <T>(o: T): T & V1Grid => o as T & V1Grid;
-type V1Travel = {
-  path?: string[]; seg: number; frac: number; cell_seconds_real: number | null;
-};
-/** TODO(E4-Task 4): remove — the journey is a metre polyline (`waypoints`). */
-const v1travel = (t: MapTravel): MapTravel & V1Travel => t as MapTravel & V1Travel;
 /**
  * The compass step, as dead as the route behind it.
  *
@@ -1550,14 +1547,65 @@ async function startApp(username: string, role: string) {
     return new THREE.Vector3(Math.cos(angle) * 1.0, 0, Math.sin(angle) * 0.8);
   }
 
+  /**
+   * Render state of a character on a JOURNEY (contract § A11), or null when it
+   * is not travelling — then the location placement below takes over.
+   *
+   * With `waypoints` the position is the point `progress_m` metres along the
+   * metre polyline; the route travels into the NpcManager, which keeps walking
+   * it between polls at `pace_m_s_real ?? speed_m_s_real` (the SEGMENT pace
+   * first: the terrain speed factor sits in it, the nominal journey speed
+   * knows nothing about the ground).
+   *
+   * WITHOUT them — the fog nulls `waypoints` for every traveller but the
+   * avatar (§ A12) — there is no route at all: the figure stands at its `pos`,
+   * no line is drawn and nothing is extrapolated. That is the point of the
+   * rule: the route ends at the target's door and would be a metre-exact map
+   * marker for a place the avatar may not know.
+   */
+  function travellerState(c: MapCharacter, stamp: number): NpcState | null {
+    const tr: MapTravel | null = c.travel ?? null;
+    if (!tr) return null;
+    const wp = tr.waypoints;
+    if (wp && wp.length >= 2) {
+      const points = wp.map((p) => [p[0], p[1]] as MetrePoint);
+      const totalM = polylineLength(points);
+      const progressM = clampProgress(tr.progress_m, totalM);
+      const at = pointAtDistance(points, progressM)!;
+      return {
+        char: c,
+        // GROUND_Y, not a tile's baked ground skin: a journey runs over the
+        // open terrain between the locations, where the ground plane is the
+        // only surface there is (`ground_y` discipline).
+        pos: new THREE.Vector3(at[0], GROUND_Y, at[1]),
+        route: { points, totalM, progressM,
+                 rateMS: tr.pace_m_s_real ?? tr.speed_m_s_real, stamp },
+      };
+    }
+    // Fogged route, or a degenerate one-point line (a journey without a way):
+    // the payload's own point is the whole answer.
+    if (c.pos) return { char: c, pos: new THREE.Vector3(c.pos.x, GROUND_Y, c.pos.z) };
+    return null;
+  }
+
   function computeNpcStates(map: WorldMap): NpcState[] {
     const byLoc = new Map<string, MapCharacter[]>();
     hiddenChars.clear();
+    const states: NpcState[] = [];
     for (const c of map.characters) {
+      // Travellers FIRST, and outside the grouping by location: on its way a
+      // character stands in the WILDERNESS (`location_id: ""`, § A11), which
+      // is no tile — grouping by location would drop it off the map for the
+      // whole journey.
+      const travelling = travellerState(c, mapStamp);
+      if (travelling) {
+        states.push(travelling);
+        shownRoom.set(c.name, null);
+        continue;
+      }
       if (!tiles.has(c.location_id)) continue;
       (byLoc.get(c.location_id) ?? byLoc.set(c.location_id, []).get(c.location_id)!).push(c);
     }
-    const states: NpcState[] = [];
     for (const [locId, chars] of byLoc) {
       const tile = tiles.get(locId)!;
       chars.sort((a, b) => a.name.localeCompare(b.name));
@@ -1567,36 +1615,9 @@ async function startApp(username: string, role: string) {
         if (room) (roomMates.get(room) ?? roomMates.set(room, []).get(room)!).push(c.name);
       }
       chars.forEach((c, i) => {
-        // Server-authoritative journey (contract § A11: the server computes, we
-        // render): position = lerp along the path cells at seg/frac — NEVER the
-        // tile centre of location_id, which lags at ticker cadence. The
-        // NpcManager keeps extrapolating between polls via cellSecondsReal.
-        // BRIDGE(E4-Task 4): the travel block has been a METRE polyline since
-        // E3 (§ A11) and carries no `path` at all — the cell branch below is
-        // dead, the guard keeps travellers rendering at their tile, and task 4
-        // rebuilds the whole block on `waypoints`/`progress_m`/`pace_m_s_real`.
-        const tr = c.travel ? v1travel(c.travel) : null;
-        if (tr && Array.isArray(tr.path) && tr.path.length >= 2) {
-          const points = tr.path.map((id: string) => {
-            const t = tiles.get(id);
-            if (t) return t.center.clone().setY(tileGroundY(t, t.center));
-            return null;
-          });
-          if (points.every((p): p is THREE.Vector3 => !!p)) {
-            const seg = THREE.MathUtils.clamp(tr.seg, 0, points.length - 2);
-            const pos = points[seg].clone().lerp(points[seg + 1], tr.frac);
-            const last = points[points.length - 1];
-            states.push({
-              char: c,
-              pos,
-              route: { points, seg, frac: tr.frac,
-                       cellSecondsReal: tr.cell_seconds_real, stamp: mapStamp },
-              travelTo: last.clone(),
-            });
-            shownRoom.set(c.name, null);
-            return;   // forEach callback — travellers skip room placement
-          }
-        }
+        // Travellers never get here — `travellerState` took them out of the
+        // grouping above, route and all (contract § A11: the server computes,
+        // we render).
         let pos: THREE.Vector3;
         let via: THREE.Vector3[] | undefined;
         let face: THREE.Vector3 | undefined;
@@ -1705,12 +1726,13 @@ async function startApp(username: string, role: string) {
           if (stops.length) via = stops;
           shownRoom.set(c.name, inRoom);
         }
+        // A destination without a running journey (the target survived, the
+        // journey did not): no line — that belongs to the ROUTE now — but the
+        // figure still looks the way it means to go, or its standing animation
+        // points at a random neighbour.
         const targetTile = c.movement_target_id ? tiles.get(c.movement_target_id) : undefined;
-        const travelTo = targetTile && c.movement_target_id !== locId ? targetTile.center.clone() : null;
-        // Reisende schauen Richtung Ziel — sonst spielt die Lauf-Animation
-        // im Stand in eine beliebige Richtung (Nachbarn/Süden)
-        if (travelTo && !face) {
-          face = travelTo.clone().sub(pos).setY(0);
+        if (targetTile && c.movement_target_id !== locId && !face) {
+          face = targetTile.center.clone().sub(pos).setY(0);
         }
         // Etagen-Umschalter: Figuren auf nicht gewählten Etagen ausblenden
         const wrongStorey = !!inRoom && tile.fade > 0.5
@@ -1741,7 +1763,6 @@ async function startApp(username: string, role: string) {
           face,
           lean,
           hidden,
-          travelTo,
         });
       });
     }

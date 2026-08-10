@@ -3,8 +3,10 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
+import { GROUND_Y } from './ground';
 import { PathGrid } from './pathfind';
 import { seededRandom } from './textures';
+import { advanceProgress, pointAtDistance, shouldSnap, type MetrePoint } from './travelPath';
 
 /** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
  *  metre world has one scale, so this number means the same thing on the map
@@ -98,12 +100,37 @@ interface Npc {
   face: THREE.Vector3 | null;
   /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
   waypoints: THREE.Vector3[];
-  /** server journey being followed (§ A11) — replaces goal/waypoint logic */
-  route: NpcState['route'] | null;
+  /** server journey being followed (§ A11) — replaces goal/waypoint logic.
+   *  `key` identifies the POLYLINE: as long as it is unchanged the local
+   *  `progressM` keeps running and only reconciles against a fresh poll; a new
+   *  key is a new journey and is adopted whole. */
+  route: (TravelRoute & { key: string }) | null;
   activity: string;
   travelLine: THREE.Line | null;
   travelKey: string;
   bobPhase: number;
+}
+
+/** A journey as the renderer needs it (contract § A11): the metre polyline,
+ *  the one number that walks it, and the rate it walks at. */
+export interface TravelRoute {
+  /** `travel.waypoints` — world points `[x, z]` in METRES, start to goal */
+  points: MetrePoint[];
+  /** arc length of `points`, measured by the client (`polylineLength`) */
+  totalM: number;
+  /** metres already walked along the polyline (`travel.progress_m`) */
+  progressM: number;
+  /** metres per REAL second: `pace_m_s_real ?? speed_m_s_real`. `null` means
+   *  do not extrapolate at all — frozen world, arrived, degenerate segment. */
+  rateMS: number | null;
+  /** which worldmap poll the numbers came from; the progress reconciliation
+   *  only runs against a genuinely NEW payload */
+  stamp: number;
+}
+
+/** Identity of a polyline — same points, same journey. */
+function routeKey(points: MetrePoint[]): string {
+  return points.map((p) => `${p[0]},${p[1]}`).join(';');
 }
 
 export interface NpcState {
@@ -118,14 +145,13 @@ export interface NpcState {
   hidden?: boolean;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
-  /** server journey (§ A11): world points of the path cells (length ==
-   *  travel.path.length) + last polled seg/frac; cellSecondsReal steers the
-   *  client-side extrapolation between polls (null = frozen world).
-   *  stamp identifies the worldmap poll the values came from — seg/frac
-   *  reconciliation only runs against a genuinely fresh payload. */
-  route?: { points: THREE.Vector3[]; seg: number; frac: number;
-            cellSecondsReal: number | null; stamp: number };
-  travelTo: THREE.Vector3 | null;   // Reiseziel (Linien-Endpunkt) oder null
+  /** Running journey (§ A11) — the METRE polyline and the distance walked
+   *  along it, built in `main.ts` from `travel.waypoints`/`progress_m`.
+   *  Absent for anyone standing still AND for a traveller whose route is
+   *  fogged (`waypoints: null`, § A12): then `pos` alone places the figure,
+   *  no line is drawn and nothing is extrapolated. The travel line is drawn
+   *  from THIS — there is no second field naming a destination. */
+  route?: TravelRoute;
 }
 
 export class NpcManager {
@@ -373,44 +399,66 @@ export class NpcManager {
         npc.animation = st.char.activity_animation || undefined;
         npc.labelActivity.textContent = npc.activity;
         npc.labelName.textContent = st.char.name;
-        this.updateTravelLine(npc, { ...st, travelTo: null });
+        this.updateTravelLine(npc, null);
         continue;
       }
-      // Adopt the server journey (§ A11). The RATE (cellSecondsReal) and the
-      // path geometry are authoritative and adopted on every update — a
-      // mid-journey freeze must stop the extrapolation immediately, not only
-      // once the 0.5-cell snap fires. Only seg/frac are subject to
+      // Adopt the server journey (§ A11). The RATE and the polyline are
+      // authoritative and adopted on every update — a mid-journey freeze must
+      // stop the extrapolation immediately, and a rate that changed with the
+      // terrain must take effect at once. Only `progressM` is subject to
       // reconciliation, and only against a genuinely NEW worldmap payload
       // (stamp): update() runs at 1 Hz off the cached map, so comparing
       // against a stale payload would snap fast journeys backwards each
-      // second. Hard snap when |server - local| > 0.5 cells, otherwise let
-      // the local extrapolation keep running (avoids poll jitter).
-      if (st.route) {
-        if (!npc.route || npc.route.points.length !== st.route.points.length) {
-          npc.route = { ...st.route, points: st.route.points.map((p) => p.clone()) };
+      // second. Hard snap when the two are more than TRAVEL_SNAP_M (2 m)
+      // apart, otherwise let the local extrapolation keep running — that is
+      // what keeps poll jitter out of the figure.
+      /** this update ended a journey — the placement below must not re-walk it */
+      let arrived = false;
+      if (st.route && st.route.points.length >= 2) {
+        const key = routeKey(st.route.points);
+        if (!npc.route || npc.route.key !== key) {
+          // Another polyline is another journey: take it whole, progress
+          // included. Counting the points would not do — a new route can have
+          // just as many, and the figure would then walk the new line from
+          // the old distance.
+          npc.route = {
+            key,
+            points: st.route.points.map((p) => [p[0], p[1]] as MetrePoint),
+            totalM: st.route.totalM,
+            progressM: st.route.progressM,
+            rateMS: st.route.rateMS,
+            stamp: st.route.stamp,
+          };
         } else {
-          npc.route.cellSecondsReal = st.route.cellSecondsReal;
-          for (let k = 0; k < st.route.points.length; k++) {
-            npc.route.points[k].copy(st.route.points[k]);
-          }
+          npc.route.rateMS = st.route.rateMS;
           if (npc.route.stamp !== st.route.stamp) {
-            const server = st.route.seg + st.route.frac;
-            const local = npc.route.seg + npc.route.frac;
-            if (Math.abs(server - local) > 0.5) {
-              npc.route.seg = st.route.seg;
-              npc.route.frac = st.route.frac;
+            if (shouldSnap(st.route.progressM, npc.route.progressM)) {
+              npc.route.progressM = st.route.progressM;
             }
             npc.route.stamp = st.route.stamp;
           }
         }
         npc.waypoints = [];
-      } else {
+      } else if (npc.route) {
+        // The journey ENDED (§ A11: arrival is the travel block being gone) —
+        // or its route went behind the fog. Either way the server has placed
+        // the figure and there is nothing left to extrapolate, so this is a
+        // SNAP: walking the last extrapolated metres off would be a visible
+        // residual run across the arrival location, and the arrival point is
+        // a door, not a direction.
         npc.route = null;
+        npc.waypoints = [];
+        npc.root.position.copy(st.pos);
+        arrived = true;
       }
       // Zielwechsel -> Weg planen: vorgegebene Zwischenstationen (Raum-
       // Ausgänge) haben Vorrang, sonst um Gebäude herum (A*). Travellers are
-      // exempt — on a journey the server route alone drives the figure.
-      if (!st.route && !npc.target.equals(st.pos)) {
+      // exempt — on a journey the server route alone drives the figure, and
+      // so is the update that ENDS one: the arrival placed the figure where
+      // it belongs, and the door routing of this very update (the traveller
+      // had no shown room, the arrival gives it one) would walk it back out
+      // to the door and in again — the residual walk in another costume.
+      if (!npc.route && !arrived && !npc.target.equals(st.pos)) {
         npc.waypoints = st.via?.length
           ? st.via.map((v) => v.clone())
           : this.planPath(npc.root.position, st.pos);
@@ -422,10 +470,13 @@ export class NpcManager {
       npc.activity = st.char.activity || '';
       npc.animation = st.char.activity_animation || undefined;
       npc.labelActivity.textContent = npc.activity;
-      const travelling = !!st.travelTo;
+      // The walking mark comes from the TRAVEL BLOCK, not from the route: a
+      // fogged traveller has no waypoints but is just as much on its way, and
+      // its arrival time is in the payload all the same (§ A11).
+      const travelling = !!st.char.travel;
       const eta = st.char.travel?.eta_game ? ` ${st.char.travel.eta_game.slice(11, 16)}` : '';
       npc.labelName.textContent = (travelling ? `🚶${eta} ` : '') + st.char.name;
-      this.updateTravelLine(npc, st);
+      this.updateTravelLine(npc, npc.route);
     }
     for (const [name, npc] of this.npcs) {
       if (!seen.has(name)) {
@@ -507,8 +558,16 @@ export class NpcManager {
     };
   }
 
-  private updateTravelLine(npc: Npc, st: NpcState) {
-    const key = st.travelTo ? `${st.travelTo.x},${st.travelTo.z}` : '';
+  /** Draw the journey as the dashed polyline it IS (§ A11), or take it away.
+   *
+   *  The whole route, not a straight line to the goal: the server's waypoints
+   *  walk around the buildings and over the passable ground, and a chord
+   *  across them would promise a way that does not exist. A fogged traveller
+   *  (`waypoints: null`) has no route here and therefore no line — that is the
+   *  binding rule, the route would be a metre-exact marker for a place the
+   *  avatar may not know. */
+  private updateTravelLine(npc: Npc, route: (TravelRoute & { key: string }) | null) {
+    const key = route ? route.key : '';
     if (key === npc.travelKey) return;
     npc.travelKey = key;
     if (npc.travelLine) {
@@ -516,10 +575,9 @@ export class NpcManager {
       npc.travelLine.geometry.dispose();
       npc.travelLine = null;
     }
-    if (st.travelTo) {
-      const from = st.pos.clone().setY(0.3);
-      const to = st.travelTo.clone().setY(0.3);
-      const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    if (route && route.points.length >= 2) {
+      const pts = route.points.map((p) => new THREE.Vector3(p[0], GROUND_Y + 0.3, p[1]));
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
       const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
         color: 0xf2cd6e, dashSize: 0.9, gapSize: 0.6, transparent: true, opacity: 0.9,
       }));
@@ -596,24 +654,19 @@ export class NpcManager {
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
       // Server journey (§ A11): walk along the route instead of npc.target.
-      // The TOTAL progress (seg+frac as one number) is extrapolated and
-      // seg/frac re-derived from it — advancing only the per-segment frac
-      // would stall at every node until the next poll arrives.
-      // cellSecondsReal == null (frozen world) => do not extrapolate.
+      // ONE number carries the whole journey — the metres walked along the
+      // polyline — and the point is re-derived from it by arc length, so a
+      // node is crossed without waiting for the next poll. The rate is metres
+      // per REAL second (`pace_m_s_real ?? speed_m_s_real`); `null` (frozen
+      // world, arrived, degenerate segment) extrapolates nothing, and the
+      // advance is capped at the END of the polyline: the figure holds at its
+      // last waypoint until the server books the arrival, it never walks past
+      // it.
       if (npc.route && npc.route.points.length >= 2) {
         const r = npc.route;
-        if (r.cellSecondsReal && r.cellSecondsReal > 0) {
-          let progress = r.seg + r.frac + dt / r.cellSecondsReal;
-          const maxProgress = r.points.length - 1;
-          // last node: hold at frac 1 and wait for the server's arrival
-          // (travel vanishes up to half a cell BEFORE that — § A11)
-          if (progress > maxProgress) progress = maxProgress;
-          r.seg = THREE.MathUtils.clamp(Math.floor(progress), 0, r.points.length - 2);
-          r.frac = progress - r.seg;
-        }
-        const a = r.points[r.seg];
-        const b = r.points[Math.min(r.seg + 1, r.points.length - 1)];
-        const goalPos = a.clone().lerp(b, r.frac);
+        r.progressM = advanceProgress(r.progressM, r.rateMS, dt, r.totalM);
+        const at = pointAtDistance(r.points, r.progressM)!;
+        const goalPos = new THREE.Vector3(at[0], GROUND_Y, at[1]);
         const delta = goalPos.clone().sub(npc.root.position);
         delta.y = 0;
         const d = delta.length();
@@ -627,8 +680,8 @@ export class NpcManager {
         npc.root.position.y += (goalPos.y - npc.root.position.y) * Math.min(1, dt * 4);
         if (npc.figure) {
           // no 'run' on journeys: the pace comes from the server —
-          // walk while the game clock moves, idle on freeze
-          npc.figure.play(d > 0.02 || (r.cellSecondsReal ?? 0) > 0 ? 'walk' : 'idle');
+          // walk while the journey is moving, idle on freeze
+          npc.figure.play(d > 0.02 || (r.rateMS ?? 0) > 0 ? 'walk' : 'idle');
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
