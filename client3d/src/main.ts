@@ -148,7 +148,7 @@ const OPENING_WALK_IN_M = 0.5;
 // So the game layer lays a flat threshold into each gap. This is an OVERLAY,
 // exactly like the event pins and the selection ring: nothing here touches the
 // recipe, the diorama or any shared render code, and `game/doors.ts` (pure
-// maths, hand-checked in scripts/smoke_walk_math.mjs) says WHERE the gaps are.
+// maths, hand-checked in client3d/scripts/smoke_walk_math.mjs) says WHERE the gaps are.
 //
 // One unit quad and one material for every marker of every tile: a threshold
 // differs only in position, direction and size, so per-marker geometry would
@@ -839,7 +839,7 @@ async function startApp(username: string, role: string) {
    * position and visibility stay exactly what the recipe made them.
    *
    * A doorway wears the locked look when a room BEHIND it is barred for this
-   * avatar (`game/locks.ts`, hand-checked in scripts/smoke_walk_math.mjs); the
+   * avatar (`game/locks.ts`, hand-checked in client3d/scripts/smoke_walk_math.mjs); the
    * room the avatar is standing in is left out of that judgement, or every door
    * of a room one may not re-enter would read as a cage.
    *
@@ -953,7 +953,7 @@ async function startApp(username: string, role: string) {
   //
   // The server decides WHAT is known (§ A12) and sends only that; here the
   // rest of the world is covered. WHICH part of the plane that is, is pure
-  // maths in `game/fog.ts` (hand-checked in scripts/smoke_walk_math.mjs) —
+  // maths in `game/fog.ts` (hand-checked in client3d/scripts/smoke_walk_math.mjs) —
   // the world frame grown by the ground's own margin, minus the footprints of
   // the tiles standing. This is only the mesh side: one quad per rectangle,
   // all of them in ONE group that is thrown away and built again whenever the
@@ -1776,7 +1776,7 @@ async function startApp(username: string, role: string) {
   // (`POST /play/pos`). What stops the figure is geometry, not a round trip:
   // impassable terrain and foreign footprints outdoors, walls inside an open
   // interior. The maths is in game/walk.ts + game/clickmove.ts and checked
-  // numerically by scripts/smoke_walk_math.mjs; nothing here recomputes it.
+  // numerically by client3d/scripts/smoke_walk_math.mjs; nothing here recomputes it.
   const avatarName = firstMap.avatar;   // one avatar per session (as everywhere else)
 
   /**
@@ -2156,7 +2156,7 @@ async function startApp(username: string, role: string) {
   // --- Soundtrack: music by daylight, ambience by ground (E4-T5) ------------
   //
   // WHAT plays is decided in `game/soundtrack.ts` (pure, hand-checked in
-  // scripts/smoke_walk_math.mjs); what is left here is the wiring — where the
+  // client3d/scripts/smoke_walk_math.mjs); what is left here is the wiring — where the
   // numbers come from and when they are looked at. ONE tick recomputes the
   // whole answer, because every input moves on its own schedule (the night
   // factor with the game-hour poll, the terrain with every step, the switches
@@ -2376,16 +2376,23 @@ async function startApp(username: string, role: string) {
     try {
       const res = await api.postPos(x, z, abort.signal);
       // Throttled: the server took none of it and said so. Not an error, not
-      // a correction — the next report carries the newer position anyway.
-      if (!res.ok) return;
+      // a correction — but the point IS still unreported, so the dirty flag
+      // has to go back up. `tickPosReport` cleared it when it sent this call,
+      // and a figure that stops right afterwards would never move again — no
+      // further `markMoved`, no further report, and the server would keep a
+      // stale stop point that only the poll's echo check papers over.
+      if (!res.ok) { posDirty = true; return; }
       reportedPos = { x, z };
       adoptReport(res);
     } catch (e) {
       const err = e instanceof api.ApiError ? e : null;
       if (!err) {
         // A dropped request is a network hiccup, not a verdict: the figure
-        // stays where it is and the next report tries again.
+        // stays where it is and the next report tries again — which it can
+        // only do while the point counts as unreported, so the flag goes back
+        // up here too (same swallowed-stop-report trap as the throttle above).
         if (!abort.signal.aborted) console.warn('[walk] position report failed', e);
+        posDirty = true;
         return;
       }
       // The server refused the point. Its answer carries the last one it
@@ -2709,7 +2716,7 @@ async function startApp(username: string, role: string) {
   // Inside an open interior the avatar's room is no longer a click on a room
   // chip — walking into a room moves it, and the chat context follows. The
   // rule itself is pure (`game/roomwalk.ts`, numbers in
-  // scripts/smoke_walk_math.mjs); everything here looks up its arguments and
+  // client3d/scripts/smoke_walk_math.mjs); everything here looks up its arguments and
   // fires the ONE request it asks for.
   //
   // This is also where the avatar's position, room and scale finally become
@@ -2795,18 +2802,20 @@ async function startApp(username: string, role: string) {
    * floor but a piece of ground: the payload gives it ONE height (its
    * `overlay.y`), while the skin samples the model under the figure's feet and
    * follows the slope. Taking the zone's single height there would float the
-   * figure downhill and sink it uphill — a village square is 0.63 m of world
-   * height across a 3 m rise of the plan at Willowbrook's scale.
+   * figure downhill and sink it uphill.
    *
    * The ground skin (`tileGroundY`) is NOT an alternative inside a room, and
    * the "Zur Rosinante" finding of the acceptance round is why: it raycasts
    * the building/area MESH from above and takes the first hit below 1.2 m,
-   * which is a world metre and therefore an assumption about scale. Willowbrook
-   * runs at k = 0.21 (extent_m 10.5 over a 50 m plan), so a whole storey is
-   * 0.63 m and every ROOF of the village fits inside that window: the ray hit
+   * which is a world metre and therefore an assumption about scale. In the
+   * SHRUNK-SCENE ERA (before E4; k = 1 since, § A1.8) Willowbrook ran at
+   * k = 0.21 — extent_m 10.5 over a 50 m plan — so a whole storey WAS 0.63 m
+   * and every ROOF of the village fitted inside that 1.2 m window: the ray hit
    * the tavern's roof at ~0.6..0.9 instead of its floor plate at 0.037 and the
-   * avatar walked over the houses. Reading the floor off the room removes the
-   * guess entirely — the number comes from the payload the room is built from.
+   * avatar walked over the houses. The metre world has taken that particular
+   * trap away, but not the guess itself — reading the floor off the room
+   * removes it entirely, the number comes from the payload the room is built
+   * from.
    */
   function roomFloorY(tile: Tile | null): number | null {
     if (!tile?.isBuilding) return null;
@@ -3074,7 +3083,7 @@ async function startApp(username: string, role: string) {
   // floors were unreachable while embodied. The building already carries the
   // holding points the NPC storey routing rides (`tile.elevatorStops`,
   // AV3D-12) — what was missing is the player's way in. The rule is pure
-  // (`game/elevator.ts`, numbers in scripts/smoke_walk_math.mjs); everything
+  // (`game/elevator.ts`, numbers in client3d/scripts/smoke_walk_math.mjs); everything
   // here looks up its arguments and rides the ONE room-request machine of the
   // room walk above.
   function elevatorStopsOf(tile: Tile): ElevatorStop[] {
@@ -3301,7 +3310,7 @@ async function startApp(username: string, role: string) {
   // --- Talking by proximity (E3-T5) -----------------------------------------
   // Walking up to someone is the whole interaction: the bus carries the name,
   // the HUD shows the prompt and F opens the chat. The rule itself is pure
-  // (`game/proximity.ts`, checked in scripts/smoke_walk_math.mjs); everything
+  // (`game/proximity.ts`, checked in client3d/scripts/smoke_walk_math.mjs); everything
   // here is the lookup of its arguments.
   //
   // Rooms come from `shownRoom`, NOT from `roomOf` — but only for the NPCs is

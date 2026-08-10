@@ -6,7 +6,7 @@
  *
  * Usage:  node client3d/scripts/smoke_ground_math.mjs
  *
- * Same discipline as `scripts/smoke_walk_math.mjs` and
+ * Same discipline as `client3d/scripts/smoke_walk_math.mjs` and
  * `scripts/smoke_scene_recipe.py`: every expected number below is derived BY
  * HAND from the geometry, written out in this header, and NEVER recorded from
  * the current output. A check that only pins today's result proves nothing.
@@ -128,7 +128,7 @@ const SRC = join(ROOT, 'packages/scene-render/src/groundAreas.ts');
  * The module is TypeScript and deliberately free of any RUNTIME import (three
  * arrives as a parameter, and its type comes in via `import type`, which
  * esbuild erases), so a plain transpile is enough — no bundler, exactly as in
- * `scripts/smoke_walk_math.mjs`. If someone ever adds a real import to it,
+ * `client3d/scripts/smoke_walk_math.mjs`. If someone ever adds a real import to it,
  * this loader fails loudly, which is the intended alarm.
  */
 async function loadGroundAreas() {

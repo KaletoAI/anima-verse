@@ -3,7 +3,7 @@
  * (plan-betreten-und-tueren.md § 3 decision 2: "a ban is visible").
  *
  * Pure maths like `walk.ts` and `doors.ts`: no Three.js, no DOM, no module
- * state and no import at all, so `scripts/smoke_walk_math.mjs` can import the
+ * state and no import at all, so `client3d/scripts/smoke_walk_math.mjs` can import the
  * file as plain ESM and check the rules with hand-derived cases.
  *
  * THE SERVER SAYS WHAT, THE CLIENT SAYS HOW. The verdict comes from the two

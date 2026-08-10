@@ -2,7 +2,7 @@
  * Pure walking maths of the embodied mode — FREE WALKING since E4 task 5.
  *
  * Everything here is a function of its arguments: no Three.js, no module
- * state, no DOM. That is what makes `scripts/smoke_walk_math.mjs` able to
+ * state, no DOM. That is what makes `client3d/scripts/smoke_walk_math.mjs` able to
  * check it with hand-derived numbers — the file is transpiled and imported as
  * plain ESM, so it must stay IMPORT-FREE as well.
  *

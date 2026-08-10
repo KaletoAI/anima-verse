@@ -319,11 +319,15 @@ export interface ScenePayload {
   signature: string
   rooms: SceneRoom[]
   /** World size of the reference square: the ONE number that turns every
-   *  fraction of this payload into metres (default 10 = one tile). Never
-   *  replace it with a constant — that was exactly the 8 that let floor plan
-   *  and model drift apart. */
+   *  fraction of this payload into metres. Since E4 it IS the footprint edge
+   *  (`plan_width_m`, § A1.1) — no default, no tile. Never replace it with a
+   *  constant — that was exactly the 8 that let floor plan and model drift
+   *  apart. */
   extent_m: number
-  /** World metres per REAL metre (extent_m / plan_width_m; 1 = legacy) */
+  /** World metres per REAL metre — CONSTANT 1 since E4 (extent_m ==
+   *  plan_width_m, § A1.8). The field stays in the payload so the ×k in the
+   *  render chains keeps computing the right thing; it is no longer a dial
+   *  and nothing may branch on it. */
   k: number
   storey_m: number
   levels: { level: number; floor_y: number }[]

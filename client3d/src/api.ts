@@ -231,7 +231,7 @@ export async function getAnimationClips(): Promise<ApiClip[]> {
  *  Empty when the route is missing or the request fails — audio is decoration,
  *  and a client that throws its start away because a folder is empty would be
  *  the worse bug. The shape is validated by `readManifest` (pure, checked in
- *  scripts/smoke_walk_math.mjs), so callers always get two music buckets and a
+ *  client3d/scripts/smoke_walk_math.mjs), so callers always get two music buckets and a
  *  plain terrain map. */
 export async function getAudioManifest(): Promise<AudioManifest> {
   try {

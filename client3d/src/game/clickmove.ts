@@ -3,7 +3,7 @@
  *
  * Pure like `walk.ts`: no Three.js, no DOM, no module state, and the only
  * import is a type from `walk.ts` itself, which the transpile in
- * `scripts/smoke_walk_math.mjs` drops — so the file loads there as plain ESM
+ * `client3d/scripts/smoke_walk_math.mjs` drops — so the file loads there as plain ESM
  * and is checked with hand-derived numbers.
  *
  * NO CLIENT A* IN E4 (plan-freie-weltkarte-e4-3d-client.md, task 5). A click

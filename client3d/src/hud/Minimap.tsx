@@ -16,7 +16,7 @@
  * still costs neither.
  *
  * All the arithmetic is in `game/minimap.ts` and hand-checked in
- * `scripts/smoke_walk_math.mjs`; nothing here computes a coordinate of its own.
+ * `client3d/scripts/smoke_walk_math.mjs`; nothing here computes a coordinate of its own.
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';

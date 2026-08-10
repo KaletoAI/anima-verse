@@ -5,7 +5,7 @@
  * rectangles; it stays pure and knows nothing about rendering. This module is
  * the other half: it makes the one material and the one texture those
  * rectangles are drawn with, so `main.ts` only has to place quads. Splitting it
- * this way keeps the maths checkable by `scripts/smoke_walk_math.mjs` (no
+ * this way keeps the maths checkable by `client3d/scripts/smoke_walk_math.mjs` (no
  * `three`, no DOM) while the pixels live somewhere they can be read on their
  * own.
  *

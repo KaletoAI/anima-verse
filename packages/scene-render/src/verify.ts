@@ -123,7 +123,7 @@ export class SpecVerifier {
    *  result's box onto them, whichever way it turned), and the `max_m` check
    *  only runs for axis-parallel yaw, where ±90° give the same axis-aligned
    *  box. The sign therefore has to be pinned somewhere else — that is what
-   *  section 6 of `scripts/smoke_place_rotation.mjs` is for. */
+   *  section 6 of `client3d/scripts/smoke_place_rotation.mjs` is for. */
   placement(obj: Object3D, spec: SceneModelSpec, origin: Vector3,
             frameYaw = 0): void {
     if (!this.active) return

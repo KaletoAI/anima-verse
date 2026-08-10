@@ -4,7 +4,7 @@
  *
  * Pure maths, exactly like `walk.ts`: no Three.js, no module state, no DOM,
  * and no value import at all — the only import is a TYPE, which the transpile
- * in `scripts/smoke_walk_math.mjs` drops, so the file can be imported there as
+ * in `client3d/scripts/smoke_walk_math.mjs` drops, so the file can be imported there as
  * plain ESM and checked with hand-derived numbers.
  *
  * WHERE THE GEOMETRY COMES FROM. Not from this file and not from the renderer:
@@ -42,7 +42,7 @@ import type { ScenePayload } from '../api';
 /** Half width of the walking body, in FIGURE metres — which since E4 are world
  *  metres, because `k` is the constant 1 (§ B). The `k` factor is still
  *  threaded through `bodyRadius`/`wallSegments` as the no-op it now is, pinned
- *  as such by the hand-derived cases in `scripts/smoke_walk_math.mjs`. 0.25 m
+ *  as such by the hand-derived cases in `client3d/scripts/smoke_walk_math.mjs`. 0.25 m
  *  is a grown figure's shoulder half width against the 1.70 m the payload
  *  scales figures to (§ A3); it was also `walk.EDGE_MARGIN`, which went with
  *  the step machine (E4 task 5), so the body width is now one constant for one
@@ -80,10 +80,12 @@ export interface Point { x: number; z: number }
 /** A wall reduced to what collision needs: a line in the world XZ plane. */
 export interface Segment { ax: number; az: number; bx: number; bz: number }
 
-/** Body radius in WORLD metres for a scene drawn at scale `k`. Indoors a world
- *  metre is not a figure metre (Willowbrook runs at k = 0.21), so an unscaled
- *  radius would be five body widths wide and wedge the figure in its own
- *  room. */
+/** Body radius in WORLD metres for a scene drawn at scale `k`. In the
+ *  shrunk-scene era a world metre was not a figure metre (Willowbrook ran at
+ *  k = 0.21), and an unscaled radius would have been five body widths wide and
+ *  wedged the figure in its own room. Since E4 the payload always sends k = 1
+ *  (§ A1.8), so the multiplication is a no-op — it stays because the FORMULA
+ *  is what is right, not because a shrunk scene is still expected. */
 export function bodyRadius(k: number): number {
   return BODY_RADIUS_M * (Number.isFinite(k) && k > 0 ? k : 1);
 }

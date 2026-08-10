@@ -3,7 +3,7 @@
  *
  * Pure maths, exactly like `walk.ts` and `collide.ts`: no Three.js, no module
  * state, no DOM, and no value import at all — the only import is a TYPE, which
- * the transpile in `scripts/smoke_walk_math.mjs` drops, so the file can be
+ * the transpile in `client3d/scripts/smoke_walk_math.mjs` drops, so the file can be
  * imported there as plain ESM and checked with hand-derived numbers.
  *
  * WHY THIS FILE EXISTS. The server draws a door as a GAP: it splits every wall

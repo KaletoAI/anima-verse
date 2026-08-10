@@ -16,7 +16,7 @@
  * React side reads it with `useSyncExternalStore` exactly like the other one.
  *
  * The arithmetic is pure and dependency-free; the hand-derived cases live in
- * `scripts/smoke_walk_math.mjs`.
+ * `client3d/scripts/smoke_walk_math.mjs`.
  */
 
 /** One thing `startApp` waits for, in the order it reaches them. */

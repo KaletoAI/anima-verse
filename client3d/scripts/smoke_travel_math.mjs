@@ -7,7 +7,7 @@
  * Usage:  node client3d/scripts/smoke_travel_math.mjs
  *
  * Same discipline as `client3d/scripts/smoke_ground_math.mjs` and
- * `scripts/smoke_walk_math.mjs`: every expected number below is derived BY
+ * `client3d/scripts/smoke_walk_math.mjs`: every expected number below is derived BY
  * HAND from the contract (§ A11 of docs/schnittstellen-3d.md), written out in
  * this header, and NEVER recorded from the current output. A check that only
  * pins today's result proves nothing.

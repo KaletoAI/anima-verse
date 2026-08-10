@@ -3,7 +3,7 @@
  * interior (plan-3d-game stage 3, task 6).
  *
  * Pure on purpose — no Three, no DOM, no clock: every input arrives as a
- * plain number and the caller hands in `nowMs`, so `scripts/smoke_walk_math.mjs`
+ * plain number and the caller hands in `nowMs`, so `client3d/scripts/smoke_walk_math.mjs`
  * can check the numbers without a browser.
  *
  * The rule is "the room whose centre is closest", and its whole difficulty is

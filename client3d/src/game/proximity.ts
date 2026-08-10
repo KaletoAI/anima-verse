@@ -3,7 +3,7 @@
  * task 5).
  *
  * Pure like `walk.ts`: no Three.js, no DOM, no module state and no import at
- * all — that is what lets `scripts/smoke_walk_math.mjs` transpile and check it
+ * all — that is what lets `client3d/scripts/smoke_walk_math.mjs` transpile and check it
  * with hand-derived numbers.
  *
  * The rule has three parts, and the middle one is the one worth explaining:

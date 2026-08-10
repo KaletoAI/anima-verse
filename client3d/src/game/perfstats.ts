@@ -6,7 +6,7 @@
  * in the picture said whether a tier does anything at all. These are the four
  * figures that answer that, and this module is the arithmetic behind them —
  * pure like `walk.ts` and `prefs.ts`: no DOM, no `three`, no module state, so
- * `scripts/smoke_walk_math.mjs` can hand-check every case.
+ * `client3d/scripts/smoke_walk_math.mjs` can hand-check every case.
  *
  * WHAT COMES FROM WHERE, and why two of the figures cannot come from
  * `renderer.info`:

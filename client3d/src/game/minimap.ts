@@ -15,7 +15,7 @@
  *
  * PURE like `walk.ts`, `soundtrack.ts` and `fog.ts`: no `three`, no DOM, no
  * module state, and only type-only imports. That is what lets
- * `scripts/smoke_walk_math.mjs` derive every number below by hand — the canvas
+ * `client3d/scripts/smoke_walk_math.mjs` derive every number below by hand — the canvas
  * in `hud/Minimap.tsx` only strokes what these functions return, and `main.ts`
  * only publishes the inputs.
  */

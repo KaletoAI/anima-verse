@@ -124,9 +124,10 @@ export interface EntryTile {
   locId: string;
   footprint: Footprint;
   /** authored openings of this location, TILE-LOCAL (the payload's
-   *  `at_world`); EMPTY = no way in: since the strictness decision of
-   *  2026-08-04 only an authored opening is an entrance, and the server
-   *  refuses a crossing anywhere else. */
+   *  `at_world`). NON-EMPTY = these are the only ways in (strictness decision
+   *  2026-08-04, the server refuses a crossing anywhere else); EMPTY = a FREE
+   *  boundary (E4 task 5) — the location never said where its way in is, so
+   *  the whole edge counts and `freeBoundaryOf` above is what reads that. */
   openings: LocalOpening[];
   /** the server refuses this location to THIS avatar (`lockedLocations`,
    *  task C1). It stays a candidate: the offer must not be silent about a

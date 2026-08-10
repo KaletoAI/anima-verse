@@ -34,7 +34,7 @@
  * NOT done here (see the algorithm note in `fogRects`).
  *
  * PURE like `walk.ts` and `soundtrack.ts`: no `three`, no DOM, no imports and
- * no module state. That is what lets `scripts/smoke_walk_math.mjs` check every
+ * no module state. That is what lets `client3d/scripts/smoke_walk_math.mjs` check every
  * case by hand — the caller in `main.ts` only turns the rectangles into quads.
  * The fog OPTICS constants below live here for the same reason: `fogClouds.ts`
  * needs `three` and a canvas and cannot be loaded in a smoke at all, so the
@@ -80,7 +80,7 @@ export const SHOW_ALL_KEY = 'av3d.showAllLocations';
 // WAS a 10 m cell. The cell is gone, so they are the metres those products
 // were — the values do not change, their anchor does. `fogClouds.ts` builds
 // the material out of them; they are declared in the pure module so
-// `scripts/smoke_walk_math.mjs` can pin them and the identity below.
+// `client3d/scripts/smoke_walk_math.mjs` can pin them and the identity below.
 
 /** How far a quad is drawn beyond its rectangle, in metres — the whole soft
  *  border lives in here. Enough for a cloud edge to read as torn, little

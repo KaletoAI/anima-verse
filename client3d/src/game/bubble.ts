@@ -3,7 +3,7 @@
  * and how long it hangs over the head.
  *
  * Pure and import-free on purpose — no `three`, no DOM — so both rules are
- * checked with hand-derived cases in `scripts/smoke_walk_math.mjs` instead of
+ * checked with hand-derived cases in `client3d/scripts/smoke_walk_math.mjs` instead of
  * being judged by looking at the screen. `scene/npcs.ts` owns the element and
  * the clock; this module owns nothing but the arithmetic.
  */

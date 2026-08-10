@@ -12,7 +12,7 @@
  *
  * Pure like `walk.ts`, `proximity.ts` and `roomwalk.ts`: plain numbers, no
  * Three, no DOM, no module state and no import — that is what lets
- * `scripts/smoke_walk_math.mjs` check the numbers with a transpile.
+ * `client3d/scripts/smoke_walk_math.mjs` check the numbers with a transpile.
  */
 
 /** How close to the holding point the avatar has to stand, in FIGURE metres —
