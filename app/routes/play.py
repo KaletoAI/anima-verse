@@ -8,6 +8,7 @@ Die gebaute Shell liegt (wie game-admin) unter ``static/game_admin/play.html``
 — derselbe ``frontend/``-Build, aber eine eigene Seite/Route.
 """
 from pathlib import Path
+from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -520,6 +521,229 @@ async def play_travel_cancel(user=Depends(get_current_user)):
                 avatar, target_id)
     return {"ok": True, "cancelled": True, "target_id": target_id,
             "target_name": get_location_name(target_id) or target_id}
+
+
+# ── Free walking (Seamless World, E4 task 5) ────────────────────────────────
+# The metre world has no cells, so it has no compass step either: the client
+# walks freely and REPORTS where it stands. Everything below is the price of
+# that freedom — the gates that used to sit on the step have to sit on the
+# report, all of them (the E3-C1 lesson: a location change derived from a
+# point, without the entry gates, is a hole in every rule the world has).
+
+#: Minimum real-time distance between two ACCEPTED reports of one avatar
+#: (~4 a second). The client reports ~3 a second while it moves plus one on
+#: stop, so this is headroom, not a budget — a client that reported per frame
+#: would just have most of them dropped. Read as a module attribute so a smoke
+#: can turn wall-clock behaviour off for the cases that are not about it.
+_POS_REPORT_INTERVAL_S = 0.25
+#: Nobody is refused a step shorter than this, whatever the clock says (metres).
+_POS_STEP_FLOOR_M = 5.0
+#: How many times the world's travel speed a free walker may make. Generous on
+#: purpose: this is an ANTI-TELEPORT bound, not a precision anticheat — the
+#: client's own walk is 3.4 m/s and every honest report stays far below.
+_POS_STEP_FACTOR = 3.0
+#: How close to an authored boundary opening a point has to be to count as
+#: crossing THROUGH it (metres). The client offers the entry at 3 m and walks
+#: the figure to the opening point, so an accepted crossing lands well inside.
+_POS_OPENING_TOLERANCE_M = 1.5
+#: When each avatar's last ACCEPTED report came in (``time.monotonic``).
+#: Process-local on purpose: it is a rate limit and a plausibility baseline,
+#: not world state — a restart simply grants everyone one free first report,
+#: which is the same grace a takeover gets.
+_pos_report_at: Dict[str, float] = {}
+
+
+@router.post("/play/pos")
+async def play_pos(request: Request, user=Depends(get_current_user)):
+    """The avatar reports where it is standing (free walking, E4 task 5).
+
+    Body: ``{"x": <metres>, "z": <metres>}``. The client walks the figure
+    itself and sends the result; this judges the point and writes it. There is
+    no server-side route computation and no per-boundary permission any more —
+    the answer is the accepted point, its location and its room.
+
+    The chain, in order:
+
+      1. a party FOLLOWER owns no movement at all (403 ``party_follower``, the
+         same backstop ``/play/travel`` applies),
+      2. the numbers are finite (400): a NaN sails through every comparison
+         below and poisons the JSON encoder afterwards,
+      3. THROTTLE — at most ~4 accepted reports a second. Excess is dropped
+         SILENTLY (200 ``{ok: false, throttled: true}``): a client that reports
+         too eagerly must not collect error toasts for it,
+      4. plausible step against the real time since the last ACCEPTED report,
+         allowance ``max(5 m, 3 × travel_speed × game_factor × elapsed)``
+         (409 ``too_far``),
+      5. terrain ``passability_at`` at the point (409 ``impassable``),
+      6. the LOCATION TRANSITION derived from the point, through the FULL gate
+         (below).
+
+    Every refusal carries ``{reason, message, pos, location_id}`` where ``pos``
+    is the LAST VALID point — the client snaps the figure back onto it, so a
+    refusal never leaves the two views disagreeing.
+
+    THE TRANSITION GATE. ``location_at_point`` derives the location of the
+    reported point. Same location, or wilderness → wilderness, is accepted as
+    it stands. Otherwise:
+
+      * ENTRY (a different, non-empty location): only across an authored
+        boundary opening — the point must lie within
+        ``_POS_OPENING_TOLERANCE_M`` of one of the target's opening world
+        points (§ A1.1) — and only when ``accessible_when`` and the access
+        rules pass. Those two are the very gates ``/play/travel`` applies
+        before it sets off; a free walker that could stroll past them would
+        make every one of them decoration (E3-C1),
+      * EXIT: ``boundary_entry.may_leave`` with the room the avatar stands in
+        — across a NEAR opening from the room it links to, from the entry room
+        over any edge, or freely when the location declares no entry room,
+      * location → location (adjacent footprints) is both: the exit check of
+        the old one, then the entry check of the new one.
+
+    A running journey is cancelled by the first accepted report — free walking
+    OVERRIDES travel deliberately (``set_character_pos`` does it for every
+    position write that is not a travel step; the ticker would otherwise pull
+    the figure back onto its baked polyline on the next tick).
+
+    Gates hand-derived in ``scripts/smoke_play_pos.py``.
+    """
+    import math
+    import time
+    from app.core.i18n import t
+    from app.models.account import get_active_character
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room,
+                                      get_character_language,
+                                      get_character_pos,
+                                      save_character_current_room,
+                                      set_character_pos)
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="x/z required")
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+    lang = get_character_language(avatar) or "de"
+
+    from app.core.party_engine import is_party_follower
+    if is_party_follower(avatar):
+        raise HTTPException(status_code=403, detail={
+            "reason": "party_follower",
+            "message": t("You are part of a party and your leader takes you "
+                         "along — you cannot move on your own.", lang)})
+
+    try:
+        x, z = float(body.get("x")), float(body.get("z"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="x/z must be numbers")
+    if not (math.isfinite(x) and math.isfinite(z)):
+        raise HTTPException(status_code=400, detail="x/z must be finite")
+
+    now = time.monotonic()
+    last_at = _pos_report_at.get(avatar)
+    if last_at is not None and now - last_at < _POS_REPORT_INTERVAL_S:
+        return {"ok": False, "throttled": True}
+
+    here = get_character_pos(avatar)
+    current_id = get_character_current_location(avatar) or ""
+
+    def refuse(status: int, reason: str, message: str):
+        """Refuse with the last VALID point — the client snaps back onto it."""
+        raise HTTPException(status_code=status, detail={
+            "reason": reason, "message": message,
+            "pos": here, "location_id": current_id})
+
+    # The step. Measured against the last ACCEPTED report, because that is the
+    # last point this route vouched for; without one (a fresh session, a
+    # takeover, an admin move) there is no baseline and the point is taken as
+    # given — the terrain and the transition gate still judge it.
+    if here is not None and last_at is not None:
+        from app.core.timeutils import game_speed_factor
+        from app.core.travel_engine import get_travel_speed_m_s
+        elapsed = max(0.0, now - last_at)
+        allowance = max(_POS_STEP_FLOOR_M,
+                        _POS_STEP_FACTOR * get_travel_speed_m_s()
+                        * game_speed_factor() * elapsed)
+        if math.hypot(x - here["x"], z - here["z"]) > allowance:
+            logger.info("pos refused (too far): %s %.2f,%.2f -> %.2f,%.2f "
+                        "in %.2fs (allowance %.2f m)", avatar,
+                        here["x"], here["z"], x, z, elapsed, allowance)
+            refuse(409, "too_far",
+                   t("You cannot get there that quickly.", lang))
+
+    from app.core.terrain_query import passability_at
+    if not passability_at(x, z)[0]:
+        refuse(409, "impassable", t("You cannot walk there.", lang))
+
+    from app.core.world_geometry import location_at_point
+    from app.models.world import get_location_by_id, list_locations
+    derived = location_at_point(x, z, list_locations())
+    derived_id = (derived.get("id") or "") if derived else ""
+
+    entry_room = ""
+    if derived_id != current_id:
+        from app.core.boundary_entry import (may_leave, opening_entry_room,
+                                             opening_world_points)
+        if current_id:
+            # LEAVING. The exit edge is not a step direction any more, so it is
+            # read off the point: every opening the crossing happens AT is a
+            # candidate, and ``may_leave`` answers for each. With none nearby
+            # the empty edge letter matches no opening, which is exactly right
+            # — the entry-room rule and the "no entry room at all" rule are
+            # what is left, and those are the other two ways out.
+            current_loc = get_location_by_id(current_id) or {}
+            current_room = get_character_current_room(avatar) or ""
+            entry_gate = str(current_loc.get("entry_room") or "").strip()
+            edges = [edge for edge, (ox, oz)
+                     in opening_world_points(current_loc)
+                     if math.hypot(ox - x, oz - z) <= _POS_OPENING_TOLERANCE_M]
+            if not any(may_leave(current_loc, current_room, entry_gate, edge)
+                       for edge in (edges or [""])):
+                logger.info("pos refused (leave): %s out of %s from room %r",
+                            avatar, current_id, current_room)
+                refuse(403, "leave_blocked",
+                       t("You cannot leave the place here — take the way you "
+                         "came in.", lang))
+        if derived_id:
+            # ENTERING. Only through an authored opening, and only past the
+            # gates the travel route applies to the very same destination.
+            best_edge, best_dist = "", None
+            for edge, (ox, oz) in opening_world_points(derived):
+                dist = math.hypot(ox - x, oz - z)
+                if best_dist is None or dist < best_dist:
+                    best_edge, best_dist = edge, dist
+            if best_dist is None or best_dist > _POS_OPENING_TOLERANCE_M:
+                logger.info("pos refused (no opening): %s into %s at %.2f,%.2f",
+                            avatar, derived_id, x, z)
+                refuse(403, "no_opening",
+                       t("There is no way in here.", lang))
+            from app.core.world_ops import conditions_pass
+            if not conditions_pass(derived.get("accessible_when") or [],
+                                   avatar, derived_id):
+                logger.info("pos refused (accessible_when): %s into %s",
+                            avatar, derived_id)
+                refuse(403, "not_accessible",
+                       t("This place is not accessible to you.", lang))
+            from app.core.danger_system import check_location_access
+            enter_ok, enter_reason = check_location_access(avatar, derived)
+            if not enter_ok:
+                logger.info("pos refused (access rule): %s into %s: %s",
+                            avatar, derived_id, enter_reason)
+                refuse(403, "block_enter", enter_reason)
+            # Arrival semantics, the same ones every other arrival path uses:
+            # the location is written by ``set_character_pos`` through
+            # ``save_character_current_location`` (which discovers the place
+            # and lands the avatar in the arrival room), and an opening that
+            # names a room overrides that — it answers the question itself.
+            entry_room = opening_entry_room(derived, best_edge)
+
+    written = set_character_pos(avatar, x, z)
+    if entry_room:
+        save_character_current_room(avatar, entry_room)
+    _pos_report_at[avatar] = now
+    return {"ok": True, "pos": written["pos"],
+            "location_id": written["location_id"],
+            "room_id": get_character_current_room(avatar) or ""}
 
 
 @router.post("/play/scene-photo/prepare")
