@@ -5,6 +5,7 @@ routes remain thin HTTP adapters (auth, request parsing, response types).
 HTTPExceptions that were embedded mid-logic moved along unchanged.
 """
 import asyncio
+import math
 import os
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
@@ -180,7 +181,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
     from app.core.world_geometry import placed_footprint
-    from app.models.terrain import terrain_sig
+    from app.models.terrain import list_areas, terrain_sig
 
     avatar = (avatar_name or "").strip()
     fogged = not show_all
@@ -204,11 +205,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     locations = []
     name_by_id = {}
     visible_ids = set()
-    # Map extent in metres over ALL placed locations — computed BEFORE the fog
-    # filter, so the map keeps its extent no matter how much of it is still
-    # dark. With a scale anchor a location contributes its whole footprint
-    # (centre ± half the edge), deliberately the axis-aligned box of the
-    # UNROTATED square: the extent is a viewport hint, not a collision volume.
+    # Map extent in metres over ALL placed locations AND all painted terrain
+    # areas — computed BEFORE the fog filter, so the map keeps its extent no
+    # matter how much of it is still dark. With a scale anchor a location
+    # contributes its whole footprint (centre ± half the edge), deliberately
+    # the axis-aligned box of the UNROTATED square: the extent is a viewport
+    # hint, not a collision volume.
     # A placed location WITHOUT a scale anchor stretches the bounds by its
     # centre point, so the map extent never misses a location it shows.
     _min_x = _min_z = _max_x = _max_z = None
@@ -280,6 +282,24 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             entry["layout_sig"] = _hashlib.md5(_json.dumps(
                 _lay_rooms, sort_keys=True, default=str).encode()).hexdigest()[:10]
         locations.append(entry)
+
+    # The painted map is part of the world frame too (E4 finding B7). Without
+    # this a largely painted world with few placed locations gets cropped to
+    # their box by everything that follows the frame (base plane, fog blanket,
+    # camera fit, minimap). Each area contributes the axis-aligned box of its
+    # polygon; malformed or non-finite points are skipped rather than poisoning
+    # the extent with NaN.
+    for _area in list_areas():
+        for _pt in (_area.get("polygon") or []):
+            if not isinstance(_pt, (list, tuple)) or len(_pt) < 2:
+                continue
+            try:
+                _px, _pz = float(_pt[0]), float(_pt[1])
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(_px) and math.isfinite(_pz)):
+                continue
+            _stretch(_px, _px, _pz, _pz)
 
     world_bounds = ({"min_x": round(_min_x, 2), "min_z": round(_min_z, 2),
                      "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}

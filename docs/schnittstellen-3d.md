@@ -495,18 +495,25 @@ Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 
-**`world_bounds` — die Regel samt ihrer zwei Randfälle.** Gerechnet wird
-über ALLE Locations mit numerischem `pos_x`/`pos_z`, und zwar:
+**`world_bounds` — die Regel samt ihrer Randfälle.** Gerechnet wird über
+ALLE Locations mit numerischem `pos_x`/`pos_z` **und über alle gemalten
+Terrain-Flächen**, und zwar:
 
-1. **mit Maßstabsanker** → der volle achsparallele Kasten des
+1. Location **mit Maßstabsanker** → der volle achsparallele Kasten des
    **UNGEDREHTEN** Quadrats, `cx ± w/2` / `cz ± w/2`. Bewusst ungedreht:
    die Ausdehnung ist ein Viewport-Hinweis, kein Kollisionsvolumen.
-2. **ohne Maßstabsanker** → der **blanke Mittelpunkt** `(cx, cz)`, ohne
-   ±w/2.
+2. Location **ohne Maßstabsanker** → der **blanke Mittelpunkt** `(cx, cz)`,
+   ohne ±w/2.
+3. **Gemalte Fläche** → der achsparallele Kasten über alle Punkte ihres
+   Polygons. Unlesbare oder nicht-endliche Punkte werden übersprungen,
+   nie in die Ausdehnung gerechnet.
 
-Daraus folgt die Invariante: **keine Location, die der Payload zeigt,
-liegt außerhalb von `world_bounds`.** `null` ist es genau dann, wenn
-überhaupt nichts platziert ist. **Der Kasten DARF entartet sein**
+Daraus folgt die Invariante: **keine Location, die der Payload zeigt, und
+keine gemalte Fläche liegt außerhalb von `world_bounds`.** Eine groß
+gemalte Karte mit wenigen platzierten Orten wird also nicht mehr auf deren
+Kasten beschnitten. `null` ist es genau dann, wenn **weder etwas platziert
+NOCH etwas gemalt** ist — eine reine Terrain-Welt ohne jede platzierte
+Location hat sehr wohl einen Rahmen. **Der Kasten DARF entartet sein**
 (`min == max`, wenn nur ankerlose Locations platziert sind oder nur eine
 einzige) — wer die Ausdehnung als Divisor benutzt (Zoom-Anschlag,
 Minimap-Maßstab), muss das abfangen.
@@ -1339,7 +1346,7 @@ einer leeren Fläche.
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `world_bounds` | `{"min_x", "min_z", "max_x", "max_z"} \| null` | Ausdehnung der Welt in METERN über ALLE platzierten Orte, **vor** dem Filter berechnet. `null`, wenn kein Ort platziert ist. Regel und Randfälle: § A1.3 |
+| `world_bounds` | `{"min_x", "min_z", "max_x", "max_z"} \| null` | Ausdehnung der Welt in METERN über ALLE platzierten Orte UND alle gemalten Terrain-Flächen, **vor** dem Filter berechnet. `null`, wenn nichts platziert und nichts gemalt ist. Regel und Randfälle: § A1.3 |
 | `fogged` | `bool` | `true` = gefilterte Sicht (`= not show_all`). Clients zeigen daran „hier ist noch Nebel" an, statt eine leere Karte zu vermuten |
 
 `world_bounds` ist bewusst UNGEFILTERT: Kartenrahmen, Zoom-Anschlag und
