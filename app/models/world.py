@@ -53,11 +53,14 @@ def _migrate_room_image_prompts(data: Dict[str, Any]) -> bool:
 
 
 def _load_world_data() -> Dict[str, Any]:
-    """Laedt die Weltdaten aus der DB (Locations + ihre Raeume).
+    """Loads the world data from the DB (locations plus their rooms).
 
-    Locations werden als vollstaendige Dicts aus dem meta-Blob geladen.
-    Raeume sind eingebettet in locations.meta.rooms.
-    Fallback auf world.json wenn DB leer oder fehlerhaft.
+    A location comes out of the ``meta`` blob as a complete dict whenever the
+    blob holds one; otherwise it is reconstructed from the columns, and the
+    rooms are read from the ``rooms`` table. Rooms of a blob-backed location
+    are embedded in ``locations.meta.rooms``.
+
+    Falls back to the legacy ``world.json`` when the DB is empty or unreadable.
     """
     try:
         conn = get_connection()
@@ -77,7 +80,7 @@ def _load_world_data() -> Dict[str, Any]:
                 except Exception:
                     pass
                 if meta and "id" in meta:
-                    # Vollstaendiges Location-Dict aus meta
+                    # A complete location dict straight out of meta
                     loc = meta
                 else:
                     # Reconstruct from columns
@@ -142,10 +145,11 @@ def _load_world_data() -> Dict[str, Any]:
                                 "activities": [],
                                 **rmeta,
                             }
-                        # Column-Fallback: Decency-Felder die im meta-Blob
-                        # fehlen aus den Spalten nachziehen (auch wenn Spalte
-                        # default-leer ist, damit Default-Werte konsistent
-                        # sind: '' statt None, False statt None).
+                        # Column fallback: decency fields missing from the
+                        # meta blob are pulled in from the columns (even when
+                        # the column holds the default, so defaults stay
+                        # consistent: '' instead of None, False instead of
+                        # None).
                         for key, col_idx, cast in (
                             ("decency",       4, str),
                             ("style_hint",    5, str),
@@ -185,9 +189,9 @@ def _load_world_data() -> Dict[str, Any]:
             _migrate_room_image_prompts(data)
             return data
     except Exception as e:
-        logger.warning("_load_world_data DB-Fehler: %s", e)
+        logger.warning("_load_world_data DB error: %s", e)
 
-    # Fallback: JSON-Datei
+    # Fallback: the legacy JSON file
     path = _get_world_file()
     if path.exists():
         try:
@@ -197,7 +201,7 @@ def _load_world_data() -> Dict[str, Any]:
                     path.write_text(
                         json.dumps(data, ensure_ascii=False, indent=2),
                         encoding="utf-8")
-                    logger.info("Room image_prompt -> image_prompt_day migriert")
+                    logger.info("Room image_prompt -> image_prompt_day migrated")
             return data
         except Exception:
             pass

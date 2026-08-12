@@ -202,6 +202,16 @@ def segment_pace_m_s(waypoints: Sequence[Sequence[float]],
     for degenerate geometry (a zero-length or zero-time segment — both legal,
     ``segment_costs`` produces them). The caller turns it into REAL seconds
     with the clock factor, exactly like ``speed_m_s_real``.
+
+    CONTRACT — where the index comes from: ``st`` must be the answer of
+    ``journey_state(waypoints, …)`` over the VERY waypoint list passed in here
+    (the journey's own ``waypoints``, never a walked prefix or a re-sampled
+    copy). ``st['seg']`` is an index INTO that list: segment ``seg`` runs from
+    ``waypoints[seg]`` to ``waypoints[seg + 1]``, so it is 0-based over the
+    SEGMENTS and never reaches ``len(waypoints) - 1``. Handing in a different
+    list silently reads a different segment — the reason the out-of-range and
+    type errors below answer ``None`` instead of raising: a mismatched pair is
+    "no pace known", never a crash in the worldmap payload.
     """
     if st.get("arrived"):
         return None

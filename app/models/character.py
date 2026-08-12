@@ -3556,23 +3556,23 @@ def enter_offmap_sleep(character_name: str) -> bool:
     except Exception:
         pass
     get_logger("character").info(
-        "Offmap-Sleep: %s -> verschwindet von der Karte (return: %s/%s)",
+        "Offmap sleep: %s -> gone from the map (return: %s/%s)",
         character_name, current_loc or "-", current_room or "-")
     return True
 
 
 def wake_from_offmap(character_name: str) -> bool:
-    """Stellt den vor-Offmap-Standort wieder her.
+    """Restores the whereabouts stored before the off-map sleep.
 
-    Nur aktiv wenn der Character aktuell offmap ist (current_location leer)
-    UND ``_offmap_return_location`` im Profil gesetzt ist. Idempotent —
-    spaetere Aufrufe ohne Return-Marker sind no-ops.
+    Only acts when the character IS off the map right now (empty
+    ``current_location``) AND ``_offmap_return_location`` is set in the
+    profile. Idempotent — a later call without the return marker is a no-op.
 
-    Returns True wenn der Character zurueckgeholt wurde.
+    Returns True when the character was brought back.
     """
     profile = get_character_profile(character_name) or {}
     if (profile.get("current_location") or "").strip():
-        # Steht schon irgendwo — nichts zu tun.
+        # Standing somewhere already — nothing to do.
         return False
     return_loc = (profile.get("_offmap_return_location") or "").strip()
     if not return_loc:

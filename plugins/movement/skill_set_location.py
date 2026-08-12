@@ -1,8 +1,15 @@
-"""SetLocation Skill - Ortswechsel per Chat
+"""SetLocation skill — changing place by chat.
 
-Leichtgewichtiger Skill, der dem Agenten erlaubt seinen Aufenthaltsort,
-Raum und Aktivitaet zu aendern. Wird automatisch vom Chat-System erkannt
-wenn der User z.B. sagt "Du bist jetzt zu Hause" oder "Reise ins Buero".
+A lightweight skill that lets an agent change its location, room and pose.
+The chat system surfaces it whenever the conversation asks for a move
+("you are at home now", "travel to the office").
+
+A cross-location move does NOT teleport: it starts a timed journey
+(``travel_engine.start_journey``) that the travel ticker advances on the game
+clock. Only a room change within the same location is instant. The gates in
+front of it are the same ones ``POST /play/travel`` and the arrival ticker
+apply — leave rules, access rules, ``accessible_when`` — because a movement
+path that skips one of them is a hole in every rule the world has.
 """
 import random
 from typing import Any, Dict
@@ -27,12 +34,11 @@ from app.models.world import (
 
 
 class SetLocationSkill(PluginSkill):
-    """
-    Skill zum Setzen des Aufenthaltsortes, Raums und Aktivitaet eines Agenten.
+    """Sets an agent's location, room and pose.
 
-    Der Agent kann diesen Skill nutzen wenn der User den Ort aendern moechte.
-    Der Skill validiert den Ort gegen die definierten World-Locations und
-    setzt automatisch einen passenden Raum und eine Aktivitaet.
+    The agent uses this skill when the conversation asks for a move. The
+    requested place is validated against the world's locations; the room and
+    the pose follow from the input or from the location's arrival rule.
     """
     SUPPRESS_IN_PERSON = True
     SINGLETON = True
@@ -62,13 +68,13 @@ class SetLocationSkill(PluginSkill):
         return known_locations_section(character_name)
 
     def execute(self, raw_input: str) -> str:
-        """Setzt Location, Raum und Activity fuer den Agenten.
+        """Sets location, room and pose for the agent.
 
-        Input-Format (vom LLM):
-            Ortsname, z.B. "zu Hause" oder "Buero"
-            Mit Raum: "zu Hause, Kueche"
-            Mit Raum + Activity: "zu Hause, Kueche, Kochen"
-            Mit Activity (findet Raum automatisch): "zu Hause, Kochen"
+        Input format (from the LLM):
+            location name, e.g. "home" or "office"
+            with a room: "home, kitchen"
+            with room + pose: "home, kitchen, cooking"
+            with a pose (the room is derived): "home, cooking"
         """
         if not self.enabled:
             return "SetLocation Skill ist nicht verfuegbar."
@@ -76,7 +82,7 @@ class SetLocationSkill(PluginSkill):
         try:
             return self._execute_inner(raw_input)
         except Exception as e:
-            logger.error("Fehler in SetLocation: %s", e)
+            logger.error("SetLocation failed: %s", e)
             return f"Fehler beim Setzen der Location: {e}"
 
     def _execute_inner(self, raw_input: str) -> str:
@@ -90,17 +96,17 @@ class SetLocationSkill(PluginSkill):
         if not input_text:
             return "Fehler: Kein Ort angegeben."
 
-        # Input parsen: "Location, Room/Activity, Activity"
+        # Parse the input: "location, room/pose, pose"
         parts = [p.strip() for p in input_text.split(",")]
         requested_location = parts[0]
         requested_second = parts[1] if len(parts) > 1 else None
         requested_third = parts[2] if len(parts) > 2 else None
 
-        logger.info(f"Ortswechsel fuer {character_name}")
-        logger.info(f"Angefragt: Location='{requested_location}', "
-              f"Second='{requested_second}', Third='{requested_third}'")
+        logger.info(f"Move requested for {character_name}")
+        logger.info(f"Requested: location='{requested_location}', "
+              f"second='{requested_second}', third='{requested_third}'")
 
-        # Location in World-Locations suchen (User-Level)
+        # Look the name up in the world's locations
         locations = list_locations()
         matched_location = None
         for loc in locations:
@@ -108,14 +114,14 @@ class SetLocationSkill(PluginSkill):
                 matched_location = loc
                 break
 
-        # Fuzzy-Match: Teilstring-Suche als Fallback
+        # Fuzzy match: substring search as a fallback
         if not matched_location:
             for loc in locations:
                 if requested_location.lower() in loc["name"].lower() or loc["name"].lower() in requested_location.lower():
                     matched_location = loc
                     break
 
-        # Description-Match: Suchbegriff in der Ort-Beschreibung finden
+        # Description match: the search term inside a location description
         if not matched_location:
             for loc in locations:
                 desc = loc.get("description", "").lower()
@@ -123,14 +129,14 @@ class SetLocationSkill(PluginSkill):
                     matched_location = loc
                     break
 
-        # Fallback: Raum am aktuellen Standort matchen
+        # Fallback: match a room at the current location
         if not matched_location:
             current_loc_id = get_character_current_location(character_name)
             current_loc = get_location_by_id(current_loc_id) if current_loc_id else None
             if current_loc:
                 current_rooms = get_location_rooms(current_loc)
                 matched_room_fallback = None
-                # Exakt
+                # Exact
                 for room in current_rooms:
                     if room.get("name", "").lower() == requested_location.lower():
                         matched_room_fallback = room
@@ -144,22 +150,24 @@ class SetLocationSkill(PluginSkill):
                             matched_room_fallback = room
                             break
                 if matched_room_fallback:
-                    # Raum am aktuellen Ort gefunden — Location beibehalten, Raum wechseln
+                    # A room at the current location — keep the location,
+                    # change the room only
                     matched_location = current_loc
                     requested_second = matched_room_fallback.get("name", "")
-                    requested_third = None  # Activity aus Raum ableiten
-                    logger.info(f"Raum '{requested_location}' am aktuellen Ort "
-                          f"'{current_loc.get('name', '')}' gefunden")
+                    requested_third = None  # the room decides the pose
+                    logger.info(f"Room '{requested_location}' found at the "
+                          f"current location '{current_loc.get('name', '')}'")
 
-        # Home-Alias: "home", "zu hause", "zuhause" etc. auf home_location aus Character-Config aufloesen
+        # Home alias: "home", "zu hause", "zuhause" … resolve to the
+        # home_location of the character config
         if not matched_location:
             home_aliases = {"home", "zu hause", "zuhause", "nach hause", "daheim"}
             if requested_location.lower() in home_aliases:
                 cfg = get_character_config(character_name)
                 home_loc_id = cfg.get("home_location", "")
-                # Offmap-Sentinel: Char hat keine Karten-Heimat — er
-                # verschwindet einfach von der Map. enter_offmap_sleep
-                # speichert die letzte Position fuer den Wakeup.
+                # Offmap sentinel: the character has no home on the map and
+                # simply disappears from it. enter_offmap_sleep stores the
+                # last position for the wakeup.
                 from app.models.character import (
                     OFFMAP_SLEEP_SENTINEL, enter_offmap_sleep)
                 if home_loc_id == OFFMAP_SLEEP_SENTINEL:
@@ -171,17 +179,18 @@ class SetLocationSkill(PluginSkill):
                     if matched_location:
                         home_room_id = cfg.get("home_room", "")
                         if home_room_id and not requested_second:
-                            # Home-Room als zweiten Part setzen (falls nicht explizit angegeben)
+                            # Use the home room as the second part unless one
+                            # was named explicitly
                             rooms = get_location_rooms(matched_location)
                             for r in rooms:
                                 if r.get("id", "") == home_room_id:
                                     requested_second = r.get("name", "")
                                     break
-                        logger.info(f"Home-Alias '{requested_location}' -> Location '{matched_location.get('name', '')}' (ID: {home_loc_id})")
+                        logger.info(f"Home alias '{requested_location}' -> location '{matched_location.get('name', '')}' (id: {home_loc_id})")
 
         if not matched_location:
             available_parts = [loc["name"] for loc in locations] if locations else []
-            # Raeume am aktuellen Standort anhaengen
+            # Append the rooms of the current location
             current_loc_id = get_character_current_location(character_name)
             current_loc = get_location_by_id(current_loc_id) if current_loc_id else None
             if current_loc:
@@ -190,18 +199,18 @@ class SetLocationSkill(PluginSkill):
                 if room_names:
                     available_parts.extend(room_names)
             available = ", ".join(available_parts) if available_parts else "keine definiert"
-            logger.warning(f"Ort nicht gefunden: '{requested_location}'. Verfuegbar: {available}")
+            logger.warning(f"Location not found: '{requested_location}'. Available: {available}")
             return f"Ort '{requested_location}' nicht gefunden. Verfuegbare Orte: {available}"
 
         location_name = matched_location["name"]
         location_id = matched_location.get("id", location_name)
 
-        # Leave-Check: Darf der Character seinen aktuellen Ort/Raum
-        # ueberhaupt verlassen? Greift bei Pinning/Confine-Rules
-        # (action="leave"). Cross-Location: Raum- + Location-Scope.
-        # Same-Location: nur Raum-Scope (Location wird ja nicht verlassen).
-        # Ziel-Raum vorab matchen, damit Confine-Sets (mehrere room_ids in
-        # einer Rule) freie Bewegung innerhalb des Sets erlauben koennen.
+        # Leave check: may the character leave its current location/room at
+        # all? Applies to pinning/confine rules (action="leave").
+        # Cross-location: room AND location scope. Same-location: room scope
+        # only (the location is not left). The target room is matched up
+        # front so confine SETS (several room_ids in one rule) can allow free
+        # movement within the set.
         from app.models.rules import check_leave, check_access
         cur_loc_for_leave = get_character_current_location(character_name) or ""
         is_same_loc = bool(cur_loc_for_leave) and cur_loc_for_leave == location_id
@@ -217,7 +226,7 @@ class SetLocationSkill(PluginSkill):
                 target_location_id=location_id,
                 target_room_id=target_room_preview)
             if not leave_ok:
-                logger.info("Leave blockiert: %s will %s -> %s: %s",
+                logger.info("Leave blocked: %s wants %s -> %s: %s",
                             character_name, cur_loc_for_leave, location_id, leave_reason)
                 try:
                     from app.models.character import record_access_denied
@@ -230,17 +239,17 @@ class SetLocationSkill(PluginSkill):
                 _trigger_access_denied_thought(character_name, location_name, leave_reason)
                 return leave_reason
 
-        # Restrictions-Check: Darf der Character diesen Ort betreten?
+        # Restrictions check: may the character enter this place?
         from app.core.danger_system import check_location_access
         allowed, deny_reason = check_location_access(character_name, matched_location)
         if not allowed:
-            logger.info("Location-Zugang verweigert: %s -> %s: %s", character_name, location_name, deny_reason)
+            logger.info("Location access denied: %s -> %s: %s", character_name, location_name, deny_reason)
             return deny_reason
 
-        # Rules-Engine: Blockade-Regeln pruefen
+        # Rules engine: the block rules
         rules_ok, rules_reason = check_access(character_name, location_id)
         if not rules_ok:
-            logger.info("Rule blockiert Zugang: %s -> %s: %s", character_name, location_name, rules_reason)
+            logger.info("Rule blocks access: %s -> %s: %s", character_name, location_name, rules_reason)
             try:
                 from app.models.character import record_access_denied
                 record_access_denied(character_name, location_id, location_name, rules_reason)
@@ -249,14 +258,41 @@ class SetLocationSkill(PluginSkill):
             _trigger_access_denied_thought(character_name, location_name, rules_reason)
             return rules_reason
 
-        # Passable-Tiles (Durchgangsorte) sind keine Ziele — der LLM darf
-        # nicht direkt dort hinwandern. Pathfinder kann sie aber als
-        # Zwischenschritt nutzen, wenn der Character sie kennt.
-        if matched_location.get("passable"):
-            logger.info("SetLocation auf Durchgangsort abgelehnt: %s -> %s",
+        # ``accessible_when`` — the field the world map greys a place out with,
+        # and NO rule row backs it. Its enforcement points are the travel route
+        # (``routes/play.py``), the arrival ticker
+        # (``travel_engine._arrival_gate``) and this skill; all three ask the
+        # very same reader, ``world_ops.conditions_pass``, so a condition can
+        # never mean one thing for the avatar and another for an NPC. Checked
+        # BEFORE the journey starts: a character must not set off for a place it
+        # may not enter — the ticker would only turn it away at the door.
+        from app.core.world_ops import conditions_pass
+        if not conditions_pass(matched_location.get("accessible_when") or [],
+                               character_name, location_id):
+            from app.core.i18n import t as _t
+            from app.models.character import get_character_language
+            cond_reason = _t("This place is not accessible to you.",
+                             get_character_language(character_name) or "de")
+            logger.info("accessible_when blocks access: %s -> %s",
                         character_name, location_name)
-            return (f"{location_name} ist ein Durchgangsort, kein Ziel. "
-                    f"Waehle einen richtigen Ort als Reiseziel.")
+            try:
+                from app.models.character import record_access_denied
+                record_access_denied(character_name, location_id,
+                                     location_name, cond_reason)
+            except Exception:
+                logger.debug("record_access_denied failed", exc_info=True)
+            _trigger_access_denied_thought(character_name, location_name,
+                                           cond_reason)
+            return cond_reason
+
+        # Passable tiles (transit places) are no destinations — the LLM must
+        # not walk there directly. The pathfinder may still use them as an
+        # intermediate step when the character knows them.
+        if matched_location.get("passable"):
+            logger.info("SetLocation onto a transit place refused: %s -> %s",
+                        character_name, location_name)
+            return (f"{location_name} is a place to pass THROUGH, not a "
+                    f"destination. Pick a real place to travel to.")
 
         # Journey mode: a cross-location move starts a timed journey
         # (start_journey; the travel ticker advances it as game time
@@ -306,22 +342,22 @@ class SetLocationSkill(PluginSkill):
 
         rooms = get_location_rooms(matched_location)
 
-        # Raum und (freie) Pose bestimmen. Es gibt keine Activity-Library mehr —
-        # ein optional mitgegebener Pose-Teil ist freier Text, der Raum gibt
-        # ueber activity_hint nur die Richtung vor (LLM entscheidet).
+        # Determine room and (free) pose. There is no activity library any
+        # more — an optional pose part is free text, and the room only points
+        # a direction through activity_hint (the LLM decides).
         matched_room = None
         pose = ""
 
         if requested_second:
-            # 1. Versuche zweiten Part als Raum-Name zu matchen
+            # 1. Try the second part as a room name
             matched_room = get_room_by_name(matched_location, requested_second)
 
             if matched_room:
-                # Rules-Check fuer Raum
+                # Rules check for the room
                 room_rules_ok, room_rules_reason = check_access(character_name, location_id, room_id=matched_room.get("id", ""))
                 if not room_rules_ok:
                     room_label = matched_room.get("name", "")
-                    logger.info("Rule blockiert Raum: %s -> %s: %s",
+                    logger.info("Rule blocks the room: %s -> %s: %s",
                                character_name, room_label, room_rules_reason)
                     try:
                         from app.models.character import record_access_denied
@@ -334,11 +370,11 @@ class SetLocationSkill(PluginSkill):
                         f"{location_name} / {room_label}" if room_label else location_name,
                         room_rules_reason)
                     return room_rules_reason
-                # Dritter Part = freie Pose im Raum
+                # Third part = the free pose in that room
                 if requested_third:
                     pose = requested_third
             else:
-                # 2. Zweiter Part ist kein Raum → als freie Pose deuten
+                # 2. The second part is no room → read it as a free pose
                 pose = requested_second
 
         # No room named: land where every arrival lands — the declared entry
@@ -354,15 +390,15 @@ class SetLocationSkill(PluginSkill):
         room_id = matched_room.get("id", "") if matched_room else ""
         room_name = matched_room.get("name", "") if matched_room else ""
 
-        # Status setzen: Location-ID speichern (nicht Name)
+        # Write the state: the location ID, never the name
         save_character_current_location(character_name, location_id)
         save_character_current_room(character_name, room_id)
         if pose:
             set_pose_intent(character_name, pose)
 
-        # Avatar-Follow: Location-Wechsel laeuft NICHT mehr automatisch
-        # (Avatar bleibt wo der User ihn hat). Nur Raum-Wechsel wird
-        # uebernommen, falls der Avatar bereits an der gleichen Location ist.
+        # Avatar follow: a LOCATION change is no longer taken over (the
+        # avatar stays where the user put it). Only a ROOM change follows,
+        # and only when the avatar is already at the same location.
         try:
             from app.models.account import get_active_character
             player = get_active_character()
@@ -370,11 +406,11 @@ class SetLocationSkill(PluginSkill):
                 player_loc = get_character_current_location(player)
                 if player_loc and player_loc == location_id:
                     save_character_current_room(player, room_id)
-                    logger.info("Avatar %s folgt %s -> Room %s", player, character_name, room_id)
+                    logger.info("Avatar %s follows %s -> room %s", player, character_name, room_id)
         except Exception as _e:
-            logger.warning("Avatar-Room-Follow fehlgeschlagen: %s", _e)
+            logger.warning("Avatar room follow failed: %s", _e)
 
-        # Decency-Compliance nach dem neuen Raum/Location.
+        # Decency compliance for the new room/location.
         from app.core.outfit_compliance import apply_outfit_compliance
         _comp = apply_outfit_compliance(character_name)
         if _comp.get("auto_filled") or _comp.get("forbidden_cleared"):
@@ -385,10 +421,10 @@ class SetLocationSkill(PluginSkill):
                 len(_comp.get("forbidden_cleared", [])),
             )
 
-        logger.info(f"Gesetzt: Location='{location_name}' (ID: {location_id}), "
-              f"Room='{room_name}' (ID: {room_id}), Pose='{pose}'")
+        logger.info(f"Set: location='{location_name}' (id: {location_id}), "
+              f"room='{room_name}' (id: {room_id}), pose='{pose}'")
 
-        # Bestaetigung
+        # The confirmation
         result = f"Standort aktualisiert: {location_name}"
         if room_name:
             result += f", Raum: {room_name}"
@@ -414,7 +450,8 @@ class SetLocationSkill(PluginSkill):
         case the LLM hallucinates anyway.
         """
         try:
-            # Soft-Hint: Wenn der Char gar nicht weg darf, nur aktuellen Ort anbieten.
+            # Soft hint: when the character may not leave at all, offer the
+            # current place only.
             if character_name:
                 try:
                     from app.models.rules import check_leave
@@ -427,10 +464,10 @@ class SetLocationSkill(PluginSkill):
                     cur_name = (cur_loc or {}).get("name", "") if cur_loc else ""
                     if cur_name:
                         rooms = get_location_rooms(cur_loc) if cur_loc else []
-                        # Pro-Raum probe: welcher Raum-Wechsel waere erlaubt?
-                        # Confine-Sets (mehrere room_ids in einer Rule) lassen
-                        # freie Bewegung INNERHALB des Sets zu — diese Raeume
-                        # sollen gelistet werden.
+                        # Per-room probe: which room change would be allowed?
+                        # Confine sets (several room_ids in one rule) allow
+                        # free movement WITHIN the set — those rooms belong on
+                        # the list.
                         allowed_room_names = []
                         for r in rooms:
                             r_id = r.get("id", "")

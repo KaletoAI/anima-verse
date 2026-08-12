@@ -167,8 +167,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     the avatar knows — placed locations pass through
     ``location_visible_to_character``, characters and events follow their
     location. ``show_all=True`` is the unfiltered admin view. ``world_bounds``
-    is always computed over ALL placed footprints, so the map keeps its extent
-    no matter how much of it is still dark.
+    is always computed BEFORE that filter, so the map keeps its extent no
+    matter how much of it is still dark — and it is not footprints alone: a
+    placed location contributes its footprint box when it HAS a scale anchor
+    (centre ± half ``plan_width_m``, axis-aligned, the rotation deliberately
+    ignored) and its bare CENTRE POINT when it has none, and every painted
+    terrain area contributes the box of its polygon (E4 finding B7).
     """
     from app.models.events import list_events
     from app.models.character import (
