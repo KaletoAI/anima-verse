@@ -78,6 +78,17 @@ export class Engine {
    *  returns per frame and the WASD pan is skipped — those keys then belong to
    *  the avatar (task 3). Wheel zoom, Q/E and orbit stay live. */
   follow: (() => THREE.Vector3 | null) | null = null;
+  /** Ceiling of the USER's zoom-out, in metres; `null` = the engine's own
+   *  `MAX_DIST`. The embodied mode sets it (finding B12): zooming out there
+   *  used to slide seamlessly back into the overview, and the player never
+   *  learnt that leaving control is a decision one takes (Esc / the mode
+   *  chip). It binds the wheel and the +/- keys only — a `flyTo` is a
+   *  deliberate camera move by the app and stays free, which is what lets the
+   *  mode fly back out to the overview while leaving. */
+  zoomCap: number | null = null;
+  /** Fired when a zoom-out was STOPPED by `zoomCap` — the hint hangs off this,
+   *  not off a distance the HUD would have to watch itself. */
+  onZoomCapped: (() => void) | null = null;
 
   constructor(container: HTMLElement) {
     // near 0.2 (was 0.5) so MIN_DIST = 0.8 stays clear of the near plane: at
@@ -175,6 +186,20 @@ export class Engine {
     this.pickables = objs;
   }
 
+  /** A wanted zoom distance, clamped into what the camera may show — and the
+   *  hint when the CAP was what stopped it (`zoomCap`, finding B12). The
+   *  engine's own `MIN_DIST`/`MAX_DIST` are silent: they are the lens, not a
+   *  rule of the game. */
+  private clampZoom(dist: number): number {
+    const ceiling = this.zoomCap === null ? MAX_DIST : Math.min(this.zoomCap, MAX_DIST);
+    // Every notch beyond the ceiling reports — how OFTEN the player is told is
+    // the listener's business (main.ts shows it once per embodied session),
+    // and a "first time only" rule down here could not tell one session from
+    // the next.
+    if (this.zoomCap !== null && dist > ceiling + 1e-6) this.onZoomCapped?.();
+    return THREE.MathUtils.clamp(dist, MIN_DIST, ceiling);
+  }
+
   /** Ease the camera onto a point + distance. */
   flyTo(point: THREE.Vector3, dist: number) {
     this.flyFrom = this.target.clone();
@@ -259,7 +284,7 @@ export class Engine {
       e.preventDefault();
       const factor = Math.exp(e.deltaY * 0.0012);
       const before = this.targetDist;
-      this.targetDist = THREE.MathUtils.clamp(before * factor, MIN_DIST, MAX_DIST);
+      this.targetDist = this.clampZoom(before * factor);
       if (this.targetDist < before) {
         // Pull the target towards the cursor by exactly the fraction of the
         // distance that was just given up. `before` is a clamped distance and
@@ -344,8 +369,8 @@ export class Engine {
     });
     window.addEventListener('keydown', (e) => {
       if (isTypingTarget(e)) return;
-      if (e.key === '+') this.targetDist = THREE.MathUtils.clamp(this.targetDist * 0.8, MIN_DIST, MAX_DIST);
-      if (e.key === '-') this.targetDist = THREE.MathUtils.clamp(this.targetDist * 1.25, MIN_DIST, MAX_DIST);
+      if (e.key === '+') this.targetDist = this.clampZoom(this.targetDist * 0.8);
+      if (e.key === '-') this.targetDist = this.clampZoom(this.targetDist * 1.25);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     container.addEventListener('pointerleave', () => this.onHover?.(null));

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import * as api from './api';
 import { initDebug3d } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
-import { checkExit, enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
+import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import { slideBlocked, walkDir } from './game/walk';
@@ -70,8 +70,9 @@ const SOUNDTRACK_TICK_MS = 1000;
 // The former INTERIOR_CAM_DIST 26 + "target within 0.75 cells" auto-open is
 // gone; opening is explicit ("Hineinsehen"/"Betreten") or avatar-driven.
 /** Camera farther out than this closes the open view (overview only). Must
- *  stay ABOVE the embodied EXIT_DIST 34 with headroom, so the open view can
- *  never close under an embodied avatar — 60 leaves 26 m of it. */
+ *  stay ABOVE the embodied EMBODY_MAX_DIST 34 with headroom, so the open view
+ *  can never close under an embodied avatar — 60 leaves 26 m of it, and since
+ *  finding B12 the wheel cannot even reach the 34. */
 const CLOSE_CAM_DIST = 60;
 /** Camera target panned this far off the open tile closes it too — the tile
  *  has left the view.
@@ -184,8 +185,8 @@ const DOOR_MARK_DEPTH = 0.3;
  */
 const ZOOM_TO_BASE_DIST = 4.5;
 /** Upper clamp of the zoom-to. It no longer has a scale to run away with, but
- *  the clamp stays as the guarantee it always was: 12 < EXIT_DIST (34) keeps a
- *  zoom-to from ever tripping the embodied-mode exit. */
+ *  the clamp stays as the guarantee it always was: 12 < EMBODY_MAX_DIST (34)
+ *  keeps a zoom-to inside what the embodied mode may show. */
 const ZOOM_TO_MAX_DIST = 12;
 
 // --- Framing the world (§ A12, E4 task 3) -----------------------------------
@@ -1254,14 +1255,25 @@ async function startApp(username: string, role: string) {
 
   // --- Embodied mode (E3-T2) -----------------------------------------------
   // Everything the mode needs is the avatar's live position: enter/leave are
-  // camera moves, the frame hook only watches the zoom threshold.
+  // camera moves, and since finding B12 the wheel is bound instead of being a
+  // third, silent way out (`engine.zoomCap`, set by the mode itself).
   const embody: EmbodyDeps = {
     engine,
     // `firstMap` on purpose: the deps object is built before `lastMap` exists,
     // and the avatar of a session does not change under us.
     avatarPos: () => npcs.positionOf(firstMap.avatar),
   };
-  gameActions.enterEmbodied = () => enterEmbodied(embody);
+  /** Has the player been told, THIS time in the mode, what the zoom wall is?
+   *  One sentence per session in control: the wall itself is the answer from
+   *  then on, and a toast on every notch of the wheel would be noise. */
+  let zoomCapHinted = false;
+  engine.onZoomCapped = () => {
+    if (zoomCapHinted || getGameState().mode !== 'embodied') return;
+    zoomCapHinted = true;
+    uiActions.toast?.('That is as far out as you can look while in control — '
+      + 'press Esc to leave control.', true);
+  };
+  gameActions.enterEmbodied = () => { zoomCapHinted = false; enterEmbodied(embody); };
   gameActions.exitEmbodied = () => exitEmbodied(embody);
   // "Take control" from the HUD's Self panel: the way back into the avatar that
   // does NOT need a clickable figure. Since a character in a closed room is not
@@ -1304,7 +1316,6 @@ async function startApp(username: string, role: string) {
       uiActions.toast?.('Your avatar is not on the map yet.', true);
     }
   };
-  engine.addFrameHook(() => checkExit(embody));
   // Esc leaves the mode — THE one binding for it. Guarded like the engine's own
   // keys: while the focus sits in a form field Esc belongs to that field (the
   // chat clears/blurs with it), not to the camera.
@@ -3547,7 +3558,8 @@ async function startApp(username: string, role: string) {
     // Who owns the open view this frame (Etappe 3):
     //  - EMBODIED, the avatar's own location IS it — auto-open on entering
     //    (embody start included), auto-close on stepping out. The camera
-    //    cannot close it: the mode exits at EXIT_DIST 34 < CLOSE_CAM_DIST 60.
+    //    cannot close it: the wheel stops at EMBODY_MAX_DIST 34, which is
+    //    inside CLOSE_CAM_DIST 60 (finding B12).
     //  - OVERVIEW, the explicit choice stands until the explicit close or an
     //    auto-close: camera beyond CLOSE_CAM_DIST, or the tile panned out of
     //    view. There is NO auto-REopen — opening is only ever explicit.
