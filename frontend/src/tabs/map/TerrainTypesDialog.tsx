@@ -274,6 +274,13 @@ export function TerrainTypesDialog({
           <div className="ga-tt-hint">
             {t('The kind should match a surface-texture kind so the 3D ground can use a real texture — the 2D map only ever shows the colour.')}
           </div>
+          {/* A type used to declare what its ground grows. It moved to the
+              painted AREA, and old entries are simply not read any more —
+              which looks exactly like "my trees are gone" unless it is said
+              out loud, here, where they were authored. */}
+          <div className="ga-tt-hint">
+            {t('Scatter used to be set here. It now belongs to the painted area — select an area on the map and open “Scatter” in its chip. Anything set here before has no effect any more.')}
+          </div>
           <table className="ga-tt-table">
             <thead>
               <tr>

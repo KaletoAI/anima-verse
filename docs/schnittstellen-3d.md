@@ -595,6 +595,49 @@ immer sichtbar, nur Locations verstecken sich.
   `color` (`#rrggbb`) die Farbe der 2D-Schemakarte. `kind` SOLL auf eine
   Oberflächen-Art (§ A9) passen, damit der 3D-Boden eine echte Textur
   bekommt — Konvention, nicht erzwungen.
+- `types[].meta` ist **frei-form und für die Renderer bedeutungslos**. Was
+  auf einem Boden WÄCHST, hängt seit Befund B17 an der Fläche, nicht an der
+  Art; eine alte `meta.scatter` an einem Typ liegt tot in der DB.
+
+**`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
+
+Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag genau drei
+Felder (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
+
+```
+scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = keine
+            model?: str,                # /assets/props/<id>/model; fehlt = eingebautes Büschel
+            height_m?: float}, … ]      # ZIELHÖHE: das Prop wird uniform darauf skaliert
+```
+
+- **Fehlende oder leere Liste = es wächst nichts.** Es gibt keine Vorgabe.
+- **`height_m` ist die Zielhöhe, nicht die Modellgröße:** das geladene Mesh
+  wird uniform skaliert, bis seine Bounding-Box so hoch ist. Ohne Angabe
+  behält das Modell seine Autorengröße. **Jedes Prop steht AUF dem Boden**:
+  die Geometrie wird auf Unterkante = 0 geschoben, nachdem die Mesh-Transform
+  innerhalb der GLB eingebacken ist (Befund B16).
+- **Die Platzierung ist deterministisch und für beide Renderer DIESELBE
+  FUNKTION** (`@anima/scene-render` → `scatterInstances`; der Karten-Editor
+  zeichnet damit seine Draufsicht-Vorschau, der 3D-Client bepflanzt damit).
+  Seed: `terrain:scatter:<area_id>:<index>` — flächen- UND eintrags-stabil.
+  Verfahren: Rejection-Sampling in der Bounding-Box des bereinigten Rings,
+  DREI Zufallszahlen je Kandidat (x, z, Yaw), Yaw bewusst VOR dem Test.
+- **Grundflächen platzierter Locations werden ausgespart** (Befund B18):
+  ein Kandidat im Footprint-Quadrat (Zentrum, `yaw_deg`, `plan_width_m` —
+  das GEHOBENE Feld) fällt weg. Weil der Yaw vorher gezogen wird, ist das
+  eine **Subtraktion**: ein neu gesetztes Gebäude räumt genau die Props weg,
+  auf denen es steht, und verschiebt die übrigen nicht.
+- **Der Client sieht dabei nur die ihm BEKANNTEN Locations, und das ist so
+  gewollt.** Unter dem Fog steht ein unentdeckter Ort nicht im Payload, sein
+  Boden wird also mitbestreut. Andersherum wäre es ein Leak: eine Lichtung
+  in Gebäudegröße verriete genau den Ort, den der Schleier verbirgt. Die
+  Props korrigieren sich beim Entdecken von selbst (die Zeile kommt, die
+  Footprint-Signatur bewegt sich, die Fläche wird neu gesampelt). Niemals
+  „reparieren", indem der Client die ungefilterte Liste holt.
+- **Ein Location-Umzug ändert `terrain_sig` NICHT.** Ein Client, der
+  Footprints aussparen will, braucht die Footprint-Signatur (Zentrum, Yaw
+  UND Kantenlänge) als ZWEITEN Rebuild-Auslöser; ohne sie stehen die Bäume
+  bis zum Reload im frisch platzierten Gebäude.
 
 ### A1.6 Fog: was gefiltert wird und was nicht
 

@@ -178,6 +178,17 @@ export interface Ground {
    * `terrain_sig` — without that trigger the trees stood inside a freshly
    * placed building until the next reload.
    *
+   * THE FOG FILTER ON THAT LIST IS DELIBERATE (review ruling, rounds 3+4).
+   * Under the fog the payload carries only the places the avatar knows, so an
+   * undiscovered location is not in `locations` and its ground gets scattered
+   * like any other. That is the RIGHT way round: a clearing in the wood
+   * exactly the size of a building would announce a place the player has not
+   * found yet — the veil would hide the tile and the missing trees would give
+   * it away. The props correct themselves the moment the place is discovered
+   * (the row arrives, the signature moves, the area re-samples), and a few
+   * trees standing where a building then appears is the cheaper of the two
+   * wrongs. Never "fix" this by fetching the unfiltered list.
+   *
    * Resolves to `true` when something was rebuilt. Never throws: a ground that
    * could not be fetched leaves the previous one standing (and the very first
    * failure leaves the base plane in the default look), because a client that

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { seededRandom } from '@anima/scene-render';
 
 function canvasTexture(size: number, draw: (ctx: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas');
@@ -12,19 +13,16 @@ function canvasTexture(size: number, draw: (ctx: CanvasRenderingContext2D) => vo
   return tex;
 }
 
-/** Deterministischer PRNG, damit die Karte bei jedem Laden gleich aussieht. */
-export function seededRandom(seed: string): () => number {
-  let h = 2166136261;
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return () => {
-    h = Math.imul(h ^ (h >>> 15), 2246822519);
-    h = Math.imul(h ^ (h >>> 13), 3266489917);
-    return ((h ^= h >>> 16) >>> 0) / 4294967296;
-  };
-}
+/**
+ * Deterministic PRNG, so the map looks the same on every load.
+ *
+ * The body MOVED to `@anima/scene-render` (`scatter.ts`): the map editor has
+ * to draw the very points the 3D ground plants, which only works if both sides
+ * pull the same numbers in the same order — and a second body here is how that
+ * stops being true. Re-exported rather than re-pointed at seven call sites,
+ * because this is where the client has always asked for it.
+ */
+export { seededRandom };
 
 export function grassTexture(): THREE.CanvasTexture {
   return canvasTexture(256, (ctx) => {

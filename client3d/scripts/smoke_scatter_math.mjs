@@ -98,6 +98,20 @@
  *        unplaced (pos_x null), edge 0, edge negative, edge missing, NaN
  *        centre. All false, for the centre point itself.
  *
+ * (B4) THE ANCHOR IS THE HOISTED FIELD, NOT THE NESTED ONE. The worldmap
+ *      payload hoists `plan_width_m` to the top level; the map editor's rows
+ *      (`/world/locations`) carry it only inside `map3d`. A row of the second
+ *      kind handed in RAW therefore has no edge at all — the review's
+ *      critical finding: the editor preview excluded nothing while the client
+ *      excluded correctly.
+ *        raw editor row {pos 10/10, yaw 0, map3d:{plan_width_m: 4}} at (10,10)
+ *          -> FALSE: nothing at the top level, so no square
+ *        the ADAPTER shape {pos 10/10, yaw 0, plan_width_m: 4} at (10,10)
+ *          -> TRUE, and it is the very square of (B1)
+ *      The type makes the first call impossible to write since the review
+ *      (every field required); this pins the RUNTIME half of the same rule,
+ *      which no type can reach in plain JS.
+ *
  * ============================================================================
  * (C) scatterInstances — the sampler, with a HAND-FED random stream
  * ============================================================================
@@ -284,6 +298,23 @@ async function main() {
     pointInFootprint({ pos_x: 0, pos_z: 0 }, 0, 0), false);
   check('B3 a NaN centre blocks nothing',
     pointInFootprint({ pos_x: NaN, pos_z: 0, yaw_deg: 0, plan_width_m: 4 }, 0, 0), false);
+  // (B4) — the anchor is the HOISTED field. An editor row handed in raw has
+  // its edge only inside `map3d` and is therefore no square at all.
+  const rawEditorRow = { pos_x: 10, pos_z: 10, yaw_deg: 0, map3d: { plan_width_m: 4 } };
+  check('B4 a nested map3d.plan_width_m is NOT read',
+    pointInFootprint(rawEditorRow, 10, 10), false);
+  check('B4 …and the adapted row is the very square of (B1)',
+    pointInFootprint({
+      pos_x: rawEditorRow.pos_x, pos_z: rawEditorRow.pos_z,
+      yaw_deg: rawEditorRow.yaw_deg,
+      plan_width_m: rawEditorRow.map3d.plan_width_m,
+    }, 10, 10), true);
+  check('B4 …the same adapted row rejects a point past its edge',
+    pointInFootprint({
+      pos_x: rawEditorRow.pos_x, pos_z: rawEditorRow.pos_z,
+      yaw_deg: rawEditorRow.yaw_deg,
+      plan_width_m: rawEditorRow.map3d.plan_width_m,
+    }, 12.1, 10), false);
 
   console.log('\n  pointInRing — the even-odd rule both sides share');
   check('the centre of the square is inside', pointInRing(10, 10, SQUARE), true);

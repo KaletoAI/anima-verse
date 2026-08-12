@@ -23,17 +23,32 @@ export type ScatterPoint2 = [number, number]
  * A placed location, as much of it as the scatter needs: the centre of its
  * footprint square, its turn and its edge length.
  *
- * The field NAMES are the payload's (`/play/worldmap → locations`, and the
- * editor's `/world/locations` rows), so both callers hand their rows straight
- * in — no adapter, and therefore no chance of the two sides describing the
- * same square differently. Anything unplaced or without a positive edge has no
- * area at all (§ A1.1/§ A1.3) and never blocks a point.
+ * The field names are the WORLDMAP payload's (`/play/worldmap → locations`,
+ * § A1.3), where all four are hoisted to the top level — the 3D client hands
+ * its rows straight in.
+ *
+ * EVERY FIELD IS REQUIRED, `null` included, and that is deliberate. The
+ * editor's rows (`/world/locations`) carry the scale anchor NESTED in
+ * `map3d.plan_width_m` and nothing at the top level, so handing them in raw
+ * made every square "no area" and the preview excluded nothing at all while
+ * the client excluded correctly — a silent disagreement between the two
+ * renderers, which is the one thing this shared module exists to prevent. An
+ * optional field would have accepted that call; a required one makes it a
+ * compile error, and the caller has to say what the edge is
+ * (`MapTab` → `anchorWidthM`).
+ *
+ * `null` is still a real answer at RUNTIME: unplaced, or no usable anchor.
+ * Such a location has no area at all (§ A1.1/§ A1.3) and never blocks a point.
  */
 export interface ScatterFootprint {
-  pos_x?: number | null
-  pos_z?: number | null
-  yaw_deg?: number | null
-  plan_width_m?: number | null
+  /** centre in world metres; `null` = unplaced */
+  pos_x: number | null
+  pos_z: number | null
+  /** turn of the square in degrees (§ A1.1); `null` reads as 0 */
+  yaw_deg: number | null
+  /** edge of the footprint square in world metres, HOISTED — never the nested
+   *  `map3d.plan_width_m`. `null` = no usable anchor, hence no area. */
+  plan_width_m: number | null
 }
 
 /** One authored scatter of an area — `terrain_areas.meta.scatter[]`, exactly
@@ -82,9 +97,13 @@ export function scatterSeed(areaId: string, index: number): string {
 
 /**
  * Deterministic PRNG over a string seed: FNV-1a for the state, xorshift for
- * the stream. Moved here from `client3d/src/scene/textures.ts` — the editor
- * preview has to draw the very points the client plants, and that is only
- * possible if both sides pull the same numbers in the same order.
+ * the stream.
+ *
+ * It LIVES here now — `client3d/src/scene/textures.ts` re-exports this one
+ * rather than keeping a second body, so the client's textures, its figure
+ * jitter and this sampler all pull the identical stream. The editor preview
+ * has to draw the very points the client plants, and that is only possible if
+ * both sides pull the same numbers in the same order.
  */
 export function seededRandom(seed: string): () => number {
   let h = 2166136261

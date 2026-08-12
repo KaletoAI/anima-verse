@@ -1159,11 +1159,13 @@ async function startApp(username: string, role: string) {
   // Kachel neu bauen. Wird eine Szene zu 404 (Layout gelöscht), bleibt genau
   // die prozedurale Kachel übrig — es gibt dann nichts mehr aufzuklappen.
   /** Blocking wall lines per location and storey, for the avatar's collision
-   *  (game/collide.ts). Built from the payload, so it is cached per
-   *  `(location, storey)` and thrown away in exactly ONE place: `onScene`
-   *  below, the only moment a payload is replaced (a moved scene signature),
-   *  and the same moment the tile is rebuilt from it. Nothing else can change
-   *  a wall — the walls are the server's. */
+   *  (game/collide.ts). The payload is TILE-LOCAL, so the cached segments are
+   *  world lines derived from the tile's centre AND its turn — which means it
+   *  is invalidated wherever the tile is rebuilt, not only where its payload
+   *  changes: `onScene` (a moved scene signature), `dropTile` (the place is
+   *  gone) and `rebuildMovedTiles` (the place was moved or turned in the
+   *  editor — finding B13's other half: the tile followed, the walls did not,
+   *  and the avatar went on clamping against the old building's outline). */
   const wallCache = new Map<string, Map<number, Segment[]>>();
 
   scenes.onScene = (locId) => {
@@ -1525,6 +1527,10 @@ async function startApp(username: string, role: string) {
       // honest answer is to adopt the signature rather than to rebuild a tile
       // against a state nobody compared it with.
       if (before === undefined || before === sig) continue;
+      // The cached wall lines were computed against the OLD centre and turn —
+      // see `wallCache`. They go with the tile, or the avatar keeps colliding
+      // with the outline of a building that has moved away underneath it.
+      wallCache.delete(row.id);
       rebuildTile(tile, {
         ...tile.loc,
         pos_x: row.pos_x,

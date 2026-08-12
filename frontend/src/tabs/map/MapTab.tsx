@@ -702,6 +702,33 @@ export function MapTab() {
    *  an ordinary outline (and then everything below edits the polygon). */
   const selStroke = useMemo(() => readStroke(selectedArea), [selectedArea])
 
+  /**
+   * The footprints the scatter preview keeps clear (finding B18).
+   *
+   * An ADAPTER, not the rows: `/world/locations` carries the scale anchor
+   * nested in `map3d.plan_width_m` and nothing at the top level, while the
+   * worldmap payload the 3D client reads has it hoisted. Handing the editor
+   * rows in raw made every square "no anchor, no area" — the preview excluded
+   * nothing while the client excluded correctly, which is exactly the silent
+   * disagreement the shared sampler exists to prevent. `anchorWidthM` is the
+   * ONE reader of that anchor in this editor, the same one the drawn
+   * footprints use.
+   *
+   * The placeholder edge of an anchor-less location (`NO_ANCHOR_WIDTH_M`) is
+   * deliberately NOT substituted: it is a drawing aid, not ground the place
+   * covers, and clearing 100 m² of props around a half-configured location
+   * would be a statement nobody made.
+   *
+   * Memoised: `placed` changes with the location list, and re-deriving this on
+   * every pan would re-sample every area behind it.
+   */
+  const scatterFootprints = useMemo(() => placed.map((l) => ({
+    pos_x: l.pos_x ?? null,
+    pos_z: l.pos_z ?? null,
+    yaw_deg: l.yaw_deg ?? null,
+    plan_width_m: anchorWidthM(l),
+  })), [placed])
+
   /** What the selected area GROWS, checked (finding B17). */
   const selScatter = useMemo(
     () => readScatter(selectedArea?.meta), [selectedArea])
@@ -1448,7 +1475,7 @@ export function MapTab() {
               onVertexDelete={deleteVertex}
               onEdgeInsert={insertVertex}
               scatterPreview={scatterOn}
-              footprints={placed}
+              footprints={scatterFootprints}
             />
             {/* Outside the location mode the footprints must let clicks
                 through: a terrain click has to reach the canvas, which is

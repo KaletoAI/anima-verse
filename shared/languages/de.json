@@ -1321,6 +1321,7 @@
     "Saving…": "Speichere…",
     "Scatter": "Streuung",
     "Scatter preview": "Streu-Vorschau",
+    "Scatter used to be set here. It now belongs to the painted area — select an area on the map and open “Scatter” in its chip. Anything set here before has no effect any more.": "Die Streuung wurde früher hier eingestellt. Sie gehört jetzt zur gemalten Fläche — Fläche auf der Karte auswählen und im Chip „Streuung\" öffnen. Was hier früher gesetzt wurde, wirkt nicht mehr.",
     "Scene photo": "Szenenfoto",
     "Schedule": "Schedule",
     "Scheduler — Background Jobs": "Scheduler — Background-Jobs",
