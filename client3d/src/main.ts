@@ -1581,7 +1581,9 @@ async function startApp(username: string, role: string) {
     const tr: MapTravel | null = c.travel ?? null;
     if (!tr) return null;
     const wp = tr.waypoints;
-    if (wp && wp.length >= 2) {
+    // The fog thins route AND distance out together (§ A12); a route without
+    // a `progress_m` is therefore a fogged row, not a walkable line.
+    if (wp && wp.length >= 2 && tr.progress_m !== null) {
       const points = wp.map((p) => [p[0], p[1]] as MetrePoint);
       const totalM = polylineLength(points);
       const progressM = clampProgress(tr.progress_m, totalM);

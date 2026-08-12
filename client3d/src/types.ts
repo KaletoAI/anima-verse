@@ -172,11 +172,14 @@ export interface MapTravel {
    *  leak more than the opaque `target_id` — then the figure is drawn at its
    *  `pos` and no line is shown. */
   waypoints: [number, number][] | null;
-  /** metres already walked, and the whole length of the polyline */
-  progress_m: number;
-  total_m: number;
-  /** arrival in GAME wall-clock time (world timezone, ISO) */
-  eta_game: string;
+  /** metres already walked, and the whole length of the polyline. `null`
+   *  under the fog (§ A12) — a foreign traveller keeps its row, but distance
+   *  and route length are thinned out along with the waypoints. */
+  progress_m: number | null;
+  total_m: number | null;
+  /** arrival in GAME wall-clock time (world timezone, ISO); `null` under the
+   *  fog (§ A12) — the arrival time would date the hidden route. */
+  eta_game: string | null;
   /** NOMINAL pace of the journey in metres per REAL second; `null` on a
    *  frozen world. The fallback when the segment pace is missing. */
   speed_m_s_real: number | null;

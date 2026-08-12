@@ -1386,6 +1386,14 @@ dann `""` durch) kennt die Sicht gar nichts, es passiert keine einzige
 Location, und dann steht auch draußen niemand. `show_all=1` kennt die Regel
 nicht.
 
+**Zwei Radien, bewusst getrennt.** Draußen gelten zwei Einstellungen
+nebeneinander: `game.hearing_radius_m` bestimmt, wen der Avatar HÖRT (die
+Nachbarn im Szenen-Panel von `GET /play/scene`, § A1.4/E6), und
+`game.discovery_range_m` bestimmt, wen und was er SIEHT (die Wildnis-Figuren
+oben und das Entdecken von Orten). Sie dürfen auseinanderlaufen: in einer Welt
+mit Hörweite > Sichtweite nennt das Szenen-Panel einen Nachbarn, den die Karte
+nicht zeichnet — das ist so gewollt und kein Payload-Widerspruch.
+
 **Gelände ist nie gefoggt.** `GET /play/terrain` kennt keinen Fog-Modus und
 kein `all`-Flag: die gemalte Landschaft ist immer sichtbar, verdeckt wird nur,
 was in ihr steht. Damit bleibt die Karte auch im Nebel eine Landschaft statt

@@ -62,11 +62,13 @@ export interface WorldmapLocationRow extends MapGeometry {
 export interface WorldmapTravel {
   target_id: string
   waypoints: Array<[number, number]> | null
-  progress_m: number
-  total_m: number
+  /** `null` under the fog (§ A12): the row stays (the `target_id` is opaque),
+   *  but route, distance and timing are thinned out for foreign travellers. */
+  progress_m: number | null
+  total_m: number | null
   /** ISO stamp on the GAME clock, in the world timezone — an HH:MM slice is
-   *  game wall-clock time. */
-  eta_game: string
+   *  game wall-clock time. `null` under the fog (§ A12). */
+  eta_game: string | null
   speed_m_s_real: number | null
   pace_m_s_real: number | null
 }
