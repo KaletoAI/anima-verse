@@ -731,7 +731,12 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
 
     from app.core.world_geometry import location_at_point
     from app.models.world import get_location_by_id, list_locations
-    derived = location_at_point(x, z, list_locations())
+    # ONE snapshot for the whole report — the transition gate below and the
+    # sight discovery at the end ask the same question of the same table, and
+    # a walking client sends up to four reports a second. Reading it twice
+    # costs a full table read plus the per-row meta parsing every time.
+    _locs = list_locations()
+    derived = location_at_point(x, z, _locs)
     derived_id = (derived.get("id") or "") if derived else ""
 
     entry_room = ""
@@ -831,10 +836,11 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     # — a refused report moved nobody and must reveal nothing, and every
     # refusal above leaves through ``refuse`` before this line. The avatar
     # gets it here rather than from the ticker alone so the map fills in at
-    # walking pace instead of at tick pace.
+    # walking pace instead of at tick pace. It reuses the snapshot the
+    # transition gate already read — see ``_locs`` above.
     try:
         from app.core.discovery import discover_in_range
-        discover_in_range(avatar, x, z)
+        discover_in_range(avatar, x, z, locations=_locs)
     except Exception as e:
         logger.debug("sight discovery failed for %s: %s", avatar, e)
     # Walking is player-driven movement, and that is the clearest wake signal

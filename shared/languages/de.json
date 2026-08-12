@@ -1276,7 +1276,7 @@
     "Revert": "Zurücksetzen",
     "rig": "Rig",
     "Rig": "Rig",
-    "Rolled per agent-loop tick. On success a random adjacent unknown location is discovered. Skill checks go through the condition.": "Pro Agent-Loop-Tick wird gewürfelt. Bei Erfolg wird ein zufälliger angrenzender unbekannter Ort entdeckt. Skill-Checks gehen über die Bedingung.",
+    "Rolled per agent-loop tick. On success one random unknown place within discovery range (see Game settings) is discovered. Skill checks go through the condition.": "Pro Agent-Loop-Tick wird gewürfelt. Bei Erfolg wird ein zufälliger unbekannter Ort in Sichtweite (siehe Spiel-Einstellungen) entdeckt. Skill-Checks gehen über die Bedingung.",
     "Romantic": "Romantisch",
     "Room": "Raum",
     "room": "Raum",

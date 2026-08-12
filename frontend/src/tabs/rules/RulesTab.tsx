@@ -33,6 +33,11 @@ interface Rule {
   character?: string
   target?: RuleTarget
   force_action?: ForceAction
+  /** The field the server reads (`rules.check_discover_rules`), top-level. */
+  probability?: number
+  /** Dead shape this tab used to WRITE — never read by the server, so no
+   *  discover rule made here ever fired. Kept only to pre-fill the form of
+   *  such a rule once; saving replaces it with `probability`. */
   discover?: { probability?: number }
   condition?: string
   message?: string
@@ -96,7 +101,11 @@ function ruleToDraft(r: Rule): DraftRule {
     force_go_to: force.go_to || 'stay',
     force_sleep: force.set_flags?.is_sleeping === true ? 'sleep'
       : force.set_flags?.is_sleeping === false ? 'wake' : '',
-    discover_probability: r.discover?.probability ?? 0.05,
+    // The contract field first; the old nested one only so a rule written by
+    // an earlier version of this tab opens with the number its author meant
+    // instead of the default. Form pre-fill only — nothing reads the nested
+    // shape at runtime, and `draftToRule` writes the flat field back.
+    discover_probability: r.probability ?? r.discover?.probability ?? 0.05,
     condition: r.condition || '',
     message: r.message || '',
     origin: r._origin || 'world',
@@ -129,7 +138,11 @@ function draftToRule(d: DraftRule): Rule {
       r.force_action.set_flags = { is_sleeping: d.force_sleep === 'sleep' }
     }
   } else if (d.type === 'discover') {
-    r.discover = { probability: d.discover_probability }
+    // TOP-LEVEL, because that is what the server reads
+    // (`app/models/rules.py`, and shared/rules/rules.json writes it that way
+    // too). The rule object is rebuilt from scratch here, so saving also
+    // drops the dead nested `discover` key.
+    r.probability = d.discover_probability
   }
   return r
 }
@@ -554,7 +567,7 @@ function RuleForm({ draft, locations, characters, onUpdate }: RuleFormProps) {
         <Field
           label={t('Discovery probability per tick')}
           hint={t(
-            'Rolled per agent-loop tick. On success a random adjacent unknown location is discovered. Skill checks go through the condition.',
+            'Rolled per agent-loop tick. On success one random unknown place within discovery range (see Game settings) is discovered. Skill checks go through the condition.',
           )}
         >
           <input
