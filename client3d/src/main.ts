@@ -1051,11 +1051,36 @@ async function startApp(username: string, role: string) {
     }
   }
   rebuildFog();
+  // THE VEIL IS AN OVERVIEW DEVICE (finding B14, the user's option 1).
+  //
+  // `fogRects` subtracts the footprints of the KNOWN places from the world
+  // frame and nothing else — there is no memory of ground one has walked. That
+  // is a map legend, and it is wrong under a figure's feet: between two places
+  // the world stays covered forever (a dark wood with no location in it never
+  // clears, however far one walks), and the cover lies as an opaque surface
+  // 5 cm above the ground, made for a camera 70 m up. In control, with 7 m of
+  // camera distance, one walks INTO it at a grazing angle.
+  //
+  // Leaving it out in control leaks nothing: an unknown place is not in the
+  // payload at all, there is no tile for it, so what shows underneath is the
+  // painted terrain the server always delivers — which § A12 keeps unfogged on
+  // purpose, "so the map stays a landscape in the fog instead of an empty
+  // plane". The overview keeps its veil, and switching back brings it straight
+  // back.
+  //
+  // Option 2 — a fog with a MEMORY, walked ground permanently free and
+  // persisted like `known_locations` — is a data model, a payload field and
+  // new client geometry. It is booked as an E7/E8 package, not smuggled in as
+  // a side effect of this.
+  //
   // The cover drifts and takes the time of day. Both are one uniform each, so
   // this rides in the engine's frame loop rather than bringing a timer: with
   // no fog standing there is nothing to advance at all.
   engine.addFrameHook((dt) => {
-    if (fogGroup.children.length) clouds.advance(dt, engine.nightFactor);
+    fogGroup.visible = getGameState().mode !== 'embodied';
+    if (fogGroup.visible && fogGroup.children.length) {
+      clouds.advance(dt, engine.nightFactor);
+    }
   });
   // Last stage: the map stands and can be clicked. The title screen fades on
   // this one — the scene models behind the tiles keep streaming in afterwards
