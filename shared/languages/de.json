@@ -12,6 +12,7 @@
   "Legs": "Beine",
   "Neck": "Hals",
   "Scene prompt": "Szenen-Prompt",
+  "Showing the cached catalog — the refresh could not reach the source": "Zwischenspeicher wird angezeigt — die Aktualisierung hat die Quelle nicht erreicht",
   "Skill Package": "Skill-Paket",
   "This skill package contains EXECUTABLE CODE. Installing runs its Python on the next skill load. Only continue if you trust the source.": "Dieses Skill-Paket enthält AUSFÜHRBAREN CODE. Die Installation führt sein Python beim nächsten Skill-Load aus. Nur fortfahren, wenn Du der Quelle vertraust.",
   "Top": "Oberteil",

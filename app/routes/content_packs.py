@@ -1002,8 +1002,14 @@ def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
 
 
 def _slug_for_pack(name: str, fallback: str) -> str:
-    base = re.sub(r"[^a-zA-Z0-9._-]+", "-", (name or fallback).strip()).strip("-_.").lower()
-    return base or "pack"
+    """Filename-safe slug for a published pack, with a fallback source name.
+
+    Delegation only — the ONE slug rule lives in `content_io._pack_slug`. Both
+    write into the same `packs/<slug>.zip` namespace (publish here, sub-packs
+    in the collection builder), so a second rule would let the two drift.
+    """
+    from app.core.content_io import _pack_slug
+    return _pack_slug(name or fallback)
 
 
 @router.post("/publish")

@@ -103,7 +103,13 @@ export function MarketplaceTab() {
         setCatalog(data)
         setSelected(null)
         if (data.stale) {
-          toast(t('Catalog is stale — fetch failed, showing cache'), 'error')
+          // Stale is NOT a failure for the user: the cached catalog is on
+          // screen and everything in it installs. Only a total fetch failure
+          // (the catch below) leaves the tab without data and earns 'error'.
+          toast(
+            t('Showing the cached catalog — the refresh could not reach the source'),
+            'info',
+          )
         }
       } catch (e) {
         toast(t('Failed to load catalog') + ': ' + (e as Error).message, 'error')
