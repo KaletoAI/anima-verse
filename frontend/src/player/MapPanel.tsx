@@ -278,7 +278,11 @@ function Characters({ chars, avatar, tooltip }: {
         const r = me ? DOT_R_AVATAR : DOT_R_OTHER
         const showChip = chips && !me && !!c.avatar_url
         return (
+          // The tooltip sits on the GROUP: with a chip the circle is only a
+          // ring (`fill="none"`), so hanging the title on it would leave the
+          // face itself — the part one actually points at — silent.
           <g key={c.name}>
+            <title>{tooltip(c)}</title>
             {showChip ? (
               <image href={c.avatar_url} x={p.x - r * 2} y={p.y - r * 2}
                 width={r * 4} height={r * 4} preserveAspectRatio="xMidYMid slice"
@@ -287,9 +291,7 @@ function Characters({ chars, avatar, tooltip }: {
             <circle cx={p.x} cy={p.y} r={showChip ? r * 2 : r}
               fill={showChip ? 'none' : me ? COL_ACCENT : COL_STONE}
               stroke={me ? COL_ACCENT : COL_DARK} strokeWidth={1.5}
-              strokeOpacity={0.9}>
-              <title>{tooltip(c)}</title>
-            </circle>
+              strokeOpacity={0.9} />
             {c.travel ? (
               <text x={p.x + r + 1} y={p.y - r} fontSize={10} pointerEvents="none">🚶</text>
             ) : null}
@@ -440,7 +442,12 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
           {t('Fit view')}
         </button>
       </div>
-      <div ref={setPaneEl} style={{ flex: 1, minHeight: 0 }}>
+      {/* `map2d-pane`: a map has no content height of its own, so under the
+          autosize toggle (which makes the panel body content-sized) it would
+          collapse to nothing and the canvas would measure 0×0. The class lets
+          player.css give it a declared height in EXACTLY that mode — a fixed
+          minimum here would clip the scale bar in a small hand-sized panel. */}
+      <div ref={setPaneEl} className="map2d-pane" style={{ flex: 1, minHeight: 0 }}>
         <MapCanvas view={view} onViewChange={setView}>
           <GroundLayer bounds={bounds} color={groundColor} />
           <TerrainAreas areas={terrain?.areas || []} types={types} />

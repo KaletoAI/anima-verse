@@ -110,6 +110,16 @@
   overflow: visible !important;
 }
 
+/* The world map is the one panel whose content has NO natural height: it is a
+   viewport onto the world, not a list that ends somewhere. Content-sized (the
+   rule above) it would collapse to its toolbar, the canvas would measure 0×0
+   and draw nothing. So in autosize mode — and only there — the map declares
+   the height it wants; every other mode keeps the panel's own height, where a
+   fixed minimum would clip the scale bar out of a small map. */
+.player-panel[data-autosize="1"] .map2d-pane {
+  min-height: 240px;
+}
+
 /* The scene, composer and empty-state rules now live in
    @anima/player-ui/panels.css (loaded by main.tsx BEFORE this file). What stays
    here are the classes other /play panels use as well. */

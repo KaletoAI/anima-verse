@@ -235,6 +235,15 @@ export interface NearestOnPolyline {
  * itself the walker is on the part already being walked, and taking the later
  * one would jump the drawn rest across the loop.
  *
+ * The search is GLOBAL, and that is a limit worth naming: it knows nothing
+ * about how far the walker has come, so on a route that comes back NEAR (not
+ * exactly onto) an earlier passage the nearest segment can be the wrong one,
+ * and a drawn "rest" would then include a stretch already walked. The exact
+ * touch is covered by the tie rule, the near miss is not. Whoever needs the
+ * true position on a self-approaching route feeds `progress_m` through an
+ * arc-length walk (`client3d/src/scene/travelPath.ts`) instead of this
+ * projection.
+ *
  * `null` for an empty line or a non-finite query point — never a foot point
  * that is not on the line.
  *
