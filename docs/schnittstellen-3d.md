@@ -189,12 +189,11 @@
 >     so nah er an der Ecke auch stehen mag (`entryOfferNear` filtert auf
 >     dieselbe Kante, die der Server prüft — sonst verspricht das Angebot
 >     einen Schritt, den `opening_on_edge` ablehnt). Und der SERVER
->     erlaubt den Avatar-Schritt nur über eine Kante mit autorisiertem
->     Opening (`app/core/boundary_entry.py`, verdrahtet in
->     `world_ops.move_avatar_step`) — eine Kante ohne Opening ist kein
->     Übergang mehr, und eine Location ohne jede Opening ist überhaupt nicht
->     betretbar (403 `no_entrance`, Entscheidung 2026-08-04: sonst wäre ein
->     Ort ohne Autoren-Öffnung heimlich über jede Kante begehbar). Der
+>     lässt niemanden anders hinein als über eine autorisierte Öffnung
+>     (`app/core/boundary_entry.py`, verdrahtet im ENTRY-Gate von
+>     `POST /play/pos`, § A15) — eine Location ohne jede Opening hat
+>     dagegen eine FREIE Grenze (E4 Task 5, § A15: sie hat nie gesagt, wo
+>     ihr Weg hinein ist; die Regel-Gates gelten trotzdem). Der
 >     Eintritt routet in den verknüpften Raum (der Verweis heißt `room` in
 >     den Autoren-Daten unter `map3d` und `room_id` im gelieferten Payload —
 >     dasselbe Feld, zwei Namen); eine Opening OHNE ihn ist trotzdem gültig
@@ -354,8 +353,7 @@
 `schnittstellen-3d.md` (Stand 2026-07-13), `backend-note-scale-anchors.md`
 (v3 + alle Nachträge), `backend-note-room-recipe.md` (+ Nachträge 2026-07-22
 bis -24) und `backend-note-asset-sizing.md`. Die alten Dateien bleiben als
-Verweis-Stubs liegen. `backend-wishlist.md` bleibt unverändert der Rückkanal
-des Clients.
+Verweis-Stubs liegen.
 
 Der Vertrag hat zwei Teile:
 
@@ -367,39 +365,6 @@ Der Vertrag hat zwei Teile:
   Payloads sind hier spezifiziert; Koexistenzregel wie immer: **die
   Datenlage entscheidet, kein Flag** — liefert der Server das neue Feld,
   rendert der Client dumm; sonst gilt Teil A.
-
----
-
-## 0. Warum v4 — Analysebefund 2026-07-24
-
-*⚠️ Historischer Befund — der beschriebene Dreifach-Zustand ist seit
-`@anima/scene-render` und § B3 überholt; gültig bleibt allein das
-Leitprinzip am Ende des Abschnitts. Ausbau in E7.*
-
-Die Geometrie-Regeln dieses Vertrags sind heute **dreifach implementiert**:
-
-1. Backend: `app/core/room_recipe.py` (Spiegelung, Öffnungs-Normalisierung,
-   Marker-Komposition), `app/core/location_model3d.py` (Anker-Meta).
-2. Game-Admin-Vorschau: `frontend/src/tabs/world/FloorPlanPreview.tsx`
-   (1841 Zeilen raw three.js) + `planGeometry.ts` — reimplementiert
-   Öffnungs-Normalisierung und Spiegelung als gepflegtes
-   „Spiegelbild" des Backend-Codes und **ruft `/play/rooms/{id}/recipe`
-   nirgends auf**.
-3. 3D-Client: `src/scene/tiles.ts`, `roomShell.ts`, `propPlace.ts`,
-   `figures.ts` — implementiert dieselben Ketten ein drittes Mal (nutzt
-   immerhin das Rezept).
-
-Jeder dokumentierte Drift-Bug der letzten Wochen ist genau daraus
-entstanden: ×k-Vergesser (Commit 237ccd7), uniforme statt achsengetrennter
-Skalierung (Mondscheinsee), Pivot- statt BBox-Verankerung (Hörsaal),
-Panel-Viewer-Einheitenfehler (de0b151), 0,12 m vs. 0,12×k, 1,70 m vs.
-1,75 m Figurenhöhe. Über ein Dutzend Geometrie-Konstanten leben als
-Kopien in beiden Frontends.
-
-**Leitprinzip v4:** Jede Geometrie-Entscheidung existiert genau EINMAL —
-im Backend. Beide Renderer konsumieren dieselben server-gerechneten Daten;
-die Admin-Vorschau ist nicht länger „Referenz per Reimplementation",
-sondern erster Konsument derselben Vertragsfläche (§ B5).
 
 ---
 
@@ -749,12 +714,14 @@ E1 unberührt:
   Detailszene und `/world/locations`).
 - Die Kachelbild-Felder `map_rotation_2d`, `map_image_off`,
   `map_patch_2d`, `map_patch_span` — **im Weltkarten-Eintrag**. Die
-  Felder selbst leben weiter: `map_rotation_2d` steht in der Yaw-Kette
-  der Szene (A1.8) und reist im Rezept/der Draft-Vorschau mit, die
-  Kachelbild-Maschinerie (`map_patch_*`, Blending, Outpainting) wird
-  erst mit **E7** ausgebaut — **gezeichnet** hat die Kachelbilder zuletzt
-  der Spieler-Panel, und der ist seit **E5** eine Schemakarte (§ A11):
-  die Dateien liegen noch, ein Renderer für sie existiert nicht mehr.
+  **Kachelbild-Maschinerie ist mit E7 ausgebaut**: 3×3-Patches,
+  Nachbar-Blending, Outpainting, der Bildtyp `map_3x3` und ihre Routen
+  sind ersatzlos gelöscht (sie waren seit E1 ohne Aufrufer, und
+  **gezeichnet** hat die Kachelbilder zuletzt der Spieler-Panel, der seit
+  **E5** eine Schemakarte ist, § A11). Geblieben sind allein
+  `map_image_2d` und `map_rotation_2d`: das Footprint-Icon der Karte und
+  der Yaw in der Szenen-Kette (§ A1.8), der im Rezept und in der
+  Draft-Vorschau mitreist.
 
 Der **Reise-Payload (§ A11) war in E1 unverändert** (Zellen-Felder auf einer
 Meter-Karte, praktisch aber `travel: null`, weil ohne Raster keine Reise
@@ -763,30 +730,15 @@ ersatzlos gestrichen, siehe § A11.
 
 ## A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)
 
-*⚠️ Kachel-Ära — die Gebäude-Kette unten rechnet in Kachel-Maßen
-(`10 × 0,92 × size`, „Kachelmitte", Terrain-/Template-Kacheln) und hat auf
-Meter-Welten keine Funktion; § A1 und der v5-Kopf gelten (die 0,92 ist dort
-ersatzlos gestrichen). Die Prop- und Diorama-Ketten leben als Legacy neben
-der EINEN Routine in § B2 weiter; ihr `× k` ist mit E4 gefallen (k = 1).
-Ausbau in E7.*
-
-**Gebäudemodell** (`/play/locations/{id}/model` + Meta):
-1. Meta-Rotations-Fix (innere Gruppe).
-2. Karten-Yaw als eigene ELTERN-Rotation (nie in einem Euler kombinieren).
-3. BBox des rotierten Ganzen messen → `k_xz = (10 × 0,92 × map3d.size) /
-   max(B_x, B_z)`; `k_y = height_m / B_y` (ohne height_m: `k_y = k_xz`).
-   `map3d.size` ∈ ]0, 2] — über 1 ragt bewusst über die Kachel, nicht
-   clampen, nicht clippen.
-4. `scale.set(k_xz, k_y, k_xz)` auf WELT-Achsen (achsengetrennt, v2.1).
-5. BBox neu messen → Unterkante = 0,06 m + `offset_y`; XZ-Zentrum =
-   Kachelmitte + `offset_x`/`offset_z` (Welt-Achsen, Yaw dreht sie NICHT
-   mit). Ausnahme Terrain-/Template-Kacheln: X und Z getrennt füllen,
-   ohne 0,92-Rand, damit size = 1 nahtlos kachelt.
-6. Meta-`walk_y` (optional, Meter über der Modell-Unterkante, Regler in
-   der Modell-Galerie): begehbare Fläche des LOCATION-Modells. Das
-   Rezept liefert daraus `walk_y_world` am Building-Spec — die
-   Standhöhe der Overlay-Zonen einer Flächen-Location; ohne das Feld
-   stehen Figuren auf der Modell-Unterkante (`bottom_y`).
+*⚠️ Legacy-Ketten — die Gebäude-Kette rechnete in Kachel-Maßen und ist mit
+**E7** ersatzlos gestrichen; wie ein Gebäudemodell auf der Meter-Karte sitzt,
+sagen § A1 (Fußabdruck), der v5-Kopf und die EINE Routine in § B2. Die Prop-
+und Diorama-Ketten unten leben als Legacy neben § B2 weiter; ihr `× k` ist
+mit E4 gefallen (k = 1). Der Anker `walk_y` des Gebäudemodells ist geblieben:
+optional, Meter über der Modell-Unterkante, Regler in der Modell-Galerie —
+das Rezept liefert daraus `walk_y_world` am Building-Spec (die Standhöhe der
+Overlay-Zonen einer Flächen-Location; ohne das Feld stehen Figuren auf der
+Modell-Unterkante `bottom_y`).*
 
 **Raum-Diorama** (`/play/rooms/{id}/model` + Meta):
 1. Normalisieren: rohe BBox messen (NIE dem Pivot trauen), größte XZ-Seite
@@ -1522,14 +1474,13 @@ je eine Sperre selbst ab.
   ablehnt (`world_ops.build_avatar_rooms`), also können angebotener und
   akzeptierter Raum nicht auseinanderlaufen; `reason` ist der Satz der Regel
   und leer genau dann, wenn der Raum offen ist.
-- **`GET /world/avatar/neighbors`** — jeder Himmelsrichtungs-Eintrag trägt
-  `may_leave` (das Abgangs-Gate dieser Kante, § B1 Nr. 13) **und**
-  `enterable` + `reason`: das Urteil über den SCHRITT als Ganzes
-  (`world_ops.neighbor_access`), in genau der Reihenfolge, in der
-  `move_avatar_step` prüft — gekreuzte Kante ohne autorisierte Öffnung →
-  Verlassen-Regeln (`check_leave`, einmal für alle vier Pfeile) →
-  `accessible_when` des Ziels → Block-Regeln (`check_access`) auf dem
-  ANKUNFTS-Raum. Der Spieler liest also die erste Absage, nicht die letzte.
+- **`POST /play/pos` → Absage-Payload** — die Reihenfolge der Gates ist die
+  Begründung, die der Spieler liest: EXIT (`may_leave` + `check_leave`) vor
+  ENTRY (Öffnungs-Nähe, `accessible_when`, `check_access`), erste Absage
+  gewinnt. Die Kette steht ausgeschrieben in **§ A15**. (Der frühere
+  Himmelsrichtungs-Kompass `GET /world/avatar/neighbors` ist mit dem
+  Kachel-Schritt zusammen gestrichen — auf einer Meter-Karte gibt es keine
+  vier Pfeile mehr, die man vorab beurteilen könnte.)
 - **Trennlinie:** der Sperr-Zustand gehört EINEM Avatar in EINEM Moment und
   steht deshalb **niemals** im signatur-gecachten Szenen-Rezept (§ B1) — das
   ist für alle dieselbe Geometrie. Clients binden ihn zur Render-/
@@ -1870,7 +1821,8 @@ place(mesh, spec):
   4. Ergebnis-BBox messen → Unterkante = bottom_y, XZ-Zentrum = anchor
 ```
 
-Ersetzt die drei Spezialketten aus § A2 vollständig — Gebäude, Diorama
+Ersetzt die früheren drei Spezialketten vollständig (§ A2 führt nur noch
+Diorama und Props als Legacy) — Gebäude, Diorama
 und Props unterscheiden sich nur noch in den vom SERVER gelieferten
 Spec-Werten, nicht im Code. `measure_axes: "xz"` beschränkt die
 maxExtent-Messung in Schritt 2 auf die XZ-Achsen.
@@ -1938,6 +1890,15 @@ Spec-Parameter aus § B2 — Koexistenz per Datenlage. (Erst nach B1–B3.)
 
 ## B5. Rollen ab v4
 
+**Leitprinzip v4:** Jede Geometrie-Entscheidung existiert genau EINMAL —
+im Backend. Beide Renderer konsumieren dieselben server-gerechneten Daten;
+die Admin-Vorschau ist nicht länger „Referenz per Reimplementation",
+sondern erster Konsument derselben Vertragsfläche. (Das war 2026-07-24 der
+Grund für v4: die Geometrie-Ketten lagen damals dreifach — Backend,
+Admin-Vorschau, 3D-Client — und jeder Drift-Bug jener Wochen kam daher.
+Der Befund selbst ist mit `@anima/scene-render` und § B3 erledigt und mit
+**E7** aus diesem Dokument entfernt; das Prinzip bleibt.)
+
 - **Backend** = einzige Geometrie-Autorität (`room_recipe.py` wächst zum
   `scene_recipe`-Composer; Konstanten/Farben ziehen dorthin um).
 - **Admin-Vorschau** = Konsument Nr. 1 (`/play/scene-preview`), Referenz
@@ -1971,20 +1932,21 @@ noch als Regressionsschutz. Verbindlich ab v4:
   ist auch der letzte doppelte Code weg und der Verify-Modus kommt aus
   einer Quelle.
 
-## B6. Divergenz-Fixliste (aus der Analyse, unabhängig von B1 startbar)
+## B6. Divergenz-Fixliste (aus der Analyse 2026-07-24)
 
-| # | Befund | Fix |
+Stand **E7** (2026-08-13) — jede Zeile am Verbraucher nachgeprüft. Sieben von
+acht sind zu; offen bleibt allein #3.
+
+| # | Befund | Stand |
 |---|---|---|
-| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`). Divergenz geschlossen |
-| 2 | „0,12 × k" in §2e der Rezept-Note | Zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
-| 3 | `activityToClipKind`-Keyword-Heuristik im Client | `activity_animation` server-authoritativ; Heuristik entfernen, sobald alle Aktivitäten gemappt liefern |
-| 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | Doku/Dead-Code entfernen |
-| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | Realität ist `GET /characters/{name}/model3d` (JSON) — Doku angleichen |
-| 6 | `placements[].model_url` | Deprecated, fällt mit `/scene` weg |
-| 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar (Wishlist 2026-07-24) | Angenommen: `walk_y` (Meter über Modell-Unterkante) als Raum-Sidecar-Anker, ausgeliefert in `/scene` `plates[].top_y` bzw. Raum-Meta; Admin-Regler wie übrige Anker |
-| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | Behoben durch § B2a: Diorama skaliert real-size über `width_m` (measure xz); Rechteck-Breite nur noch Fallback. **Endgültig erledigt mit E4:** bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe, der letzte Doppelmaßstab ist weg |
-
-Rückfragen wie immer über die Wishlist.
+| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Historisch, erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`) |
+| 2 | „0,12 × k" in §2e der Rezept-Note | **Historisch, erledigt:** zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
+| 3 | `activityToClipKind`-Keyword-Heuristik im Client | **OFFEN (E7 nachgeprüft):** die Heuristik lebt (`client3d/src/scene/figures.ts:415`, gerufen in `main.ts` und `npcs.ts`) und greift genau dann, wenn `activity_animation` leer kommt. Fix unverändert: entfernen, sobald jede Aktivität ein Preset trägt |
+| 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9). Weg ist nur die README-Zeile des Clients |
+| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md:80` sagt heute selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
+| 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |
+| 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar | **Erledigt:** `walk_y` (Meter über Modell-Unterkante) ist Sidecar-Anker mit Admin-Regler; das Rezept rechnet ihn zu `walk_y_world` aus (`app/core/scene_recipe.py`) |
+| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | **Historisch, erledigt (E4):** § B2a — Diorama skaliert real-size über `width_m` (measure xz), Rechteck-Breite nur noch Fallback; bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe |
 
 ## Nachtrag 2026-07-27: Eine Wand, ein Besitzer (Kontur vs. Raumhülle)
 
