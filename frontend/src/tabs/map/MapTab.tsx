@@ -4,10 +4,12 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
+import { renderTopDownSnapshot } from '../world/topDownSnapshot'
+import type { ScenePayload } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
 import {
   FIT_FALLBACK_PX_PER_M, fitBounds, pointInPolygon, strokeToPolygon,
-  type MapBounds, type View,
+  visibleWorldRect, type MapBounds, type View,
 } from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
@@ -69,6 +71,25 @@ import type {
  *     knows when it changed something.
  *   - `POST/PUT/DELETE /world/terrain-areas` — one refetch after each write.
  *
+ * BUILDING ROOFS is a session switch, not a setting: with it on, every placed
+ * location in the visible rectangle gets its building model rendered from
+ * straight above into its footprint square, so a placement can be aligned
+ * against the real building instead of against a flat icon. The pictures are
+ * expensive (one scene request plus one WebGL context each), which decides
+ * everything about how they are fetched:
+ *   - only the VISIBLE placed locations, and only from `ROOF_MIN_PX_PER_M` on
+ *     — below that the whole building would be drawn into a few pixels;
+ *   - STRICTLY one at a time, chained through `roofChainRef`: `topDownSnapshot`
+ *     creates and releases a GL context per run, and browsers cap live ones;
+ *   - cached per session under `id|layout_sig`, so panning back and forth
+ *     costs nothing.
+ * REFRESH IS MANUAL, deliberately (v1 decision): the cache is only dropped when
+ * the toggle is switched off and on again (or the tab is left). A model that is
+ * re-generated, re-scaled or re-rotated in the World tab does NOT invalidate
+ * anything here — `layout_sig` covers room layouts only, and the
+ * `anima-model3d-changed` event is fired in a tab that is not mounted next to
+ * this one. Toggle off/on is the cheap, explicit refresh.
+ *
  * Paint has TWO gestures and one result. `area` clicks an outline; `line`
  * clicks a centre line that `strokeToPolygon` widens into the very same kind
  * of polygon. The line survives the write only as a RECIPE in `meta.stroke`
@@ -90,6 +111,12 @@ const YAW_QUARTER = 90
 
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
+
+/** Zoom floor for the roof views: under one pixel per metre even a big house
+ *  is a smudge, and each picture costs a request plus a GL context. */
+const ROOF_MIN_PX_PER_M = 1
+/** Panning must not start a render per animation frame. */
+const ROOF_DEBOUNCE_MS = 300
 
 const normYaw = (deg: number): number => ((deg % 360) + 360) % 360
 
@@ -215,6 +242,21 @@ export function MapTab() {
 
   // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
+
+  // Building roofs: the switch, the room-layout signatures the cache keys are
+  // built from, and the cache itself (`id|layout_sig` -> data URL, or null for
+  // "asked, there is none"). Session state — see the module docstring for why
+  // the refresh is the toggle and nothing else.
+  const [roofOn, setRoofOn] = useState(false)
+  const [layoutSigs, setLayoutSigs] = useState<Record<string, string>>({})
+  const [roofs, setRoofs] = useState<Record<string, string | null>>({})
+  const roofsRef = useRef<Record<string, string | null>>({})
+  roofsRef.current = roofs
+  // ONE queue for every render: a pan starts a new pass while the previous one
+  // may still be inside `renderTopDownSnapshot`, and two live GL contexts is
+  // exactly what the module avoids. The chain also means a cancelled pass
+  // hands over instead of leaving the next one to guess whether it may start.
+  const roofChainRef = useRef<Promise<void>>(Promise.resolve())
   // Image picker: which location's picker is open plus its gallery, and which
   // gallery file is armed for deletion (inline confirmation, no confirm()).
   const [picker, setPicker] = useState<EditorLocation | null>(null)
@@ -264,10 +306,17 @@ export function MapTab() {
       toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
       return false
     }
-    // The frame is a nicety — a world without bounds still edits fine.
+    // The frame is a nicety — a world without bounds still edits fine. The
+    // room-layout signatures ride along: they are part of the roof cache key,
+    // and a location without any laid-out room simply has none.
     try {
       const wm = await apiGet<WorldmapPayload>('/play/worldmap?all=1')
       setBounds(wm.world_bounds || null)
+      const sigs: Record<string, string> = {}
+      for (const row of wm.locations || []) {
+        if (row.layout_sig) sigs[row.id] = row.layout_sig
+      }
+      setLayoutSigs(sigs)
     } catch { /* keep the current frame */ }
     return true
   }, [t, toast])
@@ -448,6 +497,78 @@ export function MapTab() {
     setYawDraft(selected ? String(normYaw(selected.yaw_deg || 0)) : '')
     setDelArmed('')
   }, [selected])
+
+  // ── Building roofs ───────────────────────────────────────────────────────
+
+  /** Cache key: the location plus what the server says about its room layouts.
+   *  A changed layout is therefore a miss; a changed MODEL is not — see the
+   *  module docstring, the refresh for that is the toggle. */
+  const roofKey = useCallback(
+    (id: string) => `${id}|${layoutSigs[id] || ''}`, [layoutSigs])
+
+  /** The switch. Flipping it either way empties the cache: that is the whole,
+   *  deliberate refresh mechanism. */
+  const toggleRoofs = useCallback(() => {
+    setRoofs({})
+    setRoofOn((v) => !v)
+  }, [])
+
+  useEffect(() => {
+    if (!roofOn || view.pxPerM < ROOF_MIN_PX_PER_M || !pane.w || !pane.h) return
+    let cancelled = false
+    const tid = setTimeout(() => {
+      const rect = visibleWorldRect(view, pane.w, pane.h)
+      const want = placed.filter((loc) => {
+        // Half the DIAGONAL, so a square standing at 45° is not dropped just
+        // before its corner would leave the screen.
+        const r = ((anchorWidthM(loc) ?? NO_ANCHOR_WIDTH_M) / 2) * Math.SQRT2
+        const x = loc.pos_x as number
+        const z = loc.pos_z as number
+        return x + r >= rect.min_x && x - r <= rect.max_x
+          && z + r >= rect.min_z && z - r <= rect.max_z
+      })
+      roofChainRef.current = roofChainRef.current.then(async () => {
+        for (const loc of want) {
+          if (cancelled) return
+          const key = roofKey(loc.id)
+          if (key in roofsRef.current) continue
+          let url: string | null = null
+          try {
+            const scene = await apiGet<ScenePayload>(
+              `/play/locations/${encodeURIComponent(loc.id)}/scene`)
+            // The snapshot images the payload as it stands — the spec yaw
+            // (`map3d.rotation`) belongs IN the picture, the location's own
+            // yaw is added by the footprint square. The derivation with the
+            // numbers is in `PlacementLayer`'s `FootSquare`.
+            url = await renderTopDownSnapshot({
+              models: scene.models || [], extentM: scene.extent_m, level: 0,
+              includeRooms: false, buildingId: loc.id,
+            })
+          } catch {
+            url = null   // 404 = no scene, no plan, no model: square as before
+          }
+          if (cancelled) return
+          // Stored even as null: "asked, there is nothing" must not be asked
+          // again on the next pan.
+          setRoofs((r) => ({ ...r, [key]: url }))
+        }
+        // A rejected link would break the chain for the rest of the session —
+        // one failed picture must not stop every later one.
+      }).catch(() => undefined)
+    }, ROOF_DEBOUNCE_MS)
+    return () => { cancelled = true; clearTimeout(tid) }
+  }, [pane, placed, roofKey, roofOn, view])
+
+  /** What the layer draws: id -> picture, for the locations that have one. */
+  const roofUrl = useMemo(() => {
+    if (!roofOn) return undefined
+    const out: Record<string, string> = {}
+    for (const loc of placed) {
+      const u = roofs[roofKey(loc.id)]
+      if (u) out[loc.id] = u
+    }
+    return out
+  }, [placed, roofKey, roofOn, roofs])
 
   // ── Writes ───────────────────────────────────────────────────────────────
 
@@ -1090,6 +1211,10 @@ export function MapTab() {
     return <div className="ga-empty">{t('Loading…')}</div>
   }
 
+  // The switch is on but the zoom is under the budget gate — say so on the
+  // switch itself, or the empty squares read as "there are no models".
+  const roofsZoomedOut = roofOn && view.pxPerM < ROOF_MIN_PX_PER_M
+
   const selAnchor = selected ? anchorWidthM(selected) : null
   const selIsClone = !!(selected && (selected.template_location_id || '').trim())
 
@@ -1194,6 +1319,18 @@ export function MapTab() {
             onManageTypes={() => setTypesOpen(true)}
             typesError={typesError}
           />
+          {/* Roofs are a VIEW, so the switch stays reachable in every mode —
+              painting ground along a building's real outline is exactly when
+              it is wanted. */}
+          <label className="ga-map-toolbar-check"
+            title={roofsZoomedOut
+              ? t('Zoom in to at least {n} px per metre to see the roofs')
+                .replace('{n}', String(ROOF_MIN_PX_PER_M))
+              : t('Show each building model from above inside its footprint. Switch off and on again to refresh the pictures.')}>
+            <input type="checkbox" checked={roofOn} onChange={toggleRoofs} />
+            🏢 {t('Building roofs')}
+            {roofsZoomedOut ? ' ' + t('(zoom in)') : ''}
+          </label>
           {mode === 'select' ? (
             <label className="ga-map-toolbar-check"
               title={t('Placing and moving snap the centre onto a {n} m grid')
@@ -1275,6 +1412,7 @@ export function MapTab() {
                 onMove={(id, x, z) => { void commitMove(id, x, z) }}
                 snapM={snapOn ? SNAP_M : 0}
                 iconVer={iconVer}
+                roofUrl={roofUrl}
                 ghost={ghost}
                 ghostPt={ghostPt}
               />
