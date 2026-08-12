@@ -2246,6 +2246,26 @@ html, * {
   color: var(--text-muted, #8b949e);
   padding-top: 0;
 }
+/* Scatter — the row that folds out under its terrain type. */
+.ga-tt-scatter-on { border-color: var(--accent, #388bfd); }
+.ga-tt-scatter-row td { padding-top: 0; }
+.ga-tt-scatter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border, #30363d);
+}
+.ga-tt-scatter label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  white-space: nowrap;
+}
+.ga-tt-scatter-model select { max-width: 200px; }
 
 /* Map image picker dialog. Narrower than the default modal — the thumbnail
    grid auto-fills, so at 560 px a handful of icons spread out into a sparse

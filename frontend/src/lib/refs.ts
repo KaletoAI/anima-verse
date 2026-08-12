@@ -68,11 +68,22 @@ export interface PropRef {
   id: string
   name?: string
   category?: string
+  /** False = the record exists but has no mesh yet — a picker that hands out
+   *  model URLs must skip those. */
+  has_model?: boolean
 }
 
 export async function loadProps(): Promise<PropRef[]> {
   const data = await apiGet<{ props?: PropRef[] }>('/world/props')
   return data.props || []
+}
+
+/** The prop library for pickers, from the LEAN endpoint (a bare array).
+ *  `/world/props` answers the same names but also spins up the image service
+ *  and lists backends — nothing a picker needs. */
+export async function loadPropAssets(): Promise<PropRef[]> {
+  const data = await apiGet<PropRef[]>('/assets/props')
+  return Array.isArray(data) ? data : []
 }
 
 export interface RuleRef {

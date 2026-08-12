@@ -128,6 +128,24 @@ export interface WorldmapPayload {
   fogged: boolean
 }
 
+/**
+ * `meta.scatter` of a terrain TYPE — what this ground grows (E5 Task 6).
+ *
+ * The server whitelists exactly these three fields (`terrain_types.py`
+ * `_sanitize_scatter`) and the 3D ground reads exactly them
+ * (`client3d/src/scene/ground.ts` → `buildScatter`). No block = nothing is
+ * scattered; there is no default.
+ */
+export interface TerrainScatter {
+  /** Instances per 100 m² of area. 0 = nothing is scattered. */
+  density_per_100m2: number
+  /** Height of the built-in tuft in metres; ignored once `model` is set. */
+  height_m?: number
+  /** URL of a prop mesh to instance — `/assets/props/<id>/model`, the same
+   *  URL the prop library hands out. Absent = the built-in tuft. */
+  model?: string
+}
+
 /** One kind of ground in the effective catalog (§ A1.5). `passable` and
  *  `speed_factor` come from HERE and nowhere else — never from an area, never
  *  from a client table. */
