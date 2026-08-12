@@ -16,6 +16,17 @@ export const MIN_DIST = 0.8;
 const MAX_DIST = 150;
 
 /**
+ * How far the pointer may travel during an orbit gesture and still count as a
+ * CLICK, in CSS pixels (B19). 4 px is the usual click slop of a desktop UI —
+ * above the one or two pixels a hand moves while pressing a button, far below
+ * the movement of an intended turn (0.005 rad/px ⇒ 4 px ≈ 1.1° of yaw, which
+ * is not a turn anybody meant). Below it the release still reaches the pick
+ * chain, so a click on the ground remains a walk order while embodied, where
+ * the bare left button now orbits.
+ */
+const ORBIT_DRAG_PX = 4;
+
+/**
  * True while the key event came out of a form field — typing must never reach
  * the camera. Shared with `main.ts`, which guards its own Esc handler with the
  * exact same rule (E3-T2), so there is ONE definition of "the user is typing".
@@ -54,6 +65,7 @@ export class Engine {
   private dragging = false;
   private orbiting = false;              // right mouse button: free orbit
   private orbitLast = { x: 0, y: 0 };
+  private orbitStart = { x: 0, y: 0 };   // where the gesture began (click vs. drag)
   pitchOffset = 0;                       // free pitch share (degrees); public for the preview pages
   private dragStart = new THREE.Vector3();
   private raycaster = new THREE.Raycaster();
@@ -89,6 +101,15 @@ export class Engine {
   /** Fired when a zoom-out was STOPPED by `zoomCap` — the hint hangs off this,
    *  not off a distance the HUD would have to watch itself. */
   onZoomCapped: (() => void) | null = null;
+  /** Plain left drag turns the view instead of panning it (B19). The embodied
+   *  mode sets it: while one steers the avatar the camera hangs on the figure
+   *  (`follow`), so a pan-drag is pulled straight back by the chase in the very
+   *  next frame — dragging was a gesture without effect there, and the one
+   *  thing a player wants to do with the mouse in that mode, look around, cost
+   *  a modifier key. In the OVERVIEW the flag stays false and every control is
+   *  what it was: drag pans, Shift/Ctrl/Alt + drag or the middle button turns.
+   *  A CLICK keeps its meaning in both modes — see `ORBIT_DRAG_PX`. */
+  orbitOnDrag = false;
 
   constructor(container: HTMLElement) {
     // near 0.2 (was 0.5) so MIN_DIST = 0.8 stays clear of the near plane: at
@@ -297,15 +318,17 @@ export class Engine {
     }, { passive: false });
 
     el.addEventListener('pointerdown', (e) => {
-      // Free orbit/tilt: middle button or Shift/Ctrl/Alt + left button. The
+      // Free orbit/tilt: middle button, Shift/Ctrl/Alt + left button — or the
+      // bare left button while `orbitOnDrag` is set (B19, embodied mode). The
       // right button stays, but collides with mouse gestures in some browsers.
       const orbit = e.button === 1 || e.button === 2
-        || (e.button === 0 && (e.shiftKey || e.ctrlKey || e.altKey));
+        || (e.button === 0 && (this.orbitOnDrag || e.shiftKey || e.ctrlKey || e.altKey));
       if (orbit) {
         e.preventDefault();
         this.orbiting = true;
         this.moved = false;
         this.orbitLast = { x: e.clientX, y: e.clientY };
+        this.orbitStart = { x: e.clientX, y: e.clientY };
         el.setPointerCapture(e.pointerId);
         return;
       }
@@ -325,7 +348,12 @@ export class Engine {
       if (this.orbiting) {
         const dx = e.clientX - this.orbitLast.x;
         const dy = e.clientY - this.orbitLast.y;
-        if (dx || dy) this.moved = true;
+        // Turn on the FIRST pixel, but count as a drag only past the
+        // threshold: since B19 the bare left button orbits while embodied, and
+        // the same button is the walk order. One pixel of hand tremor between
+        // press and release must not swallow the click.
+        if (Math.hypot(e.clientX - this.orbitStart.x, e.clientY - this.orbitStart.y)
+            > ORBIT_DRAG_PX) this.moved = true;
         this.orbitLast = { x: e.clientX, y: e.clientY };
         this.targetYaw -= dx * 0.005;
         this.pitchOffset = THREE.MathUtils.clamp(this.pitchOffset + dy * 0.25, -35, 35);

@@ -14,7 +14,10 @@ Geometrie, die auch die Admin-Vorschau braucht, liegt im geteilten Paket
 - **AoE-Kamera:** Pan (Ziehen/WASD), Zoom Richtung Mauszeiger (Rad), Drehen in
   45°-Schritten (Q/E), frei drehen/neigen (mittlere Maustaste oder
   Shift/Strg/Alt+Links; rechte Taste geht auch, kollidiert aber je nach
-  Browser mit Maus-Gesten).
+  Browser mit Maus-Gesten). **Während man den Avatar steuert, dreht schon das
+  blanke Linksziehen** (`engine.orbitOnDrag`) — die Kamera hängt dort an der
+  Figur, ein Pan-Ziehen wäre wirkungslos; ein Klick bis 4 px Bewegung bleibt
+  ein Klick und damit der Geh-Befehl.
 - **3D-Locations:** prozedurale Gebäude per Stil-Heuristik (Café, Haus, Hochhaus,
   Generisch), Terrain-Kacheln (Wald mit Bäumen, Straßen) — Boden- und
   Wandtexturen kommen, wenn vorhanden, vom Backend

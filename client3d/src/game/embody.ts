@@ -2,10 +2,11 @@
  * Embodied mode: taking control of the avatar figure (plan-3d-game stage 3,
  * task 2).
  *
- * The mode is nothing but two camera facts plus one bus flag:
+ * The mode is nothing but three camera facts plus one bus flag:
  * - `engine.follow` points at the avatar, so the camera chases it and the
  *   movement keys stop panning (task 3 hands them to the avatar),
- * - `engine.flyTo(avatar, EMBODY_DIST)` pulls the camera in.
+ * - `engine.flyTo(avatar, EMBODY_DIST)` pulls the camera in,
+ * - `engine.orbitOnDrag` hands the bare left drag to the view (B19).
  * There is NO tween of our own: the existing fly and the soft follow lerp of
  * the engine together are the ride, in both directions.
  *
@@ -46,6 +47,10 @@ export function enterEmbodied(deps: EmbodyDeps): void {
   // travels from the overview distance INWARDS, so nothing about it needs the
   // ceiling — and the very next wheel notch is already bound by it.
   deps.engine.zoomCap = EMBODY_MAX_DIST;
+  // The mouse turns the view here (B19): with the camera on the figure a
+  // pan-drag is undone by the chase in the next frame anyway, so the bare
+  // button is free for the one thing one does want — looking around.
+  deps.engine.orbitOnDrag = true;
   deps.engine.flyTo(pos, EMBODY_DIST);
   deps.engine.follow = deps.avatarPos;
   setGameState({ mode: 'embodied' });
@@ -56,6 +61,8 @@ export function enterEmbodied(deps: EmbodyDeps): void {
 export function exitEmbodied(deps: EmbodyDeps): void {
   const { engine } = deps;
   engine.follow = null;
+  // Back to the overview controls: drag pans again, Shift+drag turns (B19).
+  engine.orbitOnDrag = false;
   // Before the fly, or the camera would be pulled back to the cap it has just
   // been released from.
   engine.zoomCap = null;

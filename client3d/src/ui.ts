@@ -1,4 +1,5 @@
 import type { MapCharacter, MapEvent, WorldLocation } from './types';
+import { getGameState, subscribeGameState } from './hud/bus';
 
 /**
  * Start status line: keeps the page alive while we wait for the server (a
@@ -42,9 +43,21 @@ export function createHud(opts: { username: string; avatar: string; onLogout: ()
   (bar.querySelector('.hud-logout') as HTMLElement).addEventListener('click', opts.onLogout);
   document.body.appendChild(bar);
 
+  // The hint line follows the MODE, because the controls do (B19): while one
+  // steers the avatar the bare drag turns the view and a click is a walk
+  // order, in the overview the drag pans and a click opens a place. One line
+  // that named only the overview gestures was wrong half the time.
   const hints = document.createElement('div');
   hints.className = 'hud-hints';
-  hints.textContent = '🖱 Links ziehen: verschieben · Mitte oder Shift+Links ziehen: drehen/neigen · Rad: zoomen (ganz nah = Figuren) · Q/E: 45°-Drehung · Klick: Ort öffnen';
+  const setHints = () => {
+    hints.textContent = getGameState().mode === 'embodied'
+      ? '🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom'
+        + ' · WASD: move · Q/E: 45° turn · Esc: hand back control'
+      : '🖱 Drag: pan · Middle or Shift+drag: turn/tilt · Wheel: zoom (closest = figures)'
+        + ' · Q/E: 45° turn · Click: open place';
+  };
+  setHints();
+  subscribeGameState(setHints);
   document.body.appendChild(hints);
 
   const statusEl = bar.querySelector('.hud-status') as HTMLElement;

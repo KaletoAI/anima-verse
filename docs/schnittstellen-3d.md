@@ -1154,6 +1154,9 @@ zoomgekoppelter Pitch `lerp(18°, 62°, sqrt(norm(dist)))` + Offset ±35°
 ankertes Pan, Mitte/Shift = Drehen/Neigen (0,005 rad bzw. 0,25°/px),
 Rad = Zoom auf Cursor (`dist *= exp(ΔY·0,0012)`), Klick = Auswahl bei
 < 0,15 Einheiten Bewegung. Q/E ±45°, +/− Zoom-Stufen, WASD Pan.
+Im **Avatar-Modus** (embodied) dreht bereits das blanke Linksziehen — die
+Kamera folgt dort der Figur, ein Pan hätte keine Wirkung; Klick bleibt Klick
+(Geh-Befehl) bis 4 px Zeigerweg. In der Übersicht gilt unverändert das obige.
 Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
 
 ## A11. Reise-Payload (server-autoritative Bewegung) — Meter-Polyline seit E3 (2026-08-09)
