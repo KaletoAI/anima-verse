@@ -123,13 +123,15 @@ async def lifespan(app: FastAPI):
     except Exception as _sfe:
         logger.warning("scale-frame migration failed: %s", _sfe)
 
-    # Surface textures are shared across all worlds, not per world: a world
-    # folder left over from before hands its files to shared/surface_textures/
-    # once, on boot (E5 Task 4, 2026-08-12). Must run BEFORE the kind-meta
-    # migration below — that one reads the shared library.
+    # Surface textures are shared across all worlds, not per world: leftover
+    # world folders hand their files to shared/surface_textures/ once, on boot
+    # (E5 Task 4, 2026-08-12). The sweep covers EVERY world under the worlds
+    # root, not just the one that is open — otherwise a world without an old
+    # folder migrates nothing and strands the others (finding B9). Must run
+    # BEFORE the kind-meta migration below — that one reads the shared library.
     try:
-        from app.core.surface_textures import migrate_world_dir_once
-        _sd = migrate_world_dir_once()
+        from app.core.surface_textures import migrate_world_dirs_once
+        _sd = migrate_world_dirs_once()
         if _sd:
             logger.info("Surface texture folder handover to shared: %s", _sd)
     except Exception as _sde:

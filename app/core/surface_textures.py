@@ -27,8 +27,9 @@ Task 4, 2026-08-12). A ground material is not world-specific: there is
 nothing about "worn asphalt" that one world would have to hide from the
 next, and a per-world copy only meant generating the same texture again.
 Deliberately NOT the terrain-type pattern (shared seed + world override):
-no override layer, no merge, one library. A world folder left over from
-before is moved here once, on boot (``migrate_world_dir_once``).
+no override layer, no merge, one library. World folders left over from
+before are moved here once, on boot (``migrate_world_dirs_once`` — EVERY
+world's folder, not just the one that happens to be open).
 
 Files in that directory:
 
@@ -723,13 +724,13 @@ def ensure_kind_meta(kind: str, *, name: str = "",
     return entry
 
 
-def migrate_world_dir_once() -> Dict[str, Any]:
-    """Move a leftover ``worlds/<world>/surface_textures/`` into the shared
+def _handover_dir(src: Path) -> Dict[str, Any]:
+    """Hand ONE leftover ``<world>/surface_textures/`` folder to the shared
     library (E5 Task 4, 2026-08-12). Returns {} when there is nothing to do.
 
-    Textures stopped being per-world, so the world folder of the currently
-    opened world hands its contents over — images, sidecars, ``kinds.json``,
-    ``selection.json`` and ``blends.json`` alike, each by its file name.
+    Textures stopped being per-world, so the world folder hands its contents
+    over — images, sidecars, ``kinds.json``, ``selection.json`` and
+    ``blends.json`` alike, each by its file name.
 
     Collision rule: the SHARED file wins. A name the library already has is
     NOT overwritten — it may be the version another world already handed
@@ -745,8 +746,6 @@ def migrate_world_dir_once() -> Dict[str, Any]:
     two libraries' metadata is a manual job, not something a boot hook should
     decide behind the user's back; the warning names the folder to look at.
     """
-    from app.core.paths import get_storage_dir
-    src = get_storage_dir() / "surface_textures"
     if not src.is_dir():
         return {}
     entries = sorted(p for p in src.iterdir() if p.is_file())
@@ -771,6 +770,57 @@ def migrate_world_dir_once() -> Dict[str, Any]:
     if not moved and not kept:
         return {}
     return {"moved": moved, "kept_in_world": kept, "from": str(src)}
+
+
+def migrate_world_dirs_once() -> Dict[str, Any]:
+    """Sweep EVERY world folder for a leftover ``surface_textures/`` and hand
+    it to the shared library. Returns {} when there was nothing to do.
+
+    The boot hook used to look at the ACTIVE world only, and that stranded
+    the others (finding B9): booting a world that never had a folder migrated
+    nothing at all, while ``worlds/<other>/surface_textures/`` kept all its
+    files and the shared library stayed empty — the 3D client then drew
+    untextured ground in a world whose textures were sitting right there on
+    disk. A handover is a one-time repair of a storage layout, so it has to
+    cover the storage, not the session.
+
+    The worlds root is the PARENT of the active world's storage dir —
+    ``paths`` exposes no root of its own, and ``--storage /somewhere`` is a
+    legal way to open a world, so it is derived and never hardcoded. Every
+    direct subdirectory is a candidate; the active world is always among
+    them, even when the parent cannot be listed. Only FILES move, and only
+    out of ``<candidate>/surface_textures/`` — nothing else in a world folder
+    is touched (``world.db`` above all).
+    """
+    from app.core.paths import get_storage_dir
+    active = get_storage_dir().resolve()
+    shared = _dir().resolve()
+    worlds = [active]
+    try:
+        for p in sorted(active.parent.iterdir()):
+            if not p.is_dir():
+                continue          # stray files in the worlds root
+            rp = p.resolve()
+            if rp != active and rp not in worlds:
+                worlds.append(rp)
+    except OSError as e:
+        logger.warning("worlds root %s not readable: %s", active.parent, e)
+
+    moved = kept = 0
+    touched: List[str] = []
+    for world in worlds:
+        src = world / "surface_textures"
+        if src.resolve() == shared:
+            continue              # the library itself is not a leftover
+        stats = _handover_dir(src)
+        if not stats:
+            continue
+        moved += int(stats.get("moved") or 0)
+        kept += int(stats.get("kept_in_world") or 0)
+        touched.append(str(src))
+    if not touched:
+        return {}
+    return {"moved": moved, "kept_in_world": kept, "worlds": touched}
 
 
 def migrate_kind_meta_once() -> Dict[str, int]:
