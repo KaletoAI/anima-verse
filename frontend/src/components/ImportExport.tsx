@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { downloadBlob } from '../lib/download'
 import { useToast } from '../lib/Toast'
@@ -7,6 +8,102 @@ export interface ExportOption {
   key: string
   label: string
   default?: boolean
+}
+
+/**
+ * A small popover that hangs below its anchor button but lives in a portal on
+ * `document.body` — an `overflow:hidden/auto` ancestor (every scrolling tab
+ * panel here) would otherwise clip it away. Position is `fixed` and derived
+ * from the anchor's rect, recomputed on resize/scroll; the box is flipped
+ * above the anchor when it would not fit below and clamped into the viewport.
+ * Closes on Escape and on a click outside anchor + popover.
+ */
+function AnchoredPopover({
+  anchorRef,
+  onClose,
+  minWidth,
+  padding,
+  children,
+}: {
+  anchorRef: RefObject<HTMLElement | null>
+  onClose: () => void
+  minWidth: number
+  padding: number
+  children: ReactNode
+}) {
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const anchor = anchorRef.current
+      const box = boxRef.current
+      if (!anchor) return
+      const r = anchor.getBoundingClientRect()
+      const w = box?.offsetWidth || minWidth
+      const h = box?.offsetHeight || 0
+      // Right-aligned with the anchor, as the absolute version was.
+      const maxLeft = Math.max(8, window.innerWidth - w - 8)
+      const left = Math.min(Math.max(8, r.right - w), maxLeft)
+      let top = r.bottom + 4
+      if (h > 0 && top + h + 8 > window.innerHeight) {
+        top = Math.max(8, r.top - 4 - h)
+      }
+      setPos({ top, left })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [anchorRef, minWidth])
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node | null
+      if (!target) return
+      // Clicks inside the portaled box or on the anchor (which toggles itself)
+      // are not "outside".
+      if (boxRef.current?.contains(target)) return
+      if (anchorRef.current?.contains(target)) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [anchorRef, onClose])
+
+  return createPortal(
+    <div
+      ref={boxRef}
+      style={{
+        position: 'fixed',
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        visibility: pos ? 'visible' : 'hidden',
+        zIndex: 1100,
+        background: 'var(--bg-container, #161b22)',
+        border: '1px solid var(--border, #30363d)',
+        borderRadius: 6,
+        padding,
+        minWidth,
+        maxHeight: 'calc(100vh - 16px)',
+        overflowY: 'auto',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  )
 }
 
 /**
@@ -32,6 +129,8 @@ export function ExportButton({
   const { t } = useI18n()
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const close = useCallback(() => setOpen(false), [])
   const [opts, setOpts] = useState<Record<string, boolean>>(() =>
     Object.fromEntries((options || []).map((o) => [o.key, !!o.default])),
   )
@@ -57,8 +156,9 @@ export function ExportButton({
   const hasOptions = !!options && options.length > 0
 
   return (
-    <span style={{ position: 'relative', display: 'inline-block' }}>
+    <span style={{ display: 'inline-block' }}>
       <button
+        ref={btnRef}
         className="ga-btn ga-btn-sm"
         disabled={disabled}
         title={title ?? t('Download as ZIP')}
@@ -67,20 +167,7 @@ export function ExportButton({
         ↓ {label ?? t('Export')}
       </button>
       {open && hasOptions ? (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            right: 0,
-            zIndex: 50,
-            background: 'var(--bg-container, #161b22)',
-            border: '1px solid var(--border, #30363d)',
-            borderRadius: 6,
-            padding: 10,
-            minWidth: 220,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-          }}
-        >
+        <AnchoredPopover anchorRef={btnRef} onClose={close} minWidth={220} padding={10}>
           {options!.map((o) => (
             <label
               key={o.key}
@@ -104,11 +191,11 @@ export function ExportButton({
             <button className="ga-btn ga-btn-sm ga-btn-primary" onClick={doExport}>
               {t('Download')}
             </button>
-            <button className="ga-btn ga-btn-sm" onClick={() => setOpen(false)}>
+            <button className="ga-btn ga-btn-sm" onClick={close}>
               {t('Cancel')}
             </button>
           </div>
-        </div>
+        </AnchoredPopover>
       ) : null}
     </span>
   )
@@ -140,6 +227,8 @@ export function PublishButton({
   const [tags, setTags] = useState<string>('')
   const [description, setDescription] = useState<string>('')
   const [busy, setBusy] = useState(false)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const close = useCallback(() => setOpen(false), [])
 
   useEffect(() => {
     if (!open) return
@@ -202,8 +291,9 @@ export function PublishButton({
   }
 
   return (
-    <span style={{ position: 'relative', display: 'inline-block' }}>
+    <span style={{ display: 'inline-block' }}>
       <button
+        ref={btnRef}
         className="ga-btn ga-btn-sm"
         onClick={() => setOpen((o) => !o)}
         title={t('Publish to a marketplace catalog')}
@@ -211,84 +301,70 @@ export function PublishButton({
         ↑↑ {label ?? t('Publish')}
       </button>
       {open ? (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            right: 0,
-            zIndex: 50,
-            background: 'var(--bg-container, #161b22)',
-            border: '1px solid var(--border, #30363d)',
-            borderRadius: 6,
-            padding: 12,
-            minWidth: 280,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {t('Catalog')}
-            <select
-              className="ga-input"
-              value={catalogId}
-              onChange={(e) => setCatalogId(e.target.value)}
-              disabled={busy || catalogs.length === 0}
-            >
-              {catalogs.length === 0 ? (
-                <option value="">{t('No catalogs configured')}</option>
-              ) : (
-                catalogs.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {t('Name')}
-            <input
-              className="ga-input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {t('Tags')} <span style={{ color: '#8b949e', fontSize: 10 }}>{t('comma-separated')}</span>
-            <input
-              className="ga-input"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              disabled={busy}
-              placeholder="business, outfit"
-            />
-          </label>
-          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {t('Description')}
-            <textarea
-              className="ga-input"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={busy}
-              rows={2}
-            />
-          </label>
-          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-            <button
-              className="ga-btn ga-btn-sm ga-btn-primary"
-              onClick={submit}
-              disabled={busy}
-            >
-              {busy ? t('Publishing…') : t('Publish')}
-            </button>
-            <button className="ga-btn ga-btn-sm" onClick={() => setOpen(false)} disabled={busy}>
-              {t('Cancel')}
-            </button>
+        <AnchoredPopover anchorRef={btnRef} onClose={close} minWidth={280} padding={12}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Catalog')}
+              <select
+                className="ga-input"
+                value={catalogId}
+                onChange={(e) => setCatalogId(e.target.value)}
+                disabled={busy || catalogs.length === 0}
+              >
+                {catalogs.length === 0 ? (
+                  <option value="">{t('No catalogs configured')}</option>
+                ) : (
+                  catalogs.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Name')}
+              <input
+                className="ga-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Tags')} <span style={{ color: '#8b949e', fontSize: 10 }}>{t('comma-separated')}</span>
+              <input
+                className="ga-input"
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+                disabled={busy}
+                placeholder="business, outfit"
+              />
+            </label>
+            <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Description')}
+              <textarea
+                className="ga-input"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                disabled={busy}
+                rows={2}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                className="ga-btn ga-btn-sm ga-btn-primary"
+                onClick={submit}
+                disabled={busy}
+              >
+                {busy ? t('Publishing…') : t('Publish')}
+              </button>
+              <button className="ga-btn ga-btn-sm" onClick={close} disabled={busy}>
+                {t('Cancel')}
+              </button>
+            </div>
           </div>
-        </div>
+        </AnchoredPopover>
       ) : null}
     </span>
   )
