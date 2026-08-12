@@ -540,9 +540,13 @@ export function MapTab() {
             // (`map3d.rotation`) belongs IN the picture, the location's own
             // yaw is added by the footprint square. The derivation with the
             // numbers is in `PlacementLayer`'s `FootSquare`.
+            // `solidBuilding`: the editor's default is a TRACING ghost
+            // (opacity 0.55, no depth write) — pale, and on a building
+            // exported as one mesh its own underside can paint over the roof.
+            // The map wants the roof itself, opaque and depth-sorted.
             url = await renderTopDownSnapshot({
               models: scene.models || [], extentM: scene.extent_m, level: 0,
-              includeRooms: false, buildingId: loc.id,
+              includeRooms: false, buildingId: loc.id, solidBuilding: true,
             })
           } catch {
             url = null   // 404 = no scene, no plan, no model: square as before

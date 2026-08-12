@@ -2,7 +2,9 @@
  * topDownSnapshot — renders the placed room models of ONE level straight from
  * above (orthographic, exactly covering the location's reference square) and
  * returns the image as a data URL. The floor-plan editor lays it BEHIND the
- * room rectangles, so markers can be dropped on actual furniture.
+ * room rectangles, so markers can be dropped on actual furniture; the map
+ * editor uses the same routine with `solidBuilding` for its roof view, where
+ * the picture is the subject and not something to trace over.
  *
  * The camera frame comes from the payload (`extent_m`), NOT from a constant.
  * It used to be a fixed 8 m while a size-1 model spanned 9.2 m, so the
@@ -149,9 +151,19 @@ export async function renderTopDownSnapshot(opts: {
   /** Also render the location's BUILDING model (ghosted, per its placement
    *  spec) — for tracing the outline polygon over the real footprint. */
   buildingId?: string
+  /** Draw the building OPAQUE instead of ghosted. Default false = the tracing
+   *  ghost the floor-plan editor has always laid under its plan.
+   *
+   *  The ghost is a bad picture of a roof, and for two reasons: at opacity
+   *  0.55 it is a pale hint, and with `depthWrite: false` three.js sorts only
+   *  per OBJECT — a building exported as ONE mesh (the normal case for a
+   *  generated GLB) then draws its triangles in index order, so an interior
+   *  face or the underside can paint over the roof. The map's roof view wants
+   *  the opposite of a ghost: the real thing, correctly depth-sorted. */
+  solidBuilding?: boolean
 }): Promise<string | null> {
   const { models, extentM, level, width = 840, includeRooms = true,
-    buildingId } = opts
+    buildingId, solidBuilding = false } = opts
   const roomSpecs = includeRooms
     ? models.filter((m) => m.role === 'room' && m.level === level)
     : []
@@ -168,8 +180,10 @@ export async function renderTopDownSnapshot(opts: {
   scene.add(new THREE.AmbientLight(0xffffff, 2.4))
   scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2.4))
 
-  // Building layer first, half-transparent — the roof view IS the real
-  // footprint to trace the outline over; rooms stay readable through it.
+  // Building layer first — half-transparent by default, because there it is a
+  // TRACING ghost: the real footprint to draw the outline over, with the rooms
+  // staying readable through it. `solidBuilding` turns exactly those three
+  // material values around (opaque, depth-writing), and nothing else.
   if (bModel && bSpec) {
     const clone = bModel.obj.clone(true)
     clone.traverse((o: Object3D) => {
@@ -179,7 +193,13 @@ export async function renderTopDownSnapshot(opts: {
       const map = (src as { map?: unknown })?.map || null
       mesh.material = new THREE.MeshBasicMaterial({
         map: map as never, color: 0xffffff,
-        transparent: true, opacity: 0.55, depthWrite: false,
+        // With `solidBuilding` false these are literally the old three values
+        // (transparent true, opacity 0.55, depthWrite false) — the ghost path
+        // is unchanged, not merely equivalent. Depth writing is what makes the
+        // solid mode sort a single-mesh building correctly.
+        transparent: !solidBuilding,
+        opacity: solidBuilding ? 1 : 0.55,
+        depthWrite: solidBuilding,
       })
     })
     const g = placeModelSpec(THREE, clone, bSpec)

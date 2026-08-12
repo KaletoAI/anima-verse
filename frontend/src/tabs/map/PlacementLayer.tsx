@@ -110,10 +110,16 @@ export function mapIconUrl(locId: string, ver: number): string {
  *     here:      the spec yaw is IN the image, so the point sits at (0,−1) ->
  *                u = 0.5, v = 0.4 -> (100,99); rotate(−90) -> (99, 100)  ✔
  *     with the yaw stripped out of the image it would land on (100,99) — a
- *     90° lie, i.e. off by exactly `map3d.rotation`. That is why the roof is
- *     rendered WITH the spec yaw and gets no `iconRot`: for a location without
- *     `map3d.rotation` the spec yaw already IS `map_rotation_2d`, so applying
- *     the icon rotation on top would double it.
+ *     90° lie, i.e. off by exactly `map3d.rotation`.
+ *
+ * That is also why the roof gets NO `iconRot`. For a location without
+ * `map3d.rotation` the spec yaw already IS `map_rotation_2d` — and the two
+ * turns run against each other: a spec yaw θ reaches the image as three's
+ * `R_y(+θ)`, which in image pixels (u right = local +x, v down = local +z) is
+ * `(u,v) → (u·cosθ + v·sinθ, −u·sinθ + v·cosθ)`, i.e. SVG `rotate(−θ)`, while
+ * `iconRot` is applied as SVG `rotate(+θ)`. Adding it would CANCEL the baked
+ * yaw (`rotate(−θ)·rotate(+θ) = identity`) and hand back exactly the neutral
+ * picture rejected above — not double it.
  */
 function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconRot,
   roofHref }: {
@@ -139,9 +145,12 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
     <g transform={`rotate(${-yaw} ${p.x} ${p.y})`}>
       <rect x={p.x - half} y={p.y - half} width={size} height={size}
         fill="rgba(139,148,158,0.14)" stroke="none" />
+      {/* FULLY opaque: the picture is rendered solid (`solidBuilding`), and
+          the grey square underneath has nothing to add — it is the placeholder
+          for a location that shows no building. The outline and the north edge
+          are drawn AFTER it and therefore stay on top. */}
       {roofHref ? (
-        <image href={roofHref} x={p.x - half} y={p.y - half} width={size} height={size}
-          opacity={0.9} />
+        <image href={roofHref} x={p.x - half} y={p.y - half} width={size} height={size} />
       ) : iconHref ? (
         <image href={iconHref} x={p.x - half} y={p.y - half} width={size} height={size}
           preserveAspectRatio="xMidYMid slice"
