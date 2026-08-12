@@ -1,22 +1,23 @@
-"""DB-Zugriff fuer den Wahrnehmungs-Stream (plan-room-conversation Phase 1).
+"""DB access for the perception stream (plan-room-conversation phase 1).
 
-Zwei Tabellen (Schema in ``app/core/world_db_schema.py``):
+Two tables (schema in ``app/core/world_db_schema.py``):
 
-- ``utterances``   — kanonische Wahrheit, eine Zeile pro Sprechakt.
-- ``perceptions``  — Fan-Out, eine Zeile pro Wahrnehmendem, beim Schreiben
-                     bereits gefiltert.
+- ``utterances``   — canonical truth, one row per speech act.
+- ``perceptions``  — fan-out, one row per perceiver, already filtered at write
+                     time.
 
-Diese Schicht macht KEINE Hoerweite-Logik — sie schreibt/liest nur. Hoerweite +
-Verteilung liegen in ``app/core/perception.py``.
+This layer does NO earshot logic — it only writes/reads. Earshot + distribution
+live in ``app/core/perception.py``, and so does the retention POLICY: the prune
+below is handed a cutoff, it does not pick one.
 
-Wichtig fuer die Vertraulichkeit: ``get_character_stream`` liest ausschliesslich
-aus ``perceptions`` (nie ``utterances.content``) — gefluesterter Inhalt kann so
-einem Dritten nie ueber den subjektiven Stream zugespielt werden.
+Important for confidentiality: ``get_character_stream`` reads exclusively from
+``perceptions`` (never ``utterances.content``) — whispered content can this way
+never be leaked to a third party through the subjective stream.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
@@ -51,7 +52,7 @@ def insert_utterance(*, ts: str, speaker: str, location_id: str, room_id: str,
 
 
 def insert_perceptions(utterance_id: int, rows: Sequence[Dict[str, Any]]) -> None:
-    """Bulk-Insert der Fan-Out-Wahrnehmungen zu einem Sprechakt."""
+    """Bulk insert of the fan-out perceptions of one speech act."""
     if not rows:
         return
     with transaction() as conn:
@@ -67,8 +68,8 @@ def insert_perceptions(utterance_id: int, rows: Sequence[Dict[str, Any]]) -> Non
 
 
 def utterance_exists(speaker: str, ts: str, content: str) -> bool:
-    """Gibt es schon einen identischen Sprechakt? (Shadow-Dedup — dieselbe
-    Nachricht kann in mehreren Historien gespeichert werden.)"""
+    """Is there an identical speech act already? (Shadow dedup — the same
+    message can be stored in several histories.)"""
     conn = get_connection()
     row = conn.execute(
         "SELECT 1 FROM utterances WHERE speaker=? AND ts=? AND content=? LIMIT 1",
@@ -93,9 +94,9 @@ def _row_to_dict(row) -> Dict[str, Any]:
 
 def get_room_utterances(location_id: str, room_id: str = "",
                         limit: int = 100) -> List[Dict[str, Any]]:
-    """Objektive Raum-Sicht (Gott-Sicht): rohe Sprechakte, aelteste zuerst.
+    """Objective room view (god view): raw speech acts, oldest first.
 
-    Bei leerem ``room_id`` die ganze Location (alle Raeume).
+    An empty ``room_id`` means the whole location (all rooms).
     """
     conn = get_connection()
     if room_id:
@@ -167,20 +168,21 @@ def get_followed_conversation_tail(perceiver: str, partner: str,
                                    cur_location_id: str, cur_room_id: str,
                                    limit: int = 20,
                                    max_age_min: int = 15) -> List[Dict[str, Any]]:
-    """Gespräch beim DIREKTEN Folgen mitnehmen (plan-follow-room-conversation-bug B).
+    """Carry the conversation along when FOLLOWING directly
+    (plan-follow-room-conversation-bug B).
 
-    Liefert den Tail der Runde aus dem Raum, in dem ``perceiver`` UNMITTELBAR
-    vor dem aktuellen war — aber nur, wenn ``partner`` dort beteiligt war
-    (= direkter Follow ohne andere Location dazwischen). Sonst ``[]``.
+    Returns the tail of the round from the room ``perceiver`` was in
+    IMMEDIATELY before the current one — but only if ``partner`` took part in
+    it (= a direct follow with no other location in between). Otherwise ``[]``.
 
-    Rückgabe identisch zu ``get_character_room_stream`` (älteste zuerst), damit
-    der Aufrufer beide Streams nahtlos verketten kann.
+    Same return shape as ``get_character_room_stream`` (oldest first), so the
+    caller can chain both streams seamlessly.
 
-    Asymmetrisch gegenüber der Wildnis (E6), und zwar mit Absicht: wer aus
-    einer Location ins Freie tritt, nimmt den Faden mit (die vorherige Runde
-    hat eine Location), wer aus dem Freien eine Location betritt, nicht — die
-    ortlose Vorrunde fällt am ``prior[0]``-Check heraus, weil es draußen keinen
-    Raum-Schlüssel gibt, an dem sie hinge.
+    Asymmetric towards the wilderness (E6), and deliberately so: whoever steps
+    from a location into the open takes the thread along (the previous round
+    has a location), whoever enters a location from the open does not — the
+    location-less previous round drops out at the ``prior[0]`` check, because
+    out there is no room key it could hang on.
     """
     if not (perceiver and partner and cur_location_id is not None):
         return []
@@ -191,7 +193,7 @@ def get_followed_conversation_tail(perceiver: str, partner: str,
         "WHERE p.perceiver=? ORDER BY p.ts DESC, p.id DESC LIMIT 120",
         (perceiver,)).fetchall()
     cur = (cur_location_id or "", cur_room_id or "")
-    prior = None          # (loc, room) der unmittelbar vorherigen Runde
+    prior = None          # (loc, room) of the immediately previous round
     newest_ts = ""
     for r in rows:
         key = (r["loc"] or "", r["room"] or "")
@@ -201,11 +203,11 @@ def get_followed_conversation_tail(perceiver: str, partner: str,
             break
     if not prior or not prior[0]:
         return []
-    # Partner muss in genau dieser vorherigen Runde gesprochen haben.
+    # The partner must have spoken in exactly that previous round.
     block = [r for r in rows if (r["loc"] or "", r["room"] or "") == prior]
     if not any((r["speaker"] or "") == partner for r in block):
         return []
-    # Aktualitäts-Cap: die vorherige Runde darf nicht uralt sein.
+    # Recency cap: the previous round must not be ancient.
     try:
         from app.core.timeutils import utc_now, parse_iso
         if newest_ts and (utc_now() - parse_iso(newest_ts)).total_seconds() > max_age_min * 60:
@@ -217,9 +219,10 @@ def get_followed_conversation_tail(perceiver: str, partner: str,
 
 def get_character_stream(perceiver: str, limit: int = 100,
                          before: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Subjektiver Wahrnehmungs-Stream eines Characters, aelteste zuerst.
+    """A character's subjective perception stream, oldest first.
 
-    Liest NUR ``perceptions`` — nie den kanonischen Inhalt aus ``utterances``.
+    Reads ONLY ``perceptions`` — never the canonical content from
+    ``utterances``.
     """
     conn = get_connection()
     if before:
@@ -233,6 +236,35 @@ def get_character_stream(perceiver: str, limit: int = 100,
             "ORDER BY ts DESC, id DESC LIMIT ?",
             (perceiver, limit)).fetchall()
     return [_row_to_dict(r) for r in reversed(rows)]
+
+
+def prune_wilderness_rows(cutoff_ts: str) -> Tuple[int, int]:
+    """Delete LOCATION-LESS speech acts older than ``cutoff_ts`` together with
+    their perceptions. Returns ``(utterances, perceptions)`` deleted.
+
+    Why only the location-less ones: a located line is bounded by its scene —
+    consolidation summarises it into the participants' memories and
+    ``scene_store.prune_scene_perceptions`` drops the raw rows. Out in the open
+    there is no scene (``scene_manager.touch`` skips it), so nothing ever ends
+    those rows. WHEN they end is not this layer's call — the cutoff comes from
+    ``scene_manager.prune_wilderness_stream``.
+
+    Perceptions first, utterances second: the FK cascade is not relied upon
+    (``PRAGMA foreign_keys`` is not guaranteed to be on for this connection),
+    and doing it in one transaction means a half prune cannot leave orphans.
+    The ``(location_id, room_id, ts)`` index serves the subquery.
+    """
+    if not cutoff_ts:
+        return (0, 0)
+    with transaction() as conn:
+        cur_p = conn.execute(
+            "DELETE FROM perceptions WHERE utterance_id IN ("
+            "  SELECT id FROM utterances WHERE location_id='' AND ts<?)",
+            (cutoff_ts,))
+        n_p = cur_p.rowcount or 0
+        cur_u = conn.execute(
+            "DELETE FROM utterances WHERE location_id='' AND ts<?", (cutoff_ts,))
+        return (cur_u.rowcount or 0, n_p)
 
 
 def migrate_storyteller_speaker_once() -> None:

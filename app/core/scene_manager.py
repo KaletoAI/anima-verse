@@ -4,7 +4,9 @@
   (called from ``perception.record_utterance``).
 - ``run_idle_consolidation`` closes ebbed-away scenes: LLM summary of the raw
   utterances → scene memory in every participant's memory → prune perceptions.
-  The agent loop calls this periodically (in a thread).
+  The agent loop calls this periodically (in a thread). It also carries the
+  wilderness prune (``prune_wilderness_stream``), the age-based exit for the
+  location-less lines that have no scene to end them.
 
 Consolidation is event-driven (scene end), not a 6h batch — the batch remains
 only as a safety net. Raw perceptions are ephemeral (discarded after the
@@ -24,6 +26,34 @@ logger = get_logger("scene_manager")
 # closed. Fallback default — configurable via memory.scene_idle_minutes
 # (admin settings, Memory section).
 DEFAULT_SCENE_IDLE_MINUTES = 30
+
+# How long a LOCATION-LESS line survives (SYSTEM time — see below).
+#
+# Every located line has an end: its scene ebbs away after
+# ``scene_idle_minutes`` (30 min by default), the summary goes into the
+# participants' memories and ``prune_scene_perceptions`` drops the raw rows; a
+# scene whose summary keeps failing is force-closed after 24 h so it cannot
+# linger either. Out in the open there is no scene at all (``touch`` skips it,
+# and deliberately so — one bucket for the whole wilderness would mix
+# strangers kilometres apart into each other's memories), so nothing ever ends
+# those rows: utterances AND perceptions out there grow without bound.
+#
+# Until a wilderness scene has a spatial key of its own, AGE is the only exit.
+# Seven days is not invented here: ``day_consolidation.THOUGHT_RETENTION_DAYS``
+# is the same decision for the same kind of row (raw material with no other way
+# out) and uses the same horizon, the daily recap reads back 7 days
+# (``recent_daily_entries``, DAILY_SUMMARY_DAYS), and everything that reads the
+# wilderness stream reads its TAIL (small limits, recent lines). So a week
+# outlasts every reader by a wide margin while still bounding growth — and it
+# is 7× the 24 h ceiling a stuck located scene gets.
+#
+# SYSTEM time, not game time, although the horizon is about the world: the ts
+# columns are stamped with ``utc_now_iso`` (like every other technical stamp —
+# scene idle, thought retention, the 24 h valve), so comparing them against a
+# game clock that can be stopped or run at a tick factor would re-date old rows
+# whenever the factor changes. Retention is storage hygiene, and storage
+# hygiene runs on the wall clock.
+WILDERNESS_RETENTION_DAYS = 7
 
 
 def scene_idle_minutes() -> float:
@@ -61,6 +91,30 @@ def touch(location_id: str, room_id: str, speaker: str, ts: str = "") -> int:
         return 0
 
 
+def prune_wilderness_stream() -> int:
+    """Drops location-less lines older than ``WILDERNESS_RETENTION_DAYS``.
+    Returns the number of deleted utterances (their perceptions go with them).
+
+    The wilderness counterpart of the scene prune — see the constant for why
+    it exists and how the horizon was picked. Best-effort: a failing prune must
+    never stop the consolidation pass it rides along with.
+    """
+    from datetime import timedelta
+    from app.models import perception_store
+    cutoff = (utc_now() - timedelta(days=WILDERNESS_RETENTION_DAYS)
+              ).isoformat(timespec="seconds")
+    try:
+        gone_u, gone_p = perception_store.prune_wilderness_rows(cutoff)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("wilderness prune failed: %s", e)
+        return 0
+    if gone_u or gone_p:
+        logger.info("Wilderness prune: %d utterance(s) + %d perception(s) older "
+                    "than %d days dropped", gone_u, gone_p,
+                    WILDERNESS_RETENTION_DAYS)
+    return gone_u
+
+
 def run_idle_consolidation(skip_room_keys=None) -> int:
     """Closes + consolidates all ebbed-away open scenes. Returns the number of
     consolidated scenes. Synchronous (LLM + DB) — the loop runs it via to_thread.
@@ -71,6 +125,11 @@ def run_idle_consolidation(skip_room_keys=None) -> int:
     from datetime import timedelta
     from app.models import scene_store
     skip = skip_room_keys or set()
+    # The wilderness has no scene to consolidate, so it hangs on here — at the
+    # TOP, before anything can return early: the open world must be swept even
+    # in a world that has no open scene at all (or whose scene query just
+    # failed), and a scene skipped for a pending answer must not hold it up.
+    prune_wilderness_stream()
     cutoff = (utc_now() - timedelta(minutes=scene_idle_minutes())).isoformat(timespec="seconds")
     try:
         idle = scene_store.get_idle_open_scenes(cutoff)
