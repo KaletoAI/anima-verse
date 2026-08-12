@@ -3784,6 +3784,29 @@ async function startApp(username: string, role: string) {
       pin.position.y += Math.sin(bob) * 0.008;
     }
   });
+
+  // --- Arriving IN the avatar (finding B15) ---------------------------------
+  // "Enter world" ends where the player actually is, not on the overview. The
+  // camera used to stop at `fitDistance(world_bounds)` — the whole map from
+  // above — and every session began with the same two manual steps: find your
+  // own figure, take control. That is the arrival, so the world does it.
+  //
+  // It is `takeControl` and nothing else: the ONE way into the mode (fly in,
+  // open the detail view of the place one is in, hand the figure over), so
+  // this shares every rule with the HUD button, the zoom wall included.
+  //
+  // Two conditions, both of them "there is nobody to be":
+  //  - no avatar at all (`avatar` is "" for a session that controls nobody) —
+  //    then the overview IS the view, exactly as before;
+  //  - an avatar whose figure is not on the map yet (unplaced location, a
+  //    model still loading). `takeControl` would say so in a toast, which is
+  //    right when a player pressed the button and wrong as a greeting, so the
+  //    boot asks first and stays on the overview in silence.
+  // Last in `startApp` on purpose: everything it touches (figures, tiles, the
+  // registered action) stands by now.
+  if (firstMap.avatar && npcs.positionOf(firstMap.avatar)) {
+    gameActions.takeControl?.();
+  }
 }
 
 boot();
