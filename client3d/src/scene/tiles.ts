@@ -3,6 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { sampleTerrain, surfaceMaterial } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
+import { acceptsWalkHit, type GroundModelInfo } from '../game/ground';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
@@ -186,6 +187,10 @@ export interface Tile {
    *  Hülle und gibt die komponierte Detailszene darunter frei. Der Kachelboden
    *  folgt dabei dem Fade, statt fest sichtbar oder fest weg zu sein. */
   modelIsShellArea?: boolean;
+  /** `walk_y_world` des Location-Modells (§ B) — die vom Server DEKLARIERTE
+   *  Standhöhe. `tileGroundY` misst den Dachschutz eines Gebäudes daran statt
+   *  an einer festen Marke; bei Flächen-Modellen spielt sie keine Rolle. */
+  modelWalkY?: number;
   /** prozedurale Deko (Bäume) — weicht einem Server-Modell */
   /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
   labelObj?: CSS2DObject;
@@ -871,16 +876,28 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
 /** Standhöhe auf KACHEL-Ebene (Figur außerhalb der Räume, z.B. am
  *  Eingang): Gebäude-Meshes haben oft eine eingebackene Bodenhaut/Gelände
  *  um den Eingang — die Figur steht auf der tatsächlichen Oberfläche statt
- *  bei y=0 darin zu versinken. Strahl von oben; Dach-Treffer (alles über
- *  1,2 m) werden übersprungen, ohne Treffer bleibt es beim Kachel-Boden. */
+ *  bei y=0 darin zu versinken. Strahl von oben, ohne Treffer bleibt es beim
+ *  Kachel-Boden.
+ *
+ *  WELCHER Treffer zählt, entscheidet die Spec und nicht mehr eine feste
+ *  1,2-m-Marke (Befund B8): der Dachschutz gilt für GEBÄUDE-Modelle und misst
+ *  ab deren deklarierter Standhöhe (`walk_y_world`), ein FLÄCHEN-Modell
+ *  (`display: ground`/`shell_area`) IST der Boden und wird gar nicht
+ *  gedeckelt — sonst fällt die Figur am erhöhten Ufer auf Ebene 0 zurück.
+ *  Die Regel steht als reine Funktion in `game/ground.ts`. */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
   const lift = terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
   if (!target) return lift;
+  const info: GroundModelInfo = {
+    display: tile.modelIsGround ? 'ground'
+      : tile.modelIsShellArea ? 'shell_area' : 'shell',
+    walkY: tile.modelWalkY,
+  };
   const ray = new THREE.Raycaster(
     new THREE.Vector3(at.x, 20, at.z), new THREE.Vector3(0, -1, 0));
   for (const h of ray.intersectObject(target, true)) {
-    if (h.point.y < 1.2) return h.point.y + 0.01 + lift;
+    if (acceptsWalkHit(info, h.point.y)) return h.point.y + 0.01 + lift;
   }
   return lift;
 }

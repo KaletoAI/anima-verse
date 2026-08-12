@@ -874,6 +874,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
 function applyBuildingModel(tile: Tile, placed: THREE.Group,
                             spec: SceneModelSpec): void {
   applySceneBuilding(tile, placed, spec.display ?? 'shell');
+  // Die deklarierte Standhöhe reist mit: `tileGroundY` misst den Dachschutz
+  // daran, statt an einer festen 1,2-m-Marke (Befund B8, game/ground.ts).
+  tile.modelWalkY = spec.walk_y_world;
   const cutouts = spec.cutouts || [];
   if (cutouts.length) {
     // Polygone kommen um das Kachelzentrum, der Shader misst in
@@ -1077,6 +1080,7 @@ export function unmountScene(tile: Tile): void {
   tile.cutouts = undefined;
   tile.modelIsGround = false;
   tile.modelIsShellArea = false;
+  tile.modelWalkY = undefined;
   tile.terrain = undefined;
   tile.terrainExtent = undefined;
   // Drapierte Kachelplatte zurückbauen: das ebene Original ist die Kachel,

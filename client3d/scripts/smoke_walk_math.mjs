@@ -436,6 +436,32 @@
  * and it is the OLDEST that go: every waiting line costs a TTS render plus its
  * playing time, so a busy room would otherwise put the client minutes behind
  * the world. 5 lines at once therefore leave [3rd, 4th, 5th].
+ *
+ * --- Walk height on a location model (finding B8; `game/ground.ts`) --------
+ * `tileGroundY` shoots a ray from y = 20 down onto the location's server model
+ * and takes the first hit that counts as GROUND. Which one that is used to be
+ * a flat `y < 1.2` — the roof filter — and that cap is wrong for area models:
+ * the Mondscheinsee mesh spans y −0.80 … +2.69 m, so every hit on the raised
+ * shore was rejected and the figure dropped to the tile floor at 0.
+ *
+ * The accept rule now reads the PAYLOAD (§ B `_building_model`,
+ * `app/core/scene_recipe.py`):
+ *   display "ground" / "shell_area"  (= map3d.area_model) — the model IS the
+ *       ground of the location, relief included. No ceiling at all:
+ *       walkCeiling = Infinity.
+ *   display "shell" (a building) — keeps the roof protection, but measured
+ *       from the model's own declared walkable height:
+ *       walkCeiling = walk_y_world + ROOF_CLEARANCE_M (1.2).
+ *       A building spec without a walk height falls back to 0 + 1.2 = 1.2,
+ *       exactly the old constant.
+ * Derived by hand from those two lines:
+ *   shell, no walk_y_world:   ceiling 1.2      (0 + 1.2)
+ *   shell, walk_y_world 0.06: ceiling 1.26     (BUILDING_BOTTOM_Y 0.06, the
+ *                                               offset-free normal case)
+ *   shell, walk_y_world 3.2:  ceiling 4.4      (a building on a plinth)
+ *   ground / shell_area:      ceiling Infinity
+ * The comparison is STRICT (`y < ceiling`), so 1.2 on a plain building is
+ * already roof — the unchanged old behaviour.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -451,7 +477,7 @@ const SRC_DIR = join(ROOT, 'client3d/src/game');
  *  DOM. */
 const MODULES = ['walk', 'clickmove', 'proximity', 'roomwalk', 'elevator', 'collide',
   'doors', 'prefs', 'boot', 'soundtrack', 'voiceover', 'enterLocation', 'perfstats',
-  'bubble', 'fog', 'minimap', 'locks', 'placement'];
+  'bubble', 'fog', 'minimap', 'locks', 'placement', 'ground'];
 
 /**
  * Both files are TypeScript and deliberately free of any runtime dependency
@@ -525,7 +551,7 @@ const SQRT_HALF = Math.SQRT1_2;   // 0.7071067811865476
 async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
-    bubble, fog, minimap, locks, placement } = await loadGameModules();
+    bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -2972,6 +2998,42 @@ async function main() {
     figureTransition(SHOWN('hall', false), SHOWN('hall', true)), 'stay');
   check('a visibility change wins even when the room changes with it',
     figureTransition(SHOWN('hall', false), SHOWN('kitchen', true)), 'snap');
+
+  console.log('\nground — which ray hit counts as walkable (finding B8)');
+  const { walkCeiling, acceptsWalkHit, ROOF_CLEARANCE_M } = ground;
+  check('the clearance is the old constant', ROOF_CLEARANCE_M, 1.2);
+  check('a building without a declared walk height keeps 1.2 m',
+    walkCeiling({ display: 'shell' }), 1.2);
+  check('…and so does a tile with no model info at all',
+    walkCeiling(undefined), 1.2);
+  check('a normal building measures from its walk_y_world 0.06',
+    walkCeiling({ display: 'shell', walkY: 0.06 }), 1.26);
+  check('a building on a plinth carries the clearance up with it',
+    walkCeiling({ display: 'shell', walkY: 3.2 }), 4.4);
+  // `check` compares numbers with a tolerance, and Infinity − Infinity is
+  // NaN — so the unbounded ceiling is asserted as the identity it is.
+  check('an AREA model is not capped at all',
+    walkCeiling({ display: 'ground', walkY: 0 }) === Infinity, true);
+  check('…the detail-mode area model just the same',
+    walkCeiling({ display: 'shell_area' }) === Infinity, true);
+  const SHELL = { display: 'shell', walkY: 0.06 };
+  const LAKE = { display: 'ground', walkY: 0 };
+  check('building: the ground skin at the entrance is walkable',
+    acceptsWalkHit(SHELL, 0.2), true);
+  check('building: a roof hit at 3 m is rejected',
+    acceptsWalkHit(SHELL, 3), false);
+  check('building: the ceiling itself is already roof (strict <)',
+    acceptsWalkHit(SHELL, 1.26), false);
+  check('building: a hand below it still counts',
+    acceptsWalkHit(SHELL, 1.25), true);
+  check('area: the raised shore at 3 m is walkable',
+    acceptsWalkHit(LAKE, 3), true);
+  check('area: the water surface at 0.2 m as well',
+    acceptsWalkHit(LAKE, 0.2), true);
+  check('area: the Mondscheinsee upper edge (2.69 m) too',
+    acceptsWalkHit(LAKE, 2.69), true);
+  check('area: and the lake bed below zero (−0.8 m)',
+    acceptsWalkHit(LAKE, -0.8), true);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
