@@ -257,15 +257,12 @@ export interface Location {
   map_image_2d?: string
   map_rotation_2d?: number
   /** Grid-era wide ground patch centred on this location — gallery file of
-   *  type map_3x3, drawn UNDER the per-location map images. The metre map
-   *  editor neither reads nor writes it; the server still stores it and the
-   *  player MapPanel still draws it (grid), until the ground-image rework. */
+   *  type map_3x3. Nothing DRAWS it any more (the player map is a schematic
+   *  metre map since E5); the server still stores it, and its one remaining
+   *  reader is the gallery's usage counter, which reports how often an image
+   *  is picked. `map_patch_span`/`map_image_off` had no reader left and are
+   *  gone with the same rework. */
   map_patch_2d?: string
-  map_patch_span?: number
-  /** Grid-era switch that hid the location's own 2D map image entirely (no
-   *  first-image fallback) so an underlying patch showed through. Same status
-   *  as `map_patch_2d`: stored, but nothing in the metre editor sets it. */
-  map_image_off?: boolean
   event_settings?: EventSettings
   terrain?: string
   map3d?: Map3D

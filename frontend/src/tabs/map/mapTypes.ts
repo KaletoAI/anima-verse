@@ -48,6 +48,27 @@ export interface MapGeometry {
 export interface WorldmapLocationRow extends MapGeometry {
   /** Present only when at least one room carries a layout (AV3D-2⁺). */
   layout_sig?: string
+  /** A transit place (a road, a district) is walked THROUGH, never travelled
+   *  TO (§ A1.9). The player map draws it differently, the destination list
+   *  drops it — it is NOT the terrain passability, which lives on
+   *  `TerrainType`. */
+  passable?: boolean
+}
+
+/** The running journey of a character (§ A11) — the metre polyline plus how
+ *  far along it the walker is. `waypoints` is `null` for EVERYONE but the
+ *  avatar in a fogged payload (§ A12), so a client that has only the point
+ *  draws only the point. */
+export interface WorldmapTravel {
+  target_id: string
+  waypoints: Array<[number, number]> | null
+  progress_m: number
+  total_m: number
+  /** ISO stamp on the GAME clock, in the world timezone — an HH:MM slice is
+   *  game wall-clock time. */
+  eta_game: string
+  speed_m_s_real: number | null
+  pace_m_s_real: number | null
 }
 
 /**
@@ -88,7 +109,7 @@ export interface WorldmapCharacter {
   mood: string
   movement_target_id: string
   movement_target_name: string
-  travel: Record<string, unknown> | null
+  travel: WorldmapTravel | null
   avatar_url: string
 }
 

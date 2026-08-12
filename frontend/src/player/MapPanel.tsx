@@ -1,40 +1,105 @@
 /**
- * MapPanel — flache 2D-Weltkarte (read-only) im Player-UI, das einzige
- * Karten-Panel. Zeigt das flache Grid (2D-Tile + Per-Zell-Rotation, Highlight
- * des aktuellen Orts) und
- * darüber die Live-Infos aus /play/worldmap: Character-Avatare am Ort (inkl.
- * „unterwegs"-Badge), Event-Pins (disruption/danger) und ein Tray für heimat-
- * lose + schlafende Characters. Pan (Ziehen auf leerer Fläche) + Zoom (Mausrad
- * Richtung Cursor), in localStorage gespeichert. Bewegung bleibt im Move-Pad.
- * Reuse der layout-neutralen worldmap-* Klassen aus /static/themes/base.css.
+ * MapPanel — the player's SCHEMATIC map of the metre world (read-only).
  *
- * Fog of war (§ A12): the payload is filtered server-side to what the avatar
- * knows, so the grid comes from `grid_bounds` (all placed locations) instead of
- * the delivered ones — it stays stable while the world is discovered — and
- * empty cells wear the fog veil while `fogged` holds. Admins get a "show all"
- * checkbox that switches the request (and the poll cache key) to `?all=1`.
+ * The tile grid is gone (contract § A1). The world is one continuous plane in
+ * metres, so this panel draws exactly what the two metre payloads say and
+ * decides no geometry of its own:
+ *   - `GET /play/worldmap` (§ A1.3/§ A11/§ A12) — locations with their metre
+ *     position, yaw and footprint edge, characters with their metre `pos` and
+ *     their running journey, the events per location, `world_bounds` and the
+ *     terrain signature.
+ *   - `GET /play/terrain` (§ A1.5) — the painted ground: the type catalog with
+ *     its colours plus the areas, bottom-to-top. Never fogged.
+ *
+ * The drawing surface is the map editor's `MapCanvas`: it owns the two
+ * gestures (cursor-anchored wheel zoom via `zoomAt`, pan by dragging), the
+ * metre grid and the scale bar with the 1.70 m figure. Reusing it is the point
+ * — a second pan/zoom implementation would drift away from the first, exactly
+ * as the clip shader once did. Everything above it is a layer of this file,
+ * bottom to top:
+ *   1. `GroundLayer`   — the unpainted ground in the `default_kind` colour,
+ *                        `world_bounds` plus 40 m of air, so the edge of the
+ *                        world is visible as an edge.
+ *   2. `TerrainAreas`  — `terrain.areas` in delivered order (= z-order),
+ *                        colour from the catalog (`typeColor`, grey when the
+ *                        kind is unknown), even-odd like the editor.
+ *   3. `Footprints`    — the location squares in REAL size via
+ *                        `footprintScreenCorners`, name label by label mode,
+ *                        📍 on the avatar's location, 🔥/❗ event pin.
+ *   4. `TravelLines`   — the REST of a journey, dashed (avatar only under fog:
+ *                        `waypoints` is null for everyone else, § A12).
+ *   5. `Characters`    — every character with a `pos` (in a location or out in
+ *                        the wilderness), the avatar bigger and in the accent
+ *                        colour, foreign faces only once the zoom can carry
+ *                        them.
+ * No game action lives here: travelling is the TravelPanel's job.
+ *
+ * Fills are translucent (55 %) because the canvas draws its metre grid BEFORE
+ * its children — an opaque ground would swallow the scale aids.
+ *
+ * Two numbers this panel is pinned to (§ B5a — arithmetic, not screenshots):
+ *
+ *   SCALE BAR (drawn by `MapCanvas.MapMeasureLegend`, kept honest here):
+ *     bar metres = niceDown(140 / pxPerM), drawn length = bar × pxPerM px in
+ *     four equal segments.
+ *       pxPerM 2   -> 140/2 = 70 m -> niceDown = 50 m -> 100 px, segments 25 px
+ *       pxPerM 0.5 -> 280 m       -> niceDown = 200 m -> 100 px, segments 25 px
+ *       pxPerM 20  -> 7 m         -> niceDown = 5 m  -> 100 px, segments 25 px
+ *     (the nice values are 0.25/0.5/1/2/5/10/20/50/100/200/500 m, so the bar
+ *     lands between 70 and 140 px at every zoom.)
+ *
+ *   FOOT POINT of a travel line (`nearestOnPolyline`, hand-derived there):
+ *     route [(0,0), (10,0), (10,10)], the server reports the walker at
+ *     `pos` (4, 1). Segment 0 has direction (10,0) and |d|² = 100, so
+ *     t = (4·10 + 1·0)/100 = 0.4 -> foot (4,0), distance 1 m; segment 1 gives
+ *     foot (10,1) at distance 6 m. Segment 0 wins, and the drawn rest is
+ *     [(4,0), (10,0), (10,10)] — the line starts under the figure and ends at
+ *     the target, never behind the walker.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
 import { apiGet } from '../lib/api'
 import { usePoll } from './usePolling'
+import { MapCanvas, useMapView } from '../tabs/map/MapCanvas'
+import { typeColor } from '../tabs/map/TerrainLayer'
+import {
+  FIT_FALLBACK_PX_PER_M, fitBounds, footprintScreenCorners, nearestOnPolyline,
+  worldPolyToPath, worldToScreen, type MapBounds, type View,
+} from '../tabs/map/mapMath'
+import type {
+  TerrainArea, TerrainPayload, TerrainType, WorldmapCharacter,
+  WorldmapLocationRow, WorldmapPayload,
+} from '../tabs/map/mapTypes'
 
-const CELL = 72
-const GAP = 0 // Zellen stoßen aneinander → zusammenhängende Karte (keine Lücken)
-const PAD = 6
-// Size of the admin-only header row — counted into the reported content size
-// so the panel autosize fits the map AND keeps the row's label unclipped at
-// low zoom (the width is the checkbox plus the longest label rendering).
-const HEAD_H = 22
-const HEAD_W = 220
-const VIEW_KEY = 'anima.map2d.view'
+/** View persistence. NEW key: the old one carried grid semantics (zoom plus a
+ *  scroll offset in cell pixels) and means nothing on a metre plane. */
+const VIEW_KEY = 'anima.map2d.v2.view'
 const LABELS_KEY = 'anima.map2d.labels'
 
-// Label-Anzeige: alle / nur eindeutige / keine. "Eindeutig" = kein Durchgang
-// (passable=false), also benannte Einzelorte; Durchgangs-/Terrain-Elemente wie
-// "Stadtteil" werden ausgeblendet. Modus wird in PlayerApp gehalten (Button im
-// Panel-Header) und hier nur angewandt. Persistenz-Helfer exportiert.
+/** Air around `world_bounds` the ground is painted over, in metres. */
+const GROUND_MARGIN_M = 40
+/** One opacity for every fill — the canvas' metre grid must read through. */
+const FILL_OPACITY = 0.55
+/** From this zoom on a foreign character gets its face; below it the map
+ *  would be a wall of portraits at world zoom. */
+const CHIP_MIN_PX_PER_M = 2
+/** Radius of a character dot in px (the avatar's, and everyone else's). */
+const DOT_R_AVATAR = 6
+const DOT_R_OTHER = 4
+
+const COL_ACCENT = '#6aa9ff'
+const COL_STONE = '#8b949e'
+const COL_TEXT = '#f0f6fc'
+const COL_DARK = '#0d1117'
+
+// Size of the panel's own header row (admin checkbox + fit button).
+const HEAD_H = 24
+
+// Label display: all / only unique / none. "Unique" = not passable, i.e. named
+// single places; transit elements (a road, a district) drop out. The mode is
+// held in PlayerApp (button in the panel header) and only applied here; the
+// persistence helpers are exported with it.
 export type LabelMode = 'all' | 'unique' | 'none'
 const LABEL_CYCLE: LabelMode[] = ['all', 'unique', 'none']
 export function loadLabelMode(): LabelMode {
@@ -51,160 +116,187 @@ export function saveLabelMode(m: LabelMode): void {
   try { localStorage.setItem(LABELS_KEY, m) } catch { /* ignore */ }
 }
 
-interface WLoc {
-  id: string; name: string; grid_x?: number | null; grid_y?: number | null
-  passable: boolean; template_location_id: string; map_rotation_2d?: number
-  /** Anchor (centre) of a multi-tile ground patch — image via /map-patch-2d. */
-  map_patch_2d?: boolean; map_patch_span?: number
-  /** The cell's own tile is switched off (patch or nothing shows instead). */
-  map_image_off?: boolean
-}
-interface WChar {
-  name: string; location_id: string; activity: string
-  movement_target_id: string; movement_target_name: string; avatar_url: string
-  /** Server-driven journey (contract § A11), null while the character rests. */
-  travel?: { eta_game: string; progress_cells: number; path: string[] } | null
-}
-interface WEvent { category: string; text: string }
-interface GridBounds { min_x: number; min_y: number; max_x: number; max_y: number }
-interface WorldMap {
-  avatar: string; current_location_id: string
-  locations: WLoc[]; characters: WChar[]; events_by_location: Record<string, WEvent[]>
-  /** Extent over ALL placed locations (fog or not) — the grid stays stable
-   *  while the avatar discovers the world. Null in an empty world. */
-  grid_bounds?: GridBounds | null
-  /** The payload is filtered to what the avatar knows (§ A12). */
-  fogged?: boolean
-}
-
-interface View { zoom: number; sx: number; sy: number }
+/** The stored view, or null when there is none (or it is not a view). */
 function loadView(): View | null {
   try {
     const raw = localStorage.getItem(VIEW_KEY)
     if (!raw) return null
     const v = JSON.parse(raw)
-    if (v && typeof v.zoom === 'number') return v
+    if (v && typeof v.cx === 'number' && typeof v.cz === 'number'
+      && typeof v.pxPerM === 'number' && v.pxPerM > 0) {
+      return { cx: v.cx, cz: v.cz, pxPerM: v.pxPerM }
+    }
   } catch { /* ignore */ }
   return null
 }
 
-// Avatar image with a first-letter fallback when no profile image exists.
-function Avatar({ c }: { c: WChar }) {
-  const [fail, setFail] = useState(false)
-  if (!c.avatar_url || fail) {
-    return (
-      <span className="worldmap-avatar" style={{
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        background: 'var(--accent, #2f81f7)', color: '#fff', fontSize: 11, fontWeight: 600,
-      }}>{c.name.charAt(0).toUpperCase()}</span>
-    )
-  }
-  return <img className="worldmap-avatar" src={c.avatar_url} alt={c.name} onError={() => setFail(true)} />
+function saveView(v: View): void {
+  try { localStorage.setItem(VIEW_KEY, JSON.stringify(v)) } catch { /* ignore */ }
 }
 
-// Flat 2D map tile, hidden if none exists. The per-cell 90° rotation is a
-// display-only transform.
-function MapIcon({ loc }: { loc: WLoc }) {
-  const [hidden, setHidden] = useState(false)
-  if (hidden || loc.map_image_off) return null
-  const rot = loc.map_rotation_2d || 0
+/** Layer 1 — the unpainted ground: the world box plus 40 m of air. Outside it
+ *  the canvas background stays bare, which is what "here the world ends"
+ *  looks like. Empty until the terrain catalog has answered. */
+function GroundLayer({ bounds, color }: { bounds: MapBounds | null; color: string }) {
+  const { view, w, h } = useMapView()
+  if (!bounds || !color) return null
+  const a = worldToScreen(bounds.min_x - GROUND_MARGIN_M,
+    bounds.min_z - GROUND_MARGIN_M, view, w, h)
+  const b = worldToScreen(bounds.max_x + GROUND_MARGIN_M,
+    bounds.max_z + GROUND_MARGIN_M, view, w, h)
   return (
-    <img src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`}
-      alt={loc.name} onError={() => setHidden(true)}
-      style={{
-        position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
-        transform: rot ? `rotate(${rot}deg)` : undefined,
-      }} />
+    <rect x={a.x} y={a.y} width={Math.max(0, b.x - a.x)} height={Math.max(0, b.y - a.y)}
+      fill={color} fillOpacity={FILL_OPACITY} pointerEvents="none" />
   )
 }
 
-// Multi-tile ground patch (gallery type map_3x3), drawn UNDER the cells.
-// Hidden on 404 (patch file deleted); never intercepts pan/zoom pointers.
-function MapPatch({ loc, left, top, size }: { loc: WLoc; left: number; top: number; size: number }) {
-  const [hidden, setHidden] = useState(false)
-  if (hidden) return null
-  return (
-    <img src={`/world/locations/${encodeURIComponent(loc.id)}/map-patch-2d`}
-      alt="" onError={() => setHidden(true)}
-      style={{ position: 'absolute', left, top, width: size, height: size,
-        objectFit: 'cover', pointerEvents: 'none' }} />
-  )
-}
-
-// Fog-of-war cell: inside the grid bounds, but the avatar knows nothing here.
-// Same look as the unknown tiles in the Game-Admin KnownLocationsEditor —
-// darkened veil, no name (an empty cell carries no location data at all).
-function FogCell({ title }: { title: string }) {
-  return (
-    <div title={title} style={{
-      width: CELL, height: CELL, boxSizing: 'border-box', position: 'relative',
-      border: '1px solid rgba(255,255,255,0.08)', background: 'var(--bg, #0d1117)',
-    }}>
-      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} />
-    </div>
-  )
-}
-
-function Cell({ loc, isActive, chars, events, travellingTo, arrivesAt, showLabel, covered }: {
-  loc: WLoc; isActive: boolean; chars: WChar[]; events: WEvent[]; travellingTo: string
-  arrivesAt: string; showLabel: boolean
-  /** Cell lies inside a 3x3 patch: transparent + borderless so the patch
-   *  shows seamlessly; the cell's own tile (when active) still paints above. */
-  covered?: boolean
+/** Layer 2 — the painted areas, in the order the server sent them (bottom to
+ *  top). Even-odd, like the editor and like the server's point query. */
+function TerrainAreas({ areas, types }: {
+  areas: TerrainArea[]
+  types: Record<string, TerrainType>
 }) {
-  const hasDanger = events.some((e) => e.category === 'danger')
-  const tooltip = events.map((e) => `${(e.category || '').toUpperCase()}: ${e.text || ''}`).join('\n')
+  const { view, w, h } = useMapView()
   return (
-    <div style={{
-      width: CELL, height: CELL, boxSizing: 'border-box', position: 'relative', overflow: 'visible',
-      border: isActive ? '2px solid var(--accent, #6aa9ff)'
-        : covered ? 'none' : '1px solid var(--border, #30363d)',
-      background: covered ? 'transparent' : 'var(--bg, #0d1117)', opacity: loc.passable ? 0.85 : 1,
-    }} title={loc.name}>
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
-        <MapIcon loc={loc} />
-      </div>
-      {showLabel ? (
-        <div style={{
-          position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.6em',
-          textAlign: 'center', background: 'rgba(0,0,0,0.55)', color: '#fff',
-          padding: '1px 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          fontStyle: loc.passable ? 'italic' : 'normal',
-        }}>{loc.name}</div>
-      ) : null}
-      {isActive ? <div style={{ position: 'absolute', top: 1, right: 2, fontSize: '0.8em', zIndex: 5 }}>📍</div> : null}
-      {events.length > 0 ? (
-        <div className={`worldmap-event-pin ${hasDanger ? 'worldmap-event-pin-danger' : 'worldmap-event-pin-disruption'}`}
-          title={tooltip} style={{ fontSize: 12 }}>
-          {hasDanger ? '🔥' : '❗'}
-          {events.length > 1 ? <span className="worldmap-event-count">{events.length}</span> : null}
-        </div>
-      ) : null}
-      {chars.length > 0 ? (
-        <div className="worldmap-cell-avatars">
-          {chars.map((c) => {
-            const traveling = !!c.movement_target_id && c.movement_target_id !== loc.id
-            // ISO game timestamp -> HH:MM; empty when no journey is running.
-            const eta = c.travel?.eta_game ? c.travel.eta_game.slice(11, 16) : ''
-            // Fog (§ A12): an empty target name means the avatar does not know
-            // the destination. Then the tooltip says nothing about it — never
-            // the raw id — same as the 3D client's character list. The walking
-            // badge still shows that the character is under way.
-            const target = c.movement_target_name || ''
-            const title = c.name + (traveling && target
-              ? ` — ${travellingTo} ${target}` + (eta ? ` (${arrivesAt} ${eta})` : '')
-              : '')
-            return (
-              <span key={c.name} className={traveling ? 'worldmap-avatar-wrap traveling' : 'worldmap-avatar-wrap'}
-                title={title}>
-                <Avatar c={c} />
-                {traveling ? <span className="worldmap-travel-badge">🚶</span> : null}
-              </span>
-            )
-          })}
-        </div>
-      ) : null}
-    </div>
+    <g pointerEvents="none">
+      {areas.map((a) => (a.polygon.length >= 3 ? (
+        <path key={a.id} d={worldPolyToPath(a.polygon, view, w, h)}
+          fill={typeColor(types, (a.kind || '').toLowerCase())}
+          fillOpacity={FILL_OPACITY} fillRule="evenodd" />
+      ) : null))}
+    </g>
+  )
+}
+
+/** Layer 3 — the location squares in real size, plus label, position pin and
+ *  event pin. A location without a metre position or without a scale anchor
+ *  has NO area (§ A1.1) and is not drawn. */
+function Footprints({ locations, currentId, events, labelMode }: {
+  locations: WorldmapLocationRow[]
+  currentId: string
+  events: Record<string, Array<{ category: string; text: string }>>
+  labelMode: LabelMode
+}) {
+  const { view, w, h } = useMapView()
+  return (
+    <g>
+      {locations.map((loc) => {
+        const corners = footprintScreenCorners(loc, view, w, h)
+        if (!corners) return null
+        const here = loc.id === currentId
+        const evs = events[loc.id] || []
+        const danger = evs.some((e) => e.category === 'danger')
+        const pts = corners.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+        const minX = Math.min(...corners.map((p) => p.x))
+        const maxX = Math.max(...corners.map((p) => p.x))
+        const minY = Math.min(...corners.map((p) => p.y))
+        const maxY = Math.max(...corners.map((p) => p.y))
+        const cx = (minX + maxX) / 2
+        const showLabel = labelMode === 'all'
+          || (labelMode === 'unique' && !loc.passable)
+        return (
+          <g key={loc.id}>
+            <polygon points={pts}
+              fill={here ? COL_ACCENT : COL_STONE}
+              fillOpacity={here ? 0.35 : loc.passable ? 0.12 : 0.28}
+              stroke={here ? COL_ACCENT : COL_STONE} strokeWidth={1}
+              strokeOpacity={here ? 1 : 0.7}
+              strokeDasharray={loc.passable ? '5 4' : undefined}>
+              <title>{loc.name}</title>
+            </polygon>
+            {showLabel ? (
+              <text x={cx} y={maxY + 11} fontSize={10} textAnchor="middle"
+                fill={COL_TEXT} pointerEvents="none"
+                fontStyle={loc.passable ? 'italic' : undefined}
+                opacity={loc.passable ? 0.7 : 0.95}>
+                {loc.name}
+              </text>
+            ) : null}
+            {here ? (
+              <text x={maxX + 2} y={minY + 2} fontSize={12} pointerEvents="none">📍</text>
+            ) : null}
+            {evs.length ? (
+              <text x={minX - 2} y={minY + 2} fontSize={12} textAnchor="end">
+                <title>
+                  {evs.map((e) => `${(e.category || '').toUpperCase()}: ${e.text || ''}`)
+                    .join('\n')}
+                </title>
+                {danger ? '🔥' : '❗'}{evs.length > 1 ? ` ${evs.length}` : ''}
+              </text>
+            ) : null}
+          </g>
+        )
+      })}
+    </g>
+  )
+}
+
+/** Layer 4 — what is LEFT of a journey: from the foot point under the walker
+ *  to the target, dashed. `waypoints` is the avatar's alone under fog, so a
+ *  foreign traveller shows as a point and nothing more. */
+function TravelLines({ chars }: { chars: WorldmapCharacter[] }) {
+  const { view, w, h } = useMapView()
+  return (
+    <g pointerEvents="none">
+      {chars.map((c) => {
+        const wp = c.travel?.waypoints
+        if (!wp || wp.length < 2 || !c.pos) return null
+        const near = nearestOnPolyline(wp, c.pos.x, c.pos.z)
+        if (!near) return null
+        const rest: Array<[number, number]> = [
+          [near.x, near.z], ...wp.slice(near.index + 1),
+        ]
+        if (rest.length < 2) return null
+        return (
+          <path key={c.name} d={worldPolyToPath(rest, view, w, h, false)}
+            fill="none" stroke={COL_ACCENT} strokeWidth={1.5}
+            strokeDasharray="6 4" strokeOpacity={0.85} />
+        )
+      })}
+    </g>
+  )
+}
+
+/** Layer 5 — the characters at their metre position. `pos` is the truth: a
+ *  character standing in the wilderness has no `location_id` and is drawn all
+ *  the same. */
+function Characters({ chars, avatar, tooltip }: {
+  chars: WorldmapCharacter[]
+  avatar: string
+  /** Name plus, while travelling, where to and when — built by the panel so
+   *  the translated words stay in one place. */
+  tooltip: (c: WorldmapCharacter) => string
+}) {
+  const { view, w, h } = useMapView()
+  const chips = view.pxPerM >= CHIP_MIN_PX_PER_M
+  return (
+    <g>
+      {chars.map((c) => {
+        if (!c.pos) return null
+        const p = worldToScreen(c.pos.x, c.pos.z, view, w, h)
+        const me = c.name === avatar
+        const r = me ? DOT_R_AVATAR : DOT_R_OTHER
+        const showChip = chips && !me && !!c.avatar_url
+        return (
+          <g key={c.name}>
+            {showChip ? (
+              <image href={c.avatar_url} x={p.x - r * 2} y={p.y - r * 2}
+                width={r * 4} height={r * 4} preserveAspectRatio="xMidYMid slice"
+                style={{ clipPath: 'circle(50%)' }} />
+            ) : null}
+            <circle cx={p.x} cy={p.y} r={showChip ? r * 2 : r}
+              fill={showChip ? 'none' : me ? COL_ACCENT : COL_STONE}
+              stroke={me ? COL_ACCENT : COL_DARK} strokeWidth={1.5}
+              strokeOpacity={0.9}>
+              <title>{tooltip(c)}</title>
+            </circle>
+            {c.travel ? (
+              <text x={p.x + r + 1} y={p.y - r} fontSize={10} pointerEvents="none">🚶</text>
+            ) : null}
+          </g>
+        )
+      })}
+    </g>
   )
 }
 
@@ -213,348 +305,151 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   const { t } = useI18n()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  // Admin-only view switch (component state, off by default — admins play too).
-  // It decides WHICH view is fetched, so the poll key carries the flag: a
-  // fogged and an unfogged payload must never share one cache entry.
+  // Admin-only view switch (component state, off by default — admins play
+  // too). It decides WHICH view is fetched, so the poll key carries the flag:
+  // a fogged and an unfogged payload must never share one cache entry. The
+  // fogged key is the one TravelPanel shares — renaming it would cost the
+  // player a second request.
   const [showAll, setShowAll] = useState(false)
   const allView = isAdmin && showAll
-  const { data } = usePoll<WorldMap>(
+  const { data } = usePoll<WorldmapPayload>(
     allView ? 'play-worldmap-all' : 'play-worldmap',
-    () => apiGet<WorldMap>(allView ? '/play/worldmap?all=1' : '/play/worldmap'),
+    () => apiGet<WorldmapPayload>(allView ? '/play/worldmap?all=1' : '/play/worldmap'),
     { intervalMs: 10000 })
-  // autoFit (vergrößertes Overlay): gespeicherte Ansicht ignorieren, stattdessen
-  // die Karte in den Container einpassen — und NICHT zurückschreiben.
+
+  // The painted ground is loaded ONCE and re-fetched only when the worldmap
+  // poll reports a different signature (§ A1.5) — it is never fogged, so
+  // every logged-in user gets the same landscape.
+  const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
+  const sig = data?.terrain_sig || ''
+  const loadedSig = useRef('')
+  useEffect(() => {
+    if (!sig || loadedSig.current === sig) return
+    let cancelled = false
+    apiGet<TerrainPayload>('/play/terrain').then((p) => {
+      if (cancelled) return
+      loadedSig.current = sig
+      setTerrain(p)
+    }).catch(() => { /* the map stays a bare frame; the poll retries */ })
+    return () => { cancelled = true }
+  }, [sig])
+
+  // The view: restored from localStorage, or fitted to the world once the
+  // bounds and the pane size are known. The enlarge overlay (`autoFit`) always
+  // fits and never writes the docked panel's view back.
   const savedRef = useRef<View | null>(autoFit ? null : loadView())
-  const [zoom, setZoom] = useState(savedRef.current?.zoom ?? 1)
-  const zoomRef = useRef(zoom)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const restoredRef = useRef(false)
-  const panRef = useRef({ on: false, sx: 0, sy: 0, scx: 0, scy: 0 })
-  // autoFit-Overlay: nach der ersten manuellen Zoom-Aktion NICHT mehr automatisch
-  // einpassen — sonst snappt jeder Reinzoom (Scrollbar toggelt → Resize → Re-Fit)
-  // zurueck auf den Fit-Zoom. Initial wird weiterhin eingepasst.
-  const userZoomedRef = useRef(false)
-  // Anker fuer cursor-zentriertes Zoomen: im Wheel-Handler gesetzt, im
-  // useLayoutEffect angewandt (dann steht die neue Inhaltsgroesse im DOM).
-  const zoomAnchorRef = useRef<{ mx: number; my: number; cx: number; cy: number; z: number } | null>(null)
+  const [view, setView] = useState<View>(() => savedRef.current
+    || { cx: 0, cz: 0, pxPerM: FIT_FALLBACK_PX_PER_M })
+  const fittedRef = useRef(!!savedRef.current)
 
-  // Persist zoom + scroll offset so the view is restored next time.
-  const persist = useCallback(() => {
-    if (autoFit) return  // Overlay-Instanz darf die gespeicherte Panel-Ansicht nicht überschreiben
-    const c = containerRef.current
-    if (!c) return
-    try {
-      localStorage.setItem(VIEW_KEY, JSON.stringify({ zoom: zoomRef.current, sx: c.scrollLeft, sy: c.scrollTop }))
-    } catch { /* ignore */ }
-  }, [autoFit])
-
-  useEffect(() => { zoomRef.current = zoom; persist() }, [zoom, persist])
-
-  // Cursor-zentriertes Zoomen: nach dem Zoom-Commit (neue Inhaltsgroesse steht im
-  // DOM) den Scroll so setzen, dass der Punkt unterm Cursor an Ort und Stelle
-  // bleibt. Nur wenn der Wheel-Handler einen Anker gesetzt hat (nicht beim Fit).
-  useLayoutEffect(() => {
-    const a = zoomAnchorRef.current
-    const c = containerRef.current
-    if (!a || !c) return
-    zoomAnchorRef.current = null
-    const ratio = zoom / a.z
-    c.scrollLeft = a.mx * ratio - a.cx
-    c.scrollTop = a.my * ratio - a.cy
-  }, [zoom])
-
-  // Drag-to-pan on empty area (cells stop propagation? no — pan anywhere except
-  // when starting on an avatar/pin which have their own pointer handling).
-  useEffect(() => {
-    const move = (e: MouseEvent) => {
-      const p = panRef.current
-      const c = containerRef.current
-      if (!p.on || !c) return
-      e.preventDefault()
-      c.scrollLeft = p.scx - (e.clientX - p.sx)
-      c.scrollTop = p.scy - (e.clientY - p.sy)
+  // The pane is measured here as well: `fitBounds` needs the pixel size, and
+  // the size the canvas measures for itself lives inside its own context. A
+  // CALLBACK ref, not a mount effect — this panel renders a placeholder while
+  // the first payload is missing, so the pane does not exist on first commit.
+  const [pane, setPane] = useState({ w: 0, h: 0 })
+  const paneObsRef = useRef<ResizeObserver | null>(null)
+  const setPaneEl = useCallback((el: HTMLDivElement | null) => {
+    paneObsRef.current?.disconnect()
+    paneObsRef.current = null
+    if (!el) return
+    const read = () => {
+      const r = el.getBoundingClientRect()
+      setPane({ w: Math.round(r.width), h: Math.round(r.height) })
     }
-    const up = () => {
-      panRef.current.on = false
-      if (containerRef.current) containerRef.current.style.cursor = ''
-    }
-    window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
-    window.addEventListener('blur', up)
-    return () => {
-      window.removeEventListener('mousemove', move)
-      window.removeEventListener('mouseup', up)
-      window.removeEventListener('blur', up)
-    }
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    paneObsRef.current = ro
   }, [])
+  useEffect(() => () => paneObsRef.current?.disconnect(), [])
 
-  // Persist scroll position (throttled via rAF) — covers pan and wheel scroll.
+  const bounds = data?.world_bounds || null
   useEffect(() => {
-    const c = containerRef.current
-    if (!c) return
-    let raf = 0
-    const onScroll = () => {
-      if (raf) return
-      raf = requestAnimationFrame(() => { raf = 0; persist() })
-    }
-    c.addEventListener('scroll', onScroll, { passive: true })
-    return () => { c.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf) }
-  }, [data, persist])
+    if (fittedRef.current || !bounds || !pane.w || !pane.h) return
+    fittedRef.current = true
+    setView(fitBounds(bounds, pane.w, pane.h))
+  }, [bounds, pane])
 
-  // Wheel zoom toward cursor — native non-passive listener so preventDefault works.
+  const fitView = useCallback(() => {
+    if (!bounds || !pane.w || !pane.h) return
+    setView(fitBounds(bounds, pane.w, pane.h))
+  }, [bounds, pane])
+
+  // Persist pan and zoom — but never from the enlarge overlay, which would
+  // otherwise overwrite the docked panel's view with its own, and never
+  // before the first fit: the placeholder view is "nothing known yet", not a
+  // view the player chose.
   useEffect(() => {
-    const c = containerRef.current
-    if (!c) return
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      userZoomedRef.current = true  // ab jetzt kein Auto-Fit-Rueckspringen mehr (autoFit-Overlay)
-      const delta = e.deltaY > 0 ? -0.1 : 0.1
-      const rect = c.getBoundingClientRect()
-      const cx = e.clientX - rect.left
-      const cy = e.clientY - rect.top
-      setZoom((z) => {
-        const nz = Math.min(6, Math.max(0.3, z + delta))
-        if (nz === z) return z
-        // Punkt unter dem Cursor merken (Inhalts-Koordinate bei altem Zoom +
-        // Viewport-Position) — Scroll-Korrektur folgt im useLayoutEffect.
-        zoomAnchorRef.current = { mx: cx + c.scrollLeft, my: cy + c.scrollTop, cx, cy, z }
-        return nz
-      })
-    }
-    c.addEventListener('wheel', onWheel, { passive: false })
-    return () => c.removeEventListener('wheel', onWheel)
-  }, [data])
+    if (autoFit || !fittedRef.current) return
+    saveView(view)
+  }, [view, autoFit])
 
-  const current = currentLocationId || data?.current_location_id || ''
+  // The catalog by kind, lower-cased: the colour of an area comes from HERE
+  // and from nowhere else (§ A1.5).
+  const types = useMemo(() => {
+    const out: Record<string, TerrainType> = {}
+    for (const ty of terrain?.types || []) out[(ty.kind || '').toLowerCase()] = ty
+    return out
+  }, [terrain])
+  const groundColor = terrain
+    ? typeColor(types, (terrain.default_kind || '').toLowerCase()) : ''
+
   const travellingTo = t('travelling to')
   const arrivesAt = t('arrives ~')
-  const fogTitle = t('unknown (fog of war)')
+  const tooltip = useCallback((c: WorldmapCharacter): string => {
+    // Fog (§ A12): an empty target name means the avatar does not know the
+    // destination — then the tooltip says nothing about it, never the raw id.
+    const target = c.movement_target_name || ''
+    if (!c.movement_target_id || !target) return c.name
+    const eta = c.travel?.eta_game ? c.travel.eta_game.slice(11, 16) : ''
+    return `${c.name} — ${travellingTo} ${target}`
+      + (eta ? ` (${arrivesAt} ${eta})` : '')
+  }, [travellingTo, arrivesAt])
 
-  const { cells, gridW, gridH, focusX, focusY, fitW, fitH, fitCX, fitCY } = useMemo(() => {
-    const empty = {
-      cells: null as React.ReactNode, gridW: 0, gridH: 0,
-      focusX: 0, focusY: 0, fitW: 0, fitH: 0, fitCX: 0, fitCY: 0,
-    }
-    if (!data) return empty
-    // Delivered = every location that sits on a cell. Under fog the server
-    // already dropped what the avatar does not know, so this is exactly the
-    // known part of the map — the fog check below runs against it.
-    const delivered: WLoc[] = data.locations.filter((l) =>
-      l.grid_x != null && l.grid_y != null && (l.grid_x as number) >= 0 && (l.grid_y as number) >= 0)
-    // Placed = real locations + placed clones of passable templates (no
-    // unplaced terrain definitions). Display filter only: a delivered
-    // passable non-clone is KNOWN, it just draws no tile of its own.
-    const placed: WLoc[] = delivered.filter((l) =>
-      !(l.passable && !(l.template_location_id || '').trim()))
-    const deliveredCells = new Set(delivered.map((l) => `${l.grid_x},${l.grid_y}`))
-    // Extent: the server-side bounds over ALL placed locations keep the grid
-    // (and its cell scale) stable while the avatar discovers the world. Only
-    // an empty world (no bounds) falls back to the delivered locations.
-    const bounds = data.grid_bounds || null
-    if (!placed.length && !bounds) return empty
-    // Extent of the cells actually delivered — under fog that is what the
-    // avatar knows. ONE source of truth for two jobs: the fallback extent for
-    // a world without bounds, and the box the view opens on (below).
-    const xs = placed.map((l) => l.grid_x as number)
-    const ys = placed.map((l) => l.grid_y as number)
-    const kMinX = xs.length ? Math.min(...xs) : 0
-    const kMaxX = xs.length ? Math.max(...xs) : 0
-    const kMinY = ys.length ? Math.min(...ys) : 0
-    const kMaxY = ys.length ? Math.max(...ys) : 0
-    const minX = bounds ? bounds.min_x : kMinX
-    const maxX = bounds ? bounds.max_x : kMaxX
-    const minY = bounds ? bounds.min_y : kMinY
-    const maxY = bounds ? bounds.max_y : kMaxY
-    const cols = maxX - minX + 1
-    const rows = maxY - minY + 1
-    const byCell = new Map<string, WLoc>()
-    placed.forEach((l) => byCell.set(`${l.grid_x},${l.grid_y}`, l))
-    const charsAt = (id: string) => data.characters.filter((c) => c.location_id === id)
-
-    // "Eindeutig" = kein Durchgang (passable=false): benannte Einzelorte.
-    // Durchgangs-/Terrain-Elemente (passable, z.B. "Stadtteil") gelten NICHT
-    // als eindeutig und werden im unique-Modus ausgeblendet.
-    const showLabelFor = (l: WLoc): boolean => {
-      if (labelMode === 'none') return false
-      if (labelMode === 'all') return true
-      return !l.passable
-    }
-
-    // Multi-tile patches: drawn UNDER the cell grid (DOM order — the cells
-    // are positioned and paint above), covered cells render transparent so a
-    // 3x3 forest reads as one seamless image. A cell with an ACTIVE own tile
-    // still covers its part of the patch. Stable draw order (y, then x) makes
-    // overlapping patches deterministic: the later anchor wins.
-    const patches: React.ReactNode[] = []
-    const covered = new Set<string>()
-    const anchors = placed.filter((l) => l.map_patch_2d)
-      .sort((a, b) => ((a.grid_y as number) - (b.grid_y as number))
-        || ((a.grid_x as number) - (b.grid_x as number)))
-    for (const l of anchors) {
-      const span = Math.max(1, l.map_patch_span || 3)
-      const r = Math.floor(span / 2)
-      const ax = l.grid_x as number
-      const ay = l.grid_y as number
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) covered.add(`${ax + dx},${ay + dy}`)
-      }
-      patches.push(
-        <MapPatch key={`patch-${l.id}`} loc={l}
-          left={PAD + (ax - r - minX) * CELL} top={PAD + (ay - r - minY) * CELL}
-          size={span * CELL} />,
-      )
-    }
-
-    const els: React.ReactNode[] = []
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        const l = byCell.get(`${x},${y}`)
-        if (!l) {
-          // Fogged view: a cell the server delivered NOTHING for is
-          // unexplored. A delivered-but-not-drawn cell (passable non-clone)
-          // is known — it stays a plain empty cell, no fog.
-          els.push(data.fogged && !deliveredCells.has(`${x},${y}`)
-            ? <FogCell key={`${x},${y}`} title={fogTitle} />
-            : <div key={`${x},${y}`} style={{ width: CELL, height: CELL, opacity: 0.12 }} />)
-          continue
-        }
-        els.push(
-          <Cell key={`${x},${y}`} loc={l} isActive={l.id === current}
-            chars={charsAt(l.id)} events={data.events_by_location[l.id] || []} travellingTo={travellingTo}
-            arrivesAt={arrivesAt} showLabel={showLabelFor(l)} covered={covered.has(`${x},${y}`)} />,
-        )
-      }
-    }
-    const grid = (
-      <div style={{ position: 'relative' }}>
-        {patches}
-        <div style={{
-          display: 'grid', gridTemplateColumns: `repeat(${cols}, ${CELL}px)`,
-          gap: GAP, padding: PAD,
-        }}>{els}</div>
-      </div>
-    )
-    const gW = cols * CELL + (cols - 1) * GAP + PAD * 2
-    const gH = rows * CELL + (rows - 1) * GAP + PAD * 2
-
-    // Where the view opens (unscaled content px). Under fog the grid spans the
-    // WHOLE world while the avatar may know two cells in a corner, so the
-    // geometric centre is usually pure fog:
-    //  - the docked panel opens on the avatar's current cell,
-    //  - the autoFit overlay fits the box of the KNOWN cells instead of the
-    //    whole grid, so "Enlarge" enlarges what there is to see.
-    // Without fog both fall back to the old whole-grid behaviour.
-    const here = placed.find((l) => l.id === current)
-    const fX = here ? PAD + ((here.grid_x as number) - minX) * CELL + CELL / 2 : 0
-    const fY = here ? PAD + ((here.grid_y as number) - minY) * CELL + CELL / 2 : 0
-    const fogFit = !!data.fogged && xs.length > 0
-    const kW = (kMaxX - kMinX + 1) * CELL + PAD * 2
-    const kH = (kMaxY - kMinY + 1) * CELL + PAD * 2
-
-    return {
-      cells: grid, gridW: gW, gridH: gH,
-      focusX: here ? fX : 0, focusY: here ? fY : 0,
-      fitW: fogFit ? kW : gW,
-      fitH: fogFit ? kH : gH,
-      fitCX: fogFit ? PAD + (kMinX - minX) * CELL + (kW - PAD * 2) / 2 : gW / 2,
-      fitCY: fogFit ? PAD + (kMinY - minY) * CELL + (kH - PAD * 2) / 2 : gH / 2,
-    }
-  }, [data, current, travellingTo, arrivesAt, fogTitle, labelMode])
-
-  // Restore saved scroll once after first load, else open on the avatar's own
-  // cell (grid centre when it has none — e.g. a homeless avatar).
-  useEffect(() => {
-    if (!data || !gridW || restoredRef.current) return
-    restoredRef.current = true
-    requestAnimationFrame(() => {
-      const c = containerRef.current
-      if (!c) return
-      const s = savedRef.current
-      if (s && (s.sx || s.sy)) {
-        c.scrollLeft = s.sx
-        c.scrollTop = s.sy
-      } else if (focusX || focusY) {
-        const z = zoomRef.current
-        c.scrollLeft = focusX * z - c.clientWidth / 2
-        c.scrollTop = focusY * z - c.clientHeight / 2
-      } else {
-        c.scrollLeft = (c.scrollWidth - c.clientWidth) / 2
-        c.scrollTop = (c.scrollHeight - c.clientHeight) / 2
-      }
-    })
-  }, [data, gridW, focusX, focusY])
-
-  // autoFit: Karte in den Container einpassen (und bei Resize nachführen), damit
-  // sie im vergrößerten Overlay wirklich größer wird statt nur mehr Leerraum.
-  // Eingepasst wird die Fit-Box: ohne Nebel das ganze Raster, mit Nebel der
-  // Ausschnitt der bekannten Zellen (siehe useMemo).
-  useEffect(() => {
-    if (!autoFit || !fitW || !fitH) return
-    const fit = () => {
-      if (userZoomedRef.current) return  // Nutzer hat manuell gezoomt → Ansicht nicht zuruecksetzen
-      const c = containerRef.current
-      if (!c || !c.clientWidth || !c.clientHeight) return
-      const z = Math.min(c.clientWidth / fitW, c.clientHeight / fitH)
-      if (!isFinite(z) || z <= 0) return
-      const nz = Math.max(0.2, Math.min(z * 0.98, 6))
-      setZoom(nz)
-      requestAnimationFrame(() => {
-        const cc = containerRef.current
-        if (!cc) return
-        // Centre on the fit box (for the whole grid this is exactly the old
-        // (scrollWidth - clientWidth) / 2).
-        cc.scrollLeft = fitCX * nz - cc.clientWidth / 2
-        cc.scrollTop = fitCY * nz - cc.clientHeight / 2
-      })
-    }
-    fit()
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null
-    if (ro && containerRef.current) ro.observe(containerRef.current)
-    return () => ro?.disconnect()
-  }, [autoFit, fitW, fitH, fitCX, fitCY])
+  const current = currentLocationId || data?.current_location_id || ''
 
   if (!data) return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('Loading…')}</div>
-  if (!gridW && !data.characters.length) {
+  if (!bounds && !data.characters.length) {
     return <div style={{ opacity: 0.5, fontSize: '0.85em' }}>{t('No map positions yet.')}</div>
   }
 
-  const onDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return
-    const c = containerRef.current
-    if (!c) return
-    panRef.current = { on: true, sx: e.clientX, sy: e.clientY, scx: c.scrollLeft, scy: c.scrollTop }
-    c.style.cursor = 'grabbing'
-  }
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-      // Aktuelle (gezoomte) Inhaltsgröße melden, damit das Autosize in PlayerApp
-      // BREITE und Höhe passend zur Zoomstufe setzt (DOM-Messung scheitert, weil
-      // die Karte intern scrollt/fittet). gridW/gridH sind ungeskaliert → * zoom.
-      // Nur im Grid-Panel (nicht im autoFit-Overlay).
-      {...(!autoFit && gridW ? {
-        'data-content-w': Math.max(Math.round(gridW * zoom), isAdmin ? HEAD_W : 0),
-        'data-content-h': Math.round(gridH * zoom) + (isAdmin ? HEAD_H : 0),
-      } : {})}>
-      {isAdmin ? (
-        <label style={{
-          display: 'flex', alignItems: 'center', gap: 6, height: HEAD_H,
-          fontSize: '0.78em', opacity: 0.75, cursor: 'pointer', userSelect: 'none',
-          whiteSpace: 'nowrap',
-        }} onMouseDown={(e) => e.stopPropagation()}>
-          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
-          {t('Show all locations (admin)')}
-        </label>
-      ) : null}
-      <div ref={containerRef} onMouseDown={onDown}
-        style={{ flex: 1, minHeight: 0, overflow: 'auto', cursor: 'grab' }}>
-        <div style={{ width: gridW * zoom, height: gridH * zoom }}>
-          <div style={{ width: gridW, height: gridH, transformOrigin: '0 0', transform: `scale(${zoom})` }}>
-            {cells}
-          </div>
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, height: HEAD_H,
+        fontSize: '0.78em', opacity: 0.75, whiteSpace: 'nowrap',
+      }} onMouseDown={(e) => e.stopPropagation()}>
+        {isAdmin ? (
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+            userSelect: 'none',
+          }}>
+            <input type="checkbox" checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)} />
+            {t('Show all locations (admin)')}
+          </label>
+        ) : null}
+        <button onClick={fitView} disabled={!bounds}
+          style={{
+            marginLeft: 'auto', padding: '1px 8px', borderRadius: 10,
+            fontSize: '0.95em', cursor: bounds ? 'pointer' : 'default',
+            border: '1px solid var(--border, #30363d)', background: 'transparent',
+            color: 'inherit',
+          }}>
+          {t('Fit view')}
+        </button>
       </div>
-
+      <div ref={setPaneEl} style={{ flex: 1, minHeight: 0 }}>
+        <MapCanvas view={view} onViewChange={setView}>
+          <GroundLayer bounds={bounds} color={groundColor} />
+          <TerrainAreas areas={terrain?.areas || []} types={types} />
+          <Footprints locations={data.locations} currentId={current}
+            events={data.events_by_location || {}} labelMode={labelMode} />
+          <TravelLines chars={data.characters} />
+          <Characters chars={data.characters} avatar={data.avatar} tooltip={tooltip} />
+        </MapCanvas>
+      </div>
     </div>
   )
 }

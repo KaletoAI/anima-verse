@@ -206,6 +206,79 @@ export function worldPolyToPath(points: Array<[number, number]>, view: View,
   return parts.join(' ') + (close ? ' Z' : '')
 }
 
+/** Where a point sits on a polyline: the closest point ON the line, the
+ *  segment that carries it and how far the query point is away. */
+export interface NearestOnPolyline {
+  /** Index of the segment's FIRST point (0 on a one-point line). */
+  index: number
+  /** Position along that segment, 0…1. */
+  t: number
+  /** The foot point in world metres. */
+  x: number
+  z: number
+  /** Distance from the queried point to the foot, in metres. */
+  distM: number
+}
+
+/**
+ * The point on a polyline closest to (`x`, `z`) — the FOOT of the query point.
+ *
+ * A journey (§ A11) is a polyline plus the walked distance, and the server
+ * already reports where the walker IS (`characters[].pos`). A map that only
+ * wants to draw the REST of the route therefore needs no arc-length walk of
+ * its own: it asks which segment the position sits on and draws from the foot
+ * point onwards. The projection is the ordinary one — the query point minus
+ * the segment start, projected onto the segment direction and clamped to the
+ * segment, so a point beside or beyond the line lands on its end.
+ *
+ * Ties go to the EARLIER segment (`<`, never `<=`): where a route touches
+ * itself the walker is on the part already being walked, and taking the later
+ * one would jump the drawn rest across the loop.
+ *
+ * `null` for an empty line or a non-finite query point — never a foot point
+ * that is not on the line.
+ *
+ * Verification cases (hand-derived, § B5a — arithmetic, not screenshots), all
+ * on the polyline [(0,0), (10,0), (10,10)]:
+ *
+ *   (4, 1):  seg 0 d = (10,0), |d|² = 100, t = (4·10 + 1·0)/100 = 0.4
+ *            -> foot (4,0), dist |(0,1)| = 1
+ *            seg 1 a = (10,0), d = (0,10), t = (−6·0 + 1·10)/100 = 0.1
+ *            -> foot (10,1), dist |(−6,0)| = 6
+ *            => {index: 0, t: 0.4, x: 4, z: 0, distM: 1}
+ *   (12, 12): both t clamp to 1; seg 1 foot (10,10), dist √(2²+2²) = 2.8284;
+ *            seg 0 foot (10,0), dist √(2²+12²) = 12.166
+ *            => {index: 1, t: 1, x: 10, z: 10, distM: 2.8284…}
+ *   (5, 5):  seg 0 foot (5,0) dist 5, seg 1 foot (10,5) dist 5 — a tie, and
+ *            the earlier segment keeps it => {index: 0, t: 0.5, x: 5, z: 0}
+ *   [(5,5)] alone, query (5,7): no segment at all, so the single point IS the
+ *            foot => {index: 0, t: 0, x: 5, z: 5, distM: 2}
+ */
+export function nearestOnPolyline(points: Array<[number, number]>,
+  x: number, z: number): NearestOnPolyline | null {
+  if (!points.length) return null
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null
+  const [x0, z0] = points[0]
+  let best: NearestOnPolyline = {
+    index: 0, t: 0, x: x0, z: z0, distM: Math.hypot(x0 - x, z0 - z),
+  }
+  for (let i = 0; i < points.length - 1; i++) {
+    const [ax, az] = points[i]
+    const dx = points[i + 1][0] - ax
+    const dz = points[i + 1][1] - az
+    const len2 = dx * dx + dz * dz
+    // A collapsed segment has no direction; its start point answers for it.
+    const t = len2 > 0
+      ? Math.min(1, Math.max(0, ((x - ax) * dx + (z - az) * dz) / len2))
+      : 0
+    const fx = ax + t * dx
+    const fz = az + t * dz
+    const d = Math.hypot(fx - x, fz - z)
+    if (d < best.distM) best = { index: i, t, x: fx, z: fz, distM: d }
+  }
+  return best
+}
+
 /**
  * Point-in-polygon in WORLD metres (ray casting) — which painted area a click
  * hit. The topmost hit wins; that ordering is the caller's (§ A1.5).

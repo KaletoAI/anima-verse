@@ -440,17 +440,21 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
   `world_to_local` ist die Umkehrung (Drehung um −yaw). **Verbindlich ist
   diese Abbildung, nicht ein Richtungswort:** bei `yaw_deg` 90 zeigt die
   lokale +x-Achse auf Welt **−z**. In three.js ist das
-  `rotation.y = +rad(yaw_deg)` — **umgekehrtes Vorzeichen zur alten
-  Karten-Yaw-Kette** (`map3d.rotation`, A1.8: `rotation.y = −rad(yaw)`).
-  Die beiden Felder sind verschiedene Dinge; wer sie verwechselt,
-  spiegelt die Location.
+  `rotation.y = +rad(yaw_deg)` — **derselbe Drehsinn wie in der
+  Szenen-Yaw-Kette** (`map3d.rotation`, § A1.8: `rotation.y = +rad(yaw)`,
+  angeglichen mit E4). Die beiden Felder bleiben trotzdem verschiedene
+  Dinge — das eine dreht die Location in der Welt, das andere das Modell in
+  der Szene; wer sie verwechselt, spiegelt die Location.
   **Entschieden 2026-08-07:** Dieser Drehsinn ist ab jetzt DER Standard
   dieses Vertrags — für jede Rotation, Karte wie Szene. `k = 1` ist mit E4
-  gelandet (2026-08-09); die gegenläufige Szenen-Kette (§ A1.8) wird im
-  selben Etappenlauf angeglichen — **der Server liefert die Yaw-Werte
-  unverändert, das Vorzeichen kippt in den RENDERERN** (`place.ts`,
-  `sceneRecipe.ts`, `primitives.ts`), und bis dieser Schritt gelandet ist,
-  rechnen sie dort noch mit `−rad`.
+  gelandet (2026-08-09), und mit **E4/Task 3** (2026-08-09) ist auch die
+  früher gegenläufige Szenen-Kette angeglichen: **der Server liefert die
+  Yaw-Werte unverändert, das Vorzeichen ist in den RENDERERN gekippt**
+  (`packages/scene-render/src/place.ts`, `client3d/src/scene/sceneRecipe.ts`,
+  `frontend/src/tabs/characters/Model3DViewer.tsx`,
+  `frontend/src/tabs/world/FloorPlanPreview.tsx`). Der eigene Wand-Yaw in
+  `primitives.ts` war hergeleitet korrekt und ist bewusst NICHT gekippt
+  worden (§ A1.8).
 - **Überlappung ist legal** (die Hütte auf dem Dorfplatz). Bei der Frage,
   in welcher Location ein Punkt liegt, gewinnt der **kleinste** treffende
   Fußabdruck — die spezifischste Antwort (`location_at_point`).
@@ -702,7 +706,9 @@ E1 unberührt:
   Felder selbst leben weiter: `map_rotation_2d` steht in der Yaw-Kette
   der Szene (A1.8) und reist im Rezept/der Draft-Vorschau mit, die
   Kachelbild-Maschinerie (`map_patch_*`, Blending, Outpainting) wird
-  erst mit **E7** ausgebaut.
+  erst mit **E7** ausgebaut — **gezeichnet** hat die Kachelbilder zuletzt
+  der Spieler-Panel, und der ist seit **E5** eine Schemakarte (§ A11):
+  die Dateien liegen noch, ein Renderer für sie existiert nicht mehr.
 
 Der **Reise-Payload (§ A11) war in E1 unverändert** (Zellen-Felder auf einer
 Meter-Karte, praktisch aber `travel: null`, weil ohne Raster keine Reise
@@ -1289,8 +1295,8 @@ eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
 `speed_m_s_real` 2,0 gegen `pace_m_s_real` 1,0 — die beiden Felder sind
 messbar verschieden).
 
-**Divergenz (Stand E4, 2026-08-10):** der 3D-Client ist migriert, der
-Spieler-2D-Panel nicht.
+**Konsumenten (Stand E5, 2026-08-12): beide migriert.** Die v1-Felder haben
+damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 
 * `client3d` — **erledigt (E4 Tasks 2 + 4).** `MapTravel` trägt v2
   (`waypoints`/`progress_m`/`total_m`/`eta_game`/`speed_m_s_real`/
@@ -1302,10 +1308,19 @@ Spieler-2D-Panel nicht.
   Ankunfts-Snap ab 2 m) und werden dabei VOR der Ortsgruppierung
   eingesammelt — vorher fiel jeder Reisende mit leerer `location_id` aus
   dem NPC-Update und war für die ganze Reise unsichtbar.
-* `frontend/src/player/MapPanel.tsx` — noch Typ `travel` mit
-  `progress_cells`/`path`, liest faktisch nur `eta_game` über Optional
-  Chaining. Kein Absturz, aber auch keine Interpolation. Umstellung mit
-  **E5** (zusammen mit `grid_bounds` dort, § A12).
+* `frontend/src/player/MapPanel.tsx` — **erledigt (E5 Task 1).** Der
+  Spieler-Panel ist als Schemakarte der Meter-Welt neu gebaut: Grundrisse in
+  echter Größe, gemaltes Gelände, Figuren an ihrem `pos` — und die Reise als
+  Linie. Der Typ kommt aus `frontend/src/tabs/map/mapTypes.ts`
+  (`WorldmapTravel`, v2-Felder), die eigene v1-Deklaration mit
+  `progress_cells`/`path` ist **ersatzlos gelöscht**. Gezeichnet wird der
+  REST der Route: `waypoints` ab dem Fußpunkt zur gemeldeten Position
+  (`nearestOnPolyline` in `mapMath.ts`, Fälle handgerechnet im Docstring) —
+  keine zweite Bogenlängen-Rechnung neben `client3d/src/scene/travelPath.ts`,
+  weil der Server die Position ohnehin liefert. Unter Fog hat nur der Avatar
+  `waypoints`, alle anderen zeigen bloß ihren Punkt (§ A12). Mit demselben
+  Umbau ist auch der letzte `grid_bounds`-Leser weg: der Kartenrahmen kommt
+  aus `world_bounds`.
 
 ---
 
@@ -1609,7 +1624,7 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # @anima/scene-render).
                room_id?, level,
                fix_euler: {x,y,z},         # 'YXZ', Grad — vor Messung
-               yaw_deg,                    # Eltern-Rotation, −rad im Client
+               yaw_deg,                    # Eltern-Rotation, +rad im Client
                scale_mode: "fit_box" | "real_size" | "tile_fit",
                box: {w,d,h} | max_m | {xz, y?},
                                            # fit_box: Zielbox (Welt) & 0,96
