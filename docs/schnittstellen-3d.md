@@ -534,7 +534,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
-| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11) bleibt `pos` die Position |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
   mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim
@@ -543,9 +543,10 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
   sie gerade verlassen hat.
 - Weder Location noch `pos` ⇒ der Charakter steht gar nicht auf der
   Karte und fehlt im Payload (unverändert).
-- **Im gefoggten Payload sind Wildnis-Charaktere unsichtbar**, der Avatar
-  selbst ausgenommen (§ A12). Die Sicht-/Hörweiten-Regel, die sie
-  einander sehen lässt, kommt mit **E6**.
+- **Im gefoggten Payload entscheidet draußen die SICHTWEITE**: ein
+  Wildnis-Charakter steht im Payload, wenn er höchstens
+  `game.discovery_range_m` Meter vom Avatar entfernt ist (E6, Regel und
+  Randfälle in § A12); der Avatar selbst und Reisende immer.
 
 ### A1.5 `GET /play/terrain` — gemaltes Gelände
 
@@ -1127,11 +1128,11 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 |---|---|---|
 | `target_id` | `str` | Ziel-Location (identisch mit `movement_target_id`) |
 | `waypoints` | `[[x, z], …] \| null` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne Zeiten** — die beim Start gebackenen Zeitmarken (`t_cum`) bleiben serverintern, der Client rechnet über die STRECKE. Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg). **`null` im gefoggten Payload für JEDEN außer dem Avatar** — siehe Fog-Absatz unten |
-| `progress_m` | `float` | bereits gelaufene Strecke **entlang der Polylinie**, in Metern |
-| `total_m` | `float` | Gesamtlänge der Polylinie in Metern |
-| `eta_game` | ISO-Zeit | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit |
-| `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ) |
-| `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0) |
+| `progress_m` | `float \| null` | bereits gelaufene Strecke **entlang der Polylinie**, in Metern. **`null` im gefoggten Payload für JEDEN außer dem Avatar** (E6) — siehe Fog-Absatz unten |
+| `total_m` | `float \| null` | Gesamtlänge der Polylinie in Metern. **Gefoggt `null`** wie `progress_m` |
+| `eta_game` | ISO-Zeit `\| null` | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit. **Gefoggt `null`** wie `progress_m` |
+| `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ). **Gefoggt `null`** wie `progress_m` |
+| `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0). **Gefoggt `null`** wie `progress_m` |
 
 **Semantik**
 
@@ -1243,14 +1244,26 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   `target_id` im eigenen Block wird NICHT verschwiegen (wie
   `movement_target_id`), wohl aber der Name: `movement_target_name` bleibt
   leer, solange der Avatar das Ziel nicht kennt.
-- **Die ROUTE ist Avatar-Wissen.** Im gefoggten Payload trägt nur der Avatar
-  selbst seine `waypoints`; bei allen anderen Charakteren ist das Feld
-  `null` (der Schlüssel bleibt stehen, damit „nicht mitgeteilt" von „leer"
-  unterscheidbar ist). Grund: die Polylinie endet an der Türöffnung des
-  Ziels — sie wäre eine meter-genaue Kartenmarke für einen Ort, den der
-  Avatar nicht kennt. Eine fremde Figur wird dann an ihrem `pos` gezeichnet
-  (das die Fog-Regel ohnehin auf sichtbare Locations begrenzt), ohne
-  Zwischen-Poll-Interpolation. `show_all=1` (Admin) liefert alle Routen.
+  **In der Wildnis bleibt ein Reisender dagegen stehen** — die
+  Sichtweiten-Regel für Wildnis-Charaktere (§ A12) gilt für ihn NICHT: eine
+  Reise läuft die meiste Zeit durchs Freie, und eine Figur, die dafür die
+  ganze Reise lang verschwindet, ist genau der Fehler, den § A11 seit E4
+  beschreibt. Seine Zeile bleibt, ausgedünnt nach der nächsten Regel.
+- **Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch** (Ausdünnung seit
+  **E6**). Im gefoggten Payload trägt nur der Avatar selbst seine
+  `waypoints`; bei allen anderen Charakteren ist das Feld `null`. Grund: die
+  Polylinie endet an der Türöffnung des Ziels — sie wäre eine meter-genaue
+  Kartenmarke für einen Ort, den der Avatar nicht kennt. **Dasselbe sagen
+  aber auch die Zahlen daneben**: aus Position, Restweg (`total_m −
+  progress_m`), Ankunftszeit und Tempo lässt sich das unbekannte Ziel
+  einkreisen. Gefoggt sind für jeden außer dem Avatar deshalb ALLE sechs
+  Felder `null` — `waypoints`, `progress_m`, `total_m`, `eta_game`,
+  `speed_m_s_real`, `pace_m_s_real`. Die Schlüssel bleiben stehen, damit
+  „nicht mitgeteilt" von „leer" unterscheidbar ist. Es bleibt genau
+  **`target_id`**, eine opake Id, die der Fog nie verborgen hat (wie
+  `movement_target_id`, dessen NAMEN die Figurenliste sehr wohl
+  zurückhält). Eine fremde Figur wird dann an ihrem `pos` gezeichnet, ohne
+  Zwischen-Poll-Interpolation. `show_all=1` (Admin) liefert alles ungekürzt.
 
 **Client-Erwartung**
 
@@ -1293,7 +1306,10 @@ eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
 `speed_m_s_real` `null` · `pace_m_s_real` `null`; dieselbe Linie mit
 80 s statt 40 s auf dem zweiten Schenkel ⇒ bei Faktor 2
 `speed_m_s_real` 2,0 gegen `pace_m_s_real` 1,0 — die beiden Felder sind
-messbar verschieden).
+messbar verschieden). Die **Ausdünnung** prüfen dieselbe Datei (Fall 6:
+gefoggter Fremder ⇒ alle sechs Felder `null`, `target_id` bleibt) und
+`scripts/smoke_fog_worldmap.py` (Fall 7: Reisender 100 m entfernt, also weit
+außerhalb jeder Sichtweite, steht trotzdem mit `pos` im Payload).
 
 **Konsumenten (Stand E5, 2026-08-12): beide migriert.** Die v1-Felder haben
 damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
@@ -1339,10 +1355,10 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | Feld | Gefiltert? | Regel |
 |---|---|---|
 | `locations[]` | ja | **platzierte** Orte (beide `pos_x`/`pos_z` gesetzt) nur wenn sichtbar. Orte OHNE Meterposition passieren immer — sie stehen nicht auf der Karte und verraten nichts (Template-Stellvertreter) |
-| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): unter Fog nur der Avatar selbst — bis die Sicht-/Hörweiten-Regel mit **E6** kommt, ist draußen niemand sonst zu sehen |
+| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben immer (§ A11) |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
-| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber `waypoints` ist bei **jedem außer dem Avatar** `null`: die Route endet an der Tür des Ziels und wäre eine meter-genaue Kartenmarke für einen vielleicht unbekannten Ort (§ A11) |
+| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE sechs Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id`. Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
 | `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
 | `world_bounds` | **nein** | siehe unten |
 | `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |
@@ -1351,6 +1367,18 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 Unplatzierte Orte gelten dabei als **sichtbar** — sie passieren den Filter, und
 damit werden auch die Charaktere und Events, die an ihnen hängen, mitgeliefert
 (sie stehen auf keiner Karte und verraten keine Position).
+
+**Sichtweite im Freien (E6).** Draußen gibt es keine Location, an der die
+Sichtbarkeit hängen könnte — also entscheidet die **Entfernung**: ein
+location-loser Charakter steht im gefoggten Payload genau dann, wenn
+`hypot(avatar.pos − char.pos) <= game.discovery_range_m` ist. Das ist
+bewusst DIESELBE Zahl, mit der man einen Ort durch Näherkommen entdeckt
+(`app/core/discovery.py`, § A1.4) — eine einzige „wie weit sehe ich
+draußen"-Einstellung, keine zweite daneben. Drei Fälle geben `false`:
+Sichtweite `0` (= abgeschaltet), kein eigener Punkt des Avatars, kein Punkt
+des anderen. Der Avatar selbst ist immer dabei, ein **Reisender** ebenfalls
+(§ A11) — seine Zeile ist ausgedünnt, aber sie verschwindet nicht mitten auf
+der Strecke. `show_all=1` kennt die Regel nicht.
 
 **Gelände ist nie gefoggt.** `GET /play/terrain` kennt keinen Fog-Modus und
 kein `all`-Flag: die gemalte Landschaft ist immer sichtbar, verdeckt wird nur,

@@ -178,6 +178,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
     )
+    from app.core.discovery import get_discovery_range_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
     from app.core.world_geometry import placed_footprint
@@ -323,18 +324,59 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     _now_game = game_now()
     _factor = game_speed_factor()
 
+    # How far the avatar sees OUT IN THE OPEN (E6, § A12). Deliberately the
+    # SAME number that discovers a place by coming close to it
+    # (app/core/discovery.py) — one "how far do I see outdoors" setting, not a
+    # second one beside it; 0 switches sight off. Read once per request, like
+    # the avatar's own point the distance is measured from.
+    _sight_m = get_discovery_range_m() if (fogged and avatar) else 0.0
+    _avatar_pos = get_character_pos(avatar) if _sight_m > 0 else None
+
+    def _in_sight(p: Optional[Dict[str, float]]) -> bool:
+        """Is a metre point within the avatar's sight range? False without a
+        range (0 = off), without the avatar's own point, and for a character
+        the map does not place — none of the three is a sight line."""
+        if not (_avatar_pos and p):
+            return False
+        return math.hypot(float(p["x"]) - float(_avatar_pos["x"]),
+                          float(p["z"]) - float(_avatar_pos["z"])) <= _sight_m
+
     characters = []
     for name in list_available_characters():
         loc_id = get_character_current_location(name) or ""
         pos = get_character_pos(name)
         if not loc_id and pos is None:
             continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
+        # ONE profile load per character, shared by the fog gate below, the
+        # journey, the animation-set chain and the height — this loop runs per
+        # character on every worldmap request.
+        try:
+            from app.models.character import get_character_profile as _gcp
+            _prof = _gcp(name) or {}
+        except Exception:
+            _prof = {}
+        # The active journey (or None), read BEFORE the fog gate because the
+        # wilderness rule asks whether this character is travelling.
+        # NOTE: this reader can WRITE — a stored v1 journey (cell path) is
+        # discarded here together with its movement target, once, on the first
+        # read after the format change (travel_engine.get_journey).
+        try:
+            _j = get_journey(name, profile=_prof)
+        except Exception as e:
+            _j = None
+            # debug, not warning: this endpoint is polled every few seconds
+            # per client — a broken journey would flood the log at warning
+            # level for as long as it exists.
+            logger.debug("journey read failed for %s: %s", name, e)
         if not loc_id:
             # Wilderness: a free point outside every footprint is a legal
-            # place to be. Under fog only the avatar itself is shown there —
-            # the sight-radius rule that lets it see OTHERS out in the open
-            # lands with E6.
-            if fogged and name != avatar:
+            # place to be. Under fog the avatar always sees itself, a stranger
+            # out there only within its SIGHT RANGE (§ A12).
+            # Travellers are the exception: a journey runs through the
+            # wilderness for most of its length, so the sight rule would make
+            # a figure blink out for the whole trip — exactly what § A11 warns
+            # against. Its row stays, but thinned (see the travel block).
+            if fogged and name != avatar and _j is None and not _in_sight(pos):
                 continue
         # The avatar always sees itself; everyone else only where the avatar
         # can look. Standing in an unknown place hides a character entirely.
@@ -356,26 +398,25 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # derived from the character (animal / female / male). The client walks
         # it per kind and only falls back to the plain <kind>.fbx when neither
         # set has that clip — an explicit set may be incomplete.
-        # ONE profile load per character, shared by the set chain and the
-        # height — this loop runs per character on every worldmap request.
-        try:
-            from app.models.character import get_character_profile as _gcp
-            _prof = _gcp(name) or {}
-        except Exception:
-            _prof = {}
         anim_sets = resolve_animation_sets(name, profile=_prof)
-        # Active journey (or None), § A11: the metre polyline plus the walked
-        # distance let a client interpolate the figure between two polls
-        # instead of teleporting it. Reads the profile loaded above — no
-        # second load on this hot endpoint. Isolated like the ticker's
+        # The journey read above as § A11's travel block: the metre polyline
+        # plus the walked distance let a client interpolate the figure between
+        # two polls instead of teleporting it. Isolated like the ticker's
         # per-character block: one malformed journey dict degrades to
         # travel=null, it never breaks the whole worldmap.
+        #
+        # FOG (§ A11/§ A12): a foreign traveller keeps its ROW — it is on the
+        # map and must not blink out for the whole trip — but everything the
+        # ROUTE could be reconstructed from goes. Not only the polyline: from
+        # the walked distance, the total length, the arrival time and the two
+        # paces a client triangulates the unknown destination just as well
+        # (position + remaining distance + heading is a target). What stays is
+        # `target_id`, an opaque id the fog never hid either (like
+        # `movement_target_id`, whose NAME the roster does withhold below),
+        # and the character's own `pos` — that is where the figure is drawn.
+        _thin = fogged and name != avatar
         travel = None
         try:
-            # NOTE: this reader can WRITE — a stored v1 journey (cell path) is
-            # discarded here together with its movement target, once, on the
-            # first read after the format change (travel_engine.get_journey).
-            _j = get_journey(name, profile=_prof)
             if _j:
                 _st = journey_state(_j["waypoints"], _j["started_at_game"],
                                     _now_game)
@@ -389,30 +430,27 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # x/z ONLY — the baked cumulative game seconds (t_cum) are
                     # server-internal. A client walks the line by DISTANCE
                     # (progress_m), never by re-deriving the timing.
-                    #
-                    # FOG (§ A12): the route ENDS at the target's opening, so
-                    # it is a metre-exact map marker for a place the avatar
-                    # may not know — a far worse leak than the opaque
-                    # target_id. Under fog only the avatar gets its own
-                    # waypoints; for everyone else the field is null and the
-                    # figure is drawn at its `pos` (which the fog already
-                    # limits to visible locations).
-                    "waypoints": ([[round(float(w[0]), 2), round(float(w[1]), 2)]
-                                   for w in _j["waypoints"]]
-                                  if (not fogged or name == avatar) else None),
-                    "progress_m": _st["progress_m"],
-                    "total_m": _st["total_m"],
+                    # The route ENDS at the target's opening, so under fog it
+                    # would be a metre-exact map marker for a place the avatar
+                    # may not know (see the thinning note above).
+                    "waypoints": (None if _thin else
+                                  [[round(float(w[0]), 2), round(float(w[1]), 2)]
+                                   for w in _j["waypoints"]]),
+                    "progress_m": None if _thin else _st["progress_m"],
+                    "total_m": None if _thin else _st["total_m"],
                     # Same instant, WORLD-timezone offset: clients slice the
                     # HH:MM out of this, which must be game wall-clock — the
                     # engine stores the stamp in UTC (§ A11).
-                    "eta_game": to_world_tz(_st["eta_game"]).isoformat(),
+                    "eta_game": (None if _thin
+                                 else to_world_tz(_st["eta_game"]).isoformat()),
                     # The journey's GAME pace as a REAL-seconds one — null on
                     # a frozen world (factor 0): nothing moves, so nothing may
                     # extrapolate. Successor of v1's cell_seconds_real, with
                     # the factor on the other side: a DURATION divides by it,
                     # a SPEED (metres per second) multiplies.
                     "speed_m_s_real": (round(_speed * _factor, 4)
-                                       if _factor > 0 and _speed > 0 else None),
+                                       if not _thin and _factor > 0
+                                       and _speed > 0 else None),
                     # The pace of the segment being walked RIGHT NOW (§ A11,
                     # E4): the terrain speed_factor sits in the baked stamps,
                     # not in speed_m_s, so THIS is what a client extrapolates
@@ -421,7 +459,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # degenerate segment — the three cases where the number
                     # would be a lie.
                     "pace_m_s_real": (round(_pace * _factor, 4)
-                                      if _factor > 0 and _pace else None),
+                                      if not _thin and _factor > 0
+                                      and _pace else None),
                 }
         except Exception as e:
             travel = None
