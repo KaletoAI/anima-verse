@@ -40,19 +40,20 @@
  *     w      -> that, already unit length
  *   no key, or w+s (they cancel) -> null (never a NaN from normalising 0).
  *
- * --- what `blocked` MEANS to slideBlocked (decision 2026-08-13) -----------
+ * --- terrainBlocks: FOOTPRINT WINS (decision 2026-08-13) ------------------
  * `slideBlocked` takes the predicate as a parameter and never asks what a
- * blocker is — main.ts `blockedFor` decides that, and since the "footprint
- * wins" decision its terrain half is WILDERNESS-ONLY, mirroring the server
- * gate of `POST /play/pos` (§ A15: the location of the point is derived
- * first, `passability_at` runs only for `location_id == ""`). The mirror is
- * one condition — `const at = tileAt(x, z); if (!at && !passableAt(x, z))` —
- * and carries no maths of its own, so it is derived where the rule lives:
- * hand-checked against the server in `scripts/smoke_play_pos.py` [20]
- * (inside a footprint the same rock point is accepted, without the location
- * it is `impassable`) and, for NPC routing, `scripts/smoke_nav_grid.py` [12].
- * The cases below stay what they always were: the pure geometry of sliding
- * along WHATEVER counts as blocked.
+ * blocker is — main.ts `blockedFor` decides that. Its TERRAIN half is a rule,
+ * not a lookup, so it lives in `walk.ts` next to `slideBlocked` and is
+ * derived here: painted ground judges the WILDERNESS only, mirroring the
+ * server gate of `POST /play/pos` (§ A15 — the location of the point is
+ * derived first, `passability_at` runs only for `location_id == ""`).
+ *   terrainBlocks(passable, insideFootprint) = !insideFootprint && !passable
+ *   rock (passable false) INSIDE a footprint  -> false, one walks on it;
+ *   the same rock with no tile over it        -> true, the wilderness wall;
+ *   grass, inside or outside                  -> false either way.
+ * The lookups stay in main.ts (`terrainGround.passableAt`, `tileAt`), and the
+ * server side of the same rule is hand-derived in `scripts/smoke_play_pos.py`
+ * [20] and, for NPC routing, `scripts/smoke_nav_grid.py` [12].
  *
  * --- slideBlocked (E4 task 5) ---------------------------------------------
  * The step that would end in blocked ground keeps the component that runs
@@ -566,7 +567,7 @@ async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
-  const { walkDir, slideBlocked } = walk;
+  const { walkDir, slideBlocked, terrainBlocks } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
@@ -665,6 +666,33 @@ async function main() {
     const quadrant = (x, z) => x > 0 && z > 0;
     check('the tie goes to x, deterministically',
       slideBlocked({ x: -1, z: -1 }, { x: 1, z: 1 }, quadrant), { x: 1, z: -1 });
+  }
+
+  // --- terrainBlocks (decision 2026-08-13) ---------------------------------
+  // The client's half of the server's terrain gate, spelled out in the header:
+  // painted ground stops the figure OUT IN THE WILDERNESS only. The two cases
+  // that carry the decision are the same rock point with and without a tile
+  // over it — the B1 case (a hall on a rock plateau) and the wilderness wall.
+  console.log('terrainBlocks — painted ground judges the wilderness only');
+  {
+    check('rock INSIDE a footprint is walkable (finding B1)',
+      terrainBlocks(false, true), false);
+    check('the same rock with no location over it blocks',
+      terrainBlocks(false, false), true);
+    check('walkable ground never blocks — outside',
+      terrainBlocks(true, false), false);
+    check('...nor inside', terrainBlocks(true, true), false);
+    // And the same pair once THROUGH slideBlocked, because that is how the
+    // figure meets it: a rock strip 4 <= x <= 6 with a location standing on
+    // its northern half (z >= 0). Walking east at z = 1 crosses it; walking
+    // east at z = -1 (no tile) does not.
+    const rock = (x) => x >= 4 && x <= 6;
+    const tiled = (_x, z) => z >= 0;
+    const blocked = (x, z) => terrainBlocks(!rock(x), tiled(x, z));
+    check('into the rock UNDER the location: the step goes through',
+      slideBlocked({ x: 3, z: 1 }, { x: 5, z: 1 }, blocked), { x: 5, z: 1 });
+    check('into the same rock beside it: the figure stays put',
+      slideBlocked({ x: 3, z: -1 }, { x: 5, z: -1 }, blocked), { x: 3, z: -1 });
   }
 
   // --- clickmove (E4 task 5) -----------------------------------------------

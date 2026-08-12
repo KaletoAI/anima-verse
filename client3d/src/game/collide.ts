@@ -32,9 +32,13 @@
  *
  * Collision applies INSIDE the interior view only. Outdoors the figure walks
  * freely over the metre plane (E4 task 5): `walk.slideBlocked` holds it out of
- * impassable terrain and foreign footprints, and the server judges the
- * reported point (`POST /play/pos`) — there is no per-boundary permission any
- * more.
+ * impassable terrain — in the WILDERNESS only, since a placed footprint
+ * replaces the ground under it (`walk.terrainBlocks`, decision 2026-08-13) —
+ * and out of foreign footprints, and the server judges the reported point
+ * (`POST /play/pos`) — there is no per-boundary permission any more. Inside a
+ * location the walls below are what is left of the boundaries, which is the
+ * other half of the same decision: a place is gated by its walls and its
+ * openings, never by the rock somebody painted under it.
  */
 
 import type { ScenePayload } from '../api';

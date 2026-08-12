@@ -44,8 +44,9 @@ export const STALL_FRAMES = 20;
  * plans nothing falls through to the tile's info panel, which is how one
  * inspects a place one cannot walk into.
  *
- *  1. the clicked point is BLOCKED (impassable terrain, a foreign footprint):
- *     null — the figure would only run into it. Entering a location is the
+ *  1. the clicked point is BLOCKED (impassable terrain OUT IN THE WILDERNESS
+ *     — inside a footprint the ground is not asked, `walk.terrainBlocks` —
+ *     or a foreign footprint): null, the figure would only run into it. Entering a location is the
  *     explicit offer at its opening (`enterLocation.ts`), never a click into
  *     the middle of it;
  *  2. the point is where the figure already stands (within `GOAL_ARRIVE_M`):

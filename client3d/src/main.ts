@@ -5,7 +5,7 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { slideBlocked, walkDir } from './game/walk';
+import { slideBlocked, terrainBlocks, walkDir } from './game/walk';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
 } from './game/clickmove';
@@ -2094,7 +2094,7 @@ async function startApp(username: string, role: string) {
    */
   function blockedFor(mine: Tile | null, x: number, z: number): boolean {
     const at = tileAt(x, z);
-    if (!at && !terrainGround.passableAt(x, z)) return true;
+    if (terrainBlocks(terrainGround.passableAt(x, z), at !== null)) return true;
     if (at && at !== mine && !freeBoundary(at)) return true;
     const now = performance.now();
     for (const r of refusedPoints) {
@@ -2912,10 +2912,12 @@ async function startApp(username: string, role: string) {
     // to both the blocker and the wall/floor lookups below.
     const here = tileAt(pos.x, pos.z);
     let { x, z } = { x: pos.x + dir.x * lead, z: pos.z + dir.z * lead };
-    // OUTDOORS the world itself stops the figure: impassable terrain and the
-    // footprints of locations the avatar is not in. Both slide (the movement
-    // keeps the component that runs ALONG the boundary), so walking into a
-    // wall of water follows the shore instead of nailing the figure to it.
+    // OUTDOORS the world itself stops the figure: impassable terrain — out in
+    // the WILDERNESS only, a footprint replaces the ground under it
+    // (`terrainBlocks`, decision 2026-08-13) — and the footprints of locations
+    // the avatar is not in. Both slide (the movement keeps the component that
+    // runs ALONG the boundary), so walking into a wall of water follows the
+    // shore instead of nailing the figure to it.
     // This is what the cell clamps used to be — and unlike them it is not a
     // permission but geometry, which is why it needs no server round trip.
     ({ x, z } = slideBlocked(from, { x, z }, (bx, bz) => blockedFor(here, bx, bz)));

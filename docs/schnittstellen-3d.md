@@ -553,13 +553,17 @@ immer sichtbar, nur Locations verstecken sich.
   nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ nachträglich
   gelöscht) gilt als begehbar mit Faktor 1,0: ein Loch im Katalog darf
   niemanden stranden lassen.
-- **`passable` beurteilt die WILDNIS, nicht das Innere einer platzierten
-  Location** (Entscheidung 2026-08-13, „Footprint gewinnt", Gate-Kette in
-  § A15). Innerhalb eines Fußabdrucks gilt der Boden des Ortes; wer dort
-  hinein darf, regeln Öffnungen und Regeln. Ein Renderer, der die Figur
-  selbst hält, MUSS es genauso machen — sonst weigert sich das Bild zu
-  laufen, wo der Server jede Meldung annimmt. `speed_factor` bleibt
-  überall gültig (er sperrt nichts).
+- **`passable` UND `speed_factor` beurteilen die WILDNIS, nicht das Innere
+  einer platzierten Location** (Entscheidung 2026-08-13, „Footprint
+  gewinnt", Gate-Kette in § A15). Innerhalb eines Fußabdrucks gilt der
+  Boden des Ortes: kein Gelände-Verbot und auch kein Gelände-Tempo — das
+  NPC-Routing rechnet dort mit dem neutralen Faktor 1,0
+  (`nav_grid.FOOTPRINT_SPEED_FACTOR`), weil die Platte den Boden ERSETZT.
+  Sonst kröche eine Reise mit Faktor 0,1 durch denselben Saal, den der
+  Avatar mit vollem Tempo durchquert. Wer hinein darf, regeln Öffnungen
+  und Regeln. Ein Renderer, der die Figur selbst hält, MUSS es genauso
+  machen — sonst weigert sich das Bild zu laufen, wo der Server jede
+  Meldung annimmt.
 - Der Katalog ist **datengetrieben**: der geteilte Grundstock
   `shared/terrain/types.json` plus Welt-Zeilen, die pro `kind` den ganzen
   Eintrag **ersetzen** (Override-Replace wie die Aktivitäten-Bibliothek).
@@ -1567,7 +1571,11 @@ Planierung darf die geebnete Fläche nicht weiter sperren.
 Dieselbe Regel gilt im **NPC-Routing** (`nav_grid`): eine Zelle stirbt am
 fremden Fußabdruck (SAT) oder am Gelände in ihrer Mitte — Letzteres nur
 außerhalb jedes Fußabdrucks. Ohne das wäre ein Ort auf Fels für die Reise
-unerreichbar, während sein Avatar darin frei umherläuft.
+unerreichbar, während sein Avatar darin frei umherläuft. **Und dasselbe
+gilt fürs Tempo**: innerhalb eines Fußabdrucks kostet ein Meter den
+neutralen Faktor 1,0 statt des Geländefaktors (§ A1.5), sonst ersetzte die
+Platte den Boden zwar fürs Dürfen, nicht fürs Vorankommen — die Reisezeit
+(`segment_costs` → Reise-Engine) erbt das automatisch.
 
 **Der Übergang (Nr. 7).** Gleiche Location oder Wildnis → Wildnis ist frei.
 Sonst:
@@ -1615,12 +1623,21 @@ abgelehnte Meldung hat niemanden bewegt).
 
 **Was der CLIENT dazu tut** (reiner Sicht-/Eingabe-Zustand, nicht Vertrag):
 er hält die Figur selbst aus unpassierbarem Gelände (nach derselben Regel:
-nur außerhalb der Fußabdrücke) und aus fremden Fußabdrücken
-(`walk.slideBlocked`, Gleiten statt Anhalten), bietet den Eintritt ab 3 m an
+nur außerhalb der Fußabdrücke — `walk.terrainBlocks`) und aus fremden
+Fußabdrücken (`walk.slideBlocked`, Gleiten statt Anhalten), bietet den
+Eintritt ab 3 m an
 einer Öffnung an und läuft dann auf den Öffnungspunkt zu, und beantwortet ein
 4xx mit Gleiten (≤ 8 m) oder Sprung auf den zurückgegebenen Punkt plus einem
 Toast pro Grund. **Kein Client-A\*** — Klick-Laufen ist Luftlinie mit
 Wandgleiten (E5+, falls mehr gebraucht wird).
+
+**Unter dem Schleier ist der Client STRENGER als der Server, und das ist
+hinnehmbar:** ein unentdeckter Ort steht nicht im Weltkarten-Payload, hat
+also keine Kachel — `tileAt` antwortet dort nichts, und gemalter Fels unter
+diesem Fußabdruck hält die Figur weiter auf, obwohl der Server den Punkt
+annähme. Es korrigiert sich beim Entdecken von selbst (die Zeile kommt, die
+Kachel entsteht), und die Gegenrichtung wäre ein Leak: eine begehbare Insel
+im Fels verriete genau den Ort, den der Schleier verbirgt.
 
 **Verifikation:** `scripts/smoke_play_pos.py` ruft die Handler-Funktion
 direkt (ohne Server) gegen eine Wegwerf-Welt und rechnet alle 20 Fälle von

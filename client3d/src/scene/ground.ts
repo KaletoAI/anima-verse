@@ -226,6 +226,12 @@ export interface Ground {
    * walkable. Answering `true` while the terrain is still loading is the
    * deliberate side to err on: a wall that is not there beats a world one
    * cannot walk in.
+   *
+   * It answers for the GROUND, not for the world: since "footprint wins"
+   * (decision 2026-08-13) painted ground only judges the WILDERNESS, so a
+   * `false` inside a placed footprint means nothing. The rule that combines
+   * the two is `game/walk.terrainBlocks`, and every caller goes through it
+   * (`main.ts` `blockedFor`) — never through this answer alone.
    */
   passableAt(x: number, z: number): boolean;
   /** Counts rebuilds — a cheap "has the ground changed" for redraw signatures. */

@@ -71,6 +71,14 @@ COST_STEP_M = NAV_CELL_M
 # impassable ground — neither may produce an infinite travel time.
 MIN_SPEED_FACTOR = 0.1
 
+# The pace INSIDE a placed footprint (decision 2026-08-13, "footprint wins"):
+# neutral, 1 m per game-second at speed 1. The place replaces the ground under
+# it, so the ground's factor — fast path or treacherous rock alike — has
+# nothing to say there any more. It is a constant and not the world's default
+# terrain, because what is inside a location is a floor, not another patch of
+# world.
+FOOTPRINT_SPEED_FACTOR = 1.0
+
 _SQRT2 = math.sqrt(2.0)
 _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1),
                (1, 1), (1, -1), (-1, 1), (-1, -1))
@@ -258,6 +266,10 @@ class _Search:
                 self.exempt.add(lid)
         self.blocking = [fp for fp in ctx.footprints
                          if fp[0] not in self.exempt]
+        # …and the same split kept as geometry, for the "footprint wins"
+        # tests below (:meth:`in_footprint`).
+        self.exempt_fps = [fp for fp in ctx.footprints
+                           if fp[0] in self.exempt]
         min_x, min_z, max_x, max_z = _route_bounds(ctx, start, goal)
         self.min_i, self.min_j = cell_of(min_x, min_z)
         self.max_i, self.max_j = cell_of(max_x, max_z)
@@ -268,14 +280,24 @@ class _Search:
                 and self.min_j <= cell[1] <= self.max_j)
 
     def in_footprint(self, x: float, z: float) -> bool:
-        """Does that point lie inside ANY placed footprint (exempt or not)?
+        """Does that point lie inside one of this route's EXEMPT footprints?
 
         The routing half of "FOOTPRINT WINS" (decision 2026-08-13, the rule
         ``POST /play/pos`` walks by): painted terrain judges the WILDERNESS,
-        not the inside of a placed location.
+        not the inside of a placed location — neither its passability nor
+        its pace.
+
+        The exempt list is the whole list here, by invariant: every caller
+        has ALREADY excluded the foreign footprints when it gets this far.
+        :meth:`blocked` asks only after the SAT test found no blocking
+        footprint over the cell — and a centre inside a rectangle means the
+        rectangle overlaps that cell — and :meth:`line_clear` asks only
+        after the exact segment test, which a sample point inside a
+        blocking footprint could never survive. Testing all of them would
+        answer the same and cost the foreign ones per sample.
         """
         return any(point_in_footprint(x, z, cx, cz, w, yaw)
-                   for _lid, cx, cz, w, yaw in self.ctx.footprints)
+                   for _lid, cx, cz, w, yaw in self.exempt_fps)
 
     def blocked(self, cell: Cell) -> bool:
         """A CELL is blocked by a foreign footprint OVERLAPPING it, or by
@@ -320,12 +342,19 @@ class _Search:
         return hit
 
     def factor(self, cell: Cell) -> float:
-        """Speed of a cell — terrain everywhere, footprint or not.
+        """Speed of a cell — the terrain's, or the footprint's inside one.
 
-        "Footprint wins" is about PASSABILITY, not about pace: a factor
-        never strands anybody (it is clamped at ``MIN_SPEED_FACTOR``), so
-        ground painted under a place only makes crossing it expensive.
+        FOOTPRINT WINS FOR THE PACE TOO (controller decision 2026-08-13).
+        The rationale of the whole decision is that the place REPLACES the
+        ground under it, and a plate one walks on at a tenth of the speed
+        is not replaced ground. Measured before the change: an avatar
+        walked a hall on painted rock at full speed while every NPC routed
+        through the same hall crawled at ``MIN_SPEED_FACTOR`` — two
+        movement models over the same square metre, which is the very
+        split this decision closes.
         """
+        if self.in_footprint(*cell_centre(cell)):
+            return FOOTPRINT_SPEED_FACTOR
         return max(self.ctx.cell_terrain(cell)[1], MIN_SPEED_FACTOR)
 
     def nearest_free(self, cell: Cell) -> Optional[Cell]:
@@ -433,7 +462,16 @@ def _astar(search: _Search, start_cell: Cell,
 
 def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     """Game-seconds for one straight segment at 1 m/s — the sampling rule
-    documented on :func:`segment_costs` (midpoints of ``n`` equal parts)."""
+    documented on :func:`segment_costs` (midpoints of ``n`` equal parts).
+
+    A sample inside a placed footprint pays ``FOOTPRINT_SPEED_FACTOR``, not
+    the ground's — the cost side of "footprint wins" (decision 2026-08-13),
+    and the reason a journey through a hall on rock no longer takes ten
+    times as long as walking the same hall does. There is no route context
+    at cost time, so ALL footprints count; a baked polyline never crosses a
+    foreign one anyway (``blocked`` and ``line_clear`` saw to that), so the
+    two readings answer the same.
+    """
     length = math.dist(a, b)
     if length <= 0.0:
         return 0.0
@@ -442,9 +480,12 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     total = 0.0
     for k in range(n):
         t = (k + 0.5) / n
-        factor = max(ctx.terrain_at(a[0] + (b[0] - a[0]) * t,
-                                    a[1] + (b[1] - a[1]) * t)[1],
-                     MIN_SPEED_FACTOR)
+        px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+        if any(point_in_footprint(px, pz, cx, cz, w, yaw)
+               for _lid, cx, cz, w, yaw in ctx.footprints):
+            factor = FOOTPRINT_SPEED_FACTOR
+        else:
+            factor = max(ctx.terrain_at(px, pz)[1], MIN_SPEED_FACTOR)
         total += part / factor
     return total
 
@@ -543,8 +584,10 @@ def segment_costs(waypoints: Sequence[Point],
     is read at the MIDPOINT of each part (midpoints, not endpoints — a
     waypoint typically sits exactly on a terrain border, where the reading
     is a coin flip). The cost is the sum of ``(L / n) / factor``, i.e. the
-    length divided by the harmonic mean of the sampled factors. Footprints
-    do not matter here: a building has no speed, only ground does.
+    length divided by the harmonic mean of the sampled factors. FOOTPRINTS
+    DO matter (decision 2026-08-13): a sample inside a placed footprint is
+    paid at ``FOOTPRINT_SPEED_FACTOR``, because the place replaces the
+    ground under it for the pace exactly as it does for the passability.
     """
     if ctx is None:
         ctx = build_nav_context()

@@ -72,6 +72,33 @@ export function walkDir(keys: ReadonlySet<string>, yaw: number
  * most `WALK_SPEED × dt` long (a few centimetres at any sane frame rate),
  * and both blockers are areas metres across — a step cannot jump one.
  */
+/**
+ * Does PAINTED GROUND stop the figure at that point? The client's half of
+ * the server rule of `POST /play/pos` (§ A15), pulled out of `main.ts` so it
+ * can be checked by hand instead of only being read.
+ *
+ * FOOTPRINT WINS (decision 2026-08-13). Terrain judges the WILDERNESS, never
+ * the inside of a placed location: the server derives the location of the
+ * reported point FIRST and asks `passability_at` only for
+ * `location_id == ""`. A place is put ON the world and does not inherit the
+ * ground somebody painted under it — a hall on a rock plateau is a place one
+ * can stand in, and E8 levels the heightmap under a footprint for exactly
+ * that reason. Who may go IN is decided elsewhere (openings, rules — the
+ * foreign-footprint half of `main.ts` `blockedFor`); this predicate never
+ * had anything to say about it.
+ *
+ * `passable` is the terrain answer at the point (`ground.passableAt`),
+ * `insideFootprint` whether ANY placed footprint covers it (`main.ts`
+ * `tileAt(x, z) !== null`) — the avatar's own as much as a foreign one.
+ * Both are lookups, which is why they are the caller's job and not this
+ * file's: what is derivable is the RULE, and the rule is that a footprint
+ * point is never refused for its ground.
+ */
+export function terrainBlocks(passable: boolean, insideFootprint: boolean
+): boolean {
+  return !insideFootprint && !passable;
+}
+
 export function slideBlocked(from: Point, to: Point, blocked: BlockedFn): Point {
   if (!blocked(to.x, to.z)) return to;
   const dx = to.x - from.x;

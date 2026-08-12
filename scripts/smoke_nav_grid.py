@@ -6,12 +6,15 @@ Runs against a THROWAWAY storage directory — never touches a real world.
 
 Grid rules used to derive every number below by hand:
   NAV_CELL_M = 2.0; cell index i = floor(x / 2), its centre is 2*i + 1
-  (same for z), its square is [2*i, 2*i+2]. A cell is blocked when the
-  TERRAIN at its centre is not passable, or when a FOREIGN placed
-  footprint OVERLAPS the cell square (footprints containing the start or
-  the goal are exempt). Costs are game-seconds at 1 m/s: metres /
-  speed_factor. Shared catalog: grass 1.0 · forest 0.7 · path 1.2 ·
-  water impassable (0.0).
+  (same for z), its square is [2*i, 2*i+2]. A cell is blocked when a
+  FOREIGN placed footprint OVERLAPS the cell square (footprints containing
+  the start or the goal are exempt), or when the TERRAIN at its centre is
+  not passable AND that centre lies OUT IN THE WILDERNESS — inside a
+  placed footprint the ground is not asked at all, neither for the block
+  nor for the pace (decision 2026-08-13, case [12]). Costs are
+  game-seconds at 1 m/s: metres / speed_factor, with
+  FOOTPRINT_SPEED_FACTOR = 1.0 inside a footprint. Shared catalog:
+  grass 1.0 · forest 0.7 · path 1.2 · water impassable (0.0).
 
 Hand-derived expectations:
 
@@ -95,6 +98,11 @@ Hand-derived expectations:
       2.83 m airline is impossible and the route has to walk around one of
       the blocks (> 4.5 m).
 
+ [11] Cache: build_nav_context() returns the SAME object twice;
+      invalidate_nav_cache() forces a rebuild; painting an area (terrain
+      signature) and moving a placed location (placement hash) each
+      invalidate it on their own.
+
  [12] FOOTPRINT WINS (decision 2026-08-13, the routing half of the walking
       rule in `POST /play/pos`): painted terrain judges the WILDERNESS, not
       the inside of a placed location. Hall at (700,0), plan_width_m 20 ->
@@ -112,18 +120,19 @@ Hand-derived expectations:
          rescue radius of the goal (centres x 697..705, z -3..5) is rock
          as well, so nearest_free found nothing and an NPC could not be
          sent to a place its avatar walks around in freely.
-         The route is NOT the straight line, and that is COST, not
-         blocking: rock keeps speed_factor 0 -> MIN_SPEED_FACTOR 0.1, so
-         a metre inside costs 10 s and the cost-aware smoothing keeps the
-         detour along the rim ("footprint wins" is about passability).
-      b) The wilderness half is untouched: rock x [730,770], z [-20,20]
+      b) The PACE goes with it (controller decision, same day): a sample
+         inside a footprint is paid at FOOTPRINT_SPEED_FACTOR = 1.0, not
+         at the ground's factor. So the route is the STRAIGHT
+         [(670,0), (700,0)] and its cost is 30 m / 1.0 = 30 s: 15 samples
+         of 2 m, midpoints x = 671 … 699, the ten outside on grass (1.0),
+         the five from 691 on inside the hall (1.0 instead of the rock's
+         clamped 0.1). Before that half the same rock cost 10 s per metre,
+         A* hugged the rim instead of walking straight and the last leg
+         alone came to 90.55 s — while the avatar walked that hall at full
+         speed, two movement models over one square metre.
+      c) The wilderness half is untouched: rock x [730,770], z [-20,20]
          with NO location on it, goal (750,0) sits 20 m deep inside it,
          far beyond the rescue radius -> route((670,0), (750,0)) is None.
-
- [11] Cache: build_nav_context() returns the SAME object twice;
-      invalidate_nav_cache() forces a rebuild; painting an area (terrain
-      signature) and moving a placed location (placement hash) each
-      invalidate it on their own.
 
 Usage:  ./.venv/bin/python scripts/smoke_nav_grid.py
 """
@@ -489,21 +498,20 @@ foreign = nav_grid._Search(ctx, (670.0, 0.0), (670.0, 60.0))
 check("a FOREIGN route still finds it blocked — by the footprint",
       foreign.blocked((350, 0)), True)
 r = nav_grid.route((670, 0), (700, 0))
-check_true("the route into the hall exists (old rule: None — every cell "
-           "inside the rescue radius was rock)", r is not None, f"{r}")
-if r:
-    check("it starts where the traveller stands", r[0], (670.0, 0.0))
-    check("and ENDS on the goal, inside the rock", r[-1], (700.0, 0.0))
-    # It is not the straight line, and that is COST, not blocking: rock keeps
-    # its speed_factor 0 (clamped to MIN_SPEED_FACTOR = 0.1), so A* pays 10x
-    # per metre inside and the cost-aware smoothing keeps the detour around
-    # the rim. "Footprint wins" is about passability, never about pace.
-    check_true("the last leg really walks into the footprint",
-               point_in_footprint(r[-1][0], r[-1][1], 700, 0, 20, 0), "")
-    costs = nav_grid.segment_costs(r)
-    check_true("its costs are finite and positive",
-               costs and all(math.isfinite(c) and c > 0 for c in costs),
-               f"{[round(c, 2) for c in costs]}")
+check("the straight line into the hall (old rule: None)", r,
+      [(670.0, 0.0), (700.0, 0.0)])
+check_true("its end really lies in the footprint",
+           point_in_footprint(700, 0, 700, 0, 20, 0), "")
+# The PACE side of the decision: 30 m, 15 samples of 2 m, midpoints at
+# x = 671, 673, … 699. The ten outside are grass (1.0), the five from 691 on
+# lie in the footprint and are paid at FOOTPRINT_SPEED_FACTOR = 1.0 instead of
+# the rock's clamped 0.1 -> 30 / 1.0 = 30 s exactly. With the old factor the
+# same five would have cost 10 s per metre and A* would not even have walked
+# straight: it hugged the rim and the last leg alone cost 90.55 s.
+approx("its cost is the plain 30 m at factor 1.0",
+       nav_grid.segment_costs(r)[0], 30.0)
+check("the footprint pace is the neutral 1.0",
+      nav_grid.FOOTPRINT_SPEED_FACTOR, 1.0)
 # The wilderness half is unchanged: the same rock without a location on it.
 terrain.save_area({"kind": "rock",
                    "polygon": [[730, -20], [770, -20], [770, 20], [730, 20]],
