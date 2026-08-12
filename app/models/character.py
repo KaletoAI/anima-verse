@@ -500,6 +500,22 @@ _RESERVED_NAMES = {"user", "admin", "system", "default", "player", "",
                    "undefined", "null", "none", "nan"}
 
 
+def _is_real_character(name: str) -> bool:
+    """The ONE roster rule: is this name a playable character?
+
+    Excluded are names with a leading underscore (internal system characters
+    like _messaging_frame) and the reserved names (login accounts, sentinels).
+    Module-level on purpose — every presence path has to answer this the same
+    way, otherwise a system row shows up in one earshot list and not in the
+    other.
+    """
+    if not name or name.startswith("_"):
+        return False
+    if name.lower() in _RESERVED_NAMES:
+        return False
+    return True
+
+
 def save_character_profile(character_name: str, profile: Dict[str, Any],
                            create_new: bool = False):
     """Speichert das Profil eines Characters in der DB.
@@ -1434,6 +1450,10 @@ def list_wilderness_positions() -> List[Dict[str, Any]]:
     (see its note). Rows without both coordinates are dropped — a half-filled
     row counts as "no position" here exactly as it does there, and someone
     without a point cannot be within any radius.
+
+    Filtered through ``_is_real_character``, the same roster rule the room
+    presence path uses via ``list_available_characters`` — a system row with a
+    stray position must not turn up in one earshot list and not in the other.
     """
     try:
         rows = get_connection().execute(
@@ -1444,7 +1464,7 @@ def list_wilderness_positions() -> List[Dict[str, Any]]:
         logger.error("list_wilderness_positions DB error: %s", e)
         return []
     return [{"name": r[0], "x": float(r[1]), "z": float(r[2])}
-            for r in rows if r[0]]
+            for r in rows if _is_real_character(r[0])]
 
 
 def _write_character_pos(character_name: str, x: Optional[float],
@@ -2866,13 +2886,6 @@ def list_available_characters() -> List[str]:
         auftauchen, auch wenn sie versehentlich als Row in der ``characters``
         Tabelle landen
     """
-    def _is_real_character(name: str) -> bool:
-        if not name or name.startswith("_"):
-            return False
-        if name.lower() in _RESERVED_NAMES:
-            return False
-        return True
-
     try:
         conn = get_connection()
         rows = conn.execute(

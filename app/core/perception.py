@@ -145,7 +145,7 @@ def compute_earshot(*, speaker: str, volume: str,
                 add(m, KIND_IN_ROOM, True)
             else:
                 add(m, KIND_WHISPER_META, False)
-        else:  # normal + shout: der Raum hoert den vollen Inhalt
+        else:  # normal + shout: the room hears the full content
             add(m, KIND_IN_ROOM, True)
 
     if vol == VOLUME_SHOUT:
