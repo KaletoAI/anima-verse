@@ -574,7 +574,7 @@ async function main() {
   const { fogRects, footprintBox, SHOW_ALL_KEY,
     FOG_OVERHANG_M, FOG_FEATHER_M, FOG_RAGGED_M, FOG_TEX_METRES } = fog;
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
-    locationsSignature, MINIMAP_PREF_KEY } = minimap;
+    locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
   // The defaults are spelled out here BY HAND, never read from the module —
   // that is the whole point of pinning them (see the header).
@@ -2788,6 +2788,23 @@ async function main() {
    *     must: the dot means a different place, with a different tooltip
    *   an UNPLACED one (pos null) -> "ghost:null,null", its own state — no dot
    *     is drawn, and a place that gets a position has to bring one back
+   *
+   * `footprintSignature(loc)` — the same lesson for the TILE (finding B13).
+   * A tile is built from four numbers of the location ROW (§ A1.1): centre
+   * `pos_x`/`pos_z`, rotation `yaw_deg`, footprint edge `plan_width_m`. None
+   * of them is in `map3d`, so the layout signature that watches `map3d` and
+   * the room layouts is blind to all four, and a place moved or turned in the
+   * world editor kept its tile at the old metre in a running client while the
+   * server judged walking and entering against the new footprint. Joined as
+   * `x,z,yaw,width`:
+   *
+   *   {10, 20, yaw 0,  width 8}  -> "10,20,0,8"
+   *   the same place at x = 11   -> "11,20,0,8"    differs (a drag)
+   *   the same place at yaw 90   -> "10,20,90,8"   differs (a turn)
+   *   the same place at width 12 -> "10,20,0,12"   differs (a resize)
+   *   nothing changed            -> the same string (no rebuild per poll)
+   *   an UNPLACED one            -> "null,null,undefined,null" — its own
+   *     state, and never a tile at the origin
    *   []                                  -> ""
    */
   console.log('\nminimap — the whole METRE frame, contain-fitted, north up');
@@ -2885,6 +2902,25 @@ async function main() {
     locationsSignature([...MM_PLACES, { id: 'well', pos_x: 0, pos_z: 0 }]),
     'mill:10,20;barn:30,40;well:0,0');
   check('nothing known, nothing to draw', locationsSignature([]), '');
+
+  console.log('minimap — the tile\'s rebuild signature (finding B13)');
+  const FP = { id: 'mill', pos_x: 10, pos_z: 20, yaw_deg: 0, plan_width_m: 8 };
+  check('centre, rotation and footprint edge, joined',
+    footprintSignature(FP), '10,20,0,8');
+  check('an unchanged row is the same string (no rebuild per poll)',
+    footprintSignature({ ...FP }), '10,20,0,8');
+  check('a DRAG changes it', footprintSignature({ ...FP, pos_x: 11 }), '11,20,0,8');
+  check('...and so does a drag in z',
+    footprintSignature({ ...FP, pos_z: 21 }), '10,21,0,8');
+  check('a TURN changes it', footprintSignature({ ...FP, yaw_deg: 90 }), '10,20,90,8');
+  check('a RESIZE changes it',
+    footprintSignature({ ...FP, plan_width_m: 12 }), '10,20,0,12');
+  // The name is not geometry: renaming a place must not tear its tile down.
+  check('a rename does NOT change it',
+    footprintSignature({ ...FP, name: 'Mill of the North' }), '10,20,0,8');
+  check('an unplaced location is its own state',
+    footprintSignature({ id: 'ghost', pos_x: null, pos_z: null, plan_width_m: null }),
+    'null,null,undefined,null');
 
   /**
    * --- WHAT A SEEDED SLICE WOULD DRAW (acceptance finding B6, "shows

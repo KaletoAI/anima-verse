@@ -146,6 +146,33 @@ export function locationsSignature(
 }
 
 /**
+ * The GEOMETRY of one location, as one string — the rebuild signature of the
+ * tile that stands on it.
+ *
+ * The same lesson as above, for the other consumer (finding B13). A tile is
+ * built from exactly four numbers (§ A1.1): the centre `pos_x`/`pos_z`, the
+ * rotation `yaw_deg` and the footprint edge `plan_width_m`. None of them is in
+ * `map3d` — they sit on the location ROW — so the layout signature that
+ * watches `map3d` + the room layouts cannot see any of them, and a place moved
+ * or turned in the world editor kept its tile standing at the old metre in
+ * every running client. The server meanwhile judges walking, entering and
+ * leaving against the new footprint, so the two sides disagreed about where
+ * the walls of a place are.
+ *
+ * The numbers go in verbatim rather than rounded: they arrive rounded from the
+ * server (`build_worldmap_payload`), and a rounding of our own would be a
+ * second opinion about when a place has moved. `null`/`undefined` stringify to
+ * themselves and are thereby their own state — an unplaced location is not a
+ * location at the origin.
+ */
+export function footprintSignature(loc: {
+  pos_x: number | null; pos_z: number | null;
+  yaw_deg?: number; plan_width_m?: number | null;
+}): string {
+  return `${loc.pos_x},${loc.pos_z},${loc.yaw_deg},${loc.plan_width_m}`;
+}
+
+/**
  * Camera yaw (radians) → compass bearing in degrees, 0 = north and rising
  * CLOCKWISE, normalised into [0, 360).
  *

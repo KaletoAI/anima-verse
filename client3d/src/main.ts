@@ -24,7 +24,7 @@ import { loadPrefs, PREFS_KEY } from './game/prefs';
 import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
 import type { MinimapArea, MinimapDot } from './game/minimap';
-import { locationsSignature, terrainColor } from './game/minimap';
+import { footprintSignature, locationsSignature, terrainColor } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -1091,6 +1091,25 @@ async function startApp(username: string, role: string) {
     const detail = detailById.get(l.id) ?? detailById.get(l.template_location_id || '');
     return [l.id, sigOf(detail ?? l)];
   }));
+  /** The GEOMETRY each tile stands on (`footprintSignature`) — centre,
+   *  rotation and footprint edge, taken from the WORLDMAP row, which is the
+   *  authority for all four (`placeableOf` merges it over the detail record).
+   *  A second signature beside `locSig` on purpose: that one watches `map3d`
+   *  and the room layouts and comes from `/world/locations` every ten
+   *  seconds, while these four numbers are not in `map3d` at all and arrive
+   *  with every worldmap poll. Finding B13 is what happens without it — a
+   *  location moved in the world editor kept its tile at the old metre while
+   *  the server judged walking and entering against the new footprint. */
+  const geomSig = new Map(firstMap.locations.map((l) => [l.id, footprintSignature(l)]));
+  /** Take the geometry of a payload as the state the tiles were built from —
+   *  called wherever tiles are MOUNTED (boot above, `revealBatch` below), so
+   *  the next poll compares against the payload the tile really came from and
+   *  not against a merged record whose `plan_width_m` fallback would look like
+   *  a move. Rows without a tile are stored too: they cost a string and save
+   *  the reveal path a lookup. */
+  const noteGeometry = (rows: typeof firstMap.locations) => {
+    for (const row of rows) geomSig.set(row.id, footprintSignature(row));
+  };
   function rebuildTile(old: Tile, loc: WorldLocation) {
     engine.scene.remove(old.group);
     // The thresholds go with it, unconditionally: a scene that turned 404
@@ -1448,6 +1467,49 @@ async function startApp(username: string, role: string) {
     setGameState({ selected: { char, isAvatar: char.name === map.avatar } });
   }
 
+  /**
+   * Rebuild every tile whose FOOTPRINT has moved (finding B13).
+   *
+   * A location can be dragged to another metre, turned or resized in the world
+   * editor while clients are running, and nothing noticed: the layout poll
+   * (`pollLocations`) keys on `map3d` + the room layouts, and none of the four
+   * geometry numbers lives there — they are columns of the location row
+   * (§ A1.1). The tile therefore kept standing where it was built, which is a
+   * disagreement with the server about where the walls of a place are: the
+   * walker judges "may I walk here" against the OLD footprint
+   * (`blockedFor`/`freeBoundary`), the entry offer computes its opening points
+   * around the OLD centre, and `POST /play/pos` answers `no_opening` for a
+   * step the client thought was open ground — from every side, at every
+   * corner, until the browser was reloaded.
+   *
+   * ONLY the geometry is taken over. Everything else on `tile.loc` is the more
+   * recent merge (`pollLocations` writes rooms, `map3d`, `entry_room`,
+   * `terrain` into it from a fresher `/world/locations` than the boot
+   * snapshot `detailById` still holds), and re-merging the payload here would
+   * throw those away.
+   */
+  function rebuildMovedTiles(map: WorldMap): void {
+    for (const row of map.locations) {
+      const tile = tiles.get(row.id);
+      if (!tile) continue;
+      const sig = footprintSignature(row);
+      const before = geomSig.get(row.id);
+      geomSig.set(row.id, sig);
+      // Unknown = a tile nothing has recorded geometry for. It cannot happen
+      // (every mounting path calls `noteGeometry`), and if it ever does, the
+      // honest answer is to adopt the signature rather than to rebuild a tile
+      // against a state nobody compared it with.
+      if (before === undefined || before === sig) continue;
+      rebuildTile(tile, {
+        ...tile.loc,
+        pos_x: row.pos_x,
+        pos_z: row.pos_z,
+        yaw_deg: row.yaw_deg,
+        plan_width_m: row.plan_width_m,
+      });
+    }
+  }
+
   async function pollWorldMap() {
     let map: WorldMap;
     const rev = viewRev;
@@ -1480,6 +1542,7 @@ async function startApp(username: string, role: string) {
     worldBounds = map.world_bounds;
     takeMapLocations(map.locations);
     void terrainGround.sync(map.terrain_sig, worldBounds);
+    rebuildMovedTiles(map);
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
     // just discovered is simply in the payload from one poll to the next. The
     // switch travels with it, and the frame is the one just taken over — the
@@ -2138,6 +2201,9 @@ async function startApp(username: string, role: string) {
       locSig.set(loc.id, sigOf(
         details.get(loc.id) ?? details.get(loc.template_location_id || '') ?? loc));
     }
+    // The geometry of the payload these tiles were just built from (B13) —
+    // without it the next poll would read every fresh tile as "moved".
+    noteGeometry(map.locations);
     engine.setPickables([...tiles.values()].map((t) => t.group));
     rebuildFog();
   }
