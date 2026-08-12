@@ -114,9 +114,9 @@ async def clone_location_route(template_id: str, request: Request) -> Dict[str, 
 
 
 # --- World-Level Settings (Schritt 7, May 2026) ---------------------------
-# Temperature/Weather/Pose-Variant-Settings leben in world_kv. Eigener
-# Endpunkt damit der Setup-Tab eine kompakte Form rendern kann ohne ueber
-# die generische admin-config-Maschinerie zu gehen.
+# Temperature/weather settings live in world_kv. Own endpoint so the setup tab
+# can render a compact form without going through the generic admin-config
+# machinery.
 
 @router.get("/freeze-status")
 async def get_freeze_status() -> Dict[str, Any]:

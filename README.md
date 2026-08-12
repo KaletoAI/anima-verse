@@ -286,7 +286,7 @@ world**:
 - `world.db` — accounts, characters and their runtime state, locations/rooms/activities, items,
   inventory, outfits, memories, knowledge, relationships, mood/state history, summaries,
   notifications, events, scheduler jobs/logs, group chats, story arcs, model capabilities,
-  pose variants, chat messages, …
+  chat messages, …
 - `task_queue.db` — the persistent task queue (image generation, LLM jobs, animations).
 
 World data is **DB-only** — there are no JSON mirrors/backups on disk. Everything else under a

@@ -12,6 +12,11 @@
  *
  * Catalog:    GET/POST /poses · PUT/DELETE /poses/{key}   (?axis=…)
  * Candidates: GET /poses/candidates · POST /poses/candidates/approve|dismiss
+ * Images:     POST /poses/expression-images/clear
+ *
+ * The image cache is keyed by the catalog KEY, not by the prompt text, so
+ * editing an entry's prompt does NOT invalidate the images already rendered
+ * under it — that is what the clear button next to the editor is for.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -64,6 +69,7 @@ export function PosesTab() {
   const [search, setSearch] = useState('')
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [confirmDismiss, setConfirmDismiss] = useState<string | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const isPose = axis === 'pose'
@@ -228,6 +234,23 @@ export function PosesTab() {
     [axis, busy, t, toast],
   )
 
+  const clearExpressionImages = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await apiPost<{ images_deleted?: number }>(
+        '/poses/expression-images/clear',
+        {},
+      )
+      toast(`${t('Rendered expression images cleared')}: ${r?.images_deleted ?? 0}`)
+      setConfirmClear(false)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, t, toast])
+
   const upd = useCallback(<K extends keyof Entry>(k: K, v: Entry[K]) => {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev))
   }, [])
@@ -235,7 +258,40 @@ export function PosesTab() {
   return (
     <div className="ga-twocol">
       <aside className="ga-twocol-left">
-        <ListHeader title={t('Catalog')} onNew={addNew} />
+        <ListHeader
+          title={t('Catalog')}
+          onNew={addNew}
+          extra={
+            confirmClear ? (
+              <>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm ga-btn-danger"
+                  disabled={busy}
+                  onClick={clearExpressionImages}
+                >
+                  {busy ? t('Clearing…') : t('Really clear?')}
+                </button>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => setConfirmClear(false)}
+                >
+                  {t('Cancel')}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-danger"
+                title={t('Deletes every rendered expression image of every character. The image cache is keyed by the catalog key, not by the prompt text — use this after editing a prompt, otherwise the old images stay.')}
+                onClick={() => setConfirmClear(true)}
+              >
+                {t('Clear rendered expression images')}
+              </button>
+            )
+          }
+        />
         <p className="ga-sched-muted">
           {t('The catalog is the closed set of render keys: a pose key carries the body-posture prompt and the animation kind, an expression key the facial prompt. Free text is matched onto a key — it never creates one.')}
         </p>

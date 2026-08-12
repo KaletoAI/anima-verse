@@ -55,8 +55,8 @@ Stage 5 - admin surface (task 6), derived BY HAND from the route contract:
 - `_alias_owner("pose", "sitzen")` == "sitting" (listed synonym), an unclaimed
   text -> "" (that is what the approve conflict check reads).
 - the router carries NO `/variants/clear` path any more (pose variants were
-  torn out Aug 2026; rendered images are cleared per character in
-  characters.py).
+  torn out Aug 2026) but DOES carry `/expression-images/clear` — the image
+  cache is keyed by the catalog key, so a prompt edit needs that reset.
 - `delete_candidate` removes the row for good (approve), while
   `set_candidate_status(..., "dismissed")` keeps it and only takes it out of
   the open list (dismiss).
@@ -342,13 +342,15 @@ try:
     assert _alias_owner("pose", "standing") == "standing"
     assert _alias_owner("pose", "quantum flux calibration") == ""
 
-    # 3. The router no longer offers a variant-cache reset at all: the pose
-    #    variants are gone, and clearing rendered images is the per-character
-    #    route in characters.py. A re-introduced /poses/variants/clear would
-    #    show up here.
+    # 3. The variant-cache reset is gone; what the tab still needs — and the
+    #    only reset that heals a prompt edit, since the image cache is keyed by
+    #    the catalog KEY — is the world-wide expression-image clear.
+    #    (the router carries its own /poses prefix — assert the FULL paths,
+    #    an unprefixed needle would pass vacuously)
     from app.routes.poses import router as _poses_router
     _paths = {r.path for r in _poses_router.routes}
-    assert "/variants/clear" not in _paths, sorted(_paths)
+    assert "/poses/variants/clear" not in _paths, sorted(_paths)
+    assert "/poses/expression-images/clear" in _paths, sorted(_paths)
 
     # 4. Candidate lifecycle: dismiss keeps the row, approve deletes it.
     #    (stage 2 already left the 'quantum flux calibration' row behind)

@@ -814,8 +814,7 @@ def generate_expression_image(character_name: str,
       (``""`` omits the expression layer entirely).
     - ``image_use_case`` picks the style use case (default "expression").
     - ``output_stem`` (path without extension) stores the result there
-      instead of the expression-variant cache — no cache bookkeeping, no
-      pose-variant analysis.
+      instead of the expression-image cache — no cache bookkeeping.
     - ``override_width`` / ``override_height`` win over the outfit image
       format (a T-pose needs a wider frame than a portrait).
     - ``apply_state_modifiers=False`` renders the NEUTRAL appearance (no

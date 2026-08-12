@@ -4,8 +4,10 @@
 cached and animation clips are resolved (plan-pose-katalog.md). Both axes live
 in one curated JSON file each (``shared/templates/<axis>/<axis>_catalog.json``,
 ``pose_catalog.catalog_path``); this router is the write surface behind the
-Poses admin tab: edit entries and approve/dismiss the candidates the resolver
-recorded for free text it could not absorb.
+Poses admin tab: edit entries, approve/dismiss the candidates the resolver
+recorded for free text it could not absorb, and clear the rendered expression
+images after a prompt edit (the image cache is keyed by the catalog KEY, so an
+edited prompt does not invalidate anything by itself).
 
 Free text never creates an entry any more — the catalog grows only through the
 approval flow here. The animation vocabulary is NOT hardcoded either: it is
@@ -300,3 +302,29 @@ async def dismiss_candidate(request: Request,
     if not found:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return {"status": "success", "axis": axis}
+
+
+# ── Rendered expression images ───────────────────────────────────────────
+
+@router.post("/expression-images/clear")
+def clear_expression_images(_: Dict[str, Any] = Depends(require_admin)
+                            ) -> Dict[str, Any]:
+    """Deletes every cached expression image of every character.
+
+    Belongs next to the catalog editor because the image cache is keyed by the
+    catalog KEY, never by the prompt text: editing an entry's prompt leaves
+    every image already rendered under that key stale forever. This is the
+    reset for exactly that. Images are re-rendered on demand; the per-character
+    variant of this lives in ``characters.py``.
+    """
+    from app.core.expression_regen import clear_expression_cache
+    from app.models.character import list_available_characters
+
+    images = 0
+    for name in list_available_characters():
+        try:
+            images += clear_expression_cache(name)
+        except Exception as e:
+            logger.warning("clear_expression_cache(%s) failed: %s", name, e)
+    logger.info("rendered expression images cleared: %d", images)
+    return {"images_deleted": images}

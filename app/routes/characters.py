@@ -468,8 +468,9 @@ async def set_decency_preference(character_name: str, request: Request) -> Dict[
 
 @router.post("/{character_name}/clear-expression-cache")
 def clear_expression_cache_route(character_name: str) -> Dict[str, Any]:
-    """Loescht alle gecachten Expression-Bilder dieses Characters. Sie werden
-    bei Bedarf neu erzeugt (jetzt limitiert via Pose-Varianten + LRU)."""
+    """Deletes every cached expression image of this character. They are
+    re-rendered on demand; the key space is bounded by the pose/expression
+    catalogs. The world-wide variant lives in ``poses.py``."""
     from app.core.expression_regen import clear_expression_cache
     count = clear_expression_cache(character_name)
     return {"status": "ok", "character": character_name, "deleted": count}

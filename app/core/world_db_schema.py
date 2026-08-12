@@ -584,6 +584,7 @@ SCHEMA_STATEMENTS = [
         last_used_at    TEXT NOT NULL,
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
+    # RETIRED with the table above — no reader, no writer.
     "CREATE INDEX IF NOT EXISTS idx_cpv_char ON character_pose_variants (character_name)",
     "CREATE INDEX IF NOT EXISTS idx_cpv_lru ON character_pose_variants (character_name, last_used_at)",
 
