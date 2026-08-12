@@ -744,9 +744,16 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
     all, and where one meets new places — is exactly where this has to work.
 
     What is left for the rule beside that deterministic pass: a CONDITION
-    ("attention>80"), a probability, and a player-visible MESSAGE. The sight
-    pass reveals silently and unconditionally, so in a running world it will
-    normally have taken everything in range before a thought turn gets here.
+    ("attention>80"), a probability, and a MESSAGE. The sight pass reveals
+    silently and unconditionally, so in a running world it will normally have
+    taken everything in range before a thought turn gets here.
+
+    THE MESSAGE HAS NO READER TODAY. The only caller (``agent_loop``) throws
+    the return value away, so the rule's message is composed and returned into
+    nothing; what actually reaches the world is the discovery itself (the new
+    known_location shows up in the thought context) and the state-history
+    entry. Wiring the message up as a perception payload is an open follow-up,
+    not something this function does.
 
     Returns: dict with location_id/location_name/rule_*/message on a hit,
     otherwise None (nothing discovered this round).
@@ -757,7 +764,8 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
     from app.models.character import (
         get_character_current_location, get_character_pos, get_known_locations,
         add_known_location, _record_state_change)
-    from app.models.world import get_location_by_id
+    from app.models.world import (
+        list_locations, location_knowledge_gate_open, visibility_context)
 
     # The avatar discovers like everyone else: with fog of war (§ A12) the
     # player map shows only known_locations, so exempting the avatar would
@@ -772,8 +780,26 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
     # precondition for discovering.
     location_id = get_character_current_location(character_name) or ""
 
+    all_locations = list_locations()
     known = get_known_locations(character_name)
-    unknown = locations_within(pos["x"], pos["z"], range_m, exclude=known)
+    unknown = locations_within(pos["x"], pos["z"], range_m, all_locations,
+                               exclude=known)
+    if not unknown:
+        return None
+    # The KNOWLEDGE GATE applies to the roll as well. ``locations_within``
+    # drops what is already known; a place whose ``knowledge_item_id`` the
+    # character does not hold is not known either, but it must not enter the
+    # pool: the gate would keep it invisible afterwards, so the roll would be
+    # burnt AND — the real damage — the secret location's NAME would be
+    # written into the state history below, from where admin views and recent
+    # activity read it. The silent sight pass needs no such filter (there
+    # known and gate are conjunctive, so pre-knowledge does no harm).
+    by_id = {(loc.get("id") or ""): loc for loc in all_locations or []}
+    _vis_ctx = visibility_context(character_name)
+    unknown = [loc_id for loc_id in unknown
+               if location_knowledge_gate_open(character_name,
+                                               by_id.get(loc_id) or {},
+                                               _vis_ctx)]
     if not unknown:
         return None
 
@@ -798,7 +824,7 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
 
         discovered_id = _random.choice(unknown)
         add_known_location(character_name, discovered_id)
-        loc = get_location_by_id(discovered_id) or {}
+        loc = by_id.get(discovered_id) or {}
         loc_name = loc.get("name", discovered_id)
         _lang = _user_lang()
         message = (localized(rule, "message", _lang) or "").strip() \

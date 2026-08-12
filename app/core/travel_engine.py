@@ -921,7 +921,10 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
     # discovers the target (``save_character_current_location``), and the
     # sight pass at the end of every tick (``_discover_by_sight``) has long
     # revealed everything else within range. The rule's own roll belongs to
-    # the thought turn, where its condition and its message have a reader.
+    # the thought turn, where its CONDITION is evaluated against a character
+    # that is about to think. (Its message has no reader anywhere today — the
+    # agent loop discards the return value; wiring it up as a perception
+    # payload is an open follow-up.)
     try:
         from app.core.agent_loop import get_agent_loop
         get_agent_loop().bump(name)    # think at the destination

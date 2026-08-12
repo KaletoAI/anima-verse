@@ -867,6 +867,31 @@ def visibility_context(character_name: str) -> Dict[str, Any]:
     }
 
 
+def location_knowledge_gate_open(character_name: str,
+                                    location: Dict[str, Any],
+                                    context: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True when the character owns the location's knowledge item — or none is
+    set. The ITEM half of ``location_visible_to_character``, on its own.
+
+    It exists separately for the one caller that must ask the item gate but
+    NOT the known half: the discover rule (``rules.check_discover_rules``)
+    picks from locations that are by definition still unknown, and a gated
+    place must stay out of that pool — otherwise the roll is burnt on
+    something that stays invisible and its NAME lands in the state history.
+    The gate expression itself lives here only, never twice.
+
+    ``context``: a ``visibility_context()`` result for this character.
+    """
+    if not isinstance(location, dict):
+        return False
+    iid = (location.get("knowledge_item_id") or "").strip()
+    if not iid:
+        return True
+    return iid in context["items"] if context is not None \
+        else _character_has_item(character_name, iid)
+
+
 def location_visible_to_character(character_name: str,
                                     location: Dict[str, Any],
                                     context: Optional[Dict[str, Any]] = None
@@ -881,12 +906,8 @@ def location_visible_to_character(character_name: str,
     """
     if not isinstance(location, dict):
         return False
-    iid = (location.get("knowledge_item_id") or "").strip()
-    if iid:
-        has = iid in context["items"] if context is not None \
-            else _character_has_item(character_name, iid)
-        if not has:
-            return False
+    if not location_knowledge_gate_open(character_name, location, context):
+        return False
     known = context["known"] if context is not None \
         else _character_known_locations(character_name)
     loc_id = location.get("id") or ""

@@ -272,7 +272,14 @@ def open_world_cell_key(x: float, z: float) -> str:
     """Bucket name of the open-world cell a metre point falls into.
 
     See ``OPEN_WORLD_CELL_MIN_M`` for why the cell exists and how big it is.
-    Pure — the only input is the point (and the configured radius)."""
+    Pure — the only input is the point (and the configured radius).
+
+    Because the radius is an input, raising ``game.hearing_radius_m`` above the
+    50 m floor at runtime RE-KEYS every open-world cell at once: chime budgets
+    and winddown markers keyed by the old names are orphaned (they reset), and
+    a respond turn already running holds the OLD key's lock while a new turn
+    takes the new one — a one-time, bounded parallel window of exactly the
+    same class as a speaker straddling a cell border."""
     cell = max(OPEN_WORLD_CELL_MIN_M, get_hearing_radius_m())
     return f"open:{math.floor(x / cell)}:{math.floor(z / cell)}"
 
