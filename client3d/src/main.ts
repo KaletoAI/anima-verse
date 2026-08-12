@@ -24,7 +24,7 @@ import { loadPrefs, PREFS_KEY } from './game/prefs';
 import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
 import type { MinimapArea, MinimapDot } from './game/minimap';
-import { terrainColor } from './game/minimap';
+import { locationsSignature, terrainColor } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -33,7 +33,7 @@ import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, 
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
-import { entryOfferNear, freeBoundaryOf, type EntryTile } from './game/enterLocation';
+import { anchorRawOpenings, entryOfferNear, freeBoundaryOf, inwardOf, type EntryTile, type LocalOpening } from './game/enterLocation';
 import { figureTransition, placementOf, type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
@@ -270,8 +270,17 @@ async function retryBoot<T>(what: string, fn: () => Promise<T>,
       return out;
     } catch (e) {
       const wait = Math.min(15_000, 1000 * 2 ** Math.min(attempt, 4));
-      console.warn(`[boot] ${what} failed (attempt ${attempt + 1}) — `
-        + `retrying in ${wait / 1000} s`, e);
+      // An expired session is NOT the restarting backend this loop is for, and
+      // it is not a defect either: `api.json()` has already fired
+      // `auth:required` and the title screen's login form is coming up. The
+      // BACKOFF stays — the same request has to run again once the player is
+      // back in, and this loop is what runs it — but the console line does
+      // not, or a boot spent at the login form would fill the log with
+      // warnings about a state the player is being asked about on screen.
+      if (!api.isAuthError(e)) {
+        console.warn(`[boot] ${what} failed (attempt ${attempt + 1}) — `
+          + `retrying in ${wait / 1000} s`, e);
+      }
       sink.waiting(Math.round(wait / 1000));
       await sleep(wait);
     }
@@ -543,6 +552,15 @@ async function startApp(username: string, role: string) {
    *  task 3. Both move with every poll. */
   let worldBounds = firstMap.world_bounds;
   let mapLocations = firstMap.locations;
+  /** `locationsSignature(mapLocations)`, recomputed with every payload TAKEN
+   *  and never in the publish tick — see the minimap slice below. */
+  let mapLocSig = locationsSignature(firstMap.locations);
+  /** The one way `mapLocations` changes: the derived signature must never lag
+   *  behind the list it describes. */
+  function takeMapLocations(list: typeof firstMap.locations): void {
+    mapLocations = list;
+    mapLocSig = locationsSignature(list);
+  }
   void terrainGround.sync(firstMap.terrain_sig, worldBounds);
 
   // Basement view: the world's ground covers height 0 everywhere, so a storey
@@ -1449,7 +1467,7 @@ async function startApp(username: string, role: string) {
     // ground has to be refetched (E4 task 2). `sync` is a no-op on an
     // unchanged signature — terrain is never fogged and never polled.
     worldBounds = map.world_bounds;
-    mapLocations = map.locations;
+    takeMapLocations(map.locations);
     void terrainGround.sync(map.terrain_sig, worldBounds);
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
     // just discovered is simply in the payload from one poll to the next. The
@@ -1930,6 +1948,44 @@ async function startApp(username: string, role: string) {
     return freeBoundaryOf(scenes.get(tile.loc.id), authored.length);
   }
 
+  /**
+   * The boundary openings of a location, TILE-LOCAL and with their inward
+   * normal — from whichever of the client's TWO sources can answer.
+   *
+   * 1. THE SCENE PAYLOAD, whenever there is one: the server has already
+   *    applied `tile_rotation` and anchored every opening in metres around the
+   *    tile centre (`at_world`, `inward`, § B1 Nr. 13). A payload that lists
+   *    none is a location with a free boundary — nothing to offer, one simply
+   *    walks in.
+   * 2. THE RAW `map3d.boundary_openings`, when the scene endpoint answered 404
+   *    (no outline, no room layout, no building model — a painted place whose
+   *    author drew a gate before there was anything to draw it into). The
+   *    server reads exactly this list, so the client anchors it with the
+   *    server's own formula (`enterLocation.anchorRawOpenings`, hand-checked
+   *    against `boundary_entry.opening_world_points` in
+   *    `client3d/scripts/smoke_enter_math.mjs`). WITHOUT `plan_width_m` there
+   *    is no edge length and therefore no point — the place stays closed
+   *    rather than offering a metre nobody authored.
+   *
+   * A payload still IN FLIGHT answers nothing at all: the conservative side,
+   * the same one `freeBoundaryOf` takes.
+   */
+  function openingsOf(tile: Tile): (LocalOpening & { inward: { x: number; z: number } })[] {
+    const scene = scenes.get(tile.loc.id);
+    if (scene === undefined) return [];
+    if (scene !== null) {
+      return (scene.boundary_openings ?? []).map((o) => ({
+        edge: o.edge,
+        at: { x: o.at_world[0], z: o.at_world[1] },
+        inward: { x: o.inward[0], z: o.inward[1] },
+      }));
+    }
+    const m3 = tile.loc.map3d;
+    const width = tile.loc.plan_width_m ?? m3?.plan_width_m ?? 0;
+    return anchorRawOpenings(m3?.boundary_openings, width, m3?.tile_rotation ?? 0)
+      .map((o) => ({ ...o, inward: inwardOf(o.edge) }));
+  }
+
   /** `blockedFor` from where the avatar stands right now. */
   function blockedForAvatar(x: number, z: number): boolean {
     const p = npcs.positionOf(avatarName);
@@ -1940,8 +1996,11 @@ async function startApp(username: string, role: string) {
   //
   // The HUD draws the map, this publishes what it draws — and it publishes ONLY
   // ON A CHANGE. The signature below is the whole rule: the ground revision,
-  // the number of known places, the avatar's position to the metre and the
-  // camera yaw in whole degrees. Everything smaller than that (a step of a few
+  // the known places with their POINTS (`mapLocSig`, computed when the payload
+  // is taken — the count alone missed a location that MOVED, and the dot then
+  // sat at the old metre until an unrelated input happened to move the
+  // signature), the avatar's position to the metre and the camera yaw in whole
+  // degrees. Everything smaller than that (a step of a few
   // centimetres, a fraction of a degree of orbit) would redraw a 160-pixel
   // canvas and re-render React for a picture nobody could tell apart — the map
   // is 160 px wide, so a sub-metre move cannot even reach a pixel of it.
@@ -1964,7 +2023,7 @@ async function startApp(username: string, role: string) {
     const frame = worldBounds
       ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
     const spot = pos ? `${Math.round(pos.x)},${Math.round(pos.z)}` : '';
-    const sig = `${terrainGround.revision()}|${mapLocations.length}|${spot}|${yawDeg}|${frame}`;
+    const sig = `${terrainGround.revision()}|${mapLocSig}|${spot}|${yawDeg}|${frame}`;
     if (sig === minimapSig) return;
     minimapSig = sig;
     // The colours come from the world's OWN terrain catalog, never from a
@@ -2180,9 +2239,19 @@ async function startApp(username: string, role: string) {
       // therefore the same in both views, but this payload is what the veil
       // (and the ground, and the minimap) is rebuilt from below, and reading
       // one field from the new view and another from the old one is how two
-      // pictures of the same world start to disagree.
+      // pictures of the same world start to disagree. That the two views agree
+      // on the frame still holds since B7 gave `world_bounds` the painted
+      // areas as well (`c1447a9`) — the bounds are computed over everything
+      // placed, unfiltered by what this avatar knows, and the fog does not
+      // shrink a meadow.
       worldBounds = map.world_bounds;
-      mapLocations = map.locations;
+      takeMapLocations(map.locations);
+      // …and the GROUND is synced right here instead of being left to the next
+      // poll: `terrain_sig` travels in this payload too, and until E5 the
+      // switch published a new frame that only the base plane of the OLD sync
+      // knew about — up to three seconds in which the plate and the painted
+      // areas stood in the frame of the view one had just left.
+      void terrainGround.sync(map.terrain_sig, worldBounds);
       fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);
@@ -2432,6 +2501,14 @@ async function startApp(username: string, role: string) {
       reportedPos = { x, z };
       adoptReport(res);
     } catch (e) {
+      // AN EXPIRED SESSION IS NOT A WALKING PROBLEM. `json()` fires
+      // `auth:required` before it throws, so the relogin flow is already
+      // running and the login form is on its way up; logging it here would
+      // print one line per report — several a second while the figure walks —
+      // for a state the player is being asked about anyway. The point stays
+      // UNREPORTED (`posDirty`), so the first report after the relogin carries
+      // it, exactly like the network hiccup below.
+      if (api.isAuthError(e)) { posDirty = true; return; }
       const err = e instanceof api.ApiError ? e : null;
       if (!err) {
         // A dropped request is a network hiccup, not a verdict: the figure
@@ -3265,19 +3342,24 @@ async function startApp(username: string, role: string) {
     const myLoc = tileAt(pos.x, pos.z)?.loc.id ?? '';
     const candidates: EntryTile[] = [];
     for (const t of tiles.values()) {
-      // Only locations with a detail view to enter — walking onto plain
-      // ground is ordinary walking and needs no offer. Distance is decided
-      // by `entryOfferNear`; a first cut here would only duplicate its rule.
-      if (!openable(t)) continue;
+      // WHO IS WORTH AN OFFER. A location with a detail view to enter always
+      // is — and since E5 so is one the walker CANNOT get into by walking:
+      // a place with authored openings is not a free boundary, so its
+      // footprint is a wall everywhere but at its gates, and without an offer
+      // there is no way in at all. That is the whole 404 case (`openingsOf`
+      // Nr. 2): no scene means no interior, so `openable` was false and the
+      // painted place with a gate on it could be neither opened nor entered.
+      // Skipped is only what is BOTH: nothing to open and free to walk into —
+      // there the offer would just duplicate ordinary walking.
+      if (!openable(t) && freeBoundary(t)) continue;
       candidates.push({
         locId: t.loc.id,
         footprint: { x: t.center.x, z: t.center.z, yaw: t.yaw },
-        // Openings come TILE-LOCAL from the payload (metres around the tile
-        // centre, § B1 Nr. 13, `tile_rotation` already applied by the
-        // server); `openingWorldPoints` turns them with the tile's own yaw,
-        // the § A1.1 mapping `tileToWorld` uses for every other payload point.
-        openings: (scenes.get(t.loc.id)?.boundary_openings ?? [])
-          .map((o) => ({ edge: o.edge, at: { x: o.at_world[0], z: o.at_world[1] } })),
+        // Openings come TILE-LOCAL (metres around the tile centre, § B1
+        // Nr. 13, `tile_rotation` already applied); `openingWorldPoints`
+        // turns them with the tile's own yaw, the § A1.1 mapping `tileToWorld`
+        // uses for every other payload point.
+        openings: openingsOf(t),
         // The verdict of the neighbour poll, bound by ID at this moment — it
         // is per avatar and never travels in the cached payload above.
         locked: isLocked(state.lockedLocations, t.loc.id),
@@ -3338,12 +3420,15 @@ async function startApp(username: string, role: string) {
     // instead of choosing a second time.
     let goal = { x: offer.point.x, z: offer.point.z };
     let best = Infinity;
-    for (const o of scenes.get(offer.locId)?.boundary_openings ?? []) {
-      const at = tileToWorld(target, o.at_world[0], o.at_world[1]);
+    // The SAME list the offer was made from (`openingsOf`) — the raw-anchored
+    // one included, or a 404 place would be offered and then walked to its own
+    // opening point without the step inward that makes the crossing.
+    for (const o of openingsOf(target)) {
+      const at = tileToWorld(target, o.at.x, o.at.z);
       const d = Math.hypot(at.x - offer.point.x, at.z - offer.point.z);
       if (d >= best) continue;
       best = d;
-      const inward = tileDirToWorld(target, o.inward[0], o.inward[1]);
+      const inward = tileDirToWorld(target, o.inward.x, o.inward.z);
       goal = { x: at.x + inward.x * OPENING_WALK_IN_M,
                z: at.z + inward.z * OPENING_WALK_IN_M };
     }
