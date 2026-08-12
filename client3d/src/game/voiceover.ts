@@ -160,8 +160,10 @@ export function newSceneLines(prev: SceneSnapshot | null,
   return cur.lines.filter((l) => (l.ts || '') > seenTs);
 }
 
-/** Perception kinds that are a voice speaking IN this room. */
-const SPOKEN_KINDS = new Set(['in_room', 'spoken_self']);
+/** Perception kinds that are a voice speaking within earshot — the room
+ *  kinds, plus `nearby` for speech heard out in the open (E6: outside a
+ *  location the hearing radius takes the room's place). */
+const SPOKEN_KINDS = new Set(['in_room', 'spoken_self', 'nearby']);
 /** `meta` keys that mark a row as a UI note rather than speech (`SceneView`
  *  renders each of them as its own kind of block). */
 const NOTE_KEYS = ['display_only', 'relationship', 'event_verdict'];

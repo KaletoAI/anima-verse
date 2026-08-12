@@ -53,6 +53,14 @@ _MAX_HEARING_RADIUS_M = 500.0
 # t("Storyteller", lang); the stored value stays this canonical English token.
 STORYTELLER_SPEAKER = "Storyteller"
 
+# What the PROMPTS call the place of a location-less character. Before E6 the
+# prompt builders rendered a bare "Unknown" here, which reads as "we do not
+# know where you are" — the opposite of the truth: we know exactly where the
+# character stands, it is simply out in the open. English like every other
+# prompt string; the character's own language comes from its language
+# instruction, not from this label.
+WILDERNESS_LOCATION_LABEL = "Wilderness (in the open, no building, no room)"
+
 
 def get_hearing_radius_m() -> float:
     """How far a spoken line carries in the WILDERNESS, in world metres, from
@@ -223,6 +231,37 @@ def _nearby_in_the_open(speaker: str,
     return out
 
 
+def nearby_in_the_open(character_name: str,
+                       pos: Optional[Dict[str, float]] = None) -> List[str]:
+    """Public earshot roster for a LOCATION-LESS character: everyone else
+    without a location within ``get_hearing_radius_m`` metres of them.
+
+    The ONE wilderness-presence computation — the prompt builders, the
+    reaction dispatch and TalkTo all ask this instead of each inventing a
+    distance rule (the room paths likewise share ``_list_characters_in_room``).
+    Empty for a character the map does not place; callers that must tell
+    "nobody around" from "we do not know" read the point themselves and pass
+    it in, which also saves the second lookup.
+    """
+    if pos is None:
+        from app.models.character import get_character_pos
+        pos = get_character_pos(character_name)
+    return _nearby_in_the_open(character_name, pos)
+
+
+def location_display_name(location_id: str) -> str:
+    """The place name a PROMPT shows — the location's name, or the wilderness
+    label when the character stands outside every location.
+
+    One function for both prompt builders: they used to hardcode the same
+    "Unknown" fallback separately, and a wilderness wording fixed in only one
+    of them would have drifted immediately."""
+    if not location_id:
+        return WILDERNESS_LOCATION_LABEL
+    from app.models.world import get_location_name
+    return get_location_name(location_id)
+
+
 def announce_action(character_name: str, text: str,
                     source: str = "direct_action",
                     perception_meta: Optional[Dict[str, Any]] = None,
@@ -237,14 +276,22 @@ def announce_action(character_name: str, text: str,
        opportunity and may react — or SKIP).
 
     Location/room come from the acting character (the storyteller has no own
-    position). Best-effort — never raises into the calling route."""
+    position). An EMPTY location is the wilderness, not a missing value: the
+    action still happened and the people standing around the character still
+    react to it, so the old early return here is gone (E6).
+
+    Known v1 gap out there: the narrator speaks from nowhere — it has no
+    metre point, so its hearing circle is empty and the recorded line reaches
+    no perceiver even though the reaction dispatch below does find the
+    neighbours. Giving narration in the open the acting character's point is a
+    deliberate open decision, not an oversight.
+
+    Best-effort — never raises into the calling route."""
     try:
         from app.models.character import (get_character_current_location,
                                           get_character_current_room)
         loc = get_character_current_location(character_name) or ""
         room = get_character_current_room(character_name) or ""
-        if not loc:
-            return
         record_utterance(speaker=STORYTELLER_SPEAKER, content=text,
                          volume=VOLUME_NORMAL, location_id=loc,
                          room_id=room, source=source,

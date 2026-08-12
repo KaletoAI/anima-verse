@@ -39,7 +39,20 @@ def scene_idle_minutes() -> float:
 
 
 def touch(location_id: str, room_id: str, speaker: str, ts: str = "") -> int:
-    """Open/refresh the room's scene. Best effort, never blocking."""
+    """Open/refresh the room's scene. Best effort, never blocking.
+
+    The WILDERNESS has no scene (E6, v1 decision). A scene is keyed by
+    location — ``scenes.location_id`` is NOT NULL — so every location-less
+    line would land in the single bucket ``("", "")``. Consolidation writes
+    ONE summary into the memory of EVERY participant of a scene, so that one
+    bucket would mix characters kilometres apart into each other's memories:
+    two people who never heard a word of each other would remember a shared
+    conversation. Skipping the touch is the honest answer until a wilderness
+    scene has a spatial key of its own; consolidating open-air conversations
+    is deliberately still open.
+    """
+    if not location_id:
+        return 0
     try:
         from app.models import scene_store
         return scene_store.touch_scene(location_id, room_id, speaker, ts or utc_now_iso())

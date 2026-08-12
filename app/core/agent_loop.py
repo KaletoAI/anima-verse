@@ -428,6 +428,14 @@ class AgentLoop:
           recharges it; every AI utterance consumes a hop (decay).
         - Whispering distributes NO chimes (private).
 
+        An EMPTY location_id is the WILDERNESS (E6): the earshot roster is
+        then the hearing radius around the SPEAKER instead of the room, and
+        everything below works on that list unchanged. Note the coarseness of
+        the backstop out there — every location-less conversation shares the
+        one room key "/", so two groups far apart share a chime budget. That
+        only throttles autonomous follow-ups, never who perceives what, and a
+        spatial key for the open world is deliberately still open.
+
         Returns {"obligatory": [...], "chime": [...]} of the characters
         actually bumped.
         """
@@ -442,8 +450,23 @@ class AgentLoop:
         # talking"). On arrival the target is cleared → they are back in.
         from app.models.character import get_movement_target as _gmt
         def _leaving(c: str) -> bool:
+            if not location_id:
+                # Nobody is "walking out" of the open: everyone on the road
+                # carries a travel target, so this filter would silence
+                # exactly the chance encounters the wilderness branch exists
+                # for. Out there you meet people who are on their way.
+                return False
             tgt = _gmt(c)
             return bool(tgt and tgt != location_id)
+        # Who is in earshot at all? The room decides inside a location, the
+        # hearing radius outside — the ONE roster every step below reads.
+        # The speaker is part of the room list and NOT of the radius list;
+        # every consumer filters it out anyway.
+        if location_id:
+            in_earshot = _list_characters_in_room(location_id, room_id)
+        else:
+            from app.core.perception import nearby_in_the_open
+            in_earshot = nearby_in_the_open(speaker)
         key = self._room_key(location_id, room_id)
         # Player priority (option A): avatar in the room? Then effective
         # Backstop = 1 (one reaction round, then the stage is free) — unless
@@ -451,13 +474,11 @@ class AgentLoop:
         from app.core.timeutils import utc_now as _un
         _now_ts = _un().timestamp()
         avatar_present = False
-        if location_id:
-            try:
-                from app.models.account import is_player_controlled
-                avatar_present = any(is_player_controlled(c)
-                                     for c in _list_characters_in_room(location_id, room_id))
-            except Exception:
-                avatar_present = False
+        try:
+            from app.models.account import is_player_controlled
+            avatar_present = any(is_player_controlled(c) for c in in_earshot)
+        except Exception:
+            avatar_present = False
         effective_backstop = self._chime_backstop
         floor_mode = False
         if avatar_present and not is_avatar:
@@ -488,9 +509,9 @@ class AgentLoop:
                     return {"obligatory": [], "chime": []}
                 # Otherwise (no avatar / avatar idle for longer): ONE visible
                 # exit (concept §5), then silence until the avatar speaks.
-                if key not in self._room_winddown_done and location_id:
+                if key not in self._room_winddown_done:
                     self._room_winddown_done.add(key)
-                    present = [c for c in _list_characters_in_room(location_id, room_id)
+                    present = [c for c in in_earshot
                                if c and c != speaker and _is_respond_eligible(c)
                                and not _leaving(c) and c not in _excl]
                     if present:
@@ -505,9 +526,7 @@ class AgentLoop:
                             key, effective_backstop)
                 return {"obligatory": [], "chime": []}
 
-        if not location_id:
-            return {"obligatory": [], "chime": []}
-        present = [c for c in _list_characters_in_room(location_id, room_id)
+        present = [c for c in in_earshot
                    if c and c != speaker and not _leaving(c) and c not in _excl]
         addr = set(addressees or [])
         out: Dict[str, List[str]] = {"obligatory": [], "chime": []}
@@ -892,7 +911,9 @@ class AgentLoop:
         # The responder's room perception stream as conversation context: what
         # they HEARD in the room (multi-party) instead of the old 1:1 history.
         # That way an addressed third party knows what was just said and
-        # answers coherently.
+        # answers coherently. An empty location is not "no context" but the
+        # wilderness stream (E6) — a character answering on the road needs the
+        # words it just heard exactly as much as one in a tavern.
         _loc = _room = ""
         room_stream = []
         try:
@@ -901,19 +922,18 @@ class AgentLoop:
                                                get_character_current_room)
             _loc = get_character_current_location(character_name) or ""
             _room = get_character_current_room(character_name) or ""
-            if _loc:
-                room_stream = perception_store.get_character_room_stream(
-                    character_name, _loc, _room, limit=40)
-                # B (plan-follow-room-conversation-bug): direct follow → prepend
-                # the previous room round with the conversation partner so the
-                # conversation does not break on a room/location change.
-                if speaker:
-                    carried = perception_store.get_followed_conversation_tail(
-                        character_name, speaker, _loc, _room, limit=20)
-                    if carried:
-                        _seen = {r.get("utterance_id") for r in room_stream}
-                        carried = [c for c in carried if c.get("utterance_id") not in _seen]
-                        room_stream = carried + room_stream
+            room_stream = perception_store.get_character_room_stream(
+                character_name, _loc, _room, limit=40)
+            # B (plan-follow-room-conversation-bug): direct follow → prepend
+            # the previous room round with the conversation partner so the
+            # conversation does not break on a room/location change.
+            if speaker:
+                carried = perception_store.get_followed_conversation_tail(
+                    character_name, speaker, _loc, _room, limit=20)
+                if carried:
+                    _seen = {r.get("utterance_id") for r in room_stream}
+                    carried = [c for c in carried if c.get("utterance_id") not in _seen]
+                    room_stream = carried + room_stream
         except Exception as e:
             logger.debug("respond-turn %s: room_stream fetch failed: %s", character_name, e)
 
@@ -977,9 +997,15 @@ class AgentLoop:
         of a discarded in-chat thought. Unifies thought→speech for conversation
         participants.
 
-        None when: no location, no fresh utterance by someone else in the room,
-        or the room energy (Backstop) is exhausted (then the loop falls back to
-        the regular thought — the scene is ebbing away).
+        None when: no fresh utterance by someone else in the room, or the room
+        energy (Backstop) is exhausted (then the loop falls back to the
+        regular thought — the scene is ebbing away).
+
+        Works outside a location too (E6): the wilderness stream is what the
+        character heard in the open, so a conversation on the road keeps the
+        same speech-instead-of-thought turn a room conversation gets. Only the
+        backstop bucket is coarse out there (one key for the whole open
+        world) — see ``dispatch_room_reactions``.
         """
         try:
             from app.models.character import (get_character_current_location,
@@ -988,8 +1014,6 @@ class AgentLoop:
             from app.core.timeutils import utc_now as _now, parse_iso
             loc = get_character_current_location(character_name) or ""
             room = get_character_current_room(character_name) or ""
-            if not loc:
-                return None
             if self._room_ai_turns.get(self._room_key(loc, room), 0) >= self._chime_backstop:
                 return None  # scene ebbing away → no more autonomous follow-ups
             stream = perception_store.get_character_room_stream(character_name, loc, room, limit=6)

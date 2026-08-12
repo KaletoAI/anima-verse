@@ -125,16 +125,38 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     /play/scene route opts in.
 
     Plain room equality: the location's ground is a room like any other
-    (``world.GROUND_ROOM_ID``), so it needs no rule of its own here."""
+    (``world.GROUND_ROOM_ID``), so it needs no rule of its own here.
+
+    EMPTY location_id = the WILDERNESS (E6), and there the room argument is
+    ignored: outside there are no rooms, and a caller reading a character's
+    ``current_room`` can still be handed a stale one. What comes back are the
+    location-less lines this character PERCEIVED — nothing more:
+
+    * no additional radius filter. Earshot was decided once, when the words
+      were spoken (``perception.record_utterance``). Filtering again at read
+      time by the CURRENT distance would delete what a character heard two
+      steps ago the moment it walks on — a conversation while walking would
+      erase itself. Heard is heard.
+    * still a JOIN over ``perceptions``, so nothing reaches a character that
+      it did not perceive; whispered content stays empty exactly as in a room.
+    """
     conn = get_connection()
     # Include u.volume (whisper/normal/shout) — NOT secret content, just the
     # volume; the content itself stays filtered in p.content (whisper_meta = empty).
-    rows = conn.execute(
-        "SELECT p.*, u.volume AS volume FROM perceptions p "
-        "JOIN utterances u ON u.id = p.utterance_id "
-        "WHERE p.perceiver=? AND u.location_id=? AND u.room_id=? "
-        "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
-        (perceiver, location_id, room_id, limit)).fetchall()
+    if location_id:
+        rows = conn.execute(
+            "SELECT p.*, u.volume AS volume FROM perceptions p "
+            "JOIN utterances u ON u.id = p.utterance_id "
+            "WHERE p.perceiver=? AND u.location_id=? AND u.room_id=? "
+            "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
+            (perceiver, location_id, room_id, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT p.*, u.volume AS volume FROM perceptions p "
+            "JOIN utterances u ON u.id = p.utterance_id "
+            "WHERE p.perceiver=? AND u.location_id='' "
+            "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
+            (perceiver, limit)).fetchall()
     out = [_row_to_dict(r) for r in reversed(rows)]
     if not include_meta_lines:
         out = [r for r in out if not ((r.get("meta") or {}).get("display_only"))]

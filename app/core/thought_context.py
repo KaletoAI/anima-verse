@@ -71,15 +71,15 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     Loads only what's needed: each block is computed lazily and only set
     when it has content. The template renders nothing for empty blocks.
     """
+    from app.core.perception import location_display_name
     from app.models.character import (
         get_character_profile, get_character_current_location,
         get_character_language_instruction)
-    from app.models.world import get_location_name
 
     profile = get_character_profile(character_name)
     location_id = profile.get("current_location", "") or ""
     room_id = profile.get("current_room", "") or ""
-    location_name = get_location_name(location_id) if location_id else "Unknown"
+    location_name = location_display_name(location_id)
     # Presence is three pieces of information: who is in the ROOM, who is
     # elsewhere at this location, AND whether "nobody in the room" is a fact
     # or just unknown. The template needs all of them.
@@ -1038,9 +1038,9 @@ def _build_presence(character_name: str, location_id: str,
       room only (they are out of sight and out of earshot — no visual
       details, or the LLM stages scenes with people it cannot see).
     - ``alone_known`` is True ONLY when the lookup succeeded and really
-      nobody else is in the room — an unknown location or a failed lookup
-      yields ``("", "", False)``, because "we don't know" must never be
-      rendered as "you are alone".
+      nobody else is in the room — a failed lookup, or a character the map
+      places nowhere at all, yields ``("", "", False)``, because "we don't
+      know" must never be rendered as "you are alone".
 
     Why the room split (2026-07-30): both presence blocks used to be
     location-wide, so an NPC was told a person two rooms away was visibly
@@ -1058,12 +1058,30 @@ def _build_presence(character_name: str, location_id: str,
     Each same-room person carries what the character can SEE: a short
     outfit line (worn pieces) and visibly triggered states ('drunk',
     'aroused', ...) — without this, an NPC never knows what the people
-    around it look like right now."""
-    if not location_id:
-        return "", "", False
+    around it look like right now.
+
+    OUTSIDE every location (E6) the same three answers come from the hearing
+    radius instead of the room: everyone within it is "here", there is no
+    "elsewhere" to list, and an empty circle IS knowledge — a character alone
+    in the open must be told so, or the prompt's silence lets it keep playing
+    a scene with someone who walked off. The one case that stays unknown is a
+    character the map does not place at all: without a point there is no
+    circle to be empty."""
     try:
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
+        if not location_id:
+            from app.core.perception import nearby_in_the_open
+            from app.models.character import get_character_pos
+            pos = get_character_pos(character_name)
+            if not pos:
+                return "", "", False
+            names = nearby_in_the_open(character_name, pos)
+            here = [(n, f"{n} (avatar)" if n == avatar else n) for n in names]
+            # location_id "" for the state labels: they are per character,
+            # the place only feeds location-bound filter conditions.
+            return (present_people_details(here[:8], "") if here else "",
+                    "", not here)
         here_names, elsewhere_pairs = location_presence_split(
             character_name, location_id, room_id)
         here = [(n, f"{n} (avatar)" if n == avatar else n) for n in here_names]

@@ -60,10 +60,10 @@ THOUGHT_FULL: Set[str] = {
 # ============================================================================
 
 def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
+    from app.core.perception import location_display_name
     from app.models.character import (
         get_character_profile,
         get_character_current_location)
-    from app.models.world import get_location_name
 
     profile = get_character_profile(character_name)
     data: Dict[str, Any] = {}
@@ -73,7 +73,7 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
 
     location_id = profile.get("current_location", "")
     data["location_id"] = location_id
-    data["location_name"] = get_location_name(location_id) if location_id else "Unknown"
+    data["location_name"] = location_display_name(location_id)
     # Prompt line "Activity": DISPLAY text, not a render key — the sanitized
     # flavor when the character has one, otherwise the bare catalog key. Both
     # are already cleaned and length-capped at the write path (pose_catalog.
@@ -95,10 +95,12 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
         # Rendered whenever the location is KNOWN — the alone case included.
         # It used to be dropped on empty presence_lines, which threw away the
         # "You are ALONE" sentence in exactly the situation it is written for.
+        # Outside every location (E6) it is rendered too, in the open-air
+        # wording: out there "nobody is here" is a fact worth stating, not a
+        # missing lookup.
         data["nearby_hint"] = _format_presence_block(
             data["location_name"], presence_lines, elsewhere_lines,
-            anyone_nearby
-        ) if location_id else ""
+            anyone_nearby, in_the_open=not location_id)
 
     if EVENTS in sections:
         data["events_section"] = _load_events(location_id)
@@ -123,7 +125,8 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
 
 def _format_presence_block(location_name: str, presence_lines: list,
                             elsewhere_lines: list,
-                            anyone_nearby: bool) -> str:
+                            anyone_nearby: bool,
+                            in_the_open: bool = False) -> str:
     """Plain-text presence block (replaces former sections/presence.md).
 
     Room-scoped (2026-07-30): the block used to assert everyone at the
@@ -134,7 +137,27 @@ def _format_presence_block(location_name: str, presence_lines: list,
 
     An omitted block reads as "no information" to an LLM, never as "nobody is
     here" — which is how absent people get pulled into a scene. So the empty
-    case says so in words instead of staying silent."""
+    case says so in words instead of staying silent.
+
+    ``in_the_open`` (E6) only swaps the WORDING, never the structure: outside
+    there is no room to be in and no "elsewhere at this location", so talking
+    about "your room" would describe walls that are not there. The reach rule
+    is the same sentence with a different boundary — earshot instead of a
+    room."""
+    if in_the_open:
+        parts = ["Out in the open, within earshot of you:"]
+        parts.extend(presence_lines
+                     or ["- nobody, you are alone out here"])
+        if anyone_nearby:
+            parts.append("You can talk to the people within earshot (TalkTo).")
+            parts.append(
+                "IMPORTANT: ONLY the people listed here are near you. "
+                "Do NOT invent further attendees.")
+        else:
+            parts.append(
+                "NO other characters are near you out here. "
+                "Do NOT invent interactions with absent persons.")
+        return "\n".join(parts)
     parts = [f"In your room at '{location_name}':"]
     parts.extend(presence_lines or ["- nobody else, you are alone in this room"])
     if anyone_nearby:
@@ -164,9 +187,13 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
     ``elsewhere_lines`` = people in OTHER rooms of this location. The
     location's ground is a room like any other (``world.GROUND_ROOM_ID``),
     so plain room equality decides both.
-    Returns ([], [], False) when no location."""
+
+    WITHOUT a location (E6) the hearing radius takes the room's place: the
+    people inside it are the presence lines, there is no "elsewhere" out
+    there, and a character the map places nowhere yields ([], [], False) —
+    the only remaining "we do not know" case."""
     if not location_id:
-        return [], [], False
+        return _load_presence_in_the_open(character_name)
 
     from app.models.character import (
         list_available_characters,
@@ -227,6 +254,43 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
             f"- {other} — in: {get_room_name(location_id, other_room, lang)}")
 
     return lines, elsewhere_lines, anyone_in_room
+
+
+def _load_presence_in_the_open(character_name: str) -> tuple:
+    """``_load_presence`` for a location-less character (E6).
+
+    Same three return values, same line shapes — only the boundary differs:
+    the hearing radius around the character instead of its room. Mirrors the
+    room path's avatar rule, including the explicit "the avatar is NOT here"
+    line: an LLM that is merely not told about the player keeps inventing
+    them into the scene."""
+    from app.core.perception import nearby_in_the_open
+    from app.models.account import get_active_character
+    from app.models.character import get_character_pos, get_effective_activity
+
+    pos = get_character_pos(character_name)
+    if not pos:
+        return [], [], False
+    names = nearby_in_the_open(character_name, pos)
+    player_char = (get_active_character() or "").strip()
+    player_present = bool(player_char) and player_char in names
+
+    lines: list = []
+    if player_present:
+        lines.append(f"- {player_char} is present")
+    elif player_char and player_char != character_name:
+        lines.append(
+            f"- {player_char} is NOT here "
+            f"(do NOT react as if {player_char} were present, "
+            f"do NOT imagine an interaction with {player_char})"
+        )
+    for other in names:
+        if other == player_char:
+            continue
+        other_act = get_effective_activity(other) or ""
+        suffix = f" ({other_act})" if other_act else ""
+        lines.append(f"- {other} is here{suffix}")
+    return lines, [], bool(names)
 
 
 def _load_events(location_id: str) -> str:

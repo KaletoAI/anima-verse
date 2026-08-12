@@ -1,7 +1,8 @@
 """TalkTo package — face-to-face message to another character.
 
-Only available when the target character is in the same ROOM as the
-sender (speech reach is the room, matching the perception model). For
+Only available when the target is within EARSHOT of the sender, matching
+the perception model: inside a location that is the same ROOM, outside
+every location it is the hearing radius around the sender (E6). For
 remote communication see the SendMessage skill.
 
 Input format: "CharacterName, message"
@@ -18,7 +19,7 @@ from app.core.timeutils import utc_now_iso
 
 
 class TalkToSkill(PluginSkill):
-    """One character speaks to another in the same room.
+    """One character speaks to another within earshot.
 
     Inbox-only: the spoken line is written into both characters' chat
     history (sender as 'assistant', recipient as 'user'); the recipient
@@ -93,37 +94,56 @@ class TalkToSkill(PluginSkill):
         except Exception:
             pass
 
-        # Location check: must be at the same place
+        # Earshot check. Inside a location it is the ROOM, outside it is the
+        # hearing radius — the same boundary the perception fan-out uses when
+        # the line is actually recorded.
         from app.models.character import get_character_current_location
         self_loc = get_character_current_location(sender_name) or ""
         target_loc = get_character_current_location(target_name) or ""
-        if not self_loc or self_loc != target_loc:
+        if not self_loc:
+            # Out in the open (E6). Before, the leading `not self_loc` here
+            # refused every wilderness TalkTo outright, so two people standing
+            # next to each other on the road could not speak; dropping that
+            # guard alone would have gone to the other extreme, because
+            # "" == "" would have made the whole map one location.
+            if target_loc:
+                return (
+                    f"{target_name} is not out here with you — they are "
+                    f"inside a location. Use SendMessage for remote contact."
+                )
+            from app.core.perception import nearby_in_the_open
+            if target_name not in nearby_in_the_open(sender_name):
+                return (
+                    f"{target_name} is too far away out here to hear you. "
+                    f"Go to them first or use SendMessage for remote contact."
+                )
+        elif self_loc != target_loc:
             return (
                 f"{target_name} is not at your location. "
                 f"Use SendMessage for remote contact."
             )
-
-        # Room check: speech reach is the ROOM (plan-room-conversation) —
-        # someone in another room of the same location cannot hear this.
-        # Without the gate, cross-room TalkTo staged hours-long one-sided
-        # "scenes" with a partner who never perceived a word (2026-07-30).
-        # Plain room equality — the location's ground is a room like any
-        # other (world.GROUND_ROOM_ID), so it needs no rule of its own.
-        from app.models.character import get_character_current_room
-        self_room = get_character_current_room(sender_name) or ""
-        target_room = get_character_current_room(target_name) or ""
-        if self_room != target_room:
-            from app.models.world import get_room_name
-            from app.models.character import get_character_language
-            room_label = get_room_name(
-                self_loc, target_room,
-                get_character_language(sender_name) or "de")
-            return (
-                f"{target_name} is at this location but in another room "
-                f"({room_label}) — they cannot hear you from here. Go to "
-                f"them first with SetLocation (a room of your current "
-                f"location is a valid target) or use SendMessage."
-            )
+        else:
+            # Room check: speech reach is the ROOM (plan-room-conversation) —
+            # someone in another room of the same location cannot hear this.
+            # Without the gate, cross-room TalkTo staged hours-long one-sided
+            # "scenes" with a partner who never perceived a word (2026-07-30).
+            # Plain room equality — the location's ground is a room like any
+            # other (world.GROUND_ROOM_ID), so it needs no rule of its own.
+            from app.models.character import get_character_current_room
+            self_room = get_character_current_room(sender_name) or ""
+            target_room = get_character_current_room(target_name) or ""
+            if self_room != target_room:
+                from app.models.world import get_room_name
+                from app.models.character import get_character_language
+                room_label = get_room_name(
+                    self_loc, target_room,
+                    get_character_language(sender_name) or "de")
+                return (
+                    f"{target_name} is at this location but in another room "
+                    f"({room_label}) — they cannot hear you from here. Go to "
+                    f"them first with SetLocation (a room of your current "
+                    f"location is a valid target) or use SendMessage."
+                )
 
         # Sleep check
         from app.models.character import is_character_sleeping
@@ -208,7 +228,8 @@ class TalkToSkill(PluginSkill):
                 f"{self.description} "
                 f"Input: target character name, comma, message. "
                 f"Example: 'Pixel, are you free tonight?'. "
-                f"Only works when target is at your location; otherwise use SendMessage."
+                f"Only works when the target is within earshot — in your room, "
+                f"or nearby when you are out in the open; otherwise use SendMessage."
             ),
             func=self.execute)
 

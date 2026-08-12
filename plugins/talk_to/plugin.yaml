@@ -1,6 +1,6 @@
 name: talk_to
 version: "1.0.0"
-description: Face-to-face dialogue verb — the character speaks to someone present in the room
+description: Face-to-face dialogue verb — the character speaks to someone within earshot
 enabled_default: true        # core verb: loads even without a config/env entry
 
 skills:
@@ -8,8 +8,9 @@ skills:
     default_enabled: true    # replaces the entry in DEFAULT_NEW_CHARACTER_SKILLS
     cascade_brake: true      # replaces the class attribute (F7)
     delivers_speech: true    # spoken dialogue reaches the room through this verb
-    # NOT remote_comm: the verb is gated to the same room — SendMessage is
-    # the remote pillar (the old `remote_comm: true` here was contradictory).
+    # NOT remote_comm: the verb is gated to EARSHOT — the same room inside a
+    # location, the hearing radius out in the open. SendMessage is the remote
+    # pillar (the old `remote_comm: true` here was contradictory).
     progress_type: talkto
 
 templates:
