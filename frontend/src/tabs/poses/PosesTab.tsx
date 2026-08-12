@@ -12,7 +12,6 @@
  *
  * Catalog:    GET/POST /poses · PUT/DELETE /poses/{key}   (?axis=…)
  * Candidates: GET /poses/candidates · POST /poses/candidates/approve|dismiss
- * Cache:      POST /poses/variants/clear
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -65,7 +64,6 @@ export function PosesTab() {
   const [search, setSearch] = useState('')
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [confirmDismiss, setConfirmDismiss] = useState<string | null>(null)
-  const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const isPose = axis === 'pose'
@@ -230,26 +228,6 @@ export function PosesTab() {
     [axis, busy, t, toast],
   )
 
-  const clearVariants = useCallback(async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const r = await apiPost<{ variants_deleted?: number; images_deleted?: number }>(
-        '/poses/variants/clear',
-        {},
-      )
-      toast(
-        `${t('Rendered variants cleared')}: ${r?.variants_deleted ?? 0} ${t('variants')}, ` +
-          `${r?.images_deleted ?? 0} ${t('images')}`,
-      )
-      setConfirmClear(false)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setBusy(false)
-    }
-  }, [busy, t, toast])
-
   const upd = useCallback(<K extends keyof Entry>(k: K, v: Entry[K]) => {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev))
   }, [])
@@ -257,40 +235,7 @@ export function PosesTab() {
   return (
     <div className="ga-twocol">
       <aside className="ga-twocol-left">
-        <ListHeader
-          title={t('Catalog')}
-          onNew={addNew}
-          extra={
-            confirmClear ? (
-              <>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-danger"
-                  disabled={busy}
-                  onClick={clearVariants}
-                >
-                  {busy ? t('Clearing…') : t('Really clear?')}
-                </button>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  onClick={() => setConfirmClear(false)}
-                >
-                  {t('Cancel')}
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                title={t('Deletes every cached pose variant and every rendered expression image of every character.')}
-                onClick={() => setConfirmClear(true)}
-              >
-                {t('Clear rendered variants')}
-              </button>
-            )
-          }
-        />
+        <ListHeader title={t('Catalog')} onNew={addNew} />
         <p className="ga-sched-muted">
           {t('The catalog is the closed set of render keys: a pose key carries the body-posture prompt and the animation kind, an expression key the facial prompt. Free text is matched onto a key — it never creates one.')}
         </p>

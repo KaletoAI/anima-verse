@@ -99,22 +99,29 @@ def validate_catalog(axis: str) -> List[str]:
 
 # ── Resolution: free text → catalog key ──────────────────────────────────
 # Matching threshold: cosine similarity below which a free text is treated as
-# "not in the catalog" and logged as a candidate. World-overridable like
-# pose.variant_match_threshold. 0.60 (not 0.75 as the variant matcher used):
-# catalog entries are short verb phrases, cross-phrasing similarity is lower
-# than same-pose-different-words similarity.
-DEFAULT_CATALOG_THRESHOLD = 0.60
+# "not in the catalog" and logged as a candidate. 0.60, because catalog entries
+# are short verb phrases: cross-phrasing similarity is lower than
+# same-pose-different-words similarity.
+# Constant, not a world setting: the world knob pose.catalog_match_threshold
+# never had a UI (rule "feature = backend + UI"), so it froze at this default
+# anyway — removed with the pose-variant teardown (Aug 2026).
+CATALOG_THRESHOLD = 0.60
 
 
-def get_catalog_threshold() -> float:
-    from app.models.world import get_world_setting
-    try:
-        raw = get_world_setting("pose.catalog_match_threshold", "")
-        if raw:
-            return max(0.0, min(1.0, float(raw)))
-    except Exception:
-        pass
-    return DEFAULT_CATALOG_THRESHOLD
+def cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Cosine similarity of two vectors. Returns 0.0 on any inconsistency.
+
+    Lives here because the catalog resolver is its only consumer since the
+    pose-variant matcher was removed.
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
 
 
 def _alias_index(axis: str) -> Dict[str, str]:
@@ -162,13 +169,12 @@ def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
         from app.core.embedding import embed as _embed
     query = _embed(cleaned)
     if query:
-        from app.core.pose_variants import cosine_similarity
         best_alias, best_score = "", 0.0
         for alias, vec in _alias_embeddings(axis, _embed).items():
             score = cosine_similarity(query, vec)
             if score > best_score:
                 best_alias, best_score = alias, score
-        if best_alias and best_score >= get_catalog_threshold():
+        if best_alias and best_score >= CATALOG_THRESHOLD:
             # A catalog edit racing the embedding warm-up can leave the alias
             # embeddings holding aliases this fresh index no longer knows —
             # fall through to the fallback rather than break "never raises".

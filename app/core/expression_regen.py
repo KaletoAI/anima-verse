@@ -1155,25 +1155,11 @@ def generate_expression_image(character_name: str,
 
         logger.info("Expression image generated: %s", final_path.name)
 
-        # Trigger visual analysis for fresh pose variants (step 5e).
-        # Idempotent via example_image: only when empty (= never analyzed)
-        # → the worker fills in the path later. Not applicable to reference
-        # renders stored outside the variant cache.
-        try:
-            if output_stem is None and _pose_key:
-                from app.core.pose_variants import (
-                    get_or_create_variant, set_example_image,
-                )
-                from app.core.pose_engine import enqueue_visual_analysis
-                # Same lookup the canonical setter uses: the variant row of
-                # this catalog key (exact string match, no embedding).
-                v = get_or_create_variant(character_name, _pose_key)
-                if v and not (v.get("example_image") or "").strip():
-                    # Mark immediately so parallel saves do not analyze twice
-                    set_example_image(v["id"], str(final_path))
-                    enqueue_visual_analysis(v["id"], str(final_path))
-        except Exception as _va_err:
-            logger.debug("Visual analysis trigger failed: %s", _va_err)
+        # (The visual-analysis trigger that used to sit here fed the pose
+        # variant cache — removed with it, Aug 2026. Its example_image guard
+        # only ever deduplicated that analysis job; nothing is enqueued any
+        # more, so there is nothing left to deduplicate. The image cache
+        # itself is keyed by pose_key/expression_key and stays as it was.)
 
         return final_path
 

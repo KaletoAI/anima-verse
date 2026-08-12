@@ -412,9 +412,7 @@ def init_schema() -> None:
     # One-shot migration: pose free text → pose catalog fields
     # (plan-pose-katalog.md). The old pose_intent column held whatever the LLM
     # wrote; pose_key/pose_flavor replace it. A clean cut, no conversion: the
-    # pose is volatile — every location/room change clears it anyway — and the
-    # stored pose_variant_id points at variants that were keyed by the old
-    # free-text normalization, so it is dropped with it.
+    # pose is volatile — every location/room change clears it anyway.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='pose_catalog_fields_v1'"
     ).fetchone()
@@ -426,11 +424,9 @@ def init_schema() -> None:
                 conn.execute(
                     "ALTER TABLE character_state DROP COLUMN pose_intent")
                 conn.execute(
-                    "UPDATE character_state SET pose_key='', pose_flavor='', "
-                    "pose_variant_id=NULL"
-                )
+                    "UPDATE character_state SET pose_key='', pose_flavor=''")
                 logger.info("pose catalog fields: pose_intent column dropped, "
-                            "stale pose variants cleared")
+                            "stale poses cleared")
             conn.execute(
                 "INSERT INTO schema_meta (key, value) VALUES "
                 "('pose_catalog_fields_v1', '1')"

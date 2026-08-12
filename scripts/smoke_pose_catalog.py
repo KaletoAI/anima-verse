@@ -26,14 +26,13 @@ Stage 3 - the canonical setter (task 3), derived BY HAND from the setter code
 and the catalog files:
 - set_pose_intent("sitzen") -> pose_key `sitting` (listed synonym, exact hit),
   pose_flavor "sitzen" (sanitize_flavor keeps it, it differs from the key),
-  one variant row with canonical_pose `sitting`, exactly one profile write.
-- the same text again -> key AND flavor unchanged -> ZERO writes, no 2nd
-  variant, same pose_variant_id.
+  exactly one profile write.
+- the same text again -> key AND flavor unchanged -> ZERO writes.
 - "Sitting" -> same key, flavor equals the key case-insensitively and is
-  therefore dropped -> one more write, still the same variant.
+  therefore dropped -> one more write.
 - is_sleeping=1 -> get_effective_activity "Sleeping",
   get_effective_pose_key "sleeping" (catalog entry), stored fields untouched.
-- clear_pose_intent -> pose_key/pose_flavor "" and pose_variant_id NULL.
+- clear_pose_intent -> pose_key/pose_flavor "".
 - sanitize_flavor("demo sits on the bench") -> "sits on the bench": with a
   character row present the name removal (D7) is finally observable.
 
@@ -55,9 +54,9 @@ Stage 5 - admin surface (task 6), derived BY HAND from the route contract:
   answers anything else with HTTP 400, never a KeyError-500.
 - `_alias_owner("pose", "sitzen")` == "sitting" (listed synonym), an unclaimed
   text -> "" (that is what the approve conflict check reads).
-- `clear_all_variants()` returns the number of deleted rows and leaves both
-  the variant table empty AND every `character_state.pose_variant_id` NULL:
-  2 variants for `demo` -> 2, then 0 on a second run.
+- the router carries NO `/variants/clear` path any more (pose variants were
+  torn out Aug 2026; rendered images are cleared per character in
+  characters.py).
 - `delete_candidate` removes the row for good (approve), while
   `set_candidate_status(..., "dismissed")` keeps it and only takes it out of
   the open list (dismiss).
@@ -87,8 +86,19 @@ to fall through: expected ("standing", "fallback") plus one candidate row for
 the query text with nearest_key "" (the ghost alias resolves to nothing) and
 distance 1.0 - 1.0 = 0.0.
 
-The stage-2/3/4/5 DB work runs against a throwaway storage dir, never the demo
-world (the server may hold it).
+Stage 7 - the pose-variant teardown (Aug 2026), derived BY HAND from it:
+- `app.core.pose_variants` and `app.core.pose_engine` no longer import, and no
+  file under app/ or plugins/ names them - except world_db_schema.py, which
+  keeps the retired `character_pose_variants` table because this stream ships
+  no DB migrations.
+- a pose change still lands in character_state and still drives the expression
+  cache key (`gardening` and `sitting` produce different keys), while the
+  retired table stays empty.
+- `clear_expression_cache` - the surviving per-character reset - runs without
+  any variant row and reports 0 for a character that never rendered.
+
+The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
+demo world (the server may hold it).
 """
 import shutil
 import sys
@@ -186,6 +196,7 @@ try:
         return row[0] if row else None
 
     def _variant_rows():
+        """Retired table — must stay empty, nothing writes it any more."""
         return _db.get_connection().execute(
             "SELECT id, canonical_pose FROM character_pose_variants "
             "WHERE character_name='demo' ORDER BY id").fetchall()
@@ -205,26 +216,20 @@ try:
     _ch.set_pose_intent("demo", "sitzen")
     assert _state("pose_key") == "sitting", _state("pose_key")
     assert _state("pose_flavor") == "sitzen", _state("pose_flavor")
-    _vid = _state("pose_variant_id")
-    assert _vid, _vid
-    assert [r[1] for r in _variant_rows()] == ["sitting"], _variant_rows()
+    assert _variant_rows() == [], _variant_rows()
     assert _saves["n"] == 1, _saves
 
-    # 2. Same text again: key AND flavor unchanged -> no write, no 2nd variant.
+    # 2. Same text again: key AND flavor unchanged -> no write at all.
     _ch.set_pose_intent("demo", "sitzen")
     assert _saves["n"] == 1, _saves
-    assert len(_variant_rows()) == 1, _variant_rows()
-    assert _state("pose_variant_id") == _vid, (_state("pose_variant_id"), _vid)
 
     # 3. "Sitting" -> same key; the flavor equals the key (case-insensitively)
-    #    and is therefore dropped. Flavor changed -> exactly one more write,
-    #    still the SAME variant (the variant is keyed by the catalog key).
+    #    and is therefore dropped. Flavor changed -> exactly one more write.
     _ch.set_pose_intent("demo", "Sitting")
     assert _state("pose_key") == "sitting", _state("pose_key")
     assert _state("pose_flavor") == "", repr(_state("pose_flavor"))
     assert _saves["n"] == 2, _saves
-    assert len(_variant_rows()) == 1, _variant_rows()
-    assert _state("pose_variant_id") == _vid, (_state("pose_variant_id"), _vid)
+    assert _variant_rows() == [], _variant_rows()
 
     # 4. Read API: display text falls back to the key when the flavor is empty.
     assert _ch.get_character_pose_key("demo") == "sitting"
@@ -243,11 +248,10 @@ try:
         _conn.execute("UPDATE character_state SET is_sleeping=0 "
                       "WHERE character_name='demo'")
 
-    # 6. clear_pose_intent empties all three fields.
+    # 6. clear_pose_intent empties both fields.
     _ch.clear_pose_intent("demo")
     assert _state("pose_key") == "", repr(_state("pose_key"))
     assert _state("pose_flavor") == "", repr(_state("pose_flavor"))
-    assert _state("pose_variant_id") is None, _state("pose_variant_id")
     assert _ch.get_effective_activity("demo") == ""
 
     # 7. Empty pose is a reset, not a write, once everything is already empty.
@@ -321,7 +325,6 @@ try:
     from fastapi import HTTPException
     from app.core.pose_catalog import delete_candidate, record_candidate, \
         set_candidate_status
-    from app.core.pose_variants import clear_all_variants, get_or_create_variant
     from app.routes.poses import _alias_owner, _axis
 
     # 1. Axis validation at the boundary: a URL param never becomes a 500.
@@ -339,17 +342,13 @@ try:
     assert _alias_owner("pose", "standing") == "standing"
     assert _alias_owner("pose", "quantum flux calibration") == ""
 
-    # 3. clear_all_variants: rows gone AND the state references nulled.
-    get_or_create_variant("demo", "sitting")
-    get_or_create_variant("demo", "gardening")
-    with _db.transaction() as _conn:
-        _conn.execute("UPDATE character_state SET pose_variant_id=42 "
-                      "WHERE character_name='demo'")
-    assert len(_variant_rows()) == 2, _variant_rows()
-    assert clear_all_variants() == 2
-    assert _variant_rows() == [], _variant_rows()
-    assert _state("pose_variant_id") is None, _state("pose_variant_id")
-    assert clear_all_variants() == 0
+    # 3. The router no longer offers a variant-cache reset at all: the pose
+    #    variants are gone, and clearing rendered images is the per-character
+    #    route in characters.py. A re-introduced /poses/variants/clear would
+    #    show up here.
+    from app.routes.poses import router as _poses_router
+    _paths = {r.path for r in _poses_router.routes}
+    assert "/variants/clear" not in _paths, sorted(_paths)
 
     # 4. Candidate lifecycle: dismiss keeps the row, approve deletes it.
     #    (stage 2 already left the 'quantum flux calibration' row behind)
@@ -497,5 +496,44 @@ try:
         _pc.reload_catalogs()
 
     print("OK smoke_pose_catalog stage 6")
+
+    # ── Stage 7: pose + expression still work WITHOUT pose variants ──────
+    # Derived BY HAND from the teardown (Aug 2026): the pose write path and
+    # the expression cache key never touch the variant cache any more.
+    # 1. Source guard: no module imports the deleted modules.
+    import importlib
+    for _gone in ("app.core.pose_variants", "app.core.pose_engine"):
+        try:
+            importlib.import_module(_gone)
+            raise AssertionError(f"{_gone} is back — the teardown regressed")
+        except ModuleNotFoundError:
+            pass
+    _repo = Path(__file__).resolve().parents[1]
+    _hits = [str(p.relative_to(_repo))
+             for p in list((_repo / "app").rglob("*.py"))
+             + list((_repo / "plugins").rglob("*.py"))
+             if "pose_variants" in p.read_text(encoding="utf-8")
+             or "pose_engine" in p.read_text(encoding="utf-8")]
+    # world_db_schema keeps the retired TABLE (no DB migrations in this stream)
+    assert _hits == ["app/core/world_db_schema.py"], _hits
+
+    # 2. Round trip: a pose change lands in the state AND drives the
+    #    expression cache key, with the retired table untouched.
+    _ch.set_pose_intent("demo", "gardening")
+    assert _state("pose_key") == "gardening", _state("pose_key")
+    assert _ch.get_effective_pose_key("demo") == "gardening"
+    _k_garden = _cache_key("happy", _ch.get_effective_pose_key("demo"))
+    _ch.set_pose_intent("demo", "sitzen")
+    _k_sit = _cache_key("happy", _ch.get_effective_pose_key("demo"))
+    assert _k_garden != _k_sit, (_k_garden, _k_sit)
+    assert _variant_rows() == [], _variant_rows()
+
+    # 3. The surviving cache reset is per character and needs no variant row:
+    #    a character that never rendered anything reports 0 deletions.
+    from app.core.expression_regen import clear_expression_cache
+    assert clear_expression_cache("demo") == 0
+
+    _ch.clear_pose_intent("demo")
+    print("OK smoke_pose_catalog stage 7")
 finally:
     shutil.rmtree(_tmp_storage, ignore_errors=True)

@@ -1,20 +1,21 @@
-"""Embedding-Erzeugung — intern (fastembed/ONNX) oder extern (geroutetes Modell).
+"""Embedding generation — internal (fastembed/ONNX) or external (routed model).
 
-Aktuell einziger Konsument: Pose-Matching (``pose_engine``). Liefert einen
-Vektor oder ``None`` (dann faellt das Match-Modul auf String-Equality zurueck —
-kein Crash, kein Queue-Block).
+Only consumer today: the pose/expression catalog resolver
+(``pose_catalog.resolve_to_catalog``). Returns a vector or ``None`` — on
+``None`` the resolver falls back to plain alias equality, no crash, no queue
+block.
 
-Backend-Wahl ueber ``config.embedding.backend``:
-  - ``auto`` (Default): externes Modell wenn der Task ``pose_embedding`` geroutet
-    ist, sonst das eingebaute ONNX-Modell. So funktioniert Pose-Matching
-    out-of-the-box ohne externen Embedding-Endpoint.
-  - ``internal``: immer das eingebaute fastembed/ONNX-Modell (CPU).
-  - ``external``: nur der geroutete ``/v1/embeddings``-Provider.
+Backend choice via ``config.embedding.backend``:
+  - ``auto`` (default): the external model when the ``pose_embedding`` task is
+    routed, otherwise the built-in ONNX model. That makes catalog matching work
+    out of the box without an external embedding endpoint.
+  - ``internal``: always the built-in fastembed/ONNX model (CPU).
+  - ``external``: only the routed ``/v1/embeddings`` provider.
 
-Das eingebaute Modell laeuft via ``fastembed`` (nutzt das schon vorhandene
-``onnxruntime``, kein torch). Modell wird beim ersten Aufruf in ``cache_dir``
-geladen (~130 MB fuer bge-small). Pose-Beschreibungen werden vorher auf
-englische Kurzform normalisiert, daher genuegt ein kleines EN-Modell.
+The built-in model runs via ``fastembed`` (reuses the ``onnxruntime`` that is
+already present, no torch). It is downloaded into ``cache_dir`` on first use
+(~130 MB for bge-small). Catalog aliases are short English phrases, so a small
+EN model is enough.
 """
 from typing import List, Optional
 

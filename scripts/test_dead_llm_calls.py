@@ -17,17 +17,17 @@ The second original bug lived in ``app.core.pose_engine.normalize_pose``, which
 imported ``call`` instead of ``llm_call`` and then did ``(response or
 "").strip()`` on the response OBJECT — both hidden in one ``try/except``, so the
 ``pose_normalize`` task silently never ran. That function, its LLM task and its
-template are GONE (Aug 2026: poses resolve against the catalog,
-plan-pose-katalog.md), so the four checks that exercised it — formerly 3, 4, 5
+template went first (Aug 2026: poses resolve against the catalog,
+plan-pose-katalog.md); the rest of ``pose_engine.py`` followed with the
+pose-variant teardown. The four checks that exercised it — formerly 3, 4, 5
 and 7 — were dropped with it. Their numbers are deliberately NOT reused, so old
 failure output stays unambiguous.
 
 Checks (expected values derived by hand from the code, not recorded from a run):
 
   1. ``app.core.llm_router`` exports ``llm_call`` and NOT ``call``.
-     A later rename must break this check immediately. Still live even after the
-     pose teardown: ``_run_visual_analysis`` in ``pose_engine.py`` imports
-     ``call`` and is known-broken for exactly this reason.
+     A later rename must break this check immediately — the original bug was a
+     caller importing ``call``, and both names must not coexist.
   2. ``resolve_llm`` accepts ``agent_name`` and not ``character_name``
      (via ``inspect.signature``, not a text search).
   6. Every ``resolve_llm(...)`` call site in ``plugins/knowledge/extract_utils``
@@ -90,12 +90,12 @@ def loc(obj) -> str:
 # Callees that end in set_pose_intent. Since the pose catalog (Aug 2026) that
 # chain no longer reaches an LLM or the provider queue — but the offload
 # requirement is unchanged, because set_pose_intent is still fully synchronous:
-# it resolves the catalog key, calls get_or_create_variant (which INSERTs) and
-# then save_character_profile (another write). Those are blocking SQLite writes
-# that additionally contend for the world-DB write lock, so calling any of these
-# straight from a coroutine still stalls the event loop and with it every SSE
-# stream. The bound shrank from "up to 3 x 300 s" to "however long the DB lock
-# is held" — shorter, not zero, and an SSE stream must not pay it.
+# it resolves the catalog key (a read, possibly an embedding call) and then
+# writes the profile. Those are blocking SQLite writes that additionally
+# contend for the world-DB write lock, so calling any of these straight from a
+# coroutine still stalls the event loop and with it every SSE stream. The bound
+# shrank from "up to 3 x 300 s" to "however long the DB lock is held" —
+# shorter, not zero, and an SSE stream must not pay it.
 #   set_pose_intent   app/models/character.py  (the chain itself)
 #   _extract_activity app/routes/chat.py       -> set_pose_intent
 #   _extract_mood     app/routes/chat.py       (same extraction pair)
@@ -204,9 +204,9 @@ def _iter_blocking_calls_in_coroutines():
                 yield (f"{rel}:{node.lineno}",
                        f"async def {fn.name} calls {name}(...) inline — that "
                        f"chain reaches set_pose_intent, whose synchronous "
-                       f"variant INSERT + profile write block on the world-DB "
-                       f"write lock and stall the event loop and every SSE "
-                       f"stream; wrap it in await asyncio.to_thread(...)")
+                       f"profile write blocks on the world-DB write lock and "
+                       f"stalls the event loop and every SSE stream; wrap it "
+                       f"in await asyncio.to_thread(...)")
 
 
 def main() -> int:
@@ -222,7 +222,7 @@ def main() -> int:
     elif hasattr(llm_router, "call"):
         fail("1", where, "app.core.llm_router unexpectedly exports 'call' — "
                          "the canonical name is 'llm_call'; pick ONE and update "
-                         "pose_engine.py accordingly")
+                         "every caller accordingly")
     else:
         ok("1", "llm_router exports llm_call and no 'call'")
 
@@ -240,8 +240,8 @@ def main() -> int:
         ok("2", f"resolve_llm{sig} takes agent_name, not character_name")
 
     # Checks 3/4/5/7 lived here. They drove app.core.pose_engine.normalize_pose
-    # with a fake llm_call; that function and the pose_normalize task no longer
-    # exist (see the module docstring). Numbers are not reused.
+    # with a fake llm_call; that function, the pose_normalize task and the whole
+    # module no longer exist (see the module docstring). Numbers are not reused.
 
     # --- 6. extract_utils call sites bind against the real signature -------
     import plugins.knowledge.extract_utils as extract_utils

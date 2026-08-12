@@ -4,9 +4,8 @@
 cached and animation clips are resolved (plan-pose-katalog.md). Both axes live
 in one curated JSON file each (``shared/templates/<axis>/<axis>_catalog.json``,
 ``pose_catalog.catalog_path``); this router is the write surface behind the
-Poses admin tab: edit entries, approve/dismiss the candidates the resolver
-recorded for free text it could not absorb, and reset the rendered variant
-cache after a key-scheme change.
+Poses admin tab: edit entries and approve/dismiss the candidates the resolver
+recorded for free text it could not absorb.
 
 Free text never creates an entry any more — the catalog grows only through the
 approval flow here. The animation vocabulary is NOT hardcoded either: it is
@@ -301,26 +300,3 @@ async def dismiss_candidate(request: Request,
     if not found:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return {"status": "success", "axis": axis}
-
-
-# ── Rendered variants: the cache keyed by the catalog keys ───────────────
-
-@router.post("/variants/clear")
-def clear_variants(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Resets the rendered pose/expression cache of the whole world: every
-    ``character_pose_variants`` row plus every cached expression image. Needed
-    once after a key-scheme change — old images sit under keys nobody asks
-    for again."""
-    from app.core.pose_variants import clear_all_variants
-    from app.core.expression_regen import clear_expression_cache
-    from app.models.character import list_available_characters
-
-    variants = clear_all_variants()
-    images = 0
-    for name in list_available_characters():
-        try:
-            images += clear_expression_cache(name)
-        except Exception as e:
-            logger.warning("clear_expression_cache(%s) failed: %s", name, e)
-    logger.info("variant cache reset: %d variants, %d images", variants, images)
-    return {"variants_deleted": variants, "images_deleted": images}

@@ -132,7 +132,7 @@ SCHEMA_STATEMENTS = [
         current_feeling   TEXT DEFAULT '',
         pose_key          TEXT DEFAULT '',
         pose_flavor       TEXT DEFAULT '',
-        pose_variant_id   INTEGER,
+        pose_variant_id   INTEGER,         -- RETIRED (Aug 2026), never written
         location_changed_at TEXT DEFAULT '',
         activity_changed_at TEXT DEFAULT '',
         last_thought_at   TEXT DEFAULT '',
@@ -568,10 +568,11 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )""",
 
-    # ── Pose variants (step 5, May 2026) ─────────────────────────────────
-    # Consolidated pose variants per character — expression images are cached
-    # against this table instead of against free pose text. canonical_pose is
-    # the pose catalog key since Aug 2026 (plan-pose-katalog.md).
+    # ── Pose variants (step 5, May 2026) — RETIRED (Aug 2026) ────────────
+    # The per-character pose-variant cache is gone: expression images are
+    # keyed by the pose/expression catalog keys directly, so nothing reads or
+    # writes this table any more. Kept as an empty shell because this stream
+    # ships no DB migrations; drop it when a migration pass comes along.
     """CREATE TABLE IF NOT EXISTS character_pose_variants (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name  TEXT NOT NULL,
@@ -752,8 +753,9 @@ ALTER_MIGRATIONS = [
     # doing is stored as pose_key (catalog key, the ONE render/animation key)
     # plus pose_flavor (sanitized free text, prompt spice only). They replace
     # the free-text pose_intent column, which the pose_catalog_fields_v1
-    # migration in db.py drops. pose_variant_id points at
-    # character_pose_variants and becomes part of the expression-image cache key.
+    # migration in db.py drops. pose_variant_id is RETIRED (Aug 2026) — it
+    # pointed at character_pose_variants; the column is only kept so old and
+    # new worlds keep the same shape until a migration pass drops both.
     ("character_state", "pose_key",        "TEXT DEFAULT ''"),
     ("character_state", "pose_flavor",     "TEXT DEFAULT ''"),
     ("character_state", "pose_variant_id", "INTEGER"),

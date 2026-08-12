@@ -210,14 +210,13 @@ _STATE_COLS = ("current_location", "current_room", "current_activity",
 
 # Typed state columns — persisted separately (own casts).
 # (name, sql_type, cast_for_read, cast_for_write)
-# Step 5/6 (May 2026): pose fields + pose_variant_id + three boolean flags.
+# Step 5/6 (May 2026): pose fields + three boolean flags.
 # Pose catalog (Aug 2026): pose_key = catalog key (the ONE render key),
-# pose_flavor = sanitized free text next to it.
+# pose_flavor = sanitized free text next to it. (pose_variant_id is gone with
+# the pose-variant cache — the column survives as a retired schema leftover.)
 _STATE_TYPED_COLS = (
     ("pose_key",        "TEXT",    lambda v: v or "",             lambda v: (v or "") if isinstance(v, str) else ""),
     ("pose_flavor",     "TEXT",    lambda v: v or "",             lambda v: (v or "") if isinstance(v, str) else ""),
-    ("pose_variant_id", "INTEGER", lambda v: int(v) if v is not None else None,
-                                    lambda v: int(v) if v not in (None, "") else None),
     ("is_sleeping",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
     ("is_wet",          "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
     ("is_intimate",     "INTEGER", lambda v: bool(v),             lambda v: 1 if v else 0),
@@ -305,7 +304,7 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
         row = conn.execute(
             "SELECT current_location, current_room, current_activity, "
             "current_feeling, location_changed_at, activity_changed_at, meta, "
-            "pose_key, pose_flavor, pose_variant_id, "
+            "pose_key, pose_flavor, "
             "is_sleeping, is_wet, is_intimate, decency_exempt "
             "FROM character_state WHERE character_name=?",
             (character_name,),
@@ -320,11 +319,10 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
                 "activity_changed_at": row[5] or "",
                 "pose_key": row[7] or "",
                 "pose_flavor": row[8] or "",
-                "pose_variant_id": int(row[9]) if row[9] is not None else None,
-                "is_sleeping": bool(row[10]),
-                "is_wet": bool(row[11]),
-                "is_intimate": bool(row[12]),
-                "decency_exempt": bool(row[13]),
+                "is_sleeping": bool(row[9]),
+                "is_wet": bool(row[10]),
+                "is_intimate": bool(row[11]),
+                "decency_exempt": bool(row[12]),
             })
             try:
                 meta = json.loads(row[6] or "{}")
@@ -1307,7 +1305,6 @@ def save_character_current_location(character_name: str = "", location: str = ""
     if location_changed:
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
-        profile["pose_variant_id"] = None  # = None, not pop (pop is skipped on save → stale variant stays)
     # Intent.forbidden_slots zuruecksetzen bei echtem Location-Wechsel: die
     # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
     # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
@@ -1722,25 +1719,18 @@ def set_pose_intent(character_name: str, pose: str) -> None:
         return
     raw = (pose or "").strip()
     key, flavor = "", ""
-    variant = None
     if raw:
         from app.core.pose_catalog import resolve_to_catalog, sanitize_flavor
         key, _how = resolve_to_catalog(raw, "pose")
         flavor = sanitize_flavor(raw)
         if flavor.lower() == key.lower():
             flavor = ""          # flavor that adds nothing is noise
-        try:
-            from app.core.pose_variants import get_or_create_variant
-            variant = get_or_create_variant(character_name, key)
-        except Exception:
-            variant = None
     profile = get_character_profile(character_name) or {}
     if (profile.get("pose_key") or "") == key and (profile.get("pose_flavor") or "") == flavor:
         return
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
     profile["pose_key"] = key
     profile["pose_flavor"] = flavor
-    profile["pose_variant_id"] = variant["id"] if variant else None
     save_character_profile(character_name, profile)
     _publish_activity_changed(character_name, flavor or key, old_display, key)
 
@@ -1750,12 +1740,10 @@ def clear_pose_intent(character_name: str) -> None:
     if not character_name:
         return
     profile = get_character_profile(character_name) or {}
-    if profile.get("pose_key") or profile.get("pose_flavor") \
-            or profile.get("pose_variant_id"):
+    if profile.get("pose_key") or profile.get("pose_flavor"):
         old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
-        profile["pose_variant_id"] = None  # = None, not pop (pop is skipped on save)
         save_character_profile(character_name, profile)
         _publish_activity_changed(character_name, "", old_display, "")
 
@@ -3615,7 +3603,6 @@ def wake_from_offmap(character_name: str) -> bool:
     # pose reset of save_character_current_location).
     profile["pose_key"] = ""
     profile["pose_flavor"] = ""
-    profile["pose_variant_id"] = None  # = None, not pop: pop is skipped on save
     save_character_profile(character_name, profile)
     # Seamless world: enter_offmap_sleep cleared the metre point, so waking has
     # to put one back — a character with a location but no point has no place
@@ -3799,7 +3786,6 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     if was and not value:
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
-        profile["pose_variant_id"] = None  # = None, not pop: pop is skipped on save
     save_character_profile(character_name, profile)
     # Schlaf-Längen-Messung für die Tages-Konsolidierung (plan-history-
     # consolidation-cleanup.md, Phase 2): Einschlafen merkt die Startzeit,
