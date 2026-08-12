@@ -347,14 +347,41 @@ class AgentLoop:
                     "answers" if obligatory else "(opportunity)", speaker)
         return True
 
-    def _room_key(self, location_id: str, room_id: str) -> str:
-        return f"{location_id or ''}/{room_id or ''}"
+    def _room_key(self, location_id: str, room_id: str, who: str = "") -> str:
+        """Bucket key for the room-scoped loop state: chime budget
+        (``_room_ai_turns``), winddown marker (``_room_winddown_done``),
+        avatar-floor clock and the respond lock.
+
+        Inside a location that is ``"<loc>/<room>"``. OUTSIDE (E6) it is the
+        open-world CELL around ``who``'s point. The wilderness used to
+        collapse into the single key ``"/"``, and that key is only ever reset
+        by an avatar utterance in the same bucket — so a handful of autonomous
+        outdoor lines ANYWHERE exhausted the backstop for the whole open
+        world (obligatory answers included) and the winddown marker stayed set
+        for the rest of the process. A cell per conversation ends that.
+
+        ``who`` without a point falls back to the shared ``"/"``: a character
+        the map does not place is not outdoors, it is nowhere.
+        """
+        if location_id:
+            return f"{location_id}/{room_id or ''}"
+        if who:
+            from app.models.character import get_character_pos
+            from app.core.perception import open_world_cell_key
+            pos = get_character_pos(who)
+            if pos:
+                return open_world_cell_key(pos["x"], pos["z"])
+        return "/"
 
     def _rooms_with_pending_obligatory(self) -> set:
         """Room keys (loc/room) with a pending MANDATORY answer in the
         respond lane, or with a respond turn currently running. These rooms
         must NOT be idle-consolidated — the stream would be pruned before
-        the answer ran (no-answer bug) or mid-answer."""
+        the answer ran (no-answer bug) or mid-answer.
+
+        Location keys only, deliberately: the caller compares them against
+        open SCENES, and the wilderness has none (see ``scene_manager.touch``).
+        Outdoor cells here would be keys nothing could ever match."""
         keys: set = set()
         try:
             from app.models.character import (get_character_current_location,
@@ -430,11 +457,8 @@ class AgentLoop:
 
         An EMPTY location_id is the WILDERNESS (E6): the earshot roster is
         then the hearing radius around the SPEAKER instead of the room, and
-        everything below works on that list unchanged. Note the coarseness of
-        the backstop out there — every location-less conversation shares the
-        one room key "/", so two groups far apart share a chime budget. That
-        only throttles autonomous follow-ups, never who perceives what, and a
-        spatial key for the open world is deliberately still open.
+        the budget bucket is the speaker's open-world cell instead of the
+        room (``_room_key``) — everything below works on both unchanged.
 
         Returns {"obligatory": [...], "chime": [...]} of the characters
         actually bumped.
@@ -467,7 +491,9 @@ class AgentLoop:
         else:
             from app.core.perception import nearby_in_the_open
             in_earshot = nearby_in_the_open(speaker)
-        key = self._room_key(location_id, room_id)
+        # The bucket the SPEAKER acts in — outside that is its open-world
+        # cell, so two conversations far apart keep separate budgets.
+        key = self._room_key(location_id, room_id, speaker)
         # Player priority (option A): avatar in the room? Then effective
         # Backstop = 1 (one reaction round, then the stage is free) — unless
         # the avatar has been idle past the timeout, then the world may talk on.
@@ -681,15 +707,19 @@ class AgentLoop:
         return lock
 
     def _char_room_key(self, character_name: str) -> str:
-        """Room key (loc/room) the character is in right now; '' if unknown."""
+        """The bucket the character is in right now — its room inside a
+        location, its open-world cell outside (E6). Empty only when the
+        lookup itself fails.
+
+        Outside used to collapse to one key, which serialized every outdoor
+        respond turn in the world behind a single lock; cells make two distant
+        conversations run in parallel again, exactly like two rooms."""
         try:
             from app.models.character import (get_character_current_location,
                                               get_character_current_room)
             loc = get_character_current_location(character_name) or ""
-            if not loc:
-                return ""
-            room = get_character_current_room(character_name) or ""
-            return self._room_key(loc, room)
+            room = get_character_current_room(character_name) or "" if loc else ""
+            return self._room_key(loc, room, character_name)
         except Exception:
             return ""
 
@@ -971,7 +1001,7 @@ class AgentLoop:
             # Backstop kicks in. This is how emergent NPC↔NPC conversations
             # arise and ebb away.
             try:
-                key = self._room_key(_loc, _room)
+                key = self._room_key(_loc, _room, character_name)
                 self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
                 self.dispatch_room_reactions(
                     speaker=character_name, content=reply, volume=_reply_vol,
@@ -1003,9 +1033,8 @@ class AgentLoop:
 
         Works outside a location too (E6): the wilderness stream is what the
         character heard in the open, so a conversation on the road keeps the
-        same speech-instead-of-thought turn a room conversation gets. Only the
-        backstop bucket is coarse out there (one key for the whole open
-        world) — see ``dispatch_room_reactions``.
+        same speech-instead-of-thought turn a room conversation gets — with
+        the character's open-world cell as the backstop bucket (``_room_key``).
         """
         try:
             from app.models.character import (get_character_current_location,
@@ -1014,7 +1043,8 @@ class AgentLoop:
             from app.core.timeutils import utc_now as _now, parse_iso
             loc = get_character_current_location(character_name) or ""
             room = get_character_current_room(character_name) or ""
-            if self._room_ai_turns.get(self._room_key(loc, room), 0) >= self._chime_backstop:
+            if self._room_ai_turns.get(
+                    self._room_key(loc, room, character_name), 0) >= self._chime_backstop:
                 return None  # scene ebbing away → no more autonomous follow-ups
             stream = perception_store.get_character_room_stream(character_name, loc, room, limit=6)
             for row in reversed(stream):  # newest first (stream is oldest→newest)

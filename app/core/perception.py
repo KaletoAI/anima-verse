@@ -46,6 +46,21 @@ DEFAULT_HEARING_RADIUS_M = 20.0
 _MIN_HEARING_RADIUS_M = 1.0
 _MAX_HEARING_RADIUS_M = 500.0
 
+# Grid edge for BUCKETING open-world conversations (E6). This is not a
+# perception boundary — who hears what is the hearing radius around the
+# speaker, full stop. It is only how the agent loop names a "scene" outside:
+# the chime budget, the winddown marker and the respond lock all need SOME
+# bucket, and outside there is no room to be one. The single shared bucket the
+# wilderness had before meant one conversation could spend the chime budget of
+# the whole open world, permanently.
+#
+# The edge is at least the hearing radius, so the people of one conversation
+# normally land in one cell; a speaker close to a cell border can still
+# straddle two, which splits a BUDGET and never changes who perceives what.
+# The 50 m floor keeps the cells coarse enough that a group walking on does
+# not hop buckets every few steps.
+OPEN_WORLD_CELL_MIN_M = 50.0
+
 # Canonical speaker value for narrator/storyteller lines (act narration, spell
 # results, movement traces, party joins). Persisted AND player-visible, so it is
 # one constant referenced everywhere (write + presence filters) — never a bare
@@ -60,6 +75,10 @@ STORYTELLER_SPEAKER = "Storyteller"
 # prompt string; the character's own language comes from its language
 # instruction, not from this label.
 WILDERNESS_LOCATION_LABEL = "Wilderness (in the open, no building, no room)"
+# ...and what they call the place of a character the map does not place at all
+# (off-map: auto-sleep, a reaped avatar). Unchanged from before E6 on purpose —
+# see ``prompt_place``.
+UNKNOWN_LOCATION_LABEL = "Unknown"
 
 
 def get_hearing_radius_m() -> float:
@@ -249,17 +268,40 @@ def nearby_in_the_open(character_name: str,
     return _nearby_in_the_open(character_name, pos)
 
 
-def location_display_name(location_id: str) -> str:
-    """The place name a PROMPT shows — the location's name, or the wilderness
-    label when the character stands outside every location.
+def open_world_cell_key(x: float, z: float) -> str:
+    """Bucket name of the open-world cell a metre point falls into.
+
+    See ``OPEN_WORLD_CELL_MIN_M`` for why the cell exists and how big it is.
+    Pure — the only input is the point (and the configured radius)."""
+    cell = max(OPEN_WORLD_CELL_MIN_M, get_hearing_radius_m())
+    return f"open:{math.floor(x / cell)}:{math.floor(z / cell)}"
+
+
+def prompt_place(character_name: str, location_id: str) -> Tuple[str, bool]:
+    """Where a PROMPT says this character is: ``(display name, in_the_open)``.
+
+    THREE states, not two — that third one is the whole point of this
+    function:
+
+    * inside a location  -> the location's name, ``in_the_open`` False.
+    * location-less but placed on the map -> the wilderness label, True.
+      "Nobody is around" is then a fact worth telling the character.
+    * no metre point at all -> ``"Unknown"``, False. Off-map is a live,
+      ordinary state: auto-sleep and ``account.reap_orphaned_avatars`` park
+      characters there and they stay awake and chattable. Such a character
+      does not stand in open country, so it must not be told "you are alone
+      out here" — the honest answer is the one the builders gave before E6.
 
     One function for both prompt builders: they used to hardcode the same
-    "Unknown" fallback separately, and a wilderness wording fixed in only one
-    of them would have drifted immediately."""
-    if not location_id:
-        return WILDERNESS_LOCATION_LABEL
-    from app.models.world import get_location_name
-    return get_location_name(location_id)
+    "Unknown" fallback separately, and a rule fixed in only one of them would
+    have drifted immediately."""
+    if location_id:
+        from app.models.world import get_location_name
+        return get_location_name(location_id), False
+    from app.models.character import get_character_pos
+    if not get_character_pos(character_name):
+        return UNKNOWN_LOCATION_LABEL, False
+    return WILDERNESS_LOCATION_LABEL, True
 
 
 def announce_action(character_name: str, text: str,

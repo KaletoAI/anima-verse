@@ -13,7 +13,9 @@ export interface SceneLine {
   ts: string
   speaker?: string
   content?: string
-  /** perception kind (spoken_self|in_room|whisper_meta|distant_shout) or 'utterance' for objective rows */
+  /** perception kind (spoken_self|in_room|nearby|whisper_meta|distant_shout) or
+   *  'utterance' for objective rows. `nearby` = heard out in the open, where
+   *  the hearing radius takes the room's place (E6). */
   kind?: string
   addressees?: string[]
   /** objective view only: whisper|normal|shout */

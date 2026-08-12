@@ -71,7 +71,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     Loads only what's needed: each block is computed lazily and only set
     when it has content. The template renders nothing for empty blocks.
     """
-    from app.core.perception import location_display_name
+    from app.core.perception import prompt_place
     from app.models.character import (
         get_character_profile, get_character_current_location,
         get_character_language_instruction)
@@ -79,7 +79,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     profile = get_character_profile(character_name)
     location_id = profile.get("current_location", "") or ""
     room_id = profile.get("current_room", "") or ""
-    location_name = location_display_name(location_id)
+    # Off the map (no location AND no point) keeps saying "Unknown" — the
+    # presence block below is gated on alone_here for exactly that case.
+    location_name, _in_the_open = prompt_place(character_name, location_id)
     # Presence is three pieces of information: who is in the ROOM, who is
     # elsewhere at this location, AND whether "nobody in the room" is a fact
     # or just unknown. The template needs all of them.

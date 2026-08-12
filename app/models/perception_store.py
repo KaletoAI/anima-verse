@@ -175,6 +175,12 @@ def get_followed_conversation_tail(perceiver: str, partner: str,
 
     Rückgabe identisch zu ``get_character_room_stream`` (älteste zuerst), damit
     der Aufrufer beide Streams nahtlos verketten kann.
+
+    Asymmetrisch gegenüber der Wildnis (E6), und zwar mit Absicht: wer aus
+    einer Location ins Freie tritt, nimmt den Faden mit (die vorherige Runde
+    hat eine Location), wer aus dem Freien eine Location betritt, nicht — die
+    ortlose Vorrunde fällt am ``prior[0]``-Check heraus, weil es draußen keinen
+    Raum-Schlüssel gibt, an dem sie hinge.
     """
     if not (perceiver and partner and cur_location_id is not None):
         return []

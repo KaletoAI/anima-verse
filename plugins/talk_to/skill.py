@@ -89,7 +89,7 @@ class TalkToSkill(PluginSkill):
                 return (
                     f"{target_name} is already in the current conversation — "
                     f"address them directly through your RP speech, not via TalkTo. "
-                    f"TalkTo is only for third characters in your room."
+                    f"TalkTo is only for third characters within earshot."
                 )
         except Exception:
             pass

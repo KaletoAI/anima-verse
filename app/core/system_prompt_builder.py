@@ -60,7 +60,7 @@ THOUGHT_FULL: Set[str] = {
 # ============================================================================
 
 def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
-    from app.core.perception import location_display_name
+    from app.core.perception import prompt_place
     from app.models.character import (
         get_character_profile,
         get_character_current_location)
@@ -73,7 +73,10 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
 
     location_id = profile.get("current_location", "")
     data["location_id"] = location_id
-    data["location_name"] = location_display_name(location_id)
+    # Three states, not two: in a location / out in the open / off the map
+    # entirely — see perception.prompt_place. in_the_open decides both the
+    # place label and whether the presence block may speak at all.
+    data["location_name"], in_the_open = prompt_place(character_name, location_id)
     # Prompt line "Activity": DISPLAY text, not a render key — the sanitized
     # flavor when the character has one, otherwise the bare catalog key. Both
     # are already cleaned and length-capped at the write path (pose_catalog.
@@ -97,10 +100,13 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
         # "You are ALONE" sentence in exactly the situation it is written for.
         # Outside every location (E6) it is rendered too, in the open-air
         # wording: out there "nobody is here" is a fact worth stating, not a
-        # missing lookup.
+        # missing lookup. An OFF-MAP character gets neither wording — for it
+        # the lookup really did fail, and it is exactly the case the thought
+        # template gates away with ``alone_here``.
         data["nearby_hint"] = _format_presence_block(
             data["location_name"], presence_lines, elsewhere_lines,
-            anyone_nearby, in_the_open=not location_id)
+            anyone_nearby, in_the_open=in_the_open
+        ) if (location_id or in_the_open) else ""
 
     if EVENTS in sections:
         data["events_section"] = _load_events(location_id)
