@@ -1687,6 +1687,13 @@
     "…": "…",
     "← World adopted": "← Welt übernommen",
     "→ Moved to shared": "→ Shared verschoben",
-    "🔍 Search content…": "🔍 Inhalt durchsuchen…"
+    "🔍 Search content…": "🔍 Inhalt durchsuchen…",
+    "Reset to shared": "Auf shared zurücksetzen",
+    "Reset to the shared state": "Auf den shared-Zustand zurückgesetzt",
+    "Hides the shared values for: {fields}": "Verdeckt die shared-Werte für: {fields}",
+    "A world entry with this id replaces the shared state completely.": "Ein Welt-Eintrag mit dieser id ersetzt den shared-Zustand vollständig.",
+    "Drop the world entry \"{id}\" so the shared state applies again?": "Welt-Eintrag \"{id}\" entfernen, damit wieder der shared-Zustand gilt?",
+    "This world entry replaces the shared state of the same id and hides its {fields}. \"Reset to shared\" removes the world entry, and the shared state applies again.": "Dieser Welt-Eintrag ersetzt den shared-Zustand mit derselben id und verdeckt dessen {fields}. „Auf shared zurücksetzen“ entfernt den Welt-Eintrag, danach gilt wieder der shared-Zustand.",
+    "This world entry replaces the shared state of the same id. \"Reset to shared\" removes the world entry, and the shared state applies again.": "Dieser Welt-Eintrag ersetzt den shared-Zustand mit derselben id. „Auf shared zurücksetzen“ entfernt den Welt-Eintrag, danach gilt wieder der shared-Zustand."
   }
 }

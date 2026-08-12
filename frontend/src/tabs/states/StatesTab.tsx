@@ -19,6 +19,9 @@ interface PromptFilter {
   enabled?: boolean
   source?: string
   warnings?: string[]
+  /** Fields the shared baseline fills and this world override leaves empty —
+   *  the overlay replaces by id, so those shared values are hidden. */
+  masked_fields?: string[]
 }
 
 interface FiltersData {
@@ -27,9 +30,10 @@ interface FiltersData {
   condition_hint?: string
 }
 
-interface DraftState extends Required<Omit<PromptFilter, 'source' | 'warnings'>> {
+interface DraftState extends Required<Omit<PromptFilter, 'source' | 'warnings' | 'masked_fields'>> {
   originalId: string
   source: string
+  maskedFields: string[]
   isNew: boolean
 }
 
@@ -44,6 +48,7 @@ const EMPTY_DRAFT: DraftState = {
   enabled: true,
   originalId: '',
   source: '',
+  maskedFields: [],
   isNew: true,
 }
 
@@ -59,9 +64,15 @@ function asDraft(f: PromptFilter): DraftState {
     enabled: f.enabled !== false,
     originalId: f.id,
     source: f.source || '',
+    maskedFields: [...(f.masked_fields || [])],
     isNew: false,
   }
 }
+
+/** A world row that carries the same id as a shared state REPLACES it whole
+ *  (no deep merge — project rule). So an override that lacks the icon hides
+ *  the shared icon, and the only repair is to drop the world row. */
+const OVERRIDE = 'world override'
 
 export function StatesTab() {
   const { t } = useI18n()
@@ -69,6 +80,8 @@ export function StatesTab() {
   const [data, setData] = useState<FiltersData | null>(null)
   const [draft, setDraft] = useState<DraftState | null>(null)
   const [loading, setLoading] = useState(true)
+  // In-app confirmation for the two destructive actions (no window.confirm).
+  const [confirmAction, setConfirmAction] = useState<'delete' | 'reset' | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -92,15 +105,20 @@ export function StatesTab() {
   }, [data])
 
   const newFilter = useCallback(() => {
+    setConfirmAction(null)
     setDraft({ ...EMPTY_DRAFT })
   }, [])
 
   const editFilter = useCallback((f: PromptFilter) => {
+    setConfirmAction(null)
     setDraft(asDraft(f))
   }, [])
 
   const copyFilter = useCallback(() => {
-    setDraft((prev) => (prev ? { ...prev, id: '', isNew: true, source: '', originalId: '' } : prev))
+    setConfirmAction(null)
+    setDraft((prev) => (prev
+      ? { ...prev, id: '', isNew: true, source: '', originalId: '', maskedFields: [] }
+      : prev))
   }, [])
 
   const updateDraft = useCallback(<K extends keyof DraftState>(key: K, value: DraftState[K]) => {
@@ -148,22 +166,27 @@ export function StatesTab() {
     }
   }, [draft, reload, t, toast])
 
-  const remove = useCallback(async () => {
+  /** Both actions send the SAME request — DELETE drops the world row. What
+   *  differs is what that means: for a world-only state it removes the state,
+   *  for an override it uncovers the shared entry again. */
+  const applyRemoval = useCallback(async () => {
     if (!draft || draft.isNew) return
-    if (!window.confirm(t('Delete state "{id}"?').replace('{id}', draft.originalId))) return
+    const wasReset = confirmAction === 'reset'
     try {
       await apiDelete(`/admin/prompt-filters/${encodeURIComponent(draft.originalId)}`)
-      toast(t('Deleted'))
+      toast(wasReset ? t('Reset to the shared state') : t('Deleted'))
       await reload()
+      setConfirmAction(null)
       setDraft(null)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [draft, reload, t, toast])
+  }, [confirmAction, draft, reload, t, toast])
 
   const move = useCallback(
     async (target: 'world' | 'shared') => {
       if (!draft || draft.isNew) return
+      setConfirmAction(null)
       try {
         await apiPost(`/admin/prompt-filters/${encodeURIComponent(draft.originalId)}/move`, { target })
         toast(target === 'shared' ? t('Moved to shared') : t('Moved to world'))
@@ -231,8 +254,20 @@ export function StatesTab() {
                         <span style={{ marginLeft: 6, color: '#f85149' }}
                           title={f.warnings.join('\n')}>⚠</span>
                       ) : null}
+                      {f.source === OVERRIDE && (f.masked_fields || []).length > 0 ? (
+                        <span
+                          style={{ marginLeft: 6, color: '#d29922' }}
+                          title={t('Hides the shared values for: {fields}')
+                            .replace('{fields}', (f.masked_fields || []).join(', '))}
+                        >↺</span>
+                      ) : null}
                     </span>
-                    <span className={`ga-source ga-source-${(f.source || 'shared').replace(' ', '-')}`}>
+                    <span
+                      className={`ga-source ga-source-${(f.source || 'shared').replace(' ', '-')}`}
+                      title={f.source === OVERRIDE
+                        ? t('A world entry with this id replaces the shared state completely.')
+                        : undefined}
+                    >
                       {f.source || 'shared'}
                     </span>
                   </button>
@@ -248,17 +283,50 @@ export function StatesTab() {
             <DetailToolbar
               title={draft.id || t('New state')}
               onSave={save}
-              onCancel={() => setDraft(null)}
-              onDelete={draft.isNew ? undefined : remove}
+              onCancel={() => { setConfirmAction(null); setDraft(null) }}
+              onDelete={draft.isNew
+                ? undefined
+                : () => setConfirmAction(draft.source === OVERRIDE ? 'reset' : 'delete')}
+              deleteLabel={draft.source === OVERRIDE ? t('Reset to shared') : undefined}
               onMove={draft.isNew ? undefined : move}
               storage={
                 draft.source === 'shared'
                   ? 'shared'
-                  : draft.source === 'world override'
+                  : draft.source === OVERRIDE
                     ? 'world override'
                     : 'world'
               }
             />
+            {confirmAction ? (
+              <div
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  margin: '8px 0', padding: '8px 10px', borderRadius: 6,
+                  border: '1px solid #d29922', background: 'rgba(210, 153, 34, 0.12)',
+                }}
+              >
+                <span style={{ flex: '1 1 240px' }}>
+                  {confirmAction === 'reset'
+                    ? t('Drop the world entry "{id}" so the shared state applies again?')
+                      .replace('{id}', draft.originalId)
+                    : t('Delete state "{id}"?').replace('{id}', draft.originalId)}
+                </span>
+                <button className="ga-btn ga-btn-danger ga-btn-sm" onClick={applyRemoval}>
+                  {confirmAction === 'reset' ? t('Reset to shared') : t('Delete')}
+                </button>
+                <button className="ga-btn ga-btn-sm" onClick={() => setConfirmAction(null)}>
+                  {t('Cancel')}
+                </button>
+              </div>
+            ) : null}
+            {draft.source === OVERRIDE ? (
+              <p className="ga-sched-muted">
+                {draft.maskedFields.length > 0
+                  ? t('This world entry replaces the shared state of the same id and hides its {fields}. "Reset to shared" removes the world entry, and the shared state applies again.')
+                    .replace('{fields}', draft.maskedFields.join(', '))
+                  : t('This world entry replaces the shared state of the same id. "Reset to shared" removes the world entry, and the shared state applies again.')}
+              </p>
+            ) : null}
             <DraftForm
               draft={draft}
               blockKeys={data.block_keys || []}

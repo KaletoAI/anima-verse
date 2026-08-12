@@ -245,6 +245,12 @@ def _prompt_filter_block_keys() -> List[str]:
                                         for pid in _skill_block_package_ids()]
 
 
+# Fields of a prompt filter that a world row can silently hide when it
+# overrides a shared entry (the overlay replaces by id, it does not merge).
+_MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
+                           "prompt_modifier", "image_modifier")
+
+
 @router.get("/prompt-filters/data")
 async def prompt_filters_data(user=Depends(require_admin)):
     """Liste der gemergten Prompt-Filter (shared baseline + world overlay).
@@ -252,6 +258,13 @@ async def prompt_filters_data(user=Depends(require_admin)):
     Jeder Eintrag bekommt ein ``source``-Feld: "shared" / "world".
     Wenn dieselbe id in beiden vorkommt, gewinnt world (overlay) und
     source="world override".
+
+    An override entry also carries ``masked_fields``: the fields the shared
+    baseline fills and the world row leaves empty. The overlay REPLACES the
+    whole entry by id (no deep merge, deliberately), so such a row silently
+    hides shared content — an imported states.zip from before the shared
+    icons existed swallows exactly those icons (finding B10). The UI needs to
+    see it to offer "Reset to shared".
     """
     from app.core.prompt_filters import _load_shared, _load_world
 
@@ -274,6 +287,8 @@ async def prompt_filters_data(user=Depends(require_admin)):
         if fid in world:
             entry = dict(world[fid])
             entry["source"] = "world override"
+            entry["masked_fields"] = [f for f in _MASKABLE_FILTER_FIELDS
+                                      if e.get(f) and not entry.get(f)]
         else:
             entry = dict(e)
             entry["source"] = "shared"
