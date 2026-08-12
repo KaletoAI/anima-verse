@@ -1995,7 +1995,36 @@ async function startApp(username: string, role: string) {
   const REFUSED_MEMORY_MS = 4000;
   const REFUSED_MAX = 8;
 
-  function rememberRefused(x: number, z: number): void {
+  /**
+   * Remember a refused point — UNLESS the disc would swallow the figure.
+   *
+   * `home` is where the figure will stand once this refusal is settled: the
+   * point the server vouched for when it sent one, else the figure's own
+   * position (nothing moves it then). A disc drawn around a point that close
+   * CONTAINS that position, and `blockedFor` then answers "blocked" for every
+   * direction at once — the figure cannot walk anywhere for the four seconds
+   * the memory lasts, in the open as much as at a border. That is the
+   * total-block class E7 task 1 took out of the footprint gate, and it is the
+   * same bug here.
+   *
+   * Derived by hand (REFUSED_RADIUS_M = 1.2, `blockedFor` blocks at a distance
+   * STRICTLY below it), figure at (10, 10):
+   *   refusal (10.5, 10)   → d = 0.5  ≤ 1.2  → NO disc. With one, the figure
+   *                          at d = 0.5 < 1.2 would be inside it.
+   *   refusal (11.2, 10)   → d = 1.2  ≤ 1.2  → no disc either. The figure
+   *                          would sit exactly ON the rim, which `blockedFor`
+   *                          lets pass (`<`), so this one is skipped out of
+   *                          caution, not out of necessity.
+   *   refusal (11.3, 10)   → d = 1.3  > 1.2  → disc. The figure is 0.1 m
+   *                          outside it and keeps every direction but the one
+   *                          leading in.
+   *   refusal (14, 14)     → d = 5.66 > 1.2  → disc, far away and harmless.
+   * A refusal without any known figure position (`home` null — no avatar
+   * model yet) is remembered: there is nothing it could trap.
+   */
+  function rememberRefused(x: number, z: number,
+                           home: { x: number; z: number } | null): void {
+    if (home && Math.hypot(x - home.x, z - home.z) <= REFUSED_RADIUS_M) return;
     refusedPoints.push({ x, z, until: performance.now() + REFUSED_MEMORY_MS });
     if (refusedPoints.length > REFUSED_MAX) refusedPoints.shift();
   }
@@ -2636,7 +2665,10 @@ async function startApp(username: string, role: string) {
       // vouched for, and that is where the figure belongs — and the refused
       // point itself becomes a blocked disc, so the next frames slide along
       // that border instead of running into the same refusal.
-      rememberRefused(x, z);
+      // Where the figure ENDS UP decides whether the disc may be drawn at
+      // all: the server's own point when it sent one (`correctTo` puts the
+      // figure there), otherwise the place the figure is standing.
+      rememberRefused(x, z, err.pos ?? npcs.positionOf(avatarName) ?? null);
       if (err.pos) correctTo(err.pos);
       const now = performance.now();
       if (err.message && (err.reason !== quietReason || now > quietUntil)) {

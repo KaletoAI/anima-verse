@@ -30,14 +30,17 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { TerrainType } from './mapTypes'
+// The app's ONE fallback grey — the server's `terrain_types.DEFAULT_COLOR`,
+// held in `TerrainLayer` because that is where an unknown kind is drawn. A
+// second literal here would be a second opinion about the same server value.
+import { UNKNOWN_COLOR as DEFAULT_COLOR } from './TerrainLayer'
 
-/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, `DEFAULT_COLOR`. */
+/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`. */
 const KIND_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const SPEED_MIN = 0
 const SPEED_MAX = 2
 const SPEED_STEP = 0.05
 const NAME_MAX = 60
-const DEFAULT_COLOR = '#888888'
 
 /** What one row sends — the same shape it reads. `meta` travels along
  *  untouched: the route is a full replace, so a body without it would blank

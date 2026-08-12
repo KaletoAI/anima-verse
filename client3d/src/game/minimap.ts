@@ -83,7 +83,10 @@ export const MINIMAP_SIZE_PX = 160;
 export const MINIMAP_MIN_SPAN_M = 10;
 
 /** Fill for a kind the terrain catalog does not know — the same neutral grey
- *  the server hands out for a type without a colour. */
+ *  the server hands out for a type without a colour
+ *  (`app/core/terrain_types.py: DEFAULT_COLOR`). THE one fallback colour of
+ *  this app: the ground (`scene/ground.ts`) imports it from here instead of
+ *  keeping a second literal, so an unknown kind is one colour everywhere. */
 export const TERRAIN_FALLBACK_COLOR = '#888888';
 
 /**

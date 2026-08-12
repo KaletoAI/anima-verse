@@ -32,7 +32,7 @@ import { AREA_POLYGON_OFFSET, buildAreaGeometry, pointInRing, propGroundFit,
   scatterInstances, scatterSeed, surfaceMaterial } from '@anima/scene-render';
 import type { Point2, ScatterEntry, ScatterFootprint, SurfaceMaterialSpec } from '@anima/scene-render';
 import { fetchTerrain } from '../api';
-import { footprintSignature } from '../game/minimap';
+import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainType, WorldBounds } from '../types';
 import { preloadSurfaceTexture, surfaceFor, surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
@@ -305,10 +305,12 @@ export function createGround(): Ground {
   }
 
   /** Fallback fill of a kind: the catalog colour, else the neutral grey the
-   *  server itself uses for a kind without one. NEVER a palette of our own —
-   *  the ground is data. */
+   *  server itself uses for a kind without one — ONE constant per app
+   *  (`TERRAIN_FALLBACK_COLOR`, the minimap's copy of the server's
+   *  `terrain_types.DEFAULT_COLOR`). NEVER a palette of our own — the ground
+   *  is data. */
   function kindColor(kind: string): string {
-    return catalog.get((kind || '').toLowerCase())?.color || '#888888';
+    return catalog.get((kind || '').toLowerCase())?.color || TERRAIN_FALLBACK_COLOR;
   }
 
   /**
