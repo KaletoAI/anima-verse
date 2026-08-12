@@ -32,8 +32,14 @@ migrated_backups/
 migration_backup/
 
 # Internal helper scripts — anchored (leading /), otherwise this would also
-# swallow client3d/tools/. scripts/ itself is tracked (the smoke checks).
+# swallow client3d/tools/. scripts/ itself is tracked (the smoke checks);
+# scripts/legacy/ is not: those one-off migrations read a .env and the
+# pre-worlds storage/users/ layout, neither of which exists any more.
 /tools/
+/scripts/legacy/
+
+# Agent scratch dir
+.superpowers/
 
 # Files removed from public release
 docs/llm-task-mapping.md

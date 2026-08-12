@@ -6,11 +6,11 @@ und schreibt einen angereicherten Ziel-JSON mit Review-Block pro Eintrag.
 
 Usage:
   python scripts/review_presets.py --list
-  python scripts/review_presets.py --llm Evo-X2::Qwen3.5-9B-heretic \
+  python scripts/review_presets.py --llm local-llm::qwen3-8b \
       --source shared/templates/expression/expression_presets.json \
       --target /tmp/expression_review.json
 
-  python scripts/review_presets.py --llm Evo-X2::Qwen3.5-9B-heretic \
+  python scripts/review_presets.py --llm local-llm::qwen3-8b \
       --source shared/templates/pose/pose_presets_generated.json \
       --target /tmp/pose_generated_review.json \
       --limit 20
@@ -165,7 +165,7 @@ def print_available_llms():
 def resolve_llm(identifier: str):
     """Loest 'provider::model' in einen LLMClient (app.core.llm_client) auf."""
     if "::" not in identifier:
-        print(f"FEHLER: LLM muss im Format provider::model angegeben werden (z.B. 'Evo-X2::Qwen3.5-9B-heretic').")
+        print(f"FEHLER: LLM muss im Format provider::model angegeben werden (z.B. 'local-llm::qwen3-8b').")
         print("       Verfuegbare LLMs mit --list anzeigen.")
         sys.exit(1)
 
@@ -345,7 +345,7 @@ def main():
                         help="World-Name (Unterordner in worlds/). Bestimmt welcher storage/config "
                              "geladen wird. Default: worlds/demo")
     parser.add_argument("--llm", type=str,
-                        help="LLM als 'provider::model' (z.B. Evo-X2::Qwen3.5-9B-heretic)")
+                        help="LLM als 'provider::model' (z.B. local-llm::qwen3-8b)")
     parser.add_argument("--source", type=str,
                         help="Quell-JSON (z.B. shared/templates/expression/expression_presets.json)")
     parser.add_argument("--target", type=str,

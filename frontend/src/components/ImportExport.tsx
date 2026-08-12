@@ -419,6 +419,11 @@ export function ImportButton({
   const [busy, setBusy] = useState(false)
   // Character-Import: full clone vs fresh start ("neu zugezogen") + Intro-Memory.
   const [mode, setMode] = useState<'full' | 'fresh'>('full')
+  // Collections only: their preview reports every sub-pack as exists=false (a
+  // collection cannot know what its packs will find), so the per-element
+  // "will overwrite" flags cannot derive the flag here. This checkbox is the
+  // only way the user can ask for an UPDATE of the parts already present.
+  const [collUpdate, setCollUpdate] = useState(false)
   const [intro, setIntro] = useState('')
   const [introBusy, setIntroBusy] = useState(false)
   // Post-import warning that must not vanish with a 2-second toast (a location
@@ -427,6 +432,7 @@ export function ImportButton({
 
   const close = () => {
     setFile(null); setPreview(null); setPicked({}); setMode('full'); setIntro('')
+    setCollUpdate(false)
     setWarn(null)
   }
 
@@ -472,6 +478,7 @@ export function ImportButton({
     if (!file || !preview) return
     const selected = preview.elements.filter((e) => picked[e.id])
     const overwrite = selected.some((e) => e.exists)
+      || (preview.type === 'collection' && collUpdate)
     setBusy(true)
     try {
       const fd = new FormData()
@@ -672,6 +679,21 @@ export function ImportButton({
                         style={{ width: '100%', resize: 'vertical' }} />
                     </div>
                   )}
+                </div>
+              )}
+
+              {!warn && preview && preview.type === 'collection' && (
+                <div style={{ marginTop: 12, borderTop: '1px solid var(--border, #30363d)', paddingTop: 10 }}>
+                  <label style={{ display: 'flex', alignItems: 'baseline', gap: 8, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={collUpdate}
+                      onChange={(e) => setCollUpdate(e.target.checked)} />
+                    <span>
+                      {t('Update existing parts')}{' '}
+                      <span style={{ opacity: 0.55, fontSize: '0.82em' }}>
+                        — {t('without this, parts already present are reported as "exists" and left alone; locations are added again either way')}
+                      </span>
+                    </span>
+                  </label>
                 </div>
               )}
             </div>

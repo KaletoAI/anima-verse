@@ -2,23 +2,28 @@
 """
 LLM Tool-Calling & Vision Test Script
 ========================================
-Laedt alle verfuegbaren Modelle von einem LLM-Provider (aus .env)
-und testet jedes Modell auf:
+Laedt alle verfuegbaren Modelle von einem LLM-Provider und testet jedes
+Modell auf:
   1. Tool-Calling-Faehigkeit in 3 Formaten (tag, natural_en, natural_de)
   2. Vision-Faehigkeit (Farberkennung auf Test-PNG)
 
 Ergebnisse werden als Tabelle ausgegeben und optional in
 storage/model_capabilities.json gespeichert.
 
+LEGACY: Dieses Skript liest die Provider aus PROVIDER_N_*-Zeilen einer
+./.env-Datei — es ist aelter als das Welt-Config-Modell. Die App selbst
+konfiguriert Provider ausschliesslich in worlds/<welt>/config.json; mit
+--api-base laeuft der Check ganz ohne .env.
+
 Usage:
-  python scripts/test_llm_tools.py ASUS-GX10              # Tools + Vision testen
-  python scripts/test_llm_tools.py Evo-X2                  # Alle Modelle auf Evo-X2
-  python scripts/test_llm_tools.py ASUS-GX10 --model "Fallen*"  # Nur bestimmtes Modell
-  python scripts/test_llm_tools.py ASUS-GX10 --save        # In model_capabilities.json speichern
-  python scripts/test_llm_tools.py ASUS-GX10 --format tag  # Nur Tag-Format testen
-  python scripts/test_llm_tools.py ASUS-GX10 --no-vision   # Vision-Test ueberspringen
-  python scripts/test_llm_tools.py ASUS-GX10 --no-tools    # Nur Vision testen
-  python scripts/test_llm_tools.py ASUS-GX10 -v            # Mit Antwort-Texten
+  python scripts/test_llm_tools.py local-llm              # Tools + Vision testen
+  python scripts/test_llm_tools.py local-llm-2                  # Alle Modelle auf local-llm-2
+  python scripts/test_llm_tools.py local-llm --model "qwen3*"  # Nur bestimmtes Modell
+  python scripts/test_llm_tools.py local-llm --save        # In model_capabilities.json speichern
+  python scripts/test_llm_tools.py local-llm --format tag  # Nur Tag-Format testen
+  python scripts/test_llm_tools.py local-llm --no-vision   # Vision-Test ueberspringen
+  python scripts/test_llm_tools.py local-llm --no-tools    # Nur Vision testen
+  python scripts/test_llm_tools.py local-llm -v            # Mit Antwort-Texten
   python scripts/test_llm_tools.py --list                   # Alle Provider aus .env auflisten
   python scripts/test_llm_tools.py --api-base http://...    # Direkte URL (ohne .env)
 """
@@ -830,11 +835,11 @@ def main():
     )
     parser.add_argument(
         "provider", nargs="?", default=None,
-        help="Name des LLM-Providers aus .env (z.B. ASUS-GX10, Evo-X2)"
+        help="Name des LLM-Providers aus dem Legacy-.env-Block (z.B. local-llm, local-llm-2)"
     )
     parser.add_argument(
         "--api-base", default=None,
-        help="Direkte API-URL (statt Provider-Name aus .env)"
+        help="Direkte API-URL (statt Provider-Name aus dem .env-Block)"
     )
     parser.add_argument(
         "--api-key", default="",
@@ -846,7 +851,7 @@ def main():
     )
     parser.add_argument(
         "--model", default=None,
-        help="Nur bestimmtes Modell testen (glob-Pattern, z.B. 'Fallen*')"
+        help="Nur bestimmtes Modell testen (glob-Pattern, z.B. 'qwen3*')"
     )
     parser.add_argument(
         "--timeout", type=float, default=300,
