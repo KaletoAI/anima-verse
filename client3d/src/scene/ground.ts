@@ -28,12 +28,13 @@
  * that signature and does nothing while it is unchanged.
  */
 import * as THREE from 'three';
-import { AREA_POLYGON_OFFSET, buildAreaGeometry, propGroundFit, surfaceMaterial } from '@anima/scene-render';
-import type { Point2, SurfaceMaterialSpec } from '@anima/scene-render';
+import { AREA_POLYGON_OFFSET, buildAreaGeometry, pointInRing, propGroundFit,
+  scatterInstances, scatterSeed, surfaceMaterial } from '@anima/scene-render';
+import type { Point2, ScatterEntry, ScatterFootprint, SurfaceMaterialSpec } from '@anima/scene-render';
 import { fetchTerrain } from '../api';
-import type { TerrainArea, TerrainPayload, TerrainScatterMeta, TerrainType, WorldBounds } from '../types';
+import { footprintSignature } from '../game/minimap';
+import type { MapLocation, TerrainArea, TerrainPayload, TerrainType, WorldBounds } from '../types';
 import { preloadSurfaceTexture, surfaceFor, surfaceMaterialSpec } from './tiles';
-import { seededRandom } from './textures';
 import { loadGlb } from './propAssets';
 
 /** The world's ground height. v1 of the seamless world is flat, and this
@@ -62,14 +63,7 @@ const AREA_Y_MAX_M = 0.01;
  *  ask the driver for a two-hundred-fold offset. */
 const AREA_OFFSET_MAX = 32;
 
-/** Scatter instances are never more than this per area, whatever the density
- *  says. A hand-typed `density_per_100m2` on a lake-sized meadow would
- *  otherwise build a hundred thousand instances in one frame. */
-const SCATTER_MAX_PER_AREA = 2000;
-/** Rejection sampling gives up after this many misses per wanted instance —
- *  a very thin or very concave ring can reject most of its bounding box. */
-const SCATTER_TRIES_PER_POINT = 12;
-/** Fallback tuft size when `meta.scatter` names no model. */
+/** Fallback tuft size when a scatter entry names no model. */
 const TUFT_RADIUS_M = 0.16;
 const TUFT_HEIGHT_M = 0.55;
 
@@ -159,8 +153,9 @@ function groundedGeometry(mesh: THREE.Mesh,
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
 interface AreaMesh {
   mesh: THREE.Mesh;
-  /** instanced scatter of this area, or null when the kind scatters nothing */
-  scatter: THREE.InstancedMesh | null;
+  /** one instanced scatter per authored entry — empty when nothing grows here
+   *  (finding B17: the list hangs on the AREA, not on the terrain type) */
+  scatter: THREE.InstancedMesh[];
   /** centre of the area's bounding box — the distance the LOD measures */
   centre: THREE.Vector3;
   /** half the diagonal of the bounding box, so a big area is not hidden
@@ -177,12 +172,19 @@ export interface Ground {
    * `bounds` is `WorldMap.world_bounds` — a changed frame rebuilds the base
    * plane alone, the areas are untouched by it.
    *
+   * `locations` are the worldmap rows, handed in for their FOOTPRINTS: nothing
+   * is scattered inside a placed location (finding B18). They are a second
+   * rebuild trigger of their own, because moving a place does NOT change
+   * `terrain_sig` — without that trigger the trees stood inside a freshly
+   * placed building until the next reload.
+   *
    * Resolves to `true` when something was rebuilt. Never throws: a ground that
    * could not be fetched leaves the previous one standing (and the very first
    * failure leaves the base plane in the default look), because a client that
    * tears its world down over one failed poll is worse than a stale one.
    */
-  sync(sig: string, bounds: WorldBounds | null): Promise<boolean>;
+  sync(sig: string, bounds: WorldBounds | null,
+       locations: readonly MapLocation[]): Promise<boolean>;
   /** Hide the prop scatter beyond `farM` metres from the camera. Called by the
    *  1 Hz LOD tick of `main.ts` — the hysteresis of the model tiers lives
    *  there, this is a plain visibility switch on top of it. */
@@ -237,18 +239,19 @@ function ringBounds(polygon: Point2[]): [number, number, number, number] {
   return [minX, minZ, maxX, maxZ];
 }
 
-/** Even-odd ray crossing: is `(x, z)` inside the ring? Used for the scatter
- *  rejection sampling only — a point on the edge may fall either way, which
- *  moves at most one tuft by a hair. */
-function pointInRing(x: number, z: number, polygon: Point2[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const [xi, zi] = polygon[i];
-    const [xj, zj] = polygon[j];
-    if ((zi > z) !== (zj > z)
-        && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
-  }
-  return inside;
+/**
+ * The scatter list an area declares, read through a check.
+ *
+ * `meta` is free-form JSON the server passes through, so nothing in the type
+ * system guarantees a stored `scatter` has the declared shape — an old area
+ * still carries none at all. The server whitelists what it stores
+ * (`app/models/terrain._sanitize_scatter_list`); this is the reader's half of
+ * the same contract, and anything that is not a list of objects grows nothing.
+ */
+function readScatterList(area: TerrainArea): ScatterEntry[] {
+  const raw = (area.meta as { scatter?: unknown } | undefined)?.scatter;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((e): e is ScatterEntry => !!e && typeof e === 'object');
 }
 
 export function createGround(): Ground {
@@ -259,6 +262,12 @@ export function createGround(): Ground {
   let loadedSig: string | null = null;
   let inFlight: Promise<boolean> | null = null;
   let rev = 0;
+
+  /** The footprints the scatter keeps clear (finding B18), and the signature
+   *  the areas standing in the scene were sampled against. `null` means "never
+   *  built", which is not the same as "built against no locations at all". */
+  let footprints: readonly ScatterFootprint[] = [];
+  let builtFpSig: string | null = null;
 
   let baseMesh: THREE.Mesh | null = null;
   let baseKey = '';
@@ -360,120 +369,116 @@ export function createGround(): Ground {
   }
 
   /**
-   * Deterministic prop scatter of one area (v1).
+   * Deterministic prop scatter of one area — ONE InstancedMesh per entry.
    *
-   * Only kinds whose catalog entry carries `meta.scatter` scatter anything —
-   * there is no default, and a world that wants tufts says so in the catalog.
-   * The instance count follows the AREA: `density_per_100m2` per 100 m2 of
-   * ground, so the same meadow always carries the same number however it was
-   * drawn.
+   * WHAT GROWS HERE IS THE AREA'S OWN BUSINESS (finding B17). It used to hang
+   * on the terrain TYPE, which could only ever say "all forest everywhere
+   * grows this one tree"; a wood with two kinds of tree and a clearing without
+   * any is one painted shape each, so the list moved to `meta.scatter` of the
+   * area. No list, or an empty one, means nothing grows — there is no default.
    *
-   * SEED = the area id. The generator is `seededRandom` from `textures.ts`
-   * (FNV-1a over the seed string, then an xorshift-multiply step — the same
-   * hash the procedural textures use), so the tufts of an area land in the
-   * very same places on every client and after every reload. Positions come
-   * from rejection sampling inside the ring's bounding box; a concave area
-   * simply misses more often, which the try budget caps.
+   * WHERE the instances stand is not decided here: `scatterInstances`
+   * (@anima/scene-render) is the ONE sampler, and the map editor draws its
+   * preview from the very same call. That is the whole point of the shared
+   * module — preview and world agree by construction, not by two files being
+   * kept in step. Footprints of the placed locations go in with it, so nothing
+   * grows inside a building (finding B18).
    */
   function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number,
                         sink: { dispose(): void }[]
-  ): THREE.InstancedMesh | null {
-    const type = catalog.get((area.kind || '').toLowerCase());
-    const scatter: TerrainScatterMeta | undefined = type?.meta?.scatter;
-    const density = Number(scatter?.density_per_100m2 ?? 0);
-    if (!scatter || !Number.isFinite(density) || density <= 0) return null;
-    const wanted = Math.min(Math.round((areaM2 / 100) * density), SCATTER_MAX_PER_AREA);
-    if (wanted < 1) return null;
+  ): THREE.InstancedMesh[] {
+    const out: THREE.InstancedMesh[] = [];
+    readScatterList(area).forEach((entry, index) => {
+      const points = scatterInstances({
+        ring,
+        areaM2,
+        densityPer100m2: Number(entry.density_per_100m2 ?? 0),
+        seed: scatterSeed(area.id, index),
+        footprints,
+      });
+      if (!points.length) return;
 
-    const [minX, minZ, maxX, maxZ] = ringBounds(ring);
-    const rnd = seededRandom(`terrain:scatter:${area.id}`);
-    const points: [number, number, number][] = [];   // x, z, yaw
-    let tries = wanted * SCATTER_TRIES_PER_POINT;
-    while (points.length < wanted && tries > 0) {
-      tries -= 1;
-      const x = minX + rnd() * (maxX - minX);
-      const z = minZ + rnd() * (maxZ - minZ);
-      if (!pointInRing(x, z, ring)) continue;
-      points.push([x, z, rnd() * Math.PI * 2]);
-    }
-    if (!points.length) return null;
+      const h = Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M;
+      // v1 prop: a low cone in the kind's own colour. A `model` URL is honoured
+      // asynchronously below — the tufts stand immediately and are replaced by
+      // the mesh when it arrives, so a slow asset never delays the ground.
+      const geo = new THREE.ConeGeometry(TUFT_RADIUS_M, h, 5);
+      geo.translate(0, h / 2, 0);
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
+        roughness: 0.95,
+      });
+      sink.push(geo, mat);
+      // Typed on the BASE classes: the `model` branch below swaps geometry and
+      // material for the loaded ones, which are not a cone and not this material.
+      const inst: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
+        = new THREE.InstancedMesh(geo, mat, points.length);
+      // One of each, reused: a big meadow places thousands of instances, and a
+      // fresh Vector3 per instance is garbage for nothing.
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const up = new THREE.Vector3(0, 1, 0);
+      const at = new THREE.Vector3();
+      const s = new THREE.Vector3(1, 1, 1);
+      points.forEach((p, i) => {
+        q.setFromAxisAngle(up, p.yaw);
+        m.compose(at.set(p.x, GROUND_Y, p.z), q, s);
+        inst.setMatrixAt(i, m);
+      });
+      inst.instanceMatrix.needsUpdate = true;
+      inst.castShadow = false;
+      inst.frustumCulled = true;
 
-    const h = Number(scatter.height_m) > 0 ? Number(scatter.height_m) : TUFT_HEIGHT_M;
-    // v1 prop: a low cone in the kind's own colour. A `model` URL is honoured
-    // asynchronously below — the tufts stand immediately and are replaced by
-    // the mesh when it arrives, so a slow asset never delays the ground.
-    const geo = new THREE.ConeGeometry(TUFT_RADIUS_M, h, 5);
-    geo.translate(0, h / 2, 0);
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
-      roughness: 0.95,
+      if (entry.model) {
+        // The declared model REPLACES the tuft geometry in place: same instance
+        // matrices, same count. Only the first mesh of the file is used — a prop
+        // that is really several meshes is a v2 problem, and a silently missing
+        // prop would be worse than a simplified one.
+        void loadGlb(entry.model).then((obj) => {
+          // A terrain refetch between request and answer took this instance out
+          // of the scene and disposed it — writing into it would resurrect
+          // nothing and hold the loaded mesh alive. The test is the DISPOSED
+          // mark `clearAreas` leaves, not the parent: since the build-then-swap
+          // an instance is legitimately parentless for as long as its rebuild
+          // takes, and reading that as "gone" would drop the model of every
+          // prop whose file arrives before the swap.
+          if (!obj || inst.userData.disposed) return;
+          let src: THREE.Mesh | null = null;
+          obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
+          if (!src) return;
+          const mesh = src as THREE.Mesh;
+          // `height_m` is the TARGET height since B17: the prop is scaled until
+          // its bounding box is that tall, and grounded either way (B16).
+          const geometry = groundedGeometry(
+            mesh, Number(entry.height_m) > 0 ? Number(entry.height_m) : null);
+          // The clone is OURS and nothing else disposes it — the owned bag of
+          // this rebuild was drained into `areaOwned` long before this answer
+          // arrived (the load is asynchronous, the swap is not). So it rides on
+          // the instance and `clearAreas` frees it with the instance.
+          inst.userData.ownedGeometry = geometry;
+          inst.geometry = geometry;
+          inst.material = mesh.material as THREE.Material;
+        }).catch(() => { /* the tuft stands; a missing prop is not a broken world */ });
+      }
+      out.push(inst);
     });
-    sink.push(geo, mat);
-    // Typed on the BASE classes: the `model` branch below swaps geometry and
-    // material for the loaded ones, which are not a cone and not this material.
-    const inst: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
-      = new THREE.InstancedMesh(geo, mat, points.length);
-    // One of each, reused: a big meadow places thousands of instances, and a
-    // fresh Vector3 per instance is garbage for nothing.
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    const at = new THREE.Vector3();
-    const s = new THREE.Vector3(1, 1, 1);
-    points.forEach(([x, z, yaw], i) => {
-      q.setFromAxisAngle(up, yaw);
-      m.compose(at.set(x, GROUND_Y, z), q, s);
-      inst.setMatrixAt(i, m);
-    });
-    inst.instanceMatrix.needsUpdate = true;
-    inst.castShadow = false;
-    inst.frustumCulled = true;
-
-    if (scatter.model) {
-      // The declared model REPLACES the tuft geometry in place: same instance
-      // matrices, same count. Only the first mesh of the file is used — a prop
-      // that is really several meshes is a v2 problem, and a silently missing
-      // prop would be worse than a simplified one.
-      void loadGlb(scatter.model).then((obj) => {
-        // A terrain refetch between request and answer took this instance out
-        // of the scene and disposed it — writing into it would resurrect
-        // nothing and hold the loaded mesh alive. The test is the DISPOSED
-        // mark `clearAreas` leaves, not the parent: since the build-then-swap
-        // an instance is legitimately parentless for as long as its rebuild
-        // takes, and reading that as "gone" would drop the model of every
-        // prop whose file arrives before the swap.
-        if (!obj || inst.userData.disposed) return;
-        let src: THREE.Mesh | null = null;
-        obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
-        if (!src) return;
-        const mesh = src as THREE.Mesh;
-        const geometry = groundedGeometry(mesh, null);
-        // The clone is OURS and nothing else disposes it — the owned bag of
-        // this rebuild was drained into `areaOwned` long before this answer
-        // arrived (the load is asynchronous, the swap is not). So it rides on
-        // the instance and `clearAreas` frees it with the instance.
-        inst.userData.ownedGeometry = geometry;
-        inst.geometry = geometry;
-        inst.material = mesh.material as THREE.Material;
-      }).catch(() => { /* the tuft stands; a missing prop is not a broken world */ });
-    }
-    return inst;
+    return out;
   }
 
   function clearAreas(): void {
     for (const a of areaMeshes) {
       group.remove(a.mesh);
       a.mesh.geometry.dispose();
-      if (a.scatter) {
-        group.remove(a.scatter);
+      for (const inst of a.scatter) {
+        group.remove(inst);
         // The mark a pending `loadGlb` reads — see `buildScatter`.
-        a.scatter.userData.disposed = true;
+        inst.userData.disposed = true;
         // The grounded CLONE of a loaded prop, if one arrived (see there).
         // `InstancedMesh.dispose` frees the instance buffers, never the
         // geometry, and this one belongs to nobody else.
-        const owned = a.scatter.userData.ownedGeometry as THREE.BufferGeometry | undefined;
+        const owned = inst.userData.ownedGeometry as THREE.BufferGeometry | undefined;
         if (owned) owned.dispose();
-        a.scatter.dispose();
+        inst.dispose();
       }
     }
     areaMeshes.length = 0;
@@ -543,11 +548,26 @@ export function createGround(): Ground {
     clearAreas();
     for (const a of next) {
       group.add(a.mesh);
-      if (a.scatter) group.add(a.scatter);
+      for (const inst of a.scatter) group.add(inst);
       areaMeshes.push(a);
     }
     areaOwned.push(...nextOwned);
     rev += 1;
+  }
+
+  /**
+   * The scatter-relevant state of the placed locations, as one string.
+   *
+   * NOT `locationsSignature` (the minimap's): that one watches id and position
+   * only, and a footprint is four numbers — a location TURNED or resized
+   * changes the ground it covers without moving its centre one metre. This is
+   * `footprintSignature` per row, which is exactly those four, plus the id so
+   * one place replaced by another at the same metre is its own state.
+   *
+   * Computed once per poll, never per frame: `sync` is the only caller.
+   */
+  function footprintSig(locations: readonly MapLocation[]): string {
+    return locations.map((l) => `${l.id}:${footprintSignature(l)}`).join(';');
   }
 
   async function reload(sig: string, bounds: WorldBounds | null): Promise<boolean> {
@@ -572,13 +592,25 @@ export function createGround(): Ground {
 
   return {
     group,
-    sync(sig, bounds) {
+    sync(sig, bounds, locations) {
       if (inFlight) return inFlight;
+      const fpSig = footprintSig(locations);
+      const fpMoved = builtFpSig !== null && builtFpSig !== fpSig;
+      footprints = locations;
       if (loadedSig !== null && loadedSig === sig) {
-        // Same terrain — only the frame may have moved.
+        // Same terrain. Either only the frame moved — then the base plane is
+        // the whole job — or a location did, and then the areas have to be
+        // sampled again around the new footprints (finding B18). No refetch
+        // for that: the painted ground itself has not changed.
         rebuildBase(bounds);
-        return Promise.resolve(false);
+        if (!fpMoved) return Promise.resolve(false);
+        builtFpSig = fpSig;
+        inFlight = rebuildAreas()
+          .then(() => true)
+          .finally(() => { inFlight = null; });
+        return inFlight;
       }
+      builtFpSig = fpSig;
       inFlight = reload(sig, bounds).finally(() => { inFlight = null; });
       return inFlight;
     },
@@ -588,11 +620,12 @@ export function createGround(): Ground {
     },
     tickScatterLod(cameraPos, farM) {
       for (const a of areaMeshes) {
-        if (!a.scatter) continue;
+        if (!a.scatter.length) continue;
         // Distance to the area's bounding SPHERE, not to its centre: a large
         // meadow is under the camera long before its centre is.
         const d = cameraPos.distanceTo(a.centre) - a.radius;
-        a.scatter.visible = d <= farM;
+        const on = d <= farM;
+        for (const inst of a.scatter) inst.visible = on;
       }
     },
     payload: () => payload,

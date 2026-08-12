@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { sampleTerrain, surfaceMaterial } from '@anima/scene-render';
+import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { acceptsWalkHit, type GroundModelInfo } from '../game/ground';
@@ -92,14 +92,15 @@ export function tileToWorld(tile: Tile, lx: number, lz: number,
     tile.center.z - lx * s + lz * c);
 }
 
-/** World (x, z) → tile-local — the inverse of `tileToWorld` (a turn by −yaw). */
+/** World (x, z) → tile-local — the inverse of `tileToWorld` (a turn by −yaw).
+ *
+ *  The four lines of arithmetic live in `@anima/scene-render`
+ *  (`worldToLocalXZ`): the map editor needs the same turn for its footprints,
+ *  and the scatter's footprint exclusion (finding B18) is the third caller —
+ *  three copies of one mapping is exactly how the two renderers drift apart. */
 export function worldToTile(tile: Tile, x: number, z: number
 ): { x: number; z: number } {
-  const c = Math.cos(tile.yaw);
-  const s = Math.sin(tile.yaw);
-  const dx = x - tile.center.x;
-  const dz = z - tile.center.z;
-  return { x: dx * c - dz * s, z: dx * s + dz * c };
+  return worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, x, z);
 }
 
 /** Turn a tile-local DIRECTION into a world direction (no translation). */

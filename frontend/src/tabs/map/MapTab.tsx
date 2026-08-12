@@ -14,16 +14,18 @@ import {
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
 } from './PlacementLayer'
-import { TerrainLayer, typeColor } from './TerrainLayer'
+import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import {
   MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
   MIN_STROKE_POINTS, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainLayerHint,
   TerrainToolbar, type PaintShape, type TerrainMode,
 } from './TerrainTools'
 import { TerrainTypesDialog } from './TerrainTypesDialog'
+import { loadPropAssets, type PropRef } from '../../lib/refs'
+import { readScatter } from './mapTypes'
 import type {
-  EditorLocation, TerrainArea, TerrainMeta, TerrainPayload, TerrainStroke,
-  TerrainType, TerrainTypesResp, WorldmapPayload,
+  EditorLocation, TerrainArea, TerrainMeta, TerrainPayload, TerrainScatterEntry,
+  TerrainStroke, TerrainType, TerrainTypesResp, WorldmapPayload,
 } from './mapTypes'
 
 /**
@@ -70,6 +72,9 @@ import type {
  *     the signal a WATCHING client uses, and the hand that paints already
  *     knows when it changed something.
  *   - `POST/PUT/DELETE /world/terrain-areas` — one refetch after each write.
+ *     An area also declares what GROWS on it (`meta.scatter`, finding B17);
+ *     the "Scatter preview" switch draws those points as dots through the ONE
+ *     shared sampler the 3D client plants them with.
  *
  * BUILDING ROOFS is a session switch, not a setting: with it on, every placed
  * location in the visible rectangle gets its building model rendered from
@@ -240,6 +245,12 @@ export function MapTab() {
   const [draft, setDraft] = useState<Array<[number, number]>>([])
   const [draftCursor, setDraftCursor] = useState<{ x: number; z: number } | null>(null)
   const [selArea, setSelArea] = useState('')
+  /** The top-down scatter preview — a VIEW, so it survives every mode. */
+  const [scatterOn, setScatterOn] = useState(false)
+  /** The prop library for the scatter model picker of the area chip — fetched
+   *  once, only the props that actually have a mesh. A failed fetch leaves the
+   *  picker with the tuft alone; it must never block painting ground. */
+  const [propList, setPropList] = useState<PropRef[]>([])
 
   // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
@@ -668,6 +679,20 @@ export function MapTab() {
 
   // ── Terrain writes ───────────────────────────────────────────────────────
 
+  // The prop library, once per mount. It only feeds the area chip's model
+  // picker, so a failure is not an error the user has to act on.
+  useEffect(() => {
+    let alive = true
+    loadPropAssets()
+      .then((list) => {
+        if (!alive) return
+        setPropList(list.filter((p) => p.has_model !== false)
+          .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id)))
+      })
+      .catch(() => { /* no props to pick from — the tuft still works */ })
+    return () => { alive = false }
+  }, [])
+
   const selectedArea = useMemo(
     () => (terrain?.areas || []).find((a) => a.id === selArea) || null,
     [terrain, selArea],
@@ -676,6 +701,10 @@ export function MapTab() {
   /** The selected area's stroke recipe, checked — null when it was painted as
    *  an ordinary outline (and then everything below edits the polygon). */
   const selStroke = useMemo(() => readStroke(selectedArea), [selectedArea])
+
+  /** What the selected area GROWS, checked (finding B17). */
+  const selScatter = useMemo(
+    () => readScatter(selectedArea?.meta), [selectedArea])
 
   /** Optimistic patch of one area, so an edited outline does not snap back to
    *  its old shape for the length of the round trip. */
@@ -1014,6 +1043,19 @@ export function MapTab() {
     void putArea(a, { meta })
   }, [patchAreaLocal, putArea, selStroke, selectedArea])
 
+  /** What this area grows (finding B17). `meta` is a full replace like every
+   *  other area write, so the rest of it travels along — and an empty list
+   *  DROPS the key rather than storing "grows nothing" as a fact. */
+  const setAreaScatter = useCallback((entries: TerrainScatterEntry[]) => {
+    const a = selectedArea
+    if (!a) return
+    const meta: TerrainMeta = { ...a.meta }
+    if (entries.length) meta.scatter = entries
+    else delete meta.scatter
+    patchAreaLocal(a.id, { meta })
+    void putArea(a, { meta })
+  }, [patchAreaLocal, putArea, selectedArea])
+
   const setAreaKind = useCallback((kind: string) => {
     const a = selectedArea
     if (!a || a.kind === kind) return
@@ -1321,6 +1363,8 @@ export function MapTab() {
             onCloseDraft={closeDraft}
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
             areaCount={terrain?.areas.length || 0}
+            scatterPreview={scatterOn}
+            onScatterPreview={setScatterOn}
             onManageTypes={() => setTypesOpen(true)}
             typesError={typesError}
           />
@@ -1403,6 +1447,8 @@ export function MapTab() {
               onVertexMove={moveVertex}
               onVertexDelete={deleteVertex}
               onEdgeInsert={insertVertex}
+              scatterPreview={scatterOn}
+              footprints={placed}
             />
             {/* Outside the location mode the footprints must let clicks
                 through: a terrain click has to reach the canvas, which is
@@ -1432,9 +1478,13 @@ export function MapTab() {
               typeList={terrainTypes}
               typesError={typesError}
               stroke={selStroke}
+              scatter={selScatter}
+              props={propList}
+              scatterColor={scatterColor}
               onKind={setAreaKind}
               onZOrder={bumpAreaZ}
               onWidth={setStrokeAreaWidth}
+              onScatter={setAreaScatter}
               onConvert={convertToArea}
               onDelete={() => { void deleteArea() }}
               onClose={() => setSelArea('')}

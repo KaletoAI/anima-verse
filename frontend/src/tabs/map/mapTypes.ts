@@ -131,17 +131,21 @@ export interface WorldmapPayload {
 }
 
 /**
- * `meta.scatter` of a terrain TYPE — what this ground grows (E5 Task 6).
+ * One entry of `meta.scatter` of a painted AREA — what this piece of ground
+ * grows (finding B17; it used to hang on the terrain TYPE, which could only
+ * ever say "all forest everywhere grows this one tree").
  *
- * The server whitelists exactly these three fields (`terrain_types.py`
- * `_sanitize_scatter`) and the 3D ground reads exactly them
- * (`client3d/src/scene/ground.ts` → `buildScatter`). No block = nothing is
+ * The server whitelists exactly these three fields
+ * (`app/models/terrain._sanitize_scatter_list`), the 3D ground instances them
+ * and the map preview draws them — all three from the ONE shared sampler
+ * (`@anima/scene-render` → `scatterInstances`). No list = nothing is
  * scattered; there is no default.
  */
-export interface TerrainScatter {
-  /** Instances per 100 m² of area. 0 = nothing is scattered. */
+export interface TerrainScatterEntry {
+  /** Instances per 100 m² of the painted area. 0 = nothing is scattered. */
   density_per_100m2: number
-  /** Height of the built-in tuft in metres; ignored once `model` is set. */
+  /** TARGET height in metres: a prop model is scaled uniformly until its
+   *  bounding box is this tall, and the built-in tuft is built this high. */
   height_m?: number
   /** URL of a prop mesh to instance — `/assets/props/<id>/model`, the same
    *  URL the prop library hands out. Absent = the built-in tuft. */
@@ -150,7 +154,8 @@ export interface TerrainScatter {
 
 /** One kind of ground in the effective catalog (§ A1.5). `passable` and
  *  `speed_factor` come from HERE and nowhere else — never from an area, never
- *  from a client table. */
+ *  from a client table. `meta` is free-form and this editor writes none of
+ *  it: what grows on ground belongs to the AREA (finding B17). */
 export interface TerrainType {
   kind: string
   name: string
@@ -179,7 +184,10 @@ export interface TerrainStroke {
 /** An area's `meta`. Free-form by contract — the known key is named, the rest
  *  stays open, and a foreign key written by anything else survives a round
  *  trip through the editor untouched. */
-export type TerrainMeta = { stroke?: TerrainStroke } & Record<string, unknown>
+export type TerrainMeta = {
+  stroke?: TerrainStroke
+  scatter?: TerrainScatterEntry[]
+} & Record<string, unknown>
 
 /** A painted polygon in world metres (§ A1.5). Points are `[x, z]`, 3–256 of
  *  them, auto-closed by the server. */
@@ -189,6 +197,39 @@ export interface TerrainArea {
   polygon: Array<[number, number]>
   z_order: number
   meta?: TerrainMeta
+}
+
+/**
+ * The scatter list of an area, read through a check.
+ *
+ * `meta` is free-form JSON the server passes through, so nothing in the type
+ * system guarantees a stored `scatter` has the declared shape — and most areas
+ * carry none at all. The server whitelists what it STORES
+ * (`app/models/terrain._sanitize_scatter_list`); this is the reader's half of
+ * the same contract, and it is the ONE place the editor reads it, so the chip
+ * and the preview always see the same list.
+ *
+ * Every field is coerced, never trusted: a junk density is 0 (scatter nothing,
+ * exactly how both renderers read it) and a height that is not a height loses
+ * the key, so a model keeps its own size.
+ */
+export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[] {
+  const raw = meta?.scatter
+  if (!Array.isArray(raw)) return []
+  const out: TerrainScatterEntry[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const e = item as unknown as Record<string, unknown>
+    const density = Number(e.density_per_100m2)
+    const height = Number(e.height_m)
+    const entry: TerrainScatterEntry = {
+      density_per_100m2: Number.isFinite(density) && density > 0 ? density : 0,
+    }
+    if (Number.isFinite(height) && height > 0) entry.height_m = height
+    if (typeof e.model === 'string' && e.model) entry.model = e.model
+    out.push(entry)
+  }
+  return out
 }
 
 /** `GET /play/terrain`. `areas` arrive BOTTOM to TOP — the last entry is on

@@ -34,8 +34,15 @@ export {
 } from './groundAreas'
 export type { AreaGeometry, Point2 } from './groundAreas'
 
-export { propGroundFit } from './scatter'
-export type { PropGroundFit } from './scatter'
+export {
+  propGroundFit, scatterInstances, scatterSeed, seededRandom, pointInRing,
+  pointInFootprint, worldToLocalXZ, SCATTER_MAX_PER_ENTRY,
+  SCATTER_TRIES_PER_POINT,
+} from './scatter'
+export type {
+  PropGroundFit, ScatterEntry, ScatterFootprint, ScatterInstance,
+  ScatterPoint2, ScatterSampleOptions,
+} from './scatter'
 
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'

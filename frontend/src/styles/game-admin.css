@@ -2246,18 +2246,24 @@ html, * {
   color: var(--text-muted, #8b949e);
   padding-top: 0;
 }
-/* Scatter — the row that folds out under its terrain type. */
+/* Scatter — what a painted AREA grows, edited in its chip (finding B17).
+   `.ga-tt-scatter-on` marks the fold-out button of an area that grows
+   something; it kept its name because the button is the same one. */
 .ga-tt-scatter-on { border-color: var(--accent, #388bfd); }
-.ga-tt-scatter-row td { padding-top: 0; }
-.ga-tt-scatter {
+.ga-terrain-scatter {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 12px;
-  padding: 6px 8px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0 4px 8px;
   border-left: 2px solid var(--border, #30363d);
 }
-.ga-tt-scatter label {
+.ga-terrain-scatter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.ga-terrain-scatter-row label {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2265,7 +2271,11 @@ html, * {
   color: var(--text-muted, #8b949e);
   white-space: nowrap;
 }
-.ga-tt-scatter-model select { max-width: 200px; }
+/* The two number knobs are small on purpose — a density and a height are two
+   or three digits, and a full-width box would push the model picker out of
+   the chip. */
+.ga-terrain-scatter-row label input { width: 62px; }
+.ga-terrain-scatter-model select { max-width: 170px; }
 
 /* Map image picker dialog. Narrower than the default modal — the thumbnail
    grid auto-fills, so at 560 px a handful of icons spread out into a sparse

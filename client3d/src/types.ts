@@ -292,23 +292,30 @@ export interface TerrainType {
   passable: boolean;
   /** walking-pace multiplier, 0..2 */
   speed_factor: number;
-  /** open bag of extras. `scatter` drives the prop scatter of the 3D ground
-   *  (`scene/ground.ts`); everything else is ignored by this client. */
-  meta?: TerrainMeta;
+  /** Open bag of extras — a type says how ground LOOKS and how it is walked,
+   *  nothing about what grows on it. Ignored by this client entirely (the
+   *  scatter moved to the AREA with finding B17). */
+  meta?: Record<string, unknown>;
 }
 
-/** Prop scatter of a kind — absent means NO scatter (never a default). */
-export interface TerrainScatterMeta {
-  /** instances per 100 m2 of area; absent/0 = nothing is scattered */
-  density_per_100m2?: number;
+/** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
+ *  whitelists exactly these three fields
+ *  (`app/models/terrain._sanitize_scatter_list`); `scene/ground.ts` reads them
+ *  and hands them to the shared sampler. */
+export interface TerrainScatterEntry {
+  /** instances per 100 m2 of the painted area; 0 = nothing is scattered */
+  density_per_100m2: number;
   /** URL of a model to instance; absent = the built-in tuft */
   model?: string;
-  /** metre height of the built-in tuft (ignored with `model`) */
+  /** TARGET height in metres — the prop is scaled until its bounding box is
+   *  this tall, and the built-in tuft is built this high. */
   height_m?: number;
 }
 
+/** An area's `meta`. Free-form by contract — the known key is named, the rest
+ *  stays open. */
 export interface TerrainMeta {
-  scatter?: TerrainScatterMeta;
+  scatter?: TerrainScatterEntry[];
   [key: string]: unknown;
 }
 
@@ -320,7 +327,7 @@ export interface TerrainArea {
   kind: string;
   polygon: [number, number][];
   z_order: number;
-  meta?: Record<string, unknown>;
+  meta?: TerrainMeta;
 }
 
 export interface TerrainPayload {

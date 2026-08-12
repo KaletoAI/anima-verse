@@ -50,6 +50,7 @@
  *   pointInPolygon(0, 0, [[0,0], [1,1]]) -> false  (fewer than 3 points is
  *     not an area at all — the server fails closed the same way)
  */
+import { worldToLocalXZ } from '@anima/scene-render'
 
 /** Viewport state: world point at the canvas centre + zoom. */
 export interface View {
@@ -162,15 +163,14 @@ export function localToWorld(cx: number, cz: number, yawDeg: number,
   return { x: cx + lx * cos + lz * sin, z: cz - lx * sin + lz * cos }
 }
 
-/** World metres -> location-local metres (rotation by −yaw). */
+/** World metres -> location-local metres (rotation by −yaw).
+ *
+ *  The arithmetic lives in `@anima/scene-render` (`worldToLocalXZ`, which takes
+ *  RADIANS): the 3D client turns tiles with it and the shared scatter tests
+ *  footprints with it (finding B18). One mapping, one home. */
 export function worldToLocal(cx: number, cz: number, yawDeg: number,
   x: number, z: number): WorldPt {
-  const rad = (yawDeg * Math.PI) / 180
-  const cos = Math.cos(rad)
-  const sin = Math.sin(rad)
-  const dx = x - cx
-  const dz = z - cz
-  return { x: dx * cos - dz * sin, z: dx * sin + dz * cos }
+  return worldToLocalXZ(cx, cz, (yawDeg * Math.PI) / 180, x, z)
 }
 
 /**

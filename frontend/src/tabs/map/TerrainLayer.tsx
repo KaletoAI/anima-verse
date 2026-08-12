@@ -39,8 +39,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { cleanRing, polygonArea, scatterInstances, scatterSeed } from '@anima/scene-render'
+import type { ScatterFootprint } from '@anima/scene-render'
 import { useMapView } from './MapCanvas'
 import { screenToWorld, strokeToPolygon, worldPolyToPath, worldToScreen } from './mapMath'
+import { readScatter } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
 /** One opacity for every fill — see the module docstring. */
@@ -62,6 +65,35 @@ const CLICK_SLOP_PX = 4
 /** Metre coordinates are stored with 2 decimals (`app/models/terrain.py`);
  *  rounding here keeps what the editor draws identical to what it sent. */
 const r2 = (v: number): number => Math.round(v * 100) / 100
+
+/**
+ * Colours of the scatter preview, by list index.
+ *
+ * Not the terrain colour: the dots have to stand out FROM the ground they
+ * grow on, and two entries on one area have to be told apart. Six is well
+ * past the eight entries an area may carry in practice; beyond that the
+ * palette repeats, which is a legibility limit and not a wrong drawing.
+ */
+const SCATTER_COLORS = ['#2ecc71', '#e67e22', '#9b59b6', '#e74c3c', '#1abc9c', '#f1c40f']
+
+/** The preview colour of the n-th scatter entry — shared with its row in the
+ *  area chip, so a dot and the line that made it match by eye. */
+export function scatterColor(index: number): string {
+  return SCATTER_COLORS[((index % SCATTER_COLORS.length) + SCATTER_COLORS.length)
+    % SCATTER_COLORS.length]
+}
+
+/** Dots the preview draws at most, over ALL areas together.
+ *
+ *  The POINTS are always the world's own — the shared sampler answers them
+ *  whatever this says. This caps how many of them become SVG circles: a world
+ *  of dense meadows samples tens of thousands, and a browser asked for that
+ *  many nodes stops being an editor. What is drawn is the first n, so the
+ *  preview stays a faithful sample of the real placement. */
+const SCATTER_PREVIEW_MAX = 4000
+
+/** Radius of a preview dot in pixels. */
+const SCATTER_DOT_R = 1.8
 
 /** The colour a kind is drawn in — catalog first, grey when unknown. */
 export function typeColor(types: Record<string, TerrainType>, kind: string): string {
@@ -136,12 +168,19 @@ export interface TerrainLayerProps {
   onVertexDelete: (index: number) => void
   /** Insert a vertex AT `index` (the position it takes in that list). */
   onEdgeInsert: (index: number, x: number, z: number) => void
+  /** Draw what the areas GROW, as top-down dots (finding B17). */
+  scatterPreview: boolean
+  /** The placed locations. Their footprints are kept CLEAR of scatter
+   *  (finding B18) — the rows go in as they are, the shared sampler reads
+   *  `pos_x`/`pos_z`/`yaw_deg`/`plan_width_m` off them itself. */
+  footprints: readonly ScatterFootprint[]
 }
 
 export function TerrainLayer({
   areas, types, groundColor, editing, editable, selectedId, centerline,
   centerlineWidthM, draft, draftCursor, draftLine, draftWidthM, draftColor,
-  draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
+  draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert, scatterPreview,
+  footprints,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
   const [drag, setDrag] = useState<{ i: number; x: number; z: number } | null>(null)
@@ -228,6 +267,41 @@ export function TerrainLayer({
     draftLine && draftPts.length >= 2 ? strokeToPolygon(draftPts, draftWidthM) : null
   ), [draftLine, draftPts, draftWidthM])
 
+  /**
+   * The scatter of every area, sampled ONCE per data change — in WORLD
+   * metres, so panning and zooming only re-project it.
+   *
+   * The points come from `scatterInstances` (@anima/scene-render), the very
+   * call `client3d/src/scene/ground.ts` makes with the very same seed
+   * (`scatterSeed(area.id, index)`), the same cleaned ring and the same
+   * footprints. Preview and world are therefore identical by construction and
+   * not by two files being kept in step — that is why the sampler is shared at
+   * all.
+   */
+  const scatterDots = useMemo(() => {
+    if (!scatterPreview) return []
+    const out: { x: number; z: number; color: string }[] = []
+    for (const a of areas) {
+      const entries = readScatter(a.meta)
+      if (!entries.length) continue
+      const ring = cleanRing(a.polygon)
+      if (ring.length < 3) continue
+      const areaM2 = polygonArea(ring)
+      entries.forEach((e, i) => {
+        if (out.length >= SCATTER_PREVIEW_MAX) return
+        const color = scatterColor(i)
+        for (const p of scatterInstances({
+          ring, areaM2, densityPer100m2: e.density_per_100m2,
+          seed: scatterSeed(a.id, i), footprints,
+        })) {
+          if (out.length >= SCATTER_PREVIEW_MAX) break
+          out.push({ x: p.x, z: p.z, color })
+        }
+      })
+    }
+    return out
+  }, [areas, footprints, scatterPreview])
+
   if (!w || !h) return null
 
   // What the handles sit on as it is being edited: the CENTRE LINE of a stroke
@@ -286,6 +360,22 @@ export function TerrainLayer({
           )
         })}
       </g>
+
+      {/* What the areas grow, seen from above — the SAME points the 3D world
+          plants. Inert to the pointer: this is a view, and a click on it has
+          to reach the canvas underneath, which is where the area hit test
+          lives. */}
+      {scatterDots.length ? (
+        <g pointerEvents="none">
+          {scatterDots.map((d, i) => {
+            const s = worldToScreen(d.x, d.z, view, w, h)
+            return (
+              <circle key={`s${i}`} cx={s.x} cy={s.y} r={SCATTER_DOT_R}
+                fill={d.color} fillOpacity={0.9} />
+            )
+          })}
+        </g>
+      ) : null}
 
       {/* The centre line of the selected stroke area, dashed — the recipe is
           not the shape, so it is drawn as a hint over it and stays visible

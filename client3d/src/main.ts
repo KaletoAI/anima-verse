@@ -562,7 +562,7 @@ async function startApp(username: string, role: string) {
     mapLocations = list;
     mapLocSig = locationsSignature(list);
   }
-  void terrainGround.sync(firstMap.terrain_sig, worldBounds);
+  void terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations);
 
   // Basement view: the world's ground covers height 0 everywhere, so a storey
   // below ground would stay hidden even after the tile's own plate ghosts
@@ -1566,7 +1566,10 @@ async function startApp(username: string, role: string) {
     // unchanged signature — terrain is never fogged and never polled.
     worldBounds = map.world_bounds;
     takeMapLocations(map.locations);
-    void terrainGround.sync(map.terrain_sig, worldBounds);
+    // The locations travel WITH it: their footprints are what the scatter
+    // keeps clear (finding B18), and a place that moved is a rebuild trigger
+    // of its own — `terrain_sig` does not move when a location does.
+    void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations);
     rebuildMovedTiles(map);
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
     // just discovered is simply in the payload from one poll to the next. The
@@ -2355,7 +2358,7 @@ async function startApp(username: string, role: string) {
       // switch published a new frame that only the base plane of the OLD sync
       // knew about — up to three seconds in which the plate and the painted
       // areas stood in the frame of the view one had just left.
-      void terrainGround.sync(map.terrain_sig, worldBounds);
+      void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations);
       fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);

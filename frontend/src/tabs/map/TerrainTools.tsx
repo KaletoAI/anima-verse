@@ -16,8 +16,9 @@
  */
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import type { PropRef } from '../../lib/refs'
 import { typeColor } from './TerrainLayer'
-import type { TerrainArea, TerrainStroke, TerrainType } from './mapTypes'
+import type { TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType } from './mapTypes'
 
 /** What a click on the map does. `select` is the location editor of Task 3. */
 export type TerrainMode = 'select' | 'paint' | 'edit-area'
@@ -36,6 +37,18 @@ export const MIN_POINTS = 3
 export const MAX_POINTS = 256
 export const MAX_COORD = 100000
 export const MAX_Z_ORDER = 10000
+
+/** Server mirror — `app/models/terrain.MAX_SCATTER_ENTRIES`. */
+export const MAX_SCATTER_ENTRIES = 8
+
+/** The URL a scatter `model` stores: exactly the `model_url` the prop library
+ *  hands out on the server (`app/core/props.py`), and exactly what the 3D
+ *  ground passes to its GLB loader unchanged (`client3d/src/scene/ground.ts`
+ *  → `buildScatter`). Site-relative like every other asset URL in the payload,
+ *  so a client on another host resolves it against its own API origin. */
+export function propModelUrl(id: string): string {
+  return `/assets/props/${encodeURIComponent(id)}/model`
+}
 
 /** A line needs two points to have a direction at all. */
 export const MIN_STROKE_POINTS = 2
@@ -118,6 +131,145 @@ function WidthField({ widthM, onWidth }: {
   )
 }
 
+/**
+ * A number knob of a scatter entry — the `WidthField` pattern, generalised.
+ *
+ * Its own text draft so a half-typed "0." survives, committed on blur and on
+ * Enter (which is stopped here: the paint mode listens for it to finish a
+ * line). It never writes itself — it hands the number up and shows whatever
+ * comes back, so a value the server clamps is not left claimed by the field.
+ * An empty field is a real state and commits as `null`: "no target height" is
+ * not the same as "0 m tall".
+ */
+function ScatterNum({ label, title, value, step, onCommit }: {
+  label: string; title: string; value: number | null; step: number
+  onCommit: (v: number | null) => void
+}) {
+  const [draft, setDraft] = useState(value === null ? '' : String(value))
+  const [resync, setResync] = useState(0)
+  useEffect(() => { setDraft(value === null ? '' : String(value)) }, [value, resync])
+  const commit = () => {
+    setResync((n) => n + 1)
+    const text = draft.trim()
+    if (text === '') { if (value !== null) onCommit(null); return }
+    const v = parseFloat(text)
+    if (!Number.isFinite(v) || v < 0) return
+    const r = Math.round(v * 1000) / 1000
+    if (r !== value) onCommit(r)
+  }
+  return (
+    <label title={title}>
+      {label}
+      <input
+        className="ga-input"
+        type="number" min={0} step={step}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return
+          e.stopPropagation()
+          e.currentTarget.blur()
+        }}
+      />
+    </label>
+  )
+}
+
+/**
+ * What an area GROWS — the list editor of finding B17.
+ *
+ * It sits in the AREA chip and not in the type dialog because that is where
+ * the decision is: the shape one means is already selected, and the "Scatter
+ * preview" switch in the toolbar shows the very points the 3D client will
+ * plant (both sides call the ONE sampler, `@anima/scene-render`).
+ *
+ * Every change writes straight through, like the kind and the layer next to
+ * it — the numbers commit on blur, the pickers on choice. `colorOf` is the
+ * same index colour the preview draws with, so a row and its dots can be told
+ * apart by eye.
+ */
+function ScatterEditor({ entries, props, colorOf, onChange }: {
+  entries: TerrainScatterEntry[]
+  props: PropRef[]
+  colorOf: (index: number) => string
+  onChange: (entries: TerrainScatterEntry[]) => void
+}) {
+  const { t } = useI18n()
+  const patch = (i: number, next: Partial<TerrainScatterEntry>) => {
+    const out = entries.map((e, k) => (k === i ? { ...e, ...next } : e))
+    // An absent key is not the same as an empty one — the server whitelist
+    // drops `height_m`/`model` when they are not set, and so must this, or a
+    // cleared field would travel as `null` and read back as junk.
+    const e = out[i]
+    if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
+    if (!e.model) delete e.model
+    onChange(out)
+  }
+  return (
+    <div className="ga-terrain-scatter">
+      {entries.map((e, i) => {
+        const model = e.model || ''
+        const known = !model || props.some((p) => propModelUrl(p.id) === model)
+        return (
+          <div className="ga-terrain-scatter-row" key={i}>
+            <span className="ga-terrain-swatch" style={{ background: colorOf(i) }} />
+            <label className="ga-terrain-scatter-model">
+              <select
+                className="ga-input"
+                value={model}
+                title={t('A prop from the library replaces the tuft. Only props that already have a mesh are offered.')}
+                onChange={(ev) => patch(i, { model: ev.target.value })}
+              >
+                <option value="">{t('Tuft (no model)')}</option>
+                {props.map((p) => (
+                  <option key={p.id} value={propModelUrl(p.id)}>{p.name || p.id}</option>
+                ))}
+                {/* A model URL the library does not know — hand-authored, or a
+                    prop that has since been deleted. It stays selected and
+                    visible instead of silently falling back to the tuft. */}
+                {known ? null : <option value={model}>{model}</option>}
+              </select>
+            </label>
+            <ScatterNum
+              label={t('per 100 m²')}
+              title={t('How many of these stand on 100 m² of this area. 0 = none.')}
+              value={Number.isFinite(e.density_per_100m2) ? e.density_per_100m2 : 0}
+              step={0.5}
+              onCommit={(v) => patch(i, { density_per_100m2: v ?? 0 })}
+            />
+            <ScatterNum
+              label={t('height (m)')}
+              title={t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the model keeps its own size.')}
+              value={typeof e.height_m === 'number' ? e.height_m : null}
+              step={0.5}
+              onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
+            />
+            <button type="button" className="ga-btn ga-btn-sm"
+              title={t('Remove this scatter')}
+              onClick={() => onChange(entries.filter((_, k) => k !== i))}>
+              ×
+            </button>
+          </div>
+        )
+      })}
+      <div className="ga-terrain-scatter-row">
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={entries.length >= MAX_SCATTER_ENTRIES}
+          title={entries.length >= MAX_SCATTER_ENTRIES
+            ? t('At most {n} scatters per area').replace('{n}', String(MAX_SCATTER_ENTRIES))
+            : t('Add another prop to this ground')}
+          onClick={() => onChange([...entries, { density_per_100m2: 1 }])}>
+          + {t('Scatter')}
+        </button>
+        <span className="ga-map-chip-label">
+          {t('Placement is deterministic per area and skips the footprints of placed locations. Switch on “Scatter preview” to see the very points the 3D world plants.')}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 /** A palette entry: colour swatch plus the type's name. */
 function TypeChip({ type, armed, onPick }: {
   type: TerrainType; armed: boolean; onPick: () => void
@@ -157,6 +309,11 @@ export interface TerrainToolbarProps {
   onCloseDraft: () => void
   onDiscardDraft: () => void
   areaCount: number
+  /** The top-down preview of what the areas grow — the SAME points the 3D
+   *  client plants, drawn as dots (finding B17). A view switch, so it stays
+   *  reachable in every mode. */
+  scatterPreview: boolean
+  onScatterPreview: (on: boolean) => void
   /** Open the type manager. It sits IN the palette because that is where the
    *  vocabulary is missing something — and it is the only surface that can
    *  answer "there is no kind for this" with anything but a shrug. */
@@ -168,7 +325,8 @@ export interface TerrainToolbarProps {
 
 export function TerrainToolbar({
   mode, onMode, types, paintKind, onPaintKind, shape, onShape, widthM, onWidth,
-  draftLen, onCloseDraft, onDiscardDraft, areaCount, onManageTypes, typesError,
+  draftLen, onCloseDraft, onDiscardDraft, areaCount, scatterPreview,
+  onScatterPreview, onManageTypes, typesError,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const isLine = shape === 'line'
@@ -205,6 +363,12 @@ export function TerrainToolbar({
       <span className="ga-map-toolbar-info">
         {t('{n} areas').replace('{n}', String(areaCount))}
       </span>
+      <label className="ga-map-toolbar-check"
+        title={t('Show what the areas grow, as dots — exactly the points the 3D world plants (footprints of placed locations stay clear).')}>
+        <input type="checkbox" checked={scatterPreview}
+          onChange={(e) => onScatterPreview(e.target.checked)} />
+        🌲 {t('Scatter preview')}
+      </label>
 
       {mode === 'paint' ? (
         <>
@@ -349,6 +513,13 @@ export interface TerrainAreaChipProps {
   onZOrder: (delta: number) => void
   /** New width for a stroke area — the polygon is regenerated from it. */
   onWidth: (m: number) => void
+  /** What this area GROWS (`meta.scatter`, already checked by the caller) and
+   *  the prop library its model picker offers. */
+  scatter: TerrainScatterEntry[]
+  props: PropRef[]
+  /** The preview colour of the n-th entry — the same one the map draws. */
+  scatterColor: (index: number) => string
+  onScatter: (entries: TerrainScatterEntry[]) => void
   /** Drop `meta.stroke` and keep the polygon: the area becomes an ordinary
    *  one, editable point by point. One way, hence the confirmation. */
   onConvert: () => void
@@ -373,14 +544,18 @@ export interface TerrainAreaChipProps {
  * line's points instead of the polygon's (those are what the handles edit),
  * carries the width, and offers the one-way exit: converting it drops the
  * recipe, keeps the polygon and hands the outline back to the point editor.
+ *
+ * What the area GROWS is edited here too (finding B17), folded away until
+ * asked for — see `ScatterEditor`.
  */
 export function TerrainAreaChip({
-  area, types, typeList, typesError, stroke, onKind, onZOrder, onWidth,
-  onConvert, onDelete, onClose,
+  area, types, typeList, typesError, stroke, scatter, props, scatterColor,
+  onKind, onZOrder, onWidth, onScatter, onConvert, onDelete, onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
   const [armed, setArmed] = useState(false)
   const [convArmed, setConvArmed] = useState(false)
+  const [scatterOpen, setScatterOpen] = useState(false)
   const known = types[area.kind]
   return (
     <div className="ga-map-chip">
@@ -422,6 +597,27 @@ export function TerrainAreaChip({
             onPick={() => onKind(ty.kind)} />
         ))}
       </div>
+      {/* What grows here (finding B17). Folded away by default: most areas
+          grow nothing, and an area is selected far more often to be reshaped
+          or re-layered than to be planted. An area whose kind the catalog no
+          longer knows cannot be written at all (every write is a full replace
+          the server rejects on the kind), so it does not offer this either. */}
+      <div className="ga-map-chip-row">
+        <button type="button"
+          className={'ga-btn ga-btn-sm' + (scatter.length ? ' ga-tt-scatter-on' : '')}
+          disabled={!known}
+          aria-expanded={scatterOpen}
+          title={t('What grows on this area — props, how many per 100 m², how tall')}
+          onClick={() => setScatterOpen((o) => !o)}>
+          {t('Scatter')}
+          {scatter.length ? ` (${scatter.length})` : ` — ${t('none')}`}
+          {scatterOpen ? ' ▾' : ' ▸'}
+        </button>
+      </div>
+      {scatterOpen && known ? (
+        <ScatterEditor entries={scatter} props={props} colorOf={scatterColor}
+          onChange={onScatter} />
+      ) : null}
       <div className="ga-map-chip-actions">
         <button type="button" className="ga-btn ga-btn-sm" disabled={!known}
           title={t('Draw this area over the ones around it')}
