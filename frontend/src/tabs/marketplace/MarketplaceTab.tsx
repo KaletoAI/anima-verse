@@ -285,6 +285,13 @@ export function MarketplaceTab() {
             ))}
           </select>
         </div>
+        {filterType === 'collection' ? (
+          <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75 }}>
+            {t(
+              'Collections are built in the builder and shared as ZIP — publish applies to single packs.',
+            )}
+          </div>
+        ) : null}
         {catalog?.stale ? (
           <div
             style={{

@@ -147,6 +147,14 @@ place (byte-identical to the export, see [5]/[8]).
       collection is installed with ONE click and has no trust gate, so the
       only safe place for executable packages is their own install.
 
+ [20] The overwrite flag reaches the SUB-packs. A local change inside the prop
+      directory plus a second install with overwrite=True → the prop answers
+      "success" and its directory is the exported one again, instead of the
+      "exists" of case [14]. Both entry points carry the flag: the generic
+      dispatch and the marketplace path (_install_collection). The LOCATION
+      keeps duplicating either way — its importer knows no overwrite at all
+      and always mints a new id, so the "Old Mill" count still grows by one.
+
 Usage:  ./.venv/bin/python scripts/smoke_content_prop_collection.py
 """
 import io
@@ -615,6 +623,34 @@ for blob_in, label in ((code_coll.getvalue(), "generic dispatch"),
 check("nothing was written to plugins/installed", INSTALLED_DIR.exists(), False)
 check("and nothing to the throwaway storage either",
       (get_storage_dir() / "plugins").exists(), False)
+
+print("\n[20] overwrite reaches the sub-packs — the second install UPDATES")
+# A local file the export does not have: without overwrite the prop reports
+# "exists" and stays untouched (case [4]/[14]), with overwrite it is replaced.
+(_prop_dir(PID) / "stray2.txt").write_text("local", encoding="utf-8")
+mills_before = mill_count()
+upd = _dispatch_install_selected(coll, selected_ids=None, overwrite=True)
+check("the prop is updated instead of 'exists'",
+      [r["status"] for r in upd["results"]], ["success", "success"])
+check("installed", upd["installed"], 2)
+check("failed", upd["failed"], 0)
+check("the prop directory is the exported one again", dir_snapshot(), EXPORTED)
+check("the local-only file is gone",
+      (_prop_dir(PID) / "stray2.txt").exists(), False)
+# The location importer knows no overwrite — it always mints a new id, so a
+# collection containing a location duplicates it with the flag as well.
+check("the location duplicates anyway (no overwrite concept there)",
+      mill_count(), mills_before + 1)
+
+# The marketplace path carries the flag too.
+(_prop_dir(PID) / "stray3.txt").write_text("local", encoding="utf-8")
+mp = _install_collection(coll, overwrite=True)
+check("marketplace path: the prop is updated",
+      [r["status"] for r in mp["results"]], ["success", "success"])
+check("marketplace path: the prop directory is restored",
+      dir_snapshot(), EXPORTED)
+check("marketplace path: the location duplicates as well",
+      mill_count(), mills_before + 2)
 
 # ── Summary ─────────────────────────────────────────────────────────────
 

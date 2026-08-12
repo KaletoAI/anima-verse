@@ -397,26 +397,32 @@ def _verify_checksum(content: bytes, expected: str) -> None:
         )
 
 
-def _dispatch_install(pack_type: str, content: bytes) -> Dict[str, Any]:
+def _dispatch_install(pack_type: str, content: bytes,
+                      *, overwrite: bool = False) -> Dict[str, Any]:
     """Route the ZIP to the matching importer based on `pack_type`.
 
     Marketplace installs always land in the active world, never in the
     shared/ baseline that ships with the repo — otherwise a `git pull` can
     collide with previously installed packs. Users can promote an item/rule
     to shared manually via the "Move to shared" button if they want to.
+
+    `overwrite` reaches every importer that knows the concept. Two do not:
+    `states` merges by id anyway (`replace_all=False`), and the LOCATION
+    importer has no overwrite at all — it always creates a new location, so a
+    second install duplicates it (see the note in `_install_collection_selected`).
     """
     if pack_type == "character":
         from app.core.character_io import import_character_from_zip
-        return import_character_from_zip(content, overwrite=False)
+        return import_character_from_zip(content, overwrite=overwrite)
     if pack_type == "item":
         from app.core.content_io import import_item_from_zip
-        return import_item_from_zip(content, target="world", overwrite=False)
+        return import_item_from_zip(content, target="world", overwrite=overwrite)
     if pack_type == "item_bundle":
         from app.core.content_io import import_bundle_from_zip
-        return import_bundle_from_zip(content, target="world", overwrite=False)
+        return import_bundle_from_zip(content, target="world", overwrite=overwrite)
     if pack_type == "rule":
         from app.core.content_io import import_rule_from_zip
-        return import_rule_from_zip(content, target="world", overwrite=False)
+        return import_rule_from_zip(content, target="world", overwrite=overwrite)
     if pack_type == "states":
         from app.core.content_io import import_states_from_zip
         return import_states_from_zip(content, replace_all=False)
@@ -425,9 +431,9 @@ def _dispatch_install(pack_type: str, content: bytes) -> Dict[str, Any]:
         return import_location_from_zip(content)
     if pack_type == "prop":
         from app.core.content_io import import_prop_from_zip
-        return import_prop_from_zip(content, overwrite=False)
+        return import_prop_from_zip(content, overwrite=overwrite)
     if pack_type == "collection":
-        return _install_collection(content)
+        return _install_collection(content, overwrite=overwrite)
     if pack_type == "skill_package":
         from app.core.skill_package_io import install_skill_package_from_zip
         result = install_skill_package_from_zip(content, overwrite=True)
@@ -443,7 +449,7 @@ def _dispatch_install(pack_type: str, content: bytes) -> Dict[str, Any]:
     raise ValueError(f"unsupported pack type: {pack_type!r}")
 
 
-def _install_collection(content: bytes) -> Dict[str, Any]:
+def _install_collection(content: bytes, *, overwrite: bool = False) -> Dict[str, Any]:
     """Install every sub-pack of a collection ZIP (marketplace path).
 
     Collection layout:
@@ -455,7 +461,8 @@ def _install_collection(content: bytes) -> Dict[str, Any]:
     The whole collection is one pack here, so there is no selection —
     otherwise identical to the generic import path below.
     """
-    return _install_collection_selected(content, selected_ids=None)
+    return _install_collection_selected(content, selected_ids=None,
+                                       overwrite=overwrite)
 
 
 @router.post("/install")
@@ -611,17 +618,24 @@ def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool,
         from app.core.content_io import import_map_layout_from_zip
         return import_map_layout_from_zip(content)
     if mtype == "collection":
-        return _install_collection_selected(content, selected_ids=selected_ids)
+        return _install_collection_selected(content, selected_ids=selected_ids,
+                                            overwrite=overwrite)
     raise ValueError(f"unsupported export type: {mtype!r}")
 
 
-def _install_collection_selected(content: bytes, *, selected_ids) -> Dict[str, Any]:
+def _install_collection_selected(content: bytes, *, selected_ids,
+                                 overwrite: bool = False) -> Dict[str, Any]:
     """Install the picked sub-packs of a collection ZIP.
 
     `selected_ids` holds the ZIP-internal file paths the preview listed
-    (`contents[].file`); an empty/None selection means ALL of them. A failing
-    entry never aborts the run — every sub-pack gets its own result row, in
-    the same vocabulary `_install_collection` uses:
+    (`contents[].file`); an empty/None selection means ALL of them.
+    `overwrite` reaches each sub-pack importer, so re-installing a collection
+    UPDATES its parts instead of reporting them as "exists". Exception:
+    locations know no overwrite — the importer always creates a new one, so a
+    collection containing a location duplicates that location on every
+    install, with or without the flag. A failing entry never aborts the run —
+    every sub-pack gets its own result row, in the same vocabulary
+    `_install_collection` uses:
 
         success  installed
         exists   already there, nothing changed (some importers report this
@@ -686,7 +700,8 @@ def _install_collection_selected(content: bytes, *, selected_ids) -> Dict[str, A
                 fail_count += 1
                 continue
             try:
-                sub_result = _dispatch_install(sub_type, sub_bytes)
+                sub_result = _dispatch_install(sub_type, sub_bytes,
+                                               overwrite=overwrite)
             except FileExistsError as e:
                 results.append({"name": sub_name, "type": sub_type, "status": "exists",
                                 "error": str(e)})
