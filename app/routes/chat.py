@@ -2343,7 +2343,8 @@ def _build_full_system_prompt(character_name: str,
     # ---- Location events ----------------------------------------------
     events_section = ""
     if current_location_id and _has("locations_enabled"):
-        events_section = build_events_prompt_section(location_id=current_location_id) or ""
+        events_section = build_events_prompt_section(
+            location_id=current_location_id, character_name=character_name) or ""
 
     # ---- Memory --------------------------------------------------------
     memory_section = ""

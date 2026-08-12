@@ -73,7 +73,7 @@ const GalleryCard = memo(function GalleryCard({
           }}>{isSelected ? '✓' : ''}</span>
         ) : null}
         <img src={url} alt={filename} />
-        {type === 'map_2d' || type === 'map_3x3' ? (
+        {type === 'map_2d' ? (
           <span
             className="ga-gallery-usage"
             title={t('How many placed locations currently show this image on the map')}
@@ -115,7 +115,7 @@ const GalleryCard = memo(function GalleryCard({
               </option>
             ))}
           </select>
-          {type !== 'building' && type !== 'map_3x3' ? (
+          {type !== 'building' ? (
             <button
               className="ga-btn ga-btn-sm"
               disabled={isBusy}
@@ -198,7 +198,7 @@ export function LocationGallery({
   const [data, setData] = useState<GalleryResponse | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'map_3x3' | 'building' | null>(null)
+  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'building' | null>(null)
   const [imageSetOpen, setImageSetOpen] = useState(false)
   // "Regenerate" target: recreate an existing map image using it as a reference.
   const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
@@ -251,9 +251,8 @@ export function LocationGallery({
   const metas = data?.image_metas || {}
 
   // How often each map image is currently used on the map: placed locations
-  // whose gallery owner is this location (clones share the template gallery) and
-  // that picked exactly this file as their 2D map image — or as the wide ground
-  // patch anchored on them (grid-era, see worldTypes.map_patch_2d). File -> count.
+  // whose gallery owner is this location (clones share the template gallery)
+  // and that picked exactly this file as their 2D map image. File -> count.
   const mapUsage = useMemo(() => {
     const m: Record<string, number> = {}
     for (const l of placements) {
@@ -261,8 +260,6 @@ export function LocationGallery({
       if (((l.template_location_id || '').trim() || l.id) !== locationId) continue
       const f = (l.map_image_2d || '').trim()
       if (f) m[f] = (m[f] || 0) + 1
-      const p = (l.map_patch_2d || '').trim()
-      if (p) m[p] = (m[p] || 0) + 1
     }
     return m
   }, [placements, locationId])
@@ -353,7 +350,7 @@ export function LocationGallery({
       }
       // Room context: assign the image to the room — including 'building'
       // (the room's model-source image). Map types have no room dimension.
-      if (roomFilter && dialogType !== 'map_2d' && dialogType !== 'map_3x3') body.room_id = roomFilter
+      if (roomFilter && dialogType !== 'map_2d') body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
@@ -535,16 +532,6 @@ export function LocationGallery({
               🟦 {t('Generate 2D icon')}
             </button>
           ) : null}
-          {!roomFilter ? (
-            <button
-              className="ga-btn ga-btn-sm"
-              disabled={!!busy}
-              onClick={() => setDialogType('map_3x3')}
-              title={t('Generate a seamless ground image for a wide patch of ground around this location — the metre map editor does not place these yet.')}
-            >
-              🟩 {t('Generate 3×3 tile')}
-            </button>
-          ) : null}
           {roomFilter ? (
             <button
               className="ga-btn ga-btn-sm"
@@ -648,8 +635,7 @@ export function LocationGallery({
       ? {
           location_id: locationId,
           // Map tiles belong to the location, never to a room.
-          room_id: (roomFilter && dialogType !== 'map_2d' && dialogType !== 'map_3x3')
-            ? roomFilter : '',
+          room_id: (roomFilter && dialogType !== 'map_2d') ? roomFilter : '',
           prompt_type: dialogType,
         }
       : undefined),
@@ -661,8 +647,7 @@ export function LocationGallery({
     () => (regenTarget
       ? {
           location_id: locationId,
-          room_id: (roomFilter && regenTarget.type !== 'map_2d'
-                    && regenTarget.type !== 'map_3x3') ? roomFilter : '',
+          room_id: (roomFilter && regenTarget.type !== 'map_2d') ? roomFilter : '',
           prompt_type: regenTarget.type,
           subject_only: true,
         }
@@ -680,9 +665,7 @@ export function LocationGallery({
             ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
             : dialogType === 'building'
               ? t('Generate building image — {name}').replace('{name}', room?.name || location.name)
-              : dialogType === 'map_3x3'
-                ? t('Generate 3×3 map tile — {name}').replace('{name}', location.name)
-                : t('Generate 2D map icon — {name}').replace('{name}', location.name)
+              : t('Generate 2D map icon — {name}').replace('{name}', location.name)
       }
       defaultPrompt=""
       composeRequest={composeRequest}

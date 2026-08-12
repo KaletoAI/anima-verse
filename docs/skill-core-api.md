@@ -98,7 +98,6 @@ Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
 
 Abfragen: `list_locations`, `get_location_by_id`, `get_location_rooms`,
 `get_room_by_name`, `get_entry_room_id`, `get_location_name`.
-Pathfinder (Core-Engine, R5): `find_path_through_known`, `get_neighbor_location_ids`.
 Sichtbarkeit (Fog of War, § A12): `location_visible_to_character`,
 `room_visible_to_character`.
 Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — heute

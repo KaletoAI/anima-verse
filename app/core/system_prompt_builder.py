@@ -109,7 +109,7 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
         ) if (location_id or in_the_open) else ""
 
     if EVENTS in sections:
-        data["events_section"] = _load_events(location_id)
+        data["events_section"] = _load_events(location_id, character_name)
 
     if MEMORY in sections:
         data["memory_section"] = _load_memory(character_name)
@@ -299,12 +299,15 @@ def _load_presence_in_the_open(character_name: str) -> tuple:
     return lines, [], bool(names)
 
 
-def _load_events(location_id: str) -> str:
+def _load_events(location_id: str, character_name: str = "") -> str:
+    """Events at the place — plus the disruptions of everything within sight
+    of the CHARACTER'S own point, which is why the name comes along."""
     if not location_id:
         return ""
     try:
         from app.models.events import build_events_prompt_section
-        return build_events_prompt_section(location_id=location_id) or ""
+        return build_events_prompt_section(
+            location_id=location_id, character_name=character_name) or ""
     except Exception as e:
         logger.debug("Events laden fehlgeschlagen: %s", e)
     return ""

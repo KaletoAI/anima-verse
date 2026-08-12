@@ -279,8 +279,6 @@ SECTIONS = {
             "scene_prompt_only_background": {"type": "text", "label": "Scene Prompt (only_background)", "placeholder": "The exact {setting} from the reference image, keeping its layout, lighting and perspective. Compose {count} into the scene and NO ONE else — each person appears exactly once, no additional people, no duplicates. People: {people}", "legacy_defaults": list(SCENE_PROMPT_LEGACY_DEFAULTS), "description": "Prompt template for the only_background render mode. EMPTY = built-in default (shown greyed). Placeholders: {setting} = 'room'/'outdoor location'/'place' (from the location's indoor flag), {count} = e.g. 'exactly two people', {people} = person list with appearance descriptions and poses, {label} = room name (optional)."},
             "mesh_imagegen_default": {"type": "imagegen_select", "label": "3D Mesh Default (Match)", "default": "", "description": "Backend-name glob for the 3D model generation (character 3D tab, img2mesh — e.g. 'Trellis2-Low'). Must resolve to an api_type=openai_mesh backend. Empty = cheapest AVAILABLE mesh backend (with Trellis2-Low and -High both at cost 0 that pick is arbitrary — name the one you want here)."},
             "timevariant_imagegen_default": {"type": "imagegen_select", "label": "Day/Night Variant Default (Match)", "default": "", "description": "Backend-name glob for the day/night variant convert (the 🌙/☀️ buttons in the location gallery). Needs a reference-capable backend (ref slots ≥ 1, not inpaint). Empty = cheapest available reference-capable backend."},
-            "mapfit_imagegen_default": {"type": "imagegen_select", "label": "Map Fit/Match-edges target", "default": "", "description": "Imagegen target (backend-name glob) for 'Fit to neighbors' and 'Match edges'. Must resolve to a category=inpaint backend, which generates via POST /v1/images/edits (canvas + mask as two images)."},
-            "map_tile_vision_analysis": {"type": "bool", "label": "Analyze neighbor tiles for map prompts", "default": False, "description": "For Fit/Match-edges: run a short vision-LLM analysis of each neighbour's ACTUAL 2D tile to build the north/south/east/west prompt (instead of the stored description, which drifts after regeneration). Cached per tile — re-analysed only when a tile changes. Costs one vision call per new tile."},
 
             # --- Blender refinement (local subprocess, no gateway/GPU) ---
             "_grp_blender": {"type": "group_header", "label": "Blender Refinement (local)"},
@@ -769,14 +767,6 @@ SECTIONS = {
                 "min": 128,
                 "max": 2048,
                 "description": "Longest side for map-icon thumbnails (gallery images tagged image_type=map). Used for the world overview map. 400 px is plenty for the in-game tile view.",
-            },
-            "downscale_map_3x3_max_dim": {
-                "type": "int",
-                "label": "3x3 map patch max dimension (px)",
-                "default": 1200,
-                "min": 384,
-                "max": 4096,
-                "description": "Longest side for multi-tile map patches (image_type=map_3x3). The image spans 3x3 cells, so it keeps 3x the single-tile resolution (1200 = 400 per cell).",
             },
             "_grp_migrate": {"type": "group_header", "label": "Migrate existing images"},
             "_action_dryrun_items_current": {

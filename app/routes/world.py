@@ -4,7 +4,7 @@ import io
 import os
 from fastapi import (APIRouter, Request, HTTPException, Query, UploadFile,
                      File, Form, Depends)
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 from typing import Any, Dict, Optional
 from app.core.log import get_logger
@@ -1505,13 +1505,6 @@ def get_location_map_icon_2d(location_name: str):
     return world_ops._serve_map_icon(location_name, "map_2d", "map_image_2d")
 
 
-@router.head("/locations/{location_name}/map-patch-2d")
-@router.get("/locations/{location_name}/map-patch-2d")
-def get_location_map_patch_2d(location_name: str):
-    """Multi-tile map patch anchored at this cell (map_patch_2d) — no fallback."""
-    return world_ops._serve_map_patch(location_name)
-
-
 @router.patch("/locations/{location_id}/map-image")
 async def set_location_map_image_route(location_id: str, request: Request) -> Dict[str, Any]:
     """Setzt das pro Kartenabschnitt angezeigte 2D-Tile eines Ortes/Klons.
@@ -1530,95 +1523,6 @@ async def set_location_map_image_route(location_id: str, request: Request) -> Di
     if not loc:
         raise HTTPException(status_code=404, detail="Ort nicht gefunden")
     return {"status": "success", "location": loc}
-
-
-@router.patch("/locations/{location_id}/map-patch")
-async def set_location_map_patch_route(location_id: str, request: Request) -> Dict[str, Any]:
-    """Set/clear the 3x3 map patch anchored at this cell.
-
-    Body: ``{"file": "<gallery-filename>"|"", "span": 3}``. The image must be
-    in the owner gallery (the template's for clones). Setting the patch turns
-    the own tile image of every covered same-template cell off
-    (``map_image_off``), clearing turns them back on — ``affected`` lists the
-    toggled cell ids so the UI can report/refresh them.
-    """
-    from app.models.world import set_location_map_patch, _gallery_owner_id, get_gallery_dir
-    data = await request.json()
-    filename = (data.get("file") or "").strip()
-    try:
-        span = int(data.get("span") or 3)
-    except (TypeError, ValueError):
-        span = 3
-    if filename:
-        if "/" in filename or ".." in filename:
-            raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-        owner = _gallery_owner_id(location_id) or location_id
-        if not (get_gallery_dir(owner) / filename).exists():
-            raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-    res = set_location_map_patch(location_id, filename, span)
-    if not res:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    return {"status": "success", **res}
-
-
-@router.patch("/locations/{location_id}/map-image-off")
-async def set_location_map_image_off_route(location_id: str, request: Request) -> Dict[str, Any]:
-    """Per-cell toggle: ``{"off": true}`` hides the cell's own 2D tile (no
-    first-image fallback either) so an underlying multi-tile patch shows;
-    ``false`` restores it."""
-    from app.models.world import set_location_map_image_off
-    data = await request.json()
-    loc = set_location_map_image_off(location_id, bool(data.get("off")))
-    if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    return {"status": "success", "location": loc}
-
-
-@router.get("/locations/{location_name}/fit-prompt")
-def get_location_fit_prompt(location_name: str) -> Dict[str, Any]:
-    """Auto-Prompt fuer „Fit to neighbors": der Richtungs-Hinweis aus den 4
-    orthogonalen Nachbarn (north/south/east/west; „blend seamlessly…"). Leerer
-    String, wenn keine Nachbarn/Grid-Position. Der Dialog zeigt ihn als
-    editierbaren Prompt — beim Submit zaehlt er als custom_prompt, der Server
-    haengt ihn dann NICHT erneut an."""
-    loc = resolve_location(location_name)
-    if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    return {"prompt": world_ops._neighbor_terrain_hint(loc)}
-
-
-@router.get("/locations/{location_name}/fit-canvas")
-def get_location_fit_canvas(location_name: str):
-    """Vorschau des 3×3-Nachbar-Canvas, der bei „Fit to neighbors" als
-    input_reference_image in den Workflow geht (Mitte grau = wird inpaintet).
-    404 wenn keine Nachbarn mit Tile / keine Grid-Position."""
-    loc = resolve_location(location_name)
-    if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    data = world_ops.build_fit_canvas_png(loc)
-    return Response(content=data, media_type="image/png",
-                    headers={"Cache-Control": "no-cache"})
-
-
-@router.get("/locations/{location_name}/edges")
-def get_location_edges(location_name: str) -> Dict[str, Any]:
-    """Welche der 4 Seiten haben einen Nachbarn mit 2D-Tile (fuer den Kanten-
-    Angleich-Dialog): {sides: {north: "<name>", east: "<name>", ...}}."""
-    loc = resolve_location(location_name)
-    if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    return {"sides": {s: nb.get("name", "") for s, nb in world_ops._neighbor_sides(loc).items()}}
-
-
-@router.get("/locations/{location_name}/edge-prompt")
-def get_location_edge_prompt(location_name: str, sides: str = Query("")) -> Dict[str, Any]:
-    """Dynamischer Uebergangs-Prompt fuer „Kanten angleichen" — aus den gewaehlten
-    Seiten (kommagetrennt; leer = alle vorhandenen). Im Dialog editierbar."""
-    loc = resolve_location(location_name)
-    if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    _sides = [s.strip() for s in sides.split(",") if s.strip()] or None
-    return {"prompt": world_ops._edge_transition_prompt(loc, _sides)}
 
 
 @router.patch("/locations/{location_id}/map-rotation")

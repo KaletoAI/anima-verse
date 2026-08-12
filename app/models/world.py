@@ -1564,32 +1564,6 @@ def rename_location(location_id: str, new_name: str) -> Optional[Dict[str, Any]]
     return None
 
 
-def get_neighbor_location_ids(location_id: str) -> List[str]:
-    """Gibt die IDs der benachbarten Locations zurueck (8 Felder um das eigene auf der Karte)."""
-    data = _load_world_data()
-    locations = data.get("locations", [])
-
-    # Position des Quell-Orts finden
-    source = None
-    for loc in locations:
-        if loc.get("id") == location_id and loc.get("grid_x") is not None:
-            source = loc
-            break
-    if not source:
-        return []
-
-    sx, sy = source["grid_x"], source["grid_y"]
-    neighbors = []
-    for loc in locations:
-        if loc.get("id") == location_id:
-            continue
-        gx, gy = loc.get("grid_x"), loc.get("grid_y")
-        if gx is not None and gy is not None:
-            if abs(gx - sx) <= 1 and abs(gy - sy) <= 1:
-                neighbors.append(loc["id"])
-    return neighbors
-
-
 def get_entry_room_id(location: Dict[str, Any]) -> str:
     """The declared entry room of a location — '' when none is declared.
 
@@ -1622,53 +1596,6 @@ def get_arrival_room_id(location: Dict[str, Any]) -> str:
     room link answers the question by itself and never gets here.
     """
     return get_entry_room_id(location) or GROUND_ROOM_ID
-
-
-def find_path_through_known(start_id: str, target_id: str,
-                             known_ids: List[str]) -> Optional[List[str]]:
-    """BFS ueber das Grid, traversiert nur ``known_ids``-Locations.
-
-    Returns die Pfad-Liste (inkl. Start und Target) oder None wenn nicht
-    erreichbar. Start muss nicht in known_ids sein (Character steht dort);
-    Alle Zwischenstationen muessen in known_ids sein.
-
-    Direkte Grid-Nachbarn des Starts duerfen auch dann betreten werden, wenn
-    sie nicht in known_ids stehen — ein Character sieht das Nachbardorf vom
-    eigenen Standort aus und kann es ohne formelle "Discovery" erreichen
-    (Discovery wird beim Ankommen automatisch nachgezogen).
-    """
-    if not start_id or not target_id:
-        return None
-    if start_id == target_id:
-        return [start_id]
-    walkable = set(known_ids or [])
-    walkable.add(start_id)
-    # Direkte Grid-Nachbarn vom Start dazunehmen — egal ob known oder nicht.
-    # So bleiben Multi-Hop-Strecken durch Unbekanntes blockiert, aber der
-    # naechste Ort um die Ecke ist immer erreichbar.
-    direct_neighbors = set(get_neighbor_location_ids(start_id))
-    walkable.update(direct_neighbors)
-    if target_id not in walkable:
-        return None
-
-    from collections import deque
-    queue = deque([start_id])
-    parents: Dict[str, str] = {start_id: ""}
-    while queue:
-        node = queue.popleft()
-        if node == target_id:
-            # Pfad rekonstruieren
-            path = [node]
-            while parents.get(path[-1]):
-                path.append(parents[path[-1]])
-            path.reverse()
-            return path
-        for nb in get_neighbor_location_ids(node):
-            if nb in parents or nb not in walkable:
-                continue
-            parents[nb] = node
-            queue.append(nb)
-    return None
 
 
 def _finite_number(value: Any, label: str) -> float:
@@ -1752,9 +1679,7 @@ def set_location_map_image(location_id: str, field: str, filename: str) -> Optio
     ``field`` is ``map_image`` (iso) or ``map_image_2d`` (flat), ``filename``
     the gallery file name (empty = remove the choice → first-match fallback).
     Written directly on the (possibly thin clone) dict, so it survives the
-    clone merge. Explicitly picking a 2D tile also clears ``map_image_off`` —
-    choosing an image means "show it" (the off switch otherwise leaves the
-    cell black no matter what is picked)."""
+    clone merge."""
     if field not in ("map_image", "map_image_2d"):
         return None
     data = _load_world_data()
@@ -1762,8 +1687,6 @@ def set_location_map_image(location_id: str, field: str, filename: str) -> Optio
         if loc.get("id") == location_id:
             if filename:
                 loc[field] = filename
-                if field == "map_image_2d":
-                    loc.pop("map_image_off", None)
             else:
                 loc.pop(field, None)
             _save_world_data(data)
@@ -1785,74 +1708,11 @@ def first_map_image(owner_id: str, image_type: str = "map_2d") -> str:
     return ""
 
 
-def migrate_fixed_map_images() -> int:
-    """Einmalig/idempotent: „Auto"-Modus abschaffen — jeder platzierten Zelle ohne
-    explizites ``map_image_2d`` das erste verfuegbare Map-Bild ihres Galerie-Owners
-    fest zuordnen. Zellen ohne irgendein Map-Bild bleiben unveraendert."""
-    data = _load_world_data()
-    changed = 0
-    for loc in data.get("locations", []):
-        gx, gy = loc.get("grid_x"), loc.get("grid_y")
-        if gx is None or gy is None or gx < 0 or gy < 0:
-            continue
-        if (loc.get("map_image_2d") or "").strip():
-            continue
-        owner = (loc.get("template_location_id") or "").strip() or loc.get("id")
-        fm = first_map_image(owner, "map_2d")
-        if fm:
-            loc["map_image_2d"] = fm
-            changed += 1
-    if changed:
-        _save_world_data(data)
-        logger.info("migrate_fixed_map_images: %d Zellen fest zugeordnet", changed)
-    return changed
-
-
-def _covered_same_owner_cells(locations: List[Dict[str, Any]],
-                              anchor: Dict[str, Any],
-                              radius: int) -> List[Dict[str, Any]]:
-    """Placed cells of the SAME gallery owner within ``radius`` around the
-    anchor cell (incl. the anchor) — the cells a centred patch covers."""
-    gx, gy = anchor.get("grid_x"), anchor.get("grid_y")
-    if gx is None or gy is None or gx < 0 or gy < 0:
-        return []
-    owner = (anchor.get("template_location_id") or "").strip() or anchor.get("id")
-    out: List[Dict[str, Any]] = []
-    for loc in locations:
-        lx, ly = loc.get("grid_x"), loc.get("grid_y")
-        if lx is None or ly is None or lx < 0 or ly < 0:
-            continue
-        if abs(lx - gx) > radius or abs(ly - gy) > radius:
-            continue
-        l_owner = (loc.get("template_location_id") or "").strip() or loc.get("id")
-        if l_owner == owner:
-            out.append(loc)
-    return out
-
-
-def _drop_patch_and_reenable(locations: List[Dict[str, Any]],
-                             anchor: Dict[str, Any]) -> List[str]:
-    """Remove the patch fields of ``anchor`` and switch the covered
-    same-owner cells' own tiles back on — the symmetric undo of the auto-hide
-    on patch set. WITHOUT this, deleting a patch (or its image) leaves the
-    covered cells black with no obvious way back. Returns the re-enabled ids."""
-    old_span = int(anchor.get("map_patch_span") or 3)
-    anchor.pop("map_patch_2d", None)
-    anchor.pop("map_patch_span", None)
-    affected: List[str] = []
-    for loc in _covered_same_owner_cells(locations, anchor, old_span // 2):
-        if loc.get("map_image_off"):
-            loc.pop("map_image_off", None)
-            affected.append(loc.get("id") or "")
-    return affected
-
-
 def clear_map_image_references(image_name: str) -> int:
-    """Remove dangling ``map_image``/``map_image_2d``/``map_patch_2d`` pointers
-    to a (deleted) gallery image from ALL locations/clones — otherwise the cell
-    shows the first tile instead of the chosen one. Dropping a patch pointer
-    also re-enables the covered cells' own tiles. Returns the number of
-    cleaned pointers."""
+    """Remove dangling ``map_image``/``map_image_2d`` pointers to a (deleted)
+    gallery image from ALL locations/clones — otherwise the cell shows the
+    first tile instead of the chosen one. Returns the number of cleaned
+    pointers."""
     if not image_name:
         return 0
     data = _load_world_data()
@@ -1863,9 +1723,6 @@ def clear_map_image_references(image_name: str) -> int:
             if loc.get(field) == image_name:
                 loc.pop(field, None)
                 n += 1
-        if loc.get("map_patch_2d") == image_name:
-            _drop_patch_and_reenable(locations, loc)
-            n += 1
     if n:
         _save_world_data(data)
     return n
@@ -1887,63 +1744,6 @@ def set_location_map_rotation(location_id: str, rotation: int) -> Optional[Dict[
                 loc["map_rotation_2d"] = rot
             else:
                 loc.pop("map_rotation_2d", None)
-            _save_world_data(data)
-            return loc
-    return None
-
-
-def set_location_map_patch(location_id: str, filename: str,
-                           span: int = 3) -> Optional[Dict[str, Any]]:
-    """Set/clear the multi-tile map patch anchored at a placed cell.
-
-    The patch image (gallery type ``map_3x3``) is drawn UNDER the per-cell
-    tiles and spans ``span``×``span`` cells CENTRED on this cell (span odd,
-    default 3). Setting a patch switches the own tile image of every covered
-    same-owner cell OFF (``map_image_off``) — their auto-assigned tiles would
-    fully hide the patch; clearing switches them back on. Cells of other
-    templates are never touched, and each cell can be re-toggled individually
-    (an active own image then covers its part of the patch again).
-
-    Returns ``{"location": loc, "affected": [ids]}`` or None (unknown id).
-    """
-    span = int(span or 3)
-    if span < 1 or span % 2 == 0:
-        span = 3
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    target = None
-    for loc in locations:
-        if loc.get("id") == location_id:
-            target = loc
-            break
-    if target is None:
-        return None
-
-    affected = []
-    if filename:
-        target["map_patch_2d"] = filename
-        target["map_patch_span"] = span
-        for loc in _covered_same_owner_cells(locations, target, span // 2):
-            if not loc.get("map_image_off"):
-                loc["map_image_off"] = True
-                affected.append(loc.get("id") or "")
-    else:
-        affected = _drop_patch_and_reenable(locations, target)
-    _save_world_data(data)
-    return {"location": target, "affected": affected}
-
-
-def set_location_map_image_off(location_id: str, off: bool) -> Optional[Dict[str, Any]]:
-    """Per-cell switch: True hides the cell's own 2D tile entirely — no
-    first-image fallback either — so an underlying multi-tile patch (or
-    nothing) shows; False restores normal tile behaviour."""
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            if off:
-                loc["map_image_off"] = True
-            else:
-                loc.pop("map_image_off", None)
             _save_world_data(data)
             return loc
     return None
@@ -1994,53 +1794,17 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
                 loc["background_images"] = valid
                 pruned_bgs += len(bgs) - len(valid)
                 touched_locs += 1
-        # Remove a dangling tile/patch choice (pointing at a deleted file) —
-        # otherwise the cell / edge match shows the first instead of the
-        # chosen tile. Dropping a patch re-enables its covered cells.
+        # Remove a dangling tile choice (pointing at a deleted file) —
+        # otherwise the cell shows the first instead of the chosen tile.
         for field in ("map_image", "map_image_2d"):
             choice = (loc.get(field) or "").strip()
             if choice and not (gallery_dir / choice).exists():
                 loc.pop(field, None)
                 pruned_mapchoice += 1
                 touched_locs += 1
-        patch_choice = (loc.get("map_patch_2d") or "").strip()
-        if patch_choice and not (gallery_dir / patch_choice).exists():
-            _drop_patch_and_reenable(locations, loc)
-            pruned_mapchoice += 1
-            touched_locs += 1
-
-    # Orphaned off-switches: a cell's own tile is hidden (map_image_off) but
-    # NO patch anchor of its owner covers it anymore — e.g. the patch image
-    # was deleted before the pointer cleanup also re-enabled the cells. The
-    # cell would stay black with no obvious way back; switch it back on.
-    anchors = [l for l in locations if (l.get("map_patch_2d") or "").strip()]
-
-    def _under_patch(loc: Dict[str, Any]) -> bool:
-        lx, ly = loc.get("grid_x"), loc.get("grid_y")
-        if lx is None or ly is None or lx < 0 or ly < 0:
-            return False
-        l_owner = (loc.get("template_location_id") or "").strip() or loc.get("id")
-        for a in anchors:
-            ax, ay = a.get("grid_x"), a.get("grid_y")
-            if ax is None or ay is None or ax < 0 or ay < 0:
-                continue
-            a_owner = (a.get("template_location_id") or "").strip() or a.get("id")
-            r = max(0, int(a.get("map_patch_span") or 3) // 2)
-            if a_owner == l_owner and abs(lx - ax) <= r and abs(ly - ay) <= r:
-                return True
-        return False
-
-    healed_off = 0
-    for loc in locations:
-        if loc.get("map_image_off") and not _under_patch(loc):
-            loc.pop("map_image_off", None)
-            healed_off += 1
-            touched_locs += 1
 
     if touched_locs:
         _save_world_data(data)
-    if healed_off:
-        logger.info("cleanup_orphan_backgrounds: re-enabled %d orphaned map_image_off flags", healed_off)
 
     # Meta-JSONs: image_types/rooms/metas/prompts pro Owner-Dir.
     if gallery_root.exists():

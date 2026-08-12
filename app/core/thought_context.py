@@ -105,7 +105,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # Defaults for optional blocks — keep them present so StrictUndefined
         # doesn't raise on missing keys.
         "inbox_block": _build_inbox_block(character_name),
-        "events_block": _build_events_block(location_id),
+        "events_block": _build_events_block(location_id, character_name),
         "assignments_block": _build_assignments_block(character_name),
         "general_task": _build_general_task(profile),
         "commitments_block": _build_commitments_block(character_name),
@@ -268,13 +268,15 @@ def _build_skill_context_blocks(character_name: str) -> List[Tuple[str, str]]:
     return parts
 
 
-def _build_events_block(location_id: str) -> str:
-    """Active events at the character's location."""
+def _build_events_block(location_id: str, character_name: str = "") -> str:
+    """Active events at the character's location — plus the disruptions of
+    everything within sight of its own point (hence the name)."""
     if not location_id:
         return ""
     try:
         from app.models.events import build_events_prompt_section
-        return (build_events_prompt_section(location_id=location_id) or "").strip()
+        return (build_events_prompt_section(
+            location_id=location_id, character_name=character_name) or "").strip()
     except Exception as e:
         logger.debug("events block failed: %s", e)
         return ""

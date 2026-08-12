@@ -1050,45 +1050,6 @@ class ImageService:
             logger.error("Objektive Bildanalyse fehlgeschlagen: %s", e)
             return None
 
-    def describe_map_tile(self, image_path: str) -> Optional[str]:
-        """Kurze Terrain-Phrase eines 2D-Karten-Tiles via Vision-LLM (Task
-        image_recognition). Fuer Fit/Edge-Prompts, damit north/south/east/west das
-        TATSAECHLICHE Tile beschreiben (nicht die evtl. veraltete Textbeschreibung).
-        Englisch, 3-8 Woerter, nur die Phrase. ``None`` bei Fehler/Vision aus."""
-        from app.core.llm_client import LLMClient
-        if not os.path.exists(image_path):
-            return None
-        try:
-            with open(image_path, 'rb') as f:
-                b64 = base64.b64encode(f.read()).decode('utf-8')
-            vcfg = self._get_vision_llm_config("")
-            if not vcfg:
-                return None
-            llm = LLMClient(
-                model=vcfg["model"], api_key=vcfg["api_key"], api_base=vcfg["api_base"],
-                temperature=0.2, max_tokens=40,
-                request_timeout=int(os.environ.get("LLM_REQUEST_TIMEOUT", "120")))
-            prompt_text = (
-                "This is a top-down 2D map tile. Describe its terrain in a short "
-                "English phrase of 3-8 words (e.g. 'dense dark green pine forest', "
-                "'rocky coastline with open water', 'grassy plain with a dirt road'). "
-                "Only the terrain phrase — no sentence, no punctuation, no quotes.")
-            messages = [
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt_text},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                ]},
-            ]
-            from app.core.llm_queue import get_llm_queue, Priority
-            response = get_llm_queue().submit(
-                task_type="image_recognition", priority=Priority.NORMAL,
-                llm=llm, messages_or_prompt=messages, agent_name="")
-            term = " ".join((response.content or "").split()).strip().strip('"\'.,;')
-            return term or None
-        except Exception as e:
-            logger.warning("Map-Tile-Analyse fehlgeschlagen: %s", e)
-            return None
-
     def _generate_comment(self, character_name: str, rp_context: str = "",
                           photographer_subjects: Optional[List[str]] = None) -> Optional[str]:
         """Erzeugt eine kurze Situations-Beschreibung als Galerie-Caption.

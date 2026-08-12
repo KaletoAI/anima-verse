@@ -118,22 +118,6 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
         },
     },
-    "mapfit": {
-        # Map-Fit / Kanten-Angleich (Inpaint): die grauen/maskierten Flaechen des
-        # Nachbar-Canvas nahtlos ergaenzen — KEIN „neues Tile"-Stil. Greift fuer
-        # Fit-to-neighbors + Match-edges (category=="inpaint"-Workflows wie Qwen
-        # Inpaint / Flux Inpaint), pro Familie editierbar im Use-Cases-Editor.
-        "keywords": {
-            "prompt_style": "top-down aerial map view of the area, filling the entire frame, in the same photorealistic style, colour palette and lighting as the rest of the map, highly detailed, slight tilt for depth, no border, no frame, no text",
-            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, washed out, desaturated, flat, blurry, lowres, jpeg artifacts, low quality",
-            "prompt_instruction": "Write a short comma-separated prompt for a top-down aerial map view of the area, filling the frame, in the same photorealistic style, colour palette and lighting as the rest of the map. Self-contained — do not continue or invent beyond the edges. No border, no frame, no text.",
-        },
-        "natural": {
-            "prompt_style": "a top-down aerial map view of the area, filling the entire frame, in the same photorealistic style, colour palette and lighting as the rest of the map, highly detailed, slight tilt for depth, no border, no frame, no text",
-            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, washed out, desaturated, flat, blurry, low quality",
-            "prompt_instruction": "Write a short prompt for a top-down aerial map view of the area, filling the frame, in the same photorealistic style, colour palette and lighting as the rest of the map. Self-contained — do not continue or invent beyond the edges. No border, no frame, no text.",
-        },
-    },
     "scene": {
         # Composed player scene (room background + present characters).
         # Without a style the models drift into 3D/CGI looks — the default
@@ -1159,9 +1143,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
     _set(env, "TIMEVARIANT_IMAGEGEN_DEFAULT", ig.get("timevariant_imagegen_default", ""))
     _set(env, "PROP_IMAGEGEN_DEFAULT", ig.get("prop_imagegen_default", ""))
-    # Map fit/edge: imagegen target (match spec, e.g. "backend:<inpaint-backend>")
-    _set(env, "MAPFIT_IMAGEGEN_DEFAULT", ig.get("mapfit_imagegen_default", ""))
-    _set(env, "MAP_TILE_VISION_ANALYSIS", ig.get("map_tile_vision_analysis", False))
     _set(env, "U2NET_HOME", ig.get("u2net_home", "./models/u2net"))
     _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", ""))
     _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", ""))

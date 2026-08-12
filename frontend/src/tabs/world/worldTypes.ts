@@ -256,13 +256,6 @@ export interface Location {
   yaw_deg?: number
   map_image_2d?: string
   map_rotation_2d?: number
-  /** Grid-era wide ground patch centred on this location — gallery file of
-   *  type map_3x3. Nothing DRAWS it any more (the player map is a schematic
-   *  metre map since E5); the server still stores it, and its one remaining
-   *  reader is the gallery's usage counter, which reports how often an image
-   *  is picked. `map_patch_span`/`map_image_off` had no reader left and are
-   *  gone with the same rework. */
-  map_patch_2d?: string
   event_settings?: EventSettings
   terrain?: string
   map3d?: Map3D
@@ -305,7 +298,7 @@ export interface GalleryResponse {
   image_metas?: Record<string, { backend?: string; model?: string; loras?: string[] }>
 }
 
-export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', 'map_3x3', 'building'] as const
+export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', 'building'] as const
 
 export type Selection =
   | { kind: 'location'; locationId: string }

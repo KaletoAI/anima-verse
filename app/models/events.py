@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # TTL-Optionen in Stunden (Label -> Stunden, 0 = kein Ablauf)
 TTL_OPTIONS = {
@@ -346,29 +346,45 @@ def delete_event(event_id: str) -> bool:
     return False
 
 
-def build_events_prompt_section(location_id: Optional[str] = None) -> str:
-    """Baut den Events-Abschnitt fuer den System-Prompt.
+def build_events_prompt_section(location_id: Optional[str] = None,
+                                character_name: str = "") -> str:
+    """Build the events section of the system prompt.
 
-    Sichtbarkeit nach Kritikalitaet:
-    - ambient/social: Nur am gleichen Ort (+ globale Events)
-    - disruption: Am gleichen Ort (+ globale)
-    - danger: ALLE danger-Events, unabhaengig vom Ort
+    Visibility by criticality:
+    - ambient/social: only at the same place (+ global events)
+    - disruption: at the same place (+ global) and from NEARBY places
+    - danger: ALL danger events, wherever they are
+
+    "Nearby" is METRES, not grid neighbours (E7): every placed location whose
+    footprint lies within the discovery range of the character's own point —
+    the same distance vocabulary discovery and the hearing radius speak. It
+    needs the character, because the point belongs to the character and not to
+    its location: someone on the way out of town is closer to the next village
+    than the town hall is. Without a name, and for a character with no point
+    (never positioned / standing in an unplaced location), there are no nearby
+    places — the empty set the grid answered on every metre world.
     """
     if not location_id:
         return ""
 
-    # Events am aktuellen Ort (alle Kategorien)
+    # Events at the current place (every category)
     local_events = list_events(location_id=location_id)
     local_ids = {e.get("id") for e in local_events}
 
-    # Nachbar-Locations ueber Karten-Grid ermitteln
-    try:
-        from app.models.world import get_neighbor_location_ids
-        neighbor_ids = set(get_neighbor_location_ids(location_id))
-    except Exception:
-        neighbor_ids = set()
+    nearby_ids: Set[str] = set()
+    if character_name:
+        try:
+            from app.core.discovery import get_discovery_range_m, locations_within
+            from app.models.character import get_character_pos
+            pos = get_character_pos(character_name)
+            if pos:
+                nearby_ids = set(locations_within(
+                    pos["x"], pos["z"], get_discovery_range_m(),
+                    exclude=(location_id,)))
+        except Exception as e:
+            logger.debug("nearby locations for events failed: %s", e)
 
-    # Disruption von Nachbarn + Danger von ueberall
+    # Disruptions from nearby places + danger from everywhere
     all_events = get_all_events()
     nearby_events = []
     for e in all_events:
@@ -377,9 +393,9 @@ def build_events_prompt_section(location_id: Optional[str] = None) -> str:
         evt_loc = e.get("location_id", "")
         cat = e.get("category", "")
         if cat == "danger":
-            nearby_events.append(e)  # Danger: ueberall sichtbar
-        elif cat == "disruption" and evt_loc in neighbor_ids:
-            nearby_events.append(e)  # Disruption: nur Nachbar-Orte
+            nearby_events.append(e)  # Danger: visible everywhere
+        elif cat == "disruption" and evt_loc in nearby_ids:
+            nearby_events.append(e)  # Disruption: only from nearby places
 
     if not local_events and not nearby_events:
         return ""
