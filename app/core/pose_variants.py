@@ -29,33 +29,16 @@ from app.core.log import get_logger
 logger = get_logger("pose_variants")
 
 
-# ----- Settings -----
+# ----- Constants -----
+# Both were world settings (pose.variant_match_threshold /
+# pose.max_variants_per_char), removed with E5 — the value is the default
+# nobody changed.
 
-DEFAULT_MATCH_THRESHOLD = 0.75
-DEFAULT_MAX_VARIANTS    = 20
-
-
-def get_match_threshold() -> float:
-    """Cosine threshold from which an existing variant is reused."""
-    from app.models.world import get_world_setting
-    try:
-        raw = get_world_setting("pose.variant_match_threshold", "")
-        if raw:
-            return max(0.0, min(1.0, float(raw)))
-    except Exception:
-        pass
-    return DEFAULT_MATCH_THRESHOLD
-
-
-def get_max_variants_per_char() -> int:
-    from app.models.world import get_world_setting
-    try:
-        raw = get_world_setting("pose.max_variants_per_char", "")
-        if raw:
-            return max(1, int(raw))
-    except Exception:
-        pass
-    return DEFAULT_MAX_VARIANTS
+# Cosine threshold from which an existing variant is reused. Only reached
+# when a caller passes an embedding; the catalog path matches by exact key.
+MATCH_THRESHOLD = 0.75
+# LRU cap: how many variants a single character keeps.
+MAX_VARIANTS_PER_CHAR = 20
 
 
 # ----- Embedding helpers -----
@@ -263,7 +246,7 @@ def get_or_create_variant(
     best_score = 0.0
 
     if embedding:
-        threshold = get_match_threshold()
+        threshold = MATCH_THRESHOLD
         for v in variants:
             ve = v.get("embedding")
             if not ve:
@@ -296,7 +279,7 @@ def get_or_create_variant(
         return None
     # Prune if the limit is exceeded
     try:
-        prune_lru(character_name, keep=get_max_variants_per_char())
+        prune_lru(character_name, keep=MAX_VARIANTS_PER_CHAR)
     except Exception as e:
         logger.debug("prune_lru after create: %s", e)
     logger.info(

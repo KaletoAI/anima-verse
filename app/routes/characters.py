@@ -2010,27 +2010,6 @@ def get_available_skills_for_character(character_name: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ---------------------------------------------------------------------------
-# Body slots — species-package declarations (plan-body-slots.md, phase 3)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/body-slots/migration")
-def get_body_slot_migration_plan(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Dry-run: what a body-slot migration would change in this world
-    (template-select values -> slot values, appearance-token cleanup).
-    On demand per world — never automatic (plan-body-slots.md)."""
-    from app.core.body_slot_migration import world_plan
-    return world_plan()
-
-
-@router.post("/body-slots/migration/apply")
-def apply_body_slot_migration(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Applies the body-slot migration for all characters of this world."""
-    from app.core.body_slot_migration import apply_world
-    return apply_world()
-
-
 @router.get("/{character_name}/prompt-preview")
 async def get_prompt_preview_route(character_name: str) -> Dict[str, Any]:
     """Effective prompts (scene person description / face / outfit line)

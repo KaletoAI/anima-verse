@@ -43,7 +43,6 @@ body_slots:
       color:
         type: select
         allow_custom: true
-        migrate_from: hair_color
         options: [blonde, brunette, black, red, auburn, gray, white, pink]
         # Attraction matching (relationship engine): phrases in the OTHER
         # side's romantic_interests text that mean this canonical value.
@@ -55,7 +54,6 @@ body_slots:
       length:
         type: select
         allow_custom: true
-        migrate_from: hair_length
         options: [very short, short, medium, long, very long]
         interest_aliases:
           long: ["lange haare", "long hair"]
@@ -70,7 +68,6 @@ body_slots:
       color:
         type: select
         allow_custom: true
-        migrate_from: eye_color
         options: [blue, green, brown, hazel, gray, amber]
     prompt:
       always: "{color} eyes"
@@ -80,7 +77,6 @@ body_slots:
       tone:
         type: select
         allow_custom: true
-        migrate_from: skin_color
         options: [fair, light, medium, olive, tan, brown, dark brown, dark, pale]
     prompt:
       always: "{tone} skin"
@@ -94,7 +90,6 @@ body_slots:
       type:
         type: select
         allow_custom: true
-        migrate_from: body_type
         options: [petite, slim, average, athletic, curvy, muscular, stocky, voluptuous]
         interest_aliases:
           slim: ["schlank", "schlanke", "slim"]
@@ -112,8 +107,6 @@ body_slots:
       style:
         type: select
         allow_custom: true
-        migrate_from: facial_hair
-        migrate_skip: [none]
         options: [clean-shaven, light stubble, short beard, full beard, mustache]
     prompt:
       always: "{style}"

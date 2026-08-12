@@ -1426,27 +1426,16 @@ def update_location_with_extras(location_id: str,
 # --- World-level settings ---------------------------------------------------
 
 def build_world_settings_payload() -> Dict[str, Any]:
-    """Return world settings + pose settings."""
+    """Return world settings (atmosphere + news channel)."""
     from app.models.world import (
         get_world_temperature, get_world_weather,
-        get_world_setting, is_pose_system_active,
+        get_world_setting,
         WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
     )
     return {
         "world": {
             "temperature": get_world_temperature(),
             "weather": get_world_weather(),
-        },
-        "pose": {
-            "system_active": is_pose_system_active(),
-            "variant_match_threshold": float(
-                get_world_setting("pose.variant_match_threshold", "0.75")
-                or "0.75"
-            ),
-            "max_variants_per_char": int(
-                get_world_setting("pose.max_variants_per_char", "20")
-                or "20"
-            ),
         },
         "news": {
             # Presentation style of the player news channel.
@@ -1462,13 +1451,12 @@ def build_world_settings_payload() -> Dict[str, Any]:
 
 
 def apply_world_settings(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Set world settings + pose settings from a parsed request body."""
+    """Set world settings from a parsed request body."""
     from app.models.world import (
-        set_world_temperature, set_world_weather, set_pose_system_active,
+        set_world_temperature, set_world_weather,
         set_world_setting, WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
     )
     world = data.get("world") or {}
-    pose = data.get("pose") or {}
     news = data.get("news") or {}
     if "style" in news:
         v = (news.get("style") or "").strip().lower()
@@ -1484,22 +1472,6 @@ def apply_world_settings(data: Dict[str, Any]) -> Dict[str, Any]:
         v = (world.get("weather") or "").strip().lower()
         if v in WORLD_WEATHER_VALUES:
             set_world_weather(v)
-    if "system_active" in pose:
-        set_pose_system_active(bool(pose.get("system_active")))
-    if "variant_match_threshold" in pose:
-        try:
-            t = float(pose.get("variant_match_threshold"))
-            t = max(0.0, min(1.0, t))
-            set_world_setting("pose.variant_match_threshold", str(t))
-        except (TypeError, ValueError):
-            pass
-    if "max_variants_per_char" in pose:
-        try:
-            n = int(pose.get("max_variants_per_char"))
-            n = max(1, min(200, n))
-            set_world_setting("pose.max_variants_per_char", str(n))
-        except (TypeError, ValueError):
-            pass
     return {"status": "ok"}
 
 

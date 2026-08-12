@@ -27,7 +27,6 @@ body_slots:
       size:
         type: select
         allow_custom: true
-        migrate_from: animal_size
         options: [tiny, small, medium, large]
     prompt:
       always: "{size}"
@@ -37,17 +36,14 @@ body_slots:
       type:
         type: select
         allow_custom: true
-        migrate_from: fur_type
         options: [short, long, fluffy, sleek, curly]
       color:
         type: select
         allow_custom: true
-        migrate_from: primary_color
         options: [black, white, gray, orange, brown, cream]
       pattern:
         type: select
         allow_custom: true
-        migrate_from: pattern
         options: [solid, tabby, tuxedo, calico, tortoiseshell, spotted]
     prompt:
       always: "{type} {color} fur with {pattern} markings"
@@ -57,7 +53,6 @@ body_slots:
       color:
         type: select
         allow_custom: true
-        migrate_from: eye_color
         options: [green, yellow, amber, blue, copper, odd-eyed]
     prompt:
       always: "{color} eyes"
