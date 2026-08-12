@@ -402,7 +402,7 @@ def build_events_prompt_section(location_id: Optional[str] = None,
 
     lines = []
 
-    # Lokale Events
+    # Local events
     if local_events:
         lines.append("Events at your location:")
         for evt in local_events:
@@ -418,7 +418,7 @@ def build_events_prompt_section(location_id: Optional[str] = None,
             else:
                 lines.append(f"- {prefix}{cat_tag}{evt['text']}")
 
-    # Nearby Events (Disruption von Nachbarn + Danger von ueberall)
+    # Nearby events (disruptions from nearby places + danger from everywhere)
     if nearby_events:
         lines.append("Events nearby (you can hear/sense them from your location):")
         for evt in nearby_events:
@@ -431,7 +431,7 @@ def build_events_prompt_section(location_id: Optional[str] = None,
 
 
 def _format_event_timestamp(iso_ts: str) -> str:
-    """Kompaktes, LLM-lesbares Datum."""
+    """Compact, LLM-readable date."""
     try:
         dt = parse_iso(iso_ts)
     except (ValueError, TypeError):

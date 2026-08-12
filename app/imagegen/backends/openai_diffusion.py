@@ -53,7 +53,6 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         # everything freely configurable; the map-blend path (world.py) builds canvas + mask
         # purely from these values. The mask is ALWAYS sent along.
         #   full_mask    True = mask the whole area, False = only the center/cell
-        #   terrain_hint True = append a dynamic terrain description to the prompt
         #   mask_grow    mask-edge factor (1.05 = +5%)
         #   inner_crop   core crop of the center (0.7 = inner 70%)
         def _flag(key: str, default: bool) -> bool:
@@ -64,7 +63,6 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             except (TypeError, ValueError):
                 return default
         self.full_mask = _flag("FULL_MASK", True)
-        self.terrain_hint = _flag("TERRAIN_HINT", False)
         self.mask_grow = _num("MASK_GROW", 1.05)
         self.inner_crop = _num("INNER_CROP", 0.7)
         # Mask format for the edits upload (only category=inpaint):

@@ -1614,16 +1614,14 @@ def build_imagegen_options() -> Dict[str, Any]:
             "name": b.name,
             "label": b.name if b.available else f"{b.name} (offline?)",
             "available": b.available,
-            # Purpose category (e.g. "inpaint") + default prompt — lets the
-            # Fit/Edge dialog offer inpaint backends and prefill the prompt.
+            # Purpose category (e.g. "inpaint") + default prompt — the render
+            # dialogs filter on the category and prefill the prompt from it.
             "category": getattr(b, "category", "") or "",
             "image_family": getattr(b, "image_family", "") or "",
             "prompt": getattr(b, "default_prompt", "") or "",
             "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
             "target_model": get_target_model(
                 getattr(b, "image_family", "") or "", getattr(b, "model", "") or ""),
-            # Terrain-hint parameter — the dialog only appends the hint if True.
-            "terrain_hint": bool(getattr(b, "terrain_hint", False)),
         }
         # Use-case styles resolved for THIS backend (family + model): the
         # dialogs show the style as an editable prompt part, so the FINAL

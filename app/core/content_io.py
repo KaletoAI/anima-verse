@@ -1127,13 +1127,47 @@ def export_map_layout_to_zip() -> bytes:
     return buf.getvalue()
 
 
+def _layout_row_coords(entry: Dict[str, Any], index: int):
+    """The validated ``(pos_x, pos_z, yaw_deg)`` of ONE layout row.
+
+    Uses the writer's own guard (``world._finite_number``) so there is exactly
+    ONE rule for what a coordinate is — a row this accepts is a row
+    ``update_location_position`` will accept. Raises ``ValueError`` naming the
+    row, so the caller can refuse the whole file instead of stopping halfway.
+
+    Either coordinate being null means "unplaced" (what the exporter writes for
+    a location that stands nowhere); the rotation is dropped with it, exactly
+    as unplacing does.
+    """
+    from app.models.world import _finite_number
+
+    def _where() -> str:
+        ident = (entry.get("id") or "?")
+        name = (entry.get("name") or "").strip()
+        return f"row {index} ({ident}" + (f', "{name}"' if name else "") + ")"
+
+    pos_x, pos_z = entry.get("pos_x"), entry.get("pos_z")
+    if pos_x is None or pos_z is None:
+        return None, None, None
+    try:
+        x = _finite_number(pos_x, "pos_x")
+        z = _finite_number(pos_z, "pos_z")
+        yaw = (None if entry.get("yaw_deg") is None
+               else _finite_number(entry.get("yaw_deg"), "yaw_deg"))
+    except ValueError as e:
+        raise ValueError(f"{_where()}: {e}")
+    return x, z, yaw
+
+
 def import_map_layout_from_zip(content: bytes) -> Dict[str, Any]:
     """Apply a saved metre layout to the current world.
 
     Matching is by ID ONLY. A layout is a statement about THIS world's
     locations; matching by name would hand a position to whatever happens to
     carry the same label, and the caller cannot tell afterwards. Unknown ids
-    are reported as ``skipped_unknown`` and nothing is created.
+    are reported as ``skipped_unknown`` and nothing is created; rows that are
+    not objects at all are reported as ``skipped_invalid`` rather than
+    silently vanishing.
 
     Positions go through ``update_location_position`` — never straight into
     the row. That is the path that takes the OCCUPANTS along: a character
@@ -1142,10 +1176,17 @@ def import_map_layout_from_zip(content: bytes) -> Dict[str, Any]:
     A row with null coordinates unplaces its location, which is what the
     exporter wrote for an unplaced one.
 
-    Grid-era ZIPs (rows of ``grid_x``/``grid_y``) are refused as a whole,
-    before the first write: their cell numbers mean nothing on a metre map,
-    and half a layout is worse than none. The test is the MISSING ``pos_x``
-    key — a present-but-null one is the legitimate "unplaced" row.
+    ALL OR NOTHING. Every row is read and validated before the FIRST write —
+    the grid-era shape and every coordinate — because each
+    ``update_location_position`` persists on its own: a bad row discovered
+    halfway would leave the world with half a layout and the caller with a
+    400 instead of a report. Two refusals, both before anything moves:
+
+    * grid-era ZIPs (rows of ``grid_x``/``grid_y``): their cell numbers mean
+      nothing on a metre map. The test is the MISSING ``pos_x`` key — a
+      present-but-null one is the legitimate "unplaced" row.
+    * a coordinate that is not a finite number (``"abc"``, ``NaN``, ``1e999``):
+      the error names the offending row.
     """
     from app.models.world import list_locations, update_location_position
 
@@ -1160,36 +1201,47 @@ def import_map_layout_from_zip(content: bytes) -> Dict[str, Any]:
         raise ValueError("db/map_layout.json must be a list")
     zf.close()
 
-    entries = [r for r in rows if isinstance(r, dict)]
+    entries: List[Dict[str, Any]] = []
+    skipped_invalid: List[Dict[str, Any]] = []
+    for i, row in enumerate(rows):
+        if isinstance(row, dict):
+            entries.append(row)
+        else:
+            skipped_invalid.append({"index": i, "type": type(row).__name__})
+
     if any("pos_x" not in r for r in entries):
         raise ValueError(
             "grid-era layout (grid_x/grid_y) — no longer importable; "
             "the world map is measured in metres. Export the layout again "
             "from a current world.")
 
+    # Validation pass over EVERY row before the first write (see the docstring).
+    plan = [(entry, _layout_row_coords(entry, i)) for i, entry in enumerate(entries)]
+
     known_ids = {l.get("id") for l in list_locations() if l.get("id")}
 
     applied: List[str] = []
     skipped_unknown: List[Dict[str, Any]] = []
 
-    for entry in entries:
+    for entry, (pos_x, pos_z, yaw_deg) in plan:
         ent_id = entry.get("id") or ""
         ent_name = (entry.get("name") or "").strip()
         if ent_id not in known_ids:
             skipped_unknown.append({"id": ent_id, "name": ent_name})
             continue
-        loc = update_location_position(
-            ent_id, entry.get("pos_x"), entry.get("pos_z"), entry.get("yaw_deg"))
+        loc = update_location_position(ent_id, pos_x, pos_z, yaw_deg)
         applied.append((loc or {}).get("name") or ent_name or ent_id)
 
-    logger.info("Map import: %d applied, %d unknown",
-                len(applied), len(skipped_unknown))
+    logger.info("Map import: %d applied, %d unknown, %d invalid",
+                len(applied), len(skipped_unknown), len(skipped_invalid))
     return {
         "status": "success",
         "applied": applied,
         "skipped_unknown": skipped_unknown,
+        "skipped_invalid": skipped_invalid,
         "applied_count": len(applied),
         "skipped_unknown_count": len(skipped_unknown),
+        "skipped_invalid_count": len(skipped_invalid),
     }
 
 

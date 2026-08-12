@@ -1160,7 +1160,7 @@ def _flatten_to_env(config: dict) -> None:
                      "max_concurrent", "serialize_group",
                      "response_format", "extra_params", "category", "prompt",
                      "ref_slot_count",
-                     "full_mask", "terrain_hint", "mask_grow", "inner_crop",
+                     "full_mask", "mask_grow", "inner_crop",
                      "mask_format", "lora_url", "lora_filter",
                      # Video backends (localai_video / together_video)
                      "seconds", "video_endpoint",
