@@ -335,7 +335,8 @@ export function createGround(): Ground {
    * from rejection sampling inside the ring's bounding box; a concave area
    * simply misses more often, which the try budget caps.
    */
-  function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number
+  function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number,
+                        sink: { dispose(): void }[]
   ): THREE.InstancedMesh | null {
     const type = catalog.get((area.kind || '').toLowerCase());
     const scatter: TerrainScatterMeta | undefined = type?.meta?.scatter;
@@ -367,7 +368,7 @@ export function createGround(): Ground {
       color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
       roughness: 0.95,
     });
-    areaOwned.push(geo, mat);
+    sink.push(geo, mat);
     // Typed on the BASE classes: the `model` branch below swaps geometry and
     // material for the loaded ones, which are not a cone and not this material.
     const inst: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
@@ -396,8 +397,12 @@ export function createGround(): Ground {
       void loadGlb(scatter.model).then((obj) => {
         // A terrain refetch between request and answer took this instance out
         // of the scene and disposed it — writing into it would resurrect
-        // nothing and hold the loaded mesh alive.
-        if (!obj || !inst.parent) return;
+        // nothing and hold the loaded mesh alive. The test is the DISPOSED
+        // mark `clearAreas` leaves, not the parent: since the build-then-swap
+        // an instance is legitimately parentless for as long as its rebuild
+        // takes, and reading that as "gone" would drop the model of every
+        // prop whose file arrives before the swap.
+        if (!obj || inst.userData.disposed) return;
         let src: THREE.Mesh | null = null;
         obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
         if (!src) return;
@@ -415,6 +420,8 @@ export function createGround(): Ground {
       a.mesh.geometry.dispose();
       if (a.scatter) {
         group.remove(a.scatter);
+        // The mark a pending `loadGlb` reads — see `buildScatter`.
+        a.scatter.userData.disposed = true;
         a.scatter.dispose();
       }
     }
@@ -422,8 +429,23 @@ export function createGround(): Ground {
     drain(areaOwned);
   }
 
+  /**
+   * Rebuild the painted areas — BUILD FIRST, SWAP LAST.
+   *
+   * Everything the new ground needs is built into local lists while the old
+   * one still stands: the surface textures are awaited, the meshes and the
+   * scatter are made, and only then does the old ground go and the new one
+   * take its place, within one turn of the event loop. Tearing the old areas
+   * down first (as this did until E5) left the world lying on its bare base
+   * plane for as long as the texture preload took — an admin painting terrain
+   * refetches this every few seconds and saw the ground flash grey each time.
+   *
+   * The DISPOSABLES follow the same order, which is why the new ones are
+   * collected in `nextOwned`: draining `areaOwned` is what `clearAreas` does,
+   * and a material built into that same bag before the drain would be disposed
+   * the moment it was hung into the scene.
+   */
   async function rebuildAreas(): Promise<void> {
-    clearAreas();
     const areas = payload?.areas ?? [];
     // Textures first, ALL of them: `surfaceFor` only hands out fully loaded
     // images (a clone of a loading texture stays blank), so the whole ground
@@ -432,12 +454,14 @@ export function createGround(): Ground {
       ...areas.map((a) => a.kind)]);
     await Promise.all([...kinds].map((k) => preloadSurfaceTexture(k)));
 
+    const next: AreaMesh[] = [];
+    const nextOwned: { dispose(): void }[] = [];
     areas.forEach((area, index) => {
       const built = buildAreaGeometry(THREE, area.polygon);
       if (!built) return;   // a ring that encloses nothing has nothing to draw
       // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
       // so the texture runs seamlessly across area borders.
-      const mesh = new THREE.Mesh(built.geometry, materialFor(area.kind, 1, areaOwned));
+      const mesh = new THREE.Mesh(built.geometry, materialFor(area.kind, 1, nextOwned));
       mesh.receiveShadow = true;
       // LIST ORDER decides what covers what — the server sorted the areas
       // bottom to top (z_order, then paint order), so the index IS the layer.
@@ -451,19 +475,27 @@ export function createGround(): Ground {
         + Math.min((index + 1) * AREA_Y_STEP_M, AREA_Y_MAX_M);
       mesh.userData.terrainKind = area.kind;
       mesh.userData.terrainAreaId = area.id;
-      group.add(mesh);
 
       // The CLEANED ring, the one the mesh was built from — see `ringBounds`.
       const [minX, minZ, maxX, maxZ] = ringBounds(built.ring);
-      const scatter = buildScatter(area, built.ring, built.areaM2);
-      if (scatter) group.add(scatter);
-      areaMeshes.push({
+      const scatter = buildScatter(area, built.ring, built.areaM2, nextOwned);
+      next.push({
         mesh,
         scatter,
         centre: new THREE.Vector3((minX + maxX) / 2, GROUND_Y, (minZ + maxZ) / 2),
         radius: Math.hypot(maxX - minX, maxZ - minZ) / 2,
       });
     });
+
+    // THE SWAP. Nothing above touched the scene, so the old ground stood until
+    // this line and the new one is in place before the frame after it.
+    clearAreas();
+    for (const a of next) {
+      group.add(a.mesh);
+      if (a.scatter) group.add(a.scatter);
+      areaMeshes.push(a);
+    }
+    areaOwned.push(...nextOwned);
     rev += 1;
   }
 

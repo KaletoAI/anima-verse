@@ -5,7 +5,7 @@ import { bubbleMs, bubbleText } from '../game/bubble';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
-import { advanceProgress, catchUpStep, pointAtDistance, shouldSnap, type MetrePoint } from './travelPath';
+import { advanceProgress, catchUpStep, clampProgress, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
 
 /** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
  *  metre world has one scale, so this number means the same thing on the map
@@ -605,19 +605,32 @@ export class NpcManager {
 
   /** Draw the journey as the dashed polyline it IS (§ A11), or take it away.
    *
-   *  The whole route, not a straight line to the goal: the server's waypoints
-   *  walk around the buildings and over the passable ground, and a chord
-   *  across them would promise a way that does not exist. A fogged traveller
-   *  (`waypoints: null`) has no route here and therefore no line — that is the
-   *  binding rule, the route would be a metre-exact marker for a place the
-   *  avatar may not know. */
+   *  The whole route AHEAD, not a straight line to the goal: the server's
+   *  waypoints walk around the buildings and over the passable ground, and a
+   *  chord across them would promise a way that does not exist. A fogged
+   *  traveller (`waypoints: null`) has no route here and therefore no line —
+   *  that is the binding rule, the route would be a metre-exact marker for a
+   *  place the avatar may not know.
+   *
+   *  TRIMMED at the walker's foot point (`remainingPoints`): the stretch
+   *  already walked is behind the figure, and a line that still ran back to
+   *  the starting point drew a way that had been used up. The trim advances in
+   *  five-metre buckets, which is what the KEY carries — the geometry is
+   *  rebuilt when the bucket rolls over and at no other time, so a traveller
+   *  costs one buffer every metre and a half instead of one per frame. */
   private updateTravelLine(npc: Npc, route: (TravelRoute & { key: string }) | null) {
-    const key = route ? route.key : '';
+    // Clamped ONCE, for the bucket and the trim alike: a `progress_m` that has
+    // run past the end of its own polyline draws the same last point however
+    // far it overshoots, and an unclamped bucket would rebuild that identical
+    // geometry every further five metres.
+    const walked = route ? clampProgress(route.progressM, route.totalM) : 0;
+    const key = route ? `${route.key}#${trimBucket(walked)}` : '';
     if (key === npc.travelKey) return;
     this.dropTravelLine(npc);   // clears travelKey, so the new one goes after
     npc.travelKey = key;
-    if (route && route.points.length >= 2) {
-      const pts = route.points.map((p) => new THREE.Vector3(p[0], GROUND_Y + 0.3, p[1]));
+    const ahead = route ? remainingPoints(route.points, walked) : [];
+    if (route && ahead.length >= 2) {
+      const pts = ahead.map((p) => new THREE.Vector3(p[0], GROUND_Y + 0.3, p[1]));
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
       const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
         color: 0xf2cd6e, dashSize: 0.9, gapSize: 0.6, transparent: true, opacity: 0.9,
@@ -695,6 +708,15 @@ export class NpcManager {
       if (npc.route && npc.route.points.length >= 2) {
         const r = npc.route;
         r.progressM = advanceProgress(r.progressM, r.rateMS, dt, r.totalM);
+        // The trim follows the walker from HERE, not from the 1 Hz update:
+        // the progress that decides the bucket is the extrapolated one, and a
+        // line that only caught up with the next poll would lag a whole second
+        // behind the figure. The call itself is a string compare on all but
+        // every 5 m — see `updateTravelLine`. The player's own figure is
+        // exempt for the same reason `update()` clears its line: it walks on
+        // foot, there is no server journey to draw, and re-adding the line
+        // here would fight that second-by-second.
+        if (npc.name !== this.playerDriven) this.updateTravelLine(npc, r);
         const at = pointAtDistance(r.points, r.progressM)!;
         const goalPos = new THREE.Vector3(at[0], GROUND_Y, at[1]);
         const delta = goalPos.clone().sub(npc.root.position);
