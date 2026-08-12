@@ -22,7 +22,15 @@ Three fields, three jobs — never one field for two of them:
 The ID is derived from the Name (``slug_for_name``) unless one is given —
 that rule lives HERE, so the admin UI cannot grow a second one.
 
-Storage: ``worlds/<world>/surface_textures/``:
+Storage: ``shared/surface_textures/`` — ONE namespace for every world (E5
+Task 4, 2026-08-12). A ground material is not world-specific: there is
+nothing about "worn asphalt" that one world would have to hide from the
+next, and a per-world copy only meant generating the same texture again.
+Deliberately NOT the terrain-type pattern (shared seed + world override):
+no override layer, no merge, one library. A world folder left over from
+before is moved here once, on boot (``migrate_world_dir_once``).
+
+Files in that directory:
 
     <kind>_<ts>.jpg          — one file per version (uploads may be PNG/WebP)
     <kind>_<ts>.json         — sidecar: created_at, source, backend, prompt,
@@ -40,6 +48,7 @@ was made (backend + final prompt).
 import json
 import random
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -60,8 +69,6 @@ _SEL_FILE = "selection.json"
 _BLENDS_FILE = "blends.json"
 # Per-kind metadata: {kind: {name?, description?}} — see the module doc.
 _KINDS_FILE = "kinds.json"
-# Flag for the one-time subject → description migration.
-_META_V2_FLAG = "world.migration.surface_kind_meta_v2"
 
 _lock = threading.Lock()
 # Running job keys "<kind>|<backend glob>" — generations of the SAME kind on
@@ -71,8 +78,11 @@ _generating: set = set()
 
 
 def _dir(*, create: bool = False) -> Path:
-    from app.core.paths import get_storage_dir
-    d = get_storage_dir() / "surface_textures"
+    """THE one path source of this module — every reader and writer goes
+    through it. Shared, not per-world (see the module doc). Read paths must
+    not create it: a missing directory is the normal empty-library state."""
+    from app.core.paths import get_shared_dir
+    d = get_shared_dir() / "surface_textures"
     if create:
         d.mkdir(parents=True, exist_ok=True)
     return d
@@ -713,6 +723,56 @@ def ensure_kind_meta(kind: str, *, name: str = "",
     return entry
 
 
+def migrate_world_dir_once() -> Dict[str, Any]:
+    """Move a leftover ``worlds/<world>/surface_textures/`` into the shared
+    library (E5 Task 4, 2026-08-12). Returns {} when there is nothing to do.
+
+    Textures stopped being per-world, so the world folder of the currently
+    opened world hands its contents over — images, sidecars, ``kinds.json``,
+    ``selection.json`` and ``blends.json`` alike, each by its file name.
+
+    Collision rule: the SHARED file wins. A name the library already has is
+    NOT overwritten — it may be the version another world already handed
+    over, and replacing it would silently swap a texture that world data
+    points at. The world copy stays where it is and gets a warning, which
+    also keeps the old directory around as the evidence. An emptied
+    directory is removed.
+
+    The three registry files travel as FILES too, they are not merged. So a
+    world that migrates SECOND keeps its ``kinds.json``/``selection.json``/
+    ``blends.json`` — its texture files still arrive, and ``migrate_kind_meta_once``
+    re-seeds names and descriptions for them from the curated map. Merging
+    two libraries' metadata is a manual job, not something a boot hook should
+    decide behind the user's back; the warning names the folder to look at.
+    """
+    from app.core.paths import get_storage_dir
+    src = get_storage_dir() / "surface_textures"
+    if not src.is_dir():
+        return {}
+    entries = sorted(p for p in src.iterdir() if p.is_file())
+    if not entries:
+        if not any(src.iterdir()):
+            src.rmdir()   # nothing but an empty leftover directory
+        return {}
+    dst = _dir(create=True)
+    moved = kept = 0
+    for p in entries:
+        target = dst / p.name
+        if target.exists():
+            logger.warning(
+                "Surface texture %s already exists in the shared library — "
+                "the world copy in %s stays put and is ignored", p.name, src)
+            kept += 1
+            continue
+        shutil.move(str(p), str(target))
+        moved += 1
+    if not any(src.iterdir()):
+        src.rmdir()
+    if not moved and not kept:
+        return {}
+    return {"moved": moved, "kept_in_world": kept, "from": str(src)}
+
+
 def migrate_kind_meta_once() -> Dict[str, int]:
     """Carry ``kinds.json`` over to name + description (2026-07-28).
 
@@ -724,20 +784,24 @@ def migrate_kind_meta_once() -> Dict[str, int]:
     change. Names are filled the same way, so the pickers read as words at
     once.
 
-    Idempotent via a world_kv flag. Returns a small stats dict for the log.
+    Idempotent BY CONTENT, not by a flag: a kind whose entry already carries
+    name and description and no ``subject`` is left alone, and a run that
+    changes nothing writes nothing and returns {}. It used to be guarded by
+    the world setting ``world.migration.surface_kind_meta_v2``, which stopped
+    working the moment the library became shared — a per-world flag would let
+    every world re-run the migration over the same file (E5 Task 4). The
+    stats count the kinds actually touched.
     """
-    from app.models.world import get_world_setting, set_world_setting
-    if get_world_setting(_META_V2_FLAG):
-        return {}
     data = _read_kind_meta()
     # Kinds with files or blends but no meta entry at all also need seeding —
     # they used to live entirely off the curated map.
     known = set(data) | set(_files_by_kind()) | set(_read_blends())
-    renamed = seeded_desc = seeded_name = 0
+    renamed = seeded_desc = seeded_name = touched = 0
     for kind in sorted(known):
         if not safe_kind(kind):
             continue
-        entry = dict(data.get(kind) or {})
+        before = data.get(kind) or {}
+        entry = dict(before)
         subject = str(entry.pop("subject", "") or "").strip()
         if subject and not entry.get("description"):
             entry["description"] = subject
@@ -755,11 +819,13 @@ def migrate_kind_meta_once() -> Dict[str, int]:
             entry["description"] = (SURFACE_SUBJECTS.get(kind)
                                     or f"the surface of {unslug(kind)} seen straight from above")
             seeded_desc += 1
+        if entry != before:
+            touched += 1
         data[kind] = entry
-    if data:
-        _write_kind_meta(data)
-    set_world_setting(_META_V2_FLAG, "1")
-    return {"kinds": len(data), "subject_renamed": renamed,
+    if not touched:
+        return {}
+    _write_kind_meta(data)
+    return {"kinds": touched, "subject_renamed": renamed,
             "description_seeded": seeded_desc, "name_seeded": seeded_name}
 
 

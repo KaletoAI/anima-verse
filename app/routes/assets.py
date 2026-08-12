@@ -4,9 +4,11 @@ Clips live in ``shared/models/clips`` (see the README there for the hard file
 requirements: Mixamo FBX "Without Skin", one rig source, 52-bone rig). They
 belong to the RIG, not to a character or a world, so every client — the
 Game-Admin 3D preview and the external 3D map client — reads them from here.
-Surface textures (AV3D-13) are the second asset family: per-world tileable
-ground materials, managed via /world/surface-textures, served here because
-the 3D client consumes them exactly like the clip library.
+Surface textures (AV3D-13) are the second asset family: tileable ground
+materials in ``shared/surface_textures``, managed via /world/surface-textures,
+served here because the 3D client consumes them exactly like the clip library.
+They are shared across worlds for the same reason the clips are — a ground
+material belongs to no single world (E5 Task 4).
 
 ``kind`` (idle / walk / run / sit / dance / wave / …) is derived from the file
 name, ``set`` from the subdirectory the clip lies in; both vocabularies are

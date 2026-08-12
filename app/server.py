@@ -123,14 +123,26 @@ async def lifespan(app: FastAPI):
     except Exception as _sfe:
         logger.warning("scale-frame migration failed: %s", _sfe)
 
-    # Oberflaechen-Arten: Name / ID / Description getrennt. Schreibt die
-    # kuratierte Formulierung EINMAL ins Description-Feld, damit sie kein
-    # unsichtbarer Laufzeit-Vorrang mehr ist (2026-07-28).
+    # Surface textures are shared across all worlds, not per world: a world
+    # folder left over from before hands its files to shared/surface_textures/
+    # once, on boot (E5 Task 4, 2026-08-12). Must run BEFORE the kind-meta
+    # migration below — that one reads the shared library.
+    try:
+        from app.core.surface_textures import migrate_world_dir_once
+        _sd = migrate_world_dir_once()
+        if _sd:
+            logger.info("Surface texture folder handover to shared: %s", _sd)
+    except Exception as _sde:
+        logger.warning("surface texture move to shared failed: %s", _sde)
+
+    # Surface kinds: name / ID / description kept apart. Writes the curated
+    # wording ONCE into the description field so it stops being an invisible
+    # runtime precedence (2026-07-28). Idempotent by content.
     try:
         from app.core.surface_textures import migrate_kind_meta_once
         _km = migrate_kind_meta_once()
         if _km:
-            logger.info("Oberflaechen-Arten migriert: %s", _km)
+            logger.info("Surface kinds migrated: %s", _km)
     except Exception as _kme:
         logger.warning("surface kind-meta migration failed: %s", _kme)
 
