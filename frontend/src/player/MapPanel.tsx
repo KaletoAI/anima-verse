@@ -322,6 +322,11 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
   // The painted ground is loaded ONCE and re-fetched only when the worldmap
   // poll reports a different signature (§ A1.5) — it is never fogged, so
   // every logged-in user gets the same landscape.
+  //
+  // The effect hangs on `data`, not on `sig` alone: every poll hands back a
+  // freshly parsed payload, so a failed fetch is retried on the next tick
+  // (~10 s) even in a world whose signature never changes. `loadedSig` is
+  // what actually suppresses the repeat once the load succeeded.
   const [terrain, setTerrain] = useState<TerrainPayload | null>(null)
   const sig = data?.terrain_sig || ''
   const loadedSig = useRef('')
@@ -332,9 +337,9 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
       if (cancelled) return
       loadedSig.current = sig
       setTerrain(p)
-    }).catch(() => { /* the map stays a bare frame; the poll retries */ })
+    }).catch(() => { /* bare frame until the next poll tick retries */ })
     return () => { cancelled = true }
-  }, [sig])
+  }, [sig, data])
 
   // The view: restored from localStorage, or fitted to the world once the
   // bounds and the pane size are known. The enlarge overlay (`autoFit`) always

@@ -78,8 +78,10 @@ def _sanitize_scatter(raw: Any) -> Optional[Dict[str, Any]]:
     * ``height_m`` — height of the built-in tuft; only a value > 0 is a
       height, anything else loses the key and the client's default applies.
     * ``model`` — URL of the prop mesh to instance (`/assets/props/<id>/model`,
-      the same URL `props.model_url` hands out). A non-string or blank value
-      loses the key and the tuft stands.
+      the same URL `props.model_url` hands out). A non-string, blank or
+      over-long (> ``MODEL_URL_MAX``) value loses the key and the tuft
+      stands — truncating a URL would only produce a 404 that looks like a
+      configured model.
 
     Returns None when there is no block at all — then the key is dropped.
     """
@@ -94,7 +96,9 @@ def _sanitize_scatter(raw: Any) -> Optional[Dict[str, Any]]:
         out["height_m"] = round(height, 3)
     model = raw.get("model")
     if isinstance(model, str) and model.strip():
-        out["model"] = model.strip()[:MODEL_URL_MAX]
+        url = model.strip()
+        if len(url) <= MODEL_URL_MAX:
+            out["model"] = url
     return out
 
 

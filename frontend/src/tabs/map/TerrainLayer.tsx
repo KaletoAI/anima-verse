@@ -45,8 +45,10 @@ import type { TerrainArea, TerrainType } from './mapTypes'
 
 /** One opacity for every fill — see the module docstring. */
 const FILL_OPACITY = 0.45
-/** A kind the catalog does not know: grey, and marked as unknown. */
-export const UNKNOWN_COLOR = '#6e7681'
+/** A kind the catalog does not know: grey, and marked as unknown. The SAME
+ *  grey the server (`terrain_types.DEFAULT_COLOR`) and the 3D minimap
+ *  (`terrainColor`) fall back to — one unknown, one colour. */
+export const UNKNOWN_COLOR = '#888888'
 const COL_SELECTED = '#58a6ff'
 const COL_DRAFT = '#3fb950'
 const COL_WARN = '#d29922'
