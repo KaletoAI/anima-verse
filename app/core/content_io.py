@@ -1090,20 +1090,26 @@ def import_states_from_zip(
 
 
 # ---------------------------------------------------------------------------
-# Map layout (grid snapshot)
+# Map layout (metre snapshot)
 # ---------------------------------------------------------------------------
 
 def export_map_layout_to_zip() -> bytes:
-    """Snapshot every location's grid position. Locations themselves are NOT
-    included — only id/name/grid_x/grid_y."""
+    """Snapshot where every location stands, in world METRES.
+
+    The locations themselves are NOT included — a row is only
+    ``{id, name, pos_x, pos_z, yaw_deg}``. An unplaced location is a row with
+    null coordinates, not a missing row: the layout describes the whole world,
+    and "this one stands nowhere" is part of that.
+    """
     from app.models.world import list_locations
     rows: List[Dict[str, Any]] = []
     for loc in list_locations():
         rows.append({
             "id": loc.get("id"),
             "name": loc.get("name"),
-            "grid_x": loc.get("grid_x"),
-            "grid_y": loc.get("grid_y"),
+            "pos_x": loc.get("pos_x"),
+            "pos_z": loc.get("pos_z"),
+            "yaw_deg": loc.get("yaw_deg"),
         })
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1121,21 +1127,27 @@ def export_map_layout_to_zip() -> bytes:
     return buf.getvalue()
 
 
-def import_map_layout_from_zip(
-    content: bytes,
-    *,
-    match_by: str = "auto",
-) -> Dict[str, Any]:
-    """Apply a saved map layout to the current world.
+def import_map_layout_from_zip(content: bytes) -> Dict[str, Any]:
+    """Apply a saved metre layout to the current world.
 
-    `match_by` ∈ {'auto', 'id', 'name'}:
-      'auto' tries id first, falls back to name.
+    Matching is by ID ONLY. A layout is a statement about THIS world's
+    locations; matching by name would hand a position to whatever happens to
+    carry the same label, and the caller cannot tell afterwards. Unknown ids
+    are reported as ``skipped_unknown`` and nothing is created.
 
-    Locations that don't exist locally are skipped and reported.
+    Positions go through ``update_location_position`` — never straight into
+    the row. That is the path that takes the OCCUPANTS along: a character
+    standing in a location keeps its place in the location's local frame, so
+    re-placing (and re-turning) a location moves the people in it with it.
+    A row with null coordinates unplaces its location, which is what the
+    exporter wrote for an unplaced one.
+
+    Grid-era ZIPs (rows of ``grid_x``/``grid_y``) are refused as a whole,
+    before the first write: their cell numbers mean nothing on a metre map,
+    and half a layout is worse than none. The test is the MISSING ``pos_x``
+    key — a present-but-null one is the legitimate "unplaced" row.
     """
-    from app.models.world import (
-        _load_world_data, _save_world_data, list_locations,
-    )
+    from app.models.world import list_locations, update_location_position
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(content))
@@ -1148,44 +1160,36 @@ def import_map_layout_from_zip(
         raise ValueError("db/map_layout.json must be a list")
     zf.close()
 
-    by_id = {l.get("id"): l for l in list_locations() if l.get("id")}
-    by_name = {(l.get("name") or "").strip(): l for l in list_locations() if l.get("name")}
+    entries = [r for r in rows if isinstance(r, dict)]
+    if any("pos_x" not in r for r in entries):
+        raise ValueError(
+            "grid-era layout (grid_x/grid_y) — no longer importable; "
+            "the world map is measured in metres. Export the layout again "
+            "from a current world.")
+
+    known_ids = {l.get("id") for l in list_locations() if l.get("id")}
 
     applied: List[str] = []
-    skipped: List[Dict[str, Any]] = []
+    skipped_unknown: List[Dict[str, Any]] = []
 
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    live_by_id = {l.get("id"): l for l in locations if l.get("id")}
-
-    for entry in rows:
-        if not isinstance(entry, dict):
-            continue
+    for entry in entries:
         ent_id = entry.get("id") or ""
         ent_name = (entry.get("name") or "").strip()
-        target: Optional[Dict[str, Any]] = None
-        if match_by in ("auto", "id") and ent_id in by_id:
-            target = live_by_id.get(ent_id)
-        if target is None and match_by in ("auto", "name") and ent_name in by_name:
-            target = live_by_id.get(by_name[ent_name].get("id"))
-        if target is None:
-            skipped.append({"id": ent_id, "name": ent_name, "reason": "not found"})
+        if ent_id not in known_ids:
+            skipped_unknown.append({"id": ent_id, "name": ent_name})
             continue
+        loc = update_location_position(
+            ent_id, entry.get("pos_x"), entry.get("pos_z"), entry.get("yaw_deg"))
+        applied.append((loc or {}).get("name") or ent_name or ent_id)
 
-        if entry.get("grid_x") is not None:
-            target["grid_x"] = int(entry["grid_x"])
-        if entry.get("grid_y") is not None:
-            target["grid_y"] = int(entry["grid_y"])
-        applied.append(target.get("name") or target.get("id") or "?")
-
-    _save_world_data(data)
-    logger.info("Map import: %d applied, %d skipped", len(applied), len(skipped))
+    logger.info("Map import: %d applied, %d unknown",
+                len(applied), len(skipped_unknown))
     return {
         "status": "success",
         "applied": applied,
-        "skipped": skipped,
+        "skipped_unknown": skipped_unknown,
         "applied_count": len(applied),
-        "skipped_count": len(skipped),
+        "skipped_unknown_count": len(skipped_unknown),
     }
 
 

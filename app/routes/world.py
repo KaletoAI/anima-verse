@@ -1389,8 +1389,9 @@ def furnish_continue(room_id: str,
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")
-def export_map_layout_route() -> StreamingResponse:
-    """Stream a map-layout ZIP (positions only, no locations themselves)."""
+def export_map_layout_route(
+        _: Dict[str, Any] = Depends(require_admin)) -> StreamingResponse:
+    """Stream a map-layout ZIP — where every location stands, in metres."""
     from app.core.content_io import export_map_layout_to_zip
     zip_bytes = export_map_layout_to_zip()
     return StreamingResponse(
@@ -1403,15 +1404,16 @@ def export_map_layout_route() -> StreamingResponse:
 @router.post("/map/import")
 async def import_map_layout_route(
     file: UploadFile = File(...),
-    match_by: str = Query("auto", description="auto / id / name"),
+    _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Apply a saved map layout. Locations not present locally are skipped."""
+    """Apply a saved map layout. Matching is by id; ids this world does not
+    have are reported as ``skipped_unknown`` and nothing is created."""
     from app.core.content_io import import_map_layout_from_zip
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
     content = await file.read()
     try:
-        return import_map_layout_from_zip(content, match_by=match_by)
+        return import_map_layout_from_zip(content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
