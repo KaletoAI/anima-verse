@@ -1472,6 +1472,28 @@ def list_wilderness_positions() -> List[Dict[str, Any]]:
             for r in rows if _is_real_character(r[0])]
 
 
+def list_character_positions() -> List[Dict[str, Any]]:
+    """EVERYONE with a metre point, inside a location or not —
+    ``[{"name": ..., "x": ..., "z": ...}, ...]``.
+
+    The unrestricted sibling of ``list_wilderness_positions`` and ONE SELECT
+    for the same reason: the travel ticker asks for every character's point on
+    every tick (5 s), and ``get_character_pos`` is a query per character. Same
+    rules otherwise — a half-filled row counts as "no position", and the
+    roster filter is ``_is_real_character``, so a system row with a stray
+    position stays out of this list exactly as it does out of the earshot one.
+    """
+    try:
+        rows = get_connection().execute(
+            "SELECT character_name, pos_x, pos_z FROM character_state "
+            "WHERE pos_x IS NOT NULL AND pos_z IS NOT NULL").fetchall()
+    except Exception as e:
+        logger.error("list_character_positions DB error: %s", e)
+        return []
+    return [{"name": r[0], "x": float(r[1]), "z": float(r[2])}
+            for r in rows if _is_real_character(r[0])]
+
+
 def _write_character_pos(character_name: str, x: Optional[float],
                          z: Optional[float]) -> None:
     """Raw write of the two position columns (None/None clears the position).

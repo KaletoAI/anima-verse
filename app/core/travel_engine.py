@@ -1040,18 +1040,31 @@ def _discover_by_sight(names: List[str],
     without a point (off-map) is not near anything and is skipped.
 
     Cheap by construction rather than by a special case: the location snapshot
-    is the tick's, and ``discover_in_range`` drops the already-known ids
-    BEFORE any distance is measured — a character that knows its whole
-    neighbourhood costs one position read and one config read per tick and
-    writes nothing.
+    is the tick's, the POSITIONS are ONE bulk read for the whole cast
+    (``list_character_positions`` — a SELECT per character per 5 s inside the
+    event loop is what this loop used to cost), and ``discover_in_range`` drops
+    the already-known ids BEFORE any distance is measured, so a character that
+    knows its whole neighbourhood costs one blob read per tick and writes
+    nothing.
+
+    That known-locations blob is deliberately NOT bundled into a second bulk
+    SELECT: it is served by ``get_character_config``, which falls back to a
+    JSON file and may auto-CREATE (and write) a config for a character whose
+    DB row is empty. A bulk ``SELECT config_json`` would answer differently for
+    exactly the rows those branches exist for — that is a semantic change, not
+    a read optimisation.
+
+    ``names`` stays the roster: the position table can outlive a deleted
+    character, and only the roster says who is still playable.
     """
     from app.core.discovery import discover_in_range
-    from app.models.character import get_character_pos
+    from app.models.character import list_character_positions
+    points = {p["name"]: p for p in list_character_positions()}
     for name in names:
+        pos = points.get(name)
+        if pos is None:
+            continue
         try:
-            pos = get_character_pos(name)
-            if pos is None:
-                continue
             discover_in_range(name, pos["x"], pos["z"], locations=locations)
         except Exception as e:
             logger.debug("sight discovery failed for %s: %s", name, e)
