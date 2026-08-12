@@ -28,7 +28,7 @@
  * that signature and does nothing while it is unchanged.
  */
 import * as THREE from 'three';
-import { AREA_POLYGON_OFFSET, buildAreaGeometry, surfaceMaterial } from '@anima/scene-render';
+import { AREA_POLYGON_OFFSET, buildAreaGeometry, propGroundFit, surfaceMaterial } from '@anima/scene-render';
 import type { Point2, SurfaceMaterialSpec } from '@anima/scene-render';
 import { fetchTerrain } from '../api';
 import type { TerrainArea, TerrainPayload, TerrainScatterMeta, TerrainType, WorldBounds } from '../types';
@@ -114,6 +114,46 @@ function patchHole(mat: THREE.Material): void {
   // not in the patch, and three.js keys the compiled program on this string
   // PLUS the material's own defines.
   mat.customProgramCacheKey = () => 'ground-hole';
+}
+
+/**
+ * A loaded prop mesh as a geometry that STANDS on the ground (finding B16).
+ *
+ * Two things were wrong with handing `mesh.geometry` to the instance as it
+ * came out of the file. The placeholder cone it replaces is built with its
+ * BASE at y = 0 (`geo.translate(0, h/2, 0)`), while a GLB keeps whatever origin
+ * its author chose — a tree modelled around the middle of its trunk therefore
+ * sank by half its height, which is the metre the finding reports. And the
+ * mesh may sit anywhere INSIDE its file: a prop exported inside a turned or
+ * offset node carries that transform on the node, not in the vertices, and an
+ * instance only ever takes the geometry.
+ *
+ * So: bake the mesh's own world matrix within the GLB into a CLONE, then lift
+ * the clone until its lowest point is 0. The clone is essential — `loadGlb`
+ * CACHES the loaded file, and every other user of that prop (a placement in a
+ * scene, a second area scattering the same tree) would inherit a mutation.
+ * `updateWorldMatrix` only recomputes matrices from what the nodes already
+ * say, so the cached asset is read, never changed.
+ *
+ * How far to lift, and how much to scale, is `propGroundFit`
+ * (@anima/scene-render) — pure arithmetic on the bounding box, checked with
+ * hand-derived numbers in `client3d/scripts/smoke_scatter_math.mjs`.
+ */
+function groundedGeometry(mesh: THREE.Mesh,
+                          targetH: number | null): THREE.BufferGeometry {
+  const geo = mesh.geometry.clone();
+  mesh.updateWorldMatrix(true, false);
+  geo.applyMatrix4(mesh.matrixWorld);
+  geo.computeBoundingBox();
+  const box = geo.boundingBox;
+  if (box) {
+    const fit = propGroundFit(box.min.y, box.max.y, targetH);
+    if (fit.scale !== 1) geo.scale(fit.scale, fit.scale, fit.scale);
+    if (fit.offsetY !== 0) geo.translate(0, fit.offsetY, 0);
+    geo.computeBoundingBox();
+  }
+  geo.computeBoundingSphere();
+  return geo;
 }
 
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
@@ -407,7 +447,13 @@ export function createGround(): Ground {
         obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
         if (!src) return;
         const mesh = src as THREE.Mesh;
-        inst.geometry = mesh.geometry;
+        const geometry = groundedGeometry(mesh, null);
+        // The clone is OURS and nothing else disposes it — the owned bag of
+        // this rebuild was drained into `areaOwned` long before this answer
+        // arrived (the load is asynchronous, the swap is not). So it rides on
+        // the instance and `clearAreas` frees it with the instance.
+        inst.userData.ownedGeometry = geometry;
+        inst.geometry = geometry;
         inst.material = mesh.material as THREE.Material;
       }).catch(() => { /* the tuft stands; a missing prop is not a broken world */ });
     }
@@ -422,6 +468,11 @@ export function createGround(): Ground {
         group.remove(a.scatter);
         // The mark a pending `loadGlb` reads — see `buildScatter`.
         a.scatter.userData.disposed = true;
+        // The grounded CLONE of a loaded prop, if one arrived (see there).
+        // `InstancedMesh.dispose` frees the instance buffers, never the
+        // geometry, and this one belongs to nobody else.
+        const owned = a.scatter.userData.ownedGeometry as THREE.BufferGeometry | undefined;
+        if (owned) owned.dispose();
         a.scatter.dispose();
       }
     }
