@@ -214,7 +214,7 @@ function TypeRow({
         >
           {draftScatter
             ? t('{n}/100 m²').replace('{n}', String(draftScatter.density_per_100m2))
-            : t('off')}
+            : t('Off')}
           {scatterOpen ? ' ▾' : ' ▸'}
         </button>
       </td>
@@ -279,7 +279,10 @@ function TypeRow({
                 className={'ga-input ga-tt-speed' + (densityBad ? ' ga-tt-invalid' : '')}
                 type="number"
                 min={0}
-                step={1}
+                // Any positive number: a big tree is authored well below one
+                // per 100 m², and a step of 1 would make the browser call
+                // 0.5 invalid.
+                step="any"
                 value={density}
                 placeholder="0"
                 aria-invalid={densityBad}
@@ -528,6 +531,9 @@ export function TerrainTypesDialog({
                     onChange={(e) => setNewSpeed(e.target.value)}
                   />
                 </td>
+                {/* Scatter + Source: a new kind is created bare and gets its
+                    scatter in the table above. */}
+                <td />
                 <td />
                 <td className="ga-tt-actions">
                   <button
