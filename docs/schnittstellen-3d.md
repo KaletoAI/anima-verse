@@ -546,7 +546,9 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 - **Im gefoggten Payload entscheidet draußen die SICHTWEITE**: ein
   Wildnis-Charakter steht im Payload, wenn er höchstens
   `game.discovery_range_m` Meter vom Avatar entfernt ist (E6, Regel und
-  Randfälle in § A12); der Avatar selbst und Reisende immer.
+  Randfälle in § A12); der Avatar selbst immer, Reisende ebenfalls — aber
+  nur, solange überhaupt ein Avatar aktiv ist. Ohne aktiven Avatar steht
+  draußen niemand im Payload.
 
 ### A1.5 `GET /play/terrain` — gemaltes Gelände
 
@@ -1355,7 +1357,7 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | Feld | Gefiltert? | Regel |
 |---|---|---|
 | `locations[]` | ja | **platzierte** Orte (beide `pos_x`/`pos_z` gesetzt) nur wenn sichtbar. Orte OHNE Meterposition passieren immer — sie stehen nicht auf der Karte und verraten nichts (Template-Stellvertreter) |
-| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben immer (§ A11) |
+| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben (§ A11), solange ein Avatar aktiv ist |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
 | `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE sechs Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id`. Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
@@ -1378,7 +1380,11 @@ draußen"-Einstellung, keine zweite daneben. Drei Fälle geben `false`:
 Sichtweite `0` (= abgeschaltet), kein eigener Punkt des Avatars, kein Punkt
 des anderen. Der Avatar selbst ist immer dabei, ein **Reisender** ebenfalls
 (§ A11) — seine Zeile ist ausgedünnt, aber sie verschwindet nicht mitten auf
-der Strecke. `show_all=1` kennt die Regel nicht.
+der Strecke. **Die Reisenden-Ausnahme gilt nur bei aktivem Avatar:** ohne
+einen (eingeloggter Nutzer ohne übernommenen Charakter — die Route reicht
+dann `""` durch) kennt die Sicht gar nichts, es passiert keine einzige
+Location, und dann steht auch draußen niemand. `show_all=1` kennt die Regel
+nicht.
 
 **Gelände ist nie gefoggt.** `GET /play/terrain` kennt keinen Fog-Modus und
 kein `all`-Flag: die gemalte Landschaft ist immer sichtbar, verdeckt wird nur,

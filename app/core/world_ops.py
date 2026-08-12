@@ -376,7 +376,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # wilderness for most of its length, so the sight rule would make
             # a figure blink out for the whole trip — exactly what § A11 warns
             # against. Its row stays, but thinned (see the travel block).
-            if fogged and name != avatar and _j is None and not _in_sight(pos):
+            # WITHOUT an active avatar there is no exception either: that view
+            # knows nothing at all (no location passes the filter), so a
+            # traveller must not be the one thing it does see.
+            if (fogged and name != avatar and not (avatar and _j)
+                    and not _in_sight(pos)):
                 continue
         # The avatar always sees itself; everyone else only where the avatar
         # can look. Standing in an unknown place hides a character entirely.
