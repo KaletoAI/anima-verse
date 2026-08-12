@@ -2060,7 +2060,17 @@ async function startApp(username: string, role: string) {
    *
    *  - IMPASSABLE TERRAIN (`terrainGround.passableAt`, the client's copy of
    *    `terrain_query.passability_at` on the same payload) — water, cliffs,
-   *    whatever the world's catalog marks as such;
+   *    whatever the world's catalog marks as such — but ONLY OUT IN THE
+   *    WILDERNESS. Inside a placed footprint the FOOTPRINT WINS (server
+   *    decision 2026-08-13, `POST /play/pos` derives the location first and
+   *    checks the ground only for `location_id == ""`): a place is put ON the
+   *    world and does not inherit the ground painted under it, so a hall on a
+   *    rock plateau is a place one can stand in. Without the mirror the
+   *    figure would refuse to walk where the server accepts every report —
+   *    the two views disagreeing, which is the one thing this pair must not
+   *    do. It costs nothing extra: `tileAt` is read anyway one line down, and
+   *    the footprint rule below is untouched by it — entry stays the gate of
+   *    a place, the terrain rule never was;
    *  - a FOREIGN FOOTPRINT WITH AUTHORED OPENINGS: the server lets one into
    *    such a place only within 1.5 m of one of them
    *    (`_POS_OPENING_TOLERANCE_M`), so walking into the middle of it would
@@ -2083,8 +2093,8 @@ async function startApp(username: string, role: string) {
    * cannot walk in.
    */
   function blockedFor(mine: Tile | null, x: number, z: number): boolean {
-    if (!terrainGround.passableAt(x, z)) return true;
     const at = tileAt(x, z);
+    if (!at && !terrainGround.passableAt(x, z)) return true;
     if (at && at !== mine && !freeBoundary(at)) return true;
     const now = performance.now();
     for (const r of refusedPoints) {

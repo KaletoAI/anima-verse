@@ -598,13 +598,27 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
          3 × 3.4 m/s × elapsed)`` — THREE terms, and the last one is why a
          frozen or slow world does not strand an honest walker (409
          ``too_far``),
-      5. terrain ``passability_at`` at the point (409 ``impassable``),
-      6. the LOCATION TRANSITION derived from the point, through the FULL gate
-         (below).
+      5. the LOCATION of the point (``location_at_point``) — derived FIRST,
+         because it decides whether step 6 applies at all,
+      6. terrain ``passability_at`` at the point, ONLY OUT IN THE WILDERNESS
+         (409 ``impassable``) — inside a placed footprint the FOOTPRINT WINS
+         (decision 2026-08-13), see below,
+      7. the LOCATION TRANSITION through the FULL gate (below).
 
     Every refusal carries ``{reason, message, pos, location_id}`` where ``pos``
     is the LAST VALID point — the client snaps the figure back onto it, so a
     refusal never leaves the two views disagreeing.
+
+    FOOTPRINT WINS (decision 2026-08-13). Painted terrain judges the
+    WILDERNESS, not the inside of a placed location: a point inside ANY
+    footprint skips the terrain check entirely. A location is placed ON the
+    world, it does not inherit the ground somebody painted under it — a hall
+    on a rock plateau or an island of a village on water would otherwise be a
+    place one can never stand in (acceptance finding B1), and entry there is
+    gated by openings and rules already, which is the gate that belongs to a
+    place. It is also the PREREQUISITE for the E8 heightmap plateau: the
+    ground under a footprint is levelled there, and painted rock under that
+    levelling must not keep refusing the flattened ground.
 
     THE TRANSITION GATE. ``location_at_point`` derives the location of the
     reported point. Same location, or wilderness → wilderness, is accepted as
@@ -712,46 +726,53 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             refuse(409, "too_far",
                    t("You cannot get there that quickly.", lang))
 
-    # ONE terrain read for the check AND for the answer. Both functions take
-    # the areas and the catalog as parameters (the nav grid prefetches them the
-    # same way); without hoisting them here the refusal path would re-read
-    # every painted area and rebuild the catalog a second time — on exactly the
-    # pathology of finding B1, where an avatar parked on impassable ground has
-    # every report refused at the client's reporting rate.
-    from app.core.terrain_query import kind_at, passability_at
-    from app.core.terrain_types import effective_catalog
-    from app.models.terrain import list_areas
-    _areas = list_areas()
-    _catalog = effective_catalog()
-    if not passability_at(x, z, areas=_areas, catalog=_catalog)[0]:
-        # NAME THE GROUND. "You cannot walk there." was true and useless: the
-        # player sees a spot that looks like every other one and gets no way to
-        # tell a painted rock from a rule, a party lock or a missing opening —
-        # and an avatar embodied ON such a spot (E4 acceptance finding B1) then
-        # collects the same sentence for every direction. The display name is
-        # the terrain catalog's, the kind slug is the fallback for an area
-        # whose type was deleted.
-        kind = kind_at(x, z, areas=_areas)
-        entry = _catalog.get(kind) or {}
-        ground = str(entry.get("name") or "").strip() or kind
-        # …and it LOGS like every other refusal reason. This was the only one
-        # without a line, which is exactly why the finding needed the user to
-        # explain the world to us.
-        logger.info("pos refused (impassable): %s at %.2f,%.2f on %s",
-                    avatar, x, z, kind)
-        refuse(409, "impassable",
-               t("You cannot walk there — that is {ground}.", lang)
-               .format(ground=ground))
-
     from app.core.world_geometry import location_at_point
     from app.models.world import get_location_by_id, list_locations
-    # ONE snapshot for the whole report — the transition gate below and the
-    # sight discovery at the end ask the same question of the same table, and
-    # a walking client sends up to four reports a second. Reading it twice
-    # costs a full table read plus the per-row meta parsing every time.
+    # ONE snapshot for the whole report — the terrain gate below, the
+    # transition gate and the sight discovery at the end ask the same question
+    # of the same table, and a walking client sends up to four reports a
+    # second. Reading it twice costs a full table read plus the per-row meta
+    # parsing every time.
     _locs = list_locations()
     derived = location_at_point(x, z, _locs)
     derived_id = (derived.get("id") or "") if derived else ""
+
+    # TERRAIN — AND ONLY OUT IN THE WILDERNESS (decision 2026-08-13,
+    # "footprint wins"). The location is derived FIRST on purpose: painted
+    # ground is the surface of the world BETWEEN the places, not the floor of
+    # a placed one. Inside a footprint the place brings its own floor and its
+    # own gate (openings + rules, below), so a hall on a rock plateau or a
+    # village on a lake stays a place one can stand in instead of a spot every
+    # single report is refused on (acceptance finding B1). It is also what E8's
+    # heightmap plateau needs: the ground under a footprint is levelled there,
+    # and the rock painted under that levelling must not veto the flat top.
+    if not derived_id:
+        # ONE terrain read for the check AND for the answer. Both functions
+        # take the areas and the catalog as parameters (the nav grid prefetches
+        # them the same way); without hoisting them the refusal path would
+        # re-read every painted area and rebuild the catalog a second time.
+        from app.core.terrain_query import kind_at, passability_at
+        from app.core.terrain_types import effective_catalog
+        from app.models.terrain import list_areas
+        _areas = list_areas()
+        _catalog = effective_catalog()
+        if not passability_at(x, z, areas=_areas, catalog=_catalog)[0]:
+            # NAME THE GROUND. "You cannot walk there." was true and useless:
+            # the player sees a spot that looks like every other one and gets
+            # no way to tell a painted rock from a rule, a party lock or a
+            # missing opening. The display name is the terrain catalog's, the
+            # kind slug is the fallback for an area whose type was deleted.
+            kind = kind_at(x, z, areas=_areas)
+            entry = _catalog.get(kind) or {}
+            ground = str(entry.get("name") or "").strip() or kind
+            # …and it LOGS like every other refusal reason. This was the only
+            # one without a line, which is exactly why the finding needed the
+            # user to explain the world to us.
+            logger.info("pos refused (impassable): %s at %.2f,%.2f on %s",
+                        avatar, x, z, kind)
+            refuse(409, "impassable",
+                   t("You cannot walk there — that is {ground}.", lang)
+                   .format(ground=ground))
 
     entry_room = ""
     if derived_id != current_id:

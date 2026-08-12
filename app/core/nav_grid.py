@@ -9,12 +9,14 @@ a journey.
 
 The model in one paragraph: the world is rastered into ``NAV_CELL_M``
 squares anchored at the origin (cell ``i`` covers ``[i*c, (i+1)*c)``, its
-centre is ``(i + 0.5) * c``). A cell is blocked when the terrain AT ITS
-CENTRE is impassable or when that centre lies inside a placed location
-footprint that is FOREIGN to this route — the footprints containing the
-start or the goal are exempt, otherwise nobody could ever leave or enter a
-building. A* walks the 8 neighbours (no corner-cutting: a diagonal needs
-both orthogonals free), paying ``distance / speed_factor`` for every step,
+centre is ``(i + 0.5) * c``). A cell is blocked when a placed location
+footprint that is FOREIGN to this route overlaps it — the footprints
+containing the start or the goal are exempt, otherwise nobody could ever
+leave or enter a building — or when the terrain AT ITS CENTRE is impassable
+AND that centre lies out in the WILDERNESS (footprint wins, decision
+2026-08-13: painted ground judges the world between the places, never the
+inside of one — see :meth:`_Search.blocked`). A* walks the 8 neighbours
+(no corner-cutting: a diagonal needs both orthogonals free), paying ``distance / speed_factor`` for every step,
 and the resulting cell chain is pulled straight again by a line-of-sight
 pass so the journey follows the terrain instead of the raster.
 
@@ -265,15 +267,37 @@ class _Search:
         return (self.min_i <= cell[0] <= self.max_i
                 and self.min_j <= cell[1] <= self.max_j)
 
+    def in_footprint(self, x: float, z: float) -> bool:
+        """Does that point lie inside ANY placed footprint (exempt or not)?
+
+        The routing half of "FOOTPRINT WINS" (decision 2026-08-13, the rule
+        ``POST /play/pos`` walks by): painted terrain judges the WILDERNESS,
+        not the inside of a placed location.
+        """
+        return any(point_in_footprint(x, z, cx, cz, w, yaw)
+                   for _lid, cx, cz, w, yaw in self.ctx.footprints)
+
     def blocked(self, cell: Cell) -> bool:
-        """A CELL is blocked by impassable terrain at its centre or by a
-        foreign footprint OVERLAPPING it — cells outside the search box
-        count as blocked so A* cannot wander off.
+        """A CELL is blocked by a foreign footprint OVERLAPPING it, or by
+        impassable terrain at its centre OUT IN THE WILDERNESS — cells
+        outside the search box count as blocked so A* cannot wander off.
 
         Footprints are tested against the whole cell square, not against
         its centre: a building may cover most of a cell without touching
         the centre, and a step between two such cells would walk through
         the wall.
+
+        FOOTPRINT WINS (decision 2026-08-13, the same rule the walking gate
+        of ``POST /play/pos`` applies). For a FOREIGN footprint the rule
+        changes nothing — a cell whose centre lies inside it is hit by the
+        SAT test above anyway. It matters for the EXEMPT ones, the
+        footprints of this route's own start and goal: there the terrain
+        probe at the cell centre was the one thing that could still veto,
+        and it vetoed exactly the case the walking rule now accepts — a
+        location placed on painted rock or water (a hall on a plateau, a
+        village on a lake). Nobody could be routed to it while its avatar
+        walks around in it freely, which is the two movement models
+        disagreeing about the same square metre.
         """
         hit = self._blocked.get(cell)
         if hit is None:
@@ -281,13 +305,27 @@ class _Search:
                 hit = True
             else:
                 box = cell_box(cell)
-                hit = (not self.ctx.cell_terrain(cell)[0]
-                       or any(footprint_hits_aabb(fcx, fcz, w, yaw, *box)
-                              for _lid, fcx, fcz, w, yaw in self.blocking))
+                if any(footprint_hits_aabb(fcx, fcz, w, yaw, *box)
+                       for _lid, fcx, fcz, w, yaw in self.blocking):
+                    hit = True
+                elif self.ctx.cell_terrain(cell)[0]:
+                    hit = False
+                else:
+                    # Impassable ground — only a wilderness cell dies of it.
+                    # The point test runs LAST on purpose: it costs one pass
+                    # over the footprints and is reached only by the few cells
+                    # the terrain would refuse.
+                    hit = not self.in_footprint(*cell_centre(cell))
             self._blocked[cell] = hit
         return hit
 
     def factor(self, cell: Cell) -> float:
+        """Speed of a cell — terrain everywhere, footprint or not.
+
+        "Footprint wins" is about PASSABILITY, not about pace: a factor
+        never strands anybody (it is clamped at ``MIN_SPEED_FACTOR``), so
+        ground painted under a place only makes crossing it expensive.
+        """
         return max(self.ctx.cell_terrain(cell)[1], MIN_SPEED_FACTOR)
 
     def nearest_free(self, cell: Cell) -> Optional[Cell]:
@@ -314,7 +352,11 @@ class _Search:
         rectangle) — sampling misses the sub-metre corner clip that a
         straightened segment produces. Terrain is sampled every
         ``LOS_STEP_M`` metres (both endpoints included), the same
-        resolution the raster itself works at.
+        resolution the raster itself works at — and, like
+        :meth:`blocked`, it only judges samples OUT IN THE WILDERNESS
+        (footprint wins). Without that the straightening would still
+        break on the ground inside the start/goal location and leave the
+        polyline zig-zagging over cell centres A* had already accepted.
         """
         for _lid, cx, cz, width, yaw in self.blocking:
             if segment_hits_footprint(a[0], a[1], b[0], b[1], cx, cz, width,
@@ -324,8 +366,9 @@ class _Search:
         steps = max(1, int(math.ceil(length / LOS_STEP_M)))
         for k in range(steps + 1):
             t = k / steps
-            if not self.ctx.terrain_at(a[0] + (b[0] - a[0]) * t,
-                                       a[1] + (b[1] - a[1]) * t)[0]:
+            px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+            if not self.ctx.terrain_at(px, pz)[0] \
+                    and not self.in_footprint(px, pz):
                 return False
         return True
 

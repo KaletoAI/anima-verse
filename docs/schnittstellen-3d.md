@@ -553,6 +553,13 @@ immer sichtbar, nur Locations verstecken sich.
   nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ nachträglich
   gelöscht) gilt als begehbar mit Faktor 1,0: ein Loch im Katalog darf
   niemanden stranden lassen.
+- **`passable` beurteilt die WILDNIS, nicht das Innere einer platzierten
+  Location** (Entscheidung 2026-08-13, „Footprint gewinnt", Gate-Kette in
+  § A15). Innerhalb eines Fußabdrucks gilt der Boden des Ortes; wer dort
+  hinein darf, regeln Öffnungen und Regeln. Ein Renderer, der die Figur
+  selbst hält, MUSS es genauso machen — sonst weigert sich das Bild zu
+  laufen, wo der Server jede Meldung annimmt. `speed_factor` bleibt
+  überall gültig (er sperrt nichts).
 - Der Katalog ist **datengetrieben**: der geteilte Grundstock
   `shared/terrain/types.json` plus Welt-Zeilen, die pro `kind` den ganzen
   Eintrag **ersetzen** (Override-Replace wie die Aktivitäten-Bibliothek).
@@ -1524,8 +1531,9 @@ auseinanderstehen):
 | 2 | `x`/`z` sind endliche Zahlen | 400 |
 | 3 | **Drossel** ~4 Meldungen/s — Überschuss wird STILL verworfen, kein Fehler-Toast | 200 `{ok: false, throttled: true}` |
 | 4 | **Schrittweite** gegen die ECHTE Zeit seit der letzten AKZEPTIERTEN Meldung | 409 `too_far` |
-| 5 | Gelände `passability_at` am Punkt (§ A1.5) | 409 `impassable` |
-| 6 | **Location-Übergang** aus dem Punkt abgeleitet (`location_at_point`) — EXIT vor ENTRY | 403 (siehe unten) |
+| 5 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 6 | — |
+| 6 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`) | 409 `impassable` |
+| 7 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
 
 **Die Erlaubnis in Nr. 4 hat DREI Terme**, und der dritte ist keine
 Verzierung:
@@ -1544,7 +1552,24 @@ Sekunde läuft — ohne den dritten Term sammelte ein ehrlicher Läufer dort
 Anticheat**; ohne Basislinie (frische Sitzung, Übernahme, Admin-Move) wird
 der erste Punkt ungeprüft genommen.
 
-**Der Übergang (Nr. 6).** Gleiche Location oder Wildnis → Wildnis ist frei.
+**FOOTPRINT GEWINNT (Nr. 5 vor Nr. 6, Entscheidung 2026-08-13).** Gemaltes
+Gelände beurteilt die Welt ZWISCHEN den Orten. Liegt der gemeldete Punkt in
+IRGENDEINEM platzierten Fußabdruck (eigener wie fremder), entfällt der
+Gelände-Check ganz — eine Location wird AUF die Welt gesetzt und erbt nicht
+den Boden, den jemand darunter gemalt hat. Sonst wäre eine Halle auf einem
+Felsplateau oder ein Dorf auf einer Insel im See ein Ort, in dem man keinen
+Schritt tun kann und jede Meldung eine Absage bekommt (Abnahme-Befund B1);
+das Tor eines Ortes sind seine Öffnungen und Regeln (Nr. 7), nie der Fels
+darunter. Das ist zugleich die **Voraussetzung für das E8-Plateau**: dort
+wird die Heightmap unter dem Fußabdruck planiert, und der Fels unter dieser
+Planierung darf die geebnete Fläche nicht weiter sperren.
+
+Dieselbe Regel gilt im **NPC-Routing** (`nav_grid`): eine Zelle stirbt am
+fremden Fußabdruck (SAT) oder am Gelände in ihrer Mitte — Letzteres nur
+außerhalb jedes Fußabdrucks. Ohne das wäre ein Ort auf Fels für die Reise
+unerreichbar, während sein Avatar darin frei umherläuft.
+
+**Der Übergang (Nr. 7).** Gleiche Location oder Wildnis → Wildnis ist frei.
 Sonst:
 
 * **EXIT** — `boundary_entry.may_leave` mit dem Raum, in dem der Avatar
@@ -1589,7 +1614,8 @@ zurück), und ein **schlafender Avatar wacht auf** (dieselbe Regel wie bei
 abgelehnte Meldung hat niemanden bewegt).
 
 **Was der CLIENT dazu tut** (reiner Sicht-/Eingabe-Zustand, nicht Vertrag):
-er hält die Figur selbst aus unpassierbarem Gelände und fremden Fußabdrücken
+er hält die Figur selbst aus unpassierbarem Gelände (nach derselben Regel:
+nur außerhalb der Fußabdrücke) und aus fremden Fußabdrücken
 (`walk.slideBlocked`, Gleiten statt Anhalten), bietet den Eintritt ab 3 m an
 einer Öffnung an und läuft dann auf den Öffnungspunkt zu, und beantwortet ein
 4xx mit Gleiten (≤ 8 m) oder Sprung auf den zurückgegebenen Punkt plus einem
@@ -1597,11 +1623,14 @@ Toast pro Grund. **Kein Client-A\*** — Klick-Laufen ist Luftlinie mit
 Wandgleiten (E5+, falls mehr gebraucht wird).
 
 **Verifikation:** `scripts/smoke_play_pos.py` ruft die Handler-Funktion
-direkt (ohne Server) gegen eine Wegwerf-Welt und rechnet alle 19 Fälle von
+direkt (ohne Server) gegen eine Wegwerf-Welt und rechnet alle 20 Fälle von
 Hand vor — Öffnungspunkte, Schrittschranke (inkl. Echtzeit-Term bei
 eingefrorener Uhr, Fall [19]), Gelände und jeden Ast der Übergangs-Gates
 inklusive verschachtelter Fußabdrücke ([16]), `check_leave` ([17]) und
-Aufwachen ([18]).
+Aufwachen ([18]). Fall [20] ist „Footprint gewinnt" mit Gegenprobe: derselbe
+Fels-Punkt wird INNERHALB der Location angenommen und, nachdem die Location
+gelöscht ist, als `impassable` abgelehnt. Die Routing-Hälfte steht in
+`scripts/smoke_nav_grid.py` [12].
 
 ---
 

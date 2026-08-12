@@ -32,9 +32,12 @@ The validation chain, in the order the route applies it:
      collect 409s from an honest walker. Generous on purpose — this is an
      anti-teleport bound, not a precision anticheat (409 ``too_far`` + the
      last valid point),
-  5. terrain ``passability_at`` at the reported point (409 ``impassable`` +
-     the last valid point),
-  6. the LOCATION TRANSITION derived from the point, through the FULL gate
+  5. the LOCATION of the point (``location_at_point``) — derived FIRST,
+     because it decides whether the terrain check applies at all,
+  6. terrain ``passability_at`` at the reported point, ONLY OUT IN THE
+     WILDERNESS (409 ``impassable`` + the last valid point) — inside a placed
+     footprint the FOOTPRINT WINS (decision 2026-08-13, case [20]),
+  7. the LOCATION TRANSITION derived from the point, through the FULL gate
      (see below).
 
 A running journey is CANCELLED by the first accepted report — free walking
@@ -76,7 +79,11 @@ THE WORLD used below (all grass unless painted):
     SQUARE  (0, 200)   w 40, NO openings at all, no entry_room
     HUT     (0, 200)   w 8, INSIDE the square, opening S at 0.5 → (0, 204),
                        rooms foyer + hall, entry_room "hall", link "foyer"
+    BLUFF   (600, 50)  w 10, opening N at 0.5 → (600, 45), ON PAINTED ROCK
+                       (rock x ∈ [596, 604], z ∈ [46, 54] — strictly inside
+                       the footprint, so the approach outside stays grass)
     a water rectangle x ∈ [-10, 10], z ∈ [6, 26]
+    a rock rectangle  x ∈ [640, 650], z ∈ [40, 50] (wilderness, case [20])
 
 HAND-DERIVED EXPECTATIONS (the opening points first, since every entry case
 rests on them — ``opening_world_points``: local N edge is z = −w/2, the free
@@ -186,6 +193,27 @@ identity, so HALL's N opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       next report has elapsed ≈ 0, the allowance is the floor again, and
       20 m is far outside it.
 
+  [20] FOOTPRINT WINS (decision 2026-08-13, acceptance finding B1 — and the
+      prerequisite for E8's plateau, where the ground under a footprint is
+      levelled). Painted terrain judges the WILDERNESS; inside a placed
+      footprint it is not asked at all. BLUFF sits at (600, 50) with 10 m
+      width, so it covers x, z ∈ [595, 605] × [45, 55], and the rock is
+      painted x ∈ [596, 604], z ∈ [46, 54] — strictly inside it, so the
+      approach from the north stays grass. Three probes, and the middle one
+      is the counter-probe that would have failed under the old order:
+        a) the ROCK IS REALLY THERE: ``passability_at(600, 46.4)`` is False
+           and ``kind_at`` says "rock" — without this line the case could
+           pass on a world where nothing was painted at all;
+        b) entering at (600, 46.4) — 1.4 m ≤ 1.5 from the opening (600, 45),
+           and on that very rock — is ACCEPTED, room "foyer"; walking on
+           within the place to (600, 48) (1.6 m, deeper into the rock) is
+           accepted too: the ground inside is nobody's gate;
+        c) DELETE the location and report the identical point from the
+           identical parking spot: now it is wilderness rock and comes back
+           409 ``impassable`` with the catalog's name ("Rock").
+      Plus the wilderness half, untouched: a rock patch x ∈ [640, 650],
+      z ∈ [40, 50] with no location anywhere near it refuses (645, 42).
+
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
 a call of the route: walking the 45 m up to HALL through the route would be a
@@ -219,7 +247,7 @@ db.init_schema()
 
 from fastapi import HTTPException  # noqa: E402
 
-from app.core import travel_engine  # noqa: E402
+from app.core import terrain_query, travel_engine  # noqa: E402
 from app.core.party_engine import add_to_party, leave_party  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models import terrain  # noqa: E402
@@ -233,7 +261,7 @@ from app.models.inventory import add_item, add_to_inventory  # noqa: E402
 from app.models.rules import add_rule, delete_rule  # noqa: E402
 from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location,
-    update_location_position)
+    delete_location, update_location_position)
 from app.routes import play as play_route  # noqa: E402
 from app.routes.play import play_pos, play_travel  # noqa: E402
 
@@ -353,10 +381,20 @@ OPEN = place("Smoke Clearing", 350.0, 50.0)
 SQUARE = place("Smoke Square", 0.0, 200.0, width=40.0, openings=False)
 HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge="S", room="foyer",
             entry_room="hall")
+BLUFF = place("Smoke Bluff", 600.0, 50.0, room="foyer", entry_room="hall")
 patch_location(LOCKED, accessible_when=["has_item:silver_key"])
 add_item(name="Silver Key", description="opens the vault", item_id="silver_key")
 terrain.save_area({"kind": "water",
                    "polygon": [[-10, 6], [10, 6], [10, 26], [-10, 26]],
+                   "z_order": 0})
+# Case [20]: rock STRICTLY INSIDE the bluff's footprint (x, z ∈ [595, 605]),
+# so the approach from the north is grass and only the inside is rock…
+terrain.save_area({"kind": "rock",
+                   "polygon": [[596, 46], [604, 46], [604, 54], [596, 54]],
+                   "z_order": 0})
+# …and a second patch far out in the wilderness, where the rule is unchanged.
+terrain.save_area({"kind": "rock",
+                   "polygon": [[640, 40], [650, 40], [650, 50], [640, 50]],
                    "z_order": 0})
 
 save_character_profile(AVATAR, {"current_location": "", "language": "en"},
@@ -679,6 +717,43 @@ def main() -> int:
     status, reason, _pos, _loc, _msg = refusal_of(res)
     check("20 m in the same instant is not", res[0], "refused")
     check("the reason", reason, "too_far")
+
+    print("\n[20] FOOTPRINT WINS: painted ground judges the wilderness only")
+    # (a) the counter-probe FIRST: the rock really is under the footprint, so
+    # the acceptance below is the new gate order and not an unpainted world.
+    check("the point inside the bluff is impassable ground",
+          terrain_query.passability_at(600.0, 46.4)[0], False)
+    check("...and it is rock", terrain_query.kind_at(600.0, 46.4), "rock")
+    # (b) entering ON that rock, 1.4 m from the opening (600, 45).
+    park(600.0, 43.5)
+    check("the setup left the avatar outside",
+          get_character_current_location(AVATAR), "")
+    status, payload = report(600.0, 46.4)
+    check("the call succeeded", status, "ok")
+    check("the derived location", (payload or {}).get("location_id"), BLUFF)
+    check("the room is the opening's link", (payload or {}).get("room_id"),
+          "foyer")
+    status, payload = report(600.0, 48.0)      # 1.6 m deeper into the rock
+    check("walking on inside the place is free too", status, "ok")
+    check("...and it stays the same location",
+          (payload or {}).get("location_id"), BLUFF)
+    # (c) the same point WITHOUT the location: now it is wilderness rock.
+    park(600.0, 43.5)
+    check_true("the location is gone", delete_location(BLUFF))
+    res = report(600.0, 46.4)
+    status, reason, pos, _loc, message = refusal_of(res)
+    check("refused", res[0], "refused")
+    check("the status", status, 409)
+    check("the reason", reason, "impassable")
+    check("the message names the ground", message,
+          "You cannot walk there — that is Rock.")
+    check("the last valid point comes back", pos, {"x": 600.0, "z": 43.5})
+    # And the wilderness rule itself is untouched.
+    park(645.0, 38.0)
+    res = report(645.0, 42.0)
+    status, reason, _pos, _loc, _msg = refusal_of(res)
+    check("wilderness rock is still a wall", res[0], "refused")
+    check("the reason", reason, "impassable")
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

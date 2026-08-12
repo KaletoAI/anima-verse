@@ -95,6 +95,31 @@ Hand-derived expectations:
       2.83 m airline is impossible and the route has to walk around one of
       the blocks (> 4.5 m).
 
+ [12] FOOTPRINT WINS (decision 2026-08-13, the routing half of the walking
+      rule in `POST /play/pos`): painted terrain judges the WILDERNESS, not
+      the inside of a placed location. Hall at (700,0), plan_width_m 20 ->
+      footprint x [690,710], z [-10,10], with ROCK painted x [691,709],
+      z [-9,9] — strictly inside it, so the approach from the west stays
+      grass.
+      a) The goal cell is cell_of(700,0) = (350,0), centred on (701,1) —
+         rock, and inside the hall. For the route's OWN search (the hall
+         contains the goal, so its footprint is exempt) that cell is FREE;
+         for a foreign search — start and goal both outside, e.g.
+         (670,0) -> (670,60) — it stays blocked, by the footprint's SAT
+         test, exactly as before. route((670,0), (700,0)) therefore
+         EXISTS, starts on (670,0) and ends on (700,0), inside the rock.
+         Under the old rule it was None: every cell within the 2-cell
+         rescue radius of the goal (centres x 697..705, z -3..5) is rock
+         as well, so nearest_free found nothing and an NPC could not be
+         sent to a place its avatar walks around in freely.
+         The route is NOT the straight line, and that is COST, not
+         blocking: rock keeps speed_factor 0 -> MIN_SPEED_FACTOR 0.1, so
+         a metre inside costs 10 s and the cost-aware smoothing keeps the
+         detour along the rim ("footprint wins" is about passability).
+      b) The wilderness half is untouched: rock x [730,770], z [-20,20]
+         with NO location on it, goal (750,0) sits 20 m deep inside it,
+         far beyond the rescue radius -> route((670,0), (750,0)) is None.
+
  [11] Cache: build_nav_context() returns the SAME object twice;
       invalidate_nav_cache() forces a rebuild; painting an area (terrain
       signature) and moving a placed location (placement hash) each
@@ -438,6 +463,53 @@ update_location_position(BARN_ID, 61.0, 0.0)
 ctx_d = nav_grid.build_nav_context()
 check_true("moving a placed location invalidates the cache",
            ctx_d is not ctx_c, "")
+
+# ── [12] footprint wins over painted ground ─────────────────────────────
+print("[12] a location on rock is reachable — the footprint wins")
+hall = add_location(name="Smoke Bluff Hall", description="nav-grid smoke")
+HALL_ID = hall["id"]
+update_location_position(HALL_ID, 700.0, 0.0)
+set_plan_width(HALL_ID, 20.0)
+terrain.save_area({"kind": "rock",
+                   "polygon": [[691, -9], [709, -9], [709, 9], [691, 9]],
+                   "z_order": 0})
+check("the goal really stands on impassable ground",
+      terrain_query.passability_at(700, 0)[0], False)
+check("...and the approach does not",
+      terrain_query.passability_at(670, 0)[0], True)
+check_true("the goal lies inside the footprint",
+           point_in_footprint(700, 0, 700, 0, 20, 0), "")
+ctx = nav_grid.build_nav_context()
+check("the goal cell is (350, 0)", nav_grid.cell_of(700, 0), (350, 0))
+check("...centred on (701, 1)", nav_grid.cell_centre((350, 0)), (701.0, 1.0))
+own = nav_grid._Search(ctx, (670.0, 0.0), (700.0, 0.0))
+check("its own route does not lose the goal cell to the rock under it",
+      own.blocked((350, 0)), False)
+foreign = nav_grid._Search(ctx, (670.0, 0.0), (670.0, 60.0))
+check("a FOREIGN route still finds it blocked — by the footprint",
+      foreign.blocked((350, 0)), True)
+r = nav_grid.route((670, 0), (700, 0))
+check_true("the route into the hall exists (old rule: None — every cell "
+           "inside the rescue radius was rock)", r is not None, f"{r}")
+if r:
+    check("it starts where the traveller stands", r[0], (670.0, 0.0))
+    check("and ENDS on the goal, inside the rock", r[-1], (700.0, 0.0))
+    # It is not the straight line, and that is COST, not blocking: rock keeps
+    # its speed_factor 0 (clamped to MIN_SPEED_FACTOR = 0.1), so A* pays 10x
+    # per metre inside and the cost-aware smoothing keeps the detour around
+    # the rim. "Footprint wins" is about passability, never about pace.
+    check_true("the last leg really walks into the footprint",
+               point_in_footprint(r[-1][0], r[-1][1], 700, 0, 20, 0), "")
+    costs = nav_grid.segment_costs(r)
+    check_true("its costs are finite and positive",
+               costs and all(math.isfinite(c) and c > 0 for c in costs),
+               f"{[round(c, 2) for c in costs]}")
+# The wilderness half is unchanged: the same rock without a location on it.
+terrain.save_area({"kind": "rock",
+                   "polygon": [[730, -20], [770, -20], [770, 20], [730, 20]],
+                   "z_order": 0})
+check("a goal 20 m deep in wilderness rock stays unreachable",
+      nav_grid.route((670, 0), (750, 0)), None)
 
 print()
 if FAILURES:

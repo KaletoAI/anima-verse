@@ -40,6 +40,20 @@
  *     w      -> that, already unit length
  *   no key, or w+s (they cancel) -> null (never a NaN from normalising 0).
  *
+ * --- what `blocked` MEANS to slideBlocked (decision 2026-08-13) -----------
+ * `slideBlocked` takes the predicate as a parameter and never asks what a
+ * blocker is — main.ts `blockedFor` decides that, and since the "footprint
+ * wins" decision its terrain half is WILDERNESS-ONLY, mirroring the server
+ * gate of `POST /play/pos` (§ A15: the location of the point is derived
+ * first, `passability_at` runs only for `location_id == ""`). The mirror is
+ * one condition — `const at = tileAt(x, z); if (!at && !passableAt(x, z))` —
+ * and carries no maths of its own, so it is derived where the rule lives:
+ * hand-checked against the server in `scripts/smoke_play_pos.py` [20]
+ * (inside a footprint the same rock point is accepted, without the location
+ * it is `impassable`) and, for NPC routing, `scripts/smoke_nav_grid.py` [12].
+ * The cases below stay what they always were: the pure geometry of sliding
+ * along WHATEVER counts as blocked.
+ *
  * --- slideBlocked (E4 task 5) ---------------------------------------------
  * The step that would end in blocked ground keeps the component that runs
  * ALONG the boundary: full step if free, else the larger axis alone (ties to
