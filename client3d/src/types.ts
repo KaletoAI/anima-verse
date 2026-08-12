@@ -83,6 +83,13 @@ export interface Map3dMeta {
    *  answers for a location the scene endpoint 404s on, which is why the free
    *  boundary is judged from it (`enterLocation.freeBoundaryOf`). */
   boundary_openings?: BoundaryOpeningMeta[];
+  /** Rotation of the TEMPLATE content inside the footprint, in 90° steps
+   *  (contract v5.2 Nr. 15). The server turns the composed scene by it, so a
+   *  scene payload never carries it — but the RAW `boundary_openings` above
+   *  are stored unturned, and anything that anchors them itself has to apply
+   *  it exactly as `boundary_entry._rotated_openings` does. Distinct from
+   *  `WorldLocation.yaw_deg`, which turns the whole footprint in the world. */
+  tile_rotation?: number;
 }
 
 /** One authored boundary opening as `map3d` stores it — TEMPLATE orientation

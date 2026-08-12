@@ -68,6 +68,119 @@ export interface Footprint { x: number; z: number; yaw: number }
  *  TILE-LOCAL metres (`at_world`). */
 export interface LocalOpening { edge: Edge; at: Point }
 
+/** One clockwise 90° step of `tile_rotation`, and which edges flip their `at`
+ *  while taking it — `boundary_entry._EDGE_CW` / `_EDGE_FLIP` verbatim. */
+const EDGE_CW: Record<Edge, Edge> = { N: 'E', E: 'S', S: 'W', W: 'N' };
+const EDGE_FLIP: Record<Edge, boolean> = { N: false, E: true, S: false, W: true };
+
+/**
+ * An authored opening as `map3d` stores it — the RAW form, before the server
+ * has composed a scene out of it.
+ *
+ * `at` is the position along the edge as a fraction (left→right on N/S,
+ * top→bottom on E/W), `edge` is the letter in TEMPLATE orientation.
+ */
+export interface RawOpening { edge: Edge; at: number }
+
+/**
+ * Anchor ONE raw opening in the location's own frame — the client's mirror of
+ * `app/core/boundary_entry.opening_world_points`, up to the final
+ * local→world turn (`localToWorld`, which the caller does with the tile's
+ * `yaw_deg`).
+ *
+ * WHY THE CLIENT COMPUTES THIS AT ALL. The scene payload delivers every
+ * opening ready-anchored (`at_world`), but only for a location that HAS a
+ * scene: `/play/locations/{id}/scene` answers 404 for a place with no
+ * outline, no room layout and no building model — a painted meadow with a
+ * gate drawn on it, which the world editor allows long before any layout
+ * exists. Such a place was UNREACHABLE ON FOOT: the walker was blocked at its
+ * boundary (it has authored openings, so it is not a free boundary) while the
+ * entry offer had no opening point to stand at. The server, meanwhile, reads
+ * `map3d.boundary_openings` and would let the crossing through. So the client
+ * anchors the raw list itself, with the server's own formula.
+ *
+ * THE FORMULA, hand-derived from the server (`plan_width_m` = w, half = w/2):
+ *   free = (at − 0.5)·w        the position along the edge, centred
+ *   N → (free, −half)   S → (free, +half)   W → (−half, free)   E → (+half, free)
+ * `tileRotationDeg` (`map3d.tile_rotation`) is applied FIRST, in 90° steps:
+ * the letter walks N→E→S→W and `at` flips to `1 − at` on every step taken
+ * from an E or a W edge — the composer's rule, verbatim.
+ *
+ * NO ANCHOR, NO POINT. Without a usable `plan_width_m` the location has no
+ * edge length, and an opening with no length to sit on has no point: `null`,
+ * and the place stays closed exactly as it is today. A made-up default edge
+ * would put the offer at a metre nobody authored, and the server would refuse
+ * the crossing there.
+ */
+export function anchorRawOpening(edge: Edge, at: number, planWidthM: number,
+                                 tileRotationDeg = 0): Point | null {
+  if (!Number.isFinite(planWidthM) || planWidthM <= 0) return null;
+  if (!EDGE_CW[edge]) return null;
+  // A missing or unusable fraction is the edge MIDPOINT, and one outside the
+  // edge is pulled onto it — the server sanitises `at` the same way.
+  let f = Number.isFinite(at) ? Math.min(Math.max(at, 0), 1) : 0.5;
+  let e: Edge = edge;
+  const steps = Number.isFinite(tileRotationDeg)
+    ? ((Math.trunc(tileRotationDeg / 90) % 4) + 4) % 4 : 0;
+  for (let i = 0; i < steps; i++) {
+    if (EDGE_FLIP[e]) f = 1 - f;
+    e = EDGE_CW[e];
+  }
+  const half = planWidthM / 2;
+  const free = (f - 0.5) * planWidthM;
+  if (e === 'N') return { x: free, z: -half };
+  if (e === 'S') return { x: free, z: half };
+  if (e === 'W') return { x: -half, z: free };
+  return { x: half, z: free };                       // 'E'
+}
+
+/**
+ * The whole raw list, anchored — the openings a 404-scene location offers.
+ *
+ * Openings without an anchor drop out (see `anchorRawOpening`), so an empty
+ * answer means "this location cannot be entered at a point we know", which is
+ * the closed state and never a free boundary.
+ */
+export function anchorRawOpenings(raw: RawOpening[] | null | undefined,
+                                  planWidthM: number,
+                                  tileRotationDeg = 0): LocalOpening[] {
+  const out: LocalOpening[] = [];
+  for (const o of raw ?? []) {
+    // The ROTATED letter is what the point belongs to, and `anchorRawOpening`
+    // is where the rotation happens — so it is re-derived here rather than
+    // read off the raw entry, or a turned location would carry a point on one
+    // edge under the name of another.
+    const at = anchorRawOpening(o.edge, o.at, planWidthM, tileRotationDeg);
+    if (!at) continue;
+    out.push({ edge: rotatedEdge(o.edge, tileRotationDeg), at });
+  }
+  return out;
+}
+
+/** The world edge letter of a template edge under `tile_rotation`. */
+export function rotatedEdge(edge: Edge, tileRotationDeg = 0): Edge {
+  const steps = Number.isFinite(tileRotationDeg)
+    ? ((Math.trunc(tileRotationDeg / 90) % 4) + 4) % 4 : 0;
+  let e: Edge = edge;
+  for (let i = 0; i < steps; i++) e = EDGE_CW[e];
+  return e;
+}
+
+/**
+ * The INWARD unit normal of an edge, tile-local — the direction one walks to
+ * get from the opening into the location.
+ *
+ * The scene payload carries this per opening (`inward`, § B1 Nr. 13); this is
+ * the same vector for the raw openings that have no payload. N is the −z edge,
+ * so inward from it is +z, and so on around the square.
+ */
+export function inwardOf(edge: Edge): Point {
+  if (edge === 'N') return { x: 0, z: 1 };
+  if (edge === 'S') return { x: 0, z: -1 };
+  if (edge === 'W') return { x: 1, z: 0 };
+  return { x: -1, z: 0 };                            // 'E'
+}
+
 /** The openings of one location in WORLD metres — `localToWorld` per opening,
  *  the client's mirror of `boundary_entry.opening_world_points`. */
 export function openingWorldPoints(fp: Footprint, openings: LocalOpening[]

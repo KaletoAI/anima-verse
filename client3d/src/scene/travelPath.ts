@@ -87,6 +87,69 @@ export function pointAtDistance(
 }
 
 /**
+ * How coarsely the drawn travel line follows the walker, in METRES.
+ *
+ * The line is TRIMMED to what is still ahead (see `remainingPoints`) — the
+ * part already walked is behind the figure and drawing it promises a way that
+ * has been used up. Rebuilding the geometry every frame for that would be a
+ * new buffer sixty times a second per traveller, so the trim advances in
+ * buckets: five metres, about one and a half seconds of the 3.4 m/s walk, and
+ * a length one cannot mistake for the figure standing still.
+ */
+export const TRIM_BUCKET_M = 5;
+
+/**
+ * Which trim bucket a walked distance falls into.
+ *
+ * Part of the drawn line's IDENTITY (`npcs.ts` puts it in the travel key), so
+ * the geometry is rebuilt exactly when the bucket rolls over. Anything that is
+ * not a positive finite number is bucket 0 — the untrimmed whole line, which
+ * is what a journey that has not said how far it has come deserves.
+ */
+export function trimBucket(progressM: number): number {
+  if (!isNum(progressM) || progressM <= 0) return 0;
+  return Math.floor(progressM / TRIM_BUCKET_M);
+}
+
+/**
+ * The polyline that is still AHEAD: the point `progressM` metres along the
+ * line, followed by every waypoint after it.
+ *
+ * The first point is `pointAtDistance(points, progressM)` — the walker's own
+ * foot point — so the drawn line starts at the figure and not at the place it
+ * set off from. A corner the walk has exactly reached is NOT repeated: at
+ * `rest === L` the foot point IS that corner, and the tail therefore starts
+ * behind it.
+ *
+ * Degenerate inputs answer with something that draws nothing rather than with
+ * a lie: no points at all give an empty list, and a walk that has reached the
+ * end gives the single end point (`npcs.ts` draws from two points up).
+ */
+export function remainingPoints(
+  points: MetrePoint[] | null | undefined, progressM: number
+): MetrePoint[] {
+  if (!points || !points.length) return [];
+  const last = points[points.length - 1];
+  const tail = (from: number): MetrePoint[] =>
+    points.slice(from).map((p) => [p[0], p[1]] as MetrePoint);
+  if (points.length === 1) return [[last[0], last[1]]];
+  let rest = clampProgress(progressM, polylineLength(points));
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const L = segLength(a, b);
+    if (L <= 0) continue;          // never entered — see `pointAtDistance`
+    if (rest <= L) {
+      const t = rest / L;
+      const foot: MetrePoint = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      return [foot, ...tail(rest >= L ? i + 2 : i + 1)];
+    }
+    rest -= L;
+  }
+  return [[last[0], last[1]]];
+}
+
+/**
  * Pin a walked distance into [0, total].
  *
  * NaN is the one input that has no place on the line and becomes 0 — the whole

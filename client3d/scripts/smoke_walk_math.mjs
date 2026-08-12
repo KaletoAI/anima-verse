@@ -548,7 +548,7 @@ async function main() {
   const { fogRects, footprintBox, SHOW_ALL_KEY,
     FOG_OVERHANG_M, FOG_FEATHER_M, FOG_RAGGED_M, FOG_TEX_METRES } = fog;
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
-    MINIMAP_PREF_KEY } = minimap;
+    locationsSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
   // The defaults are spelled out here BY HAND, never read from the module —
   // that is the whole point of pinning them (see the header).
@@ -2744,6 +2744,25 @@ async function main() {
    * an empty colour — is the ONE neutral grey `#888888`, the same fallback the
    * server writes for a type without a colour (`terrain_types.DEFAULT_COLOR`).
    * A `Map` and a plain object are both accepted; `main.ts` builds a `Map`.
+   *
+   * `locationsSignature(locations)` — the REDRAW key of the dots (E5 task 2).
+   * The publisher in `main.ts` redraws only when its signature changes, and
+   * the places entered that signature by their COUNT alone. A count answers
+   * "has one been discovered" and never "has one moved" — since the seamless
+   * world a location can be dragged to another metre without the list growing,
+   * and the dot then stayed at the old spot until a step or an orbit happened
+   * to move the signature. Id AND point, `id:x,z` joined with ';':
+   *
+   *   [ {mill, 10, 20}, {barn, 30, 40} ]  -> "mill:10,20;barn:30,40"
+   *   the SAME two with the mill at 11    -> "mill:11,20;barn:30,40"   differs
+   *   the same two in the other order     -> "barn:30,40;mill:10,20"   differs
+   *     (order is the payload's; a reordered list redraws once, which is
+   *      cheaper than sorting every poll)
+   *   one place renamed to another id at the very same metre -> differs, and
+   *     must: the dot means a different place, with a different tooltip
+   *   an UNPLACED one (pos null) -> "ghost:null,null", its own state — no dot
+   *     is drawn, and a place that gets a position has to bring one back
+   *   []                                  -> ""
    */
   console.log('\nminimap — the whole METRE frame, contain-fitted, north up');
   const MM_BOUNDS = { min_x: 0, min_z: 0, max_x: 200, max_z: 100 };
@@ -2815,6 +2834,31 @@ async function main() {
   //   must keep working across versions of this client
   check('the minimap pref key is the documented one',
     MINIMAP_PREF_KEY, 'av3d.minimap');
+
+  console.log('minimap — the dots\' redraw signature (id AND point)');
+  const MM_PLACES = [{ id: 'mill', pos_x: 10, pos_z: 20 },
+    { id: 'barn', pos_x: 30, pos_z: 40 }];
+  check('id and point, joined',
+    locationsSignature(MM_PLACES), 'mill:10,20;barn:30,40');
+  // THE REGRESSION: same length, one place moved — a count could not tell.
+  check('a place that MOVED changes it at the same length',
+    locationsSignature([{ id: 'mill', pos_x: 11, pos_z: 20 }, MM_PLACES[1]]),
+    'mill:11,20;barn:30,40');
+  check('...and so does a move in z',
+    locationsSignature([{ id: 'mill', pos_x: 10, pos_z: 21 }, MM_PLACES[1]]),
+    'mill:10,21;barn:30,40');
+  check('another place at the same metre is another dot',
+    locationsSignature([{ id: 'forge', pos_x: 10, pos_z: 20 }, MM_PLACES[1]]),
+    'forge:10,20;barn:30,40');
+  check('the payload order is the signature order',
+    locationsSignature([MM_PLACES[1], MM_PLACES[0]]), 'barn:30,40;mill:10,20');
+  check('an unplaced location is its own state',
+    locationsSignature([{ id: 'ghost', pos_x: null, pos_z: null }]),
+    'ghost:null,null');
+  check('a discovery still changes it, as the count did',
+    locationsSignature([...MM_PLACES, { id: 'well', pos_x: 0, pos_z: 0 }]),
+    'mill:10,20;barn:30,40;well:0,0');
+  check('nothing known, nothing to draw', locationsSignature([]), '');
 
   /**
    * --- WHAT A SEEDED SLICE WOULD DRAW (acceptance finding B6, "shows

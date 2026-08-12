@@ -138,6 +138,65 @@
  *     on every single attempt.
  * With openings authored, entering is the ordinary walk to the opening point
  * (`entryOfferNear` above), exactly as for a location that has a scene.
+ *
+ * ---------------------------------------------------------------------------
+ * (5) anchorRawOpening — the 404 case gets its POINTS (E5 task 2)
+ * ---------------------------------------------------------------------------
+ * Knowing a 404 place is closed is not the same as being able to enter it.
+ * The composed openings come with the SCENE, so a location without one had no
+ * point to walk to: blocked at the boundary (it has authored openings, so it
+ * is no free boundary) and no offer to accept — unreachable on foot, while the
+ * server would have let the crossing through. The client therefore anchors the
+ * RAW `map3d.boundary_openings` itself, with the server's own formula:
+ *
+ *   free = (at − 0.5)·w                 w = plan_width_m, half = w/2
+ *   N → (free, −half)   S → (free, +half)   W → (−half, free)   E → (+half, free)
+ *
+ * `tile_rotation` first, in 90° steps: the letter walks N→E→S→W and `at`
+ * flips to 1 − at on every step taken FROM an E or a W edge
+ * (`boundary_entry._rotated_openings` / `scene_recipe._TILE_EDGE_CW`).
+ * `plan_width_m` ≤ 0 (or absent) yields NO point at all — `placed_footprint`
+ * refuses the same case, and an invented edge length would put the offer at a
+ * metre nobody authored.
+ *
+ * SIDE BY SIDE with the server. Left: this module, tile-LOCAL. Right:
+ * `app/core/boundary_entry.opening_world_points` for a location at (50, 50),
+ * yaw 0, i.e. world = (50 + lx, 50 + lz). Every right-hand number is the
+ * server's own output for that fixture, and every left-hand one is derived
+ * from the formula above:
+ *
+ *   w=10  N at 0.5   free 0     -> ( 0.0, −5.0)   server N (50.0, 45.0)
+ *   w=10  E at 0.25  free −2.5  -> ( 5.0, −2.5)   server E (55.0, 47.5)
+ *   w=10  N at 0.30  free −2.0  -> (−2.0, −5.0)   server N (48.0, 45.0)
+ *   w=10  N at 0     free −5    -> (−5.0, −5.0)   server N (45.0, 45.0)   NW corner
+ *   w=10  N at 1     free +5    -> ( 5.0, −5.0)   server N (55.0, 45.0)   NE corner
+ *   w=10  S at 0 / 1            -> (∓5.0, +5.0)   server S (45/55, 55.0)
+ *   w=10  W at 0 / 1            -> (−5.0, ∓5.0)   server W (45.0, 45/55)
+ *   w=10  E at 0 / 1            -> ( 5.0, ∓5.0)   server E (55.0, 45/55)
+ *   w=40  W at 0.25  free −10   -> (−20.0, −10.0) server W (30.0, 40.0)
+ *
+ *   rotation 90 (the flip rule):
+ *   w=10  E at 0.25 -> S at 0.75, free +2.5 -> ( 2.5,  5.0)  server S (52.5, 55.0)
+ *   w=10  N at 0.30 -> E at 0.30, free −2.0 -> ( 5.0, −2.0)  server E (55.0, 48.0)
+ *   rotation 180: N 0.30 -> E 0.30 -> S 0.70, free +2.0 -> (2.0, 5.0)
+ *                                                          server S (52.0, 55.0)
+ *   rotation 270: ... -> W 0.70, free +2.0 -> (−5.0, 2.0)  server W (45.0, 52.0)
+ *
+ *   sanitising, the server's rule verbatim (`_rotated_openings`):
+ *   at NaN -> the midpoint 0.5 -> ( 0.0, −5.0)   server N (50.0, 45.0)
+ *   at 2   -> clamped to 1     -> ( 5.0, −5.0)   server N (55.0, 45.0)
+ *   at −1  -> clamped to 0     -> (−5.0, −5.0)   server N (45.0, 45.0)
+ *   w = 0  -> NO point         -> null           server []
+ *
+ * The one yaw case, to show the two halves compose: the same w=40 S at 0.75 at
+ * yaw 90 gives local (10, 20) and `localToWorld(10, 20, 50, 50, π/2)` =
+ * (50 + 20, 50 − 10) = (70, 40) — the server's own (70.0, 40.0).
+ *
+ * INWARD. The scene payload names an `inward` unit normal per opening; a raw
+ * one has none, so `inwardOf` supplies it: N is the −z edge, so inward from it
+ * is +z. The server's smoke derives the same four
+ * (`scripts/smoke_boundary_entry.py` part 1/2): N [0, 1], E [−1, 0], and under
+ * rotation 90 the E opening becomes an S one whose inward is [0, −1].
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -200,7 +259,7 @@ const EPS = 1e-9;
 async function main() {
   const {
     localToWorld, openingWorldPoints, entryOfferNear, ENTER_RADIUS,
-    freeBoundaryOf,
+    freeBoundaryOf, anchorRawOpening, anchorRawOpenings, rotatedEdge, inwardOf,
   } = await loadEnterLocation();
 
   console.log('\nlocalToWorld — § A1.1, the mapping the server uses');
@@ -322,6 +381,92 @@ async function main() {
     freeBoundaryOf(undefined, 0), false);
   check('...and stays closed with openings authored as well',
     freeBoundaryOf(undefined, 2), false);
+
+  console.log('\nanchorRawOpening — the raw list anchored like the server does');
+  // Every expectation is the LEFT column of the table in the header; the
+  // comment behind it is the server's own output for the same fixture at
+  // centre (50, 50), yaw 0 (`boundary_entry.opening_world_points`).
+  check('N at 0.5 is the middle of the north edge',
+    anchorRawOpening('N', 0.5, 10), { x: 0, z: -5 }, EPS);          // (50, 45)
+  check('E at 0.25 sits a quarter down the east edge',
+    anchorRawOpening('E', 0.25, 10), { x: 5, z: -2.5 }, EPS);       // (55, 47.5)
+  check('N at 0.30', anchorRawOpening('N', 0.3, 10), { x: -2, z: -5 }, EPS); // (48, 45)
+  check('N at 0 is the NW corner',
+    anchorRawOpening('N', 0, 10), { x: -5, z: -5 }, EPS);           // (45, 45)
+  check('N at 1 is the NE corner',
+    anchorRawOpening('N', 1, 10), { x: 5, z: -5 }, EPS);            // (55, 45)
+  check('S runs left to right as well (at 0)',
+    anchorRawOpening('S', 0, 10), { x: -5, z: 5 }, EPS);            // (45, 55)
+  check('...and at 1', anchorRawOpening('S', 1, 10), { x: 5, z: 5 }, EPS);   // (55, 55)
+  check('W runs top to bottom (at 0)',
+    anchorRawOpening('W', 0, 10), { x: -5, z: -5 }, EPS);           // (45, 45)
+  check('...and at 1', anchorRawOpening('W', 1, 10), { x: -5, z: 5 }, EPS);  // (45, 55)
+  check('E at 0', anchorRawOpening('E', 0, 10), { x: 5, z: -5 }, EPS);       // (55, 45)
+  check('E at 1', anchorRawOpening('E', 1, 10), { x: 5, z: 5 }, EPS);        // (55, 55)
+  check('a 40 m location: W at 0.25 is 10 m up its west edge',
+    anchorRawOpening('W', 0.25, 40), { x: -20, z: -10 }, EPS);      // (30, 40)
+
+  console.log('\nanchorRawOpening — tile_rotation, the composer\'s own flip rule');
+  check('90°: E at 0.25 becomes the S edge at 0.75',
+    anchorRawOpening('E', 0.25, 10, 90), { x: 2.5, z: 5 }, EPS);    // S (52.5, 55)
+  check('90°: N at 0.30 becomes the E edge, `at` unflipped',
+    anchorRawOpening('N', 0.3, 10, 90), { x: 5, z: -2 }, EPS);      // E (55, 48)
+  check('180°: N at 0.30 becomes S at 0.70',
+    anchorRawOpening('N', 0.3, 10, 180), { x: 2, z: 5 }, EPS);      // S (52, 55)
+  check('270°: ...and W at 0.70',
+    anchorRawOpening('N', 0.3, 10, 270), { x: -5, z: 2 }, EPS);     // W (45, 52)
+  check('360° is no rotation at all',
+    anchorRawOpening('N', 0.3, 10, 360), { x: -2, z: -5 }, EPS);
+  check('the letter turns with it', rotatedEdge('E', 90), 'S');
+  check('...twice', rotatedEdge('N', 180), 'S');
+  check('...and not at all without rotation', rotatedEdge('W'), 'W');
+
+  console.log('\nanchorRawOpening — the sanitising the server does too');
+  check('an unusable `at` is the edge MIDPOINT',
+    anchorRawOpening('N', Number.NaN, 10), { x: 0, z: -5 }, EPS);   // (50, 45)
+  check('`at` past the end is pulled onto the edge',
+    anchorRawOpening('N', 2, 10), { x: 5, z: -5 }, EPS);            // (55, 45)
+  check('...and before the start as well',
+    anchorRawOpening('N', -1, 10), { x: -5, z: -5 }, EPS);          // (45, 45)
+  // WITHOUT AN ANCHOR THERE IS NO POINT — `placed_footprint` refuses the very
+  // same case, so the server would not name a point either.
+  check('no plan width, no point', anchorRawOpening('N', 0.5, 0), null);
+  check('...a negative one neither', anchorRawOpening('N', 0.5, -10), null);
+  check('...nor a non-finite one', anchorRawOpening('N', 0.5, Number.NaN), null);
+  check('an edge letter that is none', anchorRawOpening('X', 0.5, 10), null);
+
+  console.log('\nanchorRawOpenings — the whole list, and what drops out of it');
+  check('two openings, both anchored',
+    anchorRawOpenings([{ edge: 'N', at: 0.5 }, { edge: 'E', at: 0.5 }], 10),
+    [{ edge: 'N', at: { x: 0, z: -5 } }, { edge: 'E', at: { x: 5, z: 0 } }], EPS);
+  check('rotation turns letter AND point together',
+    anchorRawOpenings([{ edge: 'E', at: 0.25 }], 10, 90),
+    [{ edge: 'S', at: { x: 2.5, z: 5 } }], EPS);
+  check('no anchor: the location stays closed, not free',
+    anchorRawOpenings([{ edge: 'N', at: 0.5 }], 0), []);
+  check('nothing authored, nothing anchored', anchorRawOpenings([], 10), []);
+  check('...and a missing list is the same', anchorRawOpenings(undefined, 10), []);
+
+  console.log('\ninwardOf — the normal a raw opening has no payload for');
+  check('N is the −z edge, so inward is +z', inwardOf('N'), { x: 0, z: 1 }, EPS);
+  check('S', inwardOf('S'), { x: 0, z: -1 }, EPS);
+  check('W', inwardOf('W'), { x: 1, z: 0 }, EPS);
+  check('E', inwardOf('E'), { x: -1, z: 0 }, EPS);
+  // The rotated case of the server's smoke: an E opening under rotation 90 is
+  // an S opening, and its inward is S's own — the two derivations agree.
+  check('a rotated E opening carries S\'s inward',
+    inwardOf(rotatedEdge('E', 90)), { x: 0, z: -1 }, EPS);
+
+  console.log('\nthe two halves compose — local anchor, then § A1.1');
+  // w=40, S at 0.75 -> local (10, 20); centre (50, 50) at yaw 90 -> (70, 40),
+  // which is what `opening_world_points` answers for that very fixture.
+  const s75 = anchorRawOpening('S', 0.75, 40);
+  check('the raw anchor turned into the world at yaw 90',
+    localToWorld(s75.x, s75.z, 50, 50, RAD(90)), { x: 70, z: 40 }, EPS);
+  check('...and the whole list through `openingWorldPoints`',
+    openingWorldPoints({ x: 50, z: 50, yaw: 0 },
+      anchorRawOpenings([{ edge: 'N', at: 0.5 }, { edge: 'E', at: 0.25 }], 10)),
+    [{ edge: 'N', x: 50, z: 45 }, { edge: 'E', x: 55, z: 47.5 }], EPS);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;

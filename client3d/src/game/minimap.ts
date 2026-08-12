@@ -118,6 +118,34 @@ export function worldToPx(p: { x: number; z: number },
 }
 
 /**
+ * The DOTS of a location list, as one string — the redraw signature of the
+ * places on the map.
+ *
+ * The publisher in `main.ts` only redraws the minimap when its signature
+ * changes, and the places used to enter that signature by their COUNT alone.
+ * A count answers "has one been discovered", never "has one moved": since the
+ * seamless world a location can be dragged to another metre without the list
+ * growing, and the map then kept a dot at the old spot until something else
+ * (a step, an orbit) happened to move the signature.
+ *
+ * Id AND point, because both change the picture on their own: a place that
+ * moves is a dot in a new spot, and one place replaced by another at the very
+ * same metre is a different place under the same dot — the tooltip and the
+ * fog reveal that follow it are not the same. Unplaced (`null`) stringifies to
+ * "null" and is thereby its own state as well: the dot is not drawn, and a
+ * place that gets a position must bring it back.
+ *
+ * Computed once per list — when `main.ts` TAKES a payload — never per redraw
+ * tick: the publisher runs four times a second and would otherwise walk every
+ * known location of the world for a string that only a poll can change.
+ */
+export function locationsSignature(
+  locations: { id: string; pos_x: number | null; pos_z: number | null }[],
+): string {
+  return locations.map((l) => `${l.id}:${l.pos_x},${l.pos_z}`).join(';');
+}
+
+/**
  * Camera yaw (radians) → compass bearing in degrees, 0 = north and rising
  * CLOCKWISE, normalised into [0, 360).
  *

@@ -183,6 +183,45 @@
  *   shouldSnap(10, 12.5)  -> |2.5| > 2 ? yes  -> true   (local ran AHEAD)
  *   shouldSnap(0, 0)      -> 0                -> false
  *   shouldSnap(3, 2.5)    -> 0.5              -> false
+ *
+ * --- trimBucket / remainingPoints: the line BEHIND the walker (E5 task 2) ---
+ * The drawn journey used to be the whole polyline, start to goal, for the
+ * whole trip — so a traveller halfway to the next village dragged a dashed
+ * line back to the village it had left. The line is now trimmed at the
+ * walker's own foot point, and to keep that from rebuilding a buffer every
+ * frame the trim advances in BUCKETS of TRIM_BUCKET_M = 5 m; the bucket is
+ * part of the drawn line's key in `npcs.ts`.
+ *   trimBucket(0)    = floor(0/5)   = 0     (the untrimmed whole line)
+ *   trimBucket(4.99) = floor(0.998) = 0
+ *   trimBucket(5)    = 1
+ *   trimBucket(7)    = floor(1.4)   = 1                          <- plan case
+ *   trimBucket(9.99) = 1                    (still the same geometry)
+ *   trimBucket(10)   = 2
+ *   trimBucket(-3)   = 0   and   trimBucket(NaN) = 0   (nothing said = untrimmed)
+ *
+ * remainingPoints = pointAtDistance(points, d) followed by every waypoint
+ * BEHIND that point. On (P) = [[0,0],[10,0],[10,20]], total 30:
+ *   d = 0    -> foot (0,0) on segment 0, tail = points[1..]
+ *               -> [(0,0), (10,0), (10,20)]            the whole line
+ *   d = 7    -> foot (7,0) (t = 0.7 on segment 0), tail = points[1..]
+ *               -> [(7,0), (10,0), (10,20)]            <- plan case, bucket 1
+ *   d = 10   -> the foot IS the corner (t = 1). It must NOT appear twice, so
+ *               the tail starts BEHIND it: points[2..]
+ *               -> [(10,0), (10,20)]
+ *   d = 15   -> segment 1, t = 5/20 = 0.25 -> foot (10,5), tail = points[2..]
+ *               -> [(10,5), (10,20)]
+ *   d = 30   -> foot (10,20) = the end, tail empty -> [(10,20)]
+ *               ONE point: `npcs.ts` draws from two up, so an arrived
+ *               traveller draws no line at all — which is right, there is
+ *               nothing ahead of it any more.
+ *   d = 42   -> clamped to 30, same single point
+ *   d = -3   -> clamped to 0, the whole line
+ * On (D) = [[0,0],[0,0],[10,0]], the collapsed pair:
+ *   d = 4    -> segment 0 has L = 0 and is skipped (no 0/0 lerp), so the foot
+ *               is found on segment 1 at t = 0.4 -> (4,0), tail = points[2..]
+ *               -> [(4,0), (10,0)]   — the duplicate start is trimmed away
+ *               with everything else behind the walker
+ * On (S) = [[7,-2]] any d -> [(7,-2)]; on [] -> [].
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -239,7 +278,8 @@ const S = [[7, -2]];
 
 async function main() {
   const { polylineLength, pointAtDistance, clampProgress, advanceProgress,
-          catchUpStep, shouldSnap, TRAVEL_SNAP_M } = await loadTravelPath();
+          catchUpStep, shouldSnap, TRAVEL_SNAP_M,
+          trimBucket, remainingPoints, TRIM_BUCKET_M } = await loadTravelPath();
   // What `npcs.ts` hands in as its walking pace; kept as a literal because
   // this module is pure and must not import the figure code.
   const WALK = 3.4;
@@ -342,6 +382,41 @@ async function main() {
   check('the local value ran ahead by 2.5 m: snap', shouldSnap(10, 12.5), true);
   check('no difference at all', shouldSnap(0, 0), false);
   check('half a metre of poll jitter is not a snap', shouldSnap(3, 2.5), false);
+
+  console.log('\ntrimBucket — the five metres a redrawn travel line costs');
+  check('the bucket is five metres', TRIM_BUCKET_M, 5);
+  check('nothing walked yet', trimBucket(0), 0);
+  check('just short of the first bucket', trimBucket(4.99), 0);
+  check('exactly on it', trimBucket(5), 1);
+  check('seven metres in', trimBucket(7), 1);
+  check('...and still at 9.99', trimBucket(9.99), 1);
+  check('ten metres is the next', trimBucket(10), 2);
+  check('a negative progress trims nothing', trimBucket(-3), 0);
+  check('...and neither does a NaN one', trimBucket(NaN), 0);
+
+  console.log('\nremainingPoints — the line ahead of the walker, nothing behind');
+  check('nothing walked: the whole line', remainingPoints(P, 0),
+    [[0, 0], [10, 0], [10, 20]]);
+  check('7 m in: the foot point, then the rest', remainingPoints(P, 7),
+    [[7, 0], [10, 0], [10, 20]]);
+  check('exactly on the corner: it is NOT repeated', remainingPoints(P, 10),
+    [[10, 0], [10, 20]]);
+  check('a quarter up the second leg', remainingPoints(P, 15), [[10, 5], [10, 20]]);
+  check('arrived: one point, so `npcs.ts` draws no line', remainingPoints(P, 30),
+    [[10, 20]]);
+  check('past the end clamps to the same', remainingPoints(P, 42), [[10, 20]]);
+  check('before the start clamps to the whole line', remainingPoints(P, -3),
+    [[0, 0], [10, 0], [10, 20]]);
+  check('the collapsed pair is skipped, not lerped', remainingPoints(D, 4),
+    [[4, 0], [10, 0]]);
+  check('a one-point journey stays one point', remainingPoints(S, 3), [[7, -2]]);
+  check('no line at all', remainingPoints([], 5), []);
+  check('...and none for a missing one', remainingPoints(null, 5), []);
+  // The trim must not alias the payload: `npcs.ts` builds Vector3s from these
+  // and the route keeps running on its own points.
+  const kept = remainingPoints(P, 15);
+  kept[1][0] = 999;
+  check('the tail is COPIED out of the polyline', P[2][0], 10);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
