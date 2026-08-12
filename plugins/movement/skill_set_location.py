@@ -77,13 +77,13 @@ class SetLocationSkill(PluginSkill):
             with a pose (the room is derived): "home, cooking"
         """
         if not self.enabled:
-            return "SetLocation Skill ist nicht verfuegbar."
+            return "The SetLocation skill is disabled."
 
         try:
             return self._execute_inner(raw_input)
         except Exception as e:
             logger.error("SetLocation failed: %s", e)
-            return f"Fehler beim Setzen der Location: {e}"
+            return f"Error while setting the location: {e}"
 
     def _execute_inner(self, raw_input: str) -> str:
         ctx = self._parse_base_input(raw_input)
@@ -92,9 +92,9 @@ class SetLocationSkill(PluginSkill):
         user_id = ctx.get("user_id", "").strip()
 
         if not character_name:
-            return "Fehler: Agent-Name fehlt."
+            return "Error: character_name missing."
         if not input_text:
-            return "Fehler: Kein Ort angegeben."
+            return "Error: no place given."
 
         # Parse the input: "location, room/pose, pose"
         parts = [p.strip() for p in input_text.split(",")]
@@ -172,8 +172,8 @@ class SetLocationSkill(PluginSkill):
                     OFFMAP_SLEEP_SENTINEL, enter_offmap_sleep)
                 if home_loc_id == OFFMAP_SLEEP_SENTINEL:
                     if enter_offmap_sleep(character_name):
-                        return f"{character_name} hat sich zurueckgezogen — offmap."
-                    return f"{character_name} ist bereits offmap."
+                        return f"{character_name} has withdrawn — off the map."
+                    return f"{character_name} is already off the map."
                 if home_loc_id:
                     matched_location = get_location_by_id(home_loc_id)
                     if matched_location:
@@ -198,9 +198,10 @@ class SetLocationSkill(PluginSkill):
                 room_names = [r.get("name", "") for r in current_rooms if r.get("name")]
                 if room_names:
                     available_parts.extend(room_names)
-            available = ", ".join(available_parts) if available_parts else "keine definiert"
+            available = ", ".join(available_parts) if available_parts else "none defined"
             logger.warning(f"Location not found: '{requested_location}'. Available: {available}")
-            return f"Ort '{requested_location}' nicht gefunden. Verfuegbare Orte: {available}"
+            return (f"Place '{requested_location}' not found. "
+                    f"Available places: {available}")
 
         location_name = matched_location["name"]
         location_id = matched_location.get("id", location_name)
@@ -426,22 +427,22 @@ class SetLocationSkill(PluginSkill):
               f"room='{room_name}' (id: {room_id}), pose='{pose}'")
 
         # The confirmation
-        result = f"Standort aktualisiert: {location_name}"
+        result = f"Location updated: {location_name}"
         if room_name:
-            result += f", Raum: {room_name}"
+            result += f", room: {room_name}"
         if pose:
             result += f" ({pose})"
         if matched_location.get("description"):
-            result += f"\nOrt-Beschreibung: {matched_location['description']}"
+            result += f"\nPlace description: {matched_location['description']}"
         if matched_room and matched_room.get("description"):
-            result += f"\nRaum-Beschreibung: {matched_room['description']}"
+            result += f"\nRoom description: {matched_room['description']}"
 
         return result
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
         fmt = format_name or "tag"
-        return format_example(fmt, self.name, "Büro, Küche, kaffee_kochen")
+        return format_example(fmt, self.name, "Office, Kitchen, making coffee")
 
     def _build_locations_hint(self, character_name: str) -> str:
         """Builds the list of available locations for the tool description.
@@ -533,7 +534,7 @@ class SetLocationSkill(PluginSkill):
             description=(
                 f"{self.description}. "
                 f"Input: location name, optionally with room and/or activity "
-                f"(e.g. 'Büro, Küche' or 'home, bedroom, sleeping'). "
+                f"(e.g. 'Office, Kitchen' or 'home, bedroom, sleeping'). "
                 f"Cross-location moves start a timed journey along locations "
                 f"you already know — you set the destination once and the "
                 f"journey proceeds automatically as game time passes. Within "
