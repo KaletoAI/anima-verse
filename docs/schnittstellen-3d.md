@@ -208,11 +208,12 @@
 >     herauslässt (der Rundweg derselben Öffnung); aus dem `entry_room`,
 >     dem Gameplay-Gate jeder anderen Kante; und von überall, wenn die
 >     Location keinen `entry_room` erklärt.
->     Dieselbe Funktion beantwortet den Kompass:
->     `GET /world/avatar/neighbors` trägt `may_leave` **pro Richtung** in
->     jedem Nachbar-Eintrag; das frühere Wurzelfeld `at_entry_room` ist
->     ersatzlos weg — es rechnete eine zweite, ältere Regel nach und
->     blendete Richtungen aus, die der Server erlaubt.
+>     Einen Kompass, der das vorab **pro Richtung** beantwortet, gibt es
+>     nicht mehr: `GET /world/avatar/neighbors` ist mit dem Kachel-Schritt
+>     zusammen gestrichen — auf einer Meter-Karte gibt es keine vier Pfeile
+>     mehr, die man vorab beurteilen könnte. `may_leave` lebt im **EXIT-Gate
+>     von `POST /play/pos`** weiter und entscheidet am gemeldeten Standpunkt,
+>     nicht auf Vorrat (die Gate-Reihenfolge steht in **§ A15**).
 >     **`width_m` wird beim Speichern geklemmt, nie verworfen:**
 >     [0,5 … `plan_width_m`] Meter (ohne Anker steht 10 ein) — die Kante
 >     ist die Obergrenze, und eine gespeicherte Öffnung, die stillschweigend
