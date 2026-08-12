@@ -31,7 +31,6 @@ _KIND_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SPEED_MIN, SPEED_MAX = 0.0, 2.0
 DEFAULT_COLOR = "#888888"
-MODEL_URL_MAX = 300
 
 
 def _shared_path() -> Path:
@@ -52,53 +51,6 @@ def _shared_types() -> Dict[str, Dict[str, Any]]:
         except ValueError:
             continue
         out[entry["kind"]] = entry
-    return out
-
-
-def _finite(value: Any) -> Optional[float]:
-    """``value`` as a finite float, or None — NaN/inf are junk, not numbers."""
-    try:
-        num = float(value)
-    except (TypeError, ValueError):
-        return None
-    return num if math.isfinite(num) else None
-
-
-def _sanitize_scatter(raw: Any) -> Optional[Dict[str, Any]]:
-    """The ``meta.scatter`` block, whitelisted to EXACTLY the three fields the
-    3D ground reads (`client3d/src/scene/ground.ts` → `buildScatter`).
-
-    ``meta`` itself stays free-form — a foreign key next to ``scatter``
-    survives untouched. ``scatter`` does not: it is a rendering contract, and
-    a stray key or a NaN density would travel from the editor to every client.
-
-    * ``density_per_100m2`` — instances per 100 m2 of area. Always present:
-      a block whose density is junk, negative or absent means "scatter
-      nothing" (0.0), which is exactly how the client reads it.
-    * ``height_m`` — height of the built-in tuft; only a value > 0 is a
-      height, anything else loses the key and the client's default applies.
-    * ``model`` — URL of the prop mesh to instance (`/assets/props/<id>/model`,
-      the same URL `props.model_url` hands out). A non-string, blank or
-      over-long (> ``MODEL_URL_MAX``) value loses the key and the tuft
-      stands — truncating a URL would only produce a 404 that looks like a
-      configured model.
-
-    Returns None when there is no block at all — then the key is dropped.
-    """
-    if not isinstance(raw, dict):
-        return None
-    density = _finite(raw.get("density_per_100m2"))
-    out: Dict[str, Any] = {
-        "density_per_100m2": round(density, 3) if density and density > 0 else 0.0,
-    }
-    height = _finite(raw.get("height_m"))
-    if height is not None and height > 0:
-        out["height_m"] = round(height, 3)
-    model = raw.get("model")
-    if isinstance(model, str) and model.strip():
-        url = model.strip()
-        if len(url) <= MODEL_URL_MAX:
-            out["model"] = url
     return out
 
 
@@ -123,13 +75,11 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     if not math.isfinite(speed):
         speed = 1.0
     speed = min(max(speed, SPEED_MIN), SPEED_MAX)
+    # `meta` is free-form and stays that way: a type declares how ground
+    # LOOKS and how it is walked, nothing about what grows on it. Scatter used
+    # to be whitelisted here and moved to the AREA with finding B17 — see
+    # `app/models/terrain._sanitize_scatter_list`.
     meta = dict(raw.get("meta")) if isinstance(raw.get("meta"), dict) else {}
-    if "scatter" in meta:
-        scatter = _sanitize_scatter(meta["scatter"])
-        if scatter is None:
-            meta.pop("scatter")
-        else:
-            meta["scatter"] = scatter
     return {
         "kind": kind,
         "name": name,

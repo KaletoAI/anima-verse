@@ -5,6 +5,11 @@ from the terrain-type catalog plus its outline in world metres. Areas may
 overlap; ``z_order`` (then paint order) decides which one answers a point
 query — the topmost wins, mirroring how the editor paints.
 
+An area also declares what GROWS on it: ``meta.scatter`` is a LIST of prop
+scatters (model, density, target height), authored per area since finding
+B17 — a forest with two kinds of tree and a clearing without any is one
+painted shape each, and a terrain TYPE cannot say that.
+
 Everything is validated ON WRITE: the readers downstream
 (``world_geometry.point_in_polygon``) fail closed on malformed vertices
 without a word in the log, so junk must never reach the DB in the first
@@ -23,6 +28,77 @@ from app.core.timeutils import utc_now_iso
 MAX_POINTS = 256
 MAX_COORD = 100_000.0
 MAX_Z_ORDER = 10_000
+#: Scatter entries one area may carry. What GROWS on a painted area is
+#: authored per area since finding B17 — several props on one meadow are the
+#: point of the move, an unbounded list is a payload every client parses.
+MAX_SCATTER_ENTRIES = 8
+#: Longest ``model`` URL a scatter entry may name. Truncating one would only
+#: produce a 404 that looks like a configured model.
+MODEL_URL_MAX = 300
+
+
+def _finite(value: Any) -> Any:
+    """``value`` as a finite float, or None — NaN/inf are junk, not numbers."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
+    """One entry of ``meta.scatter``, whitelisted to EXACTLY the three fields
+    the renderers read (``packages/scene-render/src/scatter.ts`` and the
+    editor's preview + area dialog).
+
+    * ``density_per_100m2`` — instances per 100 m2 of the painted area. Always
+      present: a junk, negative or absent density means "scatter nothing"
+      (0.0), which is how both renderers read it.
+    * ``height_m`` — TARGET height of the placed prop in metres: the model is
+      scaled uniformly until its bounding box is this tall, and the built-in
+      tuft is built this high. Only a value > 0 is a height; anything else
+      loses the key, and then a model keeps its authored size.
+    * ``model`` — URL of the prop mesh to instance (``/assets/props/<id>/model``,
+      the very URL ``props.model_url`` hands out). A non-string, blank or
+      over-long value loses the key and the tuft stands in its place.
+
+    Raises ValueError when the entry is not an object at all — a list of junk
+    is an authoring mistake worth a 400, not something to silently drop.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("scatter entry must be an object")
+    density = _finite(raw.get("density_per_100m2"))
+    out: Dict[str, Any] = {
+        "density_per_100m2": round(density, 3) if density and density > 0 else 0.0,
+    }
+    height = _finite(raw.get("height_m"))
+    if height is not None and height > 0:
+        out["height_m"] = round(height, 3)
+    model = raw.get("model")
+    if isinstance(model, str) and model.strip():
+        url = model.strip()
+        if len(url) <= MODEL_URL_MAX:
+            out["model"] = url
+    return out
+
+
+def _sanitize_scatter_list(raw: Any) -> List[Dict[str, Any]]:
+    """``meta.scatter`` as a whitelisted LIST — what this ground grows.
+
+    The rest of ``meta`` stays free-form: a foreign key next to ``scatter``
+    survives untouched. ``scatter`` does not, because it is a rendering
+    contract — a stray key or a NaN density would travel from the editor to
+    every client.
+
+    Anything that is not a list at all raises: the field moved from the
+    terrain TYPE to the area with finding B17 and it moved as a LIST, so a
+    single object here is an old client, not an entry to be guessed at.
+    """
+    if not isinstance(raw, list):
+        raise ValueError("meta.scatter must be a list of entries")
+    if len(raw) > MAX_SCATTER_ENTRIES:
+        raise ValueError(f"at most {MAX_SCATTER_ENTRIES} scatter entries")
+    return [_sanitize_scatter_entry(entry) for entry in raw]
 
 
 def _sanitize_polygon(raw: Any) -> List[List[float]]:
@@ -68,11 +144,16 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
     # Clamped so an absurd layer number cannot blow past SQLite's 64-bit
     # INTEGER on insert.
     z_order = min(max(z_order, -MAX_Z_ORDER), MAX_Z_ORDER)
-    meta = raw.get("meta")
+    meta = dict(raw.get("meta")) if isinstance(raw.get("meta"), dict) else {}
+    # The ONE key of `meta` this module owns (finding B17). An empty list is
+    # not "no scatter authored" but "authored to nothing", and it costs one
+    # pair of brackets — so it is kept as sent rather than dropped.
+    if "scatter" in meta:
+        meta["scatter"] = _sanitize_scatter_list(meta["scatter"])
     return {"id": area_id, "kind": kind,
             "polygon": _sanitize_polygon(raw.get("polygon")),
             "z_order": z_order,
-            "meta": meta if isinstance(meta, dict) else {}}
+            "meta": meta}
 
 
 def list_areas() -> List[Dict[str, Any]]:
