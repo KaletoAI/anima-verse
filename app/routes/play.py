@@ -826,6 +826,17 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     written = set_character_pos(avatar, x, z)
     if entry_room:
         save_character_current_room(avatar, entry_room)
+    # DISCOVERY BY SIGHT (E6): walking past a place reveals it, the same rule
+    # the travel ticker applies to everybody else. AFTER the gates on purpose
+    # — a refused report moved nobody and must reveal nothing, and every
+    # refusal above leaves through ``refuse`` before this line. The avatar
+    # gets it here rather than from the ticker alone so the map fills in at
+    # walking pace instead of at tick pace.
+    try:
+        from app.core.discovery import discover_in_range
+        discover_in_range(avatar, x, z)
+    except Exception as e:
+        logger.debug("sight discovery failed for %s: %s", avatar, e)
     # Walking is player-driven movement, and that is the clearest wake signal
     # there is — the same rule ``/play/enter-room`` and ``/play/travel`` apply
     # (a sleeping avatar must not walk a road in its sleep). It sits AFTER the

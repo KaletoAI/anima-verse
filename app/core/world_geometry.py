@@ -53,6 +53,41 @@ def point_in_footprint(x: float, z: float, cx: float, cz: float,
     return abs(lx) <= half and abs(lz) <= half
 
 
+def footprint_distance(x: float, z: float, cx: float, cz: float,
+                       width_m: float, yaw_deg: float) -> float:
+    """Shortest distance in metres from world point (x, z) to the rotated
+    footprint square — **0 anywhere inside it**, edge inclusive.
+
+    The exact companion of :func:`point_in_footprint`: same transform, same
+    inclusive edge, and ``distance == 0`` is precisely what that function
+    calls "inside". In the footprint's own frame the answer is the classic
+    box distance — overshoot per axis, clamped at zero, combined by Pythagoras
+    — which is why a point beside a face measures straight to that face while
+    a point past a corner measures diagonally to the corner.
+
+    Hand-derived, footprint at (50, 50) with edge 10 (so x, z ∈ [45, 55]):
+      (50, 50) → 0        the centre
+      (55, 50) → 0        ON the east edge
+      (60, 50) → 5        5 m past that edge
+      (58, 58) → hypot(3, 3) = 4.2426…   past the corner, both axes overshoot
+    Turned by 45°, the same square around (200, 50) has its corners at
+    (200 ± 5√2, 50) and (200, 50 ± 5√2):
+      (207.0711, 50) → 0        exactly the rotated east corner
+      (210, 50)      → 2.9289   = 10 − 5√2; via the transform (10, 0) becomes
+                                local (7.0711, 7.0711), both 2.0711 past the
+                                half-edge, hypot(2.0711, 2.0711) = 2.9289.
+
+    A footprint without a size claims no point (``point_in_footprint`` says
+    False, ``placed_footprint`` refuses it) — its distance is ``inf``, so no
+    range can ever reach it and no caller needs a second "is it placed" test.
+    """
+    if not width_m or width_m <= 0:
+        return math.inf
+    lx, lz = world_to_local(x, z, cx, cz, yaw_deg)
+    half = width_m / 2.0
+    return math.hypot(max(abs(lx) - half, 0.0), max(abs(lz) - half, 0.0))
+
+
 def footprint_corners(cx: float, cz: float, width_m: float,
                       yaw_deg: float) -> List[Tuple[float, float]]:
     """The four footprint corners in world metres (local-frame order

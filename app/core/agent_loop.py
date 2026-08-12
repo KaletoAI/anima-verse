@@ -1154,6 +1154,11 @@ class AgentLoop:
                 # Discovery check: before the thought build, so the discovered
                 # place shows up in the list_locations_for_character context
                 # right away and the character can think about it in this tick.
+                # Live again since E6: the rule rolls over what is within
+                # SIGHT RANGE in metres (it walked grid neighbours before, and
+                # the seamless world has none). This is the condition-gated,
+                # announced variant — the silent deterministic pass runs in
+                # the travel ticker (``core/discovery.py``).
                 try:
                     from app.models.rules import check_discover_rules
                     check_discover_rules(character_name)

@@ -725,40 +725,55 @@ def resolve_force_destination(character_name: str,
 # ============================================================
 
 def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
-    """Check the discover rules and possibly uncover an adjacent, still
-    unknown location.
+    """Check the discover rules and possibly uncover a still-unknown location
+    WITHIN SIGHT — ``game.discovery_range_m`` metres of where the character
+    stands.
 
     How it works:
     - Iterates the discover rules in order.
-    - Per rule: character filter, condition in the current location, then the
-      probability roll.
-    - The first rule with a successful roll wins — a random still-unknown
-      neighbour (grid-adjacent) is then added to the known_locations list.
+    - Per rule: character filter, condition, then the probability roll.
+    - The first rule with a successful roll wins — one random still-unknown
+      location in range is then added to the known_locations list.
+
+    METRES, NOT NEIGHBOURS (E6). This used to walk ``get_neighbor_location_ids``
+    — the GRID neighbours of the cell one stood in. The seamless world has no
+    grid, so that list was always empty and the whole rule type was dead. The
+    range now comes from the same setting the deterministic sight pass uses
+    (``core/discovery.py``), and the anchor is the character's POINT, not its
+    location: out in the wilderness — where there is no current location at
+    all, and where one meets new places — is exactly where this has to work.
+
+    What is left for the rule beside that deterministic pass: a CONDITION
+    ("attention>80"), a probability, and a player-visible MESSAGE. The sight
+    pass reveals silently and unconditionally, so in a running world it will
+    normally have taken everything in range before a thought turn gets here.
 
     Returns: dict with location_id/location_name/rule_*/message on a hit,
     otherwise None (nothing discovered this round).
     """
     import random as _random
     from app.core.activity_engine import evaluate_condition
+    from app.core.discovery import get_discovery_range_m, locations_within
     from app.models.character import (
-        get_character_current_location, get_known_locations,
+        get_character_current_location, get_character_pos, get_known_locations,
         add_known_location, _record_state_change)
-    from app.models.world import get_neighbor_location_ids, get_location_by_id
+    from app.models.world import get_location_by_id
 
     # The avatar discovers like everyone else: with fog of war (§ A12) the
     # player map shows only known_locations, so exempting the avatar would
     # leave it unable to ever uncover the map.
-    location_id = get_character_current_location(character_name) or ""
-    if not location_id:
+    pos = get_character_pos(character_name)
+    if pos is None:
         return None
+    range_m = get_discovery_range_m()
+    if range_m <= 0:
+        return None
+    # May be empty (the wilderness) — it is context for the condition, not a
+    # precondition for discovering.
+    location_id = get_character_current_location(character_name) or ""
 
     known = get_known_locations(character_name)
-
-    try:
-        neighbors = get_neighbor_location_ids(location_id)
-    except Exception:
-        neighbors = []
-    unknown = [n for n in neighbors if n and n not in known]
+    unknown = locations_within(pos["x"], pos["z"], range_m, exclude=known)
     if not unknown:
         return None
 

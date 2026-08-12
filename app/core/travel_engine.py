@@ -917,9 +917,11 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         try_roll_on_entry(name, target_id, target)
     except Exception:
         logger.debug("try_roll_on_entry failed for %s", name, exc_info=True)
-    # check_discover_rules is deliberately NOT called: it walks GRID
-    # neighbours, which the seamless world no longer has — dead until E6
-    # rebuilds discovery on the metre map.
+    # check_discover_rules is deliberately NOT called HERE: arriving already
+    # discovers the target (``save_character_current_location``), and the
+    # sight pass at the end of every tick (``_discover_by_sight``) has long
+    # revealed everything else within range. The rule's own roll belongs to
+    # the thought turn, where its condition and its message have a reader.
     try:
         from app.core.agent_loop import get_agent_loop
         get_agent_loop().bump(name)    # think at the destination
@@ -954,15 +956,25 @@ def advance_all_journeys() -> None:
     late and never ungated. The check is skipped when the character already
     STANDS in the target: nothing is crossed then, and the write changes no
     location.
+
+    The tick ALSO carries DISCOVERY BY SIGHT (E6): after the positions are
+    written, ``_discover_by_sight`` reveals what everybody now stands close
+    enough to. It runs as a second pass over the same character list and the
+    same location snapshot — after, so a traveller sees what THIS tick walked
+    it past, not what the last one did.
     """
     from app.core.world_geometry import location_at_point
     from app.models.character import (get_character_current_location,
                                       list_available_characters,
                                       set_character_pos)
     from app.models.world import list_locations
-    locations: Optional[List[Dict[str, Any]]] = None
+    # ONE snapshot per tick, shared by both passes — the locations do not move
+    # while the ticker walks, and the discovery pass needs it every tick
+    # anyway, so there is nothing left to be lazy about.
+    locations: List[Dict[str, Any]] = list_locations()
+    names = list_available_characters()
     now = _game_now()
-    for name in list_available_characters():
+    for name in names:
         try:
             j = get_journey(name)
             if not j:
@@ -983,11 +995,6 @@ def advance_all_journeys() -> None:
             _cancel_follower_journeys(name)
             if not st["arrived"]:
                 if current_id != j["target"]:
-                    # ONE snapshot per tick — the locations do not move while
-                    # the ticker walks, and this is the same reader the write
-                    # below would derive the location with.
-                    if locations is None:
-                        locations = list_locations()
                     at = location_at_point(st["pos"][0], st["pos"][1],
                                            locations)
                     if ((at.get("id") or "") if at else "") == j["target"]:
@@ -1005,6 +1012,34 @@ def advance_all_journeys() -> None:
             _settle_arrival(name, j, st)
         except Exception as e:
             logger.warning("advance journey failed for %s: %s", name, e)
+    _discover_by_sight(names, locations)
+
+
+def _discover_by_sight(names: List[str],
+                       locations: List[Dict[str, Any]]) -> None:
+    """Reveal what everybody now stands close enough to (E6, discovery.py).
+
+    EVERY character with a point, not only the travellers: a scheduler jump, a
+    teleport spell or an admin move puts someone beside a hut just as a road
+    does, and the ticker is the one loop that sees all of them. Someone
+    without a point (off-map) is not near anything and is skipped.
+
+    Cheap by construction rather than by a special case: the location snapshot
+    is the tick's, and ``discover_in_range`` drops the already-known ids
+    BEFORE any distance is measured — a character that knows its whole
+    neighbourhood costs one position read and one config read per tick and
+    writes nothing.
+    """
+    from app.core.discovery import discover_in_range
+    from app.models.character import get_character_pos
+    for name in names:
+        try:
+            pos = get_character_pos(name)
+            if pos is None:
+                continue
+            discover_in_range(name, pos["x"], pos["z"], locations=locations)
+        except Exception as e:
+            logger.debug("sight discovery failed for %s: %s", name, e)
 
 
 class TravelTicker:
