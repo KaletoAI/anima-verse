@@ -1989,9 +1989,27 @@ async function startApp(username: string, role: string) {
    * make the walk trace a wall out of every attempt the player ever made.
    */
   const refusedPoints: { x: number; z: number; until: number }[] = [];
-  /** Radius of such a disc, in metres — a body width of margin around the
-   *  point the server would not have. */
-  const REFUSED_RADIUS_M = 1.2;
+  /**
+   * Radius of such a disc, in metres — margin around the point the server
+   * would not have.
+   *
+   * It MUST stay below one report step, or the self-trap skip below swallows
+   * every disc a walking figure could ever produce (E7 task 2 review): the
+   * figure walks `WALK_SPEED` = 3.4 m/s (`scene/npcs.ts`) and reports every
+   * `POS_REPORT_MS` = 330 ms, so between the refused point and where the
+   * figure stands when the answer arrives lie at most
+   *
+   *     3.4 m/s × 0.33 s = 1.12 m
+   *
+   * and usually less. At the old 1.2 m every refusal was inside its own
+   * skip radius and no disc was ever remembered while walking — the memory
+   * was inert exactly where it is needed. 0.8 m sits below that step (and far
+   * below the ~2 m of a delayed or dropped report), so discs exist again,
+   * while the skip stays the belt for the cases it was built for: a report
+   * gap, a standing figure, or a server correction that puts the figure right
+   * onto the refused point.
+   */
+  const REFUSED_RADIUS_M = 0.8;
   const REFUSED_MEMORY_MS = 4000;
   const REFUSED_MAX = 8;
 
@@ -2007,18 +2025,23 @@ async function startApp(username: string, role: string) {
    * total-block class E7 task 1 took out of the footprint gate, and it is the
    * same bug here.
    *
-   * Derived by hand (REFUSED_RADIUS_M = 1.2, `blockedFor` blocks at a distance
+   * Derived by hand (REFUSED_RADIUS_M = 0.8, `blockedFor` blocks at a distance
    * STRICTLY below it), figure at (10, 10):
-   *   refusal (10.5, 10)   → d = 0.5  ≤ 1.2  → NO disc. With one, the figure
-   *                          at d = 0.5 < 1.2 would be inside it.
-   *   refusal (11.2, 10)   → d = 1.2  ≤ 1.2  → no disc either. The figure
+   *   refusal (10.5, 10)   → d = 0.5  ≤ 0.8  → NO disc. With one, the figure
+   *                          at d = 0.5 < 0.8 would be inside it.
+   *   refusal (10.8, 10)   → d = 0.8  ≤ 0.8  → no disc either. The figure
    *                          would sit exactly ON the rim, which `blockedFor`
    *                          lets pass (`<`), so this one is skipped out of
    *                          caution, not out of necessity.
-   *   refusal (11.3, 10)   → d = 1.3  > 1.2  → disc. The figure is 0.1 m
+   *   refusal (10.9, 10)   → d = 0.9  > 0.8  → disc. The figure is 0.1 m
    *                          outside it and keeps every direction but the one
    *                          leading in.
-   *   refusal (14, 14)     → d = 5.66 > 1.2  → disc, far away and harmless.
+   *   refusal (11.12, 10)  → d = 1.12 > 0.8  → disc. THE ordinary case: one
+   *                          report step at walking pace (see the radius
+   *                          above), and the reason the radius is 0.8 and not
+   *                          1.2 — at 1.2 this very case was skipped and the
+   *                          memory never held anything.
+   *   refusal (14, 14)     → d = 5.66 > 0.8  → disc, far away and harmless.
    * A refusal without any known figure position (`home` null — no avatar
    * model yet) is remembered: there is nothing it could trap.
    */
@@ -2664,7 +2687,11 @@ async function startApp(username: string, role: string) {
       // The server refused the point. Its answer carries the last one it
       // vouched for, and that is where the figure belongs — and the refused
       // point itself becomes a blocked disc, so the next frames slide along
-      // that border instead of running into the same refusal.
+      // that border instead of running into the same refusal. The slide is
+      // unaffected by the disc's SIZE: a frame step is 3.4 m/s × ~16 ms ≈
+      // 0.06 m, so even the 0.8 m disc is a dozen steps wide and nothing
+      // tunnels through it — `slideBlocked` keeps the component along the
+      // border exactly as it does for a building.
       // Where the figure ENDS UP decides whether the disc may be drawn at
       // all: the server's own point when it sent one (`correctTo` puts the
       // figure there), otherwise the place the figure is standing.

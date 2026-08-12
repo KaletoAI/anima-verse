@@ -259,9 +259,10 @@ class SetLocationSkill(PluginSkill):
             return rules_reason
 
         # ``accessible_when`` — the field the world map greys a place out with,
-        # and NO rule row backs it. Its enforcement points are the travel route
-        # (``routes/play.py``), the arrival ticker
-        # (``travel_engine._arrival_gate``) and this skill; all three ask the
+        # and NO rule row backs it. Its enforcement points are FOUR: the travel
+        # route (``POST /play/travel``), the free-walker gate
+        # (``POST /play/pos``), the arrival ticker
+        # (``travel_engine._arrival_gate``) and this skill; all four ask the
         # very same reader, ``world_ops.conditions_pass``, so a condition can
         # never mean one thing for the avatar and another for an NPC. Checked
         # BEFORE the journey starts: a character must not set off for a place it

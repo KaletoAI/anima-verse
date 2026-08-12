@@ -707,10 +707,12 @@ def _arrival_gate(name: str, target_id: str, target: Dict[str, Any],
 
     ``rules.check_access`` is the rule engine's own gate. ``accessible_when``
     is the field the world map greys a place out with, and NO rule row backs
-    it: the route (``routes/play.py``) and this arrival are its only
-    enforcement points, so a missing check here would make the condition
-    decoration for every NPC and for every rule that flips while someone is
-    already on the road.
+    it: it is enforced only where a movement path asks for it, and that is
+    FOUR places — ``POST /play/travel`` and ``POST /play/pos`` (the free
+    walker) in ``routes/play.py``, the SetLocation skill, and this arrival.
+    All four read ``world_ops.conditions_pass``. This one is what makes the
+    condition bite for every NPC and for every rule that flips while someone
+    is already on the road.
     """
     from app.core.world_ops import conditions_pass
     from app.models.rules import check_access

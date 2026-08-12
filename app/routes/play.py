@@ -398,10 +398,13 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
       3. ``rules.check_leave`` — may the avatar leave where it stands,
       4. ``accessible_when`` at the target — the condition the world map
          greys a place out with. A WALL, not a hint (backend-status-3d.md,
-         commit bdd8598): no rule engine reads that field, so it is enforced
-         exactly twice — here, and at the ticker's arrival gate
-         (``travel_engine._arrival_gate``, which is what makes it bite for
-         NPCs and for conditions that flip while someone is on the road).
+         commit bdd8598): no rule engine reads that field, so it is only ever
+         as strong as the paths that ask for it, and there are FOUR of them —
+         this route, ``POST /play/pos`` (a free walker crossing into a place),
+         ``travel_engine._arrival_gate`` (the ticker's arrival, which is what
+         makes it bite for NPCs and for conditions that flip while someone is
+         on the road) and the SetLocation skill. All four read the same
+         ``world_ops.conditions_pass``.
          The SetLocation skill still does not ask before it sets off; the
          arrival gate refuses at the door (ledgered separately),
       5. ``danger_system.check_location_access`` — may it enter the target.
@@ -461,9 +464,12 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
             "reason": "block_leave", "message": leave_reason})
 
     # ``accessible_when`` — the same field the world map greys a place out
-    # with, read by the same reader (``world_ops.conditions_pass``). It is
-    # the ONLY enforcement point there is: no rule row backs it, so a missing
-    # check here means the condition is decoration.
+    # with, read by the same reader (``world_ops.conditions_pass``). No rule
+    # row backs it, so it is exactly as strong as the movement paths that ask:
+    # this route, the free-walker gate in ``play_pos`` below, the ticker's
+    # ``travel_engine._arrival_gate`` and the SetLocation skill. Four places,
+    # one reader — a missing check in any of them makes the condition
+    # decoration for that path.
     from app.core.world_ops import conditions_pass
     if not conditions_pass(target.get("accessible_when") or [],
                            avatar, target_id):
