@@ -31,9 +31,8 @@ migrated_backups/
 # Migrations-/Cleanup-Backups (z.B. faceswap_cleanup) — Wiederherstellungspunkte, nicht committen
 migration_backup/
 
-# Internal helper / migration scripts — not part of the public release
-# Verankert (fuehrender /), sonst wuerden sie auch client3d/tools/ schlucken.
-/scripts/
+# Internal helper scripts — anchored (leading /), otherwise this would also
+# swallow client3d/tools/. scripts/ itself is tracked (the smoke checks).
 /tools/
 
 # Files removed from public release
@@ -121,7 +120,8 @@ Aufgaben.md
 /models/**/*.gguf
 # fastembed downloads a full HF model cache here (built-in embeddings)
 /models/fastembed/
-voices/*.wav
+# TTS speaker references — personal data, never in the repo
+voices/
 # Game audio (music/ambience) — user files, served by /assets/audio
 /audio/
 
@@ -157,6 +157,8 @@ tests/
 test_local.py
 test_*.py
 !test.py
+# ...but the checks under scripts/ are tracked
+!scripts/test_*.py
 
 # OS
 Thumbs.db
@@ -185,10 +187,8 @@ worlds/*/suitability_cases.json
 worlds/*/model_capabilities.json
 exports/
 
-# Shared 3D animation clips: binary Mixamo FBX, provided per installation
-shared/models/clips/*.fbx
-shared/models/clips/*.glb
-shared/models/clips/*.gltf
+# Shared 3D animation clips are TRACKED (shared/models/clips/**) — the code
+# relies on them (kind = file name, set = subdirectory).
 # Shared test figure (Mixamo standard character), provided per installation
 shared/models/figure/*.fbx
 shared/models/figure/*.glb

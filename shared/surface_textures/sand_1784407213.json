@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-07-18T20:40:13+00:00",
+  "source": "generated",
+  "backend": "Flux2-9B Normal",
+  "prompt": "a seamless tileable texture photographed straight from above in macro detail: the surface fills the entire frame edge to edge with its rich natural color and fine structure, lit by soft even diffuse daylight, crisp sharp focus, photorealistic, fine beach sand with slight wind ripples, warm beige tones",
+  "negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality"
+}

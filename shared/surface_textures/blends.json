@@ -1,0 +1,19 @@
+{
+  "coast": {
+    "toward": "deep_water",
+    "zones": [
+      {
+        "kind": "deep_water",
+        "until": 0.42
+      },
+      {
+        "kind": "sand",
+        "until": 0.62
+      },
+      {
+        "kind": "neighbor"
+      }
+    ],
+    "noise": 0.08
+  }
+}

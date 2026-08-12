@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-07-29T19:40:47+00:00",
+  "source": "generated",
+  "backend": "Flux2-9B Normal",
+  "prompt": "A seamless tileable texture of a wooden floor surface, photographed straight from above in macro detail, filling the entire frame edge to edge with rich natural colors and fine grain structure, perfectly continuous and seamless at the borders with no visible edges or seams, lit by soft even diffuse daylight, crisp sharp focus, photorealistic, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border.",
+  "negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality"
+}

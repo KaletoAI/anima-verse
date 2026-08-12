@@ -1,0 +1,84 @@
+{
+  "dark_wooden_floor": {
+    "name": "dark wooden floor",
+    "description": "the surface of dark wooden floor seen straight from above"
+  },
+  "rubber_flooring": {
+    "name": "rubber flooring",
+    "description": "the surface of rubber flooring seen straight from above"
+  },
+  "wooden_floor": {
+    "name": "wooden floor",
+    "description": "the surface of wooden floor seen straight from above"
+  },
+  "tiled_floor": {
+    "name": "tiled floor",
+    "description": "A high-resolution texture of a flowing floor surface, featuring smooth, organic patterns with subtle variations in tone and depth, ideal for digital design and material rendering."
+  },
+  "woodchip_wallpaper": {
+    "name": "woodchip wallpaper",
+    "description": "white woodchip wallpaper"
+  },
+  "non-woven_wallpaper": {
+    "name": "non-woven wallpaper",
+    "description": "the surface of non woven wallpaper seen straight from above"
+  },
+  "dark_stone": {
+    "name": "stone",
+    "description": "the surface of dark stone seen straight from above"
+  },
+  "dark_stone_2": {
+    "name": "dark stone",
+    "description": "the surface of dark stone 2 seen straight from above"
+  },
+  "city": {
+    "name": "city",
+    "description": "the surface of city seen straight from above"
+  },
+  "coast": {
+    "name": "coast",
+    "description": "the surface of coast seen straight from above"
+  },
+  "forest": {
+    "name": "forest",
+    "description": "forest floor dominated by vibrant green moss patches and lush forest floor growth, interspersed with brown leaf litter and small twigs."
+  },
+  "grass": {
+    "name": "grass",
+    "description": "dense short lawn grass, natural fresh green blades"
+  },
+  "sand": {
+    "name": "sand",
+    "description": "fine beach sand with slight wind ripples, warm beige tones"
+  },
+  "street": {
+    "name": "street",
+    "description": "the surface of street seen straight from above"
+  },
+  "water": {
+    "name": "water",
+    "description": "calm water surface with gentle ripples and small waves, natural blue-green tones",
+    "material": {
+      "class": "water",
+      "tint": "#3f7fb8",
+      "map_strength": 0.75,
+      "wave_m": 1.6,
+      "speed": 0.25,
+      "sky_mix": 0.55,
+      "roughness": 0.08
+    }
+  },
+  "deep_water": {
+    "name": "deep water",
+    "description": "deep water",
+    "material": {
+      "class": "water",
+      "tint": "#002e57",
+      "map_strength": 0.75,
+      "wave_m": 1.6,
+      "speed": 0.25,
+      "sky_mix": 0.55,
+      "roughness": 0.08
+    }
+  }
+}
