@@ -487,7 +487,7 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
 | `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. Der Wert stammt aus demselben Fußabdruck, den auch `world_bounds` benutzt — Eintrag und Fußabdruck-Regel können also nicht auseinanderlaufen. `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** (dann hat er keinen Fußabdruck, egal wie gut sein Anker ist) ODER seine Geometrie hat keinen brauchbaren Anker (`map3d.plan_width_m` fehlt, ist ≤ 0 oder unlesbar). Ein Client, der die Kantenlänge eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d`; E2 (Drag-Ghost) darf den rohen Anker unplatzierter Orte später zusätzlich als eigenes Feld liefern |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
-| `layout_sig` | `str` | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat (AV3D-2⁺) |
+| `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (Grenz-Durchgänge, `rotation`, `size`, `tile_rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
 Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 `locations` · `characters` · `events_by_location` · `world_bounds` ·

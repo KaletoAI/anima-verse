@@ -270,17 +270,27 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             _top = max([l for l in _levels if l >= 0], default=None)
             if _top is not None:
                 entry["map3d"] = {**(entry.get("map3d") or {}), "floors": _top + 1}
-        # Room-layout signature (AV3D-2 addendum): a running client loads
-        # /world/locations only once — this bump tells it a room layout of
-        # this location changed, so it can re-fetch specifically.
+        # Layout signature (AV3D-2 addendum): a running client loads
+        # /world/locations only once — this bump tells it that something which
+        # SHAPES THE SCENE of this location changed, so it can re-fetch
+        # specifically. Room layouts alone were not enough (E5 finding B11):
+        # the scene payload is shaped by ``map3d`` just as much — boundary
+        # openings drawn in the floor-plan editor, rotation, size,
+        # tile_rotation, plan_width_m, storey_height_m, floors. A gate drawn
+        # into the boundary changed nothing a running client could see.
+        # ``entry["map3d"]`` is the sanitized object (sanitized on save) plus
+        # the derived floors — deliberately the SAME object the entry ships,
+        # never a second sanitize pass.
         _lay_rooms = [(r.get("id"), r.get("layout"))
                       for r in (loc.get("rooms") or [])
                       if isinstance(r, dict) and r.get("layout")]
-        if _lay_rooms:
+        _lay_map3d = entry.get("map3d") or {}
+        if _lay_rooms or _lay_map3d:
             import hashlib as _hashlib
             import json as _json
             entry["layout_sig"] = _hashlib.md5(_json.dumps(
-                _lay_rooms, sort_keys=True, default=str).encode()).hexdigest()[:10]
+                [_lay_rooms, _lay_map3d],
+                sort_keys=True, default=str).encode()).hexdigest()[:10]
         locations.append(entry)
 
     # The painted map is part of the world frame too (E4 finding B7). Without

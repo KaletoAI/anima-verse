@@ -85,10 +85,11 @@ import type {
  *     costs nothing.
  * REFRESH IS MANUAL, deliberately (v1 decision): the cache is only dropped when
  * the toggle is switched off and on again (or the tab is left). A model that is
- * re-generated, re-scaled or re-rotated in the World tab does NOT invalidate
- * anything here — `layout_sig` covers room layouts only, and the
- * `anima-model3d-changed` event is fired in a tab that is not mounted next to
- * this one. Toggle off/on is the cheap, explicit refresh.
+ * re-generated in the World tab does NOT invalidate anything here —
+ * `layout_sig` covers the room layouts and the location's `map3d` (E5 B11),
+ * not the model files behind them, and the `anima-model3d-changed` event is
+ * fired in a tab that is not mounted next to this one. Toggle off/on is the
+ * cheap, explicit refresh.
  *
  * Paint has TWO gestures and one result. `area` clicks an outline; `line`
  * clicks a centre line that `strokeToPolygon` widens into the very same kind
