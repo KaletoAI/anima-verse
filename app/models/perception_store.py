@@ -26,16 +26,26 @@ logger = get_logger("perception_store")
 
 def insert_utterance(*, ts: str, speaker: str, location_id: str, room_id: str,
                      volume: str, addressees: Sequence[str], content: str,
-                     meta: Optional[Dict[str, Any]] = None) -> int:
-    """Schreibt einen Sprechakt und gibt seine id zurueck."""
+                     meta: Optional[Dict[str, Any]] = None,
+                     pos_x: Optional[float] = None,
+                     pos_z: Optional[float] = None) -> int:
+    """Writes one speech act and returns its id.
+
+    ``pos_x``/``pos_z`` belong to the wilderness only: a speaker outside every
+    location has no room to name, so the metre point it spoke from is what
+    later tells where the line was heard. Inside a location both stay NULL —
+    the ``location_id``/``room_id`` pair already answers that question.
+    """
     with transaction() as conn:
         cur = conn.execute(
             """INSERT INTO utterances
-               (ts, speaker, location_id, room_id, volume, addressees, content, meta)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (ts, speaker, location_id, room_id, volume, addressees, content,
+                meta, pos_x, pos_z)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (ts, speaker, location_id or "", room_id or "", volume,
              json.dumps(list(addressees or []), ensure_ascii=False),
-             content, json.dumps(meta or {}, ensure_ascii=False)),
+             content, json.dumps(meta or {}, ensure_ascii=False),
+             pos_x, pos_z),
         )
         return int(cur.lastrowid)
 

@@ -172,7 +172,9 @@ SCHEMA_STATEMENTS = [
         volume       TEXT NOT NULL,            -- whisper | normal | shout
         addressees   TEXT DEFAULT '[]',        -- json-Liste ([] = an den Raum)
         content      TEXT NOT NULL,
-        meta         TEXT DEFAULT '{}'         -- meta.source = shadow | inject | ...
+        meta         TEXT DEFAULT '{}',        -- meta.source = shadow | inject | ...
+        pos_x        REAL,                     -- speaker's metre point, wilderness only
+        pos_z        REAL                      -- NULL for every utterance inside a location
     )""",
     "CREATE INDEX IF NOT EXISTS idx_utterances_room_ts ON utterances (location_id, room_id, ts)",
     "CREATE INDEX IF NOT EXISTS idx_utterances_ts ON utterances (ts)",
@@ -181,7 +183,7 @@ SCHEMA_STATEMENTS = [
         perceiver    TEXT NOT NULL,
         utterance_id INTEGER NOT NULL,
         ts           TEXT NOT NULL,
-        kind         TEXT NOT NULL,            -- spoken_self | in_room | whisper_meta | distant_shout
+        kind         TEXT NOT NULL,            -- spoken_self | in_room | whisper_meta | distant_shout | nearby
         content      TEXT NOT NULL DEFAULT '', -- fuer diesen Perceiver gefiltert; '' bei whisper_meta
         meta         TEXT DEFAULT '{}',
         FOREIGN KEY(utterance_id) REFERENCES utterances(id) ON DELETE CASCADE
@@ -781,6 +783,12 @@ ALTER_MIGRATIONS = [
     # unplaced location, which has no centre to stand on.
     ("character_state", "pos_x", "REAL"),
     ("character_state", "pos_z", "REAL"),
+    # Wilderness perception (Aug 2026, E6): a speaker outside every location
+    # has no room to name, so the utterance carries the metre point it was
+    # spoken from. NULL means "spoken inside a location" — the walls, not a
+    # radius, decided who heard it, and the room columns already say where.
+    ("utterances", "pos_x", "REAL"),
+    ("utterances", "pos_z", "REAL"),
 ]
 
 

@@ -708,6 +708,33 @@ SECTIONS = {
                 "description": "Ground of the unpainted world — a kind from the "
                                "terrain-type catalog.",
             },
+            "hearing_radius_m": {
+                "type": "float",
+                "label": "Hearing radius (m)",
+                "default": 20.0,
+                "min": 1,
+                "max": 500,
+                "step": 1,
+                "description": "How far a spoken line carries OUTSIDE every "
+                               "location, in world metres (20 m ≈ calling "
+                               "across a clearing). Everyone in the open within "
+                               "that circle hears it; a whisper still reaches "
+                               "its addressee only. Inside a location the walls "
+                               "decide instead — this value is ignored there.",
+            },
+            "discovery_range_m": {
+                "type": "float",
+                "label": "Discovery range (m)",
+                "default": 50.0,
+                "min": 0,
+                "max": 1000,
+                "step": 1,
+                "description": "How close a traveller has to come to a location "
+                               "before it is discovered and added to their known "
+                               "places, in world metres. 0 switches discovery "
+                               "off — locations then only become known by other "
+                               "means.",
+            },
         },
     },
     "ui": {

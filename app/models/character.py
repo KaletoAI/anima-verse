@@ -1425,6 +1425,28 @@ def get_character_pos(character_name: str = "") -> Optional[Dict[str, float]]:
     return {"x": float(row[0]), "z": float(row[1])}
 
 
+def list_wilderness_positions() -> List[Dict[str, Any]]:
+    """Everyone standing OUTSIDE every location, with their metre point —
+    ``[{"name": ..., "x": ..., "z": ...}, ...]``.
+
+    ONE SELECT for the whole wilderness, deliberately: the hearing radius asks
+    this per spoken line, and ``get_character_pos`` is a query per character
+    (see its note). Rows without both coordinates are dropped — a half-filled
+    row counts as "no position" here exactly as it does there, and someone
+    without a point cannot be within any radius.
+    """
+    try:
+        rows = get_connection().execute(
+            "SELECT character_name, pos_x, pos_z FROM character_state "
+            "WHERE (current_location IS NULL OR current_location='') "
+            "AND pos_x IS NOT NULL AND pos_z IS NOT NULL").fetchall()
+    except Exception as e:
+        logger.error("list_wilderness_positions DB error: %s", e)
+        return []
+    return [{"name": r[0], "x": float(r[1]), "z": float(r[2])}
+            for r in rows if r[0]]
+
+
 def _write_character_pos(character_name: str, x: Optional[float],
                          z: Optional[float]) -> None:
     """Raw write of the two position columns (None/None clears the position).
