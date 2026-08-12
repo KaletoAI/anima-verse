@@ -19,12 +19,16 @@ addressee alone — with no room to carry it, there is no bystander line.
 
 The speaker always gets a self-perception so its own stream contains what it
 said.
+
+A speaker that is not a character has no point and therefore no circle out
+there — narration would reach nobody. Such lines carry an ``anchor`` (the
+acting character) and borrow ITS point; see ``record_utterance``.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from app.core.log import get_logger
 
@@ -66,7 +70,15 @@ OPEN_WORLD_CELL_MIN_M = 50.0
 # one constant referenced everywhere (write + presence filters) — never a bare
 # string literal (previously a bare narrator literal). Localised for display via
 # t("Storyteller", lang); the stored value stays this canonical English token.
+#
+# The storyteller is not a character: it stands nowhere, so out in the open it
+# has no hearing circle of its own. That is what ``anchor`` is for — see
+# ``record_utterance``.
 STORYTELLER_SPEAKER = "Storyteller"
+
+# A narration anchor: either the NAME of the character the line belongs to
+# (its current point is read) or an explicit metre point.
+Anchor = Union[str, Mapping[str, float]]
 
 # What the PROMPTS call the place of a location-less character. Before E6 the
 # prompt builders rendered a bare "Unknown" here, which reads as "we do not
@@ -250,6 +262,25 @@ def _nearby_in_the_open(speaker: str,
     return out
 
 
+def anchor_pos(anchor: Optional[Anchor]) -> Optional[Dict[str, float]]:
+    """Metre point of a narration anchor — ``{"x": ..., "z": ...}`` or None.
+
+    A string is a character NAME (its current point is read), a mapping is an
+    explicit point. Anything unusable (unknown name, half-filled point) is
+    None, which puts the line back where it was without an anchor: spoken from
+    nowhere, heard by nobody.
+    """
+    if not anchor:
+        return None
+    if isinstance(anchor, str):
+        from app.models.character import get_character_pos
+        return get_character_pos(anchor)
+    try:
+        return {"x": float(anchor["x"]), "z": float(anchor["z"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def nearby_in_the_open(character_name: str,
                        pos: Optional[Dict[str, float]] = None) -> List[str]:
     """Public earshot roster for a LOCATION-LESS character: everyone else
@@ -325,15 +356,10 @@ def announce_action(character_name: str, text: str,
        opportunity and may react — or SKIP).
 
     Location/room come from the acting character (the storyteller has no own
-    position). An EMPTY location is the wilderness, not a missing value: the
-    action still happened and the people standing around the character still
-    react to it, so the old early return here is gone (E6).
-
-    Known v1 gap out there: the narrator speaks from nowhere — it has no
-    metre point, so its hearing circle is empty and the recorded line reaches
-    no perceiver even though the reaction dispatch below does find the
-    neighbours. Giving narration in the open the acting character's point is a
-    deliberate open decision, not an oversight.
+    position), and out in the open so does the POINT — ``anchor`` below. An
+    EMPTY location is the wilderness, not a missing value: the action still
+    happened and the people standing around the character still react to it,
+    so the old early return here is gone (E6).
 
     Best-effort — never raises into the calling route."""
     try:
@@ -344,7 +370,8 @@ def announce_action(character_name: str, text: str,
         record_utterance(speaker=STORYTELLER_SPEAKER, content=text,
                          volume=VOLUME_NORMAL, location_id=loc,
                          room_id=room, source=source,
-                         perception_meta=perception_meta)
+                         perception_meta=perception_meta,
+                         anchor=character_name)
         if not react:
             return
         try:
@@ -370,7 +397,8 @@ def record_utterance(*, speaker: str, content: str,
                      source: str = "",
                      ts: Optional[str] = None,
                      dedupe: bool = False,
-                     perception_meta: Optional[Dict[str, Any]] = None) -> Optional[int]:
+                     perception_meta: Optional[Dict[str, Any]] = None,
+                     anchor: Optional[Anchor] = None) -> Optional[int]:
     """Records a speech act + distributes the perceptions (fan-out).
 
     Presence is resolved NOW. Returns the utterance id — or None on error, so
@@ -381,6 +409,15 @@ def record_utterance(*, speaker: str, content: str,
     becomes the centre of its hearing radius and is written onto the utterance.
     dedupe=True skips if (speaker, ts, content) already exists (shadow: the
     same message can land in several histories).
+
+    ``anchor`` is for speakers WITHOUT a point of their own — the storyteller
+    above all, which is not a character and stands nowhere. Out in the open a
+    line without a centre has an empty hearing circle, so narration used to
+    reach nobody, not even the character it was about. The anchor (a character
+    name or an explicit point) supplies that centre, and the circle is then the
+    same one the acting character's own words would have. It is read ONLY when
+    the speaker has no point of its own, never as an override, and inside a
+    location it is ignored altogether — there the room columns decide.
     """
     from app.core.timeutils import utc_now_iso
     from app.models import perception_store
@@ -410,11 +447,12 @@ def record_utterance(*, speaker: str, content: str,
             room = get_character_current_room(speaker) or ""
 
     # The speaker's point is read only in the wilderness — inside a location
-    # the room columns already say where the line was spoken.
+    # the room columns already say where the line was spoken. A speaker with
+    # no point of its own (the storyteller) falls back to the anchor.
     speaker_pos: Optional[Dict[str, float]] = None
     if not loc:
         from app.models.character import get_character_pos
-        speaker_pos = get_character_pos(speaker)
+        speaker_pos = get_character_pos(speaker) or anchor_pos(anchor)
 
     try:
         room_members, location_others, nearby = _resolve_presence(

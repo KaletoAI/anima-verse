@@ -148,11 +148,14 @@ class PartySkill(PluginSkill):
             _loc = get_character_current_location(character_name) or ""
             _room = get_character_current_room(character_name) or ""
             # Narrator line — STORYTELLER_SPEAKER is the core narrator-speaker
-            # sentinel (filtered out of participant lists everywhere).
+            # sentinel (filtered out of participant lists everywhere). The
+            # anchor lends it the joiner's point: parties form on the road just
+            # as often as in a room, and out there a pointless speaker is heard
+            # by nobody.
             record_utterance(speaker=STORYTELLER_SPEAKER,
                              content=f"{character_name} joins {leader}'s party.",
                              volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
-                             source="party")
+                             source="party", anchor=character_name)
         except Exception as _re:
             self.ctx.logger.debug("join_party record failed: %s", _re)
         return f"{character_name} joins {leader}'s party."

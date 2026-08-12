@@ -1044,13 +1044,18 @@ def post_process_response(
                         _txt = (f"💞 {_speaker_a} ⇄ {_speaker_b}: "
                                 + (f"{_old_type} → {_new_type}"
                                    if _old_type else _new_type))
-                        if _r_loc:
-                            record_utterance(
-                                speaker=STORYTELLER_SPEAKER, content=_txt,
-                                volume=VOLUME_NORMAL, location_id=_r_loc,
-                                room_id=_r_room, source="relationship",
-                                perception_meta={"display_only": True,
-                                                 "relationship": True})
+                        # No location gate: an empty location is the
+                        # WILDERNESS, not a missing value (E6). The anchor
+                        # gives the storyteller the character's point, so out
+                        # there the line reaches the same people the character's
+                        # own words would.
+                        record_utterance(
+                            speaker=STORYTELLER_SPEAKER, content=_txt,
+                            volume=VOLUME_NORMAL, location_id=_r_loc,
+                            room_id=_r_room, source="relationship",
+                            anchor=character_name,
+                            perception_meta={"display_only": True,
+                                             "relationship": True})
                     except Exception as _re:
                         logger.debug("relationship display line failed: %s", _re)
             except Exception as rel_err:

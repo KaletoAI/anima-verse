@@ -164,7 +164,7 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
     # utterances (TalkTo). Before this they were only in
     # the LLM log / memory, invisible in the stream.
     _record_act_to_stream(
-        narration=narration, location_id=actor_loc, room_id=actor_room,
+        actor=actor, narration=narration, location_id=actor_loc, room_id=actor_room,
         scope=scope, resolved=resolved_flag, event_id=resolved_event_id,
         reason=resolve_reason)
 
@@ -767,20 +767,27 @@ def _recipient_recently_perceived(recipient: str, actor: str, text: str) -> bool
     return False
 
 
-def _record_act_to_stream(*, narration: str, location_id: str, room_id: str,
-                          scope: str, resolved: bool, event_id, reason: str) -> None:
+def _record_act_to_stream(*, actor: str, narration: str, location_id: str,
+                          room_id: str, scope: str, resolved: bool, event_id,
+                          reason: str) -> None:
     """Writes the storyteller narration of an act into the room log (perception
     stream), so it appears in the /play chat + observer — like spoken
     utterances. ``scope='location'`` → shout (all rooms of the location hear it),
     otherwise only the current room. If the act resolves an event, an extra
-    verdict entry is added (rendered in colour by the SceneView)."""
+    verdict entry is added (rendered in colour by the SceneView).
+
+    ``actor`` anchors both lines: the storyteller has no point, so out in the
+    open (no location) its hearing circle would be empty and the act would be
+    narrated to nobody — the acting character's point is the one the act
+    happened at."""
     try:
         from app.core.perception import record_utterance
         volume = "shout" if scope == "location" else "normal"
         if narration:
             record_utterance(speaker=STORYTELLER_SPEAKER, content=narration, volume=volume,
                              location_id=location_id, room_id=room_id,
-                             addressees=[], source="act_storyteller")
+                             addressees=[], source="act_storyteller",
+                             anchor=actor)
         if event_id:
             r = (reason or "").strip()
             verdict_content = r or (
@@ -789,7 +796,7 @@ def _record_act_to_stream(*, narration: str, location_id: str, room_id: str,
             record_utterance(
                 speaker=STORYTELLER_SPEAKER, content=verdict_content, volume=volume,
                 location_id=location_id, room_id=room_id, addressees=[],
-                source="event_verdict",
+                source="event_verdict", anchor=actor,
                 perception_meta={"event_verdict": "resolved" if resolved else "unresolved",
                                  "reason": r})
     except Exception as e:

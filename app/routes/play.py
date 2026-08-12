@@ -1438,12 +1438,15 @@ async def play_say(request: Request, user=Depends(get_current_user)):
                            perception_meta=_pmeta)
 
     # 2b) Make the spell result (success_/fail_text) visible as a storyteller line.
-    #     location_id explicit — the storyteller has no own location.
+    #     location_id explicit — the storyteller has no own location; the anchor
+    #     gives it the caster's point, without which the line reaches nobody out
+    #     in the open (it has no circle of its own).
     if _is_spell:
         _hint = (spell.get("hint") or "").strip()
         if _hint:
             record_utterance(speaker=STORYTELLER_SPEAKER, content=_hint, volume=VOLUME_NORMAL,
-                             location_id=loc, room_id=room, source="spell")
+                             location_id=loc, room_id=room, source="spell",
+                             anchor=avatar)
 
     # 3) Reaktionen über den Loop verteilen: Adressierte → Pflicht-Antwort,
     #    übrige Anwesende → Chime. Bei Spell reagiert das Ziel auf die WIRKUNG
@@ -1909,7 +1912,9 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
     # block on an embedding call. The result is used below, so it is awaited.
     res = await asyncio.to_thread(execute_cast, avatar, avatar, spell)
     # Make the effect visible as a storyteller line (location_id explicit — the
-    # storyteller has no own location, otherwise the fan-out goes nowhere).
+    # storyteller has no own location, otherwise the fan-out goes nowhere; the
+    # anchor gives it the caster's point out in the open, where an empty
+    # location is a place and not a missing value).
     try:
         from app.core.perception import record_utterance, VOLUME_NORMAL
         from app.models.character import (get_character_current_location,
@@ -1917,10 +1922,10 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
         _loc = get_character_current_location(avatar) or ""
         _room = get_character_current_room(avatar) or ""
         _hint = (res.get("hint") or "").strip()
-        if _loc and _hint:
+        if _hint:
             record_utterance(speaker=STORYTELLER_SPEAKER, content=_hint,
                              volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
-                             source="spell")
+                             source="spell", anchor=avatar)
     except Exception as _e:  # noqa: BLE001
         logger.debug("self-cast narration failed: %s", _e)
     return {"ok": True, "spell_name": spell.get("name") or item_id,

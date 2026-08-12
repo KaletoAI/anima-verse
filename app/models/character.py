@@ -1200,7 +1200,12 @@ def _movement_trace(character_name: str, location_id: str, room_id: str,
                     content: str) -> None:
     """C1: movement trace as a storyteller line in the perception stream, so
     that room changes are visible in the /play chat + observer (gold/italic) —
-    instead of a silent exit that mutes the conversation."""
+    instead of a silent exit that mutes the conversation.
+
+    No narration anchor here (unlike the other storyteller lines): a trace is
+    always ABOUT a location — leaving/entering a named place or changing rooms
+    inside one — and the guard below drops anything without one. The open road
+    between two places produces no trace at all."""
     if not (character_name and location_id and content):
         return
     try:
