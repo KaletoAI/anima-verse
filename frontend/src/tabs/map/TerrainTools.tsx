@@ -492,8 +492,8 @@ export function TerrainToolbar({
   return (
     <>
       {/* WHAT is being edited. Three subjects, not four tools: drawing ground
-          and reshaping it are the same subject, and separating them here made
-          "Paint" and "Edit terrain" look like peers of "Locations". */}
+          and reshaping it are the same subject, and listing the two terrain
+          gestures here made them look like peers of the location editor. */}
       <span className="ga-terrain-modes">
         {btn('location', '⬚', t('Location'),
           t('Place, move and turn locations'))}
@@ -1042,19 +1042,50 @@ export interface MapDisplayPanelProps {
  * are set once and then looked at rarely, while the toolbar next to them is
  * where every gesture is armed. Mixing "what am I editing" with "what can I
  * see" in one row was what made that row unreadable (user finding 2026-08-13).
+ *
+ * Folded, the header still SAYS what is not in its default state. Two of these
+ * switches explain something the user would otherwise see as a defect — an
+ * empty map (locations off) and footprints without roofs (zoomed out) — and
+ * hiding the cause behind a chevron would turn a setting into a mystery. The
+ * markers are the same icons as the switches, so the fold is the only thing
+ * the panel hides.
  */
 export function MapDisplayPanel({
   open, onOpen, scatterPreview, onScatterPreview, locations, onLocations,
   roofs, onRoofs, roofsZoomedOut, roofMinPxPerM,
 }: MapDisplayPanelProps) {
   const { t } = useI18n()
+  // What is NOT at its default — a marker for the header, a sentence for the
+  // tooltip. Both are built from the same three questions, in the order the
+  // switches stand in.
+  const marks: string[] = []
+  const said: string[] = []
+  if (scatterPreview) {
+    marks.push('🌲')
+    said.push(t('Scatter preview is on'))
+  }
+  if (!locations) {
+    marks.push('📍 ' + t('off'))
+    said.push(t('The locations are switched off — the map draws no footprints'))
+  } else if (roofs && roofsZoomedOut) {
+    marks.push('🏢 ' + t('(zoom in)'))
+    said.push(t('Zoom in to at least {n} px per metre to see the roofs')
+      .replace('{n}', String(roofMinPxPerM)))
+  } else if (roofs) {
+    marks.push('🏢')
+    said.push(t('The building roofs are on'))
+  }
+  const base = t('What the map draws — none of it changes the world')
   return (
     <div className="ga-map-tray-section">
       <button type="button" className="ga-map-tray-toggle"
         aria-expanded={open}
-        title={t('What the map draws — none of it changes the world')}
+        title={!open && said.length ? base + ' — ' + said.join(' · ') : base}
         onClick={() => onOpen(!open)}>
         <span className="ga-map-tray-title">{t('Display')}</span>
+        {!open && marks.length ? (
+          <span className="ga-map-tray-flags">{marks.join(' ')}</span>
+        ) : null}
         <span>{open ? '▾' : '▸'}</span>
       </button>
       {open ? (

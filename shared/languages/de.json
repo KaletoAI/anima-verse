@@ -1742,6 +1742,10 @@
     "Select this height area": "Diese Höhenfläche auswählen",
     "Select this height area — its ramp is too steep for walkers": "Diese Höhenfläche auswählen — ihr Anstieg ist zu steil zum Laufen",
     "What the map draws — none of it changes the world": "Was die Karte zeichnet — nichts davon verändert die Welt",
+    "off": "aus",
+    "Scatter preview is on": "Bewuchs-Vorschau ist an",
+    "The locations are switched off — the map draws no footprints": "Die Orte sind ausgeschaltet — die Karte zeichnet keine Grundflächen",
+    "The building roofs are on": "Die Dachansicht ist an",
     "flat": "flach"
   }
 }

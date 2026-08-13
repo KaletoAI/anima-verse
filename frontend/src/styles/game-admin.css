@@ -1933,7 +1933,17 @@ html, * {
   font-size: 11px;
 }
 .ga-map-tray-toggle:hover { color: var(--text, #c9d1d9); }
-.ga-map-tray-toggle .ga-map-tray-title { cursor: pointer; }
+.ga-map-tray-toggle .ga-map-tray-title { flex: 1; text-align: left; cursor: pointer; }
+/* What a folded panel would otherwise hide: the switches that are not at
+   their default, as their own icons. Right of the title, left of the
+   chevron. */
+.ga-map-tray-flags {
+  font-size: 11px;
+  color: var(--text, #c9d1d9);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
 /* The view switches, one per line — in the tray they have a column, not a
    toolbar row, so no label wraps mid-word. */
 .ga-map-tray-checks { display: flex; flex-direction: column; gap: 6px; }

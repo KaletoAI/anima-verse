@@ -1705,9 +1705,14 @@ export function MapTab() {
   // edited, and whether a click draws or picks. Nothing new is stored for it —
   // see `switchPrimary`/`switchSub`.
   const primary = primaryOf(mode)
-  const sub: MapSub = primary === 'heights'
-    ? (heightTool === 'draw' ? 'new' : 'select')
-    : (mode === 'paint' ? 'new' : 'select')
+  const sub: MapSub = primary === 'location'
+    // The location subject has no dependent switch, so this value is never
+    // read — it is named rather than fallen into, so nobody has to check
+    // which branch of a terrain ternary a location happens to land in.
+    ? 'select'
+    : primary === 'heights'
+      ? (heightTool === 'draw' ? 'new' : 'select')
+      : (mode === 'paint' ? 'new' : 'select')
 
   /** Everything the terrain layer draws, in one place — it is rendered twice
    *  in the ground modes (ground below the locations, paint above them) and
