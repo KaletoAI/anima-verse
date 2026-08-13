@@ -233,19 +233,50 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
 }
 
 /**
- * HOW DEEP the ground swallows the figure standing or moving on it
- * (`meta.sink_m`, § A9, world metres) — the third field of the same contract,
- * with the SAME reach.
+ * HOW DEEP the ground swallows the figure standing or moving on it (§ A9,
+ * world metres) — the third field of the same contract, with the SAME reach.
  *
  * The clip normalisation puts the lowest body point on the surface, and for a
  * swimmer that point is a bent knee: the body lies on the lake instead of in
  * it. This is what belongs underneath. Inside a BUILT place the ground says
  * nothing here either — a tiled hall over painted water is a floor, and one
  * does not stand knee-deep in it. Junk and non-positive numbers are no depth.
+ *
+ * WHICH of the ground's two depths is handed in is `sinkForState`'s business;
+ * this function only says how far the ground's word reaches.
  */
 export function groundSink(sink: number, scope: GroundScope): number {
   if (!Number.isFinite(sink) || sink <= 0) return 0;
   return scope === 'built' ? 0 : sink;
+}
+
+/** The two depths a ground carries (`meta.move_sink_m` / `meta.idle_sink_m`,
+ *  § A9), as `ground.typeAt` reads them — 0 where the catalog says nothing. */
+export interface GroundSink { move: number; idle: number }
+
+/**
+ * WHICH of the two depths is in force right now (finding 13, 2026-08-13).
+ *
+ * One number could not serve both poses: a moving swimmer lies HORIZONTAL and
+ * its lowest point is an angled knee a hand's width under the body, a waiting
+ * one treads water UPRIGHT and its lowest point is a foot a whole body length
+ * down. Normalised onto the same surface, one depth puts one of them right and
+ * the other in the wrong world.
+ *
+ * So the state picks: moving → the move depth, waiting → the idle one. AND
+ * WAITING HAS A GATE the moving case does not have: the idle depth only counts
+ * where the ground also NAMES a standing clip (`groundIdle`, i.e.
+ * `idleClip(meta.idle_anim, scope)` — already reach-filtered by the caller).
+ * Without one the figure keeps its OWN standing clip, and that clip brings its
+ * own reference height with it (`sleep` is animated on a bed) — sinking it
+ * would push a sleeper through the mattress. Moving needs no such gate: walk
+ * and run stand on the ground they are played on, so a bog may swallow ankles
+ * without naming a clip at all.
+ */
+export function sinkForState(moving: boolean, groundIdle: string,
+                             sink: GroundSink): number {
+  if (moving) return sink.move;
+  return groundIdle ? sink.idle : 0;
 }
 
 /** The reach rule BOTH ground clips share, in one place: outside a built

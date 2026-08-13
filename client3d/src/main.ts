@@ -493,7 +493,8 @@ async function startApp(username: string, role: string) {
   npcs.setTerrainMove((x, z) => {
     const type = terrainGround.typeAt(x, z);
     return { anim: type.move_anim, idle: type.idle_anim,
-      sink: type.sink_m, scope: groundScopeAt(x, z) };
+      sink: { move: type.move_sink_m, idle: type.idle_sink_m },
+      scope: groundScopeAt(x, z) };
   });
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen

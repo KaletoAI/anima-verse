@@ -1141,10 +1141,12 @@ export class Figure {
    *  (`walk.moveClip` / `walk.idleClip`) — part of the play state, because the
    *  same kind can be asked for both by the terrain and as a plain activity. */
   private terrainClip = false;
-  /** How deep the GROUND under the figure swallows it while such a clip runs
-   *  (`meta.sink_m`, world metres) — part of the play state for the same
+  /** How deep the GROUND under the figure swallows it while such a clip runs,
+   *  in world metres — the depth the CALLER picked for the current state
+   *  (`walk.sinkForState`, move or idle). Part of the play state for the same
    *  reason `terrainClip` is: walking from a ford into a lake changes nothing
-   *  but this number, and the figure still has to sink. */
+   *  but this number, and the figure still has to sink — and so does stopping
+   *  in the same lake, where the swimmer's depth gives way to the treader's. */
   private sink = 0;
 
   constructor(model: LoadedModel) {
@@ -1222,12 +1224,14 @@ export class Figure {
    *  keeps its authored height on purpose — `sleep` carries the bed it was
    *  animated on.
    *
-   *  `sink` is how deep that GROUND swallows the body (`meta.sink_m`, § A9, in
-   *  world metres) and rides the SAME gate: the normalisation above puts the
-   *  lowest body point ON the surface, and for a swimmer that point is a bent
-   *  knee — so the ground adds what belongs underneath it. It is NOT scaled
-   *  with the figure: half a metre of water is half a metre for a child and
-   *  for a giant. */
+   *  `sink` is how deep that GROUND swallows the body (§ A9, in world metres)
+   *  and rides the SAME gate: the normalisation above puts the lowest body
+   *  point ON the surface, and for a swimmer that point is a bent knee — so
+   *  the ground adds what belongs underneath it. It is NOT scaled with the
+   *  figure: half a metre of water is half a metre for a child and for a
+   *  giant. WHICH depth this is — the ground's move or its idle one — is the
+   *  caller's decision (`walk.sinkForState`); the two are different numbers
+   *  because a swimmer lies flat and a treader hangs upright. */
   play(rawKind: ClipKind, terrainClip = false, sink = 0) {
     const kind = (rawKind || 'idle').toLowerCase();
     // Junk is no depth, and never NaN: one NaN in the drop and the figure

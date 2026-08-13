@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { MOVE_EPS_M, groundSink, idleClip, moveClip, type GroundScope } from '../game/walk';
+import { MOVE_EPS_M, groundSink, idleClip, moveClip, sinkForState,
+  type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
@@ -25,9 +26,10 @@ export interface GroundMove {
   anim: string;
   idle: string;
   scope: GroundScope;
-  /** `meta.sink_m` of the ground's type, in metres (0 = nothing sinks) — how
-   *  deep the figure stands IN it while one of the two ground clips runs. */
-  sink: number;
+  /** The ground's two depths in metres (`meta.move_sink_m` /
+   *  `meta.idle_sink_m`, 0 = nothing sinks) — how deep the figure stands IN it
+   *  while it moves and while it waits. Which one counts is `sinkForState`. */
+  sink: GroundSink;
 }
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
@@ -223,7 +225,8 @@ export class NpcManager {
    * is the world without painted ground: walk, run and idle as always.
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
-    () => ({ anim: '', idle: '', scope: 'wilderness', sink: 0 });
+    () => ({ anim: '', idle: '', scope: 'wilderness',
+      sink: { move: 0, idle: 0 } });
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -853,10 +856,13 @@ export class NpcManager {
           // ground is the body's reference, so a clip authored on a water line
           // is dropped onto it. An ordinary standing clip keeps its height.
           // The third is how deep the ground swallows the body on top of that
-          // (`meta.sink_m`) — it rides the same gate and is 0 without one.
+          // — the MOVE depth while the journey runs, the IDLE one while it is
+          // frozen in the water (`sinkForState`), and 0 outside the ground
+          // rule's reach (`groundSink`).
           npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
             : (groundIdle || 'idle'), travelling || !!groundIdle,
-            groundSink(gm.sink, gm.scope));
+            groundSink(sinkForState(travelling, groundIdle, gm.sink),
+              gm.scope));
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -920,10 +926,12 @@ export class NpcManager {
         // traveller branch above): a clip the GROUND named — moving or
         // standing — has the ground as its reference, an activity clip does
         // not (`sleep` carries the bed it was animated on). The third is the
-        // ground's own sink depth, which rides that same gate.
+        // ground's own sink depth — one per pose since finding 13, picked by
+        // the same state that picks the clip (`sinkForState`) and cut off
+        // inside a built place like the clips are (`groundSink`).
         npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
           : (groundIdle || standingClip), moving || !!groundIdle,
-          groundSink(gm.sink, gm.scope));
+          groundSink(sinkForState(moving, groundIdle, gm.sink), gm.scope));
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

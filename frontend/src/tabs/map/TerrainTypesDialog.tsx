@@ -41,6 +41,12 @@
  * away from making a slope nobody can climb: the amplitude field says in its
  * hint how steep its number gets over one 4 m grid step.
  *
+ * The sink depth is TWO fields for one reason (finding 13): the ground's clips
+ * are normalised onto the surface, and the pose decides where that surface
+ * meets the body — a swimmer lies flat with a knee just under it, someone
+ * treading water hangs upright with a foot a body length down. One depth put
+ * one of them right and the other under or over the lake.
+ *
  * EVERY KIND IS TWO ROWS (2026-08-13). It was one, and every field the ground
  * grew added a column to it: at nine columns the modal had been widened to
  * 940 px and the sink depth would have been the tenth. The columns are the
@@ -48,7 +54,8 @@
  * from, what one can do with it — and the second row underneath carries what
  * the ground DOES to a figure: the two clips, the sink depth, the relief. That
  * one is indented and muted, because it reads as a continuation of the row
- * above and not as a kind of its own.
+ * above and not as a kind of its own. Six fields fit there; a seventh would be
+ * the point to ask what the ground still is.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -137,7 +144,8 @@ function numChanged(raw: string, stored: string): boolean {
 interface OwnedMeta {
   moveAnim: string
   idleAnim: string
-  sink: string
+  moveSink: string
+  idleSink: string
   reliefAmp: string
   reliefWave: string
 }
@@ -151,7 +159,8 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   const next = { ...(meta || {}) }
   setMetaStr(next, 'move_anim', own.moveAnim)
   setMetaStr(next, 'idle_anim', own.idleAnim)
-  setMetaNum(next, 'sink_m', own.sink)
+  setMetaNum(next, 'move_sink_m', own.moveSink)
+  setMetaNum(next, 'idle_sink_m', own.idleSink)
   setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
   return next
@@ -178,9 +187,17 @@ function amplitudeHint(t: (s: string) => string, raw: string): string {
     .replace('{step}', String(GRID_STEP_M))
 }
 
-/** The sink hint — what the number does and where it stops. */
-function sinkHint(t: (s: string) => string): string {
-  return t('How deep a figure stands IN this ground while it moves or waits on it, in metres (0–{max}) — empty = on top of it. A swimmer belongs partly under water; the animation alone puts it on the surface.')
+/** The MOVE sink hint — what the number does, where it stops, and why it is
+ *  not the same number as the one next to it. */
+function moveSinkHint(t: (s: string) => string): string {
+  return t('How deep a figure stands IN this ground while it MOVES over it, in metres (0–{max}) — empty = on top of it. A swimmer lies flat, so its lowest point is a knee just under the body; the animation alone puts that knee on the surface and the swimmer on the lake.')
+    .replace('{max}', String(SINK_MAX))
+}
+
+/** The IDLE sink hint. Two fields because the two poses hang differently in
+ *  the water — said here, where the second number is typed. */
+function idleSinkHint(t: (s: string) => string): string {
+  return t('The same while the figure WAITS on this ground, in metres (0–{max}) — a separate number, because the waiting pose hangs differently: someone treading water stands upright and its lowest point is a foot a whole body length down. Only in force where an idle animation is set above.')
     .replace('{max}', String(SINK_MAX))
 }
 
@@ -196,7 +213,8 @@ function waveHint(t: (s: string) => string): string {
 interface BehaviourRowProps extends OwnedMeta {
   onMoveAnim: (v: string) => void
   onIdleAnim: (v: string) => void
-  onSink: (v: string) => void
+  onMoveSink: (v: string) => void
+  onIdleSink: (v: string) => void
   onReliefAmp: (v: string) => void
   onReliefWave: (v: string) => void
 }
@@ -207,8 +225,8 @@ interface BehaviourRowProps extends OwnedMeta {
  *  thing start to differ. Each field carries its label, because a row that
  *  spans the whole table has no column header over it. */
 function BehaviourRow({
-  moveAnim, idleAnim, sink, reliefAmp, reliefWave,
-  onMoveAnim, onIdleAnim, onSink, onReliefAmp, onReliefWave,
+  moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave,
+  onMoveAnim, onIdleAnim, onMoveSink, onIdleSink, onReliefAmp, onReliefWave,
 }: BehaviourRowProps) {
   const { t } = useI18n()
   return (
@@ -238,17 +256,31 @@ function BehaviourRow({
             />
           </label>
           <label className="ga-tt-field">
-            <span>{t('Sink depth (m)')}</span>
+            <span>{t('Sink move (m)')}</span>
             <input
               className="ga-input ga-tt-num"
               type="number"
               min={SINK_MIN}
               max={SINK_MAX}
               step={SINK_STEP}
-              value={sink}
+              value={moveSink}
               placeholder={t('on top')}
-              title={sinkHint(t)}
-              onChange={(e) => onSink(e.target.value)}
+              title={moveSinkHint(t)}
+              onChange={(e) => onMoveSink(e.target.value)}
+            />
+          </label>
+          <label className="ga-tt-field">
+            <span>{t('Sink idle (m)')}</span>
+            <input
+              className="ga-input ga-tt-num"
+              type="number"
+              min={SINK_MIN}
+              max={SINK_MAX}
+              step={SINK_STEP}
+              value={idleSink}
+              placeholder={t('on top')}
+              title={idleSinkHint(t)}
+              onChange={(e) => onIdleSink(e.target.value)}
             />
           </label>
           <label className="ga-tt-field">
@@ -310,7 +342,8 @@ function TypeRow({
   const [speed, setSpeed] = useState(String(type.speed_factor))
   const [moveAnim, setMoveAnim] = useState(metaStrOf(type, 'move_anim'))
   const [idleAnim, setIdleAnim] = useState(metaStrOf(type, 'idle_anim'))
-  const [sink, setSink] = useState(metaNumOf(type, 'sink_m'))
+  const [moveSink, setMoveSink] = useState(metaNumOf(type, 'move_sink_m'))
+  const [idleSink, setIdleSink] = useState(metaNumOf(type, 'idle_sink_m'))
   const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
 
@@ -325,7 +358,8 @@ function TypeRow({
     || passable !== !!type.passable
     || moveAnim.trim() !== metaStrOf(type, 'move_anim')
     || idleAnim.trim() !== metaStrOf(type, 'idle_anim')
-    || numChanged(sink, metaNumOf(type, 'sink_m'))
+    || numChanged(moveSink, metaNumOf(type, 'move_sink_m'))
+    || numChanged(idleSink, metaNumOf(type, 'idle_sink_m'))
     || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
@@ -333,14 +367,14 @@ function TypeRow({
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // exactly FIVE keys in it and hands the rest back untouched. The numbers
+    // exactly SIX keys in it and hands the rest back untouched. The numbers
     // are sent unclamped on purpose: the server clamps, and the row refills
     // from its answer, so a typed 5 shows up as the stored 2.
     const saved = await onSave({
       kind: type.kind, name, color, passable,
       speed_factor: speedNum,
       meta: withOwnedMeta(type.meta,
-        { moveAnim, idleAnim, sink, reliefAmp, reliefWave }),
+        { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -349,11 +383,12 @@ function TypeRow({
     setSpeed(String(saved.speed_factor))
     setMoveAnim(metaStrOf(saved, 'move_anim'))
     setIdleAnim(metaStrOf(saved, 'idle_anim'))
-    setSink(metaNumOf(saved, 'sink_m'))
+    setMoveSink(metaNumOf(saved, 'move_sink_m'))
+    setIdleSink(metaNumOf(saved, 'idle_sink_m'))
     setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
-  }, [color, idleAnim, moveAnim, name, onSave, passable, reliefAmp, reliefWave,
-      sink, speedBad, speedNum, type])
+  }, [color, idleAnim, idleSink, moveAnim, moveSink, name, onSave, passable,
+      reliefAmp, reliefWave, speedBad, speedNum, type])
 
   return (
     <>
@@ -454,7 +489,8 @@ function TypeRow({
     <BehaviourRow
       moveAnim={moveAnim} onMoveAnim={setMoveAnim}
       idleAnim={idleAnim} onIdleAnim={setIdleAnim}
-      sink={sink} onSink={setSink}
+      moveSink={moveSink} onMoveSink={setMoveSink}
+      idleSink={idleSink} onIdleSink={setIdleSink}
       reliefAmp={reliefAmp} onReliefAmp={setReliefAmp}
       reliefWave={reliefWave} onReliefWave={setReliefWave}
     />
@@ -487,7 +523,8 @@ export function TerrainTypesDialog({
   const [newSpeed, setNewSpeed] = useState('1')
   const [newMoveAnim, setNewMoveAnim] = useState('')
   const [newIdleAnim, setNewIdleAnim] = useState('')
-  const [newSink, setNewSink] = useState('')
+  const [newMoveSink, setNewMoveSink] = useState('')
+  const [newIdleSink, setNewIdleSink] = useState('')
   const [newReliefAmp, setNewReliefAmp] = useState('')
   const [newReliefWave, setNewReliefWave] = useState('')
 
@@ -537,7 +574,8 @@ export function TerrainTypesDialog({
       meta: withOwnedMeta({}, {
         moveAnim: newMoveAnim,
         idleAnim: newIdleAnim,
-        sink: newSink,
+        moveSink: newMoveSink,
+        idleSink: newIdleSink,
         reliefAmp: newReliefAmp,
         reliefWave: newReliefWave,
       }),
@@ -550,11 +588,12 @@ export function TerrainTypesDialog({
     setNewSpeed('1')
     setNewMoveAnim('')
     setNewIdleAnim('')
-    setNewSink('')
+    setNewMoveSink('')
+    setNewIdleSink('')
     setNewReliefAmp('')
     setNewReliefWave('')
-  }, [kindClean, newColor, newIdleAnim, newMoveAnim, newName, newPassable,
-      newReliefAmp, newReliefWave, newSink, newSpeedNum, putType])
+  }, [kindClean, newColor, newIdleAnim, newIdleSink, newMoveAnim, newMoveSink,
+      newName, newPassable, newReliefAmp, newReliefWave, newSpeedNum, putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -689,7 +728,8 @@ export function TerrainTypesDialog({
               <BehaviourRow
                 moveAnim={newMoveAnim} onMoveAnim={setNewMoveAnim}
                 idleAnim={newIdleAnim} onIdleAnim={setNewIdleAnim}
-                sink={newSink} onSink={setNewSink}
+                moveSink={newMoveSink} onMoveSink={setNewMoveSink}
+                idleSink={newIdleSink} onIdleSink={setNewIdleSink}
                 reliefAmp={newReliefAmp} onReliefAmp={setNewReliefAmp}
                 reliefWave={newReliefWave} onReliefWave={setNewReliefWave}
               />

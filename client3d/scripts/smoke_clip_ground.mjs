@@ -74,29 +74,45 @@
  *                 a swim special case — the SAME rule moves both.
  *   THE GATE ONLY EVER LOWERS: `gate off − gate on >= 0` for every clip, and
  *                 the difference IS the measured offset × the figure scale.
- *   THE GROUND'S SINK DEPTH rides the same gate (`meta.sink_m`, § A9, the
- *                 water round of 2026-08-13): the normalisation puts the
- *                 LOWEST body point — a bent knee — on the surface, so the
- *                 swimmer lies ON the lake. The ground says how much of the
- *                 body belongs below it, and the arithmetic is
+ *   THE GROUND'S SINK DEPTH rides the same gate (§ A9, the water round of
+ *                 2026-08-13): the normalisation puts the LOWEST body point —
+ *                 a bent knee — on the surface, so the swimmer lies ON the
+ *                 lake. The ground says how much of the body belongs below it,
+ *                 and the arithmetic is
  *
- *                     drop = clip offset × figure scale + sink_m
+ *                     drop = clip offset × figure scale + depth
  *
- *                 with `sink_m` in WORLD metres, unscaled: half a metre of
- *                 water is half a metre for a child and for a giant. Hand
- *                 cases per rig, against the anchor its bind pose gave it:
- *                     swim, gate on, sink 0    -> anchor − off·scale
- *                     swim, gate on, sink 0.4  -> anchor − off·scale − 0.4
- *                     swim, gate on, sink 1.5  -> anchor − off·scale − 1.5
- *                     swim, gate OFF, sink 0.4 -> anchor  (no gate, no sink:
+ *                 with the depth in WORLD metres, unscaled: half a metre of
+ *                 water is half a metre for a child and for a giant.
+ *                 THE DEPTH IS ONE OF TWO (finding 13): the ground carries
+ *                 `meta.move_sink_m` for the moving pose and
+ *                 `meta.idle_sink_m` for the waiting one (water: 0.35 / 1.3),
+ *                 because a swimmer lies flat and a treader hangs upright.
+ *                 WHICH one arrives here is `walk.sinkForState`'s decision
+ *                 (its own hand cases live in `smoke_walk_math.mjs`); this
+ *                 file checks that whatever arrives lands on the anchor to the
+ *                 micrometre. Hand cases per rig, against the anchor its bind
+ *                 pose gave it:
+ *                     swim, gate on, depth 0     -> anchor − off·scale
+ *                     swim, gate on, depth 0.35  -> anchor − off·scale − 0.35
+ *                                                (the MOVING water depth)
+ *                     treading-water, gate on, depth 1.3
+ *                                                -> anchor − off·scale − 1.3
+ *                                                (the WAITING one, on the clip
+ *                                                 that actually plays then)
+ *                     swim, gate on, depth 1.5   -> anchor − off·scale − 1.5
+ *                     swim, gate OFF, depth 0.35 -> anchor  (no gate, no sink:
  *                                                 an activity clip is never
  *                                                 sunk by the ground)
- *                     swim, gate on, sink NaN/−1 -> anchor − off·scale
+ *                     swim, gate on, depth NaN/−1 -> anchor − off·scale
  *                 and the RESTORATION is exact: back to a standing clip and
  *                 the instance sits at the anchor to the micrometre.
  *                 RED COUNTER-PROBE: the pre-sink rule (offset alone) leaves
- *                 the swimmer 0.4 m higher than the sink case — measured as
- *                 the difference of the two anchors.
+ *                 the swimmer 0.35 m higher than the sunk one — measured as
+ *                 the difference of the two anchors. A SECOND one for the
+ *                 split: giving the treader the MOVING depth leaves it
+ *                 1.3 − 0.35 = 0.95 m over where it belongs, which is the
+ *                 treader standing on the lake that finding 13 reported.
  *   laying/sleep/sit  NEVER touched: they are standing clips, the gate never
  *                 opens for them, and the instance keeps the exact anchor its
  *                 bind pose gave it (`inst.position.y`, compared to the
@@ -366,26 +382,44 @@ async function main() {
       figure.play(kind, terrain, sink);
       return inst.position.y;
     };
-    near(`${label}: sink 0 is the clip offset alone`,
+    // The two depths of the water seed: the swimmer's while it moves, the
+    // treader's while it waits (`meta.move_sink_m` / `meta.idle_sink_m`).
+    const MOVE_SINK = 0.35;
+    const IDLE_SINK = 1.3;
+    const treadDrop = offsetOf('treading-water') * scale;
+    near(`${label}: depth 0 is the clip offset alone`,
       anchorFor('swim', true, 0), anchorY - swimDrop, 1e-6);
-    near(`${label}: sink 0.4 goes on top of it, unscaled`,
-      anchorFor('swim', true, 0.4), anchorY - swimDrop - 0.4, 1e-6);
+    near(`${label}: the MOVING depth goes on top of it, unscaled`,
+      anchorFor('swim', true, MOVE_SINK), anchorY - swimDrop - MOVE_SINK, 1e-6);
+    near(`${label}: the WAITING depth does the same on the waiting clip`,
+      anchorFor('treading-water', true, IDLE_SINK),
+      anchorY - treadDrop - IDLE_SINK, 1e-6);
     near(`${label}: ...and 1.5, the clamp of the catalog`,
       anchorFor('swim', true, 1.5), anchorY - swimDrop - 1.5, 1e-6);
     near(`${label}: an ACTIVITY clip is never sunk by the ground`,
-      anchorFor('swim', false, 0.4), anchorY, 1e-6);
+      anchorFor('swim', false, MOVE_SINK), anchorY, 1e-6);
     near(`${label}: a NaN depth is no depth`,
       anchorFor('swim', true, NaN), anchorY - swimDrop, 1e-6);
     near(`${label}: ...and neither is a negative one`,
       anchorFor('swim', true, -1), anchorY - swimDrop, 1e-6);
     // RED COUNTER-PROBE: the rule before the sink existed was the offset
-    // alone. It must land 0.4 m HIGHER than the sunk swimmer — otherwise the
+    // alone. It must land 0.35 m HIGHER than the sunk swimmer — otherwise the
     // sink is not reaching the anchor at all.
-    check(`${label}: RED COUNTER-PROBE — offset alone floats 0.4 m over the sunk one`,
-      Math.abs((anchorFor('swim', true, 0) - anchorFor('swim', true, 0.4)) - 0.4) <= 1e-6,
-      `${(anchorFor('swim', true, 0) - anchorFor('swim', true, 0.4)).toFixed(6)} m`);
+    check(`${label}: RED COUNTER-PROBE — offset alone floats ${MOVE_SINK} m over the sunk one`,
+      Math.abs((anchorFor('swim', true, 0) - anchorFor('swim', true, MOVE_SINK))
+        - MOVE_SINK) <= 1e-6,
+      `${(anchorFor('swim', true, 0) - anchorFor('swim', true, MOVE_SINK)).toFixed(6)} m`);
+    // RED COUNTER-PROBE for the SPLIT (finding 13): the treader handed the
+    // MOVING depth hangs 0.95 m over where the waiting depth puts it — the
+    // treader standing on the lake.
+    check(`${label}: RED COUNTER-PROBE — the treader on the moving depth floats 0.95 m`,
+      Math.abs((anchorFor('treading-water', true, MOVE_SINK)
+        - anchorFor('treading-water', true, IDLE_SINK))
+        - (IDLE_SINK - MOVE_SINK)) <= 1e-6,
+      `${(anchorFor('treading-water', true, MOVE_SINK)
+        - anchorFor('treading-water', true, IDLE_SINK)).toFixed(6)} m`);
     // Leaving the water restores the bind anchor EXACTLY, sink or no sink.
-    figure.play('swim', true, 0.4);
+    figure.play('swim', true, MOVE_SINK);
     figure.play('sit', false);
     near(`${label}: back on dry land, the anchor is exactly the bind one`,
       inst.position.y, anchorY, 1e-6);

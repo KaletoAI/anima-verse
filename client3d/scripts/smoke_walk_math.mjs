@@ -172,19 +172,44 @@
  * `moving || !!groundIdle` — `treading-water` is authored on the water line
  * exactly like `swim` and has to be dropped onto the ground the same way.
  *
- * --- groundSink: how deep the ground swallows the figure -------------------
- * The third field of the same contract (`meta.sink_m`, § A9, world metres):
- * the clip normalisation puts the LOWEST body point on the surface, which for
- * a swimmer is a bent knee, so the body lies on the lake instead of in it.
+ * --- groundSink: how far the ground's DEPTH reaches ------------------------
+ * The third field of the same contract (§ A9, world metres): the clip
+ * normalisation puts the LOWEST body point on the surface, which for a swimmer
+ * is a bent knee, so the body lies on the lake instead of in it.
  * Same reach as the two clips, and a depth that says nothing is 0:
- *   groundSink(0.4, 'wilderness')  -> 0.4
- *   groundSink(0.4, 'open')        -> 0.4
- *   groundSink(0.4, 'built')       -> 0     the reach: a tiled hall over the
+ *   groundSink(0.35, 'wilderness') -> 0.35
+ *   groundSink(0.35, 'open')       -> 0.35
+ *   groundSink(0.35, 'built')      -> 0     the reach: a tiled hall over the
  *                                           lake is a floor, nobody wades it
  *   groundSink(1.5, 'wilderness')  -> 1.5   the catalog clamp passes through
  *   groundSink(0 / −1 / NaN, …)    -> 0
- * RED COUNTER-PROBE: the same number without the scope gate sinks the figure
- * in the hall as well — 0.4 against the 0 the rule in force answers.
+ * RED COUNTER-PROBE, implemented rather than asserted: the rule this replaced
+ * is `sink > 0 ? sink : 0` without the scope, written out below as `ungated`.
+ * It answers 0.35 in the tiled hall where the rule in force answers 0, and
+ * agrees with it everywhere else — that difference IS the reach.
+ *
+ * --- sinkForState: WHICH of the two depths is in force (finding 13) --------
+ * One depth could not serve both poses: a moving swimmer lies HORIZONTAL and
+ * its lowest point is a knee a hand's width under the body, a waiting one
+ * treads water UPRIGHT and its lowest point is a foot a body length down. So
+ * the catalog carries two (`meta.move_sink_m` / `meta.idle_sink_m`) and the
+ * STATE picks, with the water seed 0.35 / 1.3:
+ *   sinkForState(true,  'treading-water', W) -> 0.35   moving: the move depth
+ *   sinkForState(true,  '',               W) -> 0.35   ...even where the
+ *                             ground names no clip: walk stands on its ground,
+ *                             so a bog may swallow ankles without a clip
+ *   sinkForState(false, 'treading-water', W) -> 1.3    waiting, and the ground
+ *                                                      names a standing clip
+ *   sinkForState(false, '',               W) -> 0      THE STANDING GATE: the
+ *                             figure keeps its OWN clip, which brings its own
+ *                             reference height (`sleep` is animated on a bed)
+ *   sinkForState(false, 'treading-water', {move: .35, idle: 0}) -> 0
+ *                             a ground that names no waiting depth sinks
+ *                             nobody while waiting
+ * RED COUNTER-PROBE, implemented: the ONE-depth rule this replaced
+ * (`single(sink) = moving || groundIdle ? sink : 0`, the state of finding 13)
+ * hands the treader the swimmer's 0.35 where the rule in force gives 1.3 —
+ * the treader standing on the lake, which is what was reported.
  *
  * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
  * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
@@ -750,7 +775,8 @@ async function main() {
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
-    moveClip, idleClip, groundSink, groundScope, MIN_PACE, MOVE_EPS_M } = walk;
+    moveClip, idleClip, groundSink, sinkForState, groundScope, MIN_PACE,
+    MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
@@ -1031,23 +1057,55 @@ async function main() {
       standing('', 'open', 'idle'), { kind: 'idle', drop: false });
   }
 
-  console.log('groundSink — how deep the ground swallows the figure');
+  console.log('groundSink — how far the ground’s depth reaches');
   {
-    check('a lake takes 0.4 m of the body', groundSink(0.4, 'wilderness'), 0.4);
-    check('...an open place is the same water', groundSink(0.4, 'open'), 0.4);
+    check('a lake takes 0.35 m of the moving body',
+      groundSink(0.35, 'wilderness'), 0.35);
+    check('...an open place is the same water', groundSink(0.35, 'open'), 0.35);
     check('THE REACH: a tiled hall over the lake is a floor',
-      groundSink(0.4, 'built'), 0);
+      groundSink(0.35, 'built'), 0);
     check('a ground without a depth sinks nobody', groundSink(0, 'wilderness'), 0);
     check('...and neither does a negative one', groundSink(-1, 'open'), 0);
     check('...nor a NaN one', groundSink(NaN, 'wilderness'), 0);
     check('the clamp of the catalog travels through untouched',
       groundSink(1.5, 'wilderness'), 1.5);
-    // RED COUNTER-PROBE: the same number without the scope gate — the figure
-    // wades knee-deep through the tiled hall.
-    check('RED: ungated, the hall sinks the figure too',
-      0.4, groundSink(0.4, 'wilderness'));
-    check('...while the rule in force leaves it alone',
-      groundSink(0.4, 'built'), 0);
+    // RED COUNTER-PROBE, EXECUTED: the rule before the reach gate existed,
+    // written out here — the depth with nothing but the "says something" test.
+    const ungated = (sink) => (Number.isFinite(sink) && sink > 0 ? sink : 0);
+    check('RED: the ungated rule wades the tiled hall', ungated(0.35), 0.35);
+    check('...where the rule in force keeps the floor dry',
+      groundSink(0.35, 'built'), 0);
+    check('...and outside a built place the two agree',
+      groundSink(0.35, 'wilderness'), ungated(0.35));
+  }
+
+  console.log('sinkForState — WHICH of the two depths is in force');
+  {
+    // The water seed of `shared/terrain/types.json`.
+    const W = { move: 0.35, idle: 1.3 };
+    check('moving, the swimmer’s depth counts',
+      sinkForState(true, 'treading-water', W), 0.35);
+    check('...even where the ground names no clip at all: a bog swallows '
+      + 'ankles under a plain walk', sinkForState(true, '', W), 0.35);
+    check('waiting on a ground that names a standing clip, the treader’s does',
+      sinkForState(false, 'treading-water', W), 1.3);
+    check('THE STANDING GATE: without a ground idle clip nobody is sunk',
+      sinkForState(false, '', W), 0);
+    check('a ground with no waiting depth sinks nobody while waiting',
+      sinkForState(false, 'treading-water', { move: 0.35, idle: 0 }), 0);
+    check('...and one with no moving depth nobody while moving',
+      sinkForState(true, '', { move: 0, idle: 1.3 }), 0);
+    // RED COUNTER-PROBE, EXECUTED: the ONE-depth rule of finding 13, rebuilt.
+    // It gives the treader whatever the swimmer got.
+    const single = (moving, groundIdle, sink) =>
+      (moving || groundIdle ? sink : 0);
+    check('RED: with one depth the treader gets the swimmer’s 0.35',
+      single(false, 'treading-water', W.move), 0.35);
+    check('...where the rule in force gives it the body length it hangs',
+      sinkForState(false, 'treading-water', W), 1.3);
+    check('...and the moving case is the one place the two agree',
+      single(true, 'treading-water', W.move),
+      sinkForState(true, 'treading-water', W));
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

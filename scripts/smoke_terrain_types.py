@@ -46,10 +46,15 @@ Throwaway storage. Hand-derived expectations:
       `speed_factor 0.4` — the ground one wades through and treads water in.
       `deep_water` is the barrier kind: same swim clip, no idle one, because
       nobody stands in it (`passable: false`).
-  [8b] A THIRD clip-side meta key since the same evening: `sink_m`, how deep
-      a figure stands IN this ground while one of the two ground clips runs.
-      Numeric shape rule (`_clamped_meta_number`) with its own clamp 0…1.5:
-        0.4        -> 0.4      the seed value of water
+  [8b] TWO MORE clip-side meta keys since the same evening, and they are two
+      on purpose (finding 13): `move_sink_m` and `idle_sink_m`, how deep a
+      figure stands IN this ground while it MOVES over it and while it WAITS
+      on it. One number could not serve both poses — a swimmer lies flat and
+      its lowest point is a knee just under the body, a treader hangs upright
+      and its lowest point is a foot a body length down — so the ground says
+      both and the renderer picks. Same numeric shape rule
+      (`_clamped_meta_number`) for each, clamp 0…1.5:
+        0.35 / 1.3 -> unchanged   the seed values of water (move / idle)
         0.05       -> 0.05     there is no lower limit but 0 — a hand's depth
                                is a legal depth
         0.4449     -> 0.44     two decimals, the editor's precision
@@ -57,8 +62,21 @@ Throwaway storage. Hand-derived expectations:
                                ground rather than in it
         0 / −1 / "deep" / NaN / "" -> the KEY IS GONE (0 = no sinking, and
                                that is written by leaving the key out)
-      Water carries `sink_m: 0.4` in the shared seed, next to its two clips;
-      `deep_water` carries none — nobody stands in a barrier.
+      THE ROUNDING EDGE (review 2026-08-13, closed with this round): a depth
+      that only rounds to nothing says nothing either. The lower clamp of
+      these two keys is 0, so a value under half a centimetre survived the
+      "> 0" test and was then stored AS 0.0 — the "authored as 0" the shape
+      rule exists to make impossible.
+        0.004      -> the KEY IS GONE (0.004 -> round 2 -> 0.0)
+        0.0049     -> the KEY IS GONE (the last value under the line)
+        0.005      -> 0.01     the first one that rounds to something
+      The relief keys cannot reach it: their lower clamps (0.05 / 8) are
+      themselves positive, so no clamped value can round down to 0.
+      Water carries `move_sink_m: 0.35` and `idle_sink_m: 1.3` in the shared
+      seed, next to its two clips; `deep_water` carries neither — nobody
+      stands in a barrier, and nobody waits in one.
+      `sink_m` is GONE, without an alias: the key was one day old, and a
+      stored one is a dead free-form key nothing reads (checked below).
 
   [9] TWO MORE whitelisted meta keys since the micro-relief decision
       (2026-08-13): `relief_amplitude_m` and `relief_wave_m`, the random
@@ -245,9 +263,10 @@ check("the two are independent, and neighbours survive both",
       meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
                "note": "x"}),
       {"move_anim": "swim", "idle_anim": "treading-water", "note": "x"})
-check("water carries both in the shared seed — plus its sink depth",
+check("water carries both in the shared seed — plus its two sink depths",
       (terrain_types.get_type("water") or {}).get("meta"),
-      {"move_anim": "swim", "idle_anim": "treading-water", "sink_m": 0.4})
+      {"move_anim": "swim", "idle_anim": "treading-water",
+       "move_sink_m": 0.35, "idle_sink_m": 1.3})
 check("...at the pace of a ground one wades through",
       (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
 check("...and it is walked into, not refused",
@@ -258,34 +277,57 @@ check("the barrier kind carries the same MOVE clip and pace — and no idle "
        (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
       ({"move_anim": "swim"}, 0.4))
 
-print("[8b] sink_m — how deep one stands IN the ground")
-check("the seed depth of water survives", meta_of({"sink_m": 0.4}),
-      {"sink_m": 0.4})
-check("a hand's depth is a legal depth (there is no lower limit but 0)",
-      meta_of({"sink_m": 0.05}), {"sink_m": 0.05})
-check("...rounded to two decimals", meta_of({"sink_m": 0.4449}),
-      {"sink_m": 0.44})
-check("deeper than a body and a half is clamped", meta_of({"sink_m": 9}),
-      {"sink_m": 1.5})
-check("a zero depth leaves no key behind", meta_of({"sink_m": 0}), {})
-check("...and neither does a negative one", meta_of({"sink_m": -1}), {})
-check("...nor junk", meta_of({"sink_m": "deep"}), {})
-check("...nor NaN", meta_of({"sink_m": float("nan")}), {})
-check("...nor an empty string", meta_of({"sink_m": ""}), {})
-check("it travels with the two clip keys and a neighbour",
+print("[8b] the two sink depths — how deep one stands IN the ground")
+check("the moving depth of water survives", meta_of({"move_sink_m": 0.35}),
+      {"move_sink_m": 0.35})
+check("...and the waiting one, which is a different number",
+      meta_of({"idle_sink_m": 1.3}), {"idle_sink_m": 1.3})
+for _key in ("move_sink_m", "idle_sink_m"):
+    check(f"[{_key}] a hand's depth is a legal depth (no lower limit but 0)",
+          meta_of({_key: 0.05}), {_key: 0.05})
+    check(f"[{_key}] ...rounded to two decimals", meta_of({_key: 0.4449}),
+          {_key: 0.44})
+    check(f"[{_key}] deeper than a body and a half is clamped",
+          meta_of({_key: 9}), {_key: 1.5})
+    check(f"[{_key}] a zero depth leaves no key behind", meta_of({_key: 0}), {})
+    check(f"[{_key}] ...and neither does a negative one",
+          meta_of({_key: -1}), {})
+    check(f"[{_key}] ...nor junk", meta_of({_key: "deep"}), {})
+    check(f"[{_key}] ...nor NaN", meta_of({_key: float("nan")}), {})
+    check(f"[{_key}] ...nor an empty string", meta_of({_key: ""}), {})
+    # THE ROUNDING EDGE: the "> 0" test alone let these through and the
+    # rounding then stored the 0 the rule forbids.
+    check(f"[{_key}] a depth that only rounds to nothing leaves no key",
+          meta_of({_key: 0.004}), {})
+    check(f"[{_key}] ...up to the last value under the line",
+          meta_of({_key: 0.0049}), {})
+    check(f"[{_key}] ...while the first one that rounds to something stays",
+          meta_of({_key: 0.005}), {_key: 0.01})
+check("the two are independent, and travel with the clips and a neighbour",
       meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
-               "sink_m": 0.4, "note": "x"}),
-      {"move_anim": "swim", "idle_anim": "treading-water", "sink_m": 0.4,
-       "note": "x"})
+               "move_sink_m": 0.35, "idle_sink_m": 1.3, "note": "x"}),
+      {"move_anim": "swim", "idle_anim": "treading-water",
+       "move_sink_m": 0.35, "idle_sink_m": 1.3, "note": "x"})
+check("a ground may sink a walker without naming a clip",
+      meta_of({"move_sink_m": 0.2}), {"move_sink_m": 0.2})
+# `sink_m` is GONE and has NO alias (the key was one day old). A stored one is
+# a free-form key like any other: it survives the sanitizer untouched — and
+# means nothing to anybody, which is what the report tells the user.
+check("the replaced sink_m is no longer read, only carried",
+      meta_of({"sink_m": 0.4}), {"sink_m": 0.4})
+check("...and it does NOT become one of the two new depths",
+      meta_of({"sink_m": 0.4}).get("move_sink_m"), None)
 terrain_types.save_world_type(
     {"kind": "bog", "name": "Bog", "color": "#5b4a2f",
-     "meta": {"sink_m": 0.6}})
-check("it survives the save/read round trip",
-      (terrain_types.get_type("bog") or {}).get("meta"), {"sink_m": 0.6})
+     "meta": {"move_sink_m": 0.3, "idle_sink_m": 0.6}})
+check("both survive the save/read round trip",
+      (terrain_types.get_type("bog") or {}).get("meta"),
+      {"move_sink_m": 0.3, "idle_sink_m": 0.6})
 terrain_types.delete_world_type("bog")
-check("the barrier kind has none — nobody stands in it",
-      "sink_m" in ((terrain_types.get_type("deep_water") or {}).get("meta") or {}),
-      False)
+check("the barrier kind has neither — nobody stands or waits in it",
+      [k for k in ("move_sink_m", "idle_sink_m")
+       if k in ((terrain_types.get_type("deep_water") or {}).get("meta") or {})],
+      [])
 
 print("[9] the micro-relief keys")
 check("an authored amplitude survives", meta_of({"relief_amplitude_m": 0.4}),

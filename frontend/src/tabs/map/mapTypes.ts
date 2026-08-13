@@ -188,13 +188,14 @@ export interface TerrainType {
    *  (finding 3, 2026-08-13) — a footprint only neutralises a factor of 0,
    *  which is a ground nobody meant to be walked rather than a slow one. */
   speed_factor: number
-  /** Free-form, with three contracted keys: `meta.move_anim`, the animation
+  /** Free-form, with four contracted keys: `meta.move_anim`, the animation
    *  clip a MOVING figure plays on this ground instead of walk/run (§ A9 —
    *  "swim" on water), `meta.idle_anim`, the one a STANDING figure plays
-   *  instead of its own ("treading-water"), and `meta.sink_m`, how deep the
-   *  figure stands IN the ground while either runs. Absent = walk, run and
-   *  idle as usual, on top of the ground; the server never stores an empty
-   *  one. */
+   *  instead of its own ("treading-water"), and the two depths
+   *  `meta.move_sink_m` / `meta.idle_sink_m`, how deep the figure stands IN
+   *  the ground while it moves and while it waits (two numbers, because the
+   *  two poses hang differently in the water). Absent = walk, run and idle as
+   *  usual, on top of the ground; the server never stores an empty one. */
   meta?: Record<string, unknown>
 }
 

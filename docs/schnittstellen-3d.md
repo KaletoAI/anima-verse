@@ -1253,20 +1253,46 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   types: [ …, {kind: "water", …, "meta": {"move_anim": "swim",
                                           "idle_anim": "treading-water"}} ]
   ```
-- **`sink_m` — wie tief man IN einem Boden steht** (2026-08-13). Dritter
-  whitelisteter `meta`-Schlüssel, eine Zahl in Metern (geklemmt 0…1,5, zwei
-  Dezimalen, 0/leer = Schlüssel weg). Die Boden-Normierung setzt den TIEFSTEN
-  Körperpunkt eines Boden-Clips auf die Oberfläche — beim Schwimmer ist das ein
-  angewinkeltes Knie, der Körper liegt also auf dem Wasser statt darin.
-  `sink_m` ist die zusätzliche Absenkung und gehört dem BODEN, nicht dem Clip:
-  derselbe Zug liegt im See tiefer als in der Furche. Vertrag für die Renderer:
-  **solange die Gelände-Regel am Punkt greift (dieselbe Reichweite wie die
-  beiden Clips: Wildnis und offene Orte ja, Gebäude und Innenräume nein),
-  sinkt die Figur zusätzlich um `sink_m` Weltmeter** — in
-  derselben Verrechnung wie der Clip-Offset (`Absenkung = Clip-Offset ×
-  Figurenskalierung + sink_m`), NICHT mit der Figur skaliert (ein halber Meter
-  Wasser ist für Kind und Riese ein halber Meter), und Rückstellung auf exakt
-  den Bind-Anker, sobald der Boden-Clip endet. Saat: `water` trägt 0,4.
+- **`move_sink_m` / `idle_sink_m` — wie tief man IN einem Boden steht**
+  (2026-08-13, Befund 13). ZWEI whitelistete `meta`-Schlüssel, je eine Zahl in
+  Metern (geklemmt 0…1,5, zwei Dezimalen, 0/leer/auf 0 gerundet = Schlüssel
+  weg). Die Boden-Normierung setzt den TIEFSTEN Körperpunkt eines Boden-Clips
+  auf die Oberfläche — beim Schwimmer ist das ein angewinkeltes Knie, der
+  Körper liegt also auf dem Wasser statt darin. Die Absenkung gehört dem BODEN,
+  nicht dem Clip: derselbe Zug liegt im See tiefer als in der Furche.
+
+  **Warum zwei Zahlen:** die POSEN hängen verschieden. Der bewegte Schwimmer
+  liegt waagerecht, sein tiefster Punkt ist ein Knie handbreit unter dem
+  Körper; der Wassertreter steht senkrecht, sein tiefster Punkt ist ein Fuß
+  eine ganze Körperlänge tiefer. Auf dieselbe Oberfläche normiert ergibt EINE
+  Absenkung für eine der beiden Posen das falsche Bild — Schwimmer abgetaucht
+  oder Treter auf dem See stehend. Es gibt bewusst keinen dritten
+  Mittelwert-Schlüssel: der Renderer weiß, welcher der beiden Clips läuft.
+
+  Vertrag für die Renderer, in dieser Reihenfolge:
+  1. **Wahl nach Zustand:** bewegt sich die Figur → `move_sink_m`; wartet sie →
+     `idle_sink_m`, **aber nur, wenn der Boden auch `idle_anim` nennt**. Ohne
+     ihn behält die Figur ihren EIGENEN Steh-Clip, und der bringt seine eigene
+     Bezugshöhe mit (`sleep` ist auf einem Bett animiert) — den zu versenken
+     hieße, den Schläfer durch die Matratze zu schieben. Die Bewegung braucht
+     dieses Gate nicht: `walk`/`run` stehen auf dem Boden, auf dem sie laufen,
+     ein Moor darf also auch ohne eigenen Clip die Knöchel schlucken.
+  2. **Reichweite:** dieselbe wie bei den beiden Clips (§ A1.5 — Wildnis und
+     offene Orte ja, Gebäude und Innenräume nein). In einer gefliesten Halle
+     im See sinkt niemand ein.
+  3. **Verrechnung:** `Absenkung = Clip-Offset × Figurenskalierung + Tiefe`,
+     die Tiefe in Weltmetern und NICHT mit der Figur skaliert (ein halber Meter
+     Wasser ist für Kind und Riese ein halber Meter); Rückstellung auf exakt
+     den Bind-Anker, sobald der Boden-Zustand endet.
+
+  Saat: `water` trägt `move_sink_m` 0,35 und `idle_sink_m` 1,3.
+
+  ```
+  types: [ …, {kind: "water", …, "meta": {"move_anim": "swim",
+                                          "idle_anim": "treading-water",
+                                          "move_sink_m": 0.35,
+                                          "idle_sink_m": 1.3}} ]
+  ```
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 
