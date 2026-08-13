@@ -24,6 +24,13 @@
  * one tree"; it is authored per painted AREA now, in the area chip of the map
  * itself — where the shape one means is already selected and the preview shows
  * what it does.
+ *
+ * What a ground is CROSSED like, on the other hand, belongs to the type and is
+ * edited here: the pace (`speed_factor`) and, since finding 3 of the E8
+ * acceptance, the movement animation (`meta.move_anim` — "swim" on water).
+ * Both count everywhere the ground is painted, inside a placed location as
+ * much as out in the wilderness; only the PASSABILITY is a wilderness question
+ * (§ A15, "footprint wins").
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -35,12 +42,32 @@ import type { TerrainType } from './mapTypes'
 // second literal here would be a second opinion about the same server value.
 import { UNKNOWN_COLOR as DEFAULT_COLOR } from './TerrainLayer'
 
-/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`. */
+/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, the `move_anim` cap. */
 const KIND_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const SPEED_MIN = 0
 const SPEED_MAX = 2
 const SPEED_STEP = 0.05
 const NAME_MAX = 60
+const MOVE_ANIM_MAX = 40
+
+/** Read the one meta key this dialog owns. Everything else in `meta` belongs
+ *  to whoever wrote it and travels along untouched. */
+function moveAnimOf(type: TerrainType): string {
+  const raw = (type.meta as { move_anim?: unknown } | undefined)?.move_anim
+  return typeof raw === 'string' ? raw : ''
+}
+
+/** `meta` with the move animation set — or with the KEY REMOVED when it is
+ *  empty, which is what the server stores too ("no animation" is never an
+ *  empty string a reader has to test for). */
+function withMoveAnim(meta: Record<string, unknown> | undefined,
+                      moveAnim: string): Record<string, unknown> {
+  const next = { ...(meta || {}) }
+  const clean = moveAnim.trim()
+  if (clean) next.move_anim = clean
+  else delete next.move_anim
+  return next
+}
 
 /** What one row sends — the same shape it reads. `meta` travels along
  *  untouched: the route is a full replace, so a body without it would blank
@@ -65,6 +92,7 @@ function TypeRow({
   const [color, setColor] = useState(type.color || DEFAULT_COLOR)
   const [passable, setPassable] = useState(!!type.passable)
   const [speed, setSpeed] = useState(String(type.speed_factor))
+  const [moveAnim, setMoveAnim] = useState(moveAnimOf(type))
 
   const speedNum = parseFloat(speed)
   const speedBad = !Number.isFinite(speedNum)
@@ -75,22 +103,24 @@ function TypeRow({
   const dirty = name !== (type.name || '')
     || color !== (type.color || DEFAULT_COLOR)
     || passable !== !!type.passable
+    || moveAnim.trim() !== moveAnimOf(type)
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
 
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // no key in it and hands it back untouched.
+    // exactly ONE key in it (`move_anim`) and hands the rest back untouched.
     const saved = await onSave({
       kind: type.kind, name, color, passable,
-      speed_factor: speedNum, meta: { ...(type.meta || {}) },
+      speed_factor: speedNum, meta: withMoveAnim(type.meta, moveAnim),
     })
     if (!saved) return
     setName(saved.name || '')
     setColor(saved.color || DEFAULT_COLOR)
     setPassable(!!saved.passable)
     setSpeed(String(saved.speed_factor))
-  }, [color, name, onSave, passable, speedBad, speedNum, type])
+    setMoveAnim(moveAnimOf(saved))
+  }, [color, moveAnim, name, onSave, passable, speedBad, speedNum, type])
 
   return (
     <tr>
@@ -135,6 +165,16 @@ function TypeRow({
               .replace('{min}', String(SPEED_MIN)).replace('{max}', String(SPEED_MAX))
             : t('Movement speed on this ground, 1 = normal')}
           onChange={(e) => setSpeed(e.target.value)}
+        />
+      </td>
+      <td>
+        <input
+          className="ga-input ga-tt-input"
+          maxLength={MOVE_ANIM_MAX}
+          value={moveAnim}
+          placeholder={t('walk / run')}
+          title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
+          onChange={(e) => setMoveAnim(e.target.value)}
         />
       </td>
       <td>
@@ -213,6 +253,7 @@ export function TerrainTypesDialog({
   const [newColor, setNewColor] = useState(DEFAULT_COLOR)
   const [newPassable, setNewPassable] = useState(true)
   const [newSpeed, setNewSpeed] = useState('1')
+  const [newMoveAnim, setNewMoveAnim] = useState('')
 
   const putType = useCallback(async (draft: TypeDraft): Promise<TerrainType | null> => {
     setBusy(true)
@@ -256,7 +297,8 @@ export function TerrainTypesDialog({
   const addType = useCallback(async () => {
     const saved = await putType({
       kind: kindClean, name: newName.trim(), color: newColor,
-      passable: newPassable, speed_factor: newSpeedNum, meta: {},
+      passable: newPassable, speed_factor: newSpeedNum,
+      meta: withMoveAnim({}, newMoveAnim),
     })
     if (!saved) return
     setNewKind('')
@@ -264,7 +306,9 @@ export function TerrainTypesDialog({
     setNewColor(DEFAULT_COLOR)
     setNewPassable(true)
     setNewSpeed('1')
-  }, [kindClean, newColor, newName, newPassable, newSpeedNum, putType])
+    setNewMoveAnim('')
+  }, [kindClean, newColor, newMoveAnim, newName, newPassable, newSpeedNum,
+      putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -292,6 +336,7 @@ export function TerrainTypesDialog({
                 <th>{t('Colour')}</th>
                 <th className="ga-tt-center">{t('Passable')}</th>
                 <th>{t('Speed')}</th>
+                <th>{t('Move animation')}</th>
                 <th>{t('Source')}</th>
                 <th />
               </tr>
@@ -299,7 +344,7 @@ export function TerrainTypesDialog({
             <tbody>
               {types.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="ga-map-tray-empty">
+                  <td colSpan={8} className="ga-map-tray-empty">
                     {t('No terrain types')}
                   </td>
                 </tr>
@@ -375,6 +420,15 @@ export function TerrainTypesDialog({
                     onChange={(e) => setNewSpeed(e.target.value)}
                   />
                 </td>
+                <td>
+                  <input
+                    className="ga-input ga-tt-input"
+                    maxLength={MOVE_ANIM_MAX}
+                    value={newMoveAnim}
+                    placeholder={t('walk / run')}
+                    onChange={(e) => setNewMoveAnim(e.target.value)}
+                  />
+                </td>
                 {/* Source: a new kind is always this world's own. */}
                 <td />
                 <td className="ga-tt-actions">
@@ -389,7 +443,7 @@ export function TerrainTypesDialog({
                 </td>
               </tr>
               <tr>
-                <td colSpan={7} className="ga-tt-newhint">
+                <td colSpan={8} className="ga-tt-newhint">
                   {kindBad
                     ? t('A kind is lowercase letters, digits, “_” and “-”, starts with a letter or digit, at most 40 characters.')
                     : kindTaken

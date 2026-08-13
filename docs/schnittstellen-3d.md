@@ -573,22 +573,29 @@ immer sichtbar, nur Locations verstecken sich.
   (`terrain_query.default_kind()`): fehlender ODER leerer Schlüssel
   ergibt `"grass"`. Der Endpoint darf nie eine andere Vorgabe melden, als
   die Laufregeln anwenden.
-- **`passable` und `speed_factor` kommen AUSSCHLIESSLICH aus dem
-  Typen-Katalog** — nie aus der Fläche, nie aus einer Client-Tabelle,
-  nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ nachträglich
-  gelöscht) gilt als begehbar mit Faktor 1,0: ein Loch im Katalog darf
-  niemanden stranden lassen.
-- **`passable` UND `speed_factor` beurteilen die WILDNIS, nicht das Innere
-  einer platzierten Location** (Entscheidung 2026-08-13, „Footprint
-  gewinnt", Gate-Kette in § A15). Innerhalb eines Fußabdrucks gilt der
-  Boden des Ortes: kein Gelände-Verbot und auch kein Gelände-Tempo — das
-  NPC-Routing rechnet dort mit dem neutralen Faktor 1,0
-  (`nav_grid.FOOTPRINT_SPEED_FACTOR`), weil die Platte den Boden ERSETZT.
-  Sonst kröche eine Reise mit Faktor 0,1 durch denselben Saal, den der
-  Avatar mit vollem Tempo durchquert. Wer hinein darf, regeln Öffnungen
-  und Regeln. Ein Renderer, der die Figur selbst hält, MUSS es genauso
-  machen — sonst weigert sich das Bild zu laufen, wo der Server jede
-  Meldung annimmt.
+- **`passable`, `speed_factor` und `meta.move_anim` kommen AUSSCHLIESSLICH
+  aus dem Typen-Katalog** — nie aus der Fläche, nie aus einer
+  Client-Tabelle, nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ
+  nachträglich gelöscht) gilt als begehbar mit Faktor 1,0 und ohne
+  Bewegungs-Clip: ein Loch im Katalog darf niemanden stranden lassen.
+- **`passable` beurteilt die WILDNIS, nicht das Innere einer platzierten
+  Location** (Entscheidung 2026-08-13, „Footprint gewinnt", Gate-Kette in
+  § A15). Innerhalb eines Fußabdrucks entfällt das Gelände-Verbot ganz —
+  die Platte ERSETZT den Boden fürs Stehen-Dürfen. Wer hinein darf, regeln
+  Öffnungen und Regeln. Ein Renderer, der die Figur selbst hält, MUSS es
+  genauso machen — sonst weigert sich das Bild zu laufen, wo der Server
+  jede Meldung annimmt.
+- **`speed_factor` und `meta.move_anim` gelten ÜBERALL** (Befund 3 der
+  E8-Sichtabnahme, 2026-08-13) — im Fußabdruck genau wie in der Wildnis.
+  Ein Dorf auf einem See wird durchwatet, und gemaltes Wasser unter einer
+  Location ist genau die Ansage dafür. **Ausnahme: Faktor `<= 0` IM
+  Fußabdruck gilt als neutrale 1,0** — eine 0 ist kein Tempo, sondern ein
+  „dieser Boden war nie zum Begehen gemeint" (Fels), und dort ersetzt die
+  Platte den Boden wirklich. Die Regel steht einmal je Sprache:
+  `terrain_query.effective_speed_factor` (Server, auch fürs NPC-Routing
+  und die Reisezeit) und `game/walk.terrainPace` (3D-Client, Klemme 0,25
+  statt 0,1 — sie schützt einen Lauf-Vorgriff vor der Stillstands-
+  Erkennung, nicht eine Kostensumme vor der Unendlichkeit).
 - Der Katalog ist **datengetrieben**: der geteilte Grundstock
   `shared/terrain/types.json` plus Welt-Zeilen, die pro `kind` den ganzen
   Eintrag **ersetzen** (Override-Replace wie die Aktivitäten-Bibliothek).
@@ -597,9 +604,10 @@ immer sichtbar, nur Locations verstecken sich.
   `color` (`#rrggbb`) die Farbe der 2D-Schemakarte. `kind` SOLL auf eine
   Oberflächen-Art (§ A9) passen, damit der 3D-Boden eine echte Textur
   bekommt — Konvention, nicht erzwungen.
-- `types[].meta` ist **frei-form und für die Renderer bedeutungslos**. Was
-  auf einem Boden WÄCHST, hängt seit Befund B17 an der Fläche, nicht an der
-  Art; eine alte `meta.scatter` an einem Typ liegt tot in der DB.
+- `types[].meta` ist **frei-form mit GENAU EINEM vertraglichen Schlüssel**:
+  `move_anim` (§ A9). Was auf einem Boden WÄCHST, hängt seit Befund B17 an
+  der Fläche, nicht an der Art; eine alte `meta.scatter` an einem Typ liegt
+  tot in der DB.
 
 **`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
 
@@ -1164,6 +1172,28 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   `toward`-Art keine Klasse, entsteht keine Maske und nichts ändert sich.
 - Das Blend-BAKING (Canvas-Komposition, Noise) bleibt bewusst
   Client-Sache — rein visuell, kein Geometrie-Vertrag.
+- **`move_anim` — der Clip, mit dem man über einen Boden kommt** (Befund 3
+  der E8-Sichtabnahme, 2026-08-13). Ein Gelände-TYP (§ A1.5, nicht die
+  Oberflächen-Bibliothek) darf in `meta.move_anim` eine Animations-Art
+  nennen; der Server whitelistet genau diesen einen `meta`-Schlüssel
+  (getrimmter String, höchstens 40 Zeichen wie eine `kind`, leer = Schlüssel
+  weg — „keine Animation" ist nie ein leerer String).
+
+  ```
+  types: [ …, {kind: "water", …, "speed_factor": 0.4,
+               "meta": {"move_anim": "swim"}} ]
+  ```
+
+  Vertrag für die Renderer: **bewegt sich eine Figur** — Avatar, NPC oder
+  Reisender — **auf einem obersten Gelände mit `move_anim`, spielt sie
+  diesen Clip statt `walk`/`run`**; es gibt kein Rennen darüber, ein
+  See wird nicht gesprintet. **Im STEHEN ändert sich nichts**: dort gewinnen
+  weiterhin `activity_animation` bzw. die Aktivitäts-Heuristik (§ A8). Die
+  Art gehört ins OFFENE Clip-Vokabular (§ A8) und wird nirgends gegen eine
+  Liste geprüft; fehlt der Clip am Modell, greift die normale
+  Ersatzkette (`swim` → `walk` → `idle`). Der Client bezieht die Antwort aus
+  EINER Stelle für alle Figuren — sonst tanzen Avatar und NPC im selben
+  Wasser verschieden.
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 
@@ -1592,7 +1622,7 @@ auseinanderstehen):
 | 3 | **Drossel** ~4 Meldungen/s — Überschuss wird STILL verworfen, kein Fehler-Toast | 200 `{ok: false, throttled: true}` |
 | 4 | **Schrittweite** gegen die ECHTE Zeit seit der letzten AKZEPTIERTEN Meldung | 409 `too_far` |
 | 5 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 6 | — |
-| 6 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`) | 409 `impassable` |
+| 6 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`); NUR die Passierbarkeit, das Tempo wird hier nie geprüft | 409 `impassable` |
 | 7 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
 | 8 | **Höhe** des Punktes gegen den letzten gültigen (Steigung immer, Stufe zusätzlich unter 1 m — siehe unten) | 409 `too_steep` |
 
@@ -1613,8 +1643,9 @@ Sekunde läuft — ohne den dritten Term sammelte ein ehrlicher Läufer dort
 Anticheat**; ohne Basislinie (frische Sitzung, Übernahme, Admin-Move) wird
 der erste Punkt ungeprüft genommen.
 
-**FOOTPRINT GEWINNT (Nr. 5 vor Nr. 6, Entscheidung 2026-08-13).** Gemaltes
-Gelände beurteilt die Welt ZWISCHEN den Orten. Liegt der gemeldete Punkt in
+**FOOTPRINT GEWINNT — FÜR DIE PASSIERBARKEIT (Nr. 5 vor Nr. 6, Entscheidung
+2026-08-13, präzisiert durch Befund 3).** Gemaltes Gelände beurteilt, wo man
+STEHEN darf, zwischen den Orten. Liegt der gemeldete Punkt in
 IRGENDEINEM platzierten Fußabdruck (eigener wie fremder), entfällt der
 Gelände-Check ganz — eine Location wird AUF die Welt gesetzt und erbt nicht
 den Boden, den jemand darunter gemalt hat. Sonst wäre eine Halle auf einem
@@ -1628,11 +1659,20 @@ Planierung darf die geebnete Fläche nicht weiter sperren.
 Dieselbe Regel gilt im **NPC-Routing** (`nav_grid`): eine Zelle stirbt am
 fremden Fußabdruck (SAT) oder am Gelände in ihrer Mitte — Letzteres nur
 außerhalb jedes Fußabdrucks. Ohne das wäre ein Ort auf Fels für die Reise
-unerreichbar, während sein Avatar darin frei umherläuft. **Und dasselbe
-gilt fürs Tempo**: innerhalb eines Fußabdrucks kostet ein Meter den
-neutralen Faktor 1,0 statt des Geländefaktors (§ A1.5), sonst ersetzte die
-Platte den Boden zwar fürs Dürfen, nicht fürs Vorankommen — die Reisezeit
-(`segment_costs` → Reise-Engine) erbt das automatisch.
+unerreichbar, während sein Avatar darin frei umherläuft.
+
+**TEMPO UND ANIMATION GEHÖREN DAGEGEN ÜBERALL DEM OBERSTEN GELÄNDE**
+(Befund 3 der E8-Sichtabnahme, 2026-08-13). Der Fußabdruck nimmt dem Boden
+das VERBOT, nicht seine Beschaffenheit: ein Dorf auf einem See wird
+durchwatet und mit `move_anim` „swim" auch so animiert, drinnen wie
+draußen. Nur ein Faktor `<= 0` im Fußabdruck wird zur neutralen 1,0 —
+eine 0 ist kein Tempo, sondern ein „nie zum Begehen gemeint" (Fels), und
+genau diese Hälfte der alten Regel bleibt. Server und Client tragen die
+Regel je einmal (`terrain_query.effective_speed_factor` bzw.
+`game/walk.terrainPace`, § A1.5); die Reisezeit (`segment_costs` →
+Reise-Engine) und die Schrittweite des Avatars erben sie automatisch.
+**Die Gate-Kette oben ändert sich dadurch NICHT** — das Tempo ist keine
+Erlaubnis, es wird nirgends geprüft, es wird gelaufen.
 
 **Der Übergang (Nr. 7).** Gleiche Location oder Wildnis → Wildnis ist frei.
 Sonst:

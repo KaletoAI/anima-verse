@@ -165,17 +165,26 @@ export interface TerrainScatterEntry {
   model?: string
 }
 
-/** One kind of ground in the effective catalog (§ A1.5). `passable` and
- *  `speed_factor` come from HERE and nowhere else — never from an area, never
- *  from a client table. `meta` is free-form and this editor writes none of
- *  it: what grows on ground belongs to the AREA (finding B17). */
+/** One kind of ground in the effective catalog (§ A1.5). `passable`,
+ *  `speed_factor` and `meta.move_anim` come from HERE and nowhere else — never
+ *  from an area, never from a client table. `meta` is free-form apart from
+ *  that ONE key; what grows on ground belongs to the AREA (finding B17). */
 export interface TerrainType {
   kind: string
   name: string
   /** `#rrggbb` — the colour of the 2D schematic map. */
   color: string
+  /** May one STAND here? The WILDERNESS answer: inside a placed footprint the
+   *  footprint wins and this says nothing (§ A15). */
   passable: boolean
+  /** Walking-pace multiplier, 0..2. Unlike `passable` it counts EVERYWHERE
+   *  (finding 3, 2026-08-13) — a footprint only neutralises a factor of 0,
+   *  which is a ground nobody meant to be walked rather than a slow one. */
   speed_factor: number
+  /** Free-form, with one contracted key: `meta.move_anim`, the animation clip
+   *  a MOVING figure plays on this ground instead of walk/run (§ A9 — "swim"
+   *  on water). Absent = walk and run as usual; the server never stores an
+   *  empty one. */
   meta?: Record<string, unknown>
 }
 
