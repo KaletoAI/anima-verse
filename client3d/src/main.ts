@@ -725,12 +725,14 @@ async function startApp(username: string, role: string) {
     }
     // Same tick, third driver: character figures by camera distance.
     npcs.tickFigureTiers(engine.camera.position, FIGURE_TIER_NEAR, FIGURE_TIER_FAR);
-    // …and fourth: the prop scatter of the painted ground (E4 task 2). It
-    // shares the far distance of the building tiers — a world where the tufts
-    // vanish at another line than the houses reads as two worlds. No
-    // hysteresis of its own: this is a visibility flag, not a mesh swap, so
-    // flapping at the line costs nothing.
-    terrainGround.tickScatterLod(engine.camera.position, BUILDING_TIER_FAR);
+    // …and fourth: the prop scatter of the painted ground. It used to be a
+    // plain on/off switch at the buildings' far distance; it now has a tier
+    // swap, an instance budget and a cull line of its own, all of them read
+    // from the area's distance in `scene/scatterLod.ts`. The numbers live
+    // there and not here because that is the module the hysteresis and the
+    // budget are TESTED in — a threshold that decides a swap belongs next to
+    // the function that swaps on it. This tick stays the driver.
+    terrainGround.tickScatterLod(engine.camera.position);
   }
   // --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ---------
   //
@@ -761,6 +763,10 @@ async function startApp(username: string, role: string) {
         placed.push({ variants: rec.spec.variants, url: rec.url });
       }
     }
+    // The ground scatter counts too — it is the same question ("how much of
+    // what is on screen is still the expensive mesh?"), and a wood of full-tier
+    // trees is exactly the load this readout exists to make visible.
+    placed.push(...terrainGround.scatterTiers());
     perfHeavy = { vertices: visibleVertices(engine.scene), tiers: tierCounts(placed) };
   }
   // The publisher is faster than the measurement on purpose: the tier numbers

@@ -324,9 +324,9 @@ export interface TerrainTypeMeta {
 }
 
 /** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
- *  whitelists exactly these three fields
- *  (`app/models/terrain._sanitize_scatter_list`); `scene/ground.ts` reads them
- *  and hands them to the shared sampler. */
+ *  STORES exactly three fields (`app/models/terrain._sanitize_scatter_list`)
+ *  and adds `variants` on delivery; `scene/ground.ts` reads them and hands
+ *  them to the shared sampler. */
 export interface TerrainScatterEntry {
   /** instances per 100 m2 of the painted area; 0 = nothing is scattered */
   density_per_100m2: number;
@@ -335,6 +335,12 @@ export interface TerrainScatterEntry {
   /** TARGET height in metres — the prop is scaled until its bounding box is
    *  this tall, and the built-in tuft is built this high. */
   height_m?: number;
+  /** The resolution tiers this prop REALLY has, per tier token
+   *  (`{full: "/assets/props/<id>/model?tier=full", …}`) — added by
+   *  `GET /play/terrain`, never stored and never authored. Resolved with the
+   *  one `pickVariant` rule; absent (an old cached answer, a foreign URL)
+   *  means `model` is all there is. */
+  variants?: Record<string, string>;
 }
 
 /** An area's `meta`. Free-form by contract — the known key is named, the rest

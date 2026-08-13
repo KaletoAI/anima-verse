@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * Smoke check for the pure scatter maths shared by the 3D client and the map
- * editor — `packages/scene-render/src/scatter.ts`.
+ * Smoke check for the pure scatter maths: the sampler shared by the 3D client
+ * and the map editor (`packages/scene-render/src/scatter.ts`, sections A-E)
+ * and the client's display LOD on top of it
+ * (`client3d/src/scene/scatterLod.ts`, section F). Two modules, one subject —
+ * where a prop stands and how much of it is drawn are the two halves of the
+ * same contract, and splitting them over two files would duplicate this
+ * harness and let the halves drift apart.
  *
  * Usage:  node client3d/scripts/smoke_scatter_math.mjs
  *
@@ -10,7 +15,7 @@
  * recorded from the current output. A check that only pins today's result
  * proves nothing.
  *
- * `scatter.ts` has NO import at all (see its header), so a plain esbuild
+ * NEITHER module has an import (see their headers), so a plain esbuild
  * transpile is enough — no bundler, no stand-ins.
  *
  * ============================================================================
@@ -278,6 +283,72 @@
  * hip-high next to a 1.70 m figure instead of knee-high). Without this the
  * arithmetic above would keep passing while the client quietly went back to
  * scale 1.
+ *
+ * ============================================================================
+ * (F) THE DISPLAY LOD — `client3d/src/scene/scatterLod.ts`
+ * ============================================================================
+ * WHERE an instance stands is (A)-(D) above and belongs to the sampler; HOW
+ * MUCH of it is drawn is a second, independent question, and it lives in its
+ * own import-free module for exactly the reason this file exists. Its numbers
+ * (plan-scatter-lod.md, binding): NEAR = 35 m, FAR = 45 m, CULL = 120 m,
+ * MIN_SHARE = 0.25. Every distance is measured to the AREA — the camera's
+ * distance to the bounding sphere's centre MINUS its radius — so a camera
+ * standing in a wood reads 0 m, and inside a large area it goes negative.
+ *
+ * (F1) THE TIER WITHOUT A HISTORY — `scatterTierFor(d, 'full')`, the case a
+ *      freshly built area is in. Both thresholds are EXCLUSIVE:
+ *        d = 0 -> full · 35 -> full · 45 -> full (45 is not > 45)
+ *        d = 45.001 -> low · 120 -> low
+ *
+ * (F2) DEMOTION. A `full` area is only demoted beyond FAR:
+ *        40 m -> full (inside the band, nothing changes)
+ *        46 m -> low
+ *
+ * (F3) PROMOTION. A `low` area is only promoted below NEAR:
+ *        40 m -> low (the same 40 m, the other answer)
+ *        35 m -> low (not < 35)
+ *        34.9 m -> full
+ *
+ * (F4) THE HYSTERESIS IN ONE LINE: at 40 m the answer depends ONLY on what
+ *      stands there — `full` stays full, `low` stays low. A rule without a
+ *      band cannot produce two answers for one distance, which is what the
+ *      red counter-check (F8) turns into a failing case.
+ *
+ * (F5) A NON-FINITE DISTANCE (a degenerate area, see `ringBounds`) keeps the
+ *      current tier — and `scatterCountShare` hides such an area anyway, so
+ *      the tier it "keeps" is never drawn.
+ *
+ * (F6) THE BUDGET — `scatterCountShare(d)`. Flat 1 up to FAR, then a straight
+ *      line to MIN_SHARE at CULL, then nothing:
+ *        share(d) = 1 - (d - 45)/(120 - 45) * (1 - 0.25)   for 45 < d <= 120
+ *        -20 -> 1 (camera inside the area) · 0 -> 1 · 45 -> 1
+ *         60 -> 1 - (15/75)*0.75 = 1 - 0.15         = 0.85
+ *         82.5 (the midpoint) -> 1 - 0.5*0.75       = 0.625
+ *        120 -> 1 - 1*0.75                          = 0.25
+ *        120.001 -> 0 · 1000 -> 0 · NaN -> 0
+ *      The value AT 120 is the last one still drawn: 0 starts beyond it, which
+ *      is the one distance where "thinned out" turns into "gone".
+ *
+ * (F7) THE INSTANCE COUNT — `scatterVisibleCount(base, d)`, rounded, because
+ *      `InstancedMesh.count` is a whole number, and floored at ONE while
+ *      anything is drawn at all:
+ *        (400,   0) -> 400            (400, 82.5) -> round(250)   = 250
+ *        (400, 120) -> round(100) = 100   (400, 121) -> 0
+ *        (  3, 118) -> share = 1 - (73/75)*0.75 = 0.27, 3*0.27 = 0.81 -> 1
+ *        (  1, 120) -> 0.25 rounds to 0, the floor keeps the lone landmark
+ *                      tree at 1 — the budget thins dense scatter, it does not
+ *                      erase sparse scatter
+ *        (  0,  10) -> 0              nothing placed stays nothing
+ *
+ * (F8) THE RED COUNTER-CHECKS, both built by mutating the source:
+ *      - "either-or, no band": the two hysteresis lines are replaced by
+ *        `return distM > SCATTER_TIER_FAR ? 'low' : 'full'`. It answers `full`
+ *        at 40 m for an area that stands at `low` — where the truth is `low`
+ *        (F3/F4) — so a camera drifting through the band would swap meshes
+ *        every tick. Pinned from both sides: the mutant's answer is asserted
+ *        to BE 'full' and the true answer is asserted NOT to be.
+ *      - "no budget": the linear part is replaced by `return 1`. At 82.5 m it
+ *        draws 400 of 400 instead of 250, which is the whole saving gone.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -286,25 +357,26 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
+const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 
-/** See the header: the module has no runtime import, so a transpile is all it
- *  takes. Should someone add one, this fails loudly — that is the alarm.
+/** See the header: neither module has a runtime import, so a transpile is all
+ *  it takes. Should someone add one, this fails loudly — that is the alarm.
  *
- *  `mutate` rewrites the SOURCE before the transpile — that is how section (D)
- *  gets a wrong sampler to compare against, without a second copy of the
- *  maths lying around to rot. */
-async function loadScatter(mutate) {
+ *  `mutate` rewrites the SOURCE before the transpile — that is how sections
+ *  (D) and (F8) get a wrong module to compare against, without a second copy
+ *  of the maths lying around to rot. */
+async function loadTs(src, mutate) {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'scattermath-'));
   try {
-    const original = await readFile(SRC, 'utf8');
+    const original = await readFile(src, 'utf8');
     const source = mutate ? mutate(original) : original;
     if (mutate && source === original) {
       throw new Error('the mutant changed nothing — the counter-check would be vacuous');
     }
     const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
-    const file = join(dir, 'scatter.mjs');
+    const file = join(dir, 'module.mjs');
     await writeFile(file, out.code, 'utf8');
     return await import(`file://${file}`);
   } finally {
@@ -319,6 +391,26 @@ function yawOnAcceptance(source) {
   return source
     .replace('    const yaw = rnd() * Math.PI * 2\n', '')
     .replace('out.push({ x, z, yaw })', 'out.push({ x, z, yaw: rnd() * Math.PI * 2 })');
+}
+
+/** Section (F8)'s first mutant: ONE threshold instead of a band — the tier no
+ *  longer depends on what is already standing, which is precisely the thrash
+ *  the hysteresis exists to prevent. */
+function dropHysteresis(source) {
+  return source.replace(
+    `  if (current === 'low' && distM < SCATTER_TIER_NEAR) return 'full';\n`
+    + `  if (current === 'full' && distM > SCATTER_TIER_FAR) return 'low';\n`
+    + '  return current;\n',
+    `  return distM > SCATTER_TIER_FAR ? 'low' : 'full';\n`);
+}
+
+/** Section (F8)'s second mutant: the linear part of the budget is gone, so
+ *  everything inside the cull distance is drawn in full. */
+function dropBudget(source) {
+  return source.replace(
+    '  const t = (distM - SCATTER_TIER_FAR) / (SCATTER_CULL_FAR - SCATTER_TIER_FAR);\n'
+    + '  return 1 - t * (1 - SCATTER_MIN_SHARE);\n',
+    '  return 1;\n');
 }
 
 let failed = 0;
@@ -378,7 +470,7 @@ function stream(values) {
 async function main() {
   const {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
-  } = await loadScatter();
+  } = await loadTs(SRC);
 
   const TAU = Math.PI * 2;
   const SQUARE = [[0, 0], [20, 0], [20, 20], [0, 20]];
@@ -573,7 +665,7 @@ async function main() {
   const RED_TRUE = [{ x: 15, z: 5, yaw: 0 }, { x: 12, z: 16, yaw: TAU * 0.25 }];
   check('D the true sampler drops the covered candidate, the rest keeps its numbers',
     scatterInstances({ ...RED, rng: stream(RED_STREAM) }), RED_TRUE);
-  const mutant = await loadScatter(yawOnAcceptance);
+  const mutant = await loadTs(SRC, yawOnAcceptance);
   const redMutant = mutant.scatterInstances({ ...RED, rng: stream(RED_STREAM) });
   checkNot('D the mutant "yaw only on acceptance" does NOT reproduce that list',
     redMutant, RED_TRUE);
@@ -597,6 +689,78 @@ async function main() {
     const m = new RegExp(`const ${name} = (-?[0-9.]+);`).exec(groundSrc);
     check(`E ground.ts ${name} is ${want} m`, m ? Number(m[1]) : null, want);
   }
+
+  console.log('\n(F) the display LOD — tier hysteresis, budget, instance count');
+  const {
+    SCATTER_TIER_NEAR, SCATTER_TIER_FAR, SCATTER_CULL_FAR, SCATTER_MIN_SHARE,
+    scatterTierFor, scatterCountShare, scatterVisibleCount,
+  } = await loadTs(LOD_SRC);
+  // The four numbers everything below is derived from — the plan's, and the
+  // reason the derivations in the header are arithmetic and not opinion.
+  check('F NEAR is 35 m', SCATTER_TIER_NEAR, 35);
+  check('F FAR is 45 m', SCATTER_TIER_FAR, 45);
+  check('F CULL is 120 m', SCATTER_CULL_FAR, 120);
+  check('F the smallest share is a quarter', SCATTER_MIN_SHARE, 0.25);
+
+  // (F1) a fresh area, no history
+  check('F1 0 m -> full', scatterTierFor(0, 'full'), 'full');
+  check('F1 exactly 35 m -> full', scatterTierFor(35, 'full'), 'full');
+  check('F1 exactly 45 m -> full (the threshold is exclusive)',
+    scatterTierFor(45, 'full'), 'full');
+  check('F1 45.001 m -> low', scatterTierFor(45.001, 'full'), 'low');
+  check('F1 120 m -> low', scatterTierFor(120, 'full'), 'low');
+  // (F2) demotion
+  check('F2 full at 40 m stays full (inside the band)',
+    scatterTierFor(40, 'full'), 'full');
+  check('F2 full at 46 m -> low', scatterTierFor(46, 'full'), 'low');
+  // (F3) promotion
+  check('F3 low at 40 m stays low (the same 40 m)',
+    scatterTierFor(40, 'low'), 'low');
+  check('F3 low at exactly 35 m stays low', scatterTierFor(35, 'low'), 'low');
+  check('F3 low at 34.9 m -> full', scatterTierFor(34.9, 'low'), 'full');
+  check('F3 low at 0 m -> full', scatterTierFor(0, 'low'), 'full');
+  // (F4) the band, both directions from ONE distance
+  check('F4 40 m answers differently for the two tiers',
+    [scatterTierFor(40, 'full'), scatterTierFor(40, 'low')], ['full', 'low']);
+  // (F5) a degenerate area
+  check('F5 NaN keeps full', scatterTierFor(NaN, 'full'), 'full');
+  check('F5 NaN keeps low', scatterTierFor(NaN, 'low'), 'low');
+
+  // (F6) the budget
+  check('F6 share inside the area (-20 m) is 1', scatterCountShare(-20), 1);
+  check('F6 share at 0 m is 1', scatterCountShare(0), 1);
+  check('F6 share at 45 m is still 1', scatterCountShare(45), 1);
+  check('F6 share at 60 m is 0.85', scatterCountShare(60), 0.85);
+  check('F6 share at the midpoint 82.5 m is 0.625', scatterCountShare(82.5), 0.625);
+  check('F6 share at 120 m is the quarter', scatterCountShare(120), 0.25);
+  check('F6 share just past 120 m is 0', scatterCountShare(120.001), 0);
+  check('F6 share at 1000 m is 0', scatterCountShare(1000), 0);
+  check('F6 share of a NaN distance is 0', scatterCountShare(NaN), 0);
+
+  // (F7) the instance count
+  check('F7 400 near -> 400', scatterVisibleCount(400, 0), 400);
+  check('F7 400 at 82.5 m -> 250', scatterVisibleCount(400, 82.5), 250);
+  check('F7 400 at 120 m -> 100', scatterVisibleCount(400, 120), 100);
+  check('F7 400 past the cull -> 0', scatterVisibleCount(400, 121), 0);
+  check('F7 3 at 118 m -> 1 (0.81 rounds up)', scatterVisibleCount(3, 118), 1);
+  check('F7 the lone tree at 120 m survives', scatterVisibleCount(1, 120), 1);
+  check('F7 …but is gone past the cull', scatterVisibleCount(1, 121), 0);
+  check('F7 nothing placed stays nothing', scatterVisibleCount(0, 10), 0);
+
+  // (F8) the red counter-checks
+  const noBand = await loadTs(LOD_SRC, dropHysteresis);
+  check('F8 the "either-or" mutant answers full at 40 m for a low area',
+    noBand.scatterTierFor(40, 'low'), 'full');
+  checkNot('F8 …which is NOT what the real rule answers there',
+    scatterTierFor(40, 'low'), 'full');
+  check('F8 …and it flaps: 40 m gives one answer for both tiers',
+    [noBand.scatterTierFor(40, 'full'), noBand.scatterTierFor(40, 'low')],
+    ['full', 'full']);
+  const noBudget = await loadTs(LOD_SRC, dropBudget);
+  check('F8 the "no budget" mutant draws all 400 at 82.5 m',
+    noBudget.scatterVisibleCount(400, 82.5), 400);
+  checkNot('F8 …which is NOT what the real budget draws there',
+    scatterVisibleCount(400, 82.5), 400);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
