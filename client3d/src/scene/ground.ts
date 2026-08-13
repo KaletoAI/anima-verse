@@ -49,7 +49,7 @@ import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, Ter
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
-import { scatterTierFor, scatterVisibleCount } from './scatterLod';
+import { scatterCountShare, scatterTierFor, scatterVisibleCount } from './scatterLod';
 import type { ScatterTier } from './scatterLod';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -194,6 +194,12 @@ interface AreaMesh {
    *  meadow's grass and its trees can never disagree about how far away
    *  they are. */
   tier: ScatterTier;
+  /** whether the props of this area have ever been ASKED to mount a mesh.
+   *  `false` for an area built beyond the cull distance: nothing of it is on
+   *  screen, so nothing of it is downloaded either, and the first tick that
+   *  brings it back inside the cull has to request it — the tier alone would
+   *  not, it may not have changed in the meantime. */
+  loaded: boolean;
 }
 
 /**
@@ -774,7 +780,13 @@ export function createGround(): Ground {
       };
       // The tuft stands until the first mesh arrives; a prop with no model at
       // all keeps it forever, and takes part in cull and budget all the same.
-      if (prop.model || Object.keys(variants).length) showTier(prop, tier);
+      // NOTHING is downloaded for an area beyond the cull distance: its
+      // instances are not drawn, and a world of far-away woods would otherwise
+      // fetch every mesh in it at build time only to hide it. The tick fetches
+      // it when the area is really approached (`loaded` on the area).
+      if (inst.count > 0 && (prop.model || Object.keys(variants).length)) {
+        showTier(prop, tier);
+      }
       out.push(prop);
     });
     return out;
@@ -818,6 +830,15 @@ export function createGround(): Ground {
       prop.shownUrl = url;
       return;
     }
+    // A LOAD THAT NEVER MOUNTED MUST NOT PIN THE WISH. `wantUrl` is both the
+    // wish and the "already asked" mark, so a failed load would leave the prop
+    // wanting a URL it does not have: the early return above then blocks every
+    // later request for that tier for the life of the area — a full mesh that
+    // failed once while the low one mounted would never be tried again. So the
+    // failing branches hand the field back to what is actually on screen
+    // (`''` = the tuft), and only while this load is still the current wish:
+    // a newer one owns the field, and last wish wins stays untouched.
+    const abandon = () => { if (prop.wantUrl === url) prop.wantUrl = prop.shownUrl; };
     // Only the first mesh of the file is used — a prop that is really several
     // meshes is a v2 problem, and a silently missing prop would be worse than
     // a simplified one. `near` puts this download into the distance queue of
@@ -831,10 +852,11 @@ export function createGround(): Ground {
       // an instance is legitimately parentless for as long as its rebuild
       // takes, and reading that as "gone" would drop the model of every
       // prop whose file arrives before the swap.
-      if (!obj || prop.inst.userData.disposed) return;
+      if (!obj) { abandon(); return; }
+      if (prop.inst.userData.disposed) return;
       let src: THREE.Mesh | null = null;
       obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
-      if (!src) return;
+      if (!src) { abandon(); return; }
       const mesh = src as THREE.Mesh;
       // `height_m` is the TARGET height since B17: the prop is scaled until
       // its bounding box is that tall, and grounded either way (B16).
@@ -852,7 +874,11 @@ export function createGround(): Ground {
       prop.inst.geometry = geometry;
       prop.inst.material = mesh.material as THREE.Material;
       prop.shownUrl = url;
-    }).catch(() => { /* the tuft stands; a missing prop is not a broken world */ });
+    }).catch(() => {
+      // The tuft stands; a missing prop is not a broken world — but the wish
+      // is released all the same, see `abandon`.
+      abandon();
+    });
   }
 
   function clearAreas(): void {
@@ -986,7 +1012,8 @@ export function createGround(): Ground {
       const tier = scatterTierFor(dist, 'full');
       const scatter = buildScatter(area, built.ring, built.areaM2, occluders,
                                    nextOwned, centre, dist, tier);
-      next.push({ mesh, scatter, centre, radius, tier });
+      next.push({ mesh, scatter, centre, radius, tier,
+                  loaded: scatterCountShare(dist) > 0 });
     });
 
     // THE SWAP. Nothing above touched the scene, so the old ground stood until
@@ -1178,14 +1205,22 @@ export function createGround(): Ground {
         const tier = scatterTierFor(d, a.tier);
         const swap = tier !== a.tier;
         a.tier = tier;
+        // Beyond the cull nothing of this area is drawn, so nothing of it is
+        // downloaded: the tier bookkeeping above still runs (the area comes
+        // back at the tier its distance deserves), the request does not. The
+        // catch-up is `loaded`: an area whose load was skipped asks once, the
+        // first tick it is inside the cull again — a tier swap alone would
+        // miss it, because approaching from far away need not change the tier.
+        const inCull = scatterCountShare(d) > 0;
         for (const prop of a.scatter) {
-          if (swap) showTier(prop, tier);
+          if (inCull && (swap || !a.loaded)) showTier(prop, tier);
           // The budget: the tail of a seed-stable instance list is capped, so
           // a distant wood thins out instead of switching off. `visible` is
           // now only the far cull — everything nearer stays on screen.
           prop.inst.count = scatterVisibleCount(prop.baseCount, d);
           prop.inst.visible = prop.inst.count > 0;
         }
+        if (inCull) a.loaded = true;
       }
     },
     scatterTiers() {
