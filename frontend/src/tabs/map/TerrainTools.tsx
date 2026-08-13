@@ -17,11 +17,27 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { PropRef } from '../../lib/refs'
+import { fmtHeight } from './HeightLayer'
+import { minFalloffFor, tooSteep } from './heightMath'
 import { typeColor } from './TerrainLayer'
-import type { TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType } from './mapTypes'
+import type {
+  HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType,
+} from './mapTypes'
 
-/** What a click on the map does. `select` is the location editor of Task 3. */
-export type TerrainMode = 'select' | 'paint' | 'edit-area'
+/**
+ * What a click on the map does. `select` is the location editor of Task 3;
+ * `heights` edits the world RELIEF (§ A16) and has a sub-tool of its own
+ * (`HeightTool`), the way `paint` has a shape.
+ */
+export type TerrainMode = 'select' | 'paint' | 'edit-area' | 'heights'
+
+/**
+ * What a click means inside the heights mode: pick an existing height area, or
+ * drop the next vertex of a new one. Explicit rather than guessed from
+ * whatever happens to sit under the cursor — the same reason the modes
+ * themselves are a visible switch.
+ */
+export type HeightTool = 'select' | 'draw'
 
 /**
  * HOW the paint mode draws. Both produce the very same thing — a polygon in
@@ -270,6 +286,61 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
   )
 }
 
+/** Server mirrors — `app/models/heightfield.py`. Heights are CLAMPED there
+ *  rather than refused, so these are the knobs' range and not a refusal
+ *  threshold; the editor simply never sends anything outside them. */
+export const HEIGHT_MAX_M = 50
+export const FALLOFF_MAX_M = 1000
+/** What a freshly drawn height area starts as: a low rise with a ramp gentle
+ *  enough for the default walk limits (5 m over 8 m is 32°, under the 40° a
+ *  walker climbs). */
+export const HEIGHT_DEFAULT_M = 5
+export const FALLOFF_DEFAULT_M = 8
+
+/**
+ * A metre knob of the relief — the `WidthField` pattern, with a sign.
+ *
+ * Its own text draft, so a half-typed "−" or "0." is not clamped mid-keystroke;
+ * committed on blur and on Enter (which is stopped here, or it would finish
+ * the polygon being drawn). It NEVER writes itself: it hands the number up and
+ * shows what comes back, so a value the server clamps is not left claimed by
+ * the field. The token makes the effect run even when the parent's value did
+ * not move.
+ */
+function HeightNum({ label, title, value, step, min, max, onCommit }: {
+  label: string; title: string; value: number; step: number
+  min: number; max: number; onCommit: (v: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  const [resync, setResync] = useState(0)
+  useEffect(() => { setDraft(String(value)) }, [value, resync])
+  const commit = () => {
+    setResync((n) => n + 1)
+    const v = parseFloat(draft)
+    if (!Number.isFinite(v)) return
+    const c = Math.round(Math.min(max, Math.max(min, v)) * 100) / 100
+    if (c !== value) onCommit(c)
+  }
+  return (
+    <label className="ga-terrain-width" title={title}>
+      {label}
+      <input
+        className="ga-input"
+        type="number" step={step} min={min} max={max}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return
+          e.stopPropagation()
+          e.currentTarget.blur()
+        }}
+      />
+      m
+    </label>
+  )
+}
+
 /** A palette entry: colour swatch plus the type's name. */
 function TypeChip({ type, armed, onPick }: {
   type: TerrainType; armed: boolean; onPick: () => void
@@ -318,6 +389,17 @@ export interface TerrainToolbarProps {
    *  vocabulary is missing something — and it is the only surface that can
    *  answer "there is no kind for this" with anything but a shrug. */
   onManageTypes: () => void
+  /** The heights mode (§ A16): its sub-tool, the two numbers the NEXT drawn
+   *  area gets, how many height areas there are, and the walk limit the
+   *  steepness warning is measured against. */
+  heightTool: HeightTool
+  onHeightTool: (tool: HeightTool) => void
+  heightM: number
+  onHeightM: (m: number) => void
+  falloffM: number
+  onFalloffM: (m: number) => void
+  heightCount: number
+  maxSlopeDeg: number
   /** The catalog fetch FAILED — an empty palette then means "not loaded",
    *  not "nothing defined", and the way out is Reload, not another click. */
   typesError?: boolean
@@ -326,10 +408,14 @@ export interface TerrainToolbarProps {
 export function TerrainToolbar({
   mode, onMode, types, paintKind, onPaintKind, shape, onShape, widthM, onWidth,
   draftLen, onCloseDraft, onDiscardDraft, areaCount, scatterPreview,
-  onScatterPreview, onManageTypes, typesError,
+  onScatterPreview, onManageTypes, typesError, heightTool, onHeightTool,
+  heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const isLine = shape === 'line'
+  const drawingHeights = mode === 'heights' && heightTool === 'draw'
+  const needFalloff = minFalloffFor(heightM, maxSlopeDeg)
+  const nextTooSteep = tooSteep(heightM, falloffM, maxSlopeDeg)
   const btn = (m: TerrainMode, icon: string, label: string, title: string) => (
     <button
       type="button"
@@ -359,9 +445,13 @@ export function TerrainToolbar({
           t('Draw terrain: an area from its outline, or a line with a width'))}
         {btn('edit-area', '✎', t('Edit terrain'),
           t('Click an area to select it, then drag its points'))}
+        {btn('heights', '⛰', t('Heights'),
+          t('Shape the ground: draw areas that stand higher or lower than the flat world'))}
       </span>
       <span className="ga-map-toolbar-info">
-        {t('{n} areas').replace('{n}', String(areaCount))}
+        {mode === 'heights'
+          ? t('{n} height areas').replace('{n}', String(heightCount))
+          : t('{n} areas').replace('{n}', String(areaCount))}
       </span>
       <label className="ga-map-toolbar-check"
         title={t('Show what the areas grow, as dots — exactly the points the 3D world plants (footprints of placed locations stay clear).')}>
@@ -435,6 +525,70 @@ export function TerrainToolbar({
               </>
             ) : null}
           </span>
+        </>
+      ) : null}
+
+      {mode === 'heights' ? (
+        <>
+          {/* WHAT a click means here — picking an existing shape and drawing a
+              new one are different gestures, so they are different buttons. */}
+          <span className="ga-terrain-modes">
+            <button type="button"
+              className={'ga-btn ga-btn-sm' + (heightTool === 'select' ? ' ga-btn-primary' : '')}
+              title={t('Click a height area to select it, then drag its points')}
+              onClick={() => onHeightTool('select')}>
+              ✋ {t('Select')}
+            </button>
+            <button type="button"
+              className={'ga-btn ga-btn-sm' + (heightTool === 'draw' ? ' ga-btn-primary' : '')}
+              title={t('Click the outline of a new height area; click the first point again to close it')}
+              onClick={() => onHeightTool('draw')}>
+              ⬟ {t('Draw')}
+            </button>
+          </span>
+          {drawingHeights ? (
+            <>
+              <HeightNum
+                label={t('Height')}
+                title={t('How high the ground stands inside the new area. Negative digs a hollow.')}
+                value={heightM} step={0.5}
+                min={-HEIGHT_MAX_M} max={HEIGHT_MAX_M} onCommit={onHeightM} />
+              <HeightNum
+                label={t('Ramp')}
+                title={t('Over how many metres before the outline the ground climbs to that height. 0 = a wall at the edge.')}
+                value={falloffM} step={0.5}
+                min={0} max={FALLOFF_MAX_M} onCommit={onFalloffM} />
+              <span className={'ga-map-arm' + (nextTooSteep ? ' warn' : '')}>
+                {nextTooSteep
+                  ? t('This ramp is too steep for walkers — {n} m or wider at {deg}°')
+                    .replace('{n}', String(needFalloff))
+                    .replace('{deg}', String(Math.round(maxSlopeDeg)))
+                  : draftLen === 0
+                    ? t('Click the map to set the first point')
+                    : t('{n} of {max} points — click the first one to close, Escape discards')
+                      .replace('{n}', String(draftLen))
+                      .replace('{max}', String(MAX_POINTS))}
+                {draftLen > 0 ? (
+                  <>
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      disabled={draftLen < MIN_POINTS}
+                      onClick={onCloseDraft}
+                      title={t('Close the ring and save the height area')}>
+                      {t('Close')}
+                    </button>
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      onClick={onDiscardDraft}>
+                      {t('Discard')}
+                    </button>
+                  </>
+                ) : null}
+              </span>
+            </>
+          ) : (
+            <span className="ga-map-arm">
+              {t('Click a height area to select it')}
+            </span>
+          )}
         </>
       ) : null}
     </>
@@ -676,6 +830,98 @@ export function TerrainAreaChip({
           : (typesError
             ? t('Terrain types could not be loaded — retry via Reload')
             : t('Pick a terrain type first'))}
+      </div>
+    </div>
+  )
+}
+
+export interface HeightAreaChipProps {
+  area: HeightArea
+  /** The steepest slope a walker climbs (worldmap payload, § A1.3). */
+  maxSlopeDeg: number
+  onHeight: (m: number) => void
+  onFalloff: (m: number) => void
+  onDelete: () => void
+  onClose: () => void
+}
+
+/**
+ * The selected HEIGHT area — the same floating chip the terrain and the
+ * locations use, with the two numbers that make a relief.
+ *
+ * The steepness line is the point of it. A ramp climbs its full height over
+ * exactly `falloff_m` metres, so its gradient is fixed the moment both numbers
+ * are set, and a plateau whose flank is steeper than `max_slope_deg` is sealed
+ * against every walker — server AND client refuse the step (§ A15 Nr. 8). That
+ * is a legitimate thing to build (a mesa reached through an opening) and a
+ * miserable thing to build by accident, so it is said out loud, with the width
+ * that would fix it, and nothing is refused.
+ *
+ * Deleting arms an inline confirmation (no `window.confirm`); the state is
+ * local because the chip is remounted per area (`key`).
+ */
+export function HeightAreaChip({
+  area, maxSlopeDeg, onHeight, onFalloff, onDelete, onClose,
+}: HeightAreaChipProps) {
+  const { t } = useI18n()
+  const [armed, setArmed] = useState(false)
+  const need = minFalloffFor(area.height_m, maxSlopeDeg)
+  const steep = tooSteep(area.height_m, area.falloff_m, maxSlopeDeg)
+  return (
+    <div className="ga-map-chip">
+      <div className="ga-map-chip-head">
+        <strong>{fmtHeight(area.height_m)}</strong>
+        <span className="ga-map-chip-tag">
+          {area.height_m < 0 ? t('hollow') : t('rise')}
+        </span>
+        <button type="button" className="ga-modal-close"
+          title={t('Clear selection')} onClick={onClose}>×</button>
+      </div>
+      <div className="ga-map-chip-row">
+        <span>{t('{n} points').replace('{n}', String(area.polygon.length))}</span>
+      </div>
+      <div className="ga-map-chip-row">
+        <HeightNum
+          label={t('Height')}
+          title={t('How high the ground stands inside this area. Negative digs a hollow.')}
+          value={area.height_m} step={0.5}
+          min={-HEIGHT_MAX_M} max={HEIGHT_MAX_M} onCommit={onHeight} />
+        <HeightNum
+          label={t('Ramp')}
+          title={t('Over how many metres before the outline the ground climbs to that height. 0 = a wall at the edge.')}
+          value={area.falloff_m} step={0.5}
+          min={0} max={FALLOFF_MAX_M} onCommit={onFalloff} />
+      </div>
+      <div className={'ga-map-chip-row ' + (steep ? 'ga-map-chip-warn' : 'ga-map-chip-label')}>
+        {steep
+          ? t('Too steep for walkers: at {deg}° this height needs a ramp of at least {n} m. Nobody will climb it — only openings lead up here.')
+            .replace('{deg}', String(Math.round(maxSlopeDeg)))
+            .replace('{n}', String(need))
+          : t('Walkable: the ramp is gentler than the {deg}° a walker climbs.')
+            .replace('{deg}', String(Math.round(maxSlopeDeg)))}
+      </div>
+      <div className="ga-map-chip-actions">
+        {armed ? (
+          <>
+            <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => { setArmed(false); onDelete() }}>
+              {t('Really delete')}
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm"
+              onClick={() => setArmed(false)}>
+              {t('Cancel')}
+            </button>
+          </>
+        ) : (
+          <button type="button" className="ga-btn ga-btn-sm"
+            title={t('Remove this height area — the ground here goes flat again')}
+            onClick={() => setArmed(true)}>
+            {t('Delete height area')}
+          </button>
+        )}
+      </div>
+      <div className="ga-map-chip-row ga-map-chip-label">
+        {t('Drag a point to move it · double-click removes it · click an edge to add one')}
       </div>
     </div>
   )

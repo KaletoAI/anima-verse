@@ -15,17 +15,20 @@ import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
 } from './PlacementLayer'
 import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
+import { HeightLayer } from './HeightLayer'
 import {
-  MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
-  MIN_STROKE_POINTS, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainLayerHint,
-  TerrainToolbar, type PaintShape, type TerrainMode,
+  FALLOFF_DEFAULT_M, HEIGHT_DEFAULT_M, HeightAreaChip, MAX_COORD, MAX_POINTS,
+  MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS, MIN_STROKE_POINTS,
+  STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainLayerHint, TerrainToolbar,
+  type HeightTool, type PaintShape, type TerrainMode,
 } from './TerrainTools'
 import { TerrainTypesDialog } from './TerrainTypesDialog'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { readScatter } from './mapTypes'
 import type {
-  EditorLocation, TerrainArea, TerrainMeta, TerrainPayload, TerrainScatterEntry,
-  TerrainStroke, TerrainType, TerrainTypesResp, WorldmapPayload,
+  EditorLocation, HeightArea, HeightAreasResp, TerrainArea, TerrainMeta,
+  TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
+  TerrainTypesResp, WorldmapPayload,
 } from './mapTypes'
 
 /**
@@ -96,6 +99,22 @@ import type {
  * fired in a tab that is not mounted next to this one. Toggle off/on is the
  * cheap, explicit refresh.
  *
+ * THE WORLD RELIEF is the fourth mode (`heights`, § A16) and reads its own
+ * endpoint: `GET /world/height-areas` plus `POST/PUT/DELETE` on the same path.
+ * A height area is a polygon with a height and a ramp width — no kind, no
+ * layer — so it is a second data set next to the painted ground, not a flag on
+ * it, and it is drawn in its own layer, only in its own mode. Inside the mode
+ * the two gestures are again a visible switch (`heightTool`): picking an
+ * existing shape and drawing a new one must not be guessed from what happens
+ * to sit under the cursor. Drawing itself reuses the very draft machinery the
+ * paint mode uses — one ring gesture on this canvas, not two.
+ *
+ * `max_slope_deg` from the worldmap payload is what makes the steepness
+ * warning possible: the server refuses a step steeper than that (§ A15 Nr. 8),
+ * so a ramp too narrow for its height would seal the plateau it was drawn to
+ * make reachable. The editor says so, with the width that would fix it, and
+ * refuses nothing — a cliff is a legitimate thing to build.
+ *
  * Paint has TWO gestures and one result. `area` clicks an outline; `line`
  * clicks a centre line that `strokeToPolygon` widens into the very same kind
  * of polygon. The line survives the write only as a RECIPE in `meta.stroke`
@@ -117,6 +136,11 @@ const YAW_QUARTER = 90
 
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
+
+/** Fallback for `max_slope_deg` (§ A1.3) — the server's own default
+ *  (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), used until the worldmap payload
+ *  has answered and on a server too old to send it. */
+const DEFAULT_MAX_SLOPE_DEG = 40
 
 /** Zoom floor for the roof views: under one pixel per metre even a big house
  *  is a smudge, and each picture costs a request plus a GL context. */
@@ -245,6 +269,20 @@ export function MapTab() {
   const [draft, setDraft] = useState<Array<[number, number]>>([])
   const [draftCursor, setDraftCursor] = useState<{ x: number; z: number } | null>(null)
   const [selArea, setSelArea] = useState('')
+  // The world relief (§ A16): the authored areas, which one is selected, what
+  // a click does inside the mode, and the two numbers the NEXT drawn area
+  // gets. The numbers live here rather than in the toolbar for the reason the
+  // stroke width does — the toolbar is unmounted whenever the mode changes.
+  const [heightAreas, setHeightAreas] = useState<HeightArea[]>([])
+  const [selHeight, setSelHeight] = useState('')
+  const [heightTool, setHeightTool] = useState<HeightTool>('draw')
+  const [newHeightM, setNewHeightM] = useState(HEIGHT_DEFAULT_M)
+  const [newFalloffM, setNewFalloffM] = useState(FALLOFF_DEFAULT_M)
+  // The walk limit the steepness warning is measured against. It arrives with
+  // the worldmap payload; the fallback is the server's own default
+  // (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), so an older server warns with
+  // the same number it judges with.
+  const [maxSlopeDeg, setMaxSlopeDeg] = useState(DEFAULT_MAX_SLOPE_DEG)
   /** The top-down scatter preview — a VIEW, so it survives every mode. */
   const [scatterOn, setScatterOn] = useState(false)
   /** The prop library for the scatter model picker of the area chip — fetched
@@ -307,7 +345,7 @@ export function MapTab() {
     paneObsRef.current = ro
   }, [])
 
-  /** The three loaders return whether they got what they came for. Only the
+  /** The four loaders return whether they got what they came for. Only the
    *  Reload button reads it — a silent success reads as a dead button, and a
    *  "reloaded" toast on top of a "failed to load" one would be a lie. */
   const reload = useCallback(async () => {
@@ -324,6 +362,11 @@ export function MapTab() {
     try {
       const wm = await apiGet<WorldmapPayload>('/play/worldmap?all=1')
       setBounds(wm.world_bounds || null)
+      // The walk limit rides along with the map (§ A1.3) — the relief editor
+      // warns with the very number the server judges steps with.
+      if (Number.isFinite(wm.max_slope_deg) && (wm.max_slope_deg as number) > 0) {
+        setMaxSlopeDeg(wm.max_slope_deg as number)
+      }
       const sigs: Record<string, string> = {}
       for (const row of wm.locations || []) {
         if (row.layout_sig) sigs[row.id] = row.layout_sig
@@ -345,8 +388,22 @@ export function MapTab() {
     return true
   }, [t, toast])
 
+  /** The authored relief. Same discipline as the terrain: on mount, on the
+   *  reload button, after every write — never on a timer. */
+  const reloadHeights = useCallback(async () => {
+    try {
+      const r = await apiGet<HeightAreasResp>('/world/height-areas')
+      setHeightAreas(r.areas || [])
+    } catch (e) {
+      toast(t('Failed to load heights') + ': ' + (e as Error).message, 'error')
+      return false
+    }
+    return true
+  }, [t, toast])
+
   useEffect(() => { void reload() }, [reload])
   useEffect(() => { void reloadTerrain() }, [reloadTerrain])
+  useEffect(() => { void reloadHeights() }, [reloadHeights])
 
   /** The catalog. Read on mount and after every write of the type manager —
    *  never on a timer: it changes only when someone edits the types, and the
@@ -372,9 +429,10 @@ export function MapTab() {
    *  failed one has already said so itself, which is why the success line only
    *  appears when nothing did. */
   const reloadAll = useCallback(async () => {
-    const ok = await Promise.all([reload(), reloadTerrain(), reloadTypes()])
+    const ok = await Promise.all([reload(), reloadTerrain(), reloadTypes(),
+      reloadHeights()])
     if (ok.every(Boolean)) toast(t('Map reloaded'), 'success')
-  }, [reload, reloadTerrain, reloadTypes, t, toast])
+  }, [reload, reloadHeights, reloadTerrain, reloadTypes, t, toast])
 
   /** What the type manager gets: the same reload, minus the boolean it now
    *  returns. The dialog AWAITS this — it closes on the refreshed catalog, not
@@ -428,6 +486,10 @@ export function MapTab() {
   modeRef.current = mode
   const areasRef = useRef<TerrainArea[]>([])
   areasRef.current = terrain?.areas || []
+  const heightAreasRef = useRef<HeightArea[]>([])
+  heightAreasRef.current = heightAreas
+  const heightToolRef = useRef<HeightTool>(heightTool)
+  heightToolRef.current = heightTool
   // Is a modal covering the canvas? The handler is bound once, so this cannot
   // be read from the state directly.
   const modalRef = useRef(false)
@@ -443,7 +505,7 @@ export function MapTab() {
       if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (draftRef.current.length) {
         setDraft([])
         setDraftCursor(null)
-      } else { setSelId(''); setSelArea('') }
+      } else { setSelId(''); setSelArea(''); setSelHeight('') }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -460,6 +522,17 @@ export function MapTab() {
     setDraftCursor(null)
     if (m !== 'select') setSelId('')
     if (m !== 'edit-area') setSelArea('')
+    if (m !== 'heights') setSelHeight('')
+  }, [])
+
+  /** Switching the height sub-tool drops both the running draft and the
+   *  selection: the two gestures act on different things, and a chip whose
+   *  handles are no longer reachable is a trap. */
+  const switchHeightTool = useCallback((tool: HeightTool) => {
+    setHeightTool(tool)
+    setDraft([])
+    setDraftCursor(null)
+    if (tool !== 'select') setSelHeight('')
   }, [])
 
   /** Switching the paint gesture drops the running draft for the same reason
@@ -843,6 +916,40 @@ export function MapTab() {
     }
   }, [paintKind, reloadTerrain, t, toast])
 
+  /**
+   * Close the running ring into a new HEIGHT area (§ A16).
+   *
+   * The same rules the terrain draft follows — the draft survives a failed
+   * write, the in-flight flag keeps a second click from posting it twice —
+   * with the two numbers of the toolbar instead of a kind. The new area is
+   * SELECTED afterwards and the mode switches to picking: the height and the
+   * ramp are what one edits next, and the chip is where they live.
+   */
+  const commitHeightDraft = useCallback(async (pts: Array<[number, number]>) => {
+    if (draftBusyRef.current) return
+    if (pts.length < MIN_POINTS) {
+      toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
+      return
+    }
+    draftBusyRef.current = true
+    try {
+      const r = await apiPost<{ area?: HeightArea }>('/world/height-areas',
+        { polygon: pts, height_m: newHeightM, falloff_m: newFalloffM })
+      setDraft([])
+      setDraftCursor(null)
+      await reloadHeights()
+      const id = r?.area?.id || ''
+      if (id) {
+        setSelHeight(id)
+        setHeightTool('select')
+      }
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      draftBusyRef.current = false
+    }
+  }, [newFalloffM, newHeightM, reloadHeights, t, toast])
+
   /** Finish the running centre line into a new area. Same rules as
    *  `commitDraft` — the draft survives a failed write — plus the recipe: the
    *  clicked line and its width travel along in `meta.stroke`, so the area can
@@ -876,16 +983,23 @@ export function MapTab() {
   /** What the Close/Finish button does — which depends on what is being drawn
    *  and on nothing else. */
   const closeDraft = useCallback(() => {
-    if (paintShape === 'line') void commitStroke(draft, strokeWidthM)
+    if (mode === 'heights') void commitHeightDraft(draft)
+    else if (paintShape === 'line') void commitStroke(draft, strokeWidthM)
     else void commitDraft(draft)
-  }, [commitDraft, commitStroke, draft, paintShape, strokeWidthM])
+  }, [commitDraft, commitHeightDraft, commitStroke, draft, mode, paintShape,
+    strokeWidthM])
 
-  /** One click while painting: close the ring, or drop another vertex. */
+  /** One click while drawing: close the ring, or drop another vertex.
+   *
+   *  ONE gesture for both data sets — the ground and the relief are drawn with
+   *  the same clicks, the same close tolerance and the same limits; only what
+   *  the closed ring BECOMES differs. */
   const addDraftPoint = useCallback((wx: number, wz: number) => {
     // While the ring is being saved the draft still stands (it is only dropped
     // once the server has it) — a vertex added now would be dropped with it.
     if (draftBusyRef.current) return
-    if (!paintKind) { toast(noKindMsg(), 'error'); return }
+    const heights = modeRef.current === 'heights'
+    if (!heights && !paintKind) { toast(noKindMsg(), 'error'); return }
     const x = r2(wx)
     const z = r2(wz)
     if (!inRange(x, z)) {
@@ -894,7 +1008,7 @@ export function MapTab() {
       return
     }
     const cur = draftRef.current
-    const line = paintShape === 'line'
+    const line = !heights && paintShape === 'line'
     // Closing is a click ON the first vertex, measured in PIXELS: the ring must
     // be equally easy to close at every zoom, and a metre tolerance would be
     // unreachable when zoomed out and hair-trigger when zoomed in. A LINE has
@@ -903,7 +1017,8 @@ export function MapTab() {
     if (!line && cur.length >= MIN_POINTS) {
       const tolM = CLOSE_TOL_PX / view.pxPerM
       if (Math.hypot(x - cur[0][0], z - cur[0][1]) <= tolM) {
-        void commitDraft(cur)
+        if (heights) void commitHeightDraft(cur)
+        else void commitDraft(cur)
         return
       }
     }
@@ -915,7 +1030,8 @@ export function MapTab() {
       return
     }
     setDraft([...cur, [x, z]])
-  }, [commitDraft, noKindMsg, paintKind, paintShape, t, toast, view.pxPerM])
+  }, [commitDraft, commitHeightDraft, noKindMsg, paintKind, paintShape, t,
+    toast, view.pxPerM])
 
   /** Write a changed centre line (or width): regenerate the polygon and send
    *  BOTH. Polygon and recipe never travel apart — an area whose `meta.stroke`
@@ -1112,10 +1228,118 @@ export function MapTab() {
     await reloadTerrain()
   }, [reloadTerrain, selectedArea, t, toast])
 
+  // ── Height writes (§ A16) ────────────────────────────────────────────────
+
+  const selectedHeight = useMemo(
+    () => heightAreas.find((a) => a.id === selHeight) || null,
+    [heightAreas, selHeight],
+  )
+
+  /** Optimistic patch of one height area, so an edited outline does not snap
+   *  back to its old shape for the length of the round trip. */
+  const patchHeightLocal = useCallback((id: string, fields: Partial<HeightArea>) => {
+    setHeightAreas((as) => as.map((a) => (a.id === id ? { ...a, ...fields } : a)))
+  }, [])
+
+  /** Replace one height area. A FULL replace like every other write here, so
+   *  every field travels along; the refetch afterwards runs whether the write
+   *  worked or not, which on a 404 (someone else erased it) is the repair. */
+  const putHeightArea = useCallback(async (area: HeightArea,
+    patch: Partial<HeightArea>) => {
+    const body = {
+      polygon: area.polygon, height_m: area.height_m,
+      falloff_m: area.falloff_m, meta: area.meta || {}, ...patch,
+    }
+    try {
+      await apiPut(`/world/height-areas/${encodeURIComponent(area.id)}`, body)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+    await reloadHeights()
+  }, [reloadHeights, t, toast])
+
+  const setHeightValue = useCallback((m: number) => {
+    const a = selectedHeight
+    if (!a || a.height_m === m) return
+    patchHeightLocal(a.id, { height_m: m })
+    void putHeightArea(a, { height_m: m })
+  }, [patchHeightLocal, putHeightArea, selectedHeight])
+
+  const setFalloffValue = useCallback((m: number) => {
+    const a = selectedHeight
+    if (!a || a.falloff_m === m) return
+    patchHeightLocal(a.id, { falloff_m: m })
+    void putHeightArea(a, { falloff_m: m })
+  }, [patchHeightLocal, putHeightArea, selectedHeight])
+
+  const moveHeightVertex = useCallback((i: number, x: number, z: number) => {
+    const a = selectedHeight
+    if (!a || i < 0 || i >= a.polygon.length) return
+    if (!inRange(x, z)) {
+      // Nothing was patched locally yet, so refusing is the whole undo.
+      toast(t('That point lies outside the world (±{n} m)')
+        .replace('{n}', String(MAX_COORD)), 'error')
+      return
+    }
+    const poly = a.polygon.map((p, k) => (k === i ? [x, z] as [number, number] : p))
+    patchHeightLocal(a.id, { polygon: poly })
+    void putHeightArea(a, { polygon: poly })
+  }, [patchHeightLocal, putHeightArea, selectedHeight, t, toast])
+
+  const deleteHeightVertex = useCallback((i: number) => {
+    const a = selectedHeight
+    if (!a || i < 0 || i >= a.polygon.length) return
+    if (a.polygon.length <= MIN_POINTS) {
+      toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
+      return
+    }
+    const poly = a.polygon.filter((_, k) => k !== i)
+    patchHeightLocal(a.id, { polygon: poly })
+    void putHeightArea(a, { polygon: poly })
+  }, [patchHeightLocal, putHeightArea, selectedHeight, t, toast])
+
+  const insertHeightVertex = useCallback((i: number, x: number, z: number) => {
+    const a = selectedHeight
+    if (!a) return
+    if (a.polygon.length >= MAX_POINTS) {
+      toast(t('An area holds at most {n} points').replace('{n}', String(MAX_POINTS)), 'error')
+      return
+    }
+    const poly = [...a.polygon]
+    poly.splice(i, 0, [x, z])
+    patchHeightLocal(a.id, { polygon: poly })
+    void putHeightArea(a, { polygon: poly })
+  }, [patchHeightLocal, putHeightArea, selectedHeight, t, toast])
+
+  const deleteHeightArea = useCallback(async () => {
+    const a = selectedHeight
+    if (!a) return
+    setSelHeight('')
+    try {
+      await apiDelete(`/world/height-areas/${encodeURIComponent(a.id)}`)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+    await reloadHeights()
+  }, [reloadHeights, selectedHeight, t, toast])
+
   const onBackgroundClick = useCallback((wx: number, wz: number) => {
     if (ghostRef.current) { void placeGhost(wx, wz); return }
     const m = modeRef.current
     if (m === 'paint') { addDraftPoint(wx, wz); return }
+    if (m === 'heights') {
+      if (heightToolRef.current === 'draw') { addDraftPoint(wx, wz); return }
+      // Picking: the LAST area containing the point wins, the same
+      // walk-from-the-end rule the terrain uses. Height areas carry no layer,
+      // so "the last one drawn" is simply the most recent statement about that
+      // ground — and it is the one the outline on top belongs to.
+      const list = heightAreasRef.current
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (pointInPolygon(wx, wz, list[i].polygon)) { setSelHeight(list[i].id); return }
+      }
+      setSelHeight('')
+      return
+    }
     if (m === 'edit-area') {
       // The list arrives bottom-to-top, so the TOPMOST area under the cursor
       // is the last one that contains the point — walk it from the end.
@@ -1394,6 +1618,14 @@ export function MapTab() {
             onScatterPreview={setScatterOn}
             onManageTypes={() => setTypesOpen(true)}
             typesError={typesError}
+            heightTool={heightTool}
+            onHeightTool={switchHeightTool}
+            heightM={newHeightM}
+            onHeightM={setNewHeightM}
+            falloffM={newFalloffM}
+            onFalloffM={setNewFalloffM}
+            heightCount={heightAreas.length}
+            maxSlopeDeg={maxSlopeDeg}
           />
           {/* Roofs are a VIEW, so the switch stays reachable in every mode —
               painting ground along a building's real outline is exactly when
@@ -1477,6 +1709,24 @@ export function MapTab() {
               scatterPreview={scatterOn}
               footprints={scatterFootprints}
             />
+            {/* The relief, only in its own mode: terrain and heights are
+                different questions about the same ground, and two
+                half-transparent polygon stacks on top of each other stop being
+                readable as either. */}
+            {mode === 'heights' ? (
+              <HeightLayer
+                areas={heightAreas}
+                selectedId={selHeight}
+                editing={heightTool === 'select'}
+                maxSlopeDeg={maxSlopeDeg}
+                draft={draft}
+                draftCursor={draftCursor}
+                draftWillClose={draftWillClose}
+                onVertexMove={moveHeightVertex}
+                onVertexDelete={deleteHeightVertex}
+                onEdgeInsert={insertHeightVertex}
+              />
+            ) : null}
             {/* Outside the location mode the footprints must let clicks
                 through: a terrain click has to reach the canvas, which is
                 where the point-in-polygon test lives. The layer's own root
@@ -1515,6 +1765,18 @@ export function MapTab() {
               onConvert={convertToArea}
               onDelete={() => { void deleteArea() }}
               onClose={() => setSelArea('')}
+            />
+          ) : null}
+
+          {selectedHeight ? (
+            <HeightAreaChip
+              key={selectedHeight.id}
+              area={selectedHeight}
+              maxSlopeDeg={maxSlopeDeg}
+              onHeight={setHeightValue}
+              onFalloff={setFalloffValue}
+              onDelete={() => { void deleteHeightArea() }}
+              onClose={() => setSelHeight('')}
             />
           ) : null}
 

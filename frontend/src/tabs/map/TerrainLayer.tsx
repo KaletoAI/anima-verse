@@ -35,14 +35,16 @@
  * point-in-polygon test on the canvas' background click (`mapMath`, the
  * server's algorithm), which is the only way to reach the TOPMOST area under
  * the cursor when several overlap. Only the vertex handles and edges of the
- * area already selected are interactive, and only while editing.
+ * area already selected are interactive, and only while editing — and those
+ * handles are the SHARED gesture (`PolygonHandles`), the same one the height
+ * areas of the world relief are edited with.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { useMemo } from 'react'
 import { cleanRing, polygonArea, scatterInstances, scatterSeed } from '@anima/scene-render'
 import type { ScatterFootprint } from '@anima/scene-render'
 import { useMapView } from './MapCanvas'
-import { screenToWorld, strokeToPolygon, worldPolyToPath, worldToScreen } from './mapMath'
+import { strokeToPolygon, worldPolyToPath, worldToScreen } from './mapMath'
+import { PolygonHandles } from './PolygonHandles'
 import { readScatter } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
@@ -58,15 +60,10 @@ const COL_SELECTED = '#58a6ff'
 const COL_DRAFT = '#3fb950'
 const COL_WARN = '#d29922'
 
-/** Vertex handle radius and the click width of an edge, in pixels. */
+/** Radius of a draft vertex marker, in pixels — the handle radius of
+ *  `PolygonHandles`, so the ring being drawn and the ring being edited read as
+ *  the same kind of point. */
 const HANDLE_R = 5
-const EDGE_HIT_PX = 10
-/** Below this travel a press on a handle stays a click (MapCanvas' value). */
-const CLICK_SLOP_PX = 4
-
-/** Metre coordinates are stored with 2 decimals (`app/models/terrain.py`);
- *  rounding here keeps what the editor draws identical to what it sent. */
-const r2 = (v: number): number => Math.round(v * 100) / 100
 
 /**
  * Colours of the scatter preview, by list index.
@@ -109,18 +106,6 @@ function centroid(poly: Array<[number, number]>): [number, number] {
   let z = 0
   for (const [px, pz] of poly) { x += px; z += pz }
   return [x / poly.length, z / poly.length]
-}
-
-/** The point on segment a→b closest to p, so an inserted vertex lands ON the
- *  edge the user clicked and not next to it. */
-function projectOnSegment(a: [number, number], b: [number, number],
-  px: number, pz: number): [number, number] {
-  const dx = b[0] - a[0]
-  const dz = b[1] - a[1]
-  const len2 = dx * dx + dz * dz
-  if (!(len2 > 0)) return [a[0], a[1]]
-  const t = Math.min(1, Math.max(0, ((px - a[0]) * dx + (pz - a[1]) * dz) / len2))
-  return [a[0] + t * dx, a[1] + t * dz]
 }
 
 export interface TerrainLayerProps {
@@ -185,76 +170,11 @@ export function TerrainLayer({
   footprints,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
-  const [drag, setDrag] = useState<{ i: number; x: number; z: number } | null>(null)
-
-  // Live values for the window listeners, which are installed once.
-  const viewRef = useRef(view)
-  viewRef.current = view
-  const moveRef = useRef(onVertexMove)
-  moveRef.current = onVertexMove
-  const dragRef = useRef<{
-    i: number; sx: number; sy: number; ox: number; oz: number
-    moved: boolean; x: number; z: number
-  } | null>(null)
-
-  useEffect(() => {
-    const move = (e: PointerEvent) => {
-      const d = dragRef.current
-      if (!d) return
-      const dx = e.clientX - d.sx
-      const dy = e.clientY - d.sy
-      if (!d.moved) {
-        if (Math.hypot(dx, dy) < CLICK_SLOP_PX) return
-        d.moved = true
-      }
-      const px = viewRef.current.pxPerM
-      d.x = r2(d.ox + dx / px)
-      d.z = r2(d.oz + dy / px)
-      setDrag({ i: d.i, x: d.x, z: d.z })
-    }
-    const up = () => {
-      const d = dragRef.current
-      if (!d) return
-      dragRef.current = null
-      setDrag(null)
-      if (d.moved) moveRef.current(d.i, d.x, d.z)
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-    window.addEventListener('pointercancel', up)
-    return () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      window.removeEventListener('pointercancel', up)
-    }
-  }, [])
 
   const selected = useMemo(
     () => areas.find((a) => a.id === selectedId) || null,
     [areas, selectedId],
   )
-
-  /** Pointer position in world metres. The SVG is measured instead of trusting
-   *  the context size — a one-pixel border between the two would put every
-   *  inserted vertex slightly off the edge it was aimed at. */
-  const worldAt = useCallback((e: ReactPointerEvent | ReactMouseEvent) => {
-    const svg = (e.currentTarget as SVGElement).ownerSVGElement
-    if (!svg) return null
-    const r = svg.getBoundingClientRect()
-    return screenToWorld(e.clientX - r.left, e.clientY - r.top,
-      viewRef.current, r.width, r.height)
-  }, [])
-
-  const startDrag = useCallback((e: ReactPointerEvent, i: number,
-    pt: [number, number]) => {
-    if (e.button !== 0) return
-    // The canvas must not pan while a vertex is being moved.
-    e.stopPropagation()
-    dragRef.current = {
-      i, sx: e.clientX, sy: e.clientY, ox: pt[0], oz: pt[1],
-      moved: false, x: pt[0], z: pt[1],
-    }
-  }, [])
 
   /** The draft as it is drawn: the clicked points plus, while the cursor is
    *  over the canvas, the point the next click would add. */
@@ -307,22 +227,21 @@ export function TerrainLayer({
   if (!w || !h) return null
 
   // What the handles sit on as it is being edited: the CENTRE LINE of a stroke
-  // area, the polygon of an ordinary one. The dragged point follows the
-  // cursor, everything else stays where the server has it.
+  // area, the polygon of an ordinary one. A centre line is OPEN (no wrap-around
+  // edge, and two points already make one); a polygon closes and needs three.
   const editPts: Array<[number, number]> = selected
-    ? (centerline || selected.polygon).map((p, i) => (
-      drag && drag.i === i ? [drag.x, drag.z] as [number, number] : p))
+    ? (centerline || selected.polygon)
     : []
-  // A centre line is OPEN: no wrap-around edge, and two points already make
-  // one — a polygon needs three and closes.
   const editClosed = !centerline
   const editMin = centerline ? 2 : 3
-  // While a line point is dragged the OUTLINE follows it live; the filled area
-  // underneath only catches up once the write comes back. Should the dragged
-  // line degenerate on the way, the stored polygon is shown instead of nothing.
-  const editOutline: Array<[number, number]> = centerline
-    ? (strokeToPolygon(editPts, centerlineWidthM) || selected?.polygon || [])
-    : editPts
+  // While a line point is dragged the RIBBON follows it live (the shared
+  // handles call this with the dragged points); the filled area underneath
+  // only catches up once the write comes back. Should the dragged line
+  // degenerate on the way, the stored polygon is shown instead of nothing.
+  const outlineOf = centerline
+    ? (pts: Array<[number, number]>) => (
+      strokeToPolygon(pts, centerlineWidthM) || selected?.polygon || [])
+    : undefined
 
   return (
     <g>
@@ -380,57 +299,38 @@ export function TerrainLayer({
       ) : null}
 
       {/* The centre line of the selected stroke area, dashed — the recipe is
-          not the shape, so it is drawn as a hint over it and stays visible
-          even where no handles are offered. */}
-      {selected && centerline && editPts.length >= 2 ? (
-        <path d={worldPolyToPath(editPts, view, w, h, false)} fill="none"
-          stroke={COL_SELECTED} strokeWidth={1.5} strokeDasharray="7 4"
-          strokeOpacity={0.9} pointerEvents="none" />
-      ) : null}
+          not the shape, so it is drawn as a hint over it. While the handles
+          are live they draw their own (drag-following) copy of it, so this one
+          steps aside instead of leaving a second, stale line behind. */}
+      {selected && centerline && centerline.length >= 2
+        && !(editing && editable) ? (
+          <path d={worldPolyToPath(centerline, view, w, h, false)} fill="none"
+            stroke={COL_SELECTED} strokeWidth={1.5} strokeDasharray="7 4"
+            strokeOpacity={0.9} pointerEvents="none" />
+        ) : null}
 
-      {/* Handles of the selected area — the only interactive part. */}
+      {/* Handles of the selected area — the only interactive part, and the
+          SHARED gesture (`PolygonHandles`). An area whose kind the catalog no
+          longer knows gets its outline brought to the top and nothing to
+          grab: every write would be refused on the kind before the polygon is
+          even read. */}
       {editing && selected && editPts.length >= editMin ? (
-        <g>
-          {/* Its outline again, on top of every fill: the selected area may
-              well be buried under later ones. */}
-          <path d={worldPolyToPath(editOutline, view, w, h)} fill="none"
+        editable ? (
+          <PolygonHandles
+            points={editPts}
+            closed={editClosed}
+            color={COL_SELECTED}
+            outlineOf={outlineOf}
+            dashed={!!centerline}
+            minPoints={editMin}
+            onMove={onVertexMove}
+            onDelete={onVertexDelete}
+            onInsert={onEdgeInsert}
+          />
+        ) : (
+          <path d={worldPolyToPath(selected.polygon, view, w, h)} fill="none"
             stroke={COL_SELECTED} strokeWidth={2} pointerEvents="none" />
-          {editable ? editPts.map((a, i) => {
-            // The closing edge exists only on a ring; a line ends where the
-            // last point is, and an "edge" back to the start would insert
-            // points into a segment that is not there.
-            if (!editClosed && i === editPts.length - 1) return null
-            const b = editPts[(i + 1) % editPts.length]
-            const pa = worldToScreen(a[0], a[1], view, w, h)
-            const pb = worldToScreen(b[0], b[1], view, w, h)
-            return (
-              // `pointerEvents="stroke"` says so outright: the line is only
-              // there to be clicked, and a transparent stroke must hit-test
-              // whatever the default rule would have made of it.
-              <line key={`e${i}`} x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
-                stroke="transparent" strokeWidth={EDGE_HIT_PX}
-                pointerEvents="stroke" style={{ cursor: 'copy' }}
-                onPointerDown={(e) => { e.stopPropagation() }}
-                onClick={(e) => {
-                  const p = worldAt(e)
-                  if (!p) return
-                  const on = projectOnSegment(a, b, p.x, p.z)
-                  onEdgeInsert(i + 1, r2(on[0]), r2(on[1]))
-                }} />
-            )
-          }) : null}
-          {editable ? editPts.map((p, i) => {
-            const s = worldToScreen(p[0], p[1], view, w, h)
-            return (
-              <circle key={`v${i}`} cx={s.x} cy={s.y} r={HANDLE_R}
-                fill={drag && drag.i === i ? COL_SELECTED : '#0d1117'}
-                stroke={COL_SELECTED} strokeWidth={2}
-                style={{ cursor: 'move' }}
-                onPointerDown={(e) => startDrag(e, i, p)}
-                onDoubleClick={(e) => { e.stopPropagation(); onVertexDelete(i) }} />
-            )
-          }) : null}
-        </g>
+        )
       ) : null}
 
       {/* The polygon being painted: an OPEN line to the cursor, closed only

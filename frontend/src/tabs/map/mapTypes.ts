@@ -127,7 +127,17 @@ export interface WorldmapPayload {
   events_by_location: Record<string, Array<{ category: string; text: string }>>
   world_bounds: MapBounds | null
   terrain_sig: string
+  /** Signature of the authored RELIEF (§ A16) — the refetch trigger for the
+   *  heightfield, exactly as `terrain_sig` is for the painted ground. */
+  height_sig?: string
   fogged: boolean
+  /** The two walk limits the server judges every reported point with
+   *  (§ A1.3, § A15 Nr. 8). The map editor needs `max_slope_deg` to say when a
+   *  drawn ramp is steeper than anyone can climb. Optional: an older server
+   *  does not send them, and then the same defaults apply that
+   *  `app/core/relief.py` falls back to. */
+  max_step_height_m?: number
+  max_slope_deg?: number
 }
 
 /**
@@ -238,6 +248,34 @@ export interface TerrainPayload {
   default_kind: string
   types: TerrainType[]
   areas: TerrainArea[]
+  sig: string
+}
+
+/**
+ * One authored HEIGHT AREA of the world relief (§ A16, `GET /world/height-areas`).
+ *
+ * The ground inside `polygon` stands at `height_m` and ramps there linearly
+ * over the last `falloff_m` metres before the outline, so the area meets the
+ * world at 0 exactly ON its own outline. A negative height is a hollow, not a
+ * mistake; `falloff_m` 0 is a wall at the edge (legal, and warned about when
+ * it is steeper than a walker can climb).
+ *
+ * It carries NO kind and NO layer: heights are not terrain (the ground under a
+ * painted meadow may well rise), and overlaps are resolved by the server
+ * arithmetically — the strongest deflection from the flat world wins.
+ */
+export interface HeightArea {
+  id: string
+  polygon: Array<[number, number]>
+  height_m: number
+  falloff_m: number
+  meta?: Record<string, unknown>
+}
+
+/** `GET /world/height-areas` — the editor's read side of the relief. `sig` is
+ *  the same signature the worldmap payload carries as `height_sig`. */
+export interface HeightAreasResp {
+  areas: HeightArea[]
   sig: string
 }
 
