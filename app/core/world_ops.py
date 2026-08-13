@@ -162,6 +162,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     ``yaw_deg``; every character carries its free metre point in ``pos``.
     Painted terrain is deliberately NOT in here — clients fetch
     ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
+    The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
+    along: the client mirrors the height gate of ``POST /play/pos`` and needs
+    the very numbers the server judges with.
 
     Fog of war (§ A12): with ``show_all=False`` the payload only carries what
     the avatar knows — placed locations pass through
@@ -183,6 +186,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.discovery import get_discovery_range_m
+    from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
     from app.core.world_geometry import placed_footprint
@@ -538,6 +542,15 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # ONCE per payload: when it changes, clients refetch /play/terrain.
         "terrain_sig": terrain_sig(),
         "fogged": fogged,
+        # The two WALK LIMITS (§ A12, E8 task 1). They are world settings the
+        # server judges every reported point with (`POST /play/pos`, § A15),
+        # and the client has to hold the same two numbers or its figure walks
+        # into refusals it could have avoided. This poll is the smallest
+        # honest channel there is: it already runs, it is never fogged (a
+        # limit reveals nothing about the world), and it carries the other
+        # thing the walker needs — the map itself.
+        "max_step_height_m": get_max_step_height_m(),
+        "max_slope_deg": get_max_slope_deg(),
     }
 
 

@@ -603,7 +603,14 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
       6. terrain ``passability_at`` at the point, ONLY OUT IN THE WILDERNESS
          (409 ``impassable``) — inside a placed footprint the FOOTPRINT WINS
          (decision 2026-08-13), see below,
-      7. the LOCATION TRANSITION through the FULL gate (below).
+      7. the LOCATION TRANSITION through the FULL gate (below),
+      8. the HEIGHT of the point against the last valid one (409
+         ``too_steep``) — a step higher than ``game.max_step_height_m`` over
+         less than a metre, or a slope steeper than ``game.max_slope_deg``
+         over more (``core/relief.slope_blocks``). Last because the height of
+         a point depends on which location owns it; exempt within
+         ``_POS_OPENING_TOLERANCE_M`` of an opening, which IS the ramp onto a
+         place.
 
     Every refusal carries ``{reason, message, pos, location_id}`` where ``pos``
     is the LAST VALID point — the client snaps the figure back onto it, so a
@@ -862,6 +869,68 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             # and lands the avatar in the arrival room), and an opening that
             # names a room overrides that — it answers the question itself.
             entry_room = opening_entry_room(derived, best_edge)
+
+    # THE GROUND PUSHES BACK (E8 task 1). Height is a RULE from here on: a
+    # step too high or a slope too steep refuses the report, on the relief the
+    # detail scenes already carry. It sits AFTER the transition gate on
+    # purpose — the height of a point depends on WHICH location owns it, and
+    # entering through a door that the geometry allows must not be answered
+    # with "too steep" when the real reason is a rule.
+    #
+    # Δh is measured between the last valid point and the reported one, and
+    # that is computable without reconstructing any path: two points, two
+    # samples. It is the same "only the reported point is judged" contract as
+    # everywhere else in this route — over one report the walker moves about a
+    # metre, which cannot hop a cliff.
+    #
+    # Without a previous point (a fresh session, a takeover, an admin move)
+    # there is no height to compare against and the gate skips, exactly like
+    # the step-plausibility bound above.
+    if here is not None:
+        from app.core.boundary_entry import opening_world_points
+        from app.core.relief import (STEP_DISTANCE_M, get_max_slope_deg,
+                                     get_max_step_height_m, scene_ground_lift,
+                                     slope_blocks)
+        was = location_at_point(here["x"], here["z"], _locs)
+        dh = scene_ground_lift(derived, x, z) \
+            - scene_ground_lift(was, here["x"], here["z"])
+        dist = math.hypot(x - here["x"], z - here["z"])
+        def _at_an_opening() -> bool:
+            """OPENINGS ARE RAMP ENDS. An authored opening sits on the edge
+            of a place, which is exactly where the ground steps up onto it —
+            and an opening is by definition the way in. Refusing the crossing
+            for its height would lock a place behind its own door, so a point
+            within the entry tolerance of an opening of either location is
+            exempt, at BOTH ends of the step (a crossing has one foot on each
+            side). Asked only once the rule has already said "blocked": the
+            openings are parsed out of ``map3d``, and this route runs up to
+            four times a second per walker."""
+            # Out of the snapshot this report already read, never a second
+            # table read.
+            here_loc = next((loc for loc in _locs
+                             if (loc.get("id") or "") == current_id), None) \
+                if current_id else None
+            for loc in (derived, here_loc):
+                for _edge, (ox, oz) in opening_world_points(loc or {}):
+                    if min(math.hypot(ox - x, oz - z),
+                           math.hypot(ox - here["x"], oz - here["z"])) \
+                            <= _POS_OPENING_TOLERANCE_M:
+                        return True
+            return False
+
+        if slope_blocks(dh, dist, get_max_step_height_m(),
+                        get_max_slope_deg()) and not _at_an_opening():
+            # NAME THE OBSTACLE (the B1 lesson: "you cannot walk there" tells
+            # the player nothing they can act on). A step and a slope are two
+            # different things to look at, so they get two different sentences
+            # — and the refusal LOGS, like every other reason here.
+            logger.info("pos refused (too steep): %s %.2f,%.2f -> %.2f,%.2f "
+                        "dh %.2f m over %.2f m", avatar, here["x"], here["z"],
+                        x, z, dh, dist)
+            refuse(409, "too_steep",
+                   t("That step is too high to climb.", lang)
+                   if dist < STEP_DISTANCE_M else
+                   t("That slope is too steep to climb.", lang))
 
     written = set_character_pos(avatar, x, z)
     if entry_room:

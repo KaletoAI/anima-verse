@@ -457,13 +457,24 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 
 Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 `locations` · `characters` · `events_by_location` · `world_bounds` ·
-`terrain_sig` · `fogged`.
+`terrain_sig` · `fogged` · `max_step_height_m` · `max_slope_deg`.
 
 | Wurzelfeld | Typ | Bedeutung |
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
+| `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
+| `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
+
+**Warum die beiden Grenzwerte hier reisen (E8 Task 1).** Der Server beurteilt
+jeden gemeldeten Punkt mit genau diesen zwei Zahlen, und der Client spiegelt
+die Regel, damit die Figur gar nicht erst in eine Absage läuft. Sie brauchen
+keinen eigenen Endpunkt: dieser Poll läuft ohnehin, er wird **nie gefoggt**
+(ein Grenzwert verrät nichts über die Welt) und er trägt schon das, was der
+Läufer sonst braucht — die Karte. Ein Client, der die Felder nicht findet
+(älterer Server), nimmt dieselben Defaults, auf die `app/core/relief.py`
+zurückfällt.
 
 **`world_bounds` — die Regel samt ihrer Randfälle.** Gerechnet wird über
 ALLE Locations mit numerischem `pos_x`/`pos_z` **und über alle gemalten
@@ -1374,6 +1385,7 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
 | `world_bounds` | **nein** | siehe unten |
 | `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |
+| `max_step_height_m`, `max_slope_deg` | **nein** | die zwei Lauf-Grenzwerte (§ A1.3, § A15 Nr. 8). Regeln sind keine Ortskenntnis — ein Grenzwert verrät nichts über die Welt |
 | `avatar`, `current_location_id` | nein | der Avatar sieht sich selbst |
 
 Unplatzierte Orte gelten dabei als **sichtbar** — sie passieren den Filter, und
@@ -1538,6 +1550,7 @@ auseinanderstehen):
 | 5 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 6 | — |
 | 6 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`) | 409 `impassable` |
 | 7 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
+| 8 | **Höhe** des Punktes gegen den letzten gültigen (Stufe/Steigung, siehe unten) | 409 `too_steep` |
 
 **Die Erlaubnis in Nr. 4 hat DREI Terme**, und der dritte ist keine
 Verzierung:
@@ -1606,6 +1619,57 @@ Sonst:
 * **Location → Location** (angrenzende oder **verschachtelte** Fußabdrücke —
   eine Hütte auf einem Dorfplatz) ist beides: EXIT der alten, dann ENTRY der
   neuen.
+
+**DAS HÖHEN-GATE (Nr. 8) — neu 2026-08-13 (E8 Task 1).** Bis hierher hat in
+dieser Welt keine einzige REGEL nach einer Höhe gefragt: das Szenen-Payload hob
+Props, die Renderer drapierten den Boden, und eine Felswand ließ sich so leicht
+hochlaufen wie eine Wiese. Jetzt vergleicht der Server den Boden unter dem
+letzten gültigen Punkt mit dem Boden unter dem gemeldeten:
+
+```
+Δh = lift(neuer Punkt) − lift(letzter Punkt)
+dist < 1 m  ->  STUFE:     |Δh| > game.max_step_height_m   (Default 0,4 m)
+sonst       ->  STEIGUNG:  atan(|Δh| / dist) > game.max_slope_deg  (Default 40°)
+```
+
+**Zwei Regeln statt einer**, weil eine 1-m-Mauer und 1 m Anstieg über 20 m
+nicht dasselbe Hindernis sind: das erste klettert niemand, das zweite ist ein
+sanfter Hügel. Die Ein-Meter-Marke ist die Länge einer Meldung selbst (~3/s bei
+3,4 m/s), also genau die Strecke, über der ein Anstieg etwas ist, das man
+hinaufgeht statt hinaufklettert. **Die Richtung zählt nicht**: einen Abhang
+hinunterzufallen ist so unmöglich wie ihn hinaufzuklettern, sonst könnte man
+einen Läufer irgendwo aussetzen, wo er nicht mehr hochkommt.
+
+**Woher die Höhe kommt.** Aus dem SZENEN-Relief und nur daraus
+(`app/core/relief.scene_ground_lift`): für eine `area_detail`-Location mit
+`map3d.relief` wird genau das Feld gesampelt, das `GET /play/locations/{id}/scene`
+als `terrain.grid` ausliefert (§ B1 Nr. 14) — dieselbe eine Gitter-Konstruktion
+(`scene_recipe.compose_terrain`), inklusive `tile_rotation`. Überall sonst ist
+die Welt flach (0,0), bis die E8-Heightmap landet. Der Client spiegelt die
+Regel mit derselben Quelle: `scene/tiles.terrainLiftAt`, **nicht** der
+Modell-Raycast `tileGroundY` — der kennt eine Modell-Oberfläche, die der Server
+nicht kennt, und die beiden Sichten müssen sich einig bleiben.
+
+**Nr. 8 steht NACH dem Übergang (Nr. 7)**, weil die Höhe eines Punktes davon
+abhängt, welche Location ihn besitzt — und weil ein Eintritt, den die Geometrie
+erlaubt, nicht mit „zu steil" beantwortet werden darf, wenn in Wahrheit eine
+Regel greift.
+
+**ÖFFNUNGEN SIND RAMPENENDEN.** Eine autorisierte Öffnung liegt auf der Kante
+eines Ortes — also genau dort, wo der Boden auf sein Plateau steigt —, und eine
+Öffnung IST per Definition der Weg hinein. Jeder Punkt innerhalb der
+Übergangs-Toleranz von 1,5 m (`_POS_OPENING_TOLERANCE_M`) einer Öffnung der
+abgeleiteten ODER der aktuellen Location ist deshalb von Nr. 8 ausgenommen, und
+zwar an BEIDEN Enden des Schritts (eine Überquerung hat einen Fuß auf jeder
+Seite). Ohne die Ausnahme wäre ein Ort auf eigenem Plateau hinter seiner
+eigenen Tür verschlossen.
+
+**Die Meldung nennt das Hindernis** (Lektion aus Befund B1): eine Stufe und
+eine Steigung bekommen zwei verschiedene Sätze, und die Absage wird geloggt wie
+jeder andere Grund hier. **Ohne Vorpunkt** (frische Sitzung, Übernahme,
+Admin-Move) gibt es nichts zu vergleichen und Nr. 8 entfällt — dieselbe Regel
+wie bei der Schrittschranke. In einer Welt ganz ohne Relief ist Δh immer 0 und
+das Gate damit vollständig inert.
 
 **Nur der gemeldete PUNKT wird beurteilt, nie der Weg dorthin.** Das ist
 Absicht: bei ~3 Meldungen/s liegt gut ein Meter dazwischen, was nichts

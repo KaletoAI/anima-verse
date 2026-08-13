@@ -68,6 +68,8 @@
     "A pose maps free-text activities onto a body posture (for image generation) and an animation kind (for 3D clients). Unknown activities are added by the LLM automatically.": "Eine Pose bildet Freitext-Aktivitäten auf eine Körperhaltung (für die Bildgenerierung) und eine Animations-Kategorie (für 3D-Clients) ab. Unbekannte Aktivitäten ergänzt das LLM automatisch.",
     "A prop from the library replaces the tuft. Only props that already have a mesh are offered.": "Ein Prop aus der Bibliothek ersetzt das Büschel. Angeboten werden nur Props, die schon ein Mesh haben.",
     "A world that lives on without you": "Eine Welt, die ohne Dich weiterlebt",
+    "That slope is too steep to climb.": "Dieser Hang ist zu steil zum Hinaufsteigen.",
+    "That step is too high to climb.": "Diese Stufe ist zu hoch zum Hinaufsteigen.",
     "a-z0-9_ — used as the profile tag that triggers the filter": "a-z0-9_ — wird als Profil-Tag genutzt der den Filter triggert",
     "Action": "Aktion",
     "Active": "Aktiv",

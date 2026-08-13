@@ -1600,12 +1600,9 @@ def _rotate_scene(out: Dict[str, Any], quarters: int,
       ``compass_new = (compass + 270 · quarters) % 360``.
     * A box in ``extras`` keeps its height and swaps its w/d extents on an odd
       number of steps; its ``side`` word rotates N→E→S→W like an edge letter.
-    * ``terrain.grid`` is resampled instead of transformed: the field is
-      indexed ``grid[j][i]`` at plan fraction ``(i/n, j/n)``, and the rotated
-      field must answer ``h_new(u, v) = h_old(rot⁻¹(u, v))`` with the INVERSE
-      (counter-clockwise) step ``rot⁻¹(u, v) = (v, 1 − u)``. Substituting
-      ``(u, v) = (i/n, j/n)`` gives ``(j/n, 1 − i/n)``, i.e. old indices
-      ``i_old = j`` and ``j_old = n − i`` — hence ``new[j][i] = old[n−i][j]``.
+    * ``terrain.grid`` is resampled instead of transformed —
+      :func:`rotate_terrain_grid` holds that rule, because the walking gate
+      has to reproduce it to sample the field the client actually got.
       ``step`` and ``amplitude_m`` are rotation-invariant.
 
     Untouched on purpose: ``signature`` (``map3d`` is hashed whole, so
@@ -1748,12 +1745,84 @@ def _rotate_scene(out: Dict[str, Any], quarters: int,
     terrain = out.get("terrain")
     grid = (terrain or {}).get("grid") if isinstance(terrain, dict) else None
     if grid:
-        n = len(grid) - 1
-        for _ in range(steps):
-            grid = [[grid[n - i][j] for i in range(n + 1)]
-                    for j in range(n + 1)]
-        terrain["grid"] = grid
+        terrain["grid"] = rotate_terrain_grid(grid, steps)
     return out
+
+
+def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
+                    extent: float, variant: int
+                    ) -> Tuple[Optional[Dict[str, Any]], Set[str]]:
+    """The location's height field (``terrain`` payload block) and the ids of
+    the rooms that stand ON it — ``(None, set())`` when there is no relief.
+
+    Extracted out of :func:`compose_scene` so there stays exactly ONE grid
+    construction in the codebase: since E8 the WALKING GATE
+    (``app/core/relief.scene_ground_lift``) samples the very same field the
+    payload ships, and a second derivation of seed, wave width or flat hulls
+    would let the rule and the picture drift apart by construction.
+
+    A detail scene without a diorama is a billiard table; the relief gives it
+    a deterministic height field. The composer owns the whole vertical story:
+    it lifts EVERYTHING that stands in a non-flat room, and the renderers only
+    drape the ground they are told to drape — no object height is ever sampled
+    twice or set by hand.
+
+    FLAT = every indoor room (walls need a level floor) plus every outdoor
+    room that opted out via ``relief_flat`` (road, paved square). Their hulls
+    are pinned to zero in the field, so nothing in them moves by a single
+    digit. The recipe ``outline`` is already the tessellated hull in absolute
+    plan fractions — the same points the plates use, not a second derivation.
+
+    The relief only survives the sanitizer on an ``area_detail`` location; the
+    gate is repeated here because a hand-posted or legacy map3d must not put a
+    height field under an ordinary building either.
+    """
+    relief = (map3d or {}).get("relief")
+    if not isinstance(relief, dict) or not (map3d or {}).get("area_detail"):
+        return None, set()
+    amplitude_world = _num(relief.get("amplitude_m"))
+    if amplitude_world <= 0:
+        return None, set()
+    relief_rooms: Set[str] = set()
+    flat_hulls: List[List[List[float]]] = []
+    for recipe in recipes:
+        hull = [[_num(p[0]), _num(p[1])]
+                for p in recipe.get("outline") or []]
+        if recipe.get("always_visible") and not recipe.get("relief_flat"):
+            relief_rooms.add(str(recipe.get("room_id") or ""))
+        elif len(hull) >= 3:
+            flat_hulls.append(hull)
+    # The wave width is authored in metres and divided into the edge length of
+    # the reference square — the same frame since E4 (extent IS plan_width_m,
+    # k = 1).
+    cells = relief_cells(relief.get("wave_m"), extent)
+    grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))), variant),
+                        amplitude_world, flat_hulls, cells)
+    # ``step`` follows the grid that was actually built, never the default —
+    # otherwise the renderers subdivide with a cell size that does not exist
+    # in the payload they were handed.
+    return ({"step": _r(extent / (len(grid) - 1)), "grid": grid,
+             "amplitude_m": _r(amplitude_world)}, relief_rooms)
+
+
+def rotate_terrain_grid(grid: List[List[float]],
+                        steps: int) -> List[List[float]]:
+    """Turn a height field ``steps`` × 90° clockwise about the square's centre.
+
+    The field is indexed ``grid[j][i]`` at plan fraction ``(i/n, j/n)``, so a
+    rotated field must answer ``h_new(u, v) = h_old(rot⁻¹(u, v))`` with the
+    INVERSE (counter-clockwise) step ``rot⁻¹(u, v) = (v, 1 − u)``.
+    Substituting ``(u, v) = (i/n, j/n)`` gives ``(j/n, 1 − i/n)``, i.e. old
+    indices ``i_old = j`` and ``j_old = n − i`` — hence
+    ``new[j][i] = old[n−i][j]``. It is RESAMPLED, never transformed.
+
+    One rule, two callers: the payload rotation (:func:`_rotate_scene`) and
+    the walking gate, which has to sample the field the client actually got.
+    """
+    n = len(grid) - 1
+    for _ in range(int(steps) % 4):
+        grid = [[grid[n - i][j] for i in range(n + 1)] for j in range(n + 1)]
+    return grid
 
 
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
@@ -1886,49 +1955,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                          "d": _r(max(max(zs) - min(zs), 0.5))},
                 "y": _r(y),
             }
-    # ── Terrain relief (plan-area-detail-scenes.md, v5.2 Nr. 14) ────────
-    # A detail scene without a diorama is a billiard table; the relief gives
-    # it a deterministic height field. The composer owns the whole vertical
-    # story: it lifts EVERYTHING that stands in a non-flat room, and the
-    # renderers only drape the ground they are told to drape — no object
-    # height is ever sampled twice or set by hand.
-    #
-    # FLAT = every indoor room (walls need a level floor) plus every outdoor
-    # room that opted out via ``relief_flat`` (road, paved square). Their
-    # hulls are pinned to zero in the field, so nothing in them moves by a
-    # single digit. The recipe ``outline`` is already the tessellated hull in
-    # absolute plan fractions — the same points the plates use, not a second
-    # derivation.
-    #
-    # The relief only survives the sanitizer on an ``area_detail`` location;
-    # the gate is repeated here because a hand-posted or legacy map3d must
-    # not put a height field under an ordinary building either.
-    relief = map3d.get("relief")
-    terrain: Optional[Dict[str, Any]] = None
-    relief_rooms: Set[str] = set()
-    if isinstance(relief, dict) and map3d.get("area_detail"):
-        amplitude_world = _num(relief.get("amplitude_m"))
-        if amplitude_world > 0:
-            flat_hulls: List[List[List[float]]] = []
-            for recipe in recipes:
-                hull = [[_num(p[0]), _num(p[1])]
-                        for p in recipe.get("outline") or []]
-                if recipe.get("always_visible") and not recipe.get("relief_flat"):
-                    relief_rooms.add(str(recipe.get("room_id") or ""))
-                elif len(hull) >= 3:
-                    flat_hulls.append(hull)
-            # The wave width is authored in metres and divided into the edge
-            # length of the reference square — the same frame since E4
-            # (extent IS plan_width_m, k = 1).
-            cells = relief_cells(relief.get("wave_m"), extent)
-            grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))),
-                                            variant),
-                                amplitude_world, flat_hulls, cells)
-            # ``step`` follows the grid that was actually built, never the
-            # default — otherwise the renderers subdivide with a cell size
-            # that does not exist in the payload they were handed.
-            terrain = {"step": _r(extent / (len(grid) - 1)), "grid": grid,
-                       "amplitude_m": _r(amplitude_world)}
+    terrain, relief_rooms = compose_terrain(map3d, recipes, extent, variant)
 
     def _lift_for(room_id: str) -> Optional[Callable[[float, float], float]]:
         """The terrain sampler of one room — ``None`` for a flat room, which

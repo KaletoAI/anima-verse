@@ -698,6 +698,34 @@ SECTIONS = {
                                "walked at speed × the terrain's speed_factor. "
                                "Existing journeys keep the speed they started with.",
             },
+            "max_step_height_m": {
+                "type": "float",
+                "label": "Max step height (m)",
+                "default": 0.4,
+                "min": 0.05,
+                "max": 5,
+                "step": 0.05,
+                "description": "How high a single step up or down may be "
+                               "before the ground stops a walker, in world "
+                               "metres (0.4 m ≈ a high kerb). It applies to "
+                               "height changes over less than a metre — a "
+                               "wall, a ledge, the rim of a crater. Longer "
+                               "rises are judged by the slope limit instead.",
+            },
+            "max_slope_deg": {
+                "type": "float",
+                "label": "Max slope (degrees)",
+                "default": 40.0,
+                "min": 10,
+                "max": 89,
+                "step": 1,
+                "description": "How steep the ground may get before a walker "
+                               "cannot climb it any more, in degrees from the "
+                               "horizontal (40° is a scramble, still "
+                               "walkable). It applies to height changes over "
+                               "a metre or more; shorter ones are judged by "
+                               "the step height instead.",
+            },
             "default_terrain_kind": {
                 "type": "str",
                 "label": "Default terrain kind",
