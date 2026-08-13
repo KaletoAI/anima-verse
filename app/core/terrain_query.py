@@ -15,13 +15,14 @@ and :func:`speed_at` are its two readers. A second loop somewhere else is how
 two answers about one square metre start to drift.
 
 THE PACE RULE LIVES HERE AND NOWHERE ELSE (finding 3 of the E8 acceptance,
-2026-08-13) — :func:`effective_speed_factor`. Passability is a WILDERNESS
-question (the footprint of a place replaces the ground for the "may I stand
-here"), the PACE is not: painted water slows a walker down inside a village
-on a lake exactly as it does outside it. The one exception is a factor of 0
-under a footprint, which is not a pace but a "this ground was never meant to
-be walked" — there the plate really does replace the ground, at the neutral
-1.0. The client mirror is ``client3d/src/game/walk.terrainPace``.
+2026-08-13) — :func:`effective_speed_factor`, and HOW FAR IT REACHES is
+:func:`ground_scope` (user decision 2026-08-13, round 2). Passability is a
+WILDERNESS question (the footprint of a place replaces the ground for the
+"may I stand here"); the PACE reaches further, but not everywhere: painted
+water slows a walker down out in the open and inside an OPEN place (an area
+location, an outdoor room), while a building and a normal interior bring
+their own floor and stay neutral. The client mirrors both functions in
+``client3d/src/game/walk`` (``groundScope`` / ``terrainPace``).
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,6 +51,20 @@ MIN_SPEED_FACTOR = 0.1
 # Not the world's default terrain: what is inside a location is a floor, not
 # another patch of world.
 NEUTRAL_SPEED_FACTOR = 1.0
+
+# HOW FAR THE TERRAIN RULE REACHES — the three places a walking figure can be
+# (user decision 2026-08-13, round 2 of the E8 acceptance). The words are the
+# contract, not the implementation: the client uses the same three
+# (``client3d/src/game/walk.GroundScope``).
+#: Out between the places — no footprint over the point.
+SCOPE_WILDERNESS = "wilderness"
+#: Inside an OPEN place: the footprint of an area location, or an outdoor
+#: room (``always_visible``, § A5). The sky is over it and the painted ground
+#: under it is the ground one really walks.
+SCOPE_OPEN = "open"
+#: Inside a BUILT place: a building footprint, or a normal interior room. The
+#: place brings its own floor, so the painted ground has nothing to say.
+SCOPE_BUILT = "built"
 
 
 def _config_default_kind() -> str:
@@ -128,31 +143,65 @@ def passability_at(x: float, z: float,
         entry.get("speed_factor", 1.0))
 
 
-def effective_speed_factor(factor: float, in_footprint: bool) -> float:
+def ground_scope(place_is_area: Optional[bool],
+                 room_is_outdoor: Optional[bool]) -> str:
+    """HOW FAR THE TERRAIN RULE REACHES at a point — the one place it exists.
+
+    User decision 2026-08-13 (round 2 of the E8 acceptance), read
+    MOST-SPECIFIC-FIRST, which is why both arguments are three-valued:
+
+    * ``room_is_outdoor`` is ``None`` when the point lies in no room at all;
+      otherwise a room ANSWERS for the point, and then only an outdoor room
+      (``always_visible``, § A5) leaves the ground its say. A normal interior
+      has a floor.
+    * ``place_is_area`` is ``None`` when no placed footprint covers the point
+      — the wilderness, where the terrain always counts. Otherwise only an
+      AREA location (``world_geometry.is_area_location``) is open ground; a
+      building footprint is a plate.
+
+    So a terrace of a house wades through painted water while the house
+    itself does not, and a hut inside a village square is dry while the
+    square around it is not. Both arguments are the caller's LOOKUP — what
+    is derivable is the rule, and only the rule lives here. The client twin
+    is ``client3d/src/game/walk.groundScope``.
+    """
+    if room_is_outdoor is not None:
+        return SCOPE_OPEN if room_is_outdoor else SCOPE_BUILT
+    if place_is_area is not None:
+        return SCOPE_OPEN if place_is_area else SCOPE_BUILT
+    return SCOPE_WILDERNESS
+
+
+def effective_speed_factor(factor: float, scope: str) -> float:
     """THE PACE RULE (finding 3, 2026-08-13) — the one place it exists.
 
-    The topmost terrain's ``speed_factor`` counts EVERYWHERE, inside a
-    placed footprint as much as out in the wilderness: a hall standing in
-    a lake is waded through, and painting the ground of a place is how one
-    says so. Two clamps sit on top of it:
+    The topmost terrain's ``speed_factor`` counts wherever the sky is over
+    the walker: out in the wilderness, and inside an OPEN place — an area
+    location's footprint or an outdoor room. A village painted onto a lake
+    is waded through, and painting the ground of a place is how one says so.
+    Three cases, in this order:
 
-    * ``factor <= 0`` INSIDE a footprint is the one case where the plate
-      really replaces the ground — a factor of 0 says "this was never meant
-      to be walked" (rock, water in the old catalog), not "one metre costs
-      forever". There the neutral :data:`NEUTRAL_SPEED_FACTOR` applies.
+    * :data:`SCOPE_BUILT` — a building footprint or a normal interior room
+      brings its OWN floor (user decision 2026-08-13, round 2). The painted
+      ground under it says nothing at all: the neutral
+      :data:`NEUTRAL_SPEED_FACTOR`, whatever the catalog holds.
+    * ``factor <= 0`` inside an OPEN place is the second neutral case — a
+      factor of 0 says "this was never meant to be walked" (rock), not "one
+      metre costs forever", and a place put down on it declares it walkable.
     * everything else is clamped up to :data:`MIN_SPEED_FACTOR`, so no
       sample can make a route infinitely expensive.
 
-    ``in_footprint`` is the caller's lookup (nav grid: the exempt footprints
-    of the route; costs: any placed footprint) — what is derivable is the
-    RULE, and only the rule lives here.
+    ``scope`` is :func:`ground_scope` read at the point — the caller's
+    lookup, never re-derived here.
     """
-    if in_footprint and factor <= 0.0:
+    if scope == SCOPE_BUILT:
+        return NEUTRAL_SPEED_FACTOR
+    if scope == SCOPE_OPEN and factor <= 0.0:
         return NEUTRAL_SPEED_FACTOR
     return max(factor, MIN_SPEED_FACTOR)
 
 
-def speed_at(x: float, z: float, *, in_footprint: bool,
+def speed_at(x: float, z: float, *, scope: str,
              areas: Optional[List[Dict[str, Any]]] = None,
              catalog: Optional[Dict[str, Dict[str, Any]]] = None,
              default_kind: Optional[str] = None) -> float:
@@ -160,5 +209,4 @@ def speed_at(x: float, z: float, *, in_footprint: bool,
     through :func:`effective_speed_factor`."""
     _kind, entry = entry_at(x, z, areas=areas, catalog=catalog,
                             default_kind=default_kind)
-    return effective_speed_factor(float(entry.get("speed_factor", 1.0)),
-                                  in_footprint)
+    return effective_speed_factor(float(entry.get("speed_factor", 1.0)), scope)

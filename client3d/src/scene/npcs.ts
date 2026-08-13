@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { moveClip } from '../game/walk';
+import { MOVE_EPS_M, moveClip, type GroundScope } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
@@ -14,6 +14,12 @@ import { advanceProgress, catchUpStep, clampProgress, densifyPolyline, pointAtDi
  *  move at exactly the NPC pace; a second constant would drift. */
 export const WALK_SPEED = 3.4;
 const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
+
+/** What the ground says about a moving figure at one point: the clip its
+ *  terrain type asks for (`''` = none) and how far the terrain rule reaches
+ *  there (§ A1.5). Both are LOOKUPS the driver hands in — `main.ts` owns the
+ *  terrain payload and the footprints, this file owns neither. */
+export interface GroundMove { anim: string; scope: GroundScope }
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
 /** Walk-target marker (E3-T4): the same gold, but a thin flat ring on the
@@ -96,6 +102,14 @@ interface Npc {
   /** `performance.now()` at which the bubble is taken down again (0 = down) */
   bubbleUntil: number;
   target: THREE.Vector3;
+  /** Pace of the NEXT step, as the ground under this figure sets it
+   *  (`walk.terrainPace`, 1 = the plain `WALK_SPEED`). Only the player-driven
+   *  figure ever carries something else: `setPlayerTarget` hands it in with
+   *  the goal, because the goal is set from the CURRENT position every frame
+   *  and a paced goal would fall under `MOVE_EPS_M` and freeze the figure
+   *  (swim finding 2026-08-13). Server-driven journeys bring their own rate
+   *  and never look at this. */
+  pace: number;
   /** feste Blickrichtung im Stand (Marker) — sonst Nachbarn ansehen */
   face: THREE.Vector3 | null;
   /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
@@ -188,15 +202,18 @@ export class NpcManager {
    *  bucket. */
   private groundRev: () => number = () => 0;
   /**
-   * The MOVE ANIMATION the ground at a point asks for (`meta.move_anim`,
-   * § A9), or `''` — handed in like the height, never derived here.
+   * What the GROUND says about a moving figure at a point: the clip its type
+   * asks for (`meta.move_anim`, § A9) and HOW FAR that rule reaches there
+   * (`walk.GroundScope`) — handed in like the height, never derived here.
    *
    * It applies to every moving figure, the player's avatar included: they all
    * walk through the one clip decision below (`moveClip`), so a lake is swum
-   * across by whoever crosses it. The default is the world without painted
-   * ground: walk and run as always.
+   * across by whoever crosses it — and a tiled hall standing in that lake is
+   * walked. The default is the world without painted ground: walk and run as
+   * always.
    */
-  private moveAnimAt: (x: number, z: number) => string = () => '';
+  private groundMoveAt: (x: number, z: number) => GroundMove =
+    () => ({ anim: '', scope: 'wilderness' });
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -207,10 +224,11 @@ export class NpcManager {
     if (revision) this.groundRev = revision;
   }
 
-  /** Install the terrain move-animation lookup (`Ground.typeAt(x, z)
-   *  .move_anim`). Called once at boot; the payload updates itself. */
-  setTerrainAnim(fn: (x: number, z: number) => string) {
-    this.moveAnimAt = fn;
+  /** Install the ground-move lookup (`main.ts` `groundMoveAt`: the terrain
+   *  type's `move_anim` plus the scope at that point). Called once at boot;
+   *  the payload updates itself. */
+  setTerrainMove(fn: (x: number, z: number) => GroundMove) {
+    this.groundMoveAt = fn;
   }
 
   setAvatar(name: string) {
@@ -295,9 +313,19 @@ export class NpcManager {
   /** Walk goal of the player-driven figure (E3-T3). Writes `npc.target`, so
    *  `tick()` walks there exactly as it does for any NPC — animation, facing
    *  and ground blending included, no second movement code path. */
-  setPlayerTarget(name: string, pos: THREE.Vector3) {
+  /** Goal of the player-driven figure, plus the PACE the ground under it
+   *  allows (`walk.terrainPace`; 1 = the plain `WALK_SPEED`).
+   *
+   *  The pace belongs to the STEP, never to the goal: `main.ts` sets the goal
+   *  a fixed lead ahead of the figure every frame, so scaling the lead
+   *  instead would push it under `MOVE_EPS_M` on slow ground and the figure
+   *  would stand still with an idle clip instead of swimming slowly (finding
+   *  2026-08-13). */
+  setPlayerTarget(name: string, pos: THREE.Vector3, pace = 1) {
     const npc = this.npcs.get(name);
-    if (npc) npc.target.copy(pos);
+    if (!npc) return;
+    npc.target.copy(pos);
+    npc.pace = Number.isFinite(pace) && pace > 0 ? pace : 1;
   }
 
   /** Hard placement of the player-driven figure (E3-T3): used when the SERVER
@@ -636,7 +664,7 @@ export class NpcManager {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
-      target: st.pos.clone(), face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
+      target: st.pos.clone(), pace: 1, face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -791,9 +819,8 @@ export class NpcManager {
           // the ground's to say (`moveClip`, finding 3): a traveller crossing
           // painted water swims through it.
           const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
-          npc.figure.play(travelling
-            ? moveClip(this.moveAnimAt(npc.root.position.x, npc.root.position.z),
-                       false)
+          const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+          npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
             : 'idle');
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
@@ -814,11 +841,15 @@ export class NpcManager {
       delta.y = 0;
       const distToGoal = delta.length();
       const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // unterwegs = laufen
-      const moving = distToGoal > 0.05;
+      const moving = distToGoal > MOVE_EPS_M;
       if (moving) {
         // ONE pace for every figure, the player's included: `WALK_SPEED` is
-        // metres a second and a metre is a metre (E4).
-        const step = Math.min(distToGoal, WALK_SPEED * dt * (dist > RUN_DISTANCE ? 1.8 : 1));
+        // metres a second and a metre is a metre (E4). `npc.pace` is what the
+        // GROUND allows on top of that (1 for everybody but the avatar) —
+        // the step is where the terrain pace belongs, because the goal is a
+        // fixed lead ahead and a paced lead would fall under `MOVE_EPS_M`.
+        const step = Math.min(distToGoal,
+          WALK_SPEED * dt * npc.pace * (dist > RUN_DISTANCE ? 1.8 : 1));
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
@@ -845,9 +876,8 @@ export class NpcManager {
         // pair stands. This is the ONE clip decision of a moving figure, the
         // player's avatar included — it is steered through this same loop.
         const standingClip = npc.animation || activityToClipKind(npc.activity);
-        npc.figure.play(moving
-          ? moveClip(this.moveAnimAt(npc.root.position.x, npc.root.position.z),
-                     dist > RUN_DISTANCE)
+        const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+        npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
           : standingClip);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben

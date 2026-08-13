@@ -14,18 +14,33 @@ Hand-derived expectations:
   [1] kind_at(30, 30)  -> "grass"  (no area)
   [2] kind_at(2, 2)    -> "water"  (only water contains it)
   [3] kind_at(10, 10)  -> "path"   (both contain it, path has higher z)
-  [4] passability_at(2, 2)  -> (False, 0.4) — water is impassable ground
-      one WADES through where a place stands on it; passability_at(30, 30)
-      -> (True, 1.0); passability_at(10, 10) -> (True, 1.2). Plus the
-      catalog hole: an area whose kind was deleted from the catalog
-      afterwards degrades to (True, 1.0) — a missing type must never
-      strand a character behind an impassable ghost.
+  [4] passability_at(2, 2)  -> (True, 0.4) — the seed's `water` is SWUM
+      (round 2 of the E8 acceptance: swimming is what `move_anim` is for,
+      a barrier of water is its own kind, `deep_water` -> (False, 0.4));
+      passability_at(30, 30) -> (True, 1.0); passability_at(10, 10)
+      -> (True, 1.2). Plus the catalog hole: an area whose kind was deleted
+      from the catalog afterwards degrades to (True, 1.0) — a missing type
+      must never strand a character behind an impassable ghost.
       entry_at is the ONE reading behind both: it hands back the kind AND
       its effective entry, so (2, 2) reads "water" with meta.move_anim
       "swim" and the hole reads its kind with the fallback entry.
-      speed_at applies the pace rule of finding 3 on top:
-      speed_at(2, 2, wilderness) -> 0.4 and speed_at(2, 2, footprint)
-      -> 0.4 as well (only a factor of 0 is neutralised under a place).
+
+      speed_at applies the pace rule of finding 3 on top, and `ground_scope`
+      says how far it reaches (user decision 2026-08-13, round 2 —
+      most-specific-first, both arguments three-valued):
+
+          ground_scope(None,  None)  -> "wilderness"   no footprint, no room
+          ground_scope(True,  None)  -> "open"         area location
+          ground_scope(False, None)  -> "built"        building footprint
+          ground_scope(True,  False) -> "built"        interior room wins
+          ground_scope(False, True)  -> "open"         terrace of a house
+          ground_scope(None,  True)  -> "open"         (a room without a
+                                                        footprint cannot
+                                                        happen — the rule
+                                                        still answers)
+
+      So speed_at(2, 2) over the water reads 0.4 in the wilderness and 0.4
+      in an OPEN place, but the neutral 1.0 in a BUILT one.
   [5] set_character_pos("probe_npc", 50, 50) -> location_id == inn id;
       get_character_pos -> {"x": 50.0, "z": 50.0};
       get_character_current_location("probe_npc") == inn id
@@ -152,20 +167,40 @@ print("[3] the topmost containing area wins")
 check("kind_at(10, 10)", terrain_query.kind_at(10, 10), "path")
 
 print("[4] passability comes from the catalog, never from hardcoded kinds")
-check("passability_at(2, 2)", terrain_query.passability_at(2, 2), (False, 0.4))
+check("passability_at(2, 2) — water is SWUM since round 2",
+      terrain_query.passability_at(2, 2), (True, 0.4))
+check("...a barrier of water is its own seed kind",
+      (terrain_types.get_type("deep_water") or {}).get("passable"), False)
+check("...at the same 0.4 and the same swim clip",
+      ((terrain_types.get_type("deep_water") or {}).get("speed_factor"),
+       ((terrain_types.get_type("deep_water") or {}).get("meta")
+        or {}).get("move_anim")), (0.4, "swim"))
 check("passability_at(30, 30)", terrain_query.passability_at(30, 30), (True, 1.0))
 check("passability_at(10, 10)", terrain_query.passability_at(10, 10), (True, 1.2))
 # The ONE reading behind both answers, and the pace rule on top of it.
 _kind, _entry = terrain_query.entry_at(2, 2)
 check("entry_at(2, 2) names the kind", _kind, "water")
 check("...and hands out its catalog entry",
-      (_entry.get("passable"), _entry.get("speed_factor")), (False, 0.4))
+      (_entry.get("passable"), _entry.get("speed_factor")), (True, 0.4))
 check("...move_anim included", (_entry.get("meta") or {}).get("move_anim"),
       "swim")
+# How far the rule reaches — the hand table of the docstring, then the pace.
+_scope = terrain_query.ground_scope
+check("ground_scope: nothing over the point is the wilderness",
+      _scope(None, None), "wilderness")
+check("...an area location is open ground", _scope(True, None), "open")
+check("...a building footprint is built", _scope(False, None), "built")
+check("...an interior room beats the area location it stands in",
+      _scope(True, False), "built")
+check("...and an outdoor room beats the building it belongs to",
+      _scope(False, True), "open")
+check("...a room without a footprint still answers", _scope(None, True), "open")
 check("speed_at(2, 2) out in the wilderness",
-      terrain_query.speed_at(2, 2, in_footprint=False), 0.4)
-check("speed_at(2, 2) inside a footprint — the same water (finding 3)",
-      terrain_query.speed_at(2, 2, in_footprint=True), 0.4)
+      terrain_query.speed_at(2, 2, scope="wilderness"), 0.4)
+check("speed_at(2, 2) in an OPEN place — the same water (finding 3)",
+      terrain_query.speed_at(2, 2, scope="open"), 0.4)
+check("speed_at(2, 2) in a BUILT one — the floor replaces it (round 2)",
+      terrain_query.speed_at(2, 2, scope="built"), 1.0)
 # Catalog hole: paint an area, then delete its type from the catalog.
 terrain_types.save_world_type({"kind": "ghost", "name": "Ghost",
                                "color": "#123456", "passable": False,

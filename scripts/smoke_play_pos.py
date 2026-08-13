@@ -82,7 +82,7 @@ THE WORLD used below (all grass unless painted):
     BLUFF   (600, 50)  w 10, opening N at 0.5 → (600, 45), ON PAINTED ROCK
                        (rock x ∈ [596, 604], z ∈ [46, 54] — strictly inside
                        the footprint, so the approach outside stays grass)
-    a water rectangle x ∈ [-10, 10], z ∈ [6, 26]
+    a deep-water rectangle x ∈ [-10, 10], z ∈ [6, 26]
     a rock rectangle  x ∈ [640, 650], z ∈ [40, 50] (wilderness, case [20])
 
 HAND-DERIVED EXPECTATIONS (the opening points first, since every entry case
@@ -93,13 +93,15 @@ identity, so HALL's N opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
   [1] wilderness → wilderness is free: (0, 0) → (0, 3) is accepted with
       ``location_id: ""`` and ``room_id: ""``.
 
-  [2] The water rectangle is a wall: from (0, 3) the point (0, 7) lies
+  [2] The deep-water rectangle is a wall: from (0, 3) the point (0, 7) lies
       inside it and is 4 m away — INSIDE the step allowance of case [3], so
       the terrain is really what refuses it → 409 ``impassable``, and the
       answer hands back the LAST VALID point (0, 3) so the client can snap
       the figure onto it. The MESSAGE names the ground it refused on — the
-      catalog's display name for `water` is "Water", so it reads
-      "You cannot walk there — that is Water." (finding B1).
+      catalog's display name for `deep_water` is "Deep water", so it reads
+      "You cannot walk there — that is Deep water." (finding B1). Plain
+      `water` is SWIMMABLE since round 2 of the acceptance — a wall of water
+      is its own kind now.
 
   [3] Anti-teleport. The clock is pinned at factor 0 for this run, so the
       game term is 0; the reports follow each other within milliseconds, so
@@ -384,7 +386,7 @@ HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge="S", room="foyer",
 BLUFF = place("Smoke Bluff", 600.0, 50.0, room="foyer", entry_room="hall")
 patch_location(LOCKED, accessible_when=["has_item:silver_key"])
 add_item(name="Silver Key", description="opens the vault", item_id="silver_key")
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[-10, 6], [10, 6], [10, 26], [-10, 26]],
                    "z_order": 0})
 # Case [20]: rock STRICTLY INSIDE the bluff's footprint (x, z ∈ [595, 605]),
@@ -443,10 +445,10 @@ def main() -> int:
     check("the reason", reason, "impassable")
     # The message NAMES THE GROUND (E4 acceptance finding B1). The display
     # name is the terrain catalog's — shared/terrain/types.json has
-    # `water` as "Water" — and the avatar's language is "en" here, so the
+    # `deep_water` as "Deep water" — and the avatar's language is "en", so the
     # English source string comes back with the name interpolated.
     check("the message names the terrain", _msg,
-          "You cannot walk there — that is Water.")
+          "You cannot walk there — that is Deep water.")
     check("the last valid point comes back", pos, {"x": 0.0, "z": 3.0})
     check("with the location it belongs to", loc_id, "")
     check("the avatar did not move", get_character_pos(AVATAR),

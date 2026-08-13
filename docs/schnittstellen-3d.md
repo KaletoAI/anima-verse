@@ -561,7 +561,10 @@ immer sichtbar, nur Locations verstecken sich.
 - `polygon` = `[[x, z], …]` in Welt-Metern, auf 2 Stellen gerundet, 3–256
   Punkte, automatisch geschlossen.
 - `sig` ist dieselbe Signatur wie `terrain_sig` in der Weltkarte: einmal
-  holen, bei Signaturwechsel neu holen.
+  holen, bei Signaturwechsel neu holen. Sie deckt die Flächen **und den
+  WIRKSAMEN Katalog** ab (Grundstock + Welt-Zeilen, Runde 2 der
+  E8-Sichtabnahme) — auch eine geänderte Saat erreicht damit laufende
+  Clients und den Routing-Cache, nicht erst den nächsten Neustart.
 
 **Geländeregeln (für beide Renderer gleich):**
 
@@ -585,17 +588,34 @@ immer sichtbar, nur Locations verstecken sich.
   Öffnungen und Regeln. Ein Renderer, der die Figur selbst hält, MUSS es
   genauso machen — sonst weigert sich das Bild zu laufen, wo der Server
   jede Meldung annimmt.
-- **`speed_factor` und `meta.move_anim` gelten ÜBERALL** (Befund 3 der
-  E8-Sichtabnahme, 2026-08-13) — im Fußabdruck genau wie in der Wildnis.
-  Ein Dorf auf einem See wird durchwatet, und gemaltes Wasser unter einer
-  Location ist genau die Ansage dafür. **Ausnahme: Faktor `<= 0` IM
-  Fußabdruck gilt als neutrale 1,0** — eine 0 ist kein Tempo, sondern ein
-  „dieser Boden war nie zum Begehen gemeint" (Fels), und dort ersetzt die
-  Platte den Boden wirklich. Die Regel steht einmal je Sprache:
-  `terrain_query.effective_speed_factor` (Server, auch fürs NPC-Routing
-  und die Reisezeit) und `game/walk.terrainPace` (3D-Client, Klemme 0,25
-  statt 0,1 — sie schützt einen Lauf-Vorgriff vor der Stillstands-
-  Erkennung, nicht eine Kostensumme vor der Unendlichkeit).
+- **`speed_factor` und `meta.move_anim` gelten SO WEIT, WIE DER HIMMEL
+  REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in Runde 2
+  entschieden). Drei Orte, von innen nach außen gefragt:
+
+  | Wo die Figur steht | Gilt das Gelände? |
+  |---|---|
+  | **In einem RAUM** | nur wenn er ein **Outdoor-Raum** ist (`always_visible`, § A5) — ein Innenraum hat einen Fußboden |
+  | Sonst **in einem Fußabdruck** | nur wenn es eine **Flächen-Location** ist (`passable` oder `map3d.area_model`) — ein Gebäude bringt seine eigene Platte mit |
+  | Sonst: **Wildnis** | immer |
+
+  Ein Dorf auf einem See wird durchwatet, die Halle daneben nicht; die
+  Terrasse eines Hauses watet, das Haus selbst nicht. Gemaltes Wasser unter
+  einer Flächen-Location ist genau die Ansage dafür. **Zweite neutrale
+  Stelle: Faktor `<= 0` in einer Flächen-Location gilt als 1,0** — eine 0 ist
+  kein Tempo, sondern ein „dieser Boden war nie zum Begehen gemeint" (Fels),
+  und wer dort einen Ort hinsetzt, erklärt ihn für begehbar. **Neutral heißt
+  immer: Tempo 1,0 UND kein `move_anim`** — durch eine geflieste Halle im See
+  schwimmt niemand.
+
+  Die zwei Regeln stehen einmal je Sprache: `terrain_query.ground_scope` +
+  `terrain_query.effective_speed_factor` (Server, auch fürs NPC-Routing und
+  die Reisezeit — dort ist die Raum-Hälfte immer `None`, eine Route läuft
+  zwischen den Orten) und `game/walk.groundScope` + `game/walk.terrainPace`
+  + `game/walk.moveClip` (3D-Client, Klemme 0,25 statt 0,1 — sie schützt
+  einen Lauf-SCHRITT vor der Stillstands-Erkennung, nicht eine Kostensumme
+  vor der Unendlichkeit). Ob eine Location Fläche ist, beantwortet
+  `world_geometry.is_area_location` bzw. `scene/tiles.isAreaLocation` — aus
+  den AUTORIERTEN Feldern, nie aus einem Stil- oder Namensraten.
 - Der Katalog ist **datengetrieben**: der geteilte Grundstock
   `shared/terrain/types.json` plus Welt-Zeilen, die pro `kind` den ganzen
   Eintrag **ersetzen** (Override-Replace wie die Aktivitäten-Bibliothek).
@@ -1186,8 +1206,10 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
 
   Vertrag für die Renderer: **bewegt sich eine Figur** — Avatar, NPC oder
   Reisender — **auf einem obersten Gelände mit `move_anim`, spielt sie
-  diesen Clip statt `walk`/`run`**; es gibt kein Rennen darüber, ein
-  See wird nicht gesprintet. **Im STEHEN ändert sich nichts**: dort gewinnen
+  diesen Clip statt `walk`/`run`**, so weit wie die Gelände-Regel dort reicht
+  (§ A1.5: Wildnis und offene Orte ja, Gebäude und Innenräume nein); es gibt
+  kein Rennen darüber, ein See wird nicht gesprintet.
+  **Im STEHEN ändert sich nichts**: dort gewinnen
   weiterhin `activity_animation` bzw. die Aktivitäts-Heuristik (§ A8). Die
   Art gehört ins OFFENE Clip-Vokabular (§ A8) und wird nirgends gegen eine
   Liste geprüft; fehlt der Clip am Modell, greift die normale
@@ -1661,18 +1683,19 @@ fremden Fußabdruck (SAT) oder am Gelände in ihrer Mitte — Letzteres nur
 außerhalb jedes Fußabdrucks. Ohne das wäre ein Ort auf Fels für die Reise
 unerreichbar, während sein Avatar darin frei umherläuft.
 
-**TEMPO UND ANIMATION GEHÖREN DAGEGEN ÜBERALL DEM OBERSTEN GELÄNDE**
-(Befund 3 der E8-Sichtabnahme, 2026-08-13). Der Fußabdruck nimmt dem Boden
-das VERBOT, nicht seine Beschaffenheit: ein Dorf auf einem See wird
-durchwatet und mit `move_anim` „swim" auch so animiert, drinnen wie
-draußen. Nur ein Faktor `<= 0` im Fußabdruck wird zur neutralen 1,0 —
-eine 0 ist kein Tempo, sondern ein „nie zum Begehen gemeint" (Fels), und
-genau diese Hälfte der alten Regel bleibt. Server und Client tragen die
-Regel je einmal (`terrain_query.effective_speed_factor` bzw.
-`game/walk.terrainPace`, § A1.5); die Reisezeit (`segment_costs` →
-Reise-Engine) und die Schrittweite des Avatars erben sie automatisch.
-**Die Gate-Kette oben ändert sich dadurch NICHT** — das Tempo ist keine
-Erlaubnis, es wird nirgends geprüft, es wird gelaufen.
+**TEMPO UND ANIMATION GEHÖREN DAGEGEN DEM OBERSTEN GELÄNDE, SO WEIT WIE DER
+HIMMEL REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in
+Runde 2 entschieden). Der Fußabdruck nimmt dem Boden das VERBOT, nicht seine
+Beschaffenheit — aber nur dort, wo der Ort selbst offener Grund ist: ein Dorf
+auf einem See wird durchwatet und mit `move_anim` „swim" auch so animiert,
+eine Halle auf demselben See nicht. Die volle Reichweiten-Tabelle (Raum →
+Fußabdruck → Wildnis) steht in § A1.5; neutral heißt dort immer Tempo 1,0 UND
+kein Bewegungs-Clip. Server und Client tragen beide Regeln je einmal
+(`terrain_query.ground_scope`/`effective_speed_factor` bzw.
+`game/walk.groundScope`/`terrainPace`/`moveClip`); die Reisezeit
+(`segment_costs` → Reise-Engine) und der Schritt des Avatars erben sie
+automatisch. **Die Gate-Kette oben ändert sich dadurch NICHT** — das Tempo
+ist keine Erlaubnis, es wird nirgends geprüft, es wird gelaufen.
 
 **Der Übergang (Nr. 7).** Gleiche Location oder Wildnis → Wildnis ist frei.
 Sonst:

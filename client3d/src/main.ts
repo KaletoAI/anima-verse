@@ -5,7 +5,10 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir } from './game/walk';
+import {
+  groundScope, slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir,
+  type GroundScope,
+} from './game/walk';
 import { groundLift, type ScenePatch } from './game/ground';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
@@ -478,8 +481,13 @@ async function startApp(username: string, role: string) {
   npcs.setGroundHeight((x, z) => terrainGround.heightAt(x, z),
                        () => terrainGround.heightRevision());
   // …and they move the way the ground under them says (finding 3): the same
-  // lookup for every figure, avatar included, out of the ONE terrain payload.
-  npcs.setTerrainAnim((x, z) => terrainGround.typeAt(x, z).move_anim);
+  // lookup for every figure, avatar included, out of the ONE terrain payload
+  // — together with how far that rule reaches at the point (§ A1.5), which is
+  // why the footprints and rooms are asked here and not in the manager.
+  npcs.setTerrainMove((x, z) => ({
+    anim: terrainGround.typeAt(x, z).move_anim,
+    scope: groundScopeAt(x, z),
+  }));
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
   figures.onModelReady = (charName) => {
@@ -2074,6 +2082,46 @@ async function startApp(username: string, role: string) {
   }
 
   /**
+   * The SMALLEST room rectangle of a tile that covers a world point, or null.
+   *
+   * The same "most specific wins" the footprints follow (`tileAt`): a hut
+   * room drawn inside a village zone is the more precise answer. `roomRects`
+   * is TILE-LOCAL, so the point is turned into that frame ONCE — the reason
+   * this is not a loop over `insideRoomRect`.
+   */
+  function roomAt(tile: Tile, x: number, z: number): string | null {
+    const p = worldToTile(tile, x, z);
+    let best: string | null = null;
+    let bestArea = Infinity;
+    for (const [id, r] of tile.roomRects) {
+      if (Math.abs(p.x - r.x) > r.w / 2 || Math.abs(p.z - r.z) > r.d / 2) continue;
+      const area = r.w * r.d;
+      if (area < bestArea) { best = id; bestArea = area; }
+    }
+    return best;
+  }
+
+  /**
+   * HOW FAR THE TERRAIN RULE REACHES at a world point (§ A1.5) — the client's
+   * lookup half of `game/walk.groundScope`, which is where the rule lives.
+   *
+   * Three sources, all of them payload: the footprint the point falls in
+   * (`tileAt`), whether that place is open ground (`tile.isArea`, the twin of
+   * `world_geometry.is_area_location`) and — most specific — the room
+   * rectangle over the point plus its outdoor flag (`alwaysVisibleRooms`,
+   * § A5). A tile whose scene is not mounted yet has no rectangles, so the
+   * footprint answers alone; that is the same answer the server's router
+   * gives, which never sees rooms either.
+   */
+  function groundScopeAt(x: number, z: number): GroundScope {
+    const tile = tileAt(x, z);
+    if (!tile) return groundScope(null, null);
+    const room = roomAt(tile, x, z);
+    return groundScope(tile.isArea,
+                       room === null ? null : tile.alwaysVisibleRooms.has(room));
+  }
+
+  /**
    * Points the SERVER refused, with the time they stop counting
    * (`performance.now()`, a duration clock). The metre successor of the grid
    * world's `rejectedUntil` cell memory, and it exists for the same reason:
@@ -2692,10 +2740,13 @@ async function startApp(username: string, role: string) {
     tickSoundtrack();
   };
 
-  /** `tick()` only counts a figure as moving from 0.05 units away, and at a
-   *  high frame rate ONE step is shorter than that — the avatar would stand
-   *  still without a walk animation. So the goal is set a short lead ahead;
-   *  0.15 m is under a twentieth of a second of walking. */
+  /** `tick()` only counts a figure as moving from `MOVE_EPS_M` = 0.05 m away,
+   *  and at a high frame rate ONE step is shorter than that — the avatar would
+   *  stand still without a walk animation. So the goal is set a short lead
+   *  ahead; 0.15 m is under a twentieth of a second of walking, and three
+   *  times the threshold, which is what keeps the figure moving on the
+   *  slowest ground as well (the pace scales the STEP, never this — see the
+   *  walking hook). */
   const MIN_LEAD = 0.15;
   /** Companion flag of the room walk (E3-T6), declared here because the two
    *  used to INTERLOCK with the cell step. The step is gone (E4 task 5), so
@@ -3101,14 +3152,22 @@ async function startApp(username: string, role: string) {
     // The footprint the figure stands in — looked up ONCE per frame and handed
     // to both the blocker and the wall/floor lookups below.
     const here = tileAt(pos.x, pos.z);
-    // THE GROUND SETS THE PACE (finding 3 of the E8 acceptance): the lead is
-    // multiplied by the factor of the terrain the figure stands on RIGHT NOW —
-    // inside a footprint as much as outside it, because a village on a lake is
-    // waded through. The clamp against the goal distance comes last, so the
+    // THE GROUND SETS THE PACE (finding 3 of the E8 acceptance): the factor of
+    // the terrain the figure stands on RIGHT NOW, as far as that rule reaches
+    // here (`groundScopeAt` — a village on a lake is waded through, the hall
+    // beside it is not).
+    //
+    // IT SCALES THE STEP, NOT THE LEAD (round 2, 2026-08-13). The goal is set
+    // a lead ahead of the CURRENT position every frame, and `npcs.tick` walks
+    // the figure toward it at `WALK_SPEED * dt * pace`; the lead only has to
+    // clear `MOVE_EPS_M`, below which the manager calls the figure standing.
+    // Multiplying the LEAD by the pace put it at 0.0375 m on a 0.25 ground —
+    // under that threshold, so the figure froze in an idle clip instead of
+    // swimming slowly. The clamp against the goal distance comes last, so the
     // figure still stops ON its click target instead of overshooting it.
     const pace = terrainPace(terrainGround.typeAt(pos.x, pos.z).speed_factor,
-                             here !== null);
-    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD) * pace, reach);
+                             groundScopeAt(pos.x, pos.z));
+    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
     let { x, z } = { x: pos.x + dir.x * lead, z: pos.z + dir.z * lead };
     // OUTDOORS the world itself stops the figure: impassable terrain — out in
     // the WILDERNESS only, a footprint replaces the ground under it
@@ -3133,7 +3192,7 @@ async function startApp(username: string, role: string) {
       if (routeStalled >= STALL_FRAMES) cancelRoute();
     }
     walkGoal.set(x, roomFloorY(here) ?? groundY(x, z), z);
-    npcs.setPlayerTarget(avatarName, walkGoal);
+    npcs.setPlayerTarget(avatarName, walkGoal, pace);
     // The report is about where the figure IS, not where it is being sent:
     // `setPlayerTarget` only moves the goal, `tick()` walks the figure there.
     // Reporting the goal would put the server up to one lead ahead of the

@@ -429,7 +429,7 @@ print("[5b] a target surrounded by water is unreachable")
 # ([6b]) — the water ring below is the ONLY new fact.
 check("the route was walkable before the water",
       travel_engine.get_journey("wild_npc"), None)
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[85, -20], [125, -20], [125, 20], [85, 20]],
                    "z_order": 0})
 check("no_route", travel_engine.start_journey("wild_npc", MARKET),

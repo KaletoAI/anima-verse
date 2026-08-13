@@ -23,12 +23,15 @@ neighbours (no corner-cutting: a diagonal needs both orthogonals free), paying
 metre of climb, and the resulting cell chain is pulled straight again by a
 line-of-sight pass so the journey follows the terrain instead of the raster.
 
-THE PACE, unlike the passability, is the terrain's EVERYWHERE (finding 3 of
-the E8 acceptance, 2026-08-13): a route through a village on a lake wades at
-the water's factor, and the only footprint exception is a ground with factor 0,
-which is a "never meant to be walked" rather than a pace. The rule itself is
-``terrain_query.effective_speed_factor`` — this file only supplies the
-``in_footprint`` half of it (:meth:`_Search.factor`, :func:`_segment_cost`).
+THE PACE, unlike the passability, follows the ground into a place — but only
+into an OPEN one (finding 3 of the E8 acceptance, 2026-08-13, reach decided
+2026-08-13 round 2): a route through a village on a lake wades at the water's
+factor, a route through a HALL on the same lake walks the hall's floor at the
+neutral 1.0. The rules are ``terrain_query.ground_scope`` and
+``terrain_query.effective_speed_factor`` — this file only supplies the lookup
+(:func:`_footprint_scope`, :meth:`_Search.factor`, :func:`_segment_cost`).
+A route never walks a room's interior, so the ROOM half of ``ground_scope``
+is always ``None`` here; it is the 3D client that has rooms under its feet.
 
 Performance discipline (E1 review lesson): the terrain areas, the type
 catalog and the placed footprints are read ONCE into a :class:`NavContext`
@@ -46,13 +49,19 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from app.core.terrain_query import MIN_SPEED_FACTOR, effective_speed_factor
+from app.core.terrain_query import (MIN_SPEED_FACTOR, effective_speed_factor,
+                                    ground_scope)
 from app.core.world_geometry import (footprint_corners, footprint_hits_aabb,
-                                     placed_footprint, point_in_footprint,
+                                     is_area_location, placed_footprint,
+                                     point_in_footprint,
                                      segment_hits_footprint)
 
 Point = Tuple[float, float]
 Cell = Tuple[int, int]
+#: One placed footprint as the router keeps it: id, centre, edge, yaw and
+#: whether the location is OPEN GROUND (``world_geometry.is_area_location``) —
+#: the last field decides how far the terrain pace reaches into it.
+Footprint = Tuple[str, float, float, float, float, bool]
 
 # Raster resolution in metres. 2 m is a body width: fine enough to squeeze
 # between two buildings, coarse enough that a kilometre of world is a few
@@ -106,14 +115,14 @@ _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1),
 class NavContext:
     """One prefetched snapshot of everything routing needs.
 
-    ``footprints`` are ``(location_id, cx, cz, width_m, yaw_deg)`` of the
-    PLACED locations, ``data_bounds`` the bounding box over all footprint
-    corners and area vertices (None for a world without either).
+    ``footprints`` are :data:`Footprint` tuples of the PLACED locations,
+    ``data_bounds`` the bounding box over all footprint corners and area
+    vertices (None for a world without either).
     """
 
     areas: List[Dict[str, Any]]
     catalog: Dict[str, Dict[str, Any]]
-    footprints: List[Tuple[str, float, float, float, float]]
+    footprints: List[Footprint]
     data_bounds: Optional[Tuple[float, float, float, float]]
     sig: Tuple[str, str]
     # The ground of every unpainted point, resolved ONCE — the hot loop must
@@ -192,8 +201,7 @@ def invalidate_nav_cache() -> None:
     _CACHE = None
 
 
-def _placement_sig(footprints: Sequence[Tuple[str, float, float, float,
-                                              float]],
+def _placement_sig(footprints: Sequence[Footprint],
                    openings: Sequence[Point] = (),
                    max_step_m: float = 0.0,
                    max_slope_deg: float = 0.0) -> str:
@@ -211,6 +219,11 @@ def _placement_sig(footprints: Sequence[Tuple[str, float, float, float,
     * ``game.max_slope_deg`` / ``game.max_step_height_m`` are admin dials that
       ``POST /play/pos`` reads live. With the router judging by the limits of
       an hour ago, "ONE predicate, two consumers" quietly becomes two.
+
+    The AREA FLAG of every footprint rides along in the tuple, so flipping a
+    location between "open ground" and "building" (``passable``,
+    ``map3d.area_model``) hands out a new context — it decides how far the
+    terrain pace reaches into that footprint and therefore what a route costs.
     """
     basis = json.dumps({"places": sorted(footprints),
                         "openings": sorted(openings),
@@ -233,9 +246,9 @@ def build_nav_context() -> NavContext:
     the ``terrain_types`` rows, and every catalog edit (a speed factor, a
     ``move_anim``) writes such a row — so a re-typed ground hands out a new
     context, which matters now that the pace of a type reaches inside the
-    footprints too. Only the SHARED seed file is outside the key; editing
-    ``shared/terrain/types.json`` by hand is a repo change and arrives with the
-    restart it needs anyway.
+    footprints too. Since round 2 of the acceptance ``terrain_sig`` hashes the
+    EFFECTIVE catalog (shared seed overlaid by the world rows), so a changed
+    seed reaches a running client and a running router as well.
 
     Since E8 task 4 the two halves of that key OVERLAP on purpose:
     ``height_sig`` covers the placements too, because a moved location moves
@@ -258,7 +271,7 @@ def build_nav_context() -> NavContext:
     from app.models.world import list_locations
 
     locations = list_locations()
-    footprints: List[Tuple[str, float, float, float, float]] = []
+    footprints: List[Footprint] = []
     openings: List[Point] = []
     for loc in locations:
         for _edge, point in opening_world_points(loc):
@@ -267,7 +280,8 @@ def build_nav_context() -> NavContext:
         if fp is None:
             continue
         cx, cz, width, yaw = fp
-        footprints.append((str(loc.get("id") or ""), cx, cz, width, yaw))
+        footprints.append((str(loc.get("id") or ""), cx, cz, width, yaw,
+                           is_area_location(loc)))
     max_step_m = get_max_step_height_m()
     max_slope_deg = get_max_slope_deg()
 
@@ -300,8 +314,7 @@ def build_nav_context() -> NavContext:
     return ctx
 
 
-def _data_bounds(areas: List[Dict[str, Any]],
-                 footprints: Sequence[Tuple[str, float, float, float, float]]
+def _data_bounds(areas: List[Dict[str, Any]], footprints: Sequence[Footprint]
                  ) -> Optional[Tuple[float, float, float, float]]:
     """Bounding box over all area vertices and footprint corners."""
     xs: List[float] = []
@@ -313,13 +326,38 @@ def _data_bounds(areas: List[Dict[str, Any]],
                 zs.append(float(pt[1]))
             except (TypeError, ValueError, IndexError):
                 continue
-    for _lid, cx, cz, width, yaw in footprints:
+    for _lid, cx, cz, width, yaw, _area in footprints:
         for x, z in footprint_corners(cx, cz, width, yaw):
             xs.append(x)
             zs.append(z)
     if not xs:
         return None
     return (min(xs), min(zs), max(xs), max(zs))
+
+
+def _footprint_scope(x: float, z: float,
+                     footprints: Sequence[Footprint]) -> str:
+    """How far the terrain rule reaches at a point, judged by FOOTPRINTS only.
+
+    The routing half of ``terrain_query.ground_scope``: the SMALLEST
+    containing footprint answers (a hut on a village square is the more
+    specific place — the same rule ``world_geometry.location_at_point`` and
+    the client's ``tileAt`` follow), an area location leaves the ground its
+    say and a building replaces it. No footprint at all is the wilderness.
+
+    The ROOM half is always ``None`` out here: a route runs between the
+    places and never through an interior, so there is no room under the
+    sample. That is a property of the router, not a shortcut — the one rule
+    is asked either way.
+    """
+    best_width: Optional[float] = None
+    best_area = False
+    for _lid, cx, cz, width, yaw, is_area in footprints:
+        if not point_in_footprint(x, z, cx, cz, width, yaw):
+            continue
+        if best_width is None or width < best_width:
+            best_width, best_area = width, is_area
+    return ground_scope(best_area if best_width is not None else None, None)
 
 
 # ── grid math ───────────────────────────────────────────────────────────
@@ -376,7 +414,7 @@ class _Search:
         # route — a character standing in a house has to be able to walk
         # out of it, and arriving means walking in.
         self.exempt: Set[str] = set()
-        for lid, cx, cz, width, yaw in ctx.footprints:
+        for lid, cx, cz, width, yaw, _area in ctx.footprints:
             if (point_in_footprint(start[0], start[1], cx, cz, width, yaw)
                     or point_in_footprint(goal[0], goal[1], cx, cz, width,
                                           yaw)):
@@ -415,7 +453,14 @@ class _Search:
         answer the same and cost the foreign ones per sample.
         """
         return any(point_in_footprint(x, z, cx, cz, w, yaw)
-                   for _lid, cx, cz, w, yaw in self.exempt_fps)
+                   for _lid, cx, cz, w, yaw, _area in self.exempt_fps)
+
+    def scope_at(self, x: float, z: float) -> str:
+        """How far the terrain rule reaches at that point — over this route's
+        EXEMPT footprints, for the same invariant :meth:`in_footprint`
+        documents (the foreign ones are already gone by the time anybody
+        asks). The rule is :func:`_footprint_scope`."""
+        return _footprint_scope(x, z, self.exempt_fps)
 
     def blocked(self, cell: Cell) -> bool:
         """A CELL is blocked by a foreign footprint OVERLAPPING it, or by
@@ -446,7 +491,7 @@ class _Search:
             else:
                 box = cell_box(cell)
                 if any(footprint_hits_aabb(fcx, fcz, w, yaw, *box)
-                       for _lid, fcx, fcz, w, yaw in self.blocking):
+                       for _lid, fcx, fcz, w, yaw, _a in self.blocking):
                     hit = True
                 elif self.ctx.cell_terrain(cell)[0]:
                     hit = self.too_steep(cell)
@@ -516,25 +561,23 @@ class _Search:
                             ctx.max_slope_deg)
 
     def factor(self, cell: Cell) -> float:
-        """Speed of a cell — the TERRAIN's, inside a footprint as well.
+        """Speed of a cell — the TERRAIN's, into an OPEN place as well.
 
-        THE PACE OF THE TOPMOST TERRAIN COUNTS EVERYWHERE (finding 3 of the
-        E8 acceptance, 2026-08-13). The PASSABILITY half of "footprint wins"
-        stays exactly as it was (:meth:`blocked`) — a place on rock has to
-        stay reachable — but the pace is a property of the ground one
-        crosses, and a village painted onto a lake is waded through whether
-        the walker is a routed NPC or an avatar. The only footprint
-        exception is a ground with factor 0: that is not a pace but a "this
-        was never meant to be walked", and there the plate really does
-        replace the ground.
+        THE PACE OF THE TOPMOST TERRAIN REACHES AS FAR AS THE SKY DOES
+        (finding 3 of the E8 acceptance, 2026-08-13; reach decided in round
+        2). The PASSABILITY half of "footprint wins" stays exactly as it was
+        (:meth:`blocked`) — a place on rock has to stay reachable — but the
+        pace is a property of the ground one crosses, and a village painted
+        onto a lake is waded through whether the walker is a routed NPC or an
+        avatar. A BUILDING footprint is the other half of the decision: it
+        brings its own floor and pays the neutral 1.0.
 
-        The rule itself is ``terrain_query.effective_speed_factor`` — the
-        ONE place it exists; this method supplies the ``in_footprint`` half
-        and the cached cell reading, nothing else.
+        The rules are ``terrain_query.ground_scope`` and
+        ``terrain_query.effective_speed_factor`` — this method supplies the
+        lookup and the cached cell reading, nothing else.
         """
-        return effective_speed_factor(
-            self.ctx.cell_terrain(cell)[1],
-            self.in_footprint(*cell_centre(cell)))
+        return effective_speed_factor(self.ctx.cell_terrain(cell)[1],
+                                      self.scope_at(*cell_centre(cell)))
 
     def nearest_free(self, cell: Cell) -> Optional[Cell]:
         """The cell itself, or the closest passable cell within
@@ -573,7 +616,7 @@ class _Search:
         the very rule the route was planned with. So a shortcut across a cell
         the search itself would not enter is not walkable, full stop.
         """
-        for _lid, cx, cz, width, yaw in self.blocking:
+        for _lid, cx, cz, width, yaw, _area in self.blocking:
             if segment_hits_footprint(a[0], a[1], b[0], b[1], cx, cz, width,
                                       yaw):
                 return False
@@ -668,15 +711,14 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     documented on :func:`segment_costs` (midpoints of ``n`` equal parts).
 
     EVERY sample pays the TERRAIN's pace (finding 3, 2026-08-13,
-    ``terrain_query.effective_speed_factor``), a sample inside a placed
-    footprint included — the only thing the footprint changes is a ground
-    with factor 0, which pays the neutral 1.0 instead of an infinity. That
-    is what keeps a journey through a hall on rock from taking ten times as
-    long as walking the same hall does, while a journey through a village on
-    a lake honestly wades. There is no route context at cost time, so ALL
-    footprints count; a baked polyline never crosses a foreign one anyway
-    (``blocked`` and ``line_clear`` saw to that), so the two readings answer
-    the same.
+    ``terrain_query.effective_speed_factor``), a sample inside an AREA
+    location included — a journey through a village on a lake honestly wades.
+    A BUILDING footprint pays the neutral 1.0, and so does a factor-0 ground
+    under an area location; that is what keeps a journey through a hall on
+    rock from taking ten times as long as walking the same hall does. There
+    is no route context at cost time, so ALL footprints count; a baked
+    polyline never crosses a foreign one anyway (``blocked`` and
+    ``line_clear`` saw to that), so the two readings answer the same.
 
     THE CLIMB IS PAID HERE TOO (E8 task 4), per part and over the part's own
     two ends, so the sum is the total up-and-down along the segment rather
@@ -696,10 +738,9 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     for k in range(n):
         t = (k + 0.5) / n
         px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-        inside = any(point_in_footprint(px, pz, cx, cz, w, yaw)
-                     for _lid, cx, cz, w, yaw in ctx.footprints)
-        total += part / effective_speed_factor(ctx.terrain_at(px, pz)[1],
-                                               inside)
+        total += part / effective_speed_factor(
+            ctx.terrain_at(px, pz)[1], _footprint_scope(px, pz,
+                                                        ctx.footprints))
         if relief:
             t0, t1 = k / n, (k + 1) / n
             h0 = ctx.height_at(a[0] + (b[0] - a[0]) * t0,
@@ -804,10 +845,10 @@ def segment_costs(waypoints: Sequence[Point],
     is read at the MIDPOINT of each part (midpoints, not endpoints — a
     waypoint typically sits exactly on a terrain border, where the reading
     is a coin flip). The cost is the sum of ``(L / n) / factor``, i.e. the
-    length divided by the harmonic mean of the sampled factors. THE FACTOR
-    IS THE TERRAIN'S, footprint or not (finding 3, 2026-08-13) — a footprint
-    only neutralises a ground of factor 0, which is a ground nobody meant to
-    be walked rather than a slow one.
+    length divided by the harmonic mean of the sampled factors. THE FACTOR IS
+    THE TERRAIN'S out in the open and inside an AREA location (finding 3,
+    2026-08-13); a building footprint and a factor-0 ground under an area
+    location pay the neutral 1.0.
     """
     if ctx is None:
         ctx = build_nav_context()

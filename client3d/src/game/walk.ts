@@ -95,65 +95,115 @@ export function walkDir(keys: ReadonlySet<string>, yaw: number
  * point is never refused for its ground.
  *
  * ONLY THE REFUSAL is a wilderness question. How FAST that ground is walked
- * and WITH WHICH CLIP counts everywhere — see `terrainPace` and `moveClip`
- * below (finding 3).
+ * and WITH WHICH CLIP reaches further — into every OPEN place as well; see
+ * `groundScope`, `terrainPace` and `moveClip` below (finding 3).
  */
 export function terrainBlocks(passable: boolean, insideFootprint: boolean
 ): boolean {
   return !insideFootprint && !passable;
 }
 
+/** HOW FAR THE TERRAIN RULE REACHES at a point — the three places a walking
+ *  figure can be (user decision 2026-08-13, round 2 of the E8 acceptance).
+ *  The words are the contract, shared with the server
+ *  (`terrain_query.SCOPE_*`):
+ *
+ *   - `wilderness` — out between the places, no footprint over the point;
+ *   - `open` — inside an OPEN place: the footprint of an AREA location, or an
+ *     outdoor room (`always_visible`, § A5). Sky above, painted ground below;
+ *   - `built` — a building footprint or a normal interior room. The place
+ *     brings its own floor and the painted ground has nothing to say. */
+export type GroundScope = 'wilderness' | 'open' | 'built';
+
+/**
+ * Which of the three a point is in — the client twin of
+ * `terrain_query.ground_scope`, read MOST-SPECIFIC-FIRST.
+ *
+ * @param placeIsArea    `null` when no footprint covers the point (the
+ *   wilderness); otherwise whether that place is open ground
+ *   (`tiles.isAreaLocation`, the twin of `world_geometry.is_area_location`).
+ * @param roomIsOutdoor  `null` when the point lies in no room rectangle;
+ *   otherwise whether that room is an outdoor one (`tile.alwaysVisibleRooms`).
+ *
+ * A room ANSWERS for the point when there is one, so the terrace of a house
+ * wades through painted water while the house itself does not, and a hut
+ * inside a village square is dry while the square around it is not. Both
+ * arguments are the caller's lookup (`main.ts` `groundScopeAt`) — what is
+ * derivable is the RULE, and only the rule lives in this import-free file.
+ */
+export function groundScope(placeIsArea: boolean | null,
+                            roomIsOutdoor: boolean | null): GroundScope {
+  if (roomIsOutdoor !== null) return roomIsOutdoor ? 'open' : 'built';
+  if (placeIsArea !== null) return placeIsArea ? 'open' : 'built';
+  return 'wilderness';
+}
+
 /** Lowest pace a ground may actually impose on the walking figure.
  *
- *  A pace multiplies the walking LEAD, and the lead is what the stall
- *  detection of `game/clickmove.walkStalled` measures: below
- *  `STALL_STEP_M` = 0.01 m a frame counts as "got nowhere" and a click order
- *  is dropped after a few of them. A 60 fps frame walks 3.4/60 = 0.0567 m, so
- *  a quarter of it is 0.0142 m — still a real step. Anything slower would be
- *  a ground one cannot walk a click route over, which is a wall pretending to
- *  be mud; the server's own clamp sits lower (0.1, `terrain_query
- *  .MIN_SPEED_FACTOR`) because it guards a COST against infinity, not a
- *  frame against a threshold. */
+ *  A pace scales the walking STEP (`npcs.tick`, `WALK_SPEED * dt * pace`),
+ *  and the step is what the stall detection of `game/clickmove.walkStalled`
+ *  measures: below `STALL_STEP_M` = 0.01 m a frame counts as "got nowhere"
+ *  and a click order is dropped after a few of them. A 60 fps frame walks
+ *  3.4/60 = 0.0567 m, so a quarter of it is 0.0142 m — still a real step.
+ *  Anything slower would be a ground one cannot walk a click route over,
+ *  which is a wall pretending to be mud; the server's own clamp sits lower
+ *  (0.1, `terrain_query.MIN_SPEED_FACTOR`) because it guards a COST against
+ *  infinity, not a frame against a threshold. */
 export const MIN_PACE = 0.25;
+
+/** From this distance to its goal a figure counts as MOVING (metres,
+ *  `npcs.tick`) — under it there is no step and no walk animation, the figure
+ *  stands.
+ *
+ *  It lives here because the walking LEAD has to clear it: the avatar's goal
+ *  is set a lead ahead of the figure every frame, so a lead below this
+ *  threshold is a figure frozen in place with an idle clip (the swim finding
+ *  of 2026-08-13 — a paced lead of 0.0375 m on `deep_forest` never moved).
+ *  That is why the pace scales the STEP and never the lead. */
+export const MOVE_EPS_M = 0.05;
 
 /**
  * How fast the figure walks on that ground — the client's half of the pace
  * rule of `terrain_query.effective_speed_factor` (finding 3 of the E8
- * acceptance, 2026-08-13).
+ * acceptance, 2026-08-13; reach decided in round 2).
  *
- * THE TOPMOST TERRAIN'S FACTOR COUNTS EVERYWHERE, inside a placed footprint
- * as much as out in the wilderness: painted water slows a walker down in a
- * village on a lake exactly as it does outside it, and painting the ground of
- * a place is how one says so. Only the PASSABILITY is a wilderness question
- * (`terrainBlocks`).
+ * THE TOPMOST TERRAIN'S FACTOR COUNTS WHEREVER THE SKY IS: out in the
+ * wilderness and inside an OPEN place — painted water slows a walker down in
+ * a village on a lake exactly as it does outside it, and painting the ground
+ * of a place is how one says so. Only the PASSABILITY is a wilderness
+ * question (`terrainBlocks`).
  *
- * The one footprint exception is a factor of 0: that is not a pace but a
- * "this ground was never meant to be walked" (rock), and there the plate
- * really does replace the ground — at the neutral 1. Everything else is
- * clamped up to `MIN_PACE`.
+ * Two neutral cases, both at the plain 1:
+ *  - a BUILT place (building footprint, normal interior room) replaces the
+ *    ground with its own floor, whatever the catalog holds there;
+ *  - a factor of 0 inside an OPEN place: that is not a pace but a "this
+ *    ground was never meant to be walked" (rock), and a place put down on it
+ *    declares it walkable.
+ * Everything else is clamped up to `MIN_PACE`.
  *
  * `speedFactor` is the caller's lookup (`ground.typeAt(x, z).speed_factor`),
- * `insideFootprint` whether ANY placed footprint covers the point (`main.ts`
- * `tileAt(x, z) !== null`) — what is derivable is the RULE, and only the rule
- * lives in this import-free file.
+ * `scope` is `groundScope` read at the point — what is derivable is the RULE,
+ * and only the rule lives in this import-free file.
  */
-export function terrainPace(speedFactor: number, insideFootprint: boolean
-): number {
+export function terrainPace(speedFactor: number, scope: GroundScope): number {
   // A world whose catalog hands out nonsense walks at the normal pace rather
-  // than at NaN — one NaN in the lead and the figure never moves again.
+  // than at NaN — one NaN in the step and the figure never moves again.
   if (!Number.isFinite(speedFactor)) return 1;
-  if (insideFootprint && speedFactor <= 0) return 1;
+  if (scope === 'built') return 1;
+  if (scope === 'open' && speedFactor <= 0) return 1;
   return Math.max(speedFactor, MIN_PACE);
 }
 
 /**
- * WHICH CLIP a moving figure plays — the animation half of the same rule.
+ * WHICH CLIP a moving figure plays — the animation half of the same rule,
+ * with the same reach.
  *
  * A ground may name the clip one moves over it with (`meta.move_anim`, § A9 —
  * `swim` on water). It replaces walk AND run: a figure crossing a lake does
  * not sprint through it, and there is no second speed of swimming to choose
  * from. Without one the old pair stands, run past `RUN_DISTANCE` and walk
- * below it.
+ * below it. INSIDE A BUILT PLACE the ground names nothing at all: one does
+ * not swim across a tiled hall standing in a lake.
  *
  * The clip kind goes into the open vocabulary of `Figure.play` unchecked —
  * a kind no model carries falls back through `figures.CLIP_FALLBACK` (swim →
@@ -161,8 +211,9 @@ export function terrainPace(speedFactor: number, insideFootprint: boolean
  * STANDING is untouched by this: an activity clip or the server's own
  * `animation` wins there, and this function is never asked.
  */
-export function moveClip(moveAnim: string, running: boolean): string {
-  const kind = (moveAnim || '').trim();
+export function moveClip(moveAnim: string, running: boolean,
+                         scope: GroundScope): string {
+  const kind = scope === 'built' ? '' : (moveAnim || '').trim();
   if (kind) return kind;
   return running ? 'run' : 'walk';
 }

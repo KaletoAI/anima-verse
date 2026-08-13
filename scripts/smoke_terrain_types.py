@@ -3,9 +3,11 @@
 
 Throwaway storage. Hand-derived expectations:
 
-  [1] Fresh world: effective_catalog() contains at least the six shared
-      kinds; grass is passable with speed_factor 1.0; water is impassable.
-      sources say "shared" for grass.
+  [1] Fresh world: effective_catalog() contains at least the seven shared
+      kinds; grass is passable with speed_factor 1.0; `water` is SWIMMABLE
+      (round 2 of the E8 acceptance — swimming is what move_anim is for)
+      while the barrier kind `deep_water` carries the same 0.4 and the same
+      swim clip at `passable: false`. sources say "shared" for grass.
   [2] save_world_type({kind: "grass", name: "Dry Grass", color: "#aaaa00",
       passable: True, speed_factor: 0.9}) -> effective grass has name
       "Dry Grass" AND speed_factor 0.9. Override REPLACES the shared entry
@@ -76,11 +78,13 @@ def check(label, actual, expected):
 
 print("[1] fresh world serves the shared seed")
 cat = terrain_types.effective_catalog()
-SHARED_KINDS = {"grass", "forest", "sand", "path", "water", "rock"}
-check("six shared kinds present", SHARED_KINDS <= set(cat), True)
+SHARED_KINDS = {"grass", "forest", "sand", "path", "water", "deep_water",
+                "rock"}
+check("seven shared kinds present", SHARED_KINDS <= set(cat), True)
 check("grass passable", cat["grass"]["passable"], True)
 check("grass speed", cat["grass"]["speed_factor"], 1.0)
-check("water impassable", cat["water"]["passable"], False)
+check("water is swum, not blocked", cat["water"]["passable"], True)
+check("...a wall of water is its own kind", cat["deep_water"]["passable"], False)
 check("grass source", terrain_types.sources().get("grass"), "shared")
 
 print("[2] world override REPLACES the shared entry")
@@ -195,8 +199,12 @@ check("water carries it in the shared seed",
       {"move_anim": "swim"})
 check("...at the pace of a ground one wades through",
       (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
-check("...and it is still impassable ground",
-      (terrain_types.get_type("water") or {}).get("passable"), False)
+check("...and it is walked into, not refused",
+      (terrain_types.get_type("water") or {}).get("passable"), True)
+check("the barrier kind carries the same clip and pace",
+      ((terrain_types.get_type("deep_water") or {}).get("meta"),
+       (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
+      ({"move_anim": "swim"}, 0.4))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

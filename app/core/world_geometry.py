@@ -237,6 +237,34 @@ def placed_footprint(loc: Dict[str, Any]) -> Optional[Tuple[float, float,
     return (px, pz, width, yaw)
 
 
+def is_area_location(loc: Dict[str, Any]) -> bool:
+    """Is this location OPEN GROUND rather than a built plate?
+
+    The one server answer to "is that an area location" (user decision
+    2026-08-13, round 2 of the E8 acceptance — the reach of the terrain pace
+    and move-animation rule, ``terrain_query.ground_scope``). Two AUTHORED
+    flags say it, and nothing else:
+
+    * ``passable`` — a transit location one walks THROUGH (the road and
+      forest clones of the terrain templates). It never had a building.
+    * ``map3d.area_model`` — "the location model IS the ground of this
+      place" (plan-area-locations.md; ``area_detail`` is only ever set on
+      top of it, so it is covered).
+
+    Deliberately NOT part of it: the style/terrain NAME vocabulary the 3D
+    client uses to pick a procedural fallback texture (``forest``, ``water``,
+    …). That is a guess from a word, and a guess must not decide how fast a
+    character walks. A lake that should wade says so with the area flag.
+
+    Pure math on a location dict, like everything else here — the client
+    twin is ``client3d/src/scene/tiles.isAreaLocation``.
+    """
+    if bool(loc.get("passable")):
+        return True
+    map3d = loc.get("map3d")
+    return bool(isinstance(map3d, dict) and map3d.get("area_model"))
+
+
 def location_at_point(x: float, z: float,
                       locations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The location whose footprint contains (x, z) — smallest wins.

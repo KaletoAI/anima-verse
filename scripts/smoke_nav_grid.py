@@ -11,12 +11,16 @@ Grid rules used to derive every number below by hand:
   the start or the goal are exempt), or when the TERRAIN at its centre is
   not passable AND that centre lies OUT IN THE WILDERNESS — inside a
   placed footprint the ground is not asked for the BLOCK (decision
-  2026-08-13, case [12]). For the PACE it is asked everywhere (finding 3,
-  case [16]): costs are game-seconds at 1 m/s, metres / speed_factor, and
-  the only thing a footprint changes is a factor of 0, which pays the
-  neutral 1.0 instead of the MIN_SPEED_FACTOR clamp. Shared catalog:
-  grass 1.0 · forest 0.7 · sand 0.85 · path 1.2 · water impassable at 0.4 ·
-  rock impassable at 0.0.
+  2026-08-13, case [12]). For the PACE it is asked as far as the sky reaches
+  (finding 3 + the reach decision of round 2, case [16]): costs are
+  game-seconds at 1 m/s, metres / speed_factor, the terrain counts out in the
+  wilderness and inside an AREA location, and a BUILDING footprint pays the
+  neutral 1.0 — as does a factor-0 ground inside an area location. Shared
+  catalog: grass 1.0 · forest 0.7 · sand 0.85 · path 1.2 · water SWIMMABLE at
+  0.4 · deep_water impassable at 0.4 · rock impassable at 0.0. (Water became
+  swimmable in round 2 — the barrier cases below use `deep_water`, which
+  carries exactly the numbers `water` used to have, so their arithmetic is
+  unchanged.)
 
 Hand-derived expectations:
 
@@ -30,13 +34,14 @@ Hand-derived expectations:
       point list is start/centre/goal and must survive smoothing as a
       single point. Non-finite coordinates raise ValueError.
 
-  [2] Water barrier x in [8,12], z in [-6,6] between the same two points.
+  [2] Deep-water barrier x in [8,12], z in [-6,6] between the same two
+      points.
       Its blocked cells are the centres 9/11 (i=4,5) and -5..5 (j=-3..2),
       so the grid barrier spans x [8,12] x z [-6,6] and the route has to
       round a corner at |z| >= 7: roughly (0,0) -> (7,-7) -> (13,-7) ->
       (20,0), about 9.9 + 6 + 9.9 = 25.8 m. Checked: route exists, every
       waypoint is passable, the whole polyline sampled every 0.3 m never
-      touches water, and the length is > the 20 m airline (and < 40 m).
+      touches the water, and the length is > the 20 m airline (and < 40 m).
       Repeating the call gives the IDENTICAL polyline (determinism), with
       and without a rebuilt context.
 
@@ -46,7 +51,7 @@ Hand-derived expectations:
       -> 20 / 1.2 = 16.6667 s. route over the corridor is the straight
       2-point line with the same cost.
 
-  [4] Lake x in [100,140], z in [-20,20]; goal (120,0) sits 18 m deep
+  [4] Deep lake x in [100,140], z in [-20,20]; goal (120,0) sits 18 m deep
       inside it — far beyond the 2-cell (<= ~4 m) rescue radius
       -> route((0,0), (120,0)) is None.
 
@@ -60,13 +65,13 @@ Hand-derived expectations:
          footprint is exempt -> straight [(40,0), (60,0)], cost [20.0].
       c) route((60,0), (80,0)): same for a start inside the barn.
 
-  [6] Rescue: water patch x in [198,202], z in [-2,2]. The start (200,0)
+  [6] Rescue: deep-water patch x in [198,202], z in [-2,2]. The start (200,0)
       lies in it and its own cell centre (201,1) is blocked; the nearest
       passable cell (201,3) is 1 cell away, inside the 2-cell rescue
       radius -> route((200,0), (220,0)) exists, keeps (200,0) as its first
       waypoint (the character really stands there) and every LATER
       waypoint is passable. Costs stay finite: an impassable ground is paid
-      at its own factor, clamped up at MIN_SPEED_FACTOR (water 0.4 here,
+      at its own factor, clamped up at MIN_SPEED_FACTOR (deep water 0.4 here,
       rock would be the clamped 0.1) — leaving the puddle is slow, never
       infinite.
 
@@ -95,7 +100,7 @@ Hand-derived expectations:
       round it: no segment may intersect the footprint (exact test) and
       the length must exceed the 40 m airline.
 
- [10] Diagonal squeeze: water at x [300,302] z [300,302] (cell centre
+ [10] Diagonal squeeze: rock at x [300,302] z [300,302] (cell centre
       (301,301)) and x [302,304] z [302,304] (centre (303,303)) touch at
       the corner (302,302). route((301,303), (303,301)) may NOT step
       through that corner: both diagonal orthogonals are blocked, so the
@@ -249,42 +254,66 @@ Hand-derived expectations:
          still hand out a NEW context, or the router judges by yesterday's
          doorway and yesterday's limit.
 
- [16] THE PACE OF THE TOPMOST TERRAIN COUNTS EVERYWHERE (finding 3 of the E8
-      acceptance, 2026-08-13). The passability half of "footprint wins" is
+ [16] THE PACE OF THE TOPMOST TERRAIN REACHES AS FAR AS THE SKY (finding 3 of
+      the E8 acceptance, 2026-08-13; the REACH decided by the user in round 2
+      of the same acceptance). The passability half of "footprint wins" is
       unchanged ([12] proves it); what changed is that the ground's
-      `speed_factor` is no longer neutralised inside a footprint. The rule is
-      `terrain_query.effective_speed_factor(factor, in_footprint)`:
+      `speed_factor` is no longer neutralised in an OPEN place. Two rules:
 
-          in_footprint AND factor <= 0  ->  1.0   (a 0 is not a pace)
+      `terrain_query.ground_scope(place_is_area, room_is_outdoor)`, read
+      most-specific-first (`None` = "no such thing over the point"):
+
+          (None,  None)  -> "wilderness"   no footprint, no room
+          (True,  None)  -> "open"         area location
+          (False, None)  -> "built"        building footprint
+          (True,  False) -> "built"        an interior room wins over it
+          (False, True)  -> "open"         the terrace of a house
+
+      `terrain_query.effective_speed_factor(factor, scope)`:
+
+          scope "built"                 ->  1.0   (the place has a floor)
+          scope "open" AND factor <= 0  ->  1.0   (a 0 is not a pace)
           otherwise                     ->  max(factor, MIN_SPEED_FACTOR)
 
       Hand table (MIN_SPEED_FACTOR = 0.1):
           (1.0,  wilderness) -> 1.0     (0.4, wilderness) -> 0.4
-          (1.0,  footprint)  -> 1.0     (0.4, footprint)  -> 0.4  <- the finding
-          (0.0,  footprint)  -> 1.0     (0.0, wilderness) -> 0.1  (clamp)
-          (0.05, footprint)  -> 0.1     (0.05, wilderness)-> 0.1  (clamp)
-          (2.0,  footprint)  -> 2.0     (an impassable type's pace counts too)
+          (1.0,  open)       -> 1.0     (0.4, open)       -> 0.4  <- finding 3
+          (0.0,  open)       -> 1.0     (0.0, wilderness) -> 0.1  (clamp)
+          (0.05, open)       -> 0.1     (0.05, wilderness)-> 0.1  (clamp)
+          (2.0,  open)       -> 2.0     (an impassable type's pace counts too)
+          (0.4,  built)      -> 1.0     (2.0, built)      -> 1.0  <- round 2
 
-      a) A HALL ON A LAKE. Hall at (900,0), plan_width_m 20 -> footprint
-         x [890,910], z [-10,10], with WATER painted x [890.5,909], z [-9,9] —
-         strictly inside it, so the approach from the west stays grass. The
-         west edge sits at 890.5 and not on a whole metre so that NO cost
-         midpoint lands exactly on the polygon boundary. Water is
-         `passable: false` at `speed_factor 0.4` (a shore one wades, not a
-         wall one walks): the footprint keeps it ENTERABLE ([12]'s rule) and
-         the 0.4 now applies inside it.
+      What makes a location OPEN is `world_geometry.is_area_location`: the
+      AUTHORED `passable` or `map3d.area_model`, never a style/name guess —
+      a location with `map3d.style: "water"` and `terrain: "lake"` is a
+      building (red probe).
+
+      a) A VILLAGE ON A LAKE. Area location at (900,0), plan_width_m 20 ->
+         footprint x [890,910], z [-10,10], with WATER painted
+         x [890.5,909], z [-9,9] — strictly inside it, so the approach from
+         the west stays grass. The west edge sits at 890.5 and not on a whole
+         metre so that NO cost midpoint lands exactly on the polygon
+         boundary. Water is `speed_factor 0.4`; the footprint keeps the point
+         ENTERABLE ([12]'s rule) and, the place being open ground, the 0.4
+         applies inside it.
          segment_costs([(870,0), (900,0)]) = 30 m in 15 parts of 2 m,
          midpoints x = 871, 873, … 899. Ten of them (871…889) lie west of
          890.5 and are grass at 1.0 -> 20 m -> 20 s; five (891…899) lie inside
          the lake at 0.4 -> 2 / 0.4 = 5 s each -> 25 s. TOTAL 45 s, against the
-         30 s the same walk cost while the footprint neutralised the ground.
+         30 s the same walk costs when the place is not open ground.
          The route is still the straight line: every way to a goal 10 m deep
          in the lake crosses the same water, and going round the rim (out at
          z = 11, back down through 9 m of water) is both longer and wetter.
-      b) RED COUNTER-PROBE: the old rule as a mutant
-         (`in_footprint -> 1.0`, whatever the factor) monkeypatched into
-         nav_grid pays the same segment 30 s. That number is the defect, and
-         it is what this case exists to keep out.
+      b) TWO RED COUNTER-PROBES, both landing on 30 s:
+         1. THE BUILDING (the round-2 decision, measured end to end): clear
+            `map3d.area_model` on the very same location and rebuild the
+            context. Nothing else moves, the scope at (900,0) turns "built",
+            and all 15 parts pay 1.0 -> 30 s. Setting the flag again wades
+            for 45 s.
+         2. THE PRE-FINDING-3 RULE as a mutant (`scope != "wilderness" ->
+            1.0`) monkeypatched into nav_grid pays the same segment 30 s —
+            the same number from the other direction, and the defect finding
+            3 named.
       c) THE WILDERNESS IS UNTOUCHED: the same 30 m of sand (0.85) with no
          location on it costs 30 / 0.85 = 35.294117… s, and a factor-0 ground
          out there still pays the MIN_SPEED_FACTOR clamp (10 s per metre),
@@ -320,8 +349,8 @@ db.init_schema()
 
 from app.core import config, nav_grid, terrain_query, terrain_types  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
-    footprint_hits_aabb, placed_footprint, point_in_footprint,
-    segment_hits_footprint)
+    footprint_hits_aabb, is_area_location, placed_footprint,
+    point_in_footprint, segment_hits_footprint)
 from app.models import terrain  # noqa: E402
 from app.models.world import (  # noqa: E402
     _load_world_data, _save_world_data, add_location,
@@ -388,6 +417,21 @@ def set_plan_width(location_id: str, width: float) -> None:
     _save_world_data(data)
 
 
+def set_area_model(location_id: str, flag: bool) -> None:
+    """Mark a location as OPEN GROUND (``map3d.area_model``) or take it back —
+    the flag ``world_geometry.is_area_location`` reads."""
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            map3d = dict(loc.get("map3d") or {})
+            if flag:
+                map3d["area_model"] = True
+            else:
+                map3d.pop("area_model", None)
+            loc["map3d"] = map3d
+    _save_world_data(data)
+
+
 def set_yaw(location_id: str, yaw_deg: float) -> None:
     data = _load_world_data()
     for loc in data.get("locations", []):
@@ -448,7 +492,7 @@ raises_value_error("inf goal raises",
 
 # ── [2] water barrier ───────────────────────────────────────────────────
 print("[2] a water barrier forces a detour")
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[8, -6], [12, -6], [12, 6], [8, 6]],
                    "z_order": 0})
 r = nav_grid.route((0, 0), (20, 0))
@@ -485,7 +529,7 @@ approx("corridor route cost", nav_grid.segment_costs(r)[0], 20.0 / 1.2)
 
 # ── [4] goal inside a lake ──────────────────────────────────────────────
 print("[4] a goal deep inside water is unreachable")
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[100, -20], [140, -20], [140, 20], [100, 20]],
                    "z_order": 0})
 check("route into the lake", nav_grid.route((0, 0), (120, 0)), None)
@@ -516,7 +560,7 @@ check("start footprint is exempt", r, [(60.0, 0.0), (80.0, 0.0)])
 
 # ── [6] blocked start cell ──────────────────────────────────────────────
 print("[6] a start on a blocked cell is rescued to the nearest passable one")
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[198, -2], [202, -2], [202, 2], [198, 2]],
                    "z_order": 0})
 check("the start really stands in water",
@@ -670,16 +714,18 @@ check_true("its end really lies in the footprint",
            point_in_footprint(700, 0, 700, 0, 20, 0), "")
 # The PACE side of the decision: 30 m, 15 samples of 2 m, midpoints at
 # x = 671, 673, … 699. The ten outside are grass (1.0), the five from 691 on
-# lie in the footprint and are paid at the neutral 1.0 a factor-0 ground turns
-# into inside a footprint, instead of the rock's clamped 0.1 -> 30 / 1.0 = 30 s
-# exactly (that neutralisation is the ONLY thing a footprint still does to the
-# pace — see [16]). With the old factor the
-# same five would have cost 10 s per metre and A* would not even have walked
-# straight: it hugged the rim and the last leg alone cost 90.55 s.
+# lie in the footprint of a BUILDING and are paid at the neutral 1.0 instead
+# of the rock's clamped 0.1 -> 30 / 1.0 = 30 s exactly. Two rules land on the
+# same number here: a built place replaces the ground outright (round 2), and
+# a factor-0 ground is neutral in an open place too (see [16]). With the old
+# factor the same five would have cost 10 s per metre and A* would not even
+# have walked straight: it hugged the rim and the last leg alone cost 90.55 s.
 approx("its cost is the plain 30 m at factor 1.0",
        nav_grid.segment_costs(r)[0], 30.0)
-check("a factor-0 ground under a footprint pays the neutral 1.0",
-      terrain_query.effective_speed_factor(0.0, True), 1.0)
+check("a built place pays the neutral 1.0 whatever the ground holds",
+      terrain_query.effective_speed_factor(0.0, "built"), 1.0)
+check("...and a factor-0 ground in an OPEN place is neutral as well",
+      terrain_query.effective_speed_factor(0.0, "open"), 1.0)
 # The wilderness half is unchanged: the same rock without a location on it.
 terrain.save_area({"kind": "rock",
                    "polygon": [[730, -20], [770, -20], [770, 20], [730, 20]],
@@ -817,7 +863,7 @@ CLIFF_FIELD = {"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
                "rows": 5, "cols": 5,
                "heights": [[0.0, 0.0, 20.0, 20.0, 20.0] for _ in range(5)]}
 hand = nav_grid.NavContext(
-    areas=[], catalog={}, footprints=[("fp", 7.0, 7.0, 8.0, 0.0)],
+    areas=[], catalog={}, footprints=[("fp", 7.0, 7.0, 8.0, 0.0, False)],
     data_bounds=(0.0, 0.0, 16.0, 16.0), sig=("hand", "hand"),
     height_field=CLIFF_FIELD, openings=(), max_step_m=0.4,
     max_slope_deg=40.0)
@@ -845,51 +891,95 @@ check("the steep cell is walkable at 80°",
 config._CONFIG.setdefault("game", {}).pop("max_slope_deg", None)
 height_store.delete_height_area("wall")
 
-print("\n[16] the pace of the topmost terrain counts everywhere")
-# The rule itself, straight off the hand table in the docstring.
-check("wilderness grass", terrain_query.effective_speed_factor(1.0, False), 1.0)
-check("footprint grass", terrain_query.effective_speed_factor(1.0, True), 1.0)
+print("\n[16] the pace of the topmost terrain reaches as far as the sky")
+# How far it reaches — the hand table of the docstring.
+check("nothing over the point is the wilderness",
+      terrain_query.ground_scope(None, None), "wilderness")
+check("an area location is open ground",
+      terrain_query.ground_scope(True, None), "open")
+check("a building footprint is built",
+      terrain_query.ground_scope(False, None), "built")
+check("an interior room beats the area location it stands in",
+      terrain_query.ground_scope(True, False), "built")
+check("an outdoor room beats the building it belongs to",
+      terrain_query.ground_scope(False, True), "open")
+# The pace itself, straight off the second hand table.
+check("wilderness grass", terrain_query.effective_speed_factor(1.0, "wilderness"),
+      1.0)
+check("open-place grass", terrain_query.effective_speed_factor(1.0, "open"), 1.0)
 check("wilderness water 0.4",
-      terrain_query.effective_speed_factor(0.4, False), 0.4)
-check("water 0.4 UNDER a footprint stays 0.4 (the finding)",
-      terrain_query.effective_speed_factor(0.4, True), 0.4)
+      terrain_query.effective_speed_factor(0.4, "wilderness"), 0.4)
+check("water 0.4 in an OPEN place stays 0.4 (the finding)",
+      terrain_query.effective_speed_factor(0.4, "open"), 0.4)
+check("...and in a BUILT one the floor replaces it (round 2)",
+      terrain_query.effective_speed_factor(0.4, "built"), 1.0)
 check("a factor-0 ground in the wilderness is clamped, not neutralised",
-      terrain_query.effective_speed_factor(0.0, False), 0.1)
-check("...and under a footprint it is neutral",
-      terrain_query.effective_speed_factor(0.0, True), 1.0)
+      terrain_query.effective_speed_factor(0.0, "wilderness"), 0.1)
+check("...and in an open place it is neutral",
+      terrain_query.effective_speed_factor(0.0, "open"), 1.0)
 check("a crawling 0.05 is clamped out here",
-      terrain_query.effective_speed_factor(0.05, False), 0.1)
-check("...and in there too (only the 0 is special)",
-      terrain_query.effective_speed_factor(0.05, True), 0.1)
-check("a fast 2.0 keeps its pace under a footprint",
-      terrain_query.effective_speed_factor(2.0, True), 2.0)
+      terrain_query.effective_speed_factor(0.05, "wilderness"), 0.1)
+check("...and in an open place too (only the 0 is special)",
+      terrain_query.effective_speed_factor(0.05, "open"), 0.1)
+check("a fast 2.0 keeps its pace in an open place",
+      terrain_query.effective_speed_factor(2.0, "open"), 2.0)
+check("...and loses it under a roof",
+      terrain_query.effective_speed_factor(2.0, "built"), 1.0)
+# What makes a location OPEN: two authored flags, never a style guess.
+check("a plain location is not an area", is_area_location({"name": "Hall"}),
+      False)
+check("a transit location is", is_area_location({"passable": True}), True)
+check("...and so is one whose model IS the ground",
+      is_area_location({"map3d": {"area_model": True}}), True)
+check("RED: a lake-STYLE building is still a building",
+      is_area_location({"map3d": {"style": "water"}, "terrain": "lake"}), False)
 
-lake_hall = add_location(name="Smoke Lake Hall", description="nav-grid smoke")
+lake_hall = add_location(name="Smoke Lake Village", description="nav-grid smoke")
 LAKE_ID = lake_hall["id"]
 update_location_position(LAKE_ID, 900.0, 0.0)
 set_plan_width(LAKE_ID, 20.0)
+set_area_model(LAKE_ID, True)
 terrain.save_area({"kind": "water",
                    "polygon": [[890.5, -9], [909, -9], [909, 9], [890.5, 9]],
                    "z_order": 0})
-check("the goal stands on water", terrain_query.passability_at(900, 0),
-      (False, 0.4))
+check("the goal stands on water — swimmable since round 2",
+      terrain_query.passability_at(900, 0), (True, 0.4))
 check("...and the approach on grass", terrain_query.passability_at(870, 0),
       (True, 1.0))
 lake_ctx = nav_grid.build_nav_context()
+check("the village really counts as open ground",
+      nav_grid._footprint_scope(900.0, 0.0, lake_ctx.footprints), "open")
 # 15 samples of 2 m, midpoints x = 871 … 899: ten west of the 890.5 shore on
 # grass (10 * 2 / 1.0 = 20 s) and five in the lake inside the footprint
 # (5 * 2 / 0.4 = 25 s) -> 45 s. No midpoint sits on the polygon edge.
-approx("30 m into the hall cost 20 s of grass + 25 s of wading",
+approx("30 m into the village cost 20 s of grass + 25 s of wading",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 45.0)
 r = nav_grid.route((870, 0), (900, 0))
-check("the route is still the straight line into the hall", r,
+check("the route is still the straight line into the village", r,
       [(870.0, 0.0), (900.0, 0.0)])
 approx("...and the journey pays the water for it",
        sum(nav_grid.segment_costs(r)), 45.0)
-# RED COUNTER-PROBE: the old rule, where a footprint neutralised every ground.
+# RED COUNTER-PROBE 1 (round 2): the SAME lake under a BUILDING. Nothing
+# changes but the area flag, and the five wet midpoints go back to the
+# neutral 1.0 -> 15 parts of 2 m at 1.0 = 30 s. That is the reach decision,
+# measured end to end instead of monkeypatched.
+set_area_model(LAKE_ID, False)
+built_ctx = nav_grid.build_nav_context()
+check_true("flipping the flag really hands out a new context",
+           built_ctx is not lake_ctx, "")
+check("the same point is BUILT now",
+      nav_grid._footprint_scope(900.0, 0.0, built_ctx.footprints), "built")
+approx("RED COUNTER-PROBE: a HALL on the same lake is walked dry in 30 s",
+       nav_grid._segment_cost(built_ctx, (870.0, 0.0), (900.0, 0.0)), 30.0)
+set_area_model(LAKE_ID, True)
+lake_ctx = nav_grid.build_nav_context()
+approx("...and the village wades again",
+       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 45.0)
+# RED COUNTER-PROBE 2: the rule BEFORE finding 3, where every footprint
+# neutralised its ground — the same 30 s, from the other direction.
 _rule = nav_grid.effective_speed_factor
 nav_grid.effective_speed_factor = (
-    lambda factor, in_footprint: 1.0 if in_footprint
+    lambda factor, scope: 1.0 if scope != "wilderness"
     else max(factor, terrain_query.MIN_SPEED_FACTOR))
 approx("RED COUNTER-PROBE: the old footprint-neutral rule walks it dry in 30 s",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 30.0)

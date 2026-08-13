@@ -239,7 +239,7 @@ ISLE = place("Smoke Isle", 0.0, 300.0, "N")
 GHOST = add_location(name="Smoke Ghost", description="never placed")["id"]
 # A water ring wide enough that the nav grid's rescue radius cannot escape it
 # — ISLE is genuinely unreachable, not merely awkward.
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[-40, 260], [40, 260], [40, 340], [-40, 340]],
                    "z_order": 0})
 

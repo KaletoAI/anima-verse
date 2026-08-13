@@ -225,8 +225,12 @@ export interface Tile {
   /** Footprint rotation in radians — `group.rotation.y`, § A1.1 sign. */
   yaw: number;
   isBuilding: boolean;
-  /** Benannte Natur-Location (Wald, See, Wiese, Straße) — kein Gebäude,
-   *  nur Gelände mit Label; Raum-Labels bleiben dort aus. */
+  /** Is this place OPEN GROUND rather than a built plate (`isAreaLocation`)?
+   *  Decides how far the terrain pace and move-animation rule reaches into
+   *  the footprint (`game/walk.groundScope`). */
+  isArea: boolean;
+  /** Named nature location (forest, lake, meadow, road) — no building, just
+   *  ground with a label; room labels stay off there. */
   natureSite?: boolean;
   height: number;
   interior: THREE.Group | null;
@@ -363,6 +367,25 @@ function detectStyle(loc: WorldLocation): TileStyle {
   if (/caf|bar|restaurant|shop|laden|store|diner/.test(n)) return 'cafe';
   if (/residence|house|haus|home|cottage|villa/.test(n)) return 'house';
   return 'generic';
+}
+
+/**
+ * Is this location OPEN GROUND rather than a built plate? The client twin of
+ * `world_geometry.is_area_location` (user decision 2026-08-13, round 2 of the
+ * E8 acceptance) — it decides how far the terrain pace and move-animation
+ * rule reaches into the footprint (`game/walk.groundScope`).
+ *
+ * Two AUTHORED flags off the worldmap entry say it, and nothing else:
+ *  - `passable` — a transit location one walks THROUGH (road/forest clones);
+ *  - `map3d.area_model` — "the model IS the ground of this place"
+ *    (`area_detail` is only ever set on top of it, so it is covered).
+ *
+ * Deliberately NOT `detectStyle`: that vocabulary guesses a procedural
+ * fallback TEXTURE from a name, and a guess from a word must not decide how
+ * fast a character walks. A lake meant to be waded says so with the flag.
+ */
+export function isAreaLocation(loc: WorldLocation): boolean {
+  return !!loc.passable || !!loc.map3d?.area_model;
 }
 
 const loader = new THREE.TextureLoader();
@@ -650,6 +673,7 @@ export function buildTile(loc: WorldLocation): Tile {
 
   const style = detectStyle(loc);
   const isBuilding = !(loc.passable || loc.template_location_id);
+  const isArea = isAreaLocation(loc);
   // THE footprint (§ A1.1): centre at (pos_x, pos_z), edge `plan_width_m`,
   // turned by `yaw_deg`. Position AND rotation sit on the group, so every
   // child is placed in tile-local metres — the same frame the scene payload
@@ -677,7 +701,7 @@ export function buildTile(loc: WorldLocation): Tile {
   ring.visible = false;
 
   const tile: Tile = {
-    loc, group, center, width, yaw, isBuilding, height: 0,
+    loc, group, center, width, yaw, isBuilding, isArea, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomDoors: new Map(),
     roomSlots: new Map(), roomSpots: new Map(),

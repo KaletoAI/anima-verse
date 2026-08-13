@@ -490,24 +490,37 @@ export function TerrainToolbar({
               t('Click a centre line; it becomes an area of the width below'))}
           </span>
           {isLine ? <WidthField widthM={widthM} onWidth={onWidth} /> : null}
-          <span className="ga-terrain-palette">
-            {types.length === 0 ? (
-              <span className="ga-map-tray-empty">
-                {typesError
-                  ? t('Terrain types could not be loaded — retry via Reload')
-                  : t('No terrain types')}
-              </span>
-            ) : types.map((ty) => (
-              <TypeChip key={ty.kind} type={ty} armed={ty.kind === paintKind}
-                onPick={() => onPaintKind(ty.kind)} />
-            ))}
-            <button type="button" className="ga-btn ga-btn-sm"
-              title={t('Add terrain types or change colour, passability and speed')}
-              onClick={onManageTypes}>
-              {t('Manage…')}
-            </button>
-          </span>
-          <span className={'ga-map-arm' + (paintKind ? '' : ' warn')}>
+        </>
+      ) : null}
+
+      {/* The palette and the way into the type editor. The CHIPS only mean
+          something while painting (they arm the next stroke), but "Manage…"
+          is the only door to passability, speed and the move animation of a
+          type — and one edits those while looking at the area one drew, not
+          while holding a brush (user finding 2026-08-13: the button was
+          reachable in Paint alone). */}
+      {mode === 'paint' || mode === 'edit-area' ? (
+        <span className="ga-terrain-palette">
+          {mode !== 'paint' ? null : types.length === 0 ? (
+            <span className="ga-map-tray-empty">
+              {typesError
+                ? t('Terrain types could not be loaded — retry via Reload')
+                : t('No terrain types')}
+            </span>
+          ) : types.map((ty) => (
+            <TypeChip key={ty.kind} type={ty} armed={ty.kind === paintKind}
+              onPick={() => onPaintKind(ty.kind)} />
+          ))}
+          <button type="button" className="ga-btn ga-btn-sm"
+            title={t('Add terrain types or change colour, passability and speed')}
+            onClick={onManageTypes}>
+            {t('Manage…')}
+          </button>
+        </span>
+      ) : null}
+
+      {mode === 'paint' ? (
+        <span className={'ga-map-arm' + (paintKind ? '' : ' warn')}>
             {!paintKind
               ? (typesError
                 ? t('Terrain types could not be loaded — retry via Reload')
@@ -541,8 +554,7 @@ export function TerrainToolbar({
                 </button>
               </>
             ) : null}
-          </span>
-        </>
+        </span>
       ) : null}
 
       {mode === 'heights' ? (

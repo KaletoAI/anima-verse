@@ -221,9 +221,20 @@ def delete_area(area_id: str) -> bool:
 
 
 def terrain_sig() -> str:
-    """10-char signature over areas + world type rows — bumps whenever the
-    painted world changes, so polling clients know when to refetch."""
-    from app.core.terrain_types import _world_types
-    basis = json.dumps({"areas": list_areas(), "types": _world_types()},
+    """10-char signature over areas + the EFFECTIVE type catalog — bumps
+    whenever the painted world changes, so polling clients know when to
+    refetch (and the nav-grid cache key inherits it).
+
+    The effective catalog, not the world rows alone (round 2 of the E8
+    acceptance): the shared seed ``shared/terrain/types.json`` is half the
+    answer every consumer gets, so a seed edit that changes a passability, a
+    speed factor or a ``move_anim`` has to reach a running client and a
+    running router the same way a world row does. It used to sit outside the
+    signature, which meant a seed change was invisible until a restart while
+    ``GET /play/terrain`` already served the new numbers under the old
+    ``sig``.
+    """
+    from app.core.terrain_types import effective_catalog
+    basis = json.dumps({"areas": list_areas(), "types": effective_catalog()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]

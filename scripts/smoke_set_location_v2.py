@@ -275,7 +275,7 @@ add_item(name="Silver Key", description="opens the vault", item_id="silver_key")
 GHOST = add_location(name="Smoke Ghost", description="never placed")["id"]
 # A water ring wide enough that the nav grid's rescue radius (2 cells of
 # 2 m) cannot escape it — ISLE is genuinely unreachable, not merely awkward.
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[-40, 160], [40, 160], [40, 240], [-40, 240]],
                    "z_order": 0})
 

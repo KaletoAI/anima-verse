@@ -55,51 +55,93 @@
  * server side of the same rule is hand-derived in `scripts/smoke_play_pos.py`
  * [20] and, for NPC routing, `scripts/smoke_nav_grid.py` [12].
  *
- * --- terrainPace: THE PACE COUNTS EVERYWHERE (finding 3, 2026-08-13) -------
- * The pace is NOT the passability. Where `terrainBlocks` asks only about the
- * wilderness, the ground's `speed_factor` applies inside a placed footprint as
- * well — a village painted onto a lake is waded through, and painting the
- * ground of a place is how one says so. The mirror is
- * `terrain_query.effective_speed_factor` (`scripts/smoke_nav_grid.py` [16]).
+ * --- groundScope: HOW FAR THE TERRAIN RULE REACHES (round 2, 2026-08-13) ---
+ * The user's decision of 2026-08-13, read MOST-SPECIFIC-FIRST. Both arguments
+ * are three-valued: `null` means "there is no such thing over this point".
+ * The mirror is `terrain_query.ground_scope` (`scripts/smoke_nav_grid.py`
+ * [16]).
  *
- *   terrainPace(f, inside) =
- *     f not finite               -> 1            (a NaN lead never moves again)
- *     inside && f <= 0           -> 1            (a 0 is not a pace: that
+ *   groundScope(placeIsArea, roomIsOutdoor) =
+ *     roomIsOutdoor !== null  -> roomIsOutdoor ? 'open' : 'built'
+ *     placeIsArea  !== null   -> placeIsArea  ? 'open' : 'built'
+ *     otherwise               -> 'wilderness'
+ *
+ *   (null,  null)  -> 'wilderness'   out between the places
+ *   (true,  null)  -> 'open'         an area location's footprint
+ *   (false, null)  -> 'built'        a building footprint
+ *   (true,  false) -> 'built'        an interior room inside an area location
+ *   (false, true)  -> 'open'         the terrace of a house
+ *   (null,  true)  -> 'open'         (a room outside every footprint cannot
+ *                                     happen; the rule still answers)
+ *
+ * --- terrainPace: THE PACE REACHES AS FAR AS THE SKY (finding 3 + round 2) --
+ * The pace is NOT the passability. Where `terrainBlocks` asks only about the
+ * wilderness, the ground's `speed_factor` applies inside an OPEN place as
+ * well — a village painted onto a lake is waded through, and painting the
+ * ground of a place is how one says so. A BUILT place brings its own floor.
+ * The mirror is `terrain_query.effective_speed_factor`.
+ *
+ *   terrainPace(f, scope) =
+ *     f not finite               -> 1            (a NaN step never moves again)
+ *     scope 'built'              -> 1            (the place has a floor)
+ *     scope 'open' && f <= 0     -> 1            (a 0 is not a pace: that
  *                                                 ground was never meant to be
- *                                                 walked, the plate replaces it)
+ *                                                 walked, the place declares
+ *                                                 it walkable)
  *     otherwise                  -> max(f, MIN_PACE = 0.25)
  *
  * Hand table (catalog: grass 1.0 · forest 0.7 · water 0.4 · rock 0.0, max 2):
- *   (1.0,  wilderness) -> 1        (1.0,  footprint) -> 1
- *   (0.4,  wilderness) -> 0.4      (0.4,  footprint) -> 0.4   <- THE finding
- *   (0.0,  footprint)  -> 1        (0.0,  wilderness)-> 0.25  (clamp)
- *   (0.1,  footprint)  -> 0.25     (0.2,  wilderness)-> 0.25  (clamp)
- *   (2.0,  wilderness) -> 2        (NaN,  footprint) -> 1
- *   (-1,   footprint)  -> 1        (-1,   wilderness)-> 0.25
+ *   (1.0,  wilderness) -> 1        (1.0,  open)  -> 1
+ *   (0.4,  wilderness) -> 0.4      (0.4,  open)  -> 0.4   <- THE finding
+ *   (0.0,  open)       -> 1        (0.0,  wilderness)-> 0.25  (clamp)
+ *   (0.1,  open)       -> 0.25     (0.2,  wilderness)-> 0.25  (clamp)
+ *   (2.0,  wilderness) -> 2        (NaN,  open)  -> 1
+ *   (-1,   open)       -> 1        (-1,   wilderness)-> 0.25
+ *   (0.4,  built)      -> 1        (2.0,  built) -> 1      <- round 2
  *
  * WHY THE CLAMP IS 0.25 HERE and 0.1 on the server: the server clamps a COST
- * against infinity, the client clamps a LEAD against the stall detector. At
- * 60 fps the walking lead is `max(3.4/60, MIN_LEAD 0.15) = 0.15 m`; times 0.25
- * that is 0.0375 m, comfortably over `STALL_STEP_M = 0.01` — so a click route
- * survives the slowest legal ground. Without the clamp a factor of 0.05 would
- * give 0.0075 m per frame, `walkStalled` would report a stall and the click
+ * against infinity, the client clamps a STEP against the stall detector. At
+ * 60 fps a step is `WALK_SPEED · dt · pace = 3.4/60 · pace`; at 0.25 that is
+ * 0.014166 m, over `STALL_STEP_M = 0.01` — so a click route survives the
+ * slowest legal ground. Without the clamp a factor of 0.05 would give
+ * 0.002833 m per frame, `walkStalled` would report a stall and the click
  * order would be dropped after a few frames: a ground one cannot walk a route
  * over is a wall pretending to be mud. Both numbers are checked below.
  *
- * RED COUNTER-PROBE: the OLD rule, which neutralised every ground under a
- * footprint (`inside ? 1 : max(f, MIN)`). It walks the lake dry — 0.4 in a
- * footprint becomes 1 — which is exactly finding 3.
+ * --- WHERE THE PACE IS APPLIED (the freeze finding, round 2) ---------------
+ * The avatar's goal is set a LEAD ahead of its CURRENT position every frame
+ * (`main.ts`), and `npcs.tick` walks the figure toward that goal:
+ *
+ *   lead = min(max(WALK_SPEED · dt, MIN_LEAD = 0.15), reach)   <- NOT paced
+ *   step = min(distToGoal, WALK_SPEED · dt · pace)             <- paced
+ *   the figure counts as MOVING only while distToGoal > MOVE_EPS_M = 0.05
+ *
+ * At 60 fps the lead is max(0.0567, 0.15) = 0.15 m — three times the movement
+ * threshold, whatever the ground. RED COUNTER-PROBE: the old formula multiplied
+ * the LEAD (`max(WALK_SPEED·dt, MIN_LEAD) · pace`), which on a 0.25 ground is
+ * 0.15 · 0.25 = 0.0375 m — UNDER 0.05, so the figure never moved and played
+ * idle instead of swimming. That is the reported "swim animation does not
+ * work" in its second half.
+ *
+ * RED COUNTER-PROBE (the rule itself): the pre-finding-3 rule, which
+ * neutralised every ground under a footprint (`inside ? 1 : max(f, MIN)`). It
+ * walks the lake dry — 0.4 in a footprint becomes 1 — which is exactly
+ * finding 3.
  *
  * --- moveClip: the ground names the clip ----------------------------------
  * A type may carry `meta.move_anim` (§ A9, `swim` on water). It replaces walk
  * AND run — there is no sprinting through a lake — and an absent one leaves
- * the old pair alone. Standing is not this function's business at all.
- *   moveClip('swim', running false)  -> 'swim'
- *   moveClip('swim', running true)   -> 'swim'   (no run over it)
- *   moveClip(' swim ', false)        -> 'swim'   (trimmed)
- *   moveClip('', false)              -> 'walk'
- *   moveClip('', true)               -> 'run'
- *   moveClip('   ', true)            -> 'run'
+ * the old pair alone. It has the SAME reach as the pace: inside a BUILT place
+ * the ground names nothing, one does not swim through a tiled hall. Standing
+ * is not this function's business at all.
+ *   moveClip('swim', running false, 'wilderness')  -> 'swim'
+ *   moveClip('swim', running true,  'wilderness')  -> 'swim'   (no run over it)
+ *   moveClip(' swim ', false, 'open')              -> 'swim'   (trimmed)
+ *   moveClip('swim', false, 'built')               -> 'walk'   <- round 2
+ *   moveClip('swim', true,  'built')               -> 'run'
+ *   moveClip('', false, 'wilderness')              -> 'walk'
+ *   moveClip('', true,  'wilderness')              -> 'run'
+ *   moveClip('   ', true, 'open')                  -> 'run'
  * A kind no model carries is not this file's problem: `figures.CLIP_FALLBACK`
  * maps swim -> walk and everything unknown ends at idle.
  *
@@ -667,7 +709,7 @@ async function main() {
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
-    moveClip, MIN_PACE } = walk;
+    moveClip, groundScope, MIN_PACE, MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
@@ -796,67 +838,113 @@ async function main() {
       slideBlocked({ x: 3, z: -1 }, { x: 5, z: -1 }, blocked), { x: 3, z: -1 });
   }
 
-  // --- terrainPace + moveClip (finding 3, 2026-08-13) ----------------------
-  // The pace and the animation of the TOPMOST terrain count everywhere, the
-  // footprint only neutralises a factor of 0. Every number is derived in the
-  // header.
-  console.log('terrainPace — the ground sets the pace, footprint or not');
+  // --- groundScope (reach decision, round 2 of 2026-08-13) -----------------
+  // Most-specific-first: a room answers when there is one, otherwise the
+  // footprint, otherwise the wilderness. Hand table in the header.
+  console.log('groundScope — how far the terrain rule reaches');
+  {
+    check('nothing over the point is the wilderness',
+      groundScope(null, null), 'wilderness');
+    check('an area location is open ground', groundScope(true, null), 'open');
+    check('a building footprint is built', groundScope(false, null), 'built');
+    check('an interior room beats the area location it stands in',
+      groundScope(true, false), 'built');
+    check('an outdoor room beats the building it belongs to',
+      groundScope(false, true), 'open');
+    check('a room without a footprint still answers',
+      groundScope(null, true), 'open');
+  }
+
+  // --- terrainPace + moveClip (finding 3 + the round-2 reach) --------------
+  // The pace and the animation of the TOPMOST terrain count in the wilderness
+  // and in every OPEN place; a built place has a floor. Every number is
+  // derived in the header.
+  console.log('terrainPace — the ground sets the pace as far as the sky');
   {
     check('MIN_PACE is the documented 0.25', MIN_PACE, 0.25);
-    check('grass out in the wilderness', terrainPace(1, false), 1);
-    check('...and inside a place', terrainPace(1, true), 1);
-    check('water in the wilderness', terrainPace(0.4, false), 0.4);
-    check('THE FINDING: the same water under a location still slows',
-      terrainPace(0.4, true), 0.4);
-    check('a factor-0 ground under a location is neutral (never meant to be walked)',
-      terrainPace(0, true), 1);
+    check('grass out in the wilderness', terrainPace(1, 'wilderness'), 1);
+    check('...and inside an open place', terrainPace(1, 'open'), 1);
+    check('water in the wilderness', terrainPace(0.4, 'wilderness'), 0.4);
+    check('THE FINDING: the same water in an open place still slows',
+      terrainPace(0.4, 'open'), 0.4);
+    check('ROUND 2: under a roof it does not — the place has a floor',
+      terrainPace(0.4, 'built'), 1);
+    check('...not even a FAST ground reaches inside', terrainPace(2, 'built'), 1);
+    check('a factor-0 ground in an open place is neutral (never meant to be walked)',
+      terrainPace(0, 'open'), 1);
     check('...and out in the open it is clamped, not neutralised',
-      terrainPace(0, false), MIN_PACE);
-    check('a crawling 0.1 is clamped inside as well', terrainPace(0.1, true), MIN_PACE);
-    check('...and 0.2 outside', terrainPace(0.2, false), MIN_PACE);
-    check('the catalog maximum passes through', terrainPace(2, false), 2);
-    check('a NaN factor walks at the normal pace', terrainPace(NaN, true), 1);
-    check('a negative factor under a place is the 0 case', terrainPace(-1, true), 1);
-    check('...and outside it the clamp', terrainPace(-1, false), MIN_PACE);
+      terrainPace(0, 'wilderness'), MIN_PACE);
+    check('a crawling 0.1 is clamped in an open place as well',
+      terrainPace(0.1, 'open'), MIN_PACE);
+    check('...and 0.2 outside', terrainPace(0.2, 'wilderness'), MIN_PACE);
+    check('the catalog maximum passes through', terrainPace(2, 'wilderness'), 2);
+    check('a NaN factor walks at the normal pace', terrainPace(NaN, 'open'), 1);
+    check('a negative factor in an open place is the 0 case',
+      terrainPace(-1, 'open'), 1);
+    check('...and outside it the clamp', terrainPace(-1, 'wilderness'), MIN_PACE);
 
-    // The clamp is about the STALL DETECTOR, so it is checked against it: at
-    // 60 fps the lead is max(3.4/60, 0.15) = 0.15 m, and the slowest legal
-    // ground still moves the figure 0.0375 m per frame — over STALL_STEP_M.
+    // WHERE the pace is applied. The lead keeps the figure over the movement
+    // threshold, the STEP carries the pace — hand-derived in the header.
+    // WALK_SPEED/MIN_LEAD are pinned here by hand (npcs.ts, main.ts); they
+    // are not importable, three.js hangs off both modules.
     const WALK_SPEED = 3.4;
     const MIN_LEAD = 0.15;
     const DT = 1 / 60;
-    const leadFor = (pace) => Math.max(WALK_SPEED * DT, MIN_LEAD) * pace;
-    check('one frame of walking is 0.15 m before the ground has a say',
-      Math.max(WALK_SPEED * DT, MIN_LEAD), 0.15);
-    check('the slowest ground still leads 0.0375 m', leadFor(terrainPace(0.05, false)),
-      0.0375);
+    const leadFor = (reach = Infinity) =>
+      Math.min(Math.max(WALK_SPEED * DT, MIN_LEAD), reach);
+    const stepFor = (pace, dist) => Math.min(dist, WALK_SPEED * DT * pace);
+    check('MOVE_EPS_M is the documented 0.05', MOVE_EPS_M, 0.05);
+    check('one frame of walking leads 0.15 m, whatever the ground',
+      leadFor(), 0.15);
+    check('...which is three times the movement threshold',
+      leadFor() > MOVE_EPS_M, true);
+    check('the slowest legal ground still steps 0.0141666 m',
+      stepFor(terrainPace(0.05, 'wilderness'), leadFor()), 3.4 / 60 * 0.25);
     check('...which the stall detector does NOT call a stall',
-      walkStalled({ x: 0, z: 0 }, { x: leadFor(terrainPace(0.05, false)), z: 0 }),
+      walkStalled({ x: 0, z: 0 },
+        { x: stepFor(terrainPace(0.05, 'wilderness'), leadFor()), z: 0 }),
       false);
     // RED COUNTER-PROBE 1: without the clamp the same ground stalls the walk.
-    const unclamped = (f, inside) => (inside && f <= 0 ? 1 : f);
-    check('RED: an unclamped 0.05 leads only 0.0075 m', leadFor(unclamped(0.05, false)),
-      0.0075);
+    const unclamped = (f, scope) => (scope === 'open' && f <= 0 ? 1 : f);
+    check('RED: an unclamped 0.05 steps only 0.00283 m',
+      stepFor(unclamped(0.05, 'wilderness'), leadFor()), 3.4 / 60 * 0.05);
     check('...and that IS a stall — the click order would be dropped',
-      walkStalled({ x: 0, z: 0 }, { x: leadFor(unclamped(0.05, false)), z: 0 }),
+      walkStalled({ x: 0, z: 0 },
+        { x: stepFor(unclamped(0.05, 'wilderness'), leadFor()), z: 0 }),
       true);
-    // RED COUNTER-PROBE 2: the old either/or rule — a footprint neutralised
+    // RED COUNTER-PROBE 2: the OLD placement of the pace — on the LEAD. On a
+    // 0.25 ground the goal lands 0.0375 m ahead, under MOVE_EPS_M, and the
+    // figure stands still with an idle clip instead of swimming.
+    const oldLead = (pace) => Math.max(WALK_SPEED * DT, MIN_LEAD) * pace;
+    check('RED: a paced LEAD on the slowest ground is 0.0375 m',
+      oldLead(terrainPace(0.05, 'wilderness')), 0.0375);
+    check('...which npcs.tick does NOT call moving — the figure froze',
+      oldLead(terrainPace(0.05, 'wilderness')) > MOVE_EPS_M, false);
+    check('...while the lead in force keeps it moving',
+      leadFor() > MOVE_EPS_M, true);
+    // RED COUNTER-PROBE 3: the pre-finding-3 rule — a footprint neutralised
     // EVERY ground, which is the defect finding 3 names.
-    const oldRule = (f, inside) => (inside ? 1 : Math.max(f, MIN_PACE));
-    check('RED: the old rule walks the lake dry', oldRule(0.4, true), 1);
-    check('...while the rule in force wades it', terrainPace(0.4, true), 0.4);
+    const oldRule = (f, scope) =>
+      (scope === 'wilderness' ? Math.max(f, MIN_PACE) : 1);
+    check('RED: the old rule walks the lake dry', oldRule(0.4, 'open'), 1);
+    check('...while the rule in force wades it', terrainPace(0.4, 'open'), 0.4);
     check('...and both agree out in the wilderness',
-      oldRule(0.4, false), terrainPace(0.4, false));
+      oldRule(0.4, 'wilderness'), terrainPace(0.4, 'wilderness'));
   }
 
   console.log('moveClip — a ground may name the clip one moves over it with');
   {
-    check('water swims', moveClip('swim', false), 'swim');
-    check('...and there is no sprinting through it', moveClip('swim', true), 'swim');
-    check('the kind is trimmed', moveClip('  swim  ', false), 'swim');
-    check('without one, walking is walking', moveClip('', false), 'walk');
-    check('...and running is running', moveClip('', true), 'run');
-    check('a blank one is no one', moveClip('   ', true), 'run');
+    check('water swims', moveClip('swim', false, 'wilderness'), 'swim');
+    check('...and there is no sprinting through it',
+      moveClip('swim', true, 'wilderness'), 'swim');
+    check('...an open place swims too', moveClip('swim', false, 'open'), 'swim');
+    check('ROUND 2: a built place names no clip at all',
+      moveClip('swim', false, 'built'), 'walk');
+    check('...and runs when it is far enough', moveClip('swim', true, 'built'), 'run');
+    check('the kind is trimmed', moveClip('  swim  ', false, 'open'), 'swim');
+    check('without one, walking is walking', moveClip('', false, 'wilderness'), 'walk');
+    check('...and running is running', moveClip('', true, 'wilderness'), 'run');
+    check('a blank one is no one', moveClip('   ', true, 'open'), 'run');
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

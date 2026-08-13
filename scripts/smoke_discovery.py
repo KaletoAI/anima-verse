@@ -318,7 +318,7 @@ SECRET_ITEM = add_item(name="Smoke Secret Map", description="discovery smoke",
 set_knowledge_gate(SECRET, SECRET_ITEM)
 
 # Impassable water NORTH of the pond house, for the refused report in [4].
-terrain.save_area({"kind": "water",
+terrain.save_area({"kind": "deep_water",
                    "polygon": [[290, 282], [310, 282], [310, 290], [290, 290]],
                    "z_order": 0})
 
