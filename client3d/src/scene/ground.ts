@@ -39,7 +39,7 @@ import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry, gridPlate, gridStepFor,
   maxWorldHeightIn, pointInRing, propGroundFit, sampleGroundHeight,
   sampleWorldHeight, scatterInstances, scatterSeed, subdivideOnGrid,
-  surfaceMaterial, worldHeightRange } from '@anima/scene-render';
+  surfaceMaterial, worldHeightRange, worldHeightRangeIn } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterEntry, ScatterFootprint,
   SurfaceMaterialSpec, WorldHeightField } from '@anima/scene-render';
 import { fetchHeightfield, fetchTerrain } from '../api';
@@ -239,6 +239,14 @@ export interface Ground {
    * to clear the highest thing under it, or the mountain stands in the cloud.
    */
   maxHeightIn(x0: number, z0: number, x1: number, z1: number): number;
+  /**
+   * How much the ground RISES AND FALLS inside that same rectangle, in metres.
+   *
+   * The fog's tiling question (E8 task 5): a veil rectangle is only cut into
+   * 64 m quads where the ground under it actually moves, so over level ground
+   * one rectangle stays one draw call. 0 in a world with no relief.
+   */
+  heightRangeIn(x0: number, z0: number, x1: number, z1: number): number;
   /**
    * Where a pointer ray meets the DRAWN ground, or `null` when it misses.
    *
@@ -927,6 +935,8 @@ export function createGround(): Ground {
     },
     maxHeightIn: (x0, z0, x1, z1) => (
       field ? maxWorldHeightIn(field, x0, z0, x1, z1, cellM) : GROUND_Y),
+    heightRangeIn: (x0, z0, x1, z1) => (
+      field ? worldHeightRangeIn(field, x0, z0, x1, z1, cellM) : 0),
     heightRevision: () => heightRev,
     setHole(rect) {
       holeOn.value = rect ? 1 : 0;

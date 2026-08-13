@@ -204,25 +204,61 @@ function rectLines(lo: number, hi: number, origin: number, step: number): number
  * THE APPROXIMATION is the stride (`MAX_RECT_LINES`): a rectangle spanning
  * more than 64 cells per axis is sampled on every n-th line instead, so a
  * single peak between two sampled lines can be missed and the veil over a very
- * large rectangle can hang a little low. Since the veil is tiled (`fogRects`,
- * ~64 m per quad) no rectangle of a 4 m world grid comes close to that; the
- * stride is the guard for a coarsened grid over a huge world, not the working
- * case.
+ * large rectangle can hang a little low. A TILED rectangle (`fogRects`, ~64 m
+ * per quad) never comes close on a 4 m grid. A rectangle that stayed whole
+ * because this very sampling found no relief under it (E8 task 5,
+ * `worldHeightRangeIn`) can be world-wide — but then the same samples that
+ * would have to miss the peak already say the ground is level, and a peak thin
+ * enough to hide between two sample lines is thin enough to be a cloud's worth
+ * of nothing. The stride is a guard, not the working case.
  */
 export function maxWorldHeightIn(field: WorldHeightField | null | undefined,
                                  x0: number, z0: number,
                                  x1: number, z1: number,
                                  cellM?: number): number {
-  if (!field) return 0
+  return scanRect(field, x0, z0, x1, z1, cellM).max
+}
+
+/**
+ * How much the drawn ground RISES AND FALLS inside a rectangle, in metres —
+ * `max − min` over the same samples `maxWorldHeightIn` takes.
+ *
+ * WHAT IT IS FOR: the fog's tiling decision (E8 task 5). A veil rectangle is
+ * cut into 64 m quads so one hill cannot lift a world-wide band into the sky —
+ * but over ground that does not move, all those quads hang at the very same
+ * height, and the tiling buys nothing but draw calls. This is the question
+ * "does the ground under this rectangle move at all", and `fogRects` keeps a
+ * rectangle whole whenever the answer is "not enough to see".
+ *
+ * 0 for a missing field: a world with no relief is flat everywhere, which is
+ * exactly what "no range" says.
+ */
+export function worldHeightRangeIn(field: WorldHeightField | null | undefined,
+                                   x0: number, z0: number,
+                                   x1: number, z1: number,
+                                   cellM?: number): number {
+  const { min, max } = scanRect(field, x0, z0, x1, z1, cellM)
+  return max - min
+}
+
+/** The one scan both rectangle queries share: the drawn ground's lowest and
+ *  highest sample inside the rectangle (0/0 without a field). */
+function scanRect(field: WorldHeightField | null | undefined,
+                  x0: number, z0: number, x1: number, z1: number,
+                  cellM?: number): { min: number; max: number } {
+  if (!field) return { min: 0, max: 0 }
   const step = cellM && cellM > 0 ? cellM : field.step_m
   const xs = rectLines(Math.min(x0, x1), Math.max(x0, x1), field.origin_x, step)
   const zs = rectLines(Math.min(z0, z1), Math.max(z0, z1), field.origin_z, step)
   let max = -Infinity
+  let min = Infinity
   for (const z of zs) {
     for (const x of xs) {
       const h = sampleGroundHeight(field, x, z, step)
       if (h > max) max = h
+      if (h < min) min = h
     }
   }
-  return Number.isFinite(max) ? max : 0
+  if (!Number.isFinite(max) || !Number.isFinite(min)) return { min: 0, max: 0 }
+  return { min, max }
 }

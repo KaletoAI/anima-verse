@@ -638,7 +638,8 @@ async function main() {
     afterOwnLine, enqueueSpeech, createVoiceover, NARRATOR_SPEAKERS,
     MAX_PENDING } = voiceover;
   const { fogRects, footprintBox, SHOW_ALL_KEY,
-    FOG_OVERHANG_M, FOG_FEATHER_M, FOG_RAGGED_M, FOG_TEX_METRES } = fog;
+    FOG_OVERHANG_M, FOG_FEATHER_M, FOG_RAGGED_M, FOG_TEX_METRES,
+    FOG_TILE_M, FOG_FLAT_EPS_M } = fog;
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
@@ -2737,6 +2738,37 @@ async function main() {
    *        20 / 35 m wide         -> unchanged, they are under 64 m
    *     and no run is deeper than 25 m, so nothing is cut in z:
    *     7 − 5 + 10 = 12 rectangles, still 9100 m².
+   *
+   *     ONLY WHERE THE GROUND MOVES (E8 task 5). The tiling exists because a
+   *     quad hangs above the HIGHEST ground in its own rectangle — so a
+   *     rectangle with level ground under it has nothing to gain from being
+   *     cut, and `fogRects` asks a height-RANGE query per run
+   *     (`FOG_FLAT_EPS_M` = 0.25 m of slack, the eye of a 70 m overview camera
+   *     against a 5 cm clearance). Two derivations on the SAME case:
+   *
+   *     (a) A LEVEL WORLD (range 0 everywhere) is the seven runs above, whole:
+   *           z −10…10  x −10…110            -> 120 × 20
+   *           z  10…30  x −10…10, x 30…110   ->  20 × 20,  80 × 20
+   *           z  30…35  x −10…110            -> 120 ×  5
+   *           z  35…45  x −10…65, x 75…110   ->  75 × 10,  35 × 10
+   *           z  45…70  x −10…110            -> 120 × 25
+   *         7 rectangles, and the areas 2400 + 400 + 1600 + 600 + 750 + 350 +
+   *         3000 = 9100 m² — the same veil as the twelve tiles, in seven draw
+   *         calls.
+   *
+   *     (b) ONE HILL, box x 60…80 / z 30…50 (the query answers 3 m for a run
+   *         that overlaps it, 0 for one that does not). Run by run:
+   *           z −10…10: no z overlap                       -> whole,  1
+   *           z  10…30: touches 30 but does not cross it    -> whole,  2
+   *           z  30…35: overlaps -> 120 m = 2 tiles, d 5    -> tiled,  2
+   *           z  35…45: x −10…65 overlaps (65 > 60) -> 75 m = 2 tiles
+   *                     x  75…110 overlaps (75 < 80) -> 35 m = 1 tile
+   *                                                        -> tiled,  3
+   *           z  45…70: overlaps z 45…50 -> 2 tiles, d 25   -> tiled,  2
+   *         1 + 2 + 2 + 3 + 2 = 10 rectangles, still 9100 m².
+   *     Without the query nothing changes at all (12 tiles) — that is the
+   *     picture the veil had before, and the safe direction for a caller that
+   *     has no field yet.
    */
   console.log('\nfog — the box of a footprint square');
   //   the three turns derived above, on the same 10 m square at the origin
@@ -2836,6 +2868,106 @@ async function main() {
   //   working across versions of this client
   check('the show-all pref key is the documented one',
     SHOW_ALL_KEY, 'av3d.showAllLocations');
+
+  console.log('fog — tiled only where the ground moves (E8 task 5)');
+  //   (a) a level world: the seven runs of the derivation, whole
+  const FOG_LEVEL = fogRects(FOG_FRAME, [FOG_A, FOG_B], 10, () => 0);
+  check('a level world keeps every run in one piece', FOG_LEVEL, [
+    { x: -10, z: -10, w: 120, d: 20 },
+    { x: -10, z: 10, w: 20, d: 20 },
+    { x: 30, z: 10, w: 80, d: 20 },
+    { x: -10, z: 30, w: 120, d: 5 },
+    { x: -10, z: 35, w: 75, d: 10 },
+    { x: 75, z: 35, w: 35, d: 10 },
+    { x: -10, z: 45, w: 120, d: 25 },
+  ]);
+  //   the veil still covers exactly frame minus footprints — fewer quads, not
+  //   less cloud
+  check('and it covers the very same 9100 m²',
+    FOG_LEVEL.reduce((sum, r) => sum + r.w * r.d, 0), 9100);
+  //   (b) one hill, box x 60…80 / z 30…50: 10 rectangles by the derivation
+  const hillRange = (x0, z0, x1, z1) => (
+    x1 > 60 && x0 < 80 && z1 > 30 && z0 < 50 ? 3 : 0);
+  const FOG_HILL = fogRects(FOG_FRAME, [FOG_A, FOG_B], 10, hillRange);
+  check('one hill tiles four runs and leaves three whole',
+    FOG_HILL.length, 10);
+  check('and that veil is 9100 m² too',
+    FOG_HILL.reduce((sum, r) => sum + r.w * r.d, 0), 9100);
+  //   the two runs that stay whole are the two the hill does not reach
+  check('the run north of the hill is one piece',
+    FOG_HILL[0], { x: -10, z: -10, w: 120, d: 20 });
+  check('the band that only touches z 30 stays whole too',
+    FOG_HILL.slice(1, 3),
+    [{ x: -10, z: 10, w: 20, d: 20 }, { x: 30, z: 10, w: 80, d: 20 }]);
+  //   the slack is a boundary, not a threshold that swallows real relief:
+  //   exactly at the epsilon a run is still level, a hair above it is not
+  check('a range of exactly the epsilon is still level',
+    fogRects(FOG_FRAME, [], 10, () => FOG_FLAT_EPS_M).length, 1);
+  check('a hair more relief tiles the same run',
+    fogRects(FOG_FRAME, [], 10, () => FOG_FLAT_EPS_M + 1e-6).length, 4);
+  //   no query at all = the old picture (the safe direction for a client whose
+  //   field has not arrived yet)
+  check('without a height query nothing changes', fogRects(FOG_FRAME,
+    [FOG_A, FOG_B], 10), fogCase);
+  //   a broken field (NaN) must not be read as "level": tile, do not float a
+  //   world-wide quad on a number nobody can compare
+  check('an unreadable range tiles like before',
+    fogRects(FOG_FRAME, [], 10, () => NaN).length, 4);
+  //   the tile size itself is pinned — the census below is quoted against it
+  check('the tile edge is the documented 64 m', FOG_TILE_M, 64);
+
+  /**
+   * THE CENSUS (E8 task 5 — the draw-call numbers of the module header).
+   *
+   * Not a check but a MEASUREMENT, printed so the number in `fog.ts` can be
+   * re-derived instead of believed. The world is the one task 3 measured on:
+   * 1000 × 1000 m, 60 m ground margin, `n` known places of 10-30 m turned at
+   * random, 20 runs per row, seeded so two runs of this file agree.
+   *
+   * Three columns, one call each:
+   *   flat   — the height query says "level" everywhere: one quad per RUN,
+   *            i.e. the pre-relief count E4 measured (~750 at n = 100).
+   *   tiled  — no query: every run cut into 64 m tiles, task 3's picture.
+   *   relief — three hills of radius 120 m: the lever's working case.
+   */
+  console.log('fog — the quad census (measurement, not a check)');
+  //   xorshift32, the same generator the server smokes use, so the worlds are
+  //   reproducible without a dependency
+  let seed = 0x2545f491;
+  const rnd = () => {
+    seed ^= seed << 13; seed >>>= 0;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5; seed >>>= 0;
+    return seed / 0x100000000;
+  };
+  const CENSUS_FRAME = { min_x: 0, min_z: 0, max_x: 1000, max_z: 1000 };
+  const HILLS = [{ x: 250, z: 300 }, { x: 700, z: 250 }, { x: 550, z: 780 }];
+  const HILL_R = 120;
+  //   a rectangle has relief in it when it reaches into a hill's box
+  const censusRange = (x0, z0, x1, z1) => (
+    HILLS.some((h) => x1 > h.x - HILL_R && x0 < h.x + HILL_R
+                   && z1 > h.z - HILL_R && z0 < h.z + HILL_R) ? 8 : 0);
+  for (const n of [10, 50, 100]) {
+    let flat = 0;
+    let tiled = 0;
+    let relief = 0;
+    for (let run = 0; run < 20; run++) {
+      const known = [];
+      for (let i = 0; i < n; i++) {
+        known.push({ x: rnd() * 1000, z: rnd() * 1000,
+          width: 10 + rnd() * 20, yaw: rnd() * Math.PI * 2 });
+      }
+      flat += fogRects(CENSUS_FRAME, known, 60, () => 0).length;
+      tiled += fogRects(CENSUS_FRAME, known, 60).length;
+      relief += fogRects(CENSUS_FRAME, known, 60, censusRange).length;
+    }
+    console.log(`  n = ${String(n).padStart(3)}  flat ${Math.round(flat / 20)}`
+      + `   tiled ${Math.round(tiled / 20)}   relief ${Math.round(relief / 20)}`);
+    //   the lever can only ever sit between the two extremes — that is what
+    //   makes the printed numbers meaningful rather than decorative
+    check(`the lever stays between flat and fully tiled (n = ${n})`,
+      relief >= flat && relief <= tiled, true);
+  }
 
   /**
    * --- Fog OPTICS: the four constants (E4 task 6) ---------------------------

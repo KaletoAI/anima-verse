@@ -1107,7 +1107,13 @@ async function startApp(username: string, role: string) {
     }
     fogGroup.clear();
     if (!fogged) return;
-    for (const r of fogRects(worldBounds, holeList, BASE_MARGIN_M)) {
+    // The ground's own relief decides which rectangles are TILED (E8 task 5):
+    // a veil over level ground stays one quad however wide it is, and only
+    // where the field moves is it cut into `FOG_TILE_M` pieces. Handing the
+    // query in keeps `game/fog.ts` importless, exactly like the footprints.
+    for (const r of fogRects(worldBounds, holeList, BASE_MARGIN_M,
+                             (x0, z0, x1, z1) =>
+                               terrainGround.heightRangeIn(x0, z0, x1, z1))) {
       // The geometry comes out LARGER than the rectangle — the cloud edge
       // needs room to fade, and neighbouring rectangles overlap into each
       // other so no seam opens between them (see `fogClouds.ts`). The centre

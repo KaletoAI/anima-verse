@@ -935,26 +935,26 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
   restoreSides();
 }
 
-/** Standhöhe auf KACHEL-Ebene (Figur außerhalb der Räume, z.B. am
- *  Eingang): Gebäude-Meshes haben oft eine eingebackene Bodenhaut/Gelände
- *  um den Eingang — die Figur steht auf der tatsächlichen Oberfläche statt
- *  bei y=0 darin zu versinken. Strahl von oben, ohne Treffer bleibt es beim
- *  Kachel-Boden.
+/** Standing height on TILE level (a figure outside the rooms, e.g. at the
+ *  entrance): building meshes often carry a baked-in ground skin or terrain
+ *  around the door — the figure stands on that actual surface instead of
+ *  sinking into it at y = 0. A ray from above; with no hit it stays on the
+ *  tile floor.
  *
- *  WELCHER Treffer zählt, entscheidet die Spec und nicht mehr eine feste
- *  1,2-m-Marke (Befund B8): der Dachschutz gilt für GEBÄUDE-Modelle und misst
- *  ab deren deklarierter Standhöhe (`walk_y_world`), ein FLÄCHEN-Modell
- *  (`display: ground`/`shell_area`) IST der Boden und wird gar nicht
- *  gedeckelt — sonst fällt die Figur am erhöhten Ufer auf Ebene 0 zurück.
- *  Die Regel steht als reine Funktion in `game/ground.ts`.
+ *  WHICH hit counts is decided by the spec and no longer by a fixed 1.2 m mark
+ *  (finding B8): the roof guard applies to BUILDING models and measures from
+ *  their declared standing height (`walk_y_world`), while an AREA model
+ *  (`display: ground`/`shell_area`) IS the ground and is not capped at all —
+ *  otherwise the figure drops back to level 0 on a raised shore. The rule is a
+ *  pure function in `game/ground.ts`.
  *
- *  ALLES MISST RELATIV ZUR KACHEL (E8 Task 4). Seit die Kachel auf ihrem
- *  Plateau steht (`footprintCentre`), sind die Strahl-Treffer WELT-y, die
- *  Spec-Zahl `walk_y_world` aber ein Kachel-Meter (das Rezept rechnet um den
- *  Kachelboden y = 0). Ohne den Abzug hier läge die Dach-Grenze auf einem
- *  Hügel um genau die Plateauhöhe zu tief und JEDER Treffer eines Gebäudes
- *  auf erhöhtem Grund wäre „Dach" — die Figur fiele auf den Kachelboden
- *  zurück, also exakt Befund B8 nochmal, nur von oben. */
+ *  EVERYTHING MEASURES RELATIVE TO THE TILE (E8 task 4). Since the tile stands
+ *  on its plateau (`footprintCentre`), the ray hits are WORLD y while the spec
+ *  number `walk_y_world` is a tile metre (the recipe computes around the tile
+ *  floor y = 0). Without the subtraction here the roof limit would sit exactly
+ *  the plateau height too low on a hill, and EVERY hit of a building on raised
+ *  ground would read as "roof" — the figure would fall back to the tile floor,
+ *  which is finding B8 all over again, only from above. */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
   const lift = tile.center.y + terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
@@ -967,8 +967,8 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
   const ray = new THREE.Raycaster(
     new THREE.Vector3(at.x, rayStartY, at.z), new THREE.Vector3(0, -1, 0));
   for (const h of ray.intersectObject(target, true)) {
-    // Der Treffer ist Welt-y, die Decke eine Kachel-Höhe: in DERSELBEN
-    // Bezugsebene vergleichen, sonst kippt die Regel mit dem Plateau.
+    // The hit is world y, the ceiling a tile height: compare them in the SAME
+    // frame of reference, or the rule tips over with the plateau.
     if (acceptsWalkHit(info, h.point.y - tile.center.y)) {
       return h.point.y + 0.01 + terrainLiftAt(tile, at.x, at.z);
     }

@@ -33,6 +33,15 @@
  * merging vertically adjacent bands with identical runs. It is deliberately
  * NOT done here (see the algorithm note in `fogRects`).
  *
+ * The RELIEF cuts those rectangles further (`FOG_TILE_M`), and that lever was
+ * pulled in E8 task 5: only a rectangle with actual relief under it is tiled at
+ * all, so an unshaped world stays at the 750 above and a shaped one pays for
+ * its hills and nothing else. Measured on randomised worlds (1000 × 1000 m,
+ * 60 m margin, footprints 10-30 m, 20 runs per row, `smoke_walk_math.mjs`
+ * census): at n = 100 a level world is 744 quads, tiling every rectangle
+ * unconditionally is 3659, and a world with three 240 m hills in it is 1899.
+ * At n = 10 the three rows read 36 / 559 / 399, at n = 50 265 / 1857 / 989.
+ *
  * PURE like `walk.ts` and `soundtrack.ts`: no `three`, no DOM, no imports and
  * no module state. That is what lets `client3d/scripts/smoke_walk_math.mjs` check every
  * case by hand — the caller in `main.ts` only turns the rectangles into quads.
@@ -117,8 +126,41 @@ export const FOG_TEX_METRES = 46;
  * follows it tells no one anything the picture does not. 64 m is a bit more
  * than the cloud texture's own tile (46 m), so the cover still reads as one
  * sky, and small enough that a hill lifts its own neighbourhood only.
+ *
+ * ONLY WHERE THE GROUND ACTUALLY MOVES (E8 task 5). Tiling every rectangle
+ * cost what it was measured to cost: 744 quads at 100 known places became
+ * 3659. But the reason is a hill, so a rectangle with no hill under it has no
+ * reason to be cut at all — `fogRects` takes a height-range query and keeps
+ * such a rectangle whole. A world nobody has shaped is back to exactly the
+ * flat world's count, and a shaped one only pays for the parts that are
+ * shaped.
  */
 export const FOG_TILE_M = 64;
+
+/**
+ * How much the ground may rise and fall under ONE veil rectangle before it is
+ * tiled, in metres (E8 task 5).
+ *
+ * The quad hangs `FOG_CLEARANCE_M` (5 cm) above the HIGHEST ground inside its
+ * rectangle, so an untiled rectangle floats up to this much plus that clearance
+ * above its lowest ground — 30 cm of air in the worst case, seen from the
+ * overview camera 70 m up, which is the only mode the veil is drawn in. That is
+ * invisible, and it is two orders below the failure this tiling exists for (one
+ * hill lifting a world-wide band fifty metres).
+ *
+ * Not zero: a field is floating-point, and a "flat" world sampled through a
+ * drawn surface answers in the last bits. A hand's breadth of slack keeps the
+ * flat world at one quad per rectangle instead of losing it to noise.
+ */
+export const FOG_FLAT_EPS_M = 0.25;
+
+/** How much the ground rises and falls inside an axis-aligned world rectangle,
+ *  in metres — `worldHeightRangeIn` of the ground module, handed in as a
+ *  function because this module imports nothing (see the header). A caller
+ *  that has no field at all passes nothing and gets the tiling unconditionally,
+ *  which is the safe direction: it is what the veil did before. */
+export type FogHeightRange =
+  (x0: number, z0: number, x1: number, z1: number) => number;
 
 /** Extents below this are not worth a draw call (metres). A sliver of a
  *  micrometre between two footprints is not a hole in the cloud cover, it is
@@ -168,6 +210,11 @@ export function footprintBox(fp: FogFootprint): FogBox | null {
  * a 1-D problem — the outer x interval minus the x intervals of the boxes that
  * live in it — and each remaining run becomes one rectangle.
  *
+ * `heightRange` is the ground's own "how much does it move in here" (see
+ * `FOG_FLAT_EPS_M`). Every run is asked once: over level ground it stays ONE
+ * rectangle, over relief it is cut into `FOG_TILE_M` tiles. Omitting it tiles
+ * everything, which is what this did before the query existed.
+ *
  * Bands are NOT merged with each other afterwards, exactly as the grid version
  * did not merge rows into columns: two stacked bands with identical runs are
  * rare on the shapes a discovered map makes, and every rectangle costs the
@@ -179,7 +226,8 @@ export function footprintBox(fp: FogFootprint): FogBox | null {
  */
 export function fogRects(bounds: FogBounds | null | undefined,
                          known: FogFootprint[],
-                         marginM: number): FogRect[] {
+                         marginM: number,
+                         heightRange?: FogHeightRange): FogRect[] {
   if (!bounds) return [];
   const margin = Number.isFinite(marginM) ? marginM : 0;
   const x0 = bounds.min_x - margin;
@@ -210,11 +258,23 @@ export function fogRects(bounds: FogBounds | null | undefined,
   cuts.sort((a, b) => a - b);
 
   const rects: FogRect[] = [];
-  /** One run of the sweep, cut into tiles of at most `FOG_TILE_M` (see there).
-   *  The pieces are EQUAL — dividing by the count instead of stepping by the
-   *  tile size avoids a sliver at the far end, which would be a draw call for
-   *  a hand's breadth of cloud. */
+  /** One run of the sweep, cut into tiles of at most `FOG_TILE_M` (see there)
+   *  — but ONLY where the ground under it moves. The pieces are EQUAL —
+   *  dividing by the count instead of stepping by the tile size avoids a sliver
+   *  at the far end, which would be a draw call for a hand's breadth of cloud.
+   *
+   *  The flatness question is asked ONCE per run, over the whole run: a run
+   *  that is level end to end needs no cut anywhere in it, and a run that is
+   *  not is cut throughout — a per-tile question would cost one range scan per
+   *  tile to save quads over the flat half of a hillside, which is paying the
+   *  rebuild to save the frame. */
   const push = (x: number, z: number, w: number, d: number): void => {
+    // Whole unless the ground is DEMONSTRABLY level: no query, or a range that
+    // is not a number, means tile — the picture the veil had before.
+    if (heightRange && heightRange(x, z, x + w, z + d) <= FOG_FLAT_EPS_M) {
+      rects.push({ x, z, w, d });
+      return;
+    }
     const nx = Math.max(1, Math.ceil(w / FOG_TILE_M - 1e-9));
     const nz = Math.max(1, Math.ceil(d / FOG_TILE_M - 1e-9));
     const tw = w / nx;
