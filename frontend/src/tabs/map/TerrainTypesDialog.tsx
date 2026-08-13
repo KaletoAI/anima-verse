@@ -40,6 +40,15 @@
  * area, because it describes what the ground is, and it is one editing step
  * away from making a slope nobody can climb: the amplitude field says in its
  * hint how steep its number gets over one 4 m grid step.
+ *
+ * EVERY KIND IS TWO ROWS (2026-08-13). It was one, and every field the ground
+ * grew added a column to it: at nine columns the modal had been widened to
+ * 940 px and the sink depth would have been the tenth. The columns are the
+ * IDENTITY of a kind now — kind, name, colour, passable, speed, where it comes
+ * from, what one can do with it — and the second row underneath carries what
+ * the ground DOES to a figure: the two clips, the sink depth, the relief. That
+ * one is indented and muted, because it reads as a continuation of the row
+ * above and not as a kind of its own.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -65,6 +74,12 @@ const RELIEF_AMP_STEP = 0.05
 const RELIEF_WAVE_MIN = 8
 const RELIEF_WAVE_MAX = 200
 const RELIEF_WAVE_STEP = 1
+const SINK_MIN = 0
+const SINK_MAX = 1.5
+const SINK_STEP = 0.05
+/** How many columns the identity row has — the behaviour row spans all of
+ *  them, and so do the two hints. */
+const COLS = 7
 /** `terrain_types.DEFAULT_RELIEF_WAVE_M` — what an amplitude without a wave
  *  gets, named in the hint so an empty field is not a mystery. */
 const RELIEF_WAVE_DEFAULT = 32
@@ -122,6 +137,7 @@ function numChanged(raw: string, stored: string): boolean {
 interface OwnedMeta {
   moveAnim: string
   idleAnim: string
+  sink: string
   reliefAmp: string
   reliefWave: string
 }
@@ -135,6 +151,7 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   const next = { ...(meta || {}) }
   setMetaStr(next, 'move_anim', own.moveAnim)
   setMetaStr(next, 'idle_anim', own.idleAnim)
+  setMetaNum(next, 'sink_m', own.sink)
   setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
   return next
@@ -161,6 +178,12 @@ function amplitudeHint(t: (s: string) => string, raw: string): string {
     .replace('{step}', String(GRID_STEP_M))
 }
 
+/** The sink hint — what the number does and where it stops. */
+function sinkHint(t: (s: string) => string): string {
+  return t('How deep a figure stands IN this ground while it moves or waits on it, in metres (0–{max}) — empty = on top of it. A swimmer belongs partly under water; the animation alone puts it on the surface.')
+    .replace('{max}', String(SINK_MAX))
+}
+
 /** The wavelength hint — how wide one swell is, plus the default an amplitude
  *  without a wave falls back to. */
 function waveHint(t: (s: string) => string): string {
@@ -168,6 +191,98 @@ function waveHint(t: (s: string) => string): string {
     .replace('{min}', String(RELIEF_WAVE_MIN))
     .replace('{max}', String(RELIEF_WAVE_MAX))
     .replace('{def}', String(RELIEF_WAVE_DEFAULT))
+}
+
+interface BehaviourRowProps extends OwnedMeta {
+  onMoveAnim: (v: string) => void
+  onIdleAnim: (v: string) => void
+  onSink: (v: string) => void
+  onReliefAmp: (v: string) => void
+  onReliefWave: (v: string) => void
+}
+
+/** The SECOND row of a kind: what this ground does to a figure standing or
+ *  moving on it. One component for the edit rows and the add row — the fields
+ *  are the same fields, and a second copy of them is how two dialogs for one
+ *  thing start to differ. Each field carries its label, because a row that
+ *  spans the whole table has no column header over it. */
+function BehaviourRow({
+  moveAnim, idleAnim, sink, reliefAmp, reliefWave,
+  onMoveAnim, onIdleAnim, onSink, onReliefAmp, onReliefWave,
+}: BehaviourRowProps) {
+  const { t } = useI18n()
+  return (
+    <tr className="ga-tt-behaviour-row">
+      <td colSpan={COLS}>
+        <div className="ga-tt-behaviour">
+          <label className="ga-tt-field">
+            <span>{t('Move animation')}</span>
+            <input
+              className="ga-input ga-tt-input"
+              maxLength={ANIM_MAX}
+              value={moveAnim}
+              placeholder={t('walk / run')}
+              title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
+              onChange={(e) => onMoveAnim(e.target.value)}
+            />
+          </label>
+          <label className="ga-tt-field">
+            <span>{t('Idle animation')}</span>
+            <input
+              className="ga-input ga-tt-input"
+              maxLength={ANIM_MAX}
+              value={idleAnim}
+              placeholder={t('idle / activity')}
+              title={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
+              onChange={(e) => onIdleAnim(e.target.value)}
+            />
+          </label>
+          <label className="ga-tt-field">
+            <span>{t('Sink depth (m)')}</span>
+            <input
+              className="ga-input ga-tt-num"
+              type="number"
+              min={SINK_MIN}
+              max={SINK_MAX}
+              step={SINK_STEP}
+              value={sink}
+              placeholder={t('on top')}
+              title={sinkHint(t)}
+              onChange={(e) => onSink(e.target.value)}
+            />
+          </label>
+          <label className="ga-tt-field">
+            <span>{t('Relief amplitude (m)')}</span>
+            <input
+              className="ga-input ga-tt-num"
+              type="number"
+              min={RELIEF_AMP_MIN}
+              max={RELIEF_AMP_MAX}
+              step={RELIEF_AMP_STEP}
+              value={reliefAmp}
+              placeholder={t('flat')}
+              title={amplitudeHint(t, reliefAmp)}
+              onChange={(e) => onReliefAmp(e.target.value)}
+            />
+          </label>
+          <label className="ga-tt-field">
+            <span>{t('Relief wavelength (m)')}</span>
+            <input
+              className="ga-input ga-tt-num"
+              type="number"
+              min={RELIEF_WAVE_MIN}
+              max={RELIEF_WAVE_MAX}
+              step={RELIEF_WAVE_STEP}
+              value={reliefWave}
+              placeholder={String(RELIEF_WAVE_DEFAULT)}
+              title={waveHint(t)}
+              onChange={(e) => onReliefWave(e.target.value)}
+            />
+          </label>
+        </div>
+      </td>
+    </tr>
+  )
 }
 
 /** What one row sends — the same shape it reads. `meta` travels along
@@ -195,6 +310,7 @@ function TypeRow({
   const [speed, setSpeed] = useState(String(type.speed_factor))
   const [moveAnim, setMoveAnim] = useState(metaStrOf(type, 'move_anim'))
   const [idleAnim, setIdleAnim] = useState(metaStrOf(type, 'idle_anim'))
+  const [sink, setSink] = useState(metaNumOf(type, 'sink_m'))
   const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
 
@@ -209,6 +325,7 @@ function TypeRow({
     || passable !== !!type.passable
     || moveAnim.trim() !== metaStrOf(type, 'move_anim')
     || idleAnim.trim() !== metaStrOf(type, 'idle_anim')
+    || numChanged(sink, metaNumOf(type, 'sink_m'))
     || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
@@ -216,14 +333,14 @@ function TypeRow({
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // exactly FOUR keys in it and hands the rest back untouched. The relief
-    // numbers are sent unclamped on purpose: the server clamps, and the row
-    // refills from its answer, so a typed 5 shows up as the stored 2.
+    // exactly FIVE keys in it and hands the rest back untouched. The numbers
+    // are sent unclamped on purpose: the server clamps, and the row refills
+    // from its answer, so a typed 5 shows up as the stored 2.
     const saved = await onSave({
       kind: type.kind, name, color, passable,
       speed_factor: speedNum,
       meta: withOwnedMeta(type.meta,
-        { moveAnim, idleAnim, reliefAmp, reliefWave }),
+        { moveAnim, idleAnim, sink, reliefAmp, reliefWave }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -232,13 +349,15 @@ function TypeRow({
     setSpeed(String(saved.speed_factor))
     setMoveAnim(metaStrOf(saved, 'move_anim'))
     setIdleAnim(metaStrOf(saved, 'idle_anim'))
+    setSink(metaNumOf(saved, 'sink_m'))
     setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
   }, [color, idleAnim, moveAnim, name, onSave, passable, reliefAmp, reliefWave,
-      speedBad, speedNum, type])
+      sink, speedBad, speedNum, type])
 
   return (
-    <tr>
+    <>
+    <tr className="ga-tt-id-row">
       <td className="ga-tt-kind">{type.kind}</td>
       <td>
         <input
@@ -280,52 +399,6 @@ function TypeRow({
               .replace('{min}', String(SPEED_MIN)).replace('{max}', String(SPEED_MAX))
             : t('Movement speed on this ground, 1 = normal')}
           onChange={(e) => setSpeed(e.target.value)}
-        />
-      </td>
-      <td>
-        <input
-          className="ga-input ga-tt-input"
-          maxLength={ANIM_MAX}
-          value={moveAnim}
-          placeholder={t('walk / run')}
-          title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
-          onChange={(e) => setMoveAnim(e.target.value)}
-        />
-      </td>
-      <td>
-        <input
-          className="ga-input ga-tt-input"
-          maxLength={ANIM_MAX}
-          value={idleAnim}
-          placeholder={t('idle / activity')}
-          title={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
-          onChange={(e) => setIdleAnim(e.target.value)}
-        />
-      </td>
-      <td>
-        <input
-          className="ga-input ga-tt-num"
-          type="number"
-          min={RELIEF_AMP_MIN}
-          max={RELIEF_AMP_MAX}
-          step={RELIEF_AMP_STEP}
-          value={reliefAmp}
-          placeholder={t('flat')}
-          title={amplitudeHint(t, reliefAmp)}
-          onChange={(e) => setReliefAmp(e.target.value)}
-        />
-      </td>
-      <td>
-        <input
-          className="ga-input ga-tt-num"
-          type="number"
-          min={RELIEF_WAVE_MIN}
-          max={RELIEF_WAVE_MAX}
-          step={RELIEF_WAVE_STEP}
-          value={reliefWave}
-          placeholder={String(RELIEF_WAVE_DEFAULT)}
-          title={waveHint(t)}
-          onChange={(e) => setReliefWave(e.target.value)}
         />
       </td>
       <td>
@@ -378,6 +451,14 @@ function TypeRow({
         ) : null}
       </td>
     </tr>
+    <BehaviourRow
+      moveAnim={moveAnim} onMoveAnim={setMoveAnim}
+      idleAnim={idleAnim} onIdleAnim={setIdleAnim}
+      sink={sink} onSink={setSink}
+      reliefAmp={reliefAmp} onReliefAmp={setReliefAmp}
+      reliefWave={reliefWave} onReliefWave={setReliefWave}
+    />
+    </>
   )
 }
 
@@ -406,6 +487,7 @@ export function TerrainTypesDialog({
   const [newSpeed, setNewSpeed] = useState('1')
   const [newMoveAnim, setNewMoveAnim] = useState('')
   const [newIdleAnim, setNewIdleAnim] = useState('')
+  const [newSink, setNewSink] = useState('')
   const [newReliefAmp, setNewReliefAmp] = useState('')
   const [newReliefWave, setNewReliefWave] = useState('')
 
@@ -455,6 +537,7 @@ export function TerrainTypesDialog({
       meta: withOwnedMeta({}, {
         moveAnim: newMoveAnim,
         idleAnim: newIdleAnim,
+        sink: newSink,
         reliefAmp: newReliefAmp,
         reliefWave: newReliefWave,
       }),
@@ -467,10 +550,11 @@ export function TerrainTypesDialog({
     setNewSpeed('1')
     setNewMoveAnim('')
     setNewIdleAnim('')
+    setNewSink('')
     setNewReliefAmp('')
     setNewReliefWave('')
   }, [kindClean, newColor, newIdleAnim, newMoveAnim, newName, newPassable,
-      newReliefAmp, newReliefWave, newSpeedNum, putType])
+      newReliefAmp, newReliefWave, newSink, newSpeedNum, putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -498,10 +582,6 @@ export function TerrainTypesDialog({
                 <th>{t('Colour')}</th>
                 <th className="ga-tt-center">{t('Passable')}</th>
                 <th>{t('Speed')}</th>
-                <th>{t('Move animation')}</th>
-                <th>{t('Idle animation')}</th>
-                <th>{t('Relief amplitude (m)')}</th>
-                <th>{t('Relief wavelength (m)')}</th>
                 <th>{t('Source')}</th>
                 <th />
               </tr>
@@ -509,7 +589,7 @@ export function TerrainTypesDialog({
             <tbody>
               {types.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="ga-map-tray-empty">
+                  <td colSpan={COLS} className="ga-map-tray-empty">
                     {t('No terrain types')}
                   </td>
                 </tr>
@@ -590,52 +670,6 @@ export function TerrainTypesDialog({
                     onChange={(e) => setNewSpeed(e.target.value)}
                   />
                 </td>
-                <td>
-                  <input
-                    className="ga-input ga-tt-input"
-                    maxLength={ANIM_MAX}
-                    value={newMoveAnim}
-                    placeholder={t('walk / run')}
-                    title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
-                    onChange={(e) => setNewMoveAnim(e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    className="ga-input ga-tt-input"
-                    maxLength={ANIM_MAX}
-                    value={newIdleAnim}
-                    placeholder={t('idle / activity')}
-                    title={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
-                    onChange={(e) => setNewIdleAnim(e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    className="ga-input ga-tt-num"
-                    type="number"
-                    min={RELIEF_AMP_MIN}
-                    max={RELIEF_AMP_MAX}
-                    step={RELIEF_AMP_STEP}
-                    value={newReliefAmp}
-                    placeholder={t('flat')}
-                    title={amplitudeHint(t, newReliefAmp)}
-                    onChange={(e) => setNewReliefAmp(e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    className="ga-input ga-tt-num"
-                    type="number"
-                    min={RELIEF_WAVE_MIN}
-                    max={RELIEF_WAVE_MAX}
-                    step={RELIEF_WAVE_STEP}
-                    value={newReliefWave}
-                    placeholder={String(RELIEF_WAVE_DEFAULT)}
-                    title={waveHint(t)}
-                    onChange={(e) => setNewReliefWave(e.target.value)}
-                  />
-                </td>
                 {/* Source: a new kind is always this world's own. */}
                 <td />
                 <td className="ga-tt-actions">
@@ -649,8 +683,18 @@ export function TerrainTypesDialog({
                   </button>
                 </td>
               </tr>
+              {/* The add row is two rows like every other kind — the same
+                  fields in the same place, so adding a ground and editing one
+                  are one habit. */}
+              <BehaviourRow
+                moveAnim={newMoveAnim} onMoveAnim={setNewMoveAnim}
+                idleAnim={newIdleAnim} onIdleAnim={setNewIdleAnim}
+                sink={newSink} onSink={setNewSink}
+                reliefAmp={newReliefAmp} onReliefAmp={setNewReliefAmp}
+                reliefWave={newReliefWave} onReliefWave={setNewReliefWave}
+              />
               <tr>
-                <td colSpan={11} className="ga-tt-newhint">
+                <td colSpan={COLS} className="ga-tt-newhint">
                   {kindBad
                     ? t('A kind is lowercase letters, digits, “_” and “-”, starts with a letter or digit, at most 40 characters.')
                     : kindTaken

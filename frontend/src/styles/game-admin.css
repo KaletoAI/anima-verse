@@ -2220,16 +2220,16 @@ html, * {
 .ga-terrain-help p { margin: 0 0 6px; }
 .ga-terrain-help p:last-child { margin-bottom: 0; }
 
-/* Terrain-type manager dialog. Wider than the default modal because nine
-   columns of controls do not fold usefully — at 560 px the row with `Reset`
-   armed (Save · Really reset · Cancel) pushes the table into sideways
-   scrolling. The two relief numbers of § A16.2 added two more columns, hence
-   940 instead of the earlier 760 px.
+/* Terrain-type manager dialog. Wider than the default modal because the row
+   with `Reset` armed (Save · Really reset · Cancel) pushes a 560 px table into
+   sideways scrolling. It had grown to 940 px, one column per field the ground
+   gained; since 2026-08-13 a kind is TWO rows — identity above, behaviour
+   below — and 760 px carries the identity row again.
 
    The selector needs BOTH classes: `.ga-modal` sets `max-width: 560px` and is
    declared FURTHER DOWN in this file, so a single `.ga-tt-modal` of equal
    specificity loses the tie-break and the widening is silently dead. */
-.ga-modal.ga-tt-modal { max-width: 940px; }
+.ga-modal.ga-tt-modal { max-width: 760px; }
 .ga-tt-hint {
   font-size: 11px;
   color: var(--text-muted, #8b949e);
@@ -2255,6 +2255,29 @@ html, * {
 .ga-tt-table tfoot tr:first-child td {
   border-top: 1px solid var(--border, #30363d);
   padding-top: 8px;
+}
+/* The SECOND row of a kind: what the ground does to a figure on it. Indented
+   and muted so it reads as a continuation of the row above; the line under it
+   is what separates one kind from the next, so the identity row carries none. */
+.ga-tt-behaviour-row td {
+  padding: 0 6px 6px;
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.ga-tt-behaviour {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding-left: 18px;
+  border-left: 2px solid var(--border, #30363d);
+  margin-left: 4px;
+}
+.ga-tt-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
 }
 .ga-tt-center { text-align: center; }
 .ga-tt-kind {
