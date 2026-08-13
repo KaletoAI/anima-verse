@@ -291,11 +291,12 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
  *  threshold; the editor simply never sends anything outside them. */
 export const HEIGHT_MAX_M = 50
 export const FALLOFF_MAX_M = 1000
-/** What a freshly drawn height area starts as: a low rise with a ramp gentle
- *  enough for the default walk limits (5 m over 8 m is 32°, under the 40° a
- *  walker climbs). */
-export const HEIGHT_DEFAULT_M = 5
-export const FALLOFF_DEFAULT_M = 8
+/** What a freshly drawn height area starts as: a low rise with a ramp that is
+ *  walkable AT THE DEFAULT LIMITS — 3 m over 10 m is 0.3 m per metre, under
+ *  both the 0.4 m step and the 40° slope. A default that starts out warned
+ *  would teach the warning to be ignored. */
+export const HEIGHT_DEFAULT_M = 3
+export const FALLOFF_DEFAULT_M = 10
 
 /**
  * A metre knob of the relief — the `WidthField` pattern, with a sign.
@@ -399,7 +400,10 @@ export interface TerrainToolbarProps {
   falloffM: number
   onFalloffM: (m: number) => void
   heightCount: number
+  /** The two walk limits the steepness warning is measured against
+   *  (§ A1.3) — the STEP is usually the binding one, see `heightMath`. */
   maxSlopeDeg: number
+  maxStepM: number
   /** The catalog fetch FAILED — an empty palette then means "not loaded",
    *  not "nothing defined", and the way out is Reload, not another click. */
   typesError?: boolean
@@ -410,12 +414,13 @@ export function TerrainToolbar({
   draftLen, onCloseDraft, onDiscardDraft, areaCount, scatterPreview,
   onScatterPreview, onManageTypes, typesError, heightTool, onHeightTool,
   heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
+  maxStepM,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const isLine = shape === 'line'
   const drawingHeights = mode === 'heights' && heightTool === 'draw'
-  const needFalloff = minFalloffFor(heightM, maxSlopeDeg)
-  const nextTooSteep = tooSteep(heightM, falloffM, maxSlopeDeg)
+  const needFalloff = minFalloffFor(heightM, maxSlopeDeg, maxStepM)
+  const nextTooSteep = tooSteep(heightM, falloffM, maxSlopeDeg, maxStepM)
   const btn = (m: TerrainMode, icon: string, label: string, title: string) => (
     <button
       type="button"
@@ -560,9 +565,8 @@ export function TerrainToolbar({
                 min={0} max={FALLOFF_MAX_M} onCommit={onFalloffM} />
               <span className={'ga-map-arm' + (nextTooSteep ? ' warn' : '')}>
                 {nextTooSteep
-                  ? t('This ramp is too steep for walkers — {n} m or wider at {deg}°')
+                  ? t('This ramp is too steep for walkers — it needs {n} m or more')
                     .replace('{n}', String(needFalloff))
-                    .replace('{deg}', String(Math.round(maxSlopeDeg)))
                   : draftLen === 0
                     ? t('Click the map to set the first point')
                     : t('{n} of {max} points — click the first one to close, Escape discards')
@@ -837,8 +841,9 @@ export function TerrainAreaChip({
 
 export interface HeightAreaChipProps {
   area: HeightArea
-  /** The steepest slope a walker climbs (worldmap payload, § A1.3). */
+  /** The two walk limits (worldmap payload, § A1.3). */
   maxSlopeDeg: number
+  maxStepM: number
   onHeight: (m: number) => void
   onFalloff: (m: number) => void
   onDelete: () => void
@@ -861,12 +866,12 @@ export interface HeightAreaChipProps {
  * local because the chip is remounted per area (`key`).
  */
 export function HeightAreaChip({
-  area, maxSlopeDeg, onHeight, onFalloff, onDelete, onClose,
+  area, maxSlopeDeg, maxStepM, onHeight, onFalloff, onDelete, onClose,
 }: HeightAreaChipProps) {
   const { t } = useI18n()
   const [armed, setArmed] = useState(false)
-  const need = minFalloffFor(area.height_m, maxSlopeDeg)
-  const steep = tooSteep(area.height_m, area.falloff_m, maxSlopeDeg)
+  const need = minFalloffFor(area.height_m, maxSlopeDeg, maxStepM)
+  const steep = tooSteep(area.height_m, area.falloff_m, maxSlopeDeg, maxStepM)
   return (
     <div className="ga-map-chip">
       <div className="ga-map-chip-head">
@@ -894,11 +899,13 @@ export function HeightAreaChip({
       </div>
       <div className={'ga-map-chip-row ' + (steep ? 'ga-map-chip-warn' : 'ga-map-chip-label')}>
         {steep
-          ? t('Too steep for walkers: at {deg}° this height needs a ramp of at least {n} m. Nobody will climb it — only openings lead up here.')
-            .replace('{deg}', String(Math.round(maxSlopeDeg)))
+          ? t('Too steep for walkers: this height needs a ramp of at least {n} m to stay under the {deg}° slope and the {step} m step a walker takes. Nobody will climb it — only openings lead up here.')
             .replace('{n}', String(need))
-          : t('Walkable: the ramp is gentler than the {deg}° a walker climbs.')
-            .replace('{deg}', String(Math.round(maxSlopeDeg)))}
+            .replace('{deg}', String(Math.round(maxSlopeDeg)))
+            .replace('{step}', String(maxStepM))
+          : t('Walkable: the ramp stays under the {deg}° slope and the {step} m step a walker takes.')
+            .replace('{deg}', String(Math.round(maxSlopeDeg)))
+            .replace('{step}', String(maxStepM))}
       </div>
       <div className="ga-map-chip-actions">
         {armed ? (

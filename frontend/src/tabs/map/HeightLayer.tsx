@@ -61,9 +61,10 @@ export interface HeightLayerProps {
   selectedId: string
   /** Handles are live only while an area is selected for editing. */
   editing: boolean
-  /** The steepest slope a walker climbs (worldmap payload) — an area whose
-   *  ramp is steeper is marked here and explained in its chip. */
+  /** The two walk limits (worldmap payload) — an area whose ramp is steeper
+   *  than they allow is marked here and explained in its chip. */
   maxSlopeDeg: number
+  maxStepM: number
   /** The polygon being drawn (world metres) and the cursor it follows. */
   draft: Array<[number, number]>
   draftCursor: { x: number; z: number } | null
@@ -75,7 +76,8 @@ export interface HeightLayerProps {
 }
 
 export function HeightLayer({
-  areas, selectedId, editing, maxSlopeDeg, draft, draftCursor, draftWillClose,
+  areas, selectedId, editing, maxSlopeDeg, maxStepM, draft, draftCursor,
+  draftWillClose,
   onVertexMove, onVertexDelete, onEdgeInsert,
 }: HeightLayerProps) {
   const { t } = useI18n()
@@ -96,7 +98,7 @@ export function HeightLayer({
           const isSel = a.id === selectedId
           const c = centroid(a.polygon)
           const cp = worldToScreen(c[0], c[1], view, w, h)
-          const steep = tooSteep(a.height_m, a.falloff_m, maxSlopeDeg)
+          const steep = tooSteep(a.height_m, a.falloff_m, maxSlopeDeg, maxStepM)
           return (
             <g key={a.id}>
               {/* evenodd like every other polygon here: the engine answers

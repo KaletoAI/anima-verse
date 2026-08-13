@@ -1715,14 +1715,14 @@
     "How high the ground stands inside this area. Negative digs a hollow.": "Wie hoch der Boden innerhalb dieser Fläche steht. Negativ hebt eine Senke aus.",
     "Ramp": "Anstieg",
     "Over how many metres before the outline the ground climbs to that height. 0 = a wall at the edge.": "Über wie viele Meter vor der Kontur der Boden auf diese Höhe steigt. 0 = eine Wand an der Kante.",
-    "This ramp is too steep for walkers — {n} m or wider at {deg}°": "Dieser Anstieg ist zu steil zum Laufen — bei {deg}° braucht er {n} m oder mehr",
     "Close the ring and save the height area": "Den Ring schließen und die Höhenfläche speichern",
     "hollow": "Senke",
     "rise": "Erhebung",
-    "Too steep for walkers: at {deg}° this height needs a ramp of at least {n} m. Nobody will climb it — only openings lead up here.": "Zu steil zum Laufen: bei {deg}° braucht diese Höhe einen Anstieg von mindestens {n} m. Niemand klettert hier hoch — hinauf führen nur Öffnungen.",
-    "Walkable: the ramp is gentler than the {deg}° a walker climbs.": "Begehbar: der Anstieg ist flacher als die {deg}°, die eine Figur erklimmt.",
     "Remove this height area — the ground here goes flat again": "Diese Höhenfläche entfernen — der Boden wird hier wieder flach",
     "Delete height area": "Höhenfläche löschen",
-    "Failed to load heights": "Höhen konnten nicht geladen werden"
+    "Failed to load heights": "Höhen konnten nicht geladen werden",
+    "This ramp is too steep for walkers — it needs {n} m or more": "Dieser Anstieg ist zu steil zum Laufen — er braucht {n} m oder mehr",
+    "Too steep for walkers: this height needs a ramp of at least {n} m to stay under the {deg}° slope and the {step} m step a walker takes. Nobody will climb it — only openings lead up here.": "Zu steil zum Laufen: diese Höhe braucht einen Anstieg von mindestens {n} m, um unter der {deg}°-Steigung und der {step}-m-Stufe zu bleiben, die eine Figur nimmt. Niemand klettert hier hoch — hinauf führen nur Öffnungen.",
+    "Walkable: the ramp stays under the {deg}° slope and the {step} m step a walker takes.": "Begehbar: der Anstieg bleibt unter der {deg}°-Steigung und der {step}-m-Stufe, die eine Figur nimmt."
   }
 }

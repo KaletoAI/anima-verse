@@ -109,11 +109,14 @@ import type {
  * to sit under the cursor. Drawing itself reuses the very draft machinery the
  * paint mode uses — one ring gesture on this canvas, not two.
  *
- * `max_slope_deg` from the worldmap payload is what makes the steepness
- * warning possible: the server refuses a step steeper than that (§ A15 Nr. 8),
- * so a ramp too narrow for its height would seal the plateau it was drawn to
- * make reachable. The editor says so, with the width that would fix it, and
- * refuses nothing — a cliff is a legitimate thing to build.
+ * `max_slope_deg` AND `max_step_height_m` from the worldmap payload are what
+ * make the steepness warning possible: the server refuses a report that climbs
+ * more than either allows (§ A15 Nr. 8), so a ramp too narrow for its height
+ * would seal the plateau it was drawn to make reachable. Both limits, not the
+ * slope alone — at the defaults the step is the harsher of the two, and
+ * warning on the slope alone called ramps walkable that a walker gets snapped
+ * back on (review 2026-08-13). The editor says so, with the width that would
+ * fix it, and refuses nothing — a cliff is a legitimate thing to build.
  *
  * Paint has TWO gestures and one result. `area` clicks an outline; `line`
  * clicks a centre line that `strokeToPolygon` widens into the very same kind
@@ -137,10 +140,14 @@ const YAW_QUARTER = 90
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
 
-/** Fallback for `max_slope_deg` (§ A1.3) — the server's own default
- *  (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), used until the worldmap payload
- *  has answered and on a server too old to send it. */
+/** Fallbacks for the two walk limits (§ A1.3) — the server's own defaults
+ *  (`app/core/relief.DEFAULT_MAX_SLOPE_DEG` / `DEFAULT_MAX_STEP_M`), used
+ *  until the worldmap payload has answered and on a server too old to send
+ *  them. BOTH are needed: the step limit is the binding one at these numbers
+ *  (0.4 m per metre against tan 40° = 0.84), so warning on the slope alone
+ *  would call ramps walkable that the server refuses. */
 const DEFAULT_MAX_SLOPE_DEG = 40
+const DEFAULT_MAX_STEP_M = 0.4
 
 /** Zoom floor for the roof views: under one pixel per metre even a big house
  *  is a smudge, and each picture costs a request plus a GL context. */
@@ -283,6 +290,7 @@ export function MapTab() {
   // (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), so an older server warns with
   // the same number it judges with.
   const [maxSlopeDeg, setMaxSlopeDeg] = useState(DEFAULT_MAX_SLOPE_DEG)
+  const [maxStepM, setMaxStepM] = useState(DEFAULT_MAX_STEP_M)
   /** The top-down scatter preview — a VIEW, so it survives every mode. */
   const [scatterOn, setScatterOn] = useState(false)
   /** The prop library for the scatter model picker of the area chip — fetched
@@ -362,10 +370,14 @@ export function MapTab() {
     try {
       const wm = await apiGet<WorldmapPayload>('/play/worldmap?all=1')
       setBounds(wm.world_bounds || null)
-      // The walk limit rides along with the map (§ A1.3) — the relief editor
-      // warns with the very number the server judges steps with.
+      // The two walk limits ride along with the map (§ A1.3) — the relief
+      // editor warns with the very numbers the server judges steps with.
       if (Number.isFinite(wm.max_slope_deg) && (wm.max_slope_deg as number) > 0) {
         setMaxSlopeDeg(wm.max_slope_deg as number)
+      }
+      if (Number.isFinite(wm.max_step_height_m)
+        && (wm.max_step_height_m as number) > 0) {
+        setMaxStepM(wm.max_step_height_m as number)
       }
       const sigs: Record<string, string> = {}
       for (const row of wm.locations || []) {
@@ -1626,6 +1638,7 @@ export function MapTab() {
             onFalloffM={setNewFalloffM}
             heightCount={heightAreas.length}
             maxSlopeDeg={maxSlopeDeg}
+            maxStepM={maxStepM}
           />
           {/* Roofs are a VIEW, so the switch stays reachable in every mode —
               painting ground along a building's real outline is exactly when
@@ -1719,6 +1732,7 @@ export function MapTab() {
                 selectedId={selHeight}
                 editing={heightTool === 'select'}
                 maxSlopeDeg={maxSlopeDeg}
+                maxStepM={maxStepM}
                 draft={draft}
                 draftCursor={draftCursor}
                 draftWillClose={draftWillClose}
@@ -1773,6 +1787,7 @@ export function MapTab() {
               key={selectedHeight.id}
               area={selectedHeight}
               maxSlopeDeg={maxSlopeDeg}
+              maxStepM={maxStepM}
               onHeight={setHeightValue}
               onFalloff={setFalloffValue}
               onDelete={() => { void deleteHeightArea() }}

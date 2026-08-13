@@ -4,40 +4,66 @@
  * One question, asked in two places (the layer draws a warning glyph, the chip
  * writes the sentence): is this ramp steeper than a walker can climb?
  *
- * The server judges every reported step with `game.max_slope_deg` (§ A15 Nr. 8)
- * and the number travels in the worldmap payload, so the editor can warn while
- * the shape is being drawn instead of leaving the author to discover a sealed
- * plateau by walking into it. A height area's ramp has a CONSTANT gradient:
- * `|height_m| / falloff_m` — it climbs the full height over exactly that
- * width. So it is walkable exactly while
+ * The server judges every reported step with TWO limits (§ A15 Nr. 8,
+ * `app/core/relief.slope_blocks`) and both travel in the worldmap payload:
  *
- *     atan(|height_m| / falloff_m) <= max_slope_deg
- *     i.e. falloff_m >= |height_m| / tan(max_slope_deg)
+ *   * `max_slope_deg` — the SLOPE, over every distance;
+ *   * `max_step_height_m` — the STEP, on top of it, below one metre of
+ *     horizontal travel (`relief.STEP_DISTANCE_M`).
  *
- * A ramp of 0 (a wall at the outline) is infinitely steep and always warns —
- * unless the area is flat, which is no ramp at all.
+ * A height area's ramp has a CONSTANT gradient — it climbs the full height
+ * over exactly `falloff_m` metres — so both limits become one number here:
+ *
+ *     gradient = |height_m| / falloff_m
+ *     walkable while gradient <= min(tan(max_slope_deg),
+ *                                    max_step_height_m / 1 m)
+ *
+ * THE STEP LIMIT IS USUALLY THE BINDING ONE, and leaving it out was a real
+ * hole (review 2026-08-13): at the defaults it allows 0.4 m per metre against
+ * the slope limit's tan 40° = 0.84, so a 5 m rise over 8 m passed as "walkable"
+ * here while the server refused every report shorter than a metre — a figure
+ * snapping back intermittently on a ramp the editor called fine. Short reports
+ * are not exotic: they are what a walker sends when it stops, slides along an
+ * obstacle or turns.
  *
  * IT IS A WARNING, NEVER A REFUSAL. A cliff is a legitimate thing to build (a
  * plateau one reaches through an opening, a ravine one is meant to walk
  * around); what is not legitimate is building one by accident.
  */
 
-/** The narrowest ramp this height may have and still be walkable, in metres.
- *  0 when nothing can be said (a flat area, or an unusable limit). */
-export function minFalloffFor(heightM: number, maxSlopeDeg: number): number {
-  const h = Math.abs(heightM)
-  if (!Number.isFinite(h) || h <= 0) return 0
-  if (!Number.isFinite(maxSlopeDeg) || maxSlopeDeg <= 0 || maxSlopeDeg >= 90) {
-    return 0
-  }
-  const need = h / Math.tan((maxSlopeDeg * Math.PI) / 180)
-  return Math.round(need * 100) / 100
+/** Below this horizontal distance a height change counts as a STEP — the
+ *  mirror of `app/core/relief.STEP_DISTANCE_M` (and of `walk.ts`). */
+export const STEP_DISTANCE_M = 1
+
+/** The steepest gradient (metres of rise per metre of ground) a walker takes,
+ *  from the two limits together. 0 when neither says anything usable. */
+export function maxGradient(maxSlopeDeg: number, maxStepM: number): number {
+  const bySlope = (Number.isFinite(maxSlopeDeg) && maxSlopeDeg > 0
+    && maxSlopeDeg < 90)
+    ? Math.tan((maxSlopeDeg * Math.PI) / 180)
+    : Infinity
+  const byStep = (Number.isFinite(maxStepM) && maxStepM > 0)
+    ? maxStepM / STEP_DISTANCE_M
+    : Infinity
+  const g = Math.min(bySlope, byStep)
+  return Number.isFinite(g) ? g : 0
 }
 
-/** Is this area's ramp steeper than `max_slope_deg`? */
+/** The narrowest ramp this height may have and still be walkable, in metres.
+ *  0 when nothing can be said (a flat area, or unusable limits). */
+export function minFalloffFor(heightM: number, maxSlopeDeg: number,
+  maxStepM: number): number {
+  const h = Math.abs(heightM)
+  if (!Number.isFinite(h) || h <= 0) return 0
+  const g = maxGradient(maxSlopeDeg, maxStepM)
+  if (!g) return 0
+  return Math.round((h / g) * 100) / 100
+}
+
+/** Is this area's ramp steeper than a walker climbs? */
 export function tooSteep(heightM: number, falloffM: number,
-  maxSlopeDeg: number): boolean {
-  const need = minFalloffFor(heightM, maxSlopeDeg)
+  maxSlopeDeg: number, maxStepM: number): boolean {
+  const need = minFalloffFor(heightM, maxSlopeDeg, maxStepM)
   if (!need) return false
   return !(falloffM >= need)
 }
