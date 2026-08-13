@@ -86,15 +86,22 @@ export const MAX_SCATTER_ENTRIES = 8
 
 /** What a freshly added scatter row starts as.
  *
- *  The target height is WRITTEN OUT rather than left empty on purpose: an
- *  entry without `height_m` falls back to the 3D client's default
- *  (`SCATTER_MODEL_HEIGHT_M`, 2 m), and an author who cannot see that number
- *  cannot correct it either. Two metres is a shrub/small tree next to a 1.70 m
- *  figure — visible, and an obvious knob to turn. Existing entries without the
- *  field stay valid; they just take the same default silently. */
+ *  The target height is deliberately EMPTY (finding 12): an entry without
+ *  `height_m` now takes the height the prop really has in the library, and a
+ *  row seeded with 2 m would override exactly that — every tree ended up
+ *  avatar-high because the seeded number was an authored answer nobody had
+ *  given. The field shows the inherited height as its placeholder instead, so
+ *  it is still visible and still an obvious knob to turn. */
 const NEW_SCATTER_ENTRY: TerrainScatterEntry = {
-  density_per_100m2: 1, height_m: 2,
+  density_per_100m2: 1,
 }
+
+/** The target height a scatter row inherits when it authors none: the prop's
+ *  own library height, and the 3D client's flat fallback where there is no
+ *  prop (the built-in tuft, a hand-written URL). Mirrors
+ *  `client3d/src/scene/scatterLod.scatterTargetH` — the editor only SHOWS the
+ *  number, the renderers decide it. */
+const SCATTER_FALLBACK_HEIGHT_M = 2
 
 /** The URL a scatter `model` stores: exactly the `model_url` the prop library
  *  hands out on the server (`app/core/props.py`), and exactly what the 3D
@@ -194,10 +201,12 @@ function WidthField({ widthM, onWidth }: {
  * line). It never writes itself — it hands the number up and shows whatever
  * comes back, so a value the server clamps is not left claimed by the field.
  * An empty field is a real state and commits as `null`: "no target height" is
- * not the same as "0 m tall".
+ * not the same as "0 m tall". `placeholder` is what the empty field then
+ * inherits — the number shown greyed out is the one that really applies.
  */
-function ScatterNum({ label, title, value, step, onCommit }: {
+function ScatterNum({ label, title, value, step, placeholder, onCommit }: {
   label: string; title: string; value: number | null; step: number
+  placeholder?: string
   onCommit: (v: number | null) => void
 }) {
   const [draft, setDraft] = useState(value === null ? '' : String(value))
@@ -218,6 +227,7 @@ function ScatterNum({ label, title, value, step, onCommit }: {
       <input
         className="ga-input"
         type="number" min={0} step={step}
+        placeholder={placeholder}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -265,7 +275,14 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     <div className="ga-terrain-scatter">
       {entries.map((e, i) => {
         const model = e.model || ''
-        const known = !model || props.some((p) => propModelUrl(p.id) === model)
+        const prop = props.find((p) => propModelUrl(p.id) === model)
+        const known = !model || !!prop
+        // What the empty height field inherits — the prop's real height from
+        // the library (the same number the Props tab shows, the lean
+        // `/assets/props` listing already carries it), the flat fallback where
+        // there is no prop record.
+        const inherited = (prop && Number(prop.height_m) > 0)
+          ? Number(prop.height_m) : SCATTER_FALLBACK_HEIGHT_M
         return (
           <div className="ga-terrain-scatter-row" key={i}>
             <span className="ga-terrain-swatch" style={{ background: colorOf(i) }} />
@@ -295,8 +312,12 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
             />
             <ScatterNum
               label={t('height (m)')}
-              title={t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the 3D world’s default, 2 m for a model and 0.8 m for a tuft.')}
+              title={model && prop
+                ? t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the prop’s own height from the Props tab ({h} m).')
+                  .replace('{h}', String(inherited))
+                : t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the prop’s own height from the Props tab, and 2 m for a model this world has no prop for (0.8 m for a tuft).')}
               value={typeof e.height_m === 'number' ? e.height_m : null}
+              placeholder={model ? String(inherited) : undefined}
               step={0.5}
               onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
             />

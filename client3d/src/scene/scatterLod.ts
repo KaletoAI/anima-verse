@@ -1,5 +1,6 @@
 /**
- * Pure display maths of the ground scatter's level of detail.
+ * Pure display maths of the ground scatter: how tall its props stand, and its
+ * level of detail.
  *
  * Everything here is a function of its arguments: no Three.js, no module
  * state, no DOM — the same discipline as `game/walk.ts`, and what lets
@@ -44,6 +45,39 @@ export const SCATTER_CULL_FAR = 120;
  *  Not 0: an area that fades to nothing pops when it crosses the line, and a
  *  quarter of a wood still reads as a wood on the horizon. */
 export const SCATTER_MIN_SHARE = 0.25;
+
+/** Target height of a scattered GLB when NOBODY knows how tall it should be
+ *  (metres) — no authored `height_m`, no prop record behind the URL.
+ *
+ *  A prop file carries whatever size its author chose, and "whatever the file
+ *  says" is not a size in a world measured in metres — a tree exported in
+ *  centimetres stood 2 cm tall next to the figure. So an unknown model is
+ *  normalised to a shrub/small-tree height instead of being trusted. It is the
+ *  LAST resort, not the default: a prop of this world brings its real height
+ *  along (`prop_height_m`), and this number is what is left for the built-in
+ *  tuft's model-less siblings and foreign URLs. */
+export const SCATTER_MODEL_HEIGHT_M = 2.0;
+
+/**
+ * How tall ONE scattered prop is drawn, in metres (§ A9).
+ *
+ * The precedence, and the whole point of it: the height AUTHORED on the
+ * scatter row wins, because someone typed it for this ground. Otherwise the
+ * prop's own library height governs — a tree is 8 m tall because the Props tab
+ * says so, and every area that scatters it gets a tree instead of a shrub.
+ * Only when neither exists (a foreign URL, a prop this world has no record
+ * for) does the flat fallback apply. Before finding 12 the fallback WAS the
+ * default and every wood stood at avatar height.
+ *
+ * Both inputs are "> 0 or nothing": undefined, null, NaN, 0 and negatives all
+ * read as "not given", written as `> 0` so NaN falls through instead of
+ * scaling a mesh into a NaN matrix.
+ */
+export function scatterTargetH(entryH?: number, propH?: number): number {
+  if (Number(entryH) > 0) return Number(entryH);
+  if (Number(propH) > 0) return Number(propH);
+  return SCATTER_MODEL_HEIGHT_M;
+}
 
 /** The two resolution tiers a prop mesh can stand at (§ B1 `variants`). The
  *  string is the tier TOKEN the payload uses; resolving it to a URL is

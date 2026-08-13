@@ -68,6 +68,12 @@ export interface PropRef {
   id: string
   name?: string
   category?: string
+  /** The prop's REAL height in metres (the sidecar dim the Props tab edits).
+   *  Every record has one — a prop without authored dims stores the 1 m
+   *  placeholder cube. It is what a terrain scatter inherits when it authors
+   *  no target height, so the map editor can show it as the field's
+   *  placeholder without asking the server a second time. */
+  height_m?: number
   /** False = the record exists but has no mesh yet — a picker that hands out
    *  model URLs must skip those. */
   has_model?: boolean

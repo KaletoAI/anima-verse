@@ -49,7 +49,8 @@ import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, Ter
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
-import { scatterCountShare, scatterTierFor, scatterVisibleCount } from './scatterLod';
+import { scatterCountShare, scatterTargetH, scatterTierFor,
+  scatterVisibleCount } from './scatterLod';
 import type { ScatterTier } from './scatterLod';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -86,14 +87,10 @@ const AREA_OFFSET_MAX = 32;
  *  numbers. */
 const TUFT_RADIUS_M = 0.22;
 const TUFT_HEIGHT_M = 0.8;
-/** Target height of a scattered GLB that declares no `height_m` (metres).
- *
- *  A prop file carries whatever size its author chose, and "whatever the file
- *  says" is not a size in a world measured in metres — a tree exported in
- *  centimetres stood 2 cm tall next to the figure. So an undeclared model is
- *  normalised to a shrub/small-tree height instead of being trusted; an author
- *  who wants another size says so in `height_m` (the editor now pre-fills it). */
-const SCATTER_MODEL_HEIGHT_M = 2.0;
+// How tall a scattered MODEL stands is `scatterTargetH` in `scatterLod.ts`:
+// authored height, else the prop's own library height, else the flat
+// fallback. It lives there because it is pure arithmetic that the smoke can
+// load — this file imports three.js and cannot be.
 
 /**
  * THE BASEMENT HOLE (moved here from `main.ts` with E4 task 3).
@@ -778,8 +775,9 @@ export function createGround(): Ground {
         baseCount: points.length,
         variants,
         model: typeof entry.model === 'string' ? entry.model : '',
-        targetH: Number(entry.height_m) > 0
-          ? Number(entry.height_m) : SCATTER_MODEL_HEIGHT_M,
+        // The authored height wins, the prop's real one governs when none was
+        // authored, the flat fallback is the last resort (§ A9).
+        targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
         near: centre,
         wantUrl: '',
         shownUrl: '',
@@ -866,10 +864,10 @@ export function createGround(): Ground {
       obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
       if (!src) { abandon(); return; }
       const mesh = src as THREE.Mesh;
-      // `height_m` is the TARGET height since B17: the prop is scaled until
-      // its bounding box is that tall, and grounded either way (B16).
-      // Without one the model is NOT instanced at its authored size — it is
-      // normalised to `SCATTER_MODEL_HEIGHT_M`, see there.
+      // `targetH` is the TARGET height since B17: the prop is scaled until
+      // its bounding box is that tall, and grounded either way (B16). The
+      // model is never instanced at its file size — that number survived no
+      // normalisation (`scatterTargetH`).
       const geometry = prop.owned.get(url) ?? groundedGeometry(mesh, prop.targetH);
       // The clone is OURS and nothing else disposes it — the owned bag of
       // this rebuild was drained into `areaOwned` long before this answer

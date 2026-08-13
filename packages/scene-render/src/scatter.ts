@@ -59,10 +59,11 @@ export interface ScatterEntry {
   /** URL of a prop mesh to instance; absent = the built-in tuft */
   model?: string
   /** TARGET height in metres: the placed prop is scaled uniformly until its
-   *  bounding box is this tall. Absent = the renderer's default height (the
-   *  3D client's `SCATTER_MODEL_HEIGHT_M` for a model, its tuft height for the
-   *  built-in one) — NOT the model's authored size, which is no size at all in
-   *  a world measured in metres. */
+   *  bounding box is this tall. Absent = the prop's own library height, which
+   *  the server ships as `prop_height_m` (the 3D client's `scatterTargetH`
+   *  resolves the precedence; a model with no prop record falls back to its
+   *  flat default, the built-in tuft to its tuft height) — NEVER the model's
+   *  authored size, which is no size at all in a world measured in metres. */
   height_m?: number
 }
 
