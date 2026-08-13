@@ -1874,24 +1874,43 @@ Erwartungen (§ B5a: Zahlen, keine Screenshots).
 **Was der RENDERER damit macht** (E8 Task 3, gilt für beide Renderer): der
 Boden wird auf DEM Gitter geschnitten, das das Feld mitbringt — die Basisplatte
 als Zellgitter (`gridPlate`), jede gemalte Fläche entlang derselben Linien
-zerteilt (`subdivideOnGrid`, `@anima/scene-render/gridMesh`), danach jeder
-Vertex per `sampleWorldHeight` an SEINEM eigenen x/z gehoben. EINE Zellweite
-für alles: `gridStepFor` verdoppelt den Feld-Schritt, bis eine Fläche unter
-40 000 Zellen bleibt (aus dem Punktbudget oben hergeleitet — die größte
-beschreibbare Welt drapiert damit auf 8 m, alles unter ~800 m auf den nativen
-4 m). Eine Fläche coarser als die Platte würde in den Hügel einsinken, deshalb
-teilen sich beide die Zahl. Volle Zellen werden auf beiden Seiten von der
-Minimum- zur Maximum-Ecke geteilt, damit Platte und Fläche dort dieselbe
-Fläche beschreiben; nur in den Zellen, die eine Flächen-KONTUR schneidet,
-können sie um einen Bruchteil der Zell-Krümmung auseinanderliegen — dagegen
-steht der Haaransatz-Versatz der Flächen (max. 1 cm), und ein `falloff_m`
-unter einer Zellweite ist die Autorierungs-Grenze dafür.
+zerteilt (`subdivideOnGrid`, `@anima/scene-render/gridMesh`). Jede Zelle wird
+dabei von der Minimum- zur Maximum-Ecke geteilt, auf beiden Seiten.
 
-Zwei Folgen, die keine Geometrie sind: **Nebel-Quads** hängen pro Rechteck auf
-`max(Höhe im Rechteck) + 5 cm` (§ A12; ein Schleier auf Durchschnittshöhe
-steckt in jedem Hügel, den er verdecken soll), und **Boden-Raycasts** starten
-bei `max(Feldhöhe) + 5 m` statt bei fixen 20 m — die ±50-m-Klemme oben ist
-genau deshalb notiert.
+**Gehoben wird mit `sampleGroundHeight`, nicht mit `sampleWorldHeight`.** Ein
+Netz ist nicht bilinear, es ist dreieckig: über einer Zelle ist die gezeichnete
+Fläche eine von zwei EBENEN
+
+```
+tz <= tx:  h00 + tx·(h10−h00) + tz·(h11−h10)
+tz >  tx:  h00 + tz·(h01−h00) + tx·(h11−h01)
+```
+
+und sie weicht im Zellinneren um bis zu ein Viertel der Zell-Verwindung
+`|h00+h11−h01−h10|` vom Feld ab. Gemessen an einer 5-m-Fläche mit 10 m Falloff
+auf 8-m-Gitter: **ein voller Meter** — genau so weit sackt ein Flächen-Vertex
+unter die Platte, wenn er bilinear gehoben wird, und genau so weit sticht die
+Platte durch die Wiese. Der Fehler hängt an der Verwindung, NICHT am Verhältnis
+`falloff_m` zur Zellweite; eine Autorierungs-Grenze gibt es dafür nicht. Also
+liest ALLES, was den Boden berührt, denselben Sampler: Platte, Flächen, Streu,
+Figuren, Marker. `sampleWorldHeight` bleibt, was es war — der Zwilling der
+Server-Lesung des Feldes.
+
+**Zellweite:** `gridStepFor` verdoppelt den Feld-Schritt, bis das Netz unter
+40 000 Zellen bleibt, und misst das über die **Feld-Box**, nie über die ganze
+Platte — außerhalb des Feldes ist der Boden eben und wird von vier Quads
+getragen. Ein 100-m-Hügel in einer 1500-m-Welt bleibt damit auf 4 m (29² = 841
+Zellen), statt auf 8 m vergröbert zu werden, um 35 000 leere Zellen zu bezahlen.
+Platte und Flächen teilen sich die eine Zahl (eine gröbere Fläche würde in den
+Hügel einsinken).
+
+Zwei Folgen, die keine Geometrie sind: **Nebel-Quads** werden auf ~64 m
+gekachelt (`FOG_TILE_M`) und hängen je Kachel auf `max(Höhe darin) + 5 cm` —
+ohne Kachelung hebt EIN Hügel ein weltbreites Band fünfzig Meter in die Luft;
+verraten wird dadurch nichts, weil das Gelände ohnehin nie gefoggt ist und die
+Topographie schon zeigt. Und **Boden-Raycasts** starten bei
+`max(Feldhöhe) + 5 m` statt bei fixen 20 m — die ±50-m-Klemme oben ist genau
+deshalb notiert.
 
 **Was hier NICHT passiert:** die Planierung unter Fußabdrücken (Plateau) ist
 E8 Task 4 — die Rasterung bleibt pur und rastert genau das, was autoriert
@@ -1904,7 +1923,8 @@ Ursprungs-Verankerung, das Vergröbern und die Routen) plus die
 `.mjs`-Tabelle des geteilten Samplers
 (`client3d/scripts/smoke_world_height.mjs`) und die Gitter-/Drape-Mathe in
 `client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt
-inkl. Naht-Gegenprobe, Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung).
+inkl. Naht-Gegenprobe, Kontur-Zelle gegen die gemessene Plattenfläche,
+Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung).
 
 ---
 

@@ -474,7 +474,8 @@ async function startApp(username: string, role: string) {
   // traveller's point every frame, so it gets the sampler rather than a height
   // per poll. `terrainGround` is created a few lines down — the arrow reads it
   // when a figure is placed, which is long after that.
-  npcs.setGroundHeight((x, z) => terrainGround.heightAt(x, z));
+  npcs.setGroundHeight((x, z) => terrainGround.heightAt(x, z),
+                       () => terrainGround.heightRevision());
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
   figures.onModelReady = (charName) => {
@@ -594,8 +595,12 @@ async function startApp(username: string, role: string) {
   // restarting under the boot must not leave the player at a black screen.
   // Whatever arrives late simply drapes the ground a moment later.
   await Promise.race([
+    // …and a ground that could not be built must not black out the boot: the
+    // sync swallows a failed FETCH itself, but a rebuild that throws (a broken
+    // texture, a driver refusing a buffer) would reject into this race.
     terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations,
-                       firstMap.height_sig ?? ''),
+                       firstMap.height_sig ?? '')
+      .catch((e) => { console.warn('[ground] first sync failed', e); return false; }),
     sleep(GROUND_BOOT_WAIT_MS),
   ]);
   /** Where the map camera looks at boot — see the frame note above. */
@@ -2955,12 +2960,18 @@ async function startApp(username: string, role: string) {
       || elevatorRide || walkIn) return false;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return false;
-    // The click is read against the plane the FIGURE stands on, not against
-    // y = 0 (parked review finding, E3): on an upper storey or a raised floor
-    // the ray otherwise runs past the floor down to the map's ground, and at a
-    // flat camera angle the goal lands metres behind the pointer. The height is
-    // the drawn one, so it is right for every storey without a second source.
-    const hit = engine.groundPointAt(x, y, pos.y);
+    // OUT IN THE OPEN the click is read against the DRAPED GROUND itself
+    // (E8 task 3): a horizontal plane through the figure's feet meets a slope
+    // metres away from the pointer — at 40° and a flat camera angle 7-14 m,
+    // which is a walk order to somewhere the player did not click.
+    //
+    // INSIDE A FOOTPRINT the plane stays (parked review finding, E3): on an
+    // upper storey or a raised floor the world's ground is the wrong surface
+    // entirely — the ray would run past the floor down to the map. Same split
+    // as `groundY()`, and for the same reason.
+    const standingOn = tileAt(pos.x, pos.z);
+    const hit = (standingOn ? null : terrainGround.groundPointAt(engine.raycasterAt(x, y)))
+      ?? engine.groundPointAt(x, y, pos.y);
     if (!hit) return false;
     const goal = planClickWalk({ x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
       (bx, bz) => blockedForAvatar(bx, bz));

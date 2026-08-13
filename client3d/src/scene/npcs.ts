@@ -180,13 +180,20 @@ export class NpcManager {
    * without a relief has always drawn.
    */
   private groundY: (x: number, z: number) => number = () => GROUND_Y;
+  /** `Ground.heightRevision` — part of the drawn travel line's identity: the
+   *  line is rebuilt only when its key changes, and the relief arrives long
+   *  after the first line was drawn. Without it a journey already running
+   *  would keep a line on the flat world until the walker's next five-metre
+   *  bucket. */
+  private groundRev: () => number = () => 0;
 
   constructor(private figures: FigureLibrary | null = null) {}
 
-  /** Install the world height sampler (`Ground.heightAt`). Called once at
-   *  boot; the field behind it updates itself. */
-  setGroundHeight(fn: (x: number, z: number) => number) {
+  /** Install the world height sampler (`Ground.heightAt`) and the revision of
+   *  the field behind it. Called once at boot; the field updates itself. */
+  setGroundHeight(fn: (x: number, z: number) => number, revision?: () => number) {
     this.groundY = fn;
+    if (revision) this.groundRev = revision;
   }
 
   setAvatar(name: string) {
@@ -640,7 +647,7 @@ export class NpcManager {
     // far it overshoots, and an unclamped bucket would rebuild that identical
     // geometry every further five metres.
     const walked = route ? clampProgress(route.progressM, route.totalM) : 0;
-    const key = route ? `${route.key}#${trimBucket(walked)}` : '';
+    const key = route ? `${route.key}#${trimBucket(walked)}#${this.groundRev()}` : '';
     if (key === npc.travelKey) return;
     this.dropTravelLine(npc);   // clears travelKey, so the new one goes after
     npc.travelKey = key;

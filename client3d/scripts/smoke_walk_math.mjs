@@ -2707,6 +2707,14 @@ async function main() {
    *     rare on the shapes a discovered map makes, and every rectangle costs
    *     the same one draw call either way.
    *
+   *     TILED since E8 task 3: every run is cut into EQUAL pieces of at most
+   *     `FOG_TILE_M` (64 m) per axis — `n = ceil(extent / 64)` pieces of
+   *     `extent / n`. On a relief a quad hangs above the highest ground in its
+   *     own rectangle, and a world-wide band would be lifted by one hill fifty
+   *     metres into the air. The tiles are emitted x-major (all pieces of the
+   *     first column, then the next), which is the order the expectations below
+   *     are written in.
+   *
    *     THE CASE. bounds x 0…100, z 0…60, margin 10 -> outer x −10…110 (120 m
    *     wide), z −10…70 (80 m deep), area 9600 m². Two known footprints, both
    *     unturned:
@@ -2718,9 +2726,17 @@ async function main() {
    *       z  30…35 (d  5): no box       -> x −10…110            ( 600)
    *       z  35…45 (d 10): B spans it   -> x −10…65, x 75…110   ( 750 +  350)
    *       z  45…70 (d 25): no box       -> x −10…110            (3000)
-   *     Seven rectangles, and their areas sum to
+   *     Seven runs, and their areas sum to
    *       2400 + 2000 + 600 + 1100 + 3000 = 9100 = 9600 − 400 − 100,
    *     which is the whole claim of the algorithm written as one number.
+   *
+   *     THE TILING then splits five of those seven (nothing changes area):
+   *       120 m wide -> 2 × 60 m   (three runs: the bands without a box)
+   *        80 m wide -> 2 × 40 m   (the run right of A)
+   *        75 m wide -> 2 × 37.5 m (the run left of B)
+   *        20 / 35 m wide         -> unchanged, they are under 64 m
+   *     and no run is deeper than 25 m, so nothing is cut in z:
+   *     7 − 5 + 10 = 12 rectangles, still 9100 m².
    */
   console.log('\nfog — the box of a footprint square');
   //   the three turns derived above, on the same 10 m square at the origin
@@ -2751,14 +2767,19 @@ async function main() {
   const fogCase = fogRects(FOG_FRAME, [FOG_A, FOG_B], 10);
   //   the seven rectangles of the derivation, bands top to bottom and runs
   //   left to right inside each band
-  check('two footprints cut the frame into seven rectangles', fogCase, [
-    { x: -10, z: -10, w: 120, d: 20 },
+  check('two footprints cut the frame into twelve tiles', fogCase, [
+    { x: -10, z: -10, w: 60, d: 20 },
+    { x: 50, z: -10, w: 60, d: 20 },
     { x: -10, z: 10, w: 20, d: 20 },
-    { x: 30, z: 10, w: 80, d: 20 },
-    { x: -10, z: 30, w: 120, d: 5 },
-    { x: -10, z: 35, w: 75, d: 10 },
+    { x: 30, z: 10, w: 40, d: 20 },
+    { x: 70, z: 10, w: 40, d: 20 },
+    { x: -10, z: 30, w: 60, d: 5 },
+    { x: 50, z: 30, w: 60, d: 5 },
+    { x: -10, z: 35, w: 37.5, d: 10 },
+    { x: 27.5, z: 35, w: 37.5, d: 10 },
     { x: 75, z: 35, w: 35, d: 10 },
-    { x: -10, z: 45, w: 120, d: 25 },
+    { x: -10, z: 45, w: 60, d: 25 },
+    { x: 50, z: 45, w: 60, d: 25 },
   ]);
   //   the invariant behind the picture: covered area = frame − footprints
   const fogArea = fogCase.reduce((sum, r) => sum + r.w * r.d, 0);
@@ -2766,12 +2787,20 @@ async function main() {
   //   the order the caller hands the known places in cannot change the veil
   check('the footprint order does not decide the picture',
     fogRects(FOG_FRAME, [FOG_B, FOG_A], 10), fogCase);
-  //   nothing known yet: the whole grown frame is one rectangle
-  check('an undiscovered world is one rectangle',
-    fogRects(FOG_FRAME, [], 10), [{ x: -10, z: -10, w: 120, d: 80 }]);
-  //   no margin, nothing known: exactly the frame
+  //   nothing known yet: the whole grown frame, tiled 2 x 2 (120 -> 2 x 60,
+  //   80 -> 2 x 40), x-major
+  check('an undiscovered world is one run in four tiles',
+    fogRects(FOG_FRAME, [], 10), [
+      { x: -10, z: -10, w: 60, d: 40 },
+      { x: -10, z: 30, w: 60, d: 40 },
+      { x: 50, z: -10, w: 60, d: 40 },
+      { x: 50, z: 30, w: 60, d: 40 },
+    ]);
+  //   no margin, nothing known: exactly the frame — 100 m wide is two tiles,
+  //   60 m deep is one
   check('without a margin the veil is the frame itself',
-    fogRects(FOG_FRAME, [], 0), [{ x: 0, z: 0, w: 100, d: 60 }]);
+    fogRects(FOG_FRAME, [], 0),
+    [{ x: 0, z: 0, w: 50, d: 60 }, { x: 50, z: 0, w: 50, d: 60 }]);
   //   nothing placed at all -> no frame -> no map to cover
   check('bounds null -> no fog', fogRects(null, [FOG_A], 10), []);
   //   a footprint that covers the whole (unmargined) frame leaves nothing:

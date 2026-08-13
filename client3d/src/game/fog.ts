@@ -102,6 +102,24 @@ export const FOG_RAGGED_M = FOG_OVERHANG_M - FOG_FEATHER_M;
  *  drift is visible without the repeat becoming a pattern. */
 export const FOG_TEX_METRES = 46;
 
+/**
+ * Edge length a veil rectangle is TILED down to, in metres (E8 task 3).
+ *
+ * A rectangle used to be as long as the band it came from — a world-wide strip
+ * between two rows of known places. That was free while the veil was flat. On
+ * a relief it is not: a quad hangs above the highest ground inside its own
+ * rectangle, so ONE hill lifted a fifteen-hundred-metre strip fifty metres into
+ * the air and the player looked at the underside of a cloud that had nothing to
+ * hide there.
+ *
+ * Tiling costs draw calls and reveals NOTHING: the terrain is never fogged
+ * (§ A12), so the draped ground already shows every ridge — a cover that
+ * follows it tells no one anything the picture does not. 64 m is a bit more
+ * than the cloud texture's own tile (46 m), so the cover still reads as one
+ * sky, and small enough that a hill lifts its own neighbourhood only.
+ */
+export const FOG_TILE_M = 64;
+
 /** Extents below this are not worth a draw call (metres). A sliver of a
  *  micrometre between two footprints is not a hole in the cloud cover, it is
  *  floating-point noise — and a quad for it would still be drawn 3.2 m
@@ -192,6 +210,21 @@ export function fogRects(bounds: FogBounds | null | undefined,
   cuts.sort((a, b) => a - b);
 
   const rects: FogRect[] = [];
+  /** One run of the sweep, cut into tiles of at most `FOG_TILE_M` (see there).
+   *  The pieces are EQUAL — dividing by the count instead of stepping by the
+   *  tile size avoids a sliver at the far end, which would be a draw call for
+   *  a hand's breadth of cloud. */
+  const push = (x: number, z: number, w: number, d: number): void => {
+    const nx = Math.max(1, Math.ceil(w / FOG_TILE_M - 1e-9));
+    const nz = Math.max(1, Math.ceil(d / FOG_TILE_M - 1e-9));
+    const tw = w / nx;
+    const td = d / nz;
+    for (let ix = 0; ix < nx; ix++) {
+      for (let iz = 0; iz < nz; iz++) {
+        rects.push({ x: x + ix * tw, z: z + iz * td, w: tw, d: td });
+      }
+    }
+  };
   for (let i = 0; i < cuts.length - 1; i++) {
     const za = cuts[i];
     const zb = cuts[i + 1];
@@ -203,11 +236,11 @@ export function fogRects(bounds: FogBounds | null | undefined,
       .sort((a, b) => a.x0 - b.x0);
     let cur = x0;
     for (const s of spans) {
-      if (s.x0 - cur > EPS_M) rects.push({ x: cur, z: za, w: s.x0 - cur, d: zb - za });
+      if (s.x0 - cur > EPS_M) push(cur, za, s.x0 - cur, zb - za);
       if (s.x1 > cur) cur = s.x1;      // overlapping boxes are ONE hole
       if (x1 - cur <= EPS_M) break;
     }
-    if (x1 - cur > EPS_M) rects.push({ x: cur, z: za, w: x1 - cur, d: zb - za });
+    if (x1 - cur > EPS_M) push(cur, za, x1 - cur, zb - za);
   }
   return rects;
 }
