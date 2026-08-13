@@ -84,6 +84,76 @@ function normBoneName(name: string): string {
   return name.replace(/^mixamorig:?/i, '').replace(/:/g, '').toLowerCase();
 }
 
+/**
+ * How far a rig's bind pose may sit from the library's bone-frame convention
+ * before its clips are worthless on it — mean deviation over the addressed
+ * bones, in degrees.
+ *
+ * `adaptExternalClips` copies LOCAL quaternion tracks 1:1, which is only ever
+ * right while donor and target hold their bones in the same rest frame. The
+ * Mixamo library was authored with every bone pointing at its child along the
+ * bone's own +Y. A rig with identity rest rotations instead carries
+ * world-parallel frames (legs down −Y, arms out +X), so the same track that
+ * bends a Mixamo elbow folds that rig's limb over its torso — and nothing
+ * downstream notices, because acceptance counts TRACK HITS by name only.
+ *
+ * Measured (acceptance round 2026-08-13, finding 7): Xbot.glb 95.6° mean /
+ * 179.6° max, Soldier.glb 8.3° / 37.4°, eight server-generated character
+ * models 1.3–1.7° / 7.0°. The threshold sits well above every rig that works
+ * and well below the one that does not; the gap is a factor of ten, so the
+ * exact value is not delicate.
+ */
+export const MAX_REST_FRAME_DEV_DEG = 30;
+
+/** The convention the shared clip library was authored in: a bone's child sits
+ *  on that bone's own +Y axis. */
+const DONOR_CHILD_AXIS = new THREE.Vector3(0, 1, 0);
+
+/**
+ * How far this skeleton's REST pose sits from the donor convention above:
+ * for every bone the clips actually address, the angle between the direction
+ * to its first bone child (expressed in the bone's OWN frame — that is exactly
+ * `child.position`) and +Y.
+ *
+ * Bind pose only, one pass over the bones, no frame sampling: the numbers come
+ * out of the rest transforms the loader already built, so this costs nothing
+ * next to adapting the clips themselves.
+ *
+ * `bones` is how many bones carried the measurement; with none of them the
+ * verdict is 0 (nothing measurable is not a defect — such a rig fails the
+ * track count anyway).
+ *
+ * Exported for `client3d/scripts/smoke_clip_ground.mjs`: the red probe has to
+ * walk the real chain rather than a copy of it.
+ */
+export function restFrameDeviation(
+  clips: readonly THREE.AnimationClip[], target: THREE.Object3D
+): { mean: number; max: number; bones: number } {
+  const addressed = new Set<string>();
+  for (const clip of clips) {
+    for (const track of clip.tracks) {
+      const dot = track.name.lastIndexOf('.');
+      if (dot > 0) addressed.add(normBoneName(track.name.slice(0, dot)));
+    }
+  }
+  const dir = new THREE.Vector3();
+  let sum = 0;
+  let max = 0;
+  let bones = 0;
+  target.traverse((o) => {
+    if (!(o as THREE.Bone).isBone || !addressed.has(normBoneName(o.name))) return;
+    const child = o.children.find((c) => (c as THREE.Bone).isBone);
+    if (!child) return;   // end bone (fingertips, toes): no direction to read
+    dir.copy(child.position);
+    if (dir.lengthSq() < 1e-12) return;   // child sitting on its parent says nothing
+    const deg = THREE.MathUtils.radToDeg(dir.normalize().angleTo(DONOR_CHILD_AXIS));
+    sum += deg;
+    if (deg > max) max = deg;
+    bones += 1;
+  });
+  return { mean: bones ? sum / bones : 0, max, bones };
+}
+
 /** How many of the bones the clips address exist on this skeleton — the count
  *  that decides whether a clip survives `adaptExternalClips`, and the one
  *  number that makes "no clip fits" diagnosable from the console. */
@@ -739,12 +809,36 @@ export class FigureLibrary {
    * library is Mixamo-named, three bones match — every library clip fell under
    * the track threshold and vanished without a word, so `swim` looked like a
    * rule failure and was a skeleton mismatch.
+   *
+   * Matching bone NAMES is not enough, though (finding 7 of the same round):
+   * Xbot.glb answers to every Mixamo name and reports 23 of 23 clips fitted —
+   * and swims with its limbs folded over its torso, because its bones rest in
+   * world-parallel frames while the library's rotation tracks assume Mixamo
+   * ones. So the bind pose is measured against that convention BEFORE the
+   * clips are adapted: over the limit, the library does not fit this skeleton
+   * and none of it is bound. Adapting first and dropping afterwards would be
+   * the same verdict at a higher price.
+   *
+   * PARKED, not built: such a rig could have the library back for real by
+   * going through `retargetClips` instead, which works over WORLD directions
+   * and does not care about bone frames — today that path is only reachable
+   * for models without any clips of their own.
    */
   private fitLibrary(charName: string, template: THREE.Object3D,
                      own: readonly THREE.AnimationClip[]
   ): LibraryFit {
     const candidates = this.clipsFor(charName);
     if (!candidates.length) return { extra: [], fits: false };
+    const dev = restFrameDeviation(candidates, template);
+    if (dev.mean > MAX_REST_FRAME_DEV_DEG) {
+      console.warn(`[figures] ${charName}: the clip library does NOT fit this`
+        + ` skeleton — its bind pose sits ${dev.mean.toFixed(1)}° off the`
+        + ` library's bone convention (mean over ${dev.bones} addressed bones,`
+        + ` max ${dev.max.toFixed(1)}°, limit ${MAX_REST_FRAME_DEV_DEG}°).`
+        + ` Copied rotation tracks would fold the limbs over the torso, so no`
+        + ` library clip is bound and this rig stays out of the random pool.`);
+      return { extra: [], fits: false };
+    }
     const adapted = adaptExternalClips(candidates, template);
     const have = new Set(own.map((c) => c.name.toLowerCase()));
     const missing = missingClipKinds(

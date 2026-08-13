@@ -79,6 +79,44 @@
  *                 bind pose gave it (`inst.position.y`, compared to the
  *                 millimetre). `sleep` floats +0.69 … +0.90 m on purpose — it
  *                 was animated on a BED, and that is a parked finding.
+ *
+ * ---------------------------------------------------------------------------
+ * [3] THE LIBRARY GATE for foreign bone conventions (finding 7, same round)
+ * ---------------------------------------------------------------------------
+ * The swimmer of finding 3 had a second problem on the fallback rig `Xbot`:
+ * limbs folded over the torso. `adaptExternalClips` copies LOCAL quaternion
+ * tracks 1:1, which is only right while both sides rest their bones in the
+ * same frame. The Mixamo library points every bone at its child along the
+ * bone's own +Y; Xbot has identity rest rotations, so its frames are
+ * world-parallel (legs −Y, arms +X) and the elbow track of the library becomes
+ * a fold. Acceptance never caught it because clips were accepted on TRACK
+ * COUNT alone — Xbot reports 23 of 23 fitted.
+ *
+ * `restFrameDeviation` is the missing measurement: the angle between the
+ * direction to a bone's first child (in that bone's own rest frame, i.e.
+ * `child.position`) and +Y, meaned over the bones the clips address. Hand
+ * values from the diagnosis: Xbot 95.6° mean / 179.6° max, Soldier 8.3°/37.4°,
+ * eight server-generated models 1.3–1.7°/7.0°. This check re-measures at the
+ * consumer and lands at Xbot 92.4°/179.6°, Soldier 9.3°/39.2°, Test3_mia
+ * 9.8°/64.8° — a little above the diagnosis on the well-behaved rigs because
+ * it means over ALL addressed bones, fingers and thumbs included (those carry
+ * the top single readings on Soldier). The verdict is untouched by that: the
+ * two groups sit a factor of ten apart, `MAX_REST_FRAME_DEV_DEG = 30` in
+ * between.
+ *
+ * The GEOMETRIC consequence is measured with it, on the adapted `idle` and the
+ * plainest number the finding gave: where the left foot sits relative to the
+ * hips.
+ *
+ *   Xbot   gate fires: 92.4° > 30 -> `fits` false, no library clip bound.
+ *   Xbot   RED COUNTER-PROBE, threshold 999 (the gate decision is a
+ *          comparison, so raising the limit is the whole "gate off" case):
+ *          the library adapts as before — and the left foot lands +0.78 m
+ *          ABOVE the hips. That IS the finding.
+ *   Soldier  9.3° < 30 -> fits, 23 clips, and the foot hangs −0.85 … −0.91 m
+ *          BELOW the hips, where a leg belongs.
+ *   Test3_mia  the server's own pipeline: 9.8° < 30, foot below the hips. The
+ *          gate must not touch the everyday case.
  */
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -135,6 +173,7 @@ async function loadClient() {
     const src = join(ROOT, 'client3d/src/scene');
     const entry = [
       `export { adaptExternalClips, Figure } from '${src}/figures';`,
+      `export { MAX_REST_FRAME_DEV_DEG, restFrameDeviation } from '${src}/figures';`,
       `export { clipGroundOffset, groundOffsetOf, measureGroundOffsets }`,
       `  from '${src}/clipGround';`,
     ].join('\n');
@@ -160,7 +199,8 @@ async function main() {
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
   const { adaptExternalClips, Figure, clipGroundOffset, groundOffsetOf,
-          measureGroundOffsets } = await loadClient();
+          measureGroundOffsets, restFrameDeviation,
+          MAX_REST_FRAME_DEV_DEG } = await loadClient();
 
   console.log('[1] groundOffsetOf — the drop a clip needs (hand-derived)');
   near('the swim case: body 0.30 over an anchor at 0',
@@ -287,6 +327,74 @@ async function main() {
     figureMinY('swim', true);
     near(`${label}: a terrain move DOES move the anchor`, inst.position.y,
       anchorY - offsetOf('swim') * scale, 1e-6);
+  }
+
+  console.log('\n[3] the library gate against foreign bone conventions');
+  check(`the threshold is ${MAX_REST_FRAME_DEV_DEG}° mean deviation`,
+    MAX_REST_FRAME_DEV_DEG === 30, `${MAX_REST_FRAME_DEV_DEG}`);
+
+  /** Left foot minus hips in the rig's own units, on the adapted `idle` — a
+   *  leg hangs BELOW the hips, and the fold of the finding puts it above. */
+  function footOverHips(template, clips) {
+    const idle = clips.find((c) => c.name === 'idle');
+    if (!idle) return NaN;
+    const mixer = new THREE.AnimationMixer(template);
+    const action = mixer.clipAction(idle);
+    action.play();
+    mixer.setTime(0.5);
+    template.updateMatrixWorld(true);
+    let foot = null;
+    let hips = null;
+    template.traverse((o) => {
+      if (!o.isBone) return;
+      const n = o.name.replace(/^mixamorig:?/i, '').replace(/:/g, '').toLowerCase();
+      if (n === 'leftfoot') foot = o;
+      if (n === 'hips') hips = o;
+    });
+    const dy = foot && hips
+      ? foot.getWorldPosition(new THREE.Vector3()).y - hips.getWorldPosition(new THREE.Vector3()).y
+      : NaN;
+    action.stop();
+    mixer.uncacheClip(idle);
+    return dy;
+  }
+
+  /** The gate as `fitLibrary` decides it: the measured mean against a limit.
+   *  Passing the limit in is what makes the counter-probe possible. */
+  const libraryFits = (dev, limit) => dev.mean <= limit;
+
+  for (const [file, expect] of [
+    ['Xbot.glb', 'foreign'], ['Soldier.glb', 'mixamo'], ['Test3_mia.glb', 'mixamo'],
+  ]) {
+    const bytes = arrayBufferOf(await readFile(join(MODELS, file)));
+    const gltf = await new Promise((res, rej) =>
+      new GLTFLoader().parse(bytes, '', res, rej));
+    const template = gltf.scene;
+    template.updateMatrixWorld(true);
+    const dev = restFrameDeviation(library, template);
+    const adapted = adaptExternalClips(library.map((c) => c.clone()), template);
+    const dy = footOverHips(template, adapted);
+    console.log(`  --- ${file}: ${dev.mean.toFixed(1)}° mean / ${dev.max.toFixed(1)}° max`
+      + ` over ${dev.bones} bones, ${adapted.length} clips adapted,`
+      + ` left foot ${dy >= 0 ? '+' : ''}${dy.toFixed(3)} vs hips`);
+
+    if (expect === 'foreign') {
+      between(`${file}: rest pose far off the library convention`, dev.mean, 85, 105);
+      between(`${file}: and a limb turned right around`, dev.max, 175, 180);
+      check(`${file}: the gate fires — the library does not fit`,
+        !libraryFits(dev, MAX_REST_FRAME_DEV_DEG), `${dev.mean.toFixed(1)}° > ${MAX_REST_FRAME_DEV_DEG}°`);
+      check(`${file}: RED COUNTER-PROBE — threshold 999, the library "fits" again`,
+        libraryFits(dev, 999) && adapted.length >= 20, `${adapted.length} clips adapted`);
+      between(`${file}: RED COUNTER-PROBE — and the foot folds ABOVE the hips`,
+        dy, 0.70, 0.86);
+    } else {
+      between(`${file}: rest pose follows the library convention`, dev.mean, 0, 20);
+      check(`${file}: the gate stays open — the library fits`,
+        libraryFits(dev, MAX_REST_FRAME_DEV_DEG) && adapted.length >= 20,
+        `${dev.mean.toFixed(1)}° <= ${MAX_REST_FRAME_DEV_DEG}°, ${adapted.length} clips`);
+      between(`${file}: and the foot hangs below the hips, where a leg belongs`,
+        dy, -1.00, -0.70);
+    }
   }
 
   console.log(`\n${passed + failed} checks, ${failed} failures`);
