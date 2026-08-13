@@ -78,6 +78,62 @@ export function sampleWorldHeight(field: WorldHeightField | null | undefined,
 }
 
 /**
+ * Height of the DRAWN ground at (x, z) — the surface a renderer really builds.
+ *
+ * NOT the same number as `sampleWorldHeight`, and the difference is the whole
+ * point. The field is defined bilinear (§ A16) and the server judges by that;
+ * a MESH cannot be bilinear, it is triangles. Every renderer here cuts its
+ * ground into cells of `cellM` and splits each cell from its minimum corner to
+ * its maximum one (`gridMesh.gridPlate`), so within a cell the drawn surface is
+ * one of two PLANES:
+ *
+ *   tz <= tx (the half towards +x):  h00 + tx·(h10 − h00) + tz·(h11 − h10)
+ *   tz >  tx (the half towards +z):  h00 + tz·(h01 − h00) + tx·(h11 − h01)
+ *
+ * with `h00…h11` the four cell corners and `tx`/`tz` the fractions inside it.
+ * The two agree on the diagonal, and both agree with the bilinear field at all
+ * four corners — they part company INSIDE the cell, by up to a quarter of the
+ * cell's twist `|h00 + h11 − h01 − h10|`. Measured on a plain 5 m hill with a
+ * 10 m falloff on an 8 m grid that is a full metre.
+ *
+ * SO EVERYTHING THAT TOUCHES THE GROUND USES THIS ONE: the plate's vertices
+ * (where it equals the bilinear reading anyway, they sit on corners), the
+ * vertices of a painted area (which land wherever its outline runs — the
+ * bilinear reading is what sank a meadow a metre into the plate), and every
+ * figure, prop and marker standing on it. `sampleWorldHeight` stays what it
+ * always was: the twin of the server's own reading of the field.
+ *
+ * `cellM` is the size the ground was actually cut at — `gridStepFor`'s answer,
+ * which may be a doubling of the field's own `step_m`. Omitting it means "the
+ * field's step", which is right whenever nothing was coarsened.
+ */
+export function sampleGroundHeight(field: WorldHeightField | null | undefined,
+                                   x: number, z: number,
+                                   cellM?: number): number {
+  if (!field) return 0
+  const step = cellM && cellM > 0 ? cellM : field.step_m
+  if (!(step > 0)) return sampleWorldHeight(field, x, z)
+  const i = Math.floor((x - field.origin_x) / step)
+  const j = Math.floor((z - field.origin_z) / step)
+  const x0 = field.origin_x + i * step
+  const z0 = field.origin_z + j * step
+  const tx = (x - x0) / step
+  const tz = (z - z0) / step
+  // The corners are read through the bilinear sampler on purpose: on the
+  // field's own grid it returns the support point exactly, and on a COARSENED
+  // grid (a doubled step) the corner is still a support point — while outside
+  // the field it clamps to the border, which is the flat world the ring quads
+  // of the plate lie in.
+  const h00 = sampleWorldHeight(field, x0, z0)
+  const h10 = sampleWorldHeight(field, x0 + step, z0)
+  const h01 = sampleWorldHeight(field, x0, z0 + step)
+  const h11 = sampleWorldHeight(field, x0 + step, z0 + step)
+  return tz <= tx
+    ? h00 + tx * (h10 - h00) + tz * (h11 - h10)
+    : h00 + tz * (h01 - h00) + tx * (h11 - h01)
+}
+
+/**
  * Lowest and highest support point of the field, in metres.
  *
  * What it is FOR: everything that has to start above the whole world. The 3D
@@ -138,30 +194,33 @@ function rectLines(lo: number, hi: number, origin: number, step: number): number
  * under it — a quad on the average height sticks out of every hill it covers,
  * and the mountain pokes through the cloud.
  *
- * EXACT for a field the rectangle does not overrun: over one cell the field is
- * bilinear, which is linear along each axis with the other one fixed, so its
- * maximum over any axis-aligned sub-rectangle sits at a CORNER of that
- * sub-rectangle. Sampling the rectangle's own edges plus every grid line
- * inside it therefore visits every candidate.
+ * It reads the DRAWN ground (`sampleGroundHeight`), because that is what a
+ * cloud can stick out of. Over each half-cell that surface is a PLANE, so its
+ * maximum over any sub-rectangle sits at a corner of that piece: sampling the
+ * rectangle's own edges plus every cell line inside it visits them all bar the
+ * points where the cell diagonal leaves the rectangle, and those lie between
+ * two corner heights that are themselves visited whenever they are inside.
  *
  * THE APPROXIMATION is the stride (`MAX_RECT_LINES`): a rectangle spanning
  * more than 64 cells per axis is sampled on every n-th line instead, so a
  * single peak between two sampled lines can be missed and the veil over a very
- * large rectangle can hang a little low. Harmless where it happens — a
- * rectangle that big is the open fog far from anything the player is near, and
- * the alternative is a rebuild that walks a hundred thousand samples.
+ * large rectangle can hang a little low. Since the veil is tiled (`fogRects`,
+ * ~64 m per quad) no rectangle of a 4 m world grid comes close to that; the
+ * stride is the guard for a coarsened grid over a huge world, not the working
+ * case.
  */
 export function maxWorldHeightIn(field: WorldHeightField | null | undefined,
                                  x0: number, z0: number,
-                                 x1: number, z1: number): number {
+                                 x1: number, z1: number,
+                                 cellM?: number): number {
   if (!field) return 0
-  const step = field.step_m
+  const step = cellM && cellM > 0 ? cellM : field.step_m
   const xs = rectLines(Math.min(x0, x1), Math.max(x0, x1), field.origin_x, step)
   const zs = rectLines(Math.min(z0, z1), Math.max(z0, z1), field.origin_z, step)
   let max = -Infinity
   for (const z of zs) {
     for (const x of xs) {
-      const h = sampleWorldHeight(field, x, z)
+      const h = sampleGroundHeight(field, x, z, step)
       if (h > max) max = h
     }
   }

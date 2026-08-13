@@ -21,8 +21,10 @@
  * the heightfield sampled at that point instead of the constant 0. Nothing
  * here invents a height of its own: the base plate and every painted area are
  * cut on the FIELD's grid (`@anima/scene-render` `gridMesh`) and every vertex
- * is lifted by `sampleWorldHeight` at its own world x/z, so the two describe
- * one surface. Stacked areas are still separated by `renderOrder` + a depth
+ * is lifted by `sampleGroundHeight` at its own world x/z — the sampler that
+ * reads the TRIANGULATED surface the mesh really is, so plate, areas, props
+ * and figures describe one surface inside a cell and not merely at its
+ * corners. Stacked areas are still separated by `renderOrder` + a depth
  * bias and NOT by a height ladder; the sub-millimetre hairline lift
  * (`AREA_Y_STEP_M`, capped at `AREA_Y_MAX_M`) now rides ON TOP of the sampled
  * height, which is the one place where "the areas sit a hair above the plate"
@@ -35,11 +37,11 @@
  */
 import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry, gridPlate, gridStepFor,
-  maxWorldHeightIn, pointInRing, propGroundFit, sampleWorldHeight,
+  maxWorldHeightIn, pointInRing, propGroundFit, sampleGroundHeight,
   scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
   worldHeightRange } from '@anima/scene-render';
-import type { Point2, ScatterEntry, ScatterFootprint, SurfaceMaterialSpec,
-  WorldHeightField } from '@anima/scene-render';
+import type { GridBox, Point2, ScatterEntry, ScatterFootprint,
+  SurfaceMaterialSpec, WorldHeightField } from '@anima/scene-render';
 import { fetchHeightfield, fetchTerrain } from '../api';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainType, WorldBounds } from '../types';
@@ -224,6 +226,18 @@ export interface Ground {
    * to clear the highest thing under it, or the mountain stands in the cloud.
    */
   maxHeightIn(x0: number, z0: number, x1: number, z1: number): number;
+  /**
+   * Where a pointer ray meets the DRAWN ground, or `null` when it misses.
+   *
+   * The click-to-walk goal used to be read against a horizontal plane at the
+   * figure's own height, which on a slope puts the goal metres away from the
+   * pointer (at 40° and a flat camera angle: 7-14 m). The draped plate is the
+   * surface the player sees, so that is what the ray asks.
+   *
+   * Costs a brute-force triangle test over the plate (three.js has no BVH) —
+   * fine for a click, never for a frame.
+   */
+  groundPointAt(ray: THREE.Raycaster): THREE.Vector3 | null;
   /** Counts how often the RELIEF was taken over. Part of the fog's rebuild key
    *  (the veil's height comes from the field) — a signature of its own,
    *  because the field arrives long after the first fog is built. */
@@ -329,17 +343,43 @@ export function createGround(): Ground {
    *  while there is no relief at all: then nothing is subdivided. */
   let cellM = 0;
 
+  /**
+   * The ground under a point — the DRAWN one (`sampleGroundHeight`), not the
+   * bilinear field.
+   *
+   * The mesh is triangles: within a cell the plate is two planes, and a vertex
+   * or a figure placed at the field's bilinear reading sits off that surface by
+   * up to a quarter of the cell's twist — a measured metre on a 5 m hill with a
+   * 10 m falloff. ONE sampler for the plate, the areas, the props and every
+   * figure is what makes them describe one surface (§ A16).
+   */
   const heightAt = (x: number, z: number): number =>
-    (field ? sampleWorldHeight(field, x, z) : GROUND_Y);
+    (field ? sampleGroundHeight(field, x, z, cellM) : GROUND_Y);
 
-  /** Lift a flat vertex list onto the field, in place. `pos` is `[x, y, z, …]`
+  /** Lift a flat vertex list onto the ground, in place. `pos` is `[x, y, z, …]`
    *  in WORLD metres (both the plate and the subdivided areas are), so the
    *  sample point is the vertex itself. */
   function liftToField(pos: number[]): void {
     if (!field) return;
     for (let i = 0; i < pos.length; i += 3) {
-      pos[i + 1] += sampleWorldHeight(field, pos[i], pos[i + 2]);
+      pos[i + 1] += sampleGroundHeight(field, pos[i], pos[i + 2], cellM);
     }
+  }
+
+  /** The box the FIELD describes (§ A16): `origin + (cols−1) · step`. Outside
+   *  it the ground is the field's border value, which the server pins to 0 —
+   *  flat, and the plate covers it with plain quads. `null` = no relief. */
+  function reliefBox(): GridBox | null {
+    const rows = field?.heights?.length ?? 0;
+    const cols = field?.heights?.[0]?.length ?? 0;
+    const step = field?.step_m ?? 0;
+    if (!field || rows < 2 || cols < 2 || !(step > 0)) return null;
+    return {
+      x0: field.origin_x,
+      z0: field.origin_z,
+      x1: field.origin_x + (cols - 1) * step,
+      z1: field.origin_z + (rows - 1) * step,
+    };
   }
 
   /** The footprints the scatter keeps clear (finding B18), and the signature
@@ -447,9 +487,18 @@ export function createGround(): Ground {
    */
   function cellFor(bounds: WorldBounds | null): number {
     const step = field?.step_m ?? 0;
-    if (!(step > 0)) return 0;
+    const relief = reliefBox();
+    if (!(step > 0) || !relief) return 0;
     if (fieldRange.min === 0 && fieldRange.max === 0) return 0;
-    const [x0, z0, x1, z1] = plateExtent(bounds);
+    const [px0, pz0, px1, pz1] = plateExtent(bounds);
+    // The budget is spent where there IS relief: the field's box, clipped to
+    // what the plate shows of it. A hill in the corner of a huge world keeps
+    // the native cell size instead of paying for the plain around it.
+    const x0 = Math.max(px0, relief.x0);
+    const z0 = Math.max(pz0, relief.z0);
+    const x1 = Math.min(px1, relief.x1);
+    const z1 = Math.min(pz1, relief.z1);
+    if (!(x1 > x0) || !(z1 > z0)) return 0;   // the relief is off the plate
     return gridStepFor(x0, z0, x1, z1, step);
   }
 
@@ -483,7 +532,8 @@ export function createGround(): Ground {
     baseKey = key;
     const plate = gridPlate(wantX0, wantZ0, Math.max(wantX1, wantX0 + 1),
                             Math.max(wantZ1, wantZ0 + 1),
-                            cellM, field?.origin_x ?? 0, field?.origin_z ?? 0);
+                            cellM, field?.origin_x ?? 0, field?.origin_z ?? 0,
+                            reliefBox());
     liftToField(plate.pos);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(plate.pos, 3));
@@ -842,8 +892,13 @@ export function createGround(): Ground {
       return inFlight;
     },
     heightAt,
+    groundPointAt(ray) {
+      if (!baseMesh) return null;
+      const hits = ray.intersectObject(baseMesh, false);
+      return hits.length ? hits[0].point.clone() : null;
+    },
     maxHeightIn: (x0, z0, x1, z1) => (
-      field ? maxWorldHeightIn(field, x0, z0, x1, z1) : GROUND_Y),
+      field ? maxWorldHeightIn(field, x0, z0, x1, z1, cellM) : GROUND_Y),
     heightRevision: () => heightRev,
     setHole(rect) {
       holeOn.value = rect ? 1 : 0;

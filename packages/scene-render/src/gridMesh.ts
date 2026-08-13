@@ -47,14 +47,18 @@ export interface GridGeometry {
 /** The plate, plus what the caller needs to know about the grid it got. */
 export interface PlateGeometry extends GridGeometry {
   index: number[]
-  /** the extent actually covered — snapped OUTWARD onto the grid */
+  /** The extent the UVs are normalised over — what the caller ASKED for. The
+   *  cut part is snapped outward onto the grid and may reach up to one cell
+   *  further; that is ground past the frame and costs nothing but a metre of
+   *  quad. */
   minX: number
   minZ: number
   maxX: number
   maxZ: number
-  /** cell size the plate was built at (the possibly doubled step) */
+  /** cell size the CUT part was built at (0 = nothing was cut at all) */
   step: number
-  /** support points per axis (cells + 1) */
+  /** support points per axis of the cut part (cells + 1); 2 when the plate is
+   *  the single quad of a flat world */
   cols: number
   rows: number
 }
@@ -64,19 +68,23 @@ export interface PlateGeometry extends GridGeometry {
  *
  * Derived from the payload numbers of § A16, not invented: the heightfield's
  * budget is 120 000 support points, so the largest field that can arrive is
- * 346 × 346 points = 1 380 m of world at the 4 m default step. The base plate
- * covers that plus the ground margin on both sides (2 × 60 m,
- * `BASE_MARGIN_M`), i.e. about 1 500 m, which at 4 m cells would be 375 × 375
- * = 140 000 cells — 280 000 triangles for one mesh, and every painted area on
- * top of it free to ask for as many again.
+ * 346 × 346 points = 1 380 m of RELIEF at the 4 m default step, which at 4 m
+ * cells is 345 × 345 ≈ 119 000 cells — 238 000 triangles for one mesh, and
+ * every painted area on top of it free to ask for as many again.
  *
- * 40 000 cells (200 × 200 on a square world, 80 000 triangles) is the ceiling
- * instead, and `gridStepFor` DOUBLES the step until a mesh fits under it. So:
- * a world up to about 800 m keeps the field's native 4 m cells, the largest
- * world the payload can describe drapes at 8 m (187 × 187 = 35 000 cells), and
- * nothing anyone can author melts the client. Doubling — never an arbitrary
- * factor — is what keeps the coarser grid a SUBSET of the field's own lines,
- * exactly as the server coarsens the field itself (§ A16).
+ * 40 000 cells (200 × 200 on a square patch, 80 000 triangles) is the ceiling
+ * instead, and `gridStepFor` DOUBLES the step until a mesh fits under it. So a
+ * relief up to about 800 m across keeps the field's native 4 m cells, and the
+ * largest field the payload can describe drapes at 8 m (173 × 173 = 29 929).
+ * Doubling — never an arbitrary factor — is what keeps the coarser grid a
+ * SUBSET of the field's own lines, exactly as the server coarsens the field
+ * itself (§ A16).
+ *
+ * THE BUDGET IS SPENT ON RELIEF, NOT ON PLAIN. It is measured over the field's
+ * own box and never over the whole plate: outside the field the ground is
+ * level and `gridPlate` covers it with four quads. A 100 m hill in a 1 500 m
+ * world therefore stays at 4 m cells (29 × 29 = 841) instead of being coarsened
+ * to 8 m to pay for 35 000 cells of empty plain.
  */
 export const GRID_MAX_CELLS = 40_000
 
@@ -130,48 +138,93 @@ function snapUp(v: number, origin: number, step: number): number {
   return origin + Math.ceil((v - origin) / step) * step
 }
 
+/** An axis-aligned box in world metres. */
+export interface GridBox { x0: number; z0: number; x1: number; z1: number }
+
 /**
- * The base plate as a grid of cells over the world, y = 0 everywhere.
+ * The base plate: a grid of cells where there is relief, plain quads where
+ * there is none. y = 0 everywhere — lifting is the caller's step.
  *
- * The requested extent is snapped OUTWARD onto the grid (`origin + k · step`),
- * so the plate's own vertex lines ARE the field's support lines and every cell
- * is one cell of the field. The snap grows the plate by less than one cell per
- * side; it never shrinks it, because the plate is what keeps a player from
- * walking off the visible world.
+ * `relief` is the box the HEIGHTFIELD covers (`origin + (cols−1)·step`, § A16).
+ * Only there is the plate cut into cells: outside it the field is its own
+ * border value everywhere, so the ground is a plane and one quad per side
+ * describes it exactly. That distinction is not thrift for its own sake — a
+ * hundred-metre hill in a fifteen-hundred-metre world would otherwise have to
+ * share the cell budget with a million square metres of flat plain, and the
+ * hill would be drawn at half the resolution to pay for it. Omit `relief` and
+ * the whole plate is cut (a field that covers everything).
+ *
+ * The relief part is snapped OUTWARD onto the grid (`origin + k · step`), so
+ * the plate's own vertex lines ARE the field's support lines and every cell is
+ * one cell of the field. Beyond it the plate reaches exactly as far as it was
+ * asked to.
  *
  * UVs run 0…1 over the whole plate, exactly as `THREE.PlaneGeometry` lays them
  * out after `rotateX(-90°)`: `u` grows with world x, `v` is 1 at the minimum z
  * edge. The material scales them by metres itself (`ground.ts`).
  *
  * Every cell is split from its MINIMUM corner to its maximum one — the same
- * diagonal `fanTriangles` gives a full cell of a painted area, which is what
- * makes plate and area agree inside a cell and not just on its edges.
+ * diagonal `fanTriangles` gives a full cell of a painted area, and the same one
+ * `sampleGroundHeight` reads. That is what makes plate, areas and figures
+ * describe ONE surface inside a cell and not merely at its corners.
  *
  * A step of 0 or a degenerate extent gives the single quad of the flat world.
  */
 export function gridPlate(minX: number, minZ: number, maxX: number, maxZ: number,
-                          step: number, originX = 0, originZ = 0): PlateGeometry {
-  const flat = !(step > 0) || !(maxX > minX) || !(maxZ > minZ)
-  const x0 = flat ? minX : snapDown(minX, originX, step)
-  const x1 = flat ? maxX : snapUp(maxX, originX, step)
-  const z0 = flat ? minZ : snapDown(minZ, originZ, step)
-  const z1 = flat ? maxZ : snapUp(maxZ, originZ, step)
-  const cols = flat ? 1 : Math.max(1, Math.round((x1 - x0) / step))
-  const rows = flat ? 1 : Math.max(1, Math.round((z1 - z0) / step))
-  const w = x1 - x0
-  const d = z1 - z0
+                          step: number, originX = 0, originZ = 0,
+                          relief?: GridBox | null): PlateGeometry {
   const pos: number[] = []
   const uv: number[] = []
   const index: number[] = []
+  const w = maxX - minX
+  const d = maxZ - minZ
+  const flat = !(step > 0) || !(w > 0) || !(d > 0)
+  /** One vertex, UVs from its world position over the WHOLE plate. */
+  const vertex = (x: number, z: number): number => {
+    pos.push(x, 0, z)
+    uv.push(w > 0 ? (x - minX) / w : 0, d > 0 ? (maxZ - z) / d : 0)
+    return pos.length / 3 - 1
+  }
+  /** One flat quad, split minimum -> maximum corner like every cell. */
+  const quad = (x0: number, z0: number, x1: number, z1: number): void => {
+    if (!(x1 - x0 > 0) || !(z1 - z0 > 0)) return
+    const a = vertex(x0, z0)
+    const b = vertex(x1, z0)
+    const c = vertex(x1, z1)
+    const e = vertex(x0, z1)
+    index.push(a, e, c, a, c, b)
+  }
+  if (flat) {
+    quad(minX, minZ, maxX, maxZ)
+    return { pos, uv, index, minX, minZ, maxX, maxZ, step: 0, cols: 2, rows: 2 }
+  }
+  // The cut part: the plate, snapped outward onto the grid, clipped to what
+  // the field actually describes.
+  let x0 = snapDown(minX, originX, step)
+  let x1 = snapUp(maxX, originX, step)
+  let z0 = snapDown(minZ, originZ, step)
+  let z1 = snapUp(maxZ, originZ, step)
+  if (relief) {
+    x0 = Math.max(x0, snapDown(relief.x0, originX, step))
+    x1 = Math.min(x1, snapUp(relief.x1, originX, step))
+    z0 = Math.max(z0, snapDown(relief.z0, originZ, step))
+    z1 = Math.min(z1, snapUp(relief.z1, originZ, step))
+  }
+  if (!(x1 - x0 > 0) || !(z1 - z0 > 0)) {
+    // The relief lies outside the plate altogether — all plain.
+    quad(minX, minZ, maxX, maxZ)
+    return { pos, uv, index, minX, minZ, maxX, maxZ, step: 0, cols: 2, rows: 2 }
+  }
+  const cols = Math.max(1, Math.round((x1 - x0) / step))
+  const rows = Math.max(1, Math.round((z1 - z0) / step))
+  const first = pos.length / 3
   for (let j = 0; j <= rows; j += 1) {
-    const z = j === rows ? z1 : z0 + (d * j) / rows
+    const z = j === rows ? z1 : z0 + ((z1 - z0) * j) / rows
     for (let i = 0; i <= cols; i += 1) {
-      const x = i === cols ? x1 : x0 + (w * i) / cols
-      pos.push(x, 0, z)
-      uv.push(w > 0 ? (x - x0) / w : 0, d > 0 ? (z1 - z) / d : 0)
+      vertex(i === cols ? x1 : x0 + ((x1 - x0) * i) / cols, z)
     }
   }
-  const at = (i: number, j: number) => j * (cols + 1) + i
+  const at = (i: number, j: number) => first + j * (cols + 1) + i
   for (let j = 0; j < rows; j += 1) {
     for (let i = 0; i < cols; i += 1) {
       const a = at(i, j)          // minimum corner (min x, min z)
@@ -184,8 +237,15 @@ export function gridPlate(minX: number, minZ: number, maxX: number, maxZ: number
       index.push(a, e, c, a, c, b)
     }
   }
-  return { pos, uv, index, minX: x0, minZ: z0, maxX: x1, maxZ: z1,
-           step: flat ? 0 : step, cols: cols + 1, rows: rows + 1 }
+  // The plain ring around it, in four bands. Their seam with the cut part sits
+  // on the field's border, which § A16 pins to 0 — the two meet at the same
+  // height whatever the relief inside does.
+  quad(minX, minZ, maxX, z0)      // north
+  quad(minX, z1, maxX, maxZ)      // south
+  quad(minX, z0, x0, z1)          // west
+  quad(x1, z0, maxX, z1)          // east
+  return { pos, uv, index, minX, minZ, maxX, maxZ,
+           step, cols: cols + 1, rows: rows + 1 }
 }
 
 /** One vertex while it is being cut: world position plus its UV. */

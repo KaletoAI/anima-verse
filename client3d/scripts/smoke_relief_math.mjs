@@ -28,20 +28,33 @@
  * ============================================================================
  * [2] `gridPlate` — the base plate on the field's own lines
  * ============================================================================
- * `gridPlate(-5, -5, 5, 5, step 4, origin (-4, -4))`. The extent is snapped
- * OUTWARD onto the grid anchored at the origin:
+ * `gridPlate(-5, -5, 5, 5, step 4, origin (-4, -4))`, no relief box = cut all
+ * over. The cut part is snapped OUTWARD onto the grid anchored at the origin:
  *   x0 = -4 + floor((-5+4)/4)·4 = -4 + (-1)·4 = -8
  *   x1 = -4 + ceil(( 5+4)/4)·4 = -4 +   3 ·4 =  8    (z likewise)
  * so 16 m per axis at 4 m = 4 × 4 cells, 5 × 5 = 25 support points (75 pos
- * numbers, 50 uv numbers) and 16 · 6 = 96 index entries.
- *   - the first vertex is (-8, 0, -8) with uv (0, 1) — u grows with x, v is 1
- *     at the MINIMUM z edge, which is what `PlaneGeometry` did after
- *     `rotateX(-90°)`;
+ * numbers, 50 uv numbers) and 16 · 6 = 96 index entries. The REPORTED extent
+ * stays the one that was asked for (-5…5) — that is what the UVs are
+ * normalised over, and the snap only adds a metre of ground past the frame.
+ *   - the first vertex is (-8, 0, -8) at uv ((-8+5)/10, (5+8)/10) =
+ *     (-0.3, 1.3): u grows with x, v is 1 at the MINIMUM z edge (what
+ *     `PlaneGeometry` did after `rotateX(-90°)`), and the snapped overhang
+ *     runs just outside 0…1, which is what RepeatWrapping is for;
  *   - vertex (i 2, j 2) = index 12 is the world origin (0, 0) at uv (0.5, 0.5);
  *   - the first cell is [0, 5, 6, 0, 6, 1]: its split runs from the minimum
  *     corner (index 0) to the maximum one (index 6);
  *   - every y is 0 — lifting is the caller's step.
- * A step of 0 gives the single quad of the flat world, extent UNSNAPPED.
+ * A step of 0 gives the single quad of the flat world, extent unsnapped.
+ *
+ * (b) THE BUDGET GOES WHERE THE RELIEF IS. `gridPlate(-100, -100, 100, 100,
+ *     step 4, origin (0, 0), relief [0…8] × [0…8])`: only the field's own box
+ *     is cut (2 × 2 cells, 9 support points, 24 index entries), the rest is
+ *     four plain quads — north (-100…100) × (-100…0), south (-100…100) ×
+ *     (8…100), west (-100…0) × (0…8), east (8…100) × (0…8). 9 + 16 = 25
+ *     vertices, 24 + 24 = 48 index entries, and the areas
+ *       20 000 + 18 400 + 800 + 736 + 64 = 40 000 m²
+ *     are exactly the 200 × 200 m asked for — so the ring covers the plate
+ *     without a gap AND without overlapping the cut part.
  *
  * ============================================================================
  * [3] `subdivideOnGrid` — a painted area cut on the same lines
@@ -73,21 +86,53 @@
  *     through it.
  *
  * ============================================================================
+ * [3b] THE CONTOUR CELL — why the ground is sampled TRIANGULATED
+ * ============================================================================
+ * The cell test above only covers vertices that land ON the grid. An area's
+ * OUTLINE runs where it was painted, so its vertices sit anywhere INSIDE a
+ * cell — and there the bilinear field and the drawn mesh are two different
+ * surfaces. Measured case, from the regime the first version called safe:
+ *
+ * A height area with `height_m` 5 and `falloff_m` 10, its corner at the world
+ * origin (the quadrant x ≥ 0, z ≥ 0), on the 8 m grid a big world gets:
+ *     h(x, z) = 5 · min(1, min(x, z) / 10)   inside, 0 outside
+ * Support points at 0, 8, 16, 24 therefore read
+ *     h(0, ·) = h(·, 0) = 0,  h(8, 8) = h(16, 8) = h(8, 16) = 4,
+ *     h(16, 16) = h(24, ·≥8) = h(·≥8, 24) = 5.
+ * Take the first cell, [0…8] × [0…8]:
+ *     h00 = 0 (0,0)   h10 = 0 (8,0)   h01 = 0 (0,8)   h11 = 4 (8,8)
+ * and its middle, (4, 4), tx = tz = 0.5:
+ *     bilinear      = (0 + 0 + 0 + 4) / 4                        = 1.00 m
+ *     drawn (tz ≤ tx) = h00 + 0.5·(h10 − h00) + 0.5·(h11 − h10)  = 2.00 m
+ * A metre apart — an area vertex lifted by the field sinks A FULL METRE under
+ * the plate it lies on, and the plate comes through the meadow. The error
+ * scales with the cell's TWIST |h00 + h11 − h01 − h10| (here 4), not with the
+ * falloff, which is why "falloff ≥ one cell" was never the bound.
+ *
+ * The checks: the drawn sampler agrees with the plate's own surface (measured
+ * barycentrically on the lifted plate triangles) at the cell middle AND at a
+ * handful of other points, while the bilinear one is 1.00 m off at the middle
+ * — the red counter-check of the first version.
+ *
+ * ============================================================================
  * [4] `maxWorldHeightIn` — the height of a fog quad
  * ============================================================================
  * THE FIELD is the one `smoke_world_height.mjs` uses: origin (-4, -4), step 4,
  * a single 5 m peak at (0, 0), heights [[0,0,0],[0,5,0],[0,0,0]].
  *   (a) the whole field, (-4,-4)…(4,4): the grid line x = 0 / z = 0 is sampled
  *       and hits the peak                                              -> 5
+ *   It reads the DRAWN ground, so the numbers are the triangulated ones:
  *   (b) (1,1)…(3,3), a rectangle with no grid line inside: the maximum sits at
- *       the CORNER nearest the peak. h(1,1): fx = 1.25 -> tx = 0.25, north =
- *       5·0.75 = 3.75, south = 0, tz = 0.25 -> 3.75·0.75          -> 2.8125
- *       (the other three corners give 0.9375, 0.9375 and 0.3125)
+ *       the CORNER nearest the peak, and that corner lies in the cell
+ *       [0…4]² whose corners are h00 = 5 (the peak), h10 = h01 = h11 = 0.
+ *       At (1,1): tx = tz = 0.25, tz <= tx, so
+ *       5 + 0.25·(0−5) + 0.25·(0−0)                                -> 3.75
+ *       (the other three corners give 1.25 each)
  *   (c) (-2,-2)…(2,2) — the peak is INSIDE the rectangle and on none of its
- *       corners (each corner reads 1.25). The grid lines x = 0 and z = 0 are
- *       sampled, so the answer is the peak                            -> 5
- *       (a corner-only reading would answer 1.25 — that is the discriminating
- *        half of this case)
+ *       corners. The grid lines x = 0 and z = 0 are sampled, so the answer is
+ *       the peak                                                    -> 5
+ *       (the nearest corner alone reads 0 + 0.5·(0−0) + 0.5·(5−0) = 2.5 —
+ *        that is the discriminating half of this case)
  *   (d) no field at all                                               -> 0
  *
  * ============================================================================
@@ -175,7 +220,7 @@ const [grid, height, travel] = await loadPure(
   'packages/scene-render/src/worldHeight.ts',
   'client3d/src/scene/travelPath.ts');
 const { gridPlate, gridStepFor, subdivideOnGrid } = grid;
-const { maxWorldHeightIn, sampleWorldHeight } = height;
+const { maxWorldHeightIn, sampleGroundHeight, sampleWorldHeight } = height;
 const { densifyPolyline, pointAtDistance } = travel;
 
 // --- [1] the cell size ------------------------------------------------------
@@ -189,20 +234,38 @@ check('no relief (step 0) is handed back', gridStepFor(0, 0, 400, 400, 0), 0);
 // --- [2] the base plate -----------------------------------------------------
 console.log('[2] gridPlate snaps onto the grid and splits every cell alike');
 const plate = gridPlate(-5, -5, 5, 5, 4, -4, -4);
-checkEq('snapped extent', [plate.minX, plate.minZ, plate.maxX, plate.maxZ],
-  [-8, -8, 8, 8]);
+checkEq('the reported extent is the one asked for',
+  [plate.minX, plate.minZ, plate.maxX, plate.maxZ], [-5, -5, 5, 5]);
 checkEq('support points per axis', [plate.cols, plate.rows], [5, 5]);
 check('position numbers', plate.pos.length, 75);
 check('uv numbers', plate.uv.length, 50);
 check('index entries', plate.index.length, 96);
 checkEq('first vertex', plate.pos.slice(0, 3), [-8, 0, -8]);
-checkEq('first uv', plate.uv.slice(0, 2), [0, 1]);
+checkEq('first uv (the snapped overhang runs outside 0…1)',
+  plate.uv.slice(0, 2), [-0.3, 1.3]);
 checkEq('the world origin is vertex 12', plate.pos.slice(36, 39), [0, 0, 0]);
 checkEq('…at uv (0.5, 0.5)', plate.uv.slice(24, 26), [0.5, 0.5]);
 checkEq('the first cell splits minimum -> maximum corner',
   plate.index.slice(0, 6), [0, 5, 6, 0, 6, 1]);
 check('every vertex lies at y = 0',
   plate.pos.filter((_, i) => i % 3 === 1).reduce((a, b) => a + Math.abs(b), 0), 0);
+const ringed = gridPlate(-100, -100, 100, 100, 4, 0, 0,
+  { x0: 0, z0: 0, x1: 8, z1: 8 });
+check('a relief box cuts only itself: vertices', ringed.pos.length / 3, 25);
+check('…index entries', ringed.index.length, 48);
+const plateArea = (g) => {
+  let sum = 0;
+  for (let t = 0; t + 2 < g.index.length; t += 3) {
+    const v = [0, 1, 2].map((n) => g.index[t + n] * 3);
+    const [ax, az] = [g.pos[v[0]], g.pos[v[0] + 2]];
+    const [bx, bz] = [g.pos[v[1]], g.pos[v[1] + 2]];
+    const [cx, cz] = [g.pos[v[2]], g.pos[v[2] + 2]];
+    sum += Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) / 2;
+  }
+  return sum;
+};
+check('…and the ring covers the plate exactly, without overlap',
+  plateArea(ringed), 40000);
 const flatPlate = gridPlate(-100, -100, 100, 100, 0);
 checkEq('a flat world is one quad, unsnapped',
   [flatPlate.pos.length, flatPlate.index.length, flatPlate.minX, flatPlate.maxX],
@@ -281,6 +344,56 @@ for (const winding of [CORNERS, [...CORNERS].reverse()]) {
 }
 check('every winding and rotation gives that same cell', sameCell, 6);
 
+// --- [3b] the contour cell --------------------------------------------------
+console.log('[3b] inside a cell the DRAWN ground is the triangulated one');
+/** The field of the derivation: a 5 m area with a 10 m falloff whose corner is
+ *  the world origin, rastered on an 8 m grid. */
+const CORNER_FIELD = (() => {
+  const at = (x, z) => (x >= 0 && z >= 0 ? 5 * Math.min(1, Math.min(x, z) / 10) : 0);
+  const heights = [];
+  for (let j = 0; j < 4; j += 1) {
+    const row = [];
+    for (let i = 0; i < 4; i += 1) row.push(at(i * 8, j * 8));
+    heights.push(row);
+  }
+  return { origin_x: 0, origin_z: 0, step_m: 8, rows: 4, cols: 4, heights };
+})();
+checkEq('the rastered field', CORNER_FIELD.heights,
+  [[0, 0, 0, 0], [0, 4, 4, 4], [0, 4, 5, 5], [0, 4, 5, 5]]);
+check('bilinear in the middle of the contour cell',
+  sampleWorldHeight(CORNER_FIELD, 4, 4), 1);
+check('the DRAWN ground there', sampleGroundHeight(CORNER_FIELD, 4, 4, 8), 2);
+
+/** The plate's own surface at (x, z): lift its vertices, find the triangle the
+ *  point falls in and interpolate barycentrically. This is the mesh, measured
+ *  — not a second formula. */
+function plateSurfaceAt(plate, lift, x, z) {
+  const pos = [...plate.pos];
+  for (let i = 0; i < pos.length; i += 3) pos[i + 1] += lift(pos[i], pos[i + 2]);
+  for (let t = 0; t + 2 < plate.index.length; t += 3) {
+    const v = [0, 1, 2].map((n) => plate.index[t + n] * 3);
+    const [ax, az] = [pos[v[0]], pos[v[0] + 2]];
+    const [bx, bz] = [pos[v[1]], pos[v[1] + 2]];
+    const [cx, cz] = [pos[v[2]], pos[v[2] + 2]];
+    const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(den) < 1e-12) continue;
+    const wa = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den;
+    const wb = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den;
+    const wc = 1 - wa - wb;
+    if (wa < -1e-9 || wb < -1e-9 || wc < -1e-9) continue;
+    return wa * pos[v[0] + 1] + wb * pos[v[1] + 1] + wc * pos[v[2] + 1];
+  }
+  return NaN;
+}
+const CORNER_PLATE = gridPlate(0, 0, 24, 24, 8, 0, 0);
+const drawn = (x, z) => sampleGroundHeight(CORNER_FIELD, x, z, 8);
+for (const [x, z] of [[4, 4], [2, 6], [6, 2], [10, 3], [13, 17], [8, 8]]) {
+  check(`the plate's surface at (${x}, ${z}) IS the drawn sampler`,
+    plateSurfaceAt(CORNER_PLATE, drawn, x, z), drawn(x, z), 1e-9);
+}
+check('a bilinearly lifted vertex sinks under it by',
+  drawn(4, 4) - sampleWorldHeight(CORNER_FIELD, 4, 4), 1);
+
 // --- [4] the fog height -----------------------------------------------------
 console.log('[4] maxWorldHeightIn — what a fog quad has to clear');
 const FIELD = {
@@ -288,10 +401,10 @@ const FIELD = {
   heights: [[0, 0, 0], [0, 5, 0], [0, 0, 0]],
 };
 check('the whole field', maxWorldHeightIn(FIELD, -4, -4, 4, 4), 5);
-check('a rectangle beside the peak', maxWorldHeightIn(FIELD, 1, 1, 3, 3), 2.8125);
+check('a rectangle beside the peak', maxWorldHeightIn(FIELD, 1, 1, 3, 3), 3.75);
 check('a rectangle AROUND the peak (no corner sees it)',
   maxWorldHeightIn(FIELD, -2, -2, 2, 2), 5);
-check('…its corners alone would say', sampleWorldHeight(FIELD, -2, -2), 1.25);
+check('…its corners alone would say', sampleGroundHeight(FIELD, -2, -2), 2.5);
 check('no field at all', maxWorldHeightIn(null, -4, -4, 4, 4), 0);
 
 // --- [5] the traveller on the slope ----------------------------------------
