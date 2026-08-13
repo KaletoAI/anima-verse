@@ -234,6 +234,19 @@ async def lifespan(app: FastAPI):
     except Exception as _he:
         logger.debug("height migration failed: %s", _he)
 
+    # Migration: appearance/face prompts saved with tokens the body-slot
+    # shrink (bc98b6a) orphaned — every character created from the stale
+    # template defaults carries literal {skin_color}/{size}/... into its
+    # image and chat prompts. Idempotent, world_kv-marked.
+    try:
+        from app.core.appearance_token_migration import (
+            migrate_dead_appearance_tokens_once)
+        _at = migrate_dead_appearance_tokens_once()
+        if _at.get("texts"):
+            logger.info("Dead appearance tokens cleaned: %s", _at)
+    except Exception as _ate:
+        logger.debug("dead-appearance-token migration failed: %s", _ate)
+
     # Migration: the pre-per-outfit global 3D-model store (characters/<name>/
     # model/) lost its routes; import its GLB/FBX into the current outfit's v2
     # slot and drop the legacy folder, so the banned serving fallback can go.

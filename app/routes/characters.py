@@ -1057,11 +1057,13 @@ def get_profile_route(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/resolve-tokens")
 async def resolve_tokens_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Live-Vorschau der Token-Ersetzungen ({hair_color} → "blonde", …).
+    """Live preview of the token replacements ({gender} -> "female", ...).
 
-    Nimmt einen Draft-Text (z.B. der gerade getippte Aussehen-Prompt) + den
-    target_key (z.B. "character_appearance") und löst die Tokens gegen das
-    aktuelle Profil + Template auf — kein Frontend-Nachbau, eine Backend-Quelle.
+    Takes a draft text (e.g. the appearance prompt being typed) plus the
+    target_key (e.g. "character_appearance") and resolves the tokens against
+    the current profile + template — no frontend re-implementation, one
+    backend source. Only tokens a template field declares via a replacement
+    block targeting target_key resolve; anything else stays literal.
     """
     from app.models.character_template import resolve_profile_tokens, get_template
     data = await request.json()
