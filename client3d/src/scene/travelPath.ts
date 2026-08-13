@@ -14,7 +14,8 @@
  * transpile and load it without a bundler, a DOM or three — the same discipline
  * as `packages/scene-render/src/groundAreas.ts` and `game/walk.ts`. Anything
  * that needs a `THREE.Vector3` builds one from the pair at the call site; the
- * y of a traveller is the ground plane (`GROUND_Y`), never a number from here.
+ * y of a traveller is the world ground under that pair (`Ground.heightAt`,
+ * § A16), never a number from here — this module knows distances, not heights.
  */
 
 /** A world point in metres, exactly the payload's `[x, z]` shape. */
@@ -147,6 +148,70 @@ export function remainingPoints(
     rest -= L;
   }
   return [[last[0], last[1]]];
+}
+
+/**
+ * How far apart the points of the DRAWN travel line may be, in metres.
+ *
+ * The line is a polyline over a landscape (§ A16): its corners get the ground
+ * height of their own point, and the stretch between two corners is a straight
+ * line through the air. The server's waypoints can be tens of metres apart, so
+ * a line drawn on them alone would tunnel through every hill it crosses. Four
+ * metres is the default cell of the heightfield — sampling finer than the
+ * field is authored buys nothing.
+ */
+export const LINE_SPACING_M = 4;
+
+/** Ceiling on the points of ONE drawn line. A journey across a big world is
+ *  kilometres long, and a dashed line with ten thousand corners is a buffer
+ *  rebuilt every five metres for a picture nobody can tell from a coarser one.
+ *  Past this the spacing is stretched until the line fits. */
+export const LINE_MAX_POINTS = 400;
+
+/**
+ * The same polyline with points at most `spacingM` apart — the ground-following
+ * form of a drawn travel line.
+ *
+ * Every original corner SURVIVES: the line still turns where the route turns,
+ * and the inserted points only fill the straight stretches between them. A
+ * segment of length `L` is cut into `ceil(L / spacing)` equal pieces, so the
+ * inserted points sit at even fractions of it and a segment shorter than the
+ * spacing keeps its two ends and nothing else.
+ *
+ * THE CAP COMES FIRST: the spacing is stretched to `total / (maxPoints − 1)`
+ * when the line would otherwise carry more points than that, which is the one
+ * decimation rule — no dropping of corners, no thinning afterwards.
+ *
+ * Degenerate input answers with itself: fewer than two points is no line, and
+ * a non-positive spacing means "do not densify at all".
+ */
+export function densifyPolyline(
+  points: MetrePoint[] | null | undefined,
+  spacingM: number = LINE_SPACING_M,
+  maxPoints: number = LINE_MAX_POINTS
+): MetrePoint[] {
+  if (!points || points.length < 2) {
+    return (points ?? []).map((p) => [p[0], p[1]] as MetrePoint);
+  }
+  const total = polylineLength(points);
+  if (!isNum(spacingM) || spacingM <= 0 || total <= 0) {
+    return points.map((p) => [p[0], p[1]] as MetrePoint);
+  }
+  const cap = isNum(maxPoints) && maxPoints > points.length ? maxPoints : points.length;
+  const spacing = Math.max(spacingM, total / (cap - 1));
+  const out: MetrePoint[] = [[points[0][0], points[0][1]]];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
+    const L = segLength(a, b);
+    const pieces = L > spacing ? Math.ceil(L / spacing) : 1;
+    for (let k = 1; k < pieces; k += 1) {
+      const t = k / pieces;
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+    out.push([b[0], b[1]]);
+  }
+  return out;
 }
 
 /**

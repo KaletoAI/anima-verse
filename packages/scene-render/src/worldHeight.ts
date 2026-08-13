@@ -76,3 +76,94 @@ export function sampleWorldHeight(field: WorldHeightField | null | undefined,
   const south = (rowS[i] || 0) * (1 - tx) + (rowS[i + 1] || 0) * tx
   return north * (1 - tz) + south * tz
 }
+
+/**
+ * Lowest and highest support point of the field, in metres.
+ *
+ * What it is FOR: everything that has to start above the whole world. The 3D
+ * client rays its tiles from a fixed height (`scene/tiles.ts`), and a fixed 20
+ * used to be that height — with a relief clamped at ±50 m (§ A1.7) a ray from
+ * 20 m starts INSIDE a hill and finds nothing, which reads as a figure falling
+ * back to the flat world on exactly the ground it should stand on.
+ *
+ * The support points ARE the extremes: between them the field is bilinear, and
+ * a bilinear patch never leaves the range of its four corners. An empty or
+ * degenerate field answers 0/0 — the flat world.
+ */
+export function worldHeightRange(field: WorldHeightField | null | undefined
+): { min: number; max: number } {
+  let min = 0
+  let max = 0
+  for (const row of field?.heights ?? []) {
+    for (const v of row ?? []) {
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue
+      if (v < min) min = v
+      if (v > max) max = v
+    }
+  }
+  return { min, max }
+}
+
+/** How many sample lines per axis `maxWorldHeightIn` may put across a
+ *  rectangle. A fog rectangle can span the whole world, and 64 × 64 samples
+ *  per rectangle is the budget at which a hundred of them still cost a
+ *  millisecond or two on a rebuild that happens when the fog moves and never
+ *  per frame. */
+const MAX_RECT_LINES = 64
+
+/** The sample coordinates across `[lo, hi]`: both ends plus every grid line
+ *  strictly between them, thinned by a stride when there are more than
+ *  `MAX_RECT_LINES` of them. */
+function rectLines(lo: number, hi: number, origin: number, step: number): number[] {
+  const out: number[] = [lo]
+  if (step > 0 && hi > lo) {
+    const first = Math.floor((lo - origin) / step) + 1
+    const last = Math.ceil((hi - origin) / step) - 1
+    const count = last - first + 1
+    const stride = count > MAX_RECT_LINES ? Math.ceil(count / MAX_RECT_LINES) : 1
+    for (let k = first; k <= last; k += stride) {
+      const c = origin + k * step
+      if (c > lo && c < hi) out.push(c)
+    }
+  }
+  if (hi > lo) out.push(hi)
+  return out
+}
+
+/**
+ * Highest ground inside an axis-aligned rectangle of world metres.
+ *
+ * WHAT IT IS FOR: the fog quads (§ A12). A veil is one flat rectangle over
+ * ground that is no longer flat, so it has to hang above the highest thing
+ * under it — a quad on the average height sticks out of every hill it covers,
+ * and the mountain pokes through the cloud.
+ *
+ * EXACT for a field the rectangle does not overrun: over one cell the field is
+ * bilinear, which is linear along each axis with the other one fixed, so its
+ * maximum over any axis-aligned sub-rectangle sits at a CORNER of that
+ * sub-rectangle. Sampling the rectangle's own edges plus every grid line
+ * inside it therefore visits every candidate.
+ *
+ * THE APPROXIMATION is the stride (`MAX_RECT_LINES`): a rectangle spanning
+ * more than 64 cells per axis is sampled on every n-th line instead, so a
+ * single peak between two sampled lines can be missed and the veil over a very
+ * large rectangle can hang a little low. Harmless where it happens — a
+ * rectangle that big is the open fog far from anything the player is near, and
+ * the alternative is a rebuild that walks a hundred thousand samples.
+ */
+export function maxWorldHeightIn(field: WorldHeightField | null | undefined,
+                                 x0: number, z0: number,
+                                 x1: number, z1: number): number {
+  if (!field) return 0
+  const step = field.step_m
+  const xs = rectLines(Math.min(x0, x1), Math.max(x0, x1), field.origin_x, step)
+  const zs = rectLines(Math.min(z0, z1), Math.max(z0, z1), field.origin_z, step)
+  let max = -Infinity
+  for (const z of zs) {
+    for (const x of xs) {
+      const h = sampleWorldHeight(field, x, z)
+      if (h > max) max = h
+    }
+  }
+  return Number.isFinite(max) ? max : 0
+}
