@@ -5,7 +5,7 @@ import { bubbleMs, bubbleText } from '../game/bubble';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
-import { advanceProgress, catchUpStep, clampProgress, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
+import { advanceProgress, catchUpStep, clampProgress, densifyPolyline, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
 
 /** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
  *  metre world has one scale, so this number means the same thing on the map
@@ -170,8 +170,24 @@ export class NpcManager {
   private playerDriven: string | null = null;
   /** ground ring at the click target of a running walk (E3-T4) */
   private walkTargetRing: THREE.Mesh | null = null;
+  /**
+   * The WORLD ground under a point (§ A16) — handed in, never derived here.
+   *
+   * A traveller's position is re-derived from the polyline on every frame
+   * (`tick`), so the height has to come with it: the poll's own point is up to
+   * a second old and the figure would walk the hill of a metre it has left.
+   * The default keeps the flat world of the payload, which is what a client
+   * without a relief has always drawn.
+   */
+  private groundY: (x: number, z: number) => number = () => GROUND_Y;
 
   constructor(private figures: FigureLibrary | null = null) {}
+
+  /** Install the world height sampler (`Ground.heightAt`). Called once at
+   *  boot; the field behind it updates itself. */
+  setGroundHeight(fn: (x: number, z: number) => number) {
+    this.groundY = fn;
+  }
 
   setAvatar(name: string) {
     this.avatarName = name;
@@ -630,7 +646,13 @@ export class NpcManager {
     npc.travelKey = key;
     const ahead = route ? remainingPoints(route.points, walked) : [];
     if (route && ahead.length >= 2) {
-      const pts = ahead.map((p) => new THREE.Vector3(p[0], GROUND_Y + 0.3, p[1]));
+      // A POINT PER GROUND SAMPLE, not per waypoint (§ A16): the height is
+      // taken at each corner and the stretch between two corners is straight,
+      // so a line drawn on the server's waypoints alone would run through the
+      // hills between them. `densifyPolyline` fills the long stretches (and
+      // caps the count) — the corners of the route itself all survive.
+      const pts = densifyPolyline(ahead).map(
+        (p) => new THREE.Vector3(p[0], this.groundY(p[0], p[1]) + 0.3, p[1]));
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
       const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
         color: 0xf2cd6e, dashSize: 0.9, gapSize: 0.6, transparent: true, opacity: 0.9,
@@ -718,7 +740,11 @@ export class NpcManager {
         // here would fight that second-by-second.
         if (npc.name !== this.playerDriven) this.updateTravelLine(npc, r);
         const at = pointAtDistance(r.points, r.progressM)!;
-        const goalPos = new THREE.Vector3(at[0], GROUND_Y, at[1]);
+        // The height belongs to the point the walk has REACHED, not to the
+        // one the last poll reported: between two polls the figure covers
+        // several metres of open country, and holding the poll's height would
+        // have it walk into the hill and out of it again every three seconds.
+        const goalPos = new THREE.Vector3(at[0], this.groundY(at[0], at[1]), at[1]);
         const delta = goalPos.clone().sub(npc.root.position);
         delta.y = 0;
         const d = delta.length();

@@ -1871,6 +1871,28 @@ hergeleitete Tabelle geprüft — `scripts/smoke_heightfield.py` Abschnitt [8]
 und `client3d/scripts/smoke_world_height.mjs`, dasselbe Feld, dieselben
 Erwartungen (§ B5a: Zahlen, keine Screenshots).
 
+**Was der RENDERER damit macht** (E8 Task 3, gilt für beide Renderer): der
+Boden wird auf DEM Gitter geschnitten, das das Feld mitbringt — die Basisplatte
+als Zellgitter (`gridPlate`), jede gemalte Fläche entlang derselben Linien
+zerteilt (`subdivideOnGrid`, `@anima/scene-render/gridMesh`), danach jeder
+Vertex per `sampleWorldHeight` an SEINEM eigenen x/z gehoben. EINE Zellweite
+für alles: `gridStepFor` verdoppelt den Feld-Schritt, bis eine Fläche unter
+40 000 Zellen bleibt (aus dem Punktbudget oben hergeleitet — die größte
+beschreibbare Welt drapiert damit auf 8 m, alles unter ~800 m auf den nativen
+4 m). Eine Fläche coarser als die Platte würde in den Hügel einsinken, deshalb
+teilen sich beide die Zahl. Volle Zellen werden auf beiden Seiten von der
+Minimum- zur Maximum-Ecke geteilt, damit Platte und Fläche dort dieselbe
+Fläche beschreiben; nur in den Zellen, die eine Flächen-KONTUR schneidet,
+können sie um einen Bruchteil der Zell-Krümmung auseinanderliegen — dagegen
+steht der Haaransatz-Versatz der Flächen (max. 1 cm), und ein `falloff_m`
+unter einer Zellweite ist die Autorierungs-Grenze dafür.
+
+Zwei Folgen, die keine Geometrie sind: **Nebel-Quads** hängen pro Rechteck auf
+`max(Höhe im Rechteck) + 5 cm` (§ A12; ein Schleier auf Durchschnittshöhe
+steckt in jedem Hügel, den er verdecken soll), und **Boden-Raycasts** starten
+bei `max(Feldhöhe) + 5 m` statt bei fixen 20 m — die ±50-m-Klemme oben ist
+genau deshalb notiert.
+
 **Was hier NICHT passiert:** die Planierung unter Fußabdrücken (Plateau) ist
 E8 Task 4 — die Rasterung bleibt pur und rastert genau das, was autoriert
 wurde. Der 2D-Spielerkarte fehlt das Relief in v1 bewusst; der Editor zeigt
@@ -1879,7 +1901,10 @@ Höhenflächen als eigene Ebene mit Zahl-Label, ohne Hillshade.
 **Verifikation:** `scripts/smoke_heightfield.py` (Rasterung, Rampe,
 Überlappung inkl. Senke, Sanitizer-Klemmen, Signatur/Store/`ground_y`, die
 Ursprungs-Verankerung, das Vergröbern und die Routen) plus die
-`.mjs`-Tabelle des geteilten Samplers.
+`.mjs`-Tabelle des geteilten Samplers
+(`client3d/scripts/smoke_world_height.mjs`) und die Gitter-/Drape-Mathe in
+`client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt
+inkl. Naht-Gegenprobe, Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung).
 
 ---
 

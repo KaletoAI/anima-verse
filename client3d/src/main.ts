@@ -41,7 +41,7 @@ import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
-import { BASE_MARGIN_M, createGround, GROUND_Y } from './scene/ground';
+import { BASE_MARGIN_M, createGround } from './scene/ground';
 import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
@@ -470,6 +470,11 @@ async function startApp(username: string, role: string) {
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
   setPropLoadFocus(engine.target);   // GLB-Queue: Modelle nahe der Kamera zuerst
   const npcs = new NpcManager(figures);
+  // The figures walk on the world's relief (§ A16): the manager re-derives a
+  // traveller's point every frame, so it gets the sampler rather than a height
+  // per poll. `terrainGround` is created a few lines down — the arrow reads it
+  // when a figure is placed, which is long after that.
+  npcs.setGroundHeight((x, z) => terrainGround.heightAt(x, z));
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
   figures.onModelReady = (charName) => {
@@ -1025,8 +1030,13 @@ async function startApp(username: string, role: string) {
   // keeps doing nothing but placing rectangles.
   const clouds = createFogClouds();
   /** A hand's breadth above the world's ground: an unknown place carries no
-   *  tile, so the painted ground is the only thing under the veil. */
-  const FOG_Y = GROUND_Y + 0.05;
+   *  tile, so the painted ground is the only thing under the veil.
+   *
+   *  ABOVE THE HIGHEST GROUND IN ITS OWN RECTANGLE since E8 (§ A16): one quad
+   *  is flat and the ground under it is not, so a veil hung on the average
+   *  height stands in every hill it covers — the mountain comes through the
+   *  cloud and shows exactly the topography the fog is there to withhold. */
+  const FOG_CLEARANCE_M = 0.05;
   const fogGroup = new THREE.Group();
   engine.scene.add(fogGroup);
   /** The switch of the CURRENT payload: `fogged: false` (the admin's
@@ -1079,7 +1089,11 @@ async function startApp(username: string, role: string) {
     const holes = holeList
       .map((f) => `${f.x.toFixed(2)},${f.z.toFixed(2)},${f.width.toFixed(2)},${f.yaw.toFixed(3)}`)
       .sort().join(' ');
-    const key = `${fogged}|${frame}|${holes}`;
+    // The RELIEF is part of the key: the veil's height comes from the field,
+    // and the field arrives well after the first fog was built (its own fetch
+    // on its own signature). Without this the clouds would keep the flat
+    // world's height until some location happened to move.
+    const key = `${fogged}|${frame}|${holes}|${terrainGround.heightRevision()}`;
     if (key === fogKey) return;
     fogKey = key;
     for (const child of fogGroup.children) {
@@ -1094,8 +1108,13 @@ async function startApp(username: string, role: string) {
       // is unaffected: the overhang is symmetric.
       const quad = new THREE.Mesh(clouds.quadGeometry(r.w, r.d), clouds.material);
       // `x`/`z` is the rectangle's MINIMUM corner, the quad hangs on its
-      // middle — half its extents further along, in plain metres.
-      quad.position.set(r.x + r.w / 2, FOG_Y, r.z + r.d / 2);
+      // middle — half its extents further along, in plain metres. Its HEIGHT
+      // is the highest ground inside that very rectangle plus the clearance:
+      // per rectangle, because the veil is many quads over one landscape and a
+      // single world-wide height would float the whole cover over the plain.
+      const fogY = terrainGround.maxHeightIn(r.x, r.z, r.x + r.w, r.z + r.d)
+        + FOG_CLEARANCE_M;
+      quad.position.set(r.x + r.w / 2, fogY, r.z + r.d / 2);
       quad.renderOrder = 1;   // under the thresholds (3) and the pins
       quad.raycast = () => {};
       fogGroup.add(quad);
@@ -1751,17 +1770,24 @@ async function startApp(username: string, role: string) {
       const at = pointAtDistance(points, progressM)!;
       return {
         char: c,
-        // GROUND_Y, not a tile's baked ground skin: a journey runs over the
-        // open terrain between the locations, where the ground plane is the
-        // only surface there is (`ground_y` discipline).
-        pos: new THREE.Vector3(at[0], GROUND_Y, at[1]),
+        // THE WORLD RELIEF, not a tile's baked ground skin: a journey runs
+        // over the open terrain between the locations, where the heightfield
+        // is the only surface there is (`ground_y` discipline, § A16). The
+        // figure keeps sampling it while it walks the polyline between polls —
+        // that half lives in `npcs.ts`, on the same sampler.
+        pos: new THREE.Vector3(at[0], terrainGround.heightAt(at[0], at[1]), at[1]),
         route: { points, totalM, progressM,
                  rateMS: tr.pace_m_s_real ?? tr.speed_m_s_real, stamp },
       };
     }
     // Fogged route, or a degenerate one-point line (a journey without a way):
     // the payload's own point is the whole answer.
-    if (c.pos) return { char: c, pos: new THREE.Vector3(c.pos.x, GROUND_Y, c.pos.z) };
+    if (c.pos) {
+      return { char: c,
+               pos: new THREE.Vector3(c.pos.x,
+                                      terrainGround.heightAt(c.pos.x, c.pos.z),
+                                      c.pos.z) };
+    }
     return null;
   }
 
@@ -1794,7 +1820,11 @@ async function startApp(username: string, role: string) {
         const wasInRoom = shownPlacement.get(c.name)?.room ?? null;
         states.push({
           char: c,
-          pos: new THREE.Vector3(placement.pos.x, GROUND_Y, placement.pos.z),
+          // On the open ground plane like a traveller's — which since § A16 is
+          // the world's relief, sampled at the character's own point.
+          pos: new THREE.Vector3(placement.pos.x,
+                                 terrainGround.heightAt(placement.pos.x, placement.pos.z),
+                                 placement.pos.z),
           snap: wasInRoom !== null,
         });
         shownPlacement.set(c.name, { room: null, interiorShown: false });
