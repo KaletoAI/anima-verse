@@ -257,6 +257,27 @@ export interface WorldMap {
    *  built-in defaults 0.4 m / 40° apply. */
   max_step_height_m?: number;
   max_slope_deg?: number;
+  /** The far backdrop (§ A17) — the mountain silhouette at the world's
+   *  horizon, pure scenery. MISSING MEANS OFF, and that is also what an older
+   *  server sends: there is no default ring. */
+  backdrop?: BackdropSpec;
+}
+
+/**
+ * The `backdrop` block of the worldmap payload (§ A17). The server authors it
+ * (`app/core/backdrop.py`) and hands the arcs over ALREADY RESOLVED to
+ * degrees — the client never translates a compass point, it draws what it is
+ * given.
+ */
+export interface BackdropSpec {
+  /** ridge height in world metres, server-clamped to [20; 300] */
+  height_m: number;
+  /** uint32 — the ridge is a pure function of it */
+  seed: number;
+  /** wrap-free ranges on the figure compass (§ A1.8, 0 = south, 90 = east):
+   *  `0 <= start < 360`, `start < end <= start + 360`. The full ring is the
+   *  one arc `[0, 360]`. */
+  arcs: Array<[number, number]>;
 }
 
 /**
