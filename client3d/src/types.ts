@@ -324,6 +324,11 @@ export interface TerrainTypeMeta {
    *  standing one (§ A9, the water round of 2026-08-13) — e.g.
    *  `treading-water` on water. Absent = the standing clip as always. */
   idle_anim?: string;
+  /** How deep a figure stands IN this ground while one of those two clips
+   *  runs, in metres (§ A9, 0…1.5). The clip is normalised onto the surface,
+   *  which puts a swimmer on top of the lake; this is the extra drop. Absent
+   *  = nothing sinks. */
+  sink_m?: number;
   [key: string]: unknown;
 }
 

@@ -21,7 +21,14 @@ const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
  *  the terrain rule reaches there (§ A1.5). All three are LOOKUPS the driver
  *  hands in: `main.ts` owns the terrain payload and the footprints, this file
  *  owns neither. */
-export interface GroundMove { anim: string; idle: string; scope: GroundScope }
+export interface GroundMove {
+  anim: string;
+  idle: string;
+  scope: GroundScope;
+  /** `meta.sink_m` of the ground's type, in metres (0 = nothing sinks) — how
+   *  deep the figure stands IN it while one of the two ground clips runs. */
+  sink: number;
+}
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
 /** Walk-target marker (E3-T4): the same gold, but a thin flat ring on the
@@ -216,7 +223,7 @@ export class NpcManager {
    * is the world without painted ground: walk, run and idle as always.
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
-    () => ({ anim: '', idle: '', scope: 'wilderness' });
+    () => ({ anim: '', idle: '', scope: 'wilderness', sink: 0 });
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -845,8 +852,10 @@ export class NpcManager {
           // (`figures.Figure.play`): whenever the GROUND names the clip, the
           // ground is the body's reference, so a clip authored on a water line
           // is dropped onto it. An ordinary standing clip keeps its height.
+          // The third is how deep the ground swallows the body on top of that
+          // (`meta.sink_m`) — it rides the same gate and is 0 without one.
           npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
-            : (groundIdle || 'idle'), travelling || !!groundIdle);
+            : (groundIdle || 'idle'), travelling || !!groundIdle, gm.sink);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -909,9 +918,10 @@ export class NpcManager {
         // The second argument is the gate of the clip ground offset (see the
         // traveller branch above): a clip the GROUND named — moving or
         // standing — has the ground as its reference, an activity clip does
-        // not (`sleep` carries the bed it was animated on).
+        // not (`sleep` carries the bed it was animated on). The third is the
+        // ground's own sink depth, which rides that same gate.
         npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
-          : (groundIdle || standingClip), moving || !!groundIdle);
+          : (groundIdle || standingClip), moving || !!groundIdle, gm.sink);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

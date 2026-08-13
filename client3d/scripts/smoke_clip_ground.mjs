@@ -74,6 +74,29 @@
  *                 a swim special case — the SAME rule moves both.
  *   THE GATE ONLY EVER LOWERS: `gate off − gate on >= 0` for every clip, and
  *                 the difference IS the measured offset × the figure scale.
+ *   THE GROUND'S SINK DEPTH rides the same gate (`meta.sink_m`, § A9, the
+ *                 water round of 2026-08-13): the normalisation puts the
+ *                 LOWEST body point — a bent knee — on the surface, so the
+ *                 swimmer lies ON the lake. The ground says how much of the
+ *                 body belongs below it, and the arithmetic is
+ *
+ *                     drop = clip offset × figure scale + sink_m
+ *
+ *                 with `sink_m` in WORLD metres, unscaled: half a metre of
+ *                 water is half a metre for a child and for a giant. Hand
+ *                 cases per rig, against the anchor its bind pose gave it:
+ *                     swim, gate on, sink 0    -> anchor − off·scale
+ *                     swim, gate on, sink 0.4  -> anchor − off·scale − 0.4
+ *                     swim, gate on, sink 1.5  -> anchor − off·scale − 1.5
+ *                     swim, gate OFF, sink 0.4 -> anchor  (no gate, no sink:
+ *                                                 an activity clip is never
+ *                                                 sunk by the ground)
+ *                     swim, gate on, sink NaN/−1 -> anchor − off·scale
+ *                 and the RESTORATION is exact: back to a standing clip and
+ *                 the instance sits at the anchor to the micrometre.
+ *                 RED COUNTER-PROBE: the pre-sink rule (offset alone) leaves
+ *                 the swimmer 0.4 m higher than the sink case — measured as
+ *                 the difference of the two anchors.
  *   laying/sleep/sit  NEVER touched: they are standing clips, the gate never
  *                 opens for them, and the instance keeps the exact anchor its
  *                 bind pose gave it (`inst.position.y`, compared to the
@@ -331,6 +354,41 @@ async function main() {
     figureMinY('swim', true);
     near(`${label}: a terrain move DOES move the anchor`, inst.position.y,
       anchorY - offsetOf('swim') * scale, 1e-6);
+
+    // --- the GROUND's sink depth on top of the clip offset ----------------
+    // `figureMinY` cannot be used here: the sink is about WHERE THE ANCHOR
+    // sits, and the anchor is the exact number `setClipDrop` writes. Read it
+    // directly, which is also what makes the arithmetic checkable to the
+    // micrometre.
+    const swimDrop = offsetOf('swim') * scale;
+    const anchorFor = (kind, terrain, sink) => {
+      figure.play('idle', false);           // leave the state, then enter it
+      figure.play(kind, terrain, sink);
+      return inst.position.y;
+    };
+    near(`${label}: sink 0 is the clip offset alone`,
+      anchorFor('swim', true, 0), anchorY - swimDrop, 1e-6);
+    near(`${label}: sink 0.4 goes on top of it, unscaled`,
+      anchorFor('swim', true, 0.4), anchorY - swimDrop - 0.4, 1e-6);
+    near(`${label}: ...and 1.5, the clamp of the catalog`,
+      anchorFor('swim', true, 1.5), anchorY - swimDrop - 1.5, 1e-6);
+    near(`${label}: an ACTIVITY clip is never sunk by the ground`,
+      anchorFor('swim', false, 0.4), anchorY, 1e-6);
+    near(`${label}: a NaN depth is no depth`,
+      anchorFor('swim', true, NaN), anchorY - swimDrop, 1e-6);
+    near(`${label}: ...and neither is a negative one`,
+      anchorFor('swim', true, -1), anchorY - swimDrop, 1e-6);
+    // RED COUNTER-PROBE: the rule before the sink existed was the offset
+    // alone. It must land 0.4 m HIGHER than the sunk swimmer — otherwise the
+    // sink is not reaching the anchor at all.
+    check(`${label}: RED COUNTER-PROBE — offset alone floats 0.4 m over the sunk one`,
+      Math.abs((anchorFor('swim', true, 0) - anchorFor('swim', true, 0.4)) - 0.4) <= 1e-6,
+      `${(anchorFor('swim', true, 0) - anchorFor('swim', true, 0.4)).toFixed(6)} m`);
+    // Leaving the water restores the bind anchor EXACTLY, sink or no sink.
+    figure.play('swim', true, 0.4);
+    figure.play('sit', false);
+    near(`${label}: back on dry land, the anchor is exactly the bind one`,
+      inst.position.y, anchorY, 1e-6);
 
     // The hyphenated kinds are PLAYABLE kinds since the parser fix of
     // 2026-08-13 — `swim-idle` used to be filed as a second `swim` and

@@ -3,8 +3,9 @@
 Data-driven ground vocabulary for the painted terrain areas: what a kind
 looks like on the schematic 2D map (color), whether it can be walked on,
 how fast, and — since finding 3 of the E8 acceptance — HOW one moves over
-it (``meta.move_anim``, the clip that replaces walk/run) and how one WAITS
-on it (``meta.idle_anim``, the clip that replaces the standing one). Since
+it (``meta.move_anim``, the clip that replaces walk/run), how one WAITS
+on it (``meta.idle_anim``, the clip that replaces the standing one) and how
+DEEP one stands in it while either runs (``meta.sink_m``). Since
 2026-08-13 also how BUMPY it is (``meta.relief_amplitude_m`` /
 ``meta.relief_wave_m``, the micro-relief baked into the world heightfield,
 § A16). NO terrain
@@ -54,6 +55,16 @@ RELIEF_AMPLITUDE_MIN, RELIEF_AMPLITUDE_MAX = 0.05, 2.0
 #: grid at all, it would only alias into a different, coarser pattern that
 #: changes whenever the raster step doubles.
 RELIEF_WAVE_MIN, RELIEF_WAVE_MAX = 8.0, 200.0
+
+#: HOW DEEP A FIGURE STANDS IN THIS GROUND, in metres (2026-08-13). The clip
+#: ground normalisation puts the LOWEST body point of a terrain clip on the
+#: surface — for a swimmer that is a bent knee, so the body lies on the water
+#: instead of in it. This is the extra drop on top, and it is a property of the
+#: GROUND, not of the clip: the same stroke sits deeper in a lake than in a
+#: ford. The upper clamp is a body length and a half: past that the figure is
+#: under the ground rather than in it, and nothing would be visible to correct
+#: it by. Zero means "no sinking" and is written by leaving the key out.
+SINK_MIN, SINK_MAX = 0.0, 1.5
 
 #: The wave a kind with an amplitude but no authored wave gets — a swell every
 #: 32 m, eight grid cells wide at the default step: the gentle rolling the
@@ -168,6 +179,13 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # and are never checked against a list.
     _trimmed_meta_string(meta, "move_anim")
     _trimmed_meta_string(meta, "idle_anim")
+    # A THIRD one belongs to the same picture (2026-08-13): `sink_m`, how deep
+    # a figure stands in this ground while one of those two clips runs. The
+    # clips are normalised onto the surface, which is right for a walker and
+    # too high for a swimmer — the ground says how much of the body belongs
+    # below it.
+    if "sink_m" in meta:
+        _clamped_meta_number(meta, "sink_m", SINK_MIN, SINK_MAX)
     # TWO MORE since the micro-relief decision (2026-08-13): the random small
     # hills this ground carries, baked into the WORLD HEIGHTFIELD by
     # ``app/core/heightfield`` (§ A16) rather than rendered by anyone — server

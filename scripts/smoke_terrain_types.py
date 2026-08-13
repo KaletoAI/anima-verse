@@ -46,6 +46,20 @@ Throwaway storage. Hand-derived expectations:
       `speed_factor 0.4` — the ground one wades through and treads water in.
       `deep_water` is the barrier kind: same swim clip, no idle one, because
       nobody stands in it (`passable: false`).
+  [8b] A THIRD clip-side meta key since the same evening: `sink_m`, how deep
+      a figure stands IN this ground while one of the two ground clips runs.
+      Numeric shape rule (`_clamped_meta_number`) with its own clamp 0…1.5:
+        0.4        -> 0.4      the seed value of water
+        0.05       -> 0.05     there is no lower limit but 0 — a hand's depth
+                               is a legal depth
+        0.4449     -> 0.44     two decimals, the editor's precision
+        9          -> 1.5      a body length and a half; deeper is under the
+                               ground rather than in it
+        0 / −1 / "deep" / NaN / "" -> the KEY IS GONE (0 = no sinking, and
+                               that is written by leaving the key out)
+      Water carries `sink_m: 0.4` in the shared seed, next to its two clips;
+      `deep_water` carries none — nobody stands in a barrier.
+
   [9] TWO MORE whitelisted meta keys since the micro-relief decision
       (2026-08-13): `relief_amplitude_m` and `relief_wave_m`, the random
       small hills the world heightfield bakes in wherever this kind is
@@ -231,9 +245,9 @@ check("the two are independent, and neighbours survive both",
       meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
                "note": "x"}),
       {"move_anim": "swim", "idle_anim": "treading-water", "note": "x"})
-check("water carries both in the shared seed",
+check("water carries both in the shared seed — plus its sink depth",
       (terrain_types.get_type("water") or {}).get("meta"),
-      {"move_anim": "swim", "idle_anim": "treading-water"})
+      {"move_anim": "swim", "idle_anim": "treading-water", "sink_m": 0.4})
 check("...at the pace of a ground one wades through",
       (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
 check("...and it is walked into, not refused",
@@ -243,6 +257,35 @@ check("the barrier kind carries the same MOVE clip and pace — and no idle "
       ((terrain_types.get_type("deep_water") or {}).get("meta"),
        (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
       ({"move_anim": "swim"}, 0.4))
+
+print("[8b] sink_m — how deep one stands IN the ground")
+check("the seed depth of water survives", meta_of({"sink_m": 0.4}),
+      {"sink_m": 0.4})
+check("a hand's depth is a legal depth (there is no lower limit but 0)",
+      meta_of({"sink_m": 0.05}), {"sink_m": 0.05})
+check("...rounded to two decimals", meta_of({"sink_m": 0.4449}),
+      {"sink_m": 0.44})
+check("deeper than a body and a half is clamped", meta_of({"sink_m": 9}),
+      {"sink_m": 1.5})
+check("a zero depth leaves no key behind", meta_of({"sink_m": 0}), {})
+check("...and neither does a negative one", meta_of({"sink_m": -1}), {})
+check("...nor junk", meta_of({"sink_m": "deep"}), {})
+check("...nor NaN", meta_of({"sink_m": float("nan")}), {})
+check("...nor an empty string", meta_of({"sink_m": ""}), {})
+check("it travels with the two clip keys and a neighbour",
+      meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
+               "sink_m": 0.4, "note": "x"}),
+      {"move_anim": "swim", "idle_anim": "treading-water", "sink_m": 0.4,
+       "note": "x"})
+terrain_types.save_world_type(
+    {"kind": "bog", "name": "Bog", "color": "#5b4a2f",
+     "meta": {"sink_m": 0.6}})
+check("it survives the save/read round trip",
+      (terrain_types.get_type("bog") or {}).get("meta"), {"sink_m": 0.6})
+terrain_types.delete_world_type("bog")
+check("the barrier kind has none — nobody stands in it",
+      "sink_m" in ((terrain_types.get_type("deep_water") or {}).get("meta") or {}),
+      False)
 
 print("[9] the micro-relief keys")
 check("an authored amplitude survives", meta_of({"relief_amplitude_m": 0.4}),

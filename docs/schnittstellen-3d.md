@@ -1238,6 +1238,19 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   types: [ …, {kind: "water", …, "meta": {"move_anim": "swim",
                                           "idle_anim": "treading-water"}} ]
   ```
+- **`sink_m` — wie tief man IN einem Boden steht** (2026-08-13). Dritter
+  whitelisteter `meta`-Schlüssel, eine Zahl in Metern (geklemmt 0…1,5, zwei
+  Dezimalen, 0/leer = Schlüssel weg). Die Boden-Normierung setzt den TIEFSTEN
+  Körperpunkt eines Boden-Clips auf die Oberfläche — beim Schwimmer ist das ein
+  angewinkeltes Knie, der Körper liegt also auf dem Wasser statt darin.
+  `sink_m` ist die zusätzliche Absenkung und gehört dem BODEN, nicht dem Clip:
+  derselbe Zug liegt im See tiefer als in der Furche. Vertrag für die Renderer:
+  **solange ein Boden-Clip läuft (`move_anim` ODER `idle_anim`, dieselbe
+  Reichweite), sinkt die Figur zusätzlich um `sink_m` Weltmeter** — in
+  derselben Verrechnung wie der Clip-Offset (`Absenkung = Clip-Offset ×
+  Figurenskalierung + sink_m`), NICHT mit der Figur skaliert (ein halber Meter
+  Wasser ist für Kind und Riese ein halber Meter), und Rückstellung auf exakt
+  den Bind-Anker, sobald der Boden-Clip endet. Saat: `water` trägt 0,4.
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 

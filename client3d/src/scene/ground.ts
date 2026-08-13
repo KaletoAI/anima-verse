@@ -257,6 +257,9 @@ export interface TerrainPoint {
   /** catalog `meta.idle_anim`, or `''` — the clip a STANDING figure plays
    *  here instead of its own standing one (`treading-water` on water) */
   idle_anim: string;
+  /** catalog `meta.sink_m`, or 0 — how deep the figure stands IN this ground
+   *  while one of those two clips runs, in metres */
+  sink_m: number;
 }
 
 export interface Ground {
@@ -1099,14 +1102,18 @@ export function createGround(): Ground {
     const entry = catalog.get(kind.toLowerCase());
     if (!entry) {
       return { kind, passable: true, speed_factor: 1, move_anim: '',
-        idle_anim: '' };
+        idle_anim: '', sink_m: 0 };
     }
+    const sink = Number(entry.meta?.sink_m);
     return {
       kind,
       passable: entry.passable !== false,
       speed_factor: Number.isFinite(entry.speed_factor) ? entry.speed_factor : 1,
       move_anim: String(entry.meta?.move_anim ?? '').trim(),
       idle_anim: String(entry.meta?.idle_anim ?? '').trim(),
+      // A ground that says nothing sinks nobody — and junk is nothing, never
+      // NaN: one NaN in the drop and the figure is at no height for good.
+      sink_m: Number.isFinite(sink) && sink > 0 ? sink : 0,
     };
   }
 

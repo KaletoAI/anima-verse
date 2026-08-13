@@ -1141,6 +1141,11 @@ export class Figure {
    *  (`walk.moveClip` / `walk.idleClip`) — part of the play state, because the
    *  same kind can be asked for both by the terrain and as a plain activity. */
   private terrainClip = false;
+  /** How deep the GROUND under the figure swallows it while such a clip runs
+   *  (`meta.sink_m`, world metres) — part of the play state for the same
+   *  reason `terrainClip` is: walking from a ford into a lake changes nothing
+   *  but this number, and the figure still has to sink. */
+  private sink = 0;
 
   constructor(model: LoadedModel) {
     this.height = model.height;
@@ -1215,11 +1220,23 @@ export class Figure {
    *  on a water line and the swimmer floated a third of a metre over the lake;
    *  `treading-water` is authored the same way). An ordinary standing clip
    *  keeps its authored height on purpose — `sleep` carries the bed it was
-   *  animated on. */
-  play(rawKind: ClipKind, terrainClip = false) {
+   *  animated on.
+   *
+   *  `sink` is how deep that GROUND swallows the body (`meta.sink_m`, § A9, in
+   *  world metres) and rides the SAME gate: the normalisation above puts the
+   *  lowest body point ON the surface, and for a swimmer that point is a bent
+   *  knee — so the ground adds what belongs underneath it. It is NOT scaled
+   *  with the figure: half a metre of water is half a metre for a child and
+   *  for a giant. */
+  play(rawKind: ClipKind, terrainClip = false, sink = 0) {
     const kind = (rawKind || 'idle').toLowerCase();
-    if (this.currentKind === kind && this.terrainClip === terrainClip) return;
+    // Junk is no depth, and never NaN: one NaN in the drop and the figure
+    // hangs at no height for the rest of the session.
+    const sinkM = terrainClip && Number.isFinite(sink) && sink > 0 ? sink : 0;
+    if (this.currentKind === kind && this.terrainClip === terrainClip
+        && this.sink === sinkM) return;
     this.terrainClip = terrainClip;
+    this.sink = sinkM;
     const fallback = CLIP_FALLBACK[kind];
     const resolved = this.actions.get(kind)
       ?? (fallback ? this.actions.get(fallback) : undefined)
@@ -1232,9 +1249,10 @@ export class Figure {
     this.root.userData.clipBound = this.actions.has(kind);
     // The drop belongs to the clip that ACTUALLY plays, not to the kind that
     // was asked for: a rig without `swim` falls back to `walk` and then walks
-    // on the ground, which is where a walk clip already is (offset 0).
+    // on the ground, which is where a walk clip already is (offset 0). The
+    // ground's sink depth comes on top of that measurement, in world metres.
     this.setClipDrop(terrainClip && resolved
-      ? clipGroundOffset(resolved.getClip()) * this.baseScale : 0);
+      ? clipGroundOffset(resolved.getClip()) * this.baseScale + sinkM : 0);
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;
       // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
