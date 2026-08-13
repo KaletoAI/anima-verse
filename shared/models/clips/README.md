@@ -59,6 +59,19 @@ belly. Take them seriously:
    model repos, and never one labelled "UE4 Skeleton".
 3. **Must match the Mixamo 52-bone rig** that the character models already use
    (the same basis as the character GLBs and the generated meshes).
+4. **Movement clips must be exported "In Place".** The client moves the figure
+   itself (the walk, the journey, the click route); a clip that also carries
+   root motion drives the body away from the position the game holds it at.
+   Mixamo has the checkbox — `swim.fbx` was downloaded without it and travels
+   2.36 m forward per cycle (0.52 m/s), the only clip in the library that does.
+5. **Author them on the FLOOR.** A movement clip is played against a figure
+   whose soles stand on the ground, so a clip animated on a line of its own —
+   `swim.fbx` is authored on a water line — holds the body over that ground.
+   The client measures the offset and drops the figure onto the ground while it
+   moves (`client3d/src/scene/clipGround.ts`), which rescues the picture but not
+   the intent: the swimmer then wades at the height the clip was authored at.
+   Standing clips are exempt on purpose — `sleep.fbx` is animated on a bed and
+   is meant to be.
 
 ## Why here and not under `characters/`
 

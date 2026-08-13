@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
 import { animatablePool, missingClipKinds } from './clipCoverage';
+import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 
@@ -314,8 +315,12 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * Hips-Positions-Track auf die Rig-Größe skalieren, übrige Positions-/
  * Scale-Tracks verwerfen. Kein Retargeting — funktioniert, weil beide Seiten
  * dieselbe Mixamo-Bind-Pose verwenden.
+ *
+ * Exported for `client3d/scripts/smoke_clip_ground.mjs` alone: the clip ground
+ * offset is measured on the clips THIS produces, so the check has to walk the
+ * real chain rather than a copy of it.
  */
-function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D): THREE.AnimationClip[] {
+export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D): THREE.AnimationClip[] {
   const boneByKey = new Map<string, THREE.Bone>();
   target.traverse((o) => {
     if ((o as THREE.Bone).isBone) boneByKey.set(normBoneName(o.name), o as THREE.Bone);
@@ -753,10 +758,20 @@ export class FigureLibrary {
         + ` (${matched} of ${total} clip bones exist on this skeleton;`
         + ` a clip needs ${MIN_CLIP_TRACKS} usable tracks to survive)`);
     }
-    return {
-      extra: adapted.filter((c) => !have.has(c.name.toLowerCase())),
-      fits: adapted.length > 0,
-    };
+    const extra = adapted.filter((c) => !have.has(c.name.toLowerCase()));
+    // WHERE each of these clips puts the body over the ground, measured once
+    // per rig (`clipGround`, finding 3 of 2026-08-13). Pure data: what it is
+    // good for is decided in `Figure.play`, and only while a terrain move clip
+    // runs. Measured AFTER the filter — a clip this rig will never play costs
+    // no skinning samples.
+    measureGroundOffsets(extra, template);
+    const floats = extra.filter((c) => clipGroundOffset(c) > 0.05)
+      .map((c) => `${c.name} +${clipGroundOffset(c).toFixed(2)} m`);
+    if (floats.length) {
+      console.info(`[figures] ${charName}: clips authored off the floor —`
+        + ` ${floats.join(', ')} (dropped while walking that ground)`);
+    }
+    return { extra, fits: adapted.length > 0 };
   }
 
   /** Pick the clips for a character along its set chain:
@@ -1017,6 +1032,14 @@ export class Figure {
   private baseScale = 1;
   /** Y-Offset, der die Füße auf y=0 bringt (Mesh-Origin liegt nicht immer dort) */
   private groundY = 0;
+  /** Extra drop currently applied on top of `groundY`, in WORLD metres — the
+   *  ground offset of the clip playing right now (`clipGround`, finding 3).
+   *  0 for everything but a running terrain move clip. */
+  private clipDrop = 0;
+  /** Whether the clip playing right now is a TERRAIN MOVE (`walk.moveClip`) —
+   *  part of the play state, because the same kind can be asked for both as a
+   *  movement and as a standing activity. */
+  private terrainMove = false;
 
   constructor(model: LoadedModel) {
     this.height = model.height;
@@ -1084,10 +1107,18 @@ export class Figure {
 
   /** Clip mit Crossfade wechseln; fehlt der Clip: Ersatz-Clip, dann idle.
    *  `kind` kommt server-authoritativ aus `activity_animation` — deshalb hier
-   *  normalisieren, die Actions liegen unter kleingeschriebenen Kinds. */
-  play(rawKind: ClipKind) {
+   *  normalisieren, die Actions liegen unter kleingeschriebenen Kinds.
+   *
+   *  `terrainMove` says the kind comes from the ground under a MOVING figure
+   *  (`walk.moveClip`) — the one state in which the ground is the body's
+   *  reference, so a clip authored off the floor is dropped onto it (finding 3
+   *  of 2026-08-13: `swim` is animated on a water line and the swimmer floated
+   *  a third of a metre over the lake). Standing clips keep their authored
+   *  height on purpose — `sleep` carries the bed it was animated on. */
+  play(rawKind: ClipKind, terrainMove = false) {
     const kind = (rawKind || 'idle').toLowerCase();
-    if (this.currentKind === kind) return;
+    if (this.currentKind === kind && this.terrainMove === terrainMove) return;
+    this.terrainMove = terrainMove;
     const fallback = CLIP_FALLBACK[kind];
     const resolved = this.actions.get(kind)
       ?? (fallback ? this.actions.get(fallback) : undefined)
@@ -1098,6 +1129,11 @@ export class Figure {
     // gespielt oder still auf idle zurückgefallen ist (Abnahme A4).
     this.root.userData.clipKind = kind;
     this.root.userData.clipBound = this.actions.has(kind);
+    // The drop belongs to the clip that ACTUALLY plays, not to the kind that
+    // was asked for: a rig without `swim` falls back to `walk` and then walks
+    // on the ground, which is where a walk clip already is (offset 0).
+    this.setClipDrop(terrainMove && resolved
+      ? clipGroundOffset(resolved.getClip()) * this.baseScale : 0);
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;
       // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
@@ -1112,6 +1148,18 @@ export class Figure {
     this.current?.fadeOut(0.25);
     this.current = resolved;
     this.currentKind = kind;
+  }
+
+  /** Put the instance at `groundY − drop`. The anchor itself stays what the
+   *  bind pose made it; only this ONE extra term moves, and it goes back to 0
+   *  the moment the terrain move ends. Static rigs never get here — they have
+   *  no actions, so `play` always resolves a drop of 0, and their procedural
+   *  bob in `update` owns `inst.position.y` alone. */
+  private setClipDrop(drop: number) {
+    if (Math.abs(drop - this.clipDrop) < 1e-4) return;
+    this.clipDrop = drop;
+    const inst = this.root.children[0];
+    if (inst) inst.position.y = this.groundY - drop;
   }
 
   faceTowards(dir: THREE.Vector3) {

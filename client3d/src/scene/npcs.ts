@@ -836,8 +836,12 @@ export class NpcManager {
           // painted water swims through it.
           const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
           const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+          // The second argument is the GATE of the clip ground offset
+          // (`figures.Figure.play`): while the figure moves over terrain the
+          // ground is its reference, so a clip authored on a water line is
+          // dropped onto it. Standing (idle here) it is not.
           npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
-            : 'idle');
+            : 'idle', travelling);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -893,8 +897,11 @@ export class NpcManager {
         // player's avatar included — it is steered through this same loop.
         const standingClip = npc.animation || activityToClipKind(npc.activity);
         const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+        // `moving` is also the gate of the clip ground offset (see the
+        // traveller branch above): only a figure walking the terrain has the
+        // ground as its reference.
         npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
-          : standingClip);
+          : standingClip, moving);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
