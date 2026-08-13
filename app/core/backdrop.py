@@ -183,8 +183,10 @@ def get_backdrop() -> Optional[Dict[str, Any]]:
                (w.strip().upper() for w in str(raw_arc or "").split(","))
                if word and word not in _SEGMENTS]
     if unknown:
-        _reject("game.backdrop_arc", ", ".join(unknown),
-                "the remaining directions (none = the full ring)")
+        if not _warned.get("game.backdrop_arc"):
+            _warned["game.backdrop_arc"] = True
+            logger.warning("game.backdrop_arc: unknown direction%s '%s' ignored — falling back to the remaining directions (none = the full ring)",
+                           "s" if len(unknown) > 1 else "", "', '".join(unknown))
     return {
         "height_m": get_backdrop_height_m(),
         "seed": get_backdrop_seed(),

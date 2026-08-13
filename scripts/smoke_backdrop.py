@@ -10,7 +10,7 @@ function. What it verifies is the SERVER half of § A17 — the renderer half
 THE COMPASS, hand-derived. Degrees are this contract's figure compass
 (§ A1.8): 0 = South, 90 = East, 180 = North, 270 = West, i.e. a ground
 direction of ``(x, z) = (sin a, cos a)`` with x growing east and z growing
-south. Check the four cardinals against that formula and nothing else:
+south. Check all eight segment centres against that formula:
 
     a =   0 -> (0, 1)   = +z = SOUTH
     a =  90 -> (1, 0)   = +x = EAST
