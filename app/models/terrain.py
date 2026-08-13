@@ -10,6 +10,11 @@ scatters (model, density, target height), authored per area since finding
 B17 — a forest with two kinds of tree and a clearing without any is one
 painted shape each, and a terrain TYPE cannot say that.
 
+Since 2026-08-13 a painted area may also shape the GROUND ITSELF: if its kind
+carries a micro-relief in the type catalog, the world heightfield gets that
+kind's random small hills wherever the area lies (§ A16.2) — which is why the
+writers here ring ``models.heightfield.note_world_write``.
+
 Everything is validated ON WRITE: the readers downstream
 (``world_geometry.point_in_polygon``) fail closed on malformed vertices
 without a word in the log, so junk must never reach the DB in the first
@@ -193,6 +198,22 @@ def area_exists(area_id: str) -> bool:
     return row is not None
 
 
+def _note_relief_write() -> None:
+    """A painted area may have moved the WORLD HEIGHTFIELD — check, then act.
+
+    Since the micro-relief (decision 2026-08-13) a terrain KIND can carry
+    random small hills, and they are baked into the world grid wherever that
+    kind is painted (``app/core/heightfield``, § A16.2). So painting is an
+    authoring act on the RELIEF too, and the same hook that answers a moved
+    location answers it: ``note_world_write`` compares the signature of the
+    cached field against the current one and only pays for a raster when the
+    ground really moved. Painting a kind without relief — the normal case —
+    costs that comparison and nothing more.
+    """
+    from app.models.heightfield import note_world_write
+    note_world_write()
+
+
 def save_area(raw: Any) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one area; returns the
     sanitized entry. Raises ValueError when the area is not usable."""
@@ -208,6 +229,7 @@ def save_area(raw: Any) -> Dict[str, Any]:
             (area["id"], area["kind"],
              json.dumps(area["polygon"], ensure_ascii=False), area["z_order"],
              json.dumps(area["meta"], ensure_ascii=False), now, now))
+    _note_relief_write()
     return area
 
 
@@ -217,6 +239,8 @@ def delete_area(area_id: str) -> bool:
         cur = conn.execute("DELETE FROM terrain_areas WHERE id=?",
                            ((area_id or "").strip(),))
         deleted = cur.rowcount > 0
+    if deleted:
+        _note_relief_write()
     return deleted
 
 

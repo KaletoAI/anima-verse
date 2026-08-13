@@ -41,6 +41,27 @@ Throwaway storage. Hand-derived expectations:
         no `move_anim` at all -> untouched, and the other keys with it
       Water carries it in the shared seed: `{"move_anim": "swim"}` with
       `speed_factor 0.4` — the ground one wades through.
+  [9] TWO MORE whitelisted meta keys since the micro-relief decision
+      (2026-08-13): `relief_amplitude_m` and `relief_wave_m`, the random
+      small hills the world heightfield bakes in wherever this kind is
+      painted (§ A16.2). Same shape rule as `move_anim` — a value that says
+      nothing leaves NO key behind — plus CLAMPS, because a slip should move
+      the ground to the limit rather than lose the entry:
+        amplitude 0.4      -> 0.4          (the authored case)
+        amplitude 99       -> 2.0          the walkability limit: two
+                                           neighbouring support points differ
+                                           by at most 2·amp over one 4 m step,
+                                           atan(2·2/4) = 45 deg
+        amplitude 0.001    -> 0.05         below this nothing is visible
+        amplitude 0.4449   -> 0.44         two decimals, the editor's precision
+        amplitude 0 / −1 / "much" / NaN / "" -> the KEY IS GONE
+        wave 2             -> 8.0          NYQUIST: 2 × the 4 m raster step, a
+                                           wave the grid cannot carry at all
+        wave 999           -> 200.0
+        wave 0 / junk      -> the KEY IS GONE (and the reader then uses 32 m)
+      The keys are independent: a wave without an amplitude survives as a
+      number and simply means nothing, and neither key disturbs `move_anim`
+      or any free-form neighbour.
 
 Usage:  ./.venv/bin/python scripts/smoke_terrain_types.py
 """
@@ -205,6 +226,47 @@ check("the barrier kind carries the same clip and pace",
       ((terrain_types.get_type("deep_water") or {}).get("meta"),
        (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
       ({"move_anim": "swim"}, 0.4))
+
+print("[9] the micro-relief keys")
+check("an authored amplitude survives", meta_of({"relief_amplitude_m": 0.4}),
+      {"relief_amplitude_m": 0.4})
+check("...clamped at the walkability limit",
+      meta_of({"relief_amplitude_m": 99}), {"relief_amplitude_m": 2.0})
+check("...and up to the smallest visible swing",
+      meta_of({"relief_amplitude_m": 0.001}), {"relief_amplitude_m": 0.05})
+check("...rounded to two decimals",
+      meta_of({"relief_amplitude_m": 0.4449}), {"relief_amplitude_m": 0.44})
+check("a zero amplitude leaves no key behind",
+      meta_of({"relief_amplitude_m": 0}), {})
+check("...and neither does a negative one",
+      meta_of({"relief_amplitude_m": -1}), {})
+check("...nor junk", meta_of({"relief_amplitude_m": "much"}), {})
+check("...nor NaN", meta_of({"relief_amplitude_m": float("nan")}), {})
+check("...nor an empty string", meta_of({"relief_amplitude_m": ""}), {})
+check("a wave shorter than two support points is clamped (Nyquist)",
+      meta_of({"relief_wave_m": 2}), {"relief_wave_m": 8.0})
+check("...and a huge one to the upper limit",
+      meta_of({"relief_wave_m": 999}), {"relief_wave_m": 200.0})
+check("a zero wave leaves no key behind (the reader uses 32 m)",
+      meta_of({"relief_wave_m": 0}), {})
+check("...and neither does junk", meta_of({"relief_wave_m": "wide"}), {})
+check("both together, with a neighbour and a move_anim",
+      meta_of({"relief_amplitude_m": 0.4, "relief_wave_m": 32,
+               "move_anim": " swim ", "note": "x"}),
+      {"relief_amplitude_m": 0.4, "relief_wave_m": 32.0,
+       "move_anim": "swim", "note": "x"})
+check("a meta without them is untouched", meta_of({"note": "free form"}),
+      {"note": "free form"})
+terrain_types.save_world_type(
+    {"kind": "meadow", "name": "Meadow", "color": "#7ac74f",
+     "meta": {"relief_amplitude_m": 0.4, "relief_wave_m": 32}})
+check("they survive the save/read round trip",
+      (terrain_types.get_type("meadow") or {}).get("meta"),
+      {"relief_amplitude_m": 0.4, "relief_wave_m": 32.0})
+terrain_types.delete_world_type("meadow")
+check("no shared kind carries a relief by default",
+      [k for k, e in terrain_types.effective_catalog().items()
+       if (e.get("meta") or {}).get("relief_amplitude_m")], [])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

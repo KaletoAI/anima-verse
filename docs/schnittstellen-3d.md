@@ -476,7 +476,7 @@ Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
-| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen der planierenden Orte** (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1; seit 2026-08-13 zählen nur Orte mit `level_ground`, und das Setzen/Löschen des Flags ändert die Signatur für sich allein). Ändert sie sich, holt der Client `GET /play/heightfield` neu — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
+| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen der planierenden Orte** (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1; seit 2026-08-13 zählen nur Orte mit `level_ground`, und das Setzen/Löschen des Flags ändert die Signatur für sich allein) UND über das **Mikro-Relief der gemalten Terrain-Arten** (§ A16.2: relief-tragende Flächen samt der flachen Flächen darüber und den beiden Katalog-Zahlen; relief-freies Malen zählt nicht mit). Ändert sie sich, holt der Client `GET /play/heightfield` neu — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
@@ -1911,6 +1911,11 @@ Autoriert wird sie im Karten-Editor als **Höhenflächen**, ausgeliefert wird
 sie als **Gitter**, und `ground_y(x, z)` (§ A1.2) ist die eine Funktion, die
 beides verbindet.
 
+**Seit 2026-08-13 hat das Feld eine zweite Quelle:** das **Mikro-Relief der
+Terrain-Arten** (§ A16.2) — gemalter Boden bringt seine eigenen kleinen Hügel
+mit. Alles Folgende gilt unverändert; das Relief kommt als ADDITIVER Durchgang
+zwischen Flächen und Planierung hinzu, und `height_sig` deckt es mit ab.
+
 **Zwei Formen, nur eine wird bearbeitet.** Eine **Höhenfläche** ist ein
 Polygon in Weltmetern plus `height_m` (wie hoch der Boden darin steht) und
 `falloff_m` (über wie viele Meter er dorthin ansteigt). Das **Gitter** ist
@@ -2151,6 +2156,86 @@ optimal. Die Strafe steckt auch in `segment_costs`, also erbt die Reisezeit
 den Berg, und die Linien-Glättung kann den Umweg um einen Hang nicht mehr
 wegziehen.
 
+### A16.2 Das Mikro-Relief der Terrain-Arten — neu 2026-08-13
+
+**Eine Terrain-ART kann Hügel tragen.** Zwei whitelistete Katalog-Felder je
+Art (`meta.relief_amplitude_m`, `meta.relief_wave_m`, Editor: „Relief
+amplitude/wavelength") erzeugen zufällige kleine Hügel überall dort, wo diese
+Art gemalt ist — der Wunsch des Users im Wortlaut: „nur um zufällige kleine
+Hügel zu erzeugen, damit die Welt nicht flach wirkt".
+
+**Eingebacken, nicht gerendert.** Das Relief landet im Welt-Höhenfeld (§ A16)
+und damit im EINEN `heights`-Array, das Server-Gate, Client-Spiegel und beide
+Renderer lesen. Es gibt bewusst **keinen TS-Zwilling**: der Client bleibt
+Sampler, sonst hätten Laufregel und Bild zwei verschiedene Böden.
+
+**Die Formel** — Wert-Rauschen auf einem Gitter der Kantenlänge `wave_m`, das
+wie das Höhengitter selbst am **Welt-Ursprung** verankert ist:
+
+```
+seed(art)  = FNV-1a 32 über den ART-NAMEN (es gibt KEIN Seed-Feld):
+             h = 2166136261; je UTF-8-Byte b:  h = ((h XOR b)·16777619) mod 2^32
+rnd(u, v)  = XorShift32((seed + u·73856093 + v·19349663) mod 2^32).next01()·2 − 1
+u, v       = floor(x/wave), floor(z/wave);   tx, tz = die Nachkommateile
+h_relief   = bilinear(rnd über die vier Ecken) · relief_amplitude_m
+```
+
+Es sind exakt die Konstanten des alten Szenen-Reliefs
+(`scatter_curves.terrain_grid`) — **eine Formelfamilie im Repo**. Der Seed ist
+ein Hash des NAMENS, weil ein gespeicherter Seed durch jede Katalog-Änderung,
+jeden Export und jeden Klon mitgeschleppt werden müsste, nur um den Boden
+stillzuhalten. Negative Ecken sind sauber definiert (`& 0xFFFFFFFF` = die
+vorzeichenlose 32-Bit-Lesung), zwei Flächen derselben Art setzen sich also
+nahtlos fort.
+
+**Klemmen.** `relief_amplitude_m` 0,05..2,0 m (2 Dezimalen; fehlend oder 0 =
+kein Relief, der Schlüssel verschwindet). Die Obergrenze ist eine
+**Begehbarkeits**-Grenze: zwei Nachbar-Stützpunkte können sich um höchstens
+2·Amplitude über einen Gitterschritt unterscheiden, also `atan(2·2,0/4,0)` =
+45° im Maximum — die Zahl, die der Editor-Hinweis nennt. `relief_wave_m`
+8..200 m, fehlend = **32 m**; die Untergrenze ist 2 × `DEFAULT_STEP_M`
+(**Nyquist**: eine kürzere Welle kann das Gitter nicht tragen, sie würde nur
+je nach Schrittweite anders aliasen). Es gibt **keinen Kontur-Fade**: den
+Übergang trägt die bilineare Interpolation des Feldes selbst.
+
+**Welche Art an einem Punkt gilt**, ist die Regel von `terrain_query.kind_at`
+— die OBERSTE gemalte Fläche, die ihn enthält (letzter Treffer gewinnt). Eine
+flache Art über einer hügeligen nimmt das Relief also wieder weg. Ein Punkt,
+den KEINE Fläche bedeckt, bekommt kein Relief: die unbemalte Welt bleibt eben,
+und nur deshalb ist das Gitter überhaupt begrenzbar.
+
+**Durchgangs-Reihenfolge der Rasterung** (jeder Schritt wegen des vorigen):
+
+```
+Flächen (stärkste Auslenkung) → Mikro-Relief (ADDITIV) → Planierung (gewinnt)
+```
+
+Additiv und NACH den Flächen, weil das Relief eine Variation der autorierten
+Landschaft ist und kein Konkurrent — vor dem `|max|`-Vergleich würde es von
+jeder Höhenfläche überschrieben. Vor der Planierung, weil ein planierter Ort
+auf ebenem Grund steht und nicht auf ebenem Grund plus Rauschen. Der **Null-Ring**
+am Gitterrand bleibt unangetastet, ohne Sonderfall: das Gitter reicht immer
+einen vollen Schritt über jede bemalte Box hinaus.
+
+**Gitter-Grenzen und Signatur wachsen mit.** Die Basisbox ist ab jetzt
+„Höhenflächen ∪ Flächen, deren ART Amplitude > 0 hat" — eine Welt ohne eine
+einzige Höhenfläche, aber mit Relief-Gras, bekommt damit ihr erstes Gitter
+(Punktbudget und Verdopplung unverändert). `height_sig` hasht zusätzlich genau
+das, was der Raster-Pass liest (`heightfield.relief_inputs`): die Polygone der
+relief-tragenden Flächen, die flachen Flächen DARÜBER und die beiden
+Katalog-Zahlen. **Terrain-Malen ohne relief-tragende Art ändert die Signatur
+nicht** — sonst kostete jeder Pinselstrich eine Neu-Rasterung. Die Schreibpfade
+`terrain.save_area/delete_area` und `terrain_types.save_world_type/delete_world_type`
+rufen dafür `note_world_write()`, das erst vergleicht und nur bei echter
+Änderung neu rastert.
+
+**Kosten** (gemessen 2026-08-13, ganze Welt mit einer Relief-Art bemalt, also
+der Worst Case): volles Punktbudget 346 × 346 = 119 716 Stützpunkte — 393 ms
+ohne, **534 ms mit** Relief-Pass; eine 800-m-Welt (203²) 129 ms → 185 ms. Der
+Aufschlag von rund einem Drittel entsteht je zur Hälfte aus „welche Art liegt
+oben" und der Rausch-Auswertung; er fällt auf dem SCHREIB-Pfad an, nie beim
+Laufen.
+
 **Was hier NICHT passiert:** der 2D-Spielerkarte fehlt das Relief in v1
 bewusst; der Editor zeigt Höhenflächen als eigene Ebene mit Zahl-Label, ohne
 Hillshade.
@@ -2160,7 +2245,13 @@ Hillshade.
 Ursprungs-Verankerung, das Vergröbern, die Routen und Abschnitt [11] die
 Planierung: das Opt-in-Flag in BEIDEN Zuständen samt roter Gegenprobe mit dem
 ungefilterten `placed_footprints`, Plateauhöhe, Dilatationsring,
-Rampen-Handrechnung, wanderndes Plateau samt Signaturwechsel) plus die `.mjs`-Tabelle des geteilten Samplers
+Rampen-Handrechnung, wanderndes Plateau samt Signaturwechsel; Abschnitt [13]
+das Mikro-Relief: Seed und ein Stützpunkt von Hand — xorshift32 Schritt für
+Schritt —, negative Lattice-Indizes samt Wrap, Determinismus, Null-Ring,
+oberste Art gegen `kind_at`, Signatur-Verhalten in allen vier Fällen,
+Reader-Klemmen und die rote Gegenprobe mit vertauschten Durchgängen), der
+Sanitizer der beiden Katalog-Felder in `scripts/smoke_terrain_types.py` [9],
+plus die `.mjs`-Tabelle des geteilten Samplers
 (`client3d/scripts/smoke_world_height.mjs`, Abschnitt [4] die kombinierte
 Höhenquelle des Client-Spiegels) und die Gitter-/Drape-Mathe in
 `client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt

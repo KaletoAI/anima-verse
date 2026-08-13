@@ -3,9 +3,11 @@
 Data-driven ground vocabulary for the painted terrain areas: what a kind
 looks like on the schematic 2D map (color), whether it can be walked on,
 how fast, and — since finding 3 of the E8 acceptance — HOW one moves over
-it (``meta.move_anim``, the clip that replaces walk/run). NO terrain
+it (``meta.move_anim``, the clip that replaces walk/run). Since 2026-08-13
+also how BUMPY it is (``meta.relief_amplitude_m`` / ``meta.relief_wave_m``,
+the micro-relief baked into the world heightfield, § A16). NO terrain
 property is ever hardcoded anywhere else — every consumer (passability,
-pace, payload, editor palette) reads this catalog.
+pace, relief, payload, editor palette) reads this catalog.
 
 Two layers, override-replace per kind (the activity-library rule): the
 shared seed ``shared/terrain/types.json`` ships the defaults, a world row
@@ -34,6 +36,28 @@ _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SPEED_MIN, SPEED_MAX = 0.0, 2.0
 DEFAULT_COLOR = "#888888"
 
+#: MICRO-RELIEF (decision 2026-08-13) — how high the random small hills of
+#: this ground stand, in metres, as a half-swing around the authored level
+#: (the noise runs in [−1, 1)). The upper clamp is a WALKABILITY limit, not a
+#: taste one: two neighbouring support points may differ by at most 2·amp over
+#: one grid step, i.e. atan(2·2.0 / 4.0) = 45° at the maximum — past that the
+#: ground would build slopes nobody can climb out of the noise alone. The
+#: lower clamp is the smallest swing that is still visible at all; anything
+#: below it means "no relief", and that is written by leaving the key out.
+RELIEF_AMPLITUDE_MIN, RELIEF_AMPLITUDE_MAX = 0.05, 2.0
+
+#: How wide ONE swell of that relief is, in metres — the edge length of the
+#: noise lattice. The lower clamp is 2 × ``heightfield.DEFAULT_STEP_M``:
+#: NYQUIST. A wave shorter than two support points cannot be carried by the
+#: grid at all, it would only alias into a different, coarser pattern that
+#: changes whenever the raster step doubles.
+RELIEF_WAVE_MIN, RELIEF_WAVE_MAX = 8.0, 200.0
+
+#: The wave a kind with an amplitude but no authored wave gets — a swell every
+#: 32 m, eight grid cells wide at the default step: the gentle rolling the
+#: user asked for ("just to make random small hills"), not a choppy field.
+DEFAULT_RELIEF_WAVE_M = 32.0
+
 
 def _shared_path() -> Path:
     from app.core.paths import get_shared_dir
@@ -54,6 +78,38 @@ def _shared_types() -> Dict[str, Dict[str, Any]]:
             continue
         out[entry["kind"]] = entry
     return out
+
+
+def _finite(value: Any) -> Optional[float]:
+    """``value`` as a finite float, or None — NaN/inf are junk, not numbers.
+
+    They must never reach a clamp: every NaN comparison is False, so min/max
+    hand them straight through and the un-encodable value poisons every later
+    JSON response (Starlette encodes with ``allow_nan=False`` -> 500).
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _clamped_meta_number(meta: Dict[str, Any], key: str,
+                         low: float, high: float) -> None:
+    """One optional numeric ``meta`` key, IN PLACE — clamped or gone.
+
+    The ``move_anim`` shape rule for numbers: a value that says nothing
+    (absent, junk, zero, negative) leaves NO key behind, so no reader ever has
+    to tell "authored as 0" from "not authored". Everything else is CLAMPED
+    rather than refused — an authoring slip should move the ground to the
+    limit, not lose the whole catalog entry — and rounded to two decimals,
+    which is the precision the editor offers.
+    """
+    num = _finite(meta.get(key))
+    if num is None or num <= 0:
+        meta.pop(key, None)
+        return
+    meta[key] = round(min(max(num, low), high), 2)
 
 
 def sanitize_type(raw: Any) -> Dict[str, Any]:
@@ -95,6 +151,18 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
             meta["move_anim"] = move_anim
         else:
             meta.pop("move_anim")
+    # TWO MORE since the micro-relief decision (2026-08-13): the random small
+    # hills this ground carries, baked into the WORLD HEIGHTFIELD by
+    # ``app/core/heightfield`` (§ A16) rather than rendered by anyone — server
+    # gates, client mirror and both renderers read the one ``heights`` array.
+    # Only the two numbers live here; the formula and the seed do not (the
+    # seed is a hash of the kind name, ``heightfield.relief_seed``).
+    if "relief_amplitude_m" in meta:
+        _clamped_meta_number(meta, "relief_amplitude_m",
+                             RELIEF_AMPLITUDE_MIN, RELIEF_AMPLITUDE_MAX)
+    if "relief_wave_m" in meta:
+        _clamped_meta_number(meta, "relief_wave_m",
+                             RELIEF_WAVE_MIN, RELIEF_WAVE_MAX)
     return {
         "kind": kind,
         "name": name,
@@ -143,6 +211,22 @@ def get_type(kind: str) -> Optional[Dict[str, Any]]:
     return effective_catalog().get((kind or "").strip())
 
 
+def _note_relief_write() -> None:
+    """A catalog write may have moved the WORLD HEIGHTFIELD — check, then act.
+
+    Since the micro-relief (2026-08-13) a terrain KIND carries a height: its
+    ``relief_amplitude_m``/``relief_wave_m`` are baked into the world grid
+    wherever that kind is painted. So editing the catalog changes the ground
+    itself, exactly as moving a height area does — and the same hook answers
+    it: ``note_world_write`` compares the signature the cached field was built
+    from against the current one and only pays for a raster when the answer
+    really moved. A colour or a name change costs the comparison and nothing
+    else.
+    """
+    from app.models.heightfield import note_world_write
+    note_world_write()
+
+
 def save_world_type(raw: Any) -> Dict[str, Any]:
     """Create/replace the WORLD override of one kind; returns the sanitized
     entry. Raises ValueError when the entry is not usable."""
@@ -158,6 +242,7 @@ def save_world_type(raw: Any) -> Dict[str, Any]:
             (entry["kind"], entry["name"], entry["color"],
              1 if entry["passable"] else 0, entry["speed_factor"],
              json.dumps(entry["meta"], ensure_ascii=False), utc_now_iso()))
+    _note_relief_write()
     return entry
 
 
@@ -168,4 +253,9 @@ def delete_world_type(kind: str) -> bool:
         cur = conn.execute("DELETE FROM terrain_types WHERE kind=?",
                            ((kind or "").strip(),))
         deleted = cur.rowcount > 0
+    if deleted:
+        # The SHARED entry becomes effective again — including its relief, or
+        # its lack of one. Dropping an override is a ground change like any
+        # other.
+        _note_relief_write()
     return deleted

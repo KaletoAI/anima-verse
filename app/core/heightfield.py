@@ -39,6 +39,20 @@ sees the locations whose ``level_ground`` flag is set, because
 authored and does not mind the places on it — a rise INSIDE a location is a
 thing one may want. Nothing in this module decides that; it only ever levels
 what it is given.
+
+**THE MICRO-RELIEF SITS BETWEEN THE TWO** (decision 2026-08-13, § A16.2). A
+terrain KIND may carry random small hills (``relief_amplitude_m`` /
+``relief_wave_m`` in the type catalog), and they are BAKED IN HERE rather than
+rendered anywhere: the server's walking gate, the client's mirror and both
+renderers read the one ``heights`` array, so a bumpy meadow cannot mean two
+different grounds. The whole pass order is
+
+    areas (strongest deflection) → micro-relief (ADDITIVE) → plateaus (win)
+
+and each step is what it is because of the one before it: the relief is a
+variation OF the authored landscape, not a competitor of it (hence additive,
+after the |max| rule), and a levelled place stands on flat ground, not on flat
+ground plus noise (hence the plateaus last).
 """
 
 import math
@@ -185,6 +199,274 @@ def area_height_at(area: Dict[str, Any], x: float, z: float) -> Optional[float]:
     if falloff <= 0:
         return height
     return height * min(1.0, edge_distance(x, z, ring) / falloff)
+
+
+# ── The micro-relief of a terrain kind ──────────────────────────────────
+
+def relief_seed(kind: str) -> int:
+    """The noise seed of a terrain kind — a stable hash OF ITS NAME.
+
+    THERE IS NO SEED FIELD, on purpose (decision 2026-08-13): a seed is a
+    number nobody can author meaningfully, and a stored one would have to be
+    carried through every catalog edit, every export and every world clone to
+    keep the ground still. The name already identifies the kind, so the hills
+    of "grass" are the hills of "grass" in every world, and renaming a kind is
+    honestly a different ground.
+
+    The formula is FNV-1a, 32 bit — three lines of integer arithmetic so a
+    smoke run can re-derive any support point by hand (§ B5a)::
+
+        h = 2166136261
+        for each byte b of kind, UTF-8:
+            h = ((h XOR b) · 16777619) mod 2**32
+
+    Different kinds therefore get unrelated hill patterns, and two areas of the
+    SAME kind continue each other seamlessly — the lattice is one world-wide
+    field per kind, not a per-area one.
+    """
+    h = 2166136261
+    for byte in (kind or "").encode("utf-8"):
+        h = ((h ^ byte) * 16777619) & 0xFFFFFFFF
+    return h
+
+
+def relief_params(kind: str, entry: Any
+                  ) -> Optional[Tuple[int, float, float]]:
+    """``(seed, amplitude_m, wave_m)`` of a catalog entry, or None.
+
+    None means "this ground is flat", and that is the answer for a missing
+    key, a junk value, a non-finite one and an amplitude of 0 alike — the
+    sanitizer already drops those keys on write
+    (``terrain_types.sanitize_type``), so this is the reader's half of the
+    same rule and covers a catalog row that never went through it.
+
+    BOTH NUMBERS ARE CLAMPED HERE TOO, and the wave one matters: it is the
+    Nyquist limit of the raster (2 × :data:`DEFAULT_STEP_M`), and a field that
+    cannot carry its own wave would alias differently at every step size.
+    """
+    from app.core.terrain_types import (DEFAULT_RELIEF_WAVE_M,
+                                        RELIEF_AMPLITUDE_MAX,
+                                        RELIEF_AMPLITUDE_MIN, RELIEF_WAVE_MAX,
+                                        RELIEF_WAVE_MIN)
+    meta = entry.get("meta") if isinstance(entry, dict) else None
+    if not isinstance(meta, dict):
+        return None
+    try:
+        amp = float(meta.get("relief_amplitude_m") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(amp) or amp <= 0.0:
+        return None
+    amp = min(max(amp, RELIEF_AMPLITUDE_MIN), RELIEF_AMPLITUDE_MAX)
+    try:
+        wave = float(meta.get("relief_wave_m") or DEFAULT_RELIEF_WAVE_M)
+    except (TypeError, ValueError, OverflowError):
+        wave = DEFAULT_RELIEF_WAVE_M
+    if not math.isfinite(wave) or wave <= 0.0:
+        wave = DEFAULT_RELIEF_WAVE_M
+    wave = min(max(wave, RELIEF_WAVE_MIN), RELIEF_WAVE_MAX)
+    return (relief_seed(kind), round(amp, 2), round(wave, 2))
+
+
+def lattice_noise(seed: int, u: int, v: int) -> float:
+    """One lattice corner of the noise field, in [−1, 1).
+
+    THE FORMULA OF THE OLD SCENE RELIEF, deliberately unchanged
+    (``scatter_curves.terrain_grid``, whose constants are imported rather than
+    copied): one xorshift32 draw seeded with the spatial hash of the corner::
+
+        rnd(u, v) = XorShift32((seed + u·73856093 + v·19349663) mod 2**32)
+                    .next01() · 2 − 1
+
+    Position-independent, so a corner keeps its height no matter in which
+    order, how often or on which machine it is computed — that is what makes
+    the whole world heightfield reproducible.
+
+    NEGATIVE CORNERS ARE WELL DEFINED: ``& 0xFFFFFFFF`` reads Python's
+    unbounded negative integer as its two's complement, so the corner west of
+    the world origin is a corner like any other and not a mirror of the one
+    east of it.
+    """
+    from app.core.scatter_curves import (TERRAIN_HASH_I, TERRAIN_HASH_J,
+                                         XorShift32)
+    state = (int(seed) + int(u) * TERRAIN_HASH_I
+             + int(v) * TERRAIN_HASH_J) & 0xFFFFFFFF
+    return XorShift32(state).next01() * 2.0 - 1.0
+
+
+def micro_relief_at(params: Optional[Tuple[int, float, float]],
+                    x: float, z: float) -> float:
+    """The micro-relief a terrain kind adds at (x, z), in metres.
+
+    Value noise on a lattice of edge ``wave_m`` that is ANCHORED AT THE WORLD
+    ORIGIN, exactly like the height grid itself: the corner indices are
+    ``floor((x, z) / wave)``, and the value between four corners is bilinear —
+    the same mixing rule :func:`sample_height` uses, so the field stays smooth
+    where the raster samples it::
+
+        u, v   = floor(x/wave), floor(z/wave);  tx, tz = the fractions
+        north  = rnd(u, v)·(1−tx)   + rnd(u+1, v)·tx
+        south  = rnd(u, v+1)·(1−tx) + rnd(u+1, v+1)·tx
+        h      = (north·(1−tz) + south·tz) · amplitude
+
+    There is NO fade at the painted contour, and that is a decision
+    (2026-08-13): the field's own bilinear interpolation carries the transition
+    over one grid step, and the worst case it can build is atan(2·amp/step) —
+    45° at the maximum amplitude, which is why the amplitude is clamped.
+    """
+    if not params:
+        return 0.0
+    seed, amp, wave = params
+    fx = float(x) / wave
+    fz = float(z) / wave
+    u = math.floor(fx)
+    v = math.floor(fz)
+    tx = fx - u
+    tz = fz - v
+    north = (lattice_noise(seed, u, v) * (1.0 - tx)
+             + lattice_noise(seed, u + 1, v) * tx)
+    south = (lattice_noise(seed, u, v + 1) * (1.0 - tx)
+             + lattice_noise(seed, u + 1, v + 1) * tx)
+    return (north * (1.0 - tz) + south * tz) * amp
+
+
+def relief_inputs(terrain_areas: Sequence[Dict[str, Any]],
+                  catalog: Optional[Dict[str, Dict[str, Any]]]
+                  ) -> List[Tuple[Dict[str, Any],
+                                  Optional[Tuple[int, float, float]],
+                                  Tuple[float, float, float, float]]]:
+    """The painted terrain the relief pass READS — ``(area, params, box)``.
+
+    THE ONE PLACE THAT DECIDES WHAT THE FIELD DEPENDS ON, and it has two
+    readers on purpose: :func:`rasterize` builds the ground from it, and
+    ``models.heightfield.height_sig`` hashes it. A signature over a different
+    list than the raster consumes is how a stale grid survives an edit.
+
+    Two kinds of entry come back, in the areas' own bottom-to-top order:
+
+    * an area whose KIND carries relief — ``params`` is its
+      ``(seed, amplitude, wave)``;
+    * an area whose kind does NOT, but which lies OVER one that does —
+      ``params`` is None. It still matters, because the topmost kind at a
+      point decides (``terrain_query.kind_at``): a paved square painted on a
+      bumpy meadow flattens the ground it covers.
+
+    Everything else is dropped, and that is the point of the filter: painting
+    on a world whose catalog carries no relief at all changes NOTHING about
+    the heightfield, so it must not change the signature and must not cost a
+    re-raster. An empty list means the whole pass is a no-op.
+    """
+    catalog = catalog or {}
+    params_by_kind: Dict[str, Tuple[int, float, float]] = {}
+    for kind, entry in catalog.items():
+        params = relief_params(kind, entry)
+        if params is not None:
+            params_by_kind[kind] = params
+    if not params_by_kind:
+        return []
+    from app.models.heightfield import polygon_bounds
+    out: List[Tuple[Dict[str, Any], Optional[Tuple[int, float, float]],
+                    Tuple[float, float, float, float]]] = []
+    active: List[Tuple[float, float, float, float]] = []
+    for area in (terrain_areas or []):
+        polygon = area.get("polygon") or []
+        if len(polygon) < 3:
+            continue
+        box = polygon_bounds(polygon)
+        if box is None:
+            continue
+        params = params_by_kind.get(str(area.get("kind") or ""))
+        if params is None:
+            # A flat kind is only an input where it can ERASE something: over
+            # an area with relief that was painted BEFORE it. Anywhere else it
+            # writes the 0 that is already there.
+            if not any(_overlaps(box, earlier) for earlier in active):
+                continue
+        else:
+            active.append(box)
+        out.append((area, params, box))
+    return out
+
+
+def _apply_micro_relief(origin_x: float, origin_z: float, step: float,
+                        heights: List[List[float]],
+                        relief: Sequence[Tuple[Dict[str, Any],
+                                               Optional[Tuple[int, float,
+                                                              float]],
+                                               Tuple[float, float, float,
+                                                     float]]]) -> None:
+    """Add every kind's micro-relief onto the rastered areas — IN PLACE.
+
+    TWO SWEEPS, and the first one is only there for the cost. Which kind is
+    on top at a point is ``terrain_query.kind_at``'s rule — the LAST painted
+    area containing it — and asking that per support point would walk every
+    area for every one of up to 120 000 points. So the same rule is turned
+    inside out: each area writes its own parameters into its own index window,
+    in the areas' bottom-to-top order, and the last writer wins. Identical
+    answer, "painted area × its own points" instead of "point × every area".
+
+    The second sweep adds the noise where a kind was found. The lattice
+    corners are memoised for the whole grid: at the default 32 m wave over a
+    4 m step, sixty-four support points share the same four corners.
+
+    THE 0-RING IS NOT TOUCHED and needs no special case: the grid always
+    reaches one full step PAST the union box of everything that shaped it
+    (:func:`_axis_origin`), so no painted polygon can contain a border point.
+    """
+    rows = len(heights)
+    cols = len(heights[0]) if rows else 0
+    if rows < 2 or cols < 2 or step <= 0 or not relief:
+        return
+    from app.core.world_geometry import point_in_polygon
+    at_point: List[List[Optional[Tuple[int, float, float]]]] = [
+        [None] * cols for _ in range(rows)]
+    for area, params, (ax0, az0, ax1, az1) in relief:
+        polygon = area.get("polygon")
+        i0 = max(0, int(math.floor((ax0 - origin_x) / step)))
+        i1 = min(cols - 1, int(math.ceil((ax1 - origin_x) / step)))
+        j0 = max(0, int(math.floor((az0 - origin_z) / step)))
+        j1 = min(rows - 1, int(math.ceil((az1 - origin_z) / step)))
+        for j in range(j0, j1 + 1):
+            pz = origin_z + j * step
+            row = at_point[j]
+            for i in range(i0, i1 + 1):
+                if point_in_polygon(origin_x + i * step, pz, polygon):
+                    row[i] = params
+    corners: Dict[Tuple[int, int, int], float] = {}
+    for j in range(rows):
+        pz = origin_z + j * step
+        krow = at_point[j]
+        hrow = heights[j]
+        for i in range(cols):
+            params = krow[i]
+            if params is None:
+                continue
+            seed, amp, wave = params
+            fx = (origin_x + i * step) / wave
+            fz = pz / wave
+            u = math.floor(fx)
+            v = math.floor(fz)
+            tx = fx - u
+            tz = fz - v
+            n00 = _corner(corners, seed, u, v)
+            n10 = _corner(corners, seed, u + 1, v)
+            n01 = _corner(corners, seed, u, v + 1)
+            n11 = _corner(corners, seed, u + 1, v + 1)
+            north = n00 * (1.0 - tx) + n10 * tx
+            south = n01 * (1.0 - tx) + n11 * tx
+            hrow[i] += (north * (1.0 - tz) + south * tz) * amp
+
+
+def _corner(cache: Dict[Tuple[int, int, int], float],
+            seed: int, u: int, v: int) -> float:
+    """:func:`lattice_noise`, memoised per raster run. A cached 0.0 is a value
+    like any other — hence the ``is None`` test and not a truth test."""
+    key = (seed, u, v)
+    value = cache.get(key)
+    if value is None:
+        value = lattice_noise(seed, u, v)
+        cache[key] = value
+    return value
 
 
 def _step_for(bounds: Tuple[float, float, float, float]) -> float:
@@ -336,7 +618,9 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
 
 def rasterize(areas: Sequence[Dict[str, Any]],
               step_m: float = 0.0,
-              footprints: Sequence[Tuple[float, float, float, float]] = ()
+              footprints: Sequence[Tuple[float, float, float, float]] = (),
+              terrain_areas: Sequence[Dict[str, Any]] = (),
+              terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None
               ) -> Dict[str, Any]:
     """The authored areas as a grid — pure, deterministic, no DB.
 
@@ -361,6 +645,18 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     A world without a single height area stays empty even with a hundred
     places on it: every plateau there would be levelled to 0 on ground that is
     already 0, and a grid of zeros is a payload nobody needs.
+
+    ``terrain_areas`` + ``terrain_catalog`` are the painted ground and its type
+    catalog, and they are here for the MICRO-RELIEF (decision 2026-08-13): a
+    kind carrying ``relief_amplitude_m`` puts random small hills on every area
+    painted with it (:func:`relief_inputs`, :func:`_apply_micro_relief`). They
+    are handed IN rather than read, because this function stays pure — the
+    caller (``get_field``) does the one DB read.
+
+    A RELIEF KIND GROWS THE GRID like a height area does: the base box is the
+    height areas UNION the areas whose kind carries relief. A world without a
+    single height area but with bumpy grass painted on it gets its first grid
+    that way, and the point budget behaves exactly as before.
     """
     from app.models.heightfield import polygon_bounds
     usable = [a for a in (areas or []) if len(a.get("polygon") or []) >= 3]
@@ -369,12 +665,14 @@ def rasterize(areas: Sequence[Dict[str, Any]],
         box = polygon_bounds(area.get("polygon"))
         if box is not None:
             boxes.append((area, box))
-    if not boxes:
+    relief = relief_inputs(terrain_areas, terrain_catalog)
+    relief_boxes = [box for _a, params, box in relief if params is not None]
+    if not boxes and not relief_boxes:
         return {"origin_x": 0.0, "origin_z": 0.0,
                 "step_m": step_m or DEFAULT_STEP_M,
                 "rows": 0, "cols": 0, "heights": []}
 
-    area_bounds = _union([b[1] for b in boxes])
+    area_bounds = _union([b[1] for b in boxes] + relief_boxes)
     # THE GRID HAS TO COVER WHAT IT DESCRIBES. A LEVELLING footprint reaching
     # out of the painted box is levelled too, so the grid grows to hold it
     # plus its ramp ring — otherwise the plateau would be cut off at the
@@ -428,6 +726,11 @@ def rasterize(areas: Sequence[Dict[str, Any]],
                 if abs(value) > abs(current) or (
                         abs(value) == abs(current) and value > current):
                     row[i] = value
+    # THEN the terrain's own small hills, ADDED onto that landscape — a
+    # variation of it, not a competitor: run before the |max| rule they would
+    # simply be overwritten by every authored area (which is exactly the red
+    # counter-probe in the smoke).
+    _apply_micro_relief(origin_x, origin_z, step, heights, relief)
     # …and only now the places standing on that landscape (E8 task 4).
     level_plateaus(origin_x, origin_z, step, heights,
                    [fp for fp in (footprints or ()) if fp and float(fp[2]) > 0])
@@ -473,6 +776,12 @@ def get_field() -> Dict[str, Any]:
     used when its signature still matches the areas — a grid that no longer
     describes what is authored is not a cache, it is a lie.
 
+    THE RASTER'S INPUTS ARE READ HERE, all four of them: the height areas, the
+    levelling placements, and (since 2026-08-13) the painted terrain plus its
+    type catalog, which carry the micro-relief. ``height_sig`` hashes exactly
+    the same four, so "the world changed" and "this grid is stale" stay one
+    question.
+
     **The returned dict is SHARED — treat it as read-only.** Every caller gets
     the very object the cache holds, so mutating it (a plateau pass writing
     into ``heights``, task 4) would rewrite the world for everyone else and
@@ -490,8 +799,12 @@ def get_field() -> Dict[str, Any]:
     if stored is not None and stored.get("sig") == sig:
         _CACHE = (generation, stored)
         return stored
+    from app.core.terrain_types import effective_catalog
+    from app.models.terrain import list_areas
     field = rasterize(store.list_height_areas(),
-                      footprints=store.placed_footprints())
+                      footprints=store.placed_footprints(),
+                      terrain_areas=list_areas(),
+                      terrain_catalog=effective_catalog())
     field["sig"] = sig
     try:
         store.store_grid(field)

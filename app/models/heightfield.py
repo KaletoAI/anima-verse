@@ -239,6 +239,36 @@ def placed_footprints() -> List[Tuple[float, float, float, float]]:
     return out
 
 
+def relief_basis() -> List[Dict[str, Any]]:
+    """The MICRO-RELIEF inputs of the raster, in hashable form.
+
+    Not "the painted terrain": exactly the areas
+    ``core.heightfield.relief_inputs`` hands the raster — the ones painted
+    with a kind that carries relief, plus the flat ones lying over them, each
+    with the two catalog numbers that shape its hills. Same function, same
+    list, so the signature cannot describe a different world than the grid
+    does.
+
+    THE POINT OF THE FILTER is what it leaves out (decision 2026-08-13):
+    painting on a world whose catalog carries no relief changes no height at
+    all, so it must not move this signature and must not cost a re-raster.
+    Terrain is painted stroke by stroke; a heightfield rebuild per stroke would
+    be paid by whoever walks next.
+    """
+    from app.core.heightfield import relief_inputs
+    from app.core.terrain_types import effective_catalog
+    from app.models.terrain import list_areas
+    out: List[Dict[str, Any]] = []
+    for area, params, _box in relief_inputs(list_areas(), effective_catalog()):
+        out.append({"kind": area.get("kind"),
+                    "polygon": area.get("polygon"),
+                    # The seed is derivable from the kind, so only the two
+                    # authored numbers travel; None is the flat area on top.
+                    "relief": None if params is None else [params[1],
+                                                           params[2]]})
+    return out
+
+
 def height_sig() -> str:
     """10-char signature over the authored height areas AND the placements.
 
@@ -258,22 +288,32 @@ def height_sig() -> str:
     flagged places are in :func:`placed_footprints`, so switching the
     flattening on or off adds or removes a whole entry from the basis while the
     place stands perfectly still (decision 2026-08-13).
+
+    AND SO DOES THE MICRO-RELIEF (:func:`relief_basis`, decision 2026-08-13):
+    since a terrain KIND may carry hills, painting such a kind — or editing its
+    amplitude or wave in the catalog — moves the ground exactly as a height
+    area does. Painting a kind WITHOUT relief does not appear here at all.
     """
     basis = json.dumps({"areas": list_height_areas(),
-                        "places": placed_footprints()},
+                        "places": placed_footprints(),
+                        "terrain": relief_basis()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 
 
 def note_world_write() -> None:
-    """A location was written — re-raster IF that moved a plateau.
+    """Something that MIGHT shape the ground was written — re-raster if it did.
 
     Called by the ONE writer of the world data (``world._save_world_data``),
     which is a location write of every kind: a move, a turn, a resize, a new
     place, a deletion — and equally a rename or a room edit, which change no
-    plateau at all. So the cheap question is asked first (the signature the
-    cached field was built from against the current one) and the expensive
-    answer only follows a real change.
+    plateau at all. Since the micro-relief (2026-08-13) also by the terrain
+    writers, ``models.terrain.save_area``/``delete_area`` and
+    ``core.terrain_types.save_world_type``/``delete_world_type``: a painted
+    area of a kind with hills, or that kind's amplitude, is part of the world
+    relief. So the cheap question is asked first (the signature the cached
+    field was built from against the current one) and the expensive answer only
+    follows a real change — a stroke of flat grass costs one comparison.
 
     Same reasoning as :func:`_invalidate`, one step further out: the editing
     request is already waiting for a round trip and is the honest place to pay
