@@ -77,9 +77,20 @@ const AREA_Y_MAX_M = 0.01;
  *  ask the driver for a two-hundred-fold offset. */
 const AREA_OFFSET_MAX = 32;
 
-/** Fallback tuft size when a scatter entry names no model. */
-const TUFT_RADIUS_M = 0.16;
-const TUFT_HEIGHT_M = 0.55;
+/** Fallback tuft size when a scatter entry names no model — HIP-HIGH next to a
+ *  1.70 m figure, not knee-high (finding 2 of the E8 acceptance round: the old
+ *  0.55 m / 0.16 m tuft read as moss from eye level). ONE place for the two
+ *  numbers. */
+const TUFT_RADIUS_M = 0.22;
+const TUFT_HEIGHT_M = 0.8;
+/** Target height of a scattered GLB that declares no `height_m` (metres).
+ *
+ *  A prop file carries whatever size its author chose, and "whatever the file
+ *  says" is not a size in a world measured in metres — a tree exported in
+ *  centimetres stood 2 cm tall next to the figure. So an undeclared model is
+ *  normalised to a shrub/small-tree height instead of being trusted; an author
+ *  who wants another size says so in `height_m` (the editor now pre-fills it). */
+const SCATTER_MODEL_HEIGHT_M = 2.0;
 
 /**
  * THE BASEMENT HOLE (moved here from `main.ts` with E4 task 3).
@@ -602,10 +613,11 @@ export function createGround(): Ground {
    * preview from the very same call. That is the whole point of the shared
    * module — preview and world agree by construction, not by two files being
    * kept in step. Footprints of the placed locations go in with it, so nothing
-   * grows inside a building (finding B18).
+   * grows inside a building (finding B18), and the rings of the areas stacked
+   * ABOVE this one, so only the topmost area of a spot scatters there.
    */
   function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number,
-                        sink: { dispose(): void }[]
+                        occluders: Point2[][], sink: { dispose(): void }[]
   ): THREE.InstancedMesh[] {
     const out: THREE.InstancedMesh[] = [];
     readScatterList(area).forEach((entry, index) => {
@@ -615,6 +627,7 @@ export function createGround(): Ground {
         densityPer100m2: Number(entry.density_per_100m2 ?? 0),
         seed: scatterSeed(area.id, index),
         footprints,
+        occluders,
       });
       if (!points.length) return;
 
@@ -674,8 +687,11 @@ export function createGround(): Ground {
           const mesh = src as THREE.Mesh;
           // `height_m` is the TARGET height since B17: the prop is scaled until
           // its bounding box is that tall, and grounded either way (B16).
+          // Without one the model is NOT instanced at its authored size — it is
+          // normalised to `SCATTER_MODEL_HEIGHT_M`, see there.
           const geometry = groundedGeometry(
-            mesh, Number(entry.height_m) > 0 ? Number(entry.height_m) : null);
+            mesh, Number(entry.height_m) > 0
+              ? Number(entry.height_m) : SCATTER_MODEL_HEIGHT_M);
           // The clone is OURS and nothing else disposes it — the owned bag of
           // this rebuild was drained into `areaOwned` long before this answer
           // arrived (the load is asynchronous, the swap is not). So it rides on
@@ -770,8 +786,14 @@ export function createGround(): Ground {
 
     const next: AreaMesh[] = [];
     const nextOwned: { dispose(): void }[] = [];
+    // ALL geometries first, in list order — the scatter of an area needs the
+    // rings of the areas ABOVE it (see `buildScatter`), and the list order is
+    // the stacking order the server sorted (z_order ASC, created_at ASC).
+    // `null` = a ring that encloses nothing: it draws nothing and covers
+    // nothing. Each area is still built exactly once.
+    const builtAreas = areas.map((area) => buildAreaGeometry(THREE, area.polygon));
     areas.forEach((area, index) => {
-      const built = buildAreaGeometry(THREE, area.polygon);
+      const built = builtAreas[index];
       if (!built) return;   // a ring that encloses nothing has nothing to draw
       // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
       // so the texture runs seamlessly across area borders.
@@ -795,7 +817,12 @@ export function createGround(): Ground {
 
       // The CLEANED ring, the one the mesh was built from — see `ringBounds`.
       const [minX, minZ, maxX, maxZ] = ringBounds(built.ring);
-      const scatter = buildScatter(area, built.ring, built.areaM2, nextOwned);
+      // Everything painted OVER this area hides the ground it grows on.
+      const occluders = builtAreas.slice(index + 1)
+        .filter((b): b is NonNullable<typeof b> => !!b)
+        .map((b) => b.ring);
+      const scatter = buildScatter(area, built.ring, built.areaM2, occluders,
+                                   nextOwned);
       next.push({
         mesh,
         scatter,

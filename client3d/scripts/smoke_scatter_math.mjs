@@ -62,6 +62,21 @@
  *      request: scale stays 1, only the grounding lift applies. Derived from
  *      minY = -1, maxY = 1 -> offsetY = +1 in every one of those cases.
  *
+ * (A8) THE DEFAULT TARGET HEIGHT of a scattered model, 2.0 m (finding 1 of the
+ *      E8 acceptance round). A scatter entry without `height_m` no longer
+ *      hands `null` in — `client3d/src/scene/ground.ts` passes its
+ *      `SCATTER_MODEL_HEIGHT_M`, so "whatever the file says" is never a size
+ *      in a world measured in metres. The arithmetic is (A2)'s with a
+ *      different target:
+ *        a tree exported in CENTIMETRES, minY 0, maxY 0.02:
+ *          height 0.02, scale = 2 / 0.02 = 100, offsetY = -0 * 100 = 0
+ *          -> the 2 cm speck standing next to the 1.70 m figure becomes 2 m.
+ *        a 4 m tree modelled around its centre, minY -2, maxY +2:
+ *          height 4, scale = 2 / 4 = 0.5, offsetY = -(-2) * 0.5 = +1
+ *          -> box 0 .. 2. The default SHRINKS an oversized prop too.
+ *      The constant itself lives in the client (it cannot be imported here —
+ *      that module imports three), so its VALUE is pinned separately, see (E).
+ *
  * ============================================================================
  * (B) pointInFootprint — the exclusion of finding B18
  * ============================================================================
@@ -122,7 +137,7 @@
  *     x   = minX + r * (maxX - minX)
  *     z   = minZ + r * (maxZ - minZ)      (the NEXT number)
  *     yaw = r * 2*pi                       (the NEXT one, ALWAYS drawn)
- *     reject when outside the ring or inside a footprint
+ *     reject when outside the ring, inside an OCCLUDER or inside a footprint
  *
  * THREE numbers per candidate, drawn before the test even when the candidate
  * is thrown away. That is the point of (C2): every candidate keeps its place
@@ -176,6 +191,93 @@
  *      same seed gives an identical list twice, and `scatterSeed` differs per
  *      index, so entry 0 and entry 1 of one area do not stand in the same
  *      spots.
+ *
+ * ----------------------------------------------------------------------------
+ * (C8..C11) OCCLUDERS — only the TOPMOST area of a spot scatters (finding 2 of
+ * the E8 acceptance round: a wood painted under a river grew its trees through
+ * the water). `areas` arrives bottom to top, so an area's occluders are the
+ * cleaned rings after its own index, and the test is the very `pointInRing`
+ * even-odd rule the area's own ring uses.
+ *
+ * THE OCCLUDER SQUARE `OCC_LEFT`: (0,0) (10,0) (10,10) (0,10) — the lower-left
+ * quarter of the 20 x 20 sampling square. `OCC_RIGHT`: (12,0) (20,0) (20,10)
+ * (12,10).
+ *
+ * (C8) THE SAME STREAM as (C1) with `OCC_LEFT`. The first candidate (2, 4) is
+ *      inside it and is dropped; (15, 5) has x = 15 > 10 and survives. Result
+ *      [ {15, 5, 0} ] — (C1) MINUS the covered point, exactly the shape (C2)
+ *      has for footprints, and for the same reason: the three numbers were
+ *      already drawn.
+ *
+ * (C9) THE EXISTENCE GUARANTEE. `occluders` absent, `occluders: []`, one
+ *      EMPTY ring and `OCC_RIGHT`-far-from-everything must all give (C1)
+ *      verbatim — the two points {2,4,pi} and {15,5,0}. An area with nothing
+ *      painted over it must not move a single prop.
+ *      (`OCC_RIGHT` does cover (15,5), so the "far" ring here is a third
+ *      square well outside the stream's points: (30,30) (40,30) (40,40)
+ *      (30,40).)
+ *
+ * (C10) THE EVEN-ODD RULE, on a BOW-TIE occluder
+ *       (0,0) (10,10) (10,0) (0,10). Its two lobes meet at (5,5); the notches
+ *       above and below that crossing are OUTSIDE by even-odd. Crossings to
+ *       the right of the point, at the point's own z:
+ *         (2, 5): the diagonal crosses at x = 5 (toggle), the right edge
+ *                 x = 10 (toggle), the anti-diagonal at x = 5 (toggle), the
+ *                 left edge x = 0 is not to the right -> 3 crossings, INSIDE.
+ *         (5, 2): the diagonal crosses at x = 2 (not to the right), the right
+ *                 edge x = 10 (toggle), the anti-diagonal at x = 8 (toggle),
+ *                 the left edge x = 0 no -> 2 crossings, OUTSIDE.
+ *       Stream 0.10, 0.25, 0.00 -> (2, 5) yaw 0   -> occluded, dropped
+ *              0.25, 0.10, 0.50 -> (5, 2) yaw pi  -> the notch, kept
+ *       -> [ {5, 2, pi} ]. A bounding-box test of the occluder would have
+ *       dropped both.
+ *
+ * (C11) SEVERAL OCCLUDERS: being inside ANY of them is enough. With
+ *       [FAR, OCC_RIGHT] on the (C1) stream, (2,4) survives (in neither) and
+ *       (15,5) falls to the second ring -> [ {2, 4, pi} ]. The mirror image of
+ *       (C8), so a wrong "only the first ring counts" cannot pass both.
+ *
+ * ============================================================================
+ * (D) THE RED COUNTER-CHECK — a mutant that provably fails
+ * ============================================================================
+ * The cases above are only worth their runtime if a wrong sampler fails them.
+ * So the module is transpiled a SECOND time from a mutated source and the same
+ * arithmetic is run against it; the check passes when the mutant DISAGREES.
+ *
+ * THE MUTANT: "draw the yaw only when the candidate is accepted" — the exact
+ * shape of the mistake the occluder test invites (test first, draw later).
+ * Textually: the `const yaw = rnd() * ...` line is deleted and the yaw is
+ * drawn inside `out.push` instead. A rejected candidate then costs TWO numbers
+ * instead of three, and the whole stream behind it shifts.
+ *
+ * ITS DERIVATION, on a case built for it: the (C8) square with `OCC_LEFT`,
+ * density 0.5 (wanted 2) and `triesPerPoint` 2 (budget 4 candidates), fed
+ *   0.10, 0.20, 0.50,   0.75, 0.25, 0.00,   0.60, 0.80, 0.25
+ *   TRUE sampler:  (2,4) occluded (3 numbers spent) | (15,5) yaw 0 kept |
+ *                  (0.60,0.80) -> (12,16), x = 12 > 10 and z = 16 > 10, so
+ *                  outside OCC_LEFT, yaw = 0.25 * 2pi = pi/2, kept
+ *                  -> [ {15,5,0}, {12,16,pi/2} ]
+ *   MUTANT:        (2,4) occluded, only TWO numbers spent | the next candidate
+ *                  reads 0.50/0.75 -> (10, 15): z = 15 > 10, so outside
+ *                  OCC_LEFT, accepted, and only NOW draws its yaw from the
+ *                  next number: 0.25 * 2pi = pi/2
+ *                  -> its FIRST instance is {10, 15, pi/2}, not {15, 5, 0}
+ * The two lists differ in their very first point, and that is what the check
+ * asserts (what the mutant does with the rest of the stream is beside the
+ * point — it has already lost). The mutant breaks (C2) as well, the
+ * footprint's own subtraction: the same property from the other side.
+ *
+ * ============================================================================
+ * (E) THE CLIENT'S SCATTER CONSTANTS
+ * ============================================================================
+ * `client3d/src/scene/ground.ts` imports three.js and cannot be loaded here,
+ * so the three numbers of finding 1+2 are pinned by reading the source: the
+ * default target height a model without `height_m` is normalised to
+ * (`SCATTER_MODEL_HEIGHT_M` = 2.0, the one (A8) does the arithmetic for) and
+ * the built-in tuft's size (`TUFT_HEIGHT_M` = 0.8, `TUFT_RADIUS_M` = 0.22 —
+ * hip-high next to a 1.70 m figure instead of knee-high). Without this the
+ * arithmetic above would keep passing while the client quietly went back to
+ * scale 1.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -184,14 +286,23 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
+const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 
 /** See the header: the module has no runtime import, so a transpile is all it
- *  takes. Should someone add one, this fails loudly — that is the alarm. */
-async function loadScatter() {
+ *  takes. Should someone add one, this fails loudly — that is the alarm.
+ *
+ *  `mutate` rewrites the SOURCE before the transpile — that is how section (D)
+ *  gets a wrong sampler to compare against, without a second copy of the
+ *  maths lying around to rot. */
+async function loadScatter(mutate) {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'scattermath-'));
   try {
-    const source = await readFile(SRC, 'utf8');
+    const original = await readFile(SRC, 'utf8');
+    const source = mutate ? mutate(original) : original;
+    if (mutate && source === original) {
+      throw new Error('the mutant changed nothing — the counter-check would be vacuous');
+    }
     const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
     const file = join(dir, 'scatter.mjs');
     await writeFile(file, out.code, 'utf8');
@@ -199,6 +310,15 @@ async function loadScatter() {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/** Section (D)'s mutant: the yaw is drawn only for an ACCEPTED candidate, so a
+ *  rejected one costs two numbers instead of three and shifts everything
+ *  behind it. See the header for the derivation. */
+function yawOnAcceptance(source) {
+  return source
+    .replace('    const yaw = rnd() * Math.PI * 2\n', '')
+    .replace('out.push({ x, z, yaw })', 'out.push({ x, z, yaw: rnd() * Math.PI * 2 })');
 }
 
 let failed = 0;
@@ -211,6 +331,19 @@ function check(label, actual, expected, eps = 1e-9) {
   } else {
     failed += 1;
     console.log(`  FAIL ${label}\n       expected ${JSON.stringify(expected)}`
+      + `\n       actual   ${JSON.stringify(actual)}`);
+  }
+}
+/** The other half of a red counter-check: the value the MUTANT produces,
+ *  asserted absent. A mutant that agrees means the case pins nothing. */
+function checkNot(label, actual, forbidden, eps = 1e-9) {
+  const ok = !compare(actual, forbidden, eps);
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label}`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       this is the value the correct sampler gives`
       + `\n       actual   ${JSON.stringify(actual)}`);
   }
 }
@@ -250,6 +383,18 @@ async function main() {
   const TAU = Math.PI * 2;
   const SQUARE = [[0, 0], [20, 0], [20, 20], [0, 20]];
   const TRIANGLE = [[0, 0], [20, 0], [0, 20]];
+  // The occluder rings of (C8..C11) — see the header for what each covers.
+  const OCC_LEFT = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  const OCC_RIGHT = [[12, 0], [20, 0], [20, 10], [12, 10]];
+  const OCC_FAR = [[30, 30], [40, 30], [40, 40], [30, 40]];
+  const BOWTIE = [[0, 0], [10, 10], [10, 0], [0, 10]];
+  // The (C1) stream and the two points it makes — reused by every existence
+  // check below, so "nothing moved" is one literal and not four.
+  const C1_STREAM = [0.10, 0.20, 0.50, 0.75, 0.25, 0.00];
+  const C1_POINTS = [{ x: 2, z: 4, yaw: Math.PI }, { x: 15, z: 5, yaw: 0 }];
+  /** The client's `SCATTER_MODEL_HEIGHT_M` (metres), written out by hand and
+   *  pinned against the client source in section (E). */
+  const DEFAULT_TARGET_H = 2.0;
 
   console.log('\n(A) propGroundFit — the prop stands on the ground (B16)');
   check('A1 a 2 m tree around its centre rises by exactly 1 m',
@@ -272,6 +417,10 @@ async function main() {
     check(`A7 target height ${JSON.stringify(bad)} is no request — lift only`,
       propGroundFit(-1, 1, bad), { scale: 1, offsetY: 1 });
   }
+  check('A8 the 2 m default blows a centimetre-sized tree up to 2 m',
+    propGroundFit(0, 0.02, DEFAULT_TARGET_H), { scale: 100, offsetY: 0 });
+  check('A8 …and SHRINKS an oversized one to the same 2 m',
+    propGroundFit(-2, 2, DEFAULT_TARGET_H), { scale: 0.5, offsetY: 1 });
 
   console.log('\n(B) pointInFootprint — footprints stay clear (B18)');
   const fp = { pos_x: 10, pos_z: 10, yaw_deg: 0, plan_width_m: 4 };
@@ -328,15 +477,15 @@ async function main() {
     scatterInstances({
       ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
       triesPerPoint: 1,
-      rng: stream([0.10, 0.20, 0.50, 0.75, 0.25, 0.00]),
+      rng: stream(C1_STREAM),
     }),
-    [{ x: 2, z: 4, yaw: Math.PI }, { x: 15, z: 5, yaw: 0 }]);
+    C1_POINTS);
   check('C2 a footprint SUBTRACTS the covered point — the rest is (C1) verbatim',
     scatterInstances({
       ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
       footprints: [{ pos_x: 2, pos_z: 4, yaw_deg: 0, plan_width_m: 2 }],
       triesPerPoint: 1,
-      rng: stream([0.10, 0.20, 0.50, 0.75, 0.25, 0.00]),
+      rng: stream(C1_STREAM),
     }),
     [{ x: 15, z: 5, yaw: 0 }]);
   check('C3 a candidate outside the ring costs its three numbers all the same',
@@ -369,6 +518,40 @@ async function main() {
     [{ x: 2, z: 2, yaw: 0 }, { x: 4, z: 4, yaw: TAU * 0.25 },
      { x: 6, z: 6, yaw: Math.PI }]);
 
+  console.log('\n  C8..C11 occluders — only the topmost area of a spot scatters');
+  check('C8 an area painted OVER this one subtracts the covered point',
+    scatterInstances({
+      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+      occluders: [OCC_LEFT], triesPerPoint: 1, rng: stream(C1_STREAM),
+    }),
+    [{ x: 15, z: 5, yaw: 0 }]);
+  for (const [what, occluders] of [
+    ['no occluders at all', undefined],
+    ['an empty occluder list', []],
+    ['an empty ring', [[]]],
+    ['a ring that covers nothing here', [OCC_FAR]],
+  ]) {
+    check(`C9 ${what} moves not one prop — (C1) verbatim`,
+      scatterInstances({
+        ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+        occluders, triesPerPoint: 1, rng: stream(C1_STREAM),
+      }),
+      C1_POINTS);
+  }
+  check('C10 the occluder is tested EVEN-ODD: the bow-tie notch is not covered',
+    scatterInstances({
+      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+      occluders: [BOWTIE], triesPerPoint: 1,
+      rng: stream([0.10, 0.25, 0.00, 0.25, 0.10, 0.50]),
+    }),
+    [{ x: 5, z: 2, yaw: Math.PI }]);
+  check('C11 lying in ANY occluder is enough — here it is the second',
+    scatterInstances({
+      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+      occluders: [OCC_FAR, OCC_RIGHT], triesPerPoint: 1, rng: stream(C1_STREAM),
+    }),
+    [{ x: 2, z: 4, yaw: Math.PI }]);
+
   console.log('\n  C7 determinism of the seeded path (a property, not a record)');
   const opts = { ring: SQUARE, areaM2: 400, densityPer100m2: 2 };
   const a1 = scatterInstances({ ...opts, seed: scatterSeed('ta_1', 0) });
@@ -380,6 +563,40 @@ async function main() {
     JSON.stringify(a1) !== JSON.stringify(b1), true);
   check('the seed is area- and index-stable',
     scatterSeed('ta_1', 2), 'terrain:scatter:ta_1:2');
+
+  console.log('\n(D) the RED counter-check — a mutant that fails these cases');
+  const RED = {
+    ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+    occluders: [OCC_LEFT], triesPerPoint: 2,
+  };
+  const RED_STREAM = [0.10, 0.20, 0.50, 0.75, 0.25, 0.00, 0.60, 0.80, 0.25];
+  const RED_TRUE = [{ x: 15, z: 5, yaw: 0 }, { x: 12, z: 16, yaw: TAU * 0.25 }];
+  check('D the true sampler drops the covered candidate, the rest keeps its numbers',
+    scatterInstances({ ...RED, rng: stream(RED_STREAM) }), RED_TRUE);
+  const mutant = await loadScatter(yawOnAcceptance);
+  const redMutant = mutant.scatterInstances({ ...RED, rng: stream(RED_STREAM) });
+  checkNot('D the mutant "yaw only on acceptance" does NOT reproduce that list',
+    redMutant, RED_TRUE);
+  check('D …its first instance is the hand-derived shifted one',
+    redMutant[0], { x: 10, z: 15, yaw: TAU * 0.25 });
+  checkNot('D …and it breaks the footprint subtraction (C2) too',
+    mutant.scatterInstances({
+      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+      footprints: [{ pos_x: 2, pos_z: 4, yaw_deg: 0, plan_width_m: 2 }],
+      triesPerPoint: 1, rng: stream(C1_STREAM),
+    }),
+    [{ x: 15, z: 5, yaw: 0 }]);
+
+  console.log('\n(E) the client\'s scatter constants — pinned by reading the source');
+  const groundSrc = await readFile(GROUND_SRC, 'utf8');
+  for (const [name, want] of [
+    ['SCATTER_MODEL_HEIGHT_M', DEFAULT_TARGET_H],
+    ['TUFT_HEIGHT_M', 0.8],
+    ['TUFT_RADIUS_M', 0.22],
+  ]) {
+    const m = new RegExp(`const ${name} = (-?[0-9.]+);`).exec(groundSrc);
+    check(`E ground.ts ${name} is ${want} m`, m ? Number(m[1]) : null, want);
+  }
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

@@ -155,7 +155,10 @@ export interface TerrainScatterEntry {
   /** Instances per 100 m² of the painted area. 0 = nothing is scattered. */
   density_per_100m2: number
   /** TARGET height in metres: a prop model is scaled uniformly until its
-   *  bounding box is this tall, and the built-in tuft is built this high. */
+   *  bounding box is this tall, and the built-in tuft is built this high.
+   *  Absent = the 3D client's defaults (2 m for a model, 0.8 m for a tuft) —
+   *  never the model's authored size, which is no size at all in a world
+   *  measured in metres. */
   height_m?: number
   /** URL of a prop mesh to instance — `/assets/props/<id>/model`, the same
    *  URL the prop library hands out. Absent = the built-in tuft. */

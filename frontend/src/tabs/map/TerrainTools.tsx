@@ -57,6 +57,18 @@ export const MAX_Z_ORDER = 10000
 /** Server mirror — `app/models/terrain.MAX_SCATTER_ENTRIES`. */
 export const MAX_SCATTER_ENTRIES = 8
 
+/** What a freshly added scatter row starts as.
+ *
+ *  The target height is WRITTEN OUT rather than left empty on purpose: an
+ *  entry without `height_m` falls back to the 3D client's default
+ *  (`SCATTER_MODEL_HEIGHT_M`, 2 m), and an author who cannot see that number
+ *  cannot correct it either. Two metres is a shrub/small tree next to a 1.70 m
+ *  figure — visible, and an obvious knob to turn. Existing entries without the
+ *  field stay valid; they just take the same default silently. */
+const NEW_SCATTER_ENTRY: TerrainScatterEntry = {
+  density_per_100m2: 1, height_m: 2,
+}
+
 /** The URL a scatter `model` stores: exactly the `model_url` the prop library
  *  hands out on the server (`app/core/props.py`), and exactly what the 3D
  *  ground passes to its GLB loader unchanged (`client3d/src/scene/ground.ts`
@@ -256,7 +268,7 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
             />
             <ScatterNum
               label={t('height (m)')}
-              title={t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the model keeps its own size.')}
+              title={t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = 2 m, the default the 3D world normalises an undeclared prop to.')}
               value={typeof e.height_m === 'number' ? e.height_m : null}
               step={0.5}
               onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
@@ -275,11 +287,11 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
           title={entries.length >= MAX_SCATTER_ENTRIES
             ? t('At most {n} scatters per area').replace('{n}', String(MAX_SCATTER_ENTRIES))
             : t('Add another prop to this ground')}
-          onClick={() => onChange([...entries, { density_per_100m2: 1 }])}>
+          onClick={() => onChange([...entries, { ...NEW_SCATTER_ENTRY }])}>
           + {t('Scatter')}
         </button>
         <span className="ga-map-chip-label">
-          {t('Placement is deterministic per area and skips the footprints of placed locations. Switch on “Scatter preview” to see the very points the 3D world plants.')}
+          {t('Placement is deterministic per area and skips the footprints of placed locations. Ground covered by an area painted on top of this one stays bare. Switch on “Scatter preview” to see the very points the 3D world plants.')}
         </span>
       </div>
     </div>

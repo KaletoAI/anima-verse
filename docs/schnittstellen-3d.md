@@ -614,16 +614,28 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 
 - **Fehlende oder leere Liste = es wächst nichts.** Es gibt keine Vorgabe.
 - **`height_m` ist die Zielhöhe, nicht die Modellgröße:** das geladene Mesh
-  wird uniform skaliert, bis seine Bounding-Box so hoch ist. Ohne Angabe
-  behält das Modell seine Autorengröße. **Jedes Prop steht AUF dem Boden**:
-  die Geometrie wird auf Unterkante = 0 geschoben, nachdem die Mesh-Transform
-  innerhalb der GLB eingebacken ist (Befund B16).
+  wird uniform skaliert, bis seine Bounding-Box so hoch ist. **Ohne Angabe
+  gilt die Vorgabe-Zielhöhe 2,0 m**, nicht die Autorengröße — „was die Datei
+  sagt" ist in einer Meter-Welt keine Größe (Befund 1 der E8-Sichtabnahme: ein
+  in Zentimetern exportierter Baum stand 2 cm hoch neben der 1,70-m-Figur).
+  Das eingebaute Büschel ohne `height_m` ist **0,8 m** hoch (hüfthoch statt
+  kniehoch). **Jedes Prop steht AUF dem Boden**: die Geometrie wird auf
+  Unterkante = 0 geschoben, nachdem die Mesh-Transform innerhalb der GLB
+  eingebacken ist (Befund B16).
 - **Die Platzierung ist deterministisch und für beide Renderer DIESELBE
   FUNKTION** (`@anima/scene-render` → `scatterInstances`; der Karten-Editor
   zeichnet damit seine Draufsicht-Vorschau, der 3D-Client bepflanzt damit).
   Seed: `terrain:scatter:<area_id>:<index>` — flächen- UND eintrags-stabil.
   Verfahren: Rejection-Sampling in der Bounding-Box des bereinigten Rings,
   DREI Zufallszahlen je Kandidat (x, z, Yaw), Yaw bewusst VOR dem Test.
+- **Gestreut wird nur, wo die Fläche selbst die oberste ist** (Befund 2 der
+  E8-Sichtabnahme). `areas` kommt von unten nach oben (`z_order` ASC,
+  `created_at` ASC), also ist die Listenreihenfolge die Stapelreihenfolge: ein
+  Kandidat, der im bereinigten Ring IRGENDEINER späteren Fläche liegt, fällt
+  weg. Der Wald unter dem darübergemalten Fluss wächst nicht mehr durchs
+  Wasser. Getestet mit derselben Even-odd-Regel wie der eigene Ring
+  (`pointInRing`, Server-Semantik `point_in_polygon`), und weil der Yaw auch
+  hier vorher gezogen wird, ist es wieder eine reine **Subtraktion**.
 - **Grundflächen platzierter Locations werden ausgespart** (Befund B18):
   ein Kandidat im Footprint-Quadrat (Zentrum, `yaw_deg`, `plan_width_m` —
   das GEHOBENE Feld) fällt weg. Weil der Yaw vorher gezogen wird, ist das

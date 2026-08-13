@@ -59,8 +59,10 @@ export interface ScatterEntry {
   /** URL of a prop mesh to instance; absent = the built-in tuft */
   model?: string
   /** TARGET height in metres: the placed prop is scaled uniformly until its
-   *  bounding box is this tall. Absent = the model keeps its authored size
-   *  (and the tuft its default). */
+   *  bounding box is this tall. Absent = the renderer's default height (the
+   *  3D client's `SCATTER_MODEL_HEIGHT_M` for a model, its tuft height for the
+   *  built-in one) — NOT the model's authored size, which is no size at all in
+   *  a world measured in metres. */
   height_m?: number
 }
 
@@ -198,6 +200,21 @@ export interface ScatterSampleOptions {
   seed: string
   /** Placed locations whose footprints are kept CLEAR (finding B18). */
   footprints?: readonly ScatterFootprint[]
+  /**
+   * The CLEANED rings of every area that lies ABOVE this one in the stack —
+   * only the ground an area actually SHOWS is scattered.
+   *
+   * The server delivers the areas bottom to top (`z_order` ASC, `created_at`
+   * ASC), so the list order IS the stacking order and this is the slice after
+   * the sampled area's own index. A river painted over a wood covers the
+   * wood's surface, and until this existed the wood's trees kept growing
+   * through the water — the area below is simply not visible there.
+   *
+   * Tested with the same even-odd rule as the area's own ring
+   * (`pointInRing`), so a hole polygon has the same inside on both sides and
+   * on the server (`point_in_polygon`).
+   */
+  occluders?: readonly (readonly ScatterPoint2[])[]
   /** Hard ceiling; defaults to `SCATTER_MAX_PER_ENTRY`. */
   maxPoints?: number
   /** Misses allowed per wanted instance; defaults to
@@ -222,17 +239,18 @@ export interface ScatterSampleOptions {
  *   x   = minX + r · (maxX − minX)
  *   z   = minZ + r · (maxZ − minZ)
  *   yaw = r · 2π
- *   reject when the point is outside the ring or inside any footprint
+ *   reject when the point is outside the ring, inside a covering area
+ *     (`occluders`) or inside any footprint
  *
  * THREE NUMBERS PER CANDIDATE, ALWAYS — the yaw is drawn before the test even
  * though a rejected candidate never uses it. That one wasted number is what
- * makes the footprint exclusion (B18) a SUBTRACTION: every candidate keeps its
- * place in the stream, so dropping a building onto a meadow removes exactly
- * the props it covers and leaves every other tree exactly where it stood.
- * Drawing the yaw only on acceptance would save the number and shift the whole
- * stream at the first rejection, which rearranges the entire wood behind the
- * new building — deterministic, but for the author indistinguishable from
- * random.
+ * makes the footprint exclusion (B18) and the occluder exclusion a
+ * SUBTRACTION: every candidate keeps its place in the stream, so dropping a
+ * building onto a meadow removes exactly the props it covers and leaves every
+ * other tree exactly where it stood. Drawing the yaw only on acceptance would
+ * save the number and shift the whole stream at the first rejection, which
+ * rearranges the entire wood behind the new building — deterministic, but for
+ * the author indistinguishable from random.
  */
 export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] {
   const ring = opts.ring ?? []
@@ -259,6 +277,7 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
 
   const rnd = opts.rng ?? seededRandom(opts.seed)
   const footprints = opts.footprints ?? []
+  const occluders = opts.occluders ?? []
   const out: ScatterInstance[] = []
   let tries = wanted * (opts.triesPerPoint ?? SCATTER_TRIES_PER_POINT)
   while (out.length < wanted && tries > 0) {
@@ -267,6 +286,14 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
     const z = minZ + rnd() * (maxZ - minZ)
     const yaw = rnd() * Math.PI * 2
     if (!pointInRing(x, z, ring)) continue
+    // Covered by an area painted OVER this one: that ground is not visible,
+    // so nothing grows on it. Same shape of rejection as the footprint below —
+    // all three numbers are already drawn, so this only ever subtracts.
+    let hidden = false
+    for (const occ of occluders) {
+      if ((occ?.length ?? 0) >= 3 && pointInRing(x, z, occ)) { hidden = true; break }
+    }
+    if (hidden) continue
     let covered = false
     for (const fp of footprints) {
       if (pointInFootprint(fp, x, z)) { covered = true; break }

@@ -57,7 +57,9 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
     * ``height_m`` — TARGET height of the placed prop in metres: the model is
       scaled uniformly until its bounding box is this tall, and the built-in
       tuft is built this high. Only a value > 0 is a height; anything else
-      loses the key, and then a model keeps its authored size.
+      loses the key, and then the RENDERER's default applies (2 m for a model,
+      0.8 m for the tuft) — never the model's authored size, which says
+      nothing in a world measured in metres.
     * ``model`` — URL of the prop mesh to instance (``/assets/props/<id>/model``,
       the very URL ``props.model_url`` hands out). A non-string, blank or
       over-long value loses the key and the tuft stands in its place.

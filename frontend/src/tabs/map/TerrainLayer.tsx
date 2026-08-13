@@ -199,28 +199,35 @@ export function TerrainLayer({
    * footprints. Preview and world are therefore identical by construction and
    * not by two files being kept in step — that is why the sampler is shared at
    * all.
+   *
+   * The rings are cleaned ONCE up front, because an area also has to know the
+   * rings of the areas ABOVE it: only the topmost area of a spot scatters
+   * there. `areas` arrives bottom to top, so those are the rings after its own
+   * index.
    */
   const scatterDots = useMemo(() => {
     if (!scatterPreview) return []
     const out: { x: number; z: number; color: string }[] = []
-    for (const a of areas) {
+    const rings = areas.map((a) => cleanRing(a.polygon))
+    areas.forEach((a, ai) => {
       const entries = readScatter(a.meta)
-      if (!entries.length) continue
-      const ring = cleanRing(a.polygon)
-      if (ring.length < 3) continue
+      if (!entries.length) return
+      const ring = rings[ai]
+      if (ring.length < 3) return
       const areaM2 = polygonArea(ring)
+      const occluders = rings.slice(ai + 1).filter((r) => r.length >= 3)
       entries.forEach((e, i) => {
         if (out.length >= SCATTER_PREVIEW_MAX) return
         const color = scatterColor(i)
         for (const p of scatterInstances({
           ring, areaM2, densityPer100m2: e.density_per_100m2,
-          seed: scatterSeed(a.id, i), footprints,
+          seed: scatterSeed(a.id, i), footprints, occluders,
         })) {
           if (out.length >= SCATTER_PREVIEW_MAX) break
           out.push({ x: p.x, z: p.z, color })
         }
       })
-    }
+    })
     return out
   }, [areas, footprints, scatterPreview])
 
