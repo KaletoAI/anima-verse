@@ -263,18 +263,21 @@ Hand-derived expectations:
           (1.0,  footprint)  -> 1.0     (0.4, footprint)  -> 0.4  <- the finding
           (0.0,  footprint)  -> 1.0     (0.0, wilderness) -> 0.1  (clamp)
           (0.05, footprint)  -> 0.1     (0.05, wilderness)-> 0.1  (clamp)
+          (2.0,  footprint)  -> 2.0     (an impassable type's pace counts too)
 
       a) A HALL ON A LAKE. Hall at (900,0), plan_width_m 20 -> footprint
-         x [890,910], z [-10,10], with WATER painted x [891,909], z [-9,9] —
-         strictly inside it, so the approach from the west stays grass. Water
-         is `passable: false` at `speed_factor 0.4` (a shore one wades, not a
+         x [890,910], z [-10,10], with WATER painted x [890.5,909], z [-9,9] —
+         strictly inside it, so the approach from the west stays grass. The
+         west edge sits at 890.5 and not on a whole metre so that NO cost
+         midpoint lands exactly on the polygon boundary. Water is
+         `passable: false` at `speed_factor 0.4` (a shore one wades, not a
          wall one walks): the footprint keeps it ENTERABLE ([12]'s rule) and
          the 0.4 now applies inside it.
          segment_costs([(870,0), (900,0)]) = 30 m in 15 parts of 2 m,
-         midpoints x = 871, 873, … 899. Ten of them (871…889) are grass at
-         1.0 -> 20 m -> 20 s; five (891…899) are water at 0.4 -> 2 / 0.4 = 5 s
-         each -> 25 s. TOTAL 45 s, against the 30 s the same walk cost while
-         the footprint neutralised the ground.
+         midpoints x = 871, 873, … 899. Ten of them (871…889) lie west of
+         890.5 and are grass at 1.0 -> 20 m -> 20 s; five (891…899) lie inside
+         the lake at 0.4 -> 2 / 0.4 = 5 s each -> 25 s. TOTAL 45 s, against the
+         30 s the same walk cost while the footprint neutralised the ground.
          The route is still the straight line: every way to a goal 10 m deep
          in the lake crosses the same water, and going round the rim (out at
          z = 11, back down through 9 m of water) is both longer and wetter.
@@ -287,6 +290,15 @@ Hand-derived expectations:
          out there still pays the MIN_SPEED_FACTOR clamp (10 s per metre),
          which is what makes [4] and [12c] unreachable rather than merely
          slow.
+      d) THE HEURISTIC STAYS ADMISSIBLE (review finding F1). `best_factor` is
+         the fastest pace A* divides its straight-line estimate by, so it must
+         be the maximum over EVERY catalog entry — since (a), an impassable
+         type's factor is paid inside footprints and clamped in the
+         wilderness, so it is reachable pace. Authoring an impassable
+         `speed_factor 2.0` type therefore lifts best_factor from the shared
+         catalog's 1.2 (path) to 2.0; the old rule, maximising over passable
+         entries only, would have kept 1.2 and let the heuristic overestimate
+         a walk over that ground.
 
 Usage:  ./.venv/bin/python scripts/smoke_nav_grid.py
 """
@@ -306,7 +318,7 @@ paths.init(STORAGE)
 from app.core import db  # noqa: E402
 db.init_schema()
 
-from app.core import config, nav_grid, terrain_query  # noqa: E402
+from app.core import config, nav_grid, terrain_query, terrain_types  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
     footprint_hits_aabb, placed_footprint, point_in_footprint,
     segment_hits_footprint)
@@ -658,8 +670,10 @@ check_true("its end really lies in the footprint",
            point_in_footprint(700, 0, 700, 0, 20, 0), "")
 # The PACE side of the decision: 30 m, 15 samples of 2 m, midpoints at
 # x = 671, 673, … 699. The ten outside are grass (1.0), the five from 691 on
-# lie in the footprint and are paid at FOOTPRINT_SPEED_FACTOR = 1.0 instead of
-# the rock's clamped 0.1 -> 30 / 1.0 = 30 s exactly. With the old factor the
+# lie in the footprint and are paid at the neutral 1.0 a factor-0 ground turns
+# into inside a footprint, instead of the rock's clamped 0.1 -> 30 / 1.0 = 30 s
+# exactly (that neutralisation is the ONLY thing a footprint still does to the
+# pace — see [16]). With the old factor the
 # same five would have cost 10 s per metre and A* would not even have walked
 # straight: it hugged the rim and the last leg alone cost 90.55 s.
 approx("its cost is the plain 30 m at factor 1.0",
@@ -847,21 +861,24 @@ check("a crawling 0.05 is clamped out here",
       terrain_query.effective_speed_factor(0.05, False), 0.1)
 check("...and in there too (only the 0 is special)",
       terrain_query.effective_speed_factor(0.05, True), 0.1)
+check("a fast 2.0 keeps its pace under a footprint",
+      terrain_query.effective_speed_factor(2.0, True), 2.0)
 
 lake_hall = add_location(name="Smoke Lake Hall", description="nav-grid smoke")
 LAKE_ID = lake_hall["id"]
 update_location_position(LAKE_ID, 900.0, 0.0)
 set_plan_width(LAKE_ID, 20.0)
 terrain.save_area({"kind": "water",
-                   "polygon": [[891, -9], [909, -9], [909, 9], [891, 9]],
+                   "polygon": [[890.5, -9], [909, -9], [909, 9], [890.5, 9]],
                    "z_order": 0})
 check("the goal stands on water", terrain_query.passability_at(900, 0),
       (False, 0.4))
 check("...and the approach on grass", terrain_query.passability_at(870, 0),
       (True, 1.0))
 lake_ctx = nav_grid.build_nav_context()
-# 15 samples of 2 m, midpoints x = 871 … 899: ten on grass (10 * 2 / 1.0 = 20 s)
-# and five in the lake inside the footprint (5 * 2 / 0.4 = 25 s) -> 45 s.
+# 15 samples of 2 m, midpoints x = 871 … 899: ten west of the 890.5 shore on
+# grass (10 * 2 / 1.0 = 20 s) and five in the lake inside the footprint
+# (5 * 2 / 0.4 = 25 s) -> 45 s. No midpoint sits on the polygon edge.
 approx("30 m into the hall cost 20 s of grass + 25 s of wading",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 45.0)
 r = nav_grid.route((870, 0), (900, 0))
@@ -888,6 +905,22 @@ sand_ctx = nav_grid.build_nav_context()
 approx("30 m of wilderness sand cost 30 / 0.85",
        nav_grid._segment_cost(sand_ctx, (1205.0, 0.0), (1235.0, 0.0)),
        30.0 / 0.85)
+# [16d] the heuristic's divisor knows the impassable types too.
+approx("the shared catalog's fastest pace is the path's 1.2",
+       nav_grid.build_nav_context().best_factor, 1.2)
+terrain_types.save_world_type({"kind": "rapids", "color": "#3366aa",
+                               "passable": False, "speed_factor": 2.0})
+approx("an impassable 2.0 type lifts best_factor to 2.0",
+       nav_grid.build_nav_context().best_factor, 2.0)
+# RED COUNTER-PROBE: the old rule looked at passable entries only.
+_old_best = max([1.0] + [float(e.get("speed_factor", 1.0) or 1.0)
+                         for e in terrain_types.effective_catalog().values()
+                         if e.get("passable", True)])
+approx("RED COUNTER-PROBE: passable-only would have kept 1.2 (inadmissible)",
+       _old_best, 1.2)
+terrain_types.delete_world_type("rapids")
+approx("...and removing the type puts the divisor back",
+       nav_grid.build_nav_context().best_factor, 1.2)
 
 print()
 if FAILURES:

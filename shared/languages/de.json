@@ -1462,7 +1462,7 @@
     "Take it off the map — it keeps all its data": "Nimmt ihn von der Karte — alle Daten bleiben erhalten",
     "Talk": "Ansprechen",
     "Target": "Ziel",
-    "Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = 2 m, the default the 3D world normalises an undeclared prop to.": "Zielhöhe: Das Modell wird skaliert, bis es so hoch ist, und steht immer AUF dem Boden. Leer = 2 m, die Vorgabe, auf die die 3D-Welt ein Prop ohne Angabe normiert.",
+    "Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the 3D world’s default, 2 m for a model and 0.8 m for a tuft.": "Zielhöhe: Das Modell wird skaliert, bis es so hoch ist, und steht immer AUF dem Boden. Leer = die Vorgabe der 3D-Welt: 2 m für ein Modell, 0,8 m für ein Grasbüschel.",
     "Target language": "Zielsprache",
     "Target location": "Zielort",
     "Target resolution tier": "Ziel-Auflösungsstufe",

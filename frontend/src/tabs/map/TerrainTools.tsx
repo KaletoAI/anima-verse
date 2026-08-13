@@ -268,7 +268,7 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
             />
             <ScatterNum
               label={t('height (m)')}
-              title={t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = 2 m, the default the 3D world normalises an undeclared prop to.')}
+              title={t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the 3D world’s default, 2 m for a model and 0.8 m for a tuft.')}
               value={typeof e.height_m === 'number' ? e.height_m : null}
               step={0.5}
               onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}

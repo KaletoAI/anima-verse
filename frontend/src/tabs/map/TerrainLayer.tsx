@@ -14,7 +14,9 @@
  * Inside the paint part the order never changes: fills, then the scatter
  * preview, then the selection outline / centre line / handles / draft. The
  * overlays are how the user sees WHAT they are editing, so nothing this layer
- * draws may cover them.
+ * draws may cover them — which is why the selection outline is one of those
+ * overlays and NOT the stroke of the selected area's own fill: an area painted
+ * on top of it is drawn later and would swallow it.
  *
  * A terrain area is a polygon in WORLD METRES (contract § A1.5) — not a
  * location, so it carries no `yaw_deg` and gets NO rotation transform. The
@@ -289,6 +291,10 @@ export function TerrainLayer({
     ? (pts: Array<[number, number]>) => (
       strokeToPolygon(pts, centerlineWidthM) || selected?.polygon || [])
     : undefined
+  // Are the handles on screen? Only then do they draw the outline themselves,
+  // and only then does the static selection outline step aside.
+  const handlesLive = !!selected && editing && editable
+    && editPts.length >= editMin
 
   return (
     <g>
@@ -298,7 +304,6 @@ export function TerrainLayer({
           if (a.polygon.length < 3) return null
           const known = !!types[a.kind]
           const color = typeColor(types, a.kind)
-          const isSel = a.id === selectedId
           const c = centroid(a.polygon)
           const cp = worldToScreen(c[0], c[1], view, w, h)
           return (
@@ -309,9 +314,7 @@ export function TerrainLayer({
                   nonzero would paint a centre the engine calls OUTSIDE. */}
               <path d={worldPolyToPath(a.polygon, view, w, h)}
                 fill={color} fillOpacity={FILL_OPACITY} fillRule="evenodd"
-                stroke={isSel ? COL_SELECTED : color}
-                strokeWidth={isSel ? 2 : 1}
-                strokeOpacity={isSel ? 1 : 0.75}
+                stroke={color} strokeWidth={1} strokeOpacity={0.75}
                 strokeDasharray={known ? undefined : '5 4'} />
               {known ? null : (
                 <text x={cp.x} y={cp.y + 5} fontSize={15} textAnchor="middle"
@@ -338,6 +341,18 @@ export function TerrainLayer({
         </g>
       ) : null}
 
+      {/* The outline of the SELECTED area — an overlay, not the stroke of its
+          own fill: an area painted on top of it would otherwise cover the very
+          outline that says what is selected. While the handles are live they
+          draw their own (drag-following) outline, so this one steps aside
+          instead of leaving a stale ring behind. An area whose kind the
+          catalog no longer knows has nothing to grab (every write would be
+          refused on the kind) and keeps this outline. */}
+      {selected && selected.polygon.length >= 3 && !handlesLive ? (
+        <path d={worldPolyToPath(selected.polygon, view, w, h)} fill="none"
+          stroke={COL_SELECTED} strokeWidth={2} pointerEvents="none" />
+      ) : null}
+
       {/* The centre line of the selected stroke area, dashed — the recipe is
           not the shape, so it is drawn as a hint over it. While the handles
           are live they draw their own (drag-following) copy of it, so this one
@@ -351,26 +366,21 @@ export function TerrainLayer({
 
       {/* Handles of the selected area — the only interactive part, and the
           SHARED gesture (`PolygonHandles`). An area whose kind the catalog no
-          longer knows gets its outline brought to the top and nothing to
-          grab: every write would be refused on the kind before the polygon is
-          even read. */}
-      {editing && selected && editPts.length >= editMin ? (
-        editable ? (
-          <PolygonHandles
-            points={editPts}
-            closed={editClosed}
-            color={COL_SELECTED}
-            outlineOf={outlineOf}
-            dashed={!!centerline}
-            minPoints={editMin}
-            onMove={onVertexMove}
-            onDelete={onVertexDelete}
-            onInsert={onEdgeInsert}
-          />
-        ) : (
-          <path d={worldPolyToPath(selected.polygon, view, w, h)} fill="none"
-            stroke={COL_SELECTED} strokeWidth={2} pointerEvents="none" />
-        )
+          longer knows gets no handles: every write would be refused on the
+          kind before the polygon is even read. Its outline is the overlay
+          above, which is drawn for every selection. */}
+      {handlesLive ? (
+        <PolygonHandles
+          points={editPts}
+          closed={editClosed}
+          color={COL_SELECTED}
+          outlineOf={outlineOf}
+          dashed={!!centerline}
+          minPoints={editMin}
+          onMove={onVertexMove}
+          onDelete={onVertexDelete}
+          onInsert={onEdgeInsert}
+        />
       ) : null}
 
       {/* The polygon being painted: an OPEN line to the cursor, closed only

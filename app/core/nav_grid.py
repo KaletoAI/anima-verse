@@ -283,10 +283,13 @@ def build_nav_context() -> NavContext:
     areas = list_areas()
     catalog = effective_catalog()
 
+    # Over ALL entries, passable or not: since Befund 3 an impassable type's
+    # speed factor still applies — inside a location footprint, and in the
+    # wilderness rescue clamp — so an impassable "fast" type would otherwise
+    # let the heuristic overestimate and stop being admissible.
     best = 1.0
     for entry in catalog.values():
-        if entry.get("passable", True):
-            best = max(best, float(entry.get("speed_factor", 1.0) or 1.0))
+        best = max(best, float(entry.get("speed_factor", 1.0) or 1.0))
 
     ctx = NavContext(areas=areas, catalog=catalog, footprints=footprints,
                      data_bounds=_data_bounds(areas, footprints), sig=key,
