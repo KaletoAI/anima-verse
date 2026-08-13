@@ -890,13 +890,13 @@ export class FigureLibrary {
     return model;
   }
 
-  /** Modellwahl: Server-Modell > Manifest-Assignment > Pool (Demo-Welt). */
+  /** Model choice: server model > manifest assignment > pool (demo world). */
   instantiate(charName: string): Figure | null {
     const api = this.apiModels.get(charName);
     if (api) return new Figure(api);
-    if (api === undefined) this.fetchCharacterModel(charName);   // nachladen anstoßen
-    // api === null (Server hat keins) oder noch nicht geladen:
-    // weiter zu Manifest-Assignment/Pool — sonst Portrait-Fallback.
+    if (api === undefined) this.fetchCharacterModel(charName);   // kick off the load
+    // api === null (the server has none) or not loaded yet: on to the manifest
+    // assignment/pool — the portrait fallback is the last resort.
     if (!this.models.length) return null;
     const assigned = this.assignments[charName] ?? charName;
     let model = this.models.find((m) => m.name === assigned);
