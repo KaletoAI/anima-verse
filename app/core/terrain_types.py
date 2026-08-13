@@ -10,7 +10,8 @@ DEEP one stands in it while doing either (``meta.move_sink_m`` /
 hangs upright, and the same drop cannot serve both). Since
 2026-08-13 also how BUMPY it is (``meta.relief_amplitude_m`` /
 ``meta.relief_wave_m``, the micro-relief baked into the world heightfield,
-§ A16). NO terrain
+§ A16) and, since 2026-08-14, how far what grows on it WAVES in the wind
+(``meta.sway_m``, § A9). NO terrain
 property is ever hardcoded anywhere else — every consumer (passability,
 pace, relief, payload, editor palette) reads this catalog.
 
@@ -78,6 +79,17 @@ SINK_MIN, SINK_MAX = 0.0, 1.5
 #: the lake. So the ground says both, and the renderer picks by what the figure
 #: is doing (§ A9).
 SINK_KEYS = ("move_sink_m", "idle_sink_m")
+
+#: HOW FAR THE SCATTER OF THIS GROUND BENDS IN THE WIND, in metres — the
+#: maximum sideways deflection of a blade's TIP (decision 2026-08-14). The
+#: number hangs on the KIND, so all scatter of a swaying kind moves, tufts and
+#: props alike; the area FILL never moves (only the water class animates
+#: there). The lower clamp is the smallest swing that reads as motion at all at
+#: eye level; the upper one is a hand's breadth and a half, past which grass
+#: does not bend but shears — the deflection is quadratic in the height above
+#: the ground, so the tip carries the whole of it while the base stands still.
+#: Frequency and wind direction are fixed in the renderer, not authored.
+SWAY_MIN, SWAY_MAX = 0.01, 0.5
 
 #: The wave a kind with an amplitude but no authored wave gets — a swell every
 #: 32 m, eight grid cells wide at the default step: the gentle rolling the
@@ -225,6 +237,13 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     if "relief_wave_m" in meta:
         _clamped_meta_number(meta, "relief_wave_m",
                              RELIEF_WAVE_MIN, RELIEF_WAVE_MAX)
+    # AND ONE MORE since the terrain-animation decision (2026-08-14): how far
+    # what GROWS on this ground bends in the wind. Same shape rule as every
+    # other number here — no key means "stands still", which is what every
+    # kind without it does. The renderer reads it off the AREA's kind, so a
+    # meadow's tufts and its trees sway together or not at all.
+    if "sway_m" in meta:
+        _clamped_meta_number(meta, "sway_m", SWAY_MIN, SWAY_MAX)
     return {
         "kind": kind,
         "name": name,

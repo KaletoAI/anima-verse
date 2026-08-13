@@ -1,7 +1,7 @@
 {
   "types": [
-    {"kind": "grass",      "name": "Grass",      "color": "#6a994e", "passable": true,  "speed_factor": 1.0},
-    {"kind": "forest",     "name": "Forest",     "color": "#386641", "passable": true,  "speed_factor": 0.7},
+    {"kind": "grass",      "name": "Grass",      "color": "#6a994e", "passable": true,  "speed_factor": 1.0,  "meta": {"sway_m": 0.06}},
+    {"kind": "forest",     "name": "Forest",     "color": "#386641", "passable": true,  "speed_factor": 0.7,  "meta": {"sway_m": 0.04}},
     {"kind": "sand",       "name": "Sand",       "color": "#e9c46a", "passable": true,  "speed_factor": 0.85},
     {"kind": "path",       "name": "Path",       "color": "#b08968", "passable": true,  "speed_factor": 1.2},
     {"kind": "water",      "name": "Water",      "color": "#4a90d9", "passable": true,  "speed_factor": 0.4, "meta": {"move_anim": "swim", "idle_anim": "treading-water", "move_sink_m": 0.35, "idle_sink_m": 1.3}},

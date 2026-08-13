@@ -100,6 +100,24 @@ Throwaway storage. Hand-derived expectations:
       number and simply means nothing, and neither key disturbs `move_anim`
       or any free-form neighbour.
 
+  [10] ONE MORE since the terrain animations (2026-08-14): `sway_m`, how far
+      what GROWS on this ground bends in the wind — the maximum sideways
+      deflection of a blade's tip, in metres (§ A9). Same numeric shape rule,
+      clamp 0.01…0.5:
+        0.06 / 0.04   -> unchanged   the seed values of grass and forest
+        0.9           -> 0.5         a hand's breadth and a half; further is
+                                     shearing, not bending
+        0.0649        -> 0.06        two decimals, the editor's precision
+        0 / −1 / "windy" / NaN / "" -> the KEY IS GONE (a ground that says
+                                     nothing lets nothing wave)
+      THE ROUNDING EDGE reads the other way round here, and that is the point
+      of checking it: the lower clamp is 0.01, which is itself positive, so a
+      value under it is LIFTED to the smallest visible sway instead of being
+      dropped the way a 0.004 sink depth is. Nothing can round to a stored 0.
+        0.004         -> 0.01        clamped up, then rounded — a key, not a 0
+      Saat: `grass` 0.06 and `forest` 0.04 carry it in the shared seed, water
+      and the rest carry none. The key is independent of every other one.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_types.py
 """
 import json
@@ -369,6 +387,41 @@ terrain_types.delete_world_type("meadow")
 check("no shared kind carries a relief by default",
       [k for k, e in terrain_types.effective_catalog().items()
        if (e.get("meta") or {}).get("relief_amplitude_m")], [])
+
+print("[10] the sway of what grows on a ground")
+check("the authored deflection of grass survives", meta_of({"sway_m": 0.06}),
+      {"sway_m": 0.06})
+check("...and the gentler one of a wood", meta_of({"sway_m": 0.04}),
+      {"sway_m": 0.04})
+check("a wind that would shear the meadow is clamped",
+      meta_of({"sway_m": 0.9}), {"sway_m": 0.5})
+check("...and rounded to two decimals", meta_of({"sway_m": 0.0649}),
+      {"sway_m": 0.06})
+# THE ROUNDING EDGE, the other way round: the lower clamp is positive, so a
+# value under it is lifted rather than dropped — no `sway_m` can be stored 0.
+check("a deflection under the smallest visible one is lifted to it",
+      meta_of({"sway_m": 0.004}), {"sway_m": 0.01})
+check("a zero sway leaves no key behind", meta_of({"sway_m": 0}), {})
+check("...and neither does a negative one", meta_of({"sway_m": -1}), {})
+check("...nor junk", meta_of({"sway_m": "windy"}), {})
+check("...nor NaN", meta_of({"sway_m": float("nan")}), {})
+check("...nor an empty string", meta_of({"sway_m": ""}), {})
+check("it travels with the relief, a clip and a free-form neighbour",
+      meta_of({"sway_m": 0.06, "relief_amplitude_m": 0.4,
+               "move_anim": " swim ", "note": "x"}),
+      {"sway_m": 0.06, "relief_amplitude_m": 0.4,
+       "move_anim": "swim", "note": "x"})
+_seeded = {k: (e.get("meta") or {}).get("sway_m")
+           for k, e in terrain_types.effective_catalog().items()
+           if (e.get("meta") or {}).get("sway_m")}
+check("exactly grass and forest wave in the shared seed", _seeded,
+      {"grass": 0.06, "forest": 0.04})
+terrain_types.save_world_type(
+    {"kind": "reed", "name": "Reed", "color": "#8ab17d",
+     "meta": {"sway_m": 0.2}})
+check("it survives the save/read round trip",
+      (terrain_types.get_type("reed") or {}).get("meta"), {"sway_m": 0.2})
+terrain_types.delete_world_type("reed")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

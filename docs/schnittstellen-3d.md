@@ -1299,6 +1299,22 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
                                           "move_sink_m": 0.35,
                                           "idle_sink_m": 1.3}} ]
   ```
+- **`sway_m` — wie weit das WEHT, was auf einem Boden wächst** (2026-08-14).
+  Ein whitelisteter `meta`-Schlüssel, eine Zahl in Metern (geklemmt 0,01…0,5,
+  zwei Dezimalen, 0/leer/Junk = Schlüssel weg) = maximale seitliche Auslenkung
+  der SPITZE. Vertrag für die Renderer: die Zahl hängt an der ART der Fläche,
+  also wehen ALLE Streu-Einträge einer solchen Fläche — Büschel wie
+  Modell-Props —, die Flächen-FÜLLUNG dagegen nie (dort animiert allein die
+  Wasser-Klasse). Die Auslenkung wächst QUADRATISCH mit der Höhe über dem
+  Boden (Fuß steht, Spitze trägt die volle Zahl), jede Instanz bekommt aus
+  ihrer Weltlage eine eigene Phase, und Frequenz wie Windrichtung stehen fest
+  im Renderer — es gibt dafür keine weiteren Katalog-Schlüssel. Saat: `grass`
+  0,06 und `forest` 0,04; eine Welt-Zeile ersetzt den geteilten Eintrag ganz,
+  also fehlt der Schlüssel dort, bis er im Typen-Dialog gesetzt wird.
+
+  ```
+  types: [ …, {kind: "grass", …, "meta": {"sway_m": 0.06}} ]
+  ```
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 
