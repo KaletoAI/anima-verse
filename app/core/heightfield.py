@@ -414,6 +414,17 @@ def _apply_micro_relief(origin_x: float, origin_z: float, step: float,
     corners are memoised for the whole grid: at the default 32 m wave over a
     4 m step, sixty-four support points share the same four corners.
 
+    THE EDGE RULE (user decision 2026-08-13, § A16.2): at a support point one
+    of whose four grid neighbours carries NO relief, the noise is clamped to
+    ``max(0, noise)``. A bumpy meadow may run OUT over its border — the
+    bilinear interpolation carries a hill a little way into the water next to
+    it, and a shore rising softly is what one wants — but it must never pull
+    the flat neighbour DOWN, which is the acceptance finding: the seam of a
+    lake sank with the grass beside it. The first sweep's buffer IS the mask,
+    which is why this costs no second area scan: a neighbour without relief
+    parameters is a flat topmost kind or unpainted ground, and both are ground
+    this field has no business moving.
+
     THE 0-RING IS NOT TOUCHED and needs no special case: the grid always
     reaches one full step PAST the union box of everything that shaped it
     (:func:`_axis_origin`), so no painted polygon can contain a border point.
@@ -459,7 +470,27 @@ def _apply_micro_relief(origin_x: float, origin_z: float, step: float,
             n11 = _corner(corners, seed, u + 1, v + 1)
             north = n00 * (1.0 - tx) + n10 * tx
             south = n01 * (1.0 - tx) + n11 * tx
-            hrow[i] += (north * (1.0 - tz) + south * tz) * amp
+            noise = (north * (1.0 - tz) + south * tz) * amp
+            # The edge rule: only a DIP is cut off, and only at the border of
+            # the relief-carrying region (see the docstring). Asking for the
+            # neighbours costs nothing where the noise lifts anyway.
+            if noise < 0.0 and _flat_neighbour(at_point, i, j, rows, cols):
+                noise = 0.0
+            hrow[i] += noise
+
+
+def _flat_neighbour(at_point: List[List[Optional[Tuple[int, float, float]]]],
+                    i: int, j: int, rows: int, cols: int) -> bool:
+    """Does one of the four grid neighbours of (i, j) carry no relief?
+
+    The mask of the edge rule, read straight off the first sweep's buffer.
+    A point ON the grid border counts as bordering flat ground: outside the
+    grid the border value applies, and that ground is nobody's relief.
+    """
+    if i == 0 or j == 0 or i == cols - 1 or j == rows - 1:
+        return True
+    return (at_point[j - 1][i] is None or at_point[j + 1][i] is None
+            or at_point[j][i - 1] is None or at_point[j][i + 1] is None)
 
 
 def _corner(cache: Dict[Tuple[int, int, int], float],

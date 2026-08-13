@@ -2217,6 +2217,15 @@ kein Relief, der Schlüssel verschwindet). Die Obergrenze ist eine
 je nach Schrittweite anders aliasen). Es gibt **keinen Kontur-Fade**: den
 Übergang trägt die bilineare Interpolation des Feldes selbst.
 
+**Die Randregel (Abnahme 2026-08-13): am Rand hebt das Relief nur noch.** An
+einem Stützpunkt, von dessen vier Gitter-Nachbarn einer KEIN Relief trägt
+(flache oberste Art oder unbemalter Grund), wird der Rausch-Beitrag auf
+`max(0, Rauschen)` geklemmt — Positives läuft über die Interpolation sanft in
+den Nachbarboden aus (das Ufer hebt sich), Negatives endet auf dem autorierten
+Niveau. Sonst zog eine Senke im Gras die Naht des Sees mit sich nach unten;
+innere Stützpunkte (alle vier Nachbarn relief-tragend) bleiben unverändert
+voll.
+
 **Welche Art an einem Punkt gilt**, ist die Regel von `terrain_query.kind_at`
 — die OBERSTE gemalte Fläche, die ihn enthält (letzter Treffer gewinnt). Eine
 flache Art über einer hügeligen nimmt das Relief also wieder weg. Ein Punkt,

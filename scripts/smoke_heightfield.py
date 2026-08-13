@@ -377,6 +377,51 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
        amplitude 99 -> 2.0, wave 2 -> 8.0 (NYQUIST: 2 × the 4 m step, a wave
        the grid could not carry), no wave -> 32.0, amplitude 0/junk -> no
        relief at all.
+    l) THE EDGE RULE — the relief may LIFT its neighbour, never sink it (user
+       decision 2026-08-13). At a support point one of whose four grid
+       neighbours carries no relief (a flat topmost kind or unpainted ground)
+       the noise is clamped to max(0, noise); inner points keep theirs.
+
+       THE FIXTURE: "g" (amplitude 1.0, wave 16) painted over (0,0)-(40,40)
+       with a FLAT "w" (water) over (40,0)-(80,40) east of it, and no height
+       area at all — so every support point reads its bare relief. The grid is
+       the one of the grass box alone (the flat kind does not grow it): 13 × 13
+       from origin (−4,−4), step 4. The ray-cast contains the LOWER edges only
+       (`world_geometry.point_in_polygon`, `x < cross_x`), so the grass points
+       are i, j = 1..10 (x, z = 0..36) and the water starts at i = 11 (x = 40)
+       — the seam runs between them.
+
+       THE FOUR POINTS, all by hand from rnd(u, v) of b):
+         rnd(2,1) = −0.057022939436   rnd(3,1) =  0.968026378658
+         rnd(2,2) = −0.201629256364   rnd(3,2) = −0.737533572596
+         rnd(0,1) = −0.100840141065   rnd(0,0) =  0.494826480746
+       (the last two by the same three lines as b): state(0,1) = 3792446982 +
+       19349663 = 3811796645 -> 2414331557 -> 2414313814 -> 1930931094, and
+       1930931094/2**32·2−1 = −0.100840141065.)
+
+         (36,32) i=10 j=9  BORDER (i+1 is water), fx = 2.25 -> tx = 0.25,
+                           fz = 2.0 -> tz = 0:
+                           0.75·(−0.201629256364) + 0.25·(−0.737533572596)
+                           = −0.335605335422   -> CLAMPED to 0.0
+         (36,16) i=10 j=5  the same border column, tz = 0 on v = 1:
+                           0.75·(−0.057022939436) + 0.25·(0.968026378658)
+                           = +0.199239390088   -> KEPT, the shore lifts
+         (32,16) i=9  j=5  INNER (all four neighbours are grass), fx = 2.0:
+                           rnd(2,1) = −0.057022939436  -> KEPT, still a dip
+         (0,16)  i=1  j=5  BORDER to UNPAINTED ground, fx = 0, fz = 1:
+                           rnd(0,1) = −0.100840141065  -> CLAMPED to 0.0
+         (0,0)   i=1  j=1  the same border, positive:
+                           rnd(0,0) = +0.494826480746  -> KEPT
+       and the seam itself is level: (36,32) and the water point (40,32) both
+       read 0.0, which is the finding — the lake no longer sinks with the
+       meadow beside it.
+
+       RED COUNTER-PROBE, EXECUTED: the same pass without the clamp, rebuilt
+       in this script from the module's own pieces (`relief_inputs` +
+       `micro_relief_at` + `point_in_polygon`, i.e. the topmost-kind rule and
+       the noise, without the mask). It puts −0.335605335422 back at (36,32)
+       and −0.100840141065 at (0,16) — the values the finding was about — and
+       agrees with the shipped pass at every point that is NOT a clamped one.
 
 Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
 """
@@ -398,7 +443,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import heightfield as hf  # noqa: E402
-from app.core.world_geometry import ground_y  # noqa: E402
+from app.core.world_geometry import ground_y, point_in_polygon  # noqa: E402
 from app.models import heightfield as store  # noqa: E402
 from app.models.world import (_load_world_data, _save_world_data,  # noqa: E402
                               add_location, delete_location,
@@ -889,6 +934,14 @@ R_16_16 = RND_11                    # wave 16: (16,16) IS the corner (1,1)
 R_20_16 = 0.75 * RND_11 + 0.25 * RND_21
 R_20_20 = -0.292580240552           # [13]f, the plateau's ground
 R_4_4 = 0.085719348543              # [13]g
+RND_00 = 0.494826480746             # rnd(0, 0)   — [13]l
+RND_01 = -0.100840141065            # rnd(0, 1)
+RND_22 = -0.201629256364            # rnd(2, 2)
+RND_31 = 0.968026378658             # rnd(3, 1)
+RND_32 = -0.737533572596            # rnd(3, 2)
+R_32_16 = RND_21                    # wave 16: (32,16) IS the corner (2,1)
+R_36_16 = 0.75 * RND_21 + 0.25 * RND_31     # +0.199239390088, a border HILL
+R_36_32 = 0.75 * RND_22 + 0.25 * RND_32     # −0.335605335422, a border DIP
 
 
 def set_relief(kind, amplitude=None, wave=None):
@@ -1082,6 +1135,56 @@ near("a wave that is not carried by the grid is clamped, not aliased",
      hf.micro_relief_at(hf.relief_params("g", {"meta": {
          "relief_amplitude_m": 1.0, "relief_wave_m": 2}}), 8, 0),
      hf.micro_relief_at((SEED_G, 1.0, 8.0), 8, 0), 1e-15)
+
+print("  [13l] the edge rule — the relief lifts its neighbour, never sinks it")
+for _a in store.list_height_areas():
+    store.delete_height_area(_a["id"])
+for _a in list(terrain.list_areas()):
+    terrain.delete_area(_a["id"])
+set_relief("g", amplitude=1.0, wave=16.0)
+set_relief("w")                     # the flat neighbour: water
+terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
+terrain.save_area({"kind": "w", "polygon": square(40, 0, 80, 40)})
+f13l = raster_now()
+_areas_l = terrain.list_areas()
+check("the flat neighbour does not grow the grid",
+      (f13l["rows"], f13l["cols"], f13l["origin_x"], f13l["origin_z"]),
+      (13, 13, -4.0, -4.0))
+check("kind_at agrees where the seam runs",
+      [kind_at(36, 32, areas=_areas_l), kind_at(40, 32, areas=_areas_l)],
+      ["g", "w"])
+near("an INNER dip is still a dip", at(f13l, 9, 5), R_32_16, 5e-4)
+near("THE FINDING: a border dip toward the water is pulled up to 0",
+     at(f13l, 10, 9), 0.0)
+near("...while a border hill runs out into it", at(f13l, 10, 5), R_36_16, 5e-4)
+near("...and the water itself is where it always was", at(f13l, 11, 9), 0.0)
+near("the same at the border to UNPAINTED ground: the dip is pulled up",
+     at(f13l, 1, 5), 0.0)
+near("...and the hill is kept", at(f13l, 1, 1), RND_00, 5e-4)
+
+# RED COUNTER-PROBE, executed: the pass WITHOUT the mask, rebuilt from the
+# module's own pieces — the topmost-kind rule (`relief_inputs` + the ray-cast)
+# and the noise, and nothing else. It is the state the finding was reported on.
+_relief_l = hf.relief_inputs(_areas_l, terrain_types.effective_catalog())
+_unclamped = [[0.0] * f13l["cols"] for _ in range(f13l["rows"])]
+for _j in range(f13l["rows"]):
+    _pz = f13l["origin_z"] + _j * f13l["step_m"]
+    for _i in range(f13l["cols"]):
+        _px = f13l["origin_x"] + _i * f13l["step_m"]
+        _params = None
+        for _area, _p, _b in _relief_l:
+            if point_in_polygon(_px, _pz, _area.get("polygon")):
+                _params = _p
+        _unclamped[_j][_i] = round(hf.micro_relief_at(_params, _px, _pz), 3)
+near("RED COUNTER-PROBE: without the clamp the border dip is back",
+     _unclamped[9][10], R_36_32, 5e-4)
+near("...and so is the one toward unpainted ground",
+     _unclamped[5][1], RND_01, 5e-4)
+_moved = [(i, j) for j in range(f13l["rows"]) for i in range(f13l["cols"])
+          if _unclamped[j][i] != at(f13l, i, j)]
+check("the clamp moves ONLY border points, and only downward-pointing ones",
+      all(_unclamped[j][i] < 0 and at(f13l, i, j) == 0.0
+          for i, j in _moved) and len(_moved) > 0, True)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)
