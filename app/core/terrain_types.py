@@ -1,9 +1,11 @@
 """Terrain-type catalog (Seamless World, E1).
 
 Data-driven ground vocabulary for the painted terrain areas: what a kind
-looks like on the schematic 2D map (color), whether it can be walked on
-and how fast. NO terrain property is ever hardcoded anywhere else — every
-consumer (passability, payload, editor palette) reads this catalog.
+looks like on the schematic 2D map (color), whether it can be walked on,
+how fast, and — since finding 3 of the E8 acceptance — HOW one moves over
+it (``meta.move_anim``, the clip that replaces walk/run). NO terrain
+property is ever hardcoded anywhere else — every consumer (passability,
+pace, payload, editor palette) reads this catalog.
 
 Two layers, override-replace per kind (the activity-library rule): the
 shared seed ``shared/terrain/types.json`` ships the defaults, a world row
@@ -80,6 +82,19 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # to be whitelisted here and moved to the AREA with finding B17 — see
     # `app/models/terrain._sanitize_scatter_list`.
     meta = dict(raw.get("meta")) if isinstance(raw.get("meta"), dict) else {}
+    # ONE key inside it is whitelisted: `move_anim`, the clip a figure MOVING
+    # over this ground plays instead of walk/run (finding 3 of the E8
+    # acceptance — water is swum through, § A9). It is a clip KIND out of the
+    # open vocabulary of `shared/models/clips`, so nothing is validated
+    # against a list here; what is enforced is the shape (a trimmed string,
+    # 40 characters like a kind) and that an empty one leaves no key behind —
+    # "no animation" must not be an empty string every reader has to test for.
+    if "move_anim" in meta:
+        move_anim = str(meta.get("move_anim") or "").strip()[:40]
+        if move_anim:
+            meta["move_anim"] = move_anim
+        else:
+            meta.pop("move_anim")
     return {
         "kind": kind,
         "name": name,

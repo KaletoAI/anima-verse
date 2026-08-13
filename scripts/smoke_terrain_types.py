@@ -28,6 +28,17 @@ Throwaway storage. Hand-derived expectations:
       scripts/smoke_terrain_areas.py [11]) — the type-level field was
       removed without a shim, so a `meta` handed to sanitize_type now
       survives verbatim, scatter-shaped keys included.
+  [8] ONE key inside `meta` is whitelisted again since finding 3 of the E8
+      acceptance: `move_anim`, the clip a MOVING figure plays on this
+      ground instead of walk/run. It is a clip kind out of an OPEN
+      vocabulary, so nothing is checked against a list — only the shape:
+        "  swim  "        -> "swim"          (trimmed)
+        "s" * 45          -> "s" * 40        (a kind is 40 chars, no more)
+        ""  /  "   "      -> the KEY IS GONE, never an empty string
+        41 chars of blanks around a 3-letter word -> the word
+        no `move_anim` at all -> untouched, and the other keys with it
+      Water carries it in the shared seed: `{"move_anim": "swim"}` with
+      `speed_factor 0.4` — the ground one wades through.
 
 Usage:  ./.venv/bin/python scripts/smoke_terrain_types.py
 """
@@ -164,6 +175,28 @@ check("meta survives the save/read round trip",
       (terrain_types.get_type("meadow") or {}).get("meta"),
       {"note": "free form", "n": 3})
 terrain_types.delete_world_type("meadow")
+
+print("[8] move_anim is the one whitelisted meta key")
+check("a move_anim is trimmed", meta_of({"move_anim": "  swim  "}),
+      {"move_anim": "swim"})
+check("...and capped at 40 characters",
+      meta_of({"move_anim": "s" * 45}), {"move_anim": "s" * 40})
+check("an empty one leaves no key behind", meta_of({"move_anim": ""}), {})
+check("...and neither does a blank one", meta_of({"move_anim": "   "}), {})
+check("blanks around a real value keep the value",
+      meta_of({"move_anim": " " * 20 + "fly" + " " * 21}), {"move_anim": "fly"})
+check("a meta without it is untouched", meta_of({"note": "free form"}),
+      {"note": "free form"})
+check("...and the neighbours of a move_anim survive",
+      meta_of({"move_anim": " crawl ", "note": "x"}),
+      {"move_anim": "crawl", "note": "x"})
+check("water carries it in the shared seed",
+      (terrain_types.get_type("water") or {}).get("meta"),
+      {"move_anim": "swim"})
+check("...at the pace of a ground one wades through",
+      (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
+check("...and it is still impassable ground",
+      (terrain_types.get_type("water") or {}).get("passable"), False)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

@@ -14,7 +14,7 @@ footprint that is FOREIGN to this route overlaps it — the footprints
 containing the start or the goal are exempt, otherwise nobody could ever
 leave or enter a building — or when the terrain AT ITS CENTRE is impassable
 AND that centre lies out in the WILDERNESS (footprint wins, decision
-2026-08-13: painted ground judges the world between the places, never the
+2026-08-13: painted ground judges PASSABILITY between the places, never the
 inside of one — see :meth:`_Search.blocked`), or when the GROUND UNDER IT IS
 TOO STEEP to stand on (E8 task 4, the walking rule of § A15 no. 8 measured as
 the slope at the cell centre — :meth:`_Search.too_steep`). A* walks the 8
@@ -22,6 +22,13 @@ neighbours (no corner-cutting: a diagonal needs both orthogonals free), paying
 ``distance / speed_factor`` for every step PLUS ``SLOPE_COST_S_PER_M`` per
 metre of climb, and the resulting cell chain is pulled straight again by a
 line-of-sight pass so the journey follows the terrain instead of the raster.
+
+THE PACE, unlike the passability, is the terrain's EVERYWHERE (finding 3 of
+the E8 acceptance, 2026-08-13): a route through a village on a lake wades at
+the water's factor, and the only footprint exception is a ground with factor 0,
+which is a "never meant to be walked" rather than a pace. The rule itself is
+``terrain_query.effective_speed_factor`` — this file only supplies the
+``in_footprint`` half of it (:meth:`_Search.factor`, :func:`_segment_cost`).
 
 Performance discipline (E1 review lesson): the terrain areas, the type
 catalog and the placed footprints are read ONCE into a :class:`NavContext`
@@ -39,6 +46,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from app.core.terrain_query import MIN_SPEED_FACTOR, effective_speed_factor
 from app.core.world_geometry import (footprint_corners, footprint_hits_aabb,
                                      placed_footprint, point_in_footprint,
                                      segment_hits_footprint)
@@ -69,11 +77,6 @@ LOS_STEP_M = NAV_CELL_M / 2.0
 # Cost sampling step (:func:`segment_costs`): one sample per cell length.
 COST_STEP_M = NAV_CELL_M
 
-# Lower clamp on the speed factor used for COSTS. A terrain type may be
-# configured passable with factor 0, and a rescued start may sit on
-# impassable ground — neither may produce an infinite travel time.
-MIN_SPEED_FACTOR = 0.1
-
 # Extra game-seconds a metre of CLIMB costs, up or down, on top of the
 # horizontal metres (E8 task 4). Four is the honest end of "a metre up is
 # worth several metres along" and it is deliberately a PENALTY only: A*'s
@@ -91,14 +94,6 @@ SLOPE_COST_S_PER_M = 4.0
 # it would lock every such location behind its own door for the router while
 # an avatar walks through it (§ A15 no. 8, the ramp-end exemption).
 OPENING_EXEMPT_M = 1.5 + NAV_CELL_M
-
-# The pace INSIDE a placed footprint (decision 2026-08-13, "footprint wins"):
-# neutral, 1 m per game-second at speed 1. The place replaces the ground under
-# it, so the ground's factor — fast path or treacherous rock alike — has
-# nothing to say there any more. It is a constant and not the world's default
-# terrain, because what is inside a location is a floor, not another patch of
-# world.
-FOOTPRINT_SPEED_FACTOR = 1.0
 
 _SQRT2 = math.sqrt(2.0)
 _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1),
@@ -173,8 +168,7 @@ class NavContext:
         Under a footprint the world grid is LEVELLED FLAT (the plateau pass of
         E8 task 4), so the ground a route crosses inside a place is the
         plateau, and what a location builds on top of its own floor is its
-        business — the same split "footprint wins" already draws for
-        passability and pace.
+        business — the same split "footprint wins" draws for passability.
         """
         if not self.has_relief:
             return 0.0
@@ -234,6 +228,14 @@ def build_nav_context() -> NavContext:
     what a cell is — a hill raised after the context was built must not be
     routed over as if it were still flat. Checking it costs one areas read and
     one world read; building it adds the catalog on top.
+
+    "World terrain types" is the whole EDITABLE catalog: ``terrain_sig`` hashes
+    the ``terrain_types`` rows, and every catalog edit (a speed factor, a
+    ``move_anim``) writes such a row — so a re-typed ground hands out a new
+    context, which matters now that the pace of a type reaches inside the
+    footprints too. Only the SHARED seed file is outside the key; editing
+    ``shared/terrain/types.json`` by hand is a repo change and arrives with the
+    restart it needs anyway.
 
     Since E8 task 4 the two halves of that key OVERLAP on purpose:
     ``height_sig`` covers the placements too, because a moved location moves
@@ -511,20 +513,25 @@ class _Search:
                             ctx.max_slope_deg)
 
     def factor(self, cell: Cell) -> float:
-        """Speed of a cell — the terrain's, or the footprint's inside one.
+        """Speed of a cell — the TERRAIN's, inside a footprint as well.
 
-        FOOTPRINT WINS FOR THE PACE TOO (controller decision 2026-08-13).
-        The rationale of the whole decision is that the place REPLACES the
-        ground under it, and a plate one walks on at a tenth of the speed
-        is not replaced ground. Measured before the change: an avatar
-        walked a hall on painted rock at full speed while every NPC routed
-        through the same hall crawled at ``MIN_SPEED_FACTOR`` — two
-        movement models over the same square metre, which is the very
-        split this decision closes.
+        THE PACE OF THE TOPMOST TERRAIN COUNTS EVERYWHERE (finding 3 of the
+        E8 acceptance, 2026-08-13). The PASSABILITY half of "footprint wins"
+        stays exactly as it was (:meth:`blocked`) — a place on rock has to
+        stay reachable — but the pace is a property of the ground one
+        crosses, and a village painted onto a lake is waded through whether
+        the walker is a routed NPC or an avatar. The only footprint
+        exception is a ground with factor 0: that is not a pace but a "this
+        was never meant to be walked", and there the plate really does
+        replace the ground.
+
+        The rule itself is ``terrain_query.effective_speed_factor`` — the
+        ONE place it exists; this method supplies the ``in_footprint`` half
+        and the cached cell reading, nothing else.
         """
-        if self.in_footprint(*cell_centre(cell)):
-            return FOOTPRINT_SPEED_FACTOR
-        return max(self.ctx.cell_terrain(cell)[1], MIN_SPEED_FACTOR)
+        return effective_speed_factor(
+            self.ctx.cell_terrain(cell)[1],
+            self.in_footprint(*cell_centre(cell)))
 
     def nearest_free(self, cell: Cell) -> Optional[Cell]:
         """The cell itself, or the closest passable cell within
@@ -657,13 +664,16 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     """Game-seconds for one straight segment at 1 m/s — the sampling rule
     documented on :func:`segment_costs` (midpoints of ``n`` equal parts).
 
-    A sample inside a placed footprint pays ``FOOTPRINT_SPEED_FACTOR``, not
-    the ground's — the cost side of "footprint wins" (decision 2026-08-13),
-    and the reason a journey through a hall on rock no longer takes ten
-    times as long as walking the same hall does. There is no route context
-    at cost time, so ALL footprints count; a baked polyline never crosses a
-    foreign one anyway (``blocked`` and ``line_clear`` saw to that), so the
-    two readings answer the same.
+    EVERY sample pays the TERRAIN's pace (finding 3, 2026-08-13,
+    ``terrain_query.effective_speed_factor``), a sample inside a placed
+    footprint included — the only thing the footprint changes is a ground
+    with factor 0, which pays the neutral 1.0 instead of an infinity. That
+    is what keeps a journey through a hall on rock from taking ten times as
+    long as walking the same hall does, while a journey through a village on
+    a lake honestly wades. There is no route context at cost time, so ALL
+    footprints count; a baked polyline never crosses a foreign one anyway
+    (``blocked`` and ``line_clear`` saw to that), so the two readings answer
+    the same.
 
     THE CLIMB IS PAID HERE TOO (E8 task 4), per part and over the part's own
     two ends, so the sum is the total up-and-down along the segment rather
@@ -683,12 +693,10 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     for k in range(n):
         t = (k + 0.5) / n
         px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-        if any(point_in_footprint(px, pz, cx, cz, w, yaw)
-               for _lid, cx, cz, w, yaw in ctx.footprints):
-            factor = FOOTPRINT_SPEED_FACTOR
-        else:
-            factor = max(ctx.terrain_at(px, pz)[1], MIN_SPEED_FACTOR)
-        total += part / factor
+        inside = any(point_in_footprint(px, pz, cx, cz, w, yaw)
+                     for _lid, cx, cz, w, yaw in ctx.footprints)
+        total += part / effective_speed_factor(ctx.terrain_at(px, pz)[1],
+                                               inside)
         if relief:
             t0, t1 = k / n, (k + 1) / n
             h0 = ctx.height_at(a[0] + (b[0] - a[0]) * t0,
@@ -793,10 +801,10 @@ def segment_costs(waypoints: Sequence[Point],
     is read at the MIDPOINT of each part (midpoints, not endpoints — a
     waypoint typically sits exactly on a terrain border, where the reading
     is a coin flip). The cost is the sum of ``(L / n) / factor``, i.e. the
-    length divided by the harmonic mean of the sampled factors. FOOTPRINTS
-    DO matter (decision 2026-08-13): a sample inside a placed footprint is
-    paid at ``FOOTPRINT_SPEED_FACTOR``, because the place replaces the
-    ground under it for the pace exactly as it does for the passability.
+    length divided by the harmonic mean of the sampled factors. THE FACTOR
+    IS THE TERRAIN'S, footprint or not (finding 3, 2026-08-13) — a footprint
+    only neutralises a ground of factor 0, which is a ground nobody meant to
+    be walked rather than a slow one.
     """
     if ctx is None:
         ctx = build_nav_context()

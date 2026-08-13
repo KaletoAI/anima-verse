@@ -602,7 +602,10 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
          because it decides whether step 6 applies at all,
       6. terrain ``passability_at`` at the point, ONLY OUT IN THE WILDERNESS
          (409 ``impassable``) — inside a placed footprint the FOOTPRINT WINS
-         (decision 2026-08-13), see below,
+         (decision 2026-08-13), see below. PASSABILITY only: the terrain's
+         ``speed_factor`` is not gated anywhere in this chain — it applies
+         everywhere, footprint included (finding 3, § A15), and the client
+         walks it,
       7. the LOCATION TRANSITION through the FULL gate (below),
       8. the HEIGHT of the point against the last valid one (409
          ``too_steep``) — a step higher than ``game.max_step_height_m`` over
@@ -616,9 +619,13 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     is the LAST VALID point — the client snaps the figure back onto it, so a
     refusal never leaves the two views disagreeing.
 
-    FOOTPRINT WINS (decision 2026-08-13). Painted terrain judges the
-    WILDERNESS, not the inside of a placed location: a point inside ANY
-    footprint skips the terrain check entirely. A location is placed ON the
+    FOOTPRINT WINS — FOR THE PASSABILITY (decision 2026-08-13, narrowed by
+    finding 3). Painted terrain judges whether one MAY STAND out in the
+    WILDERNESS, not inside a placed location: a point inside ANY footprint
+    skips the terrain check entirely. What it does NOT skip is the pace and
+    the movement animation — those belong to the topmost terrain everywhere,
+    so a village on a lake is waded through instead of being strolled over
+    (§ A15). A location is placed ON the
     world, it does not inherit the ground somebody painted under it — a hall
     on a rock plateau or an island of a village on water would otherwise be a
     place one can never stand in (acceptance finding B1), and entry there is

@@ -14,11 +14,18 @@ Hand-derived expectations:
   [1] kind_at(30, 30)  -> "grass"  (no area)
   [2] kind_at(2, 2)    -> "water"  (only water contains it)
   [3] kind_at(10, 10)  -> "path"   (both contain it, path has higher z)
-  [4] passability_at(2, 2)  -> (False, 0.0); passability_at(30, 30)
+  [4] passability_at(2, 2)  -> (False, 0.4) — water is impassable ground
+      one WADES through where a place stands on it; passability_at(30, 30)
       -> (True, 1.0); passability_at(10, 10) -> (True, 1.2). Plus the
       catalog hole: an area whose kind was deleted from the catalog
       afterwards degrades to (True, 1.0) — a missing type must never
       strand a character behind an impassable ghost.
+      entry_at is the ONE reading behind both: it hands back the kind AND
+      its effective entry, so (2, 2) reads "water" with meta.move_anim
+      "swim" and the hole reads its kind with the fallback entry.
+      speed_at applies the pace rule of finding 3 on top:
+      speed_at(2, 2, wilderness) -> 0.4 and speed_at(2, 2, footprint)
+      -> 0.4 as well (only a factor of 0 is neutralised under a place).
   [5] set_character_pos("probe_npc", 50, 50) -> location_id == inn id;
       get_character_pos -> {"x": 50.0, "z": 50.0};
       get_character_current_location("probe_npc") == inn id
@@ -145,9 +152,20 @@ print("[3] the topmost containing area wins")
 check("kind_at(10, 10)", terrain_query.kind_at(10, 10), "path")
 
 print("[4] passability comes from the catalog, never from hardcoded kinds")
-check("passability_at(2, 2)", terrain_query.passability_at(2, 2), (False, 0.0))
+check("passability_at(2, 2)", terrain_query.passability_at(2, 2), (False, 0.4))
 check("passability_at(30, 30)", terrain_query.passability_at(30, 30), (True, 1.0))
 check("passability_at(10, 10)", terrain_query.passability_at(10, 10), (True, 1.2))
+# The ONE reading behind both answers, and the pace rule on top of it.
+_kind, _entry = terrain_query.entry_at(2, 2)
+check("entry_at(2, 2) names the kind", _kind, "water")
+check("...and hands out its catalog entry",
+      (_entry.get("passable"), _entry.get("speed_factor")), (False, 0.4))
+check("...move_anim included", (_entry.get("meta") or {}).get("move_anim"),
+      "swim")
+check("speed_at(2, 2) out in the wilderness",
+      terrain_query.speed_at(2, 2, in_footprint=False), 0.4)
+check("speed_at(2, 2) inside a footprint — the same water (finding 3)",
+      terrain_query.speed_at(2, 2, in_footprint=True), 0.4)
 # Catalog hole: paint an area, then delete its type from the catalog.
 terrain_types.save_world_type({"kind": "ghost", "name": "Ghost",
                                "color": "#123456", "passable": False,
@@ -163,6 +181,9 @@ terrain_types.delete_world_type("ghost")
 check("kind survives the type deletion", terrain_query.kind_at(105, 105), "ghost")
 check("catalog hole degrades to walkable",
       terrain_query.passability_at(105, 105), (True, 1.0))
+check("...and entry_at hands out the fallback entry, kind and all",
+      terrain_query.entry_at(105, 105),
+      ("ghost", {"passable": True, "speed_factor": 1.0, "meta": {}}))
 terrain.delete_area(ghost["id"])
 
 print("[5] a position inside a footprint derives the location")
