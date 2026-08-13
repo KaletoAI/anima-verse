@@ -1245,8 +1245,9 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   angewinkeltes Knie, der Körper liegt also auf dem Wasser statt darin.
   `sink_m` ist die zusätzliche Absenkung und gehört dem BODEN, nicht dem Clip:
   derselbe Zug liegt im See tiefer als in der Furche. Vertrag für die Renderer:
-  **solange ein Boden-Clip läuft (`move_anim` ODER `idle_anim`, dieselbe
-  Reichweite), sinkt die Figur zusätzlich um `sink_m` Weltmeter** — in
+  **solange die Gelände-Regel am Punkt greift (dieselbe Reichweite wie die
+  beiden Clips: Wildnis und offene Orte ja, Gebäude und Innenräume nein),
+  sinkt die Figur zusätzlich um `sink_m` Weltmeter** — in
   derselben Verrechnung wie der Clip-Offset (`Absenkung = Clip-Offset ×
   Figurenskalierung + sink_m`), NICHT mit der Figur skaliert (ein halber Meter
   Wasser ist für Kind und Riese ein halber Meter), und Rückstellung auf exakt

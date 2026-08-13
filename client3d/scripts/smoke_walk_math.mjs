@@ -172,6 +172,20 @@
  * `moving || !!groundIdle` — `treading-water` is authored on the water line
  * exactly like `swim` and has to be dropped onto the ground the same way.
  *
+ * --- groundSink: how deep the ground swallows the figure -------------------
+ * The third field of the same contract (`meta.sink_m`, § A9, world metres):
+ * the clip normalisation puts the LOWEST body point on the surface, which for
+ * a swimmer is a bent knee, so the body lies on the lake instead of in it.
+ * Same reach as the two clips, and a depth that says nothing is 0:
+ *   groundSink(0.4, 'wilderness')  -> 0.4
+ *   groundSink(0.4, 'open')        -> 0.4
+ *   groundSink(0.4, 'built')       -> 0     the reach: a tiled hall over the
+ *                                           lake is a floor, nobody wades it
+ *   groundSink(1.5, 'wilderness')  -> 1.5   the catalog clamp passes through
+ *   groundSink(0 / −1 / NaN, …)    -> 0
+ * RED COUNTER-PROBE: the same number without the scope gate sinks the figure
+ * in the hall as well — 0.4 against the 0 the rule in force answers.
+ *
  * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
  * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
  * exact mirror of `relief.slope_blocks`. The SLOPE limit holds at every
@@ -736,7 +750,7 @@ async function main() {
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
-    moveClip, idleClip, groundScope, MIN_PACE, MOVE_EPS_M } = walk;
+    moveClip, idleClip, groundSink, groundScope, MIN_PACE, MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
@@ -1015,6 +1029,25 @@ async function main() {
       standing('', 'wilderness', 'sit'), { kind: 'sit', drop: false });
     check('...not even the plain idle of a figure without an activity',
       standing('', 'open', 'idle'), { kind: 'idle', drop: false });
+  }
+
+  console.log('groundSink — how deep the ground swallows the figure');
+  {
+    check('a lake takes 0.4 m of the body', groundSink(0.4, 'wilderness'), 0.4);
+    check('...an open place is the same water', groundSink(0.4, 'open'), 0.4);
+    check('THE REACH: a tiled hall over the lake is a floor',
+      groundSink(0.4, 'built'), 0);
+    check('a ground without a depth sinks nobody', groundSink(0, 'wilderness'), 0);
+    check('...and neither does a negative one', groundSink(-1, 'open'), 0);
+    check('...nor a NaN one', groundSink(NaN, 'wilderness'), 0);
+    check('the clamp of the catalog travels through untouched',
+      groundSink(1.5, 'wilderness'), 1.5);
+    // RED COUNTER-PROBE: the same number without the scope gate — the figure
+    // wades knee-deep through the tiled hall.
+    check('RED: ungated, the hall sinks the figure too',
+      0.4, groundSink(0.4, 'wilderness'));
+    check('...while the rule in force leaves it alone',
+      groundSink(0.4, 'built'), 0);
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

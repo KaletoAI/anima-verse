@@ -232,6 +232,22 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
   return groundClip(idleAnim, scope);
 }
 
+/**
+ * HOW DEEP the ground swallows the figure standing or moving on it
+ * (`meta.sink_m`, § A9, world metres) — the third field of the same contract,
+ * with the SAME reach.
+ *
+ * The clip normalisation puts the lowest body point on the surface, and for a
+ * swimmer that point is a bent knee: the body lies on the lake instead of in
+ * it. This is what belongs underneath. Inside a BUILT place the ground says
+ * nothing here either — a tiled hall over painted water is a floor, and one
+ * does not stand knee-deep in it. Junk and non-positive numbers are no depth.
+ */
+export function groundSink(sink: number, scope: GroundScope): number {
+  if (!Number.isFinite(sink) || sink <= 0) return 0;
+  return scope === 'built' ? 0 : sink;
+}
+
 /** The reach rule BOTH ground clips share, in one place: outside a built
  *  place the ground may name a clip, inside it never does, and a blank name
  *  is no name. Two copies of this is how one of them starts reaching further

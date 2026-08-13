@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { MOVE_EPS_M, idleClip, moveClip, type GroundScope } from '../game/walk';
+import { MOVE_EPS_M, groundSink, idleClip, moveClip, type GroundScope } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
@@ -855,7 +855,8 @@ export class NpcManager {
           // The third is how deep the ground swallows the body on top of that
           // (`meta.sink_m`) — it rides the same gate and is 0 without one.
           npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
-            : (groundIdle || 'idle'), travelling || !!groundIdle, gm.sink);
+            : (groundIdle || 'idle'), travelling || !!groundIdle,
+            groundSink(gm.sink, gm.scope));
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -921,7 +922,8 @@ export class NpcManager {
         // not (`sleep` carries the bed it was animated on). The third is the
         // ground's own sink depth, which rides that same gate.
         npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
-          : (groundIdle || standingClip), moving || !!groundIdle, gm.sink);
+          : (groundIdle || standingClip), moving || !!groundIdle,
+          groundSink(gm.sink, gm.scope));
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
