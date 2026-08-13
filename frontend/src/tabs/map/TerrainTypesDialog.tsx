@@ -34,6 +34,12 @@
  * as much as out in the wilderness; only the PASSABILITY is a wilderness
  * question (§ A15, "footprint wins").
  *
+ * And what GROWS on it moves: `meta.sway_m`, how far a blade's tip bends in
+ * the wind (§ A9). It is a property of the KIND for the same reason the relief
+ * is — a meadow blows as a meadow, not one tuft at a time — and it reaches
+ * every scatter entry of every area painted in that kind. The area's FILL
+ * never moves; that is the surface library's business (the water class).
+ *
  * And what a ground is SHAPED like: the micro-relief (`meta.relief_amplitude_m`
  * / `meta.relief_wave_m`, § A16.2) — random small hills baked into the world
  * heightfield wherever this kind is painted. It is authored per KIND, not per
@@ -52,10 +58,11 @@
  * 940 px and the sink depth would have been the tenth. The columns are the
  * IDENTITY of a kind now — kind, name, colour, passable, speed, where it comes
  * from, what one can do with it — and the second row underneath carries what
- * the ground DOES to a figure: the two clips, the sink depth, the relief. That
- * one is indented and muted, because it reads as a continuation of the row
- * above and not as a kind of its own. Six fields fit there; a seventh would be
- * the point to ask what the ground still is.
+ * the ground DOES: the two clips, the two sink depths, the relief and, since
+ * the terrain animations, the wind. That one is indented and muted, because it
+ * reads as a continuation of the row above and not as a kind of its own. Seven
+ * fields stand there; the row wraps, and the next one added is the point to
+ * ask whether the ground is still one thing.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -84,6 +91,9 @@ const RELIEF_WAVE_STEP = 1
 const SINK_MIN = 0
 const SINK_MAX = 1.5
 const SINK_STEP = 0.05
+const SWAY_MIN = 0.01
+const SWAY_MAX = 0.5
+const SWAY_STEP = 0.01
 /** How many columns the identity row has — the behaviour row spans all of
  *  them, and so do the two hints. */
 const COLS = 7
@@ -148,6 +158,7 @@ interface OwnedMeta {
   idleSink: string
   reliefAmp: string
   reliefWave: string
+  sway: string
 }
 
 /** `meta` with the owned keys written — or with the KEY REMOVED where the
@@ -163,6 +174,7 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   setMetaNum(next, 'idle_sink_m', own.idleSink)
   setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
+  setMetaNum(next, 'sway_m', own.sway)
   return next
 }
 
@@ -201,6 +213,15 @@ function idleSinkHint(t: (s: string) => string): string {
     .replace('{max}', String(SINK_MAX))
 }
 
+/** The sway hint — what bends, how far, and what does NOT bend. The last part
+ *  is the one the field cannot show: a painted lake is animated by its surface
+ *  class, and a number typed here would never move the ground itself. */
+function swayHint(t: (s: string) => string): string {
+  return t('How far what GROWS on this ground bends in the wind, in metres ({min}–{max}) — empty = it stands still. The tip carries the whole number, the foot none of it, and every plant has its own phase. Counts for all scatter of an area of this kind, tufts and models alike; the ground surface itself is not moved by it.')
+    .replace('{min}', String(SWAY_MIN))
+    .replace('{max}', String(SWAY_MAX))
+}
+
 /** The wavelength hint — how wide one swell is, plus the default an amplitude
  *  without a wave falls back to. */
 function waveHint(t: (s: string) => string): string {
@@ -217,6 +238,7 @@ interface BehaviourRowProps extends OwnedMeta {
   onIdleSink: (v: string) => void
   onReliefAmp: (v: string) => void
   onReliefWave: (v: string) => void
+  onSway: (v: string) => void
 }
 
 /** The SECOND row of a kind: what this ground does to a figure standing or
@@ -225,8 +247,9 @@ interface BehaviourRowProps extends OwnedMeta {
  *  thing start to differ. Each field carries its label, because a row that
  *  spans the whole table has no column header over it. */
 function BehaviourRow({
-  moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave,
+  moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
   onMoveAnim, onIdleAnim, onMoveSink, onIdleSink, onReliefAmp, onReliefWave,
+  onSway,
 }: BehaviourRowProps) {
   const { t } = useI18n()
   return (
@@ -311,6 +334,20 @@ function BehaviourRow({
               onChange={(e) => onReliefWave(e.target.value)}
             />
           </label>
+          <label className="ga-tt-field">
+            <span>{t('Sway (m)')}</span>
+            <input
+              className="ga-input ga-tt-num"
+              type="number"
+              min={SWAY_MIN}
+              max={SWAY_MAX}
+              step={SWAY_STEP}
+              value={sway}
+              placeholder={t('still')}
+              title={swayHint(t)}
+              onChange={(e) => onSway(e.target.value)}
+            />
+          </label>
         </div>
       </td>
     </tr>
@@ -346,6 +383,7 @@ function TypeRow({
   const [idleSink, setIdleSink] = useState(metaNumOf(type, 'idle_sink_m'))
   const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
+  const [sway, setSway] = useState(metaNumOf(type, 'sway_m'))
 
   const speedNum = parseFloat(speed)
   const speedBad = !Number.isFinite(speedNum)
@@ -362,19 +400,20 @@ function TypeRow({
     || numChanged(idleSink, metaNumOf(type, 'idle_sink_m'))
     || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
+    || numChanged(sway, metaNumOf(type, 'sway_m'))
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
 
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // exactly SIX keys in it and hands the rest back untouched. The numbers
+    // exactly SEVEN keys in it and hands the rest back untouched. The numbers
     // are sent unclamped on purpose: the server clamps, and the row refills
     // from its answer, so a typed 5 shows up as the stored 2.
     const saved = await onSave({
       kind: type.kind, name, color, passable,
       speed_factor: speedNum,
       meta: withOwnedMeta(type.meta,
-        { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave }),
+        { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -387,8 +426,9 @@ function TypeRow({
     setIdleSink(metaNumOf(saved, 'idle_sink_m'))
     setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
+    setSway(metaNumOf(saved, 'sway_m'))
   }, [color, idleAnim, idleSink, moveAnim, moveSink, name, onSave, passable,
-      reliefAmp, reliefWave, speedBad, speedNum, type])
+      reliefAmp, reliefWave, speedBad, speedNum, sway, type])
 
   return (
     <>
@@ -493,6 +533,7 @@ function TypeRow({
       idleSink={idleSink} onIdleSink={setIdleSink}
       reliefAmp={reliefAmp} onReliefAmp={setReliefAmp}
       reliefWave={reliefWave} onReliefWave={setReliefWave}
+      sway={sway} onSway={setSway}
     />
     </>
   )
@@ -527,6 +568,7 @@ export function TerrainTypesDialog({
   const [newIdleSink, setNewIdleSink] = useState('')
   const [newReliefAmp, setNewReliefAmp] = useState('')
   const [newReliefWave, setNewReliefWave] = useState('')
+  const [newSway, setNewSway] = useState('')
 
   const putType = useCallback(async (draft: TypeDraft): Promise<TerrainType | null> => {
     setBusy(true)
@@ -578,6 +620,7 @@ export function TerrainTypesDialog({
         idleSink: newIdleSink,
         reliefAmp: newReliefAmp,
         reliefWave: newReliefWave,
+        sway: newSway,
       }),
     })
     if (!saved) return
@@ -592,8 +635,10 @@ export function TerrainTypesDialog({
     setNewIdleSink('')
     setNewReliefAmp('')
     setNewReliefWave('')
+    setNewSway('')
   }, [kindClean, newColor, newIdleAnim, newIdleSink, newMoveAnim, newMoveSink,
-      newName, newPassable, newReliefAmp, newReliefWave, newSpeedNum, putType])
+      newName, newPassable, newReliefAmp, newReliefWave, newSpeedNum, newSway,
+      putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -732,6 +777,7 @@ export function TerrainTypesDialog({
                 idleSink={newIdleSink} onIdleSink={setNewIdleSink}
                 reliefAmp={newReliefAmp} onReliefAmp={setNewReliefAmp}
                 reliefWave={newReliefWave} onReliefWave={setNewReliefWave}
+                sway={newSway} onSway={setNewSway}
               />
               <tr>
                 <td colSpan={COLS} className="ga-tt-newhint">
