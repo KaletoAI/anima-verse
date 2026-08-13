@@ -851,6 +851,66 @@ export function TerrainAreaChip({
   )
 }
 
+export interface TerrainAreaListProps {
+  /** The areas to offer, TOPMOST FIRST. Filtering (what is on screen) and
+   *  ordering are the caller's — `MapTab` owns the view, this only draws. */
+  areas: TerrainArea[]
+  /** The effective catalog by kind, for colour and name. */
+  types: Record<string, TerrainType>
+  selectedId: string
+  onSelect: (id: string) => void
+}
+
+/**
+ * The painted areas in view, as a list — the second way to select one.
+ *
+ * The canvas hit test can only ever return the TOPMOST polygon under the
+ * cursor (that is what makes it agree with the engine about which kind is at a
+ * spot). Where two areas overlap, the lower one is therefore unreachable by
+ * clicking, and no click sequence gets to it (finding 5). Naming all of them
+ * does, and it costs no new gesture on the canvas.
+ *
+ * Ordered the way the map is read: the area drawn LAST is the one the eye
+ * sees, so it is named first. The row says the type's colour, the type's name
+ * and which layer the area sits on — the three things that tell two areas of
+ * the same kind apart, and the same wording the chip uses.
+ */
+export function TerrainAreaList({
+  areas, types, selectedId, onSelect,
+}: TerrainAreaListProps) {
+  const { t } = useI18n()
+  return (
+    <div className="ga-map-tray-section">
+      <div className="ga-map-tray-title">{t('Terrain areas')}</div>
+      {areas.length === 0 ? (
+        <div className="ga-map-tray-empty">{t('No areas in view')}</div>
+      ) : (
+        <div className="ga-map-tray-items ga-map-tray-areas">
+          {areas.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              className={'ga-map-tray-item'
+                + (a.id === selectedId ? ' selected' : '')}
+              onClick={() => onSelect(a.id)}
+              title={t('Select this area — the topmost one is listed first')}
+            >
+              <span className="ga-terrain-swatch"
+                style={{ background: typeColor(types, a.kind) }} />
+              <span className="ga-map-tray-name">
+                {types[a.kind]?.name || a.kind}
+              </span>
+              <span className="ga-map-tray-stamp">
+                {t('layer {n}').replace('{n}', String(a.z_order))}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export interface HeightAreaChipProps {
   area: HeightArea
   /** The two walk limits (worldmap payload, § A1.3). */

@@ -312,6 +312,56 @@ export function pointInPolygon(x: number, z: number,
   return inside
 }
 
+/**
+ * Does a polygon's bounding box touch a world rectangle?
+ *
+ * The cheap half of a visibility test, and deliberately only that: it feeds a
+ * LIST filter (which painted areas are worth offering for the part of the
+ * world on screen), never a hit test. An AABB that overlaps while the shape
+ * itself misses costs one extra row; a true polygon-rectangle intersection
+ * would cost a clip per area on every pan and buy nothing a reader notices.
+ * Which area a CLICK hit stays `pointInPolygon`'s question.
+ *
+ * Touching counts as overlap (`>=` / `<=`): an area whose edge sits exactly on
+ * the screen border is drawn on that border and belongs in the list with it.
+ * An empty polygon encloses nothing and is never in view — and because the
+ * extent is built by comparison, a non-finite coordinate leaves it inverted
+ * and fails closed the same way.
+ *
+ * The rectangle is taken as given: `visibleWorldRect` always returns
+ * `min <= max`, and a box handed in the other way round matches nothing rather
+ * than being quietly repaired.
+ *
+ * Verification cases (hand-derived, § B5a — arithmetic, not screenshots), all
+ * against rect {min_x: 0, min_z: 0, max_x: 100, max_z: 50}:
+ *
+ *   [(10,10),(20,10),(20,20)]            -> true   bbox x 10…20, z 10…20: inside
+ *   [(-50,-50),(-40,-50),(-40,-40)]      -> false  bbox max_x −40 < 0
+ *   [(-10,-10),(110,-10),(110,60),(-10,60)]
+ *                                        -> true   encloses the rect entirely
+ *   [(100,50),(120,50),(120,70)]         -> true   corner touches at (100,50)
+ *   [(100.01,50),(120,50),(120,70)]      -> false  min_x 100.01 > max_x 100
+ *   [(-20,20),(120,20),(120,30),(-20,30)]-> true   crosses the rect west→east
+ *   [(40,-30),(60,-30),(60,-10),(40,-10)]-> false  bbox max_z −10 < 0
+ *   []                                   -> false  no points, no extent
+ */
+export function areaInRect(polygon: Array<[number, number]>,
+  rect: MapBounds): boolean {
+  if (!polygon.length) return false
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const [x, z] of polygon) {
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (z < minZ) minZ = z
+    if (z > maxZ) maxZ = z
+  }
+  return maxX >= rect.min_x && minX <= rect.max_x
+    && maxZ >= rect.min_z && minZ <= rect.max_z
+}
+
 /** A join is bevelled once the miter would stick out further than this many
  *  stroke widths — 2 widths means only a near-hairpin (turn > 151°) bevels. */
 export const STROKE_MITER_LIMIT_WIDTHS = 2

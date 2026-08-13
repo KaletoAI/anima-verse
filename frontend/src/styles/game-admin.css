@@ -1940,12 +1940,22 @@ html, * {
   transition: border-color 0.15s, background 0.15s;
 }
 .ga-map-tray-item:hover { border-color: var(--accent, #58a6ff); }
-/* Armed for placement — the ghost on the map belongs to this entry. */
-.ga-map-tray-item.armed {
+/* `armed`: the ghost on the map belongs to this entry. `selected`: the terrain
+   area of this row is the one selected on the map. One accent for both — they
+   say the same thing, "the canvas is showing you this one". */
+.ga-map-tray-item.armed,
+.ga-map-tray-item.selected {
   border-color: var(--accent, #58a6ff);
   background: rgba(88, 166, 255, 0.12);
 }
 .ga-map-tray-item.ga-map-tray-template { border-style: dashed; }
+/* The terrain-area list scrolls inside the tray instead of pushing the
+   location sections out of reach: a busy patch of world can have dozens of
+   areas in view, and the tray is the only place the other two lists live. */
+.ga-map-tray-areas {
+  max-height: 260px;
+  overflow-y: auto;
+}
 .ga-map-tray-icon {
   width: 22px;
   height: 22px;

@@ -1,6 +1,20 @@
 /**
  * TerrainLayer — the painted ground of the free world map, drawn INSIDE the
- * `MapCanvas` SVG and underneath everything else.
+ * `MapCanvas` SVG.
+ *
+ * It draws in TWO parts, and which of them a caller asks for decides what
+ * covers what (`part`). The unpainted GROUND is a full-canvas wash and belongs
+ * at the very bottom; the painted areas and every overlay above them are the
+ * PAINT part. In the ground-editing modes `MapTab` puts that second part above
+ * the location footprints, because a footprint is drawn opaque (map picture or
+ * roof snapshot) and would otherwise swallow the 45 % fills — and with them the
+ * running draft. Everywhere else both parts stay in one piece, underneath the
+ * placements, which is where ground belongs while locations are being moved.
+ *
+ * Inside the paint part the order never changes: fills, then the scatter
+ * preview, then the selection outline / centre line / handles / draft. The
+ * overlays are how the user sees WHAT they are editing, so nothing this layer
+ * draws may cover them.
  *
  * A terrain area is a polygon in WORLD METRES (contract § A1.5) — not a
  * location, so it carries no `yaw_deg` and gets NO rotation transform. The
@@ -108,7 +122,19 @@ function centroid(poly: Array<[number, number]>): [number, number] {
   return [x / poly.length, z / poly.length]
 }
 
+/**
+ * Which half of the layer to draw — see the module docstring.
+ *
+ * `ground` is the unpainted default kind alone, `paint` everything that is
+ * drawn on top of it, `all` both in one group (the order inside is identical
+ * either way). The split exists so a caller can slot ANOTHER layer between the
+ * two; it is not a second opinion about paint order.
+ */
+export type TerrainPart = 'ground' | 'paint' | 'all'
+
 export interface TerrainLayerProps {
+  /** Which half to draw. Default `all` — both, as one group. */
+  part?: TerrainPart
   /** Bottom-to-top, as the server sent them. Never re-sorted here. */
   areas: TerrainArea[]
   /** The effective catalog by kind — the ONLY source of colours. */
@@ -164,10 +190,10 @@ export interface TerrainLayerProps {
 }
 
 export function TerrainLayer({
-  areas, types, groundColor, editing, editable, selectedId, centerline,
-  centerlineWidthM, draft, draftCursor, draftLine, draftWidthM, draftColor,
-  draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert, scatterPreview,
-  footprints,
+  part = 'all', areas, types, groundColor, editing, editable, selectedId,
+  centerline, centerlineWidthM, draft, draftCursor, draftLine, draftWidthM,
+  draftColor, draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
+  scatterPreview, footprints,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
 
@@ -206,7 +232,9 @@ export function TerrainLayer({
    * index.
    */
   const scatterDots = useMemo(() => {
-    if (!scatterPreview) return []
+    // The ground part draws no dots, and sampling for it would mean paying the
+    // whole scatter twice per render once the layer is split in two.
+    if (!scatterPreview || part === 'ground') return []
     const out: { x: number; z: number; color: string }[] = []
     const rings = areas.map((a) => cleanRing(a.polygon))
     areas.forEach((a, ai) => {
@@ -229,9 +257,21 @@ export function TerrainLayer({
       })
     })
     return out
-  }, [areas, footprints, scatterPreview])
+  }, [areas, footprints, part, scatterPreview])
 
   if (!w || !h) return null
+
+  // Unpainted ground: the default kind, same treatment as a painted area so
+  // the two can be compared by eye. Empty until the catalog has answered —
+  // colouring the whole world grey to mean "not loaded yet" would be a
+  // statement about the ground, not about the load.
+  const ground = groundColor ? (
+    <rect x={0} y={0} width={w} height={h} fill={groundColor}
+      fillOpacity={FILL_OPACITY} pointerEvents="none" />
+  ) : null
+  // The ground part is the wash and NOTHING else — returned here so the paint
+  // part below stays one unbroken order to read.
+  if (part === 'ground') return <g>{ground}</g>
 
   // What the handles sit on as it is being edited: the CENTRE LINE of a stroke
   // area, the polygon of an ordinary one. A centre line is OPEN (no wrap-around
@@ -252,15 +292,8 @@ export function TerrainLayer({
 
   return (
     <g>
+      {part === 'all' ? ground : null}
       <g pointerEvents="none">
-        {/* Unpainted ground: the default kind, same treatment as a painted
-            area so the two can be compared by eye. Empty until the catalog
-            has answered — colouring the whole world grey to mean "not loaded
-            yet" would be a statement about the ground, not about the load. */}
-        {groundColor ? (
-          <rect x={0} y={0} width={w} height={h} fill={groundColor}
-            fillOpacity={FILL_OPACITY} />
-        ) : null}
         {areas.map((a) => {
           if (a.polygon.length < 3) return null
           const known = !!types[a.kind]

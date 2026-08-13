@@ -8,8 +8,8 @@ import { renderTopDownSnapshot } from '../world/topDownSnapshot'
 import type { ScenePayload } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
 import {
-  FIT_FALLBACK_PX_PER_M, fitBounds, pointInPolygon, strokeToPolygon,
-  visibleWorldRect, type MapBounds, type View,
+  FIT_FALLBACK_PX_PER_M, areaInRect, fitBounds, pointInPolygon,
+  strokeToPolygon, visibleWorldRect, type MapBounds, type View,
 } from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
@@ -19,8 +19,8 @@ import { HeightLayer } from './HeightLayer'
 import {
   FALLOFF_DEFAULT_M, HEIGHT_DEFAULT_M, HeightAreaChip, MAX_COORD, MAX_POINTS,
   MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS, MIN_STROKE_POINTS,
-  STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainLayerHint, TerrainToolbar,
-  type HeightTool, type PaintShape, type TerrainMode,
+  STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainAreaList, TerrainLayerHint,
+  TerrainToolbar, type HeightTool, type PaintShape, type TerrainMode,
 } from './TerrainTools'
 import { TerrainTypesDialog } from './TerrainTypesDialog'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
@@ -306,6 +306,13 @@ export function MapTab() {
   // "asked, there is none"). Session state — see the module docstring for why
   // the refresh is the toggle and nothing else.
   const [roofOn, setRoofOn] = useState(false)
+  /** Are the locations drawn at all? A pure VIEW switch, session-only like the
+   *  roof one next to it — nothing about the world changes, only what this
+   *  canvas shows. Switching them off is the way to reach ground and relief
+   *  points that lie UNDER a footprint: an opaque map picture cannot be
+   *  clicked through, and neither the terrain hit test nor a relief handle can
+   *  do anything about that from below (finding 6). */
+  const [locsOn, setLocsOn] = useState(true)
   const [layoutSigs, setLayoutSigs] = useState<Record<string, string>>({})
   const [roofs, setRoofs] = useState<Record<string, string | null>>({})
   const roofsRef = useRef<Record<string, string | null>>({})
@@ -610,8 +617,24 @@ export function MapTab() {
     setRoofOn((v) => !v)
   }, [])
 
+  /** Hiding the locations also drops what only makes sense while they are
+   *  drawn: a selection whose chip would edit a square nobody can see, and an
+   *  armed ghost that would be placed blind. Showing them again brings back
+   *  nothing — an emptied selection is emptied. */
+  const toggleLocs = useCallback((on: boolean) => {
+    setLocsOn(on)
+    if (on) return
+    setSelId('')
+    setGhost(null)
+    setGhostPt(null)
+  }, [])
+
   useEffect(() => {
-    if (!roofOn || view.pxPerM < ROOF_MIN_PX_PER_M || !pane.w || !pane.h) return
+    // A hidden location layer draws no roofs, and each picture costs a scene
+    // request plus a WebGL context — so nothing is rendered for it. Turning
+    // the layer back on re-runs this and fills the cache then.
+    if (!locsOn || !roofOn || view.pxPerM < ROOF_MIN_PX_PER_M
+      || !pane.w || !pane.h) return
     let cancelled = false
     const tid = setTimeout(() => {
       const rect = visibleWorldRect(view, pane.w, pane.h)
@@ -658,7 +681,7 @@ export function MapTab() {
       }).catch(() => undefined)
     }, ROOF_DEBOUNCE_MS)
     return () => { cancelled = true; clearTimeout(tid) }
-  }, [pane, placed, roofKey, roofOn, view])
+  }, [locsOn, pane, placed, roofKey, roofOn, view])
 
   /** What the layer draws: id -> picture, for the locations that have one. */
   const roofUrl = useMemo(() => {
@@ -817,6 +840,28 @@ export function MapTab() {
   /** What the selected area GROWS, checked (finding B17). */
   const selScatter = useMemo(
     () => readScatter(selectedArea?.meta), [selectedArea])
+
+  /**
+   * The painted areas the tray lists, TOPMOST FIRST.
+   *
+   * The canvas hit test can only ever answer with the topmost polygon under
+   * the cursor, so an area painted UNDER another one cannot be selected by
+   * clicking at all (finding 5). The list is the second way in, and it is
+   * ordered the way the map is read — the one drawn last is named first.
+   *
+   * Filtered to what is on screen, by bounding box, the same viewport filter
+   * the roof preload uses: a world with hundreds of areas would otherwise
+   * offer a list nobody can find anything in, and "in view" is the one
+   * question a user can check by looking. `pane` is {0,0} until the canvas has
+   * been measured; there is no visible rectangle then, and an unfiltered list
+   * would be a different list for one frame.
+   */
+  const visibleAreas = useMemo(() => {
+    const all = terrain?.areas || []
+    if (!pane.w || !pane.h) return []
+    const rect = visibleWorldRect(view, pane.w, pane.h)
+    return all.filter((a) => areaInRect(a.polygon, rect)).reverse()
+  }, [pane, terrain, view])
 
   /** Optimistic patch of one area, so an edited outline does not snap back to
    *  its old shape for the length of the round trip. */
@@ -1365,11 +1410,22 @@ export function MapTab() {
     setSelId('')
   }, [addDraftPoint, placeGhost])
 
+  /** Picking an area from the tray list. From the paint mode it also switches
+   *  to `edit-area`: that is the mode the chip and the handles belong to, and
+   *  a selection that shows neither would be a click without an answer. */
+  const pickListedArea = useCallback((id: string) => {
+    if (modeRef.current === 'paint') switchMode('edit-area')
+    setSelArea(id)
+  }, [switchMode])
+
   /** Arming a tray entry is a location gesture — it takes the canvas back to
    *  the location mode instead of leaving a ghost that the next click, meant
-   *  for the ground, would place by accident. */
+   *  for the ground, would place by accident. For the same reason it brings
+   *  the locations BACK into view: placing an invisible square, next to
+   *  invisible neighbours, is a gesture nobody can aim. */
   const armGhost = useCallback((loc: EditorLocation, kind: 'place' | 'clone') => {
     switchMode('select')
+    setLocsOn(true)
     const anchor = anchorWidthM(loc)
     setGhost({
       kind, id: loc.id, name: loc.name,
@@ -1548,6 +1604,40 @@ export function MapTab() {
     && Math.hypot(draftCursor.x - draft[0][0], draftCursor.z - draft[0][1])
       <= CLOSE_TOL_PX / view.pxPerM)
 
+  // The two GROUND modes. In them the painted areas move ABOVE the location
+  // footprints: a footprint carries an opaque picture (map image or roof
+  // snapshot) and swallowed the 45 % fills underneath it — and with them the
+  // running draft, which made painting inside a place a blind gesture
+  // (finding 4). The unpainted ground stays at the very bottom: it is a
+  // full-canvas wash, and putting THAT on top would grey out exactly the roof
+  // view that painting along a building's outline needs.
+  const groundMode = mode === 'paint' || mode === 'edit-area'
+
+  /** Everything the terrain layer draws, in one place — it is rendered twice
+   *  in the ground modes (ground below the locations, paint above them) and
+   *  once everywhere else, and two copies of this list would drift. */
+  const terrainProps = {
+    areas: terrain?.areas || [],
+    types: typeMap,
+    groundColor,
+    editing: mode === 'edit-area',
+    editable: selAreaEditable,
+    selectedId: selArea,
+    centerline: selStroke ? selStroke.points : null,
+    centerlineWidthM: selStroke ? selStroke.width_m : 0,
+    draft,
+    draftCursor,
+    draftLine: paintingLine,
+    draftWidthM: strokeWidthM,
+    draftColor: typeColor(typeMap, paintKind),
+    draftWillClose,
+    onVertexMove: moveVertex,
+    onVertexDelete: deleteVertex,
+    onEdgeInsert: insertVertex,
+    scatterPreview: scatterOn,
+    footprints: scatterFootprints,
+  }
+
   const trayEntry = (loc: EditorLocation, kind: 'place' | 'clone') => {
     const anchor = anchorWidthM(loc)
     return (
@@ -1574,6 +1664,13 @@ export function MapTab() {
   return (
     <div className="ga-map-layout">
       <aside className="ga-map-tray">
+        {/* First, and only while the ground is being edited: in those modes it
+            is the section the hand works with, and it is the only way to a
+            painted area that lies under another one. */}
+        {groundMode ? (
+          <TerrainAreaList areas={visibleAreas} types={typeMap}
+            selectedId={selArea} onSelect={pickListedArea} />
+        ) : null}
         <div className="ga-map-tray-section">
           <div className="ga-map-tray-title">{t('Unplaced')}</div>
           {unplaced.length === 0 ? (
@@ -1640,17 +1737,33 @@ export function MapTab() {
             maxSlopeDeg={maxSlopeDeg}
             maxStepM={maxStepM}
           />
+          {/* Locations are a VIEW too, and the one that can be IN THE WAY: a
+              footprint is drawn with an opaque picture, so ground and relief
+              points underneath it are neither visible nor grabbable (finding
+              6). Switching the layer off is the way to them; it changes
+              nothing about the world, and nothing is placed or moved while it
+              is off (the layer takes no pointer events at all). */}
+          <label className="ga-map-toolbar-check"
+            title={t('Draw the placed locations. Switch them off to reach ground and relief points that lie under a building.')}>
+            <input type="checkbox" checked={locsOn}
+              onChange={(e) => toggleLocs(e.target.checked)} />
+            📍 {t('Locations')}
+          </label>
           {/* Roofs are a VIEW, so the switch stays reachable in every mode —
               painting ground along a building's real outline is exactly when
-              it is wanted. */}
+              it is wanted. With the locations off there is nothing to draw a
+              roof into, so the switch says so instead of doing nothing. */}
           <label className="ga-map-toolbar-check"
-            title={roofsZoomedOut
-              ? t('Zoom in to at least {n} px per metre to see the roofs')
-                .replace('{n}', String(ROOF_MIN_PX_PER_M))
-              : t('Show each building model from above inside its footprint. Switch off and on again to refresh the pictures.')}>
-            <input type="checkbox" checked={roofOn} onChange={toggleRoofs} />
+            title={locsOn
+              ? (roofsZoomedOut
+                ? t('Zoom in to at least {n} px per metre to see the roofs')
+                  .replace('{n}', String(ROOF_MIN_PX_PER_M))
+                : t('Show each building model from above inside its footprint. Switch off and on again to refresh the pictures.'))
+              : t('Switch the locations back on to see the roofs')}>
+            <input type="checkbox" checked={roofOn} onChange={toggleRoofs}
+              disabled={!locsOn} />
             🏢 {t('Building roofs')}
-            {roofsZoomedOut ? ' ' + t('(zoom in)') : ''}
+            {roofsZoomedOut && locsOn ? ' ' + t('(zoom in)') : ''}
           </label>
           {mode === 'select' ? (
             <label className="ga-map-toolbar-check"
@@ -1701,27 +1814,9 @@ export function MapTab() {
             onPointerWorldMove={onWorldMove}
             cursor={ghost || mode !== 'select' ? 'crosshair' : undefined}
           >
-            <TerrainLayer
-              areas={terrain?.areas || []}
-              types={typeMap}
-              groundColor={groundColor}
-              editing={mode === 'edit-area'}
-              editable={selAreaEditable}
-              selectedId={selArea}
-              centerline={selStroke ? selStroke.points : null}
-              centerlineWidthM={selStroke ? selStroke.width_m : 0}
-              draft={draft}
-              draftCursor={draftCursor}
-              draftLine={paintingLine}
-              draftWidthM={strokeWidthM}
-              draftColor={typeColor(typeMap, paintKind)}
-              draftWillClose={draftWillClose}
-              onVertexMove={moveVertex}
-              onVertexDelete={deleteVertex}
-              onEdgeInsert={insertVertex}
-              scatterPreview={scatterOn}
-              footprints={scatterFootprints}
-            />
+            {/* In a ground mode only the unpainted wash goes here; the painted
+                areas and every overlay follow AFTER the placements. */}
+            <TerrainLayer {...terrainProps} part={groundMode ? 'ground' : 'all'} />
             {/* The relief, only in its own mode: terrain and heights are
                 different questions about the same ground, and two
                 half-transparent polygon stacks on top of each other stop being
@@ -1745,20 +1840,31 @@ export function MapTab() {
                 through: a terrain click has to reach the canvas, which is
                 where the point-in-polygon test lives. The layer's own root
                 sets no pointer-events when nothing is armed, so it inherits
-                this. */}
-            <g pointerEvents={mode === 'select' ? undefined : 'none'}>
-              <PlacementLayer
-                locations={placed}
-                selectedId={selId}
-                onSelect={setSelId}
-                onMove={(id, x, z) => { void commitMove(id, x, z) }}
-                snapM={snapOn ? SNAP_M : 0}
-                iconVer={iconVer}
-                roofUrl={roofUrl}
-                ghost={ghost}
-                ghostPt={ghostPt}
-              />
-            </g>
+                this. Switched off entirely it is not rendered at all — hidden
+                and inert are the same state, so nothing invisible can be
+                clicked, dragged or selected. */}
+            {locsOn ? (
+              <g pointerEvents={mode === 'select' ? undefined : 'none'}>
+                <PlacementLayer
+                  locations={placed}
+                  selectedId={selId}
+                  onSelect={setSelId}
+                  onMove={(id, x, z) => { void commitMove(id, x, z) }}
+                  snapM={snapOn ? SNAP_M : 0}
+                  iconVer={iconVer}
+                  roofUrl={roofUrl}
+                  ghost={ghost}
+                  ghostPt={ghostPt}
+                />
+              </g>
+            ) : null}
+            {/* The painted ground, on top of the placements while it is being
+                edited — see `groundMode`. The overlays it carries (selection
+                outline, centre line, handles, draft) come last inside it, so
+                nothing on this canvas covers what the hand is working on. */}
+            {groundMode ? (
+              <TerrainLayer {...terrainProps} part="paint" />
+            ) : null}
           </MapCanvas>
 
           {selectedArea ? (
