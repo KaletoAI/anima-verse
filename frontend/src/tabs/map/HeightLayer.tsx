@@ -34,6 +34,13 @@ const COL_SELECTED = '#58a6ff'
 const COL_DRAFT = '#3fb950'
 const COL_WARN = '#d29922'
 
+/** Which way the ground goes, as a colour. Exported because the tray list says
+ *  the same thing about the same area, and two tables of colours for one
+ *  meaning drift apart. */
+export function heightColor(m: number): string {
+  return m < 0 ? COL_HOLLOW : COL_HILL
+}
+
 /** Light enough that the painted ground and the metre grid read through it —
  *  a height area says something ABOUT ground that stays visible. */
 const FILL_OPACITY = 0.22
@@ -94,7 +101,7 @@ export function HeightLayer({
       <g pointerEvents="none">
         {areas.map((a) => {
           if (a.polygon.length < 3) return null
-          const color = a.height_m < 0 ? COL_HOLLOW : COL_HILL
+          const color = heightColor(a.height_m)
           const isSel = a.id === selectedId
           const c = centroid(a.polygon)
           const cp = worldToScreen(c[0], c[1], view, w, h)

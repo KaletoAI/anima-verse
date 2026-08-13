@@ -4,10 +4,17 @@
  * all state live in `MapTab`, these components only decide what is armed,
  * disabled or shown.
  *
- * The three modes are exclusive because their clicks mean three different
- * things — select a location, drop a vertex, pick an area. A single "click on
- * the map" that guesses from context would be exactly the kind of hidden
- * modality the plan editor already learned to avoid.
+ * The modes are exclusive because their clicks mean different things — select
+ * a location, drop a vertex, pick an area. A single "click on the map" that
+ * guesses from context would be exactly the kind of hidden modality the plan
+ * editor already learned to avoid.
+ *
+ * The user picks them in TWO steps (user finding 2026-08-13): WHAT is being
+ * edited (`MapPrimary`: Location / Terrain / Heights), and — under Terrain and
+ * Heights, with the same two words in both — WHETHER a click draws a new shape
+ * or picks an existing one (`MapSub`: New / Select). Painting and reshaping
+ * ground are one subject, not two peers of "Locations", and the pair of
+ * gestures is the same question in both subjects.
  *
  * The limits below are the SERVER's (`app/models/terrain.py`), mirrored so a
  * refusal arrives as a sentence in the toolbar instead of a 400 after the
@@ -17,7 +24,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { PropRef } from '../../lib/refs'
-import { fmtHeight } from './HeightLayer'
+import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, tooSteep } from './heightMath'
 import { typeColor } from './TerrainLayer'
 import type {
@@ -28,8 +35,28 @@ import type {
  * What a click on the map does. `select` is the location editor of Task 3;
  * `heights` edits the world RELIEF (§ A16) and has a sub-tool of its own
  * (`HeightTool`), the way `paint` has a shape.
+ *
+ * This stays the ONE state the canvas, the layer order and the hit tests read.
+ * The two-step toolbar is a view of it: `paint` and `edit-area` are the two
+ * halves of the Terrain subject, and `heights` splits along `HeightTool`
+ * instead. Nothing about a click changed when the buttons were regrouped.
  */
 export type TerrainMode = 'select' | 'paint' | 'edit-area' | 'heights'
+
+/** WHAT the toolbar is editing — the primary switch. */
+export type MapPrimary = 'location' | 'terrain' | 'heights'
+
+/** WHETHER a click draws a new shape or picks an existing one. The dependent
+ *  switch of Terrain and Heights, worded identically in both. */
+export type MapSub = 'new' | 'select'
+
+/** The subject a canvas mode belongs to. The toolbar, the tray lists and the
+ *  layer order all ask this question, so it is answered in one place. */
+export function primaryOf(mode: TerrainMode): MapPrimary {
+  if (mode === 'heights') return 'heights'
+  if (mode === 'select') return 'location'
+  return 'terrain'
+}
 
 /**
  * What a click means inside the heights mode: pick an existing height area, or
@@ -377,7 +404,12 @@ function TypeChip({ type, armed, onPick }: {
 
 export interface TerrainToolbarProps {
   mode: TerrainMode
-  onMode: (m: TerrainMode) => void
+  /** The primary switch. `MapTab` maps a subject back onto a canvas mode — it
+   *  is the one that knows which half of Terrain the user was last in. */
+  onPrimary: (p: MapPrimary) => void
+  /** The dependent switch of Terrain and Heights, and where it stands. */
+  sub: MapSub
+  onSub: (s: MapSub) => void
   /** The effective catalog, already sorted by the server. */
   types: TerrainType[]
   /** The armed kind; empty until one is picked. */
@@ -393,20 +425,13 @@ export interface TerrainToolbarProps {
   onCloseDraft: () => void
   onDiscardDraft: () => void
   areaCount: number
-  /** The top-down preview of what the areas grow — the SAME points the 3D
-   *  client plants, drawn as dots (finding B17). A view switch, so it stays
-   *  reachable in every mode. */
-  scatterPreview: boolean
-  onScatterPreview: (on: boolean) => void
   /** Open the type manager. It sits IN the palette because that is where the
    *  vocabulary is missing something — and it is the only surface that can
    *  answer "there is no kind for this" with anything but a shrug. */
   onManageTypes: () => void
-  /** The heights mode (§ A16): its sub-tool, the two numbers the NEXT drawn
-   *  area gets, how many height areas there are, and the walk limit the
-   *  steepness warning is measured against. */
-  heightTool: HeightTool
-  onHeightTool: (tool: HeightTool) => void
+  /** The heights mode (§ A16): the two numbers the NEXT drawn area gets, how
+   *  many height areas there are, and the walk limit the steepness warning is
+   *  measured against. Which gesture is armed is the shared `sub` switch. */
   heightM: number
   onHeightM: (m: number) => void
   falloffM: number
@@ -422,23 +447,34 @@ export interface TerrainToolbarProps {
 }
 
 export function TerrainToolbar({
-  mode, onMode, types, paintKind, onPaintKind, shape, onShape, widthM, onWidth,
-  draftLen, onCloseDraft, onDiscardDraft, areaCount, scatterPreview,
-  onScatterPreview, onManageTypes, typesError, heightTool, onHeightTool,
+  mode, onPrimary, sub, onSub, types, paintKind, onPaintKind, shape, onShape,
+  widthM, onWidth, draftLen, onCloseDraft, onDiscardDraft, areaCount,
+  onManageTypes, typesError,
   heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
   maxStepM,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const isLine = shape === 'line'
-  const drawingHeights = mode === 'heights' && heightTool === 'draw'
+  const primary = primaryOf(mode)
+  const drawingHeights = primary === 'heights' && sub === 'new'
   const needFalloff = minFalloffFor(heightM, maxSlopeDeg, maxStepM)
   const nextTooSteep = tooSteep(heightM, falloffM, maxSlopeDeg, maxStepM)
-  const btn = (m: TerrainMode, icon: string, label: string, title: string) => (
+  const btn = (p: MapPrimary, icon: string, label: string, title: string) => (
     <button
       type="button"
-      className={'ga-btn ga-btn-sm' + (mode === m ? ' ga-btn-primary' : '')}
+      className={'ga-btn ga-btn-sm' + (primary === p ? ' ga-btn-primary' : '')}
       title={title}
-      onClick={() => onMode(m)}
+      onClick={() => onPrimary(p)}
+    >
+      {icon} {label}
+    </button>
+  )
+  const subBtn = (s: MapSub, icon: string, label: string, title: string) => (
+    <button
+      type="button"
+      className={'ga-btn ga-btn-sm' + (sub === s ? ' ga-btn-primary' : '')}
+      title={title}
+      onClick={() => onSub(s)}
     >
       {icon} {label}
     </button>
@@ -455,27 +491,38 @@ export function TerrainToolbar({
   )
   return (
     <>
+      {/* WHAT is being edited. Three subjects, not four tools: drawing ground
+          and reshaping it are the same subject, and separating them here made
+          "Paint" and "Edit terrain" look like peers of "Locations". */}
       <span className="ga-terrain-modes">
-        {btn('select', '⬚', t('Locations'),
+        {btn('location', '⬚', t('Location'),
           t('Place, move and turn locations'))}
-        {btn('paint', '🖌', t('Paint'),
-          t('Draw terrain: an area from its outline, or a line with a width'))}
-        {btn('edit-area', '✎', t('Edit terrain'),
-          t('Click an area to select it, then drag its points'))}
+        {btn('terrain', '🖌', t('Terrain'),
+          t('Paint the ground: draw new areas, or select one and reshape it'))}
         {btn('heights', '⛰', t('Heights'),
-          t('Shape the ground: draw areas that stand higher or lower than the flat world'))}
+          t('Shape the ground: areas that stand higher or lower than the flat world'))}
       </span>
+      {/* …and WHETHER a click draws or picks. The same two words under both
+          subjects: it is the same question, and two vocabularies for it were
+          the reason the heights sub-tools read as something else entirely. */}
+      {primary === 'location' ? null : (
+        <span className="ga-terrain-modes">
+          {/* Not the pentagon of the shape buttons next to it: "New" is the
+              gesture, "Area/Line" is HOW it draws, and one icon for two
+              questions makes them look like the same switch. */}
+          {subBtn('new', '✚', t('New'), primary === 'heights'
+            ? t('Click the outline of a new height area; click the first point again to close it')
+            : t('Draw terrain: an area from its outline, or a line with a width'))}
+          {subBtn('select', '✋', t('Select'), primary === 'heights'
+            ? t('Click a height area to select it, then drag its points')
+            : t('Click an area to select it, then drag its points'))}
+        </span>
+      )}
       <span className="ga-map-toolbar-info">
         {mode === 'heights'
           ? t('{n} height areas').replace('{n}', String(heightCount))
           : t('{n} areas').replace('{n}', String(areaCount))}
       </span>
-      <label className="ga-map-toolbar-check"
-        title={t('Show what the areas grow, as dots — exactly the points the 3D world plants (footprints of placed locations stay clear).')}>
-        <input type="checkbox" checked={scatterPreview}
-          onChange={(e) => onScatterPreview(e.target.checked)} />
-        🌲 {t('Scatter preview')}
-      </label>
 
       {mode === 'paint' ? (
         <>
@@ -559,22 +606,6 @@ export function TerrainToolbar({
 
       {mode === 'heights' ? (
         <>
-          {/* WHAT a click means here — picking an existing shape and drawing a
-              new one are different gestures, so they are different buttons. */}
-          <span className="ga-terrain-modes">
-            <button type="button"
-              className={'ga-btn ga-btn-sm' + (heightTool === 'select' ? ' ga-btn-primary' : '')}
-              title={t('Click a height area to select it, then drag its points')}
-              onClick={() => onHeightTool('select')}>
-              ✋ {t('Select')}
-            </button>
-            <button type="button"
-              className={'ga-btn ga-btn-sm' + (heightTool === 'draw' ? ' ga-btn-primary' : '')}
-              title={t('Click the outline of a new height area; click the first point again to close it')}
-              onClick={() => onHeightTool('draw')}>
-              ⬟ {t('Draw')}
-            </button>
-          </span>
           {drawingHeights ? (
             <>
               <HeightNum
@@ -919,6 +950,149 @@ export function TerrainAreaList({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+export interface HeightAreaListProps {
+  /** The height areas to offer, newest first — filtering (what is on screen)
+   *  and ordering are the caller's, exactly as for `TerrainAreaList`. */
+  areas: HeightArea[]
+  selectedId: string
+  onSelect: (id: string) => void
+  /** The two walk limits, so a ramp nobody can walk up is marked in the list
+   *  as well as on the map (§ A1.3). */
+  maxSlopeDeg: number
+  maxStepM: number
+}
+
+/**
+ * The height areas in view, as a list — the same second way in the painted
+ * areas have.
+ *
+ * A relief area has no name, so the row says what an author actually tells two
+ * of them apart by: which way the ground goes (colour and sign), how far, and
+ * how wide the ramp is. Overlapping relief is as unreachable by clicking as
+ * overlapping terrain — the canvas can only answer with one polygon — and this
+ * is the way to the one underneath.
+ */
+export function HeightAreaList({
+  areas, selectedId, onSelect, maxSlopeDeg, maxStepM,
+}: HeightAreaListProps) {
+  const { t } = useI18n()
+  return (
+    <div className="ga-map-tray-section">
+      <div className="ga-map-tray-title">{t('Height areas')}</div>
+      {areas.length === 0 ? (
+        <div className="ga-map-tray-empty">{t('No height areas in view')}</div>
+      ) : (
+        <div className="ga-map-tray-items ga-map-tray-areas">
+          {areas.map((a) => {
+            const steep = tooSteep(a.height_m, a.falloff_m, maxSlopeDeg, maxStepM)
+            return (
+              <button
+                key={a.id}
+                type="button"
+                className={'ga-map-tray-item'
+                  + (a.id === selectedId ? ' selected' : '')}
+                onClick={() => onSelect(a.id)}
+                title={steep
+                  ? t('Select this height area — its ramp is too steep for walkers')
+                  : t('Select this height area')}
+              >
+                <span className="ga-terrain-swatch"
+                  style={{ background: heightColor(a.height_m) }} />
+                <span className="ga-map-tray-name">
+                  {(steep ? '⚠ ' : '') + fmtHeight(a.height_m)}
+                </span>
+                <span className="ga-map-tray-stamp">
+                  {t('ramp {n} m').replace('{n}', String(a.falloff_m))}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export interface MapDisplayPanelProps {
+  /** Folded or not. Session state in `MapTab` like the switches themselves. */
+  open: boolean
+  onOpen: (open: boolean) => void
+  scatterPreview: boolean
+  onScatterPreview: (on: boolean) => void
+  locations: boolean
+  onLocations: (on: boolean) => void
+  roofs: boolean
+  /** The roof switch takes no argument — flipping it also drops the rendered
+   *  pictures, which is how they are refreshed (see `MapTab`). */
+  onRoofs: () => void
+  /** The zoom is under the budget gate: the switch says so instead of showing
+   *  empty squares that read as "there are no models". */
+  roofsZoomedOut: boolean
+  roofMinPxPerM: number
+}
+
+/**
+ * What the map DRAWS — three switches that change nothing about the world.
+ *
+ * They sit in the tray, not in the toolbar, and folded away by default: they
+ * are set once and then looked at rarely, while the toolbar next to them is
+ * where every gesture is armed. Mixing "what am I editing" with "what can I
+ * see" in one row was what made that row unreadable (user finding 2026-08-13).
+ */
+export function MapDisplayPanel({
+  open, onOpen, scatterPreview, onScatterPreview, locations, onLocations,
+  roofs, onRoofs, roofsZoomedOut, roofMinPxPerM,
+}: MapDisplayPanelProps) {
+  const { t } = useI18n()
+  return (
+    <div className="ga-map-tray-section">
+      <button type="button" className="ga-map-tray-toggle"
+        aria-expanded={open}
+        title={t('What the map draws — none of it changes the world')}
+        onClick={() => onOpen(!open)}>
+        <span className="ga-map-tray-title">{t('Display')}</span>
+        <span>{open ? '▾' : '▸'}</span>
+      </button>
+      {open ? (
+        <div className="ga-map-tray-checks">
+          <label className="ga-map-toolbar-check"
+            title={t('Show what the areas grow, as dots — exactly the points the 3D world plants (footprints of placed locations stay clear).')}>
+            <input type="checkbox" checked={scatterPreview}
+              onChange={(e) => onScatterPreview(e.target.checked)} />
+            🌲 {t('Scatter preview')}
+          </label>
+          {/* Locations are a VIEW too, and the one that can be IN THE WAY: a
+              footprint is drawn with an opaque picture, so ground and relief
+              points underneath it are neither visible nor grabbable (finding
+              6). Switching the layer off is the way to them; it changes
+              nothing about the world, and nothing is placed or moved while it
+              is off (the layer takes no pointer events at all). */}
+          <label className="ga-map-toolbar-check"
+            title={t('Draw the placed locations. Switch them off to reach ground and relief points that lie under a building.')}>
+            <input type="checkbox" checked={locations}
+              onChange={(e) => onLocations(e.target.checked)} />
+            📍 {t('Locations')}
+          </label>
+          {/* With the locations off there is nothing to draw a roof into, so
+              the switch says so instead of doing nothing. */}
+          <label className="ga-map-toolbar-check"
+            title={locations
+              ? (roofsZoomedOut
+                ? t('Zoom in to at least {n} px per metre to see the roofs')
+                  .replace('{n}', String(roofMinPxPerM))
+                : t('Show each building model from above inside its footprint. Switch off and on again to refresh the pictures.'))
+              : t('Switch the locations back on to see the roofs')}>
+            <input type="checkbox" checked={roofs} onChange={onRoofs}
+              disabled={!locations} />
+            🏢 {t('Building roofs')}
+            {roofsZoomedOut && locations ? ' ' + t('(zoom in)') : ''}
+          </label>
+        </div>
+      ) : null}
     </div>
   )
 }

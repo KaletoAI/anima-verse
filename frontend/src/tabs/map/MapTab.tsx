@@ -17,10 +17,12 @@ import {
 import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import { HeightLayer } from './HeightLayer'
 import {
-  FALLOFF_DEFAULT_M, HEIGHT_DEFAULT_M, HeightAreaChip, MAX_COORD, MAX_POINTS,
-  MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS, MIN_STROKE_POINTS,
-  STROKE_WIDTH_DEFAULT_M, TerrainAreaChip, TerrainAreaList, TerrainLayerHint,
-  TerrainToolbar, type HeightTool, type PaintShape, type TerrainMode,
+  FALLOFF_DEFAULT_M, HEIGHT_DEFAULT_M, HeightAreaChip, HeightAreaList,
+  MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
+  MIN_STROKE_POINTS, MapDisplayPanel, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip,
+  TerrainAreaList, TerrainLayerHint, TerrainToolbar, primaryOf,
+  type HeightTool, type MapPrimary, type MapSub, type PaintShape,
+  type TerrainMode,
 } from './TerrainTools'
 import { TerrainTypesDialog } from './TerrainTypesDialog'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
@@ -322,6 +324,10 @@ export function MapTab() {
    *  clicked through, and neither the terrain hit test nor a relief handle can
    *  do anything about that from below (finding 6). */
   const [locsOn, setLocsOn] = useState(true)
+  /** The tray's display panel, folded or not. Session state like the three
+   *  switches inside it — and folded to start with, because they are set once
+   *  and then read rarely. */
+  const [displayOpen, setDisplayOpen] = useState(false)
   const [layoutSigs, setLayoutSigs] = useState<Record<string, string>>({})
   const [roofs, setRoofs] = useState<Record<string, string | null>>({})
   const roofsRef = useRef<Record<string, string | null>>({})
@@ -539,10 +545,18 @@ export function MapTab() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  /** Which half of the Terrain subject the user was last in. The primary
+   *  switch has to send them back to it: a user who was reshaping an area and
+   *  looks at a location expects Terrain to be the way BACK to reshaping, not
+   *  a brush in the hand. Heights remembers the same way — through its own
+   *  `heightTool` state, which no mode change touches. */
+  const lastTerrainModeRef = useRef<TerrainMode>('paint')
+
   /** Switching modes drops everything the previous mode had armed — an
    *  abandoned draft or a selection whose chip is no longer reachable would
    *  keep acting on clicks that now mean something else. */
   const switchMode = useCallback((m: TerrainMode) => {
+    if (m === 'paint' || m === 'edit-area') lastTerrainModeRef.current = m
     setMode(m)
     setGhost(null)
     setGhostPt(null)
@@ -562,6 +576,24 @@ export function MapTab() {
     setDraftCursor(null)
     if (tool !== 'select') setSelHeight('')
   }, [])
+
+  /** The two-step toolbar, mapped onto the one canvas mode. The primary switch
+   *  picks the SUBJECT; Terrain lands on whichever of its two halves was last
+   *  used, Heights keeps its own sub-tool. Nothing here is a new state: both
+   *  handlers end in `switchMode`/`switchHeightTool`, so a click on the map
+   *  still means exactly what it meant before the buttons were regrouped. */
+  const switchPrimary = useCallback((p: MapPrimary) => {
+    if (p === 'location') switchMode('select')
+    else if (p === 'heights') switchMode('heights')
+    else switchMode(lastTerrainModeRef.current)
+  }, [switchMode])
+
+  /** The dependent switch: "New" draws, "Select" picks — in Terrain by mode,
+   *  in Heights by sub-tool, with the same two words on both. */
+  const switchSub = useCallback((s: MapSub) => {
+    if (modeRef.current === 'heights') switchHeightTool(s === 'new' ? 'draw' : 'select')
+    else switchMode(s === 'new' ? 'paint' : 'edit-area')
+  }, [switchHeightTool, switchMode])
 
   /** Switching the paint gesture drops the running draft for the same reason
    *  switching the mode does: an outline is not a centre line. Reading the one
@@ -896,6 +928,20 @@ export function MapTab() {
     const rect = visibleWorldRect(view, pane.w, pane.h)
     return all.filter((a) => areaInRect(a.polygon, rect)).reverse()
   }, [pane, terrain, view])
+
+  /**
+   * The height areas the tray lists — the same list, the same filter and the
+   * same reason as `visibleAreas`: relief areas overlap too, and the canvas
+   * hit test can only ever answer with one of them.
+   *
+   * Newest first, which is how they are drawn on top of each other, so the one
+   * whose numbers the eye reads is the one named first.
+   */
+  const visibleHeights = useMemo(() => {
+    if (!pane.w || !pane.h) return []
+    const rect = visibleWorldRect(view, pane.w, pane.h)
+    return heightAreas.filter((a) => areaInRect(a.polygon, rect)).reverse()
+  }, [heightAreas, pane, view])
 
   /** Optimistic patch of one area, so an edited outline does not snap back to
    *  its old shape for the length of the round trip. */
@@ -1452,6 +1498,14 @@ export function MapTab() {
     setSelArea(id)
   }, [switchMode])
 
+  /** The same for the relief list: from the drawing gesture it switches to
+   *  Select, because that is where the chip and the handles live. Switching
+   *  the sub-tool drops the selection, so the id is set afterwards. */
+  const pickListedHeight = useCallback((id: string) => {
+    if (heightToolRef.current === 'draw') switchHeightTool('select')
+    setSelHeight(id)
+  }, [switchHeightTool])
+
   /** Arming a tray entry is a location gesture — it takes the canvas back to
    *  the location mode instead of leaving a ghost that the next click, meant
    *  for the ground, would place by accident. For the same reason it brings
@@ -1647,6 +1701,14 @@ export function MapTab() {
   // view that painting along a building's outline needs.
   const groundMode = mode === 'paint' || mode === 'edit-area'
 
+  // The two-step toolbar, derived from the one canvas mode: WHAT is being
+  // edited, and whether a click draws or picks. Nothing new is stored for it —
+  // see `switchPrimary`/`switchSub`.
+  const primary = primaryOf(mode)
+  const sub: MapSub = primary === 'heights'
+    ? (heightTool === 'draw' ? 'new' : 'select')
+    : (mode === 'paint' ? 'new' : 'select')
+
   /** Everything the terrain layer draws, in one place — it is rendered twice
    *  in the ground modes (ground below the locations, paint above them) and
    *  once everywhere else, and two copies of this list would drift. */
@@ -1698,36 +1760,62 @@ export function MapTab() {
   return (
     <div className="ga-map-layout">
       <aside className="ga-map-tray">
-        {/* First, and only while the ground is being edited: in those modes it
-            is the section the hand works with, and it is the only way to a
-            painted area that lies under another one. */}
-        {groundMode ? (
+        {/* The tray answers the SAME question the primary switch does: it
+            lists what the current subject can select, and nothing else. The
+            location trays under a brush were shelves nobody could reach with
+            the tool in hand (user finding 2026-08-13). */}
+        {primary === 'terrain' ? (
           <TerrainAreaList areas={visibleAreas} types={typeMap}
             selectedId={selArea} onSelect={pickListedArea} />
         ) : null}
-        <div className="ga-map-tray-section">
-          <div className="ga-map-tray-title">{t('Unplaced')}</div>
-          {unplaced.length === 0 ? (
-            <div className="ga-map-tray-empty">{t('None')}</div>
-          ) : (
-            <div className="ga-map-tray-items">
-              {unplaced.map((loc) => trayEntry(loc, 'place'))}
+        {primary === 'heights' ? (
+          <HeightAreaList areas={visibleHeights} selectedId={selHeight}
+            onSelect={pickListedHeight}
+            maxSlopeDeg={maxSlopeDeg} maxStepM={maxStepM} />
+        ) : null}
+        {primary === 'location' ? (
+          <>
+            <div className="ga-map-tray-section">
+              <div className="ga-map-tray-title">{t('Unplaced')}</div>
+              {unplaced.length === 0 ? (
+                <div className="ga-map-tray-empty">{t('None')}</div>
+              ) : (
+                <div className="ga-map-tray-items">
+                  {unplaced.map((loc) => trayEntry(loc, 'place'))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <div className="ga-map-tray-section">
-          <div className="ga-map-tray-title">{t('Templates')}</div>
-          {templates.length === 0 ? (
-            <div className="ga-map-tray-empty">{t('None')}</div>
-          ) : (
-            <div className="ga-map-tray-items">
-              {templates.map((loc) => trayEntry(loc, 'clone'))}
+            <div className="ga-map-tray-section">
+              <div className="ga-map-tray-title">{t('Templates')}</div>
+              {templates.length === 0 ? (
+                <div className="ga-map-tray-empty">{t('None')}</div>
+              ) : (
+                <div className="ga-map-tray-items">
+                  {templates.map((loc) => trayEntry(loc, 'clone'))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <div className="ga-map-tray-hint">
-          {t('Click an entry, then click the map to place it. Escape cancels.')}
-        </div>
+          </>
+        ) : null}
+        {/* What the map DRAWS — the switches that belong to no subject, so
+            they stay reachable in every one of them. */}
+        <MapDisplayPanel
+          open={displayOpen}
+          onOpen={setDisplayOpen}
+          scatterPreview={scatterOn}
+          onScatterPreview={setScatterOn}
+          locations={locsOn}
+          onLocations={toggleLocs}
+          roofs={roofOn}
+          onRoofs={toggleRoofs}
+          roofsZoomedOut={roofsZoomedOut}
+          roofMinPxPerM={ROOF_MIN_PX_PER_M}
+        />
+        {primary === 'location' ? (
+          <div className="ga-map-tray-hint">
+            {t('Click an entry, then click the map to place it. Escape cancels.')}
+          </div>
+        ) : null}
       </aside>
 
       <div className="ga-map-main">
@@ -1745,7 +1833,9 @@ export function MapTab() {
           </button>
           <TerrainToolbar
             mode={mode}
-            onMode={switchMode}
+            onPrimary={switchPrimary}
+            sub={sub}
+            onSub={switchSub}
             types={terrainTypes}
             paintKind={paintKind}
             onPaintKind={setPaintKind}
@@ -1757,12 +1847,8 @@ export function MapTab() {
             onCloseDraft={closeDraft}
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
             areaCount={terrain?.areas.length || 0}
-            scatterPreview={scatterOn}
-            onScatterPreview={setScatterOn}
             onManageTypes={() => setTypesOpen(true)}
             typesError={typesError}
-            heightTool={heightTool}
-            onHeightTool={switchHeightTool}
             heightM={newHeightM}
             onHeightM={setNewHeightM}
             falloffM={newFalloffM}
@@ -1771,34 +1857,10 @@ export function MapTab() {
             maxSlopeDeg={maxSlopeDeg}
             maxStepM={maxStepM}
           />
-          {/* Locations are a VIEW too, and the one that can be IN THE WAY: a
-              footprint is drawn with an opaque picture, so ground and relief
-              points underneath it are neither visible nor grabbable (finding
-              6). Switching the layer off is the way to them; it changes
-              nothing about the world, and nothing is placed or moved while it
-              is off (the layer takes no pointer events at all). */}
-          <label className="ga-map-toolbar-check"
-            title={t('Draw the placed locations. Switch them off to reach ground and relief points that lie under a building.')}>
-            <input type="checkbox" checked={locsOn}
-              onChange={(e) => toggleLocs(e.target.checked)} />
-            📍 {t('Locations')}
-          </label>
-          {/* Roofs are a VIEW, so the switch stays reachable in every mode —
-              painting ground along a building's real outline is exactly when
-              it is wanted. With the locations off there is nothing to draw a
-              roof into, so the switch says so instead of doing nothing. */}
-          <label className="ga-map-toolbar-check"
-            title={locsOn
-              ? (roofsZoomedOut
-                ? t('Zoom in to at least {n} px per metre to see the roofs')
-                  .replace('{n}', String(ROOF_MIN_PX_PER_M))
-                : t('Show each building model from above inside its footprint. Switch off and on again to refresh the pictures.'))
-              : t('Switch the locations back on to see the roofs')}>
-            <input type="checkbox" checked={roofOn} onChange={toggleRoofs}
-              disabled={!locsOn} />
-            🏢 {t('Building roofs')}
-            {roofsZoomedOut && locsOn ? ' ' + t('(zoom in)') : ''}
-          </label>
+          {/* Scatter preview, Locations and Building roofs are VIEWS — they
+              belong to no subject and changed nothing about the world, so they
+              sit in the tray's Display panel instead of between the switches
+              that arm a gesture (user finding 2026-08-13). */}
           {mode === 'select' ? (
             <label className="ga-map-toolbar-check"
               title={t('Placing and moving snap the centre onto a {n} m grid')

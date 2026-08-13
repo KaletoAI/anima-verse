@@ -1918,6 +1918,25 @@ html, * {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+/* The header of a foldable tray section: the title, and the chevron pushed to
+   the far edge. A bare button so the whole row is the hit target. */
+.ga-map-tray-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted, #8b949e);
+  cursor: pointer;
+  font-size: 11px;
+}
+.ga-map-tray-toggle:hover { color: var(--text, #c9d1d9); }
+.ga-map-tray-toggle .ga-map-tray-title { cursor: pointer; }
+/* The view switches, one per line — in the tray they have a column, not a
+   toolbar row, so no label wraps mid-word. */
+.ga-map-tray-checks { display: flex; flex-direction: column; gap: 6px; }
 .ga-map-tray-empty {
   font-size: 12px;
   color: var(--text-muted, #8b949e);
