@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
+import { animatablePool, missingClipKinds } from './clipCoverage';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 
@@ -56,6 +57,50 @@ interface LoadedModel {
   noClips: boolean;
   /** Stufe, mit der das Modell geladen wurde (Manifest-Modelle: full). */
   tier: FigureTier;
+  /** true = the shared clip library reached this skeleton (at least one
+   *  library clip survived `adaptExternalClips`). false also when no library
+   *  was loaded at all — see `animatablePool`. */
+  libraryFits: boolean;
+}
+
+/** What fitting the clip library to ONE rig produced. */
+interface LibraryFit {
+  /** adapted clips for kinds the model does not carry itself */
+  extra: THREE.AnimationClip[];
+  /** true = the library reached this skeleton at all */
+  fits: boolean;
+}
+
+/** How many keyframe tracks a clip has to keep to be worth playing. Below
+ *  that, so few bones of the target were addressed that the result is a twitch
+ *  rather than a motion — the same bar in the adapt and the retarget path. */
+const MIN_CLIP_TRACKS = 8;
+
+/** A bone / track node name reduced to what is comparable across rigs: the
+ *  `mixamorig` prefix and any namespace colons are noise, case is not
+ *  significant. */
+function normBoneName(name: string): string {
+  return name.replace(/^mixamorig:?/i, '').replace(/:/g, '').toLowerCase();
+}
+
+/** How many of the bones the clips address exist on this skeleton — the count
+ *  that decides whether a clip survives `adaptExternalClips`, and the one
+ *  number that makes "no clip fits" diagnosable from the console. */
+function boneOverlap(clips: readonly THREE.AnimationClip[], target: THREE.Object3D): { matched: number; total: number } {
+  const bones = new Set<string>();
+  target.traverse((o) => {
+    if ((o as THREE.Bone).isBone) bones.add(normBoneName(o.name));
+  });
+  const nodes = new Set<string>();
+  for (const clip of clips) {
+    for (const track of clip.tracks) {
+      const dot = track.name.lastIndexOf('.');
+      if (dot > 0) nodes.add(normBoneName(track.name.slice(0, dot)));
+    }
+  }
+  let matched = 0;
+  for (const node of nodes) if (bones.has(node)) matched += 1;
+  return { matched, total: nodes.size };
 }
 
 /** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
@@ -254,7 +299,7 @@ function retargetClips(
     }
     action.stop();
     mixer.uncacheClip(clip);
-    if (tracks.length >= 8) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
+    if (tracks.length >= MIN_CLIP_TRACKS) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
   }
   return out;
 }
@@ -271,10 +316,9 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * dieselbe Mixamo-Bind-Pose verwenden.
  */
 function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D): THREE.AnimationClip[] {
-  const norm = (s: string) => s.replace(/^mixamorig:?/i, '').replace(/:/g, '').toLowerCase();
   const boneByKey = new Map<string, THREE.Bone>();
   target.traverse((o) => {
-    if ((o as THREE.Bone).isBone) boneByKey.set(norm(o.name), o as THREE.Bone);
+    if ((o as THREE.Bone).isBone) boneByKey.set(normBoneName(o.name), o as THREE.Bone);
   });
   if (!boneByKey.size) return [];
   const hips = [...boneByKey.entries()].find(([k]) => /hips$/.test(k))?.[1];
@@ -349,7 +393,7 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
       const dot = track.name.lastIndexOf('.');
       const node = track.name.slice(0, dot);
       const prop = track.name.slice(dot + 1);
-      const bone = boneByKey.get(norm(node));
+      const bone = boneByKey.get(normBoneName(node));
       if (!bone) continue;
       if (prop === 'quaternion') {
         if (bone === hips) {
@@ -382,7 +426,7 @@ function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D
         tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...vals]));
       }
     }
-    if (tracks.length >= 8) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
+    if (tracks.length >= MIN_CLIP_TRACKS) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
   }
   return out;
 }
@@ -513,7 +557,7 @@ export class FigureLibrary {
         // state until a rigged model exists; such figures glide without a
         // walk animation.
         console.info(`[figures] ${m.name}: rawHeight=${rawHeight.toFixed(3)} -> scale=${(height / rawHeight).toFixed(3)}, clips=${usable.length}, bones=${boneNames(template).size}`);
-        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly, noClips: !!m.noClips, tier: 'full' as FigureTier };
+        return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly, noClips: !!m.noClips, tier: 'full' as FigureTier, libraryFits: false };
       })
     );
     for (const r of results) {
@@ -559,12 +603,13 @@ export class FigureLibrary {
       // PER KIND, not all-or-nothing: a fallback rig that ships walk/idle/run
       // (Soldier, Xbot, Robot) keeps those and takes swim, yoga and the rest
       // of the library on top. Its own clips win for their own kinds.
-      const extra = this.libraryClipsFor(m.name, m.template, m.clips);
-      if (extra.length) {
-        const kinds = extra.map((c) => c.name).sort().join(', ');
-        console.info(`[figures] ${m.name}: ${extra.length} clip kinds added`
+      const fit = this.fitLibrary(m.name, m.template, m.clips);
+      m.libraryFits = fit.fits;
+      if (fit.extra.length) {
+        const kinds = fit.extra.map((c) => c.name).sort().join(', ');
+        console.info(`[figures] ${m.name}: ${fit.extra.length} clip kinds added`
           + ` from the library — ${kinds}`);
-        m.clips = [...m.clips, ...extra];
+        m.clips = [...m.clips, ...fit.extra];
       }
       if (m.clips.length) continue;
       // Neither its own clips nor a library that fits this skeleton: borrow
@@ -681,15 +726,37 @@ export class FigureLibrary {
    *
    * The KIND of a clip is its lowercased name — the same key `Figure` binds
    * its actions under, and the library sets `clip.name = kind` itself.
+   *
+   * Every kind the library offered and this rig still cannot play is NAMED in
+   * one console.warn, with the bone overlap behind it. Silence was the actual
+   * bug in the acceptance round of 2026-08-13: the fallback rig
+   * RobotExpressive has Blender bone names (Hips, Abdomen, UpperArm.L), the
+   * library is Mixamo-named, three bones match — every library clip fell under
+   * the track threshold and vanished without a word, so `swim` looked like a
+   * rule failure and was a skeleton mismatch.
    */
-  private libraryClipsFor(charName: string, template: THREE.Object3D,
-                          own: readonly THREE.AnimationClip[]
-  ): THREE.AnimationClip[] {
+  private fitLibrary(charName: string, template: THREE.Object3D,
+                     own: readonly THREE.AnimationClip[]
+  ): LibraryFit {
     const candidates = this.clipsFor(charName);
-    if (!candidates.length) return [];
+    if (!candidates.length) return { extra: [], fits: false };
+    const adapted = adaptExternalClips(candidates, template);
     const have = new Set(own.map((c) => c.name.toLowerCase()));
-    return adaptExternalClips(candidates, template)
-      .filter((c) => !have.has(c.name.toLowerCase()));
+    const missing = missingClipKinds(
+      candidates.map((c) => c.name),
+      [...have, ...adapted.map((c) => c.name)],
+    );
+    if (missing.length) {
+      const { matched, total } = boneOverlap(candidates, template);
+      console.warn(`[figures] ${charName}: ${missing.length} of ${candidates.length}`
+        + ` library clip kinds NOT bound — ${missing.join(', ')}`
+        + ` (${matched} of ${total} clip bones exist on this skeleton;`
+        + ` a clip needs ${MIN_CLIP_TRACKS} usable tracks to survive)`);
+    }
+    return {
+      extra: adapted.filter((c) => !have.has(c.name.toLowerCase())),
+      fits: adapted.length > 0,
+    };
   }
 
   /** Pick the clips for a character along its set chain:
@@ -808,6 +875,7 @@ export class FigureLibrary {
       name, template,
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
+      libraryFits: false,
     };
     // Clips along the character's set chain (female/male/animal/custom),
     // merged PER KIND: a clip embedded in the mesh wins for its own kind, the
@@ -815,8 +883,9 @@ export class FigureLibrary {
     // 2026-08-13 — a single embedded clip used to lock the whole library out).
     // "generic" rigs (own skeletons) stay clip-less -> procedural idle.
     if (info.rig !== 'generic' && boneNames(template).size) {
-      const extra = this.libraryClipsFor(name, template, model.clips);
-      if (extra.length) model.clips = [...model.clips, ...extra];
+      const fit = this.fitLibrary(name, template, model.clips);
+      model.libraryFits = fit.fits;
+      if (fit.extra.length) model.clips = [...model.clips, ...fit.extra];
     }
     return model;
   }
@@ -832,7 +901,12 @@ export class FigureLibrary {
     const assigned = this.assignments[charName] ?? charName;
     let model = this.models.find((m) => m.name === assigned);
     if (!model) {
-      const pool = this.models.filter((m) => !m.assignOnly);
+      // Only rigs the clip library reaches are drawn at random (see
+      // `animatablePool`): a Blender-named fallback rig can play its own
+      // handful of embedded kinds and NOTHING else, so a character on water
+      // would walk across the lake instead of swimming. An explicit
+      // `assignments` entry still wins above — that is a deliberate choice.
+      const pool = animatablePool(this.models.filter((m) => !m.assignOnly));
       if (!pool.length) return null;
       const rnd = seededRandom('model:' + charName);
       model = pool[Math.floor(rnd() * pool.length)];
