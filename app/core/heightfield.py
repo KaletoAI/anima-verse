@@ -26,8 +26,11 @@ shift every height in the world whenever someone painted at its border — the
 one failure mode that cannot be seen in a screenshot and ruins every stored
 comparison (inventory finding 5).
 
-**NO PLATEAU PASS HERE.** Flattening the ground under a location's footprint
-is E8 task 4; this module rasters exactly what was authored and nothing else.
+**THE PLATEAU PASS RUNS AFTER THE AREAS** (E8 task 4, :func:`level_plateaus`).
+The authored areas are rastered first, purely; then every placed location's
+footprint is pinned flat to the ground under its own centre. That order is the
+whole trick — the plateau's height is read from the authored landscape BEFORE
+any of it is levelled, so a hill keeps carrying the place standing on it.
 """
 
 import math
@@ -214,8 +217,113 @@ def _axis_points(low: float, high: float, step: float) -> int:
     return int(math.ceil((high + step - origin) / step)) + 1
 
 
+def _footprint_box(fp: Tuple[float, float, float, float]
+                   ) -> Tuple[float, float, float, float]:
+    """Axis-aligned box around a rotated footprint square (cx, cz, w, yaw)."""
+    from app.core.world_geometry import footprint_corners
+    cx, cz, width, yaw = fp
+    corners = footprint_corners(cx, cz, width, yaw)
+    xs = [p[0] for p in corners]
+    zs = [p[1] for p in corners]
+    return (min(xs), min(zs), max(xs), max(zs))
+
+
+def _union(boxes: Sequence[Tuple[float, float, float, float]]
+           ) -> Tuple[float, float, float, float]:
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _overlaps(a: Tuple[float, float, float, float],
+              b: Tuple[float, float, float, float]) -> bool:
+    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+
+def _grown(box: Tuple[float, float, float, float],
+           margin: float) -> Tuple[float, float, float, float]:
+    return (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
+
+
+def level_plateaus(origin_x: float, origin_z: float, step: float,
+                   heights: List[List[float]],
+                   footprints: Sequence[Tuple[float, float, float, float]]
+                   ) -> None:
+    """Flatten the ground under every placed footprint — IN PLACE (E8 task 4).
+
+    A location is a building site, not a tent: it is put ON the world, and the
+    ground under it is levelled to carry it. Without this pass a place standing
+    on a slope has its own floor cutting through the hill on one side and
+    hovering over it on the other, and the walking rule (§ A15 no. 8) refuses
+    every step across the seam.
+
+    THE HEIGHT OF THE PLATEAU is the authored ground at the footprint's CENTRE,
+    ``ground_y(pos_x, pos_z)`` — read from the raster BEFORE anything is
+    levelled, which is why every ``h0`` below is sampled first and only then
+    written. Sampling as we go would let the first plateau raise the ground the
+    second one then reads, so two neighbouring places would answer differently
+    depending on the order the DB returned them.
+
+    THE PINNED REGION IS THE FOOTPRINT DILATED BY ONE CELL — the flat-hull
+    pattern of the scene relief (``scatter_curves.terrain_grid``), for the same
+    reason it exists there: with only the points INSIDE pinned, every border
+    cell still interpolates the outside heights back IN, and the ground would
+    rise through the floor of the place at its own edge. With the ring, every
+    cell that touches the footprint has four pinned corners, the plateau is
+    exactly flat across the whole place, and THE RAMP is the one cell between
+    the ring and the untouched landscape.
+
+    A ramp of one cell is what makes the plateau reachable at all: over 4 m a
+    walker climbs ``tan(40°)·4 = 3.36 m`` at the default limit. A place whose
+    centre sits more than that below or above the ground at its rim keeps a
+    rim nobody can cross — legal and sometimes intended (a plateau entered
+    through an opening, which the gate exempts), and the authoring warning in
+    the height tool is about exactly this number.
+
+    OVERLAPS: THE SMALLEST FOOTPRINT WINS, the rule ``location_at_point`` and
+    ``relief.ground_lift_at`` already resolve nesting by — the hut on the
+    village square is the more specific answer about the square metre it
+    stands on. It is implemented by levelling the widest first, so the
+    narrowest writes last; equal widths keep the caller's (stable) order,
+    where the later one wins.
+    """
+    rows = len(heights)
+    cols = len(heights[0]) if rows else 0
+    if rows < 2 or cols < 2 or step <= 0 or not footprints:
+        return
+    from app.core.world_geometry import footprint_distance
+    field = {"origin_x": origin_x, "origin_z": origin_z, "step_m": step,
+             "rows": rows, "cols": cols, "heights": heights}
+    # Widest first — see the docstring: the last write wins, so the smallest
+    # footprint has the final say. ``sorted`` is stable, so equal widths keep
+    # the order they arrived in.
+    ordered = sorted(footprints, key=lambda fp: -float(fp[2]))
+    # EVERY plateau height first, from the untouched raster.
+    levels = [sample_height(field, fp[0], fp[1]) for fp in ordered]
+    for (cx, cz, width, yaw), h0 in zip(ordered, levels):
+        # Index window: the whole rotated square (half-diagonal) plus the
+        # dilation ring, so no pinned point is missed and none of the world
+        # outside it is visited.
+        reach = width * 0.7071067811865476 + step
+        i0 = max(0, int(math.floor((cx - reach - origin_x) / step)))
+        i1 = min(cols - 1, int(math.ceil((cx + reach - origin_x) / step)))
+        j0 = max(0, int(math.floor((cz - reach - origin_z) / step)))
+        j1 = min(rows - 1, int(math.ceil((cz + reach - origin_z) / step)))
+        for j in range(j0, j1 + 1):
+            pz = origin_z + j * step
+            row = heights[j]
+            for i in range(i0, i1 + 1):
+                # ``footprint_distance`` is 0 anywhere INSIDE the square, so
+                # this one test is "inside or within one cell of it" — the
+                # exact distance to the rotated rectangle, not a bounding box.
+                if footprint_distance(origin_x + i * step, pz,
+                                      cx, cz, width, yaw) <= step + 1e-9:
+                    row[i] = h0
+
+
 def rasterize(areas: Sequence[Dict[str, Any]],
-              step_m: float = 0.0) -> Dict[str, Any]:
+              step_m: float = 0.0,
+              footprints: Sequence[Tuple[float, float, float, float]] = ()
+              ) -> Dict[str, Any]:
     """The authored areas as a grid — pure, deterministic, no DB.
 
     Per support point the areas that COVER it are compared and the STRONGEST
@@ -229,6 +337,12 @@ def rasterize(areas: Sequence[Dict[str, Any]],
 
     A point no area covers is 0.0 — the unpainted world is flat, and there is
     no "default height" to configure.
+
+    ``footprints`` are the placed locations ``(cx, cz, width_m, yaw_deg)``; the
+    PLATEAU PASS (:func:`level_plateaus`) runs over the finished area raster.
+    A world without a single height area stays empty even with a hundred
+    places on it: every plateau there would be levelled to 0 on ground that is
+    already 0, and a grid of zeros is a payload nobody needs.
     """
     from app.models.heightfield import polygon_bounds
     usable = [a for a in (areas or []) if len(a.get("polygon") or []) >= 3]
@@ -242,12 +356,30 @@ def rasterize(areas: Sequence[Dict[str, Any]],
                 "step_m": step_m or DEFAULT_STEP_M,
                 "rows": 0, "cols": 0, "heights": []}
 
-    min_x = min(b[1][0] for b in boxes)
-    min_z = min(b[1][1] for b in boxes)
-    max_x = max(b[1][2] for b in boxes)
-    max_z = max(b[1][3] for b in boxes)
-    bounds = (min_x, min_z, max_x, max_z)
-    step = float(step_m) if step_m and step_m > 0 else _step_for(bounds)
+    area_bounds = _union([b[1] for b in boxes])
+    # THE GRID HAS TO COVER WHAT IT DESCRIBES. A footprint reaching out of the
+    # painted box is levelled too, so the grid grows to hold it plus its ramp
+    # ring — otherwise the plateau would be cut off at the border and the
+    # clamp outside the grid ("the flat world") would meet it as a cliff.
+    # Footprints that cannot touch any authored height are left out: outside
+    # every polygon the ground is 0, levelling 0 onto 0 changes nothing, and a
+    # single far-away hut must not stretch the grid across the world.
+    fp_boxes = [_footprint_box(fp) for fp in (footprints or ())
+                if fp and float(fp[2]) > 0]
+    step = float(step_m) if step_m and step_m > 0 else _step_for(area_bounds)
+    bounds = area_bounds
+    # The ring margin depends on the step and the step on the bounds, so the
+    # two are settled by iteration. The step only ever DOUBLES (`_step_for`)
+    # and is capped, so this reaches a fixed point in a couple of rounds.
+    for _round in range(6):
+        relevant = [box for box in fp_boxes
+                    if _overlaps(_grown(box, step), area_bounds)]
+        bounds = _union([area_bounds] + [_grown(b, step) for b in relevant])
+        nxt = float(step_m) if step_m and step_m > 0 else _step_for(bounds)
+        if nxt == step:
+            break
+        step = nxt
+    min_x, min_z, max_x, max_z = bounds
     origin_x = _axis_origin(min_x, step)
     origin_z = _axis_origin(min_z, step)
     cols = _axis_points(min_x, max_x, step)
@@ -277,6 +409,9 @@ def rasterize(areas: Sequence[Dict[str, Any]],
                 if abs(value) > abs(current) or (
                         abs(value) == abs(current) and value > current):
                     row[i] = value
+    # …and only now the places standing on that landscape (E8 task 4).
+    level_plateaus(origin_x, origin_z, step, heights,
+                   [fp for fp in (footprints or ()) if fp and float(fp[2]) > 0])
     return {"origin_x": round(origin_x, 3), "origin_z": round(origin_z, 3),
             "step_m": step, "rows": rows, "cols": cols,
             "heights": [[round(v, 3) for v in row] for row in heights]}
@@ -336,7 +471,8 @@ def get_field() -> Dict[str, Any]:
     if stored is not None and stored.get("sig") == sig:
         _CACHE = (generation, stored)
         return stored
-    field = rasterize(store.list_height_areas())
+    field = rasterize(store.list_height_areas(),
+                      footprints=store.placed_footprints())
     field["sig"] = sig
     try:
         store.store_grid(field)
@@ -344,6 +480,22 @@ def get_field() -> Dict[str, Any]:
         logger.warning("Could not store the rastered heightfield: %s", exc)
     _CACHE = (generation, field)
     return field
+
+
+def cached_sig() -> Optional[str]:
+    """Signature of the field this process holds, or None when it holds none.
+
+    The ONE cheap way to ask "is what I have still the world?": it costs a
+    dict lookup, while the answer it is compared against (``height_sig``) costs
+    a full read of the areas and the placed locations. That asymmetry is the
+    point — the check runs on WRITE paths (a location moved, and a location
+    write happens for every rename and every room edit too), where paying for
+    the question once is cheap and re-rastering blindly is not.
+    """
+    cached = _CACHE
+    if cached is None or cached[0] != _GENERATION:
+        return None
+    return cached[1].get("sig")
 
 
 def world_height(x: float, z: float) -> float:

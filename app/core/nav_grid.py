@@ -15,10 +15,13 @@ containing the start or the goal are exempt, otherwise nobody could ever
 leave or enter a building — or when the terrain AT ITS CENTRE is impassable
 AND that centre lies out in the WILDERNESS (footprint wins, decision
 2026-08-13: painted ground judges the world between the places, never the
-inside of one — see :meth:`_Search.blocked`). A* walks the 8 neighbours
-(no corner-cutting: a diagonal needs both orthogonals free), paying ``distance / speed_factor`` for every step,
-and the resulting cell chain is pulled straight again by a line-of-sight
-pass so the journey follows the terrain instead of the raster.
+inside of one — see :meth:`_Search.blocked`), or when the GROUND UNDER IT IS
+TOO STEEP to stand on (E8 task 4, the walking rule of § A15 no. 8 measured as
+the slope at the cell centre — :meth:`_Search.too_steep`). A* walks the 8
+neighbours (no corner-cutting: a diagonal needs both orthogonals free), paying
+``distance / speed_factor`` for every step PLUS ``SLOPE_COST_S_PER_M`` per
+metre of climb, and the resulting cell chain is pulled straight again by a
+line-of-sight pass so the journey follows the terrain instead of the raster.
 
 Performance discipline (E1 review lesson): the terrain areas, the type
 catalog and the placed footprints are read ONCE into a :class:`NavContext`
@@ -71,6 +74,24 @@ COST_STEP_M = NAV_CELL_M
 # impassable ground — neither may produce an infinite travel time.
 MIN_SPEED_FACTOR = 0.1
 
+# Extra game-seconds a metre of CLIMB costs, up or down, on top of the
+# horizontal metres (E8 task 4). Four is the honest end of "a metre up is
+# worth several metres along" and it is deliberately a PENALTY only: A*'s
+# heuristic knows nothing about the relief, so any cost that could be
+# NEGATIVE would make it overestimate and the route stop being optimal.
+# Downhill pays too — it is a rope-length argument, not a physiological one:
+# the route has to stay symmetric or the way back would find another way.
+SLOPE_COST_S_PER_M = 4.0
+
+# How close to an authored opening a cell centre may sit and still be exempt
+# from the steepness rule (metres): the 1.5 m crossing tolerance of
+# ``POST /play/pos`` plus one cell, because a cell centre may be that far from
+# the point a walker would actually cross at. An opening is BY DEFINITION the
+# way in — a place on its own plateau has its step exactly there, and refusing
+# it would lock every such location behind its own door for the router while
+# an avatar walks through it (§ A15 no. 8, the ramp-end exemption).
+OPENING_EXEMPT_M = 1.5 + NAV_CELL_M
+
 # The pace INSIDE a placed footprint (decision 2026-08-13, "footprint wins"):
 # neutral, 1 m per game-second at speed 1. The place replaces the ground under
 # it, so the ground's factor — fast path or treacherous rock alike — has
@@ -106,6 +127,19 @@ class NavContext:
     # Best speed factor of the catalog (>= 1.0) — the A* heuristic divides
     # by it so it stays admissible on fast terrain.
     best_factor: float = 1.0
+    # The world relief (E8), prefetched like everything else here: the SAME
+    # levelled grid ``ground_y`` answers from, so a route judges the ground
+    # the walker will be judged against. ``None`` (or an empty grid) is the
+    # flat world, where every height below is 0 and the whole slope machinery
+    # is inert.
+    height_field: Optional[Dict[str, Any]] = None
+    # World points of every authored boundary opening — the ramp ends the
+    # steepness rule is not allowed to seal (see ``OPENING_EXEMPT_M``).
+    openings: Tuple[Point, ...] = ()
+    # The two walking limits, read ONCE (they are world settings, i.e. config
+    # — the same treatment ``default_kind`` gets).
+    max_step_m: float = 0.4
+    max_slope_deg: float = 40.0
     # Cell centre -> (passable, speed_factor), filled lazily. Terrain only;
     # footprints are per route (their exemption depends on the endpoints).
     _terrain_cache: Dict[Cell, Tuple[bool, float]] = field(
@@ -124,6 +158,35 @@ class NavContext:
             hit = self.terrain_at(*cell_centre(cell))
             self._terrain_cache[cell] = hit
         return hit
+
+    @property
+    def has_relief(self) -> bool:
+        """Does this world have a relief at all? A flat world skips every
+        height sample — the gate stays exactly as cheap as it was."""
+        return bool(self.height_field
+                    and len(self.height_field.get("heights") or []) >= 2)
+
+    def height_at(self, x: float, z: float) -> float:
+        """Ground height at a world point, metres — the WORLD relief.
+
+        Not ``relief.ground_lift_at``: a scene's own field is not asked here.
+        Under a footprint the world grid is LEVELLED FLAT (the plateau pass of
+        E8 task 4), so the ground a route crosses inside a place is the
+        plateau, and what a location builds on top of its own floor is its
+        business — the same split "footprint wins" already draws for
+        passability and pace.
+        """
+        if not self.has_relief:
+            return 0.0
+        from app.core.heightfield import sample_height
+        return sample_height(self.height_field, x, z)
+
+    def near_opening(self, x: float, z: float) -> bool:
+        """Is that point at an authored opening (``OPENING_EXEMPT_M``)?"""
+        for ox, oz in self.openings:
+            if math.hypot(ox - x, oz - z) <= OPENING_EXEMPT_M:
+                return True
+        return False
 
 
 _CACHE: Optional[Tuple[Tuple[str, str], NavContext]] = None
@@ -151,14 +214,21 @@ def build_nav_context() -> NavContext:
     what a cell is — a hill raised after the context was built must not be
     routed over as if it were still flat. Checking it costs one areas read and
     one world read; building it adds the catalog on top.
+
+    Since E8 task 4 the two halves of that key OVERLAP on purpose:
+    ``height_sig`` covers the placements too, because a moved location moves
+    the plateau levelled under it and therefore the relief itself. Either half
+    alone would catch a move; neither alone would catch both a move and a
+    painted hill.
     """
     global _CACHE
     from app.models.heightfield import height_sig
     from app.models.terrain import list_areas, terrain_sig
     from app.models.world import list_locations
 
+    locations = list_locations()
     footprints: List[Tuple[str, float, float, float, float]] = []
-    for loc in list_locations():
+    for loc in locations:
         fp = placed_footprint(loc)
         if fp is None:
             continue
@@ -170,6 +240,9 @@ def build_nav_context() -> NavContext:
     if cached is not None and cached[0] == key:
         return cached[1]
 
+    from app.core.boundary_entry import opening_world_points
+    from app.core.heightfield import get_field
+    from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     areas = list_areas()
@@ -180,9 +253,17 @@ def build_nav_context() -> NavContext:
         if entry.get("passable", True):
             best = max(best, float(entry.get("speed_factor", 1.0) or 1.0))
 
+    openings: List[Point] = []
+    for loc in locations:
+        for _edge, point in opening_world_points(loc):
+            openings.append((float(point[0]), float(point[1])))
+
     ctx = NavContext(areas=areas, catalog=catalog, footprints=footprints,
                      data_bounds=_data_bounds(areas, footprints), sig=key,
-                     default_kind=default_kind(), best_factor=best)
+                     default_kind=default_kind(), best_factor=best,
+                     height_field=get_field(), openings=tuple(openings),
+                     max_step_m=get_max_step_height_m(),
+                     max_slope_deg=get_max_slope_deg())
     _CACHE = (key, ctx)
     return ctx
 
@@ -278,6 +359,7 @@ class _Search:
         self.min_i, self.min_j = cell_of(min_x, min_z)
         self.max_i, self.max_j = cell_of(max_x, max_z)
         self._blocked: Dict[Cell, bool] = {}
+        self._steep: Dict[Cell, bool] = {}
 
     def in_bounds(self, cell: Cell) -> bool:
         return (self.min_i <= cell[0] <= self.max_i
@@ -335,15 +417,71 @@ class _Search:
                        for _lid, fcx, fcz, w, yaw in self.blocking):
                     hit = True
                 elif self.ctx.cell_terrain(cell)[0]:
-                    hit = False
+                    hit = self.too_steep(cell)
                 else:
                     # Impassable ground — only a wilderness cell dies of it.
                     # The point test runs LAST on purpose: it costs one pass
                     # over the footprints and is reached only by the few cells
-                    # the terrain would refuse.
+                    # the terrain would refuse. No steepness question here: a
+                    # cell that survives this test lies inside a footprint,
+                    # where the ground is levelled and exempt anyway.
                     hit = not self.in_footprint(*cell_centre(cell))
             self._blocked[cell] = hit
         return hit
+
+    def too_steep(self, cell: Cell) -> bool:
+        """Is the GROUND under this cell too steep to stand on (E8 task 4)?
+
+        The same rule the walking gate applies (``relief.slope_blocks``, § A15
+        no. 8) and the same limits, so a route never leads a traveller
+        somewhere ``POST /play/pos`` would refuse to let an avatar walk. What
+        differs is only what is measured, and it has to: a walk report compares
+        two REPORTED points, a cell has no direction. So the cell is judged by
+        the STEEPNESS OF THE GROUND AT ITS CENTRE — the central difference over
+        its two opposite neighbours per axis::
+
+            rise = hypot(h(x+c, z) − h(x−c, z),  h(x, z+c) − h(x, z−c))
+            run  = 2·NAV_CELL_M
+
+        A CENTRAL difference, not the distance to the worst neighbour, and that
+        is the whole design of this predicate: one-sided, every flat cell at
+        the FOOT of a cliff would inherit the cliff's slope and the shore of
+        every lake would stop being walkable. Central, the number is the slope
+        of the ground one stands on, which is the thing the rule is about. The
+        run is two cells, so the STEP half of ``slope_blocks`` never fires here
+        — over 4 m a height change is a hill, never a kerb.
+
+        TWO EXEMPTIONS, both of them rules this file already lives by:
+
+        * INSIDE A FOOTPRINT nothing is measured (footprint wins). The world
+          grid is levelled flat under a place anyway, so this only matters at
+          the rim, where the plateau's own ramp would otherwise wall its
+          location in.
+        * AT AN OPENING nothing is measured either (``OPENING_EXEMPT_M``) —
+          the ramp-end exemption of the walking gate. A place on a plateau is
+          entered exactly where its ground steps up.
+        """
+        ctx = self.ctx
+        if not ctx.has_relief:
+            return False
+        hit = self._steep.get(cell)
+        if hit is not None:
+            return hit
+        self._steep[cell] = hit = self._measure_steep(cell)
+        return hit
+
+    def _measure_steep(self, cell: Cell) -> bool:
+        """:meth:`too_steep` without the memo — the arithmetic itself."""
+        ctx = self.ctx
+        cx, cz = cell_centre(cell)
+        if self.in_footprint(cx, cz) or ctx.near_opening(cx, cz):
+            return False
+        from app.core.relief import slope_blocks
+        run = 2.0 * NAV_CELL_M
+        d_x = ctx.height_at(cx + NAV_CELL_M, cz) - ctx.height_at(cx - NAV_CELL_M, cz)
+        d_z = ctx.height_at(cx, cz + NAV_CELL_M) - ctx.height_at(cx, cz - NAV_CELL_M)
+        return slope_blocks(math.hypot(d_x, d_z), run, ctx.max_step_m,
+                            ctx.max_slope_deg)
 
     def factor(self, cell: Cell) -> float:
         """Speed of a cell — the terrain's, or the footprint's inside one.
@@ -390,11 +528,19 @@ class _Search:
         (footprint wins). Without that the straightening would still
         break on the ground inside the start/goal location and leave the
         polyline zig-zagging over cell centres A* had already accepted.
+
+        THE STEEPNESS IS ASKED HERE TOO (E8 task 4). The cost guard of
+        :func:`_smooth` alone would not do: it weighs a shortcut against a
+        detour, and a short scramble over a cliff can weigh less than a long
+        way round it — while a traveller sent over that cliff is refused by
+        the very rule the route was planned with. So a shortcut across a cell
+        the search itself would not enter is not walkable, full stop.
         """
         for _lid, cx, cz, width, yaw in self.blocking:
             if segment_hits_footprint(a[0], a[1], b[0], b[1], cx, cz, width,
                                       yaw):
                 return False
+        relief = self.ctx.has_relief
         length = math.dist(a, b)
         steps = max(1, int(math.ceil(length / LOS_STEP_M)))
         for k in range(steps + 1):
@@ -402,6 +548,8 @@ class _Search:
             px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
             if not self.ctx.terrain_at(px, pz)[0] \
                     and not self.in_footprint(px, pz):
+                return False
+            if relief and self.too_steep(cell_of(px, pz)):
                 return False
         return True
 
@@ -411,7 +559,16 @@ class _Search:
 def _astar(search: _Search, start_cell: Cell,
            goal_cell: Cell) -> Optional[List[Cell]]:
     """8-neighbour A*; cost per step = metres / speed_factor of the entered
-    cell, heuristic = octile distance / best catalog factor (admissible)."""
+    cell PLUS the climb between the two cell centres, heuristic = octile
+    distance / best catalog factor (admissible).
+
+    THE CLIMB IS A PENALTY, NEVER A BONUS (E8 task 4,
+    ``SLOPE_COST_S_PER_M``): the heuristic knows nothing about the relief, so
+    it stays a lower bound only as long as every height term ADDS. A downhill
+    discount would make it overestimate, and A* would return the first route it
+    stumbled over instead of the cheapest one. That is also why the penalty is
+    the absolute rise: a route that saved time going down a mountain would not
+    be the same route coming back up."""
     if start_cell == goal_cell:
         return [start_cell]
     inv_best = 1.0 / max(search.ctx.best_factor, MIN_SPEED_FACTOR)
@@ -454,7 +611,12 @@ def _astar(search: _Search, start_cell: Cell,
                 step = NAV_CELL_M * _SQRT2
             else:
                 step = NAV_CELL_M
-            tentative = base_g + step / search.factor(nxt)
+            climb = 0.0
+            if search.ctx.has_relief:
+                climb = SLOPE_COST_S_PER_M * abs(
+                    search.ctx.height_at(*cell_centre(nxt))
+                    - search.ctx.height_at(*cell_centre(cell)))
+            tentative = base_g + step / search.factor(nxt) + climb
             if tentative < g_score.get(nxt, math.inf):
                 g_score[nxt] = tentative
                 came[nxt] = cell
@@ -475,12 +637,21 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     at cost time, so ALL footprints count; a baked polyline never crosses a
     foreign one anyway (``blocked`` and ``line_clear`` saw to that), so the
     two readings answer the same.
+
+    THE CLIMB IS PAID HERE TOO (E8 task 4), per part and over the part's own
+    two ends, so the sum is the total up-and-down along the segment rather
+    than the difference between its endpoints — a segment over a ridge costs
+    the ridge. Two things hang on it: a journey over a mountain honestly takes
+    longer than the flat metres suggest, and the string-pulling
+    (:func:`_smooth`) can no longer straighten a slope detour away, because
+    the shortcut it compares against now carries the hill it would cross.
     """
     length = math.dist(a, b)
     if length <= 0.0:
         return 0.0
     n = max(1, int(math.ceil(length / COST_STEP_M)))
     part = length / n
+    relief = ctx.has_relief
     total = 0.0
     for k in range(n):
         t = (k + 0.5) / n
@@ -491,6 +662,13 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
         else:
             factor = max(ctx.terrain_at(px, pz)[1], MIN_SPEED_FACTOR)
         total += part / factor
+        if relief:
+            t0, t1 = k / n, (k + 1) / n
+            h0 = ctx.height_at(a[0] + (b[0] - a[0]) * t0,
+                               a[1] + (b[1] - a[1]) * t0)
+            h1 = ctx.height_at(a[0] + (b[0] - a[0]) * t1,
+                               a[1] + (b[1] - a[1]) * t1)
+            total += SLOPE_COST_S_PER_M * abs(h1 - h0)
     return total
 
 

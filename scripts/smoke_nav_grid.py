@@ -134,6 +134,65 @@ Hand-derived expectations:
          with NO location on it, goal (750,0) sits 20 m deep inside it,
          far beyond the rescue radius -> route((670,0), (750,0)) is None.
 
+ [13] TOO STEEP TO STAND ON (E8 task 4). A cell dies of the GROUND under it
+      when the slope at its centre passes `game.max_slope_deg` — the very rule
+      `POST /play/pos` walks by, measured as the CENTRAL difference over the
+      two opposite neighbours per axis (run = 2 · NAV_CELL_M = 4 m; one-sided,
+      the flat shore at the foot of a cliff would inherit the cliff).
+
+      THE HILL: height area (2000,0)-(2040,40), height 5, falloff 4. On the
+      origin-anchored lattice (step 4) the support points sit at x = 1996 + 4i,
+      z = -4 + 4j, and at z = 20 the row reads 0 (1996), 0 (2000, ON the
+      outline), 5 (2004, 4 m in), 5 … 5 (2036), 0 (2040), 0 (2044).
+        cell (1000, 10) — centre (2001, 21):
+            h(2003, 21) = 0·0.25 + 5·0.75 = 3.75   (tx = 0.75, both z rows
+                                                    read the same)
+            h(1999, 21) = 0
+            h(2001, 23) − h(2001, 19) = 0          (the flank runs in x only)
+            rise = 3.75 over 4 m -> atan(0.9375) = 43.15° > 40 -> BLOCKED
+        cell centred (2021, 21) sits on the plateau: 5 against 5 -> free
+        cell centred (1981, 21) is out on the flat: 0 against 0 -> free
+      A 5 m plateau reached over a 4 m ramp is a wall on EVERY side (that is
+      the authoring limit § A16 names: tan(40°)·4 = 3.36 m), so a route from
+      (1960,20) to (2060,20) does not cross it — it goes round the whole hill,
+      which is more than the straight 100 m.
+      RED COUNTER-PROBE: with the hill deleted the same route is the straight
+      [(1960,20), (2060,20)], length 100.
+
+ [14] THE CLIMB IS PAID FOR (E8 task 4), and it is a PENALTY only — the
+      heuristic knows nothing about the relief, so a downhill discount would
+      make it overestimate and A* would stop being optimal.
+      `SLOPE_COST_S_PER_M` = 4 game-seconds per metre of rise, up or down.
+
+      THE RIDGE: height area (3100,0)-(3112,12), height 5, falloff 12, out in
+      untouched grass (the earlier sections paint their own ground and a slow
+      area would swamp the cost this one measures). Nothing inside is further
+      than 6 m from the outline, so the ridge tops out at 5·6/12 = 2.5 m and
+      its steepest cell is atan(1.667/4) = 22.6° — well inside the limit, so
+      NOTHING here is blocked and what is measured is the cost alone. The
+      raster (origin (3096,-4), 6 × 6, step 4) carries exactly four non-zero
+      support points, x ∈ {3104, 3108} × z ∈ {4, 8}, each 5 · 4/12 = 1.6667,
+      STORED at the raster's 3 decimals as 1.667.
+
+      THE STRAIGHT WAY OVER, (3106,-6) -> (3106,18): 24 m in 12 parts of 2 m,
+      grass factor 1.0 -> 24 s of walking. Along x = 3106 (tx = 0.5 between the
+      two non-zero columns) the profile is
+        z:   -6  -4  -2   0     2      4      6      8     10     12 … 18
+        h:    0   0   0   0  0.8335 1.667  1.667  1.667  0.8335   0
+      so the climb per part sums to 0.8335 · 4 = 3.334 m and the segment costs
+      24 + 4 · 3.334 = 37.336 s.
+      AROUND AN END the ground is 0 (everything outside the outline is): a way
+      round like (3106,-6) -> (3099,6) -> (3106,18) is 2 · hypot(7,12) =
+      27.78 m and climbs nothing — cheaper than the 37.336 over the top, so
+      the route BENDS and the string-pulling does not straighten it back (the
+      shortcut it weighs carries the hill now, `_smooth`'s cost guard). WHICH
+      end it takes is the search's business (it hugs the east flank, the
+      mirror image); what is derived by hand is that any way round is under
+      30 s while over the top is 37.336.
+      RED COUNTER-PROBE: with `SLOPE_COST_S_PER_M` at 0 the same route is the
+      straight [(3106,-6), (3106,18)] at 24 s — the bend is the penalty and
+      nothing else.
+
 Usage:  ./.venv/bin/python scripts/smoke_nav_grid.py
 """
 import math
@@ -518,6 +577,78 @@ terrain.save_area({"kind": "rock",
                    "z_order": 0})
 check("a goal 20 m deep in wilderness rock stays unreachable",
       nav_grid.route((670, 0), (750, 0)), None)
+
+print("[13] a cell too steep to stand on is blocked")
+from app.models import heightfield as height_store  # noqa: E402
+
+height_store.save_height_area(
+    {"id": "steep", "height_m": 5.0, "falloff_m": 4.0,
+     "polygon": [[2000, 0], [2040, 0], [2040, 40], [2000, 40]]})
+ctx = nav_grid.build_nav_context()
+approx("the west flank at (2003, 21)", ctx.height_at(2003, 21), 3.75)
+approx("...against (1999, 21)", ctx.height_at(1999, 21), 0.0)
+approx("the angle of that rise over 4 m",
+       math.degrees(math.atan2(3.75, 4.0)), 43.1524, 1e-4)
+search = nav_grid._Search(ctx, (1960.0, 20.0), (2060.0, 20.0))
+check("the flank cell", nav_grid.cell_of(2001, 21), (1000, 10))
+check("...is too steep to stand on", search.too_steep((1000, 10)), True)
+check("...and therefore blocked", search.blocked((1000, 10)), True)
+check("the plateau itself is flat and free",
+      search.too_steep(nav_grid.cell_of(2021, 21)), False)
+check("...and so is the flat world beside the hill",
+      search.too_steep(nav_grid.cell_of(1981, 21)), False)
+steep_route = nav_grid.route((1960, 20), (2060, 20))
+check_true("a route past the hill exists", steep_route is not None,
+           f"{steep_route}")
+check_true("...and it does not cross it",
+           steep_route is not None
+           and all(not search.too_steep(nav_grid.cell_of(x, z))
+                   for x, z in polyline_samples(steep_route, 1.0)),
+           "")
+check_true("...so it is longer than the straight 100 m",
+           steep_route is not None and polyline_length(steep_route) > 100.0,
+           f"{round(polyline_length(steep_route), 2) if steep_route else None}")
+height_store.delete_height_area("steep")
+check("RED COUNTER-PROBE: without the hill the route is straight",
+      nav_grid.route((1960, 20), (2060, 20)), [(1960.0, 20.0), (2060.0, 20.0)])
+
+print("\n[14] the climb is paid for — a penalty, never a bonus")
+height_store.save_height_area(
+    {"id": "ridge", "height_m": 5.0, "falloff_m": 12.0,
+     "polygon": [[3100, 0], [3112, 0], [3112, 12], [3100, 12]]})
+ctx = nav_grid.build_nav_context()
+check("the ridge raster is 6 × 6",
+      (ctx.height_field["rows"], ctx.height_field["cols"]), (6, 6))
+check("the ground around it is plain grass at factor 1.0",
+      ctx.terrain_at(3106, -6), (True, 1.0))
+approx("its spine tops out at 5 · 6/12 (raster: 1.667)",
+       ctx.height_at(3106, 6), 1.667, 1e-9)
+approx("the profile at z = 2", ctx.height_at(3106, 2), 0.8335, 1e-9)
+ridge_search = nav_grid._Search(ctx, (3106.0, -6.0), (3106.0, 18.0))
+check("nothing on the ridge is blocked",
+      any(ridge_search.too_steep(nav_grid.cell_of(3106, z))
+          for z in range(-6, 19)), False)
+approx("the straight way over costs 24 m + 4 · 3.334 m of climb",
+       nav_grid._segment_cost(ctx, (3106.0, -6.0), (3106.0, 18.0)), 37.336,
+       1e-9)
+ridge_route = nav_grid.route((3106, -6), (3106, 18))
+check_true("the route BENDS around the ridge instead of going over it",
+           ridge_route is not None and len(ridge_route) > 2, f"{ridge_route}")
+check_true("...and costs less than the straight way",
+           ridge_route is not None
+           and sum(nav_grid.segment_costs(ridge_route)) < 37.336,
+           f"{round(sum(nav_grid.segment_costs(ridge_route)), 3)}")
+_penalty = nav_grid.SLOPE_COST_S_PER_M
+nav_grid.SLOPE_COST_S_PER_M = 0.0
+nav_grid.invalidate_nav_cache()
+check("RED COUNTER-PROBE: without the penalty it goes straight over",
+      nav_grid.route((3106, -6), (3106, 18)),
+      [(3106.0, -6.0), (3106.0, 18.0)])
+approx("...at the plain 24 m",
+       nav_grid._segment_cost(nav_grid.build_nav_context(),
+                              (3106.0, -6.0), (3106.0, 18.0)), 24.0)
+nav_grid.SLOPE_COST_S_PER_M = _penalty
+height_store.delete_height_area("ridge")
 
 print()
 if FAILURES:

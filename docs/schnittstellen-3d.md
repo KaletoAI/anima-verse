@@ -476,7 +476,7 @@ Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
-| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** (E8 Task 2). Ändert sie sich, holt der Client `GET /play/heightfield` neu — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
+| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen** aller Orte (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1). Ändert sie sich, holt der Client `GET /play/heightfield` neu — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
@@ -1686,15 +1686,47 @@ lauter legale „Stufen". Ein Grenzwert, den man durch Geduld umgeht, ist keiner
 wie ihn hinaufzuklettern, sonst könnte man einen Läufer irgendwo aussetzen, wo
 er nicht mehr hochkommt.
 
-**Woher die Höhe kommt.** Aus dem SZENEN-Relief und nur daraus
-(`app/core/relief.ground_lift_at`): für eine `area_detail`-Location mit
-`map3d.relief` wird genau das Feld gesampelt, das `GET /play/locations/{id}/scene`
-als `terrain.grid` ausliefert (§ B1 Nr. 14) — dieselbe eine Gitter-Konstruktion
-(`scene_recipe.compose_terrain`), inklusive `tile_rotation`. Überall sonst ist
-die Welt flach (0,0), bis die E8-Heightmap landet. Der Client spiegelt die
-Regel mit derselben Quelle: `scene/tiles.terrainLiftAt`, **nicht** der
-Modell-Raycast `tileGroundY` — der kennt eine Modell-Oberfläche, die der Server
-nicht kennt, und die beiden Sichten müssen sich einig bleiben.
+**Woher die Höhe kommt: ZWEI Quellen, EINE Antwort**
+(`app/core/relief.ground_lift_at`).
+
+1. Das WELTRELIEF unter allem — `world_geometry.ground_y`, das gerasterte
+   Höhenfeld (§ A16), bilinear gelesen. Es gilt drinnen wie draußen; unter
+   einem Fußabdruck ist es durch die Planierung eben (§ A16.1).
+2. Das SZENEN-Relief obendrauf: für eine `area_detail`-Location mit
+   `map3d.relief` wird genau das Feld gesampelt, das
+   `GET /play/locations/{id}/scene` als `terrain.grid` ausliefert (§ B1 Nr. 14)
+   — dieselbe eine Gitter-Konstruktion (`scene_recipe.compose_terrain`),
+   inklusive `tile_rotation`. Sein Rand ist auf 0 gepinnt, es ist also ein
+   Aufschlag, kein Ersatz: ein Ort auf einem Hügel fährt mit dem Hügel hoch.
+
+In einer Welt, in der niemand etwas modelliert hat, sind beide 0 und das Gate
+ist vollständig inert.
+
+Der Client spiegelt beides mit denselben Quellen (`main.ts reliefLiftAt` →
+`game/ground.groundLift`): das Weltfeld über `sampleWorldHeight` — die
+BILINEARE Lesung, nicht die gezeichnete Dreiecksfläche `sampleGroundHeight`,
+denn dieser Spiegel sagt die Server-Antwort voraus und der Server liest das
+Feld — und das Szenen-Relief über `scene/tiles.terrainLiftAt`, **nicht** über
+den Modell-Raycast `tileGroundY`: der kennt eine Modell-Oberfläche, die der
+Server nicht kennt, und die beiden Sichten müssen sich einig bleiben. (Bis E8
+Task 4 fehlte dem Spiegel der Welt-Term — das war das Gummiband auf jedem
+Welt-Hügel: der Client lief die Figur hoch, der Server holte sie 3×/s zurück.)
+
+**Dieselbe Regel im NPC-Routing** (`nav_grid`, E8 Task 4). Eine Zelle ist
+blockiert, wenn der Boden AN IHRER MITTE steiler steht als `max_slope_deg` —
+gemessen als ZENTRALE Differenz über die je zwei Gegennachbarn
+(`rise = hypot(h(x+c,z)−h(x−c,z), h(x,z+c)−h(x,z−c))`, `run = 2 · NAV_CELL_M`).
+Zentral und nicht einseitig: der flache Boden am FUSS einer Klippe erbte sonst
+deren Steilheit, und das Ufer jedes Sees wäre unbegehbar. Ausgenommen sind
+Zellen INNERHALB eines Fußabdrucks (Footprint gewinnt; dort ist das Feld
+ohnehin planiert) und Zellen an einer Öffnung (`OPENING_EXEMPT_M` = 1,5 m
+Toleranz + eine Zelle) — dieselbe Rampenenden-Ausnahme wie unten. Dazu kostet
+jeder Höhenmeter `SLOPE_COST_S_PER_M` = 4 Spielsekunden extra, als STRAFE und
+nie als Bonus (die A*-Heuristik kennt kein Relief; ein Bonus machte sie
+unzulässig). Die Strafe steckt auch in `segment_costs` — die Reisezeit erbt den
+Berg — und in der Kosten-Prüfung der Linien-Glättung, die den Umweg um einen
+Hang sonst wieder wegzöge; die Sichtlinie lehnt zusätzlich jede Abkürzung über
+eine zu steile Zelle ab.
 
 **Verschachtelung: der INNERSTE UMSCHLIESSENDE Ort MIT Relief gewinnt.** Nicht
 „der Ort, in den der Punkt fällt": ein Ort ohne eigenes Relief planiert den
@@ -1719,6 +1751,13 @@ abgeleiteten ODER der aktuellen Location ist deshalb von Nr. 8 ausgenommen, und
 zwar an BEIDEN Enden des Schritts (eine Überquerung hat einen Fuß auf jeder
 Seite). Ohne die Ausnahme wäre ein Ort auf eigenem Plateau hinter seiner
 eigenen Tür verschlossen.
+
+Seit der Planierung (§ A16.1) ist am Weltrelief ohnehin nichts zu überqueren:
+der gepinnte Ring reicht eine Zelle ÜBER den Fußabdruck hinaus, die Öffnung
+liegt also auf ebenem Grund. Die Ausnahme trägt weiterhin den Fall, den sie
+immer trug — eine Klippe im SZENEN-Relief an der Öffnung. Und sie reicht
+bewusst nicht bis zur Plateau-Rampe eine Zelle weiter draußen: das ist die
+Autorierungs-Grenze aus § A16.1, kein Loch in der Regel.
 
 **Die Meldung nennt das Hindernis** (Lektion aus Befund B1): eine Stufe und
 eine Steigung bekommen zwei verschiedene Sätze, und die Absage wird geloggt wie
@@ -1912,19 +1951,90 @@ Topographie schon zeigt. Und **Boden-Raycasts** starten bei
 `max(Feldhöhe) + 5 m` statt bei fixen 20 m — die ±50-m-Klemme oben ist genau
 deshalb notiert.
 
-**Was hier NICHT passiert:** die Planierung unter Fußabdrücken (Plateau) ist
-E8 Task 4 — die Rasterung bleibt pur und rastert genau das, was autoriert
-wurde. Der 2D-Spielerkarte fehlt das Relief in v1 bewusst; der Editor zeigt
-Höhenflächen als eigene Ebene mit Zahl-Label, ohne Hillshade.
+### A16.1 Die Planierung unter Fußabdrücken (Plateau) — E8 Task 4
+
+**Ein Ort wird AUF die Welt gesetzt, und der Boden darunter wird dafür
+geebnet.** Nach der reinen Flächen-Rasterung läuft ein zweiter Durchgang:
+jeder platzierte Fußabdruck wird auf die autorierte Höhe an seinem EIGENEN
+MITTELPUNKT gepinnt — `ground_y(pos_x, pos_z)`, gelesen VOR jeder Planierung,
+damit zwei benachbarte Orte nicht davon abhängen, wen die DB zuerst
+zurückgab. Ohne das schneidet der Boden eines Ortes am Hang auf der einen
+Seite durch den Hügel und schwebt auf der anderen, und die Geh-Regel (§ A15
+Nr. 8) lehnt jeden Schritt über diese Naht ab.
+
+**Gepinnt wird der Fußabdruck DILATIERT UM EINE ZELLE** — dasselbe Muster,
+mit dem das Szenen-Relief seine flachen Räume pinnt
+(`scatter_curves.terrain_grid`, `flat_hulls`), und aus demselben Grund: ohne
+den Ring interpolieren die Randzellen die Außenhöhen wieder HINEIN, und der
+Boden steigt am eigenen Rand durch den Ort. Mit dem Ring hat jede Zelle, die
+den Fußabdruck berührt, vier gepinnte Ecken — das Plateau ist über den ganzen
+Ort exakt eben —, und **die Rampe ist die eine Zelle** zwischen Ring und
+unangetasteter Landschaft.
+
+**Überlappung: der KLEINSTE Fußabdruck gewinnt**, dieselbe Auflösung, die
+`location_at_point` und `relief.ground_lift_at` für Verschachtelung
+benutzen (die Hütte auf dem Dorfplatz ist die speziellere Antwort). Umgesetzt
+als „der breiteste zuerst", damit der schmalste zuletzt schreibt.
+
+**Das Gitter WÄCHST dafür.** Ein Fußabdruck, der über die bemalte Box
+hinausragt, zieht seine Box plus einen Schritt in die Gitter-Grenzen — sonst
+würde das Plateau am Rand abgeschnitten und träfe draußen (wo der Randwert
+gilt) als Klippe auf die flache Welt. Fußabdrücke, die keine autorierte Höhe
+berühren können, bleiben draußen: dort ist alles 0, und eine ferne Hütte darf
+das Gitter nicht über die halbe Welt spannen. Eine Welt ohne eine einzige
+Höhenfläche behält deshalb ihr leeres Gitter, egal wie viele Orte darauf
+stehen.
+
+**`height_sig` deckt seit Task 4 auch die PLATZIERUNGEN.** Verschieben,
+Drehen, Größe ändern, Setzen und Löschen einer Location bewegen ihr Plateau
+und damit das Relief — ohne dass eine Höhenfläche angefasst wurde. Clients
+holen das Feld also auch dann neu, wenn nur ein Ort umgezogen ist; der
+Schreibpfad (`world._save_world_data`) vergleicht die Signatur und rastert
+neu, wenn sie sich geändert hat.
+
+**Die AUTORIERUNGS-GRENZE, klar benannt:** die Rampe ist EINE Zelle breit,
+also trägt sie `tan(max_slope_deg) · step_m` = 3,36 m bei den Vorgaben.
+Steht ein Ort mehr als das über oder unter dem Boden an seinem Rand, bleibt
+ein Rand, den niemand überschreitet — eine Zelle AUSSERHALB des Fußabdrucks
+und damit außer Reichweite der 1,5-m-Öffnungs-Ausnahme. Am Ort selbst ist das
+kein Problem: der gepinnte Ring reicht eine Zelle über den Fußabdruck hinaus,
+die Öffnung liegt also auf ebenem Grund und das Betreten ist frei. Wer den
+Ort auf einem echten Steilhang platziert, baut sich eine Mauer — der
+Höhen-Editor warnt an derselben Zahl.
+
+**Der Client hängt seine ganze Kachel daran** (`scene/tiles.footprintCentre`):
+die Kachel steht auf `y = ground_y(pos_x, pos_z)`, und weil die
+Kachel-Gruppe Position UND Drehung trägt, klettert alles darin — Platte,
+Hülle, Räume, das kachel-lokale Szenen-Payload — gemeinsam den Hügel hinauf.
+Kein Payload-Feld ändert sich dafür (§ A1.2 gilt: kein y im Payload). Zwei
+Folgen im Client, beide Pflicht: die Dach-Grenze `walk_y_world` misst
+RELATIV zur Kachel (sie ist ein Szenen-Meter, der Strahl-Treffer ein
+Welt-Meter), und eine Kachel wird neu gebaut, wenn sich ihre Plateauhöhe
+ändert — die Szene verankert Türschwellen und Raummitten als Weltpunkte.
+
+**Das NPC-Routing zieht mit** (`nav_grid`, siehe § A15): eine Zelle, deren
+Boden steiler steht als `max_slope_deg`, ist blockiert, und jeder Höhenmeter
+kostet zusätzlich `SLOPE_COST_S_PER_M` = 4 Spielsekunden — eine STRAFE, nie
+ein Bonus, sonst überschätzt die A*-Heuristik und die Route ist nicht mehr
+optimal. Die Strafe steckt auch in `segment_costs`, also erbt die Reisezeit
+den Berg, und die Linien-Glättung kann den Umweg um einen Hang nicht mehr
+wegziehen.
+
+**Was hier NICHT passiert:** der 2D-Spielerkarte fehlt das Relief in v1
+bewusst; der Editor zeigt Höhenflächen als eigene Ebene mit Zahl-Label, ohne
+Hillshade.
 
 **Verifikation:** `scripts/smoke_heightfield.py` (Rasterung, Rampe,
 Überlappung inkl. Senke, Sanitizer-Klemmen, Signatur/Store/`ground_y`, die
-Ursprungs-Verankerung, das Vergröbern und die Routen) plus die
-`.mjs`-Tabelle des geteilten Samplers
-(`client3d/scripts/smoke_world_height.mjs`) und die Gitter-/Drape-Mathe in
+Ursprungs-Verankerung, das Vergröbern, die Routen und Abschnitt [11] die
+Planierung: Plateauhöhe, Dilatationsring, Rampen-Handrechnung, wanderndes
+Plateau samt Signaturwechsel) plus die `.mjs`-Tabelle des geteilten Samplers
+(`client3d/scripts/smoke_world_height.mjs`, Abschnitt [4] die kombinierte
+Höhenquelle des Client-Spiegels) und die Gitter-/Drape-Mathe in
 `client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt
 inkl. Naht-Gegenprobe, Kontur-Zelle gegen die gemessene Plattenfläche,
-Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung).
+Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung). Regel und Routing:
+`scripts/smoke_slope_gate.py` [6] und `scripts/smoke_nav_grid.py` [13]/[14].
 
 ---
 

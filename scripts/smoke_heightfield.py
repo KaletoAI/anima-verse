@@ -147,10 +147,72 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
     404 the second time. GET /play/heightfield returns exactly the field plus
     its signature.
+[11] THE PLATEAU (E8 task 4). A place is PUT ON the world and the ground under
+    it is levelled to carry it — the footprint pinned to the authored height at
+    its own CENTRE, dilated by one cell so the ramp starts outside the place
+    (the flat-hull pattern of the scene relief).
+
+    NO AREAS, NO GRID. A location on an unpainted world levels 0 onto 0: the
+    raster stays empty (rows/cols 0), because a grid of zeros describes exactly
+    what its absence describes.
+
+    THE CASE: HILL again (square (0,0)-(40,40), height 5, falloff 4) and a
+    location "Hut" at (2, 2) with plan_width_m 8, yaw 0 — footprint x, z in
+    [-2, 6], deliberately on the FLANK, where levelling has something to do.
+
+    a) THE GRID GROWS to hold the plateau and its ramp. The footprint box
+       [-2,6]^2 widened by one step is [-6,10]^2, so the union with the hill's
+       box is (-6,-6)-(40,40):
+         origin = floor(-6/4)·4 - 4 = -12  (both axes)
+         points = ceil((40 + 4 + 12)/4) + 1 = 14 + 1 = 15 per axis
+       Support point (i, j) therefore sits at (-12 + 4i, -12 + 4j). Without the
+       growth the plateau would be cut off at the border and meet the flat
+       world outside the grid as a cliff.
+
+    b) THE PLATEAU HEIGHT is the AREA raster sampled at the centre (2, 2), read
+       BEFORE anything is levelled: the cell (0,0)-(4,4) has the corners
+       (0,0)=0, (4,0)=0, (0,4)=0 (all ON the outline) and (4,4)=5 (4 m in), and
+       both fractions are 0.5 -> 0.25 · 5 = 1.25 m. Same number as [5], on a
+       differently anchored grid — the lattice is the same lattice.
+
+    c) THE PINNED POINTS are those within one step of the footprint (the exact
+       distance to the rectangle, not to its box): x in {-4, 0, 4, 8}
+       (overshoots 2, 0, 0, 2) and the same in z, so i, j in {2, 3, 4, 5} —
+       every combination, since the worst pair is hypot(2, 2) = 2.83 <= 4.
+         (i,j) = (3,3) = (0,0)  authored 0 -> 1.25   the place raises the ground
+         (i,j) = (4,4) = (4,4)  authored 5 -> 1.25   and cuts it down
+         (i,j) = (2,2) = (-4,-4) authored 0 -> 1.25  the dilation ring, OUTSIDE
+                                                     the footprint
+       The border ring of the grid stays 0 (i or j 0 or 14) — the invariant the
+       clamp outside the grid rests on.
+
+    d) FLAT ACROSS THE WHOLE PLACE: sampled at the centre (2,2), at the corner
+       (6,6) and at (-1,5) the field answers 1.25 everywhere, because every
+       cell touching the footprint has four pinned corners.
+
+    e) THE RAMP is the ONE cell between the ring and the landscape, and it is
+       linear. East of the ring, on the row z = 4: h(8,4) = 1.25 (pinned),
+       h(12,4) = 5 (authored: distance 4 to the nearest edge), so
+         h(9,4)  = 1.25 + 3.75·0.25 = 2.1875
+         h(10,4) = 3.125
+         h(11,4) = 4.0625
+       — monotone up. HONESTLY: 3.75 m over 4 m is atan(0.9375) = 43.2 deg,
+       past the default max_slope_deg of 40 — this rim is a wall a walker
+       cannot climb, and gets in through an opening (§ A15 no. 8 exempts them).
+       That is the authoring limit the height tool warns about: a ramp of one
+       cell carries tan(40 deg)·4 = 3.36 m.
+
+    f) THE PLATEAU WANDERS WITH THE PLACE. Moving the hut to (20, 2) changes
+       the signature (placements are part of it), frees (4,4) back to its
+       authored 5 and levels the new footprint instead: the new centre reads
+       h(20,0) = 0 (ON the outline) and h(20,4) = 5, i.e. 2.5 at z = 2, and
+       (22,4) and (18,4) — both authored 5, both inside the new footprint — are
+       cut to that same 2.5. Deleting the hut gives all of them back their 5.
 
 Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
 """
 import asyncio
+import math
 import os
 import sys
 import tempfile
@@ -169,6 +231,9 @@ db.init_schema()
 from app.core import heightfield as hf  # noqa: E402
 from app.core.world_geometry import ground_y  # noqa: E402
 from app.models import heightfield as store  # noqa: E402
+from app.models.world import (_load_world_data, _save_world_data,  # noqa: E402
+                              add_location, delete_location,
+                              update_location_position)
 
 FAILURES = []
 CHECKED = 0
@@ -439,6 +504,64 @@ near("payload height at (20,20)",
 
 check("DELETE", route_status(delete_height_area_route, new_id), 200)
 check("DELETE again", route_status(delete_height_area_route, new_id), 404)
+
+print("\n[11] the plateau under a footprint")
+for _a in store.list_height_areas():
+    store.delete_height_area(_a["id"])
+
+HUT = add_location("Hut", "a place on the flank")["id"]
+_world = _load_world_data()
+for _loc in _world["locations"]:
+    if _loc.get("id") == HUT:
+        _loc["map3d"] = {"plan_width_m": 8}
+_save_world_data(_world)
+update_location_position(HUT, 2.0, 2.0, 0.0)
+
+check("a placed location alone raises no grid", hf.get_field()["rows"], 0)
+check("...and the ground stays flat", ground_y(2, 2), 0.0)
+
+store.save_height_area(dict(HILL))
+field = hf.get_field()
+check("the grid grew for the plateau + ramp",
+      (field["rows"], field["cols"]), (15, 15))
+check("...anchored one ring outside (-6, -6)",
+      (field["origin_x"], field["origin_z"]), (-12.0, -12.0))
+near("the plateau height = the authored ground at the centre",
+     at(field, 3, 3), 1.25)
+near("the levelling RAISES (0,0) from 0", at(field, 3, 3), 1.25)
+near("...and CUTS (4,4) down from 5", at(field, 4, 4), 1.25)
+near("the dilation ring outside the footprint, (-4,-4)", at(field, 2, 2), 1.25)
+check("the border ring is still 0",
+      [at(field, 0, 0), at(field, 14, 14), at(field, 0, 7), at(field, 7, 14)],
+      [0.0, 0.0, 0.0, 0.0])
+near("flat at the centre", ground_y(2, 2), 1.25)
+near("flat at the footprint corner (6,6)", ground_y(6, 6), 1.25)
+near("flat at (-1, 5)", ground_y(-1, 5), 1.25)
+near("the ramp starts at the ring, h(8,4)", ground_y(8, 4), 1.25)
+near("h(9,4)", ground_y(9, 4), 2.1875)
+near("h(10,4)", ground_y(10, 4), 3.125)
+near("h(11,4)", ground_y(11, 4), 4.0625)
+near("h(12,4) — the authored landscape again", ground_y(12, 4), 5.0)
+check("the ramp is monotone",
+      [round(ground_y(8 + k, 4), 4) for k in range(5)]
+      == sorted(round(ground_y(8 + k, 4), 4) for k in range(5)), True)
+check("...and this rim is steeper than a walker climbs (43.2 deg)",
+      round(math.degrees(math.atan2(5.0 - 1.25, 4.0)), 1), 43.2)
+
+_sig_before = store.height_sig()
+update_location_position(HUT, 20.0, 2.0, 0.0)
+check("moving the place changes the height signature",
+      store.height_sig() != _sig_before, True)
+near("the old plateau is gone — (4,4) is the hill again", ground_y(4, 4), 5.0)
+near("the new plateau stands at the new centre", ground_y(20, 2), 2.5)
+near("...and cut (22,4) down from 5", ground_y(22, 4), 2.5)
+near("...and (18,4), inside it, likewise", ground_y(18, 4), 2.5)
+
+delete_location(HUT)
+near("deleting the place restores the hill at (18,4)", ground_y(18, 4), 5.0)
+near("...and at (22,4)", ground_y(22, 4), 5.0)
+check("...and the grid is the plain hill raster again",
+      (hf.get_field()["rows"], hf.get_field()["cols"]), (13, 13))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

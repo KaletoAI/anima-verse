@@ -170,6 +170,49 @@ weight is 0).
       smoke asserts both: that ``scene_ground_lift`` on the hut alone is still
       0, that the old difference WOULD block, and that the route accepts.
 
+  [6] THE WORLD RELIEF (E8 task 4). Until now the gate only ever saw a
+      location's own scene field; outside every footprint the world was flat
+      and the rule was inert there. ``ground_lift_at`` adds ``ground_y`` under
+      all of it, and this section walks the OPEN WORLD.
+
+      THE HILL: a height area (3000,3000)-(3040,3040), height 5, falloff 4 —
+      rastered on the origin-anchored lattice (step 4), so the support point
+      (3000, z) sits ON the outline (height 0) and (3004, z) is 4 m in (height
+      5·4/4 = 5) for every z well inside.
+
+      a) THE FLANK, in the wilderness, on the line z = 3008:
+           h(3002, 3008) = 0·0.5 + 5·0.5 = 2.5
+           h(3003, 3008) = 0·0.25 + 5·0.75 = 3.75
+         so a step of one metre rises 1.25 m: no step limit (dist is not below
+         1 m) but atan(1.25 / 1) = 51.3402° > 40° -> 409 ``too_steep``, naming
+         the SLOPE. The identical pair is what the client mirror is checked on
+         (``smoke_world_height.mjs`` [4]) — same numbers, both sides.
+      b) THE SAME HILL AT A SHALLOWER ANGLE: (3002,3008) -> (3006,3008) is
+         2.5 m over 4 m, atan(0.625) = 32.0054° < 40° -> accepted. So it is
+         the ANGLE that refuses, not the hill.
+      c) RED COUNTER-PROBE: the location-free half of the height is 0 —
+         ``scene_ground_lift(None, …)`` — so before task 4 the pair in (a) was
+         0 against 0 and walked through. With ``max_slope_deg`` at 89 the very
+         same report is accepted again, which pins the refusal on this rule.
+      d) THE PLATEAU MAKES A PLACE ON A SLOPE WALKABLE, which is the whole
+         point of levelling. HOUSE at (3000, 3020), plan_width_m 8, no relief
+         of its own, one opening on the E edge at 0.5 -> world (3004, 3020).
+         Its centre sits ON the hill's outline, so the plateau is 0 and the
+         footprint plus one cell around it is pinned there:
+           inside, (3001,3020) -> (3002,3020): Δh = 0 -> accepted, while the
+           IDENTICAL metre out on the open flank (a) is refused.
+      e) THE OPENING IS LEVEL GROUND, and by construction rather than by
+         exemption: the pinned ring reaches one cell (4 m) PAST the footprint,
+         so the crossing at (3004, 3020) has the same height on both sides.
+         Walking (3005,3020) -> (3003,3020) is accepted with Δh = 0.
+         HONEST LIMIT, measured here and reported: the ramp itself lies
+         between 4 and 8 m outside the footprint (support points 3008 -> 3012,
+         0 -> 5 = atan(1.25) = 51.34°), which is FAR outside the 1.5 m
+         opening tolerance — the exemption does not reach it. A plateau whose
+         rim rises more than tan(max_slope)·step_m = 3.36 m therefore keeps a
+         wall around itself, one cell out. It is the authoring limit § A16
+         names; see the task report for the two options.
+
 Usage:  ./.venv/bin/python scripts/smoke_slope_gate.py
 """
 import asyncio
@@ -658,6 +701,89 @@ def main() -> int:
     status, payload = report(out_x, out_z)
     check("and back out again", (payload or {}).get("ok")
           if status == "ok" else status, True)
+
+    print("\n[6] THE WORLD RELIEF — the gate outside every scene")
+    from app.core.boundary_entry import opening_world_points  # noqa: E402
+    from app.core.world_geometry import ground_y  # noqa: E402
+    from app.models import heightfield as store  # noqa: E402
+    store.save_height_area({"id": "hill", "height_m": 5.0, "falloff_m": 4.0,
+                            "polygon": [[3000, 3000], [3040, 3000],
+                                        [3040, 3040], [3000, 3040]]})
+    near("the flank at (3002, 3008)", ground_y(3002, 3008), 2.5)
+    near("the flank at (3003, 3008)", ground_y(3003, 3008), 3.75)
+    near("no location is involved",
+         relief.scene_ground_lift(None, 3002, 3008), 0.0)
+    near("so the world alone answers", relief.ground_lift_at(
+        3002, 3008, list_locations()), 2.5)
+    near("the angle over one metre",
+         math.degrees(math.atan2(1.25, 1.0)), 51.3402, 1e-4)
+    park(3002.0, 3008.0, "")
+    res = report(3003.0, 3008.0)
+    status, reason, pos, message = refusal_of(res) if res[0] == "refused" \
+        else (200, "", None, "")
+    check("a metre up the world flank is refused", res[0], "refused")
+    check("the reason", reason, "too_steep")
+    check("the message names the SLOPE", message,
+          "That slope is too steep to climb.")
+    check("...and the last valid point comes back", pos,
+          {"x": 3002.0, "z": 3008.0})
+
+    near("the same hill over four metres", ground_y(3006, 3008), 5.0)
+    near("its angle", math.degrees(math.atan2(2.5, 4.0)), 32.0054, 1e-4)
+    park(3002.0, 3008.0, "")
+    status, payload = report(3006.0, 3008.0)
+    check("the shallower way up the same hill is accepted",
+          (payload or {}).get("ok") if status == "ok" else status, True)
+
+    config._CONFIG.setdefault("game", {})["max_slope_deg"] = 89.0
+    park(3002.0, 3008.0, "")
+    status, payload = report(3003.0, 3008.0)
+    check("RED COUNTER-PROBE: at 89° the identical report passes",
+          (payload or {}).get("ok") if status == "ok" else status, True)
+    config._CONFIG.setdefault("game", {}).pop("max_slope_deg", None)
+
+    HOUSE = add_location(name="Smoke House",
+                         description="slope-gate smoke")["id"]
+    update_location_position(HOUSE, 3000.0, 3020.0)
+    set_map3d(HOUSE, plan_width_m=8.0,
+              boundary_openings=[{"edge": "E", "at": 0.5, "width_m": 2.0,
+                                  "type": "passage", "room": ""}])
+    set_known_locations(AVATAR, [CLIFF, TURNED, SPUN, PLAIN, DOME, HUT, HOUSE])
+    check("the opening sits on the E edge",
+          opening_world_points(get_location_by_id(HOUSE)),
+          [("E", (3004.0, 3020.0))])
+    near("the plateau is the ground at the house's centre",
+         ground_y(3000, 3020), 0.0)
+    near("...flat across the footprint, (3001,3020)", ground_y(3001, 3020), 0.0)
+    near("...and (3002,3020)", ground_y(3002, 3020), 0.0)
+    near("...and one cell PAST it, (3005,3020)", ground_y(3005, 3020), 0.0)
+    # RED COUNTER-PROBE for the levelling: the SAME metre on the raster
+    # WITHOUT the plateau pass rises 1.25 m (1.25 -> 2.5, the flank), i.e. the
+    # very 51° the open flank is refused for.
+    from app.core import heightfield as hf  # noqa: E402
+    _bare = hf.rasterize(store.list_height_areas())
+    near("unlevelled, the house's floor would rise from 1.25...",
+         hf.sample_height(_bare, 3001, 3020), 1.25)
+    near("...to 2.5 over that same metre",
+         hf.sample_height(_bare, 3002, 3020), 2.5)
+    check_true("...which is exactly the 51° the open flank is refused for",
+               relief.slope_blocks(1.25, 1.0, 0.4, 40.0))
+    park(3001.0, 3020.0, HOUSE)
+    status, payload = report(3002.0, 3020.0)
+    check("a metre INSIDE the place on the slope is accepted",
+          (payload or {}).get("ok") if status == "ok" else status, True)
+    park(3005.0, 3020.0, "")
+    status, payload = report(3003.0, 3020.0)
+    check("...and so is walking in through the opening",
+          (payload or {}).get("ok") if status == "ok" else status, True)
+    check("...into the house", (payload or {}).get("location_id"), HOUSE)
+    near("the RAMP outside, h(3008,3020)", ground_y(3008, 3020), 0.0)
+    near("...against the landscape at h(3012,3020)",
+         ground_y(3012, 3020), 5.0)
+    check_true("...which is a 51° wall one cell further out, and the 1.5 m "
+               "opening tolerance does not reach it",
+               relief.slope_blocks(5.0, 4.0, 0.4, 40.0)
+               and math.hypot(3010 - 3004, 0) > 1.5)
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

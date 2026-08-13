@@ -328,6 +328,18 @@ def _save_world_data(data: Dict[str, Any]):
                     ))
     except Exception as e:
         logger.error("_save_world_data DB-Fehler: %s", e)
+    # THE PLATEAU FOLLOWS THE PLACE (E8 task 4). The world's relief is levelled
+    # flat under every footprint, so moving, turning, resizing, placing or
+    # deleting a location changes the heightfield — and with it what every
+    # client draws and what the walking rule judges. This is the one writer of
+    # the location table, so it is the one place that has to say so. AFTER the
+    # transaction: the re-raster reads the locations back, and it must read the
+    # written ones. It costs a signature compare when nothing moved.
+    try:
+        from app.models.heightfield import note_world_write
+        note_world_write()
+    except Exception as e:   # noqa: BLE001 — a cache must never fail a write
+        logger.warning("heightfield refresh after a world write failed: %s", e)
 
 
 # === Welt-Settings (world_kv) ===

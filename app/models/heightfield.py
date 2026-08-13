@@ -203,17 +203,67 @@ def _invalidate() -> None:
             "Could not re-raster the heightfield after a write: %s", exc)
 
 
+def placed_footprints() -> List[Tuple[float, float, float, float]]:
+    """``(cx, cz, width_m, yaw_deg)`` of every PLACED location, stable order.
+
+    The second input of the raster since E8 task 4: the ground under a
+    footprint is levelled to a plateau, so where the places stand is part of
+    what the world's relief IS. Rounded to the centimetre and the tenth of a
+    degree — the precision the placement itself is stored at — so the
+    signature over this list does not flap on float noise.
+    """
+    from app.core.world_geometry import placed_footprint
+    from app.models.world import list_locations
+    out: List[Tuple[float, float, float, float]] = []
+    for loc in list_locations():
+        fp = placed_footprint(loc)
+        if fp is None:
+            continue
+        cx, cz, width, yaw = fp
+        out.append((round(cx, 2), round(cz, 2), round(width, 2), round(yaw, 1)))
+    return out
+
+
 def height_sig() -> str:
-    """10-char signature over the authored height areas.
+    """10-char signature over the authored height areas AND the placements.
 
     The refetch trigger of every client (worldmap ``height_sig``) AND the
     validity token of the stored raster: the grid row carries the signature it
     was built from, so "the areas changed" and "the grid is stale" are the same
     question asked once.
+
+    THE PLACEMENTS BELONG IN IT (E8 task 4). A moved, turned, resized, newly
+    placed or deleted location moves its PLATEAU with it, which changes the
+    world's relief without a single height area being touched. A client
+    holding the old grid would drape its ground around a hole where the place
+    used to stand — and the server, which samples the same field, would agree
+    with nobody.
     """
-    basis = json.dumps({"areas": list_height_areas()}, sort_keys=True,
-                       default=str)
+    basis = json.dumps({"areas": list_height_areas(),
+                        "places": placed_footprints()},
+                       sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
+
+
+def note_world_write() -> None:
+    """A location was written — re-raster IF that moved a plateau.
+
+    Called by the ONE writer of the world data (``world._save_world_data``),
+    which is a location write of every kind: a move, a turn, a resize, a new
+    place, a deletion — and equally a rename or a room edit, which change no
+    plateau at all. So the cheap question is asked first (the signature the
+    cached field was built from against the current one) and the expensive
+    answer only follows a real change.
+
+    Same reasoning as :func:`_invalidate`, one step further out: the editing
+    request is already waiting for a round trip and is the honest place to pay
+    the raster, rather than the ``POST /play/pos`` of whoever walks next.
+    """
+    from app.core.heightfield import cached_sig
+    current = cached_sig()
+    if current is not None and current == height_sig():
+        return
+    _invalidate()
 
 
 # ── The derived raster ───────────────────────────────────────────────────
