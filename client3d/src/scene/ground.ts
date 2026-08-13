@@ -194,11 +194,13 @@ interface AreaMesh {
    *  meadow's grass and its trees can never disagree about how far away
    *  they are. */
   tier: ScatterTier;
-  /** whether the props of this area have ever been ASKED to mount a mesh.
-   *  `false` for an area built beyond the cull distance: nothing of it is on
-   *  screen, so nothing of it is downloaded either, and the first tick that
-   *  brings it back inside the cull has to request it — the tier alone would
-   *  not, it may not have changed in the meantime. */
+  /** whether the props of this area have been ASKED to mount a mesh WHILE
+   *  inside the cull distance. `false` for an area built or ticked beyond it:
+   *  nothing of it is on screen, so nothing of it is downloaded either, and
+   *  the first tick that brings it back inside the cull has to request it —
+   *  the tier alone would not, it may not have changed in the meantime.
+   *  Because leaving the cull clears it again, a load that FAILED also heals
+   *  on the next approach, not only on a tier change or a terrain refetch. */
   loaded: boolean;
 }
 
@@ -1220,7 +1222,12 @@ export function createGround(): Ground {
           prop.inst.count = scatterVisibleCount(prop.baseCount, d);
           prop.inst.visible = prop.inst.count > 0;
         }
-        if (inCull) a.loaded = true;
+        // Leaving the cull RESETS the flag, so re-entering the view distance
+        // asks again. That is what makes a FAILED load heal without a tier
+        // change or a terrain refetch: it stays "not loaded", and the next
+        // approach retries. The common case costs nothing — `showTier`
+        // early-returns for a prop that already stands at that tier.
+        a.loaded = inCull;
       }
     },
     scatterTiers() {
