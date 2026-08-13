@@ -6,6 +6,7 @@ import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import { slideBlocked, slopeBlocks, terrainBlocks, walkDir } from './game/walk';
+import { groundLift, type ScenePatch } from './game/ground';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
 } from './game/clickmove';
@@ -2204,31 +2205,31 @@ async function startApp(username: string, role: string) {
    * Height of the ground at a WORLD point — the client's mirror of the
    * server's `relief.ground_lift_at`.
    *
-   * `terrainLiftAt`, NOT `tileGroundY`, and that is the whole point: the
-   * server's height source is the scene payload's relief field and nothing
-   * else. The model skin `tileGroundY` raycasts against is client-only, so
-   * judging the walk by it would refuse steps the server happily accepts —
-   * the two views disagreeing, which is exactly what this mirror exists to
-   * prevent. Outside every relief the world is flat (until the E8 heightmap),
-   * which is the server's answer there too.
+   * TWO SOURCES, ADDED (E8 task 4, the rule itself is `game/ground.groundLift`
+   * and hand-checked in `client3d/scripts/smoke_world_height.mjs`):
    *
-   * NOT `tileAt` either: the innermost tile may carry no relief at all, and a
-   * place without one does not flatten the ground it stands on — it stands ON
-   * it. A hut on a village square that rises 2 m would otherwise sit in a hole
-   * of its own making and be sealed off by a cliff nobody authored (finding
-   * F3). So this asks the innermost enclosing tile that HAS a field, which is
-   * `tileAt`'s smallest-wins rule restricted to those.
+   *  - the WORLD relief under everything — `terrainGround.fieldHeightAt`, the
+   *    BILINEAR reading of the heightfield. Bilinear and not the drawn surface
+   *    (`heightAt`) on purpose: this function exists to predict what the
+   *    server will say, and the server reads the field, not our triangles.
+   *    Until task 4 this term was missing and the mirror knew scene relief
+   *    only — the rubber band on every world hill steeper than `max_slope_deg`.
+   *  - the SCENE relief of the innermost enclosing tile that HAS a field
+   *    (`terrainLiftAt`, the payload's own grid — never `tileGroundY`, whose
+   *    model skin is client-only and would refuse steps the server accepts).
+   *    A place without a field of its own does not flatten the ground it
+   *    stands on (finding F3).
    */
   function reliefLiftAt(x: number, z: number): number {
-    let best: Tile | null = null;
+    const patches: ScenePatch[] = [];
     for (const tile of tiles.values()) {
       if (!tile.terrain) continue;
       const half = tile.width / 2;
       const p = worldToTile(tile, x, z);
       if (Math.abs(p.x) > half || Math.abs(p.z) > half) continue;
-      if (!best || tile.width < best.width) best = tile;
+      patches.push({ width: tile.width, lift: terrainLiftAt(tile, x, z) });
     }
-    return best ? terrainLiftAt(best, x, z) : 0;
+    return groundLift(terrainGround.fieldHeightAt(x, z), patches);
   }
 
   /**
@@ -3905,9 +3906,39 @@ async function startApp(username: string, role: string) {
     if (state.mode === 'overview' && state.selected?.isAvatar) gameActions.enterEmbodied?.();
   });
 
+  /**
+   * Put every tile back on its plateau after the relief changed (E8 task 4).
+   *
+   * `footprintCentre` reads the world ground at the location's centre, so the
+   * height a tile stands on is decided when the tile is BUILT — and the field
+   * arrives asynchronously and changes again whenever somebody paints a hill
+   * or moves a place. A tile built before its ground was known would stand on
+   * the flat world for good.
+   *
+   * A full rebuild rather than moving the group: the scene mount anchors
+   * doorway thresholds, room centres and marker heights as WORLD points via
+   * `tileToWorld`, so a group that quietly slid up would leave them behind at
+   * the old height. Rebuilding is the path a MOVED location already takes
+   * (`rebuildMovedTiles`) and costs the same; it happens on an authoring edit,
+   * never per frame — the revision counter is compared, not the field.
+   */
+  let builtHeightRev = -1;
+  function relevelTiles(): void {
+    const rev = terrainGround.heightRevision();
+    if (rev === builtHeightRev) return;
+    builtHeightRev = rev;
+    for (const tile of [...tiles.values()]) {
+      const centre = footprintCentre(tile.loc);
+      if (!centre || Math.abs(centre.y - tile.center.y) < 1e-3) continue;
+      wallCache.delete(tile.loc.id);
+      rebuildTile(tile, tile.loc);
+    }
+  }
+
   // --- Frame-Hook: Detail-Ansicht (Singleton), NPC-Animation, Pin-Bobbing ---
   let bob = 0;
   engine.addFrameHook((dt) => {
+    relevelTiles();
     // Who owns the open view this frame (Etappe 3):
     //  - EMBODIED, the avatar's own location IS it — auto-open on entering
     //    (embody start included), auto-close on stepping out. The camera

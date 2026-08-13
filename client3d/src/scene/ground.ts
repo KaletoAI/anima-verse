@@ -38,14 +38,14 @@
 import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry, gridPlate, gridStepFor,
   maxWorldHeightIn, pointInRing, propGroundFit, sampleGroundHeight,
-  scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
-  worldHeightRange } from '@anima/scene-render';
+  sampleWorldHeight, scatterInstances, scatterSeed, subdivideOnGrid,
+  surfaceMaterial, worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterEntry, ScatterFootprint,
   SurfaceMaterialSpec, WorldHeightField } from '@anima/scene-render';
 import { fetchHeightfield, fetchTerrain } from '../api';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainType, WorldBounds } from '../types';
-import { preloadSurfaceTexture, setWorldRayStart, surfaceFor,
+import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
 
@@ -221,6 +221,19 @@ export interface Ground {
    */
   heightAt(x: number, z: number): number;
   /**
+   * The world's ground as THE SERVER reads it — bilinear, not triangulated.
+   *
+   * The other height, and the difference is a rule rather than a picture: the
+   * field is defined bilinear (§ A16) and the walking gate judges a step by
+   * THAT reading (`relief.ground_lift_at` → `POST /play/pos`). A mesh cannot
+   * be bilinear, so `heightAt` answers the drawn surface, which inside a cell
+   * differs by up to a quarter of its twist — a measured metre on a steep
+   * hill. Everything that has to PREDICT the server (the client's mirror of
+   * the slope rule) asks here; everything that has to touch the ground the
+   * player sees asks `heightAt`.
+   */
+  fieldHeightAt(x: number, z: number): number;
+  /**
    * Highest ground inside an axis-aligned rectangle (world metres) — what the
    * fog quads hang above (§ A12 + § A16). One flat quad over a hilly patch has
    * to clear the highest thing under it, or the mountain stands in the cloud.
@@ -355,6 +368,20 @@ export function createGround(): Ground {
    */
   const heightAt = (x: number, z: number): number =>
     (field ? sampleGroundHeight(field, x, z, cellM) : GROUND_Y);
+
+  /** The BILINEAR reading of the field — the server's own (see the interface).
+   *  Used by the walk-rule mirror, never by anything that is drawn. */
+  const fieldHeightAt = (x: number, z: number): number =>
+    (field ? sampleWorldHeight(field, x, z) : GROUND_Y);
+
+  // THE PLATEAU HOOK (E8 task 4): a location's tile stands on the ground under
+  // its centre, and this is where `scene/tiles.ts` gets that height from. The
+  // sampler is a closure over `field`/`cellM`, so it stays correct across every
+  // refetch without anyone re-registering it — and it is the DRAWN ground on
+  // purpose: the tile has to sit on the surface the player sees. Under a
+  // footprint the two readings agree anyway, because the server levels the
+  // field flat there (plateau pass, § A16).
+  setWorldGround(heightAt);
 
   /** Lift a flat vertex list onto the ground, in place. `pos` is `[x, y, z, …]`
    *  in WORLD metres (both the plate and the subdivided areas are), so the
@@ -892,6 +919,7 @@ export function createGround(): Ground {
       return inFlight;
     },
     heightAt,
+    fieldHeightAt,
     groundPointAt(ray) {
       if (!baseMesh) return null;
       const hits = ray.intersectObject(baseMesh, false);

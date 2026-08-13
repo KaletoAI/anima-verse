@@ -57,6 +57,37 @@
  *      both fractions 0.5 -> 2.5. Same number on the Python side (section [8]
  *      there). And `rows`/`cols` claiming 99 changes nothing: with
  *      [[0, 10], [0, 10]] the point (2, 2) is 5.
+ *
+ * ============================================================================
+ * [4] THE COMBINED HEIGHT SOURCE — the client's mirror of the walk rule
+ * ============================================================================
+ * E8 task 4. `main.ts` `reliefLiftAt` asks TWO sources and adds them:
+ * the WORLD field (`sampleWorldHeight`, the bilinear reading — the server's
+ * own) and, on top, the scene relief of the INNERMOST enclosing location that
+ * has a field. The composition rule is `client3d/src/game/ground.groundLift`,
+ * the walk verdict is `client3d/src/game/walk.slopeBlocks`; both are pure and
+ * checked here against the very field above.
+ *
+ * (12) THE FLANK, walking east from (−2, 0) to (−1, 0), no scene relief:
+ *        h(−2, 0) = 2.5                                  (case 8 above)
+ *        h(−1, 0): fx = (−1+4)/4 = 0.75 -> i = 0, tx = 0.75; fz = 1 -> j = 1
+ *                  north = 0·0.25 + 5·0.75 = 3.75        -> 3.75
+ *      so dh = 1.25 over dist 1. dist is NOT below 1 m, so the step limit
+ *      does not apply; atan(1.25 / 1) = 51.3402° > 40° -> BLOCKED.
+ *      RED COUNTER-PROBE, and it is the regression this task closes: with the
+ *      world term LEFT OUT — the mirror as task 3 shipped it, scene relief
+ *      only — both heights are 0, dh = 0 and the client walks on while the
+ *      server refuses. That is the rubber band of the acceptance list.
+ * (13) THE INNERMOST SCENE RELIEF WINS. At (2, 2) the world says 1.25.
+ *      With two enclosing locations — a square of width 80 lifting 0.2 m and
+ *      a hut of width 20 lifting 1.0 m — the answer is 1.25 + 1.0 = 2.25:
+ *      the narrower footprint is the more specific one (finding F3). With no
+ *      patch at all it is the world alone, 1.25.
+ * (14) THE PLATEAU IS FLAT, which is what makes a place walkable on a hill:
+ *      the server levels the field under every footprint, so BOTH ends of a
+ *      step inside it read the same height (5 on the levelled field below),
+ *      dh = 0 and `slopeBlocks` is inert — even over 0.15 m, the walking lead
+ *      that would refuse a 0.5 m rise as a step.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -66,15 +97,16 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/worldHeight.ts');
 
-/** The module has no runtime import (see its header), so a transpile is all it
- *  takes. Should someone add one, this fails loudly — that is the alarm. */
-async function loadSampler() {
+/** Transpile one IMPORT-FREE module and import it. Every file loaded this way
+ *  says in its own header that it has no runtime import; should someone add
+ *  one, this fails loudly — that is the alarm. */
+async function loadModule(path, name) {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'worldheight-'));
   try {
-    const source = await readFile(SRC, 'utf8');
+    const source = await readFile(path, 'utf8');
     const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
-    const file = join(dir, 'worldHeight.mjs');
+    const file = join(dir, `${name}.mjs`);
     await writeFile(file, out.code, 'utf8');
     return await import(`file://${file}`);
   } finally {
@@ -95,7 +127,11 @@ function check(label, actual, expected, eps = 1e-9) {
   }
 }
 
-const { sampleWorldHeight } = await loadSampler();
+const { sampleWorldHeight } = await loadModule(SRC, 'worldHeight');
+const { groundLift } = await loadModule(
+  join(ROOT, 'client3d/src/game/ground.ts'), 'ground');
+const { slopeBlocks } = await loadModule(
+  join(ROOT, 'client3d/src/game/walk.ts'), 'walk');
 
 const FIELD = {
   origin_x: -4, origin_z: -4, step_m: 4, rows: 3, cols: 3,
@@ -135,6 +171,51 @@ check('rows/cols lying about the array', sampleWorldHeight(
   2, 2), 5);
 check('no field at all', sampleWorldHeight(null, 0, 0), 0);
 check('undefined', sampleWorldHeight(undefined, 12, 34), 0);
+
+function checkBool(label, actual, expected) {
+  const ok = actual === expected;
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual}`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected ${expected}\n       actual   ${actual}`);
+  }
+}
+
+console.log('[4] the combined height source — world field + scene relief');
+// The world's limits, the defaults of `game.max_step_height_m` / `max_slope_deg`.
+const STEP = 0.4;
+const SLOPE = 40;
+const hereH = groundLift(sampleWorldHeight(FIELD, -2, 0), []);
+const thereH = groundLift(sampleWorldHeight(FIELD, -1, 0), []);
+check('the flank at (-2, 0)', hereH, 2.5);
+check('the flank at (-1, 0)', thereH, 3.75);
+check('the rise over one metre', thereH - hereH, 1.25);
+checkBool('atan(1.25/1) = 51.34 deg > 40 -> the step is refused',
+  slopeBlocks(thereH - hereH, 1, STEP, SLOPE), true);
+checkBool('RED COUNTER-PROBE: without the world term the mirror sees nothing',
+  slopeBlocks(groundLift(0, []) - groundLift(0, []), 1, STEP, SLOPE), false);
+
+const PATCHES = [{ width: 80, lift: 0.2 }, { width: 20, lift: 1 }];
+check('the innermost scene relief wins',
+  groundLift(sampleWorldHeight(FIELD, 2, 2), PATCHES), 2.25);
+check('...and the widest alone would have said',
+  groundLift(sampleWorldHeight(FIELD, 2, 2), [PATCHES[0]]), 1.45);
+check('no scene relief: the world alone',
+  groundLift(sampleWorldHeight(FIELD, 2, 2), []), 1.25);
+
+// The levelled plateau under a footprint: the server pins these points, so
+// both ends of any step inside it read the same height.
+const PLATEAU = {
+  origin_x: -4, origin_z: -4, step_m: 4, rows: 3, cols: 3,
+  heights: [[5, 5, 5], [5, 5, 5], [5, 5, 5]],
+};
+check('the plateau at its centre', sampleWorldHeight(PLATEAU, 0, 0), 5);
+check('...and a metre away', sampleWorldHeight(PLATEAU, 1, 1), 5);
+checkBool('a step on the plateau is never refused',
+  slopeBlocks(sampleWorldHeight(PLATEAU, 1, 1) - sampleWorldHeight(PLATEAU, 0, 0),
+    0.15, STEP, SLOPE), false);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

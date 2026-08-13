@@ -47,8 +47,50 @@ export function walkCeiling(info: GroundModelInfo | null | undefined): number {
 
 /** Does this hit height count as walkable ground? Strictly below the ceiling,
  *  so the old `< 1.2` behaviour of a building without a declared walk height
- *  is unchanged. */
+ *  is unchanged.
+ *
+ *  `y` is measured FROM THE TILE, not from the world: `walk_y_world` is a
+ *  scene metre and the tile stands on its plateau since E8 task 4, so the
+ *  caller (`scene/tiles.tileGroundY`) subtracts the tile height before asking. */
 export function acceptsWalkHit(info: GroundModelInfo | null | undefined,
                                y: number): boolean {
   return y < walkCeiling(info);
+}
+
+/** One location's scene relief at the point being asked about: how WIDE its
+ *  footprint is and how high its own field lifts the ground there. Only
+ *  locations that both CONTAIN the point and carry a field are handed in —
+ *  the geometry is the caller's lookup, the rule is here. */
+export interface ScenePatch { width: number; lift: number }
+
+/**
+ * The ground at a world point, in metres — THE client's mirror of the server's
+ * `relief.ground_lift_at` (E8 task 4).
+ *
+ * TWO HEIGHT SOURCES, ONE ANSWER, and that is the whole rule:
+ *
+ *  - `worldHeight` is the authored WORLD relief (§ A16, `sampleWorldHeight` —
+ *    the bilinear reading, the server's own). It is under EVERYTHING, inside a
+ *    location as much as out in the wilderness. Until task 4 the client's
+ *    mirror left this term out and knew only the scene relief, which is
+ *    exactly the rubber band the acceptance list described: the figure walked
+ *    up a world hill the client thought was flat and the server pulled it
+ *    back three times a second.
+ *  - a SCENE relief adds on top of it, and only the INNERMOST enclosing one
+ *    that actually has a field counts (finding F3): a place carrying no relief
+ *    of its own does not flatten the ground it stands on, it stands ON it. So
+ *    the narrowest footprint among the patches wins, which is `tileAt`'s
+ *    smallest-wins rule restricted to those that answer at all.
+ *
+ * Inside a footprint the world term is FLAT by construction — the server
+ * levels the heightfield under every place (the plateau pass) — so this adds
+ * the plateau height, not a second slope under the scene.
+ */
+export function groundLift(worldHeight: number,
+                           patches: readonly ScenePatch[]): number {
+  let best: ScenePatch | null = null;
+  for (const p of patches) {
+    if (!best || p.width < best.width) best = p;
+  }
+  return worldHeight + (best ? best.lift : 0);
 }

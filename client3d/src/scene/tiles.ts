@@ -55,6 +55,28 @@ export function setWorldRayStart(maxGroundY: number): void {
   rayStartY = Math.max(RAY_START_FALLBACK_M, want);
 }
 
+/** The world ground under a point, or `null` while nothing has been taken
+ *  over — see `setWorldGround`. */
+let worldGroundAt: ((x: number, z: number) => number) | null = null;
+
+/**
+ * Take over the world's ground sampler — THE PLATEAU HOOK (§ A16, E8 task 4).
+ *
+ * A location does not float over its landscape: the server LEVELS the
+ * heightfield flat under every footprint, so the ground at a location's centre
+ * is the height of the whole place. `footprintCentre` reads it here and the
+ * tile group carries it, which is what lifts a location onto its hill in one
+ * move — the scene inside stays tile-local metres and rides along, exactly as
+ * it does for position and yaw (`tileToWorld`).
+ *
+ * Set by `scene/ground.ts`, which owns the field. Nothing here fetches: while
+ * no field has arrived the world is flat, which is also what an unrelieved
+ * world answers, so a client that never gets one is wrong about nothing.
+ */
+export function setWorldGround(sampler: (x: number, z: number) => number): void {
+  worldGroundAt = sampler;
+}
+
 /** Edge length of a location's footprint square in world metres. */
 export function footprintWidth(loc: WorldLocation): number {
   const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
@@ -76,6 +98,14 @@ export function footprintWidth(loc: WorldLocation): number {
  * yet), and a `?? 0` anywhere on this path would stack every unplaced location
  * on the world origin in one silent heap — which reads as one broken tile, not
  * as missing data.
+ *
+ * THE y IS THE PLATEAU (E8 task 4). Not 0 any more: the ground under a
+ * footprint is levelled flat by the server, and the height of that plateau is
+ * the field at the location's own centre (`setWorldGround`). Because the whole
+ * tile group hangs off this one point, everything the place is made of — the
+ * plate, the shell, the rooms, the scene payload's tile-local metres — climbs
+ * the hill together, and nothing inside the location has to know about relief
+ * at all.
  */
 export function footprintCentre(
   loc: { pos_x?: number | null; pos_z?: number | null }
@@ -84,7 +114,8 @@ export function footprintCentre(
   const z = loc.pos_z;
   if (typeof x !== 'number' || !Number.isFinite(x)) return null;
   if (typeof z !== 'number' || !Number.isFinite(z)) return null;
-  return new THREE.Vector3(x, 0, z);
+  const y = worldGroundAt ? worldGroundAt(x, z) : 0;
+  return new THREE.Vector3(x, Number.isFinite(y) ? y : 0, z);
 }
 
 /** Footprint rotation in RADIANS, the world-map convention of § A1.1 — the
@@ -915,9 +946,17 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
  *  ab deren deklarierter Standhöhe (`walk_y_world`), ein FLÄCHEN-Modell
  *  (`display: ground`/`shell_area`) IST der Boden und wird gar nicht
  *  gedeckelt — sonst fällt die Figur am erhöhten Ufer auf Ebene 0 zurück.
- *  Die Regel steht als reine Funktion in `game/ground.ts`. */
+ *  Die Regel steht als reine Funktion in `game/ground.ts`.
+ *
+ *  ALLES MISST RELATIV ZUR KACHEL (E8 Task 4). Seit die Kachel auf ihrem
+ *  Plateau steht (`footprintCentre`), sind die Strahl-Treffer WELT-y, die
+ *  Spec-Zahl `walk_y_world` aber ein Kachel-Meter (das Rezept rechnet um den
+ *  Kachelboden y = 0). Ohne den Abzug hier läge die Dach-Grenze auf einem
+ *  Hügel um genau die Plateauhöhe zu tief und JEDER Treffer eines Gebäudes
+ *  auf erhöhtem Grund wäre „Dach" — die Figur fiele auf den Kachelboden
+ *  zurück, also exakt Befund B8 nochmal, nur von oben. */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
-  const lift = terrainLiftAt(tile, at.x, at.z);
+  const lift = tile.center.y + terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
   if (!target) return lift;
   const info: GroundModelInfo = {
@@ -928,7 +967,11 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
   const ray = new THREE.Raycaster(
     new THREE.Vector3(at.x, rayStartY, at.z), new THREE.Vector3(0, -1, 0));
   for (const h of ray.intersectObject(target, true)) {
-    if (acceptsWalkHit(info, h.point.y)) return h.point.y + 0.01 + lift;
+    // Der Treffer ist Welt-y, die Decke eine Kachel-Höhe: in DERSELBEN
+    // Bezugsebene vergleichen, sonst kippt die Regel mit dem Plateau.
+    if (acceptsWalkHit(info, h.point.y - tile.center.y)) {
+      return h.point.y + 0.01 + terrainLiftAt(tile, at.x, at.z);
+    }
   }
   return lift;
 }
