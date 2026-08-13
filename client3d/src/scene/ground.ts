@@ -319,6 +319,11 @@ export function createGround(): Ground {
   let field: WorldHeightField | null = null;
   let loadedHeightSig: string | null = null;
   let heightRev = 0;
+  /** `worldHeightRange(field)`, taken ONCE when the field arrives. It walks
+   *  every support point (up to 120 000 of them, § A16) and both readers ask
+   *  on the poll path — the ray start when the field lands, the cell size on
+   *  every single sync. */
+  let fieldRange = { min: 0, max: 0 };
   /** The cell size plate and areas are cut at — ONE for the whole ground, so
    *  the two always meet on the same lines (`gridStepFor`, gridMesh.ts). 0
    *  while there is no relief at all: then nothing is subdivided. */
@@ -443,8 +448,7 @@ export function createGround(): Ground {
   function cellFor(bounds: WorldBounds | null): number {
     const step = field?.step_m ?? 0;
     if (!(step > 0)) return 0;
-    const range = worldHeightRange(field);
-    if (range.min === 0 && range.max === 0) return 0;
+    if (fieldRange.min === 0 && fieldRange.max === 0) return 0;
     const [x0, z0, x1, z1] = plateExtent(bounds);
     return gridStepFor(x0, z0, x1, z1, step);
   }
@@ -758,9 +762,10 @@ export function createGround(): Ground {
       field = await fetchHeightfield();
       loadedHeightSig = field.sig || heightSig;
       heightRev += 1;
+      fieldRange = worldHeightRange(field);
       // The tiles ray their ground from above the WORLD, so the relief moves
       // the start of that ray — see `setWorldRayStart`.
-      setWorldRayStart(worldHeightRange(field).max);
+      setWorldRayStart(fieldRange.max);
       return true;
     } catch {
       return false;
