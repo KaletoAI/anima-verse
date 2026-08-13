@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { acceptsWalkHit, standY, type GroundModelInfo } from '../game/ground';
+import { acceptsWalkHit, plateLift, standY, type GroundModelInfo } from '../game/ground';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
@@ -525,10 +525,11 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
 const DRAPE_STEP_M = 2;
 const DRAPE_MAX_SEGMENTS = 48;
 
-/** Below this spread of the world ground over a footprint the plate stays the
- *  ONE quad it always was (metres). Same idea as the fog tiling of E8 task 5:
- *  cut only where the ground actually moves — a world without relief must cost
- *  exactly what it cost before. */
+/** Below this LIFT anywhere over a footprint the plate stays the ONE quad it
+ *  always was (metres). Same idea as the fog tiling of E8 task 5: cut only
+ *  where the ground actually moves — a world without relief must cost exactly
+ *  what it cost before. The lift is never negative (`plateLift`), so the
+ *  largest one IS the spread. */
 const DRAPE_FLAT_EPS_M = 0.05;
 
 /** Ground plate of the FOOTPRINT — the surface texture of the location's
@@ -544,6 +545,22 @@ const DRAPE_FLAT_EPS_M = 0.05;
  *  Under a levelling footprint (`level_ground`, § A16.1) the field is flat and
  *  every lift is the same zero — the plate stays the ONE quad it was, and so it
  *  does in a world with no relief at all (`DRAPE_FLAT_EPS_M`).
+ *
+ *  IT ONLY EVER RISES (`game/ground.plateLift`, review finding I1). The figure
+ *  stands on `standY` = the HIGHER of tile and world, so downhill the tile wins
+ *  and a plate that followed the world down would sink away under it. Worked
+ *  through by hand, a footprint whose centre stands on 2.0 m: at a point where
+ *  the world reads 3.2 the vertex is lifted 1.2 and the figure walks at 3.2 —
+ *  both on the same surface; at a point where the world reads 0.5 the lift is 0,
+ *  the plate stays the tile floor 2.0 and the figure walks at 2.0 — again the
+ *  same surface, with the landscape passing underneath.
+ *
+ *  THE FLATNESS PROBE READS THE DRAPE GRID, not a handful of points (review
+ *  finding I2): a hill at the quarter point of an 80 m footprint is 28 m from
+ *  every corner, edge midpoint and the centre, so a 3 × 3 probe read a spread
+ *  of 0 and left the plate flat for exactly the layout the drape is for. The
+ *  probe now walks the same (`seg`+1)² lattice the vertices sit on — at most
+ *  49² samples of plain arithmetic, once, when the tile is built.
  *
  *  THE MESH FRAME IS UNTOUCHED: the plate keeps its −90° rotation and its
  *  y = 0.04, because `sceneRecipe` writes that height (backstop mode) and
@@ -562,36 +579,36 @@ function groundPlate(widthM: number, tex: THREE.Texture,
   const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
   const cos = Math.cos(at.yaw);
   const sin = Math.sin(at.yaw);
-  /** The world lift over the tile's own floor at a TILE-LOCAL point. The tile
-   *  group already stands on `at.y`, so only the DIFFERENCE belongs on the
-   *  vertex — otherwise the plate would climb the hill twice. The mapping is
-   *  § A1.1, the same one `tileToWorld` uses. */
+  /** The lift of one TILE-LOCAL point over the tile floor. The world lookup is
+   *  the caller's business, the RULE is `game/ground.plateLift` — the same one
+   *  the figure stands by. The mapping is § A1.1, the one `tileToWorld` uses. */
   const liftAt = (lx: number, lz: number): number => {
     if (!worldGroundAt) return 0;
-    const h = worldGroundAt(at.x + lx * cos + lz * sin,
-                            at.z - lx * sin + lz * cos);
-    return Number.isFinite(h) ? h - at.y : 0;
+    return plateLift(worldGroundAt(at.x + lx * cos + lz * sin,
+                                   at.z - lx * sin + lz * cos), at.y);
   };
-  // Does the ground move under this footprint at all? Nine probes over the
-  // square — the corners alone would miss a hill sitting in the middle of it.
+  const seg = Math.min(DRAPE_MAX_SEGMENTS,
+                       Math.max(1, Math.ceil(widthM / DRAPE_STEP_M)));
+  const step = widthM / seg;
   const half = widthM / 2;
-  let min = Infinity;
-  let max = -Infinity;
-  for (const lx of [-half, 0, half]) {
-    for (const lz of [-half, 0, half]) {
-      const h = liftAt(lx, lz);
-      if (h < min) min = h;
-      if (h > max) max = h;
+  // Does the ground move under this footprint at all? Probed on the DRAPE GRID
+  // itself, so nothing between the samples can hide (finding I2).
+  let maxLift = 0;
+  for (let iz = 0; iz <= seg; iz++) {
+    for (let ix = 0; ix <= seg; ix++) {
+      const h = liftAt(-half + ix * step, -half + iz * step);
+      if (h > maxLift) maxLift = h;
     }
   }
-  const seg = max - min > DRAPE_FLAT_EPS_M
-    ? Math.min(DRAPE_MAX_SEGMENTS, Math.max(1, Math.ceil(widthM / DRAPE_STEP_M)))
-    : 1;
-  const geo = new THREE.PlaneGeometry(widthM, widthM, seg, seg);
-  if (seg > 1) {
+  const draped = maxLift > DRAPE_FLAT_EPS_M;
+  const geo = new THREE.PlaneGeometry(widthM, widthM,
+                                      draped ? seg : 1, draped ? seg : 1);
+  if (draped) {
     // The plate lies in the XY plane and the mesh turns it by −90° about X, so
     // a vertex (px, py, pz) sits at tile-local (px, pz, −py): the sample point
-    // is (px, −py) and the height is the local z.
+    // is (px, −py) and the height is the local z. Read off the vertex rather
+    // than off a grid index, so the geometry's own vertex order cannot drift
+    // away from the lattice probed above.
     const pos = geo.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       pos.setZ(i, liftAt(pos.getX(i), -pos.getY(i)));
@@ -1080,6 +1097,13 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
                 worldGroundAt ? worldGroundAt(at.x, at.z) : NaN);
 }
 
+/** The downward probe of `tileWalkY`, hoisted: it runs for every figure of
+ *  every frame since the travellers share this height, and a Raycaster plus two
+ *  vectors per call is garbage nobody needs. */
+const walkRay = new THREE.Raycaster();
+const walkRayFrom = new THREE.Vector3();
+const WALK_RAY_DOWN = new THREE.Vector3(0, -1, 0);
+
 /** The TILE's own answer — plate, model skin and scene relief, all measured
  *  from the tile centre. Split off so the world term above wraps the whole
  *  answer instead of one of its three exits. */
@@ -1092,9 +1116,8 @@ function tileWalkY(tile: Tile, at: THREE.Vector3): number {
       : tile.modelIsShellArea ? 'shell_area' : 'shell',
     walkY: tile.modelWalkY,
   };
-  const ray = new THREE.Raycaster(
-    new THREE.Vector3(at.x, rayStartY, at.z), new THREE.Vector3(0, -1, 0));
-  for (const h of ray.intersectObject(target, true)) {
+  walkRay.set(walkRayFrom.set(at.x, rayStartY, at.z), WALK_RAY_DOWN);
+  for (const h of walkRay.intersectObject(target, true)) {
     // The hit is world y, the ceiling a tile height: compare them in the SAME
     // frame of reference, or the rule tips over with the plateau.
     if (acceptsWalkHit(info, h.point.y - tile.center.y)) {

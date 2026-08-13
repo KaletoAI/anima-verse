@@ -80,12 +80,33 @@ export function acceptsWalkHit(info: GroundModelInfo | null | undefined,
  *
  * NaN is not a height. A sampler that answers nonsense (no field yet, a broken
  * payload) must not put a figure at NaN, from which no frame ever recovers:
- * the other source answers alone, and with both gone the tile floor 0 does.
+ * a non-finite TILE answer reads as the tile floor 0 (and the world may still
+ * win over it — `standY(NaN, −0.8)` is 0, not −0.8), a non-finite WORLD answer
+ * leaves the tile answer alone, and with both gone the figure stands on 0.
  */
 export function standY(walkY: number, terrainY: number): number {
   const walk = Number.isFinite(walkY) ? walkY : 0;
   const terrain = Number.isFinite(terrainY) ? terrainY : walk;
   return Math.max(walk, terrain);
+}
+
+/**
+ * How far the footprint PLATE is lifted over the tile floor at a point — the
+ * drawn mirror of `standY`, and derived from it so the two cannot drift.
+ *
+ * THE PLATE ONLY EVER RISES. `standY` lets the tile answer win where the
+ * landscape runs BELOW the footprint, so a plate that followed the world down
+ * would sink away under a figure standing at the tile height — the same hole
+ * as finding 4, only mirrored (review 2026-08-13, I1). Downhill the lift is
+ * therefore 0: the plate stays the tile floor the figure stands on, and the
+ * landscape passes underneath it.
+ *
+ * `worldY` is the world ground at the point, `tileY` the height the tile group
+ * already stands on (`footprintCentre`) — only the DIFFERENCE belongs on a
+ * vertex, or the plate would climb the hill twice.
+ */
+export function plateLift(worldY: number, tileY: number): number {
+  return standY(tileY, worldY) - (Number.isFinite(tileY) ? tileY : 0);
 }
 
 /** One location's scene relief at the point being asked about: how WIDE its
