@@ -650,11 +650,26 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Clients** (Distanz-Hysterese, Sichtweite, Instanz-Budget — in
   `development_instructions/plan-scatter-lod.md` festgehalten), kein
   Payload-Vertrag: gespeichert bleiben die drei Felder oben.
+- **Der Server hängt an denselben Eintrag zusätzlich `prop_height_m`** — die
+  ECHTE Höhe des Props in Metern aus seinem Bibliotheks-Datensatz
+  (`app/core/props.prop_height_m`, dieselbe Zahl, die der Props-Tab zeigt und
+  editiert). Auch das ist reine Auslieferung, nie gespeichert: eine im Props-Tab
+  korrigierte Höhe wirkt beim nächsten Refetch. Fremde/absolute URLs und
+  Einträge ohne `model` bekommen den Schlüssel nicht; ein Prop-Datensatz hat
+  IMMER eine Höhe (ohne eigene Maße den 1-m-Platzhalterwürfel), „kein
+  Schlüssel" heißt also „kein Prop", nicht „keine Höhe".
 - **`height_m` ist die Zielhöhe, nicht die Modellgröße:** das geladene Mesh
-  wird uniform skaliert, bis seine Bounding-Box so hoch ist. **Ohne Angabe
-  gilt die Vorgabe-Zielhöhe 2,0 m**, nicht die Autorengröße — „was die Datei
-  sagt" ist in einer Meter-Welt keine Größe (Befund 1 der E8-Sichtabnahme: ein
-  in Zentimetern exportierter Baum stand 2 cm hoch neben der 1,70-m-Figur).
+  wird uniform skaliert, bis seine Bounding-Box so hoch ist. Die **Rangfolge
+  je Eintrag** ist (Befund 12 der Sichtabnahme):
+  `height_m` am Eintrag → `prop_height_m` des Props → **2,0 m** als letzte
+  Vorgabe. Also: was jemand für DIESEN Boden hingeschrieben hat, sonst wie
+  groß das Prop wirklich ist, und die flache Vorgabe nur noch dort, wo es gar
+  kein Prop gibt (fremde URL). Die Autorengröße der Datei gilt nie — „was die
+  Datei sagt" ist in einer Meter-Welt keine Größe (Befund 1 der E8-Sichtabnahme:
+  ein in Zentimetern exportierter Baum stand 2 cm hoch neben der 1,70-m-Figur;
+  Befund 12 war die Gegenrichtung: mit der flachen Vorgabe stand jeder Baum
+  avatarhoch). Der Karten-Editor sät deshalb KEINE Höhe mehr in eine neue
+  Zeile, er zeigt die geerbte als Platzhalter.
   Das eingebaute Büschel ohne `height_m` ist **0,8 m** hoch (hüfthoch statt
   kniehoch). **Jedes Prop steht AUF dem Boden**: die Geometrie wird auf
   Unterkante = 0 geschoben, nachdem die Mesh-Transform innerhalb der GLB

@@ -506,6 +506,26 @@ def model_tiers(prop_id: str) -> List[str]:
     return sorted(g.tiers()) if g else []
 
 
+def prop_height_m(prop_id: str) -> float:
+    """The prop's REAL height in metres — the very number the Props tab shows
+    and :func:`list_props` reports; ``0.0`` for an id this world has no record
+    for.
+
+    The lean single-prop read: the master sidecar and the same
+    ``_effective_dims`` every listing goes through, without the gallery,
+    bbox-backfill and per-run detail :func:`get_prop` collects. It is what a
+    payload asks when it wants to know how tall a prop REALLY is (the terrain
+    scatter default, § A9) — the mesh file cannot say, its normalisation
+    destroyed the scale.
+
+    A record always answers with a usable height: a prop created without dims
+    stores the ``DEFAULT_DIM_M`` cube, and a legacy sidecar with only
+    ``size_m`` is derived in memory. So ``0.0`` means "no such prop", never
+    "no height authored"."""
+    meta = read_sidecar(prop_id)
+    return _effective_dims(meta)["height_m"] if meta else 0.0
+
+
 def prop_id_from_model_url(url: Any) -> str:
     """The prop id behind the canonical model URL (``/assets/props/<id>/model``
     — the very string :func:`list_props` hands out as ``model_url`` and the map

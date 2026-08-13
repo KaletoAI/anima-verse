@@ -163,32 +163,40 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
             "meta": meta}
 
 
-def with_scatter_variants(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Add ``variants`` to every scatter entry whose ``model`` is a prop of
-    this world — PAYLOAD ONLY, never stored (§ A9).
+def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Add what the PROP knows to every scatter entry naming one — ``variants``
+    and ``prop_height_m``, PAYLOAD ONLY, never stored (§ A9).
 
-    The stored entry keeps its exactly three authored fields; the resolution
-    tiers are a fact about the PROP, not about the painting, so they are
-    derived when the areas are handed out instead of being frozen into the DB
-    (a low variant generated afterwards would otherwise never reach a client).
+    The stored entry keeps its exactly three authored fields; both additions
+    are facts about the PROP, not about the painting, so they are derived when
+    the areas are handed out instead of being frozen into the DB (a low variant
+    generated afterwards, or a corrected height, would otherwise never reach a
+    client).
+
     ``variants`` is ``{tier: "/assets/props/<id>/model?tier=<tier>"}`` for the
     tiers the prop HAS — the same map and the same ``pickVariant`` rule the
-    scene payload uses for props and buildings.
+    scene payload uses for props and buildings; it stays away when the prop
+    carries no mesh.
 
-    No key at all when there is no model, when the URL is not the canonical
-    prop URL (a foreign or absolute one names a mesh with no tiers here) or
-    when the prop carries no mesh; a client without ``variants`` loads
-    ``model`` exactly as before.
+    ``prop_height_m`` is the prop's REAL height in metres from its library
+    record — the target height a client falls back to when the entry authors
+    none. A tree is a tree because the library says it is 8 m tall; the flat
+    default only ever meant "nobody asked", and it made every wood
+    avatar-high.
+
+    Neither key at all when there is no model or when the URL is not the
+    canonical prop URL (a foreign or absolute one names a mesh this world has
+    no record for); a client without them behaves exactly as before.
 
     The areas are enriched IN PLACE (``list_areas`` builds fresh dicts per
-    call) and handed back. The tier lookup touches the prop directory, so it
-    is cached per call: one read per DISTINCT prop, however many areas name
-    it.
+    call) and handed back. Both lookups touch the prop directory, so they are
+    cached together per call: one read per DISTINCT prop, however many areas
+    name it.
     """
     from app.core.model_store import variant_urls
-    from app.core.props import model_tiers, prop_id_from_model_url
+    from app.core import props as _props
 
-    cache: Dict[str, Dict[str, str]] = {}
+    cache: Dict[str, Dict[str, Any]] = {}
     for area in areas:
         meta = area.get("meta")
         scatter = meta.get("scatter") if isinstance(meta, dict) else None
@@ -197,14 +205,23 @@ def with_scatter_variants(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for entry in scatter:
             if not isinstance(entry, dict):
                 continue
-            prop_id = prop_id_from_model_url(entry.get("model"))
+            prop_id = _props.prop_id_from_model_url(entry.get("model"))
             if not prop_id:
                 continue
             if prop_id not in cache:
-                cache[prop_id] = variant_urls(f"/assets/props/{prop_id}/model",
-                                              model_tiers(prop_id))
-            if cache[prop_id]:
-                entry["variants"] = dict(cache[prop_id])
+                cache[prop_id] = {
+                    "variants": variant_urls(
+                        f"/assets/props/{prop_id}/model",
+                        _props.model_tiers(prop_id)),
+                    "height": _props.prop_height_m(prop_id),
+                }
+            known = cache[prop_id]
+            if known["variants"]:
+                entry["variants"] = dict(known["variants"])
+            # 0.0 is "no such prop", never "no height authored" — a record
+            # always has one (see props.prop_height_m).
+            if known["height"] > 0:
+                entry["prop_height_m"] = known["height"]
     return areas
 
 

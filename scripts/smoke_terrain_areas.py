@@ -64,34 +64,52 @@ Throwaway storage. Hand-derived expectations:
       next to scatter survive untouched, and the list survives a save/read
       round trip.
 
- [12] meta.scatter `variants` — the resolution tiers the entry's PROP has,
-      added when the areas are handed out (GET /play/terrain), never stored
-      (plan-scatter-lod.md, Task 1). Prop fixtures are built in the same
+ [12] meta.scatter enrichment (`terrain.with_scatter_props`) — what the
+      entry's PROP knows, added when the areas are handed out
+      (GET /play/terrain) and never stored: `variants` (the resolution tiers
+      it HAS, plan-scatter-lod.md Task 1) and `prop_height_m` (its REAL
+      height, acceptance finding 12). Prop fixtures are built in the same
       throwaway storage with the real props/model_store APIs:
-        smoke-tree  two gallery files, the second selected for tier "low"
-                    -> tiers [full, low]
-        smoke-rock  one gallery file, no selection at all — the default tier
-                    resolves to the newest unclaimed file -> tiers [full]
-        smoke-ghost a prop record without any mesh          -> tiers []
+        smoke-tree  height_m 8.5; two gallery files, the second selected for
+                    tier "low"                             -> tiers [full, low]
+        smoke-rock  no dims given; one gallery file, no selection at all —
+                    the default tier resolves to the newest unclaimed file
+                                                           -> tiers [full]
+        smoke-ghost no dims given, a prop record without any mesh -> tiers []
+      DEFAULT_DIM_M IS THE REALITY, and the test pins it: `create_prop` writes
+      the 1 m placeholder cube when no dim is given, and `_effective_dims`
+      derives one for a legacy `size_m` sidecar — so EVERY prop record answers
+      with a height > 0. There is no "prop without a height"; a missing
+      `prop_height_m` means "no prop record behind that URL", full stop.
       Hand-derived expectations per scatter entry:
         model /assets/props/<tree>/model  -> variants with EXACTLY two URLs,
-              "/assets/props/<tree>/model?tier=full" and "...?tier=low"
-        model /assets/props/<rock>/model  -> exactly one URL, ?tier=full
-        no model                          -> no "variants" key
-        model of the mesh-less prop       -> no key (an invented tier is a
-                                             404 dressed up as a model)
-        an unknown prop id                -> no key
+              "/assets/props/<tree>/model?tier=full" and "...?tier=low",
+              and prop_height_m 8.5 (the sidecar's, not the entry's)
+        model /assets/props/<rock>/model  -> exactly one URL, ?tier=full,
+              and prop_height_m 1.0 (DEFAULT_DIM_M, nothing was authored)
+        no model                          -> neither key
+        model of the mesh-less prop       -> no "variants" (an invented tier
+              is a 404 dressed up as a model) but prop_height_m 1.0: the two
+              keys are independent, the height is a fact about the RECORD
+        an unknown prop id                -> neither key
         an absolute/foreign URL, and the canonical path WITH a query string
-                                          -> no key (parsing is strict)
+                                          -> neither key (parsing is strict)
+        the tree AGAIN with height_m 3    -> prop_height_m still 8.5; the
+              enrichment reports the LIBRARY height and never echoes the
+              authored one, which is what makes the precedence a precedence
       The stored area is unchanged afterwards: a fresh read has exactly the
-      three authored fields per entry.
-      The tier lookup is cached per call: two areas naming the same prop four
-      times in total do ONE props.model_tiers read (counted with a wrapper).
-      RED COUNTER-PROBES, EXECUTED, both built from the module's own pieces:
+      authored fields per entry (the entry with a height: exactly those
+      three).
+      Both lookups are cached TOGETHER per call: seven parsable mentions
+      across two areas do FOUR props.model_tiers and FOUR props.prop_height_m
+      reads — one per DISTINCT prop, and the height is not a second walk of
+      the directory (counted with wrappers).
+      RED COUNTER-PROBES, EXECUTED, all built from the module's own pieces:
       a "loose URL" mutant (anything containing /assets/props/) hands the
-      foreign URL a variants map, and a "no tier parameter" mutant builds
-      "/assets/props/<id>/model" without "?tier=" — both answers differ from
-      the real one at exactly the checked spot.
+      foreign URL a variants map, a "no tier parameter" mutant builds
+      "/assets/props/<id>/model" without "?tier=", and an "echo the entry"
+      mutant reports entry.height_m as prop_height_m (3 instead of 8.5) —
+      every answer differs from the real one at exactly the checked spot.
 
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
@@ -412,18 +430,19 @@ check("the list survives the save/read round trip",
        "note": "free form"})
 terrain.delete_area(_scat["id"])
 
-print("[12] scatter variants — the tiers the prop HAS (payload only)")
+print("[12] scatter enrichment — the tiers and the height the prop HAS")
 from app.core import props  # noqa: E402
 
 
-def make_prop(name, tiers):
+def make_prop(name, tiers, height_m=None):
     """A prop with real gallery files, built through the props API.
 
     The default tier needs no selection entry (the gallery answers it with the
     newest unclaimed file); every further tier is selected explicitly, which is
-    exactly what the admin's "create low variant" does.
+    exactly what the admin's "create low variant" does. Without ``height_m``
+    the record takes the DEFAULT_DIM_M cube — the "nobody authored dims" case.
     """
-    pid = props.create_prop(name=name)["id"]
+    pid = props.create_prop(name=name, height_m=height_m)["id"]
     for tier in tiers:
         gallery = props.model_gallery(pid)
         path = gallery.new_path(".glb")
@@ -433,12 +452,21 @@ def make_prop(name, tiers):
     return pid
 
 
-TREE = make_prop("smoke tree", ["full", "low"])
+TREE = make_prop("smoke tree", ["full", "low"], height_m=8.5)
 ROCK = make_prop("smoke rock", ["full"])
 GHOST = make_prop("smoke ghost", [])
 check("tree tiers", props.model_tiers(TREE), ["full", "low"])
 check("rock tiers", props.model_tiers(ROCK), ["full"])
 check("mesh-less prop has no tier", props.model_tiers(GHOST), [])
+# The DEFAULT_DIM_M reality: a record ALWAYS answers with a height, and 0.0
+# is reserved for "no such prop".
+check("authored height comes back", props.prop_height_m(TREE), 8.5)
+check("no dims authored -> the DEFAULT_DIM_M cube",
+      props.prop_height_m(ROCK), 1.0)
+check("no mesh is still a record with a height",
+      props.prop_height_m(GHOST), 1.0)
+check("unknown prop -> 0.0, the 'no such prop' answer",
+      props.prop_height_m("nope"), 0.0)
 
 # Same prop id, foreign host: the strict parse must still refuse it — and it
 # is what makes the "loose URL" mutant below produce a real variants map.
@@ -456,12 +484,14 @@ _va = terrain.save_area(
                           {"density_per_100m2": 2,
                            "model": "/assets/props/nope/model"},
                           {"density_per_100m2": 2, "model": FOREIGN},
-                          {"density_per_100m2": 2, "model": WITH_QUERY}]}})
+                          {"density_per_100m2": 2, "model": WITH_QUERY},
+                          {"density_per_100m2": 2, "height_m": 3,
+                           "model": f"/assets/props/{TREE}/model"}]}})
 
 
 def served_scatter():
     """The entries as GET /play/terrain hands them out."""
-    areas = terrain.with_scatter_variants(terrain.list_areas())
+    areas = terrain.with_scatter_props(terrain.list_areas())
     return next(a["meta"]["scatter"] for a in areas if a["id"] == _va["id"])
 
 
@@ -479,21 +509,46 @@ check("canonical path with a query -> no variants key",
       "variants" in entries[6], False)
 check("model itself is untouched", entries[0]["model"],
       f"/assets/props/{TREE}/model")
+# The height half — same reach, own answer.
+check("the tree's real height rides along", entries[0].get("prop_height_m"), 8.5)
+check("the rock's DEFAULT_DIM_M height rides along",
+      entries[1].get("prop_height_m"), 1.0)
+check("no model -> no prop_height_m key", "prop_height_m" in entries[2], False)
+check("no mesh but a record -> the height still rides along",
+      entries[3].get("prop_height_m"), 1.0)
+check("unknown prop id -> no prop_height_m key",
+      "prop_height_m" in entries[4], False)
+check("foreign URL -> no prop_height_m key",
+      "prop_height_m" in entries[5], False)
+check("canonical path with a query -> no prop_height_m key",
+      "prop_height_m" in entries[6], False)
+check("an authored height does not change the reported library height",
+      (entries[7].get("height_m"), entries[7].get("prop_height_m")), (3.0, 8.5))
 _stored = next(a["meta"]["scatter"] for a in terrain.list_areas()
                if a["id"] == _va["id"])
-check("a fresh read carries no variants (payload only)",
-      [sorted(e) for e in _stored[:2]],
-      [["density_per_100m2", "model"], ["density_per_100m2", "model"]])
+check("a fresh read carries neither key (payload only)",
+      [sorted(e) for e in (_stored[0], _stored[1], _stored[7])],
+      [["density_per_100m2", "model"], ["density_per_100m2", "model"],
+       ["density_per_100m2", "height_m", "model"]])
 
 # One read per DISTINCT prop, however often it is named: the payload is
 # refetched on every terrain_sig change, and each read walks a prop directory.
+# Both facts come out of the SAME cache entry — a second walk per mention for
+# the height would undo exactly what the cache is there for.
 _calls = []
+_height_calls = []
 _real_tiers = props.model_tiers
+_real_height = props.prop_height_m
 
 
 def counting_tiers(prop_id):
     _calls.append(prop_id)
     return _real_tiers(prop_id)
+
+
+def counting_height(prop_id):
+    _height_calls.append(prop_id)
+    return _real_height(prop_id)
 
 
 _va2 = terrain.save_area(
@@ -503,19 +558,27 @@ _va2 = terrain.save_area(
                           {"density_per_100m2": 1,
                            "model": f"/assets/props/{TREE}/model"}]}})
 props.model_tiers = counting_tiers
+props.prop_height_m = counting_height
 try:
-    served = terrain.with_scatter_variants(terrain.list_areas())
+    served = terrain.with_scatter_props(terrain.list_areas())
 finally:
     props.model_tiers = _real_tiers
-# Six parsable mentions across the two areas, four distinct props (the two
+    props.prop_height_m = _real_height
+# Seven parsable mentions across the two areas, four distinct props (the two
 # without a mesh are looked up once as well and then remembered as "none").
-check("six mentions of four props -> four lookups", sorted(_calls),
+check("seven mentions of four props -> four tier lookups", sorted(_calls),
       sorted([TREE, ROCK, GHOST, "nope"]))
+check("…and four height lookups, out of the same cache entry",
+      sorted(_height_calls), sorted([TREE, ROCK, GHOST, "nope"]))
 _by_id = {a["id"]: (a["meta"].get("scatter") or []) for a in served}
 check("every mention still got its variants",
       [len(e.get("variants") or {})
        for e in _by_id[_va["id"]] + _by_id[_va2["id"]]],
-      [2, 1, 0, 0, 0, 0, 0, 2, 2])
+      [2, 1, 0, 0, 0, 0, 0, 2, 2, 2])
+check("every mention of a KNOWN prop still got its height",
+      [e.get("prop_height_m")
+       for e in _by_id[_va["id"]] + _by_id[_va2["id"]]],
+      [8.5, 1.0, None, 1.0, None, None, None, 8.5, 8.5, 8.5])
 
 # Red counter-probes, built from the module's own pieces.
 from app.core.model_store import variant_urls  # noqa: E402
@@ -537,13 +600,27 @@ def mutant_no_tier(entry):
     return {t: f"/assets/props/{pid}/model" for t in tiers} or None
 
 
+def mutant_echo_entry(entry):
+    """Mutant: the enrichment reads the ENTRY's height instead of the prop's
+    sidecar — the precedence collapses into "whatever is already there"."""
+    pid = props.prop_id_from_model_url(entry.get("model"))
+    return float(entry.get("height_m") or 0) if pid else None
+
+
 differs("mutant 'loose URL' invents variants for the foreign URL",
         mutant_loose({"model": FOREIGN}), entries[5].get("variants"))
 differs("mutant 'no tier parameter' names the same URL twice",
         mutant_no_tier({"model": f"/assets/props/{TREE}/model"}),
         entries[0].get("variants"))
+differs("mutant 'echo the entry' reports the authored 3 m as the prop height",
+        mutant_echo_entry({"model": f"/assets/props/{TREE}/model",
+                           "height_m": 3}),
+        entries[7].get("prop_height_m"))
 check("the loose mutant would really answer the foreign URL",
       bool(mutant_loose({"model": FOREIGN})), True)
+check("the echoing mutant would really answer 3 m",
+      mutant_echo_entry({"model": f"/assets/props/{TREE}/model",
+                         "height_m": 3}), 3.0)
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])
 

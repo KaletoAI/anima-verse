@@ -2189,9 +2189,10 @@ def get_terrain_route(user=Depends(get_current_user)):
     hide. Clients poll /play/worldmap and refetch this when terrain_sig
     changes.
 
-    The scatter entries are enriched with the resolution tiers their prop HAS
-    (`variants`, § A9) on the way out — derived here, not stored, so a low
-    variant generated later reaches the clients with the next refetch.
+    The scatter entries are enriched with what their prop knows on the way out
+    (`variants` = the resolution tiers it HAS, `prop_height_m` = its real
+    height, § A9) — derived here, not stored, so a low variant generated later
+    or a corrected height reaches the clients with the next refetch.
     """
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
@@ -2203,7 +2204,7 @@ def get_terrain_route(user=Depends(get_current_user)):
         "default_kind": default_kind(),
         "types": sorted(effective_catalog().values(),
                         key=lambda t: t["kind"]),
-        "areas": terrain.with_scatter_variants(terrain.list_areas()),
+        "areas": terrain.with_scatter_props(terrain.list_areas()),
         "sig": terrain.terrain_sig(),
     }
 
