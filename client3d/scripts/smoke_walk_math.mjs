@@ -57,14 +57,21 @@
  *
  * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
  * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
- * exact mirror of `relief.slope_blocks`. Below one metre of horizontal
- * distance a height change is a STEP (capped by `maxStep`), above it a SLOPE
- * (capped by `maxSlope` degrees):
+ * exact mirror of `relief.slope_blocks`. The SLOPE limit holds at every
+ * distance, and below one metre the STEP limit holds ON TOP of it:
  *
  *   slopeBlocks(dh, dist, maxStep, maxSlope) =
- *     |dh| === 0            -> false
- *     dist < 1              -> |dh| > maxStep
- *     otherwise             -> atan(|dh| / dist) * 180/pi > maxSlope
+ *     |dh| === 0  -> false
+ *     otherwise   -> (dist < 1 && |dh| > maxStep)
+ *                    || atan(|dh| / dist) * 180/pi > maxSlope
+ *
+ * The two hold TOGETHER and not either/or, and this file is where that shows
+ * (review finding F1/F2): the walk loop tests a LEAD of ~0.15 m while the
+ * server tests a REPORT step of ~1.12 m, so an either/or made the client blind
+ * to the whole band the server refuses between 40° and 69° — the figure walked
+ * on while the server snapped it back three times a second. The same form also
+ * let one climb any wall by crawling: 0.4 m per 0.1 m report is exactly the
+ * step limit and passed.
  *
  * At the world defaults (maxStep 0.4 m, maxSlope 40 deg), all derived by hand
  * and the first two straight off the plan (the Mondscheinsee shore and the
@@ -77,19 +84,27 @@
  *   dh 2,    dist 2    -> SLOPE, atan(1)     = 45      deg  > 40 -> blocked
  *   dh 1.6,  dist 2    -> SLOPE, atan(0.8)   = 38.6598 deg  < 40 -> free
  *   dh 1.6,  dist 0.99 -> the SAME rise a hair under the metre is a step
- *                         instead: 1.6 > 0.4                     -> blocked
+ *                         as well: 1.6 > 0.4                     -> blocked
  *   dh 0,    dist 0    -> flat ground never blocks (and no atan(0/0))
- * The metre line itself: dist exactly 1 is a SLOPE (`<` is strict), so
- * dh 0.5 / dist 1 -> atan(0.5) = 26.5651 deg < 40 -> free, while the same
- * 0.5 m at dist 0.999 is a step of 0.5 > 0.4 -> blocked. That jump is the
- * rule, not a defect: a 0.5 m rise one takes in a single stride IS a wall,
+ * and the two REGIME cases the either/or form waved through:
+ *   dh 0.18, dist 0.15 -> ONE walking lead. No step (0.18 <= 0.4), but
+ *                         atan(1.2) = 50.1944 deg                -> blocked
+ *   dh 0.4,  dist 0.1  -> THE CRAWL: exactly the step limit, so the old form
+ *                         said free; atan(4) = 75.9638 deg       -> blocked
+ * The metre line itself: at dist exactly 1 the step regime is over (`<` is
+ * strict), so dh 0.5 / dist 1 -> atan(0.5) = 26.5651 deg < 40 -> free, while
+ * the same 0.5 m at dist 0.999 is a step of 0.5 > 0.4 -> blocked. That jump is
+ * the rule, not a defect: a 0.5 m rise one takes in a single stride IS a wall,
  * and the same rise spread over a metre is a ramp.
  * The two LOOKUPS stay in main.ts, deliberately: the heights come from
- * `scene/tiles.terrainLiftAt` (the payload's relief field, the server's own
- * source — never the model raycast of `tileGroundY`), and the OPENING
- * EXEMPTION (a point within 1.5 m of an authored opening is never refused for
- * its height — an opening is the ramp onto a plateau) is `slopeBlockedBetween`
- * there. The server half is hand-derived in `scripts/smoke_slope_gate.py`.
+ * `reliefLiftAt` — the innermost enclosing tile that HAS a relief field, via
+ * `scene/tiles.terrainLiftAt` (the payload's field, the server's own source —
+ * never the model raycast of `tileGroundY`); a hut without a field of its own
+ * stands ON the ground under it rather than flattening it (finding F3). The
+ * OPENING EXEMPTION (a point within 1.5 m of an authored opening is never
+ * refused for its height — an opening is the ramp onto a plateau) is
+ * `slopeBlockedBetween` there. The server half is hand-derived in
+ * `scripts/smoke_slope_gate.py`.
  *
  * --- slideBlocked (E4 task 5) ---------------------------------------------
  * The step that would end in blocked ground keeps the component that runs
@@ -734,7 +749,7 @@ async function main() {
   // --- slopeBlocks (E8 task 1) ---------------------------------------------
   // The height gate as a pure predicate, mirroring `relief.slope_blocks`.
   // Every number is derived in the header; the limits are the world defaults.
-  console.log('slopeBlocks — a step below one metre, a slope above it');
+  console.log('slopeBlocks — the slope always, the step on top below one metre');
   {
     const STEP = 0.4;
     const SLOPE = 40;
@@ -762,6 +777,25 @@ async function main() {
       slopeBlocks(0, 0, STEP, SLOPE), false);
     check('a world with the limits wide open lets the cliff through',
       slopeBlocks(1.2, 0.5, 5, 89), false);
+    // THE TWO REGIME CASES (findings F1/F2) — the step limit alone is blind
+    // to both, and the client is where the first one bites: it walks in leads
+    // of ~0.15 m while the server judges ~1.12 m report steps.
+    check('one 0.15 m lead up a 50.19° wall is blocked here too',
+      slopeBlocks(0.18, 0.15, STEP, SLOPE), true);
+    check('...and crawling 0.4 m per 0.1 m does not climb 75.96° either',
+      slopeBlocks(0.4, 0.1, STEP, SLOPE), true);
+    // RED COUNTER-PROBE: the either/or form this rule started as. Both cases
+    // pass under it, which is exactly why the two limits now hold together.
+    const eitherOr = (dh, dist, maxStep, maxSlope) => {
+      const rise = Math.abs(dh);
+      if (!rise) return false;
+      if (dist < 1) return rise > maxStep;
+      return Math.atan2(rise, dist) * 180 / Math.PI > maxSlope;
+    };
+    check('the old form let the 50° lead through',
+      eitherOr(0.18, 0.15, STEP, SLOPE), false);
+    check('...and the crawl as well',
+      eitherOr(0.4, 0.1, STEP, SLOPE), false);
   }
 
   // --- clickmove (E4 task 5) -----------------------------------------------

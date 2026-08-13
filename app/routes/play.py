@@ -889,11 +889,15 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     if here is not None:
         from app.core.boundary_entry import opening_world_points
         from app.core.relief import (STEP_DISTANCE_M, get_max_slope_deg,
-                                     get_max_step_height_m, scene_ground_lift,
+                                     get_max_step_height_m, ground_lift_at,
                                      slope_blocks)
-        was = location_at_point(here["x"], here["z"], _locs)
-        dh = scene_ground_lift(derived, x, z) \
-            - scene_ground_lift(was, here["x"], here["z"])
+        # ``ground_lift_at`` asks the WORLD, not the derived location: a place
+        # without a relief of its own stands ON the ground under it instead of
+        # flattening it, so the innermost ENCLOSING relief answers. Without
+        # that a hut on a relief square would sit in a hole of its own making
+        # and seal itself off (finding F3).
+        dh = ground_lift_at(x, z, _locs) \
+            - ground_lift_at(here["x"], here["z"], _locs)
         dist = math.hypot(x - here["x"], z - here["z"])
         def _at_an_opening() -> bool:
             """OPENINGS ARE RAMP ENDS. An authored opening sits on the edge
@@ -905,12 +909,13 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             side). Asked only once the rule has already said "blocked": the
             openings are parsed out of ``map3d``, and this route runs up to
             four times a second per walker."""
-            # Out of the snapshot this report already read, never a second
-            # table read.
-            here_loc = next((loc for loc in _locs
-                             if (loc.get("id") or "") == current_id), None) \
-                if current_id else None
-            for loc in (derived, here_loc):
+            # Both ends are resolved GEOMETRICALLY, out of the snapshot this
+            # report already read: the location the previous point lies in,
+            # not the avatar's recorded ``current_location``. The two can
+            # disagree — an admin move, a takeover, a teleport — and it is the
+            # POINT whose door this is about.
+            was = location_at_point(here["x"], here["z"], _locs)
+            for loc in (derived, was):
                 for _edge, (ox, oz) in opening_world_points(loc or {}):
                     if min(math.hypot(ox - x, oz - z),
                            math.hypot(ox - here["x"], oz - here["z"])) \
@@ -918,18 +923,24 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
                         return True
             return False
 
-        if slope_blocks(dh, dist, get_max_step_height_m(),
+        max_step = get_max_step_height_m()
+        if slope_blocks(dh, dist, max_step,
                         get_max_slope_deg()) and not _at_an_opening():
             # NAME THE OBSTACLE (the B1 lesson: "you cannot walk there" tells
             # the player nothing they can act on). A step and a slope are two
             # different things to look at, so they get two different sentences
-            # — and the refusal LOGS, like every other reason here.
+            # — and the sentence follows WHICH limit actually fired, not the
+            # distance: a short report can be refused by the SLOPE limit with
+            # its step well inside the cap, and calling that "a step too high"
+            # would send the player looking for the wrong obstacle.
+            # The refusal LOGS, like every other reason here.
+            step = dist < STEP_DISTANCE_M and abs(dh) > max_step
             logger.info("pos refused (too steep): %s %.2f,%.2f -> %.2f,%.2f "
-                        "dh %.2f m over %.2f m", avatar, here["x"], here["z"],
-                        x, z, dh, dist)
+                        "dh %.2f m over %.2f m (%s)", avatar, here["x"],
+                        here["z"], x, z, dh, dist,
+                        "step" if step else "slope")
             refuse(409, "too_steep",
-                   t("That step is too high to climb.", lang)
-                   if dist < STEP_DISTANCE_M else
+                   t("That step is too high to climb.", lang) if step else
                    t("That slope is too steep to climb.", lang))
 
     written = set_character_pos(avatar, x, z)

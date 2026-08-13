@@ -1805,6 +1805,41 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
              "amplitude_m": _r(amplitude_world)}, relief_rooms)
 
 
+def layout_signature(map3d: Dict[str, Any],
+                     rooms: List[Dict[str, Any]]) -> str:
+    """Hash over everything that SHAPES a location's scene: its ``map3d``
+    (boundary openings, rotation, size, ``tile_rotation``, ``plan_width_m``,
+    ``storey_height_m``, ``floors``, the relief dials) plus every room that has
+    a layout.
+
+    Two consumers, deliberately one function: the worldmap payload ships the
+    first 10 characters as ``layout_sig`` so a running client knows when to
+    refetch a scene (E5 finding B11), and the walking gate keys its height-field
+    cache on it (``core/relief``). Room layouts alone were never enough — a gate
+    drawn into the boundary changes the scene and nothing else.
+    """
+    import hashlib
+    import json
+    rows = [(r.get("id"), r.get("layout"))
+            for r in (rooms or [])
+            if isinstance(r, dict) and r.get("layout")]
+    return hashlib.md5(json.dumps([rows, map3d or {}], sort_keys=True,
+                                  default=str).encode()).hexdigest()
+
+
+def tile_rotation_steps(map3d: Dict[str, Any]) -> int:
+    """How many 90° steps the FINISHED payload is turned by (0–3).
+
+    ONE decision, two callers: :func:`compose_scene` turns the payload with it
+    and the walking gate reproduces the same turn on the height field. Anything
+    that is not a right angle — 0, 45, an empty field, a string — is no
+    rotation at all, and ``_num`` swallows the unreadable cases rather than
+    raising on a stored blob nobody sanitized.
+    """
+    quarters = int(_num((map3d or {}).get("tile_rotation")))
+    return (quarters // 90) % 4 if quarters in (90, 180, 270) else 0
+
+
 def rotate_terrain_grid(grid: List[List[float]],
                         steps: int) -> List[List[float]]:
     """Turn a height field ``steps`` × 90° clockwise about the square's centre.
@@ -2056,7 +2091,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # turns about the square's centre, so one template location can be cloned
     # onto several places facing different ways. Everything above composed the
     # template in its base orientation — that is what the editor edits.
-    tile_rotation = int(_num(map3d.get("tile_rotation")))
-    if tile_rotation in (90, 180, 270):
-        _rotate_scene(out, tile_rotation // 90, extent)
+    steps = tile_rotation_steps(map3d)
+    if steps:
+        _rotate_scene(out, steps, extent)
     return out

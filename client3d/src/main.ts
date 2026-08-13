@@ -2139,19 +2139,33 @@ async function startApp(username: string, role: string) {
 
   /**
    * Height of the ground at a WORLD point — the client's mirror of the
-   * server's `relief.scene_ground_lift`.
+   * server's `relief.ground_lift_at`.
    *
    * `terrainLiftAt`, NOT `tileGroundY`, and that is the whole point: the
    * server's height source is the scene payload's relief field and nothing
    * else. The model skin `tileGroundY` raycasts against is client-only, so
    * judging the walk by it would refuse steps the server happily accepts —
    * the two views disagreeing, which is exactly what this mirror exists to
-   * prevent. Outside every footprint the world is flat (until the E8
-   * heightmap), which is the server's answer there too.
+   * prevent. Outside every relief the world is flat (until the E8 heightmap),
+   * which is the server's answer there too.
+   *
+   * NOT `tileAt` either: the innermost tile may carry no relief at all, and a
+   * place without one does not flatten the ground it stands on — it stands ON
+   * it. A hut on a village square that rises 2 m would otherwise sit in a hole
+   * of its own making and be sealed off by a cliff nobody authored (finding
+   * F3). So this asks the innermost enclosing tile that HAS a field, which is
+   * `tileAt`'s smallest-wins rule restricted to those.
    */
   function reliefLiftAt(x: number, z: number): number {
-    const t = tileAt(x, z);
-    return t ? terrainLiftAt(t, x, z) : 0;
+    let best: Tile | null = null;
+    for (const tile of tiles.values()) {
+      if (!tile.terrain) continue;
+      const half = tile.width / 2;
+      const p = worldToTile(tile, x, z);
+      if (Math.abs(p.x) > half || Math.abs(p.z) > half) continue;
+      if (!best || tile.width < best.width) best = tile;
+    }
+    return best ? terrainLiftAt(best, x, z) : 0;
   }
 
   /**

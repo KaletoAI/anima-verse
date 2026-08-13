@@ -111,15 +111,28 @@ export const STEP_DISTANCE_M = 1;
  * client's half of the E8 height gate of `POST /play/pos` (§ A15), and the
  * exact mirror of `relief.slope_blocks` on the server.
  *
- *   - `dist < STEP_DISTANCE_M` -> a STEP: blocked when `|dh| > maxStep`;
- *   - otherwise a SLOPE: blocked when `atan(|dh| / dist) > maxSlope` degrees.
+ * THE TWO LIMITS APPLY TOGETHER, and the step is the ADDITIONAL one:
+ *
+ *   - the SLOPE limit holds at EVERY distance: blocked when
+ *     `atan(|dh| / dist) > maxSlope` degrees;
+ *   - BELOW `STEP_DISTANCE_M` the step limit holds on top: blocked when
+ *     `|dh| > maxStep`, however gentle the angle would call it.
+ *
+ * It was an either/or once, and that broke this mirror in particular (review
+ * 2026-08-13): the client tests a walking LEAD of ~0.15 m while the server
+ * tests a REPORT step of ~1.12 m, so with an either/or the whole band from
+ * `maxSlope` up to the angle the same rise makes over a lead — 40° to 69° at
+ * the defaults — was invisible here and refused there. The figure walked on
+ * while the server snapped it back three times a second. (It also made every
+ * slope climbable by crawling: 0.1 m per report turns a 76° wall into a legal
+ * "step".)
  *
  * Direction does not matter — dropping off a cliff is as impossible as
  * climbing it, and a walker allowed down where it cannot come back up is a
  * walker one can strand. Level ground never blocks, which is what keeps the
  * whole gate inert in a world without relief.
  *
- * `dh` is the caller's lookup (`scene/tiles.terrainLiftAt` at both points),
+ * `dh` is the caller's lookup (`main.ts` `reliefLiftAt` at both points),
  * `maxStep`/`maxSlope` the world settings off the worldmap payload — what is
  * derivable is the RULE, and only the rule lives in this import-free file.
  */
@@ -127,8 +140,8 @@ export function slopeBlocks(dh: number, dist: number, maxStep: number,
                             maxSlope: number): boolean {
   const rise = Math.abs(dh);
   if (!rise) return false;
-  if (dist < STEP_DISTANCE_M) return rise > maxStep;
-  return Math.atan2(rise, dist) * 180 / Math.PI > maxSlope;
+  return (dist < STEP_DISTANCE_M && rise > maxStep)
+    || Math.atan2(rise, dist) * 180 / Math.PI > maxSlope;
 }
 
 export function slideBlocked(from: Point, to: Point, blocked: BlockedFn): Point {

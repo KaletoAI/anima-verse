@@ -18,17 +18,17 @@ Three things live here, and they are deliberately separate:
   (``client3d/src/game/walk.ts`` ``slopeBlocks``) and this side can be checked
   against the same hand-derived table.
 
-The rule itself, in one sentence: over a SHORT report (< 1 m) a height change
-is a STEP and is capped by ``max_step_height_m``; over anything longer it is a
-SLOPE and is capped by ``max_slope_deg``. Two rules rather than one because a
-1 m wall and a 1 m rise over 20 m are not the same obstacle — the first is
-unclimbable at any pace, the second is a gentle hill.
+The rule itself, in one sentence: the SLOPE limit (``max_slope_deg``) holds
+over EVERY distance, and below a metre the STEP limit (``max_step_height_m``)
+holds ON TOP of it. Two limits rather than one because a 1 m wall and a 1 m
+rise over 20 m are not the same obstacle — the first is unclimbable at any
+pace, the second is a gentle hill; and they hold together rather than
+either/or because each one alone can be walked round (see
+:func:`slope_blocks`).
 """
 
-import hashlib
-import json
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.log import get_logger
 
@@ -116,9 +116,23 @@ def slope_blocks(dh: float, dist: float, max_step: float,
     hand-derived table (``scripts/smoke_slope_gate.py``,
     ``client3d/scripts/smoke_walk_math.mjs``).
 
-      * ``dist < STEP_DISTANCE_M`` -> a STEP: blocked when ``|dh| > max_step``.
-      * otherwise a SLOPE: blocked when ``atan(|dh| / dist)`` exceeds
-        ``max_slope_deg``.
+    THE TWO LIMITS APPLY TOGETHER, and the step is the ADDITIONAL one:
+
+      * the SLOPE limit holds at every distance — blocked when
+        ``atan(|dh| / dist)`` exceeds ``max_slope_deg``;
+      * BELOW ``STEP_DISTANCE_M`` the step limit holds on top of it — blocked
+        when ``|dh| > max_step``, however gentle the angle would call it.
+
+    It was an either/or once (step under a metre, slope above it), and that
+    was wrong twice over (review 2026-08-13). First, the two sides of the
+    mirror measure over DIFFERENT lengths: the client tests a walking lead of
+    ~0.15 m, the server a report step of ~1.12 m. With an either/or the whole
+    band between ``max_slope_deg`` and the angle the same rise makes over a
+    lead — 40° to 69° at the defaults — was invisible to the client and
+    refused by the server, which is a figure walking on while the server
+    snaps it back three times a second. Second, an either/or makes EVERY slope
+    climbable by walking slowly: report 0.1 m at a time and a 76° wall passes
+    as a legal "step". A limit one gets round by being patient is not a limit.
 
     Direction does not matter — falling down a cliff is as impossible as
     climbing it, and a walker who may go down somewhere it cannot come back up
@@ -128,9 +142,9 @@ def slope_blocks(dh: float, dist: float, max_step: float,
     rise = abs(float(dh))
     if not rise:
         return False
-    if float(dist) < STEP_DISTANCE_M:
-        return rise > float(max_step)
-    return math.degrees(math.atan2(rise, float(dist))) > float(max_slope_deg)
+    dist = float(dist)
+    return (dist < STEP_DISTANCE_M and rise > float(max_step)) \
+        or math.degrees(math.atan2(rise, dist)) > float(max_slope_deg)
 
 
 # ── The scene relief as a height over the world ─────────────────────────
@@ -146,17 +160,19 @@ _grid_cache: Dict[str, Tuple[str, List[List[float]], float]] = {}
 
 def _fingerprint(map3d: Dict[str, Any], rooms: List[Dict[str, Any]],
                  variant: int) -> str:
-    """Everything the height field is built from, hashed: the ``map3d`` blob
+    """Everything the height field is built from, hashed.
+
+    ``scene_recipe.layout_signature`` is the shared part — the ``map3d`` blob
     (relief seed/amplitude/wave, ``area_detail``, ``tile_rotation``, the scale
-    anchor) plus every room layout (the flat hulls) plus the clone variant."""
-    payload = {
-        "map3d": map3d or {},
-        "rooms": [[str(r.get("id") or ""), r.get("layout") or {}]
-                  for r in rooms if isinstance(r, dict)],
-        "variant": variant,
-    }
-    return hashlib.md5(json.dumps(payload, sort_keys=True,
-                                  default=str).encode()).hexdigest()
+    anchor) plus every room layout (the flat hulls); it is the same signature
+    the worldmap payload ships as ``layout_sig``, so there is ONE answer to
+    "what shapes this scene". The clone VARIANT is added on top and is exactly
+    why the payload's own ``layout_sig`` cannot be reused as it stands: it does
+    not cover ``variant_seed``, and two clones of one template differ in
+    nothing else — their fields would collide in this cache.
+    """
+    from app.core.scene_recipe import layout_signature
+    return f"{layout_signature(map3d, rooms)}:{variant}"
 
 
 def _terrain_of(loc: Dict[str, Any], width_m: float
@@ -165,7 +181,8 @@ def _terrain_of(loc: Dict[str, Any], width_m: float
     applied), or ``None`` when the location has no relief."""
     from app.core.room_recipe import compose_recipe
     from app.core.scene_recipe import (compose_terrain, derive_scalars,
-                                       rotate_terrain_grid)
+                                       rotate_terrain_grid,
+                                       tile_rotation_steps)
     map3d = loc.get("map3d") or {}
     if not isinstance(map3d.get("relief"), dict) or not map3d.get("area_detail"):
         return None
@@ -188,10 +205,10 @@ def _terrain_of(loc: Dict[str, Any], width_m: float
         return None
     # ``tile_rotation`` is applied to the FINISHED payload, so the grid the
     # renderers hold is the rotated one — the gate has to judge that field,
-    # not the template's.
-    rotation = int(float((map3d.get("tile_rotation") or 0) or 0))
-    grid = rotate_terrain_grid(terrain["grid"], rotation // 90
-                               if rotation in (90, 180, 270) else 0)
+    # not the template's. WHICH rotations count is one decision and lives in
+    # one place (``tile_rotation_steps``), never a second copy of the
+    # ``in (90, 180, 270)`` question that could answer differently.
+    grid = rotate_terrain_grid(terrain["grid"], tile_rotation_steps(map3d))
     if key:
         _grid_cache[key] = (fp, grid, width_m)
     return grid
@@ -230,3 +247,57 @@ def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
         return 0.0
     lx, lz = world_to_local(x, z, cx, cz, yaw)
     return terrain_height(grid, lx / width + 0.5, lz / width + 0.5)
+
+
+def has_relief(loc: Optional[Dict[str, Any]]) -> bool:
+    """Does this location carry a height field of its own? An ``area_detail``
+    location with a ``relief`` block and a real amplitude — the same three
+    conditions ``compose_terrain`` composes on, so "has a relief" and "ships a
+    terrain grid" cannot mean two different things."""
+    map3d = (loc or {}).get("map3d") or {}
+    relief = map3d.get("relief")
+    if not isinstance(relief, dict) or not map3d.get("area_detail"):
+        return False
+    try:
+        return float(relief.get("amplitude_m") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def ground_lift_at(x: float, z: float,
+                   locations: Sequence[Dict[str, Any]]) -> float:
+    """Height of the ground at a WORLD point over the WHOLE world, metres.
+
+    THE ONE HEIGHT SOURCE the rules ask. Not "the height of the location the
+    point derives to": a place that carries NO relief of its own does not
+    flatten the ground it stands on — it stands ON that ground. A hut placed on
+    a village square whose relief rises 2 m would otherwise sit in a hole of
+    its own making: the square answers 2 m, the hut answers 0, and the step
+    between them is an artificial 63° cliff sealing an openingless hut from
+    every side (review finding F3, 2026-08-13).
+
+    So the answer is the INNERMOST ENCLOSING location that HAS a relief:
+    smallest footprint wins among those that do, exactly the way
+    ``location_at_point`` resolves nesting, and a location without one is
+    simply transparent to the question. Outside every relief the world is flat
+    (0.0) until the E8 heightmap lands.
+
+    The E8 heightmap will change only this function: a world ground height gets
+    ADDED here and every rule inherits it, because there is no second place
+    that samples a height.
+    """
+    from app.core.world_geometry import placed_footprint, point_in_footprint
+    best: Optional[Dict[str, Any]] = None
+    best_width: Optional[float] = None
+    for loc in locations or []:
+        if not has_relief(loc):
+            continue
+        fp = placed_footprint(loc)
+        if fp is None:
+            continue
+        cx, cz, width, yaw = fp
+        if not point_in_footprint(x, z, cx, cz, width, yaw):
+            continue
+        if best_width is None or width < best_width:
+            best, best_width = loc, width
+    return scene_ground_lift(best, x, z)

@@ -1550,7 +1550,7 @@ auseinanderstehen):
 | 5 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 6 | — |
 | 6 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`) | 409 `impassable` |
 | 7 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
-| 8 | **Höhe** des Punktes gegen den letzten gültigen (Stufe/Steigung, siehe unten) | 409 `too_steep` |
+| 8 | **Höhe** des Punktes gegen den letzten gültigen (Steigung immer, Stufe zusätzlich unter 1 m — siehe unten) | 409 `too_steep` |
 
 **Die Erlaubnis in Nr. 4 hat DREI Terme**, und der dritte ist keine
 Verzierung:
@@ -1628,20 +1628,34 @@ letzten gültigen Punkt mit dem Boden unter dem gemeldeten:
 
 ```
 Δh = lift(neuer Punkt) − lift(letzter Punkt)
-dist < 1 m  ->  STUFE:     |Δh| > game.max_step_height_m   (Default 0,4 m)
-sonst       ->  STEIGUNG:  atan(|Δh| / dist) > game.max_slope_deg  (Default 40°)
+IMMER       ->  STEIGUNG:  atan(|Δh| / dist) > game.max_slope_deg  (Default 40°)
+dist < 1 m  ->  UND STUFE: |Δh| > game.max_step_height_m           (Default 0,4 m)
 ```
 
-**Zwei Regeln statt einer**, weil eine 1-m-Mauer und 1 m Anstieg über 20 m
+**Zwei Grenzwerte statt einem**, weil eine 1-m-Mauer und 1 m Anstieg über 20 m
 nicht dasselbe Hindernis sind: das erste klettert niemand, das zweite ist ein
 sanfter Hügel. Die Ein-Meter-Marke ist die Länge einer Meldung selbst (~3/s bei
 3,4 m/s), also genau die Strecke, über der ein Anstieg etwas ist, das man
-hinaufgeht statt hinaufklettert. **Die Richtung zählt nicht**: einen Abhang
-hinunterzufallen ist so unmöglich wie ihn hinaufzuklettern, sonst könnte man
-einen Läufer irgendwo aussetzen, wo er nicht mehr hochkommt.
+hinaufgeht statt hinaufklettert.
+
+**Und sie gelten ZUSAMMEN, nicht entweder/oder** (Review 2026-08-13). Die
+Entweder-Oder-Form — Stufe unter einem Meter, Steigung darüber — war aus zwei
+Gründen falsch. Erstens messen die beiden Seiten des Spiegels über
+VERSCHIEDENE Längen: der Client prüft einen Lauf-Vorgriff von ~0,15 m, der
+Server einen Melde-Schritt von ~1,12 m. Das ganze Band zwischen
+`max_slope_deg` und dem Winkel, den dieselbe Höhe über einen Vorgriff macht
+(bei den Defaults 40° bis 69°), war damit für den Client unsichtbar und für
+den Server eine Absage — die Figur lief weiter, während der Server sie 3×/s
+zurückschnappte. Zweitens machte die Entweder-Oder-Form jede Steigung durch
+LANGSAMES Gehen erkletterbar: 0,1 m pro Meldung verwandelt eine 76°-Wand in
+lauter legale „Stufen". Ein Grenzwert, den man durch Geduld umgeht, ist keiner.
+
+**Die Richtung zählt nicht**: einen Abhang hinunterzufallen ist so unmöglich
+wie ihn hinaufzuklettern, sonst könnte man einen Läufer irgendwo aussetzen, wo
+er nicht mehr hochkommt.
 
 **Woher die Höhe kommt.** Aus dem SZENEN-Relief und nur daraus
-(`app/core/relief.scene_ground_lift`): für eine `area_detail`-Location mit
+(`app/core/relief.ground_lift_at`): für eine `area_detail`-Location mit
 `map3d.relief` wird genau das Feld gesampelt, das `GET /play/locations/{id}/scene`
 als `terrain.grid` ausliefert (§ B1 Nr. 14) — dieselbe eine Gitter-Konstruktion
 (`scene_recipe.compose_terrain`), inklusive `tile_rotation`. Überall sonst ist
@@ -1649,6 +1663,16 @@ die Welt flach (0,0), bis die E8-Heightmap landet. Der Client spiegelt die
 Regel mit derselben Quelle: `scene/tiles.terrainLiftAt`, **nicht** der
 Modell-Raycast `tileGroundY` — der kennt eine Modell-Oberfläche, die der Server
 nicht kennt, und die beiden Sichten müssen sich einig bleiben.
+
+**Verschachtelung: der INNERSTE UMSCHLIESSENDE Ort MIT Relief gewinnt.** Nicht
+„der Ort, in den der Punkt fällt": ein Ort ohne eigenes Relief planiert den
+Boden nicht, auf dem er steht — er steht DARAUF. Sonst säße eine Hütte auf
+einem Dorfplatz, dessen Relief 2 m ansteigt, in einer selbstgemachten Grube:
+der Platz antwortet 2 m, die Hütte 0, und dazwischen stünde eine 63°-Klippe,
+die eine öffnungslose Hütte von allen Seiten versiegelt. Die Auflösung ist
+dieselbe Kleinster-gewinnt-Regel wie bei `location_at_point`, nur beschränkt
+auf Orte, die ein Feld HABEN; wer keines hat, ist für die Frage durchsichtig.
+Der Client spiegelt das in `reliefLiftAt`.
 
 **Nr. 8 steht NACH dem Übergang (Nr. 7)**, weil die Höhe eines Punktes davon
 abhängt, welche Location ihn besitzt — und weil ein Eintritt, den die Geometrie

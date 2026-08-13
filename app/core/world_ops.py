@@ -290,16 +290,16 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # ``entry["map3d"]`` is the sanitized object (sanitized on save) plus
         # the derived floors — deliberately the SAME object the entry ships,
         # never a second sanitize pass.
-        _lay_rooms = [(r.get("id"), r.get("layout"))
-                      for r in (loc.get("rooms") or [])
+        # ONE signature function (``scene_recipe.layout_signature``): the
+        # walking gate keys its height-field cache on the very same answer,
+        # and two hashes over "what shapes this scene" would drift.
+        _lay_rooms = [r for r in (loc.get("rooms") or [])
                       if isinstance(r, dict) and r.get("layout")]
         _lay_map3d = entry.get("map3d") or {}
         if _lay_rooms or _lay_map3d:
-            import hashlib as _hashlib
-            import json as _json
-            entry["layout_sig"] = _hashlib.md5(_json.dumps(
-                [_lay_rooms, _lay_map3d],
-                sort_keys=True, default=str).encode()).hexdigest()[:10]
+            from app.core.scene_recipe import layout_signature
+            entry["layout_sig"] = layout_signature(_lay_map3d,
+                                                   _lay_rooms)[:10]
         locations.append(entry)
 
     # The painted map is part of the world frame too (E4 finding B7). Without
