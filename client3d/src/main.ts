@@ -5,7 +5,7 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { slideBlocked, terrainBlocks, walkDir } from './game/walk';
+import { slideBlocked, slopeBlocks, terrainBlocks, walkDir } from './game/walk';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
 } from './game/clickmove';
@@ -142,6 +142,12 @@ const MINIMAP_MS = 250;
  * more than a body width, and more than the walk-in's own arrival threshold.
  */
 const OPENING_WALK_IN_M = 0.5;
+/** Fallbacks for the two walk limits (§ A15 Nr. 8) when the worldmap payload
+ *  carries none — the same numbers `app/core/relief.py` defaults to, so a
+ *  client talking to an older server judges the ground the way that server
+ *  does. */
+const DEFAULT_MAX_STEP_M = 0.4;
+const DEFAULT_MAX_SLOPE_DEG = 40;
 
 // --- Doorway markers (E3 acceptance: "you cannot see the doors") ------------
 //
@@ -1001,6 +1007,24 @@ async function startApp(username: string, role: string) {
    *  `worldBounds` above — one field for the ground, the minimap and the fog,
    *  because all three cover the same world. */
   let fogged = firstMap.fogged;
+  /**
+   * The two WALK LIMITS of the world (§ A12): how high a step the figure
+   * takes and how steep a slope it climbs. They are SERVER settings — the
+   * height gate of `POST /play/pos` judges every reported point with exactly
+   * these two numbers (§ A15 Nr. 8) — and they ride along on the worldmap
+   * poll, so an admin who changes them reaches a running client within one
+   * poll instead of at the next reload. An older server sends neither, and
+   * then the built-in defaults are the very ones `app/core/relief.py` falls
+   * back to.
+   */
+  let maxStepHeightM = DEFAULT_MAX_STEP_M;
+  let maxSlopeDeg = DEFAULT_MAX_SLOPE_DEG;
+
+  function takeWalkLimits(map: WorldMap): void {
+    maxStepHeightM = map.max_step_height_m ?? DEFAULT_MAX_STEP_M;
+    maxSlopeDeg = map.max_slope_deg ?? DEFAULT_MAX_SLOPE_DEG;
+  }
+  takeWalkLimits(firstMap);
   /** What the veil currently standing was built from. The poll runs every
    *  three seconds and nearly always finds the same inputs — rebuilding
    *  regardless would throw away and re-allocate a dozen geometries per poll
@@ -1576,6 +1600,7 @@ async function startApp(username: string, role: string) {
     // keeps clear (finding B18), and a place that moved is a rebuild trigger
     // of its own — `terrain_sig` does not move when a location does.
     void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations);
+    takeWalkLimits(map);
     rebuildMovedTiles(map);
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
     // just discovered is simply in the payload from one poll to the next. The
@@ -2091,16 +2116,78 @@ async function startApp(username: string, role: string) {
    * answer depends on it: the avatar's OWN location never blocks — inside it
    * the walls take over, and standing in a place must never be a state one
    * cannot walk in.
+   *
+   * `from` is the point the step STARTS at, and it is optional because only
+   * one caller has one: the height gate (E8 task 1) judges a DIFFERENCE, so
+   * without an origin there is nothing to compare. The walk loop passes the
+   * figure's current point; a click target — which is metres away and not a
+   * step at all — deliberately does not, or a hill between here and there
+   * would refuse a goal the figure could perfectly well walk around to.
    */
-  function blockedFor(mine: Tile | null, x: number, z: number): boolean {
+  function blockedFor(mine: Tile | null, x: number, z: number,
+                      from?: { x: number; z: number }): boolean {
     const at = tileAt(x, z);
     if (terrainBlocks(terrainGround.passableAt(x, z), at !== null)) return true;
     if (at && at !== mine && !freeBoundary(at)) return true;
+    if (from && slopeBlockedBetween(from, x, z)) return true;
     const now = performance.now();
     for (const r of refusedPoints) {
       if (r.until > now && Math.hypot(r.x - x, r.z - z) < REFUSED_RADIUS_M) return true;
     }
     return false;
+  }
+
+  /**
+   * Height of the ground at a WORLD point — the client's mirror of the
+   * server's `relief.scene_ground_lift`.
+   *
+   * `terrainLiftAt`, NOT `tileGroundY`, and that is the whole point: the
+   * server's height source is the scene payload's relief field and nothing
+   * else. The model skin `tileGroundY` raycasts against is client-only, so
+   * judging the walk by it would refuse steps the server happily accepts —
+   * the two views disagreeing, which is exactly what this mirror exists to
+   * prevent. Outside every footprint the world is flat (until the E8
+   * heightmap), which is the server's answer there too.
+   */
+  function reliefLiftAt(x: number, z: number): number {
+    const t = tileAt(x, z);
+    return t ? terrainLiftAt(t, x, z) : 0;
+  }
+
+  /**
+   * Does the HEIGHT between two points stop the figure (§ A15 Nr. 8)?
+   *
+   * The rule is `walk.slopeBlocks` and the limits are the world's
+   * (`maxStepHeightM` / `maxSlopeDeg`, off the worldmap payload) — this only
+   * looks the two heights up and applies the OPENING EXEMPTION: an authored
+   * opening is where a place is entered, and a place sitting on its own
+   * plateau has a step at exactly that spot. Refusing it would lock every
+   * such location behind its own door, so any point within the server's
+   * crossing tolerance of an opening — at either end of the step, because a
+   * crossing has one foot on each side — is exempt, the same way
+   * `POST /play/pos` exempts it.
+   */
+  const OPENING_TOLERANCE_M = 1.5;
+
+  function slopeBlockedBetween(from: { x: number; z: number },
+                               x: number, z: number): boolean {
+    const dh = reliefLiftAt(x, z) - reliefLiftAt(from.x, from.z);
+    if (!dh) return false;
+    if (!slopeBlocks(dh, Math.hypot(x - from.x, z - from.z),
+                     maxStepHeightM, maxSlopeDeg)) return false;
+    const there = tileAt(x, z);
+    const here = tileAt(from.x, from.z);
+    for (const t of here && here !== there ? [there, here] : [there]) {
+      if (!t) continue;
+      for (const o of openingsOf(t)) {
+        const w = tileToWorld(t, o.at.x, o.at.z);
+        if (Math.hypot(w.x - x, w.z - z) <= OPENING_TOLERANCE_M
+            || Math.hypot(w.x - from.x, w.z - from.z) <= OPENING_TOLERANCE_M) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**
@@ -2427,6 +2514,7 @@ async function startApp(username: string, role: string) {
       // knew about — up to three seconds in which the plate and the painted
       // areas stood in the frame of the view one had just left.
       void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations);
+      takeWalkLimits(map);
       fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);
@@ -2920,7 +3008,8 @@ async function startApp(username: string, role: string) {
     // shore instead of nailing the figure to it.
     // This is what the cell clamps used to be — and unlike them it is not a
     // permission but geometry, which is why it needs no server round trip.
-    ({ x, z } = slideBlocked(from, { x, z }, (bx, bz) => blockedFor(here, bx, bz)));
+    ({ x, z } = slideBlocked(from, { x, z },
+                            (bx, bz) => blockedFor(here, bx, bz, from)));
     // Walls have the LAST word (E3 acceptance: "the avatar walks through
     // walls"), and they apply INSIDE an open interior, where the outdoor
     // blockers say nothing: a room is inside the avatar's own footprint.

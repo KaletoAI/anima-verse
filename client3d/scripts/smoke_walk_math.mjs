@@ -55,6 +55,42 @@
  * server side of the same rule is hand-derived in `scripts/smoke_play_pos.py`
  * [20] and, for NPC routing, `scripts/smoke_nav_grid.py` [12].
  *
+ * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
+ * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
+ * exact mirror of `relief.slope_blocks`. Below one metre of horizontal
+ * distance a height change is a STEP (capped by `maxStep`), above it a SLOPE
+ * (capped by `maxSlope` degrees):
+ *
+ *   slopeBlocks(dh, dist, maxStep, maxSlope) =
+ *     |dh| === 0            -> false
+ *     dist < 1              -> |dh| > maxStep
+ *     otherwise             -> atan(|dh| / dist) * 180/pi > maxSlope
+ *
+ * At the world defaults (maxStep 0.4 m, maxSlope 40 deg), all derived by hand
+ * and the first two straight off the plan (the Mondscheinsee shore and the
+ * flat beach):
+ *   dh 1.2,  dist 0.5  -> STEP,  1.2 > 0.4                       -> blocked
+ *   dh 0.3,  dist 2    -> SLOPE, atan(0.15)  =  8.5308 deg  < 40 -> free
+ *   dh 0.3,  dist 0.5  -> STEP,  0.3 <= 0.4                      -> free
+ *   dh 0.4,  dist 0.5  -> STEP,  the limit itself passes (`>`)   -> free
+ *   dh -1.2, dist 0.5  -> STEP,  the drop is the climb           -> blocked
+ *   dh 2,    dist 2    -> SLOPE, atan(1)     = 45      deg  > 40 -> blocked
+ *   dh 1.6,  dist 2    -> SLOPE, atan(0.8)   = 38.6598 deg  < 40 -> free
+ *   dh 1.6,  dist 0.99 -> the SAME rise a hair under the metre is a step
+ *                         instead: 1.6 > 0.4                     -> blocked
+ *   dh 0,    dist 0    -> flat ground never blocks (and no atan(0/0))
+ * The metre line itself: dist exactly 1 is a SLOPE (`<` is strict), so
+ * dh 0.5 / dist 1 -> atan(0.5) = 26.5651 deg < 40 -> free, while the same
+ * 0.5 m at dist 0.999 is a step of 0.5 > 0.4 -> blocked. That jump is the
+ * rule, not a defect: a 0.5 m rise one takes in a single stride IS a wall,
+ * and the same rise spread over a metre is a ramp.
+ * The two LOOKUPS stay in main.ts, deliberately: the heights come from
+ * `scene/tiles.terrainLiftAt` (the payload's relief field, the server's own
+ * source — never the model raycast of `tileGroundY`), and the OPENING
+ * EXEMPTION (a point within 1.5 m of an authored opening is never refused for
+ * its height — an opening is the ramp onto a plateau) is `slopeBlockedBetween`
+ * there. The server half is hand-derived in `scripts/smoke_slope_gate.py`.
+ *
  * --- slideBlocked (E4 task 5) ---------------------------------------------
  * The step that would end in blocked ground keeps the component that runs
  * ALONG the boundary: full step if free, else the larger axis alone (ties to
@@ -567,7 +603,7 @@ async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
-  const { walkDir, slideBlocked, terrainBlocks } = walk;
+  const { walkDir, slideBlocked, slopeBlocks, terrainBlocks } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
@@ -693,6 +729,39 @@ async function main() {
       slideBlocked({ x: 3, z: 1 }, { x: 5, z: 1 }, blocked), { x: 5, z: 1 });
     check('into the same rock beside it: the figure stays put',
       slideBlocked({ x: 3, z: -1 }, { x: 5, z: -1 }, blocked), { x: 3, z: -1 });
+  }
+
+  // --- slopeBlocks (E8 task 1) ---------------------------------------------
+  // The height gate as a pure predicate, mirroring `relief.slope_blocks`.
+  // Every number is derived in the header; the limits are the world defaults.
+  console.log('slopeBlocks — a step below one metre, a slope above it');
+  {
+    const STEP = 0.4;
+    const SLOPE = 40;
+    check('the Mondscheinsee shore: 1.2 m over 0.5 m is a wall',
+      slopeBlocks(1.2, 0.5, STEP, SLOPE), true);
+    check('the flat beach: 0.3 m over 2 m (8.53 deg) is walked',
+      slopeBlocks(0.3, 2, STEP, SLOPE), false);
+    check('a 0.3 m step under the cap passes',
+      slopeBlocks(0.3, 0.5, STEP, SLOPE), false);
+    check('the cap itself passes (strictly greater blocks)',
+      slopeBlocks(0.4, 0.5, STEP, SLOPE), false);
+    check('a DROP is the same obstacle as a climb',
+      slopeBlocks(-1.2, 0.5, STEP, SLOPE), true);
+    check('45 deg over 2 m is refused',
+      slopeBlocks(2, 2, STEP, SLOPE), true);
+    check('38.66 deg over the same 2 m is not',
+      slopeBlocks(1.6, 2, STEP, SLOPE), false);
+    check('...and the very same rise a hair under the metre is a step',
+      slopeBlocks(1.6, 0.99, STEP, SLOPE), true);
+    check('one metre exactly is already a slope (26.57 deg)',
+      slopeBlocks(0.5, 1, STEP, SLOPE), false);
+    check('...0.999 m of it is a 0.5 m step and blocks',
+      slopeBlocks(0.5, 0.999, STEP, SLOPE), true);
+    check('level ground never blocks, at any distance',
+      slopeBlocks(0, 0, STEP, SLOPE), false);
+    check('a world with the limits wide open lets the cliff through',
+      slopeBlocks(1.2, 0.5, 5, 89), false);
   }
 
   // --- clickmove (E4 task 5) -----------------------------------------------

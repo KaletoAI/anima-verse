@@ -246,6 +246,13 @@ export interface WorldMap {
   /** `true` = this is the filtered view, so unknown places stay hidden.
    *  `false` = the admin's unfiltered view (`?all=1`), no fog at all. */
   fogged: boolean;
+  /** The two WALK LIMITS the server judges every reported point with
+   *  (`game.max_step_height_m` / `game.max_slope_deg`, § A12/§ A15). The
+   *  client mirrors the height gate with them so the figure never walks into
+   *  a refusal it could have seen coming; missing (an older server) means the
+   *  built-in defaults 0.4 m / 40° apply. */
+  max_step_height_m?: number;
+  max_slope_deg?: number;
 }
 
 /**

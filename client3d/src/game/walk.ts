@@ -99,6 +99,38 @@ export function terrainBlocks(passable: boolean, insideFootprint: boolean
   return !insideFootprint && !passable;
 }
 
+/** Below this horizontal distance a height change counts as a STEP, above it
+ *  as a SLOPE (metres) — the mirror of `STEP_DISTANCE_M` in
+ *  `app/core/relief.py`. One metre is the scale of a position report itself,
+ *  which is what makes it the line between "one has to climb that" and "one
+ *  walks up that". */
+export const STEP_DISTANCE_M = 1;
+
+/**
+ * Does a height change of `dh` over `dist` metres stop the figure? The
+ * client's half of the E8 height gate of `POST /play/pos` (§ A15), and the
+ * exact mirror of `relief.slope_blocks` on the server.
+ *
+ *   - `dist < STEP_DISTANCE_M` -> a STEP: blocked when `|dh| > maxStep`;
+ *   - otherwise a SLOPE: blocked when `atan(|dh| / dist) > maxSlope` degrees.
+ *
+ * Direction does not matter — dropping off a cliff is as impossible as
+ * climbing it, and a walker allowed down where it cannot come back up is a
+ * walker one can strand. Level ground never blocks, which is what keeps the
+ * whole gate inert in a world without relief.
+ *
+ * `dh` is the caller's lookup (`scene/tiles.terrainLiftAt` at both points),
+ * `maxStep`/`maxSlope` the world settings off the worldmap payload — what is
+ * derivable is the RULE, and only the rule lives in this import-free file.
+ */
+export function slopeBlocks(dh: number, dist: number, maxStep: number,
+                            maxSlope: number): boolean {
+  const rise = Math.abs(dh);
+  if (!rise) return false;
+  if (dist < STEP_DISTANCE_M) return rise > maxStep;
+  return Math.atan2(rise, dist) * 180 / Math.PI > maxSlope;
+}
+
 export function slideBlocked(from: Point, to: Point, blocked: BlockedFn): Point {
   if (!blocked(to.x, to.z)) return to;
   const dx = to.x - from.x;
