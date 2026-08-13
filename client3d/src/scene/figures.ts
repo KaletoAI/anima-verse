@@ -399,11 +399,14 @@ const CLIP_SYNONYMS: Record<string, string[]> = {
   wave: ['wave', 'greet'],
 };
 
-/** Ersatz-Clip, wenn der gewünschte fehlt (bevor auf idle zurückgefallen wird):
- *  ein Liegender soll wenigstens sitzen, ein Rennender schnell gehen. */
+/** Stand-in clip when the wanted one is missing (before falling back to idle):
+ *  someone lying down should at least sit, a runner walk fast — and a swimmer
+ *  walk, because a terrain `move_anim` (§ A9) names a kind out of an OPEN
+ *  vocabulary that not every model carries. */
 const CLIP_FALLBACK: Record<string, ClipKind> = {
   lie: 'sit',
   run: 'walk',
+  swim: 'walk',
 };
 
 /** Modelle, deren gebundene Kinds schon geloggt wurden (einmal je Modell,

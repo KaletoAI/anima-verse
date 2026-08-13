@@ -300,13 +300,27 @@ export interface TerrainType {
   /** `#rrggbb`, the schematic fill of this kind (2D map, minimap, and the
    *  3D fallback when the surface library has no texture for it) */
   color: string;
+  /** may one STAND here — the wilderness answer; inside a placed footprint
+   *  the footprint wins (§ A15) */
   passable: boolean;
-  /** walking-pace multiplier, 0..2 */
+  /** walking-pace multiplier, 0..2 — it counts EVERYWHERE (§ A1.5, finding 3),
+   *  a footprint only neutralises a factor of 0 */
   speed_factor: number;
   /** Open bag of extras — a type says how ground LOOKS and how it is walked,
-   *  nothing about what grows on it. Ignored by this client entirely (the
-   *  scatter moved to the AREA with finding B17). */
-  meta?: Record<string, unknown>;
+   *  nothing about what grows on it (the scatter moved to the AREA with
+   *  finding B17). ONE key in it is a contract: `move_anim`. */
+  meta?: TerrainTypeMeta;
+}
+
+/** A type's `meta`. Free-form by contract — the one key with a meaning is
+ *  named, the rest stays open. */
+export interface TerrainTypeMeta {
+  /** The clip a MOVING figure plays on this ground instead of walk/run
+   *  (§ A9, finding 3) — a kind out of the open clip vocabulary, e.g.
+   *  `swim` on water. Absent = walk/run as always; the server never stores
+   *  an empty one. */
+  move_anim?: string;
+  [key: string]: unknown;
 }
 
 /** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server

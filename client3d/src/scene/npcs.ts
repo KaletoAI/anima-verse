@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
+import { moveClip } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
@@ -186,6 +187,16 @@ export class NpcManager {
    *  would keep a line on the flat world until the walker's next five-metre
    *  bucket. */
   private groundRev: () => number = () => 0;
+  /**
+   * The MOVE ANIMATION the ground at a point asks for (`meta.move_anim`,
+   * § A9), or `''` — handed in like the height, never derived here.
+   *
+   * It applies to every moving figure, the player's avatar included: they all
+   * walk through the one clip decision below (`moveClip`), so a lake is swum
+   * across by whoever crosses it. The default is the world without painted
+   * ground: walk and run as always.
+   */
+  private moveAnimAt: (x: number, z: number) => string = () => '';
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -194,6 +205,12 @@ export class NpcManager {
   setGroundHeight(fn: (x: number, z: number) => number, revision?: () => number) {
     this.groundY = fn;
     if (revision) this.groundRev = revision;
+  }
+
+  /** Install the terrain move-animation lookup (`Ground.typeAt(x, z)
+   *  .move_anim`). Called once at boot; the payload updates itself. */
+  setTerrainAnim(fn: (x: number, z: number) => string) {
+    this.moveAnimAt = fn;
   }
 
   setAvatar(name: string) {
@@ -769,9 +786,15 @@ export class NpcManager {
         }
         npc.root.position.y += (goalPos.y - npc.root.position.y) * Math.min(1, dt * 4);
         if (npc.figure) {
-          // no 'run' on journeys: the pace comes from the server —
-          // walk while the journey is moving, idle on freeze
-          npc.figure.play(d > 0.02 || (r.rateMS ?? 0) > 0 ? 'walk' : 'idle');
+          // no 'run' on journeys: the pace comes from the server — walk while
+          // the journey is moving, idle on freeze. WHAT walking looks like is
+          // the ground's to say (`moveClip`, finding 3): a traveller crossing
+          // painted water swims through it.
+          const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
+          npc.figure.play(travelling
+            ? moveClip(this.moveAnimAt(npc.root.position.x, npc.root.position.z),
+                       false)
+            : 'idle');
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -816,9 +839,16 @@ export class NpcManager {
       }
 
       if (npc.figure) {
-        // Server-Kategorie schlägt das Keyword-Raten (AV3D-6)
+        // The server's category beats the keyword guessing (AV3D-6) — while
+        // STANDING. Moving, the GROUND decides (`moveClip`, finding 3): its
+        // `move_anim` replaces walk and run alike, and without one the old
+        // pair stands. This is the ONE clip decision of a moving figure, the
+        // player's avatar included — it is steered through this same loop.
         const standingClip = npc.animation || activityToClipKind(npc.activity);
-        npc.figure.play(moving ? (dist > RUN_DISTANCE ? 'run' : 'walk') : standingClip);
+        npc.figure.play(moving
+          ? moveClip(this.moveAnimAt(npc.root.position.x, npc.root.position.z),
+                     dist > RUN_DISTANCE)
+          : standingClip);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

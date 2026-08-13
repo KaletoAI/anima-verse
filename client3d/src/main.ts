@@ -5,7 +5,7 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
-import { slideBlocked, slopeBlocks, terrainBlocks, walkDir } from './game/walk';
+import { slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir } from './game/walk';
 import { groundLift, type ScenePatch } from './game/ground';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
@@ -477,6 +477,9 @@ async function startApp(username: string, role: string) {
   // when a figure is placed, which is long after that.
   npcs.setGroundHeight((x, z) => terrainGround.heightAt(x, z),
                        () => terrainGround.heightRevision());
+  // …and they move the way the ground under them says (finding 3): the same
+  // lookup for every figure, avatar included, out of the ONE terrain payload.
+  npcs.setTerrainAnim((x, z) => terrainGround.typeAt(x, z).move_anim);
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
   figures.onModelReady = (charName) => {
@@ -3094,11 +3097,18 @@ async function startApp(username: string, role: string) {
       tickPosReport({ x: pos.x, z: pos.z });
       return;
     }
-    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD), reach);
     const from = { x: pos.x, z: pos.z };
     // The footprint the figure stands in — looked up ONCE per frame and handed
     // to both the blocker and the wall/floor lookups below.
     const here = tileAt(pos.x, pos.z);
+    // THE GROUND SETS THE PACE (finding 3 of the E8 acceptance): the lead is
+    // multiplied by the factor of the terrain the figure stands on RIGHT NOW —
+    // inside a footprint as much as outside it, because a village on a lake is
+    // waded through. The clamp against the goal distance comes last, so the
+    // figure still stops ON its click target instead of overshooting it.
+    const pace = terrainPace(terrainGround.typeAt(pos.x, pos.z).speed_factor,
+                             here !== null);
+    const lead = Math.min(Math.max(WALK_SPEED * dt, MIN_LEAD) * pace, reach);
     let { x, z } = { x: pos.x + dir.x * lead, z: pos.z + dir.z * lead };
     // OUTDOORS the world itself stops the figure: impassable terrain — out in
     // the WILDERNESS only, a footprint replaces the ground under it

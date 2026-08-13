@@ -93,10 +93,78 @@ export function walkDir(keys: ReadonlySet<string>, yaw: number
  * Both are lookups, which is why they are the caller's job and not this
  * file's: what is derivable is the RULE, and the rule is that a footprint
  * point is never refused for its ground.
+ *
+ * ONLY THE REFUSAL is a wilderness question. How FAST that ground is walked
+ * and WITH WHICH CLIP counts everywhere — see `terrainPace` and `moveClip`
+ * below (finding 3).
  */
 export function terrainBlocks(passable: boolean, insideFootprint: boolean
 ): boolean {
   return !insideFootprint && !passable;
+}
+
+/** Lowest pace a ground may actually impose on the walking figure.
+ *
+ *  A pace multiplies the walking LEAD, and the lead is what the stall
+ *  detection of `game/clickmove.walkStalled` measures: below
+ *  `STALL_STEP_M` = 0.01 m a frame counts as "got nowhere" and a click order
+ *  is dropped after a few of them. A 60 fps frame walks 3.4/60 = 0.0567 m, so
+ *  a quarter of it is 0.0142 m — still a real step. Anything slower would be
+ *  a ground one cannot walk a click route over, which is a wall pretending to
+ *  be mud; the server's own clamp sits lower (0.1, `terrain_query
+ *  .MIN_SPEED_FACTOR`) because it guards a COST against infinity, not a
+ *  frame against a threshold. */
+export const MIN_PACE = 0.25;
+
+/**
+ * How fast the figure walks on that ground — the client's half of the pace
+ * rule of `terrain_query.effective_speed_factor` (finding 3 of the E8
+ * acceptance, 2026-08-13).
+ *
+ * THE TOPMOST TERRAIN'S FACTOR COUNTS EVERYWHERE, inside a placed footprint
+ * as much as out in the wilderness: painted water slows a walker down in a
+ * village on a lake exactly as it does outside it, and painting the ground of
+ * a place is how one says so. Only the PASSABILITY is a wilderness question
+ * (`terrainBlocks`).
+ *
+ * The one footprint exception is a factor of 0: that is not a pace but a
+ * "this ground was never meant to be walked" (rock), and there the plate
+ * really does replace the ground — at the neutral 1. Everything else is
+ * clamped up to `MIN_PACE`.
+ *
+ * `speedFactor` is the caller's lookup (`ground.typeAt(x, z).speed_factor`),
+ * `insideFootprint` whether ANY placed footprint covers the point (`main.ts`
+ * `tileAt(x, z) !== null`) — what is derivable is the RULE, and only the rule
+ * lives in this import-free file.
+ */
+export function terrainPace(speedFactor: number, insideFootprint: boolean
+): number {
+  // A world whose catalog hands out nonsense walks at the normal pace rather
+  // than at NaN — one NaN in the lead and the figure never moves again.
+  if (!Number.isFinite(speedFactor)) return 1;
+  if (insideFootprint && speedFactor <= 0) return 1;
+  return Math.max(speedFactor, MIN_PACE);
+}
+
+/**
+ * WHICH CLIP a moving figure plays — the animation half of the same rule.
+ *
+ * A ground may name the clip one moves over it with (`meta.move_anim`, § A9 —
+ * `swim` on water). It replaces walk AND run: a figure crossing a lake does
+ * not sprint through it, and there is no second speed of swimming to choose
+ * from. Without one the old pair stands, run past `RUN_DISTANCE` and walk
+ * below it.
+ *
+ * The clip kind goes into the open vocabulary of `Figure.play` unchecked —
+ * a kind no model carries falls back through `figures.CLIP_FALLBACK` (swim →
+ * walk) and finally to idle, which is the same road every other kind takes.
+ * STANDING is untouched by this: an activity clip or the server's own
+ * `animation` wins there, and this function is never asked.
+ */
+export function moveClip(moveAnim: string, running: boolean): string {
+  const kind = (moveAnim || '').trim();
+  if (kind) return kind;
+  return running ? 'run' : 'walk';
 }
 
 /** Below this horizontal distance a height change counts as a STEP, above it

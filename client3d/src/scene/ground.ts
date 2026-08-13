@@ -188,6 +188,19 @@ interface AreaMesh {
   radius: number;
 }
 
+/** The ground at ONE world point, as `typeAt` reads it out of the payload —
+ *  the client's half of `terrain_query.entry_at`. */
+export interface TerrainPoint {
+  /** the kind of the topmost area, or the world's default kind */
+  kind: string;
+  /** catalog `passable`; a kind without a catalog entry is walkable */
+  passable: boolean;
+  /** catalog `speed_factor`; a kind without an entry walks at 1 */
+  speed_factor: number;
+  /** catalog `meta.move_anim`, or `''` — the clip a moving figure plays here */
+  move_anim: string;
+}
+
 export interface Ground {
   /** everything this module owns, in one group the caller adds to the scene */
   readonly group: THREE.Group;
@@ -295,22 +308,24 @@ export interface Ground {
    *  The minimap paints the same areas from this. */
   payload(): TerrainPayload | null;
   /**
-   * May the avatar walk on that world point (E4 task 5)?
+   * WHAT GROUND is at that world point — the client's mirror of
+   * `app/core/terrain_query.entry_at`, and the ONE reading behind every
+   * terrain question the walk asks: topmost painted area wins, unpainted is
+   * the default kind, a kind the catalog does not know is walkable at normal
+   * speed. The same holds while the terrain is still loading — a wall that is
+   * not there beats a world one cannot walk in.
    *
-   * The COLLISION side of the ground: free walking is the client's, so the
-   * client has to know what the server will refuse (`terrain_query
-   * .passability_at`, 409 `impassable`). Same data, same rule — topmost
-   * painted area wins, unpainted is the default kind, an unknown kind is
-   * walkable. Answering `true` while the terrain is still loading is the
-   * deliberate side to err on: a wall that is not there beats a world one
-   * cannot walk in.
-   *
-   * It answers for the GROUND, not for the world: since "footprint wins"
-   * (decision 2026-08-13) painted ground only judges the WILDERNESS, so a
-   * `false` inside a placed footprint means nothing. The rule that combines
-   * the two is `game/walk.terrainBlocks`, and every caller goes through it
-   * (`main.ts` `blockedFor`) — never through this answer alone.
+   * It answers for the GROUND, not for the world. `passable` judges the
+   * WILDERNESS only (footprint wins, § A15), `speed_factor` and `move_anim`
+   * count everywhere (finding 3). The rules that combine each with the
+   * footprint live in `game/walk.ts` (`terrainBlocks`, `terrainPace`,
+   * `moveClip`) and every caller goes through them — never through this
+   * answer alone.
    */
+  typeAt(x: number, z: number): TerrainPoint;
+  /** May the avatar STAND on that point, as far as the ground is concerned —
+   *  `typeAt(x, z).passable`, kept as its own name because that is what the
+   *  blocking predicates read. */
   passableAt(x: number, z: number): boolean;
   /** Counts rebuilds — a cheap "has the ground changed" for redraw signatures. */
   revision(): number;
@@ -885,6 +900,40 @@ export function createGround(): Ground {
   }
 
   /**
+   * The ground at one world point — the client's mirror of
+   * `app/core/terrain_query.entry_at`, on the very same data
+   * (`GET /play/terrain`) and with the same loop: the TOPMOST containing area
+   * wins (`areas` arrives in ascending z_order/paint order, so the LAST hit is
+   * the one on top) and an unpainted point is the default kind.
+   *
+   * An area with an EMPTY kind falls back to the DEFAULT kind and does not
+   * keep the area underneath it — the server's `hit` is overwritten by every
+   * containing area and only resolved against the default at the end
+   * (`kind_at`). Two readings of one square metre are how the halves of a
+   * mirror start to drift.
+   *
+   * A kind the catalog does not know is walkable at normal speed (a painted
+   * area whose type was deleted later must never strand a figure), and so is a
+   * world whose terrain has not arrived yet: an empty payload would otherwise
+   * turn the whole map into a wall for the first seconds.
+   */
+  function typeAt(x: number, z: number): TerrainPoint {
+    let hit = '';
+    for (const a of payload?.areas ?? []) {
+      if (pointInRing(x, z, a.polygon)) hit = a.kind || '';
+    }
+    const kind = hit || payload?.default_kind || '';
+    const entry = catalog.get(kind.toLowerCase());
+    if (!entry) return { kind, passable: true, speed_factor: 1, move_anim: '' };
+    return {
+      kind,
+      passable: entry.passable !== false,
+      speed_factor: Number.isFinite(entry.speed_factor) ? entry.speed_factor : 1,
+      move_anim: String(entry.meta?.move_anim ?? '').trim(),
+    };
+  }
+
+  /**
    * Fetch what changed and rebuild the ground once — relief first.
    *
    * The ORDER is the point: the field decides where every vertex of the plate
@@ -980,22 +1029,8 @@ export function createGround(): Ground {
       }
     },
     payload: () => payload,
-    passableAt(x, z) {
-      // The client's mirror of `app/core/terrain_query.passability_at`, on the
-      // very same data (`GET /play/terrain`): the TOPMOST containing area
-      // wins — `areas` arrives in ascending z_order/paint order, so the LAST
-      // hit is the one on top — and an unpainted point is the default kind.
-      // A kind the catalog does not know is walkable (a painted area whose
-      // type was deleted later must never strand a figure), and so is a world
-      // whose terrain has not arrived yet: an empty payload would otherwise
-      // turn the whole map into a wall for the first seconds.
-      let kind = payload?.default_kind ?? '';
-      for (const a of payload?.areas ?? []) {
-        if (pointInRing(x, z, a.polygon)) kind = a.kind || kind;
-      }
-      const entry = catalog.get((kind || '').toLowerCase());
-      return entry ? entry.passable !== false : true;
-    },
+    typeAt,
+    passableAt: (x, z) => typeAt(x, z).passable,
     revision: () => rev,
     dispose() {
       clearAreas();
