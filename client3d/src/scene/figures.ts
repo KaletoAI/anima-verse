@@ -509,8 +509,9 @@ export class FigureLibrary {
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
         const height = m.height ?? defaultHeight;
         const usable = gltf.animations.filter((c) => c.tracks.length > 0);
-        // Auch statische Meshes (ohne Skelett/Clips) zulassen — Interimszustand,
-        // bis ein geriggtes Modell vorliegt; solche Figuren gleiten ohne Laufanimation.
+        // Static meshes (no skeleton, no clips) are allowed too — an interim
+        // state until a rigged model exists; such figures glide without a
+        // walk animation.
         console.info(`[figures] ${m.name}: rawHeight=${rawHeight.toFixed(3)} -> scale=${(height / rawHeight).toFixed(3)}, clips=${usable.length}, bones=${boneNames(template).size}`);
         return { name: m.name, template, clips: usable, scale: height / rawHeight, height, assignOnly: !!m.assignOnly, noClips: !!m.noClips, tier: 'full' as FigureTier };
       })
@@ -520,21 +521,21 @@ export class FigureLibrary {
       else console.warn('[figures]', r.reason);
     }
 
-    // Modelle mit Skelett, aber ohne Clips (z.B. Make-It-Animatable-Rigs):
-    // Clips vom ersten Modell MIT Animationen leihen und auf die
-    // Ziel-Knochennamen umschreiben (mixamorig-Präfix-Mapping).
-    // Clips: bevorzugt die globale Bibliothek des Servers (AV3D-5),
-    // sonst die lokalen Manifest-Clips (Dev-/Offline-Betrieb).
+    // Where the clips come from: the server's global library (AV3D-5) by
+    // preference, the local manifest clips otherwise (dev/offline). What is
+    // done with them is the loop below — every rig gets the kinds it does not
+    // carry itself, and a rig the library does not fit borrows from another
+    // model (bone names rewritten, mixamorig prefix mapping).
     const serverClips = await getAnimationClips();
     const sources: Array<{ kind: string; set: string; url: string }> = serverClips.map((c) => ({
       kind: c.kind, set: c.set ?? '', url: c.url,
     }));
     if (!sources.length) {
-      // Dev-/Offline-Fallback: lokale Manifest-Clips (ohne Sets)
+      // Dev/offline fallback: the local manifest clips (no sets)
       for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) sources.push({ kind, set: '', url });
     } else {
       const desc = sources.map((s) => s.set ? `${s.kind}/${s.set}` : s.kind).join(', ');
-      console.info(`[figures] ${sources.length} Clips vom Server: ${desc}`);
+      console.info(`[figures] ${sources.length} clips from the server: ${desc}`);
     }
     for (const { kind, set, url } of sources) {
       try {
@@ -544,9 +545,9 @@ export class FigureLibrary {
         clip.name = kind;
         if (!this.clipIndex.has(kind)) this.clipIndex.set(kind, new Map());
         const bySet = this.clipIndex.get(kind)!;
-        if (!bySet.has(set)) bySet.set(set, clip);   // erster Treffer je kind+set
+        if (!bySet.has(set)) bySet.set(set, clip);   // first hit per kind+set
       } catch (e) {
-        console.warn('[figures] Clip nicht ladbar:', url, e);
+        console.warn('[figures] clip not loadable:', url, e);
       }
     }
     this.defaultHeight = defaultHeight;
@@ -561,8 +562,8 @@ export class FigureLibrary {
       const extra = this.libraryClipsFor(m.name, m.template, m.clips);
       if (extra.length) {
         const kinds = extra.map((c) => c.name).sort().join(', ');
-        console.info(`[figures] ${m.name}: ${extra.length} Mixamo-Clips aus der`
-          + ` Bibliothek ergänzt — ${kinds}`);
+        console.info(`[figures] ${m.name}: ${extra.length} clip kinds added`
+          + ` from the library — ${kinds}`);
         m.clips = [...m.clips, ...extra];
       }
       if (m.clips.length) continue;
@@ -570,10 +571,10 @@ export class FigureLibrary {
       // from the first model that HAS clips and retarget bone by bone.
       if (!donor) continue;
       m.clips = retargetClips(m.template, donor.template, donor.clips);
-      if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
-      else console.info(`[figures] ${m.name}: ${m.clips.length} Clips von ${donor.name} retargetet`);
+      if (!m.clips.length) console.warn(`[figures] ${m.name}: clip retargeting failed`);
+      else console.info(`[figures] ${m.name}: ${m.clips.length} clips retargeted from ${donor.name}`);
     }
-    return true;   // Server-Modelle kommen ggf. später (fetchCharacterModel)
+    return true;   // server models may still arrive later (fetchCharacterModel)
   }
 
   private loadFile!: (url: string, forceFbx?: boolean) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
@@ -691,8 +692,8 @@ export class FigureLibrary {
       .filter((c) => !have.has(c.name.toLowerCase()));
   }
 
-  /** Clips für einen Charakter gemäß seiner Set-Kette auswählen:
-   *  <kind>_<set1> → <kind>_<set2> → … → <kind> (ohne Set). */
+  /** Pick the clips for a character along its set chain:
+   *  <kind>_<set1> → <kind>_<set2> → … → <kind> (no set). */
   private clipsFor(charName: string): THREE.AnimationClip[] {
     const chain = [...(this.charSets.get(charName) ?? []), ''];
     const out: THREE.AnimationClip[] = [];
@@ -741,10 +742,10 @@ export class FigureLibrary {
     })();
   }
 
-  /** Modell laden, aufrichten, normalisieren; Clips nur bei Mixamo-Rig.
-   *  FBX-Modelle (generic/Tiere) bekommen ihre Textur separat.
-   *  `tier=low` fordert die Distanzfassung an — existiert sie (noch) nicht,
-   *  liefert der Server das volle Mesh unter derselben Stufe aus. */
+  /** Load, upright and normalise a model; library clips only on a Mixamo rig.
+   *  FBX models (generic/animals) get their texture separately.
+   *  `tier=low` asks for the distance edition — where it does not (yet) exist
+   *  the server serves the full mesh under the same tier. */
   private async buildModel(name: string, info: ApiModel, tier: FigureTier = 'full'): Promise<LoadedModel> {
     const url = tier === 'low' ? `${info.url}?tier=low` : info.url;
     const gltf = await this.loadFile(url, info.format === 'fbx');
@@ -808,12 +809,11 @@ export class FigureLibrary {
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
     };
-    // Clips gemäß der Set-Kette des Charakters (female/male/animal/custom),
-    // PER KIND gemischt: ein im Mesh eingebetteter Clip gewinnt für seine
-    // eigene Art, die Bibliothek füllt jede Art, die das Modell nicht trägt
-    // (swim finding 2026-08-13 — ein einziger eingebetteter Clip sperrte
-    // vorher die ganze Bibliothek aus).
-    // "generic"-Rigs (eigene Skelette) bleiben clip-los -> prozedurales Idle.
+    // Clips along the character's set chain (female/male/animal/custom),
+    // merged PER KIND: a clip embedded in the mesh wins for its own kind, the
+    // library fills every kind the model does not carry (swim finding
+    // 2026-08-13 — a single embedded clip used to lock the whole library out).
+    // "generic" rigs (own skeletons) stay clip-less -> procedural idle.
     if (info.rig !== 'generic' && boneNames(template).size) {
       const extra = this.libraryClipsFor(name, template, model.clips);
       if (extra.length) model.clips = [...model.clips, ...extra];

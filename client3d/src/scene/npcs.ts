@@ -291,6 +291,7 @@ export class NpcManager {
     npc.route = null;        // a server journey would keep overriding the input
     npc.waypoints = [];      // ditto for a planned A* path
     npc.target.copy(npc.root.position);
+    npc.pace = 1;            // the walking hook reads the ground on its first frame
     // The placement fields update() stops writing keep their last value, and
     // two of them are wrong for a steered figure:
     // `face` was the traveller's destination — the avatar would walk while
@@ -338,6 +339,10 @@ export class NpcManager {
     npc.target.copy(pos);
     npc.waypoints = [];
     npc.route = null;
+    // A jump lands on ground nobody has read yet — the pace of the ground the
+    // figure stood on a moment ago says nothing about it. The next walking
+    // frame supplies the real one.
+    npc.pace = 1;
   }
 
   /** Show the goal of a click-to-walk order on the ground (E3-T4); null takes
@@ -571,6 +576,17 @@ export class NpcManager {
         npc.root.position.copy(st.pos);
       }
       npc.target.copy(st.pos);
+      // …and at the SERVER's pace, which is the plain one. Only the walking
+      // hook of main.ts hands a ground pace in, and only for the figure it
+      // steers; a figure the player has just given back (leaving embodied
+      // mode goes through ONE choke point, `setPlayerDriven(null)` on the
+      // game-state bus — explicit exit and the zoom-out inside embody.ts
+      // alike) would otherwise keep the pace of the ground it stood on and
+      // crawl over every ground for the rest of the session. The reset sits
+      // HERE, at the target write, because that is the first thing `update()`
+      // does for a figure again once it is server-driven: while the player
+      // steers, the branch above `continue`s long before this line.
+      npc.pace = 1;
       npc.face = st.face ?? null;
       npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
       npc.root.visible = !st.hidden;
