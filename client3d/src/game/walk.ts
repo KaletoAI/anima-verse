@@ -82,8 +82,7 @@ export function walkDir(keys: ReadonlySet<string>, yaw: number
  * reported point FIRST and asks `passability_at` only for
  * `location_id == ""`. A place is put ON the world and does not inherit the
  * ground somebody painted under it — a hall on a rock plateau is a place one
- * can stand in, and E8 levels the heightmap under a footprint for exactly
- * that reason. Who may go IN is decided elsewhere (openings, rules — the
+ * can stand in. Who may go IN is decided elsewhere (openings, rules — the
  * foreign-footprint half of `main.ts` `blockedFor`); this predicate never
  * had anything to say about it.
  *

@@ -1043,6 +1043,19 @@ check("changing the amplitude moves it again",
       store.height_sig() != _sig_relief, True)
 set_relief("g", amplitude=0.5, wave=64.0)
 check("...and so does the wave", store.height_sig() != _sig_relief, True)
+# THE FLAT-OVER-RELIEF REFINEMENT, probed directly. Two lines of reasoning,
+# no new number: [13g] already shows such an area IS an input of the pass (it
+# erases the hills it covers), and the signature hashes exactly the input list
+# (`relief_basis`) — so membership is provable by adding it and taking it away
+# again. The basis carries kind/polygon/relief only, never an id, which is why
+# the removal has to give the SAME string back and not merely a different one.
+_sig_wave = store.height_sig()
+_over = terrain.save_area({"kind": "p", "polygon": square(8, 8, 24, 24)})
+check("a flat area painted OVER the active relief moves the signature",
+      store.height_sig() != _sig_wave, True)
+terrain.delete_area(_over["id"])
+check("...and deleting it gives EXACTLY that signature back",
+      store.height_sig(), _sig_wave)
 set_relief("g")
 check("taking the relief away gives EXACTLY the old signature back",
       store.height_sig(), _sig0)

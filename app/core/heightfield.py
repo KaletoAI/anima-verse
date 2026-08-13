@@ -380,6 +380,11 @@ def relief_inputs(terrain_areas: Sequence[Dict[str, Any]],
             # A flat kind is only an input where it can ERASE something: over
             # an area with relief that was painted BEFORE it. Anywhere else it
             # writes the 0 that is already there.
+            # The test is the bounding BOXES, i.e. a superset of the true
+            # polygon overlap: a flat area whose box merely touches a bumpy
+            # one's box comes along as an input that erases nothing. That
+            # costs one no-op entry in the list (and in the signature), never
+            # a wrong height — the pass itself asks `kind_at` per cell.
             if not any(_overlaps(box, earlier) for earlier in active):
                 continue
         else:

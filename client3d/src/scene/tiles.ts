@@ -60,12 +60,15 @@ export function setWorldRayStart(maxGroundY: number): void {
 let worldGroundAt: ((x: number, z: number) => number) | null = null;
 
 /**
- * Take over the world's ground sampler — THE PLATEAU HOOK (§ A16, E8 task 4).
+ * Take over the world's ground sampler — THE GROUND HOOK (§ A16, E8 task 4).
  *
- * A location does not float over its landscape: the server LEVELS the
- * heightfield flat under every footprint, so the ground at a location's centre
- * is the height of the whole place. `footprintCentre` reads it here and the
- * tile group carries it, which is what lifts a location onto its hill in one
+ * A location does not float over its landscape: its tile stands on the world
+ * ground under its own centre. Under a footprint that levels its ground
+ * (`level_ground`, § A16.1, opt-in) that one height IS the whole place,
+ * because the server flattens the field there; under an unflagged place the
+ * landscape runs on underneath and the centre is simply where the tile sits.
+ * `footprintCentre` reads it here and the tile group carries it, which is what
+ * lifts a location onto its hill in one
  * move — the scene inside stays tile-local metres and rides along, exactly as
  * it does for position and yaw (`tileToWorld`).
  *
@@ -99,10 +102,12 @@ export function footprintWidth(loc: WorldLocation): number {
  * on the world origin in one silent heap — which reads as one broken tile, not
  * as missing data.
  *
- * THE y IS THE PLATEAU (E8 task 4). Not 0 any more: the ground under a
- * footprint is levelled flat by the server, and the height of that plateau is
- * the field at the location's own centre (`setWorldGround`). Because the whole
- * tile group hangs off this one point, everything the place is made of — the
+ * THE y IS THE WORLD GROUND (E8 task 4). Not 0 any more: it is the field at
+ * the location's own centre (`setWorldGround`) — under a footprint that levels
+ * its ground (`level_ground`, § A16.1, opt-in) that is the flat plateau the
+ * server made, under any other place it is the landscape at that point.
+ * Because the whole tile group hangs off this one point, everything the place
+ * is made of — the
  * plate, the shell, the rooms, the scene payload's tile-local metres — climbs
  * the hill together, and nothing inside the location has to know about relief
  * at all.

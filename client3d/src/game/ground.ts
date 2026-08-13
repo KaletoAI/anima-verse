@@ -82,9 +82,11 @@ export interface ScenePatch { width: number; lift: number }
  *    the narrowest footprint among the patches wins, which is `tileAt`'s
  *    smallest-wins rule restricted to those that answer at all.
  *
- * Inside a footprint the world term is FLAT by construction — the server
- * levels the heightfield under every place (the plateau pass) — so this adds
- * the plateau height, not a second slope under the scene.
+ * Under a footprint that levels its ground (`level_ground`, § A16.1, opt-in)
+ * the world term is FLAT by construction, so this adds the plateau height and
+ * not a second slope under the scene. Under an unflagged place the authored
+ * landscape simply runs on underneath; the sum is the same one either way,
+ * which is why the opt-in changes nothing about this rule.
  */
 export function groundLift(worldHeight: number,
                            patches: readonly ScenePatch[]): number {

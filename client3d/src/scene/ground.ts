@@ -408,13 +408,13 @@ export function createGround(): Ground {
   const fieldHeightAt = (x: number, z: number): number =>
     (field ? sampleWorldHeight(field, x, z) : GROUND_Y);
 
-  // THE PLATEAU HOOK (E8 task 4): a location's tile stands on the ground under
+  // THE GROUND HOOK (E8 task 4): a location's tile stands on the ground under
   // its centre, and this is where `scene/tiles.ts` gets that height from. The
   // sampler is a closure over `field`/`cellM`, so it stays correct across every
   // refetch without anyone re-registering it — and it is the DRAWN ground on
   // purpose: the tile has to sit on the surface the player sees. Under a
-  // footprint the two readings agree anyway, because the server levels the
-  // field flat there (plateau pass, § A16).
+  // footprint that levels its ground (`level_ground`, § A16.1, opt-in) the two
+  // readings agree anyway, because the server flattens the field there.
   setWorldGround(heightAt);
 
   /** Lift a flat vertex list onto the ground, in place. `pos` is `[x, y, z, …]`
