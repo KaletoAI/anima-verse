@@ -88,6 +88,43 @@
  *      step inside it read the same height (5 on the levelled field below),
  *      dh = 0 and `slopeBlocks` is inert — even over 0.15 m, the walking lead
  *      that would refuse a 0.5 m rise as a step.
+ *
+ * ============================================================================
+ * [5] WHERE THE FIGURE STANDS INSIDE A FOOTPRINT — `game/ground.standY`
+ * ============================================================================
+ * Acceptance finding 4 (2026-08-13): `tileGroundY` measured everything from the
+ * location's centre — plate, model skin, scene relief — so it knew ONE world
+ * height for the whole footprint, while a traveller outside was already sampled
+ * off the world field. The figure walked at plate height through a rising hill,
+ * and at the border the height rule changed and it jumped. The user's rule is
+ * THE HIGHER ONE WINS, and it is the whole of `standY(walkY, terrainY)`.
+ *
+ * (15) THE HILL RUNS THROUGH THE PLATE: the tile of a place at the foot of the
+ *      5 m peak stands on its centre height, say 1.25 (the field at (2, 2)),
+ *      while the world under a point further in reads 2.5 (the flank at
+ *      (2, 0), case 3/2 above). standY(1.25, 2.5) = 2.5 — the figure walks up
+ *      the hill instead of into it.
+ *      RED COUNTER-PROBE: `min` instead of `max` gives 1.25, which IS the
+ *      finding — the plate height while the ground rises through it.
+ * (16) THE MODEL WINS WHERE IT IS HIGHER: a bridge or a raised shore rayed at
+ *      3.0 over a world ground of 2.5 answers 3.0. Nothing about the rule
+ *      prefers one source; it prefers the HIGHER one, in both directions.
+ * (17) EQUAL SOURCES ANSWER THAT ONE NUMBER: standY(5, 5) = 5. This is the
+ *      LEVELLED FOOTPRINT (`level_ground`, § A16.1): the server flattens the
+ *      field to exactly the plateau the tile stands on, so the rule is inert
+ *      there by construction — a no-op, not an exception.
+ * (18) A SUNKEN PLACE IS UNDERCUT, and knowingly so: a lake bed at −0.8 under a
+ *      world ground of 0 answers 0. That is the price of the rule, named in the
+ *      spec (§ A16) — an area model that dips below the landscape is an
+ *      authoring matter.
+ * (19) NaN IS NOT A HEIGHT. A figure put at NaN never recovers, so a
+ *      non-finite reading lets the other source answer alone:
+ *      standY(NaN, 2.5) = 2.5, standY(1.25, NaN) = 1.25 (the state before the
+ *      field has arrived — the client passes NaN then, deliberately, so a tile
+ *      standing below zero is not lifted to zero by a missing field), and
+ *      standY(NaN, NaN) = 0, the tile floor.
+ *      Infinity is not a height either: standY(1.25, Infinity) = 1.25.
+ * (20) NEGATIVE HEIGHTS COMPARE LIKE ANY OTHER: standY(−1, −4) = −1.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -128,7 +165,7 @@ function check(label, actual, expected, eps = 1e-9) {
 }
 
 const { sampleWorldHeight } = await loadModule(SRC, 'worldHeight');
-const { groundLift } = await loadModule(
+const { groundLift, standY } = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground');
 const { slopeBlocks } = await loadModule(
   join(ROOT, 'client3d/src/game/walk.ts'), 'walk');
@@ -216,6 +253,29 @@ check('...and a metre away', sampleWorldHeight(PLATEAU, 1, 1), 5);
 checkBool('a step on the plateau is never refused',
   slopeBlocks(sampleWorldHeight(PLATEAU, 1, 1) - sampleWorldHeight(PLATEAU, 0, 0),
     0.15, STEP, SLOPE), false);
+
+console.log('\n[5] standY — where the figure stands inside a footprint');
+// The two numbers of case (15) come off the very field above: the tile centre
+// height at (2, 2) and the world ground at (2, 0).
+const tileY = sampleWorldHeight(FIELD, 2, 2);
+const worldY = sampleWorldHeight(FIELD, 2, 0);
+check('the tile centre height', tileY, 1.25);
+check('the world ground further in', worldY, 2.5);
+check('the hill runs through the plate -> the hill wins',
+  standY(tileY, worldY), 2.5);
+check('RED COUNTER-PROBE: min instead of max is the finding itself',
+  Math.min(tileY, worldY), 1.25);
+check('a bridge over the landscape keeps its own height',
+  standY(3, worldY), 3);
+check('a levelled footprint is a no-op (both sources agree)',
+  standY(5, 5), 5);
+check('a sunken lake bed is undercut — the named price',
+  standY(-0.8, 0), 0);
+check('NaN tile answer: the world alone', standY(NaN, 2.5), 2.5);
+check('NaN world answer (no field yet): the tile alone', standY(1.25, NaN), 1.25);
+check('both gone: the tile floor, never NaN', standY(NaN, NaN), 0);
+check('Infinity is not a height either', standY(1.25, Infinity), 1.25);
+check('negative heights compare like any other', standY(-1, -4), -1);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

@@ -2042,6 +2042,16 @@ liest ALLES, was den Boden berührt, denselben Sampler: Platte, Flächen, Streu,
 Figuren, Marker. `sampleWorldHeight` bleibt, was es war — der Zwilling der
 Server-Lesung des Feldes.
 
+**Und wo die FIGUR steht:** auf `max(Weltboden, Kachel-Laufhöhe)` — der
+Fußabdruck bringt seine eigene Laufhöhe mit (Platte, Modellhaut, Szenen-Relief,
+alles um das Kachelzentrum gerechnet), das Weltrelief läuft unter einem nicht
+planierenden Ort einfach weiter, und das Höhere gewinnt; die Fußabdruck-Platte
+wird mit demselben Sampler drapiert, damit das Gelände nicht durch sie
+hindurchschneidet. Unter einer Planierung (§ A16.1) sind beide Zahlen dieselbe,
+die Regel ist dort ein No-op. Der Preis ist Autorierungs-Sache: ein
+`display: ground`/`shell_area`-Modell, das unter den Weltboden taucht (Seegrund,
+versenkter Hof), wird von der Landschaft unterlaufen.
+
 **Zellweite:** `gridStepFor` verdoppelt den Feld-Schritt, bis das Netz unter
 40 000 Zellen bleibt, und misst das über die **Feld-Box**, nie über die ganze
 Platte — außerhalb des Feldes ist der Boden eben und wird von vier Quads

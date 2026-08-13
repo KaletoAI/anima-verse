@@ -478,7 +478,13 @@ async function startApp(username: string, role: string) {
   // traveller's point every frame, so it gets the sampler rather than a height
   // per poll. `terrainGround` is created a few lines down — the arrow reads it
   // when a figure is placed, which is long after that.
-  npcs.setGroundHeight((x, z) => terrainGround.heightAt(x, z),
+  //
+  // ONE SAMPLER FOR EVERY FIGURE (finding 4, 2026-08-13): `groundY` is the
+  // hoisted function below, which asks the TILE inside a footprint and the world
+  // field outside it. The world field alone was the height rule of a traveller
+  // only, so a walker crossing a footprint border changed rule and jumped —
+  // and inside a place it ignored the plate it was walking on.
+  npcs.setGroundHeight((x, z) => groundY(x, z),
                        () => terrainGround.heightRevision());
   // …and they move the way the ground under them says (finding 3): the same
   // lookup for every figure, avatar included, out of the ONE terrain payload
@@ -3008,6 +3014,12 @@ async function startApp(username: string, role: string) {
    * one constant is what kept markers, walk goals, the camera and the
    * corrections on the y = 0 plane; with the fallback moved, all seven callers
    * of this function stand on the terrain without a line of their own.
+   *
+   * The two are no longer two RULES, only two lookups (finding 4, 2026-08-13):
+   * `tileGroundY` itself answers the higher of the tile and the world under it,
+   * so the height does not change its mind at a footprint border. Since then
+   * this is also the sampler the NPC manager walks its travellers on
+   * (`setGroundHeight` above), which is what closed the jump.
    */
   const groundProbe = new THREE.Vector3();
   function groundY(x: number, z: number): number {

@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { acceptsWalkHit, type GroundModelInfo } from '../game/ground';
+import { acceptsWalkHit, standY, type GroundModelInfo } from '../game/ground';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
@@ -518,16 +518,88 @@ function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Materi
   return m;
 }
 
+/** How fine the footprint plate is cut for the drape, and how many cells it may
+ *  cost at most. 2 m is finer than any world field step (§ A16: 4 m and up), so
+ *  the plate follows the landscape rather than interpolating over it; the cap
+ *  keeps a 500 m area from paying 60 000 quads. */
+const DRAPE_STEP_M = 2;
+const DRAPE_MAX_SEGMENTS = 48;
+
+/** Below this spread of the world ground over a footprint the plate stays the
+ *  ONE quad it always was (metres). Same idea as the fog tiling of E8 task 5:
+ *  cut only where the ground actually moves — a world without relief must cost
+ *  exactly what it cost before. */
+const DRAPE_FLAT_EPS_M = 0.05;
+
 /** Ground plate of the FOOTPRINT — the surface texture of the location's
  *  terrain kind (server library, else procedural), over the whole
  *  `plan_width_m` square. The 2D map illustrations are NOT used as ground
- *  (baked-in shadows and objects do not belong in a 3D scene). */
+ *  (baked-in shadows and objects do not belong in a 3D scene).
+ *
+ *  THE PLATE FOLLOWS THE LANDSCAPE (finding 4, 2026-08-13), by the same
+ *  mechanism the world plate uses (`scene/ground.liftToField`): it is cut into
+ *  cells and every vertex is lifted by the world ground under it. Without that
+ *  the figure walks at the height of the terrain (`tileGroundY`) while a flat
+ *  plate at the centre height cuts straight through the hill it stands on.
+ *  Under a levelling footprint (`level_ground`, § A16.1) the field is flat and
+ *  every lift is the same zero — the plate stays the ONE quad it was, and so it
+ *  does in a world with no relief at all (`DRAPE_FLAT_EPS_M`).
+ *
+ *  THE MESH FRAME IS UNTOUCHED: the plate keeps its −90° rotation and its
+ *  y = 0.04, because `sceneRecipe` writes that height (backstop mode) and
+ *  drapes the SCENE relief on top through `drapeGeometry(…, gp.matrix)`. In
+ *  that frame world +Y is local +Z, which is where the lift goes — the scene
+ *  drape then ADDS its own along the same axis, so the two reliefs stack
+ *  instead of overwriting each other.
+ *
+ *  `at` is the footprint's placement: the centre in WORLD metres plus its yaw,
+ *  because the vertices are TILE-LOCAL and the world sampler is not. */
 function groundPlate(widthM: number, tex: THREE.Texture,
-                    material?: SurfaceMaterialSpec | null): THREE.Mesh {
+                     material: SurfaceMaterialSpec | null | undefined,
+                     at: { x: number; y: number; z: number; yaw: number }): THREE.Mesh {
   // Die Kachel-Oberfläche geht durch dieselbe Fabrik wie die Szenen-Platten:
   // eine Wasser-Location soll auf der Karte so aussehen wie im Raum.
   const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(widthM, widthM), mat);
+  const cos = Math.cos(at.yaw);
+  const sin = Math.sin(at.yaw);
+  /** The world lift over the tile's own floor at a TILE-LOCAL point. The tile
+   *  group already stands on `at.y`, so only the DIFFERENCE belongs on the
+   *  vertex — otherwise the plate would climb the hill twice. The mapping is
+   *  § A1.1, the same one `tileToWorld` uses. */
+  const liftAt = (lx: number, lz: number): number => {
+    if (!worldGroundAt) return 0;
+    const h = worldGroundAt(at.x + lx * cos + lz * sin,
+                            at.z - lx * sin + lz * cos);
+    return Number.isFinite(h) ? h - at.y : 0;
+  };
+  // Does the ground move under this footprint at all? Nine probes over the
+  // square — the corners alone would miss a hill sitting in the middle of it.
+  const half = widthM / 2;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const lx of [-half, 0, half]) {
+    for (const lz of [-half, 0, half]) {
+      const h = liftAt(lx, lz);
+      if (h < min) min = h;
+      if (h > max) max = h;
+    }
+  }
+  const seg = max - min > DRAPE_FLAT_EPS_M
+    ? Math.min(DRAPE_MAX_SEGMENTS, Math.max(1, Math.ceil(widthM / DRAPE_STEP_M)))
+    : 1;
+  const geo = new THREE.PlaneGeometry(widthM, widthM, seg, seg);
+  if (seg > 1) {
+    // The plate lies in the XY plane and the mesh turns it by −90° about X, so
+    // a vertex (px, py, pz) sits at tile-local (px, pz, −py): the sample point
+    // is (px, −py) and the height is the local z.
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      pos.setZ(i, liftAt(pos.getX(i), -pos.getY(i)));
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+  const plate = new THREE.Mesh(geo, mat);
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = 0.04;
   plate.receiveShadow = true;
@@ -725,7 +797,8 @@ export function buildTile(loc: WorldLocation): Tile {
   const groundPlateFor = (): THREE.Mesh => {
     const kind = loc.surface_kind || style;
     return groundPlate(width, surfaceTexture(kind, fallbackFor(style), width),
-                       surfaceMaterialSpec(kind));
+                       surfaceMaterialSpec(kind),
+                       { x: center.x, y: center.y, z: center.z, yaw });
   };
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
@@ -983,8 +1056,34 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
  *  floor y = 0). Without the subtraction here the roof limit would sit exactly
  *  the plateau height too low on a hill, and EVERY hit of a building on raised
  *  ground would read as "roof" — the figure would fall back to the tile floor,
- *  which is finding B8 all over again, only from above. */
+ *  which is finding B8 all over again, only from above.
+ *
+ *  AND THE WORLD RUNS ON UNDERNEATH (finding 4 of the acceptance round
+ *  2026-08-13). Everything above is measured from the tile's own centre, so it
+ *  only ever knew ONE world height for the whole footprint. Under an unflagged
+ *  place the landscape does not stop at the border: the figure walked at plate
+ *  height while the ground rose through the plate, and at the border it jumped,
+ *  because a traveller outside is sampled off the world field. The higher of the
+ *  two wins (`game/ground.standY`), which is ALSO where both consumers of this
+ *  function — the NPC placement and the walk/click height — inherit it from.
+ *  Under a levelling footprint (`level_ground`, § A16.1) the world term IS the
+ *  plateau, so the rule is a no-op there by construction.
+ *
+ *  The DRAWN sampler answers (`heightAt` via `setWorldGround`), not the bilinear
+ *  field: the figure stands on the triangles that are on the screen. The walk
+ *  gate keeps its own bilinear mirror (`main.ts` `reliefLiftAt`) — that one
+ *  predicts the SERVER, and the server reads the field. */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
+  // No sampler yet = no world answer at all (NaN), not a flat 0: a tile whose
+  // plateau is below zero must not be lifted to it by a missing field.
+  return standY(tileWalkY(tile, at),
+                worldGroundAt ? worldGroundAt(at.x, at.z) : NaN);
+}
+
+/** The TILE's own answer — plate, model skin and scene relief, all measured
+ *  from the tile centre. Split off so the world term above wraps the whole
+ *  answer instead of one of its three exits. */
+function tileWalkY(tile: Tile, at: THREE.Vector3): number {
   const lift = tile.center.y + terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
   if (!target) return lift;

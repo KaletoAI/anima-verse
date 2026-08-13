@@ -57,6 +57,37 @@ export function acceptsWalkHit(info: GroundModelInfo | null | undefined,
   return y < walkCeiling(info);
 }
 
+/**
+ * WHERE A FIGURE STANDS when the tile and the world disagree — THE HIGHER ONE
+ * WINS (user decision 2026-08-13, acceptance finding 4).
+ *
+ * A tile's walking height is a TILE answer: the plate it carries, the model
+ * skin it rays, the scene relief on top — all measured from the location's own
+ * centre. The WORLD relief (§ A16) runs on underneath a footprint that does not
+ * level its ground (`level_ground` is opt-in), and until this rule the client
+ * never asked it inside a footprint: the figure walked at plate height while
+ * the landscape rose through the plate around it, and crossing the footprint
+ * border it JUMPED, because a traveller outside was already sampled off the
+ * world field.
+ *
+ * Under a levelling footprint this is inert by construction: the server
+ * flattens the field there to exactly the plateau the tile stands on, so both
+ * answers are the same number and the maximum is that number.
+ *
+ * The price is named in the spec (§ A16): a model that dips BELOW the world
+ * ground — the lake bed of an area model, a sunken courtyard — is undercut by
+ * the landscape, and that is an authoring matter, not a case for the renderer.
+ *
+ * NaN is not a height. A sampler that answers nonsense (no field yet, a broken
+ * payload) must not put a figure at NaN, from which no frame ever recovers:
+ * the other source answers alone, and with both gone the tile floor 0 does.
+ */
+export function standY(walkY: number, terrainY: number): number {
+  const walk = Number.isFinite(walkY) ? walkY : 0;
+  const terrain = Number.isFinite(terrainY) ? terrainY : walk;
+  return Math.max(walk, terrain);
+}
+
 /** One location's scene relief at the point being asked about: how WIDE its
  *  footprint is and how high its own field lifts the ground there. Only
  *  locations that both CONTAIN the point and carry a field are handed in —
