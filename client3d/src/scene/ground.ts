@@ -211,7 +211,9 @@ export function swayCacheKey(swayM: number): string {
 }
 
 /** Materials that already bend. Same guard as `holePatched`, same reason: the
- *  patch CHAINS, so applying it twice would declare its locals twice. */
+ *  patch CHAINS, so applying it twice would declare its locals twice. Note the
+ *  consequence: an amplitude change requires a NEW material — the guard
+ *  silently ignores re-patch attempts on one that already bends. */
 const swayPatched = new WeakSet<THREE.Material>();
 
 /**
@@ -231,6 +233,11 @@ const swayPatched = new WeakSet<THREE.Material>();
  * still in OBJECT coordinates there and the geometry is grounded (B16), so its
  * y IS the height above the ground — no varying, no second anchor. A missing
  * anchor (a three upgrade) simply leaves the prop standing still.
+ *
+ * Known limitation: the displacement happens in the vertex shader, so the
+ * bounding sphere three culls against does NOT know about it. A prop deflected
+ * by up to `swayM` (≤ 0.5 m) can therefore pop at the screen border when its
+ * unbent bounds leave the frustum — the symptom to look for here.
  */
 export function applySway(mat: THREE.Material, swayM: number,
                           refH: number): void {
@@ -257,6 +264,9 @@ export function applySway(mat: THREE.Material, swayM: number,
     // somewhere else in the same wave — no second attribute, and it survives
     // every tier swap because the matrices are never rewritten. Without
     // instancing there is one prop and no phase to spread.
+    // The hash degrades in float32 far from the origin: at ~1 km the dot
+    // product is around 1e5, where consecutive positions no longer separate
+    // and the phases start to cluster. Harmless at the world sizes we render.
     const bend = `
   {
     #ifdef USE_INSTANCING
