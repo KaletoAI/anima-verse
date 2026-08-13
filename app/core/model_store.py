@@ -54,6 +54,17 @@ def normalize_tier(tier: Any) -> str:
     return t if re.fullmatch(r"[a-z0-9_-]{1,16}", t or "") else ""
 
 
+def variant_urls(base_url: str, tiers: Sequence[str]) -> Dict[str, str]:
+    """``{tier: "<base_url>?tier=<tier>"}`` — the ONE shape a resolution-tier
+    URL has in every payload (scene models § B1, terrain scatter § A9).
+
+    There is exactly one way to name a tier so there is exactly one way to
+    resolve it: every consumer picks with the single ``pickVariant`` rule of
+    ``@anima/scene-render``. Only tiers the subject actually HAS belong in
+    here — an invented one is a 404 that looks like a configured model."""
+    return {str(t): f"{base_url}?tier={t}" for t in tiers if t}
+
+
 def read_sidecar(model_path: Path) -> Dict[str, Any]:
     """The JSON sidecar next to a model file ({} when absent/unreadable)."""
     sp = model_path.with_suffix(".json")

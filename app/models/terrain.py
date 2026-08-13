@@ -163,6 +163,51 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
             "meta": meta}
 
 
+def with_scatter_variants(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Add ``variants`` to every scatter entry whose ``model`` is a prop of
+    this world — PAYLOAD ONLY, never stored (§ A9).
+
+    The stored entry keeps its exactly three authored fields; the resolution
+    tiers are a fact about the PROP, not about the painting, so they are
+    derived when the areas are handed out instead of being frozen into the DB
+    (a low variant generated afterwards would otherwise never reach a client).
+    ``variants`` is ``{tier: "/assets/props/<id>/model?tier=<tier>"}`` for the
+    tiers the prop HAS — the same map and the same ``pickVariant`` rule the
+    scene payload uses for props and buildings.
+
+    No key at all when there is no model, when the URL is not the canonical
+    prop URL (a foreign or absolute one names a mesh with no tiers here) or
+    when the prop carries no mesh; a client without ``variants`` loads
+    ``model`` exactly as before.
+
+    The areas are enriched IN PLACE (``list_areas`` builds fresh dicts per
+    call) and handed back. The tier lookup touches the prop directory, so it
+    is cached per call: one read per DISTINCT prop, however many areas name
+    it.
+    """
+    from app.core.model_store import variant_urls
+    from app.core.props import model_tiers, prop_id_from_model_url
+
+    cache: Dict[str, Dict[str, str]] = {}
+    for area in areas:
+        meta = area.get("meta")
+        scatter = meta.get("scatter") if isinstance(meta, dict) else None
+        if not isinstance(scatter, list):
+            continue
+        for entry in scatter:
+            if not isinstance(entry, dict):
+                continue
+            prop_id = prop_id_from_model_url(entry.get("model"))
+            if not prop_id:
+                continue
+            if prop_id not in cache:
+                cache[prop_id] = variant_urls(f"/assets/props/{prop_id}/model",
+                                              model_tiers(prop_id))
+            if cache[prop_id]:
+                entry["variants"] = dict(cache[prop_id])
+    return areas
+
+
 def list_areas() -> List[Dict[str, Any]]:
     """All areas bottom-to-top: z_order, then paint order (rowid = insert
     order, which an update keeps). The LAST entry is drawn on top."""

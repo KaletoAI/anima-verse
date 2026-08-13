@@ -92,6 +92,10 @@ MARKER_AT_Y_MIN = -1.0
 
 _PROP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+#: The canonical model URL this module hands out — site-relative, no query,
+#: nothing after ``/model``. Parsing it back (``prop_id_from_model_url``) is
+#: how a stored reference becomes a prop id again.
+_MODEL_URL_RE = re.compile(r"^/assets/props/([^/?#]+)/model$")
 
 _lock = threading.Lock()
 # Running generation job keys "<prop_id>|<backend glob>" (see A2 generation
@@ -487,6 +491,31 @@ def model_path(prop_id: str, tier: str = "") -> Optional[Path]:
     to the best available one, so a prop without a low variant still renders."""
     g = model_gallery(prop_id)
     return g.find(tier) if g else None
+
+
+def model_tiers(prop_id: str) -> List[str]:
+    """The resolution tiers the prop actually HAS, sorted ('' id or no mesh →
+    empty list).
+
+    The SELECTION decides, not the files on disk: a prop switched off with the
+    ``__none__`` sentinel has no tier at all. This is the read behind every
+    ``variants`` map that names a prop (scene placements, terrain scatter) —
+    only an existing tier may be offered, a guessed one is a 404 dressed up as
+    a model."""
+    g = model_gallery(prop_id)
+    return sorted(g.tiers()) if g else []
+
+
+def prop_id_from_model_url(url: Any) -> str:
+    """The prop id behind the canonical model URL (``/assets/props/<id>/model``
+    — the very string :func:`list_props` hands out as ``model_url`` and the map
+    editor stores on a scatter entry); ``''`` for anything else.
+
+    Deliberately strict: no host, no query, no trailing path. A foreign or
+    absolute URL names a mesh this world knows nothing about, and guessing an
+    id out of it would invent tiers that do not exist."""
+    m = _MODEL_URL_RE.match(str(url or "").strip())
+    return safe_prop_id(m.group(1)) if m else ""
 
 
 def model_file_path(prop_id: str, filename: str) -> Optional[Path]:

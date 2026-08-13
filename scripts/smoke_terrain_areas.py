@@ -64,6 +64,35 @@ Throwaway storage. Hand-derived expectations:
       next to scatter survive untouched, and the list survives a save/read
       round trip.
 
+ [12] meta.scatter `variants` — the resolution tiers the entry's PROP has,
+      added when the areas are handed out (GET /play/terrain), never stored
+      (plan-scatter-lod.md, Task 1). Prop fixtures are built in the same
+      throwaway storage with the real props/model_store APIs:
+        smoke-tree  two gallery files, the second selected for tier "low"
+                    -> tiers [full, low]
+        smoke-rock  one gallery file, no selection at all — the default tier
+                    resolves to the newest unclaimed file -> tiers [full]
+        smoke-ghost a prop record without any mesh          -> tiers []
+      Hand-derived expectations per scatter entry:
+        model /assets/props/<tree>/model  -> variants with EXACTLY two URLs,
+              "/assets/props/<tree>/model?tier=full" and "...?tier=low"
+        model /assets/props/<rock>/model  -> exactly one URL, ?tier=full
+        no model                          -> no "variants" key
+        model of the mesh-less prop       -> no key (an invented tier is a
+                                             404 dressed up as a model)
+        an unknown prop id                -> no key
+        an absolute/foreign URL, and the canonical path WITH a query string
+                                          -> no key (parsing is strict)
+      The stored area is unchanged afterwards: a fresh read has exactly the
+      three authored fields per entry.
+      The tier lookup is cached per call: two areas naming the same prop four
+      times in total do ONE props.model_tiers read (counted with a wrapper).
+      RED COUNTER-PROBES, EXECUTED, both built from the module's own pieces:
+      a "loose URL" mutant (anything containing /assets/props/) hands the
+      foreign URL a variants map, and a "no tier parameter" mutant builds
+      "/assets/props/<id>/model" without "?tier=" — both answers differ from
+      the real one at exactly the checked spot.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
 import asyncio
@@ -98,6 +127,17 @@ def check(label, actual, expected):
     ok = actual == expected
     print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
           + ("" if ok else f" — expected {expected!r}"))
+    if not ok:
+        FAILURES.append(label)
+
+
+def differs(label, actual, forbidden):
+    """A red counter-probe: the mutant's answer must NOT be the real one."""
+    global CHECKED
+    CHECKED += 1
+    ok = actual != forbidden
+    print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
+          + ("" if ok else " — the mutant agrees, so the check proves nothing"))
     if not ok:
         FAILURES.append(label)
 
@@ -371,6 +411,141 @@ check("the list survives the save/read round trip",
                     "model": "/assets/props/fern/model"}],
        "note": "free form"})
 terrain.delete_area(_scat["id"])
+
+print("[12] scatter variants — the tiers the prop HAS (payload only)")
+from app.core import props  # noqa: E402
+
+
+def make_prop(name, tiers):
+    """A prop with real gallery files, built through the props API.
+
+    The default tier needs no selection entry (the gallery answers it with the
+    newest unclaimed file); every further tier is selected explicitly, which is
+    exactly what the admin's "create low variant" does.
+    """
+    pid = props.create_prop(name=name)["id"]
+    for tier in tiers:
+        gallery = props.model_gallery(pid)
+        path = gallery.new_path(".glb")
+        path.write_bytes(b"glTF-smoke")
+        if tier != "full":
+            gallery.select(path.name, tier)
+    return pid
+
+
+TREE = make_prop("smoke tree", ["full", "low"])
+ROCK = make_prop("smoke rock", ["full"])
+GHOST = make_prop("smoke ghost", [])
+check("tree tiers", props.model_tiers(TREE), ["full", "low"])
+check("rock tiers", props.model_tiers(ROCK), ["full"])
+check("mesh-less prop has no tier", props.model_tiers(GHOST), [])
+
+# Same prop id, foreign host: the strict parse must still refuse it — and it
+# is what makes the "loose URL" mutant below produce a real variants map.
+FOREIGN = f"https://cdn.example.org/assets/props/{TREE}/model"
+WITH_QUERY = f"/assets/props/{TREE}/model?tier=low"
+_va = terrain.save_area(
+    {"kind": "water", "polygon": SQUARE,
+     "meta": {"scatter": [{"density_per_100m2": 2,
+                           "model": f"/assets/props/{TREE}/model"},
+                          {"density_per_100m2": 2,
+                           "model": f"/assets/props/{ROCK}/model"},
+                          {"density_per_100m2": 2},
+                          {"density_per_100m2": 2,
+                           "model": f"/assets/props/{GHOST}/model"},
+                          {"density_per_100m2": 2,
+                           "model": "/assets/props/nope/model"},
+                          {"density_per_100m2": 2, "model": FOREIGN},
+                          {"density_per_100m2": 2, "model": WITH_QUERY}]}})
+
+
+def served_scatter():
+    """The entries as GET /play/terrain hands them out."""
+    areas = terrain.with_scatter_variants(terrain.list_areas())
+    return next(a["meta"]["scatter"] for a in areas if a["id"] == _va["id"])
+
+
+entries = served_scatter()
+check("prop with two tiers -> two URLs", entries[0].get("variants"),
+      {"full": f"/assets/props/{TREE}/model?tier=full",
+       "low": f"/assets/props/{TREE}/model?tier=low"})
+check("prop with one tier -> one URL", entries[1].get("variants"),
+      {"full": f"/assets/props/{ROCK}/model?tier=full"})
+check("no model -> no variants key", "variants" in entries[2], False)
+check("prop without a mesh -> no variants key", "variants" in entries[3], False)
+check("unknown prop id -> no variants key", "variants" in entries[4], False)
+check("foreign URL -> no variants key", "variants" in entries[5], False)
+check("canonical path with a query -> no variants key",
+      "variants" in entries[6], False)
+check("model itself is untouched", entries[0]["model"],
+      f"/assets/props/{TREE}/model")
+_stored = next(a["meta"]["scatter"] for a in terrain.list_areas()
+               if a["id"] == _va["id"])
+check("a fresh read carries no variants (payload only)",
+      [sorted(e) for e in _stored[:2]],
+      [["density_per_100m2", "model"], ["density_per_100m2", "model"]])
+
+# One read per DISTINCT prop, however often it is named: the payload is
+# refetched on every terrain_sig change, and each read walks a prop directory.
+_calls = []
+_real_tiers = props.model_tiers
+
+
+def counting_tiers(prop_id):
+    _calls.append(prop_id)
+    return _real_tiers(prop_id)
+
+
+_va2 = terrain.save_area(
+    {"kind": "grass", "polygon": SQUARE,
+     "meta": {"scatter": [{"density_per_100m2": 1,
+                           "model": f"/assets/props/{TREE}/model"},
+                          {"density_per_100m2": 1,
+                           "model": f"/assets/props/{TREE}/model"}]}})
+props.model_tiers = counting_tiers
+try:
+    served = terrain.with_scatter_variants(terrain.list_areas())
+finally:
+    props.model_tiers = _real_tiers
+# Six parsable mentions across the two areas, four distinct props (the two
+# without a mesh are looked up once as well and then remembered as "none").
+check("six mentions of four props -> four lookups", sorted(_calls),
+      sorted([TREE, ROCK, GHOST, "nope"]))
+_by_id = {a["id"]: (a["meta"].get("scatter") or []) for a in served}
+check("every mention still got its variants",
+      [len(e.get("variants") or {})
+       for e in _by_id[_va["id"]] + _by_id[_va2["id"]]],
+      [2, 1, 0, 0, 0, 0, 0, 2, 2])
+
+# Red counter-probes, built from the module's own pieces.
+from app.core.model_store import variant_urls  # noqa: E402
+
+
+def mutant_loose(entry):
+    """Mutant: "URL contains /assets/props/" instead of the strict match."""
+    url = str(entry.get("model") or "")
+    if "/assets/props/" not in url:
+        return None
+    pid = url.split("/assets/props/", 1)[1].split("/", 1)[0]
+    return variant_urls(f"/assets/props/{pid}/model", _real_tiers(pid)) or None
+
+
+def mutant_no_tier(entry):
+    """Mutant: the variants map without the ?tier= parameter."""
+    pid = props.prop_id_from_model_url(entry.get("model"))
+    tiers = _real_tiers(pid) if pid else []
+    return {t: f"/assets/props/{pid}/model" for t in tiers} or None
+
+
+differs("mutant 'loose URL' invents variants for the foreign URL",
+        mutant_loose({"model": FOREIGN}), entries[5].get("variants"))
+differs("mutant 'no tier parameter' names the same URL twice",
+        mutant_no_tier({"model": f"/assets/props/{TREE}/model"}),
+        entries[0].get("variants"))
+check("the loose mutant would really answer the foreign URL",
+      bool(mutant_loose({"model": FOREIGN})), True)
+for _a in terrain.list_areas():
+    terrain.delete_area(_a["id"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

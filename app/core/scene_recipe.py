@@ -46,7 +46,7 @@ from typing import (Any, Callable, Dict, Iterator, List, Optional, Set,
                     Tuple)
 
 from app.core.log import get_logger
-from app.core.model_store import DEFAULT_TIER
+from app.core.model_store import DEFAULT_TIER, variant_urls
 from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
                                   compose_recipe)
 from app.core.scatter_curves import (relief_cells, terrain_grid,
@@ -1082,7 +1082,7 @@ def _variants(base_url: str, tiers: Any) -> Dict[str, str]:
     and fall back to the best available one; an empty object means there is no
     mesh at all (then ``placeholder_dims`` carries the placement)."""
     names = [str(t) for t in (tiers or []) if t] or [DEFAULT_TIER]
-    return {t: f"{base_url}?tier={t}" for t in names}
+    return variant_urls(base_url, names)
 
 
 def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],

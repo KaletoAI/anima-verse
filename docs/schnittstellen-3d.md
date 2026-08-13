@@ -641,6 +641,15 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 ```
 
 - **Fehlende oder leere Liste = es wächst nichts.** Es gibt keine Vorgabe.
+- **Der Server hängt an einen Eintrag mit Prop-`model` zusätzlich
+  `variants: {tier: "/assets/props/<id>/model?tier=<tier>"}`** — nur die
+  Stufen, die das Prop WIRKLICH hat, aufgelöst mit derselben einen Regel
+  `pickVariant` wie die Szenen-Props (§ B1); fremde/absolute URLs und Props
+  ohne Mesh bekommen den Schlüssel nicht, und ohne `variants` lädt ein Client
+  weiter `model`. Welche Stufe er wann nimmt, ist **Anzeige-Politik des
+  Clients** (Distanz-Hysterese, Sichtweite, Instanz-Budget — in
+  `development_instructions/plan-scatter-lod.md` festgehalten), kein
+  Payload-Vertrag: gespeichert bleiben die drei Felder oben.
 - **`height_m` ist die Zielhöhe, nicht die Modellgröße:** das geladene Mesh
   wird uniform skaliert, bis seine Bounding-Box so hoch ist. **Ohne Angabe
   gilt die Vorgabe-Zielhöhe 2,0 m**, nicht die Autorengröße — „was die Datei
