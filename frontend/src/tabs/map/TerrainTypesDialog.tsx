@@ -31,6 +31,13 @@
  * Both count everywhere the ground is painted, inside a placed location as
  * much as out in the wilderness; only the PASSABILITY is a wilderness question
  * (§ A15, "footprint wins").
+ *
+ * And what a ground is SHAPED like: the micro-relief (`meta.relief_amplitude_m`
+ * / `meta.relief_wave_m`, § A16.2) — random small hills baked into the world
+ * heightfield wherever this kind is painted. It is authored per KIND, not per
+ * area, because it describes what the ground is, and it is one editing step
+ * away from making a slope nobody can climb: the amplitude field says in its
+ * hint how steep its number gets over one 4 m grid step.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -42,31 +49,106 @@ import type { TerrainType } from './mapTypes'
 // second literal here would be a second opinion about the same server value.
 import { UNKNOWN_COLOR as DEFAULT_COLOR } from './TerrainLayer'
 
-/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, the `move_anim` cap. */
+/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, the `move_anim` cap and the
+ *  two relief clamps of `terrain_types.py`. */
 const KIND_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const SPEED_MIN = 0
 const SPEED_MAX = 2
 const SPEED_STEP = 0.05
 const NAME_MAX = 60
 const MOVE_ANIM_MAX = 40
+const RELIEF_AMP_MIN = 0.05
+const RELIEF_AMP_MAX = 2
+const RELIEF_AMP_STEP = 0.05
+const RELIEF_WAVE_MIN = 8
+const RELIEF_WAVE_MAX = 200
+const RELIEF_WAVE_STEP = 1
+/** `terrain_types.DEFAULT_RELIEF_WAVE_M` — what an amplitude without a wave
+ *  gets, named in the hint so an empty field is not a mystery. */
+const RELIEF_WAVE_DEFAULT = 32
+/** `heightfield.DEFAULT_STEP_M` — the grid step the steepness hint divides by.
+ *  It is the FINEST step; a coarsened grid only ever makes the slope gentler,
+ *  so the number quoted here is the worst case. */
+const GRID_STEP_M = 4
 
-/** Read the one meta key this dialog owns. Everything else in `meta` belongs
- *  to whoever wrote it and travels along untouched. */
+/** Read the string meta key this dialog owns. Everything else in `meta`
+ *  belongs to whoever wrote it and travels along untouched. */
 function moveAnimOf(type: TerrainType): string {
   const raw = (type.meta as { move_anim?: unknown } | undefined)?.move_anim
   return typeof raw === 'string' ? raw : ''
 }
 
-/** `meta` with the move animation set — or with the KEY REMOVED when it is
- *  empty, which is what the server stores too ("no animation" is never an
- *  empty string a reader has to test for). */
-function withMoveAnim(meta: Record<string, unknown> | undefined,
-                      moveAnim: string): Record<string, unknown> {
+/** Read one optional NUMERIC meta key as the string its input shows — a
+ *  missing key is the empty field, which is exactly how "no relief" is
+ *  authored. */
+function metaNumOf(type: TerrainType, key: string): string {
+  const raw = (type.meta as Record<string, unknown> | undefined)?.[key]
+  return typeof raw === 'number' && Number.isFinite(raw) ? String(raw) : ''
+}
+
+/** One optional numeric key, IN PLACE — written or GONE. Mirrors the server's
+ *  `_clamped_meta_number`: nothing, junk or a non-positive number leaves NO
+ *  key behind, so no reader has to tell "authored as 0" from "not authored". */
+function setMetaNum(meta: Record<string, unknown>, key: string,
+                    raw: string): void {
+  const num = parseFloat(raw)
+  if (Number.isFinite(num) && num > 0) meta[key] = num
+  else delete meta[key]
+}
+
+/** Whether an optional numeric field differs from what is stored, compared as
+ *  NUMBERS — "0.40" is not a change to 0.4, and empty, junk and 0 are all the
+ *  same "no value" the server keeps as a missing key. */
+function numChanged(raw: string, stored: string): boolean {
+  const typed = parseFloat(raw)
+  const known = parseFloat(stored)
+  return (Number.isFinite(typed) && typed > 0 ? typed : null)
+    !== (Number.isFinite(known) && known > 0 ? known : null)
+}
+
+/** The `meta` keys this dialog owns, as their fields hold them. */
+interface OwnedMeta {
+  moveAnim: string
+  reliefAmp: string
+  reliefWave: string
+}
+
+/** `meta` with the owned keys written — or with the KEY REMOVED where the
+ *  field is empty, which is what the server stores too ("no animation" is
+ *  never an empty string a reader has to test for). The rest of `meta` is
+ *  copied through untouched: the route is a full replace. */
+function withOwnedMeta(meta: Record<string, unknown> | undefined,
+                       own: OwnedMeta): Record<string, unknown> {
   const next = { ...(meta || {}) }
-  const clean = moveAnim.trim()
+  const clean = own.moveAnim.trim()
   if (clean) next.move_anim = clean
   else delete next.move_anim
+  setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
+  setMetaNum(next, 'relief_wave_m', own.reliefWave)
   return next
+}
+
+/** The steepness hint of the amplitude field: the worst case two neighbouring
+ *  support points can build out of the noise alone is `atan(2·amp / step)` —
+ *  45° at the clamp of 2 m. An empty field quotes that clamp, so the sentence
+ *  says what the limit means before anything is typed. */
+function amplitudeHint(t: (s: string) => string, raw: string): string {
+  const typed = parseFloat(raw)
+  const amp = Number.isFinite(typed) && typed > 0 ? typed : RELIEF_AMP_MAX
+  const deg = Math.round(Math.atan(2 * amp / GRID_STEP_M) * 180 / Math.PI)
+  return t('Height of the random hills of this ground, in metres — empty = flat. {amp} m builds slopes of up to {deg}° over one {step} m grid step.')
+    .replace('{amp}', String(amp))
+    .replace('{deg}', String(deg))
+    .replace('{step}', String(GRID_STEP_M))
+}
+
+/** The wavelength hint — how wide one swell is, plus the default an amplitude
+ *  without a wave falls back to. */
+function waveHint(t: (s: string) => string): string {
+  return t('Width of one hill of this ground, in metres ({min}–{max}) — empty = {def} m.')
+    .replace('{min}', String(RELIEF_WAVE_MIN))
+    .replace('{max}', String(RELIEF_WAVE_MAX))
+    .replace('{def}', String(RELIEF_WAVE_DEFAULT))
 }
 
 /** What one row sends — the same shape it reads. `meta` travels along
@@ -93,6 +175,8 @@ function TypeRow({
   const [passable, setPassable] = useState(!!type.passable)
   const [speed, setSpeed] = useState(String(type.speed_factor))
   const [moveAnim, setMoveAnim] = useState(moveAnimOf(type))
+  const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
+  const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
 
   const speedNum = parseFloat(speed)
   const speedBad = !Number.isFinite(speedNum)
@@ -104,15 +188,20 @@ function TypeRow({
     || color !== (type.color || DEFAULT_COLOR)
     || passable !== !!type.passable
     || moveAnim.trim() !== moveAnimOf(type)
+    || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
+    || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
 
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // exactly ONE key in it (`move_anim`) and hands the rest back untouched.
+    // exactly THREE keys in it and hands the rest back untouched. The relief
+    // numbers are sent unclamped on purpose: the server clamps, and the row
+    // refills from its answer, so a typed 5 shows up as the stored 2.
     const saved = await onSave({
       kind: type.kind, name, color, passable,
-      speed_factor: speedNum, meta: withMoveAnim(type.meta, moveAnim),
+      speed_factor: speedNum,
+      meta: withOwnedMeta(type.meta, { moveAnim, reliefAmp, reliefWave }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -120,7 +209,10 @@ function TypeRow({
     setPassable(!!saved.passable)
     setSpeed(String(saved.speed_factor))
     setMoveAnim(moveAnimOf(saved))
-  }, [color, moveAnim, name, onSave, passable, speedBad, speedNum, type])
+    setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
+    setReliefWave(metaNumOf(saved, 'relief_wave_m'))
+  }, [color, moveAnim, name, onSave, passable, reliefAmp, reliefWave, speedBad,
+      speedNum, type])
 
   return (
     <tr>
@@ -175,6 +267,32 @@ function TypeRow({
           placeholder={t('walk / run')}
           title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
           onChange={(e) => setMoveAnim(e.target.value)}
+        />
+      </td>
+      <td>
+        <input
+          className="ga-input ga-tt-speed"
+          type="number"
+          min={RELIEF_AMP_MIN}
+          max={RELIEF_AMP_MAX}
+          step={RELIEF_AMP_STEP}
+          value={reliefAmp}
+          placeholder={t('flat')}
+          title={amplitudeHint(t, reliefAmp)}
+          onChange={(e) => setReliefAmp(e.target.value)}
+        />
+      </td>
+      <td>
+        <input
+          className="ga-input ga-tt-speed"
+          type="number"
+          min={RELIEF_WAVE_MIN}
+          max={RELIEF_WAVE_MAX}
+          step={RELIEF_WAVE_STEP}
+          value={reliefWave}
+          placeholder={String(RELIEF_WAVE_DEFAULT)}
+          title={waveHint(t)}
+          onChange={(e) => setReliefWave(e.target.value)}
         />
       </td>
       <td>
@@ -254,6 +372,8 @@ export function TerrainTypesDialog({
   const [newPassable, setNewPassable] = useState(true)
   const [newSpeed, setNewSpeed] = useState('1')
   const [newMoveAnim, setNewMoveAnim] = useState('')
+  const [newReliefAmp, setNewReliefAmp] = useState('')
+  const [newReliefWave, setNewReliefWave] = useState('')
 
   const putType = useCallback(async (draft: TypeDraft): Promise<TerrainType | null> => {
     setBusy(true)
@@ -298,7 +418,11 @@ export function TerrainTypesDialog({
     const saved = await putType({
       kind: kindClean, name: newName.trim(), color: newColor,
       passable: newPassable, speed_factor: newSpeedNum,
-      meta: withMoveAnim({}, newMoveAnim),
+      meta: withOwnedMeta({}, {
+        moveAnim: newMoveAnim,
+        reliefAmp: newReliefAmp,
+        reliefWave: newReliefWave,
+      }),
     })
     if (!saved) return
     setNewKind('')
@@ -307,8 +431,10 @@ export function TerrainTypesDialog({
     setNewPassable(true)
     setNewSpeed('1')
     setNewMoveAnim('')
-  }, [kindClean, newColor, newMoveAnim, newName, newPassable, newSpeedNum,
-      putType])
+    setNewReliefAmp('')
+    setNewReliefWave('')
+  }, [kindClean, newColor, newMoveAnim, newName, newPassable, newReliefAmp,
+      newReliefWave, newSpeedNum, putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -337,6 +463,8 @@ export function TerrainTypesDialog({
                 <th className="ga-tt-center">{t('Passable')}</th>
                 <th>{t('Speed')}</th>
                 <th>{t('Move animation')}</th>
+                <th>{t('Relief amplitude (m)')}</th>
+                <th>{t('Relief wavelength (m)')}</th>
                 <th>{t('Source')}</th>
                 <th />
               </tr>
@@ -344,7 +472,7 @@ export function TerrainTypesDialog({
             <tbody>
               {types.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="ga-map-tray-empty">
+                  <td colSpan={10} className="ga-map-tray-empty">
                     {t('No terrain types')}
                   </td>
                 </tr>
@@ -405,6 +533,7 @@ export function TerrainTypesDialog({
                   <input
                     type="checkbox"
                     checked={newPassable}
+                    title={t('Whether characters can walk on this ground')}
                     onChange={(e) => setNewPassable(e.target.checked)}
                   />
                 </td>
@@ -417,6 +546,10 @@ export function TerrainTypesDialog({
                     step={SPEED_STEP}
                     value={newSpeed}
                     aria-invalid={newSpeedBad}
+                    title={newSpeedBad
+                      ? t('Speed must be between {min} and {max}')
+                        .replace('{min}', String(SPEED_MIN)).replace('{max}', String(SPEED_MAX))
+                      : t('Movement speed on this ground, 1 = normal')}
                     onChange={(e) => setNewSpeed(e.target.value)}
                   />
                 </td>
@@ -426,7 +559,34 @@ export function TerrainTypesDialog({
                     maxLength={MOVE_ANIM_MAX}
                     value={newMoveAnim}
                     placeholder={t('walk / run')}
+                    title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
                     onChange={(e) => setNewMoveAnim(e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="ga-input ga-tt-speed"
+                    type="number"
+                    min={RELIEF_AMP_MIN}
+                    max={RELIEF_AMP_MAX}
+                    step={RELIEF_AMP_STEP}
+                    value={newReliefAmp}
+                    placeholder={t('flat')}
+                    title={amplitudeHint(t, newReliefAmp)}
+                    onChange={(e) => setNewReliefAmp(e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="ga-input ga-tt-speed"
+                    type="number"
+                    min={RELIEF_WAVE_MIN}
+                    max={RELIEF_WAVE_MAX}
+                    step={RELIEF_WAVE_STEP}
+                    value={newReliefWave}
+                    placeholder={String(RELIEF_WAVE_DEFAULT)}
+                    title={waveHint(t)}
+                    onChange={(e) => setNewReliefWave(e.target.value)}
                   />
                 </td>
                 {/* Source: a new kind is always this world's own. */}
@@ -443,7 +603,7 @@ export function TerrainTypesDialog({
                 </td>
               </tr>
               <tr>
-                <td colSpan={8} className="ga-tt-newhint">
+                <td colSpan={10} className="ga-tt-newhint">
                   {kindBad
                     ? t('A kind is lowercase letters, digits, “_” and “-”, starts with a letter or digit, at most 40 characters.')
                     : kindTaken

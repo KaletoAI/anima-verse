@@ -2191,15 +2191,16 @@ html, * {
 .ga-terrain-help p { margin: 0 0 6px; }
 .ga-terrain-help p:last-child { margin-bottom: 0; }
 
-/* Terrain-type manager dialog. Wider than the default modal because seven
+/* Terrain-type manager dialog. Wider than the default modal because nine
    columns of controls do not fold usefully — at 560 px the row with `Reset`
    armed (Save · Really reset · Cancel) pushes the table into sideways
-   scrolling.
+   scrolling. The two relief numbers of § A16.2 added two more columns, hence
+   940 instead of the earlier 760 px.
 
    The selector needs BOTH classes: `.ga-modal` sets `max-width: 560px` and is
    declared FURTHER DOWN in this file, so a single `.ga-tt-modal` of equal
    specificity loses the tie-break and the widening is silently dead. */
-.ga-modal.ga-tt-modal { max-width: 760px; }
+.ga-modal.ga-tt-modal { max-width: 940px; }
 .ga-tt-hint {
   font-size: 11px;
   color: var(--text-muted, #8b949e);
