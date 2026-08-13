@@ -498,6 +498,33 @@ def cached_sig() -> Optional[str]:
     return cached[1].get("sig")
 
 
+def current_sig() -> str:
+    """The world relief's signature — out of the WARM CACHE where there is one.
+
+    The same answer as ``models.heightfield.height_sig``, and that identity is
+    the point: whenever this process holds the current field, the signature it
+    was built from IS the current one — every writer of a height area and every
+    writer of a placement drops the cache first (:func:`invalidate_cache` via
+    ``_invalidate`` / ``note_world_write``), so a warm cache cannot hold a
+    signature the world has moved past.
+
+    THE READ PATH IS WHY IT EXISTS. ``build_worldmap_payload`` carries the
+    signature on a 3-second poll, per client — and ``height_sig`` costs a full
+    read of every area PLUS a full ``list_locations()`` PLUS an md5 (1.4 ms
+    measured on the areas alone), for an answer that only changes when somebody
+    edits the world. Here it is a dict lookup.
+
+    A COLD cache falls back to the full computation and deliberately does NOT
+    build the field: a poll is not the place to pay for a raster (0.39 s for a
+    full-budget square, measured). Then it costs exactly what it always did.
+    """
+    cached = cached_sig()
+    if cached is not None:
+        return cached
+    from app.models import heightfield as store
+    return store.height_sig()
+
+
 def world_height(x: float, z: float) -> float:
     """Height of the world ground at (x, z) — what ``ground_y`` answers."""
     return sample_height(get_field(), x, z)

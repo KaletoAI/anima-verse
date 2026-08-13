@@ -142,6 +142,13 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
         world the ``POST /play/pos`` of a walker.
     ``invalidate_cache()`` drops the object again (the next call rebuilds or
     reloads, so it is a DIFFERENT object with the same content).
+    THE THIRD PROPERTY is ``current_sig()`` (E8 task 5), the signature the
+    worldmap poll carries: warm it must equal ``height_sig()`` — a cached
+    signature that outlived its world would send every client to refetch never
+    or forever — and cold it must fall back WITHOUT building the field, i.e.
+    ``cached_sig()`` is still None afterwards. A write in between is the
+    discriminating case: the cache is dropped by the writer, so the poll may
+    not answer out of it.
 [10] ROUTES. POST assigns the id; PUT on an unknown id is 404 and creates
     NOTHING (the store is an upsert, so a repeated stale PUT would otherwise
     resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
@@ -500,6 +507,22 @@ hf.invalidate_cache()
 check("invalidating drops it", hf.get_field() is not _warm, True)
 check("and the content is the same", hf.get_field()["heights"] == _warm["heights"],
       True)
+# The poll's signature: warm it comes out of the cache and is the real one.
+hf.get_field()
+check("a warm current_sig is the real signature",
+      hf.current_sig(), store.height_sig())
+# ...and a WRITE in between may not be answered out of the old cache.
+_cache_area2 = store.save_height_area({"polygon": square(300, 300, 340, 340),
+                                       "height_m": 3, "falloff_m": 4})
+check("a write moves the polled signature too",
+      hf.current_sig(), store.height_sig())
+check("...and it really moved", hf.current_sig() != _stored["sig"], True)
+store.delete_height_area(_cache_area2["id"])
+# Cold: the same answer, and NOT by rastering — the poll never builds a field.
+hf.invalidate_cache()
+check("a cold current_sig is still the real signature",
+      hf.current_sig(), store.height_sig())
+check("...and it built no field to say so", hf.cached_sig(), None)
 store.delete_height_area(_cache_area["id"])
 
 print("[10] the routes")

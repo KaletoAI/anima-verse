@@ -192,7 +192,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
     from app.core.world_geometry import placed_footprint
-    from app.models.heightfield import height_sig
+    from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import list_areas, terrain_sig
 
     avatar = (avatar_name or "").strip()
@@ -548,6 +548,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # `terrain_sig` and the same reason it rides here: when it changes,
         # clients refetch `GET /play/heightfield` — the one payload too big to
         # send with a 3-second poll.
+        # Asked of the FIELD CACHE (`core.heightfield.current_sig`), not
+        # recomputed: the raw `models.heightfield.height_sig` re-reads every
+        # area and every location and hashes them, which on this poll is a
+        # second full `list_locations()` per client every three seconds. The
+        # cached answer is the same string whenever the cache is warm, and a
+        # cold one falls back to the full computation.
         "height_sig": height_sig(),
         "fogged": fogged,
         # The two WALK LIMITS (§ A12, E8 task 1). They are world settings the
