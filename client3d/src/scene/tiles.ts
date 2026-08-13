@@ -30,6 +30,31 @@ export const FOOTPRINT_FALLBACK_M = 10;
  *  tile is rebuilt on every layout change. */
 const widthWarned = new Set<string>();
 
+/** How high above the world the ground raycast of `tileGroundY` starts, in
+ *  metres, before any relief is known. A ray has to start ABOVE what it is
+ *  meant to hit — one that starts inside a hill finds nothing and the figure
+ *  falls back to the tile floor on exactly the ground it should be standing
+ *  on. */
+const RAY_START_FALLBACK_M = 20;
+/** Air above the highest ground the ray keeps: a location's model may stand a
+ *  little proud of the terrain it is placed on. */
+const RAY_START_MARGIN_M = 5;
+let rayStartY = RAY_START_FALLBACK_M;
+
+/**
+ * Raise the ground raycast above the world's relief (§ A16).
+ *
+ * Called by `scene/ground.ts` whenever the heightfield is taken over: the
+ * relief is clamped at ±50 m, so the fixed 20 m the client used before is
+ * INSIDE any hill taller than that. The start only ever grows — the fallback
+ * is the floor, because a ray starting lower than it always did would be a
+ * regression on the flat world it was chosen for.
+ */
+export function setWorldRayStart(maxGroundY: number): void {
+  const want = (Number.isFinite(maxGroundY) ? maxGroundY : 0) + RAY_START_MARGIN_M;
+  rayStartY = Math.max(RAY_START_FALLBACK_M, want);
+}
+
 /** Edge length of a location's footprint square in world metres. */
 export function footprintWidth(loc: WorldLocation): number {
   const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
@@ -739,6 +764,11 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
   const restoreSides = () => { for (const [m, s] of savedSides) m.side = s; };
   const ray = new THREE.Raycaster();
   const down = new THREE.Vector3(0, -1, 0);
+  // RELATIVE to the room's own holder, and that is what makes the 20 m below
+  // relief-proof (§ A16): `base` is a world position that travels with the
+  // tile, so a location standing on a hill rays from 20 m above ITS floor, not
+  // from 20 m above the flat world. The one absolute start in this file is
+  // `tileGroundY`'s, and that one follows the field (`setWorldRayStart`).
   const base = slot.holder.getWorldPosition(new THREE.Vector3());
   const N = 6;
   const samples: { p: THREE.Vector3; ix: number; iz: number; uv?: THREE.Vector2; mesh?: THREE.Mesh }[] = [];
@@ -896,7 +926,7 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
     walkY: tile.modelWalkY,
   };
   const ray = new THREE.Raycaster(
-    new THREE.Vector3(at.x, 20, at.z), new THREE.Vector3(0, -1, 0));
+    new THREE.Vector3(at.x, rayStartY, at.z), new THREE.Vector3(0, -1, 0));
   for (const h of ray.intersectObject(target, true)) {
     if (acceptsWalkHit(info, h.point.y)) return h.point.y + 0.01 + lift;
   }

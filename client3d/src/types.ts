@@ -243,6 +243,10 @@ export interface WorldMap {
    *  changes, `/play/terrain` is refetched — the poll carries the sig so the
    *  terrain itself needs no polling of its own. */
   terrain_sig: string;
+  /** Signature of the world RELIEF (§ A16), the same trigger one step further:
+   *  when it changes, `/play/heightfield` is refetched and the ground is
+   *  draped again. Missing (an older server) means a flat world. */
+  height_sig?: string;
   /** `true` = this is the filtered view, so unknown places stay hidden.
    *  `false` = the admin's unfiltered view (`?all=1`), no fog at all. */
   fogged: boolean;

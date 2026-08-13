@@ -16,30 +16,42 @@
  *  - what is in THIS file is view state: which meshes stand in the scene, the
  *    prop scatter and its distance cut-off.
  *
- * GROUND_Y DISCIPLINE. Every vertex sits at y = 0 and stays there. Stacked
- * areas are separated by `renderOrder` + a depth bias, not by a height ladder
- * — a metre world whose meadow floats above its path would show a step at
- * every edge the moment relief arrives. The only exception is a sub-millimetre
- * lift, capped at one centimetre in total (`AREA_Y_MAX_M`), which is there for
- * the drivers whose depth bias is too weak to separate coplanar faces.
+ * GROUND_Y DISCIPLINE, as amended by the world relief (E8 task 3). The ground
+ * is still one height and one only — `ground_y(x, z)`, which since § A16 is
+ * the heightfield sampled at that point instead of the constant 0. Nothing
+ * here invents a height of its own: the base plate and every painted area are
+ * cut on the FIELD's grid (`@anima/scene-render` `gridMesh`) and every vertex
+ * is lifted by `sampleWorldHeight` at its own world x/z, so the two describe
+ * one surface. Stacked areas are still separated by `renderOrder` + a depth
+ * bias and NOT by a height ladder; the sub-millimetre hairline lift
+ * (`AREA_Y_STEP_M`, capped at `AREA_Y_MAX_M`) now rides ON TOP of the sampled
+ * height, which is the one place where "the areas sit a hair above the plate"
+ * is allowed to be true.
  *
- * REFETCH. The terrain is never fogged, so it is fetched ONCE and again only
- * when the worldmap poll reports a different `terrain_sig` — `sync()` takes
- * that signature and does nothing while it is unchanged.
+ * REFETCH. Neither the terrain nor the relief is ever fogged, so both are
+ * fetched ONCE and again only when the worldmap poll reports a different
+ * signature — `terrain_sig` for the painted areas, `height_sig` for the field.
+ * `sync()` takes both and does nothing while they are unchanged.
  */
 import * as THREE from 'three';
-import { AREA_POLYGON_OFFSET, buildAreaGeometry, pointInRing, propGroundFit,
-  scatterInstances, scatterSeed, surfaceMaterial } from '@anima/scene-render';
-import type { Point2, ScatterEntry, ScatterFootprint, SurfaceMaterialSpec } from '@anima/scene-render';
-import { fetchTerrain } from '../api';
+import { AREA_POLYGON_OFFSET, buildAreaGeometry, gridPlate, gridStepFor,
+  maxWorldHeightIn, pointInRing, propGroundFit, sampleWorldHeight,
+  scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
+  worldHeightRange } from '@anima/scene-render';
+import type { Point2, ScatterEntry, ScatterFootprint, SurfaceMaterialSpec,
+  WorldHeightField } from '@anima/scene-render';
+import { fetchHeightfield, fetchTerrain } from '../api';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainType, WorldBounds } from '../types';
-import { preloadSurfaceTexture, surfaceFor, surfaceMaterialSpec } from './tiles';
+import { preloadSurfaceTexture, setWorldRayStart, surfaceFor,
+  surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
 
-/** The world's ground height. v1 of the seamless world is flat, and this
- *  constant is the single place that says so — nothing computes a ground y of
- *  its own (plan § D: `ground_y(x, z)` is the ground truth). */
+/** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
+ *  the level every height in the payload is measured from. Since E8 the ground
+ *  under a point is `Ground.heightAt(x, z)`; this constant is what that answers
+ *  where nobody has authored a hill, and it stays the one place that says the
+ *  unshaped world lies at zero. */
 export const GROUND_Y = 0;
 
 /** How far the base plane reaches beyond `world_bounds`, in metres. The bounds
@@ -195,7 +207,27 @@ export interface Ground {
    * tears its world down over one failed poll is worse than a stale one.
    */
   sync(sig: string, bounds: WorldBounds | null,
-       locations: readonly MapLocation[]): Promise<boolean>;
+       locations: readonly MapLocation[], heightSig: string): Promise<boolean>;
+  /**
+   * The world's ground height at a point (§ A16), in metres.
+   *
+   * THE one height source of the client: the base plate and the painted areas
+   * are draped with it, the figures stand on it, and `main.ts` `groundY()`
+   * falls back to it wherever no location's own model answers. 0 until the
+   * field has arrived, and 0 for ever in a world nobody has shaped — the flat
+   * world is a relief like any other, it just happens to be level.
+   */
+  heightAt(x: number, z: number): number;
+  /**
+   * Highest ground inside an axis-aligned rectangle (world metres) — what the
+   * fog quads hang above (§ A12 + § A16). One flat quad over a hilly patch has
+   * to clear the highest thing under it, or the mountain stands in the cloud.
+   */
+  maxHeightIn(x0: number, z0: number, x1: number, z1: number): number;
+  /** Counts how often the RELIEF was taken over. Part of the fog's rebuild key
+   *  (the veil's height comes from the field) — a signature of its own,
+   *  because the field arrives long after the first fog is built. */
+  heightRevision(): number;
   /** Hide the prop scatter beyond `farM` metres from the camera. Called by the
    *  1 Hz LOD tick of `main.ts` — the hysteresis of the model tiers lives
    *  there, this is a plain visibility switch on top of it. */
@@ -280,6 +312,31 @@ export function createGround(): Ground {
   let inFlight: Promise<boolean> | null = null;
   let rev = 0;
 
+  /** The world relief (§ A16) and the signature it was fetched for. `null`
+   *  means "not yet arrived", which answers a flat world — the same answer a
+   *  world without a single authored hill gives, and deliberately so: nothing
+   *  waits for the field, the ground is simply draped again when it lands. */
+  let field: WorldHeightField | null = null;
+  let loadedHeightSig: string | null = null;
+  let heightRev = 0;
+  /** The cell size plate and areas are cut at — ONE for the whole ground, so
+   *  the two always meet on the same lines (`gridStepFor`, gridMesh.ts). 0
+   *  while there is no relief at all: then nothing is subdivided. */
+  let cellM = 0;
+
+  const heightAt = (x: number, z: number): number =>
+    (field ? sampleWorldHeight(field, x, z) : GROUND_Y);
+
+  /** Lift a flat vertex list onto the field, in place. `pos` is `[x, y, z, …]`
+   *  in WORLD metres (both the plate and the subdivided areas are), so the
+   *  sample point is the vertex itself. */
+  function liftToField(pos: number[]): void {
+    if (!field) return;
+    for (let i = 0; i < pos.length; i += 3) {
+      pos[i + 1] += sampleWorldHeight(field, pos[i], pos[i + 2]);
+    }
+  }
+
   /** The footprints the scatter keeps clear (finding B18), and the signature
    *  the areas standing in the scene were sampled against. `null` means "never
    *  built", which is not the same as "built against no locations at all". */
@@ -356,16 +413,62 @@ export function createGround(): Ground {
     return mat;
   }
 
-  /** The plane under everything, in the look of the unpainted ground. */
+  /** What the base plate has to cover, as `[minX, minZ, maxX, maxZ]`: the
+   *  world frame grown by the ground margin, or the fallback square when
+   *  nothing is placed at all. */
+  function plateExtent(bounds: WorldBounds | null
+  ): [number, number, number, number] {
+    if (!bounds) {
+      const h = BASE_FALLBACK_M / 2;
+      return [-h, -h, h, h];
+    }
+    return [bounds.min_x - BASE_MARGIN_M, bounds.min_z - BASE_MARGIN_M,
+            bounds.max_x + BASE_MARGIN_M, bounds.max_z + BASE_MARGIN_M];
+  }
+
+  /**
+   * The cell size the WHOLE ground is cut at, in metres — 0 for a flat world,
+   * where nothing is subdivided at all.
+   *
+   * ONE number for the plate and every painted area (`gridStepFor` doubles the
+   * field's own step until the plate stays under `GRID_MAX_CELLS`). A plate
+   * cut coarser than the areas on it would have the areas sampling the field
+   * where the plate only interpolates between two of its vertices — the
+   * meadow would sink into the hill it is painted on.
+   *
+   * A field of nothing but zeroes is FLAT and says so: today's worlds have no
+   * relief at all, and giving them forty thousand cells for a surface that is
+   * level would be paid every rebuild for nothing.
+   */
+  function cellFor(bounds: WorldBounds | null): number {
+    const step = field?.step_m ?? 0;
+    if (!(step > 0)) return 0;
+    const range = worldHeightRange(field);
+    if (range.min === 0 && range.max === 0) return 0;
+    const [x0, z0, x1, z1] = plateExtent(bounds);
+    return gridStepFor(x0, z0, x1, z1, step);
+  }
+
+  /**
+   * The plane under everything, in the look of the unpainted ground — and
+   * since E8 the LANDSCAPE under everything.
+   *
+   * Without a relief it stays the two triangles it always was. With one it is
+   * a grid of cells on the field's own lines (`gridPlate`), every vertex
+   * lifted by the sampled height: the plate IS the world's terrain, and the
+   * painted areas are cut on the same grid so they lie on it instead of
+   * cutting through it.
+   *
+   * The plate is built in WORLD coordinates and the mesh sits at the origin —
+   * not at the plate's centre with local coordinates around it. That is what
+   * lets one and the same sampled height serve the plate, the areas and the
+   * figures without a transform in between, and it costs nothing: a mesh's
+   * bounding sphere is what culls it, and that is computed either way.
+   */
   function rebuildBase(bounds: WorldBounds | null): void {
-    const minX = bounds ? bounds.min_x - BASE_MARGIN_M : -BASE_FALLBACK_M / 2;
-    const maxX = bounds ? bounds.max_x + BASE_MARGIN_M : BASE_FALLBACK_M / 2;
-    const minZ = bounds ? bounds.min_z - BASE_MARGIN_M : -BASE_FALLBACK_M / 2;
-    const maxZ = bounds ? bounds.max_z + BASE_MARGIN_M : BASE_FALLBACK_M / 2;
-    const w = Math.max(maxX - minX, 1);
-    const d = Math.max(maxZ - minZ, 1);
+    const [wantX0, wantZ0, wantX1, wantZ1] = plateExtent(bounds);
     const kind = payload?.default_kind || '';
-    const key = `${kind}|${minX}|${minZ}|${w}|${d}`;
+    const key = `${kind}|${wantX0}|${wantZ0}|${wantX1}|${wantZ1}|${heightRev}`;
     if (baseMesh && key === baseKey) return;
     if (baseMesh) {
       group.remove(baseMesh);
@@ -374,13 +477,22 @@ export function createGround(): Ground {
       drain(baseOwned);
     }
     baseKey = key;
-    const geo = new THREE.PlaneGeometry(w, d);
-    geo.rotateX(-Math.PI / 2);
+    const plate = gridPlate(wantX0, wantZ0, Math.max(wantX1, wantX0 + 1),
+                            Math.max(wantZ1, wantZ0 + 1),
+                            cellM, field?.origin_x ?? 0, field?.origin_z ?? 0);
+    liftToField(plate.pos);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(plate.pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(plate.uv, 2));
+    geo.setIndex(plate.index);
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    const w = plate.maxX - plate.minX;
+    const d = plate.maxZ - plate.minZ;
     // The base tiles over its WHOLE edge, so one UV unit is `w` metres wide
     // and `d` deep. Non-square worlds would stretch the texture; the shorter
     // edge decides, which repeats a little more often than it stretches.
     const mesh = new THREE.Mesh(geo, materialFor(kind, Math.min(w, d), baseOwned));
-    mesh.position.set((minX + maxX) / 2, GROUND_Y, (minZ + maxZ) / 2);
     mesh.receiveShadow = true;
     mesh.renderOrder = 0;
     baseMesh = mesh;
@@ -441,7 +553,12 @@ export function createGround(): Ground {
       const s = new THREE.Vector3(1, 1, 1);
       points.forEach((p, i) => {
         q.setFromAxisAngle(up, p.yaw);
-        m.compose(at.set(p.x, GROUND_Y, p.z), q, s);
+        // EVERY instance samples its own ground (§ A16): the sampler decides
+        // where the tuft stands, the scatter only where it stands in XZ. A
+        // shared height would float half a wood over the slope it grows on.
+        // The props stay UPRIGHT on a slope — a tree grows towards the sky,
+        // and tilting one into the surface normal is a look, not a fix.
+        m.compose(at.set(p.x, heightAt(p.x, p.z), p.z), q, s);
         inst.setMatrixAt(i, m);
       });
       inst.instanceMatrix.needsUpdate = true;
@@ -520,6 +637,39 @@ export function createGround(): Ground {
    * and a material built into that same bag before the drain would be disposed
    * the moment it was hung into the scene.
    */
+  /**
+   * A painted area, cut on the ground grid and laid on the relief.
+   *
+   * The flat geometry of `buildAreaGeometry` is a handful of big triangles
+   * from earcut; over a hill those four corners would drape and the metres in
+   * between would cut straight through it. So the triangles are clipped along
+   * the SAME grid lines the base plate is built on (`subdivideOnGrid`) and
+   * every vertex is lifted by the field. The UVs survive because they are
+   * world metres and the cut interpolates them linearly — a texture that ran
+   * seamlessly across an area border still does.
+   *
+   * The input geometry is consumed: it is either handed back untouched (a flat
+   * world subdivides nothing) or disposed here, because from that moment on
+   * nothing else knows about it.
+   */
+  function drapeArea(flat: THREE.BufferGeometry): THREE.BufferGeometry {
+    if (!(cellM > 0) || !field) return flat;
+    const src = flat.index ? flat.toNonIndexed() : flat;
+    const pos = Array.from(src.getAttribute('position').array as ArrayLike<number>);
+    const uvAttr = src.getAttribute('uv');
+    const uv = uvAttr ? Array.from(uvAttr.array as ArrayLike<number>) : null;
+    if (src !== flat) src.dispose();
+    flat.dispose();
+    const cut = subdivideOnGrid(pos, uv, cellM, field.origin_x, field.origin_z);
+    liftToField(cut.pos);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(cut.pos, 3));
+    if (uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(cut.uv, 2));
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    return geo;
+  }
+
   async function rebuildAreas(): Promise<void> {
     const areas = payload?.areas ?? [];
     // Textures first, ALL of them: `surfaceFor` only hands out fully loaded
@@ -536,7 +686,8 @@ export function createGround(): Ground {
       if (!built) return;   // a ring that encloses nothing has nothing to draw
       // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
       // so the texture runs seamlessly across area borders.
-      const mesh = new THREE.Mesh(built.geometry, materialFor(area.kind, 1, nextOwned));
+      const mesh = new THREE.Mesh(drapeArea(built.geometry),
+                                  materialFor(area.kind, 1, nextOwned));
       mesh.receiveShadow = true;
       // LIST ORDER decides what covers what — the server sorted the areas
       // bottom to top (z_order, then paint order), so the index IS the layer.
@@ -546,8 +697,10 @@ export function createGround(): Ground {
       mat.polygonOffset = true;
       mat.polygonOffsetFactor = bias;
       mat.polygonOffsetUnits = bias;
-      mesh.position.y = GROUND_Y
-        + Math.min((index + 1) * AREA_Y_STEP_M, AREA_Y_MAX_M);
+      // The hairline lift rides ON TOP of the sampled height: the vertices
+      // carry the relief, this adds the fraction of a millimetre that keeps a
+      // driver with a weak depth bias from tearing two coplanar areas apart.
+      mesh.position.y = Math.min((index + 1) * AREA_Y_STEP_M, AREA_Y_MAX_M);
       mesh.userData.terrainKind = area.kind;
       mesh.userData.terrainAreaId = area.id;
 
@@ -557,7 +710,9 @@ export function createGround(): Ground {
       next.push({
         mesh,
         scatter,
-        centre: new THREE.Vector3((minX + maxX) / 2, GROUND_Y, (minZ + maxZ) / 2),
+        centre: new THREE.Vector3((minX + maxX) / 2,
+                                  heightAt((minX + maxX) / 2, (minZ + maxZ) / 2),
+                                  (minZ + maxZ) / 2),
         radius: Math.hypot(maxX - minX, maxZ - minZ) / 2,
       });
     });
@@ -589,38 +744,85 @@ export function createGround(): Ground {
     return locations.map((l) => `${l.id}:${footprintSignature(l)}`).join(';');
   }
 
-  async function reload(sig: string, bounds: WorldBounds | null): Promise<boolean> {
+  /**
+   * Take over the world relief (§ A16).
+   *
+   * Failure keeps the field that stands and does NOT advance the signature, so
+   * the next poll tries again — the same rule the terrain follows. A world
+   * whose relief never arrives is drawn flat, which is wrong by the height of
+   * its hills and right in every other respect; a client that refused to draw
+   * a ground at all would be wrong about the whole world.
+   */
+  async function reloadHeight(heightSig: string): Promise<boolean> {
     try {
-      payload = await fetchTerrain();
-      loadedSig = payload.sig || sig;
+      field = await fetchHeightfield();
+      loadedHeightSig = field.sig || heightSig;
+      heightRev += 1;
+      // The tiles ray their ground from above the WORLD, so the relief moves
+      // the start of that ray — see `setWorldRayStart`.
+      setWorldRayStart(worldHeightRange(field).max);
+      return true;
     } catch {
-      // Keep whatever stands. `loadedSig` is deliberately NOT advanced, so the
-      // next poll with the same signature tries again.
-      if (!payload) rebuildBase(bounds);
       return false;
     }
-    rebuildCatalog();
-    // Areas FIRST: `rebuildAreas` preloads the surface textures of every kind
-    // in play, the default kind included. Building the base plane before that
-    // would give it the flat catalog colour and never rebuild it — the key
-    // below has not changed, so nothing would ever put its texture on.
-    await rebuildAreas();
+  }
+
+  /**
+   * Fetch what changed and rebuild the ground once — relief first.
+   *
+   * The ORDER is the point: the field decides where every vertex of the plate
+   * and of every area sits, so it has to be in before either is built. After
+   * it come the areas (they preload the surface textures of every kind in
+   * play, the default kind included) and only then the plate — building the
+   * plate first would give it the flat catalog colour and never rebuild it,
+   * because its key would not have moved by the time the texture arrived.
+   */
+  async function reload(sig: string, bounds: WorldBounds | null,
+                        heightSig: string, wantTerrain: boolean,
+                        wantHeight: boolean): Promise<boolean> {
+    if (wantHeight) await reloadHeight(heightSig);
+    let ok = true;
+    if (wantTerrain) {
+      try {
+        payload = await fetchTerrain();
+        loadedSig = payload.sig || sig;
+        rebuildCatalog();
+      } catch {
+        // Keep whatever stands. `loadedSig` is deliberately NOT advanced, so
+        // the next poll with the same signature tries again.
+        ok = false;
+      }
+    }
+    cellM = cellFor(bounds);
+    // A failed terrain fetch does NOT cost the relief its rebuild: the areas
+    // are re-cut from the payload that stands, and standing on the old ground
+    // while the world is draped around it is the one state that would look
+    // broken.
+    if (ok || wantHeight) await rebuildAreas();
     rebuildBase(bounds);
-    return true;
+    return ok;
   }
 
   return {
     group,
-    sync(sig, bounds, locations) {
+    sync(sig, bounds, locations, heightSig) {
       if (inFlight) return inFlight;
       const fpSig = footprintSig(locations);
       const fpMoved = builtFpSig !== null && builtFpSig !== fpSig;
       footprints = locations;
-      if (loadedSig !== null && loadedSig === sig) {
-        // Same terrain. Either only the frame moved — then the base plane is
-        // the whole job — or a location did, and then the areas have to be
-        // sampled again around the new footprints (finding B18). No refetch
-        // for that: the painted ground itself has not changed.
+      // The relief has its own signature and its own fetch (§ A16). `null`
+      // is "never fetched", so the first sync always asks — a world whose
+      // `height_sig` is the empty string of an older server asks once and is
+      // then done with it.
+      const wantHeight = loadedHeightSig !== heightSig;
+      const wantTerrain = loadedSig === null || loadedSig !== sig;
+      if (!wantTerrain && !wantHeight) {
+        // Same terrain, same relief. Either only the frame moved — then the
+        // base plate is the whole job — or a location did, and then the areas
+        // have to be sampled again around the new footprints (finding B18).
+        // No refetch for that: neither the painted ground nor the relief has
+        // changed.
+        cellM = cellFor(bounds);
         rebuildBase(bounds);
         if (!fpMoved) return Promise.resolve(false);
         builtFpSig = fpSig;
@@ -630,9 +832,14 @@ export function createGround(): Ground {
         return inFlight;
       }
       builtFpSig = fpSig;
-      inFlight = reload(sig, bounds).finally(() => { inFlight = null; });
+      inFlight = reload(sig, bounds, heightSig, wantTerrain, wantHeight)
+        .finally(() => { inFlight = null; });
       return inFlight;
     },
+    heightAt,
+    maxHeightIn: (x0, z0, x1, z1) => (
+      field ? maxWorldHeightIn(field, x0, z0, x1, z1) : GROUND_Y),
+    heightRevision: () => heightRev,
     setHole(rect) {
       holeOn.value = rect ? 1 : 0;
       if (rect) holeRect.value.set(rect[0], rect[1], rect[2], rect[3]);

@@ -57,6 +57,10 @@ import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } fr
 // `world_bounds` — so a grid read would not even type-check today.
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
+/** How long the boot waits for the ground (terrain + relief) before framing
+ *  the camera anyway. Long enough for a local request and far too short to
+ *  strand the player behind a backend that is restarting. */
+const GROUND_BOOT_WAIT_MS = 2500;
 /** How often the soundtrack driver reconsiders what should be playing (E4-T5).
  *  Every input of that decision moves on its own schedule (the night factor
  *  with the game-hour poll, the terrain with every step), and recomputing the
@@ -220,10 +224,16 @@ const CAMERA_FIT_MAX = 150;
  *  empty world looks exactly as it always did. */
 const CAMERA_FIT_EMPTY = 70;
 
-/** Centre of `world_bounds`, or the world origin when nothing is placed. */
-function worldCentre(b: WorldBounds | null | undefined): THREE.Vector3 {
-  if (!b) return new THREE.Vector3(0, 0, 0);
-  return new THREE.Vector3((b.min_x + b.max_x) / 2, 0, (b.min_z + b.max_z) / 2);
+/** Centre of `world_bounds`, or the world origin when nothing is placed — on
+ *  the GROUND there (§ A16). The camera looks at a point of the world, and in
+ *  a world whose middle is a hilltop the y = 0 plane is somewhere inside the
+ *  hill: the view would start looking at the inside of the mountain. `groundY`
+ *  is the sampler; a world without a relief answers 0 as it always did. */
+function worldCentre(b: WorldBounds | null | undefined,
+                     groundY: (x: number, z: number) => number): THREE.Vector3 {
+  const x = b ? (b.min_x + b.max_x) / 2 : 0;
+  const z = b ? (b.min_z + b.max_z) / 2 : 0;
+  return new THREE.Vector3(x, groundY(x, z), z);
 }
 
 /** Camera distance at which `world_bounds` fits the picture, clamped to what
@@ -539,7 +549,10 @@ async function startApp(username: string, role: string) {
   // distance — the grid world's fallback was a min/max over the placed cells,
   // and with the metre payload `Math.min()` of nothing gave `Infinity` and the
   // camera target became NaN: a world one could not see at all.
-  const center = worldCentre(firstMap.world_bounds);
+  //
+  // The centre itself is taken further down, AFTER the ground has been synced:
+  // its height comes from the relief (§ A16), and asking before the field has
+  // arrived would frame the world on the flat plane under its hills.
 
   // --- The ground of the metre world (E4 task 2) -----------------------------
   //
@@ -568,7 +581,21 @@ async function startApp(username: string, role: string) {
     mapLocations = list;
     mapLocSig = locationsSignature(list);
   }
-  void terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations);
+  // THE FIRST SYNC IS AWAITED, with a deadline (E8 task 3): the world's
+  // RELIEF comes with it, and the camera below is framed on the centre of the
+  // world — which is a point on the ground, not on the y = 0 plane. Waiting
+  // for it is a single request on a boot that already awaits half a dozen;
+  // waiting for it FOREVER is what the race guards against, because a backend
+  // restarting under the boot must not leave the player at a black screen.
+  // Whatever arrives late simply drapes the ground a moment later.
+  await Promise.race([
+    terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations,
+                       firstMap.height_sig ?? ''),
+    sleep(GROUND_BOOT_WAIT_MS),
+  ]);
+  /** Where the map camera looks at boot — see the frame note above. */
+  const center = worldCentre(firstMap.world_bounds,
+                             (x, z) => terrainGround.heightAt(x, z));
 
   // Basement view: the world's ground covers height 0 everywhere, so a storey
   // below ground would stay hidden even after the tile's own plate ghosts
@@ -1599,7 +1626,8 @@ async function startApp(username: string, role: string) {
     // The locations travel WITH it: their footprints are what the scatter
     // keeps clear (finding B18), and a place that moved is a rebuild trigger
     // of its own — `terrain_sig` does not move when a location does.
-    void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations);
+    void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
+                            map.height_sig ?? '');
     takeWalkLimits(map);
     rebuildMovedTiles(map);
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
@@ -2527,7 +2555,8 @@ async function startApp(username: string, role: string) {
       // switch published a new frame that only the base plane of the OLD sync
       // knew about — up to three seconds in which the plate and the painted
       // areas stood in the frame of the view one had just left.
-      void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations);
+      void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
+                              map.height_sig ?? '');
       takeWalkLimits(map);
       fogged = map.fogged;
       dropVanished(map);
@@ -2867,12 +2896,21 @@ async function startApp(username: string, role: string) {
     npcs.setWalkTarget(null);
   }
 
-  /** Ground height at a world point, so marker and walk goal sit on the
-   *  footprint under them instead of on the y=0 plane. */
+  /**
+   * Ground height at a world point — THE height every consumer here asks for.
+   *
+   * Two sources, in this order: inside a footprint the location's own model
+   * answers (`tileGroundY` rays it, so a raised shore or a bridge is honoured),
+   * and outside every footprint the WORLD RELIEF does (§ A16, the sampled
+   * heightfield). Until E8 the second half was the flat `GROUND_Y`, and that
+   * one constant is what kept markers, walk goals, the camera and the
+   * corrections on the y = 0 plane; with the fallback moved, all seven callers
+   * of this function stand on the terrain without a line of their own.
+   */
   const groundProbe = new THREE.Vector3();
   function groundY(x: number, z: number): number {
     const tile = tileAt(x, z);
-    if (!tile) return GROUND_Y;
+    if (!tile) return terrainGround.heightAt(x, z);
     groundProbe.set(x, 0, z);
     return tileGroundY(tile, groundProbe);
   }

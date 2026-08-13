@@ -6,7 +6,7 @@ import type {
 import type {
   SceneBoundaryOpening, SceneDoorway, SceneExtra, SceneMarker,
   SceneModelSpec, ScenePayload, ScenePlate, SceneProblem, SceneRoom,
-  SceneTerrain, SceneWall,
+  SceneTerrain, SceneWall, WorldHeightField,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
 // the choosing side and the fetching side cannot drift apart (E4-T5).
@@ -176,6 +176,18 @@ export async function postPos(x: number, z: number, signal?: AbortSignal
  *  default kind and look right while being wrong. */
 export async function fetchTerrain(): Promise<TerrainPayload> {
   return json<TerrainPayload>(await fetch('/play/terrain'));
+}
+
+/** The world RELIEF (`GET /play/heightfield`, § A16): a grid of support points
+ *  in world metres. Fetched and refetched exactly like the terrain, on its own
+ *  signature (`WorldMap.height_sig`) — it is by far the largest thing the map
+ *  has (up to ~1 MB) and has no business in a three-second poll.
+ *
+ *  Throws like the terrain call, and for the same reason: a client that
+ *  swallowed the failure would drape the world flat and look right while
+ *  standing figures in the air. */
+export async function fetchHeightfield(): Promise<WorldHeightField> {
+  return json<WorldHeightField>(await fetch('/play/heightfield'));
 }
 
 /** Move the avatar into another room of its current location — the same call
