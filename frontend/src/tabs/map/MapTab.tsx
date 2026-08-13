@@ -28,7 +28,8 @@ import { TerrainTypesDialog } from './TerrainTypesDialog'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { readScatter } from './mapTypes'
 import type {
-  EditorLocation, HeightArea, HeightAreasResp, TerrainArea, TerrainMeta,
+  EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
+  TerrainArea, TerrainMeta,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
   TerrainTypesResp, WorldmapPayload,
 } from './mapTypes'
@@ -296,6 +297,11 @@ export function MapTab() {
   const [heightTool, setHeightTool] = useState<HeightTool>('draw')
   const [newHeightM, setNewHeightM] = useState(HEIGHT_DEFAULT_M)
   const [newFalloffM, setNewFalloffM] = useState(FALLOFF_DEFAULT_M)
+  // How coarse the world's relief grid IS, and the finest it can be — both
+  // read from the server, never recomputed (finding 14). 0 = not answered yet,
+  // which is the one state that says nothing at all.
+  const [heightStepM, setHeightStepM] = useState(0)
+  const [heightStepDefaultM, setHeightStepDefaultM] = useState(0)
   // The walk limit the steepness warning is measured against. It arrives with
   // the worldmap payload; the fallback is the server's own default
   // (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), so an older server warns with
@@ -422,18 +428,50 @@ export function MapTab() {
     return true
   }, [t, toast])
 
+  /**
+   * The GRID STEP the server just reported — shown, and said out loud when it
+   * just got COARSER (finding 14).
+   *
+   * Every path that changes a height area ends here: the refetch below and the
+   * two write answers, which carry the step the world has after the write. The
+   * warning fires on the STEP GOING UP, and only when something to compare
+   * with was already known — the first answer of a session states the world,
+   * it does not report a change. Two reports of the same number say nothing
+   * twice, which is what keeps the save and the refetch behind it from
+   * toasting one event two times.
+   *
+   * The consequence sentence is the whole point: a coarser grid is invisible,
+   * and what it eats — every relief detail narrower than two support points —
+   * is what the user actually sees vanish.
+   */
+  const heightStepRef = useRef(0)
+  const noteHeightStep = useCallback((raw: unknown) => {
+    const next = Number(raw)
+    if (!Number.isFinite(next) || next <= 0) return
+    const prev = heightStepRef.current
+    heightStepRef.current = next
+    setHeightStepM(next)
+    if (prev > 0 && next > prev) {
+      toast(t('World relief step is now {n} m (painted extent forces a coarser grid) — relief details under {d} m disappear.')
+        .replace('{n}', String(next)).replace('{d}', String(next * 2)), 'error')
+    }
+  }, [t, toast])
+
   /** The authored relief. Same discipline as the terrain: on mount, on the
    *  reload button, after every write — never on a timer. */
   const reloadHeights = useCallback(async () => {
     try {
       const r = await apiGet<HeightAreasResp>('/world/height-areas')
       setHeightAreas(r.areas || [])
+      noteHeightStep(r.step_m)
+      const def = Number(r.default_step_m)
+      if (Number.isFinite(def) && def > 0) setHeightStepDefaultM(def)
     } catch (e) {
       toast(t('Failed to load heights') + ': ' + (e as Error).message, 'error')
       return false
     }
     return true
-  }, [t, toast])
+  }, [noteHeightStep, t, toast])
 
   useEffect(() => { void reload() }, [reload])
   useEffect(() => { void reloadTerrain() }, [reloadTerrain])
@@ -1070,10 +1108,13 @@ export function MapTab() {
     }
     draftBusyRef.current = true
     try {
-      const r = await apiPost<{ area?: HeightArea }>('/world/height-areas',
+      const r = await apiPost<HeightAreaWriteResp>('/world/height-areas',
         { polygon: pts, height_m: newHeightM, falloff_m: newFalloffM })
       setDraft([])
       setDraftCursor(null)
+      // The step the world has AFTER this drawing — a ring drawn far out
+      // coarsens the grid everywhere, and this is where that is noticed.
+      noteHeightStep(r?.step_m)
       await reloadHeights()
       const id = r?.area?.id || ''
       if (id) {
@@ -1085,7 +1126,7 @@ export function MapTab() {
     } finally {
       draftBusyRef.current = false
     }
-  }, [newFalloffM, newHeightM, reloadHeights, t, toast])
+  }, [newFalloffM, newHeightM, noteHeightStep, reloadHeights, t, toast])
 
   /** Finish the running centre line into a new area. Same rules as
    *  `commitDraft` — the draft survives a failed write — plus the recipe: the
@@ -1388,12 +1429,16 @@ export function MapTab() {
       falloff_m: area.falloff_m, meta: area.meta || {}, ...patch,
     }
     try {
-      await apiPut(`/world/height-areas/${encodeURIComponent(area.id)}`, body)
+      const r = await apiPut<HeightAreaWriteResp>(
+        `/world/height-areas/${encodeURIComponent(area.id)}`, body)
+      // Dragging one vertex 8 km east coarsens the grid exactly as drawing a
+      // new area out there would — same answer, same notice.
+      noteHeightStep(r?.step_m)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
     await reloadHeights()
-  }, [reloadHeights, t, toast])
+  }, [noteHeightStep, reloadHeights, t, toast])
 
   const setHeightValue = useCallback((m: number) => {
     const a = selectedHeight
@@ -1861,6 +1906,8 @@ export function MapTab() {
             heightCount={heightAreas.length}
             maxSlopeDeg={maxSlopeDeg}
             maxStepM={maxStepM}
+            gridStepM={heightStepM}
+            gridStepDefaultM={heightStepDefaultM}
           />
           {/* Scatter preview, Locations and Building roofs are VIEWS — they
               belong to no subject and changed nothing about the world, so they

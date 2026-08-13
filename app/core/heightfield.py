@@ -850,6 +850,30 @@ def get_field() -> Dict[str, Any]:
     return field
 
 
+def current_step_m() -> float:
+    """The grid step the world's relief is rastered at right now, in metres.
+
+    THE ONE SOURCE OF THAT NUMBER FOR THE EDITOR (finding 14, 2026-08-13). The
+    step is not a setting: it is :func:`_step_for`'s answer to the UNION BOX of
+    everything that shapes the ground, doubled until the grid fits inside
+    :data:`MAX_POINTS`. So one hill painted 16 km out coarsens the relief of the
+    whole world — a measured case forced 4 m to 32 m — and the micro-relief of
+    a 22 m patch, whose swells are 8…12 m wide, loses every support point it
+    had and simply disappears. Nothing on screen said so.
+
+    The editor shows it and warns when a save moves it, and it asks HERE rather
+    than reimplementing the doubling: a second opinion about the raster is how
+    the warning starts naming a step the world does not have.
+
+    It costs what :func:`get_field` costs — a dict lookup on a warm cache, the
+    stored raster on a cold one. That is why it is asked on the editor's
+    routes, which are already waiting for a round trip, and nowhere near a
+    poll.
+    """
+    step = get_field().get("step_m")
+    return float(step) if step else DEFAULT_STEP_M
+
+
 def cached_sig() -> Optional[str]:
     """Signature of the field this process holds, or None when it holds none.
 

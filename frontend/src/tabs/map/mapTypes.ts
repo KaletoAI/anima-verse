@@ -300,6 +300,24 @@ export interface HeightArea {
 export interface HeightAreasResp {
   areas: HeightArea[]
   sig: string
+  /** The grid step the world relief is rastered at RIGHT NOW, in metres
+   *  (finding 14). Nobody sets it: the server doubles it until the grid over
+   *  the whole painted extent fits its point budget, so an area drawn far out
+   *  coarsens the relief everywhere. The editor shows it and warns when a save
+   *  moves it — see `heightMath.reliefStepNotice`. */
+  step_m?: number
+  /** The finest step there is (`heightfield.DEFAULT_STEP_M`) — what "coarser
+   *  than normal" is measured against, so the editor holds no constant of its
+   *  own. */
+  default_step_m?: number
+}
+
+/** What `POST`/`PUT /world/height-areas` answer. The step is the one the world
+ *  has AFTERWARDS (the write re-rasters synchronously), which is what makes
+ *  the coarsening warning a fact rather than a forecast. */
+export interface HeightAreaWriteResp {
+  area?: HeightArea
+  step_m?: number
 }
 
 /** `GET /world/terrain-types` — the admin view: the catalog plus where each

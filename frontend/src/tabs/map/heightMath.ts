@@ -60,6 +60,39 @@ export function minFalloffFor(heightM: number, maxSlopeDeg: number,
   return Math.round((h / g) * 100) / 100
 }
 
+/**
+ * IS THE WORLD'S RELIEF GRID COARSER THAN NORMAL, and what does that cost?
+ * (finding 14, 2026-08-13.)
+ *
+ * The step is nothing anybody sets: the server doubles it until the grid over
+ * the whole painted extent fits inside its point budget
+ * (`app/core/heightfield._step_for`). So ONE area drawn far out coarsens the
+ * relief of the entire world — measured live, a 16 160 × 5 876 m union box
+ * took the step from 4 m to 32 m — and the small hills of a 22 m patch, 8…12 m
+ * wide, then have no support point left and vanish. Nothing said so.
+ *
+ * THE NUMBERS COME FROM THE SERVER, both of them (`GET /world/height-areas`
+ * and the save answers carry `step_m` + `default_step_m`). This function does
+ * not recompute the doubling — a second implementation of it is how a warning
+ * starts naming a step the world does not have. All it does is the ONE piece
+ * of arithmetic the sentence needs:
+ *
+ *     nothing under 2 × step survives      (NYQUIST — the same limit that
+ *                                           clamps `relief_wave_m` at
+ *                                           2 × the default step)
+ *
+ * `null` means "nothing to say": the finest grid, or numbers that say nothing.
+ * An unusable `defaultStepM` is deliberately silent rather than alarming —
+ * without it there is no "coarser than normal" to speak of.
+ */
+export function reliefStepNotice(stepM: number, defaultStepM: number
+): { stepM: number; lostUnderM: number } | null {
+  if (!Number.isFinite(stepM) || stepM <= 0) return null
+  if (!Number.isFinite(defaultStepM) || defaultStepM <= 0) return null
+  if (stepM <= defaultStepM) return null
+  return { stepM, lostUnderM: stepM * 2 }
+}
+
 /** Is this area's ramp steeper than a walker climbs? */
 export function tooSteep(heightM: number, falloffM: number,
   maxSlopeDeg: number, maxStepM: number): boolean {

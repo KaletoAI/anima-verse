@@ -737,9 +737,9 @@ Routers.
 | `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
 | `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche; **404**, wenn es sie nicht gab |
-| `GET /world/height-areas` | `{areas, sig}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge |
-| `POST /world/height-areas` | Neue Höhenfläche, **die Id vergibt der Server** → `{status, area}` |
-| `PUT /world/height-areas/{id}` | Ersetzt `polygon`/`height_m`/`falloff_m`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
+| `GET /world/height-areas` | `{areas, sig, step_m, default_step_m}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge, dazu der aktuelle Gitter-Schritt und der feinste (Befund 14: die Vergröberung ist sonst unsichtbar) |
+| `POST /world/height-areas` | Neue Höhenfläche, **die Id vergibt der Server** → `{status, area, step_m}`; `step_m` ist der Schritt DANACH (der Schreibvorgang rastert synchron neu), also eine Tatsache und keine Prognose |
+| `PUT /world/height-areas/{id}` | Ersetzt `polygon`/`height_m`/`falloff_m`/`meta` einer **bestehenden** Fläche → `{status, area, step_m}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/height-areas/{id}` | Löscht eine Höhenfläche (der Boden dort fällt auf die flache Welt zurück); **404**, wenn es sie nicht gab |
 
 Geprüft wird **beim Schreiben**, nicht beim Lesen (die Leser scheitern
@@ -2045,6 +2045,20 @@ Schritt **verdoppelt**, bis es passt — ein doppelt so weites Land bekommt ein
 gröberes Relief, kein abgeschnittenes. Verdoppeln hält das Gitter am
 Ursprung verankert. `height_m` ist auf **±50 m** geklemmt (§ A1.7), auch weil
 der 3D-Client seine Kacheln aus fester Höhe anrayct.
+
+**Diese Vergröberung ist SICHTBAR zu machen** (Befund 14, 2026-08-13). Sie
+hängt an der Vereinigungs-Box von allem, was den Boden formt: eine einzige
+Fläche weit draußen vergröbert das Relief der GANZEN Welt — live gemessen hob
+eine 16 160 × 5 876 m große Box den Schritt von 4 m auf 32 m, und das
+Mikro-Relief einer 22-m-Fläche (Welle 8…12 m) hatte danach keinen Stützpunkt
+mehr und verschwand, ohne dass irgendetwas den Zusammenhang gezeigt hätte.
+Darum liefern `GET /world/height-areas` und die Schreib-Antworten von
+`POST`/`PUT /world/height-areas` den aktuellen `step_m` (die GET zusätzlich
+`default_step_m`), und der Editor zeigt ihn dauerhaft an, sobald er über dem
+feinsten liegt, samt Konsequenz: **unter 2 × Schritt trägt das Raster nichts
+mehr** (Nyquist, dieselbe Grenze, die `relief_wave_m` klemmt). Der Server
+rechnet, der Editor zeigt — eine zweite Verdopplungs-Logik im Client wäre
+genau die Zwillings-Regel, die auseinanderläuft.
 
 **Payload** (Auth wie `/play/terrain`: eingeloggter User, **kein** Admin-Gate,
 **nie gefoggt**). Eigener Endpoint aus demselben Grund wie das Gelände — und

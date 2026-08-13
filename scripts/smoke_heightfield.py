@@ -110,6 +110,25 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     = 253 009, 32 -> ceil((8000+32+32)/32)+1 = 253 per axis = 64 009. So
     step_m 32 and 253 × 253. Doubling keeps the lattice anchored at the
     origin, so a coarser grid still samples a subset of the finer points.
+[7b] THE STEP THE EDITOR IS TOLD ABOUT (finding 14, 2026-08-13). The
+    coarsening above is invisible in the editor, and the case it was reported
+    on is the LIVE north area: a union box of 16 160 × 5 876 m. By hand, with
+    `points = ceil((max + step − origin) / step) + 1` and
+    `origin = floor(min/step)·step − step`, i.e. for a box starting at 0
+    `points = ceil((max + 2·step) / step) + 1`:
+        step  4: cols ceil(16168/4)+1 = 4043, rows ceil(5884/4)+1 = 1472
+                 -> 5 951 296 points, far past MAX_POINTS (120 000)
+        step  8: cols ceil(16176/8)+1 = 2023, rows ceil(5892/8)+1 =  738
+                 -> 1 492 974
+        step 16: cols ceil(16192/16)+1 = 1013, rows ceil(5908/16)+1 = 371
+                 ->   375 823, still past it
+        step 32: cols ceil(16224/32)+1 =  508, rows ceil(5940/32)+1 = 187
+                 ->    94 996  <= 120 000, so the step is 32 m
+    and 32 m is where the forest's micro-relief dies: its swells are 8…12 m
+    wide (§ A16.2) and the raster carries nothing under 2 × step = 64 m.
+    `heightfield.current_step_m()` is the ONE place the editor's routes read
+    that number from — checked here against the same box in the store, so the
+    warning cannot name a step the world does not have.
 [8] THE SHARED SAMPLER's table, hand-derived on a 3 × 3 field with a single
     5 m peak in the middle — the SAME field and the SAME expectations as
     ``client3d/scripts/smoke_world_height.mjs``. Twin discipline: one bilinear
@@ -631,6 +650,33 @@ huge = hf.rasterize([{"id": "huge", "polygon": square(0, 0, 8000, 8000),
                       "height_m": 5.0, "falloff_m": 4.0}])
 check("step doubled to", huge["step_m"], 32.0)
 check("shape", (huge["rows"], huge["cols"]), (253, 253))
+
+print("[7b] the step the editor is told about (the live box of finding 14)")
+LIVE = {"id": "live", "polygon": square(0, 0, 16160, 5876),
+        "height_m": 5.0, "falloff_m": 4.0}
+live = hf.rasterize([LIVE])
+check("the live north box coarsens the world to", live["step_m"], 32.0)
+check("...at this shape", (live["rows"], live["cols"]), (187, 508))
+check("...which is inside the point budget",
+      live["rows"] * live["cols"] <= hf.MAX_POINTS, True)
+# ...and one step finer would not be: the doubling stops at the FIRST step
+# that fits, so 16 m has to be over the budget or 32 is the wrong answer.
+check("...while one step finer is not", (hf._axis_points(0, 5876, 16.0)
+                                         * hf._axis_points(0, 16160, 16.0)
+                                         > hf.MAX_POINTS), True)
+# THE EDITOR'S SOURCE, asked the way the routes ask it: through the store.
+for _a in store.list_height_areas():
+    store.delete_height_area(_a["id"])
+check("an empty world stands at the finest step",
+      hf.current_step_m(), hf.DEFAULT_STEP_M)
+store.save_height_area(LIVE)
+check("...and reports the coarsened one once the area is stored",
+      hf.current_step_m(), 32.0)
+check("which is exactly what the raster says",
+      hf.current_step_m(), hf.get_field()["step_m"])
+store.delete_height_area("live")
+check("deleting it gives the fine grid back", hf.current_step_m(),
+      hf.DEFAULT_STEP_M)
 
 print("[8] the shared sampler's table")
 FIELD = {"origin_x": -4.0, "origin_z": -4.0, "step_m": 4.0,

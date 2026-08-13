@@ -25,7 +25,7 @@ import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { PropRef } from '../../lib/refs'
 import { fmtHeight, heightColor } from './HeightLayer'
-import { minFalloffFor, tooSteep } from './heightMath'
+import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
 import { typeColor } from './TerrainLayer'
 import type {
   HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType,
@@ -367,14 +367,27 @@ export const FALLOFF_DEFAULT_M = 10
  * shows what comes back, so a value the server clamps is not left claimed by
  * the field. The token makes the effect run even when the parent's value did
  * not move.
+ *
+ * THE CLAMP IS SAID WHILE IT IS TYPED (finding 14, 2026-08-13). It always
+ * clamped — 80 became the 50 m of `heightfield.MAX_HEIGHT_M` — but silently,
+ * one round trip later, and a mountain that simply refused to grow past a
+ * number nobody named reads as a broken field. Typing past the limit now marks
+ * the input and names the limit right there. Nothing is refused: the value is
+ * still committed, clamped, exactly as the server stores it.
  */
 function HeightNum({ label, title, value, step, min, max, onCommit }: {
   label: string; title: string; value: number; step: number
   min: number; max: number; onCommit: (v: number) => void
 }) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState(String(value))
   const [resync, setResync] = useState(0)
   useEffect(() => { setDraft(String(value)) }, [value, resync])
+  const typed = parseFloat(draft)
+  // Only a NUMBER can be out of range: a half-typed "−" or "0." is neither
+  // wrong nor worth shouting about.
+  const over = Number.isFinite(typed) && typed > max
+  const under = Number.isFinite(typed) && typed < min
   const commit = () => {
     setResync((n) => n + 1)
     const v = parseFloat(draft)
@@ -386,9 +399,10 @@ function HeightNum({ label, title, value, step, min, max, onCommit }: {
     <label className="ga-terrain-width" title={title}>
       {label}
       <input
-        className="ga-input"
+        className={'ga-input' + (over || under ? ' ga-tt-invalid' : '')}
         type="number" step={step} min={min} max={max}
         value={draft}
+        aria-invalid={over || under}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -398,6 +412,13 @@ function HeightNum({ label, title, value, step, min, max, onCommit }: {
         }}
       />
       m
+      {over || under ? (
+        <span className="ga-height-clamp">
+          {over
+            ? t('max {n} m').replace('{n}', String(max))
+            : t('min {n} m').replace('{n}', String(min))}
+        </span>
+      ) : null}
     </label>
   )
 }
@@ -462,6 +483,12 @@ export interface TerrainToolbarProps {
    *  (§ A1.3) — the STEP is usually the binding one, see `heightMath`. */
   maxSlopeDeg: number
   maxStepM: number
+  /** How coarse the world's relief GRID is right now and the finest it can be,
+   *  both straight from the server (`GET /world/height-areas`). 0 = not
+   *  answered yet. Shown while the Heights mode is open, as soon as the grid
+   *  is coarser than the finest one — see `heightMath.reliefStepNotice`. */
+  gridStepM: number
+  gridStepDefaultM: number
   /** The catalog fetch FAILED — an empty palette then means "not loaded",
    *  not "nothing defined", and the way out is Reload, not another click. */
   typesError?: boolean
@@ -472,7 +499,7 @@ export function TerrainToolbar({
   widthM, onWidth, draftLen, onCloseDraft, onDiscardDraft, areaCount,
   onManageTypes, typesError,
   heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
-  maxStepM,
+  maxStepM, gridStepM, gridStepDefaultM,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const isLine = shape === 'line'
@@ -480,6 +507,7 @@ export function TerrainToolbar({
   const drawingHeights = primary === 'heights' && sub === 'new'
   const needFalloff = minFalloffFor(heightM, maxSlopeDeg, maxStepM)
   const nextTooSteep = tooSteep(heightM, falloffM, maxSlopeDeg, maxStepM)
+  const stepNotice = reliefStepNotice(gridStepM, gridStepDefaultM)
   const btn = (p: MapPrimary, icon: string, label: string, title: string) => (
     <button
       type="button"
@@ -622,6 +650,20 @@ export function TerrainToolbar({
                 </button>
               </>
             ) : null}
+        </span>
+      ) : null}
+
+      {/* HOW COARSE THE GROUND'S GRID IS, permanently, while heights are being
+          edited (finding 14). Nobody sets this number — the server doubles it
+          until the grid over the whole painted extent fits its point budget,
+          so one area drawn far out flattens the small hills of every other
+          one. It only appears once the grid IS coarser than the finest, which
+          is the state nothing else on screen shows. */}
+      {mode === 'heights' && stepNotice ? (
+        <span className="ga-map-arm warn" title={t('The relief grid is one shared raster over everything painted in the world. The further apart those areas lie, the coarser it has to be to stay inside the server’s point budget — and support points are what carries a hill.')}>
+          {t('World relief step is now {n} m (painted extent forces a coarser grid) — relief details under {d} m disappear.')
+            .replace('{n}', String(stepNotice.stepM))
+            .replace('{d}', String(stepNotice.lostUnderM))}
         </span>
       ) : null}
 

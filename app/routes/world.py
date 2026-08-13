@@ -361,27 +361,49 @@ def delete_terrain_area_route(area_id: str) -> Dict[str, Any]:
 # well rise. Mixing the two would put passability questions and height
 # questions into one body where every write has to say something about both.
 
+#
+# THE GRID STEP TRAVELS WITH EVERY ONE OF THEM (finding 14, 2026-08-13). It is
+# not authored anywhere: the raster doubles it until the world's whole painted
+# extent fits inside the point budget, so a single hill drawn far out coarsens
+# the relief everywhere — measured live, a 16 160 × 5 876 m union box forced 4 m
+# to 32 m and wiped out a forest's 8…12 m micro-relief, with nothing on screen
+# to connect the two. The editor shows the current step and warns when a save
+# moves it, and BOTH numbers come from here (``heightfield.current_step_m``)
+# rather than from a second implementation of the doubling in the client.
+
 @router.get("/height-areas")
 def get_height_areas_route() -> Dict[str, Any]:
-    """All authored height areas plus the change signature."""
+    """All authored height areas, the change signature and the grid step."""
+    from app.core.heightfield import DEFAULT_STEP_M, current_step_m
     from app.models import heightfield
     return {"areas": heightfield.list_height_areas(),
-            "sig": heightfield.height_sig()}
+            "sig": heightfield.height_sig(),
+            "step_m": current_step_m(),
+            # The finest step there is, so the editor can say "coarser than
+            # normal" without a constant of its own.
+            "default_step_m": DEFAULT_STEP_M}
 
 
 @router.post("/height-areas")
 async def post_height_area_route(request: Request) -> Dict[str, Any]:
-    """Draw a new height area; the id is assigned by the server."""
+    """Draw a new height area; the id is assigned by the server.
+
+    Answers the grid step the world has AFTERWARDS: the write re-rasters
+    synchronously (``models.heightfield._invalidate``), so this is the real new
+    step and not a forecast — the editor compares it with the one it held and
+    says out loud when the drawing just coarsened the world.
+    """
+    from app.core.heightfield import current_step_m
     from app.models import heightfield
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     data.pop("id", None)
     try:
-        return {"status": "success",
-                "area": heightfield.save_height_area(data)}
+        area = heightfield.save_height_area(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "area": area, "step_m": current_step_m()}
 
 
 @router.put("/height-areas/{area_id}")
@@ -391,7 +413,11 @@ async def put_height_area_route(area_id: str, request: Request) -> Dict[str, Any
     404 on an unknown id, for the reason the terrain route has it: the store is
     an upsert, so a repeated stale PUT would otherwise raise a deleted hill
     from the dead under its old id.
+
+    Carries ``step_m`` like the POST does — dragging one vertex 8 km east
+    coarsens the world's grid exactly as drawing a new area there would.
     """
+    from app.core.heightfield import current_step_m
     from app.models import heightfield
     data = await request.json()
     if not isinstance(data, dict):
@@ -400,10 +426,10 @@ async def put_height_area_route(area_id: str, request: Request) -> Dict[str, Any
         raise HTTPException(status_code=404, detail="height area not found")
     data["id"] = area_id
     try:
-        return {"status": "success",
-                "area": heightfield.save_height_area(data)}
+        area = heightfield.save_height_area(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "area": area, "step_m": current_step_m()}
 
 
 @router.delete("/height-areas/{area_id}")

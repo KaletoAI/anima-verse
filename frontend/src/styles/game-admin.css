@@ -2168,6 +2168,13 @@ html, * {
   padding: 2px 6px;
   font-size: 12px;
 }
+/* The limit a typed height runs into, named next to the field it is typed in
+   (finding 14) — the clamp used to happen silently on save. */
+.ga-height-clamp {
+  font-size: 11px;
+  color: var(--danger, #f85149);
+  white-space: nowrap;
+}
 
 /* The layer model, said out loud while painting. Its own block UNDER the
    toolbar, not another item inside it: the toolbar wraps, and a sentence that
