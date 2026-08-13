@@ -1726,7 +1726,11 @@ nie als Bonus (die A*-Heuristik kennt kein Relief; ein Bonus machte sie
 unzulässig). Die Strafe steckt auch in `segment_costs` — die Reisezeit erbt den
 Berg — und in der Kosten-Prüfung der Linien-Glättung, die den Umweg um einen
 Hang sonst wieder wegzöge; die Sichtlinie lehnt zusätzlich jede Abkürzung über
-eine zu steile Zelle ab.
+eine zu steile Zelle ab. Der Routing-Cache hält Öffnungen und beide
+Grenzwerte, also stehen sie in seinem Schlüssel: eine neu autorierte Öffnung
+ändert weder Gelände noch Höhenfläche noch Platzierung, und ein Admin-Regler
+ändert gar nichts an der Welt — beides muss den Router trotzdem neu bauen,
+sonst urteilt er nach der Tür und der Grenze von gestern.
 
 **Verschachtelung: der INNERSTE UMSCHLIESSENDE Ort MIT Relief gewinnt.** Nicht
 „der Ort, in den der Punkt fällt": ein Ort ohne eigenes Relief planiert den

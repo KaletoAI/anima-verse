@@ -193,6 +193,57 @@ Hand-derived expectations:
       straight [(3106,-6), (3106,18)] at 24 s — the bend is the penalty and
       nothing else.
 
+ [15] THE TWO EXEMPTIONS of the steepness rule (review finding I2). Both were
+      untested: a mutant `openings=()` and a mutant `if False` on the
+      footprint branch passed every case above.
+
+      a) AT AN OPENING (`OPENING_EXEMPT_M` = 1.5 m tolerance + one cell).
+         WALL: height area (2200,0)-(2260,60), height 20, falloff 4 — twenty
+         metres, so the plateau's rim is a wall by any measure. HOUSE at
+         (2200,30), plan_width_m 8, one opening on the E edge at 0.5 -> world
+         (2204, 30). The house's centre sits ON the area's west outline, so
+         its plateau is 0 and the footprint plus one cell around it is pinned
+         there.
+         Grid: bounds = area box ∪ footprint box grown by one step
+         ([2192,2208]x[22,38]) = (2192,0)-(2260,60), so origin (2188,-4),
+         20 x 18 points at 4 m. Pinned to 0 are x ∈ {2192…2208} × z ∈ {24…36}
+         MINUS the four corners, whose overshoot pair (4, 2) is
+         hypot = 4.47 > 4 — the pin is a distance to the rectangle, not a box.
+         So (2208,24) and (2208,36) keep their authored 20 (8 m in -> full
+         height) while (2208,28) and (2208,32) are 0.
+
+         THE CELL centred (2207, 29), three metres outside the footprint and
+         hypot(3,1) = 3.162 m from the opening:
+           h(2205,29) = 0            (both x-neighbours pinned)
+           h(2209,29) = 0·0.75 + 20·0.25 = 5      (a quarter into the ramp
+                                                   towards (2212,·) = 20)
+           h(2207,27) = 15·0.25 + 0·0.75 = 3.75   (the unpinned corner
+                                                   (2208,24) = 20 at tx 0.75)
+           h(2207,31) = 0
+         rise = hypot(5, 3.75) = 6.25 over run 4 -> atan(1.5625) = 57.3808°,
+         far past 40 -> the cell WOULD be blocked, and is exempt because the
+         opening is within reach.
+         RED COUNTER-PROBE: the same context with `openings=()` blocks it.
+         CONTROL: the next cell out, centred (2209,29), is hypot(5,1) = 5.1 m
+         from the opening -> not exempt -> blocked. The exemption is local.
+
+      b) INSIDE A FOOTPRINT (footprint wins). Not constructible through the
+         store — after levelling no cell inside a footprint can be steep, the
+         apron reaches one full cell past it and the probes only 2 m — so this
+         is measured on a HAND-BUILT context: a 5 x 5 field, step 4, origin
+         (0,0), columns [0, 0, 20, 20, 20], i.e. a cliff between x = 4 and
+         x = 8. The cell centred (7,7): h(5,7) = 0·0.75 + 20·0.25 = 5,
+         h(9,7) = 20 -> rise 15 over 4 -> 75.07° -> steep. With a footprint of
+         edge 8 at (7,7) that the route STARTS in (so it is exempt) the cell
+         is free; for a route that neither starts nor ends there the same cell
+         is blocked. That is the guard the branch exists for.
+
+      c) THE CACHE KEY (review finding I1). Authoring an opening changes no
+         terrain area, no height area and no placement, and changing
+         `game.max_slope_deg` changes nothing in the world at all — both must
+         still hand out a NEW context, or the router judges by yesterday's
+         doorway and yesterday's limit.
+
 Usage:  ./.venv/bin/python scripts/smoke_nav_grid.py
 """
 import math
@@ -211,7 +262,7 @@ paths.init(STORAGE)
 from app.core import db  # noqa: E402
 db.init_schema()
 
-from app.core import nav_grid, terrain_query  # noqa: E402
+from app.core import config, nav_grid, terrain_query  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
     footprint_hits_aabb, placed_footprint, point_in_footprint,
     segment_hits_footprint)
@@ -649,6 +700,92 @@ approx("...at the plain 24 m",
                               (3106.0, -6.0), (3106.0, 18.0)), 24.0)
 nav_grid.SLOPE_COST_S_PER_M = _penalty
 height_store.delete_height_area("ridge")
+
+print("\n[15] the two exemptions of the steepness rule")
+from dataclasses import replace as _replace  # noqa: E402
+
+height_store.save_height_area(
+    {"id": "wall", "height_m": 20.0, "falloff_m": 4.0,
+     "polygon": [[2200, 0], [2260, 0], [2260, 60], [2200, 60]]})
+HOUSE = add_location(name="Smoke House", description="nav smoke")["id"]
+update_location_position(HOUSE, 2200.0, 30.0)
+set_plan_width(HOUSE, 8.0)
+ctx_before = nav_grid.build_nav_context()
+_house = _load_world_data()
+for _loc in _house["locations"]:
+    if _loc.get("id") == HOUSE:
+        _map3d = dict(_loc.get("map3d") or {})
+        _map3d["boundary_openings"] = [{"edge": "E", "at": 0.5,
+                                        "width_m": 2.0, "type": "passage",
+                                        "room": ""}]
+        _loc["map3d"] = _map3d
+_save_world_data(_house)
+ctx = nav_grid.build_nav_context()
+check_true("[I1] authoring an opening hands out a NEW context",
+           ctx is not ctx_before, f"{ctx_before.sig} -> {ctx.sig}")
+check("the opening sits on the E edge", ctx.openings, ((2204.0, 30.0),))
+check("the grid grew for the house's plateau",
+      (ctx.height_field["rows"], ctx.height_field["cols"]), (18, 20))
+approx("h(2205,29) — the pinned apron", ctx.height_at(2205, 29), 0.0)
+approx("h(2209,29) — a quarter into the ramp", ctx.height_at(2209, 29), 5.0)
+approx("h(2207,27) — the unpinned ring corner pulls 3.75",
+       ctx.height_at(2207, 27), 3.75)
+approx("h(2207,31)", ctx.height_at(2207, 31), 0.0)
+approx("so the rise is hypot(5, 3.75)", math.hypot(5.0, 3.75), 6.25)
+approx("its angle over 4 m", math.degrees(math.atan2(6.25, 4.0)), 57.3808,
+       1e-4)
+near_cell = nav_grid.cell_of(2207, 29)
+far_cell = nav_grid.cell_of(2209, 29)
+check("the exempt cell is centred (2207, 29)", nav_grid.cell_centre(near_cell),
+      (2207.0, 29.0))
+approx("...and lies 3.162 m from the opening",
+       math.hypot(2207 - 2204, 29 - 30), 3.1622777, 1e-6)
+search = nav_grid._Search(ctx, (2260.0, 58.0), (2258.0, 56.0))
+check("the cell at the opening is NOT blocked for its height",
+      search.too_steep(near_cell), False)
+blind = nav_grid._Search(_replace(ctx, openings=()),
+                         (2260.0, 58.0), (2258.0, 56.0))
+check("RED COUNTER-PROBE: without the openings it is too steep",
+      blind.too_steep(near_cell), True)
+approx("the control cell lies 5.1 m from the opening",
+       math.hypot(2209 - 2204, 29 - 30), 5.0990195, 1e-6)
+check("...so it stays blocked — the exemption is local",
+      search.too_steep(far_cell), True)
+
+# The footprint half, on a hand-built context: after levelling no cell INSIDE
+# a footprint can be steep, so the guard is measured where a cliff and a
+# footprint really do overlap.
+CLIFF_FIELD = {"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
+               "rows": 5, "cols": 5,
+               "heights": [[0.0, 0.0, 20.0, 20.0, 20.0] for _ in range(5)]}
+hand = nav_grid.NavContext(
+    areas=[], catalog={}, footprints=[("fp", 7.0, 7.0, 8.0, 0.0)],
+    data_bounds=(0.0, 0.0, 16.0, 16.0), sig=("hand", "hand"),
+    height_field=CLIFF_FIELD, openings=(), max_step_m=0.4,
+    max_slope_deg=40.0)
+approx("the hand-built cliff: h(5,7)", hand.height_at(5, 7), 5.0)
+approx("...against h(9,7)", hand.height_at(9, 7), 20.0)
+approx("...15 m over 4 m", math.degrees(math.atan2(15.0, 4.0)), 75.0686, 1e-4)
+inside = nav_grid._Search(hand, (7.0, 7.0), (7.0, 7.0))
+check("a route that starts in the place walks its own ground",
+      inside.too_steep(nav_grid.cell_of(7, 7)), False)
+outside = nav_grid._Search(hand, (100.0, 100.0), (101.0, 101.0))
+check("RED COUNTER-PROBE: for a foreign route the same cell is too steep",
+      outside.too_steep(nav_grid.cell_of(7, 7)), True)
+
+# [I1] the second half: an admin dial nobody else notices.
+ctx_limits = nav_grid.build_nav_context()
+config._CONFIG.setdefault("game", {})["max_slope_deg"] = 80.0
+check_true("[I1] changing max_slope_deg hands out a NEW context",
+           nav_grid.build_nav_context() is not ctx_limits, "")
+check("...and the router judges by the new limit",
+      nav_grid.build_nav_context().max_slope_deg, 80.0)
+check("the steep cell is walkable at 80°",
+      nav_grid._Search(nav_grid.build_nav_context(),
+                       (2260.0, 58.0), (2258.0, 56.0)).too_steep(far_cell),
+      False)
+config._CONFIG.setdefault("game", {}).pop("max_slope_deg", None)
+height_store.delete_height_area("wall")
 
 print()
 if FAILURES:

@@ -208,6 +208,45 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
        h(20,0) = 0 (ON the outline) and h(20,4) = 5, i.e. 2.5 at z = 2, and
        (22,4) and (18,4) — both authored 5, both inside the new footprint — are
        cut to that same 2.5. Deleting the hut gives all of them back their 5.
+[12] TWO PLACES ON ONE HILL (review finding I3). Everything in [11] has a
+    single footprint, and two rules the docstrings call load-bearing are
+    invisible with one: that every plateau height is sampled BEFORE any
+    levelling, and that on overlap the SMALLEST footprint wins. Both need a
+    nested pair.
+
+    THE CASE, on the same HILL: SQUARE at (6, 6) with plan_width_m 24
+    (footprint [-6, 18]²) and HUT at (2, 2) with plan_width_m 4 (footprint
+    [0, 4]², entirely inside the square).
+
+    THE GRID: the boxes grown by one step are [-10, 22]² and [-4, 8]², so the
+    bounds are (-10,-10)-(40,40):
+      origin = floor(-10/4)·4 - 4 = -16,  points = ceil((40+4+16)/4)+1 = 16
+    Support point (i, j) sits at (-16 + 4i, -16 + 4j).
+
+    THE TWO HEIGHTS, both read off the UNTOUCHED area raster:
+      SQUARE at (6, 6): the cell (4,4)-(8,8) has all four corners at the full
+                        5 (each 4 m or more inside the outline)      -> 5
+      HUT    at (2, 2): corners (0,0), (4,0), (0,4) all ON the outline -> 0,
+                        (4,4) -> 5, both fractions 0.5               -> 1.25
+    The widest is levelled first, so the HUT writes last and wins where they
+    overlap:
+      ground_y(2, 2)   = 1.25     the hut's own plateau
+      ground_y(14, 14) = 5        the square's, outside the hut's ring
+      (i,j) = (4,4) = (0,0)   -> 1.25   pinned by the hut
+      (i,j) = (7,5) = (12,4)  -> 5      the square's, past the hut's ring
+      (i,j) = (3,3) = (-4,-4) -> 5      the hut's ring has ROUNDED corners
+                                        (overshoot pair (4,4), hypot 5.66 > 4),
+                                        so the square shows through there
+      (i,j) = (6,6) = (8,8)   -> 5      the same corner on the far side
+
+    TWO RED COUNTER-PROBES, and they are the point of the case:
+      * LARGEST WINS (the sort key reversed): the hut is levelled first and
+        the square overwrites it -> ground_y(2,2) = 5, not 1.25.
+      * SAMPLED WHILE WRITING (h0 read inside the write loop instead of all of
+        them up front): the square has already pinned (0,0)…(4,4) to 5 when
+        the hut asks for its own height, so the hut levels to 5 as well ->
+        ground_y(2,2) = 5. Which is the failure mode the "before" exists for:
+        the answer would depend on the order the DB returned the two places.
 
 Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
 """
@@ -255,6 +294,18 @@ def near(label, actual, expected, tol=1e-9):
     ok = abs(float(actual) - float(expected)) <= tol
     print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
           + ("" if ok else f" — expected {expected!r}"))
+    if not ok:
+        FAILURES.append(label)
+
+
+def check_not(label, actual, forbidden):
+    """The other half of a red counter-probe: the value a MUTANT would
+    produce, asserted absent."""
+    global CHECKED
+    CHECKED += 1
+    ok = actual != forbidden
+    print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
+          + ("" if ok else f" — this is the mutant's {forbidden!r}"))
     if not ok:
         FAILURES.append(label)
 
@@ -562,6 +613,44 @@ near("deleting the place restores the hill at (18,4)", ground_y(18, 4), 5.0)
 near("...and at (22,4)", ground_y(22, 4), 5.0)
 check("...and the grid is the plain hill raster again",
       (hf.get_field()["rows"], hf.get_field()["cols"]), (13, 13))
+
+print("\n[12] two places on one hill — sampled before, smallest wins")
+
+
+def place_square(name, x, z, width):
+    """A placed location with a scale anchor — the two inputs the raster has
+    of a place."""
+    loc_id = add_location(name, "plateau smoke")["id"]
+    data = _load_world_data()
+    for loc in data["locations"]:
+        if loc.get("id") == loc_id:
+            loc["map3d"] = {"plan_width_m": width}
+    _save_world_data(data)
+    update_location_position(loc_id, x, z)
+    return loc_id
+
+
+SQUARE = place_square("Square", 6.0, 6.0, 24.0)
+HUT2 = place_square("Hut on the square", 2.0, 2.0, 4.0)
+field = hf.get_field()
+check("the grid holds both plateaus", (field["rows"], field["cols"]), (16, 16))
+check("...anchored at (-16, -16)",
+      (field["origin_x"], field["origin_z"]), (-16.0, -16.0))
+_bare = hf.rasterize(store.list_height_areas())
+near("the square's height, read off the UNTOUCHED raster",
+     hf.sample_height(_bare, 6, 6), 5.0)
+near("the hut's, likewise", hf.sample_height(_bare, 2, 2), 1.25)
+near("the SMALLEST footprint wins: ground_y(2,2)", ground_y(2, 2), 1.25)
+check_not("...and it is neither of the two mutants' 5.0", ground_y(2, 2), 5.0)
+near("the square's plateau outside the hut's ring", ground_y(14, 14), 5.0)
+near("(0,0) belongs to the hut", at(field, 4, 4), 1.25)
+near("(12,4) to the square", at(field, 7, 5), 5.0)
+near("(-4,-4): the hut's ring has rounded corners", at(field, 3, 3), 5.0)
+near("(8,8): the same corner on the far side", at(field, 6, 6), 5.0)
+delete_location(HUT2)
+near("without the hut the square levels (2,2) to its own 5",
+     ground_y(2, 2), 5.0)
+delete_location(SQUARE)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

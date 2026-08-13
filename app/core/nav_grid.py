@@ -199,8 +199,28 @@ def invalidate_nav_cache() -> None:
 
 
 def _placement_sig(footprints: Sequence[Tuple[str, float, float, float,
-                                              float]]) -> str:
-    basis = json.dumps(sorted(footprints), sort_keys=True)
+                                              float]],
+                   openings: Sequence[Point] = (),
+                   max_step_m: float = 0.0,
+                   max_slope_deg: float = 0.0) -> str:
+    """Hash of everything the context prefetches that is NOT covered by the
+    terrain and relief signatures.
+
+    The footprints were the whole story until E8 task 4; then the context also
+    started holding the authored OPENINGS and the two WALK LIMITS, and a
+    cached input outside the cache key is a stale answer waiting to happen
+    (review finding I1):
+
+    * an opening is authored in ``map3d`` and changes no terrain area, no
+      height area and no placement — the router would keep exempting the old
+      doorway from the steepness rule, and none of it until a restart;
+    * ``game.max_slope_deg`` / ``game.max_step_height_m`` are admin dials that
+      ``POST /play/pos`` reads live. With the router judging by the limits of
+      an hour ago, "ONE predicate, two consumers" quietly becomes two.
+    """
+    basis = json.dumps({"places": sorted(footprints),
+                        "openings": sorted(openings),
+                        "limits": [max_step_m, max_slope_deg]}, sort_keys=True)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 
 
@@ -220,29 +240,42 @@ def build_nav_context() -> NavContext:
     the plateau levelled under it and therefore the relief itself. Either half
     alone would catch a move; neither alone would catch both a move and a
     painted hill.
+
+    EVERYTHING PREFETCHED IS IN THE KEY, and the second half grew twice for
+    it: the authored openings and the two walk limits are inputs of the
+    steepness rule, so they decide routes and therefore decide cache validity
+    (see :func:`_placement_sig`). The openings are read on every call, cache
+    hit included — that is one ``map3d`` parse per placed location, on the
+    same list this function already walks for the footprints.
     """
     global _CACHE
+    from app.core.boundary_entry import opening_world_points
+    from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.models.heightfield import height_sig
     from app.models.terrain import list_areas, terrain_sig
     from app.models.world import list_locations
 
     locations = list_locations()
     footprints: List[Tuple[str, float, float, float, float]] = []
+    openings: List[Point] = []
     for loc in locations:
+        for _edge, point in opening_world_points(loc):
+            openings.append((float(point[0]), float(point[1])))
         fp = placed_footprint(loc)
         if fp is None:
             continue
         cx, cz, width, yaw = fp
         footprints.append((str(loc.get("id") or ""), cx, cz, width, yaw))
+    max_step_m = get_max_step_height_m()
+    max_slope_deg = get_max_slope_deg()
 
-    key = (terrain_sig() + ":" + height_sig(), _placement_sig(footprints))
+    key = (terrain_sig() + ":" + height_sig(),
+           _placement_sig(footprints, openings, max_step_m, max_slope_deg))
     cached = _CACHE
     if cached is not None and cached[0] == key:
         return cached[1]
 
-    from app.core.boundary_entry import opening_world_points
     from app.core.heightfield import get_field
-    from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     areas = list_areas()
@@ -253,17 +286,11 @@ def build_nav_context() -> NavContext:
         if entry.get("passable", True):
             best = max(best, float(entry.get("speed_factor", 1.0) or 1.0))
 
-    openings: List[Point] = []
-    for loc in locations:
-        for _edge, point in opening_world_points(loc):
-            openings.append((float(point[0]), float(point[1])))
-
     ctx = NavContext(areas=areas, catalog=catalog, footprints=footprints,
                      data_bounds=_data_bounds(areas, footprints), sig=key,
                      default_kind=default_kind(), best_factor=best,
                      height_field=get_field(), openings=tuple(openings),
-                     max_step_m=get_max_step_height_m(),
-                     max_slope_deg=get_max_slope_deg())
+                     max_step_m=max_step_m, max_slope_deg=max_slope_deg)
     _CACHE = (key, ctx)
     return ctx
 
