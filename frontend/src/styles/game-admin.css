@@ -2233,7 +2233,7 @@ html, * {
   white-space: nowrap;
 }
 .ga-tt-input { padding: 3px 6px; font-size: 12px; min-width: 90px; }
-.ga-tt-speed { padding: 3px 6px; font-size: 12px; width: 72px; }
+.ga-tt-num { padding: 3px 6px; font-size: 12px; width: 72px; }
 /* A value the server would refuse — marked where it is typed, not as a toast
    after a round trip. */
 .ga-tt-invalid { border-color: var(--danger, #f85149); }

@@ -131,10 +131,17 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
 /** The steepness hint of the amplitude field: the worst case two neighbouring
  *  support points can build out of the noise alone is `atan(2·amp / step)` —
  *  45° at the clamp of 2 m. An empty field quotes that clamp, so the sentence
- *  says what the limit means before anything is typed. */
+ *  says what the limit means before anything is typed.
+ *
+ *  THE TYPED NUMBER IS CLAMPED FIRST, like the server clamps it on save: the
+ *  sentence describes what WILL BE STORED, not what stands in the field. A
+ *  typed 5 promised "5 m … 68°" while 2 m/45° is what arrives, and a typed
+ *  0.02 promised 1° where 0.05 is stored. */
 function amplitudeHint(t: (s: string) => string, raw: string): string {
   const typed = parseFloat(raw)
-  const amp = Number.isFinite(typed) && typed > 0 ? typed : RELIEF_AMP_MAX
+  const amp = Number.isFinite(typed) && typed > 0
+    ? Math.min(RELIEF_AMP_MAX, Math.max(RELIEF_AMP_MIN, typed))
+    : RELIEF_AMP_MAX
   const deg = Math.round(Math.atan(2 * amp / GRID_STEP_M) * 180 / Math.PI)
   return t('Height of the random hills of this ground, in metres — empty = flat. {amp} m builds slopes of up to {deg}° over one {step} m grid step.')
     .replace('{amp}', String(amp))
@@ -245,7 +252,7 @@ function TypeRow({
       </td>
       <td>
         <input
-          className={'ga-input ga-tt-speed' + (speedBad ? ' ga-tt-invalid' : '')}
+          className={'ga-input ga-tt-num' + (speedBad ? ' ga-tt-invalid' : '')}
           type="number"
           min={SPEED_MIN}
           max={SPEED_MAX}
@@ -271,7 +278,7 @@ function TypeRow({
       </td>
       <td>
         <input
-          className="ga-input ga-tt-speed"
+          className="ga-input ga-tt-num"
           type="number"
           min={RELIEF_AMP_MIN}
           max={RELIEF_AMP_MAX}
@@ -284,7 +291,7 @@ function TypeRow({
       </td>
       <td>
         <input
-          className="ga-input ga-tt-speed"
+          className="ga-input ga-tt-num"
           type="number"
           min={RELIEF_WAVE_MIN}
           max={RELIEF_WAVE_MAX}
@@ -539,7 +546,7 @@ export function TerrainTypesDialog({
                 </td>
                 <td>
                   <input
-                    className={'ga-input ga-tt-speed' + (newSpeedBad ? ' ga-tt-invalid' : '')}
+                    className={'ga-input ga-tt-num' + (newSpeedBad ? ' ga-tt-invalid' : '')}
                     type="number"
                     min={SPEED_MIN}
                     max={SPEED_MAX}
@@ -565,7 +572,7 @@ export function TerrainTypesDialog({
                 </td>
                 <td>
                   <input
-                    className="ga-input ga-tt-speed"
+                    className="ga-input ga-tt-num"
                     type="number"
                     min={RELIEF_AMP_MIN}
                     max={RELIEF_AMP_MAX}
@@ -578,7 +585,7 @@ export function TerrainTypesDialog({
                 </td>
                 <td>
                   <input
-                    className="ga-input ga-tt-speed"
+                    className="ga-input ga-tt-num"
                     type="number"
                     min={RELIEF_WAVE_MIN}
                     max={RELIEF_WAVE_MAX}
