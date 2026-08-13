@@ -268,8 +268,24 @@ Hand-derived expectations:
              `in_level_footprint` would silently wave through.
            * a route that neither starts nor ends there -> blocked either way
              (foreign footprint, the pre-existing guard).
-         The PASSABILITY exemption is NOT flag-conditional and stays where it
-         is: [12] measures it, and it must keep passing with the flag off.
+
+         AND THE TWO RULES MEET IN ONE BRANCH. The PASSABILITY exemption is
+         NOT flag-conditional; the steepness one is — so the case where BOTH
+         speak has to be measured, or the steepness question in `blocked`'s
+         impassable-ground branch is untested. Same hand-built cliff, plus the
+         whole box (0,0)-(16,16) painted with an IMPASSABLE type
+         (`{"rock": {"passable": False}}`), route starting inside the
+         footprint, so the cell centre fails the terrain test and `blocked`
+         takes exactly that branch:
+           without a height field: 0 relief -> free in BOTH flag states
+                                   (footprint wins, unchanged rule)
+           with CLIFF_FIELD, UNFLAGGED: the branch still asks the steepness
+                                   -> the same 75.07° -> BLOCKED
+           with CLIFF_FIELD, FLAGGED:   `in_level_footprint` -> free
+         RED COUNTER-PROBE (run by hand, 2026-08-13): with the
+         `or self.too_steep(cell)` clause deleted from that branch the third
+         line reads False and the check fails; the other three are unmoved by
+         the mutant, which is why the pair is measured in both flag states.
 
       c) THE CACHE KEY (review finding I1). Authoring an opening changes no
          terrain area, no height area and no placement, and changing
@@ -939,15 +955,34 @@ check("...while the levelling one stays free",
 outside = nav_grid._Search(hand, (100.0, 100.0), (101.0, 101.0))
 check("RED COUNTER-PROBE: for a foreign route the same cell is too steep",
       outside.too_steep(nav_grid.cell_of(7, 7)), True)
+ROCK_AREAS = [{"kind": "rock", "z_order": 0,
+               "polygon": [[0, 0], [16, 0], [16, 16], [0, 16]]}]
+ROCK_CATALOG = {"rock": {"passable": False, "speed_factor": 1.0}}
+
+
+def rock_search(level_ground, with_relief):
+    """A route starting INSIDE the footprint on painted rock — the cell centre
+    fails the terrain test, so ``blocked`` reaches its impassable-ground
+    branch, which is the one both rules meet in."""
+    ctx = _replace(cliff_ctx(level_ground), areas=ROCK_AREAS,
+                   catalog=ROCK_CATALOG,
+                   height_field=CLIFF_FIELD if with_relief else None)
+    return nav_grid._Search(ctx, (7.0, 7.0), (7.0, 7.0))
+
+
+check("the cell centre really is impassable rock",
+      terrain_query.passability_at(7, 7, areas=ROCK_AREAS,
+                                   catalog=ROCK_CATALOG), (False, 1.0))
 check("the PASSABILITY exemption does NOT ask the flag — an unflagged place "
       "on impassable ground still wins",
-      nav_grid._Search(
-          _replace(cliff_ctx(False), height_field=None,
-                   areas=[{"kind": "rock", "z_order": 0,
-                           "polygon": [[0, 0], [16, 0], [16, 16], [0, 16]]}],
-                   catalog={"rock": {"passable": False, "speed_factor": 1.0}}),
-          (7.0, 7.0), (7.0, 7.0)).blocked(nav_grid.cell_of(7, 7)),
-      False)
+      rock_search(False, False).blocked(nav_grid.cell_of(7, 7)), False)
+check("...nor does it for a levelling one",
+      rock_search(True, False).blocked(nav_grid.cell_of(7, 7)), False)
+check("...but on the CLIFF the unflagged place is blocked all the same — by "
+      "its STEEPNESS, in the very branch the terrain just waved through",
+      rock_search(False, True).blocked(nav_grid.cell_of(7, 7)), True)
+check("RED COUNTER-PROBE: its levelling twin, same rock, same cliff, is free",
+      rock_search(True, True).blocked(nav_grid.cell_of(7, 7)), False)
 
 # [I1] the second half: an admin dial nobody else notices.
 ctx_limits = nav_grid.build_nav_context()

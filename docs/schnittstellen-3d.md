@@ -1683,7 +1683,10 @@ Fläche nicht weiter sperren. Diese Passierbarkeits-Regel hängt NICHT am
 Dieselbe Regel gilt im **NPC-Routing** (`nav_grid`): eine Zelle stirbt am
 fremden Fußabdruck (SAT) oder am Gelände in ihrer Mitte — Letzteres nur
 außerhalb jedes Fußabdrucks. Ohne das wäre ein Ort auf Fels für die Reise
-unerreichbar, während sein Avatar darin frei umherläuft.
+unerreichbar, während sein Avatar darin frei umherläuft. Am GELÄNDE stirbt
+sie drinnen also nie; an der STEILHEIT dagegen schon, wenn der Ort nicht
+planiert (§ A16.1) — die beiden Ausnahmen sind zwei Regeln, und nur die
+zweite fragt `level_ground`.
 
 **TEMPO UND ANIMATION GEHÖREN DAGEGEN DEM OBERSTEN GELÄNDE, SO WEIT WIE DER
 HIMMEL REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in
