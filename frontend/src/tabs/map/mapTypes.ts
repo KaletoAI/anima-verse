@@ -172,9 +172,9 @@ export interface TerrainScatterEntry {
 }
 
 /** One kind of ground in the effective catalog (§ A1.5). `passable`,
- *  `speed_factor` and `meta.move_anim` come from HERE and nowhere else — never
- *  from an area, never from a client table. `meta` is free-form apart from
- *  that ONE key; what grows on ground belongs to the AREA (finding B17). */
+ *  `speed_factor` and the two clip keys come from HERE and nowhere else —
+ *  never from an area, never from a client table. `meta` is free-form apart
+ *  from those keys; what grows on ground belongs to the AREA (finding B17). */
 export interface TerrainType {
   kind: string
   name: string
@@ -187,10 +187,11 @@ export interface TerrainType {
    *  (finding 3, 2026-08-13) — a footprint only neutralises a factor of 0,
    *  which is a ground nobody meant to be walked rather than a slow one. */
   speed_factor: number
-  /** Free-form, with one contracted key: `meta.move_anim`, the animation clip
+  /** Free-form, with two contracted keys: `meta.move_anim`, the animation clip
    *  a MOVING figure plays on this ground instead of walk/run (§ A9 — "swim"
-   *  on water). Absent = walk and run as usual; the server never stores an
-   *  empty one. */
+   *  on water), and `meta.idle_anim`, the one a STANDING figure plays instead
+   *  of its own ("treading-water"). Absent = walk, run and idle as usual; the
+   *  server never stores an empty one. */
   meta?: Record<string, unknown>
 }
 

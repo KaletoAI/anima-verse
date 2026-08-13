@@ -520,12 +520,15 @@ const CLIP_SYNONYMS: Record<string, string[]> = {
 
 /** Stand-in clip when the wanted one is missing (before falling back to idle):
  *  someone lying down should at least sit, a runner walk fast — and a swimmer
- *  walk, because a terrain `move_anim` (§ A9) names a kind out of an OPEN
- *  vocabulary that not every model carries. */
+ *  walk, because the terrain clips (`move_anim`/`idle_anim`, § A9) name kinds
+ *  out of an OPEN vocabulary that not every model carries. A model without
+ *  `treading-water` simply stands in the lake, which is where it stood before
+ *  the key existed — no break, just no water. */
 const CLIP_FALLBACK: Record<string, ClipKind> = {
   lie: 'sit',
   run: 'walk',
   swim: 'walk',
+  'treading-water': 'idle',
 };
 
 /** Modelle, deren gebundene Kinds schon geloggt wurden (einmal je Modell,
@@ -1128,12 +1131,12 @@ export class Figure {
   private groundY = 0;
   /** Extra drop currently applied on top of `groundY`, in WORLD metres — the
    *  ground offset of the clip playing right now (`clipGround`, finding 3).
-   *  0 for everything but a running terrain move clip. */
+   *  0 for everything but a clip the GROUND named (move or idle). */
   private clipDrop = 0;
-  /** Whether the clip playing right now is a TERRAIN MOVE (`walk.moveClip`) —
-   *  part of the play state, because the same kind can be asked for both as a
-   *  movement and as a standing activity. */
-  private terrainMove = false;
+  /** Whether the clip playing right now was named by the GROUND
+   *  (`walk.moveClip` / `walk.idleClip`) — part of the play state, because the
+   *  same kind can be asked for both by the terrain and as a plain activity. */
+  private terrainClip = false;
 
   constructor(model: LoadedModel) {
     this.height = model.height;
@@ -1203,16 +1206,18 @@ export class Figure {
    *  `kind` kommt server-authoritativ aus `activity_animation` — deshalb hier
    *  normalisieren, die Actions liegen unter kleingeschriebenen Kinds.
    *
-   *  `terrainMove` says the kind comes from the ground under a MOVING figure
-   *  (`walk.moveClip`) — the one state in which the ground is the body's
-   *  reference, so a clip authored off the floor is dropped onto it (finding 3
-   *  of 2026-08-13: `swim` is animated on a water line and the swimmer floated
-   *  a third of a metre over the lake). Standing clips keep their authored
-   *  height on purpose — `sleep` carries the bed it was animated on. */
-  play(rawKind: ClipKind, terrainMove = false) {
+   *  `terrainClip` says the kind comes from the GROUND the figure is on
+   *  (`walk.moveClip` while it moves, `walk.idleClip` while it stands) — the
+   *  state in which the ground is the body's reference, so a clip authored off
+   *  the floor is dropped onto it (finding 3 of 2026-08-13: `swim` is animated
+   *  on a water line and the swimmer floated a third of a metre over the lake;
+   *  `treading-water` is authored the same way). An ordinary standing clip
+   *  keeps its authored height on purpose — `sleep` carries the bed it was
+   *  animated on. */
+  play(rawKind: ClipKind, terrainClip = false) {
     const kind = (rawKind || 'idle').toLowerCase();
-    if (this.currentKind === kind && this.terrainMove === terrainMove) return;
-    this.terrainMove = terrainMove;
+    if (this.currentKind === kind && this.terrainClip === terrainClip) return;
+    this.terrainClip = terrainClip;
     const fallback = CLIP_FALLBACK[kind];
     const resolved = this.actions.get(kind)
       ?? (fallback ? this.actions.get(fallback) : undefined)
@@ -1226,7 +1231,7 @@ export class Figure {
     // The drop belongs to the clip that ACTUALLY plays, not to the kind that
     // was asked for: a rig without `swim` falls back to `walk` and then walks
     // on the ground, which is where a walk clip already is (offset 0).
-    this.setClipDrop(terrainMove && resolved
+    this.setClipDrop(terrainClip && resolved
       ? clipGroundOffset(resolved.getClip()) * this.baseScale : 0);
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;

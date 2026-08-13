@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { MOVE_EPS_M, moveClip, type GroundScope } from '../game/walk';
+import { MOVE_EPS_M, idleClip, moveClip, type GroundScope } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
@@ -15,11 +15,13 @@ import { advanceProgress, catchUpStep, clampProgress, densifyPolyline, pointAtDi
 export const WALK_SPEED = 3.4;
 const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
 
-/** What the ground says about a moving figure at one point: the clip its
- *  terrain type asks for (`''` = none) and how far the terrain rule reaches
- *  there (§ A1.5). Both are LOOKUPS the driver hands in — `main.ts` owns the
- *  terrain payload and the footprints, this file owns neither. */
-export interface GroundMove { anim: string; scope: GroundScope }
+/** What the ground says about a figure at one point: the clip its terrain type
+ *  asks for while the figure MOVES (`anim`) and the one while it STANDS
+ *  (`idle`) — `''` for either means "the ground says nothing" — plus how far
+ *  the terrain rule reaches there (§ A1.5). All three are LOOKUPS the driver
+ *  hands in: `main.ts` owns the terrain payload and the footprints, this file
+ *  owns neither. */
+export interface GroundMove { anim: string; idle: string; scope: GroundScope }
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
 /** Walk-target marker (E3-T4): the same gold, but a thin flat ring on the
@@ -202,18 +204,19 @@ export class NpcManager {
    *  bucket. */
   private groundRev: () => number = () => 0;
   /**
-   * What the GROUND says about a moving figure at a point: the clip its type
-   * asks for (`meta.move_anim`, § A9) and HOW FAR that rule reaches there
-   * (`walk.GroundScope`) — handed in like the height, never derived here.
+   * What the GROUND says about a figure at a point: the clips its type asks
+   * for (`meta.move_anim` and `meta.idle_anim`, § A9) and HOW FAR that rule
+   * reaches there (`walk.GroundScope`) — handed in like the height, never
+   * derived here.
    *
-   * It applies to every moving figure, the player's avatar included: they all
-   * walk through the one clip decision below (`moveClip`), so a lake is swum
-   * across by whoever crosses it — and a tiled hall standing in that lake is
-   * walked. The default is the world without painted ground: walk and run as
-   * always.
+   * It applies to every figure, the player's avatar included: they all go
+   * through the one clip decision below (`moveClip` / `idleClip`), so a lake
+   * is swum across by whoever crosses it and trodden by whoever stops in it —
+   * and a tiled hall standing in that lake is walked and stood in. The default
+   * is the world without painted ground: walk, run and idle as always.
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
-    () => ({ anim: '', scope: 'wilderness' });
+    () => ({ anim: '', idle: '', scope: 'wilderness' });
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -224,9 +227,9 @@ export class NpcManager {
     if (revision) this.groundRev = revision;
   }
 
-  /** Install the ground-move lookup (`main.ts` `groundMoveAt`: the terrain
-   *  type's `move_anim` plus the scope at that point). Called once at boot;
-   *  the payload updates itself. */
+  /** Install the ground-clip lookup (`main.ts` `groundMoveAt`: the terrain
+   *  type's `move_anim` and `idle_anim` plus the scope at that point). Called
+   *  once at boot; the payload updates itself. */
   setTerrainMove(fn: (x: number, z: number) => GroundMove) {
     this.groundMoveAt = fn;
   }
@@ -833,15 +836,17 @@ export class NpcManager {
           // no 'run' on journeys: the pace comes from the server — walk while
           // the journey is moving, idle on freeze. WHAT walking looks like is
           // the ground's to say (`moveClip`, finding 3): a traveller crossing
-          // painted water swims through it.
+          // painted water swims through it — and a FROZEN journey in that
+          // water treads it (`idleClip`), instead of standing on the lake.
           const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
           const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+          const groundIdle = idleClip(gm.idle, gm.scope);
           // The second argument is the GATE of the clip ground offset
-          // (`figures.Figure.play`): while the figure moves over terrain the
-          // ground is its reference, so a clip authored on a water line is
-          // dropped onto it. Standing (idle here) it is not.
+          // (`figures.Figure.play`): whenever the GROUND names the clip, the
+          // ground is the body's reference, so a clip authored on a water line
+          // is dropped onto it. An ordinary standing clip keeps its height.
           npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
-            : 'idle', travelling);
+            : (groundIdle || 'idle'), travelling || !!groundIdle);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -890,18 +895,23 @@ export class NpcManager {
       }
 
       if (npc.figure) {
-        // The server's category beats the keyword guessing (AV3D-6) — while
-        // STANDING. Moving, the GROUND decides (`moveClip`, finding 3): its
-        // `move_anim` replaces walk and run alike, and without one the old
-        // pair stands. This is the ONE clip decision of a moving figure, the
-        // player's avatar included — it is steered through this same loop.
+        // Moving, the GROUND decides (`moveClip`, finding 3): its `move_anim`
+        // replaces walk and run alike, and without one the old pair stands.
+        // STANDING, the ground gets the FIRST word too since the water round
+        // of 2026-08-13 (`idleClip`): a figure standing in a lake treads water
+        // rather than standing on it. Only where the ground names nothing does
+        // the old order hold — the server's category beats the keyword
+        // guessing (AV3D-6). This is the ONE clip decision of every figure,
+        // the player's avatar included: it is steered through this same loop.
         const standingClip = npc.animation || activityToClipKind(npc.activity);
         const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
-        // `moving` is also the gate of the clip ground offset (see the
-        // traveller branch above): only a figure walking the terrain has the
-        // ground as its reference.
+        const groundIdle = idleClip(gm.idle, gm.scope);
+        // The second argument is the gate of the clip ground offset (see the
+        // traveller branch above): a clip the GROUND named — moving or
+        // standing — has the ground as its reference, an activity clip does
+        // not (`sleep` carries the bed it was animated on).
         npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
-          : standingClip, moving);
+          : (groundIdle || standingClip), moving || !!groundIdle);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

@@ -26,11 +26,13 @@
  * what it does.
  *
  * What a ground is CROSSED like, on the other hand, belongs to the type and is
- * edited here: the pace (`speed_factor`) and, since finding 3 of the E8
- * acceptance, the movement animation (`meta.move_anim` — "swim" on water).
- * Both count everywhere the ground is painted, inside a placed location as
- * much as out in the wilderness; only the PASSABILITY is a wilderness question
- * (§ A15, "footprint wins").
+ * edited here: the pace (`speed_factor`), since finding 3 of the E8 acceptance
+ * the movement animation (`meta.move_anim` — "swim" on water) and, since the
+ * water round of 2026-08-13, the standing one next to it (`meta.idle_anim` —
+ * "treading-water", so a figure that stops in the lake does not stand on it).
+ * All three count everywhere the ground is painted, inside a placed location
+ * as much as out in the wilderness; only the PASSABILITY is a wilderness
+ * question (§ A15, "footprint wins").
  *
  * And what a ground is SHAPED like: the micro-relief (`meta.relief_amplitude_m`
  * / `meta.relief_wave_m`, § A16.2) — random small hills baked into the world
@@ -49,14 +51,14 @@ import type { TerrainType } from './mapTypes'
 // second literal here would be a second opinion about the same server value.
 import { UNKNOWN_COLOR as DEFAULT_COLOR } from './TerrainLayer'
 
-/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, the `move_anim` cap and the
- *  two relief clamps of `terrain_types.py`. */
+/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, the cap of the two animation
+ *  keys and the two relief clamps of `terrain_types.py`. */
 const KIND_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const SPEED_MIN = 0
 const SPEED_MAX = 2
 const SPEED_STEP = 0.05
 const NAME_MAX = 60
-const MOVE_ANIM_MAX = 40
+const ANIM_MAX = 40
 const RELIEF_AMP_MIN = 0.05
 const RELIEF_AMP_MAX = 2
 const RELIEF_AMP_STEP = 0.05
@@ -71,10 +73,10 @@ const RELIEF_WAVE_DEFAULT = 32
  *  so the number quoted here is the worst case. */
 const GRID_STEP_M = 4
 
-/** Read the string meta key this dialog owns. Everything else in `meta`
- *  belongs to whoever wrote it and travels along untouched. */
-function moveAnimOf(type: TerrainType): string {
-  const raw = (type.meta as { move_anim?: unknown } | undefined)?.move_anim
+/** Read one of the string meta keys this dialog owns. Everything else in
+ *  `meta` belongs to whoever wrote it and travels along untouched. */
+function metaStrOf(type: TerrainType, key: string): string {
+  const raw = (type.meta as Record<string, unknown> | undefined)?.[key]
   return typeof raw === 'string' ? raw : ''
 }
 
@@ -84,6 +86,16 @@ function moveAnimOf(type: TerrainType): string {
 function metaNumOf(type: TerrainType, key: string): string {
   const raw = (type.meta as Record<string, unknown> | undefined)?.[key]
   return typeof raw === 'number' && Number.isFinite(raw) ? String(raw) : ''
+}
+
+/** One optional string key, IN PLACE — trimmed or GONE. The server's
+ *  `_trimmed_meta_string`: "no animation" is a missing key, never an empty
+ *  string a reader has to test for. */
+function setMetaStr(meta: Record<string, unknown>, key: string,
+                    raw: string): void {
+  const clean = raw.trim()
+  if (clean) meta[key] = clean
+  else delete meta[key]
 }
 
 /** One optional numeric key, IN PLACE — written or GONE. Mirrors the server's
@@ -109,6 +121,7 @@ function numChanged(raw: string, stored: string): boolean {
 /** The `meta` keys this dialog owns, as their fields hold them. */
 interface OwnedMeta {
   moveAnim: string
+  idleAnim: string
   reliefAmp: string
   reliefWave: string
 }
@@ -120,9 +133,8 @@ interface OwnedMeta {
 function withOwnedMeta(meta: Record<string, unknown> | undefined,
                        own: OwnedMeta): Record<string, unknown> {
   const next = { ...(meta || {}) }
-  const clean = own.moveAnim.trim()
-  if (clean) next.move_anim = clean
-  else delete next.move_anim
+  setMetaStr(next, 'move_anim', own.moveAnim)
+  setMetaStr(next, 'idle_anim', own.idleAnim)
   setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
   return next
@@ -181,7 +193,8 @@ function TypeRow({
   const [color, setColor] = useState(type.color || DEFAULT_COLOR)
   const [passable, setPassable] = useState(!!type.passable)
   const [speed, setSpeed] = useState(String(type.speed_factor))
-  const [moveAnim, setMoveAnim] = useState(moveAnimOf(type))
+  const [moveAnim, setMoveAnim] = useState(metaStrOf(type, 'move_anim'))
+  const [idleAnim, setIdleAnim] = useState(metaStrOf(type, 'idle_anim'))
   const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
 
@@ -194,7 +207,8 @@ function TypeRow({
   const dirty = name !== (type.name || '')
     || color !== (type.color || DEFAULT_COLOR)
     || passable !== !!type.passable
-    || moveAnim.trim() !== moveAnimOf(type)
+    || moveAnim.trim() !== metaStrOf(type, 'move_anim')
+    || idleAnim.trim() !== metaStrOf(type, 'idle_anim')
     || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
@@ -202,24 +216,26 @@ function TypeRow({
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // exactly THREE keys in it and hands the rest back untouched. The relief
+    // exactly FOUR keys in it and hands the rest back untouched. The relief
     // numbers are sent unclamped on purpose: the server clamps, and the row
     // refills from its answer, so a typed 5 shows up as the stored 2.
     const saved = await onSave({
       kind: type.kind, name, color, passable,
       speed_factor: speedNum,
-      meta: withOwnedMeta(type.meta, { moveAnim, reliefAmp, reliefWave }),
+      meta: withOwnedMeta(type.meta,
+        { moveAnim, idleAnim, reliefAmp, reliefWave }),
     })
     if (!saved) return
     setName(saved.name || '')
     setColor(saved.color || DEFAULT_COLOR)
     setPassable(!!saved.passable)
     setSpeed(String(saved.speed_factor))
-    setMoveAnim(moveAnimOf(saved))
+    setMoveAnim(metaStrOf(saved, 'move_anim'))
+    setIdleAnim(metaStrOf(saved, 'idle_anim'))
     setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
-  }, [color, moveAnim, name, onSave, passable, reliefAmp, reliefWave, speedBad,
-      speedNum, type])
+  }, [color, idleAnim, moveAnim, name, onSave, passable, reliefAmp, reliefWave,
+      speedBad, speedNum, type])
 
   return (
     <tr>
@@ -269,11 +285,21 @@ function TypeRow({
       <td>
         <input
           className="ga-input ga-tt-input"
-          maxLength={MOVE_ANIM_MAX}
+          maxLength={ANIM_MAX}
           value={moveAnim}
           placeholder={t('walk / run')}
           title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
           onChange={(e) => setMoveAnim(e.target.value)}
+        />
+      </td>
+      <td>
+        <input
+          className="ga-input ga-tt-input"
+          maxLength={ANIM_MAX}
+          value={idleAnim}
+          placeholder={t('idle / activity')}
+          title={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
+          onChange={(e) => setIdleAnim(e.target.value)}
         />
       </td>
       <td>
@@ -379,6 +405,7 @@ export function TerrainTypesDialog({
   const [newPassable, setNewPassable] = useState(true)
   const [newSpeed, setNewSpeed] = useState('1')
   const [newMoveAnim, setNewMoveAnim] = useState('')
+  const [newIdleAnim, setNewIdleAnim] = useState('')
   const [newReliefAmp, setNewReliefAmp] = useState('')
   const [newReliefWave, setNewReliefWave] = useState('')
 
@@ -427,6 +454,7 @@ export function TerrainTypesDialog({
       passable: newPassable, speed_factor: newSpeedNum,
       meta: withOwnedMeta({}, {
         moveAnim: newMoveAnim,
+        idleAnim: newIdleAnim,
         reliefAmp: newReliefAmp,
         reliefWave: newReliefWave,
       }),
@@ -438,10 +466,11 @@ export function TerrainTypesDialog({
     setNewPassable(true)
     setNewSpeed('1')
     setNewMoveAnim('')
+    setNewIdleAnim('')
     setNewReliefAmp('')
     setNewReliefWave('')
-  }, [kindClean, newColor, newMoveAnim, newName, newPassable, newReliefAmp,
-      newReliefWave, newSpeedNum, putType])
+  }, [kindClean, newColor, newIdleAnim, newMoveAnim, newName, newPassable,
+      newReliefAmp, newReliefWave, newSpeedNum, putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -470,6 +499,7 @@ export function TerrainTypesDialog({
                 <th className="ga-tt-center">{t('Passable')}</th>
                 <th>{t('Speed')}</th>
                 <th>{t('Move animation')}</th>
+                <th>{t('Idle animation')}</th>
                 <th>{t('Relief amplitude (m)')}</th>
                 <th>{t('Relief wavelength (m)')}</th>
                 <th>{t('Source')}</th>
@@ -479,7 +509,7 @@ export function TerrainTypesDialog({
             <tbody>
               {types.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="ga-map-tray-empty">
+                  <td colSpan={11} className="ga-map-tray-empty">
                     {t('No terrain types')}
                   </td>
                 </tr>
@@ -563,11 +593,21 @@ export function TerrainTypesDialog({
                 <td>
                   <input
                     className="ga-input ga-tt-input"
-                    maxLength={MOVE_ANIM_MAX}
+                    maxLength={ANIM_MAX}
                     value={newMoveAnim}
                     placeholder={t('walk / run')}
                     title={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
                     onChange={(e) => setNewMoveAnim(e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="ga-input ga-tt-input"
+                    maxLength={ANIM_MAX}
+                    value={newIdleAnim}
+                    placeholder={t('idle / activity')}
+                    title={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
+                    onChange={(e) => setNewIdleAnim(e.target.value)}
                   />
                 </td>
                 <td>
@@ -610,7 +650,7 @@ export function TerrainTypesDialog({
                 </td>
               </tr>
               <tr>
-                <td colSpan={10} className="ga-tt-newhint">
+                <td colSpan={11} className="ga-tt-newhint">
                   {kindBad
                     ? t('A kind is lowercase letters, digits, “_” and “-”, starts with a letter or digit, at most 40 characters.')
                     : kindTaken

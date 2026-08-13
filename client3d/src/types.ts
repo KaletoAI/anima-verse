@@ -308,11 +308,11 @@ export interface TerrainType {
   speed_factor: number;
   /** Open bag of extras — a type says how ground LOOKS and how it is walked,
    *  nothing about what grows on it (the scatter moved to the AREA with
-   *  finding B17). ONE key in it is a contract: `move_anim`. */
+   *  finding B17). TWO keys in it are a contract: `move_anim`, `idle_anim`. */
   meta?: TerrainTypeMeta;
 }
 
-/** A type's `meta`. Free-form by contract — the one key with a meaning is
+/** A type's `meta`. Free-form by contract — the two keys with a meaning are
  *  named, the rest stays open. */
 export interface TerrainTypeMeta {
   /** The clip a MOVING figure plays on this ground instead of walk/run
@@ -320,6 +320,10 @@ export interface TerrainTypeMeta {
    *  `swim` on water. Absent = walk/run as always; the server never stores
    *  an empty one. */
   move_anim?: string;
+  /** The clip a STANDING figure plays on this ground instead of its own
+   *  standing one (§ A9, the water round of 2026-08-13) — e.g.
+   *  `treading-water` on water. Absent = the standing clip as always. */
+  idle_anim?: string;
   [key: string]: unknown;
 }
 

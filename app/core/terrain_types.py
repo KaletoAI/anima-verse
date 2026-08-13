@@ -3,9 +3,11 @@
 Data-driven ground vocabulary for the painted terrain areas: what a kind
 looks like on the schematic 2D map (color), whether it can be walked on,
 how fast, and — since finding 3 of the E8 acceptance — HOW one moves over
-it (``meta.move_anim``, the clip that replaces walk/run). Since 2026-08-13
-also how BUMPY it is (``meta.relief_amplitude_m`` / ``meta.relief_wave_m``,
-the micro-relief baked into the world heightfield, § A16). NO terrain
+it (``meta.move_anim``, the clip that replaces walk/run) and how one WAITS
+on it (``meta.idle_anim``, the clip that replaces the standing one). Since
+2026-08-13 also how BUMPY it is (``meta.relief_amplitude_m`` /
+``meta.relief_wave_m``, the micro-relief baked into the world heightfield,
+§ A16). NO terrain
 property is ever hardcoded anywhere else — every consumer (passability,
 pace, relief, payload, editor palette) reads this catalog.
 
@@ -112,6 +114,25 @@ def _clamped_meta_number(meta: Dict[str, Any], key: str,
     meta[key] = round(min(max(num, low), high), 2)
 
 
+def _trimmed_meta_string(meta: Dict[str, Any], key: str,
+                         limit: int = 40) -> None:
+    """One optional string ``meta`` key, IN PLACE — trimmed, capped or GONE.
+
+    The shape rule of the animation keys: they name a clip KIND out of the
+    open vocabulary of ``shared/models/clips``, so nothing is validated against
+    a list; what is enforced is the shape (a trimmed string, ``limit``
+    characters like a ``kind``) and that an empty one leaves no key behind —
+    "no animation" must not be an empty string every reader has to test for.
+    """
+    if key not in meta:
+        return
+    value = str(meta.get(key) or "").strip()[:limit]
+    if value:
+        meta[key] = value
+    else:
+        meta.pop(key)
+
+
 def sanitize_type(raw: Any) -> Dict[str, Any]:
     """Whitelist + coerce one catalog entry; raises ValueError on junk."""
     if not isinstance(raw, dict):
@@ -138,19 +159,15 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # to be whitelisted here and moved to the AREA with finding B17 — see
     # `app/models/terrain._sanitize_scatter_list`.
     meta = dict(raw.get("meta")) if isinstance(raw.get("meta"), dict) else {}
-    # ONE key inside it is whitelisted: `move_anim`, the clip a figure MOVING
-    # over this ground plays instead of walk/run (finding 3 of the E8
-    # acceptance — water is swum through, § A9). It is a clip KIND out of the
-    # open vocabulary of `shared/models/clips`, so nothing is validated
-    # against a list here; what is enforced is the shape (a trimmed string,
-    # 40 characters like a kind) and that an empty one leaves no key behind —
-    # "no animation" must not be an empty string every reader has to test for.
-    if "move_anim" in meta:
-        move_anim = str(meta.get("move_anim") or "").strip()[:40]
-        if move_anim:
-            meta["move_anim"] = move_anim
-        else:
-            meta.pop("move_anim")
+    # TWO keys inside it are whitelisted as CLIPS (§ A9): `move_anim`, what a
+    # figure MOVING over this ground plays instead of walk/run (finding 3 of
+    # the E8 acceptance — water is swum through), and since the water round of
+    # 2026-08-13 `idle_anim`, what it plays STANDING there instead of its idle
+    # (treading water instead of standing in the lake). Same shape rule for
+    # both, `_trimmed_meta_string` — the kinds come out of an open vocabulary
+    # and are never checked against a list.
+    _trimmed_meta_string(meta, "move_anim")
+    _trimmed_meta_string(meta, "idle_anim")
     # TWO MORE since the micro-relief decision (2026-08-13): the random small
     # hills this ground carries, baked into the WORLD HEIGHTFIELD by
     # ``app/core/heightfield`` (§ A16) rather than rendered by anyone — server

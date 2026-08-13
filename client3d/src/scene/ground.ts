@@ -254,6 +254,9 @@ export interface TerrainPoint {
   speed_factor: number;
   /** catalog `meta.move_anim`, or `''` — the clip a moving figure plays here */
   move_anim: string;
+  /** catalog `meta.idle_anim`, or `''` — the clip a STANDING figure plays
+   *  here instead of its own standing one (`treading-water` on water) */
+  idle_anim: string;
 }
 
 export interface Ground {
@@ -383,11 +386,11 @@ export interface Ground {
    * not there beats a world one cannot walk in.
    *
    * It answers for the GROUND, not for the world. `passable` judges the
-   * WILDERNESS only (footprint wins, § A15), `speed_factor` and `move_anim`
-   * count everywhere (finding 3). The rules that combine each with the
+   * WILDERNESS only (footprint wins, § A15), `speed_factor` and the two clip
+   * keys count everywhere (finding 3). The rules that combine each with the
    * footprint live in `game/walk.ts` (`terrainBlocks`, `terrainPace`,
-   * `moveClip`) and every caller goes through them — never through this
-   * answer alone.
+   * `moveClip`, `idleClip`) and every caller goes through them — never
+   * through this answer alone.
    */
   typeAt(x: number, z: number): TerrainPoint;
   /** May the avatar STAND on that point, as far as the ground is concerned —
@@ -1094,12 +1097,16 @@ export function createGround(): Ground {
     }
     const kind = hit || payload?.default_kind || '';
     const entry = catalog.get(kind.toLowerCase());
-    if (!entry) return { kind, passable: true, speed_factor: 1, move_anim: '' };
+    if (!entry) {
+      return { kind, passable: true, speed_factor: 1, move_anim: '',
+        idle_anim: '' };
+    }
     return {
       kind,
       passable: entry.passable !== false,
       speed_factor: Number.isFinite(entry.speed_factor) ? entry.speed_factor : 1,
       move_anim: String(entry.meta?.move_anim ?? '').trim(),
+      idle_anim: String(entry.meta?.idle_anim ?? '').trim(),
     };
   }
 

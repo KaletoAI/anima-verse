@@ -207,14 +207,37 @@ export function terrainPace(speedFactor: number, scope: GroundScope): number {
  * The clip kind goes into the open vocabulary of `Figure.play` unchecked —
  * a kind no model carries falls back through `figures.CLIP_FALLBACK` (swim →
  * walk) and finally to idle, which is the same road every other kind takes.
- * STANDING is untouched by this: an activity clip or the server's own
- * `animation` wins there, and this function is never asked.
+ * STANDING is `idleClip`'s business, not this one's.
  */
 export function moveClip(moveAnim: string, running: boolean,
                          scope: GroundScope): string {
-  const kind = scope === 'built' ? '' : (moveAnim || '').trim();
+  const kind = groundClip(moveAnim, scope);
   if (kind) return kind;
   return running ? 'run' : 'walk';
+}
+
+/**
+ * WHICH CLIP a STANDING figure plays because of the ground — the second half
+ * of the same contract (`meta.idle_anim`, § A9; the water round of
+ * 2026-08-13: standing still in a lake played the standing clip, and the
+ * figure stood on the water like a floor).
+ *
+ * `''` means "the ground says nothing", and then the caller's own standing
+ * clip stands — the server's `animation` or the activity heuristic (§ A8),
+ * unchanged. THE REACH IS THE ONE OF `moveClip`, literally the same helper:
+ * inside a built place the ground names nothing, one does not tread water in
+ * a tiled hall standing in a lake.
+ */
+export function idleClip(idleAnim: string, scope: GroundScope): string {
+  return groundClip(idleAnim, scope);
+}
+
+/** The reach rule BOTH ground clips share, in one place: outside a built
+ *  place the ground may name a clip, inside it never does, and a blank name
+ *  is no name. Two copies of this is how one of them starts reaching further
+ *  than the other. */
+function groundClip(anim: string, scope: GroundScope): string {
+  return scope === 'built' ? '' : (anim || '').trim();
 }
 
 /** Below this horizontal distance a height change counts as a STEP, above it

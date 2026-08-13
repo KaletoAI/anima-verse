@@ -30,17 +30,22 @@ Throwaway storage. Hand-derived expectations:
       scripts/smoke_terrain_areas.py [11]) — the type-level field was
       removed without a shim, so a `meta` handed to sanitize_type now
       survives verbatim, scatter-shaped keys included.
-  [8] ONE key inside `meta` is whitelisted again since finding 3 of the E8
-      acceptance: `move_anim`, the clip a MOVING figure plays on this
-      ground instead of walk/run. It is a clip kind out of an OPEN
-      vocabulary, so nothing is checked against a list — only the shape:
+  [8] TWO keys inside `meta` are whitelisted as CLIPS: `move_anim` (finding
+      3 of the E8 acceptance), what a MOVING figure plays on this ground
+      instead of walk/run, and `idle_anim` (the water round of 2026-08-13),
+      what it plays STANDING there instead of its idle. Both are clip kinds
+      out of an OPEN vocabulary, so nothing is checked against a list — only
+      the shape, and it is the SAME shape rule for both:
         "  swim  "        -> "swim"          (trimmed)
         "s" * 45          -> "s" * 40        (a kind is 40 chars, no more)
         ""  /  "   "      -> the KEY IS GONE, never an empty string
         41 chars of blanks around a 3-letter word -> the word
         no `move_anim` at all -> untouched, and the other keys with it
-      Water carries it in the shared seed: `{"move_anim": "swim"}` with
-      `speed_factor 0.4` — the ground one wades through.
+      Water carries both in the shared seed:
+      `{"move_anim": "swim", "idle_anim": "treading-water"}` with
+      `speed_factor 0.4` — the ground one wades through and treads water in.
+      `deep_water` is the barrier kind: same swim clip, no idle one, because
+      nobody stands in it (`passable: false`).
   [9] TWO MORE whitelisted meta keys since the micro-relief decision
       (2026-08-13): `relief_amplitude_m` and `relief_wave_m`, the random
       small hills the world heightfield bakes in wherever this kind is
@@ -215,14 +220,26 @@ check("a meta without it is untouched", meta_of({"note": "free form"}),
 check("...and the neighbours of a move_anim survive",
       meta_of({"move_anim": " crawl ", "note": "x"}),
       {"move_anim": "crawl", "note": "x"})
-check("water carries it in the shared seed",
+check("an idle_anim follows the same shape rule",
+      meta_of({"idle_anim": "  treading-water  "}),
+      {"idle_anim": "treading-water"})
+check("...capped at 40 characters too",
+      meta_of({"idle_anim": "t" * 45}), {"idle_anim": "t" * 40})
+check("...and an empty one leaves no key behind either",
+      meta_of({"idle_anim": "   "}), {})
+check("the two are independent, and neighbours survive both",
+      meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
+               "note": "x"}),
+      {"move_anim": "swim", "idle_anim": "treading-water", "note": "x"})
+check("water carries both in the shared seed",
       (terrain_types.get_type("water") or {}).get("meta"),
-      {"move_anim": "swim"})
+      {"move_anim": "swim", "idle_anim": "treading-water"})
 check("...at the pace of a ground one wades through",
       (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
 check("...and it is walked into, not refused",
       (terrain_types.get_type("water") or {}).get("passable"), True)
-check("the barrier kind carries the same clip and pace",
+check("the barrier kind carries the same MOVE clip and pace — and no idle "
+      "one, nobody stands in it",
       ((terrain_types.get_type("deep_water") or {}).get("meta"),
        (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
       ({"move_anim": "swim"}, 0.4))

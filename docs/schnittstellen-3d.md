@@ -576,11 +576,11 @@ immer sichtbar, nur Locations verstecken sich.
   (`terrain_query.default_kind()`): fehlender ODER leerer Schlüssel
   ergibt `"grass"`. Der Endpoint darf nie eine andere Vorgabe melden, als
   die Laufregeln anwenden.
-- **`passable`, `speed_factor` und `meta.move_anim` kommen AUSSCHLIESSLICH
-  aus dem Typen-Katalog** — nie aus der Fläche, nie aus einer
+- **`passable`, `speed_factor`, `meta.move_anim` und `meta.idle_anim` kommen
+  AUSSCHLIESSLICH aus dem Typen-Katalog** — nie aus der Fläche, nie aus einer
   Client-Tabelle, nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ
   nachträglich gelöscht) gilt als begehbar mit Faktor 1,0 und ohne
-  Bewegungs-Clip: ein Loch im Katalog darf niemanden stranden lassen.
+  Boden-Clips: ein Loch im Katalog darf niemanden stranden lassen.
 - **`passable` beurteilt die WILDNIS, nicht das Innere einer platzierten
   Location** (Entscheidung 2026-08-13, „Footprint gewinnt", Gate-Kette in
   § A15). Innerhalb eines Fußabdrucks entfällt das Gelände-Verbot ganz —
@@ -588,8 +588,8 @@ immer sichtbar, nur Locations verstecken sich.
   Öffnungen und Regeln. Ein Renderer, der die Figur selbst hält, MUSS es
   genauso machen — sonst weigert sich das Bild zu laufen, wo der Server
   jede Meldung annimmt.
-- **`speed_factor` und `meta.move_anim` gelten SO WEIT, WIE DER HIMMEL
-  REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in Runde 2
+- **`speed_factor`, `meta.move_anim` und `meta.idle_anim` gelten SO WEIT, WIE
+  DER HIMMEL REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in Runde 2
   entschieden). Drei Orte, von innen nach außen gefragt:
 
   | Wo die Figur steht | Gilt das Gelände? |
@@ -604,14 +604,14 @@ immer sichtbar, nur Locations verstecken sich.
   Stelle: Faktor `<= 0` in einer Flächen-Location gilt als 1,0** — eine 0 ist
   kein Tempo, sondern ein „dieser Boden war nie zum Begehen gemeint" (Fels),
   und wer dort einen Ort hinsetzt, erklärt ihn für begehbar. **Neutral heißt
-  immer: Tempo 1,0 UND kein `move_anim`** — durch eine geflieste Halle im See
-  schwimmt niemand.
+  immer: Tempo 1,0 UND keiner der beiden Boden-Clips** — durch eine geflieste
+  Halle im See schwimmt niemand, und niemand tritt darin Wasser.
 
   Die zwei Regeln stehen einmal je Sprache: `terrain_query.ground_scope` +
   `terrain_query.effective_speed_factor` (Server, auch fürs NPC-Routing und
   die Reisezeit — dort ist die Raum-Hälfte immer `None`, eine Route läuft
   zwischen den Orten) und `game/walk.groundScope` + `game/walk.terrainPace`
-  + `game/walk.moveClip` (3D-Client, Klemme 0,25 statt 0,1 — sie schützt
+  + `game/walk.moveClip`/`idleClip` (3D-Client, Klemme 0,25 statt 0,1 — sie schützt
   einen Lauf-SCHRITT vor der Stillstands-Erkennung, nicht eine Kostensumme
   vor der Unendlichkeit). Ob eine Location Fläche ist, beantwortet
   `world_geometry.is_area_location` bzw. `scene/tiles.isAreaLocation` — aus
@@ -624,9 +624,9 @@ immer sichtbar, nur Locations verstecken sich.
   `color` (`#rrggbb`) die Farbe der 2D-Schemakarte. `kind` SOLL auf eine
   Oberflächen-Art (§ A9) passen, damit der 3D-Boden eine echte Textur
   bekommt — Konvention, nicht erzwungen.
-- `types[].meta` ist **frei-form mit GENAU EINEM vertraglichen Schlüssel**:
-  `move_anim` (§ A9). Was auf einem Boden WÄCHST, hängt seit Befund B17 an
-  der Fläche, nicht an der Art; eine alte `meta.scatter` an einem Typ liegt
+- `types[].meta` ist **frei-form mit GENAU ZWEI vertraglichen Schlüsseln**:
+  `move_anim` und `idle_anim` (§ A9). Was auf einem Boden WÄCHST, hängt seit
+  Befund B17 an der Fläche, nicht an der Art; eine alte `meta.scatter` an einem Typ liegt
   tot in der DB.
 
 **`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
@@ -1204,7 +1204,7 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
 - **`move_anim` — der Clip, mit dem man über einen Boden kommt** (Befund 3
   der E8-Sichtabnahme, 2026-08-13). Ein Gelände-TYP (§ A1.5, nicht die
   Oberflächen-Bibliothek) darf in `meta.move_anim` eine Animations-Art
-  nennen; der Server whitelistet genau diesen einen `meta`-Schlüssel
+  nennen; der Server whitelistet diesen `meta`-Schlüssel
   (getrimmter String, höchstens 40 Zeichen wie eine `kind`, leer = Schlüssel
   weg — „keine Animation" ist nie ein leerer String).
 
@@ -1217,14 +1217,27 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Reisender — **auf einem obersten Gelände mit `move_anim`, spielt sie
   diesen Clip statt `walk`/`run`**, so weit wie die Gelände-Regel dort reicht
   (§ A1.5: Wildnis und offene Orte ja, Gebäude und Innenräume nein); es gibt
-  kein Rennen darüber, ein See wird nicht gesprintet.
-  **Im STEHEN ändert sich nichts**: dort gewinnen
-  weiterhin `activity_animation` bzw. die Aktivitäts-Heuristik (§ A8). Die
+  kein Rennen darüber, ein See wird nicht gesprintet. Die
   Art gehört ins OFFENE Clip-Vokabular (§ A8) und wird nirgends gegen eine
   Liste geprüft; fehlt der Clip am Modell, greift die normale
   Ersatzkette (`swim` → `walk` → `idle`). Der Client bezieht die Antwort aus
   EINER Stelle für alle Figuren — sonst tanzen Avatar und NPC im selben
   Wasser verschieden.
+- **`idle_anim` — der Clip, mit dem man auf einem Boden WARTET** (Wasser-Runde
+  der Abnahme, 2026-08-13). Derselbe Vertrag für den Stand: ein zweiter
+  whitelisteter `meta`-Schlüssel mit derselben Formregel, und **steht eine
+  Figur auf einem obersten Gelände mit `idle_anim`, spielt sie diesen Clip
+  statt ihres eigenen Steh-Clips** — so weit wie dieselbe Gelände-Regel reicht
+  (in einer gefliesten Halle im See wird kein Wasser getreten). Nur wo der Boden
+  nichts sagt, gilt die alte Ordnung: `activity_animation` vor der
+  Aktivitäts-Heuristik (§ A8). Die Boden-Absenkung des Clips (die Figur steht
+  auf dem Boden, nicht auf ihrer autorierten Wasserlinie) gilt für BEIDE
+  Boden-Clips; `treading-water` fällt am Modell ohne ihn über `idle` zurück.
+
+  ```
+  types: [ …, {kind: "water", …, "meta": {"move_anim": "swim",
+                                          "idle_anim": "treading-water"}} ]
+  ```
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 
@@ -1704,9 +1717,10 @@ Beschaffenheit — aber nur dort, wo der Ort selbst offener Grund ist: ein Dorf
 auf einem See wird durchwatet und mit `move_anim` „swim" auch so animiert,
 eine Halle auf demselben See nicht. Die volle Reichweiten-Tabelle (Raum →
 Fußabdruck → Wildnis) steht in § A1.5; neutral heißt dort immer Tempo 1,0 UND
-kein Bewegungs-Clip. Server und Client tragen beide Regeln je einmal
+keiner der beiden Boden-Clips (`move_anim` im Gehen, `idle_anim` im Stehen).
+Server und Client tragen beide Regeln je einmal
 (`terrain_query.ground_scope`/`effective_speed_factor` bzw.
-`game/walk.groundScope`/`terrainPace`/`moveClip`); die Reisezeit
+`game/walk.groundScope`/`terrainPace`/`moveClip`/`idleClip`); die Reisezeit
 (`segment_costs` → Reise-Engine) und der Schritt des Avatars erben sie
 automatisch. **Die Gate-Kette oben ändert sich dadurch NICHT** — das Tempo
 ist keine Erlaubnis, es wird nirgends geprüft, es wird gelaufen.

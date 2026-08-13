@@ -274,8 +274,8 @@ async function main() {
     /** Lowest mesh point of the FIGURE over its root, in world metres — the
      *  number the finding is about. Own sampling (every 17th vertex, 25 poses),
      *  independent of the module's budget. */
-    function figureMinY(kind, terrainMove) {
-      figure.play(kind, terrainMove);
+    function figureMinY(kind, terrainClip) {
+      figure.play(kind, terrainClip);
       for (let i = 0; i < 20; i++) figure.update(0.05);   // let the crossfade end
       let min = Infinity;
       for (let f = 0; f < 25; f++) {

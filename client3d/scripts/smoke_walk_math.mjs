@@ -145,6 +145,33 @@
  * A kind no model carries is not this file's problem: `figures.CLIP_FALLBACK`
  * maps swim -> walk and everything unknown ends at idle.
  *
+ * --- idleClip: the ground names the STANDING clip too (water round) --------
+ * The acceptance finding of 2026-08-13: a figure standing still in a lake
+ * played its standing clip and stood ON the water. A type may therefore carry
+ * a second clip, `meta.idle_anim` (§ A9, `treading-water` on water), and it is
+ * the same contract as `move_anim` with the same reach — literally the same
+ * helper inside `walk.ts`, so the two can never start reaching differently.
+ * `''` is the answer "the ground says nothing", and only then does the
+ * caller's own standing clip stand (`npc.animation` or the activity heuristic,
+ * § A8) — this function never invents `idle` itself, which is what keeps
+ * "no terrain idle" distinguishable from "the terrain wants idle".
+ *   idleClip('treading-water', 'wilderness')  -> 'treading-water'
+ *   idleClip('treading-water', 'open')        -> 'treading-water'
+ *   idleClip('  treading-water  ', 'open')    -> 'treading-water'  (trimmed)
+ *   idleClip('treading-water', 'built')       -> ''   <- the reach, see below
+ *   idleClip('', 'wilderness')                -> ''
+ *   idleClip('   ', 'wilderness')             -> ''
+ * RED COUNTER-PROBE, the one that matters: a rule WITHOUT the built-scope
+ * gate (`(a || '').trim()` alone) answers 'treading-water' inside a tiled hall
+ * standing in that lake — a figure treading water on a floor. The reach is
+ * not decoration, it is the difference between the two answers.
+ * The npcs.ts side of it, derived by hand and checked below as a table: the
+ * standing branch plays `idleClip(...) || standingClip`, so the ground wins
+ * where it speaks and nothing changes where it does not, and the SECOND
+ * argument of `Figure.play` (the clip-ground drop gate) is
+ * `moving || !!groundIdle` — `treading-water` is authored on the water line
+ * exactly like `swim` and has to be dropped onto the ground the same way.
+ *
  * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
  * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
  * exact mirror of `relief.slope_blocks`. The SLOPE limit holds at every
@@ -709,7 +736,7 @@ async function main() {
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
-    moveClip, groundScope, MIN_PACE, MOVE_EPS_M } = walk;
+    moveClip, idleClip, groundScope, MIN_PACE, MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
@@ -945,6 +972,49 @@ async function main() {
     check('without one, walking is walking', moveClip('', false, 'wilderness'), 'walk');
     check('...and running is running', moveClip('', true, 'wilderness'), 'run');
     check('a blank one is no one', moveClip('   ', true, 'open'), 'run');
+  }
+
+  console.log('idleClip — and it may name the standing one as well');
+  {
+    check('water is trodden, not stood on',
+      idleClip('treading-water', 'wilderness'), 'treading-water');
+    check('...in an open place too', idleClip('treading-water', 'open'),
+      'treading-water');
+    check('the kind is trimmed', idleClip('  treading-water  ', 'open'),
+      'treading-water');
+    check('THE REACH: a built place names no clip at all',
+      idleClip('treading-water', 'built'), '');
+    check('without one the ground says NOTHING — never an idle of its own',
+      idleClip('', 'wilderness'), '');
+    check('...and a blank one is no one either',
+      idleClip('   ', 'open'), '');
+    // RED COUNTER-PROBE: the same rule without the scope gate. It treads
+    // water on the tiled floor of a hall standing in the lake.
+    const ungated = (a) => (a || '').trim();
+    check('RED: without the built gate the hall is trodden too',
+      ungated('treading-water'), 'treading-water');
+    check('...while the rule in force leaves it alone',
+      idleClip('treading-water', 'built'), '');
+    check('...and both agree out in the wilderness',
+      ungated('treading-water'), idleClip('treading-water', 'wilderness'));
+
+    // The npcs.ts standing branch as a TABLE — the ground wins where it
+    // speaks, the standing clip stands where it does not, and the drop gate
+    // follows the ground and nothing else.
+    const standing = (idleAnim, scope, standingClip) => {
+      const groundIdle = idleClip(idleAnim, scope);
+      return { kind: groundIdle || standingClip, drop: !!groundIdle };
+    };
+    check('standing in the lake: the ground wins, and the drop is gated on',
+      standing('treading-water', 'wilderness', 'sit'),
+      { kind: 'treading-water', drop: true });
+    check('...the same lake under a roof: the activity clip stands, no drop',
+      standing('treading-water', 'built', 'sit'),
+      { kind: 'sit', drop: false });
+    check('a ground that names nothing changes nothing',
+      standing('', 'wilderness', 'sit'), { kind: 'sit', drop: false });
+    check('...not even the plain idle of a figure without an activity',
+      standing('', 'open', 'idle'), { kind: 'idle', drop: false });
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

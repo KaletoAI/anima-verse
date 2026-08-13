@@ -490,10 +490,11 @@ async function startApp(username: string, role: string) {
   // lookup for every figure, avatar included, out of the ONE terrain payload
   // — together with how far that rule reaches at the point (§ A1.5), which is
   // why the footprints and rooms are asked here and not in the manager.
-  npcs.setTerrainMove((x, z) => ({
-    anim: terrainGround.typeAt(x, z).move_anim,
-    scope: groundScopeAt(x, z),
-  }));
+  npcs.setTerrainMove((x, z) => {
+    const type = terrainGround.typeAt(x, z);
+    return { anim: type.move_anim, idle: type.idle_anim,
+      scope: groundScopeAt(x, z) };
+  });
   engine.scene.add(npcs.group);
   // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
   figures.onModelReady = (charName) => {
