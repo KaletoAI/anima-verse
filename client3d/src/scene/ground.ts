@@ -1057,9 +1057,13 @@ export function createGround(): Ground {
       // to every scene that places it; patching it here would set them all
       // waving. The clone keeps the same cache key, so the extra material
       // costs no extra program.
-      const material = prop.sway > 0
+      // Whatever this tier already has wins, exactly as the geometry above:
+      // two loads of one URL can be in flight at once (a band crossed twice
+      // while the first was travelling), and a second clone would replace the
+      // first in the ledger with nobody left to free it.
+      const material = prop.mats.get(url) ?? (prop.sway > 0
         ? (mesh.material as THREE.Material).clone()
-        : (mesh.material as THREE.Material);
+        : (mesh.material as THREE.Material));
       // CENTRAL, in the ONE place a tier is mounted: a swap replaces the
       // material, so a patch applied anywhere else would be lost the first
       // time the camera crossed the band.

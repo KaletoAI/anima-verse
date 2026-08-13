@@ -640,7 +640,7 @@ async function main() {
   check('…the tuft material of every entry is patched',
     /applySway\(mat, sway, h\);/.test(groundSrc), true);
   check('…a swaying prop draws through a CLONE of the cached GLB material',
-    /prop\.sway > 0\n\s*\? \(mesh\.material as THREE\.Material\)\.clone\(\)/.test(groundSrc),
+    /prop\.sway > 0\n?\s*\? \(mesh\.material as THREE\.Material\)\.clone\(\)/.test(groundSrc),
     true);
   check('…and the patch is applied where a tier is MOUNTED (showTier)',
     /applySway\(material, prop\.sway, prop\.targetH\);/.test(groundSrc), true);
