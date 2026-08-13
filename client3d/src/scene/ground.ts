@@ -728,7 +728,13 @@ export function createGround(): Ground {
       });
       if (!points.length) return;
 
-      const h = Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M;
+      // An entry WITH a model gets its cone at the height the mesh will have —
+      // the cone is that prop's stand-in, and a knee-high one that turns into
+      // an 8 m tree is a pop where the sizes could simply agree. Only the
+      // built-in tuft (no model at all) keeps the hip-high tuft size.
+      const h = entry.model
+        ? scatterTargetH(entry.height_m, entry.prop_height_m)
+        : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
       // v1 prop: a low cone in the kind's own colour. A `model` URL is honoured
       // asynchronously below — the tufts stand immediately and are replaced by
       // the mesh when it arrives, so a slow asset never delays the ground.
