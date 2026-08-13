@@ -295,7 +295,6 @@
           ],
           "in_prompt": true,
           "prompt_label": "Appearance",
-          "default": "{species}",
           "llm_generable": true,
           "rows": 6
         }

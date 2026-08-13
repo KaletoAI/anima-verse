@@ -47,6 +47,17 @@ Those six/four/five tokens are exactly what the body-slot migration bc98b6a
 blocks but left the defaults untouched. This check would have caught it on
 migration day; it runs the historical strings as a counter-probe so a green
 run cannot be green by accident.
+
+Second rule: the appearance PROMPT fields ship no default at all
+------------------------------------------------------------------
+Even a default made purely of living tokens is wrong here, because it does
+not only feed the previews: the form prefill (TemplateSectionForm), the
+world-dev apply seeding (routes/world_dev.py) and the template switch
+(character_ops) all write a default into the stored profile, and
+``build_prompt_section`` renders a stored value into the chat system prompt
+WITHOUT resolving tokens. A seeded "{gender}" would therefore reach the LLM
+literally. human-default.json has always shipped these fields without a
+default; the check pins that for the other templates too.
 """
 import json
 import re
@@ -146,6 +157,20 @@ def main() -> None:
     check("no default references an undeclared token"
           + ("" if not findings else " -> " + " | ".join(findings)),
           not findings)
+
+    # Second rule: no appearance prompt field ships a default at all — a
+    # seeded default lands in the profile and goes unresolved into the chat
+    # system prompt.
+    seeded = []
+    for name in names:
+        for section in load_effective(name).get("sections", []):
+            for field in section.get("fields", []):
+                if (field.get("key") in ("character_appearance",
+                                         "face_appearance")
+                        and field.get("default") is not None):
+                    seeded.append(f"{name}/{field['key']}")
+    check("appearance prompt fields ship no default"
+          + ("" if not seeded else " -> " + ", ".join(seeded)), not seeded)
 
     # Red counter-probe: the historical defaults must still be rejected, with
     # exactly the token sets derived by hand in the docstring.
