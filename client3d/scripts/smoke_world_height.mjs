@@ -51,6 +51,12 @@
  *     column (cols < 2), step 0, and `null`/`undefined`               -> 0
  * (10) THE EMPTY WORLD as the endpoint sends it (rows/cols 0, heights [])
  *      -> 0, and not a crash: a world nobody has shaped is flat.
+ * (11) A RAGGED FIELD — heights [[0, 10], [0]], origin (0, 0), step 4. The
+ *      shape comes from the ARRAY, never from `rows`/`cols`, and a missing
+ *      entry reads as 0: at (2, 2) north = 0·0.5 + 10·0.5 = 5, south = 0,
+ *      both fractions 0.5 -> 2.5. Same number on the Python side (section [8]
+ *      there). And `rows`/`cols` claiming 99 changes nothing: with
+ *      [[0, 10], [0, 10]] the point (2, 2) is 5.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -121,6 +127,12 @@ check('step 0', sampleWorldHeight(
   0, 0), 0);
 check('the empty world', sampleWorldHeight(
   { origin_x: 0, origin_z: 0, step_m: 4, rows: 0, cols: 0, heights: [] }, 0, 0), 0);
+check('a ragged row is a height, not a crash', sampleWorldHeight(
+  { origin_x: 0, origin_z: 0, step_m: 4, rows: 2, cols: 2, heights: [[0, 10], [0]] },
+  2, 2), 2.5);
+check('rows/cols lying about the array', sampleWorldHeight(
+  { origin_x: 0, origin_z: 0, step_m: 4, rows: 99, cols: 99, heights: [[0, 10], [0, 10]] },
+  2, 2), 5);
 check('no field at all', sampleWorldHeight(null, 0, 0), 0);
 check('undefined', sampleWorldHeight(undefined, 12, 34), 0);
 

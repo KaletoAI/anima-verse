@@ -76,13 +76,22 @@ def sample_height(field: Optional[Dict[str, Any]], x: float, z: float) -> float:
     points OUTSIDE every authored area, so the whole border is 0 and clamping
     means "the flat world". A field without at least 2 × 2 points carries no
     relief at all and answers 0.0.
+
+    THE SHAPE IS TAKEN FROM THE ARRAY, not from ``rows``/``cols`` — those two
+    are a description of the data and this function is on the walk-report path.
+    A row shorter than the rest (a hand-edited row, a truncated write) must
+    make a walker sample a slightly wrong height, never turn ``POST /play/pos``
+    into a 500. The client sampler reads the array the same way.
     """
     if not field:
         return 0.0
     heights = field.get("heights") or []
-    rows = int(field.get("rows") or len(heights))
-    cols = int(field.get("cols") or (len(heights[0]) if heights else 0))
-    step = float(field.get("step_m") or 0.0)
+    rows = len(heights)
+    cols = len(heights[0]) if rows and isinstance(heights[0], list) else 0
+    try:
+        step = float(field.get("step_m") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
     if rows < 2 or cols < 2 or step <= 0:
         return 0.0
     fx = (float(x) - float(field.get("origin_x") or 0.0)) / step
@@ -93,10 +102,17 @@ def sample_height(field: Optional[Dict[str, Any]], x: float, z: float) -> float:
     j = min(int(math.floor(fz)), rows - 2)
     tx = fx - i
     tz = fz - j
+
+    def _at(row: Any, k: int) -> float:
+        try:
+            return float(row[k])
+        except (TypeError, ValueError, IndexError, KeyError):
+            return 0.0
+
     row_n = heights[j]
     row_s = heights[j + 1]
-    north = row_n[i] * (1.0 - tx) + row_n[i + 1] * tx
-    south = row_s[i] * (1.0 - tx) + row_s[i + 1] * tx
+    north = _at(row_n, i) * (1.0 - tx) + _at(row_n, i + 1) * tx
+    south = _at(row_s, i) * (1.0 - tx) + _at(row_s, i + 1) * tx
     return north * (1.0 - tz) + south * tz
 
 
@@ -171,6 +187,16 @@ def _step_for(bounds: Tuple[float, float, float, float]) -> float:
         cols = _axis_points(min_x, max_x, step)
         rows = _axis_points(min_z, max_z, step)
         if rows * cols <= MAX_POINTS or step >= 1024:
+            if step > DEFAULT_STEP_M:
+                # Said out loud: the resolution drops silently otherwise, and
+                # it hangs on the UNION box of all height areas — ONE hill
+                # painted far out coarsens the relief of the whole world.
+                logger.info(
+                    "Heightfield coarsened to a %s m step (%d x %d points): "
+                    "the authored areas span %.0f x %.0f m, which is past the "
+                    "%d-point budget at %s m",
+                    step, rows, cols, max_x - min_x, max_z - min_z,
+                    MAX_POINTS, DEFAULT_STEP_M)
             return step
         step *= 2.0
 
@@ -193,11 +219,13 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     """The authored areas as a grid — pure, deterministic, no DB.
 
     Per support point the areas that COVER it are compared and the STRONGEST
-    deflection from the flat world wins: the largest ``|value|``, ties going to
-    the greater height and then to the id, so the answer never depends on row
-    order. For two hills that is exactly "the higher one wins"; it is written
-    as a deflection so that a hollow (negative ``height_m``) is not silently
-    beaten by the 0 of the flat world around it.
+    deflection from the flat world wins: the largest ``|value|``; at equal
+    strength the greater value (a hill over a hollow of the same depth), and a
+    true tie keeps what is already there. ``areas`` arrives in a stable order
+    (insert order), so a tie is decided reproducibly rather than by whatever
+    the DB returned first. For two hills the rule is exactly "the higher one
+    wins"; it is written as a deflection so that a hollow (negative
+    ``height_m``) is not silently beaten by the 0 of the flat world around it.
 
     A point no area covers is 0.0 — the unpainted world is flat, and there is
     no "default height" to configure.
@@ -256,37 +284,57 @@ def rasterize(areas: Sequence[Dict[str, Any]],
 
 # ── The cached world field ──────────────────────────────────────────────
 
-#: (signature, field) of the field this process last built or loaded. The
-#: writers drop it (``app/models/heightfield`` calls :func:`invalidate_cache`
-#: on every save/delete), so the hot path — ``ground_y`` on every walk report
-#: and in every nav loop — never re-reads the areas just to hash them.
-_CACHE: Optional[Tuple[str, Dict[str, Any]]] = None
+#: Bumped by :func:`invalidate_cache`, i.e. by every authoring write. It is
+#: what a cache hit is checked against, and checking it costs an integer
+#: comparison — deliberately NOT the signature, which is a full read of every
+#: area plus an md5 (1.4 ms, measured). ``ground_y`` runs on every walk report
+#: and, from task 4 on, per nav CELL: a signature per call would be seconds per
+#: route. The signature still decides whether the STORED raster may be used —
+#: on a miss, where it costs nothing that matters.
+_GENERATION = 0
+
+#: (generation, field) of the field this process last built or loaded.
+_CACHE: Optional[Tuple[int, Dict[str, Any]]] = None
 
 
 def invalidate_cache() -> None:
-    """Drop the cached field (tests + every authoring write)."""
-    global _CACHE
+    """Drop the cached field (tests + every authoring write).
+
+    THE ONE WAY the cache learns about a change. A writer that goes round
+    ``app/models/heightfield`` — raw SQL against ``height_areas`` — leaves this
+    process on a stale grid until it is called; that is the price of not
+    hashing on the read path, and there is no such writer in the app.
+    """
+    global _GENERATION, _CACHE
+    _GENERATION += 1
     _CACHE = None
 
 
 def get_field() -> Dict[str, Any]:
     """The current world heightfield, cached, with its ``sig``.
 
-    Three levels, cheapest first: the process cache, the raster stored in
-    ``world_heightfield`` (a restart costs no rastering), and finally the
-    raster itself, which is then stored. The stored row is only used when its
-    signature still matches the areas — a grid that no longer describes what is
-    authored is not a cache, it is a lie.
+    Three levels, cheapest first: the process cache (an integer comparison),
+    the raster stored in ``world_heightfield`` (a restart costs no rastering),
+    and finally the raster itself, which is then stored. The stored row is only
+    used when its signature still matches the areas — a grid that no longer
+    describes what is authored is not a cache, it is a lie.
+
+    **The returned dict is SHARED — treat it as read-only.** Every caller gets
+    the very object the cache holds, so mutating it (a plateau pass writing
+    into ``heights``, task 4) would rewrite the world for everyone else and
+    survive until the next authoring write. Build a new grid instead; the
+    payload route only reads.
     """
     global _CACHE
     from app.models import heightfield as store
-    sig = store.height_sig()
     cached = _CACHE
-    if cached is not None and cached[0] == sig:
+    if cached is not None and cached[0] == _GENERATION:
         return cached[1]
+    generation = _GENERATION
+    sig = store.height_sig()
     stored = store.load_grid()
     if stored is not None and stored.get("sig") == sig:
-        _CACHE = (sig, stored)
+        _CACHE = (generation, stored)
         return stored
     field = rasterize(store.list_height_areas())
     field["sig"] = sig
@@ -294,7 +342,7 @@ def get_field() -> Dict[str, Any]:
         store.store_grid(field)
     except Exception as exc:   # a cache that cannot be written is not fatal
         logger.warning("Could not store the rastered heightfield: %s", exc)
-    _CACHE = (sig, field)
+    _CACHE = (generation, field)
     return field
 
 

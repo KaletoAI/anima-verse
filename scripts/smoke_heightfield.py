@@ -83,13 +83,27 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     when the area is deleted (same areas, same signature), and ground_y is 0
     again afterwards — the write-through invalidation, without which the
     world would stay hilly after the hill was erased.
-[6] THE ANCHORED LATTICE. FAR = square (100,0)-(140,40), height 5, falloff 4.
+[6] THE ANCHORED LATTICE — and it has to be checked where it can FAIL.
+    FAR = square (100,0)-(140,40), height 5, falloff 4.
     Rastered ALONE: origin_x = floor(100/4)·4 − 4 = 96.
-    Rastered TOGETHER with a shape 600 m to the west (WEST, (−500,0)-(−460,40)):
-    origin_x = floor(−500/4)·4 − 4 = −504. Different origin, different index —
-    and the SAME height at the same world point, because both origins sit on
-    the 4 m lattice through (0, 0). Checked at (120, 20) (a support point in
-    both) and at (118, 20) (between two, so the bilinear mix is compared too).
+    Rastered TOGETHER with WEST = square (−501,0)-(−461,40), a shape 600 m to
+    the west whose corner is deliberately NOT on the 4 m lattice:
+    origin_x = floor(−501/4)·4 − 4 = −126·4 − 4 = −508. Different origin,
+    different index — and the SAME height at the same world point, because
+    −508 is still a multiple of 4, so both grids sample the very same points.
+
+    MEASURED ON THE FLANK, at (102, 20), and that is the whole point of the
+    case. The support points either side are x = 100 (ON the outline, height 0)
+    and x = 104 (4 m in, height 5·4/4 = 5), and 102 sits exactly between them:
+      0·0.5 + 5·0.5 = 2.5, in BOTH rasters.
+    RED COUNTER-PROBE (run by hand, 2026-08-13): with the naive origin
+    `origin = min − step` the two answers come apart here — alone it is
+    unchanged (100 is a multiple of 4, so the naive origin is also 96, 2.5),
+    but with WEST the origin becomes −505, the neighbours of 102 are 99
+    (outside, 0) and 103 (3 m in, 5·3/4 = 3.75) at fraction 0.75, giving
+    0·0.25 + 3.75·0.75 = 2.8125 ≠ 2.5. A check on a lattice point (120) or in
+    the PLATEAU (118, both neighbours already at full height) passes under that
+    mutant — which is why neither is the measurement.
 [7] COARSENING. A single square (0,0)-(8000,8000) would need
     ceil((8000+4+4)/4)+1 = 2003 points per axis = 4.0 M — past MAX_POINTS
     (120 000). The step doubles until it fits: 8 -> 1003² = 1.0 M, 16 -> 503²
@@ -109,7 +123,26 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
       (100,0) outside east: fx clamps to 2, i = 1, tx 1 -> 0 (border)
       (−100,−100) outside north-west: the corner        -> 0
       a field with a single row (rows < 2) carries no relief -> 0
-[9] ROUTES. POST assigns the id; PUT on an unknown id is 404 and creates
+      A RAGGED FIELD must not raise (a hand-edited or truncated row must cost
+      a slightly wrong height, never a 500 on POST /play/pos): with
+      heights [[0, 10], [0]] the point (2, 2) mixes north = 0·0.5 + 10·0.5 = 5
+      against a south row whose missing entries read as 0 -> 5·0.5 = 2.5. The
+      client sampler answers the same, from the same array shape.
+[9] THE CACHE CONTRACT (review 2026-08-13, findings I1 + I4). Two properties,
+    both of them about WHEN work happens rather than what it computes:
+      * a warm ``get_field()`` returns THE SAME OBJECT — no signature, no DB
+        read, no raster. That is the whole point: ``ground_y`` runs per walk
+        report and (from task 4) per nav cell, and hashing every area per call
+        measured 1.42 ms, i.e. ~14 s for a 10 000-cell route. After the fix the
+        warm call is 0.0016 ms.
+      * the raster is written BY THE WRITE, not by the next reader: right after
+        ``save_height_area`` the stored grid already carries the current
+        signature, without anyone having sampled anything. Rastering costs
+        0.1–0.4 s, and lazily that bill lands on whoever asks next — on a live
+        world the ``POST /play/pos`` of a walker.
+    ``invalidate_cache()`` drops the object again (the next call rebuilds or
+    reloads, so it is a DIFFERENT object with the same content).
+[10] ROUTES. POST assigns the id; PUT on an unknown id is 404 and creates
     NOTHING (the store is an upsert, so a repeated stale PUT would otherwise
     resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
     404 the second time. GET /play/heightfield returns exactly the field plus
@@ -285,18 +318,22 @@ check("deleting twice", store.delete_height_area(saved["id"]), False)
 print("[6] the lattice is anchored at the world origin")
 FAR = {"id": "far", "polygon": square(100, 0, 140, 40),
        "height_m": 5.0, "falloff_m": 4.0}
-WEST = {"id": "west", "polygon": square(-500, 0, -460, 40),
+# Its west corner is NOT a multiple of the step, on purpose: an aligned shape
+# would give the naive origin (min − step) the right answer by accident.
+WEST = {"id": "west", "polygon": square(-501, 0, -461, 40),
         "height_m": 2.0, "falloff_m": 4.0}
 alone = hf.rasterize([FAR])
 grown = hf.rasterize([FAR, WEST])
 check("origin alone", alone["origin_x"], 96.0)
-check("origin after the world grew west", grown["origin_x"], -504.0)
-near("same support point, same height",
-     hf.sample_height(grown, 120, 20), hf.sample_height(alone, 120, 20))
-near("same height between points",
-     hf.sample_height(grown, 118, 20), hf.sample_height(alone, 118, 20))
-near("and it is a real height, not two zeros",
-     hf.sample_height(alone, 120, 20), 5.0)
+check("origin after the world grew west", grown["origin_x"], -508.0)
+check("and it is still on the lattice through (0,0)",
+      grown["origin_x"] % hf.DEFAULT_STEP_M, 0.0)
+# THE measurement: on the FLANK, where a shifted lattice changes the answer.
+near("the flank, rastered alone", hf.sample_height(alone, 102, 20), 2.5)
+near("the flank, after the world grew west",
+     hf.sample_height(grown, 102, 20), 2.5)
+near("and the ramp is really a ramp, not a plateau",
+     hf.sample_height(alone, 104, 20), 5.0)
 
 print("[7] coarsening past the point budget")
 huge = hf.rasterize([{"id": "huge", "polygon": square(0, 0, 8000, 8000),
@@ -323,9 +360,33 @@ near("a single row carries no relief",
 near("the empty world as the endpoint sends it",
      hf.sample_height({"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
                        "rows": 0, "cols": 0, "heights": []}, 0, 0), 0.0)
+near("a ragged row is a height, not a crash",
+     hf.sample_height({"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
+                       "rows": 2, "cols": 2, "heights": [[0, 10], [0]]}, 2, 2), 2.5)
+near("rows/cols lying about the array does not matter",
+     hf.sample_height({"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
+                       "rows": 99, "cols": 99,
+                       "heights": [[0, 10], [0, 10]]}, 2, 2), 5.0)
 near("no field at all", hf.sample_height(None, 0, 0), 0.0)
 
-print("[9] the routes")
+print("[9] the cache contract")
+_cache_area = store.save_height_area({"polygon": square(200, 200, 240, 240),
+                                      "height_m": 6, "falloff_m": 8})
+# I4: the WRITE rastered and stored it — nobody has sampled anything yet.
+_stored = store.load_grid()
+check("the write left a stored raster", _stored is not None, True)
+check("and it is the current one", _stored["sig"], store.height_sig())
+# I1: a warm read is the same object, so it cost neither a hash nor a query.
+check("a warm get_field is the same object",
+      hf.get_field() is hf.get_field(), True)
+_warm = hf.get_field()
+hf.invalidate_cache()
+check("invalidating drops it", hf.get_field() is not _warm, True)
+check("and the content is the same", hf.get_field()["heights"] == _warm["heights"],
+      True)
+store.delete_height_area(_cache_area["id"])
+
+print("[10] the routes")
 from fastapi import HTTPException  # noqa: E402
 from app.routes.world import (delete_height_area_route,  # noqa: E402
                               post_height_area_route, put_height_area_route)

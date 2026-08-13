@@ -173,18 +173,34 @@ def delete_height_area(area_id: str) -> bool:
 
 
 def _invalidate() -> None:
-    """Every write drops the rastered field this process holds.
+    """Every write drops the rastered field — and RE-RASTERS it right here.
 
     HERE and not in the routes: ``ground_y`` is asked on every walk report and
     in every routing loop, so the sampler may not re-hash the areas per call —
     which makes a forgotten invalidation a silently stale world. One writer,
     one place. The nav grid is dropped along with it: its cells carry terrain
     AND (from E8) the ground under them.
+
+    THE RE-RASTER IS THE POINT OF DOING IT HERE. Rastering a big area costs
+    hundreds of milliseconds (0.39 s for a full-budget square, measured), and
+    with a lazy cache that bill lands on whoever asks NEXT — which on a live
+    world is a walker's ``POST /play/pos``, i.e. a figure freezing because
+    somebody else moved a hill. The editing request is already waiting for a
+    round trip and is the honest place to pay it.
+
+    A failed re-raster is not a failed write: the areas are stored, the cache
+    is empty, and the next reader simply builds the grid the old way.
     """
-    from app.core.heightfield import invalidate_cache
+    from app.core.heightfield import get_field, invalidate_cache
     from app.core.nav_grid import invalidate_nav_cache
     invalidate_cache()
     invalidate_nav_cache()
+    try:
+        get_field()
+    except Exception as exc:   # noqa: BLE001 — never fail the write for a cache
+        from app.core.log import get_logger
+        get_logger("heightfield").warning(
+            "Could not re-raster the heightfield after a write: %s", exc)
 
 
 def height_sig() -> str:

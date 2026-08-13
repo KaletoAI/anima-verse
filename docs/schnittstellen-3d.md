@@ -691,7 +691,13 @@ Grenze schieben, nicht die gezeichnete Form kosten): `height_m` auf
 ±50 m, unlesbar/fehlend → 0,0 (eine flache Fläche, die nichts ändert),
 `falloff_m` auf 0…1 000 m — 0 heißt „kein Übergang“, eine Wand an der
 Kontur. Das ist erlaubt (ein Plateau, das man über eine Öffnung betritt);
-der Editor warnt nur, wenn der Anstieg steiler wird als `max_slope_deg`.
+der Editor warnt nur — und zwar gegen BEIDE Lauf-Grenzwerte, nicht nur gegen
+`max_slope_deg`: eine Rampe hat die feste Steigung `|height_m| / falloff_m`,
+und begehbar ist sie, solange die unter `min(tan(max_slope_deg),
+max_step_height_m / 1 m)` bleibt. Bei den Vorgaben ist die STUFE die härtere
+Schranke (0,4 gegen tan 40° = 0,84); wer nur gegen die Steigung warnt, nennt
+Rampen begehbar, auf denen der Server jede kurze Meldung ablehnt (Review
+2026-08-13).
 
 ### A1.8 Was aus dem alten § A1 weitergilt (Innenszene)
 
@@ -1795,6 +1801,14 @@ gewinnt“; als Auslenkung formuliert, damit eine **Senke** (negatives
 Deterministisch: dieselben Flächen ergeben dasselbe Gitter, auf jeder
 Maschine.
 
+**Bekannte Autorierungsgrenze dieser Regel** (Entscheid 2026-08-13, bewusst
+so): eine schwächere Fläche kann sich nicht RELATIV in eine stärkere
+einschneiden — ein 2-m-Graben quer über ein 9-m-Plateau bleibt Plateau, weil
+9 stärker auslenkt als 2. Wer eine Mulde im Hochland will, autoriert sie als
+eigene Fläche mit der ABSOLUTEN Höhe (7 m), nicht als Differenz. Die
+Planierung unter Fußabdrücken (T4) braucht das nicht: sie ist ein eigener
+Durchgang NACH der Rasterung und gewinnt ohnehin.
+
 **Das Gitter hängt am WELT-URSPRUNG, nie an `world_bounds`.** Jeder
 Stützpunkt sitzt auf einem Vielfachen von `step_m`, gezählt ab (0, 0):
 
@@ -1819,8 +1833,12 @@ der 3D-Client seine Kacheln aus fester Höhe anrayct.
 
 **Payload** (Auth wie `/play/terrain`: eingeloggter User, **kein** Admin-Gate,
 **nie gefoggt**). Eigener Endpoint aus demselben Grund wie das Gelände — und
-doppelt so triftig, weil ein Gitter größer ist als eine Flächenliste. Geholt
-wird er einmal und neu, wenn `height_sig` in der Weltkarte wechselt.
+doppelt so triftig, weil ein Gitter größer ist als eine Flächenliste:
+**gemessen 0,94 MB unkomprimiert bei vollem Punktbudget** (346 × 346 Punkte,
+1 370 m Kante) und 190 KB für eine Welt aus 40 autorierten Hügeln. Das ist
+nichts für einen 3-Sekunden-Poll und alles für einen Abruf bei
+Signaturwechsel. Geholt wird er einmal und neu, wenn `height_sig` in der
+Weltkarte wechselt.
 
 ```
 { origin_x, origin_z,   # Weltmeter des Stützpunkts heights[0][0]
