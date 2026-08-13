@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
-import { animatablePool, missingClipKinds } from './clipCoverage';
+import { animatablePool, missingClipKinds, resolveClipName } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -528,6 +528,10 @@ const CLIP_FALLBACK: Record<string, ClipKind> = {
   lie: 'sit',
   run: 'walk',
   swim: 'walk',
+  // A clip kind is the whole file name since 2026-08-13, so `swim-idle` is a
+  // kind of its own — and the nearest thing to it on a rig without it is the
+  // swimming stroke, not standing.
+  'swim-idle': 'swim',
   'treading-water': 'idle',
 };
 
@@ -1174,18 +1178,16 @@ export class Figure {
     for (const [kind, clip] of byName) {
       if (kind) this.actions.set(kind, this.mixer.clipAction(clip));
     }
-    // Synonym-Tabelle bleibt als ALIAS-Schicht: ein kanonisches Kind, das kein
-    // Clip wörtlich trägt, wird über seine Synonyme nachgebunden (der Server
-    // liefert z.B. "laying"/"sleep", gemeint ist auch "lie").
+    // The synonym table stays the ALIAS layer: a canonical kind no clip
+    // carries literally is bound through its synonyms (the server delivers
+    // "laying"/"sleep", "lie" is meant as well). Which clip stands in is
+    // `resolveClipName` — EXACT before substring, so a needle never steals a
+    // longer kind that only contains it (`swim` vs `swim-idle`, 2026-08-13).
     for (const [kind, needles] of Object.entries(CLIP_SYNONYMS) as [ClipKind, string[]][]) {
       if (this.actions.has(kind)) continue;
-      for (const needle of needles) {
-        const clip = [...byName.entries()].find(([n]) => n.includes(needle))?.[1];
-        if (clip) {
-          this.actions.set(kind, this.mixer.clipAction(clip));
-          break;
-        }
-      }
+      const name = resolveClipName([...byName.keys()], needles);
+      const clip = name ? byName.get(name) : undefined;
+      if (clip) this.actions.set(kind, this.mixer.clipAction(clip));
     }
     // Einmal je Modell die gebundenen Kinds nennen — das ist der Nachweis,
     // dass das Vokabular offen ist (Abnahme A4).

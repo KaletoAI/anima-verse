@@ -17,12 +17,18 @@ Drop the `.fbx` files straight in — no registration, no config.
 | `lady/walk.fbx` | `walk` | `lady` |
 | `lady/sit_02.fbx` | `sit` | `lady` |
 | `walk_02.fbx` | `walk` | — |
+| `swim-idle.fbx` | `swim-idle` | — |
+| `treading-water.fbx` | `treading-water` | — |
+| `spell_casting.fbx` | `spell_casting` | — |
 
 **`kind`** is the category an activity maps onto (`idle`, `walk`, `run`, `sit`,
-`lie`, `dance`, `wave`, …) and comes from the FILE NAME — the first token of
-the stem. It is what the character is *doing*: the pose presets carry an
-`animation` field (Game-Admin → Poses). A trailing number only distinguishes
-several clips of the same kind; nothing else in the name is read.
+`lie`, `dance`, `wave`, …) and is the FILE NAME without its extension —
+**hyphens and underscores are part of it**. The ONLY thing cut off is a
+trailing `_<number>`, the numbering of several clips of one kind. So
+`swim-idle.fbx` is the kind `swim-idle`, not a second `swim`. It is what the
+character is *doing*: the pose presets carry an `animation` field (Game-Admin →
+Poses), and a terrain type names one in `move_anim`/`idle_anim` — both must
+spell the kind exactly as the file does.
 
 **`set`** is the figure the clip was authored for and comes from the
 DIRECTORY — one subdirectory per set, exactly one level deep. Clips in this

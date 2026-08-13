@@ -229,7 +229,11 @@ async function main() {
     const clip = obj.animations?.[0];
     if (!clip) continue;
     const c = clip.clone();
-    c.name = name.replace(/\.fbx$/, '');
+    // The KIND is the file name minus the extension — the server's
+    // `animation_clips.parse_clip_name` (a trailing `_<number>` would be cut
+    // too; the library carries none). `swim-idle` and `treading-water` are
+    // therefore kinds of their own, not two more `swim`/`treading`.
+    c.name = name.replace(/\.fbx$/, '').replace(/_\d+$/, '');
     library.push(c);
   }
   check('the clip library is readable', library.length > 10,
@@ -327,6 +331,21 @@ async function main() {
     figureMinY('swim', true);
     near(`${label}: a terrain move DOES move the anchor`, inst.position.y,
       anchorY - offsetOf('swim') * scale, 1e-6);
+
+    // The hyphenated kinds are PLAYABLE kinds since the parser fix of
+    // 2026-08-13 — `swim-idle` used to be filed as a second `swim` and
+    // `treading-water` as `treading`, so the kind an author writes into
+    // `idle_anim` was bound to nothing. Proven at the consumer: the figure
+    // reports the kind as bound, and the anchor moves by THAT clip's own
+    // offset, which is how one sees it is not the `swim` clip again.
+    for (const kind of ['swim-idle', 'treading-water']) {
+      figureMinY(kind, true);
+      check(`${label}: ${kind} is a kind of its own and is bound`,
+        figure.root.userData.clipKind === kind && figure.root.userData.clipBound === true,
+        `${figure.root.userData.clipKind}, bound ${figure.root.userData.clipBound}`);
+      near(`${label}: ...and the anchor follows ITS offset`, inst.position.y,
+        anchorY - offsetOf(kind) * scale, 1e-6);
+    }
   }
 
   console.log('\n[3] the library gate against foreign bone conventions');

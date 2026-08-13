@@ -45,6 +45,9 @@ def build_tree() -> None:
     (CLIPS / "male" / "sit.fbx").write_bytes(b"male-sit")
     (CLIPS / "Lady").mkdir()          # directory name is lowercased into the set
     (CLIPS / "Lady" / "dance_02.fbx").write_bytes(b"lady-dance")
+    # A hyphenated kind, so the derived lists prove the rule too and not only
+    # the parser unit above: this is ONE kind called "swim-idle".
+    (CLIPS / "swim-idle.fbx").write_bytes(b"root-swim-idle")
     # Ignored: not a clip extension, hidden file, hidden directory, and a
     # second nesting level (only ONE level of sets exists).
     (CLIPS / "README.md").write_text("not a clip", encoding="utf-8")
@@ -55,12 +58,73 @@ def build_tree() -> None:
     (CLIPS / "male" / "deeper" / "walk.fbx").write_bytes(b"too-deep")
 
 
+def test_parse() -> None:
+    """The KIND rule itself, hand-derived from the layout ``[<set>/]<kind>[_<n>]``.
+
+    The kind is the whole stem minus a trailing ``_<number>``; hyphens and
+    inner underscores BELONG to it. Everything below is derived from that one
+    sentence, not recorded from the output:
+
+        walk.fbx            -> walk              (nothing to cut)
+        walk_2.fbx          -> walk              (the numbering suffix)
+        walk_02.fbx         -> walk              (leading zero, same suffix)
+        Walk_02.FBX         -> walk              (lower-cased, suffix stripped)
+        swim-idle.fbx       -> swim-idle         (a hyphen is part of the kind)
+        treading-water.fbx  -> treading-water
+        spell_casting.fbx   -> spell_casting     (an inner underscore stays)
+        circle-crunch_2.fbx -> circle-crunch     (both rules at once)
+        sit_a.fbx           -> sit_a             (only DIGITS are a numbering)
+        walk2.fbx           -> walk2             (no underscore, no suffix)
+        "  walk .fbx"       -> walk              (the name is trimmed)
+        _7.fbx              -> _7                (cutting it would leave
+                                                  nothing — the stem stands)
+    """
+    print("\n[0] parse_clip_name — the kind is the file name, minus _<number>")
+    for name, want in [
+        ("walk.fbx", "walk"),
+        ("walk_2.fbx", "walk"),
+        ("walk_02.fbx", "walk"),
+        ("Walk_02.FBX", "walk"),
+        ("swim-idle.fbx", "swim-idle"),
+        ("treading-water.fbx", "treading-water"),
+        ("spell_casting.fbx", "spell_casting"),
+        ("circle-crunch_2.fbx", "circle-crunch"),
+        ("sit_a.fbx", "sit_a"),
+        ("walk2.fbx", "walk2"),
+        ("  walk .fbx", "walk"),
+        ("_7.fbx", "_7"),
+    ]:
+        got = ac.parse_clip_name(name)
+        check(f"{name} -> {want}", got == want, got)
+
+    # RED COUNTER-PROBE: the bug this rule replaces was a split at the first
+    # separator. Re-run that old rule here — it must DISAGREE on exactly the
+    # names the finding was about, otherwise this smoke would pass with the
+    # bug still in place.
+    def old_split(filename: str) -> str:
+        import re
+        stem = Path(filename).stem.strip().lower()
+        tokens = [t for t in re.split(r"[\s_\-.]+", stem) if t]
+        return tokens[0] if tokens else stem
+
+    for name, old in [("swim-idle.fbx", "swim"),
+                      ("treading-water.fbx", "treading"),
+                      ("spell_casting.fbx", "spell")]:
+        check(f"RED PROBE: the old split filed {name} as {old!r}",
+              old_split(name) == old and ac.parse_clip_name(name) != old,
+              ac.parse_clip_name(name))
+    check("RED PROBE: and the two rules still agree on walk_2.fbx",
+          old_split("walk_2.fbx") == ac.parse_clip_name("walk_2.fbx") == "walk")
+
+
 def test_discovery() -> None:
     print("\n[1] clip_entries()")
     entries = ac.clip_entries()
     got = sorted((e["set"], e["kind"], e["path"].name) for e in entries)
-    check("exactly the three real clips are found", len(entries) == 3, str(got))
+    check("exactly the four real clips are found", len(entries) == 4, str(got))
     check("the root clip has the empty set", ("", "sit", "sit.fbx") in got)
+    check("a hyphen is part of the kind, not a separator",
+          ("", "swim-idle", "swim-idle.fbx") in got)
     check("a set clip carries its directory", ("male", "sit", "sit.fbx") in got)
     check("the set is lowercased", ("lady", "dance", "dance_02.fbx") in got)
     check("the trailing number is not part of the kind",
@@ -74,10 +138,11 @@ def test_discovery() -> None:
           all("deeper" not in e["path"].parts for e in entries))
 
     print("\n[2] the derived lists")
-    check("clip_kinds", ac.clip_kinds() == ["dance", "sit"], str(ac.clip_kinds()))
+    check("clip_kinds", ac.clip_kinds() == ["dance", "sit", "swim-idle"],
+          str(ac.clip_kinds()))
     check("clip_sets", ac.clip_sets() == ["lady", "male"], str(ac.clip_sets()))
     check("clip_files returns the same files",
-          len(ac.clip_files()) == 3
+          len(ac.clip_files()) == 4
           and all(isinstance(p, Path) for p in ac.clip_files()))
 
     print("\n[3] the same kind exists per set (the chain has something to pick)")
@@ -140,6 +205,7 @@ def main() -> int:
     check("ANIMATION_CLIPS_DIR is honoured",
           paths.get_animation_clips_dir() == CLIPS,
           str(paths.get_animation_clips_dir()))
+    test_parse()
     test_discovery()
     test_listing()
     test_serving()

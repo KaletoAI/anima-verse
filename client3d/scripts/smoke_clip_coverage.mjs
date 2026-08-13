@@ -49,6 +49,37 @@
  *   offered [],                 bound [walk]            -> []
  *
  * ---------------------------------------------------------------------------
+ * (1b) resolveClipName(names, needles) — WHICH clip stands in for a kind
+ * ---------------------------------------------------------------------------
+ * The alias layer of `Figure` (`CLIP_SYNONYMS`), as a rule: the needles rank,
+ * and INSIDE one needle the exact name beats a name that merely contains it.
+ * `''` when nothing stands in.
+ *
+ * The exact step is the fix of 2026-08-13: a clip kind is the whole file name
+ * now, so `swim-idle` and `treading-water` are kinds of their own — and a
+ * substring-only rule would hand a needle `swim` the clip `swim-idle` whenever
+ * that one is listed first, i.e. a swimmer treading water on the spot.
+ *
+ *   ([swim-idle, swim], [swim])            -> swim        exact beats substring
+ *                                                         though swim-idle is
+ *                                                         listed first
+ *   ([swim-idle], [swim])                  -> swim-idle   the substring step
+ *                                                         still reaches (this
+ *                                                         is `walk`→`walking`)
+ *   ([walk, walking], [walk])              -> walk
+ *   ([walking], [walk])                    -> walking
+ *   ([laying, sleep], [lie, lay, sleep])   -> laying      needle 2 hits before
+ *                                                         needle 3 is asked —
+ *                                                         `sleep` was animated
+ *                                                         on a bed
+ *   ([sleep, lie-down], [lie, lay, sleep]) -> lie-down    the FIRST needle
+ *                                                         already has a
+ *                                                         substring hit
+ *   ([" Idle ", walk], [idle])             -> idle        trimmed + lower-cased
+ *   ([walk], [idle, stand])                -> ''          nothing stands in
+ *   ([], [idle])                           -> ''
+ *
+ * ---------------------------------------------------------------------------
  * (2) animatablePool(pool) — WHICH rigs may stand in at random
  * ---------------------------------------------------------------------------
  * The rigs the library fits; all of them when none fits (a figure with three
@@ -102,7 +133,7 @@ function check(label, actual, expected) {
 }
 
 async function main() {
-  const { missingClipKinds, animatablePool } = await loadClipCoverage();
+  const { missingClipKinds, animatablePool, resolveClipName } = await loadClipCoverage();
 
   console.log('missingClipKinds — the kinds a rig cannot play');
   check('library swim missing, own walk/idle bound',
@@ -121,6 +152,34 @@ async function main() {
     missingClipKinds(['swim', 'Swim'], []), ['swim']);
   check('empty library offers nothing to miss',
     missingClipKinds([], ['walk']), []);
+
+  console.log('resolveClipName — exact before substring');
+  check('a needle takes its OWN clip, not the longer kind listed first',
+    resolveClipName(['swim-idle', 'swim'], ['swim']), 'swim');
+  check('...and the substring pass still reaches when there is no exact one',
+    resolveClipName(['swim-idle'], ['swim']), 'swim-idle');
+  check('walk beats walking', resolveClipName(['walk', 'walking'], ['walk']), 'walk');
+  check('walking still stands in for walk',
+    resolveClipName(['walking'], ['walk']), 'walking');
+  check('the needle order ranks: `laying` before the exactly-named `sleep`',
+    resolveClipName(['laying', 'sleep'], ['lie', 'lay', 'sleep']), 'laying');
+  check('...and a substring hit on the FIRST needle ends it',
+    resolveClipName(['sleep', 'lie-down'], ['lie', 'lay', 'sleep']), 'lie-down');
+  check('names are trimmed and lower-cased',
+    resolveClipName([' Idle ', 'walk'], ['idle']), 'idle');
+  check('nothing stands in -> empty', resolveClipName(['walk'], ['idle', 'stand']), '');
+  check('no clips at all -> empty', resolveClipName([], ['idle']), '');
+  // RED COUNTER-PROBE: the substring-only rule this replaces. It must DISAGREE
+  // on the swim case — otherwise the exact pass proves nothing.
+  const substringOnly = (names, needles) => {
+    for (const needle of needles) {
+      const hit = names.find((n) => n.includes(needle));
+      if (hit) return hit;
+    }
+    return '';
+  };
+  check('RED PROBE: substring-only would hand `swim` the swim-idle clip',
+    substringOnly(['swim-idle', 'swim'], ['swim']), 'swim-idle');
 
   console.log('animatablePool — the rigs a character may be drawn from');
   const soldier = { name: 'Soldier', libraryFits: true };

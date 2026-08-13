@@ -5,7 +5,8 @@ requirements: Mixamo FBX "Without Skin", one rig source, 52-bone rig). The
 layout is ``[<set>/]<kind>[_<n>].<ext>``:
 
 * the KIND is the semantic category an activity maps to (walk, sit, …) and
-  comes from the FILE NAME — the first token of the stem;
+  is the WHOLE file name without its extension — only a trailing ``_<number>``
+  is cut off, because that is the numbering of several clips of one kind;
 * the SET is the figure the clip was authored for (female, male, animal,
   lady, …) and comes from the DIRECTORY: one level of subdirectories below
   the clips root, one directory per set. Clips lying in the root itself are
@@ -28,19 +29,25 @@ CLIP_EXTS = (".fbx", ".glb", ".gltf")
 
 
 def parse_clip_name(filename: str) -> str:
-    """The clip KIND from a file name — the first token of the stem, lowercased.
+    """The clip KIND from a file name — the whole stem, lowercased, minus a
+    trailing ``_<number>``.
 
-    Everything after it is decoration: trailing numbers distinguish several
-    clips of the same kind, any other token is ignored. The set is NOT read
-    from the name (it is the directory).
+    ONLY that numbering suffix is decoration; hyphens and inner underscores
+    belong to the kind. Splitting at them was the bug of 2026-08-13: it filed
+    ``swim-idle.fbx`` under "swim" (two clips of one kind, the wrong one played
+    while moving) and ``treading-water.fbx`` under "treading", so the kind an
+    author writes into ``idle_anim`` existed nowhere. The set is NOT read from
+    the name (it is the directory).
 
-        walk.fbx      -> "walk"
-        walk_02.fbx   -> "walk"
-        Sit_A.fbx     -> "sit"
+        walk.fbx             -> "walk"
+        walk_02.fbx          -> "walk"
+        swim-idle.fbx        -> "swim-idle"
+        treading-water.fbx   -> "treading-water"
+        spell_casting.fbx    -> "spell_casting"
+        Sit_A.fbx            -> "sit_a"
     """
     stem = Path(filename).stem.strip().lower()
-    tokens = [t for t in re.split(r"[\s_\-.]+", stem) if t]
-    return tokens[0] if tokens else stem
+    return re.sub(r"_\d+$", "", stem) or stem
 
 
 def clip_entries() -> List[Dict[str, Any]]:
