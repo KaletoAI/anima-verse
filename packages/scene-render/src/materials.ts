@@ -62,12 +62,17 @@ export interface SurfaceMaterialOptions {
 // ── Geteilte Uniforms ───────────────────────────────────────────────────
 // EIN Objekt für alle Wasserflächen: `updateSurfaceMaterials` rückt die Zeit
 // vor, und 50 Kacheln kosten damit so viel wie eine.
-const uTime = { value: 0 }
+/** THE clock of every animated surface, in seconds — exported because water is
+ *  no longer the only thing that moves: the grass sway of the 3D client
+ *  (client3d `scene/ground.ts`) hangs on the SAME object, so one tick per
+ *  frame advances both and a swaying meadow costs no second uniform. Bind it
+ *  under whatever name the shader wants; here it is `uTime`. */
+export const surfaceTimeUniform = { value: 0 }
 const uSky = { value: { r: 0.62, g: 0.78, b: 0.91 } }
 
 /** Zeit vorrücken — einmal pro Frame, aus der Render-Schleife der App. */
 export function updateSurfaceMaterials(dt: number): void {
-  uTime.value = (uTime.value + (dt || 0)) % 3600
+  surfaceTimeUniform.value = (surfaceTimeUniform.value + (dt || 0)) % 3600
 }
 
 /** Himmelsfarbe für den Fresnel-Anteil (0xrrggbb). Der 3D-Client reicht seine
@@ -198,7 +203,7 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
 
   // Kein Typ am Parameter: three leitet ihn aus `onBeforeCompile` her.
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = uTime
+    shader.uniforms.uTime = surfaceTimeUniform
     shader.uniforms.uSky = uSky
     shader.uniforms.uWaveM = uWave
     shader.uniforms.uSpeed = uSpeed

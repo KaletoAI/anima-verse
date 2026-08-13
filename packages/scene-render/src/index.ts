@@ -62,7 +62,7 @@ export {
 export { FIGURE_ROOT_DROP, rootDropFor, pickVariant, MODEL_TIERS } from './types'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
-  disposeSurfaceMaterials } from './materials'
+  disposeSurfaceMaterials, surfaceTimeUniform } from './materials'
 export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {

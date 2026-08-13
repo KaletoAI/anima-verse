@@ -39,7 +39,8 @@ import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry, gridPlate, gridStepFor,
   maxWorldHeightIn, pickVariant, pointInRing, propGroundFit, sampleGroundHeight,
   sampleWorldHeight, scatterInstances, scatterSeed, subdivideOnGrid,
-  surfaceMaterial, worldHeightRange, worldHeightRangeIn } from '@anima/scene-render';
+  surfaceMaterial, surfaceTimeUniform, worldHeightRange,
+  worldHeightRangeIn } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint,
   SurfaceMaterialSpec, WorldHeightField } from '@anima/scene-render';
 import { fetchHeightfield, fetchTerrain } from '../api';
@@ -170,6 +171,112 @@ export function patchHole(mat: THREE.Material): void {
 }
 
 /**
+ * THE WIND (terrain animations, task 2).
+ *
+ * What a ground GROWS may bend: a terrain kind declares `meta.sway_m`, the
+ * maximum sideways deflection of a blade's TIP in metres (§ A9), and every
+ * scatter entry of an area of that kind sways — the built-in tufts as much as
+ * the loaded models. HOW it bends is not authored and never will be: frequency
+ * and wind direction are these two constants, because a catalog of wind
+ * settings is a wind machine, not a meadow.
+ *
+ * The deflection grows QUADRATICALLY with the height above the ground and is
+ * measured against `uSwayRef`, the prop's own height — so the foot stands
+ * still, the tip carries exactly `sway_m`, and an 8 m tree bends as far at its
+ * crown as a tuft does at its blade instead of 100 times as far. That is why
+ * the reference is a per-material uniform and not a constant: it is the one
+ * number that differs between a tuft and a tree, and it must not split the
+ * compiled programs.
+ */
+const SWAY_SPEED = 1.7;
+/** Unit vector, so `sway_m` really is metres — and WORLD-fixed: the instance's
+ *  own yaw is rotated out below, otherwise every blade would bend along its
+ *  own turn and a field would look combed rather than blown. */
+const SWAY_DIR: [number, number] = [0.8, 0.6];
+/** Mirror of the server clamp (`terrain_types.SWAY_MIN/MAX`) — the client
+ *  never trusts a number it did not clamp itself; a hand-edited row must not
+ *  shear a meadow off its ground. */
+const SWAY_MIN_M = 0.01;
+const SWAY_MAX_M = 0.5;
+
+/** The cache key this patch contributes, without its amplitude. Exported so
+ *  the smoke can pin the combined key without carrying a copy of the string. */
+export const SWAY_CACHE_KEY = 'ground-sway';
+
+/** The key of ONE amplitude: the deflection is a GLSL literal, so two values
+ *  are two programs — and two areas of the same kind are one. Quantised to the
+ *  two decimals the catalog stores, which is what keeps that number small. */
+export function swayCacheKey(swayM: number): string {
+  return `${SWAY_CACHE_KEY}@${swayM.toFixed(2)}`;
+}
+
+/** Materials that already bend. Same guard as `holePatched`, same reason: the
+ *  patch CHAINS, so applying it twice would declare its locals twice. */
+const swayPatched = new WeakSet<THREE.Material>();
+
+/**
+ * Let a scatter material bend in the wind.
+ *
+ * CHAINED, never assigned — the rule the hole patch had to learn (see
+ * `patchHole`): one slot, and whoever assigns into it throws away what the
+ * previous writer built. Nothing in the scatter path patches before this
+ * today, and that is exactly why the discipline has to be in the code and not
+ * in the caller's memory.
+ *
+ * `refH` is the height the prop is scaled to, i.e. the y at which the
+ * deflection reaches `swayM`. A value that says nothing (no model height yet)
+ * falls back to one metre rather than dividing by zero.
+ *
+ * The whole displacement rides on `#include <begin_vertex>`: `transformed` is
+ * still in OBJECT coordinates there and the geometry is grounded (B16), so its
+ * y IS the height above the ground — no varying, no second anchor. A missing
+ * anchor (a three upgrade) simply leaves the prop standing still.
+ */
+export function applySway(mat: THREE.Material, swayM: number,
+                          refH: number): void {
+  const amp = Math.round(Math.min(Math.max(swayM, 0), SWAY_MAX_M) * 100) / 100;
+  if (!(amp >= SWAY_MIN_M)) return;
+  if (swayPatched.has(mat)) return;
+  swayPatched.add(mat);
+  const swayRef = { value: refH > 0 ? refH : 1 };
+  const prev = mat.onBeforeCompile;
+  // Only a patch with a key of its OWN is worth carrying — three's default
+  // returns `onBeforeCompile.toString()`. Read before the slot is rewritten.
+  const prevKey = Object.prototype.hasOwnProperty.call(mat, 'customProgramCacheKey')
+    ? String(mat.customProgramCacheKey())
+    : '';
+  const key = swayCacheKey(amp);
+  const anchor = '#include <begin_vertex>';
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev.call(mat, shader, renderer);
+    shader.uniforms.uTime = surfaceTimeUniform;
+    shader.uniforms.uSwayRef = swayRef;
+    if (!shader.vertexShader.includes(anchor)) return;
+    // The phase comes out of the instance's own position (`instanceMatrix`
+    // column 3 is its translation), so every blade of one field starts
+    // somewhere else in the same wave — no second attribute, and it survives
+    // every tier swap because the matrices are never rewritten. Without
+    // instancing there is one prop and no phase to spread.
+    const bend = `
+  {
+    #ifdef USE_INSTANCING
+      vec3 swayDir = normalize( ( vec4( ${SWAY_DIR[0]}, 0.0, ${SWAY_DIR[1]}, 0.0 ) * instanceMatrix ).xyz );
+      float swayPhase = fract( sin( dot( instanceMatrix[ 3 ].xz, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ) * 6.2831853;
+    #else
+      vec3 swayDir = vec3( ${SWAY_DIR[0]}, 0.0, ${SWAY_DIR[1]} );
+      float swayPhase = 0.0;
+    #endif
+    float swayUp = pow( max( transformed.y, 0.0 ) / uSwayRef, 2.0 );
+    transformed.xz += ${amp.toFixed(2)} * swayUp * sin( uTime * ${SWAY_SPEED.toFixed(2)} + swayPhase ) * swayDir.xz;
+  }
+`;
+    shader.vertexShader = `uniform float uTime;\nuniform float uSwayRef;\n${shader.vertexShader}`
+      .replace(anchor, `${anchor}\n${bend}`);
+  };
+  mat.customProgramCacheKey = () => (prevKey ? `${prevKey}+${key}` : key);
+}
+
+/**
  * A loaded prop mesh as a geometry that STANDS on the ground (finding B16).
  *
  * Two things were wrong with handing `mesh.geometry` to the instance as it
@@ -254,6 +361,11 @@ interface ScatterProp {
   model: string;
   /** target height for `groundedGeometry`, already defaulted */
   targetH: number;
+  /** `meta.sway_m` of the AREA's kind, or 0 — how far this prop bends in the
+   *  wind. It hangs on the area, so every entry of one meadow sways together
+   *  or not at all, and it is kept here because `showTier` has to bend the
+   *  material of every tier it mounts. */
+  sway: number;
   /** area centre, handed to `loadGlb` so the download queue serves the props
    *  the camera is looking at first */
   near: THREE.Vector3;
@@ -269,8 +381,12 @@ interface ScatterProp {
    *  of them at most, the hysteresis makes swaps rare, and re-deriving one
    *  means re-uploading a vertex buffer for a mesh we already had. */
   owned: Map<string, THREE.BufferGeometry>;
-  /** the material that came with each loaded tier. NOT owned — it belongs to
-   *  the GLB in `loadGlb`'s cache, which several areas share. */
+  /** the material each loaded tier is drawn with. Whose it is depends on
+   *  `sway`: standing still it is the GLB's own, out of `loadGlb`'s cache and
+   *  shared with every other area — never disposed here. Swaying, it is a
+   *  CLONE of it carrying the shader patch, ours, and freed with the area:
+   *  patching the cached material would set every scene that ever placed this
+   *  prop waving, wind or no wind. */
   mats: Map<string, THREE.Material>;
 }
 
@@ -594,6 +710,16 @@ export function createGround(): Ground {
     return catalog.get((kind || '').toLowerCase())?.color || TERRAIN_FALLBACK_COLOR;
   }
 
+  /** How far what grows on a kind bends, in metres — `meta.sway_m` (§ A9), or
+   *  0 for a ground whose scatter stands still. Clamped like the server
+   *  clamps it, because junk in `meta` must cost a still meadow and never a
+   *  sheared one. */
+  function swayFor(kind: string): number {
+    const raw = Number(catalog.get((kind || '').toLowerCase())?.meta?.sway_m);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.min(Math.max(raw, SWAY_MIN_M), SWAY_MAX_M);
+  }
+
   /**
    * Material of one ground kind.
    *
@@ -754,6 +880,10 @@ export function createGround(): Ground {
                         centre: THREE.Vector3, dist: number, tier: ScatterTier
   ): ScatterProp[] {
     const out: ScatterProp[] = [];
+    // ONE wind question per area, not per entry: the deflection hangs on the
+    // KIND of the painted shape (§ A9), so a meadow's tufts and its trees can
+    // never disagree about whether it is blowing.
+    const sway = swayFor(area.kind);
     readScatterList(area).forEach((entry, index) => {
       const points = scatterInstances({
         ring,
@@ -781,6 +911,9 @@ export function createGround(): Ground {
         color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
         roughness: 0.95,
       });
+      // The tuft's material is this entry's own, so it is simply patched —
+      // the reference height is the cone's, whose tip is what bends.
+      applySway(mat, sway, h);
       sink.push(geo, mat);
       // Typed on the BASE classes: `showTier` swaps geometry and material for
       // the loaded ones, which are not a cone and not this material.
@@ -821,6 +954,7 @@ export function createGround(): Ground {
         // The authored height wins, the prop's real one governs when none was
         // authored, the flat fallback is the last resort (§ A9).
         targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
+        sway,
         near: centre,
         wantUrl: '',
         shownUrl: '',
@@ -918,10 +1052,22 @@ export function createGround(): Ground {
       // the prop and `clearAreas` frees it with the instance. One per tier
       // URL: the map is the ledger of what has to be freed.
       prop.owned.set(url, geometry);
-      prop.mats.set(url, mesh.material as THREE.Material);
+      // THE MATERIAL OF A SWAYING PROP IS A CLONE. `loadGlb` caches the file,
+      // so `mesh.material` belongs to every area that scatters this tree and
+      // to every scene that places it; patching it here would set them all
+      // waving. The clone keeps the same cache key, so the extra material
+      // costs no extra program.
+      const material = prop.sway > 0
+        ? (mesh.material as THREE.Material).clone()
+        : (mesh.material as THREE.Material);
+      // CENTRAL, in the ONE place a tier is mounted: a swap replaces the
+      // material, so a patch applied anywhere else would be lost the first
+      // time the camera crossed the band.
+      applySway(material, prop.sway, prop.targetH);
+      prop.mats.set(url, material);
       if (prop.wantUrl !== url) return;   // superseded while it loaded
       prop.inst.geometry = geometry;
-      prop.inst.material = mesh.material as THREE.Material;
+      prop.inst.material = material;
       prop.shownUrl = url;
     }).catch(() => {
       // The tuft stands; a missing prop is not a broken world — but the wish
@@ -944,6 +1090,12 @@ export function createGround(): Ground {
         // (they came with the shared GLB) and are left alone.
         for (const geo of prop.owned.values()) geo.dispose();
         prop.owned.clear();
+        // The tier MATERIALS are ours only where the wind blows (see
+        // `ScatterProp.mats`): a swaying prop draws through a clone of the
+        // cached one, and a clone nobody frees is a leak per rebuild — an
+        // admin painting terrain rebuilds this every few seconds.
+        if (prop.sway > 0) for (const m of prop.mats.values()) m.dispose();
+        prop.mats.clear();
         prop.inst.dispose();
       }
     }

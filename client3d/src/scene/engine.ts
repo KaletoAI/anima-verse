@@ -406,7 +406,8 @@ export class Engine {
 
   private frame() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
-    // ONE time value for ALL water surfaces (shared uniform).
+    // ONE time value for everything that moves by itself: the water surfaces
+    // and, since the terrain animations, the swaying scatter (shared uniform).
     updateSurfaceMaterials(dt);
 
     // WASD/arrow-key pan relative to the view direction — skipped while a

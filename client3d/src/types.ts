@@ -356,6 +356,12 @@ export interface TerrainTypeMeta {
    *  hand's width down, a treader hangs upright and its foot is a body length
    *  down. Only in force where the ground also names an `idle_anim`. */
   idle_sink_m?: number;
+  /** How far what GROWS on this ground bends in the wind, in metres (§ A9,
+   *  0.01…0.5) — the sideways deflection of a blade's TIP, quadratic in the
+   *  height above the ground. Read per painted AREA, so every scatter entry
+   *  of one shape sways together; the area's FILL never moves. Absent = the
+   *  scatter stands still. */
+  sway_m?: number;
   [key: string]: unknown;
 }
 

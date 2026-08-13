@@ -125,6 +125,70 @@
  * first, `patchHole` on the very material it returned — is pinned against the
  * source text. Without it the checks above would keep passing while the ground
  * quietly stopped patching at all.
+ *
+ * ===========================================================================
+ * THE SECOND SUBJECT: THE WIND (terrain animations, task 2)
+ * ===========================================================================
+ * `applySway` bends what grows on a ground: a terrain kind names `meta.sway_m`
+ * (§ A9) and every scatter material of an area of that kind gets a vertex
+ * displacement at the very anchor the water patch uses. It is a THIRD writer
+ * of the one slot, and it is held to the rule the hole patch had to learn.
+ *
+ * ---------------------------------------------------------------------------
+ * [8] THE SWAY TERM ITSELF — at the real anchor, with the real formula
+ * ---------------------------------------------------------------------------
+ * Hand expectations, each one a line the patch writes into the VERTEX shader:
+ *   `uniform float uTime;` + `uniform float uSwayRef;` (the clock is shared,
+ *   the reference height is per material — a tuft and a tree must not split
+ *   the compiled programs over their size)
+ *   `pow( max( transformed.y, 0.0 ) / uSwayRef, 2.0 )` — quadratic in the
+ *   height above the ground: the foot stands, the tip carries all of it
+ *   `sin( uTime * 1.70 + swayPhase )` — the shared clock, one fixed frequency
+ *   the phase out of `instanceMatrix[ 3 ].xz`, the instance's own position:
+ *   no second attribute, and it survives every tier swap because the matrices
+ *   are written once
+ *   and the term stands AFTER `#include <begin_vertex>`, which is still there
+ *   (appended, not replaced — `transformed` has to exist first).
+ * The amplitude is a GLSL LITERAL, quantised to two decimals, and the cache
+ * key carries it: 0.06 and 0.0649 are one program, 0.04 is another, 9 is the
+ * clamp 0.50 — one program per authored value, never one per mesh. A kind
+ * that says nothing (0) writes nothing at all and claims no key.
+ *
+ * ---------------------------------------------------------------------------
+ * [9] THE CHAIN AGAIN — three writers, one slot
+ * ---------------------------------------------------------------------------
+ * The rule inherited from the hole patch: every further patch CHAINS. Water,
+ * hole and sway on ONE material must all be present and the key must be
+ * 'anima-water+ground-hole+ground-sway@0.06' — the three of them in the order
+ * they were applied. Patching twice is still one patch (the WeakSet guard),
+ * or the shader would declare `swayUp` twice and not compile.
+ *
+ * ---------------------------------------------------------------------------
+ * [10] THE SHARED CLOCK, for the wind too
+ * ---------------------------------------------------------------------------
+ * The sway hangs on `surfaceTimeUniform` of @anima/scene-render — the very
+ * object `updateSurfaceMaterials` advances once per frame (client3d
+ * `engine.ts`). Two swaying areas therefore hand the SAME object into their
+ * shaders and one tick moves both. Read through the GROUND BUNDLE's own
+ * import, because the bundle carries its own instance of the shared module
+ * (that is what `external: ['three']` leaves in); the water sections above
+ * measure the separately transpiled copy, and comparing the two would only
+ * measure the bundler.
+ *
+ * ---------------------------------------------------------------------------
+ * [11] THE RED COUNTER-CHECKS — two mutants, two losses
+ * ---------------------------------------------------------------------------
+ * (a) THE PHASE HASH REMOVED. With the instance position out of the phase
+ *     every blade of a field starts in the same place of the same wave — a
+ *     meadow marching in lockstep, which no screenshot would ever be trusted
+ *     to tell. The mutant replaces the hash by `0.0`: its composed shader then
+ *     names neither `instanceMatrix` nor `fract( sin(`, while the truth names
+ *     both. Pinned from both sides, so a renamed local cannot make it vacuous.
+ * (b) ASSIGNMENT INSTEAD OF CHAIN, in `applySway` this time. The predecessor
+ *     is dropped: a material that carried the hole patch loses every hole line
+ *     while the sway lines stay — the probe measures the chain, not a broken
+ *     module. This is the mutation the review of task 1 declared binding for
+ *     every further patch on these materials.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -188,7 +252,11 @@ async function loadGround(mutate) {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(ROOT, 'client3d/scripts/.smoke-'));
   try {
-    const entry = `export { patchHole, HOLE_CACHE_KEY } from '${GROUND_SRC}';\n`;
+    // The shared module is re-exported THROUGH the bundle on purpose: the
+    // bundle carries its own instance of it, and the sway's clock has to be
+    // measured on the instance the sway actually writes (section [10]).
+    const entry = `export { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey } from '${GROUND_SRC}';\n`
+      + "export { updateSurfaceMaterials, surfaceTimeUniform } from '@anima/scene-render';\n";
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
       bundle: true, platform: 'node', format: 'esm', write: false,
@@ -207,14 +275,35 @@ async function loadGround(mutate) {
 /** Section [6]'s mutant: `patchHole` as it stood — it ASSIGNS instead of
  *  chaining (the previous callback is never called) and claims the bare key.
  *  Both edits are asserted to bite; a mutation that changed nothing would make
- *  the counter-check vacuous. */
+ *  the counter-check vacuous.
+ *
+ *  ANCHORED on the line that follows, because there are two chained patches in
+ *  this module now and a bare `prev.call(…)` would hit whichever esbuild
+ *  printed first. */
 function assignInsteadOfChain(text) {
-  let out = text.replace('prev.call(mat, shader, renderer);\n', '');
-  if (out === text) throw new Error('the mutant did not drop the chained call');
+  const chained = /prev\.call\(mat, shader, renderer\);(\s*)shader\.uniforms\.uHole =/;
+  if (!chained.test(text)) throw new Error('the hole patch no longer chains here');
+  let out = text.replace(chained, 'shader.uniforms.uHole =');
   const keyed = out.replace('prevKey ? ', 'false ? ');
   if (keyed === out) throw new Error('the mutant did not drop the combined key');
   out = keyed;
   return out;
+}
+
+/** Section [11a]'s mutant: the phase hash gone, so every instance rides the
+ *  same wave at the same moment. */
+function phaseInSync(text) {
+  const hash = /fract\( sin\( dot\( instanceMatrix\[ 3 \]\.xz[^\n]*/;
+  if (!hash.test(text)) throw new Error('the phase hash is no longer where the probe looks');
+  return text.replace(hash, '0.0;');
+}
+
+/** Section [11b]'s mutant: `applySway` ASSIGNS instead of chaining — same
+ *  anchoring trick, this time on the sway's own first uniform. */
+function swayAssignInsteadOfChain(text) {
+  const chained = /prev\.call\(mat, shader, renderer\);(\s*)shader\.uniforms\.uTime =/;
+  if (!chained.test(text)) throw new Error('the sway patch no longer chains here');
+  return text.replace(chained, 'shader.uniforms.uTime =');
 }
 
 /** The stub shader: three's own anchor lines, in three's own order, and
@@ -261,6 +350,21 @@ const HOLE_MARKS = [
 const WATER_UNIFORMS = ['uTime', 'uSky', 'uWaveM', 'uSpeed', 'uSkyMix', 'uTint',
   'uMapStrength', 'uMask'];
 const HOLE_UNIFORMS = ['uHole', 'uHoleOn'];
+/** What the sway writes — all of it in the VERTEX shader, where `transformed`
+ *  lives. The amplitude is a literal, so the list is a function of it. */
+const swayMarks = (amp) => [
+  ['vert', 'uniform float uTime;'],
+  ['vert', 'uniform float uSwayRef;'],
+  ['vert', 'float swayUp = pow( max( transformed.y, 0.0 ) / uSwayRef, 2.0 );'],
+  ['vert', `transformed.xz += ${amp} * swayUp * sin( uTime * 1.70 + swayPhase ) * swayDir.xz;`],
+];
+const SWAY_MARKS = swayMarks('0.06');
+/** The phase, checked on its own: section [11a] takes exactly this away. */
+const PHASE_MARKS = [
+  ['vert', 'instanceMatrix[ 3 ].xz'],
+  ['vert', 'fract( sin( dot('],
+];
+const SWAY_UNIFORMS = ['uTime', 'uSwayRef'];
 
 let failed = 0;
 let passed = 0;
@@ -286,7 +390,8 @@ const allOf = (marks) => marks.map(([, text]) => text);
 async function main() {
   const THREE = await import('three');
   const { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky } = await loadMaterials();
-  const { patchHole, HOLE_CACHE_KEY } = await loadGround();
+  const { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey,
+    updateSurfaceMaterials: tickSurfaces, surfaceTimeUniform } = await loadGround();
 
   /** One painted area's material, built the way `materialFor` builds it. */
   function groundMaterial(spec, patch = patchHole) {
@@ -400,6 +505,145 @@ async function main() {
     /const mat = surfaceMaterial\(THREE, \{ material: spec,/.test(groundSrc), true);
   check('…and hands that very material to patchHole',
     /\n\s*patchHole\(mat\);\n/.test(groundSrc), true);
+
+  // ── THE WIND ─────────────────────────────────────────────────────────────
+  /** One scatter material of a swaying kind: a plain standard material, the
+   *  way a tuft and a cloned prop material both arrive at `applySway`. */
+  function swayMaterial(swayM, refH, patch = applySway) {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x6a994e });
+    patch(mat, swayM, refH);
+    const shader = stubShader();
+    mat.onBeforeCompile(shader, null);
+    return { mat, shader };
+  }
+
+  console.log('\n[8] the sway term — at the real anchor, with the real formula');
+  const grass = swayMaterial(0.06, 0.8);
+  check('every sway line is written', marksIn(grass.shader, SWAY_MARKS),
+    allOf(SWAY_MARKS));
+  check('…the phase comes out of the instance position',
+    marksIn(grass.shader, PHASE_MARKS), allOf(PHASE_MARKS));
+  check('…the clock and the reference height are bound',
+    SWAY_UNIFORMS.filter((u) => grass.shader.uniforms[u] !== undefined),
+    SWAY_UNIFORMS);
+  check('…the reference height is the prop\'s own',
+    grass.shader.uniforms.uSwayRef.value, 0.8);
+  check('the anchor is APPENDED to, not replaced',
+    grass.shader.vertexShader.includes('#include <begin_vertex>'), true);
+  check('…and the bend stands after it (transformed exists first)',
+    grass.shader.vertexShader.indexOf('#include <begin_vertex>')
+      < grass.shader.vertexShader.indexOf('float swayUp ='), true);
+  check('nothing of it lands in the fragment shader',
+    grass.shader.fragmentShader.includes('swayUp'), false);
+  check('the key carries the amplitude', grass.mat.customProgramCacheKey(),
+    'ground-sway@0.06');
+  check('…which is what swayCacheKey says', swayCacheKey(0.06),
+    grass.mat.customProgramCacheKey());
+  const rounded = swayMaterial(0.0649, 1.2);
+  check('two decimals: 0.0649 is the SAME program as 0.06',
+    rounded.mat.customProgramCacheKey(), grass.mat.customProgramCacheKey());
+  check('…and writes the same literal', marksIn(rounded.shader, SWAY_MARKS),
+    allOf(SWAY_MARKS));
+  check('…while its own reference height still differs',
+    rounded.shader.uniforms.uSwayRef.value, 1.2);
+  const wood = swayMaterial(0.04, 8);
+  check('a gentler kind is its own program',
+    wood.mat.customProgramCacheKey(), 'ground-sway@0.04');
+  check('…with its own literal in the shader',
+    marksIn(wood.shader, swayMarks('0.04')), allOf(swayMarks('0.04')));
+  const shorn = swayMaterial(9, 0.8);
+  check('a deflection that would shear the meadow is clamped',
+    shorn.mat.customProgramCacheKey(), 'ground-sway@0.50');
+  const stillMat = new THREE.MeshStandardMaterial({ color: 0x6a994e });
+  applySway(stillMat, 0, 0.8);
+  const stillShader = stubShader();
+  stillMat.onBeforeCompile(stillShader, null);
+  check('a kind that says nothing writes nothing',
+    marksIn(stillShader, SWAY_MARKS), []);
+  check('…and claims no cache key of its own',
+    Object.prototype.hasOwnProperty.call(stillMat, 'customProgramCacheKey'), false);
+
+  console.log('\n[9] the chain again — water, hole and wind in one shader');
+  const all = surfaceMaterial(THREE, { material: { class: 'water' }, color: 0x336699 });
+  patchHole(all);
+  applySway(all, 0.06, 0.8);
+  const allShader = stubShader();
+  all.onBeforeCompile(allShader, null);
+  check('the water lines survive two more patches',
+    marksIn(allShader, WATER_MARKS), allOf(WATER_MARKS));
+  check('…the hole lines survive the sway',
+    marksIn(allShader, HOLE_MARKS), allOf(HOLE_MARKS));
+  check('…and the sway lines are there too',
+    marksIn(allShader, SWAY_MARKS), allOf(SWAY_MARKS));
+  check('the key is all three, in the order they were applied',
+    all.customProgramCacheKey(), `anima-water+${HOLE_CACHE_KEY}+ground-sway@0.06`);
+  applySway(all, 0.06, 0.8);
+  const twiceSway = stubShader();
+  all.onBeforeCompile(twiceSway, null);
+  check('patching the sway twice is still one patch',
+    twiceSway.vertexShader.split('float swayUp =').length - 1, 1);
+  check('…and the key did not grow a second wind',
+    all.customProgramCacheKey(), `anima-water+${HOLE_CACHE_KEY}+ground-sway@0.06`);
+
+  console.log('\n[10] the shared clock — the wind really advances');
+  check('two swaying areas share ONE time uniform',
+    grass.shader.uniforms.uTime === wood.shader.uniforms.uTime, true);
+  check('…and it is the module\'s own surface clock',
+    grass.shader.uniforms.uTime === surfaceTimeUniform, true);
+  const before = surfaceTimeUniform.value;
+  tickSurfaces(0.5);
+  check('a 0.5 s frame moves the clock in the composed shader',
+    Math.round((wood.shader.uniforms.uTime.value - before) * 1000) / 1000, 0.5);
+  tickSurfaces(0.75);
+  check('…and the next frame adds to it',
+    Math.round((grass.shader.uniforms.uTime.value - before) * 1000) / 1000, 1.25);
+
+  console.log('\n[11] the RED counter-checks — the phase, and the chain again');
+  const synced = await loadGround(phaseInSync);
+  const syncMat = new THREE.MeshStandardMaterial({ color: 0x6a994e });
+  synced.applySway(syncMat, 0.06, 0.8);
+  const syncShader = stubShader();
+  syncMat.onBeforeCompile(syncShader, null);
+  check('without the hash no instance knows where it stands',
+    marksIn(syncShader, PHASE_MARKS), []);
+  check('…while the bend itself is untouched (the probe measures the phase)',
+    marksIn(syncShader, SWAY_MARKS), allOf(SWAY_MARKS));
+  check('the truth, from the other side, DOES spread the phase',
+    marksIn(grass.shader, PHASE_MARKS).length, PHASE_MARKS.length);
+
+  const flat = await loadGround(swayAssignInsteadOfChain);
+  const redSway = new THREE.MeshStandardMaterial({ color: 0x6a994e });
+  flat.patchHole(redSway);
+  flat.applySway(redSway, 0.06, 0.8);
+  const redSwayShader = stubShader();
+  redSway.onBeforeCompile(redSwayShader, null);
+  check('the assignment mutant loses the patch it found',
+    marksIn(redSwayShader, HOLE_MARKS), []);
+  check('…and its own hole uniforms with it',
+    HOLE_UNIFORMS.filter((u) => redSwayShader.uniforms[u] !== undefined), []);
+  check('…while its sway is fully intact (the probe measures the chain)',
+    marksIn(redSwayShader, SWAY_MARKS), allOf(SWAY_MARKS));
+  // The other side of the same coin: a chained sway keeps what it found.
+  const kept = new THREE.MeshStandardMaterial({ color: 0x6a994e });
+  patchHole(kept);
+  applySway(kept, 0.06, 0.8);
+  const keptShader = stubShader();
+  kept.onBeforeCompile(keptShader, null);
+  check('the chained sway keeps the hole patch',
+    marksIn(keptShader, HOLE_MARKS), allOf(HOLE_MARKS));
+  check('…and combines the keys instead of claiming the slot',
+    kept.customProgramCacheKey(), `${HOLE_CACHE_KEY}+ground-sway@0.06`);
+
+  console.log('\n[12] the wiring in buildScatter/showTier, pinned by the source');
+  check('the sway hangs on the AREA\'s kind, asked once per area',
+    /const sway = swayFor\(area\.kind\);/.test(groundSrc), true);
+  check('…the tuft material of every entry is patched',
+    /applySway\(mat, sway, h\);/.test(groundSrc), true);
+  check('…a swaying prop draws through a CLONE of the cached GLB material',
+    /prop\.sway > 0\n\s*\? \(mesh\.material as THREE\.Material\)\.clone\(\)/.test(groundSrc),
+    true);
+  check('…and the patch is applied where a tier is MOUNTED (showTier)',
+    /applySway\(material, prop\.sway, prop\.targetH\);/.test(groundSrc), true);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
