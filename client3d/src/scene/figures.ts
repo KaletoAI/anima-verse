@@ -554,15 +554,20 @@ export class FigureLibrary {
 
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
-      if (m.clips.length || m.noClips || !boneNames(m.template).size) continue;
-      const fallbackClips = this.clipsFor(m.name);
-      if (fallbackClips.length) {
-        m.clips = adaptExternalClips(fallbackClips, m.template);
-        if (m.clips.length) {
-          console.info(`[figures] ${m.name}: ${m.clips.length} Mixamo-Clips direkt angewandt`);
-          continue;
-        }
+      if (m.noClips || !boneNames(m.template).size) continue;
+      // PER KIND, not all-or-nothing: a fallback rig that ships walk/idle/run
+      // (Soldier, Xbot, Robot) keeps those and takes swim, yoga and the rest
+      // of the library on top. Its own clips win for their own kinds.
+      const extra = this.libraryClipsFor(m.name, m.template, m.clips);
+      if (extra.length) {
+        const kinds = extra.map((c) => c.name).sort().join(', ');
+        console.info(`[figures] ${m.name}: ${extra.length} Mixamo-Clips aus der`
+          + ` Bibliothek ergänzt — ${kinds}`);
+        m.clips = [...m.clips, ...extra];
       }
+      if (m.clips.length) continue;
+      // Neither its own clips nor a library that fits this skeleton: borrow
+      // from the first model that HAS clips and retarget bone by bone.
       if (!donor) continue;
       m.clips = retargetClips(m.template, donor.template, donor.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: Clip-Retargeting fehlgeschlagen`);
@@ -653,6 +658,37 @@ export class FigureLibrary {
   /** Körpergröße eines Charakters merken (cm -> m); wirkt beim nächsten Bau. */
   setCharacterHeight(charName: string, heightCm: number | undefined) {
     if (heightCm && heightCm > 30 && heightCm < 400) this.charHeight.set(charName, heightCm / 100);
+  }
+
+  /**
+   * The server's clip library, fitted to ONE rig and reduced to the kinds
+   * that rig does not already carry — the per-kind MERGE (swim finding
+   * 2026-08-13).
+   *
+   * It used to be all or nothing on both sides: a model with ANY embedded
+   * clip never saw the library, so the three manifest fallback rigs and every
+   * server model that ships a single clip could play walk and idle and
+   * nothing else. `move_anim: "swim"` then fell through `CLIP_FALLBACK` to
+   * walk and the lake looked like a meadow. Per kind: an embedded clip WINS
+   * for its own kind (it was authored for this mesh), the library fills the
+   * rest.
+   *
+   * The whole library goes through `adaptExternalClips` and the filter runs
+   * AFTER it, deliberately: that function derives its standing reference from
+   * the hip heights ACROSS the clips it is given, so handing it a subset
+   * would rescale the survivors against a different yardstick.
+   *
+   * The KIND of a clip is its lowercased name — the same key `Figure` binds
+   * its actions under, and the library sets `clip.name = kind` itself.
+   */
+  private libraryClipsFor(charName: string, template: THREE.Object3D,
+                          own: readonly THREE.AnimationClip[]
+  ): THREE.AnimationClip[] {
+    const candidates = this.clipsFor(charName);
+    if (!candidates.length) return [];
+    const have = new Set(own.map((c) => c.name.toLowerCase()));
+    return adaptExternalClips(candidates, template)
+      .filter((c) => !have.has(c.name.toLowerCase()));
   }
 
   /** Clips für einen Charakter gemäß seiner Set-Kette auswählen:
@@ -772,11 +808,15 @@ export class FigureLibrary {
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
     };
-    // Clips gemäß der Set-Kette des Charakters (female/male/animal/custom).
+    // Clips gemäß der Set-Kette des Charakters (female/male/animal/custom),
+    // PER KIND gemischt: ein im Mesh eingebetteter Clip gewinnt für seine
+    // eigene Art, die Bibliothek füllt jede Art, die das Modell nicht trägt
+    // (swim finding 2026-08-13 — ein einziger eingebetteter Clip sperrte
+    // vorher die ganze Bibliothek aus).
     // "generic"-Rigs (eigene Skelette) bleiben clip-los -> prozedurales Idle.
-    if (info.rig !== 'generic' && !model.clips.length && boneNames(template).size) {
-      const candidates = this.clipsFor(name);
-      if (candidates.length) model.clips = adaptExternalClips(candidates, template);
+    if (info.rig !== 'generic' && boneNames(template).size) {
+      const extra = this.libraryClipsFor(name, template, model.clips);
+      if (extra.length) model.clips = [...model.clips, ...extra];
     }
     return model;
   }
