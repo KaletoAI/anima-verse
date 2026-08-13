@@ -1951,7 +1951,12 @@ Zwei Folgen, die keine Geometrie sind: **Nebel-Quads** werden auf ~64 m
 gekachelt (`FOG_TILE_M`) und hängen je Kachel auf `max(Höhe darin) + 5 cm` —
 ohne Kachelung hebt EIN Hügel ein weltbreites Band fünfzig Meter in die Luft;
 verraten wird dadurch nichts, weil das Gelände ohnehin nie gefoggt ist und die
-Topographie schon zeigt. Und **Boden-Raycasts** starten bei
+Topographie schon zeigt. **Gekachelt wird nur, wo das Gelände sich bewegt**
+(E8 Task 5): ein Schleier-Rechteck, unter dem die Spannweite des Bodens unter
+`FOG_FLAT_EPS_M` = 0,25 m bleibt, bleibt EIN Quad. Eine Welt ohne Relief kostet
+damit exakt so viele Draw Calls wie vor E8 (gemessen: 744 bei 100 bekannten
+Orten; alles kacheln wären 3 659, mit drei Hügeln sind es 1 899). Und
+**Boden-Raycasts** starten bei
 `max(Feldhöhe) + 5 m` statt bei fixen 20 m — die ±50-m-Klemme oben ist genau
 deshalb notiert.
 
