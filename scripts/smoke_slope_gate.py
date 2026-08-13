@@ -195,8 +195,11 @@ weight is 0).
          0 against 0 and walked through. With ``max_slope_deg`` at 89 the very
          same report is accepted again, which pins the refusal on this rule.
       d) THE PLATEAU MAKES A PLACE ON A SLOPE WALKABLE, which is the whole
-         point of levelling. HOUSE at (3000, 3020), plan_width_m 8, no relief
-         of its own, one opening on the E edge at 0.5 -> world (3004, 3020).
+         point of levelling — AND IT IS OPT-IN (``level_ground``, decision
+         2026-08-13): HOUSE carries the flag, or it would stand on the
+         untouched flank and repeat case (a) inside its own walls. HOUSE at
+         (3000, 3020), plan_width_m 8, no relief of its own, one opening on
+         the E edge at 0.5 -> world (3004, 3020).
          Its centre sits ON the hill's outline, so the plateau is 0 and the
          footprint plus one cell around it is pinned there:
            inside, (3001,3020) -> (3002,3020): Δh = 0 -> accepted, while the
@@ -349,6 +352,16 @@ def set_map3d(location_id: str, **fields) -> None:
             map3d = dict(loc.get("map3d") or {})
             map3d.update(fields)
             loc["map3d"] = map3d
+    _save_world_data(data)
+
+
+def set_level_ground(location_id: str, flag: bool = True) -> None:
+    """Ask for the FLATTENING under a place (``level_ground``) — opt-in since
+    2026-08-13, so a location levels nothing without it."""
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            loc["level_ground"] = bool(flag)
     _save_world_data(data)
 
 
@@ -748,6 +761,9 @@ def main() -> int:
     set_map3d(HOUSE, plan_width_m=8.0,
               boundary_openings=[{"edge": "E", "at": 0.5, "width_m": 2.0,
                                   "type": "passage", "room": ""}])
+    # The levelling is OPT-IN (2026-08-13): without the flag this house would
+    # stand on the untouched flank, which is case (a) all over again.
+    set_level_ground(HOUSE)
     set_known_locations(AVATAR, [CLIFF, TURNED, SPUN, PLAIN, DOME, HUT, HOUSE])
     check("the opening sits on the E edge",
           opening_world_points(get_location_by_id(HOUSE)),

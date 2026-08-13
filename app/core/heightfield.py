@@ -27,10 +27,18 @@ one failure mode that cannot be seen in a screenshot and ruins every stored
 comparison (inventory finding 5).
 
 **THE PLATEAU PASS RUNS AFTER THE AREAS** (E8 task 4, :func:`level_plateaus`).
-The authored areas are rastered first, purely; then every placed location's
-footprint is pinned flat to the ground under its own centre. That order is the
-whole trick — the plateau's height is read from the authored landscape BEFORE
-any of it is levelled, so a hill keeps carrying the place standing on it.
+The authored areas are rastered first, purely; then the footprint of every
+location THAT ASKED FOR IT is pinned flat to the ground under its own centre.
+That order is the whole trick — the plateau's height is read from the authored
+landscape BEFORE any of it is levelled, so a hill keeps carrying the place
+standing on it.
+
+**FLATTENING IS OPT-IN** (decision 2026-08-13, default OFF): the pass only ever
+sees the locations whose ``level_ground`` flag is set, because
+``models.heightfield.placed_footprints`` hands out no others. The landscape is
+authored and does not mind the places on it — a rise INSIDE a location is a
+thing one may want. Nothing in this module decides that; it only ever levels
+what it is given.
 """
 
 import math
@@ -248,13 +256,17 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
                    heights: List[List[float]],
                    footprints: Sequence[Tuple[float, float, float, float]]
                    ) -> None:
-    """Flatten the ground under every placed footprint — IN PLACE (E8 task 4).
+    """Flatten the ground under every footprint GIVEN — IN PLACE (E8 task 4).
 
-    A location is a building site, not a tent: it is put ON the world, and the
-    ground under it is levelled to carry it. Without this pass a place standing
-    on a slope has its own floor cutting through the hill on one side and
-    hovering over it on the other, and the walking rule (§ A15 no. 8) refuses
-    every step across the seam.
+    ``footprints`` are the places that OPTED IN (``level_ground``, decision
+    2026-08-13) — the caller filters, this pass levels. Such a location is a
+    building site, not a tent: it is put ON the world, and the ground under it
+    is levelled to carry it. Without the pass a place standing on a slope has
+    its own floor cutting through the hill on one side and hovering over it on
+    the other, and the walking rule (§ A15 no. 8) refuses every step across the
+    seam. A location that did NOT ask for it accepts exactly that — the
+    landscape runs through it, and keeping the place usable is an authoring
+    matter.
 
     THE HEIGHT OF THE PLATEAU is the authored ground at the footprint's CENTRE,
     ``ground_y(pos_x, pos_z)`` — read from the raster BEFORE anything is
@@ -277,7 +289,9 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     centre sits more than that below or above the ground at its rim keeps a
     rim nobody can cross — legal and sometimes intended (a plateau entered
     through an opening, which the gate exempts), and the authoring warning in
-    the height tool is about exactly this number.
+    the height tool is about exactly this number. IT IS AN OPT-IN RIM: a
+    location without ``level_ground`` builds no ramp at all, because it changes
+    no height — there the authored slope simply continues under the place.
 
     OVERLAPS: THE SMALLEST FOOTPRINT WINS, the rule ``location_at_point`` and
     ``relief.ground_lift_at`` already resolve nesting by — the hut on the
@@ -338,8 +352,12 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     A point no area covers is 0.0 — the unpainted world is flat, and there is
     no "default height" to configure.
 
-    ``footprints`` are the placed locations ``(cx, cz, width_m, yaw_deg)``; the
-    PLATEAU PASS (:func:`level_plateaus`) runs over the finished area raster.
+    ``footprints`` are the LEVELLING locations ``(cx, cz, width_m, yaw_deg)`` —
+    the ones whose ``level_ground`` flag is set, filtered by the caller
+    (``models.heightfield.placed_footprints``); the PLATEAU PASS
+    (:func:`level_plateaus`) runs over the finished area raster. An unflagged
+    place is not in the list and therefore neither grows this grid nor changes
+    a height in it: the landscape runs through it (decision 2026-08-13).
     A world without a single height area stays empty even with a hundred
     places on it: every plateau there would be levelled to 0 on ground that is
     already 0, and a grid of zeros is a payload nobody needs.
@@ -357,10 +375,11 @@ def rasterize(areas: Sequence[Dict[str, Any]],
                 "rows": 0, "cols": 0, "heights": []}
 
     area_bounds = _union([b[1] for b in boxes])
-    # THE GRID HAS TO COVER WHAT IT DESCRIBES. A footprint reaching out of the
-    # painted box is levelled too, so the grid grows to hold it plus its ramp
-    # ring — otherwise the plateau would be cut off at the border and the
-    # clamp outside the grid ("the flat world") would meet it as a cliff.
+    # THE GRID HAS TO COVER WHAT IT DESCRIBES. A LEVELLING footprint reaching
+    # out of the painted box is levelled too, so the grid grows to hold it
+    # plus its ramp ring — otherwise the plateau would be cut off at the
+    # border and the clamp outside the grid ("the flat world") would meet it
+    # as a cliff.
     # Footprints that cannot touch any authored height are left out: outside
     # every polygon the ground is 0, levelling 0 onto 0 changes nothing, and a
     # single far-away hut must not stretch the grid across the world.

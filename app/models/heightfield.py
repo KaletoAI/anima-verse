@@ -204,18 +204,33 @@ def _invalidate() -> None:
 
 
 def placed_footprints() -> List[Tuple[float, float, float, float]]:
-    """``(cx, cz, width_m, yaw_deg)`` of every PLACED location, stable order.
+    """``(cx, cz, width_m, yaw_deg)`` of every location that LEVELS the ground.
 
-    The second input of the raster since E8 task 4: the ground under a
-    footprint is levelled to a plateau, so where the places stand is part of
+    The second input of the raster since E8 task 4: the ground under such a
+    footprint is levelled to a plateau, so where those places stand is part of
     what the world's relief IS. Rounded to the centimetre and the tenth of a
     degree — the precision the placement itself is stored at — so the
     signature over this list does not flap on float noise.
+
+    **FLATTENING IS OPT-IN** (decision 2026-08-13): only a location whose
+    ``level_ground`` flag is set appears here. The landscape is authored and a
+    place is put ON it — "the landscape should not mind the place; one may even
+    want a rise inside it" — so an unflagged location changes no height at all.
+
+    ONE FILTER, THREE CONSEQUENCES, and that is why it sits here rather than in
+    the raster: this list is what :func:`height_sig` hashes AND what
+    ``core.heightfield.rasterize`` grows its grid for AND what
+    ``level_plateaus`` pins. So flipping the flag changes the list membership
+    and therefore the signature — every client refetches, the stored raster is
+    stale and is rebuilt — without a single extra field anywhere. An unflagged
+    place needs no grid coverage either, because it writes nothing into it.
     """
     from app.core.world_geometry import placed_footprint
     from app.models.world import list_locations
     out: List[Tuple[float, float, float, float]] = []
     for loc in list_locations():
+        if not loc.get("level_ground"):
+            continue
         fp = placed_footprint(loc)
         if fp is None:
             continue
@@ -238,6 +253,11 @@ def height_sig() -> str:
     holding the old grid would drape its ground around a hole where the place
     used to stand — and the server, which samples the same field, would agree
     with nobody.
+
+    SO DOES THE ``level_ground`` FLAG, and it costs nothing extra: only the
+    flagged places are in :func:`placed_footprints`, so switching the
+    flattening on or off adds or removes a whole entry from the basis while the
+    place stands perfectly still (decision 2026-08-13).
     """
     basis = json.dumps({"areas": list_height_areas(),
                         "places": placed_footprints()},

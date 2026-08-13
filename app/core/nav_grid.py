@@ -17,11 +17,13 @@ AND that centre lies out in the WILDERNESS (footprint wins, decision
 2026-08-13: painted ground judges PASSABILITY between the places, never the
 inside of one — see :meth:`_Search.blocked`), or when the GROUND UNDER IT IS
 TOO STEEP to stand on (E8 task 4, the walking rule of § A15 no. 8 measured as
-the slope at the cell centre — :meth:`_Search.too_steep`). A* walks the 8
-neighbours (no corner-cutting: a diagonal needs both orthogonals free), paying
-``distance / speed_factor`` for every step PLUS ``SLOPE_COST_S_PER_M`` per
-metre of climb, and the resulting cell chain is pulled straight again by a
-line-of-sight pass so the journey follows the terrain instead of the raster.
+the slope at the cell centre — :meth:`_Search.too_steep`; that one steps back
+only inside a place that LEVELS its ground, since flattening became opt-in).
+A* walks the 8 neighbours (no corner-cutting: a diagonal needs both
+orthogonals free), paying ``distance / speed_factor`` for every step PLUS
+``SLOPE_COST_S_PER_M`` per metre of climb, and the resulting cell chain is
+pulled straight again by a line-of-sight pass so the journey follows the
+terrain instead of the raster.
 
 THE PACE, unlike the passability, follows the ground into a place — but only
 into an OPEN one (finding 3 of the E8 acceptance, 2026-08-13, reach decided
@@ -58,10 +60,12 @@ from app.core.world_geometry import (footprint_corners, footprint_hits_aabb,
 
 Point = Tuple[float, float]
 Cell = Tuple[int, int]
-#: One placed footprint as the router keeps it: id, centre, edge, yaw and
-#: whether the location is OPEN GROUND (``world_geometry.is_area_location``) —
-#: the last field decides how far the terrain pace reaches into it.
-Footprint = Tuple[str, float, float, float, float, bool]
+#: One placed footprint as the router keeps it: id, centre, edge, yaw, whether
+#: the location is OPEN GROUND (``world_geometry.is_area_location``) — that
+#: field decides how far the terrain pace reaches into it — and whether it
+#: LEVELS the ground under itself (``level_ground``, opt-in since 2026-08-13),
+#: which decides whether the steepness rule is measured inside it at all.
+Footprint = Tuple[str, float, float, float, float, bool, bool]
 
 # Raster resolution in metres. 2 m is a body width: fine enough to squeeze
 # between two buildings, coarse enough that a kilometre of world is a few
@@ -174,10 +178,13 @@ class NavContext:
         """Ground height at a world point, metres — the WORLD relief.
 
         Not ``relief.ground_lift_at``: a scene's own field is not asked here.
-        Under a footprint the world grid is LEVELLED FLAT (the plateau pass of
-        E8 task 4), so the ground a route crosses inside a place is the
-        plateau, and what a location builds on top of its own floor is its
-        business — the same split "footprint wins" draws for passability.
+        Under a footprint THAT ASKED FOR IT the world grid is LEVELLED FLAT
+        (the plateau pass of E8 task 4, opt-in since 2026-08-13), so the ground
+        a route crosses inside such a place is the plateau, and what a location
+        builds on top of its own floor is its business — the same split
+        "footprint wins" draws for passability. Under an UNFLAGGED place the
+        authored landscape simply runs on, and this reads it like any other
+        ground.
         """
         if not self.has_relief:
             return 0.0
@@ -224,6 +231,15 @@ def _placement_sig(footprints: Sequence[Footprint],
     location between "open ground" and "building" (``passable``,
     ``map3d.area_model``) hands out a new context — it decides how far the
     terrain pace reaches into that footprint and therefore what a route costs.
+
+    SO DOES ``level_ground`` (opt-in flattening, 2026-08-13). It is the input
+    of a rule of THIS file — whether the steepness of the ground is measured
+    inside that footprint (:meth:`_Search.in_level_footprint`) — and the
+    context caches the answer per cell, so it belongs in the key that decides
+    how long the context lives. ``height_sig`` moves for the flag as well
+    (``placed_footprints`` only lists the flagged places), and that overlap is
+    the same deliberate one the two halves already have for a MOVE: either
+    would catch it, neither alone would catch everything.
     """
     basis = json.dumps({"places": sorted(footprints),
                         "openings": sorted(openings),
@@ -281,7 +297,8 @@ def build_nav_context() -> NavContext:
             continue
         cx, cz, width, yaw = fp
         footprints.append((str(loc.get("id") or ""), cx, cz, width, yaw,
-                           is_area_location(loc)))
+                           is_area_location(loc),
+                           bool(loc.get("level_ground"))))
     max_step_m = get_max_step_height_m()
     max_slope_deg = get_max_slope_deg()
 
@@ -326,7 +343,7 @@ def _data_bounds(areas: List[Dict[str, Any]], footprints: Sequence[Footprint]
                 zs.append(float(pt[1]))
             except (TypeError, ValueError, IndexError):
                 continue
-    for _lid, cx, cz, width, yaw, _area in footprints:
+    for _lid, cx, cz, width, yaw, _area, _level in footprints:
         for x, z in footprint_corners(cx, cz, width, yaw):
             xs.append(x)
             zs.append(z)
@@ -352,7 +369,7 @@ def _footprint_scope(x: float, z: float,
     """
     best_width: Optional[float] = None
     best_area = False
-    for _lid, cx, cz, width, yaw, is_area in footprints:
+    for _lid, cx, cz, width, yaw, is_area, _level in footprints:
         if not point_in_footprint(x, z, cx, cz, width, yaw):
             continue
         if best_width is None or width < best_width:
@@ -414,7 +431,7 @@ class _Search:
         # route — a character standing in a house has to be able to walk
         # out of it, and arriving means walking in.
         self.exempt: Set[str] = set()
-        for lid, cx, cz, width, yaw, _area in ctx.footprints:
+        for lid, cx, cz, width, yaw, _area, _level in ctx.footprints:
             if (point_in_footprint(start[0], start[1], cx, cz, width, yaw)
                     or point_in_footprint(goal[0], goal[1], cx, cz, width,
                                           yaw)):
@@ -425,6 +442,11 @@ class _Search:
         # tests below (:meth:`in_footprint`).
         self.exempt_fps = [fp for fp in ctx.footprints
                            if fp[0] in self.exempt]
+        # The LEVELLING half of them (``level_ground``, opt-in since
+        # 2026-08-13) — the only footprints the STEEPNESS rule steps back for
+        # (:meth:`in_level_footprint`). The passability exemption above is a
+        # different rule and keeps the whole list.
+        self.level_fps = [fp for fp in self.exempt_fps if fp[6]]
         min_x, min_z, max_x, max_z = _route_bounds(ctx, start, goal)
         self.min_i, self.min_j = cell_of(min_x, min_z)
         self.max_i, self.max_j = cell_of(max_x, max_z)
@@ -453,7 +475,26 @@ class _Search:
         answer the same and cost the foreign ones per sample.
         """
         return any(point_in_footprint(x, z, cx, cz, w, yaw)
-                   for _lid, cx, cz, w, yaw, _area in self.exempt_fps)
+                   for _lid, cx, cz, w, yaw, _area, _lvl in self.exempt_fps)
+
+    def in_level_footprint(self, x: float, z: float) -> bool:
+        """Does that point lie inside an exempt footprint that LEVELS its
+        ground (``level_ground``)?
+
+        The steepness half of the footprint exemption, and it is a NARROWER
+        list than :meth:`in_footprint` on purpose (decision 2026-08-13):
+        stepping back from the slope rule was only ever justified by the world
+        grid being flat under the place, and since flattening is opt-in that is
+        true of the flagged places alone. Under an unflagged one the authored
+        landscape runs through, and a route judges it exactly like the ground
+        outside — which is also what the walking gate of ``POST /play/pos``
+        does, since it never knew about footprints at all.
+
+        The same invariant :meth:`in_footprint` documents applies: the foreign
+        footprints are already gone by the time anybody asks.
+        """
+        return any(point_in_footprint(x, z, cx, cz, w, yaw)
+                   for _lid, cx, cz, w, yaw, _area, _lvl in self.level_fps)
 
     def scope_at(self, x: float, z: float) -> str:
         """How far the terrain rule reaches at that point — over this route's
@@ -483,6 +524,12 @@ class _Search:
         village on a lake). Nobody could be routed to it while its avatar
         walks around in it freely, which is the two movement models
         disagreeing about the same square metre.
+
+        THE PASSABILITY EXEMPTION IS UNCONDITIONAL — it does NOT ask
+        ``level_ground``. Painted ground judges the world BETWEEN the places
+        whether or not a place levels its own; the flag only ever says who
+        moved the height field (decision 2026-08-13). The steepness question
+        below is the one that follows the flag.
         """
         hit = self._blocked.get(cell)
         if hit is None:
@@ -491,7 +538,7 @@ class _Search:
             else:
                 box = cell_box(cell)
                 if any(footprint_hits_aabb(fcx, fcz, w, yaw, *box)
-                       for _lid, fcx, fcz, w, yaw, _a in self.blocking):
+                       for _lid, fcx, fcz, w, yaw, _a, _l in self.blocking):
                     hit = True
                 elif self.ctx.cell_terrain(cell)[0]:
                     hit = self.too_steep(cell)
@@ -499,10 +546,16 @@ class _Search:
                     # Impassable ground — only a wilderness cell dies of it.
                     # The point test runs LAST on purpose: it costs one pass
                     # over the footprints and is reached only by the few cells
-                    # the terrain would refuse. No steepness question here: a
-                    # cell that survives this test lies inside a footprint,
-                    # where the ground is levelled and exempt anyway.
-                    hit = not self.in_footprint(*cell_centre(cell))
+                    # the terrain would refuse. A cell that survives it lies
+                    # inside a footprint — and is STILL asked for its
+                    # steepness, exactly like the passable-ground branch
+                    # above: since flattening became opt-in (2026-08-13) the
+                    # ground inside a place is only guaranteed flat when the
+                    # place levelled it, and ``too_steep`` is the one place
+                    # that knows. For a levelling footprint the question
+                    # answers False and nothing changes.
+                    hit = (not self.in_footprint(*cell_centre(cell))
+                           or self.too_steep(cell))
             self._blocked[cell] = hit
         return hit
 
@@ -530,10 +583,17 @@ class _Search:
 
         TWO EXEMPTIONS, both of them rules this file already lives by:
 
-        * INSIDE A FOOTPRINT nothing is measured (footprint wins). The world
-          grid is levelled flat under a place anyway, so this only matters at
-          the rim, where the plateau's own ramp would otherwise wall its
-          location in.
+        * INSIDE A **LEVELLING** FOOTPRINT nothing is measured (footprint
+          wins). The world grid is levelled flat under such a place anyway, so
+          this only matters at the rim, where the plateau's own ramp would
+          otherwise wall its location in. Since flattening became opt-in
+          (``level_ground``, 2026-08-13) it is the FLAGGED footprints alone:
+          under an unflagged place the authored landscape runs on, so there is
+          real ground to judge and the rule judges it — the same ground the
+          walking gate of ``POST /play/pos`` judges, which never knew about
+          footprints. A location built on a steep slope without the flag can
+          therefore be unroutable; that is the authoring consequence the
+          decision accepted, and the cure is the flag.
         * AT AN OPENING nothing is measured either (``OPENING_EXEMPT_M``) —
           the ramp-end exemption of the walking gate. A place on a plateau is
           entered exactly where its ground steps up.
@@ -551,7 +611,7 @@ class _Search:
         """:meth:`too_steep` without the memo — the arithmetic itself."""
         ctx = self.ctx
         cx, cz = cell_centre(cell)
-        if self.in_footprint(cx, cz) or ctx.near_opening(cx, cz):
+        if self.in_level_footprint(cx, cz) or ctx.near_opening(cx, cz):
             return False
         from app.core.relief import slope_blocks
         run = 2.0 * NAV_CELL_M
@@ -605,18 +665,23 @@ class _Search:
         ``LOS_STEP_M`` metres (both endpoints included), the same
         resolution the raster itself works at — and, like
         :meth:`blocked`, it only judges samples OUT IN THE WILDERNESS
-        (footprint wins). Without that the straightening would still
-        break on the ground inside the start/goal location and leave the
-        polyline zig-zagging over cell centres A* had already accepted.
+        (footprint wins, for ALL exempt footprints — the passability
+        exemption does not ask ``level_ground``). Without that the
+        straightening would still break on the ground inside the start/goal
+        location and leave the polyline zig-zagging over cell centres A* had
+        already accepted.
 
         THE STEEPNESS IS ASKED HERE TOO (E8 task 4). The cost guard of
         :func:`_smooth` alone would not do: it weighs a shortcut against a
         detour, and a short scramble over a cliff can weigh less than a long
         way round it — while a traveller sent over that cliff is refused by
         the very rule the route was planned with. So a shortcut across a cell
-        the search itself would not enter is not walkable, full stop.
+        the search itself would not enter is not walkable, full stop. That
+        question goes through :meth:`too_steep`, so it steps back only inside
+        a LEVELLING footprint — a shortcut through an unflagged place crosses
+        the authored slope and is judged on it.
         """
-        for _lid, cx, cz, width, yaw, _area in self.blocking:
+        for _lid, cx, cz, width, yaw, _area, _lvl in self.blocking:
             if segment_hits_footprint(a[0], a[1], b[0], b[1], cx, cz, width,
                                       yaw):
                 return False

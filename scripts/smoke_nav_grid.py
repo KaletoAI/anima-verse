@@ -205,15 +205,27 @@ Hand-derived expectations:
 
  [15] THE TWO EXEMPTIONS of the steepness rule (review finding I2). Both were
       untested: a mutant `openings=()` and a mutant `if False` on the
-      footprint branch passed every case above.
+      footprint branch passed every case above. SINCE 2026-08-13 the footprint
+      half is FLAG-CONDITIONAL: flattening is opt-in (`level_ground`), and the
+      only justification the exemption ever had — "the field is levelled flat
+      under a place anyway" — holds for the flagged places alone.
 
       a) AT AN OPENING (`OPENING_EXEMPT_M` = 1.5 m tolerance + one cell).
          WALL: height area (2200,0)-(2260,60), height 20, falloff 4 — twenty
          metres, so the plateau's rim is a wall by any measure. HOUSE at
          (2200,30), plan_width_m 8, one opening on the E edge at 0.5 -> world
-         (2204, 30). The house's centre sits ON the area's west outline, so
-         its plateau is 0 and the footprint plus one cell around it is pinned
-         there.
+         (2204, 30), and `level_ground` SET — without the flag there is no
+         plateau and therefore no rim to be exempt from. The house's centre
+         sits ON the area's west outline, so its plateau is 0 and the
+         footprint plus one cell around it is pinned there.
+
+         THE FLAG-OFF STATE FIRST, hand-derived on the same two objects: the
+         grid is then the plain area raster, bounds (2200,0)-(2260,60) ->
+         origin (2196,-4), ceil((2260+4-2196)/4)+1 = 18 columns and
+         ceil((60+4+4)/4)+1 = 18 rows, i.e. 18 x 18 instead of 18 x 20, and
+         h(2205,29) is the authored wall (5 m in from the west outline, ramp
+         capped at falloff 4) = 20 rather than the pinned 0. Setting the flag
+         has to hand out a NEW nav context (the placement hash carries it).
          Grid: bounds = area box ∪ footprint box grown by one step
          ([2192,2208]x[22,38]) = (2192,0)-(2260,60), so origin (2188,-4),
          20 x 18 points at 4 m. Pinned to 0 are x ∈ {2192…2208} × z ∈ {24…36}
@@ -237,16 +249,27 @@ Hand-derived expectations:
          CONTROL: the next cell out, centred (2209,29), is hypot(5,1) = 5.1 m
          from the opening -> not exempt -> blocked. The exemption is local.
 
-      b) INSIDE A FOOTPRINT (footprint wins). Not constructible through the
-         store — after levelling no cell inside a footprint can be steep, the
-         apron reaches one full cell past it and the probes only 2 m — so this
-         is measured on a HAND-BUILT context: a 5 x 5 field, step 4, origin
-         (0,0), columns [0, 0, 20, 20, 20], i.e. a cliff between x = 4 and
-         x = 8. The cell centred (7,7): h(5,7) = 0·0.75 + 20·0.25 = 5,
-         h(9,7) = 20 -> rise 15 over 4 -> 75.07° -> steep. With a footprint of
-         edge 8 at (7,7) that the route STARTS in (so it is exempt) the cell
-         is free; for a route that neither starts nor ends there the same cell
-         is blocked. That is the guard the branch exists for.
+      b) INSIDE A LEVELLING FOOTPRINT (footprint wins). Not constructible
+         through the store — after levelling no cell inside a footprint can be
+         steep, the apron reaches one full cell past it and the probes only
+         2 m — so this is measured on a HAND-BUILT context: a 5 x 5 field,
+         step 4, origin (0,0), columns [0, 0, 20, 20, 20], i.e. a cliff
+         between x = 4 and x = 8. The cell centred (7,7): h(5,7) =
+         0·0.75 + 20·0.25 = 5, h(9,7) = 20 -> rise 15 over 4 -> 75.07° ->
+         steep. THREE readings of that one cell, and each is the red probe of
+         the next:
+           * footprint of edge 8 at (7,7), `level_ground` SET, route STARTS in
+             it (so it is exempt) -> free. The place levelled its ground, so
+             there is nothing to measure.
+           * the SAME footprint with the flag CLEARED -> steep again. The
+             landscape runs through an unflagged place, and the router judges
+             it exactly like the ground outside — the accepted consequence of
+             the decision, and the case a `in_footprint` instead of
+             `in_level_footprint` would silently wave through.
+           * a route that neither starts nor ends there -> blocked either way
+             (foreign footprint, the pre-existing guard).
+         The PASSABILITY exemption is NOT flag-conditional and stays where it
+         is: [12] measures it, and it must keep passing with the flag off.
 
       c) THE CACHE KEY (review finding I1). Authoring an opening changes no
          terrain area, no height area and no placement, and changing
@@ -429,6 +452,17 @@ def set_area_model(location_id: str, flag: bool) -> None:
             else:
                 map3d.pop("area_model", None)
             loc["map3d"] = map3d
+    _save_world_data(data)
+
+
+def set_level_ground(location_id: str, flag: bool) -> None:
+    """Flip the OPT-IN FLATTENING of a location (``level_ground``, decision
+    2026-08-13) — the flag that decides whether the world grid is levelled
+    under it and therefore whether the steepness rule steps back inside it."""
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            loc["level_ground"] = bool(flag)
     _save_world_data(data)
 
 
@@ -814,7 +848,21 @@ height_store.save_height_area(
 HOUSE = add_location(name="Smoke House", description="nav smoke")["id"]
 update_location_position(HOUSE, 2200.0, 30.0)
 set_plan_width(HOUSE, 8.0)
+# THE FLAG-OFF STATE FIRST: an unflagged place levels nothing, so there is no
+# plateau, no rim and no grid growth — the authored wall runs straight through
+# the house.
+flat_ctx = nav_grid.build_nav_context()
+check("an unflagged house does not grow the grid",
+      (flat_ctx.height_field["rows"], flat_ctx.height_field["cols"]), (18, 18))
+check("...which is anchored at the area's own box",
+      (flat_ctx.height_field["origin_x"], flat_ctx.height_field["origin_z"]),
+      (2196.0, -4.0))
+approx("...and h(2205,29) is the authored wall, not a pinned apron",
+       flat_ctx.height_at(2205, 29), 20.0)
+set_level_ground(HOUSE, True)
 ctx_before = nav_grid.build_nav_context()
+check_true("setting level_ground hands out a NEW context (placement hash)",
+           ctx_before is not flat_ctx, f"{flat_ctx.sig} -> {ctx_before.sig}")
 _house = _load_world_data()
 for _loc in _house["locations"]:
     if _loc.get("id") == HOUSE:
@@ -862,20 +910,44 @@ check("...so it stays blocked — the exemption is local",
 CLIFF_FIELD = {"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
                "rows": 5, "cols": 5,
                "heights": [[0.0, 0.0, 20.0, 20.0, 20.0] for _ in range(5)]}
-hand = nav_grid.NavContext(
-    areas=[], catalog={}, footprints=[("fp", 7.0, 7.0, 8.0, 0.0, False)],
-    data_bounds=(0.0, 0.0, 16.0, 16.0), sig=("hand", "hand"),
-    height_field=CLIFF_FIELD, openings=(), max_step_m=0.4,
-    max_slope_deg=40.0)
+
+
+def cliff_ctx(level_ground):
+    """The hand-built cliff with ONE footprint over it, flagged or not."""
+    return nav_grid.NavContext(
+        areas=[], catalog={},
+        footprints=[("fp", 7.0, 7.0, 8.0, 0.0, False, level_ground)],
+        data_bounds=(0.0, 0.0, 16.0, 16.0), sig=("hand", "hand"),
+        height_field=CLIFF_FIELD, openings=(), max_step_m=0.4,
+        max_slope_deg=40.0)
+
+
+hand = cliff_ctx(True)
 approx("the hand-built cliff: h(5,7)", hand.height_at(5, 7), 5.0)
 approx("...against h(9,7)", hand.height_at(9, 7), 20.0)
 approx("...15 m over 4 m", math.degrees(math.atan2(15.0, 4.0)), 75.0686, 1e-4)
 inside = nav_grid._Search(hand, (7.0, 7.0), (7.0, 7.0))
-check("a route that starts in the place walks its own ground",
+check("a route that starts in a LEVELLING place walks its own ground",
       inside.too_steep(nav_grid.cell_of(7, 7)), False)
+unflagged = nav_grid._Search(cliff_ctx(False), (7.0, 7.0), (7.0, 7.0))
+check("RED COUNTER-PROBE: without level_ground the same cell measures for "
+      "real", unflagged.too_steep(nav_grid.cell_of(7, 7)), True)
+check("...and is therefore blocked, out of its own place",
+      unflagged.blocked(nav_grid.cell_of(7, 7)), True)
+check("...while the levelling one stays free",
+      inside.blocked(nav_grid.cell_of(7, 7)), False)
 outside = nav_grid._Search(hand, (100.0, 100.0), (101.0, 101.0))
 check("RED COUNTER-PROBE: for a foreign route the same cell is too steep",
       outside.too_steep(nav_grid.cell_of(7, 7)), True)
+check("the PASSABILITY exemption does NOT ask the flag — an unflagged place "
+      "on impassable ground still wins",
+      nav_grid._Search(
+          _replace(cliff_ctx(False), height_field=None,
+                   areas=[{"kind": "rock", "z_order": 0,
+                           "polygon": [[0, 0], [16, 0], [16, 16], [0, 16]]}],
+                   catalog={"rock": {"passable": False, "speed_factor": 1.0}}),
+          (7.0, 7.0), (7.0, 7.0)).blocked(nav_grid.cell_of(7, 7)),
+      False)
 
 # [I1] the second half: an admin dial nobody else notices.
 ctx_limits = nav_grid.build_nav_context()

@@ -329,12 +329,14 @@ def _save_world_data(data: Dict[str, Any]):
     except Exception as e:
         logger.error("_save_world_data DB-Fehler: %s", e)
     # THE PLATEAU FOLLOWS THE PLACE (E8 task 4). The world's relief is levelled
-    # flat under every footprint, so moving, turning, resizing, placing or
-    # deleting a location changes the heightfield — and with it what every
-    # client draws and what the walking rule judges. This is the one writer of
-    # the location table, so it is the one place that has to say so. AFTER the
-    # transaction: the re-raster reads the locations back, and it must read the
-    # written ones. It costs a signature compare when nothing moved.
+    # flat under every footprint THAT ASKED FOR IT (``level_ground``, opt-in
+    # since 2026-08-13), so moving, turning, resizing, placing, deleting — or
+    # flagging — such a location changes the heightfield, and with it what
+    # every client draws and what the walking rule judges. This is the one
+    # writer of the location table, so it is the one place that has to say so.
+    # AFTER the transaction: the re-raster reads the locations back, and it
+    # must read the written ones. It costs a signature compare when nothing
+    # moved.
     try:
         from app.models.heightfield import note_world_write
         note_world_write()
@@ -755,13 +757,14 @@ def _resolve_clones(locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         tmpl = by_id.get(tmpl_id)
         if not tmpl:
-            # Template geloescht — Klon wird zur Waise; spaeter beim
-            # naechsten Save aufraeumen lassen, jetzt aber rendern.
+            # Template deleted — the clone becomes an orphan; let the next
+            # save clean it up, but render it now.
             resolved.append(loc)
             continue
         merged = {**tmpl, **{
             k: v for k, v in loc.items()
-            if k in ("id", "pos_x", "pos_z", "yaw_deg", "template_location_id")
+            if k in ("id", "pos_x", "pos_z", "yaw_deg", "template_location_id",
+                     "level_ground")
             or (k not in _CLONE_TEMPLATE_ONLY_KEYS and v not in (None, "", [], {}))
         }}
         # Forget the template identity, or the clone would take on the
@@ -773,6 +776,11 @@ def _resolve_clones(locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         merged["pos_x"] = loc.get("pos_x")
         merged["pos_z"] = loc.get("pos_z")
         merged["yaw_deg"] = float(loc.get("yaw_deg") or 0.0)
+        # …and so is the FLATTENING (decision 2026-08-13): whether the ground
+        # under this clone is levelled is a property of where it was put, not
+        # of the template it copies. A template standing on a plateau must not
+        # hand its levelling to a clone somebody dropped on a hillside.
+        merged["level_ground"] = bool(loc.get("level_ground"))
         # Gallery-related fields ALWAYS come from the template — the gallery
         # path goes through _gallery_owner_id (= template id) anyway, and
         # clones would otherwise keep stale lists when the template gains or

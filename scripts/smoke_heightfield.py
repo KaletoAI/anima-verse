@@ -154,10 +154,13 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
     404 the second time. GET /play/heightfield returns exactly the field plus
     its signature.
-[11] THE PLATEAU (E8 task 4). A place is PUT ON the world and the ground under
-    it is levelled to carry it — the footprint pinned to the authored height at
-    its own CENTRE, dilated by one cell so the ramp starts outside the place
-    (the flat-hull pattern of the scene relief).
+[11] THE PLATEAU (E8 task 4) — AND IT IS OPT-IN (decision 2026-08-13). A place
+    that ASKS FOR IT (``level_ground``) is put ON the world and the ground
+    under it is levelled to carry it — the footprint pinned to the authored
+    height at its own CENTRE, dilated by one cell so the ramp starts outside
+    the place (the flat-hull pattern of the scene relief). A place that does NOT ask for
+    it changes no height at all: the landscape runs through it, because "the
+    landscape should not mind the place — one may even want a rise inside it".
 
     NO AREAS, NO GRID. A location on an unpainted world levels 0 onto 0: the
     raster stays empty (rows/cols 0), because a grid of zeros describes exactly
@@ -166,6 +169,28 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     THE CASE: HILL again (square (0,0)-(40,40), height 5, falloff 4) and a
     location "Hut" at (2, 2) with plan_width_m 8, yaw 0 — footprint x, z in
     [-2, 6], deliberately on the FLANK, where levelling has something to do.
+    The SAME hut is measured twice, once per flag state.
+
+    0) FLAG OFF (the default). ``placed_footprints()`` does not list the hut at
+       all, so the raster gets no footprint: the grid is the plain hill raster
+       of [1] (13 × 13, origin (-4,-4)) and the field is byte-for-byte the pure
+       area result. The authored landscape answers everywhere, hut or no hut:
+         h( 4, 4) = 5      the support point 4 m inside the outline
+         h( 6, 6) = 5      distance min(6, 34) = 6 > falloff 4, so full height
+         h( 8, 4) = 5      the support point where the plateau's ramp would be
+         h(-1, 5) = 0      outside the outline — all four corners of its cell
+                           are 0 (x = -4 and x = 0 are outside/ON the outline)
+       NOT MEASURED AT THE CENTRE: h(2,2) is 1.25 in BOTH states (a plateau is
+       pinned to exactly the authored height at its centre), so the centre is
+       the one point that cannot tell the two apart.
+       RED COUNTER-PROBE, executed: with ``placed_footprints`` replaced by its
+       pre-decision version (no flag filter) every one of those four points
+       moves to the plateau's 1.25 and the grid grows to 15 × 15.
+
+    0b) THE SIGNATURE FOLLOWS THE FLAG. Setting it changes ``height_sig``
+       without the hut moving a centimetre (it enters the hashed list of
+       places), and clearing it again returns EXACTLY the signature from before
+       — the basis is the same data, so the hash has to be.
 
     a) THE GRID GROWS to hold the plateau and its ramp. The footprint box
        [-2,6]^2 widened by one step is [-6,10]^2, so the union with the hill's
@@ -223,7 +248,9 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
 
     THE CASE, on the same HILL: SQUARE at (6, 6) with plan_width_m 24
     (footprint [-6, 18]²) and HUT at (2, 2) with plan_width_m 4 (footprint
-    [0, 4]², entirely inside the square).
+    [0, 4]², entirely inside the square). BOTH FLAGGED ``level_ground`` — an
+    unflagged place is not in the list at all, so nesting only has a question
+    to answer between two levelling ones.
 
     THE GRID: the boxes grown by one step are [-10, 22]² and [-4, 8]², so the
     bounds are (-10,-10)-(40,40):
@@ -579,9 +606,37 @@ near("payload height at (20,20)",
 check("DELETE", route_status(delete_height_area_route, new_id), 200)
 check("DELETE again", route_status(delete_height_area_route, new_id), 404)
 
-print("\n[11] the plateau under a footprint")
+print("\n[11] the plateau under a footprint — and its opt-in flag")
 for _a in store.list_height_areas():
     store.delete_height_area(_a["id"])
+
+
+def set_level_ground(loc_id, on):
+    """Flip the ``level_ground`` flag of a placed location — the ONE input of
+    the opt-in flattening. Written through ``_save_world_data``, i.e. the same
+    writer the PUT route uses, so the re-raster hook runs with it."""
+    data = _load_world_data()
+    for loc in data["locations"]:
+        if loc.get("id") == loc_id:
+            loc["level_ground"] = bool(on)
+    _save_world_data(data)
+
+
+def unfiltered_footprints():
+    """THE MUTANT of the red counter-probe below: ``placed_footprints`` as it
+    was before the decision — every placed location levels, flag or no flag."""
+    from app.core.world_geometry import placed_footprint
+    from app.models.world import list_locations
+    out = []
+    for loc in list_locations():
+        fp = placed_footprint(loc)
+        if fp is None:
+            continue
+        cx, cz, width, yaw = fp
+        out.append((round(cx, 2), round(cz, 2), round(width, 2),
+                    round(yaw, 1)))
+    return out
+
 
 HUT = add_location("Hut", "a place on the flank")["id"]
 _world = _load_world_data()
@@ -595,6 +650,40 @@ check("a placed location alone raises no grid", hf.get_field()["rows"], 0)
 check("...and the ground stays flat", ground_y(2, 2), 0.0)
 
 store.save_height_area(dict(HILL))
+check("an UNFLAGGED place is no input of the raster",
+      store.placed_footprints(), [])
+field = hf.get_field()
+check("so the grid is the plain hill raster",
+      (field["rows"], field["cols"]), (13, 13))
+check("...anchored at (-4,-4), not grown for a plateau",
+      (field["origin_x"], field["origin_z"]), (-4.0, -4.0))
+check("...and the field IS the pure area result",
+      field["heights"] == hf.rasterize(store.list_height_areas())["heights"],
+      True)
+near("the landscape runs through the place: h(4,4)", ground_y(4, 4), 5.0)
+near("...at the footprint corner (6,6)", ground_y(6, 6), 5.0)
+near("...where the plateau's ramp would be, h(8,4)", ground_y(8, 4), 5.0)
+near("...and outside the outline h(-1,5) is still 0", ground_y(-1, 5), 0.0)
+near("the CENTRE cannot tell the two states apart", ground_y(2, 2), 1.25)
+
+_real_footprints = store.placed_footprints
+store.placed_footprints = unfiltered_footprints
+hf.invalidate_cache()
+_mutant = hf.get_field()
+check("RED COUNTER-PROBE: without the flag filter the grid grows again",
+      (_mutant["rows"], _mutant["cols"]), (15, 15))
+near("...and the mutant levels (6,6) to the plateau", ground_y(6, 6), 1.25)
+near("...and (4,4)", ground_y(4, 4), 1.25)
+near("...and (8,4)", ground_y(8, 4), 1.25)
+near("...and (-1,5)", ground_y(-1, 5), 1.25)
+store.placed_footprints = _real_footprints
+hf.invalidate_cache()
+near("the real filter puts the landscape back", ground_y(6, 6), 5.0)
+
+_sig_flat = store.height_sig()
+set_level_ground(HUT, True)
+check("flagging the place changes the signature — it never moved",
+      store.height_sig() != _sig_flat, True)
 field = hf.get_field()
 check("the grid grew for the plateau + ramp",
       (field["rows"], field["cols"]), (15, 15))
@@ -622,6 +711,16 @@ check("the ramp is monotone",
 check("...and this rim is steeper than a walker climbs (43.2 deg)",
       round(math.degrees(math.atan2(5.0 - 1.25, 4.0)), 1), 43.2)
 
+set_level_ground(HUT, False)
+near("clearing the flag gives the landscape back at (6,6)",
+     ground_y(6, 6), 5.0)
+check("...the grid shrinks to the plain hill raster",
+      (hf.get_field()["rows"], hf.get_field()["cols"]), (13, 13))
+check("...and the signature is EXACTLY the one from before the flag",
+      store.height_sig(), _sig_flat)
+set_level_ground(HUT, True)
+near("flagging it again levels (6,6) once more", ground_y(6, 6), 1.25)
+
 _sig_before = store.height_sig()
 update_location_position(HUT, 20.0, 2.0, 0.0)
 check("moving the place changes the height signature",
@@ -641,13 +740,14 @@ print("\n[12] two places on one hill — sampled before, smallest wins")
 
 
 def place_square(name, x, z, width):
-    """A placed location with a scale anchor — the two inputs the raster has
-    of a place."""
+    """A placed location with a scale anchor and the flattening flag — the
+    three inputs the raster has of a place."""
     loc_id = add_location(name, "plateau smoke")["id"]
     data = _load_world_data()
     for loc in data["locations"]:
         if loc.get("id") == loc_id:
             loc["map3d"] = {"plan_width_m": width}
+            loc["level_ground"] = True
     _save_world_data(data)
     update_location_position(loc_id, x, z)
     return loc_id
