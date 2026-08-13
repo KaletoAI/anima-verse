@@ -39,7 +39,10 @@ wrap case. Hand-derived expectations:
     "n , ne"   -> case and blanks do not matter -> [[112.5, 202.5]]
 
   [1] the compass itself, against the direction formula.
-  [2] the arc resolution, the table above plus junk handling.
+  [2] the arc resolution, the table above plus junk handling — including the
+      WARNING an unreadable direction has to raise (read off the log, once per
+      setting), because dropping it silently escalates: mountains all around
+      instead of none, and that looks deliberate.
   [3] the RED COUNTER-PROBE: a mirrored degree convention (the other common
       one, 0 = North growing clockwise) must FAIL against the same table —
       otherwise the table would pass under either reading and prove nothing.
@@ -49,6 +52,8 @@ wrap case. Hand-derived expectations:
 
 Usage:  ./.venv/bin/python scripts/smoke_backdrop.py
 """
+import contextlib
+import logging
 import math
 import sys
 from pathlib import Path
@@ -93,6 +98,26 @@ def direction(deg):
     return round(math.sin(rad), 6), round(math.cos(rad), 6)
 
 
+@contextlib.contextmanager
+def captured_warnings():
+    """Collect the module's WARNING lines while the block runs — the log is
+    the deliverable here, so it is read rather than assumed."""
+    said = []
+
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.WARNING:
+                said.append(record.getMessage())
+
+    sink = _Sink()
+    logger = logging.getLogger("backdrop")
+    logger.addHandler(sink)
+    try:
+        yield said
+    finally:
+        logger.removeHandler(sink)
+
+
 def game():
     return config._CONFIG.setdefault("game", {})
 
@@ -110,11 +135,21 @@ def main() -> int:
     check("90° points east (+x)", direction(90), (1.0, 0.0))
     check("180° points north (−z)", direction(180), (0.0, -1.0))
     check("270° points west (−x)", direction(270), (-1.0, 0.0))
-    ne_x, ne_z = direction(135)
-    check_true("135° is north-EAST (x > 0, z < 0)", ne_x > 0 > ne_z,
-               f"({ne_x}, {ne_z})")
-    near("...and it is exactly halfway between N 180 and E 90",
-         (180 + 90) / 2, 135.0)
+    # Every one of the eight centres against its NAME, by the sign pattern of
+    # the direction: a word contains "N" exactly when the direction runs north
+    # (z < 0), "E" exactly when it runs east (x > 0), and a cardinal has a zero
+    # on the axis it does not use. That pins SE, NW and SW as well, which a
+    # check of the four cardinals alone would leave to trust.
+    for i, word in enumerate(backdrop._SEGMENTS):
+        dx, dz = direction(i * 45)
+        expect_north = "N" in word
+        expect_south = "S" in word
+        expect_east = "E" in word
+        expect_west = "W" in word
+        check_true(f"{word} at {i * 45}° points where its name says",
+                   (dz < 0) == expect_north and (dz > 0) == expect_south
+                   and (dx > 0) == expect_east and (dx < 0) == expect_west,
+                   f"({dx}, {dz})")
     check("the segment order walks the ring in 45° steps",
           backdrop._SEGMENTS,
           ("S", "SE", "E", "NE", "N", "NW", "W", "SW"))
@@ -138,6 +173,31 @@ def main() -> int:
           backdrop.resolve_arcs("up,north-ish,42"), [[0.0, 360.0]])
     check("junk BESIDE a direction is dropped, the direction stands",
           backdrop.resolve_arcs("N,banana"), [[157.5, 202.5]])
+    # ...and it is SAID, once: an unreadable direction escalates (all around
+    # instead of nothing), so it must not pass wordlessly. The warning lives on
+    # the reading side, `get_backdrop` — `resolve_arcs` stays pure.
+    clear()
+    game()["backdrop_enabled"] = True
+    game()["backdrop_arc"] = "N,banana"
+    with captured_warnings() as said:
+        block = backdrop.get_backdrop()
+    check("...and the arcs are still the readable half",
+          block["arcs"], [[157.5, 202.5]])
+    check_true("the dropped word is warned about", len(said) == 1,
+               f"{said}")
+    check_true("...naming the setting and the word",
+               said and "game.backdrop_arc" in said[0]
+               and "BANANA" in said[0], f"{said}")
+    with captured_warnings() as again:
+        backdrop.get_backdrop()
+    check("...but only ONCE (this runs on a 3-second poll)", len(again), 0)
+    clear()
+    game()["backdrop_enabled"] = True
+    game()["backdrop_arc"] = "N,NE"
+    with captured_warnings() as quiet:
+        backdrop.get_backdrop()
+    check("RED COUNTER-PROBE: a clean setting says nothing", len(quiet), 0)
+    clear()
     check("case and blanks do not matter",
           backdrop.resolve_arcs(" n , ne "), [[112.5, 202.5]])
     check("a repeated segment is still one segment",

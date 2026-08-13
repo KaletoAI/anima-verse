@@ -52,7 +52,12 @@ _warned: Dict[str, bool] = {}
 
 
 def _reject(setting: str, raw: Any, default: Any) -> Any:
-    """Log a discarded world setting ONCE and return the default."""
+    """Log a discarded world setting ONCE and return the default.
+
+    A deliberate copy of ``relief.py``'s channel rather than a shared helper:
+    the one-shot state has to be PER MODULE (its own settings, its own reset in
+    the smokes), and sharing it would couple two unrelated dial sets.
+    """
     if not _warned.get(setting):
         _warned[setting] = True
         logger.warning("Unusable %s (%r) — using the default %s",
@@ -169,8 +174,19 @@ def get_backdrop() -> Optional[Dict[str, Any]]:
     if not get_backdrop_enabled():
         return None
     from app.core import config
+    raw_arc = config.get("game.backdrop_arc", "")
+    # `resolve_arcs` stays pure and forgiving, but a word it does not know is
+    # SAID here: "Nord", "north", "NNE", "N;NE" are all plausible in a free
+    # text field, and dropping them silently escalates — an unreadable
+    # direction ends as mountains ALL AROUND, which looks deliberate.
+    unknown = [word for word in
+               (w.strip().upper() for w in str(raw_arc or "").split(","))
+               if word and word not in _SEGMENTS]
+    if unknown:
+        _reject("game.backdrop_arc", ", ".join(unknown),
+                "the remaining directions (none = the full ring)")
     return {
         "height_m": get_backdrop_height_m(),
         "seed": get_backdrop_seed(),
-        "arcs": resolve_arcs(config.get("game.backdrop_arc", "")),
+        "arcs": resolve_arcs(raw_arc),
     }
