@@ -109,10 +109,44 @@ const TUFT_HEIGHT_M = 0.8;
 const holeRect = { value: new THREE.Vector4(0, 0, 0, 0) };  // minX, minZ, maxX, maxZ
 const holeOn = { value: 0 };
 
-/** Give a ground material the hole test. Idempotent per material — each one is
- *  created once per rebuild and patched right here. */
-function patchHole(mat: THREE.Material): void {
-  mat.onBeforeCompile = (shader) => {
+/** The cache key this patch contributes. Exported so the smoke can pin the
+ *  COMBINED key without carrying a copy of the string. */
+export const HOLE_CACHE_KEY = 'ground-hole';
+
+/** Materials that already carry the hole test. The patch CHAINS onto whatever
+ *  sits in the slot, so applying it twice would declare `vHoleWorld` twice and
+ *  the shader would not compile — the old assignment was idempotent only by
+ *  accident, and the guard keeps the promise the assignment used to make. */
+const holePatched = new WeakSet<THREE.Material>();
+
+/**
+ * Give a ground material the hole test.
+ *
+ * CHAINED, never assigned. A painted water area arrives here with the ripple
+ * patch of `surfaceMaterial` (@anima/scene-render `materials.ts`) already in
+ * `onBeforeCompile`, and an assignment threw it away: one slot, two writers,
+ * last one wins. That is why painted lakes lay dead still while scene floors,
+ * tile plates and the admin previews rippled — the water shader was built and
+ * then overwritten one line later. So the previous callback runs FIRST (water
+ * ripple, tint, roughness mask, sky fresnel), the hole discard after it; the
+ * two touch different anchors and different varyings.
+ *
+ * The cache key is COMBINED for the same reason: three keys the compiled
+ * program on this string, so a rippling ground area and a matte one must not
+ * answer with the same key.
+ */
+export function patchHole(mat: THREE.Material): void {
+  if (holePatched.has(mat)) return;
+  holePatched.add(mat);
+  const prev = mat.onBeforeCompile;
+  // three's DEFAULT `customProgramCacheKey` returns `onBeforeCompile.toString()`
+  // — only a patch that declared a key of its OWN (water: 'anima-water') is
+  // worth carrying. Read here, before the slot below is overwritten.
+  const prevKey = Object.prototype.hasOwnProperty.call(mat, 'customProgramCacheKey')
+    ? String(mat.customProgramCacheKey())
+    : '';
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev.call(mat, shader, renderer);
     shader.uniforms.uHole = holeRect;
     shader.uniforms.uHoleOn = holeOn;
     shader.vertexShader = `varying vec3 vHoleWorld;\n${shader.vertexShader}`
@@ -129,10 +163,10 @@ function patchHole(mat: THREE.Material): void {
       ? body.replace('#include <clipping_planes_fragment>', `${test}\n#include <clipping_planes_fragment>`)
       : body.replace('void main() {', `void main() {\n${test}`);
   };
-  // One cache key for every ground material: they differ in maps and colours,
-  // not in the patch, and three.js keys the compiled program on this string
-  // PLUS the material's own defines.
-  mat.customProgramCacheKey = () => 'ground-hole';
+  // One cache key per PATCH COMBINATION: ground materials differ in maps and
+  // colours, not in the patch, and three.js keys the compiled program on this
+  // string PLUS the material's own defines.
+  mat.customProgramCacheKey = () => (prevKey ? `${prevKey}+${HOLE_CACHE_KEY}` : HOLE_CACHE_KEY);
 }
 
 /**

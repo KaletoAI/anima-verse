@@ -1206,7 +1206,11 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Richtung Himmelsfarbe. Beide Renderer bauen das Material aus **einer**
   Routine (`surfaceMaterial` in `@anima/scene-render`); die Himmelsfarbe
   reicht der Client aus seiner Tageszeit durch, die Vorschau einen festen
-  Tagwert. Die Textur der Art bleibt die Basisfarbe.
+  Tagwert. Die Textur der Art bleibt die Basisfarbe. Das gilt auch für die
+  GEMALTEN Weltflächen (§ A1.5): eine Fläche einer Wasser-Art kräuselt und
+  spiegelt dort genauso wie Szenen-Wasser, weil der Boden-Patch des 3D-Clients
+  (Keller-Loch) sich an den Wasser-Patch ANHÄNGT statt ihn zu überschreiben
+  (Befund 2026-08-14).
 - **Eine Zusammenstellung übernimmt das Material ihrer `toward`-Art**
   (2026-07-29) und wendet es NUR auf deren Zonen an. Eine Küste ist eine
   Platte mit einer gebackenen Textur; ohne Maske kräuselte der Sandstreifen
