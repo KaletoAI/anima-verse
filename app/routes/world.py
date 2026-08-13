@@ -353,6 +353,68 @@ def delete_terrain_area_route(area_id: str) -> Dict[str, Any]:
     return {"status": "success"}
 
 
+# === Height areas (world relief, E8) ===
+#
+# The same CRUD shape as the terrain areas next door — and deliberately a
+# SECOND set of routes rather than a flag on those: a height area carries no
+# kind, no layer and no scatter, and the ground under a painted meadow may
+# well rise. Mixing the two would put passability questions and height
+# questions into one body where every write has to say something about both.
+
+@router.get("/height-areas")
+def get_height_areas_route() -> Dict[str, Any]:
+    """All authored height areas plus the change signature."""
+    from app.models import heightfield
+    return {"areas": heightfield.list_height_areas(),
+            "sig": heightfield.height_sig()}
+
+
+@router.post("/height-areas")
+async def post_height_area_route(request: Request) -> Dict[str, Any]:
+    """Draw a new height area; the id is assigned by the server."""
+    from app.models import heightfield
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    data.pop("id", None)
+    try:
+        return {"status": "success",
+                "area": heightfield.save_height_area(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/height-areas/{area_id}")
+async def put_height_area_route(area_id: str, request: Request) -> Dict[str, Any]:
+    """Replace one EXISTING height area (outline, height, falloff, meta).
+
+    404 on an unknown id, for the reason the terrain route has it: the store is
+    an upsert, so a repeated stale PUT would otherwise raise a deleted hill
+    from the dead under its old id.
+    """
+    from app.models import heightfield
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    if not heightfield.height_area_exists(area_id):
+        raise HTTPException(status_code=404, detail="height area not found")
+    data["id"] = area_id
+    try:
+        return {"status": "success",
+                "area": heightfield.save_height_area(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/height-areas/{area_id}")
+def delete_height_area_route(area_id: str) -> Dict[str, Any]:
+    """Erase one height area — the ground there falls back to the flat world."""
+    from app.models import heightfield
+    if not heightfield.delete_height_area(area_id):
+        raise HTTPException(status_code=404, detail="height area not found")
+    return {"status": "success"}
+
+
 @router.delete("/locations/{location_name}")
 def delete_location_route(
     location_name: str,

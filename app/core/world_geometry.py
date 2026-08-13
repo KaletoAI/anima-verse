@@ -10,9 +10,15 @@ south. ``yaw_deg`` rotates clockwise when looking down onto the map, so at
 yaw 90 the local +x axis points at world -z.
 
 ``ground_y`` is THE v2 reservation (plan-freie-weltkarte.md): terrain height
-as a function of (x, z), constant 0.0 in v1. Every consumer — placement,
-journeys, renderers — must derive y through this function and never persist
-it; the relief stage (E8) swaps ONLY this implementation.
+as a function of (x, z). Every consumer — placement, journeys, renderers —
+derives y through this function and never persists it. E8 task 2 filled it in:
+it is no longer 0.0 but the authored world relief, and it is the ONE function
+that had to change for the world to become hilly.
+
+That one function is also the ONE thing in this module that is not pure math:
+it reads the rastered heightfield (``app.core.heightfield``, a cached grid over
+the DB). The import is local to the function, so everything else here stays
+DB-free and hand-checkable.
 """
 
 import math
@@ -20,8 +26,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def ground_y(x: float, z: float) -> float:
-    """Terrain height at (x, z) in world metres. v1: a flat world."""
-    return 0.0
+    """Ground height at (x, z) in WORLD metres — the authored relief (E8).
+
+    Bilinear over the rastered heightfield; 0.0 wherever nothing was authored,
+    which is the whole world until someone paints a height area. The height of
+    a DETAIL SCENE is not in here — a location's own relief is a second field
+    on top of this one, and ``relief.ground_lift_at`` is where the two meet.
+    """
+    from app.core.heightfield import world_height
+    return world_height(x, z)
 
 
 def local_to_world(lx: float, lz: float, cx: float, cz: float,

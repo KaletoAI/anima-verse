@@ -23,9 +23,9 @@ pass so the journey follows the terrain instead of the raster.
 Performance discipline (E1 review lesson): the terrain areas, the type
 catalog and the placed footprints are read ONCE into a :class:`NavContext`
 and every cell sample runs against that prefetched data — never a DB or
-config round trip per cell. The context is cached on the terrain
-signature plus a placement hash, so it survives every route that does not
-change the world; :func:`invalidate_nav_cache` drops it.
+config round trip per cell. The context is cached on the terrain and
+relief signatures plus a placement hash, so it survives every route that
+does not change the world; :func:`invalidate_nav_cache` drops it.
 """
 
 import hashlib
@@ -144,12 +144,16 @@ def _placement_sig(footprints: Sequence[Tuple[str, float, float, float,
 def build_nav_context() -> NavContext:
     """The current nav context — cached until the world changes.
 
-    The cache key is ``(terrain.terrain_sig(), placement hash)``: the first
-    covers painted areas + world terrain types, the second every placed
-    footprint (position, size, yaw). Checking it costs one areas read and
+    The cache key is ``(terrain.terrain_sig() + height_sig(), placement
+    hash)``: the first covers painted areas, world terrain types AND the
+    authored relief, the second every placed footprint (position, size, yaw).
+    The relief belongs in the key because the ground a route crosses is part of
+    what a cell is — a hill raised after the context was built must not be
+    routed over as if it were still flat. Checking it costs one areas read and
     one world read; building it adds the catalog on top.
     """
     global _CACHE
+    from app.models.heightfield import height_sig
     from app.models.terrain import list_areas, terrain_sig
     from app.models.world import list_locations
 
@@ -161,7 +165,7 @@ def build_nav_context() -> NavContext:
         cx, cz, width, yaw = fp
         footprints.append((str(loc.get("id") or ""), cx, cz, width, yaw))
 
-    key = (terrain_sig(), _placement_sig(footprints))
+    key = (terrain_sig() + ":" + height_sig(), _placement_sig(footprints))
     cached = _CACHE
     if cached is not None and cached[0] == key:
         return cached[1]

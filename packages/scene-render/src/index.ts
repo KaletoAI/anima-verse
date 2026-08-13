@@ -28,6 +28,9 @@ export type { CutoutHandle } from './cutouts'
 
 export { sampleTerrain, drapeGeometry, TERRAIN_CELLS } from './terrain'
 
+export { sampleWorldHeight } from './worldHeight'
+export type { WorldHeightField } from './worldHeight'
+
 export {
   buildAreaGeometry, signedArea, polygonArea, cleanRing, shapePoints,
   AREA_EPS_M2, AREA_POLYGON_OFFSET,

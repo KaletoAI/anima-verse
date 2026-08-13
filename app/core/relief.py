@@ -2,10 +2,10 @@
 
 THE FIRST CONSUMER OF A HEIGHT (E8 task 1). Until now every height in this
 world was a rendering detail: the scene payload lifted props and the renderers
-draped the ground, but no RULE ever asked how high anything was
-(``world_geometry.ground_y`` is still the flat v1 reservation). This module is
+draped the ground, but no RULE ever asked how high anything was. This module is
 where the ground starts pushing back — a step too high and a slope too steep
-stop a walker, on the relief the detail scenes already have.
+stop a walker, on the relief the detail scenes already have and, since task 2,
+on the authored world relief under them (``world_geometry.ground_y``).
 
 Three things live here, and they are deliberately separate:
 
@@ -219,9 +219,9 @@ def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
     """Height of a location's scene relief at the WORLD point (x, z), metres.
 
     0.0 everywhere else — outside a placed footprint, on a location without an
-    ``area_detail`` relief, and on the pinned border of the field itself. That
-    is not a placeholder: the world plate is flat until the E8 heightmap
-    lands, and the only heights that exist today are the detail scenes'.
+    ``area_detail`` relief, and on the pinned border of the field itself. This
+    is the SCENE half of the height alone: what the world ground does under it
+    is ``world_geometry.ground_y``, and ``ground_lift_at`` adds the two.
 
     THE FRAME, the one thing that can silently be wrong here. The payload is
     anchored around the TILE CENTRE in the location's own turned frame, and
@@ -279,14 +279,17 @@ def ground_lift_at(x: float, z: float,
     So the answer is the INNERMOST ENCLOSING location that HAS a relief:
     smallest footprint wins among those that do, exactly the way
     ``location_at_point`` resolves nesting, and a location without one is
-    simply transparent to the question. Outside every relief the world is flat
-    (0.0) until the E8 heightmap lands.
+    simply transparent to the question.
 
-    The E8 heightmap will change only this function: a world ground height gets
-    ADDED here and every rule inherits it, because there is no second place
-    that samples a height.
+    THE WORLD GROUND IS UNDER ALL OF IT (E8 task 2). ``ground_y`` is the
+    authored world relief, and a scene's own field is a lift ON TOP of it: its
+    border is pinned to 0, so a location standing on a hill rides up with the
+    hill instead of cutting a flat shelf into it. Outside every scene relief
+    the answer is the world ground alone, and in a world nobody has shaped it
+    is 0.0 — the flat plate as before.
     """
-    from app.core.world_geometry import placed_footprint, point_in_footprint
+    from app.core.world_geometry import (ground_y, placed_footprint,
+                                         point_in_footprint)
     best: Optional[Dict[str, Any]] = None
     best_width: Optional[float] = None
     for loc in locations or []:
@@ -300,4 +303,4 @@ def ground_lift_at(x: float, z: float,
             continue
         if best_width is None or width < best_width:
             best, best_width = loc, width
-    return scene_ground_lift(best, x, z)
+    return ground_y(x, z) + scene_ground_lift(best, x, z)

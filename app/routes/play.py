@@ -2197,6 +2197,38 @@ def get_terrain_route(user=Depends(get_current_user)):
     }
 
 
+@router.get("/play/heightfield")
+def get_heightfield_route(user=Depends(get_current_user)):
+    """The world relief as a grid of support points (§ A16).
+
+    Auth and fog exactly like ``/play/terrain``: any logged-in user, never
+    fogged. A relief is not local knowledge — the ridge on the horizon is
+    visible from far outside anything the avatar has discovered, and hiding it
+    would only make the ground disagree with the picture.
+
+    Its own endpoint (not a block in the worldmap poll) because it is by far
+    the largest thing the map has: the payload is refetched when the worldmap's
+    ``height_sig`` changes, and never otherwise.
+
+    ``heights[j][i]`` is the height in metres at
+    ``(origin_x + i·step_m, origin_z + j·step_m)``; between the points the
+    field is BILINEAR (``@anima/scene-render`` ``sampleWorldHeight``, the twin
+    of ``app/core/heightfield.sample_height``). An empty world answers
+    ``rows``/``cols`` 0 and an empty ``heights`` — a flat world, not an error.
+    """
+    from app.core.heightfield import get_field
+    field = get_field()
+    return {
+        "origin_x": field.get("origin_x", 0.0),
+        "origin_z": field.get("origin_z", 0.0),
+        "step_m": field.get("step_m", 0.0),
+        "rows": field.get("rows", 0),
+        "cols": field.get("cols", 0),
+        "heights": field.get("heights", []),
+        "sig": field.get("sig", ""),
+    }
+
+
 @router.get("/play/scenes")
 async def play_scenes(user=Depends(get_current_user), limit: int = 5):
     """„Was bisher geschah" — zuletzt konsolidierte Szenen, an denen der Avatar

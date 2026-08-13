@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""Smoke run for the WORLD HEIGHTFIELD — authoring, rastering, sampling
+(Seamless World, E8 task 2).
+
+Throwaway storage, no server, no real world. Every number below is derived BY
+HAND in this header from the rules, never recorded from the current output.
+
+THE RULES BEING CHECKED
+-----------------------
+A height AREA is a polygon plus ``height_m`` (how high the ground stands
+inside) and ``falloff_m`` (over how many metres it climbs there from the
+outline). The server RASTERS the areas onto a grid of support points and
+samples that grid bilinearly; nobody edits the grid.
+
+    h_area(p) = height_m · min(1, distance_from_p_to_the_outline / falloff_m)
+                for p INSIDE the outline, otherwise the area says nothing
+
+Per support point the STRONGEST deflection from the flat world wins (largest
+|value|), so two hills resolve to "the higher one" and a hollow is not beaten
+by the 0 of the ground around it.
+
+THE LATTICE IS ANCHORED AT THE WORLD ORIGIN (0, 0) — section [6] is the whole
+reason this matters, and it is the finding this task was told to respect:
+``world_bounds`` grows, and a grid derived from it would move every sample
+point in the world whenever someone painted at the far edge.
+
+  origin = floor(min / step) · step − step          (one ring OUTSIDE the data)
+  points = ceil((max + step − origin) / step) + 1   (and one ring past it)
+
+so the whole border of every raster is 0, which is what makes "clamp to the
+border outside the grid" mean "the flat world".
+
+THE SHAPES USED BELOW (step 4 m, the default, throughout)
+--------------------------------------------------------
+  HILL   square (0,0)-(40,40), height 5, falloff 4
+  SOFT   the same square,      height 5, falloff 8
+  BIG    square (20,20)-(60,60), height 9, falloff 4
+  PIT    the same square as BIG, height −9, falloff 4
+  VALLEY the HILL square with height −3, falloff 4
+
+[1] RASTER GEOMETRY of HILL alone. bbox (0,0)-(40,40):
+      origin = floor(0/4)·4 − 4 = −4 on both axes
+      points = ceil((40 + 4 + 4)/4) + 1 = 12 + 1 = 13 per axis
+    so heights[j][i] is the height at (−4 + 4i, −4 + 4j), 13 × 13.
+      (−4,−4) i=0 j=0   outside the outline            -> 0
+      ( 0, 0) i=1 j=1   ON the outline, distance 0     -> 5 · 0/4  = 0
+      ( 4, 4) i=2 j=2   distance 4 to the nearest edge -> 5 · 4/4  = 5
+      (20,20) i=6 j=6   distance 20                    -> 5 (capped by min)
+      (40,20) i=11 j=6  ON the east edge, distance 0   -> 0
+      (44,44) i=12 j=12 outside                        -> 0
+[2] THE RAMP, with SOFT (falloff 8) on the same square:
+      ( 4, 4) distance 4 -> 5 · 4/8 = 2.5
+      ( 8, 8) distance 8 -> 5 · 8/8 = 5
+      (20,20) distance 20, min caps the ramp at 1 -> 5
+[3] OVERLAP. HILL + BIG together, bbox (0,0)-(60,60):
+      origin −4, points = ceil((60+4+4)/4)+1 = 17+1 = 18 per axis.
+      (32,32) HILL: distance min(32, 8, 32, 8) = 8 -> 5 · 1 = 5
+              BIG:  distance min(12, 28, 12, 28) = 12 -> 9 · 1 = 9
+              |9| > |5| -> 9          "the higher area wins"
+      ( 4, 4) only HILL covers it -> 5
+      (56,56) only BIG covers it, distance min(36,4,36,4) = 4 -> 9
+    HILL + PIT (the same square as BIG, −9):
+      (32,32) 5 against −9: |−9| > |5| -> −9
+    VALLEY alone:
+      (20,20) -> −3, and NOT 0: a hollow that lost against the flat world
+                 would make every valley un-authorable.
+[4] SANITIZER. height_m is CLAMPED (an authoring slip moves the ground to the
+    limit, it does not lose the shape): 80 -> 50, −80 -> −50, junk/absent ->
+    0.0. falloff_m is a width: −5 -> 0 (a wall, legal), 2000 -> 1000.
+    The outline follows the terrain-area rules: 2 points, 257 points, a
+    coordinate of 1e9, NaN and a dict vertex all raise ValueError. New ids are
+    prefixed "ha_".
+[5] SIGNATURE + STORE + ground_y. With HILL saved:
+      ground_y(20,20) = 5.0                (a support point)
+      ground_y( 2, 2) = 1.25               bilinear between (0,0)=0, (4,0)=0,
+                                           (0,4)=0 and (4,4)=5, both fractions
+                                           0.5 -> 0.25·5
+      ground_y( 2,20) = 2.5                between (0,20)=0 and (4,20)=5,
+                                           fraction 0.5, exactly on the z line
+      ground_y(−100,−100) = 0.0            outside -> the 0 border
+    The stored grid carries the signature it was built from (13 × 13 here),
+    the signature changes on save, on edit and comes BACK to the empty one
+    when the area is deleted (same areas, same signature), and ground_y is 0
+    again afterwards — the write-through invalidation, without which the
+    world would stay hilly after the hill was erased.
+[6] THE ANCHORED LATTICE. FAR = square (100,0)-(140,40), height 5, falloff 4.
+    Rastered ALONE: origin_x = floor(100/4)·4 − 4 = 96.
+    Rastered TOGETHER with a shape 600 m to the west (WEST, (−500,0)-(−460,40)):
+    origin_x = floor(−500/4)·4 − 4 = −504. Different origin, different index —
+    and the SAME height at the same world point, because both origins sit on
+    the 4 m lattice through (0, 0). Checked at (120, 20) (a support point in
+    both) and at (118, 20) (between two, so the bilinear mix is compared too).
+[7] COARSENING. A single square (0,0)-(8000,8000) would need
+    ceil((8000+4+4)/4)+1 = 2003 points per axis = 4.0 M — past MAX_POINTS
+    (120 000). The step doubles until it fits: 8 -> 1003² = 1.0 M, 16 -> 503²
+    = 253 009, 32 -> ceil((8000+32+32)/32)+1 = 253 per axis = 64 009. So
+    step_m 32 and 253 × 253. Doubling keeps the lattice anchored at the
+    origin, so a coarser grid still samples a subset of the finer points.
+[8] THE SHARED SAMPLER's table, hand-derived on a 3 × 3 field with a single
+    5 m peak in the middle — the SAME field and the SAME expectations as
+    ``client3d/scripts/smoke_world_height.mjs``. Twin discipline: one bilinear
+    rule, two implementations, one table.
+      field: origin (−4,−4), step 4, heights [[0,0,0],[0,5,0],[0,0,0]]
+      ( 0, 0) the peak                                  -> 5
+      ( 2, 0) fx 1.5 -> i 1, tx .5; fz 1 -> j 1, tz 0   -> 2.5
+      ( 2, 2) both fractions .5, one corner carries 5   -> 1.25
+      ( 0,−2) fz 0.5 between the 0 row and the peak row -> 2.5
+      (−4,−4) the corner point itself                   -> 0
+      (100,0) outside east: fx clamps to 2, i = 1, tx 1 -> 0 (border)
+      (−100,−100) outside north-west: the corner        -> 0
+      a field with a single row (rows < 2) carries no relief -> 0
+[9] ROUTES. POST assigns the id; PUT on an unknown id is 404 and creates
+    NOTHING (the store is an upsert, so a repeated stale PUT would otherwise
+    resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
+    404 the second time. GET /play/heightfield returns exactly the field plus
+    its signature.
+
+Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
+"""
+import asyncio
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+STORAGE = Path(tempfile.mkdtemp(prefix="heightfield-smoke-"))
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="heightfield-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(STORAGE)
+from app.core import db  # noqa: E402
+db.init_schema()
+
+from app.core import heightfield as hf  # noqa: E402
+from app.core.world_geometry import ground_y  # noqa: E402
+from app.models import heightfield as store  # noqa: E402
+
+FAILURES = []
+CHECKED = 0
+
+
+def check(label, actual, expected):
+    global CHECKED
+    CHECKED += 1
+    ok = actual == expected
+    print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
+          + ("" if ok else f" — expected {expected!r}"))
+    if not ok:
+        FAILURES.append(label)
+
+
+def near(label, actual, expected, tol=1e-9):
+    global CHECKED
+    CHECKED += 1
+    ok = abs(float(actual) - float(expected)) <= tol
+    print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
+          + ("" if ok else f" — expected {expected!r}"))
+    if not ok:
+        FAILURES.append(label)
+
+
+def raises_value_error(label, fn):
+    global CHECKED
+    CHECKED += 1
+    try:
+        fn()
+    except ValueError as e:
+        print(f"  ✓ {label}: ValueError({str(e)!r})")
+        return
+    except Exception as e:  # noqa: BLE001 — anything else is the defect
+        print(f"  ✗ {label}: {type(e).__name__}({e}) — expected ValueError")
+        FAILURES.append(label)
+        return
+    print(f"  ✗ {label}: no exception — expected ValueError")
+    FAILURES.append(label)
+
+
+def square(x0, z0, x1, z1):
+    return [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
+
+
+def at(field, i, j):
+    """The stored support point (i, j) — the raster, not a sample."""
+    return field["heights"][j][i]
+
+
+HILL = {"id": "hill", "polygon": square(0, 0, 40, 40),
+        "height_m": 5.0, "falloff_m": 4.0}
+SOFT = {"id": "soft", "polygon": square(0, 0, 40, 40),
+        "height_m": 5.0, "falloff_m": 8.0}
+BIG = {"id": "big", "polygon": square(20, 20, 60, 60),
+       "height_m": 9.0, "falloff_m": 4.0}
+PIT = {"id": "pit", "polygon": square(20, 20, 60, 60),
+       "height_m": -9.0, "falloff_m": 4.0}
+VALLEY = {"id": "valley", "polygon": square(0, 0, 40, 40),
+          "height_m": -3.0, "falloff_m": 4.0}
+
+print("[1] raster geometry of one area")
+f1 = hf.rasterize([HILL])
+check("origin", (f1["origin_x"], f1["origin_z"]), (-4.0, -4.0))
+check("step", f1["step_m"], 4.0)
+check("shape", (f1["rows"], f1["cols"]), (13, 13))
+near("(-4,-4) outside", at(f1, 0, 0), 0.0)
+near("(0,0) on the outline", at(f1, 1, 1), 0.0)
+near("(4,4) one falloff in", at(f1, 2, 2), 5.0)
+near("(20,20) deep inside", at(f1, 6, 6), 5.0)
+near("(40,20) on the east edge", at(f1, 11, 6), 0.0)
+near("(44,44) the 0 ring", at(f1, 12, 12), 0.0)
+
+print("[2] the ramp (falloff 8)")
+f2 = hf.rasterize([SOFT])
+near("(4,4) half way up", at(f2, 2, 2), 2.5)
+near("(8,8) at the top", at(f2, 3, 3), 5.0)
+near("(20,20) capped", at(f2, 6, 6), 5.0)
+
+print("[3] overlap — the strongest deflection wins")
+f3 = hf.rasterize([HILL, BIG])
+check("shape", (f3["rows"], f3["cols"]), (18, 18))
+near("(32,32) the higher area", at(f3, 9, 9), 9.0)
+near("(4,4) only the hill", at(f3, 2, 2), 5.0)
+near("(56,56) only the big one", at(f3, 15, 15), 9.0)
+f3b = hf.rasterize([HILL, PIT])
+near("(32,32) hill against pit", at(f3b, 9, 9), -9.0)
+f3c = hf.rasterize([VALLEY])
+near("(20,20) a hollow survives", at(f3c, 6, 6), -3.0)
+# The order of the list must not decide anything (compared as a whole grid,
+# reported as one word — 18 × 18 numbers in the log are not a check).
+check("order does not matter",
+      hf.rasterize([BIG, HILL])["heights"] == f3["heights"], True)
+
+print("[4] the sanitizer")
+check("id prefix", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1)})["id"][:3], "ha_")
+check("height clamped up", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1), "height_m": 80})["height_m"], 50.0)
+check("height clamped down", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1), "height_m": -80})["height_m"], -50.0)
+check("junk height is flat", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1), "height_m": "abc"})["height_m"], 0.0)
+check("absent height is flat", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1)})["height_m"], 0.0)
+check("NaN height is flat", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1), "height_m": float("nan")})["height_m"], 0.0)
+check("negative falloff is a wall", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1), "falloff_m": -5})["falloff_m"], 0.0)
+check("falloff clamped", store.sanitize_height_area(
+    {"polygon": square(0, 0, 1, 1), "falloff_m": 2000})["falloff_m"], 1000.0)
+raises_value_error("2 points", lambda: store.sanitize_height_area(
+    {"polygon": [[0, 0], [1, 1]]}))
+raises_value_error("257 points", lambda: store.sanitize_height_area(
+    {"polygon": [[0, 0]] * 257}))
+raises_value_error("coordinate 1e9", lambda: store.sanitize_height_area(
+    {"polygon": square(0, 0, 1e9, 1)}))
+raises_value_error("NaN coordinate", lambda: store.sanitize_height_area(
+    {"polygon": [[0, 0], [1, 0], [float("nan"), 1]]}))
+raises_value_error("dict vertex", lambda: store.sanitize_height_area(
+    {"polygon": [[0, 0], [1, 0], {"x": 1, "z": 1}]}))
+raises_value_error("not an object", lambda: store.sanitize_height_area("hill"))
+
+print("[5] signature, store and ground_y")
+sig_empty = store.height_sig()
+check("signature length", len(sig_empty), 10)
+saved = store.save_height_area({"polygon": square(0, 0, 40, 40),
+                                "height_m": 5, "falloff_m": 4})
+sig_one = store.height_sig()
+check("saving changes the signature", sig_one != sig_empty, True)
+near("ground_y at a support point", ground_y(20, 20), 5.0)
+near("ground_y between four points", ground_y(2, 2), 1.25)
+near("ground_y on a grid line", ground_y(2, 20), 2.5)
+near("ground_y outside the grid", ground_y(-100, -100), 0.0)
+grid = store.load_grid()
+check("the stored grid carries its signature", grid["sig"], sig_one)
+check("the stored shape", (grid["rows"], grid["cols"]), (13, 13))
+store.save_height_area({"id": saved["id"], "polygon": square(0, 0, 40, 40),
+                        "height_m": 9, "falloff_m": 4})
+check("editing changes the signature", store.height_sig() != sig_one, True)
+near("ground_y follows the edit", ground_y(20, 20), 9.0)
+check("delete", store.delete_height_area(saved["id"]), True)
+check("the signature comes back", store.height_sig(), sig_empty)
+near("ground_y is flat again", ground_y(20, 20), 0.0)
+check("deleting twice", store.delete_height_area(saved["id"]), False)
+
+print("[6] the lattice is anchored at the world origin")
+FAR = {"id": "far", "polygon": square(100, 0, 140, 40),
+       "height_m": 5.0, "falloff_m": 4.0}
+WEST = {"id": "west", "polygon": square(-500, 0, -460, 40),
+        "height_m": 2.0, "falloff_m": 4.0}
+alone = hf.rasterize([FAR])
+grown = hf.rasterize([FAR, WEST])
+check("origin alone", alone["origin_x"], 96.0)
+check("origin after the world grew west", grown["origin_x"], -504.0)
+near("same support point, same height",
+     hf.sample_height(grown, 120, 20), hf.sample_height(alone, 120, 20))
+near("same height between points",
+     hf.sample_height(grown, 118, 20), hf.sample_height(alone, 118, 20))
+near("and it is a real height, not two zeros",
+     hf.sample_height(alone, 120, 20), 5.0)
+
+print("[7] coarsening past the point budget")
+huge = hf.rasterize([{"id": "huge", "polygon": square(0, 0, 8000, 8000),
+                      "height_m": 5.0, "falloff_m": 4.0}])
+check("step doubled to", huge["step_m"], 32.0)
+check("shape", (huge["rows"], huge["cols"]), (253, 253))
+
+print("[8] the shared sampler's table")
+FIELD = {"origin_x": -4.0, "origin_z": -4.0, "step_m": 4.0,
+         "rows": 3, "cols": 3,
+         "heights": [[0, 0, 0], [0, 5, 0], [0, 0, 0]]}
+near("(0,0) the peak", hf.sample_height(FIELD, 0, 0), 5.0)
+near("(2,0) half a cell east", hf.sample_height(FIELD, 2, 0), 2.5)
+near("(2,2) diagonally between", hf.sample_height(FIELD, 2, 2), 1.25)
+near("(0,-2) half a cell north", hf.sample_height(FIELD, 0, -2), 2.5)
+near("(-2,0) half a cell west", hf.sample_height(FIELD, -2, 0), 2.5)
+near("(-4,-4) the corner point", hf.sample_height(FIELD, -4, -4), 0.0)
+near("(100,0) far east clamps to the border",
+     hf.sample_height(FIELD, 100, 0), 0.0)
+near("(-100,-100) far north-west", hf.sample_height(FIELD, -100, -100), 0.0)
+near("a single row carries no relief",
+     hf.sample_height({"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
+                       "rows": 1, "cols": 3, "heights": [[1, 2, 3]]}, 4, 0), 0.0)
+near("the empty world as the endpoint sends it",
+     hf.sample_height({"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
+                       "rows": 0, "cols": 0, "heights": []}, 0, 0), 0.0)
+near("no field at all", hf.sample_height(None, 0, 0), 0.0)
+
+print("[9] the routes")
+from fastapi import HTTPException  # noqa: E402
+from app.routes.world import (delete_height_area_route,  # noqa: E402
+                              post_height_area_route, put_height_area_route)
+from app.routes.play import get_heightfield_route  # noqa: E402
+
+
+class _FakeRequest:
+    """Minimal stand-in: the routes only ever await ``request.json()``."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+posted = asyncio.run(post_height_area_route(_FakeRequest(
+    {"id": "ignored", "polygon": square(0, 0, 40, 40),
+     "height_m": 5, "falloff_m": 4})))
+new_id = posted["area"]["id"]
+check("POST assigns its own id", new_id != "ignored" and new_id[:3] == "ha_",
+      True)
+
+
+def route_status(fn, *args):
+    try:
+        asyncio.run(fn(*args)) if asyncio.iscoroutinefunction(fn) else fn(*args)
+    except HTTPException as e:
+        return e.status_code
+    return 200
+
+
+check("PUT on an unknown id", route_status(
+    put_height_area_route, "ha_nope",
+    _FakeRequest({"polygon": square(0, 0, 4, 4)})), 404)
+check("nothing was created", len(store.list_height_areas()), 1)
+check("PUT on the live id", route_status(
+    put_height_area_route, new_id,
+    _FakeRequest({"polygon": square(0, 0, 40, 40), "height_m": 7,
+                  "falloff_m": 4})), 200)
+check("the edit landed", store.list_height_areas()[0]["height_m"], 7.0)
+
+payload = get_heightfield_route(user={"role": "user"})
+check("payload keys", sorted(payload.keys()),
+      ["cols", "heights", "origin_x", "origin_z", "rows", "sig", "step_m"])
+check("payload signature", payload["sig"], store.height_sig())
+check("payload shape", (payload["rows"], payload["cols"]), (13, 13))
+near("payload height at (20,20)",
+     payload["heights"][6][6], 7.0)
+
+check("DELETE", route_status(delete_height_area_route, new_id), 200)
+check("DELETE again", route_status(delete_height_area_route, new_id), 404)
+
+print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
+sys.exit(1 if FAILURES else 0)

@@ -162,6 +162,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     ``yaw_deg``; every character carries its free metre point in ``pos``.
     Painted terrain is deliberately NOT in here — clients fetch
     ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
+    The world RELIEF travels the same way: ``height_sig`` is the trigger,
+    ``GET /play/heightfield`` the payload (§ A16).
     The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
     along: the client mirrors the height gate of ``POST /play/pos`` and needs
     the very numbers the server judges with.
@@ -190,6 +192,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
     from app.core.world_geometry import placed_footprint
+    from app.models.heightfield import height_sig
     from app.models.terrain import list_areas, terrain_sig
 
     avatar = (avatar_name or "").strip()
@@ -541,6 +544,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # Signature of the painted terrain (areas + world type rows), read
         # ONCE per payload: when it changes, clients refetch /play/terrain.
         "terrain_sig": terrain_sig(),
+        # Signature of the authored world RELIEF (E8 task 2). Same job as
+        # `terrain_sig` and the same reason it rides here: when it changes,
+        # clients refetch `GET /play/heightfield` — the one payload too big to
+        # send with a 3-second poll.
+        "height_sig": height_sig(),
         "fogged": fogged,
         # The two WALK LIMITS (§ A12, E8 task 1). They are world settings the
         # server judges every reported point with (`POST /play/pos`, § A15),

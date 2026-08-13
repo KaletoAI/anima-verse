@@ -695,6 +695,40 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
+
+    # ── World relief (E8 task 2) ─────────────────────────────────────────
+    # One authored HEIGHT AREA: an outline in world metres (JSON [[x, z], ...])
+    # that lifts (or sinks) the ground inside it to `height_m`, ramping there
+    # linearly over the last `falloff_m` metres before its edge. This is the
+    # authoring SOURCE; the grid below is derived from it and nothing else.
+    # See app/models/heightfield.py.
+    """CREATE TABLE IF NOT EXISTS height_areas (
+        id         TEXT PRIMARY KEY,
+        polygon    TEXT NOT NULL,
+        height_m   REAL NOT NULL DEFAULT 0,
+        falloff_m  REAL NOT NULL DEFAULT 0,
+        meta       TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+
+    # The RASTERED world heightfield — one row (id = 1), the derived cache of
+    # the height areas above. Origin and step travel WITH the data: the grid
+    # lattice is anchored at the world origin (0, 0) and never at world_bounds,
+    # so growing the world moves no sample point. `sig` is the signature of the
+    # areas this raster was built from; a mismatch means "re-raster".
+    # See app/core/heightfield.py.
+    """CREATE TABLE IF NOT EXISTS world_heightfield (
+        id         INTEGER PRIMARY KEY CHECK (id = 1),
+        origin_x   REAL NOT NULL,
+        origin_z   REAL NOT NULL,
+        step_m     REAL NOT NULL,
+        n_rows     INTEGER NOT NULL,
+        n_cols     INTEGER NOT NULL,
+        heights    TEXT NOT NULL,
+        sig        TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
 ]
 
 

@@ -429,7 +429,7 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
 
 ### A1.2 `ground_y(x, z)` — die Höhen-Reservierung (bindend)
 
-Bodenhöhe ist eine **Funktion**, kein Feld. v1 liefert konstant `0.0`.
+Bodenhöhe ist eine **Funktion**, kein Feld.
 
 - **Keine Position in irgendeinem Payload trägt ein `y`** — weder ein
   Charakterpunkt noch eine Fläche noch eine Reise-Polyline.
@@ -438,6 +438,18 @@ Bodenhöhe ist eine **Funktion**, kein Feld. v1 liefert konstant `0.0`.
 - Das Höhenrelief (E8) tauscht **ausschließlich** diese Implementierung.
   Wer sich daran hält, sieht die Welt einfach hügelig werden; wer ein y
   gespeichert hat, hängt in der Luft.
+
+> **Eingelöst mit E8 Task 2 (2026-08-13).** `ground_y` liefert nicht mehr
+> konstant `0.0`, sondern das **autorierte Weltrelief**: bilinear aus dem
+> Höhen-Gitter (**§ A16**), `0.0` überall dort, wo niemand etwas modelliert
+> hat. Der Satz oben bleibt Wort für Wort gültig — genau deshalb hat der
+> Umbau KEIN einziges Payload-Feld gekostet: die Höhe ist weiterhin
+> **ableitbar** und steht in keiner Position. Wer sie ableitet, sieht Hügel;
+> wer sie irgendwo gespeichert hat, hängt jetzt tatsächlich in der Luft.
+> Die Szenenhöhe einer Location ist ein ZWEITES Feld **auf** diesem
+> (`relief.ground_lift_at` addiert beide) — der Rand eines Szenen-Reliefs ist
+> auf 0 gepinnt, ein Ort auf einem Hügel fährt also mit dem Hügel hoch,
+> statt ein flaches Regal hineinzuschneiden.
 
 ### A1.3 `GET /play/worldmap` — Payload v2
 
@@ -457,12 +469,14 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 
 Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 `locations` · `characters` · `events_by_location` · `world_bounds` ·
-`terrain_sig` · `fogged` · `max_step_height_m` · `max_slope_deg`.
+`terrain_sig` · `height_sig` · `fogged` · `max_step_height_m` ·
+`max_slope_deg`.
 
 | Wurzelfeld | Typ | Bedeutung |
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
+| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** (E8 Task 2). Ändert sie sich, holt der Client `GET /play/heightfield` neu — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
@@ -659,6 +673,10 @@ Routers.
 | `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
 | `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche; **404**, wenn es sie nicht gab |
+| `GET /world/height-areas` | `{areas, sig}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge |
+| `POST /world/height-areas` | Neue Höhenfläche, **die Id vergibt der Server** → `{status, area}` |
+| `PUT /world/height-areas/{id}` | Ersetzt `polygon`/`height_m`/`falloff_m`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
+| `DELETE /world/height-areas/{id}` | Löscht eine Höhenfläche (der Boden dort fällt auf die flache Welt zurück); **404**, wenn es sie nicht gab |
 
 Geprüft wird **beim Schreiben**, nicht beim Lesen (die Leser scheitern
 still): Art muss im Katalog stehen · Polygon 3–256 endliche
@@ -666,6 +684,14 @@ still): Art muss im Katalog stehen · Polygon 3–256 endliche
 geklemmt auf ±10 000 · `speed_factor` geklemmt auf 0…2 (nicht-endlich →
 1,0) · `color` genau `#rrggbb` · `kind` klein, 1–40 Zeichen aus
 `[a-z0-9_-]`.
+
+Für **Höhenflächen** gilt dieselbe Polygon-Regel; die beiden Zahlen werden
+dagegen **geklemmt statt abgelehnt** (ein Vertipper soll den Boden auf die
+Grenze schieben, nicht die gezeichnete Form kosten): `height_m` auf
+±50 m, unlesbar/fehlend → 0,0 (eine flache Fläche, die nichts ändert),
+`falloff_m` auf 0…1 000 m — 0 heißt „kein Übergang“, eine Wand an der
+Kontur. Das ist erlaubt (ein Plateau, das man über eine Öffnung betritt);
+der Editor warnt nur, wenn der Anstieg steiler wird als `max_slope_deg`.
 
 ### A1.8 Was aus dem alten § A1 weitergilt (Innenszene)
 
@@ -1736,6 +1762,106 @@ Aufwachen ([18]). Fall [20] ist „Footprint gewinnt" mit Gegenprobe: derselbe
 Fels-Punkt wird INNERHALB der Location angenommen und, nachdem die Location
 gelöscht ist, als `impassable` abgelehnt. Die Routing-Hälfte steht in
 `scripts/smoke_nav_grid.py` [12].
+
+---
+
+## A16. Das Weltrelief — `GET /play/heightfield` — neu 2026-08-13 (E8 Task 2)
+
+**Der Boden der offenen Welt ist ab hier eine Landschaft.** Bis E8 war jede
+Höhe eine Sache der Innenszene; draußen war die Welt die flache v1-Platte.
+Autoriert wird sie im Karten-Editor als **Höhenflächen**, ausgeliefert wird
+sie als **Gitter**, und `ground_y(x, z)` (§ A1.2) ist die eine Funktion, die
+beides verbindet.
+
+**Zwei Formen, nur eine wird bearbeitet.** Eine **Höhenfläche** ist ein
+Polygon in Weltmetern plus `height_m` (wie hoch der Boden darin steht) und
+`falloff_m` (über wie viele Meter er dorthin ansteigt). Das **Gitter** ist
+daraus gerechnet — ein Cache, keine Autorierungsfläche. Niemand bearbeitet
+Zellen.
+
+```
+h_flaeche(p) = height_m · min(1, Abstand(p, Kontur) / falloff_m)
+               für p INNERHALB der Kontur, sonst sagt die Fläche nichts
+```
+
+Die Fläche trifft die Welt also **auf ihrer eigenen Kontur** bei 0 und
+braucht keinen passenden Nachbarn, um stetig auszusehen. `falloff_m` 0 heißt
+„kein Übergang“ — eine Wand an der Kante.
+
+**Überlappung: die STÄRKSTE Auslenkung gewinnt** (größter `|Wert|`, bei
+Gleichstand der höhere). Für zwei Hügel ist das wörtlich „der höhere
+gewinnt“; als Auslenkung formuliert, damit eine **Senke** (negatives
+`height_m`) nicht von der 0 der flachen Welt drumherum geschlagen wird.
+Deterministisch: dieselben Flächen ergeben dasselbe Gitter, auf jeder
+Maschine.
+
+**Das Gitter hängt am WELT-URSPRUNG, nie an `world_bounds`.** Jeder
+Stützpunkt sitzt auf einem Vielfachen von `step_m`, gezählt ab (0, 0):
+
+```
+origin = floor(min / step) · step − step          # ein Ring AUSSERHALB der Daten
+punkte = ceil((max + step − origin) / step) + 1   # und einer dahinter
+```
+
+Damit verschiebt eine neu gemalte Fläche am Weltrand **keinen einzigen
+bestehenden Stützpunkt** — ein aus der aktuellen Ausdehnung abgeleitetes
+Gitter würde bei jedem Anbau alle Höhen der Welt verrücken (Inventar-Befund
+5). Und weil der komplette Rand außerhalb aller Flächen liegt, ist er 0:
+**außerhalb des Gitters gilt der Randwert**, und das bedeutet exakt „die
+flache Welt“.
+
+`step_m` ist standardmäßig **4 m** und reist MIT dem Datensatz. Reicht die
+bemalte Ausdehnung über das Punktbudget (120 000 Stützpunkte), wird der
+Schritt **verdoppelt**, bis es passt — ein doppelt so weites Land bekommt ein
+gröberes Relief, kein abgeschnittenes. Verdoppeln hält das Gitter am
+Ursprung verankert. `height_m` ist auf **±50 m** geklemmt (§ A1.7), auch weil
+der 3D-Client seine Kacheln aus fester Höhe anrayct.
+
+**Payload** (Auth wie `/play/terrain`: eingeloggter User, **kein** Admin-Gate,
+**nie gefoggt**). Eigener Endpoint aus demselben Grund wie das Gelände — und
+doppelt so triftig, weil ein Gitter größer ist als eine Flächenliste. Geholt
+wird er einmal und neu, wenn `height_sig` in der Weltkarte wechselt.
+
+```
+{ origin_x, origin_z,   # Weltmeter des Stützpunkts heights[0][0]
+  step_m,               # Abstand zweier Stützpunkte in Metern
+  rows, cols,           # Gitterform; 0/0 + heights [] = flache Welt
+  heights: [[float, …], …],   # heights[j][i] = Höhe bei
+                              # (origin_x + i·step_m, origin_z + j·step_m)
+  sig }                 # identisch mit worldmap.height_sig
+```
+
+**Zwischen den Stützpunkten ist das Feld BILINEAR**, und zwar in beiden
+Sprachen gleich:
+
+```
+fx = clamp((x − origin_x)/step, 0, cols−1);  i = min(floor(fx), cols−2);  tx = fx − i
+fz = clamp((z − origin_z)/step, 0, rows−1);  j = min(floor(fz), rows−2);  tz = fz − j
+nord = h[j][i]·(1−tx) + h[j][i+1]·tx
+sued = h[j+1][i]·(1−tx) + h[j+1][i+1]·tx
+h    = nord·(1−tz) + sued·tz
+```
+
+Ein Feld mit weniger als 2 × 2 Punkten trägt kein Relief und antwortet 0.
+
+**Zwillings-Disziplin (verbindlich).** `app/core/heightfield.sample_height`
+und `packages/scene-render/src/worldHeight.ts` (`sampleWorldHeight`) sind
+dieselbe Formel zweimal, und sie müssen es bleiben: der Server lehnt eine
+Laufmeldung nach SEINER Lesung des Feldes ab (§ A15 Nr. 8), der Renderer
+drapiert den Boden nach seiner. Beide werden gegen **eine** von Hand
+hergeleitete Tabelle geprüft — `scripts/smoke_heightfield.py` Abschnitt [8]
+und `client3d/scripts/smoke_world_height.mjs`, dasselbe Feld, dieselben
+Erwartungen (§ B5a: Zahlen, keine Screenshots).
+
+**Was hier NICHT passiert:** die Planierung unter Fußabdrücken (Plateau) ist
+E8 Task 4 — die Rasterung bleibt pur und rastert genau das, was autoriert
+wurde. Der 2D-Spielerkarte fehlt das Relief in v1 bewusst; der Editor zeigt
+Höhenflächen als eigene Ebene mit Zahl-Label, ohne Hillshade.
+
+**Verifikation:** `scripts/smoke_heightfield.py` (Rasterung, Rampe,
+Überlappung inkl. Senke, Sanitizer-Klemmen, Signatur/Store/`ground_y`, die
+Ursprungs-Verankerung, das Vergröbern und die Routen) plus die
+`.mjs`-Tabelle des geteilten Samplers.
 
 ---
 
