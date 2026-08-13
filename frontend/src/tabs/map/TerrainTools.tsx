@@ -946,6 +946,12 @@ export interface HeightAreaChipProps {
  * miserable thing to build by accident, so it is said out loud, with the width
  * that would fix it, and nothing is refused.
  *
+ * The warning is about THIS area and nothing else. A location dropped on the
+ * flank does not soften it any more: since 2026-08-13 a place levels the
+ * ground under itself only when its own "Flatten terrain" box is ticked
+ * (`level_ground`, § A16.1), so that is said once, as a side note about an
+ * option — never as a plateau the editor can count on.
+ *
  * Deleting arms an inline confirmation (no `window.confirm`); the state is
  * local because the chip is remounted per area (`key`).
  */
@@ -983,13 +989,19 @@ export function HeightAreaChip({
       </div>
       <div className={'ga-map-chip-row ' + (steep ? 'ga-map-chip-warn' : 'ga-map-chip-label')}>
         {steep
-          ? t('Too steep for walkers: this height needs a ramp of at least {n} m to stay under the {deg}° slope and the {step} m step a walker takes. Nobody will climb it — only openings lead up here.')
+          ? t('Too steep for walkers: this height needs a ramp of at least {n} m to stay under the {deg}° slope and the {step} m step a walker takes. Nobody will climb this flank — only openings lead up here.')
             .replace('{n}', String(need))
             .replace('{deg}', String(Math.round(maxSlopeDeg)))
             .replace('{step}', String(maxStepM))
           : t('Walkable: the ramp stays under the {deg}° slope and the {step} m step a walker takes.')
             .replace('{deg}', String(Math.round(maxSlopeDeg)))
             .replace('{step}', String(maxStepM))}
+      </div>
+      {/* The opt-in side note: the relief no longer bends for a placement, so
+          the chip says who does the flattening and that somebody has to ask
+          for it. */}
+      <div className="ga-map-chip-row ga-map-chip-label">
+        {t('A location standing here only levels the ground under itself when its “Flatten terrain” box is ticked — otherwise this relief runs straight through it.')}
       </div>
       <div className="ga-map-chip-actions">
         {armed ? (

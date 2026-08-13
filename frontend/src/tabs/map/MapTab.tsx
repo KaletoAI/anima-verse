@@ -47,11 +47,13 @@ import type {
  *   - `GET /play/worldmap?all=1` — for `world_bounds` alone, to frame the
  *     first view. The reload button refetches both.
  *
- * Writing goes through three routes only: `PATCH .../position` (place, move,
+ * Writing goes through four routes only: `PATCH .../position` (place, move,
  * turn, and — with null coordinates — unplace), `POST .../clone` (a template
- * instance at a point) and `DELETE /world/locations/{id}` (clones only, as
- * before). Re-placing shifts the occupants server-side, so the editor moves a
- * location without thinking about who stands inside it.
+ * instance at a point), `DELETE /world/locations/{id}` (clones only, as
+ * before) and `PUT /world/locations/{id}` for the one field that is not a
+ * position: `level_ground` ("Flatten terrain", § A16.1). Re-placing shifts the
+ * occupants server-side, so the editor moves a location without thinking about
+ * who stands inside it.
  *
  * Placing is click-arm-click, never HTML5 drag&drop: a tray entry arms a
  * ghost footprint that follows the cursor, the next click on the map commits
@@ -117,6 +119,13 @@ import type {
  * warning on the slope alone called ramps walkable that a walker gets snapped
  * back on (review 2026-08-13). The editor says so, with the width that would
  * fix it, and refuses nothing — a cliff is a legitimate thing to build.
+ *
+ * The relief and the LOCATIONS are two data sets that no longer touch by
+ * themselves: since 2026-08-13 a place levels the ground under itself only
+ * when its own "Flatten terrain" box is ticked (`level_ground`, § A16.1).
+ * Nothing here may promise a plateau that a placement makes on its own — the
+ * warning belongs to the height area, and the flattening is a side note about
+ * an option somebody has to switch on.
  *
  * Paint has TWO gestures and one result. `area` clicks an outline; `line`
  * clicks a centre line that `strokeToPolygon` widens into the very same kind
@@ -722,6 +731,31 @@ export function MapTab() {
     try {
       await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/position`,
         { pos_x: loc.pos_x, pos_z: loc.pos_z, yaw_deg: yaw })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      void reload()
+    }
+  }, [patchLocal, reload, t, toast])
+
+  /**
+   * The flattening flag (§ A16.1). It is opt-in and default OFF: only a
+   * flagged location levels the world relief under its footprint, everything
+   * else lets the authored landscape run through. That makes it a property of
+   * the RECORD, not of the position, so it is the one write here that goes
+   * through `PUT /world/locations/{id}` — a partial body, the route touches
+   * only the fields it was sent. A clone has its own flag (the template never
+   * hands it down), and the id in the chip is the clone's own id, so the same
+   * write serves both.
+   *
+   * Nothing else has to be wired: the server re-rasters the height field on
+   * the write and `height_sig` changes, which is what makes the 3D client
+   * refetch.
+   */
+  const commitLevelGround = useCallback(async (loc: EditorLocation, on: boolean) => {
+    patchLocal(loc.id, { level_ground: on })
+    try {
+      await apiPut(`/world/locations/${encodeURIComponent(loc.id)}`,
+        { level_ground: on })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       void reload()
@@ -1952,6 +1986,17 @@ export function MapTab() {
                   onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
                 />
                 <span className="ga-map-chip-label">°</span>
+              </div>
+              {/* The flattening is authored per PLACEMENT (§ A16.1) and is off
+                  by default: the landscape does not care about a location
+                  unless one says so here. */}
+              <div className="ga-map-chip-row">
+                <label className="ga-map-toolbar-check"
+                  title={t('Level the world relief under this footprint, pinned to the height at its centre, so the location stands on flat ground. Off, the authored landscape runs straight through it and walkers follow the slope inside the location too.')}>
+                  <input type="checkbox" checked={!!selected.level_ground}
+                    onChange={(e) => { void commitLevelGround(selected, e.target.checked) }} />
+                  {t('Flatten terrain')}
+                </label>
               </div>
               <div className="ga-map-chip-actions">
                 <button type="button" className="ga-btn ga-btn-sm"

@@ -85,6 +85,12 @@ export interface WorldmapTravel {
  */
 export interface EditorLocation extends MapGeometry {
   passable?: boolean
+  /** Opt-in flattening (§ A16.1, `PUT /world/locations/{id}`): only a location
+   *  with this flag levels the world relief under its footprint. Absent =
+   *  `false` — the authored landscape then runs straight through the place.
+   *  It belongs to the PLACEMENT, so a clone carries its own and never
+   *  inherits the template's. */
+  level_ground?: boolean
   template_location_id?: string
   description?: string
   /** Chosen gallery file for the flat map icon (`PATCH .../map-image`); empty

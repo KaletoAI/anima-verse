@@ -1730,7 +1730,10 @@
     "Delete height area": "Höhenfläche löschen",
     "Failed to load heights": "Höhen konnten nicht geladen werden",
     "This ramp is too steep for walkers — it needs {n} m or more": "Dieser Anstieg ist zu steil zum Laufen — er braucht {n} m oder mehr",
-    "Too steep for walkers: this height needs a ramp of at least {n} m to stay under the {deg}° slope and the {step} m step a walker takes. Nobody will climb it — only openings lead up here.": "Zu steil zum Laufen: diese Höhe braucht einen Anstieg von mindestens {n} m, um unter der {deg}°-Steigung und der {step}-m-Stufe zu bleiben, die eine Figur nimmt. Niemand klettert hier hoch — hinauf führen nur Öffnungen.",
-    "Walkable: the ramp stays under the {deg}° slope and the {step} m step a walker takes.": "Begehbar: der Anstieg bleibt unter der {deg}°-Steigung und der {step}-m-Stufe, die eine Figur nimmt."
+    "Too steep for walkers: this height needs a ramp of at least {n} m to stay under the {deg}° slope and the {step} m step a walker takes. Nobody will climb this flank — only openings lead up here.": "Zu steil zum Laufen: diese Höhe braucht einen Anstieg von mindestens {n} m, um unter der {deg}°-Steigung und der {step}-m-Stufe zu bleiben, die eine Figur nimmt. Niemand klettert diese Flanke hoch — hinauf führen nur Öffnungen.",
+    "Walkable: the ramp stays under the {deg}° slope and the {step} m step a walker takes.": "Begehbar: der Anstieg bleibt unter der {deg}°-Steigung und der {step}-m-Stufe, die eine Figur nimmt.",
+    "A location standing here only levels the ground under itself when its “Flatten terrain” box is ticked — otherwise this relief runs straight through it.": "Ein Ort, der hier steht, ebnet den Boden unter sich nur, wenn sein Haken „Gelände planieren“ gesetzt ist — sonst läuft dieses Relief einfach durch ihn hindurch.",
+    "Flatten terrain": "Gelände planieren",
+    "Level the world relief under this footprint, pinned to the height at its centre, so the location stands on flat ground. Off, the authored landscape runs straight through it and walkers follow the slope inside the location too.": "Das Weltrelief unter diesem Fußabdruck ebnen, angeheftet an die Höhe in seinem Mittelpunkt, damit der Ort auf ebenem Boden steht. Aus läuft die autorierte Landschaft einfach durch ihn hindurch, und Figuren folgen dem Hang auch IM Ort."
   }
 }
