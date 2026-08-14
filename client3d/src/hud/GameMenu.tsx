@@ -13,13 +13,18 @@
  * administrator in the admin settings. The hint line under "Session" says so
  * instead of quietly leaving the player to search.
  *
- * PRESENTATIONAL ONLY: it owns no state. `Hud.tsx` holds the prefs, applies
- * the volumes to the audio engine and writes `localStorage` — see `setPrefs`
- * there for the contract between the sliders (live) and the switches (stored
- * for the drivers of tasks 5/6).
+ * PRESENTATIONAL: it owns no SETTING. `Hud.tsx` holds the prefs, applies the
+ * volumes to the audio engine and writes `localStorage` — see `setPrefs` there
+ * for the contract between the sliders (live) and the switches (stored for the
+ * drivers of tasks 5/6). The one `useState` in here holds the TEXT of the
+ * three distance fields while they are being typed, which is a keyboard and
+ * not a setting; nothing leaves this file until it is a valid triple.
  */
+import { useState } from 'react';
 import { useI18n } from '@anima/player-ui';
-import type { Prefs, TtsMode } from '../game/prefs';
+import { checkScatterPrefs, DEFAULT_SCATTER_PREFS, SCATTER_PREF_MAX_M,
+  SCATTER_PREF_MIN_M } from '../game/prefs';
+import type { Prefs, ScatterPrefs, TtsMode } from '../game/prefs';
 
 /** The prefs fields that are a volume — the sliders below are one per entry,
  *  in this order (master first, it multiplies onto the other three). */
@@ -37,6 +42,14 @@ export interface GameMenuProps {
    *  `perfOn`, with its own storage key — see `Hud.tsx`. */
   minimapOn: boolean;
   onMinimapChange: (on: boolean) => void;
+  /** the three scatter detail distances of this browser (per-object scatter
+   *  LOD). A view setting with its own storage key, like the two above — see
+   *  `Hud.tsx`, which owns the store and the action into the running world. */
+  scatterPrefs: ScatterPrefs;
+  /** take an ORDERED triple: the fields below only report what passed
+   *  `checkScatterPrefs`, and a refused one stays in the field with a hint
+   *  under it instead of reaching the world. */
+  onScatterChange: (prefs: ScatterPrefs) => void;
   /** the signed-in account may see the unfiltered map (Etappe 5) — the entry
    *  below exists only for one, and the server refuses the view for anybody
    *  else anyway */
@@ -92,11 +105,69 @@ function Choice<T extends string | boolean>({ label, value, options, onPick }: {
   );
 }
 
+/** One distance of the scatter LOD, in metres. A number input rather than a
+ *  slider: three distances that have to CLIMB are typed and compared, not
+ *  dragged, and the browser's own stepper is the whole control this needs. */
+function Metres({ label, value, onType }: {
+  label: string; value: string; onType: (v: string) => void;
+}) {
+  return (
+    <label className="hud-menu-row">
+      <span className="hud-menu-label">{label}</span>
+      <input className="hud-menu-num" type="number" inputMode="numeric"
+        min={SCATTER_PREF_MIN_M} max={SCATTER_PREF_MAX_M} step={5}
+        value={value} onChange={(e) => onType(e.target.value)} />
+    </label>
+  );
+}
+
 export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
                            minimapOn, onMinimapChange,
+                           scatterPrefs, onScatterChange,
                            isAdmin, showAll, onShowAllChange,
                            onBackToTitle }: GameMenuProps) {
   const { t } = useI18n();
+
+  /**
+   * THE ONE PIECE OF STATE IN THIS FILE, and it is not a setting: the three
+   * distance fields hold TEXT while they are being typed. A field one has
+   * cleared to type a new number is empty, not 0, and the intermediate "4" of
+   * a "45" is not a distance either — so what is stored is what the player
+   * has typed, and only a triple that passes `checkScatterPrefs` is handed up.
+   * The stored settings still live in `Hud.tsx` like every other one here.
+   */
+  const [draft, setDraft] = useState(() => ({
+    near: String(scatterPrefs.scatterNearM),
+    far: String(scatterPrefs.scatterFarM),
+    cull: String(scatterPrefs.scatterCullM),
+  }));
+  /** why the last typing was NOT taken (`''` = it was) — the hint under the
+   *  fields, and the reason a refused triple leaves the world alone */
+  const [scatterError, setScatterError] = useState<'' | 'number' | 'order'>('');
+  /** An empty field is NOT a zero: `Number('')` is 0, which would sail through
+   *  the check as a legal (if clamped) distance and re-draw the world while
+   *  somebody is still typing. NaN is what "no number here" means. */
+  const metres = (raw: string): number => (raw.trim() === '' ? NaN : Number(raw));
+  const typeDistance = (patch: Partial<typeof draft>) => {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    const checked = checkScatterPrefs(metres(next.near), metres(next.far),
+                                      metres(next.cull));
+    setScatterError(checked.ok ? '' : checked.error);
+    // Applied AS TYPED, without an OK button — the world behind the menu is
+    // the preview, and a distance one cannot see the effect of is a distance
+    // nobody can set sensibly.
+    if (checked.ok) onScatterChange(checked.prefs);
+  };
+  const resetDistances = () => {
+    setDraft({
+      near: String(DEFAULT_SCATTER_PREFS.scatterNearM),
+      far: String(DEFAULT_SCATTER_PREFS.scatterFarM),
+      cull: String(DEFAULT_SCATTER_PREFS.scatterCullM),
+    });
+    setScatterError('');
+    onScatterChange({ ...DEFAULT_SCATTER_PREFS });
+  };
 
   const volumes: Array<{ field: VolumeField; label: string }> = [
     { field: 'master', label: t('Master') },
@@ -145,6 +216,36 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
         <p className="hud-menu-hint">
           {t('Frame rate, draw calls and how many models stand on the full or the low resolution.')}
         </p>
+      </section>
+
+      {/* The scatter detail distances. Kept apart from "Display" because these
+          three are not a switch but a budget: they say how much of the ground
+          cover this machine draws, and they are the first thing to turn down
+          on a weak one. */}
+      <section className="hud-menu-section">
+        <h3 className="hud-menu-head">{t('Detail distances')}</h3>
+        <Metres label={t('Full detail up to (m)')} value={draft.near}
+          onType={(v) => typeDistance({ near: v })} />
+        <Metres label={t('Low detail up to (m)')} value={draft.far}
+          onType={(v) => typeDistance({ far: v })} />
+        <Metres label={t('Not drawn beyond (m)')} value={draft.cull}
+          onType={(v) => typeDistance({ cull: v })} />
+        {scatterError === 'number' && (
+          <p className="hud-menu-warn">
+            {t('Each of the three fields needs a number of metres.')}
+          </p>
+        )}
+        {scatterError === 'order' && (
+          <p className="hud-menu-warn">
+            {t('The three distances have to climb: full detail, then low detail, then hidden.')}
+          </p>
+        )}
+        <p className="hud-menu-hint">
+          {t('How far away trees, bushes and grass drop to the cheap model and where they stop being drawn. Lower distances buy frame rate.')}
+        </p>
+        <button type="button" className="hud-menu-btn" onClick={resetDistances}>
+          {t('Reset detail distances')}
+        </button>
       </section>
 
       {/* The one entry that is not a player setting: it lifts the fog of war

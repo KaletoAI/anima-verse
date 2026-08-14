@@ -42,7 +42,8 @@ import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
-import { loadPrefs, savePrefs, PREFS_KEY, type Prefs } from '../game/prefs';
+import { loadPrefs, loadScatterPrefs, savePrefs, saveScatterPrefs, PREFS_KEY,
+  SCATTER_PREFS_KEY, type Prefs, type ScatterPrefs } from '../game/prefs';
 import { SHOW_ALL_KEY } from '../game/fog';
 import { MINIMAP_PREF_KEY } from '../game/minimap';
 import {
@@ -279,6 +280,24 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     localStorage.setItem(MINIMAP_PREF_KEY, minimapOn ? '1' : '0');
   }, [minimapOn]);
+
+  /**
+   * The scatter detail distances (per-object scatter LOD) — a local view
+   * setting like the two above, with a reader of its own because it is three
+   * numbers rather than one boolean (`loadScatterPrefs`, which never returns
+   * half a setting).
+   *
+   * `main.ts` reads the store at startup for itself, so nothing here has to
+   * run before the world is built; what goes through the action is the CHANGE,
+   * and the ground applies it to the standing world at once.
+   */
+  const [scatterPrefs, setScatterPrefsState] = useState<ScatterPrefs>(
+    () => loadScatterPrefs(localStorage.getItem(SCATTER_PREFS_KEY)));
+  const setScatterPrefs = useCallback((p: ScatterPrefs) => {
+    localStorage.setItem(SCATTER_PREFS_KEY, saveScatterPrefs(p));
+    gameActions.applyScatterPrefs?.(p);
+    setScatterPrefsState(p);
+  }, []);
 
   /**
    * "Show all locations" (Etappe 5) — the administrator's way past the fog of
@@ -763,6 +782,7 @@ export function Hud({ avatar, username, role }: {
                   <GameMenu prefs={prefs} onChange={setPrefs}
                     perfOn={perfOn} onPerfChange={setPerfOn}
                     minimapOn={minimapOn} onMinimapChange={setMinimapOn}
+                    scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
                     isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
                     onBackToTitle={() => gameActions.backToTitle?.()} />
                 </ErrorBoundary>

@@ -20,7 +20,7 @@
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
-import type { Prefs } from '../game/prefs';
+import type { Prefs, ScatterPrefs } from '../game/prefs';
 import type { MapCharacter } from '../types';
 
 export type GameMode = 'overview' | 'embodied';
@@ -104,6 +104,12 @@ export interface HudGameActions {
    *  business of the music/ambience/speech drivers (stage 4, tasks 5 + 6).
    *  Only CHANGES arrive here; the state at startup is read with `loadPrefs`. */
   applyAudioPrefs?: (prefs: Prefs) => void;
+  /** the player changed a scatter detail distance in the menu (per-object
+   *  scatter LOD, 2026-08-15). `main.ts` hands it to the ground, which re-bins
+   *  the props at once instead of waiting for the next LOD tick. Only CHANGES
+   *  arrive here; the state at startup the ground reads for itself, the same
+   *  way the audio drivers read `loadPrefs`. */
+  applyScatterPrefs?: (prefs: ScatterPrefs) => void;
 }
 
 /** React-side handlers the vanilla app calls (e.g. the F key opens the chat). */

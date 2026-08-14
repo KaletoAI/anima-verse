@@ -678,6 +678,29 @@
   line-height: 1.4;
   opacity: 0.6;
 }
+/* One typed distance. Narrow on purpose: it holds three digits and a stepper,
+   and a field as wide as the row would read as a text box. */
+#hud .hud-menu-num {
+  width: 5.5em;
+  padding: 3px 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  background: var(--bg-alt, #0d1117);
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+#hud .hud-menu-num:focus { outline: none; border-color: var(--accent, #6aa9ff); }
+/* Why the typing was not taken. Same place and size as a hint, but it says
+   something is wrong, so it is not dimmed away. */
+#hud .hud-menu-warn {
+  margin: 10px 0 0;
+  font-size: 0.85em;
+  line-height: 1.4;
+  color: var(--danger, #f85149);
+}
 #hud .hud-menu-btn {
   margin-top: 10px;
   width: 100%;

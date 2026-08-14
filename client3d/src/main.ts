@@ -24,7 +24,8 @@ import {
   newFpsMeter, pushFrame, tierCounts, visibleVertices,
   type TierCounts, type TierSample,
 } from './game/perfstats';
-import { loadPrefs, PREFS_KEY } from './game/prefs';
+import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
+  SCATTER_PREFS_KEY } from './game/prefs';
 import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
 import type { MinimapArea, MinimapDot } from './game/minimap';
@@ -594,6 +595,16 @@ async function startApp(username: string, role: string) {
   // basement hole below.
   const terrainGround = createGround();
   engine.scene.add(terrainGround.group);
+  // THE DETAIL DISTANCES OF THE SCATTER, read here for the same reason the
+  // audio drivers read their own settings (E4-T4): this runs long before the
+  // React island that owns the menu mounts, and a ground built at the module's
+  // defaults would draw one picture and then jump to the player's on the first
+  // menu change. Every later change comes through `applyScatterPrefs` below.
+  terrainGround.setScatterLod(scatterLodCfgOf(
+    loadScatterPrefs(localStorage.getItem(SCATTER_PREFS_KEY))));
+  gameActions.applyScatterPrefs = (p) => {
+    terrainGround.setScatterLod(scatterLodCfgOf(p));
+  };
 
   // --- The far backdrop (§ A17) ---------------------------------------------
   //
