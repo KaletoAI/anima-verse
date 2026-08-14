@@ -118,6 +118,9 @@ _lod_building: set = set()
 # this memory every poll would start the same doomed reduction again. The
 # admin's explicit button ignores it and clears the entry on success. Not
 # persisted — a restart (new Blender, new config) is a fair reason to retry.
+# A FAILED button click lands in here too, and thereby also silences the
+# automatic path for that prop: deliberate. The failure is an environment
+# problem (Blender missing, mesh broken) — fix it and press the button again.
 _lod_failed: set = set()
 # Models whose bbox extraction already failed, keyed by (prop_id, model mtime)
 # — keeps the lazy backfill from re-parsing an unmeasurable GLB on every
@@ -902,11 +905,17 @@ def request_low_tier(prop_id: str) -> None:
     on ("Build distance meshes on demand").
 
     Called wherever a payload lists this prop's tiers (see
-    :func:`_demand_low`), so it runs on POLLED paths: every gate is ordered by
-    cost — the config flag, the in-process sets and the global slot first, the
-    gallery read and the mesh probe only for a real candidate. The in-flight
-    key is taken BEFORE the thread starts (``model3d.request_lod``'s pattern):
-    two simultaneous payload builds must not start two reductions.
+    :func:`_demand_low`), so it runs on POLLED paths and every gate is ordered
+    by COST: the config flag, the in-process sets and the global slot come
+    first, the gallery read and the GLB probe only for a candidate that could
+    start right now. With every slot busy a sweep over a hundred props is
+    therefore a hundred set lookups, not a hundred GLB parses.
+
+    The in-flight key is taken BEFORE the thread starts
+    (``model3d.request_lod``'s pattern): two simultaneous payload builds must
+    not start two reductions. Key and slot are both released again on EVERY
+    way out — a rejected candidate, a failed thread start, or the build
+    itself.
 
     Serving never waits and nothing is reported back — a distance mesh is an
     optimisation, and its absence is a fallback, not an error."""
@@ -920,41 +929,50 @@ def request_low_tier(prop_id: str) -> None:
     with _lock:
         if pid in _lod_building:
             return
-    g = model_gallery(pid)
-    src = g.find(DEFAULT_TIER, fallback=False) if g else None
-    if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
-        return
-    # A mesh the store itself calls unreducible never becomes a low variant;
-    # remembering it here is what keeps the probe off the polled path.
-    if not shrink_capability(src)["shrinkable"]:
-        _lod_failed.add(pid)
-        return
-    ratio = refine.lod_ratio("prop")
-    with _lock:
-        if pid in _lod_building:
-            return
         _lod_building.add(pid)
     if not refine.take_lod_slot():
         with _lock:
             _lod_building.discard(pid)
         return
-
-    def _run() -> None:
-        try:
-            res = _reduce_to_low(pid, src, ratio)
-            if not res.get("ok"):
-                logger.debug("Prop %s: distance mesh not built (%s)", pid,
-                             res.get("error"))
-        except Exception as e:                              # noqa: BLE001
+    started = False
+    try:
+        g = model_gallery(pid)
+        src = g.find(DEFAULT_TIER, fallback=False) if g else None
+        if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
+            return
+        # A mesh the store itself calls unreducible never becomes a low
+        # variant; remembering it is what keeps the probe off the polled path.
+        if not shrink_capability(src)["shrinkable"]:
             _lod_failed.add(pid)
-            logger.warning("Prop %s: distance-mesh build failed: %s", pid, e)
-        finally:
+            return
+        ratio = refine.lod_ratio("prop")
+
+        def _run() -> None:
+            try:
+                res = _reduce_to_low(pid, src, ratio)
+                if not res.get("ok"):
+                    logger.debug("Prop %s: distance mesh not built (%s)", pid,
+                                 res.get("error"))
+            except Exception as e:                          # noqa: BLE001
+                _lod_failed.add(pid)
+                logger.warning("Prop %s: distance-mesh build failed: %s",
+                               pid, e)
+            finally:
+                refine.free_lod_slot()
+                with _lock:
+                    _lod_building.discard(pid)
+
+        threading.Thread(target=_run, daemon=True,
+                         name=f"prop-lod-{pid}").start()
+        started = True
+    finally:
+        # Whatever ends this call without a running thread — a rejected
+        # candidate or a refused thread start — gives both back. A leaked slot
+        # would shrink the global limit for the rest of the process.
+        if not started:
             refine.free_lod_slot()
             with _lock:
                 _lod_building.discard(pid)
-
-    threading.Thread(target=_run, daemon=True,
-                     name=f"prop-lod-{pid}").start()
 
 
 def _demand_low(prop_id: str, tiers: List[str]) -> None:

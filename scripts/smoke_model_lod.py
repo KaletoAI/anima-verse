@@ -34,7 +34,8 @@ Expected behaviour, derived from the design decisions of
     admin's ``force`` tries anyway, and a success clears the entry,
   - at most two background builds run at a time ACROSS the stores; with every
     slot busy nothing is started and no in-flight key stays stuck (the next
-    demand builds).
+    demand builds), and a candidate that is rejected AFTER taking its slot
+    (no mesh at all) hands it back.
 
 Usage:  ./.venv/bin/python scripts/smoke_model_lod.py
 """
@@ -311,6 +312,21 @@ def main() -> int:
     check("...and the next demand builds it (no key stayed stuck)",
           wait_for(lambda: props.model_tiers(pid5) == ["full", "low"]),
           str(props.model_tiers(pid5)))
+    # A candidate that turns out not to be one takes its slot BEFORE the
+    # gallery is read (that is the point of the order — a full sweep must not
+    # parse a GLB per subject while the limit is exhausted), so it has to give
+    # the slot back on the way out.
+    empty = props.create_prop(name="Lod Ghost", width_m=0.2, depth_m=0.2,
+                              height_m=0.2)["id"]
+    CALLS.clear()
+    props.request_low_tier(empty)
+    check("a prop without a mesh starts nothing",
+          not wait_for(lambda: bool(CALLS), 0.3), str(CALLS))
+    slots = [refine.take_lod_slot(), refine.take_lod_slot()]
+    check("...and its slot came back (both are free again)",
+          slots == [True, True], str(slots))
+    refine.free_lod_slot()
+    refine.free_lod_slot()
 
     print("\n[10] the same contract for a room diorama and a building")
     refine.auto_lod_enabled = lambda: False  # back to the explicit path alone

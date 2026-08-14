@@ -66,6 +66,9 @@ _lod_building: set = set()
 # without this memory every poll would start the same doomed reduction again.
 # The admin's explicit button ignores it and clears the entry on success. Not
 # persisted — a restart (new Blender, new config) is a fair reason to retry.
+# A FAILED button click lands in here too, and thereby also silences the
+# automatic path for that subject: deliberate. The failure is an environment
+# problem (Blender missing, mesh broken) — fix it and press the button again.
 _lod_failed: set = set()
 
 
@@ -441,7 +444,7 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
     # This meta IS the client payload's tier list (model/meta route and the
     # scene recipe's inputs), so it is where a missing distance mesh is
     # noticed and asked for — see :func:`_demand_low`.
-    _demand_low(location_id, room_id, tiers)
+    _demand_low(location_id, room_id, tiers, owner=owner)
     out = {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
            "rig": meta.get("rig", "none"),
            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
@@ -686,7 +689,7 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     logger.info("Location model %s%s: uploaded (%d bytes) -> %s", owner,
                 f"/{room_id}" if room_id else "", len(contents), target.name)
     if (tier or DEFAULT_TIER) == DEFAULT_TIER:
-        request_low_tier(location_id, room_id)
+        request_low_tier(location_id, room_id, owner=owner)
     return meta
 
 
@@ -784,26 +787,36 @@ def build_low_tier(location_id: str, room_id: str = "", ratio: float = 0.0,
             _lod_building.discard(key)
 
 
-def request_low_tier(location_id: str, room_id: str = "") -> None:
+def request_low_tier(location_id: str, room_id: str = "",
+                     owner: str = "") -> None:
     """Builds the subject's missing distance mesh in the BACKGROUND (CPU), if
     switched on ("Build distance meshes on demand").
 
     The GPU route fills the low tier only when the alias delivered LOD stages
     (``lod_faces``); a generation without stages and every upload used to
     leave the tier to a batch run. Called wherever a payload lists this
-    subject's tiers (see :func:`_demand_low`), so it runs on POLLED paths:
-    every gate is ordered by cost — the config flag, the in-process sets and
-    the global slot first, the gallery read and the mesh probe only for a real
-    candidate. The in-flight key is taken BEFORE the thread starts
+    subject's tiers (see :func:`_demand_low`), so it runs on POLLED paths and
+    every gate is ordered by COST: the config flag, the in-process sets and
+    the global slot come first, the gallery read and the GLB probe only for a
+    candidate that could start right now. With every slot busy a sweep over a
+    whole world is therefore a set lookup per subject, not a GLB parse.
+
+    ``owner`` is the gallery owner (clones share their template's gallery) and
+    IS the key here — a caller that just resolved it hands it in, because
+    resolving it costs a full location lookup and this runs on polled paths.
+
+    The in-flight key is taken BEFORE the thread starts
     (``model3d.request_lod``'s pattern): two simultaneous payload builds must
-    not start two reductions.
+    not start two reductions. Key and slot are both released again on EVERY
+    way out — a rejected candidate, a failed thread start, or the build
+    itself.
 
     Serving never waits and nothing is reported back — a distance mesh is an
     optimisation, and its absence is a fallback, not an error."""
     from app.blender import refine
     if not refine.auto_lod_enabled():
         return
-    owner = _owner_id(location_id)
+    owner = owner or _owner_id(location_id)
     if not owner:
         return
     key = f"{owner}:{room_id}"
@@ -812,46 +825,56 @@ def request_low_tier(location_id: str, room_id: str = "") -> None:
     with _lock:
         if key in _lod_building:
             return
-    g = _gallery(owner, room_id)
-    src = g.find(DEFAULT_TIER, fallback=False)
-    if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
-        return
-    # A model the store itself calls unreducible never becomes a low variant;
-    # remembering it here is what keeps the probe off the polled path.
-    if not shrink_capability(src)["shrinkable"]:
-        _lod_failed.add(key)
-        return
-    ratio = refine.lod_ratio("room" if room_id else "building")
-    with _lock:
-        if key in _lod_building:
-            return
         _lod_building.add(key)
     if not refine.take_lod_slot():
         with _lock:
             _lod_building.discard(key)
         return
-
-    def _run() -> None:
-        try:
-            res = _reduce_to_low(location_id, owner, room_id, src, ratio)
-            if not res.get("ok"):
-                logger.debug("Location model %s%s: distance mesh not built "
-                             "(%s)", owner, f"/{room_id}" if room_id else "",
-                             res.get("error"))
-        except Exception as e:                              # noqa: BLE001
+    started = False
+    try:
+        g = _gallery(owner, room_id)
+        src = g.find(DEFAULT_TIER, fallback=False)
+        if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
+            return
+        # A model the store itself calls unreducible never becomes a low
+        # variant; remembering it is what keeps the probe off the polled path.
+        if not shrink_capability(src)["shrinkable"]:
             _lod_failed.add(key)
-            logger.warning("Location model %s: distance-mesh build failed: %s",
-                           owner, e)
-        finally:
+            return
+        ratio = refine.lod_ratio("room" if room_id else "building")
+
+        def _run() -> None:
+            try:
+                res = _reduce_to_low(location_id, owner, room_id, src, ratio)
+                if not res.get("ok"):
+                    logger.debug("Location model %s%s: distance mesh not "
+                                 "built (%s)", owner,
+                                 f"/{room_id}" if room_id else "",
+                                 res.get("error"))
+            except Exception as e:                          # noqa: BLE001
+                _lod_failed.add(key)
+                logger.warning("Location model %s: distance-mesh build "
+                               "failed: %s", owner, e)
+            finally:
+                refine.free_lod_slot()
+                with _lock:
+                    _lod_building.discard(key)
+
+        threading.Thread(target=_run, daemon=True,
+                         name=f"locmodel-lod-{owner}").start()
+        started = True
+    finally:
+        # Whatever ends this call without a running thread — a rejected
+        # candidate or a refused thread start — gives both back. A leaked slot
+        # would shrink the global limit for the rest of the process.
+        if not started:
             refine.free_lod_slot()
             with _lock:
                 _lod_building.discard(key)
 
-    threading.Thread(target=_run, daemon=True,
-                     name=f"locmodel-lod-{owner}").start()
 
-
-def _demand_low(location_id: str, room_id: str, tiers: Any) -> None:
+def _demand_low(location_id: str, room_id: str, tiers: Any,
+                owner: str = "") -> None:
     """A payload just listed this subject's resolution tiers — if ``low`` is
     missing while a full model exists, ask for it in the BACKGROUND.
 
@@ -859,9 +882,10 @@ def _demand_low(location_id: str, room_id: str, tiers: Any) -> None:
     lists only the tiers a subject HAS, and every renderer picks from that
     list (``pickVariant``), so nobody ever requests a ``low`` that does not
     exist. The moment a client is TOLD there is no distance mesh is the moment
-    to build one."""
+    to build one. ``owner`` travels with it — the caller resolved it to read
+    the tiers in the first place."""
     if tiers and LOW_TIER not in tiers:
-        request_low_tier(location_id, room_id)
+        request_low_tier(location_id, room_id, owner=owner)
 
 
 def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
@@ -1010,7 +1034,7 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
         elif (tier or DEFAULT_TIER) == DEFAULT_TIER:
             # The alias delivered no stages — build the distance mesh locally
             # (CPU, seconds) instead of leaving the tier to a batch run.
-            request_low_tier(location_id, room_id)
+            request_low_tier(location_id, room_id, owner=owner)
         return {"ok": True, "path": str(path), "meta": meta}
     finally:
         if task_id:
