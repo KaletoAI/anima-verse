@@ -442,7 +442,7 @@ interface ScatterProp {
    *  `meta.sway_m` times the entry's own `sway_factor` (`scatterSway`), or 0.
    *  The weather hangs on the area, the share on the prop, so a boulder can
    *  stand still in a meadow whose ferns bend fully. It is kept here because
-   *  `showTier` has to bend the material of every tier it mounts. */
+   *  `mountUrl` has to bend the material of every mesh it mounts. */
   sway: number;
   /** area centre, handed to `loadGlb` so the download queue serves the props
    *  the camera is looking at first */
@@ -2020,7 +2020,7 @@ export function createGround(): Ground {
     },
     tickScatterLod(cameraPos) {
       // Remembered for the next REBUILD, which happens outside this tick and
-      // has to know where the camera is to pick a tier (see `rebuildAreas`).
+      // has to bin its fresh entries against a camera (see `buildScatter`).
       // A copy, not the live vector: it is read a second later from another
       // call stack, and a reference the engine mutates would be a different
       // camera by then.
