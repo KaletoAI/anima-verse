@@ -739,7 +739,7 @@ Routers.
 | `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
 | `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche; **404**, wenn es sie nicht gab |
-| `GET /world/height-areas` | `{areas, sig, step_m, default_step_m}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge, dazu der aktuelle Gitter-Schritt und der feinste (Befund 14: die Vergröberung ist sonst unsichtbar) |
+| `GET /world/height-areas` | `{areas, sig, step_m, default_step_m, tile_step_m}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge, dazu der aktuelle Übersichts-Schritt und der feinste (Befund 14: die Vergröberung ist sonst unsichtbar) sowie der **Kachel-Schritt**, aus dem der Editor die Plateau-Rampe `tan(max_slope_deg) · tile_step_m` rechnet (§ A16.1) |
 | `POST /world/height-areas` | Neue Höhenfläche, **die Id vergibt der Server** → `{status, area, step_m}`; `step_m` ist der Schritt DANACH (der Schreibvorgang rastert synchron neu), also eine Tatsache und keine Prognose |
 | `PUT /world/height-areas/{id}` | Ersetzt `polygon`/`height_m`/`falloff_m`/`meta` einer **bestehenden** Fläche → `{status, area, step_m}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/height-areas/{id}` | Löscht eine Höhenfläche (der Boden dort fällt auf die flache Welt zurück); **404**, wenn es sie nicht gab |
@@ -2076,11 +2076,13 @@ Mikro-Relief einer 22-m-Fläche (Welle 8…12 m) hatte danach keinen Stützpunkt
 mehr und verschwand, ohne dass irgendetwas den Zusammenhang gezeigt hätte.
 Darum liefern `GET /world/height-areas` und die Schreib-Antworten von
 `POST`/`PUT /world/height-areas` den aktuellen `step_m` (die GET zusätzlich
-`default_step_m`), und der Editor zeigt ihn dauerhaft an, sobald er über dem
-feinsten liegt, samt Konsequenz: **unter 2 × Schritt trägt das Raster nichts
-mehr** (Nyquist, dieselbe Grenze, die `relief_wave_m` klemmt). Der Server
-rechnet, der Editor zeigt — eine zweite Verdopplungs-Logik im Client wäre
-genau die Zwillings-Regel, die auseinanderläuft.
+`default_step_m` und `tile_step_m`), und der Editor zeigt ihn dauerhaft an,
+sobald er über dem feinsten liegt, samt Konsequenz: **unter 2 × Schritt trägt
+das Raster nichts mehr** (Nyquist, dieselbe Grenze, die `relief_wave_m` klemmt
+— dort am KACHEL-Schritt, siehe § A16.2). Der Server rechnet, der Editor zeigt
+— eine zweite Verdopplungs-Logik im Client wäre genau die Zwillings-Regel, die
+auseinanderläuft. Aus demselben Grund reist `tile_step_m` mit: die
+Rampen-Zahl der Planierung hängt daran und hat sich am 2026-08-14 halbiert.
 
 **Payload** (Auth wie `/play/terrain`: eingeloggter User, **kein** Admin-Gate,
 **nie gefoggt**). Eigener Endpoint aus demselben Grund wie das Gelände — und
@@ -2099,7 +2101,7 @@ Weltkarte wechselt.
                               # (origin_x + i·step_m, origin_z + j·step_m)
   sig,                  # identisch mit worldmap.height_sig
   tile_m,               # Kantenlänge einer Kachel in Metern (256,0; § A16.3)
-  tile_step_m,          # Schritt der Kacheln — IMMER 4,0, nie vergröbert
+  tile_step_m,          # Schritt der Kacheln — IMMER 2,0, nie vergröbert
   tiles: ["tx,tz", …] } # der KACHEL-INDEX: jede Kachel, in der die Welt
                         # einen Boden hat, sortiert nach tx, dann tz
 ```
@@ -2108,7 +2110,7 @@ Weltkarte wechselt.
 Raster, das vergröbert werden darf, und keine Regel liest es mehr. Die
 mitgelieferten drei Felder sind die Brücke zur feinen Auflösung —
 `tiles` sagt, wo überhaupt Boden ist, und `GET /play/heightfield/tiles` liefert
-ihn in 4 m. **Vermischt werden die beiden nie**, siehe § A16.3.
+ihn in 2 m. **Vermischt werden die beiden nie**, siehe § A16.3.
 
 **Zwischen den Stützpunkten ist das Feld BILINEAR**, und zwar in beiden
 Sprachen gleich:
@@ -2257,15 +2259,19 @@ neu, wenn sie sich geändert hat.
 
 **Die AUTORIERUNGS-GRENZE, klar benannt** (sie betrifft nur geflaggte Orte —
 ohne Planierung gibt es keine Rampe, sondern nur den durchlaufenden Hang):
-die Rampe ist EINE Zelle breit,
-also trägt sie `tan(max_slope_deg) · step_m` = 3,36 m bei den Vorgaben.
+die Rampe ist EINE Zelle breit — und eine Zelle ist der Schritt des Rasters,
+auf dem planiert wird, auf einer Kachel also `TILE_STEP_M` = 2 m —,
+also trägt sie `tan(max_slope_deg) · tile_step_m` = **1,68 m** bei den
+Vorgaben (bis 2026-08-14, als die Kacheln noch bei 4 m standen: 3,36 m).
 Steht ein Ort mehr als das über oder unter dem Boden an seinem Rand, bleibt
 ein Rand, den niemand überschreitet — eine Zelle AUSSERHALB des Fußabdrucks
 und damit außer Reichweite der 1,5-m-Öffnungs-Ausnahme. Am Ort selbst ist das
 kein Problem: der gepinnte Ring reicht eine Zelle über den Fußabdruck hinaus,
 die Öffnung liegt also auf ebenem Grund und das Betreten ist frei. Wer den
 Ort auf einem echten Steilhang platziert, baut sich eine Mauer — der
-Höhen-Editor warnt an derselben Zahl.
+Höhen-Editor nennt dieselbe Zahl, und zwar **gerechnet aus `tile_step_m`**
+(`GET /world/height-areas` trägt es mit): eine im Client hartkodierte 3,36
+hätte nach der Halbierung weiter den doppelten Anstieg versprochen.
 
 **Der Client hängt seine ganze Kachel daran** (`scene/tiles.footprintCentre`):
 die Kachel steht auf `y = ground_y(pos_x, pos_z)` — unverändert und ohne
@@ -2325,12 +2331,17 @@ nahtlos fort.
 **Klemmen.** `relief_amplitude_m` 0,05..2,0 m (2 Dezimalen; fehlend oder 0 =
 kein Relief, der Schlüssel verschwindet). Die Obergrenze ist eine
 **Begehbarkeits**-Grenze: zwei Nachbar-Stützpunkte können sich um höchstens
-2·Amplitude über einen Gitterschritt unterscheiden, also `atan(2·2,0/4,0)` =
-45° im Maximum — die Zahl, die der Editor-Hinweis nennt. `relief_wave_m`
-8..200 m, fehlend = **32 m**; die Untergrenze ist 2 × `DEFAULT_STEP_M`
-(**Nyquist**: eine kürzere Welle kann das Gitter nicht tragen, sie würde nur
-je nach Schrittweite anders aliasen). Es gibt **keinen Kontur-Fade**: den
-Übergang trägt die bilineare Interpolation des Feldes selbst.
+2·Amplitude über einen Gitterschritt unterscheiden, auf dem Kachel-Raster, das
+die Regeln lesen, also `atan(2·2,0/2,0)` = **63°** im Maximum (45°, solange
+dieser Schritt 4 m war) — die Zahl, die der Editor-Hinweis nennt. Es ist ein
+theoretischer Worst Case: er verlangt zwei benachbarte Rausch-Ecken auf ±1.
+`relief_wave_m` **4**..200 m, fehlend = **32 m**; die Untergrenze ist
+2 × `TILE_STEP_M` (**Nyquist**: eine kürzere Welle kann das Gitter nicht
+tragen, sie würde nur je nach Schrittweite anders aliasen) — sie halbierte
+sich am 2026-08-14 mit dem Kachel-Schritt, und **genau dafür** wurde er
+halbiert: eine 4-m-Welle ist seither autorierbar, vorher machte der Server
+stillschweigend 8 m daraus. Es gibt **keinen Kontur-Fade**: den Übergang trägt
+die bilineare Interpolation des Feldes selbst.
 
 **Die Randregel (Abnahme 2026-08-13): am Rand hebt das Relief nur noch.** An
 einem Stützpunkt, von dessen vier Gitter-Nachbarn einer KEIN Relief trägt
@@ -2412,20 +2423,31 @@ Raster derselben Landschaft**:
 
 - die **Übersicht** — ein Gitter über alles, vergröberbar. Ein BILD für die
   Ferne, sonst nichts.
-- die **Kacheln** — 256-m-Quadrate im immer feinen 4-m-Schritt, auf Anfrage
-  gerechnet. Alles, was der Boden ENTSCHEIDET (Laufregel, Routing, jede
-  Serverregel) liest diese, und der Nahbereich der Renderer auch.
+- die **Kacheln** — 256-m-Quadrate im immer feinen **2-m-Schritt** (bis
+  2026-08-14: 4 m), auf Anfrage gerechnet. Alles, was der Boden ENTSCHEIDET
+  (Laufregel, Routing, jede Serverregel) liest diese, und der Nahbereich der
+  Renderer auch.
+
+**Warum 2 m und nicht 4** (User-Entscheidung 2026-08-14): die autorierbare
+Wellenlänge des Mikro-Reliefs ist auf 2 × den Kachel-Schritt geklemmt
+(§ A16.2, Nyquist), bei 4 m also auf 8 m. Wer 4 m tippte, bekam 8 m — ohne
+dass es irgendwo stand. Der halbierte Schritt macht 4-m-Wellen autorierbar;
+er kostet die vierfache Punktzahl je Kachel und halbiert die Rampe eines
+planierenden Ortes (§ A16.1, 3,36 m → 1,68 m). Die **Übersicht bleibt bei
+4 m**: sie ist ein Fernbild, und niemand liest sie als Regel.
 
 **Kachelmaß 256 m, Anker ist der Welt-Ursprung.** Kachel `(tx, tz)` deckt
 `[tx·256, (tx+1)·256] × [tz·256, (tz+1)·256]` ab, ihre Stützpunkte SIND globale
 Gitterpunkte (`tile_key(x, z) = (floor(x/256), floor(z/256))`; ein Punkt auf
 einer Naht gehört zur Kachel im Osten/Süden — beide tragen ihn mit demselben
-Wert). 256 ist ein Vielfaches von 4, das ist die ganze Anforderung: eine Kachel
-ist ein FENSTER des einen Weltgitters, kein eigenes Gitter.
+Wert). 256 ist ein Vielfaches von 2, das ist die ganze Anforderung: eine Kachel
+ist ein FENSTER des einen Weltgitters, kein eigenes Gitter. Auch die Übersicht
+bleibt gitter-kongruent, weil 4 ein Vielfaches von 2 ist: jeder
+Übersichts-Stützpunkt IST ein Kachel-Stützpunkt.
 
-**65 × 65 Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn.** Die
-Duplizierung der Randpunkte ist Absicht und kostet 3,15 % Daten (65²/64²
-Punkte; die 1,56 % je Achse fallen auf beiden an): bilineares Sampling
+**129 × 129 Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn.** Die
+Duplizierung der Randpunkte ist Absicht und kostet 1,56 % Daten (129²/128²
+Punkte; die 0,78 % je Achse fallen auf beiden an): bilineares Sampling
 INNERHALB einer Kachel braucht damit nie einen Punkt der Nachbarkachel (ein
 Client darf jede beliebige Teilmenge halten), und weil beide Seiten denselben
 Punkt tragen, ist der Boden über die Naht **stetig** statt nur beinahe.
@@ -2441,10 +2463,10 @@ flach".
 ```jsonc
 { "sig": "4400406961",      // DIE eine height_sig, global
   "tile_m": 256.0,
-  "step_m": 4.0,
+  "step_m": 2.0,
   "tiles": {
     "1,0": { "origin_x": 256.0, "origin_z": 0.0,
-             "rows": 65, "cols": 65, "heights": [[…], …] }
+             "rows": 129, "cols": 129, "heights": [[…], …] }
   } }
 ```
 
@@ -2452,11 +2474,11 @@ flach".
 |---|---|---|
 | `sig` | `str` (10) | Identisch mit `worldmap.height_sig` und mit dem `sig` der Übersicht — es gibt **eine** Signatur. Ändert sie sich, verwirft der Client Index UND alle geladenen Kacheln |
 | `tile_m` | `float` | Kantenlänge einer Kachel in Metern (256,0). Der Client **hartkodiert sie nicht**, er rechnet seine Schlüssel damit |
-| `step_m` | `float` | Abstand zweier Stützpunkte, **immer** 4,0 — Kacheln werden nie vergröbert |
+| `step_m` | `float` | Abstand zweier Stützpunkte, **immer** 2,0 — Kacheln werden nie vergröbert |
 | `tiles` | `{ "tx,tz": Kachel }` | Nur die Kacheln, die es gibt (siehe unten). Ein leeres Objekt ist eine gültige Antwort |
 | `tiles[k].origin_x/_z` | `float` | Weltmeter von `heights[0][0]` — exakt `tx·256` / `tz·256` |
-| `tiles[k].rows/cols` | `int` | 65 × 65, Ränder inklusive |
-| `tiles[k].heights` | `[[float, …], …]` | `heights[j][i]` = Höhe bei `(origin_x + i·4, origin_z + j·4)`, dieselbe bilineare Leseregel wie die Übersicht (§ A16). Eine Kachel trägt **kein eigenes** `step_m`: alle im Batch haben dasselbe, und es steht oben |
+| `tiles[k].rows/cols` | `int` | 129 × 129, Ränder inklusive |
+| `tiles[k].heights` | `[[float, …], …]` | `heights[j][i]` = Höhe bei `(origin_x + i·2, origin_z + j·2)`, dieselbe bilineare Leseregel wie die Übersicht (§ A16). Eine Kachel trägt **kein eigenes** `step_m`: alle im Batch haben dasselbe, und es steht oben |
 
 **Zwei Schreibweisen desselben Schlüssels, absichtlich verschieden.** In der
 QUERY trennt `:` innerhalb eines Schlüssels und `,` zwischen den Schlüsseln
@@ -2465,7 +2487,10 @@ dort kein Trennzeichen zweiter Ordnung gebraucht wird. Negative Indizes sind
 gewöhnliche Kacheln.
 
 **Der Batch ist auf 64 Schlüssel gekappt** (`TILE_BATCH_MAX`) — 4 km² feiner
-Boden, mehr als der Laderadius je auf einmal will. Duplikate fallen auf ihre
+Boden, mehr als der Laderadius je auf einmal will (der Client fragt sein
+Want-Set, rund 28 Kacheln). Bei 129² Punkten sind das rund 100 KB je Kachel
+und damit 6…8 MB für einen vollen 64er-Batch; das Kap bleibt trotzdem, weil
+der Client ohnehin nie so viel auf einmal will. Duplikate fallen auf ihre
 ERSTE Position zusammen, und **die Kappung greift NACH dem Entdoppeln**, ein
 wiederholter Schlüssel verdrängt also keinen anderen. Unlesbare Tokens
 (fehlender Doppelpunkt, keine ganze Zahl) werden **übersprungen**, nicht als
@@ -2495,23 +2520,31 @@ liest die Übersicht überhaupt nicht mehr), clientseitig
 Reihenfolge anwenden.
 
 **Die Gleichheitsgarantie.** Kachel und Übersicht kommen aus DEMSELBEN
-Auswertungskern über DASSELBE ursprungsverankerte Gitter. Steht die Übersicht
-bei 4 m, trägt sie an jedem gemeinsamen Stützpunkt exakt die Zahl der Kachel —
-Punkt für Punkt gemessen in `scripts/smoke_heightfield.py`, Abschnitt [14]
-(„alle Stützpunkte der Übersicht tragen die Zahl der Kacheln", dazu die
+Auswertungskern über DASSELBE ursprungsverankerte Gitter. Rastert man die
+Übersicht **auf dem Kachel-Schritt**, trägt sie an jedem gemeinsamen
+Stützpunkt exakt die Zahl der Kachel — Punkt für Punkt gemessen in
+`scripts/smoke_heightfield.py`, Abschnitt [14], der den Schritt dafür auf 2 m
+zwingt („alle Stützpunkte der Übersicht tragen die Zahl der Kacheln", dazu die
 Naht-Prüfungen und Zwischenpunkte auf beiden Nähten).
 
-**Sobald die Übersicht vergröbert ist, laufen die beiden auseinander — aus ZWEI
-Gründen**, und der zweite ist der unauffällige:
+**Bei ihrem eigenen Schritt laufen die beiden auseinander — aus ZWEI
+Gründen**, und der zweite ist der unauffällige. Seit dem 2026-08-14 gilt das
+schon bei der UNVERGRÖBERTEN Übersicht (4 m gegen 2 m), vorher erst ab der
+ersten Verdopplung:
 
-1. **Die Auflösung selbst.** Bei 32 m fehlen 7 von 8 Stützpunkten je Achse; ein
-   22-m-Hügel hat gar keinen mehr (Nyquist, § A16.2) und existiert in der
-   Übersicht nicht.
+1. **Die Auflösung selbst.** Schon bei 4 m fehlt jeder zweite Stützpunkt je
+   Achse — eine 4-m-Welle hat dort nur noch einen je Wellenzelle —, und bei
+   32 m fehlen 15 von 16; ein 22-m-Hügel hat gar keinen mehr (Nyquist,
+   § A16.2) und existiert in der Übersicht nicht.
 2. **Die Planierung planiert mit IHREM Schritt.** Der Rampenring um einen
    Fußabdruck (§ A16.1) ist „eine Zelle breit" — in der Übersicht bei 32 m also
-   **32 m breit**, in der Kachel immer 4 m. Ein planierter Ort hat in den
-   beiden Rastern damit unterschiedlich weit ausgreifende Plateaus, auch dort,
-   wo die Auflösung allein noch nichts erklären würde.
+   **32 m breit**, bei 4 m eben 4 m, in der Kachel immer 2 m. Ein planierter Ort
+   hat in den beiden Rastern damit unterschiedlich weit ausgreifende Plateaus
+   UND unterschiedliche Plateauhöhen (die Höhe wird auf dem eigenen Gitter am
+   Mittelpunkt gelesen), auch dort, wo die Auflösung allein noch nichts
+   erklären würde. Das ist der Preis der Entscheidung und kein Fehler: die
+   Naht zwischen beiden liegt konstruktionsbedingt hinter dem Nebelband
+   (siehe unten), und keine REGEL liest die Übersicht.
 
 **Regel daraus: die beiden nie mischen.** Ein Leser fragt ENTWEDER die Kacheln
 ODER die Übersicht — nie den einen Wert hier und den anderen einen Meter
@@ -2526,12 +2559,15 @@ konstruktionsbedingt hinter dem Nebelband. Sie wird **nicht extra kaschiert** �
 das ist eine dokumentierte Annahme, keine Auslassung: ein Übergangs-Blend wäre
 genau die Mischzone, die die Regel oben verbietet.
 
-**Kosten und Caches.** Eine Kachel rastert in **Millisekunden** (gemessen 20 ms
-für den Worst Case: 8-km-Fläche mit Relief, 65² Punkte, `smoke_heightfield.py`
-[14d]) und wird **nicht in der DB gespeichert** — es gibt einen Prozess-LRU
-über 512 Kacheln, Schlüssel `(Generation, tx, tz)`, und der Index ist je
-Generation gecacht. Persistiert wird weiterhin nur die Übersicht, weil nur sie
-eine Drittelsekunde kostet.
+**Kosten und Caches.** Eine Kachel rastert in **Millisekunden** (gemessen
+**78 ms** für den Worst Case: 8-km-Fläche mit Relief, 129² Punkte,
+`smoke_heightfield.py` [14d] — knapp das Vierfache der 20 ms bei 65², also
+genau die vierfache Punktzahl) und wird **nicht in der DB gespeichert** — es
+gibt einen Prozess-LRU über 512 Kacheln, Schlüssel `(Generation, tx, tz)`, und
+der Index ist je Generation gecacht. ACHTUNG bei der Obergrenze: 512 volle
+Kacheln sind bei 129² Punkten mehrere hundert MB Python-Floats (bei 65² waren
+es rund 70). Persistiert wird weiterhin nur die Übersicht, weil nur sie eine
+Drittelsekunde kostet.
 
 ## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload — neu 2026-08-14
 
