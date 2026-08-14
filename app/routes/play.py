@@ -2227,8 +2227,15 @@ def get_heightfield_route(user=Depends(get_current_user)):
     field is BILINEAR (``@anima/scene-render`` ``sampleWorldHeight``, the twin
     of ``app/core/heightfield.sample_height``). An empty world answers
     ``rows``/``cols`` 0 and an empty ``heights`` — a flat world, not an error.
+
+    IT IS THE DISTANT VIEW SINCE v2 (§ A16.3): this grid may stand at a
+    coarsened ``step_m``, and the near ground plus every rule reads the TILES
+    instead. ``tiles`` is the index — every tile the world has a ground in —
+    and a client fetches those from ``/play/heightfield/tiles``. The two are
+    never mixed: a reader takes either the tiles or the overview.
     """
-    from app.core.heightfield import get_field
+    from app.core.heightfield import (DEFAULT_STEP_M, TILE_M, get_field,
+                                      tile_index_keys)
     field = get_field()
     return {
         "origin_x": field.get("origin_x", 0.0),
@@ -2238,7 +2245,42 @@ def get_heightfield_route(user=Depends(get_current_user)):
         "cols": field.get("cols", 0),
         "heights": field.get("heights", []),
         "sig": field.get("sig", ""),
+        "tile_m": TILE_M,
+        "tile_step_m": DEFAULT_STEP_M,
+        "tiles": tile_index_keys(),
     }
+
+
+#: One-shot state of the junk-token warning below — the route is a client poll
+#: path, so a warning per request would drown the log (the ``backdrop.py``
+#: pattern, one flag per channel).
+_TILE_KEYS_WARNED = False
+
+
+@router.get("/play/heightfield/tiles")
+def get_heightfield_tiles_route(keys: str = "", user=Depends(get_current_user)):
+    """A batch of FINE height tiles — the ground the rules read (§ A16.3).
+
+    Auth and fog exactly like ``/play/heightfield``: any logged-in user, never
+    fogged. ``keys`` is ``tx:tz,tx:tz`` (colon inside a key, comma between
+    them), at most ``TILE_BATCH_MAX`` keys per request.
+
+    Tiles the index does not know are LEFT OUT — the client already has the
+    index from ``/play/heightfield`` and treats a missing tile as flat ground,
+    so there is nothing to report and nothing to ship. Unreadable tokens are
+    skipped for the same reason and said once, here.
+    """
+    global _TILE_KEYS_WARNED
+    from app.core.heightfield import (parse_tile_keys, tiles_payload,
+                                      unusable_tile_tokens)
+    junk = unusable_tile_tokens(keys)
+    if junk and not _TILE_KEYS_WARNED:
+        _TILE_KEYS_WARNED = True
+        logger.warning(
+            "/play/heightfield/tiles: unreadable key%s '%s' skipped — the "
+            "query is keys=tx:tz,tx:tz with integer tile indices",
+            "s" if len(junk) > 1 else "", "', '".join(junk))
+    return tiles_payload(parse_tile_keys(keys))
 
 
 @router.get("/play/scenes")

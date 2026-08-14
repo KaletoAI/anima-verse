@@ -1334,3 +1334,130 @@ def world_height(x: float, z: float) -> float:
     if key not in tile_index():
         return 0.0
     return sample_height(get_tile(*key), x, z)
+
+
+# ── The payload: the index list and the tile batch ──────────────────────
+
+#: Tiles one batch request may ask for. 64 tiles are 4 km² of fine ground —
+#: more than the client's own load radius ever wants at once — and they cost a
+#: few hundred milliseconds to raster from cold. The cap is what keeps a
+#: hand-written query from turning one request into a full-world raster; a
+#: client that needs more asks twice.
+TILE_BATCH_MAX = 64
+
+
+def format_tile_key(tx: int, tz: int) -> str:
+    """A tile key as it appears IN A PAYLOAD: ``"tx,tz"``.
+
+    Deliberately not the form the QUERY uses (``tx:tz``, see
+    :func:`parse_tile_keys`) — a comma separates the keys from each other
+    there, so a comma inside one would need escaping. Both forms are written
+    down in § A16.3.
+    """
+    return f"{tx},{tz}"
+
+
+def _parse_tile_token(token: str) -> Optional[Tuple[int, int]]:
+    """One ``"tx:tz"`` token, or None when it is not one.
+
+    The whole rule of the query format in one place, so the parser and the
+    junk-token list of the route cannot disagree about what is readable.
+    Exactly one colon, an integer on each side — a float, a name, a missing
+    half and a second colon are all "not a tile key".
+    """
+    parts = token.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def parse_tile_keys(raw: str, cap: int = TILE_BATCH_MAX
+                    ) -> List[Tuple[int, int]]:
+    """The ``keys=tx:tz,tx:tz`` query of the tile batch — pure, no DB.
+
+    FORGIVING BY DESIGN, like every reader of a free-text field here: an
+    unreadable token is SKIPPED rather than failing the request, because the
+    tiles a client did name are still the ground it is missing, and a batch
+    that answers nothing turns one typo into a flat world. What is dropped is
+    said once, by the route (§ A16.3, the ``backdrop.py`` pattern).
+
+    Duplicates collapse to their FIRST position — a client that asks for the
+    same tile twice gets it once, and the order it asked in survives, which is
+    the order the cap then cuts at: :data:`TILE_BATCH_MAX` keys AFTER the
+    dedupe, so a repeated key cannot push a distinct one out of the batch.
+    """
+    out: List[Tuple[int, int]] = []
+    seen = set()
+    for token in str(raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        key = _parse_tile_token(token)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+        if 0 < cap <= len(out):
+            break
+    return out
+
+
+def unusable_tile_tokens(raw: str) -> List[str]:
+    """The tokens of a ``keys=`` query that are NOT tile keys.
+
+    The other half of :func:`parse_tile_keys`, and it exists because the parser
+    stays silent: a client asking with the wrong separator gets an empty batch
+    and a flat world, which looks exactly like "there is no ground there". The
+    route says so once. An EMPTY token is not listed — a trailing comma is a
+    typo without consequence, not a misunderstanding of the format.
+    """
+    return [token for token in
+            (t.strip() for t in str(raw or "").split(","))
+            if token and _parse_tile_token(token) is None]
+
+
+def tile_index_keys() -> List[str]:
+    """The indexed tiles as payload keys, sorted by ``tx``, then ``tz``.
+
+    THE INDEX IS THE CLIENT'S MAP OF THE GROUND: it names every tile that can
+    carry a height, so a client only ever asks for tiles that exist and treats
+    everything else as the flat world without a round trip. Sorted because a
+    payload that reorders itself between two identical worlds is a diff nobody
+    can read.
+    """
+    return [format_tile_key(tx, tz) for tx, tz in sorted(tile_index())]
+
+
+def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
+    """The batch payload of ``GET /play/heightfield/tiles`` (§ A16.3).
+
+    ONLY INDEXED TILES COME BACK. A key outside :func:`tile_index` is left out
+    — not an error, not an empty grid: the index already told the client that
+    everything else is flat, so a missing entry is that same statement and
+    costs neither a raster nor a kilobyte. That also makes the endpoint safe to
+    ask with a stale index; the answer is simply smaller than the question.
+
+    THE SIGNATURE IS READ FIRST, before a single tile is rastered, and that
+    order matters: an authoring write landing mid-request then makes the client
+    hold tiles NEWER than the signature they arrived with, which the next poll
+    corrects. The other way round it would hold stale tiles labelled current.
+    """
+    sig = current_sig()
+    index = tile_index()
+    tiles: Dict[str, Any] = {}
+    for tx, tz in keys:
+        if (tx, tz) not in index:
+            continue
+        tile = get_tile(tx, tz)
+        # The tile's own fields, minus its ``step_m``: every tile in a batch
+        # has the same one and it stands at the top level.
+        tiles[format_tile_key(tx, tz)] = {
+            "origin_x": tile["origin_x"], "origin_z": tile["origin_z"],
+            "rows": tile["rows"], "cols": tile["cols"],
+            "heights": tile["heights"],
+        }
+    return {"sig": sig, "tile_m": TILE_M, "step_m": DEFAULT_STEP_M,
+            "tiles": tiles}

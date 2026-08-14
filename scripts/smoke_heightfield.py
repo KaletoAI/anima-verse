@@ -533,6 +533,28 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
          answers 0.0 instead of FP_WEST's ramp — the index is not a hint, it is
          the statement "everywhere else is flat".
 
+[15] THE TILE-KEY QUERY of the batch endpoint (§ A16.3). ``keys=tx:tz,tx:tz``
+    — colon INSIDE a key, comma BETWEEN them — parsed purely, and every rule
+    of it derived here:
+      "1:0,2:3"        -> [(1, 0), (2, 3)]        the plain case
+      "1:0,x,2:3:4,,7" -> [(1, 0)]                a name, two colons, an empty
+                                                  token and a missing half are
+                                                  all "not a tile key"
+      "-1:-2"          -> [(-1, -2)]              west/north of the origin is
+                                                  an ordinary tile
+      "2:3,1:0,2:3"    -> [(2, 3), (1, 0)]        a duplicate collapses to its
+                                                  FIRST position — the order
+                                                  the cap then cuts at
+      ""               -> []                      an empty query asks nothing
+    THE CAP IS 64 AND IT BITES AFTER THE DEDUPE: "0:0,0:1,…,0:64" is 65
+    distinct keys, so 64 come back and the 65th, (0, 64), is not among them;
+    a query of 64 distinct keys with every one of them repeated still returns
+    all 64, because the repeats never occupied a slot.
+    THE PAYLOAD is built over the [14] world: the index is {(0,0), (1,0),
+    (1,1)}, so ``tiles`` answers "1,0" (comma in the payload, colon in the
+    query) and simply omits the unindexed (9, 9) — the client reads a missing
+    tile as flat ground.
+
 Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
 """
 import asyncio
@@ -835,7 +857,8 @@ print("[10] the routes")
 from fastapi import HTTPException  # noqa: E402
 from app.routes.world import (delete_height_area_route,  # noqa: E402
                               post_height_area_route, put_height_area_route)
-from app.routes.play import get_heightfield_route  # noqa: E402
+from app.routes.play import (get_heightfield_route,  # noqa: E402
+                             get_heightfield_tiles_route)
 
 
 class _FakeRequest:
@@ -876,11 +899,30 @@ check("the edit landed", store.list_height_areas()[0]["height_m"], 7.0)
 
 payload = get_heightfield_route(user={"role": "user"})
 check("payload keys", sorted(payload.keys()),
-      ["cols", "heights", "origin_x", "origin_z", "rows", "sig", "step_m"])
+      ["cols", "heights", "origin_x", "origin_z", "rows", "sig", "step_m",
+       "tile_m", "tile_step_m", "tiles"])
 check("payload signature", payload["sig"], store.height_sig())
 check("payload shape", (payload["rows"], payload["cols"]), (13, 13))
+# The overview carries the TILE INDEX with it (§ A16.3): the one area here is
+# the square (0,0)-(40,40), which lies inside tile (0, 0) alone.
+check("the overview carries the tile index", payload["tiles"], ["0,0"])
+check("...with the tile edge", payload["tile_m"], 256.0)
+check("...and the fine step the tiles are rastered at",
+      payload["tile_step_m"], 4.0)
 near("payload height at (20,20)",
      payload["heights"][6][6], 7.0)
+
+# …and the batch endpoint on the same world: (0,0) is the only indexed tile,
+# (5,5) is 1.3 km away and simply missing, the junk token is skipped.
+batch = get_heightfield_tiles_route(keys="0:0,5:5,nonsense",
+                                    user={"role": "user"})
+check("batch keys", sorted(batch.keys()),
+      ["sig", "step_m", "tile_m", "tiles"])
+check("the batch answers the indexed tile and nothing else",
+      sorted(batch["tiles"].keys()), ["0,0"])
+near("...and it is the fine ground under the hill's centre",
+     hf.sample_height({**batch["tiles"]["0,0"], "step_m": batch["step_m"]},
+                      20, 20), 7.0)
 
 check("DELETE", route_status(delete_height_area_route, new_id), 200)
 check("DELETE again", route_status(delete_height_area_route, new_id), 404)
@@ -1604,6 +1646,47 @@ near("...deep inside the area, at the full height plus its noise",
      _giant_tile["heights"][32][32] - 12.0,
      hf.micro_relief_at(hf.relief_params("g", T14_CATALOG["g"]), 896.0, 896.0),
      5e-4)
+
+print("[15] the tile-key query and the batch payload")
+check("the plain case", hf.parse_tile_keys("1:0,2:3"), [(1, 0), (2, 3)])
+check("junk tokens are skipped, the readable ones survive",
+      hf.parse_tile_keys("1:0,x,2:3:4,,7"), [(1, 0)])
+check("...and exactly those tokens are the ones the route says out loud",
+      hf.unusable_tile_tokens("1:0,x,2:3:4,,7"), ["x", "2:3:4", "7"])
+check("an empty token is no complaint", hf.unusable_tile_tokens("1:0,,"), [])
+check("negative tile indices are ordinary tiles",
+      hf.parse_tile_keys("-1:-2"), [(-1, -2)])
+check("a duplicate collapses to its FIRST position",
+      hf.parse_tile_keys("2:3,1:0,2:3"), [(2, 3), (1, 0)])
+check("an empty query asks for nothing", hf.parse_tile_keys(""), [])
+# The cap bites AFTER the dedupe: 65 distinct keys in, 64 out.
+_65 = ",".join(f"0:{n}" for n in range(65))
+check("65 distinct keys are cut to the cap",
+      len(hf.parse_tile_keys(_65)), 64)
+check("...and it is the 65th that is missing",
+      (0, 64) in hf.parse_tile_keys(_65), False)
+check("...while repeats never occupy a slot",
+      len(hf.parse_tile_keys(",".join(f"0:{n},0:{n}" for n in range(64)))), 64)
+
+# The payload, over the world [14c] left standing (index {(0,0),(1,0),(1,1)}).
+check("the index travels as sorted payload keys — tx first, then tz",
+      hf.tile_index_keys(), ["0,0", "1,0", "1,1"])
+_batch = hf.tiles_payload(hf.parse_tile_keys("1:0,9:9"))
+check("the batch names the tile with a COMMA, the query used a colon",
+      sorted(_batch["tiles"].keys()), ["1,0"])
+check("an unindexed tile is simply left out — no error, no empty grid",
+      "9,9" in _batch["tiles"], False)
+check("the batch carries THE one signature", _batch["sig"], store.height_sig())
+check("...the tile edge", _batch["tile_m"], 256.0)
+check("...and the always-fine step", _batch["step_m"], 4.0)
+check("a tile entry is the grid without its own step",
+      sorted(_batch["tiles"]["1,0"].keys()),
+      ["cols", "heights", "origin_x", "origin_z", "rows"])
+check("...and it IS the tile the rules read",
+      _batch["tiles"]["1,0"]["heights"] == hf.get_tile(1, 0)["heights"], True)
+check("...at the tile's own origin",
+      (_batch["tiles"]["1,0"]["origin_x"], _batch["tiles"]["1,0"]["origin_z"]),
+      (256.0, 0.0))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)
