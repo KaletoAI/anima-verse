@@ -53,9 +53,32 @@ and each step is what it is because of the one before it: the relief is a
 variation OF the authored landscape, not a competitor of it (hence additive,
 after the |max| rule), and a levelled place stands on flat ground, not on flat
 ground plus noise (hence the plateaus last).
+
+**THE RULES READ TILES, THE DISTANCE READS THE OVERVIEW** (v2, decision
+2026-08-14). One grid for the whole world cannot be both: the point budget
+(:data:`MAX_POINTS`) coarsens it as soon as somebody paints far out, and at a
+32 m step the ground a walker is judged against is not the ground anybody
+authored. So there are two rasters of the same landscape now:
+
+* the OVERVIEW — :func:`rasterize` / :func:`get_field`, one grid over
+  everything, coarsened when it must be. It is a PICTURE for the distant view
+  and nothing else reads it any more.
+* the TILES — :func:`rasterize_tile`, a 256 m square of the world at the
+  always-fine :data:`DEFAULT_STEP_M`, computed on demand and cached per
+  process. :func:`world_height`, i.e. every rule that asks what the ground
+  does, samples THOSE.
+
+Both come out of the SAME evaluation kernel over the SAME lattice
+(:func:`_window_grid`; the lattice is anchored at the world origin, so a tile's
+support points ARE global support points), which is what makes the two agree
+point for point wherever the overview is still at 4 m — the equality the smoke
+run measures. A tile is only rastered where there is something to raster:
+:func:`tile_index` lists the tiles any authored box reaches into, and a point
+outside every one of them is the flat world, answered without touching a grid.
 """
 
 import math
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.log import get_logger
@@ -425,36 +448,54 @@ def _apply_micro_relief(origin_x: float, origin_z: float, step: float,
     parameters is a flat topmost kind or unpainted ground, and both are ground
     this field has no business moving.
 
-    THE 0-RING IS NOT TOUCHED and needs no special case: the grid always
+    THE MASK CARRIES A ONE-POINT APRON (v2, 2026-08-14) — it is built over the
+    window GROWN BY ONE SUPPORT POINT on every side, and that ring is the
+    whole reason a tile can be rastered on its own. The edge rule asks about
+    the four NEIGHBOURS of a point, so a window that only knew its own points
+    would have to guess at its border, and a tile border is an arbitrary line
+    through the middle of a meadow: guessing "flat" there would clamp dips that
+    the one world grid keeps, and the tile would step away from the overview
+    exactly along its seams. With the apron the neighbours are simply
+    evaluated, so the answer is the world's answer wherever the window ends.
+    For the OVERVIEW the ring changes nothing (see below), which is what the
+    equality smoke measures.
+
+    THE 0-RING IS NOT TOUCHED and needs no special case: the overview always
     reaches one full step PAST the union box of everything that shaped it
-    (:func:`_axis_origin`), so no painted polygon can contain a border point.
+    (:func:`_axis_origin`), so no painted polygon can contain a border point —
+    and for the same reason the apron OF the overview is outside every polygon
+    too, i.e. all-flat, the very answer the border used to be given by hand.
     """
     rows = len(heights)
     cols = len(heights[0]) if rows else 0
     if rows < 2 or cols < 2 or step <= 0 or not relief:
         return
     from app.core.world_geometry import point_in_polygon
+    # The mask is indexed with the apron offset: grid point (i, j) is
+    # ``at_point[j + 1][i + 1]``, and every one of its four neighbours exists.
+    mcols, mrows = cols + 2, rows + 2
+    mask_x, mask_z = origin_x - step, origin_z - step
     at_point: List[List[Optional[Tuple[int, float, float]]]] = [
-        [None] * cols for _ in range(rows)]
+        [None] * mcols for _ in range(mrows)]
     for area, params, (ax0, az0, ax1, az1) in relief:
         polygon = area.get("polygon")
-        i0 = max(0, int(math.floor((ax0 - origin_x) / step)))
-        i1 = min(cols - 1, int(math.ceil((ax1 - origin_x) / step)))
-        j0 = max(0, int(math.floor((az0 - origin_z) / step)))
-        j1 = min(rows - 1, int(math.ceil((az1 - origin_z) / step)))
+        i0 = max(0, int(math.floor((ax0 - mask_x) / step)))
+        i1 = min(mcols - 1, int(math.ceil((ax1 - mask_x) / step)))
+        j0 = max(0, int(math.floor((az0 - mask_z) / step)))
+        j1 = min(mrows - 1, int(math.ceil((az1 - mask_z) / step)))
         for j in range(j0, j1 + 1):
-            pz = origin_z + j * step
+            pz = mask_z + j * step
             row = at_point[j]
             for i in range(i0, i1 + 1):
-                if point_in_polygon(origin_x + i * step, pz, polygon):
+                if point_in_polygon(mask_x + i * step, pz, polygon):
                     row[i] = params
     corners: Dict[Tuple[int, int, int], float] = {}
     for j in range(rows):
         pz = origin_z + j * step
-        krow = at_point[j]
+        krow = at_point[j + 1]
         hrow = heights[j]
         for i in range(cols):
-            params = krow[i]
+            params = krow[i + 1]
             if params is None:
                 continue
             seed, amp, wave = params
@@ -474,21 +515,21 @@ def _apply_micro_relief(origin_x: float, origin_z: float, step: float,
             # The edge rule: only a DIP is cut off, and only at the border of
             # the relief-carrying region (see the docstring). Asking for the
             # neighbours costs nothing where the noise lifts anyway.
-            if noise < 0.0 and _flat_neighbour(at_point, i, j, rows, cols):
+            if noise < 0.0 and _flat_neighbour(at_point, i + 1, j + 1):
                 noise = 0.0
             hrow[i] += noise
 
 
 def _flat_neighbour(at_point: List[List[Optional[Tuple[int, float, float]]]],
-                    i: int, j: int, rows: int, cols: int) -> bool:
-    """Does one of the four grid neighbours of (i, j) carry no relief?
+                    i: int, j: int) -> bool:
+    """Does one of the four lattice neighbours of the MASK point (i, j) carry
+    no relief?
 
     The mask of the edge rule, read straight off the first sweep's buffer.
-    A point ON the grid border counts as bordering flat ground: outside the
-    grid the border value applies, and that ground is nobody's relief.
+    ``i``/``j`` are indices INTO THE MASK, which carries the one-point apron —
+    so every window point has its four neighbours in the buffer and there is no
+    border case to invent. The apron itself is never asked.
     """
-    if i == 0 or j == 0 or i == cols - 1 or j == rows - 1:
-        return True
     return (at_point[j - 1][i] is None or at_point[j + 1][i] is None
             or at_point[j][i - 1] is None or at_point[j][i + 1] is None)
 
@@ -570,9 +611,154 @@ def _grown(box: Tuple[float, float, float, float],
     return (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
 
 
+def _relevant_footprints(fp_boxes: Sequence[Tuple[float, float, float, float]],
+                         area_bounds: Tuple[float, float, float, float],
+                         step: float
+                         ) -> List[Tuple[float, float, float, float]]:
+    """The levelling footprints that can touch an authored height at all.
+
+    A footprint LEVELS the ground under itself plus one cell of ramp, so it is
+    relevant as far as its box GROWN BY ONE STEP reaches. Where that still
+    misses every authored box, the plateau levels 0 onto 0 and changes nothing:
+    outside every polygon the ground is flat, and the height it would pin is
+    read from that same flat ground.
+
+    ONE RULE, TWO READERS — the overview grows its grid for exactly these
+    (:func:`rasterize`) and the tile index lists exactly their tiles
+    (:func:`tile_index_from`). A single far-away hut must neither stretch the
+    grid across the world nor conjure a tile, and the two must not disagree
+    about which hut that is, or the tiles would stop matching the overview.
+    """
+    return [box for box in fp_boxes
+            if _overlaps(_grown(box, step), area_bounds)]
+
+
+# ── The evaluation kernel: ONE window of the world lattice ──────────────
+
+#: A height area together with its bounding box, the form both passes want.
+AreaBox = Tuple[Dict[str, Any], Tuple[float, float, float, float]]
+
+
+def area_boxes(areas: Sequence[Dict[str, Any]]) -> List[AreaBox]:
+    """The usable height areas with their boxes, in the order given.
+
+    A polygon of fewer than three points describes no surface and an outline
+    whose vertices are all unreadable has no box — both are dropped HERE, once,
+    so every consumer downstream (the raster, a tile, the tile index) works off
+    the same list and cannot disagree about what is authored.
+    """
+    from app.models.heightfield import polygon_bounds
+    out: List[AreaBox] = []
+    for area in (areas or []):
+        if len(area.get("polygon") or []) < 3:
+            continue
+        box = polygon_bounds(area.get("polygon"))
+        if box is not None:
+            out.append((area, box))
+    return out
+
+
+def _window_grid(origin_x: float, origin_z: float, step: float,
+                 cols: int, rows: int, boxes: Sequence[AreaBox],
+                 relief: Sequence[Tuple[Dict[str, Any],
+                                        Optional[Tuple[int, float, float]],
+                                        Tuple[float, float, float, float]]]
+                 ) -> List[List[float]]:
+    """The authored landscape over ONE window of the lattice — WITHOUT the
+    plateaus. Pure.
+
+    THE ONE EVALUATION KERNEL (v2, 2026-08-14). The overview asks it for the
+    window that covers the whole world, a tile for its own 256 m square, and
+    :func:`plateau_height` for the 2 × 2 cell under a footprint centre — same
+    code, same lattice, therefore the same number at the same world point. The
+    alternative, a second implementation for the tiles, is the failure this
+    package exists to avoid: two grounds that agree everywhere except where it
+    matters.
+
+    A WINDOW IS ITS ORIGIN, ITS STEP AND ITS SIZE — nothing else. It may lie
+    anywhere, may be smaller than an area, and need hold no 0-ring at all;
+    what a point outside it does is not this function's business. The two
+    passes are the ones the module documents: the areas by the |max| rule, then
+    the micro-relief added on top (whose mask carries its own one-point apron,
+    see :func:`_apply_micro_relief`).
+    """
+    heights = [[0.0] * cols for _ in range(rows)]
+    if cols < 1 or rows < 1 or step <= 0:
+        return heights
+    # Per area only the index window its own box covers — a world of small
+    # hills must not cost "every area × every point".
+    for area, (ax0, az0, ax1, az1) in boxes:
+        i0 = max(0, int(math.floor((ax0 - origin_x) / step)))
+        i1 = min(cols - 1, int(math.ceil((ax1 - origin_x) / step)))
+        j0 = max(0, int(math.floor((az0 - origin_z) / step)))
+        j1 = min(rows - 1, int(math.ceil((az1 - origin_z) / step)))
+        for j in range(j0, j1 + 1):
+            pz = origin_z + j * step
+            row = heights[j]
+            for i in range(i0, i1 + 1):
+                value = area_height_at(area, origin_x + i * step, pz)
+                if value is None:
+                    continue
+                current = row[i]
+                # Stronger deflection wins; at equal strength the higher
+                # value does (a hill over a hollow of the same depth), and a
+                # true tie keeps what is there. `areas` arrives in a stable
+                # order (insert order), so the result never depends on which
+                # row the DB happened to return first.
+                if abs(value) > abs(current) or (
+                        abs(value) == abs(current) and value > current):
+                    row[i] = value
+    # THEN the terrain's own small hills, ADDED onto that landscape — a
+    # variation of it, not a competitor: run before the |max| rule they would
+    # simply be overwritten by every authored area (which is exactly the red
+    # counter-probe in the smoke).
+    _apply_micro_relief(origin_x, origin_z, step, heights, relief)
+    return heights
+
+
+def plateau_height(cx: float, cz: float, step: float,
+                   boxes: Sequence[AreaBox],
+                   relief: Sequence[Tuple[Dict[str, Any],
+                                          Optional[Tuple[int, float, float]],
+                                          Tuple[float, float, float, float]]]
+                   ) -> float:
+    """The authored ground under a footprint centre, BEFORE any levelling.
+
+    ``ground_y(pos_x, pos_z)`` of the plateau rule (:func:`level_plateaus`),
+    computed PURELY: the four lattice points around (cx, cz) are evaluated by
+    the kernel and mixed bilinearly — the very rule :func:`sample_height`
+    applies, only without a grid to look them up in.
+
+    That is what lets a tile level its own plateaus (v2, 2026-08-14). The
+    height of a plateau is a property of the WORLD, not of the window one
+    happens to be rastering: a footprint sitting on a tile border reads two of
+    its corners from the tile next door, and a levelled place must not stand at
+    two heights depending on which tile one asks. Sampling the window's own
+    array — what the overview did while it was the only raster — would clamp
+    those corners to the window border and do exactly that.
+
+    The lattice is anchored at the world origin, so the enclosing cell is
+    ``floor((cx, cz) / step)`` and needs no window to be named.
+    """
+    if step <= 0:
+        return 0.0
+    i = math.floor(cx / step)
+    j = math.floor(cz / step)
+    cell = _window_grid(i * step, j * step, step, 2, 2, boxes, relief)
+    tx = cx / step - i
+    tz = cz / step - j
+    north = cell[0][0] * (1.0 - tx) + cell[0][1] * tx
+    south = cell[1][0] * (1.0 - tx) + cell[1][1] * tx
+    return north * (1.0 - tz) + south * tz
+
+
 def level_plateaus(origin_x: float, origin_z: float, step: float,
                    heights: List[List[float]],
-                   footprints: Sequence[Tuple[float, float, float, float]]
+                   footprints: Sequence[Tuple[float, float, float, float]],
+                   boxes: Sequence[AreaBox],
+                   relief: Sequence[Tuple[Dict[str, Any],
+                                          Optional[Tuple[int, float, float]],
+                                          Tuple[float, float, float, float]]]
                    ) -> None:
     """Flatten the ground under every footprint GIVEN — IN PLACE (E8 task 4).
 
@@ -587,11 +773,13 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     matter.
 
     THE HEIGHT OF THE PLATEAU is the authored ground at the footprint's CENTRE,
-    ``ground_y(pos_x, pos_z)`` — read from the raster BEFORE anything is
-    levelled, which is why every ``h0`` below is sampled first and only then
-    written. Sampling as we go would let the first plateau raise the ground the
-    second one then reads, so two neighbouring places would answer differently
-    depending on the order the DB returned them.
+    ``ground_y(pos_x, pos_z)`` — read BEFORE anything is levelled, which is why
+    every ``h0`` below is taken first and only then written. Reading as we go
+    would let the first plateau raise the ground the second one then reads, so
+    two neighbouring places would answer differently depending on the order the
+    DB returned them. Since v2 it is :func:`plateau_height` that answers, from
+    the areas themselves rather than from ``heights``: the number is the same
+    one on the overview, and it belongs to the world, not to the window.
 
     THE PINNED REGION IS THE FOOTPRINT DILATED BY ONE CELL — the flat-hull
     pattern of the scene relief (``scatter_curves.terrain_grid``), for the same
@@ -623,14 +811,13 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     if rows < 2 or cols < 2 or step <= 0 or not footprints:
         return
     from app.core.world_geometry import footprint_distance
-    field = {"origin_x": origin_x, "origin_z": origin_z, "step_m": step,
-             "rows": rows, "cols": cols, "heights": heights}
     # Widest first — see the docstring: the last write wins, so the smallest
     # footprint has the final say. ``sorted`` is stable, so equal widths keep
     # the order they arrived in.
     ordered = sorted(footprints, key=lambda fp: -float(fp[2]))
-    # EVERY plateau height first, from the untouched raster.
-    levels = [sample_height(field, fp[0], fp[1]) for fp in ordered]
+    # EVERY plateau height first, from the untouched landscape.
+    levels = [plateau_height(fp[0], fp[1], step, boxes, relief)
+              for fp in ordered]
     for (cx, cz, width, yaw), h0 in zip(ordered, levels):
         # Index window: the whole rotated square (half-diagonal) plus the
         # dilation ring, so no pinned point is missed and none of the world
@@ -693,14 +880,14 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     height areas UNION the areas whose kind carries relief. A world without a
     single height area but with bumpy grass painted on it gets its first grid
     that way, and the point budget behaves exactly as before.
+
+    SINCE v2 THIS IS THE OVERVIEW, and only the distant view reads it (see the
+    module docstring): it is the one raster that may be COARSENED, and a rule
+    asked at 32 m would judge a landscape nobody authored. The heights it
+    carries are the tiles' heights wherever it stands at
+    :data:`DEFAULT_STEP_M` — same kernel, same lattice.
     """
-    from app.models.heightfield import polygon_bounds
-    usable = [a for a in (areas or []) if len(a.get("polygon") or []) >= 3]
-    boxes: List[Tuple[Dict[str, Any], Tuple[float, float, float, float]]] = []
-    for area in usable:
-        box = polygon_bounds(area.get("polygon"))
-        if box is not None:
-            boxes.append((area, box))
+    boxes = area_boxes(areas)
     relief = relief_inputs(terrain_areas, terrain_catalog)
     relief_boxes = [box for _a, params, box in relief if params is not None]
     if not boxes and not relief_boxes:
@@ -714,9 +901,8 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     # plus its ramp ring — otherwise the plateau would be cut off at the
     # border and the clamp outside the grid ("the flat world") would meet it
     # as a cliff.
-    # Footprints that cannot touch any authored height are left out: outside
-    # every polygon the ground is 0, levelling 0 onto 0 changes nothing, and a
-    # single far-away hut must not stretch the grid across the world.
+    # Footprints that cannot touch any authored height are left out
+    # (:func:`_relevant_footprints`).
     fp_boxes = [_footprint_box(fp) for fp in (footprints or ())
                 if fp and float(fp[2]) > 0]
     step = float(step_m) if step_m and step_m > 0 else _step_for(area_bounds)
@@ -725,8 +911,7 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     # two are settled by iteration. The step only ever DOUBLES (`_step_for`)
     # and is capped, so this reaches a fixed point in a couple of rounds.
     for _round in range(6):
-        relevant = [box for box in fp_boxes
-                    if _overlaps(_grown(box, step), area_bounds)]
+        relevant = _relevant_footprints(fp_boxes, area_bounds, step)
         bounds = _union([area_bounds] + [_grown(b, step) for b in relevant])
         nxt = float(step_m) if step_m and step_m > 0 else _step_for(bounds)
         if nxt == step:
@@ -738,40 +923,147 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     cols = _axis_points(min_x, max_x, step)
     rows = _axis_points(min_z, max_z, step)
 
-    heights = [[0.0] * cols for _ in range(rows)]
-    # Per area only the index window its own box covers — a world of small
-    # hills must not cost "every area × every point".
-    for area, (ax0, az0, ax1, az1) in boxes:
-        i0 = max(0, int(math.floor((ax0 - origin_x) / step)))
-        i1 = min(cols - 1, int(math.ceil((ax1 - origin_x) / step)))
-        j0 = max(0, int(math.floor((az0 - origin_z) / step)))
-        j1 = min(rows - 1, int(math.ceil((az1 - origin_z) / step)))
-        for j in range(j0, j1 + 1):
-            pz = origin_z + j * step
-            row = heights[j]
-            for i in range(i0, i1 + 1):
-                value = area_height_at(area, origin_x + i * step, pz)
-                if value is None:
-                    continue
-                current = row[i]
-                # Stronger deflection wins; at equal strength the higher
-                # value does (a hill over a hollow of the same depth), and a
-                # true tie keeps what is there. `areas` arrives in a stable
-                # order (insert order), so the result never depends on which
-                # row the DB happened to return first.
-                if abs(value) > abs(current) or (
-                        abs(value) == abs(current) and value > current):
-                    row[i] = value
-    # THEN the terrain's own small hills, ADDED onto that landscape — a
-    # variation of it, not a competitor: run before the |max| rule they would
-    # simply be overwritten by every authored area (which is exactly the red
-    # counter-probe in the smoke).
-    _apply_micro_relief(origin_x, origin_z, step, heights, relief)
+    heights = _window_grid(origin_x, origin_z, step, cols, rows, boxes, relief)
     # …and only now the places standing on that landscape (E8 task 4).
-    level_plateaus(origin_x, origin_z, step, heights,
-                   [fp for fp in (footprints or ()) if fp and float(fp[2]) > 0])
+    placed = [fp for fp in (footprints or ()) if fp and float(fp[2]) > 0]
+    level_plateaus(origin_x, origin_z, step, heights, placed, boxes, relief)
     return {"origin_x": round(origin_x, 3), "origin_z": round(origin_z, 3),
             "step_m": step, "rows": rows, "cols": cols,
+            "heights": [[round(v, 3) for v in row] for row in heights]}
+
+
+# ── Tiles: the fine ground the RULES read ───────────────────────────────
+
+#: Edge of one height tile, in metres. 256 is a multiple of
+#: :data:`DEFAULT_STEP_M`, which is the whole requirement: a tile's support
+#: points are then global lattice points and a tile is a WINDOW of the one
+#: world grid rather than a grid of its own. It is also a sensible parcel —
+#: 65 × 65 points, a couple of milliseconds to raster, a few kilobytes to ship.
+TILE_M = 256.0
+
+#: Support points per tile axis — the edges INCLUDED, so tile (tx, tz) covers
+#: ``[tx·256, (tx+1)·256]`` closed and the point on a seam exists in both
+#: neighbours. That duplication is deliberate: bilinear sampling inside a tile
+#: never needs a point from the tile next door (so a client may hold any subset
+#: it likes), and the shared points guarantee the ground is continuous across
+#: the seam instead of merely nearly so.
+TILE_POINTS = int(TILE_M / DEFAULT_STEP_M) + 1
+
+
+def tile_key(x: float, z: float) -> Tuple[int, int]:
+    """The tile a world point belongs to — ``floor((x, z) / TILE_M)``.
+
+    A point ON a seam belongs to the tile EAST/SOUTH of it, which is the same
+    half-open rule the nav grid uses for its cells. Both tiles carry that point
+    with the same height, so nothing depends on the choice.
+    """
+    return (int(math.floor(float(x) / TILE_M)),
+            int(math.floor(float(z) / TILE_M)))
+
+
+def tiles_of_box(box: Tuple[float, float, float, float]
+                 ) -> List[Tuple[int, int]]:
+    """Every tile an axis-aligned box reaches into, seams included."""
+    tx0, tz0 = tile_key(box[0], box[1])
+    tx1, tz1 = tile_key(box[2], box[3])
+    return [(tx, tz) for tx in range(tx0, tx1 + 1)
+            for tz in range(tz0, tz1 + 1)]
+
+
+def tile_index_from(areas: Sequence[Dict[str, Any]],
+                    relief: Sequence[Tuple[Dict[str, Any],
+                                           Optional[Tuple[int, float, float]],
+                                           Tuple[float, float, float, float]]],
+                    footprints: Sequence[Tuple[float, float, float, float]]
+                    ) -> frozenset:
+    """Which tiles the world has a ground in — pure, no DB (v2, 2026-08-14).
+
+    PURE BOX COVERAGE, and nothing finer: a tile is indexed when a height
+    area's box, a relief-carrying terrain area's box or the grown box of a
+    RELEVANT levelling footprint reaches into it. A polygon that only clips the
+    corner of a tile still indexes the whole tile — the answer is "there may be
+    ground here", and the raster then says what it is.
+
+    OUTSIDE THE INDEX THE WORLD IS FLAT, which is the property everything else
+    hangs on (:func:`world_height` answers 0.0 there without rastering
+    anything), so the list has to be a SUPERSET of everywhere a height can be
+    non-zero. It is: an area writes only inside its own box, the relief only
+    inside a relief-carrying area, and a plateau only inside its footprint plus
+    one cell of ramp — while a footprint the relevance rule drops levels 0 onto
+    0 (:func:`_relevant_footprints`) and can therefore write nothing anywhere.
+
+    ``relief`` is what :func:`relief_inputs` hands the raster, and only its
+    relief-CARRYING entries count: a flat kind painted on top erases relief
+    where it covers one, which happens inside that other area's box and
+    therefore inside a tile that is already indexed.
+    """
+    boxes = [box for _a, box in area_boxes(areas)]
+    boxes += [box for _a, params, box in relief if params is not None]
+    if not boxes:
+        # Nothing shapes the ground: no tile, exactly as the overview returns
+        # an empty grid. A hundred levelling places on an unpainted world are
+        # a hundred plateaus at 0 on ground that is already 0.
+        return frozenset()
+    area_bounds = _union(boxes)
+    fp_boxes = [_footprint_box(fp) for fp in (footprints or ())
+                if fp and float(fp[2]) > 0]
+    # The step is the TILE step here, never a coarsened one: tiles are the fine
+    # raster by definition, so the ramp ring they must hold is 4 m wide.
+    boxes += [_grown(box, DEFAULT_STEP_M) for box
+              in _relevant_footprints(fp_boxes, area_bounds, DEFAULT_STEP_M)]
+    keys: List[Tuple[int, int]] = []
+    for box in boxes:
+        keys.extend(tiles_of_box(box))
+    return frozenset(keys)
+
+
+def rasterize_tile(
+        tx: int, tz: int,
+        areas: Sequence[Dict[str, Any]],
+        footprints: Sequence[Tuple[float, float, float, float]] = (),
+        terrain_areas: Sequence[Dict[str, Any]] = (),
+        terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """ONE 256 m tile of the world ground as a grid — pure, no DB.
+
+    The same payload shape :func:`sample_height` reads, and the same shape the
+    overview has, only with a fixed window: origin ``(tx·256, tz·256)``, step
+    :data:`DEFAULT_STEP_M`, 65 × 65 points. It takes the very inputs
+    :func:`rasterize` takes, for the same reason: purity, so a smoke run can
+    build a world out of literals.
+
+    IT IS A WINDOW OF THE OVERVIEW, NOT A SECOND OPINION. Both go through
+    :func:`_window_grid` and :func:`level_plateaus` over the world-anchored
+    lattice, so wherever the overview stands at 4 m the two carry the same
+    number at every shared point — the equality the smoke run measures point by
+    point, seams included.
+
+    THE PLATEAUS ARE APPLIED HERE TOO, and over ALL levelling footprints that
+    reach into the window — including the ones the tile index calls irrelevant.
+    Those level 0 onto 0 and so cannot change a height (which is why they need
+    no tile of their own), but they are kept in the list because ORDER decides
+    on overlap: the widest is levelled first and the narrowest has the final
+    say, and dropping a member of that chain would let a wide plateau show
+    through where a narrow one flattened it.
+    """
+    origin_x = tx * TILE_M
+    origin_z = tz * TILE_M
+    step = DEFAULT_STEP_M
+    boxes = area_boxes(areas)
+    relief = relief_inputs(terrain_areas, terrain_catalog)
+    heights = _window_grid(origin_x, origin_z, step, TILE_POINTS, TILE_POINTS,
+                           boxes, relief)
+    window = (origin_x, origin_z, origin_x + TILE_M, origin_z + TILE_M)
+    # Only the footprints that can write into this window, in the order they
+    # arrived (``sorted`` in the pass is stable, so filtering cannot reorder
+    # the ones that stay). A footprint levels its square plus one cell, i.e. at
+    # most its grown box — anything not overlapping the window is a no-op here.
+    near = [fp for fp in (footprints or ())
+            if fp and float(fp[2]) > 0
+            and _overlaps(_grown(_footprint_box(fp), step), window)]
+    level_plateaus(origin_x, origin_z, step, heights, near, boxes, relief)
+    return {"origin_x": origin_x, "origin_z": origin_z, "step_m": step,
+            "rows": TILE_POINTS, "cols": TILE_POINTS,
             "heights": [[round(v, 3) for v in row] for row in heights]}
 
 
@@ -789,18 +1081,51 @@ _GENERATION = 0
 #: (generation, field) of the field this process last built or loaded.
 _CACHE: Optional[Tuple[int, Dict[str, Any]]] = None
 
+#: (generation, inputs) — the four raster inputs, read once per generation.
+#: The tiles are built lazily, so without this a tile miss would be a DB read,
+#: and a route crossing five tiles would pay five of them mid-A*.
+_TILE_INPUTS: Optional[Tuple[int, Tuple[List[Dict[str, Any]],
+                                        List[Tuple[float, float, float,
+                                                   float]],
+                                        List[Dict[str, Any]],
+                                        Dict[str, Dict[str, Any]]]]] = None
+
+#: (generation, keys) of the tile index.
+_TILE_INDEX: Optional[Tuple[int, frozenset]] = None
+
+#: The tiles this process holds, keyed ``(generation, tx, tz)`` and ordered
+#: least-recently-used FIRST. A plain OrderedDict rather than
+#: ``functools.lru_cache``: the generation has to be able to drop the whole
+#: cache at once, and a decorator that only knows its own arguments cannot.
+_TILES: "OrderedDict[Tuple[int, int, int], Dict[str, Any]]" = OrderedDict()
+
+#: How many tiles stay in the process. 512 tiles are 512 × 65² floats, i.e. a
+#: few dozen megabytes at worst and 16 km² of world at best — far more than any
+#: one walker needs, and a tile costs milliseconds to rebuild anyway.
+TILE_CACHE_MAX = 512
+
 
 def invalidate_cache() -> None:
-    """Drop the cached field (tests + every authoring write).
+    """Drop the cached field AND every cached tile (tests + authoring writes).
 
     THE ONE WAY the cache learns about a change. A writer that goes round
     ``app/models/heightfield`` — raw SQL against ``height_areas`` — leaves this
     process on a stale grid until it is called; that is the price of not
     hashing on the read path, and there is no such writer in the app.
+
+    The tiles hang off the same generation counter as the overview, because
+    they describe the same authored world: a hill painted into it moves both,
+    and a tile that outlived its world would let a walker walk on a ground the
+    picture no longer shows. Bumping the counter alone would already do it (it
+    is part of every tile key); the caches are emptied as well so a long-lived
+    process does not carry a dead generation around.
     """
-    global _GENERATION, _CACHE
+    global _GENERATION, _CACHE, _TILE_INDEX, _TILE_INPUTS
     _GENERATION += 1
     _CACHE = None
+    _TILE_INDEX = None
+    _TILE_INPUTS = None
+    _TILES.clear()
 
 
 def get_field() -> Dict[str, Any]:
@@ -917,6 +1242,95 @@ def current_sig() -> str:
     return store.height_sig()
 
 
+def _tile_inputs() -> Tuple[List[Dict[str, Any]],
+                            List[Tuple[float, float, float, float]],
+                            List[Dict[str, Any]],
+                            Dict[str, Dict[str, Any]]]:
+    """The four raster inputs, read ONCE per generation.
+
+    The same four :func:`get_field` reads and ``height_sig`` hashes — height
+    areas, levelling placements, painted terrain, type catalog — kept here
+    because the tiles are built ON DEMAND: without it a tile miss would be four
+    DB reads, and those misses happen in the middle of a route, of a walk
+    report, of an A* expansion. With it a miss is arithmetic.
+    """
+    global _TILE_INPUTS
+    cached = _TILE_INPUTS
+    if cached is not None and cached[0] == _GENERATION:
+        return cached[1]
+    generation = _GENERATION
+    from app.core.terrain_types import effective_catalog
+    from app.models import heightfield as store
+    from app.models.terrain import list_areas
+    data = (store.list_height_areas(), store.placed_footprints(),
+            list_areas(), effective_catalog())
+    _TILE_INPUTS = (generation, data)
+    return data
+
+
+def tile_index() -> frozenset:
+    """The keys of every tile the world has a ground in, cached per generation.
+
+    The reading half of :func:`tile_index_from` — same list of tiles, read out
+    of the DB instead of handed in. It is asked on EVERY :func:`world_height`,
+    so it must be a set lookup and nothing more; that is what the per-
+    generation cache buys.
+    """
+    global _TILE_INDEX
+    cached = _TILE_INDEX
+    if cached is not None and cached[0] == _GENERATION:
+        return cached[1]
+    generation = _GENERATION
+    areas, footprints, terrain_areas, catalog = _tile_inputs()
+    keys = tile_index_from(areas, relief_inputs(terrain_areas, catalog),
+                           footprints)
+    _TILE_INDEX = (generation, keys)
+    return keys
+
+
+def get_tile(tx: int, tz: int) -> Dict[str, Any]:
+    """One tile of the world ground, rastered on demand and kept (LRU).
+
+    NOTHING IS STORED IN THE DB, deliberately: a tile costs a couple of
+    milliseconds (measured in ``scripts/smoke_heightfield.py``), while a stored
+    one would need its own validity token, its own migration and its own way of
+    going stale. The overview is the one raster worth persisting, because it is
+    the one that costs a third of a second.
+
+    **The returned dict is SHARED — treat it as read-only**, exactly like
+    :func:`get_field`'s.
+    """
+    key = (_GENERATION, int(tx), int(tz))
+    tile = _TILES.get(key)
+    if tile is not None:
+        _TILES.move_to_end(key)
+        return tile
+    areas, footprints, terrain_areas, catalog = _tile_inputs()
+    tile = rasterize_tile(int(tx), int(tz), areas, footprints=footprints,
+                          terrain_areas=terrain_areas,
+                          terrain_catalog=catalog)
+    _TILES[key] = tile
+    while len(_TILES) > TILE_CACHE_MAX:
+        _TILES.popitem(last=False)
+    return tile
+
+
 def world_height(x: float, z: float) -> float:
-    """Height of the world ground at (x, z) — what ``ground_y`` answers."""
-    return sample_height(get_field(), x, z)
+    """Height of the world ground at (x, z) — what ``ground_y`` answers.
+
+    THE RULES READ TILES (v2, 2026-08-14), never the overview: this is the one
+    function the walking gate, the router and every skill go through, and the
+    overview may stand at a 32 m step, where a hill is a slope nobody authored
+    and a 22 m patch of relief does not exist at all.
+
+    Three lines, and the first one is the cheap answer: a point in no indexed
+    tile is the flat world, which is most of the world (:func:`tile_index`).
+    Otherwise the tile is fetched — a dict lookup, or a few milliseconds of
+    rastering once — and read bilinearly, the very rule the overview is read
+    with. The tile covers its whole square INCLUDING the seams, so the clamp in
+    :func:`sample_height` never fires for a point inside it.
+    """
+    key = tile_key(x, z)
+    if key not in tile_index():
+        return 0.0
+    return sample_height(get_tile(*key), x, z)
