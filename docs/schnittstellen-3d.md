@@ -477,7 +477,7 @@ Fernkulisse eingeschaltet ist, § A17).
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
-| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen der planierenden Orte** (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1; seit 2026-08-13 zählen nur Orte mit `level_ground`, und das Setzen/Löschen des Flags ändert die Signatur für sich allein) UND über das **Mikro-Relief der gemalten Terrain-Arten** (§ A16.2: relief-tragende Flächen samt der flachen Flächen darüber und den beiden Katalog-Zahlen; relief-freies Malen zählt nicht mit). Ändert sie sich, holt der Client `GET /play/heightfield` neu — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
+| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen der planierenden Orte** (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1; seit 2026-08-13 zählen nur Orte mit `level_ground`, und das Setzen/Löschen des Flags ändert die Signatur für sich allein) UND über das **Mikro-Relief der gemalten Terrain-Arten** (§ A16.2: relief-tragende Flächen samt der flachen Flächen darüber und den beiden Katalog-Zahlen; relief-freies Malen zählt nicht mit). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.3) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
@@ -2424,7 +2424,8 @@ Wert). 256 ist ein Vielfaches von 4, das ist die ganze Anforderung: eine Kachel
 ist ein FENSTER des einen Weltgitters, kein eigenes Gitter.
 
 **65 × 65 Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn.** Die
-Duplizierung der Randpunkte ist Absicht und kostet 1,5 %: bilineares Sampling
+Duplizierung der Randpunkte ist Absicht und kostet 3,15 % Daten (65²/64²
+Punkte; die 1,56 % je Achse fallen auf beiden an): bilineares Sampling
 INNERHALB einer Kachel braucht damit nie einen Punkt der Nachbarkachel (ein
 Client darf jede beliebige Teilmenge halten), und weil beide Seiten denselben
 Punkt tragen, ist der Boden über die Naht **stetig** statt nur beinahe.
@@ -2468,8 +2469,11 @@ Boden, mehr als der Laderadius je auf einmal will. Duplikate fallen auf ihre
 ERSTE Position zusammen, und **die Kappung greift NACH dem Entdoppeln**, ein
 wiederholter Schlüssel verdrängt also keinen anderen. Unlesbare Tokens
 (fehlender Doppelpunkt, keine ganze Zahl) werden **übersprungen**, nicht als
-Fehler beantwortet — die genannten Kacheln sind ja trotzdem der fehlende Boden;
-gesagt wird es **einmal** im Log (Muster `backdrop.py`).
+Fehler beantwortet — die genannten Kacheln sind ja trotzdem der fehlende Boden.
+Beides, Junk-Tokens UND die über dem Kap abgeschnittenen Schlüssel, wird
+**je einmal** im Log gesagt (Muster `backdrop.py`, ein Kanal pro Fall): eine
+verworfene Kachel sieht auf der Client-Seite aus wie flacher Boden, das Log ist
+also die einzige Stelle, an der sie noch auffallen kann.
 
 **Nicht indizierte Kacheln fehlen einfach in der Antwort** — kein Fehler, kein
 Null-Gitter. Der Index hat dem Client schon gesagt, dass dort die flache Welt

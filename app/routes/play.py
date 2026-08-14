@@ -2251,10 +2251,10 @@ def get_heightfield_route(user=Depends(get_current_user)):
     }
 
 
-#: One-shot state of the junk-token warning below — the route is a client poll
-#: path, so a warning per request would drown the log (the ``backdrop.py``
-#: pattern, one flag per channel).
-_TILE_KEYS_WARNED = False
+#: One-shot state of the two warnings below, one flag per channel — the route
+#: is a client fetch path, so a warning per request would drown the log (the
+#: ``backdrop.py`` pattern).
+_TILE_KEY_WARNED: Dict[str, bool] = {}
 
 
 @router.get("/play/heightfield/tiles")
@@ -2267,19 +2267,30 @@ def get_heightfield_tiles_route(keys: str = "", user=Depends(get_current_user)):
 
     Tiles the index does not know are LEFT OUT — the client already has the
     index from ``/play/heightfield`` and treats a missing tile as flat ground,
-    so there is nothing to report and nothing to ship. Unreadable tokens are
-    skipped for the same reason and said once, here.
+    so there is nothing to report and nothing to ship. Unreadable tokens and
+    keys past the cap are dropped for the same reason, and BOTH are said once
+    here: a dropped tile is indistinguishable from flat ground on the other
+    side, so the only place it can still be noticed is the log.
     """
-    global _TILE_KEYS_WARNED
-    from app.core.heightfield import (parse_tile_keys, tiles_payload,
+    from app.core.heightfield import (TILE_BATCH_MAX, overflow_tile_keys,
+                                      parse_tile_keys, tiles_payload,
                                       unusable_tile_tokens)
     junk = unusable_tile_tokens(keys)
-    if junk and not _TILE_KEYS_WARNED:
-        _TILE_KEYS_WARNED = True
+    if junk and not _TILE_KEY_WARNED.get("junk"):
+        _TILE_KEY_WARNED["junk"] = True
         logger.warning(
             "/play/heightfield/tiles: unreadable key%s '%s' skipped — the "
             "query is keys=tx:tz,tx:tz with integer tile indices",
             "s" if len(junk) > 1 else "", "', '".join(junk))
+    dropped = overflow_tile_keys(keys)
+    if dropped and not _TILE_KEY_WARNED.get("overflow"):
+        _TILE_KEY_WARNED["overflow"] = True
+        logger.warning(
+            "/play/heightfield/tiles: %d key%s past the cap of %d dropped "
+            "(first %s) — ask in several batches; the missing tiles read as "
+            "flat ground on the client",
+            len(dropped), "s" if len(dropped) > 1 else "", TILE_BATCH_MAX,
+            ",".join(f"{tx}:{tz}" for tx, tz in dropped[:3]))
     return tiles_payload(parse_tile_keys(keys))
 
 

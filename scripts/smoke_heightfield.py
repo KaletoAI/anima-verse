@@ -554,6 +554,11 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     (1,1)}, so ``tiles`` answers "1,0" (comma in the payload, colon in the
     query) and simply omits the unindexed (9, 9) — the client reads a missing
     tile as flat ground.
+    THE INDEX IS SORTED NUMERICALLY, which only a two-digit index can show:
+    two more patches at x = 520…530 and x = 2570…2580 are the tiles
+    floor(520/256) = 2 and floor(2570/256) = 10, so the index reads
+    ["0,0", "1,0", "1,1", "2,0", "10,0"] — sorting the strings would put
+    "10,0" in front of "2,0".
 
 Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
 """
@@ -1687,6 +1692,17 @@ check("...and it IS the tile the rules read",
 check("...at the tile's own origin",
       (_batch["tiles"]["1,0"]["origin_x"], _batch["tiles"]["1,0"]["origin_z"]),
       (256.0, 0.0))
+
+# THE SORT IS NUMERIC, and only a two-digit index can show it: a patch at
+# x = 520…530 is tile floor(520/256) = 2, one at x = 2570…2580 is tile 10.
+# Numerically 2 comes before 10; sorting the STRINGS would put "10,0" first.
+store.save_height_area({"id": "t15_tx2", "polygon": square(520, 10, 530, 20),
+                        "height_m": 2.0, "falloff_m": 2.0})
+store.save_height_area({"id": "t15_tx10",
+                        "polygon": square(2570, 10, 2580, 20),
+                        "height_m": 2.0, "falloff_m": 2.0})
+check("two-digit tile indices sort numerically, not lexicographically",
+      hf.tile_index_keys(), ["0,0", "1,0", "1,1", "2,0", "10,0"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

@@ -1303,7 +1303,16 @@ def get_tile(tx: int, tz: int) -> Dict[str, Any]:
     key = (_GENERATION, int(tx), int(tz))
     tile = _TILES.get(key)
     if tile is not None:
-        _TILES.move_to_end(key)
+        try:
+            _TILES.move_to_end(key)
+        except KeyError:
+            # Another thread evicted the entry between the lookup and this
+            # line — two batch requests can each push 64 tiles through the
+            # LRU at once. We already hold the tile, so the ANSWER is right;
+            # only its place in the order is lost, which costs a re-raster
+            # later. A lock around the whole cache would buy nothing else and
+            # would sit on the walk-report path.
+            pass
         return tile
     areas, footprints, terrain_areas, catalog = _tile_inputs()
     tile = rasterize_tile(int(tx), int(tz), areas, footprints=footprints,
@@ -1388,6 +1397,8 @@ def parse_tile_keys(raw: str, cap: int = TILE_BATCH_MAX
     same tile twice gets it once, and the order it asked in survives, which is
     the order the cap then cuts at: :data:`TILE_BATCH_MAX` keys AFTER the
     dedupe, so a repeated key cannot push a distinct one out of the batch.
+    A ``cap`` of 0 does not cut at all — that is how :func:`overflow_tile_keys`
+    asks what the cap threw away.
     """
     out: List[Tuple[int, int]] = []
     seen = set()
@@ -1417,6 +1428,21 @@ def unusable_tile_tokens(raw: str) -> List[str]:
     return [token for token in
             (t.strip() for t in str(raw or "").split(","))
             if token and _parse_tile_token(token) is None]
+
+
+def overflow_tile_keys(raw: str, cap: int = TILE_BATCH_MAX
+                       ) -> List[Tuple[int, int]]:
+    """The distinct keys of a query that the CAP cut off, in order.
+
+    The third reader of the same parse (:func:`parse_tile_keys` with the cap
+    switched off, ``cap`` 0 = do not cut), and it exists for the same reason
+    :func:`unusable_tile_tokens` does: what the batch silently does not answer
+    is what a client then draws as flat ground. 100 keys in, 64 out, and the
+    36 missing tiles look exactly like a world without a hill in it — so the
+    route says once that they were dropped, and the client's own load policy
+    is the fix (ask twice), not a bigger cap.
+    """
+    return parse_tile_keys(raw, cap=0)[cap:] if cap > 0 else []
 
 
 def tile_index_keys() -> List[str]:
