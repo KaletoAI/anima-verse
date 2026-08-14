@@ -2097,8 +2097,18 @@ Weltkarte wechselt.
   rows, cols,           # Gitterform; 0/0 + heights [] = flache Welt
   heights: [[float, …], …],   # heights[j][i] = Höhe bei
                               # (origin_x + i·step_m, origin_z + j·step_m)
-  sig }                 # identisch mit worldmap.height_sig
+  sig,                  # identisch mit worldmap.height_sig
+  tile_m,               # Kantenlänge einer Kachel in Metern (256,0; § A16.3)
+  tile_step_m,          # Schritt der Kacheln — IMMER 4,0, nie vergröbert
+  tiles: ["tx,tz", …] } # der KACHEL-INDEX: jede Kachel, in der die Welt
+                        # einen Boden hat, sortiert nach tx, dann tz
 ```
+
+**Dieses Gitter ist seit v2 die FERN-Übersicht** (§ A16.3): es ist das eine
+Raster, das vergröbert werden darf, und keine Regel liest es mehr. Die
+mitgelieferten drei Felder sind die Brücke zur feinen Auflösung —
+`tiles` sagt, wo überhaupt Boden ist, und `GET /play/heightfield/tiles` liefert
+ihn in 4 m. **Vermischt werden die beiden nie**, siehe § A16.3.
 
 **Zwischen den Stützpunkten ist das Feld BILINEAR**, und zwar in beiden
 Sprachen gleich:
@@ -2391,6 +2401,133 @@ Höhenquelle des Client-Spiegels) und die Gitter-/Drape-Mathe in
 inkl. Naht-Gegenprobe, Kontur-Zelle gegen die gemessene Plattenfläche,
 Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung). Regel und Routing:
 `scripts/smoke_slope_gate.py` [6] und `scripts/smoke_nav_grid.py` [13]/[14].
+
+### A16.3 Das Kachel-Höhenfeld — `GET /play/heightfield/tiles` — neu 2026-08-14
+
+**Ein Gitter kann nicht beides sein.** Die Übersicht (§ A16) deckt die ganze
+Welt ab und wird deshalb vergröbert, sobald jemand weit draußen malt — live
+gemessen 4 m → 32 m. Auf 32 m ist der Boden, gegen den ein Läufer beurteilt
+wird, nicht mehr der Boden, den jemand autoriert hat. Also gibt es ab v2 **zwei
+Raster derselben Landschaft**:
+
+- die **Übersicht** — ein Gitter über alles, vergröberbar. Ein BILD für die
+  Ferne, sonst nichts.
+- die **Kacheln** — 256-m-Quadrate im immer feinen 4-m-Schritt, auf Anfrage
+  gerechnet. Alles, was der Boden ENTSCHEIDET (Laufregel, Routing, jede
+  Serverregel) liest diese, und der Nahbereich der Renderer auch.
+
+**Kachelmaß 256 m, Anker ist der Welt-Ursprung.** Kachel `(tx, tz)` deckt
+`[tx·256, (tx+1)·256] × [tz·256, (tz+1)·256]` ab, ihre Stützpunkte SIND globale
+Gitterpunkte (`tile_key(x, z) = (floor(x/256), floor(z/256))`; ein Punkt auf
+einer Naht gehört zur Kachel im Osten/Süden — beide tragen ihn mit demselben
+Wert). 256 ist ein Vielfaches von 4, das ist die ganze Anforderung: eine Kachel
+ist ein FENSTER des einen Weltgitters, kein eigenes Gitter.
+
+**65 × 65 Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn.** Die
+Duplizierung der Randpunkte ist Absicht und kostet 1,5 %: bilineares Sampling
+INNERHALB einer Kachel braucht damit nie einen Punkt der Nachbarkachel (ein
+Client darf jede beliebige Teilmenge halten), und weil beide Seiten denselben
+Punkt tragen, ist der Boden über die Naht **stetig** statt nur beinahe.
+
+**Payload von `GET /play/heightfield`** — der Index reist mit der Übersicht
+(Felder `tile_m`, `tile_step_m`, `tiles`, siehe § A16). Ein Client hat damit
+ohne Zusatz-Runde die Aussage „hier KANN Boden sein, überall sonst ist die Welt
+flach".
+
+**Payload von `GET /play/heightfield/tiles?keys=tx:tz,tx:tz`** (Auth wie
+`/play/terrain`: eingeloggter User, **nie gefoggt**):
+
+```jsonc
+{ "sig": "4400406961",      // DIE eine height_sig, global
+  "tile_m": 256.0,
+  "step_m": 4.0,
+  "tiles": {
+    "1,0": { "origin_x": 256.0, "origin_z": 0.0,
+             "rows": 65, "cols": 65, "heights": [[…], …] }
+  } }
+```
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `sig` | `str` (10) | Identisch mit `worldmap.height_sig` und mit dem `sig` der Übersicht — es gibt **eine** Signatur. Ändert sie sich, verwirft der Client Index UND alle geladenen Kacheln |
+| `tile_m` | `float` | Kantenlänge einer Kachel in Metern (256,0). Der Client **hartkodiert sie nicht**, er rechnet seine Schlüssel damit |
+| `step_m` | `float` | Abstand zweier Stützpunkte, **immer** 4,0 — Kacheln werden nie vergröbert |
+| `tiles` | `{ "tx,tz": Kachel }` | Nur die Kacheln, die es gibt (siehe unten). Ein leeres Objekt ist eine gültige Antwort |
+| `tiles[k].origin_x/_z` | `float` | Weltmeter von `heights[0][0]` — exakt `tx·256` / `tz·256` |
+| `tiles[k].rows/cols` | `int` | 65 × 65, Ränder inklusive |
+| `tiles[k].heights` | `[[float, …], …]` | `heights[j][i]` = Höhe bei `(origin_x + i·4, origin_z + j·4)`, dieselbe bilineare Leseregel wie die Übersicht (§ A16). Eine Kachel trägt **kein eigenes** `step_m`: alle im Batch haben dasselbe, und es steht oben |
+
+**Zwei Schreibweisen desselben Schlüssels, absichtlich verschieden.** In der
+QUERY trennt `:` innerhalb eines Schlüssels und `,` zwischen den Schlüsseln
+(`keys=0:0,1:0,-1:2`); im PAYLOAD heißt die Kachel `"tx,tz"` (`"1,0"`), weil
+dort kein Trennzeichen zweiter Ordnung gebraucht wird. Negative Indizes sind
+gewöhnliche Kacheln.
+
+**Der Batch ist auf 64 Schlüssel gekappt** (`TILE_BATCH_MAX`) — 4 km² feiner
+Boden, mehr als der Laderadius je auf einmal will. Duplikate fallen auf ihre
+ERSTE Position zusammen, und **die Kappung greift NACH dem Entdoppeln**, ein
+wiederholter Schlüssel verdrängt also keinen anderen. Unlesbare Tokens
+(fehlender Doppelpunkt, keine ganze Zahl) werden **übersprungen**, nicht als
+Fehler beantwortet — die genannten Kacheln sind ja trotzdem der fehlende Boden;
+gesagt wird es **einmal** im Log (Muster `backdrop.py`).
+
+**Nicht indizierte Kacheln fehlen einfach in der Antwort** — kein Fehler, kein
+Null-Gitter. Der Index hat dem Client schon gesagt, dass dort die flache Welt
+ist, und eine fehlende Kachel ist genau diese Aussage; sie kostet damit weder
+Rasterung noch Kilobytes. Deshalb ist der Endpunkt auch mit veraltetem Index
+gefahrlos: die Antwort ist kleiner als die Frage.
+
+**Der Sampler-Vorrang (bindend, für JEDEN Leser): fein > Übersicht > 0.**
+
+```
+h(x, z) = Kachel, die (x,z) enthält, sofern geladen   → bilinear aus ihr
+          sonst die Übersicht, sofern sie den Punkt trägt → bilinear aus ihr
+          sonst 0                                       (die flache Welt)
+```
+
+Serverseitig ist das `heightfield.world_height` (Kachel oder 0 — der Server
+liest die Übersicht überhaupt nicht mehr), clientseitig
+`@anima/scene-render` (`sampleCompositeHeight`), damit beide Renderer dieselbe
+Reihenfolge anwenden.
+
+**Die Gleichheitsgarantie.** Kachel und Übersicht kommen aus DEMSELBEN
+Auswertungskern über DASSELBE ursprungsverankerte Gitter. Steht die Übersicht
+bei 4 m, trägt sie an jedem gemeinsamen Stützpunkt exakt die Zahl der Kachel —
+Punkt für Punkt gemessen in `scripts/smoke_heightfield.py`, Abschnitt [14]
+(„alle Stützpunkte der Übersicht tragen die Zahl der Kacheln", dazu die
+Naht-Prüfungen und Zwischenpunkte auf beiden Nähten).
+
+**Sobald die Übersicht vergröbert ist, laufen die beiden auseinander — aus ZWEI
+Gründen**, und der zweite ist der unauffällige:
+
+1. **Die Auflösung selbst.** Bei 32 m fehlen 7 von 8 Stützpunkten je Achse; ein
+   22-m-Hügel hat gar keinen mehr (Nyquist, § A16.2) und existiert in der
+   Übersicht nicht.
+2. **Die Planierung planiert mit IHREM Schritt.** Der Rampenring um einen
+   Fußabdruck (§ A16.1) ist „eine Zelle breit" — in der Übersicht bei 32 m also
+   **32 m breit**, in der Kachel immer 4 m. Ein planierter Ort hat in den
+   beiden Rastern damit unterschiedlich weit ausgreifende Plateaus, auch dort,
+   wo die Auflösung allein noch nichts erklären würde.
+
+**Regel daraus: die beiden nie mischen.** Ein Leser fragt ENTWEDER die Kacheln
+ODER die Übersicht — nie den einen Wert hier und den anderen einen Meter
+weiter. Wer aus Kachel-Boden auf Übersichts-Boden umschaltet, tut das an einer
+Kante, nicht in einer Mischzone.
+
+**Und wo diese Kante liegt: im Nebel.** Der Client hält die indizierten Kacheln
+im Radius **560 m** um seinen Anker (Avatar-Position, unverkörpert das
+Kamera-Bodenziel), der Szenennebel endet bei **520 m** (`THREE.Fog(220, 520)`,
+`engine.ts`). Die Naht zwischen feinem und grobem Boden liegt damit
+konstruktionsbedingt hinter dem Nebelband. Sie wird **nicht extra kaschiert** —
+das ist eine dokumentierte Annahme, keine Auslassung: ein Übergangs-Blend wäre
+genau die Mischzone, die die Regel oben verbietet.
+
+**Kosten und Caches.** Eine Kachel rastert in **Millisekunden** (gemessen 20 ms
+für den Worst Case: 8-km-Fläche mit Relief, 65² Punkte, `smoke_heightfield.py`
+[14d]) und wird **nicht in der DB gespeichert** — es gibt einen Prozess-LRU
+über 512 Kacheln, Schlüssel `(Generation, tx, tz)`, und der Index ist je
+Generation gecacht. Persistiert wird weiterhin nur die Übersicht, weil nur sie
+eine Drittelsekunde kostet.
 
 ## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload — neu 2026-08-14
 
