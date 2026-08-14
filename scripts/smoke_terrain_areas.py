@@ -101,9 +101,9 @@ Throwaway storage. Hand-derived expectations:
       authored fields per entry (the entry with a height: exactly those
       three).
       Both lookups are cached TOGETHER per call: seven parsable mentions
-      across two areas do FOUR props.model_tiers and FOUR props.prop_height_m
-      reads — one per DISTINCT prop, and the height is not a second walk of
-      the directory (counted with wrappers).
+      across two areas do FOUR props.model_tiers and FOUR
+      props.prop_scatter_facts reads — one per DISTINCT prop, and the sidecar
+      facts are not a second walk of the directory (counted with wrappers).
       RED COUNTER-PROBES, EXECUTED, all built from the module's own pieces:
       a "loose URL" mutant (anything containing /assets/props/) hands the
       foreign URL a variants map, a "no tier parameter" mutant builds

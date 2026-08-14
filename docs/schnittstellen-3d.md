@@ -654,10 +654,10 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Payload-Vertrag: gespeichert bleiben die drei Felder oben.
 - **Der Server hängt an denselben Eintrag zusätzlich `prop_height_m`** — die
   ECHTE Höhe des Props in Metern aus seinem Bibliotheks-Datensatz
-  (`app/core/props.prop_height_m`, dieselbe Zahl, die der Props-Tab zeigt und
-  editiert). Auch das ist reine Auslieferung, nie gespeichert: eine im Props-Tab
-  korrigierte Höhe wirkt beim nächsten Refetch. Fremde/absolute URLs und
-  Einträge ohne `model` bekommen den Schlüssel nicht; ein Prop-Datensatz hat
+  (`app/core/props.prop_scatter_facts`, dieselbe Zahl, die der Props-Tab
+  zeigt und editiert). Auch das ist reine Auslieferung, nie gespeichert: eine
+  im Props-Tab korrigierte Höhe wirkt beim nächsten Refetch. Fremde/absolute
+  URLs und Einträge ohne `model` bekommen den Schlüssel nicht; ein Datensatz hat
   IMMER eine Höhe (ohne eigene Maße den 1-m-Platzhalterwürfel), „kein
   Schlüssel" heißt also „kein Prop", nicht „keine Höhe".
 - **`height_m` ist die Zielhöhe, nicht die Modellgröße:** das geladene Mesh
@@ -1320,7 +1320,13 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   still in derselben Wiese, deren Farne voll wehen. Die Art beantwortet „wie
   stark weht es hier", das Prop „wie sehr bewege ich mich darin" — es gibt
   dafür weiterhin keinen Katalog-Schlüssel und keinen Override pro
-  Streu-Eintrag.
+  Streu-Eintrag. **Die Stillstands-Schwelle liegt bei 0,005 m:** das Produkt
+  wird auf zwei Dezimalen gerundet, und der Renderer weist alles unter
+  `SWAY_MIN_M` (0,01) ab — ein Produkt unter 0,005 ist damit exakt 0, das Prop
+  steht still und bekommt kein eigenes Material. Auf `grass` (0,06) steht
+  folglich jeder Faktor bis 0,08 still, auf einer 0,01-Fläche jeder unter 0,5.
+  Gewollt: ein Wackeln, das der Shader ohnehin verwirft, soll keinen
+  Material-Klon je Fläche kosten.
 
   ```
   types: [ …, {kind: "grass", …, "meta": {"sway_m": 0.06}} ]
