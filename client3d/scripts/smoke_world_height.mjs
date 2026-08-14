@@ -509,6 +509,10 @@ function checkText(label, actual, expected) {
 
 console.log('\n[8] the tiled field — fine tile > overview > 0');
 const TILE_M = 256;
+// A SYNTHETIC tile grid of this file's own, not the server's contract: the
+// sampler takes every step out of the payload it is handed, so the numbers
+// here only have to be consistent with each other. (The server ships 2 m /
+// 129 points since 2026-08-14; nothing below depends on that.)
 const TILE_STEP = 4;
 const TILE_N = 65;
 

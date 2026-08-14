@@ -177,28 +177,35 @@ Hand-derived expectations:
       THE RIDGE: height area (3100,0)-(3112,12), height 5, falloff 12, out in
       untouched grass (the earlier sections paint their own ground and a slow
       area would swamp the cost this one measures). Nothing inside is further
-      than 6 m from the outline, so the ridge tops out at 5·6/12 = 2.5 m and
-      its steepest cell is atan(1.667/4) = 22.6° — well inside the limit, so
-      NOTHING here is blocked and what is measured is the cost alone. The
-      raster (origin (3096,-4), 6 × 6, step 4) carries exactly four non-zero
-      support points, x ∈ {3104, 3108} × z ∈ {4, 8}, each 5 · 4/12 = 1.6667,
-      STORED at the raster's 3 decimals as 1.667.
+      than 6 m from the outline, so the ridge tops out at 5·6/12 = 2.5 m.
+      `height_at` reads the 2 m TILE (since 2026-08-14; the `height_field` the
+      shape check below names is the 4 m OVERVIEW, which the rule no longer
+      asks), and the 2 m lattice CARRIES the crest: (3106, 6) is a support
+      point, so the ridge really tops out at its authored 2.5 rather than at
+      the 1.667 the 4 m lattice could reach. The steepest probe pair anywhere
+      on it is 1.4736 m over the 4 m run, atan(0.3684) = 20.2° — well inside
+      the limit, so NOTHING here is blocked and what is measured is the cost
+      alone.
 
       THE STRAIGHT WAY OVER, (3106,-6) -> (3106,18): 24 m in 12 parts of 2 m,
-      grass factor 1.0 -> 24 s of walking. Along x = 3106 (tx = 0.5 between the
-      two non-zero columns) the profile is
-        z:   -6  -4  -2   0     2      4      6      8     10     12 … 18
-        h:    0   0   0   0  0.8335 1.667  1.667  1.667  0.8335   0
-      so the climb per part sums to 0.8335 · 4 = 3.334 m and the segment costs
-      24 + 4 · 3.334 = 37.336 s.
+      grass factor 1.0 -> 24 s of walking. x = 3106 IS a support column of the
+      2 m lattice, so the profile is the authored ramp itself, 5 · d/12 at the
+      distance d to the nearest outline, stored at three decimals:
+        z:   -6  -4  -2   0     2      4     6     8      10    12 … 18
+        h:    0   0   0   0  0.833  1.667  2.5  1.667  0.833    0
+      The climb sums to the honest full rise, 2.5 up plus 2.5 down = 5 m, so
+      the segment costs 24 + 4 · 5 = 44 s. (At the old 4 m step it was 37.336:
+      the coarse lattice never reached the crest, so the route was charged for
+      a hill lower than the one it walked over — one of the two disagreements
+      the tiles exist to end.)
       AROUND AN END the ground is 0 (everything outside the outline is): a way
       round like (3106,-6) -> (3099,6) -> (3106,18) is 2 · hypot(7,12) =
-      27.78 m and climbs nothing — cheaper than the 37.336 over the top, so
+      27.78 m and climbs nothing — cheaper than the 44 over the top, so
       the route BENDS and the string-pulling does not straighten it back (the
       shortcut it weighs carries the hill now, `_smooth`'s cost guard). WHICH
       end it takes is the search's business (it hugs the east flank, the
       mirror image); what is derived by hand is that any way round is under
-      30 s while over the top is 37.336.
+      30 s while over the top is 44.
       RED COUNTER-PROBE: with `SLOPE_COST_S_PER_M` at 0 the same route is the
       straight [(3106,-6), (3106,18)] at 24 s — the bend is the penalty and
       nothing else.
@@ -226,25 +233,31 @@ Hand-derived expectations:
          h(2205,29) is the authored wall (5 m in from the west outline, ramp
          capped at falloff 4) = 20 rather than the pinned 0. Setting the flag
          has to hand out a NEW nav context (the placement hash carries it).
-         Grid: bounds = area box ∪ footprint box grown by one step
+         Grid (the OVERVIEW, which is what the shape check names): bounds =
+         area box ∪ footprint box grown by one overview step
          ([2192,2208]x[22,38]) = (2192,0)-(2260,60), so origin (2188,-4),
-         20 x 18 points at 4 m. Pinned to 0 are x ∈ {2192…2208} × z ∈ {24…36}
-         MINUS the four corners, whose overshoot pair (4, 2) is
-         hypot = 4.47 > 4 — the pin is a distance to the rectangle, not a box.
-         So (2208,24) and (2208,36) keep their authored 20 (8 m in -> full
-         height) while (2208,28) and (2208,32) are 0.
+         20 x 18 points at 4 m.
 
+         THE HEIGHTS BELOW ARE THE TILE's (2 m since 2026-08-14) — that is
+         what `height_at` reads. Pinned to the plateau's 0 is everything within
+         ONE 2 m cell of the footprint [2196,2204]x[26,34], i.e. the rounded
+         rectangle out to x ∈ [2194,2206], z ∈ [24,36]; the ring is half as
+         wide as it was, so the wall now starts one lattice point earlier.
          THE CELL centred (2207, 29), three metres outside the footprint and
-         hypot(3,1) = 3.162 m from the opening:
-           h(2205,29) = 0            (both x-neighbours pinned)
-           h(2209,29) = 0·0.75 + 20·0.25 = 5      (a quarter into the ramp
-                                                   towards (2212,·) = 20)
-           h(2207,27) = 15·0.25 + 0·0.75 = 3.75   (the unpinned corner
-                                                   (2208,24) = 20 at tx 0.75)
-           h(2207,31) = 0
-         rise = hypot(5, 3.75) = 6.25 over run 4 -> atan(1.5625) = 57.3808°,
-         far past 40 -> the cell WOULD be blocked, and is exempt because the
-         opening is within reach.
+         hypot(3,1) = 3.162 m from the opening — all four probes read between
+         two lattice points (2207 and 29 are odd):
+           h(2205,29) = 0     both corner columns 2204/2206 are pinned
+           h(2209,29) = 20    columns 2208/2210 are 8 and 10 m into the area,
+                              i.e. past the falloff 4 -> the full 20
+           h(2207,27) = (0 + 20)/2 = 10    the west corners (2206,·) pinned,
+                                           the east ones (2208,·) authored 20
+           h(2207,31) = (0 + 20)/2 = 10    the same pair one cell north
+         rise = hypot(h(2209,29) − h(2205,29), h(2207,31) − h(2207,27))
+              = hypot(20, 0) = 20 over run 4 -> atan(5) = 78.6901°, far past
+         40 -> the cell WOULD be blocked, and is exempt because the opening is
+         within reach. The 4 m raster made the same statement more gently
+         (hypot(5, 3.75) = 6.25 -> 57.4°): the narrower ramp ring is a steeper
+         wall, which is the accepted consequence of the finer step.
          RED COUNTER-PROBE: the same context with `openings=()` blocks it.
          CONTROL: the next cell out, centred (2209,29), is hypot(5,1) = 5.1 m
          from the opening -> not exempt -> blocked. The exemption is local.
@@ -826,22 +839,23 @@ check("the ridge raster is 6 × 6",
       (ctx.height_field["rows"], ctx.height_field["cols"]), (6, 6))
 check("the ground around it is plain grass at factor 1.0",
       ctx.terrain_at(3106, -6), (True, 1.0))
-approx("its spine tops out at 5 · 6/12 (raster: 1.667)",
-       ctx.height_at(3106, 6), 1.667, 1e-9)
-approx("the profile at z = 2", ctx.height_at(3106, 2), 0.8335, 1e-9)
+approx("its spine tops out at the authored 5 · 6/12 on the 2 m tile",
+       ctx.height_at(3106, 6), 2.5, 1e-9)
+approx("the profile at z = 2", ctx.height_at(3106, 2), 0.833, 1e-9)
 ridge_search = nav_grid._Search(ctx, (3106.0, -6.0), (3106.0, 18.0))
 check("nothing on the ridge is blocked",
       any(ridge_search.too_steep(nav_grid.cell_of(3106, z))
           for z in range(-6, 19)), False)
-approx("the straight way over costs 24 m + 4 · 3.334 m of climb",
-       nav_grid._segment_cost(ctx, (3106.0, -6.0), (3106.0, 18.0)), 37.336,
+approx("the straight way over costs 24 m + 4 · 5 m of climb (2.5 up, 2.5 "
+       "down)",
+       nav_grid._segment_cost(ctx, (3106.0, -6.0), (3106.0, 18.0)), 44.0,
        1e-9)
 ridge_route = nav_grid.route((3106, -6), (3106, 18))
 check_true("the route BENDS around the ridge instead of going over it",
            ridge_route is not None and len(ridge_route) > 2, f"{ridge_route}")
 check_true("...and costs less than the straight way",
            ridge_route is not None
-           and sum(nav_grid.segment_costs(ridge_route)) < 37.336,
+           and sum(nav_grid.segment_costs(ridge_route)) < 44.0,
            f"{round(sum(nav_grid.segment_costs(ridge_route)), 3)}")
 _penalty = nav_grid.SLOPE_COST_S_PER_M
 nav_grid.SLOPE_COST_S_PER_M = 0.0
@@ -895,12 +909,14 @@ check("the opening sits on the E edge", ctx.openings, ((2204.0, 30.0),))
 check("the grid grew for the house's plateau",
       (ctx.height_field["rows"], ctx.height_field["cols"]), (18, 20))
 approx("h(2205,29) — the pinned apron", ctx.height_at(2205, 29), 0.0)
-approx("h(2209,29) — a quarter into the ramp", ctx.height_at(2209, 29), 5.0)
-approx("h(2207,27) — the unpinned ring corner pulls 3.75",
-       ctx.height_at(2207, 27), 3.75)
-approx("h(2207,31)", ctx.height_at(2207, 31), 0.0)
-approx("so the rise is hypot(5, 3.75)", math.hypot(5.0, 3.75), 6.25)
-approx("its angle over 4 m", math.degrees(math.atan2(6.25, 4.0)), 57.3808,
+approx("h(2209,29) — past the falloff, the full wall",
+       ctx.height_at(2209, 29), 20.0)
+approx("h(2207,27) — pinned west, authored east", ctx.height_at(2207, 27),
+       10.0)
+approx("h(2207,31) — the same pair one cell north",
+       ctx.height_at(2207, 31), 10.0)
+approx("so the rise is hypot(20, 0)", math.hypot(20.0, 0.0), 20.0)
+approx("its angle over 4 m", math.degrees(math.atan2(20.0, 4.0)), 78.6901,
        1e-4)
 near_cell = nav_grid.cell_of(2207, 29)
 far_cell = nav_grid.cell_of(2209, 29)

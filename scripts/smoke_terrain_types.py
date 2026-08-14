@@ -70,7 +70,7 @@ Throwaway storage. Hand-derived expectations:
         0.004      -> the KEY IS GONE (0.004 -> round 2 -> 0.0)
         0.0049     -> the KEY IS GONE (the last value under the line)
         0.005      -> 0.01     the first one that rounds to something
-      The relief keys cannot reach it: their lower clamps (0.05 / 8) are
+      The relief keys cannot reach it: their lower clamps (0.05 / 4) are
       themselves positive, so no clamped value can round down to 0.
       Water carries `move_sink_m: 0.35` and `idle_sink_m: 1.3` in the shared
       seed, next to its two clips; `deep_water` carries neither — nobody
@@ -87,13 +87,17 @@ Throwaway storage. Hand-derived expectations:
         amplitude 0.4      -> 0.4          (the authored case)
         amplitude 99       -> 2.0          the walkability limit: two
                                            neighbouring support points differ
-                                           by at most 2·amp over one 4 m step,
-                                           atan(2·2/4) = 45 deg
+                                           by at most 2·amp over one grid step,
+                                           atan(2·2/2) = 63 deg on the 2 m tile
+                                           grid the rules read (45 deg while
+                                           that step was 4 m)
         amplitude 0.001    -> 0.05         below this nothing is visible
         amplitude 0.4449   -> 0.44         two decimals, the editor's precision
         amplitude 0 / −1 / "much" / NaN / "" -> the KEY IS GONE
-        wave 2             -> 8.0          NYQUIST: 2 × the 4 m raster step, a
+        wave 2             -> 4.0          NYQUIST: 2 × the 2 m TILE step, a
                                            wave the grid cannot carry at all
+                                           (the floor halved with the step on
+                                           2026-08-14)
         wave 999           -> 200.0
         wave 0 / junk      -> the KEY IS GONE (and the reader then uses 32 m)
       The keys are independent: a wave without an amplitude survives as a
@@ -364,7 +368,7 @@ check("...nor junk", meta_of({"relief_amplitude_m": "much"}), {})
 check("...nor NaN", meta_of({"relief_amplitude_m": float("nan")}), {})
 check("...nor an empty string", meta_of({"relief_amplitude_m": ""}), {})
 check("a wave shorter than two support points is clamped (Nyquist)",
-      meta_of({"relief_wave_m": 2}), {"relief_wave_m": 8.0})
+      meta_of({"relief_wave_m": 2}), {"relief_wave_m": 4.0})
 check("...and a huge one to the upper limit",
       meta_of({"relief_wave_m": 999}), {"relief_wave_m": 200.0})
 check("a zero wave leaves no key behind (the reader uses 32 m)",

@@ -176,13 +176,14 @@ weight is 0).
       all of it, and this section walks the OPEN WORLD.
 
       THE HILL: a height area (3000,3000)-(3040,3040), height 5, falloff 4 —
-      rastered on the origin-anchored lattice (step 4), so the support point
-      (3000, z) sits ON the outline (height 0) and (3004, z) is 4 m in (height
-      5·4/4 = 5) for every z well inside.
+      rastered on the origin-anchored lattice of the TILES (step 2 since
+      2026-08-14; ``ground_y`` reads those), so the support point (3000, z)
+      sits ON the outline (height 0), (3002, z) is 2 m in (height 5·2/4 = 2.5)
+      and (3004, z) is 4 m in (the full 5) for every z well inside.
 
       a) THE FLANK, in the wilderness, on the line z = 3008:
-           h(3002, 3008) = 0·0.5 + 5·0.5 = 2.5
-           h(3003, 3008) = 0·0.25 + 5·0.75 = 3.75
+           h(3002, 3008) = 2.5      a support point, the ramp itself
+           h(3003, 3008) = 2.5·0.5 + 5·0.5 = 3.75
          so a step of one metre rises 1.25 m: no step limit (dist is not below
          1 m) but atan(1.25 / 1) = 51.3402° > 40° -> 409 ``too_steep``, naming
          the SLOPE. The identical pair is what the client mirror is checked on
@@ -209,12 +210,15 @@ weight is 0).
          so the crossing at (3004, 3020) has the same height on both sides.
          Walking (3005,3020) -> (3003,3020) is accepted with Δh = 0.
          HONEST LIMIT, measured here and reported: the ramp itself lies
-         between 4 and 8 m outside the footprint (support points 3008 -> 3012,
-         0 -> 5 = atan(1.25) = 51.34°), which is FAR outside the 1.5 m
-         opening tolerance — the exemption does not reach it. A plateau whose
-         rim rises more than tan(max_slope)·step_m = 3.36 m therefore keeps a
-         wall around itself, one cell out. It is the authoring limit § A16
-         names; see the task report for the two options.
+         between 2 and 4 m outside the footprint (support points 3006 -> 3008,
+         0 -> 5 = atan(2.5) = 68.20°), which is outside the 1.5 m opening
+         tolerance — the exemption does not reach it. A plateau whose rim
+         rises more than tan(max_slope)·step_m = 1.68 m therefore keeps a wall
+         around itself, one cell out. Both numbers moved with the tile step on
+         2026-08-14: the ring is narrower, so the same rim is a steeper wall
+         standing closer in. It is the authoring limit § A16 names, and the
+         height editor computes it from the ``tile_step_m`` the server sends
+         rather than pinning it.
 
 Usage:  ./.venv/bin/python scripts/smoke_slope_gate.py
 """
@@ -793,13 +797,13 @@ def main() -> int:
     check("...and so is walking in through the opening",
           (payload or {}).get("ok") if status == "ok" else status, True)
     check("...into the house", (payload or {}).get("location_id"), HOUSE)
-    near("the RAMP outside, h(3008,3020)", ground_y(3008, 3020), 0.0)
-    near("...against the landscape at h(3012,3020)",
-         ground_y(3012, 3020), 5.0)
-    check_true("...which is a 51° wall one cell further out, and the 1.5 m "
+    near("the RAMP outside, h(3006,3020)", ground_y(3006, 3020), 0.0)
+    near("...against the landscape at h(3008,3020)",
+         ground_y(3008, 3020), 5.0)
+    check_true("...which is a 68° wall one cell further out, and the 1.5 m "
                "opening tolerance does not reach it",
-               relief.slope_blocks(5.0, 4.0, 0.4, 40.0)
-               and math.hypot(3010 - 3004, 0) > 1.5)
+               relief.slope_blocks(5.0, 2.0, 0.4, 40.0)
+               and math.hypot(3007 - 3004, 0) > 1.5)
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:
