@@ -71,6 +71,14 @@ export function minFalloffFor(heightM: number, maxSlopeDeg: number,
  * took the step from 4 m to 32 m — and the small hills of a 22 m patch, 8…12 m
  * wide, then have no support point left and vanish. Nothing said so.
  *
+ * WHAT IT COSTS IS THE DISTANCE ALONE since v2 (§ A16.3). The relief is
+ * delivered twice: this coarsenable grid as an OVERVIEW for the far view, and
+ * 256 m tiles at the fine step for everything that decides — every walk rule
+ * reads those, and so does the ground drawn around a character. The number
+ * below is still worth saying, because a hill that vanishes from the picture is
+ * a hill the author cannot see any more; it is no longer a hill the world
+ * forgot. The wording carries that distinction.
+ *
  * THE NUMBERS COME FROM THE SERVER, both of them (`GET /world/height-areas`
  * and the save answers carry `step_m` + `default_step_m`). This function does
  * not recompute the doubling — a second implementation of it is how a warning

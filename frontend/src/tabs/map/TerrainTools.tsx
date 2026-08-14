@@ -653,15 +653,20 @@ export function TerrainToolbar({
         </span>
       ) : null}
 
-      {/* HOW COARSE THE GROUND'S GRID IS, permanently, while heights are being
-          edited (finding 14). Nobody sets this number — the server doubles it
-          until the grid over the whole painted extent fits its point budget,
-          so one area drawn far out flattens the small hills of every other
-          one. It only appears once the grid IS coarser than the finest, which
-          is the state nothing else on screen shows. */}
+      {/* HOW COARSE THE GROUND'S OVERVIEW GRID IS, permanently, while heights
+          are being edited (finding 14). Nobody sets this number — the server
+          doubles it until the grid over the whole painted extent fits its
+          point budget, so one area drawn far out flattens the small hills of
+          every other one. It only appears once the grid IS coarser than the
+          finest, which is the state nothing else on screen shows.
+          WHAT IT COSTS IS THE DISTANCE, and only that, since the relief is
+          delivered twice (§ A16.3): the fine tiles every rule and the near
+          ground read are never coarsened. The sentence says so, because a
+          warning that sounded like "your world is now walked on a 32 m grid"
+          would send the author hunting for a problem that is not there. */}
       {mode === 'heights' && stepNotice ? (
-        <span className="ga-map-arm warn" title={t('The relief grid is one shared raster over everything painted in the world. The further apart those areas lie, the coarser it has to be to stay inside the server’s point budget — and support points are what carries a hill.')}>
-          {t('World relief step is now {n} m (painted extent forces a coarser grid) — relief details under {d} m disappear.')
+        <span className="ga-map-arm warn" title={t('The relief grid is one shared raster over everything painted in the world. The further apart those areas lie, the coarser it has to be to stay inside the server’s point budget — and support points are what carries a hill. Since the relief is delivered twice, this coarsens the distant view alone: every rule and the ground near a character read the fine height tiles.')}>
+          {t('World relief overview step is now {n} m (painted extent forces a coarser grid) — details under {d} m vanish from the DISTANT view; walk rules and the near ground always read the fine height tiles.')
             .replace('{n}', String(stepNotice.stepM))
             .replace('{d}', String(stepNotice.lostUnderM))}
         </span>

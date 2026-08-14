@@ -442,7 +442,12 @@ export function MapTab() {
    *
    * The consequence sentence is the whole point: a coarser grid is invisible,
    * and what it eats — every relief detail narrower than two support points —
-   * is what the user actually sees vanish.
+   * is what the user actually sees vanish. Since the relief is delivered twice
+   * (§ A16.3) it eats it from the DISTANT view alone, and the sentence says
+   * that too: the fine tiles behind every walk rule and the ground under the
+   * player never coarsen, so a warning that read like "the world is walked on a
+   * 32 m grid now" would send the author hunting for a problem that is not
+   * there.
    */
   const heightStepRef = useRef(0)
   const noteHeightStep = useCallback((raw: unknown) => {
@@ -452,7 +457,7 @@ export function MapTab() {
     heightStepRef.current = next
     setHeightStepM(next)
     if (prev > 0 && next > prev) {
-      toast(t('World relief step is now {n} m (painted extent forces a coarser grid) — relief details under {d} m disappear.')
+      toast(t('World relief overview step is now {n} m (painted extent forces a coarser grid) — details under {d} m vanish from the DISTANT view; walk rules and the near ground always read the fine height tiles.')
         .replace('{n}', String(next)).replace('{d}', String(next * 2)), 'error')
     }
   }, [t, toast])
