@@ -634,15 +634,20 @@ async function main() {
   check('…and combines the keys instead of claiming the slot',
     kept.customProgramCacheKey(), `${HOLE_CACHE_KEY}+ground-sway@0.06`);
 
-  console.log('\n[12] the wiring in buildScatter/showTier, pinned by the source');
+  console.log('\n[12] the wiring in buildScatter/mountUrl, pinned by the source');
   check('the sway hangs on the AREA\'s kind, asked once per area',
     /const sway = swayFor\(area\.kind\);/.test(groundSrc), true);
+  // The tuft is patched with the ENTRY's amplitude (`entrySway`), not the
+  // area's: the kind says how hard it blows, the prop's `sway_factor` how much
+  // it takes part, and the product is what a stone with factor 0 arrives at.
   check('…the tuft material of every entry is patched',
-    /applySway\(mat, sway, h\);/.test(groundSrc), true);
+    /applySway\(mat, entrySway, h\);/.test(groundSrc), true);
   check('…a swaying prop draws through a CLONE of the cached GLB material',
     /prop\.sway > 0\n?\s*\? \(mesh\.material as THREE\.Material\)\.clone\(\)/.test(groundSrc),
     true);
-  check('…and the patch is applied where a tier is MOUNTED (showTier)',
+  // ONE mount path for BOTH meshes of an entry since the per-instance LOD:
+  // the full and the cheap mesh come through `mountUrl`, so both bend.
+  check('…and the patch is applied where a tier is MOUNTED (mountUrl)',
     /applySway\(material, prop\.sway, prop\.targetH\);/.test(groundSrc), true);
 
   console.log(`\n${passed} ok, ${failed} failed`);

@@ -14,47 +14,44 @@
  * shown do not all have to be the expensive mesh. So the distance decides
  * three things separately, and none of them is the building rule:
  *
- *   0 … 35 m   full mesh, every instance
- *  35 … 45 m   the hysteresis band — whatever tier the area already shows
- *  45 …120 m   low mesh, and the visible count sinks linearly to a quarter
- *   > 120 m    nothing (the area's scatter is switched off)
+ *   0 … 35 m   full mesh
+ *  35 … 45 m   the hysteresis band — whatever mesh the instance already shows
+ *  45 …120 m   low mesh, and the share still drawn sinks linearly to a quarter
+ *   > 120 m    nothing
  *
- * THE DISTANCE IS TO THE AREA, NOT TO ITS CENTRE. Every function here is fed
- * `distance(camera, area.centre) - area.radius` — a 200 m meadow under the
- * camera is 0 m away, not 100 m. Inside an area the distance goes negative,
- * which reads as "as near as it gets" everywhere below.
+ * THE DISTANCE IS THE INSTANCE'S OWN. Every function here is fed the distance
+ * from the camera to ONE scattered prop, and the numbers above are only the
+ * DEFAULTS: they arrive as a `ScatterLodCfg` argument, because the player sets
+ * them in the game menu (`game/prefs.ts`, localStorage).
+ *
+ * PER INSTANCE, AND THAT IS THE POINT (2026-08-15). The rules used to be asked
+ * once per painted AREA, and an area is a wood, not a point: with one answer
+ * for all of it the trees at the player's feet dropped to the cheap mesh
+ * because the far edge of the same wood was 100 m away, and a 300 m meadow was
+ * either wholly drawn or wholly gone. The three questions are now asked of ONE
+ * prop at ITS OWN distance; `scene/ground.ts` sorts the answers into two
+ * instance buffers per entry.
  *
  * WHAT IS NOT DECIDED HERE: where the instances stand. That is the shared
  * sampler (`@anima/scene-render/scatter.ts`), it is seed-stable, and this
- * module never reorders it — the budget caps the TAIL of a deterministic
- * list, so thinning out a distant wood removes trees but never moves one.
- *
- * ONE STEP PER AREA IS TOO COARSE, which is why the second half of this file
- * exists (`instanceTier`/`instanceVisible`, 2026-08-15). An area is a wood,
- * not a point: with one tier for all of it the trees at the player's feet drop
- * to the cheap mesh because the far edge of the same wood is 100 m away, and a
- * 300 m meadow is either wholly drawn or wholly gone. The per-instance rules
- * ask the same three questions of ONE prop at ITS OWN distance, and they take
- * the distances as a `ScatterLodCfg` argument instead of reading the constants
- * — the numbers above are only their DEFAULTS now, because the player may set
- * them (`game/prefs.ts`, localStorage). The area-wide functions stay until
- * their callers are rewired.
+ * module never reorders it — the thinning picks by a hash of the instance
+ * INDEX, so walking towards a wood regrows the same trees and never moves one.
  */
 
-/** Nearer than this, an area's props stand at the `full` tier (metres). */
+/** Nearer than this, a scattered prop stands on the full mesh (metres). */
 export const SCATTER_TIER_NEAR = 35;
-/** Farther than this, they stand at `low`. Between NEAR and FAR the tier in
- *  place stays — a camera hovering at the line would otherwise re-download
+/** Farther than this, it stands on the low one. Between NEAR and FAR the mesh
+ *  in place stays — a camera hovering at the line would otherwise re-download
  *  and re-swap a mesh every second, which costs far more than the detail it
  *  saves. Same shape as `wantedBuildingTier` in `main.ts`, own numbers. */
 export const SCATTER_TIER_FAR = 45;
-/** Beyond this the scatter of an area is not drawn at all (metres). Twice the
- *  old borrowed 60 m: props stay visible far longer than before, but as the
- *  cheap mesh and in thinning numbers instead of all-or-nothing. */
+/** Beyond this a scattered prop is not drawn at all (metres). Twice the old
+ *  borrowed 60 m: props stay visible far longer than before, but on the cheap
+ *  mesh and in thinning numbers instead of all-or-nothing. */
 export const SCATTER_CULL_FAR = 120;
 /** The share of instances still drawn immediately before the cull distance.
- *  Not 0: an area that fades to nothing pops when it crosses the line, and a
- *  quarter of a wood still reads as a wood on the horizon. */
+ *  Not 0: a wood that fades to nothing pops when it crosses the line, and a
+ *  quarter of it still reads as a wood on the horizon. */
 export const SCATTER_MIN_SHARE = 0.25;
 
 /** Target height of a scattered GLB when NOBODY knows how tall it should be
@@ -129,73 +126,14 @@ export function scatterSway(swayM: number, factor?: number): number {
   return Math.round(base * clamped * 100) / 100;
 }
 
-/** The two resolution tiers a prop mesh can stand at (§ B1 `variants`). The
- *  string is the tier TOKEN the payload uses; resolving it to a URL is
- *  `pickVariant`'s job and nobody else's. */
-export type ScatterTier = 'full' | 'low';
-
-/**
- * Which tier an area's props should stand at, given how far away the area is
- * and which tier they stand at NOW.
- *
- * The hysteresis is the whole point of the second argument: the answer inside
- * the 35…45 m band is "whatever is already there". Both thresholds are
- * EXCLUSIVE, so exactly 35 m does not promote and exactly 45 m does not
- * demote — a camera parked on the number keeps what it has.
- *
- * A non-finite distance (a degenerate area, see `ringBounds`) compares false
- * both ways and keeps the current tier; it is `scatterCountShare` that hides
- * such an area, so the two answers cannot contradict each other.
- */
-export function scatterTierFor(distM: number, current: ScatterTier): ScatterTier {
-  if (current === 'low' && distM < SCATTER_TIER_NEAR) return 'full';
-  if (current === 'full' && distM > SCATTER_TIER_FAR) return 'low';
-  return current;
-}
-
-/**
- * What share of an area's instances is drawn at that distance — 1 near, 0
- * beyond the cull distance, and a straight line from 1 to `SCATTER_MIN_SHARE`
- * in between.
- *
- * The line starts at `SCATTER_TIER_FAR`, not at NEAR: as long as an area is
- * near enough to deserve the full mesh it is also near enough to be counted
- * out in full. So the two rules hand over at one distance instead of fighting
- * over the same metres.
- *
- * A non-finite distance yields 0 — a degenerate area draws nothing, which is
- * what the old binary switch did with its NaN comparison too.
- */
-export function scatterCountShare(distM: number): number {
-  // Written as a NEGATED comparison so NaN lands here rather than in the
-  // linear part, where it would produce a NaN instance count.
-  if (!(distM <= SCATTER_CULL_FAR)) return 0;
-  if (distM <= SCATTER_TIER_FAR) return 1;
-  const t = (distM - SCATTER_TIER_FAR) / (SCATTER_CULL_FAR - SCATTER_TIER_FAR);
-  return 1 - t * (1 - SCATTER_MIN_SHARE);
-}
-
-/**
- * How many of `baseCount` instances to actually draw at that distance —
- * `InstancedMesh.count`, which is why it has to be a whole number.
- *
- * AREA-WIDE, and that is the older half of this module: the per-instance rules
- * below answer the same question for ONE prop at its OWN distance.
- *
- * Rounded, with a floor of ONE as long as anything is drawn at all: a lone
- * landmark tree on a hill has a base count of 1, and multiplying it by the
- * share would delete it at 46 m while a hundred-tree wood beside it stays.
- * The budget is meant to thin dense scatter, not to erase sparse scatter.
- */
-export function scatterVisibleCount(baseCount: number, distM: number): number {
-  if (!(baseCount > 0)) return 0;   // nothing placed stays nothing, floor or no floor
-  const share = scatterCountShare(distM);
-  if (share <= 0) return 0;
-  return Math.max(1, Math.min(baseCount, Math.round(baseCount * share)));
-}
-
 /* ==========================================================================
- * PER-INSTANCE LOD — the same three questions, asked of ONE prop
+ * PER-INSTANCE LOD — the three questions, asked of ONE prop
+ *
+ * There used to be an AREA-WIDE half above this line (`scatterTierFor`,
+ * `scatterCountShare`, `scatterVisibleCount`, and a `ScatterTier` string type
+ * for the two mesh tiers). It went with the caller that binned whole areas:
+ * the tier is per instance now, the "visible count" is a per-instance hash
+ * rather than the tail of a list, and a rule nothing asks is a rule that rots.
  * ========================================================================== */
 
 /**
@@ -230,8 +168,9 @@ export const SCATTER_LOD_DEFAULTS: ScatterLodCfg = {
 /** What ONE instance is drawn as: 0 = the full mesh, 1 = the low mesh,
  *  2 = not at all.
  *
- *  Numbers and not the `ScatterTier` strings, because this is what a
- *  `Uint8Array` per scatter entry holds — one byte per instance, read and
+ *  Numbers and not the payload's tier tokens (`'full'`/`'low'`), because this
+ *  is what a `Uint8Array` per scatter entry holds — one byte per instance,
+ *  read and
  *  written for every instance of every entry on every LOD tick. A string per
  *  instance would allocate on a path whose whole point is not to. */
 export type InstanceTier = 0 | 1 | 2;
@@ -253,8 +192,9 @@ export const SCATTER_UNHIDE_FACTOR = 0.92;
  * Two hystereses, both of them "the answer inside the band is whatever is
  * already there":
  *
- *   - `nearM`…`farM` between full and low, exclusive on both ends exactly as
- *     `scatterTierFor` has it — 35 m does not promote, 45 m does not demote.
+ *   - `nearM`…`farM` between full and low, exclusive on BOTH ends — at exactly
+ *     35 m nothing is promoted and at exactly 45 m nothing is demoted, so a
+ *     camera parked on the number keeps what it has.
  *   - `SCATTER_UNHIDE_FACTOR`·`cullM`…`cullM` between drawn and hidden. Note
  *     the asymmetry: hiding happens BEYOND the cull distance, showing again
  *     only well inside it, so the two thresholds cannot chase each other.
@@ -265,9 +205,8 @@ export const SCATTER_UNHIDE_FACTOR = 0.92;
  * The one case where that matters is a hand-set cfg whose bands overlap; the
  * answer there is still a tier and not a crash.
  *
- * A NON-FINITE DISTANCE HIDES the instance, unlike `scatterTierFor`, which
- * keeps the tier and leaves the hiding to `scatterCountShare`. Here one
- * function answers both questions, so it has to give the answer that draws
+ * A NON-FINITE DISTANCE HIDES the instance. One function answers both the
+ * mesh and the cull question here, so it has to give the answer that draws
  * nothing rather than the one that draws a NaN matrix.
  */
 export function instanceTier(
@@ -286,10 +225,10 @@ export function instanceTier(
 }
 
 /**
- * What share of the instances at that distance is drawn — `scatterCountShare`
- * measured at the instance's own distance and against a given cfg.
+ * What share of the instances at that distance is drawn, measured at the
+ * instance's own distance and against a given cfg.
  *
- * The line is the same one: flat 1 up to `farM`, straight down to
+ * The line: flat 1 up to `farM`, straight down to
  * `SCATTER_MIN_SHARE` at `cullM`, nothing beyond. `cullM > farM` need not be
  * checked before the division: the only branch that divides is the one where
  * `distM` is above `farM` and at most `cullM`, which cannot be reached unless
@@ -305,9 +244,10 @@ export function instanceShare(distM: number, cfg: ScatterLodCfg): number {
 /**
  * A number in [0,1) that belongs to an instance INDEX and to nothing else.
  *
- * This is what makes thinning stable. The area-wide budget could cap the tail
- * of the list because one distance governed the whole area; per instance there
- * is no tail — every instance has its own share, and "the first n of them"
+ * This is what makes thinning stable. The area-wide budget this replaces could
+ * cap the tail of the list because one distance governed the whole area; per
+ * instance there is no tail — every instance has its own share, and "the first
+ * n of them"
  * would mean a different n per tick and a different SET per tick, i.e. trees
  * blinking in and out while the player stands still. A hash of the index gives
  * each instance a fixed place in the queue, so walking towards a wood always
@@ -320,9 +260,10 @@ export function instanceShare(distM: number, cfg: ScatterLodCfg): number {
  * one stays inside 3.5 % over the same 1000 indices.
  *
  * `hash(0) === 0` falls out of the multiplication and is kept deliberately:
- * instance 0 survives as long as anything of the entry is drawn at all, which
- * is the per-instance form of the "floor of ONE" in `scatterVisibleCount` — a
- * lone landmark tree is instance 0 of a one-instance entry.
+ * instance 0 survives as long as anything of the entry is drawn at all. That
+ * is the floor the area-wide budget had to spell out ("at least ONE as long as
+ * anything is drawn"), and here it costs no rule at all — a lone landmark tree
+ * is instance 0 of a one-instance entry.
  */
 function instanceHash(index: number): number {
   let h = Math.imul(index | 0, 2654435761) >>> 0;

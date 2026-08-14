@@ -285,70 +285,23 @@
  * quietly went back to scale 1.
  *
  * ============================================================================
- * (F) THE DISPLAY LOD — `client3d/src/scene/scatterLod.ts`
+ * (F) THE DISPLAY LOD — WHERE IT WENT
  * ============================================================================
- * WHERE an instance stands is (A)-(D) above and belongs to the sampler; HOW
- * MUCH of it is drawn is a second, independent question, and it lives in its
- * own import-free module for exactly the reason this file exists. Its numbers
- * (plan-scatter-lod.md, binding): NEAR = 35 m, FAR = 45 m, CULL = 120 m,
- * MIN_SHARE = 0.25. Every distance is measured to the AREA — the camera's
- * distance to the bounding sphere's centre MINUS its radius — so a camera
- * standing in a wood reads 0 m, and inside a large area it goes negative.
+ * This section used to check the AREA-WIDE half of
+ * `client3d/src/scene/scatterLod.ts`: `scatterTierFor` (one mesh tier per
+ * painted area), `scatterCountShare` and `scatterVisibleCount` (the tail of a
+ * seed-stable list, capped by the area's distance), plus two red mutants for
+ * the band and the budget. All three functions are GONE with the caller that
+ * asked them — `scene/ground.ts` bins every instance on its own since
+ * 2026-08-15 (see the file header and section (I)), so an area no longer has a
+ * tier and there is no tail to cap.
  *
- * (F1) THE TIER WITHOUT A HISTORY — `scatterTierFor(d, 'full')`, the case a
- *      freshly built area is in. Both thresholds are EXCLUSIVE:
- *        d = 0 -> full · 35 -> full · 45 -> full (45 is not > 45)
- *        d = 45.001 -> low · 120 -> low
- *
- * (F2) DEMOTION. A `full` area is only demoted beyond FAR:
- *        40 m -> full (inside the band, nothing changes)
- *        46 m -> low
- *
- * (F3) PROMOTION. A `low` area is only promoted below NEAR:
- *        40 m -> low (the same 40 m, the other answer)
- *        35 m -> low (not < 35)
- *        34.9 m -> full
- *
- * (F4) THE HYSTERESIS IN ONE LINE: at 40 m the answer depends ONLY on what
- *      stands there — `full` stays full, `low` stays low. A rule without a
- *      band cannot produce two answers for one distance, which is what the
- *      red counter-check (F8) turns into a failing case.
- *
- * (F5) A NON-FINITE DISTANCE (a degenerate area, see `ringBounds`) keeps the
- *      current tier — and `scatterCountShare` hides such an area anyway, so
- *      the tier it "keeps" is never drawn.
- *
- * (F6) THE BUDGET — `scatterCountShare(d)`. Flat 1 up to FAR, then a straight
- *      line to MIN_SHARE at CULL, then nothing:
- *        share(d) = 1 - (d - 45)/(120 - 45) * (1 - 0.25)   for 45 < d <= 120
- *        -20 -> 1 (camera inside the area) · 0 -> 1 · 45 -> 1
- *         60 -> 1 - (15/75)*0.75 = 1 - 0.15         = 0.85
- *         82.5 (the midpoint) -> 1 - 0.5*0.75       = 0.625
- *        120 -> 1 - 1*0.75                          = 0.25
- *        120.001 -> 0 · 1000 -> 0 · NaN -> 0
- *      The value AT 120 is the last one still drawn: 0 starts beyond it, which
- *      is the one distance where "thinned out" turns into "gone".
- *
- * (F7) THE INSTANCE COUNT — `scatterVisibleCount(base, d)`, rounded, because
- *      `InstancedMesh.count` is a whole number, and floored at ONE while
- *      anything is drawn at all:
- *        (400,   0) -> 400            (400, 82.5) -> round(250)   = 250
- *        (400, 120) -> round(100) = 100   (400, 121) -> 0
- *        (  3, 118) -> share = 1 - (73/75)*0.75 = 0.27, 3*0.27 = 0.81 -> 1
- *        (  1, 120) -> 0.25 rounds to 0, the floor keeps the lone landmark
- *                      tree at 1 — the budget thins dense scatter, it does not
- *                      erase sparse scatter
- *        (  0,  10) -> 0              nothing placed stays nothing
- *
- * (F8) THE RED COUNTER-CHECKS, both built by mutating the source:
- *      - "either-or, no band": the two hysteresis lines are replaced by
- *        `return distM > SCATTER_TIER_FAR ? 'low' : 'full'`. It answers `full`
- *        at 40 m for an area that stands at `low` — where the truth is `low`
- *        (F3/F4) — so a camera drifting through the band would swap meshes
- *        every tick. Pinned from both sides: the mutant's answer is asserted
- *        to BE 'full' and the true answer is asserted NOT to be.
- *      - "no budget": the linear part is replaced by `return 1`. At 82.5 m it
- *        draws 400 of 400 instead of 250, which is the whole saving gone.
+ * The rules themselves did not go: (I1)-(I4) below ask the same three
+ * questions of ONE prop at ITS OWN distance, with the thresholds handed in
+ * rather than read out of module scope. What is unchecked here now — that
+ * `ground.ts` fills the two instance buffers from those answers — is not
+ * arithmetic and cannot be checked in this file at all: it needs three.js, a
+ * scene and a camera.
  *
  * ============================================================================
  * (G) HOW TALL A SCATTERED PROP IS — `scatterTargetH` (finding 12)
@@ -496,12 +449,24 @@
  *          60 m (share 0.85). Walking closer only ever ADDS trees, so nothing
  *          pops away in front of the player.
  *        - the COUNT is the share: over 1000 indices, within +-5 % of
- *          1000 * share. 850 at 60 m, 625 at 82.5 m, 400 at 105 m, and 625
- *          again for CFG2 at 40 m. The tolerance is not a rubber band: a fair
- *          hash has a binomial spread of about 1.1..1.5 % here, so +-5 % is
- *          roughly three sigma. The textbook `fract(sin(i*12.9898)*43758.5453)`
- *          fails it at 0.25 (14 % too few), which is how the mix in use was
- *          chosen.
+ *          1000 * share. 850 at 60 m, 625 at 82.5 m, 400 at 105 m, 250 at
+ *          120 m, and 625 again for CFG2 at 40 m.
+ *          WHAT THE +-5 % REALLY IS, because "roughly three sigma" stood here
+ *          and is wrong: the tolerance is RELATIVE, the binomial spread is
+ *          not, so the two drift apart as the share sinks. At n = 1000,
+ *          sigma = sqrt(n*p*(1-p)) is 11.3 counts at p = 0.85 against a
+ *          tolerance of 42.5 (3.8 sigma), 15.5 at p = 0.4 against 20 (1.3
+ *          sigma) and 13.7 at p = 0.25 against 12.5 — 0.9 sigma, TIGHTER than
+ *          chance would reliably meet. That is on purpose and it is not a
+ *          coin toss: the hash is deterministic, so what these rows pin is
+ *          that THIS mix lands inside the band at every one of those shares.
+ *          It does, by 10 / 15 / 4 / 8 counts.
+ *          THE 0.25 ROW IS THE ONE THAT CHOSE THE HASH. The textbook
+ *          `fract(sin(i*12.9898)*43758.5453)` is inside the band at 0.85,
+ *          0.625 and even at 0.4 (380, exactly on the 20-count line) — and
+ *          draws 215 at 0.25, 35 counts or 2.6 sigma short, 14 % too few
+ *          exactly where the thinning has to work. Without this row the whole
+ *          table would have accepted the biased mix.
  *        - instance 0 is drawn wherever anything of the entry is (its hash is
  *          0): at 119.9 m it is in, past the cull it is out. That is the
  *          per-instance form of the "floor of ONE" in (F7).
@@ -519,6 +484,12 @@
  *        asserted as "more than 100", which is some ten sigma away from what
  *        a fair coin could produce, while the real set gains 0. That is trees
  *        blinking in and out on every tick with the camera standing still.
+ *      - "the textbook mix": `instanceHash` is replaced by
+ *        `fract(sin(i*12.9898)*43758.5453)`, the hash that was tried first.
+ *        It draws 215 of 1000 at the cull edge where 250 are wanted — 35
+ *        counts outside the band the real mix holds by 8 — and it is asserted
+ *        to pass at share 0.4 all the same, which is why the 0.25 row of (I4)
+ *        and not the rest of that table is what chose the hash.
  *
  * ============================================================================
  * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
@@ -607,17 +578,6 @@ function yawOnAcceptance(source) {
     .replace('out.push({ x, z, yaw })', 'out.push({ x, z, yaw: rnd() * Math.PI * 2 })');
 }
 
-/** Section (F8)'s first mutant: ONE threshold instead of a band — the tier no
- *  longer depends on what is already standing, which is precisely the thrash
- *  the hysteresis exists to prevent. */
-function dropHysteresis(source) {
-  return source.replace(
-    `  if (current === 'low' && distM < SCATTER_TIER_NEAR) return 'full';\n`
-    + `  if (current === 'full' && distM > SCATTER_TIER_FAR) return 'low';\n`
-    + '  return current;\n',
-    `  return distM > SCATTER_TIER_FAR ? 'low' : 'full';\n`);
-}
-
 /** Section (G5)'s mutant: the precedence is turned around — the prop's library
  *  height is consulted before the height authored on the row, so an author who
  *  corrects one area's trees is overruled by the library. */
@@ -638,13 +598,18 @@ function ignoreSwayFactor(source) {
     '  return Math.round(base * 100) / 100;\n');
 }
 
-/** Section (F8)'s second mutant: the linear part of the budget is gone, so
- *  everything inside the cull distance is drawn in full. */
-function dropBudget(source) {
+/** Section (I5)'s third mutant: the textbook `fract(sin(i*12.9898)*43758.5453)`
+ *  in place of the murmur3 finaliser — the mix that WAS tried first, and the
+ *  one the 0.25 row of (I4) rejected. */
+function sinInsteadOfMurmur(source) {
   return source.replace(
-    '  const t = (distM - SCATTER_TIER_FAR) / (SCATTER_CULL_FAR - SCATTER_TIER_FAR);\n'
-    + '  return 1 - t * (1 - SCATTER_MIN_SHARE);\n',
-    '  return 1;\n');
+    '  let h = Math.imul(index | 0, 2654435761) >>> 0;\n'
+    + '  h = Math.imul(h ^ (h >>> 15), 2246822507);\n'
+    + '  h = Math.imul(h ^ (h >>> 13), 3266489909);\n'
+    + '  h ^= h >>> 16;\n'
+    + '  return (h >>> 0) / 4294967296;\n',
+    '  const v = Math.sin(index * 12.9898) * 43758.5453;\n'
+    + '  return v - Math.floor(v);\n');
 }
 
 /** Section (I5)'s first mutant: the per-instance band is gone, so an instance
@@ -947,79 +912,18 @@ async function main() {
     check(`E ground.ts ${name} is ${want} m`, m ? Number(m[1]) : null, want);
   }
 
-  console.log('\n(F) the display LOD — tier hysteresis, budget, instance count');
+  // The constants of the LOD, which section (I) derives its expectations from.
+  // Loaded here because (G) and (H) below read the same module.
   const {
     SCATTER_TIER_NEAR, SCATTER_TIER_FAR, SCATTER_CULL_FAR, SCATTER_MIN_SHARE,
     SCATTER_MODEL_HEIGHT_M, scatterTargetH,
     SCATTER_SWAY_FACTOR_DEFAULT, scatterSway,
-    scatterTierFor, scatterCountShare, scatterVisibleCount,
   } = await loadTs(LOD_SRC);
-  // The four numbers everything below is derived from — the plan's, and the
-  // reason the derivations in the header are arithmetic and not opinion.
+  console.log('\n(F) the display LOD — the four numbers everything is derived from');
   check('F NEAR is 35 m', SCATTER_TIER_NEAR, 35);
   check('F FAR is 45 m', SCATTER_TIER_FAR, 45);
   check('F CULL is 120 m', SCATTER_CULL_FAR, 120);
   check('F the smallest share is a quarter', SCATTER_MIN_SHARE, 0.25);
-
-  // (F1) a fresh area, no history
-  check('F1 0 m -> full', scatterTierFor(0, 'full'), 'full');
-  check('F1 exactly 35 m -> full', scatterTierFor(35, 'full'), 'full');
-  check('F1 exactly 45 m -> full (the threshold is exclusive)',
-    scatterTierFor(45, 'full'), 'full');
-  check('F1 45.001 m -> low', scatterTierFor(45.001, 'full'), 'low');
-  check('F1 120 m -> low', scatterTierFor(120, 'full'), 'low');
-  // (F2) demotion
-  check('F2 full at 40 m stays full (inside the band)',
-    scatterTierFor(40, 'full'), 'full');
-  check('F2 full at 46 m -> low', scatterTierFor(46, 'full'), 'low');
-  // (F3) promotion
-  check('F3 low at 40 m stays low (the same 40 m)',
-    scatterTierFor(40, 'low'), 'low');
-  check('F3 low at exactly 35 m stays low', scatterTierFor(35, 'low'), 'low');
-  check('F3 low at 34.9 m -> full', scatterTierFor(34.9, 'low'), 'full');
-  check('F3 low at 0 m -> full', scatterTierFor(0, 'low'), 'full');
-  // (F4) the band, both directions from ONE distance
-  check('F4 40 m answers differently for the two tiers',
-    [scatterTierFor(40, 'full'), scatterTierFor(40, 'low')], ['full', 'low']);
-  // (F5) a degenerate area
-  check('F5 NaN keeps full', scatterTierFor(NaN, 'full'), 'full');
-  check('F5 NaN keeps low', scatterTierFor(NaN, 'low'), 'low');
-
-  // (F6) the budget
-  check('F6 share inside the area (-20 m) is 1', scatterCountShare(-20), 1);
-  check('F6 share at 0 m is 1', scatterCountShare(0), 1);
-  check('F6 share at 45 m is still 1', scatterCountShare(45), 1);
-  check('F6 share at 60 m is 0.85', scatterCountShare(60), 0.85);
-  check('F6 share at the midpoint 82.5 m is 0.625', scatterCountShare(82.5), 0.625);
-  check('F6 share at 120 m is the quarter', scatterCountShare(120), 0.25);
-  check('F6 share just past 120 m is 0', scatterCountShare(120.001), 0);
-  check('F6 share at 1000 m is 0', scatterCountShare(1000), 0);
-  check('F6 share of a NaN distance is 0', scatterCountShare(NaN), 0);
-
-  // (F7) the instance count
-  check('F7 400 near -> 400', scatterVisibleCount(400, 0), 400);
-  check('F7 400 at 82.5 m -> 250', scatterVisibleCount(400, 82.5), 250);
-  check('F7 400 at 120 m -> 100', scatterVisibleCount(400, 120), 100);
-  check('F7 400 past the cull -> 0', scatterVisibleCount(400, 121), 0);
-  check('F7 3 at 118 m -> 1 (0.81 rounds up)', scatterVisibleCount(3, 118), 1);
-  check('F7 the lone tree at 120 m survives', scatterVisibleCount(1, 120), 1);
-  check('F7 …but is gone past the cull', scatterVisibleCount(1, 121), 0);
-  check('F7 nothing placed stays nothing', scatterVisibleCount(0, 10), 0);
-
-  // (F8) the red counter-checks
-  const noBand = await loadTs(LOD_SRC, dropHysteresis);
-  check('F8 the "either-or" mutant answers full at 40 m for a low area',
-    noBand.scatterTierFor(40, 'low'), 'full');
-  checkNot('F8 …which is NOT what the real rule answers there',
-    scatterTierFor(40, 'low'), 'full');
-  check('F8 …and it flaps: 40 m gives one answer for both tiers',
-    [noBand.scatterTierFor(40, 'full'), noBand.scatterTierFor(40, 'low')],
-    ['full', 'full']);
-  const noBudget = await loadTs(LOD_SRC, dropBudget);
-  check('F8 the "no budget" mutant draws all 400 at 82.5 m',
-    noBudget.scatterVisibleCount(400, 82.5), 400);
-  checkNot('F8 …which is NOT what the real budget draws there',
-    scatterVisibleCount(400, 82.5), 400);
 
   console.log('\n(G) how tall a scattered prop is — the precedence of finding 12');
   // The fallback of (A8) and step 3 of the precedence are the same number.
@@ -1194,7 +1098,13 @@ async function main() {
     far105.filter((i) => !near60.has(i)).length, 0);
   for (const [d, cfg, share, label] of [
     [60, DEF, 0.85, 'DEF at 60 m'], [82.5, DEF, 0.625, 'DEF at 82.5 m'],
-    [105, DEF, 0.4, 'DEF at 105 m'], [40, CFG2, 0.625, 'CFG2 at 40 m'],
+    [105, DEF, 0.4, 'DEF at 105 m'],
+    // THE ROW THAT CHOSE THE HASH — the cull edge, where the share is at its
+    // smallest and the tolerance at its tightest (0.9 sigma). The mix in use
+    // draws 258 of the ideal 250; the textbook sin-hash draws 215 and fails
+    // here alone. See (I4) in the header for the whole derivation.
+    [120, DEF, 0.25, 'DEF at 120 m'],
+    [40, CFG2, 0.625, 'CFG2 at 40 m'],
   ]) {
     const n = drawn(instanceVisible, d, cfg).length;
     check(`I4 ${label} draws ${1000 * share} of 1000, within 5 % (got ${n})`,
@@ -1221,6 +1131,18 @@ async function main() {
   const churn = rolledB.filter((i) => !rolledA.has(i)).length;
   check(`I5 the "random" mutant reshuffles the set between two ticks (${churn})`,
     churn > 100, true);
+  // …and the mix that was tried FIRST, pinned from both sides: at the cull
+  // edge it draws 215 where 250 are wanted, 35 counts outside the +-12.5 the
+  // real mix holds — while at 0.4 it would still have passed (380 against a
+  // 20-count line). One row apart, one hash chosen.
+  const sinHash = await loadTs(LOD_SRC, sinInsteadOfMurmur);
+  const sinAt120 = drawn(sinHash.instanceVisible, 120, DEF).length;
+  check('I5 the textbook sin-hash draws 215 of 1000 at the cull edge',
+    sinAt120, 215);
+  check('I5 …which is outside the band the real mix keeps',
+    Math.abs(sinAt120 - 250) > 12.5, true);
+  check('I5 …while at share 0.4 it would have passed unnoticed',
+    Math.abs(drawn(sinHash.instanceVisible, 105, DEF).length - 400) <= 20, true);
 
   console.log('\n(J) the detail distances as a local setting — prefs.ts');
   const {

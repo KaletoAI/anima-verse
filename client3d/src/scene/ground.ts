@@ -61,9 +61,9 @@ import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
-import { scatterCountShare, scatterSway, scatterTargetH, scatterTierFor,
-  scatterVisibleCount } from './scatterLod';
-import type { ScatterTier } from './scatterLod';
+import { instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterSway,
+  scatterTargetH } from './scatterLod';
+import type { InstanceTier, ScatterLodCfg } from './scatterLod';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
  *  the level every height in the payload is measured from. Since E8 the ground
@@ -347,46 +347,95 @@ function groundedGeometry(mesh: THREE.Mesh,
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
 interface AreaMesh {
   mesh: THREE.Mesh;
-  /** one instanced scatter per authored entry — empty when nothing grows here
+  /** one scatter entry per authored row — empty when nothing grows here
    *  (finding B17: the list hangs on the AREA, not on the terrain type) */
   scatter: ScatterProp[];
-  /** centre of the area's bounding box — the distance the LOD measures */
+  /** centre of the area's bounding box. NOT a LOD distance any more (that is
+   *  per instance since 2026-08-15) — it is what the download queue sorts by,
+   *  handed to `loadGlb` as the place the props of this area stand. */
   centre: THREE.Vector3;
-  /** half the diagonal of the bounding box, so a big area is not hidden
-   *  because its CENTRE is far while its edge is under the camera */
-  radius: number;
-  /** the tier its props stand at — ONE per area, because the distance the
-   *  hysteresis reads is the area's. Carried here and not per mesh so a
-   *  meadow's grass and its trees can never disagree about how far away
-   *  they are. */
-  tier: ScatterTier;
-  /** whether the props of this area have been ASKED to mount a mesh WHILE
-   *  inside the cull distance. `false` for an area built or ticked beyond it:
-   *  nothing of it is on screen, so nothing of it is downloaded either, and
-   *  the first tick that brings it back inside the cull has to request it —
-   *  the tier alone would not, it may not have changed in the meantime.
-   *  Because leaving the cull clears it again, a load that FAILED also heals
-   *  on the next approach, not only on a tier change or a terrain refetch. */
-  loaded: boolean;
 }
 
 /**
- * One instanced prop kind of an area, with everything the LOD needs to swap
- * it without rebuilding it.
+ * One instanced prop kind of an area, with everything the LOD needs to bin it
+ * per instance without rebuilding it.
  *
- * The instance matrices are written ONCE, at build time, and never touched
- * again: the tier swap replaces geometry and material in place, and the
- * distance budget only moves `count` — the point list stays as the seed-stable
- * sampler produced it, so a thinned wood is the same wood minus its tail.
+ * TWO MESHES, ONE INSTANCE LIST. The list of matrices is written ONCE, at
+ * build time, and never touched again — it stays as the seed-stable sampler
+ * produced it. What the LOD moves per tick is which BUFFER each of those
+ * matrices is copied into: the `high` mesh (the full-detail model), the `low`
+ * mesh (the cheap one, and the tuft before anything is loaded), or neither.
+ * That is the whole difference to the area-wide swap this replaces: a wood is
+ * not one distance, so the tree at the player's feet may stand on the full
+ * mesh while the far edge of the same wood is thinned out.
+ *
+ * BOTH BUFFERS ARE ALLOCATED AT BUILD SIZE and never grow: in the worst case
+ * every instance of the entry is in one of them, and a realloc inside the tick
+ * would be a fresh vertex-buffer upload for a camera that merely walked a
+ * metre.
  */
 interface ScatterProp {
-  inst: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>;
-  /** how many instances the sampler placed — `count` is a share of this */
+  /** the cheap mesh — the tuft cone at build time, the `low` tier once it has
+   *  arrived. It exists from the first frame, because SOMETHING has to stand
+   *  where props were placed while the model is still on the wire. */
+  low: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>;
+  /** the full-detail mesh, created the first time an instance of this entry is
+   *  near enough to deserve it (`null` until then, and for ever for an entry
+   *  whose two tiers resolve to the same URL — see `hasHigh`). */
+  high: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material> | null;
+  /** how many instances the sampler placed — the size of every array here */
   baseCount: number;
+  /** the instance matrices as built, 16 floats each: the SOURCE both buffers
+   *  are filled from, and the reason the phase of the wind survives every
+   *  re-bin (`applySway` reads the translation out of `instanceMatrix`, and a
+   *  matrix is copied, never rewritten). */
+  srcMatrix: Float32Array;
+  /** world position of every instance, 3 floats each — the distance the LOD
+   *  measures. Kept beside the matrices instead of read out of them per tick:
+   *  this is the one array the LOD touches for EVERY instance of EVERY entry
+   *  on every tick, and it should be three contiguous floats, not a stride of
+   *  sixteen. */
+  pos: Float32Array;
+  /** what each instance was classed as on the last tick (`InstanceTier`) —
+   *  the `prev` the hysteresis of `instanceTier` reads. One byte per instance;
+   *  see the type for why it is a number and not a tier string. */
+  tiers: Uint8Array;
+  /** which buffer each instance was really copied into last tick: 0 = high,
+   *  1 = low, 2 = neither. NOT the same as `tiers`: an instance classed high
+   *  while the full mesh is still loading is drawn in the low buffer, and it
+   *  is this array — the buffer membership — that decides whether a buffer has
+   *  to be uploaded again. */
+  slots: Uint8Array;
+  /** bounding sphere over ALL instances of the entry, padded by the prop's own
+   *  height. TWO jobs, both of which the per-instance geometry needs:
+   *  three.js culls the instanced mesh against it (its own lazy computation
+   *  would measure whatever `count` happened to be at the time and then keep
+   *  that answer for ever), and the tick asks it first — an entry whose
+   *  NEAREST possible instance is beyond the cull is hidden whole, without
+   *  looping over its instances at all. */
+  sphere: THREE.Sphere;
+  /** the whole entry is currently hidden by that sphere test, so a tick that
+   *  finds it hidden again does nothing at all */
+  hidden: boolean;
+  /** the area is gone (`clearAreas`) — the mark a pending `loadGlb` reads
+   *  before it writes into a mesh that is no longer in the scene */
+  disposed: boolean;
   /** tier URLs from the payload (`{}` when the answer carried none) */
   variants: Record<string, string>;
   /** the authored, canonical URL — what is loaded when `variants` is empty */
   model: string;
+  /** the two resolved URLs, computed once at build: the payload's variants do
+   *  not change while the area stands, so resolving them per tick would be the
+   *  same string every second. */
+  loUrl: string;
+  hiUrl: string;
+  /** the entry really HAS two meshes — a full URL that differs from the low
+   *  one. `false` for the built-in tuft (no model at all) and for a prop
+   *  without a `low` variant, where `pickVariant` falls back to the full mesh:
+   *  both are ONE representation, drawn in the low mesh whatever the tier
+   *  says, and a second InstancedMesh holding the same geometry would be a
+   *  second draw call for nothing. */
+  hasHigh: boolean;
   /** target height for `groundedGeometry`, already defaulted */
   targetH: number;
   /** How far THIS prop bends in the wind, in metres — the area kind's
@@ -398,13 +447,16 @@ interface ScatterProp {
   /** area centre, handed to `loadGlb` so the download queue serves the props
    *  the camera is looking at first */
   near: THREE.Vector3;
-  /** the URL the LOD wants to see. The load is asynchronous and a swap may be
-   *  superseded while it runs, so an arriving mesh is only mounted when this
-   *  still names it — last wish wins, never the last answer. */
-  wantUrl: string;
-  /** the URL actually MOUNTED right now (`''` = still the tuft). What the
-   *  performance readout counts, because a wish is not a picture. */
-  shownUrl: string;
+  /** the URL each of the two meshes has been ASKED for. It is the wish and the
+   *  "already requested" mark in one, so a tick that comes round again does
+   *  not queue the same file a second time; a load that fails hands it back
+   *  (see `abandon`), which is what lets a later approach retry. */
+  wantLow: string;
+  wantHigh: string;
+  /** the URL each mesh really stands on (`''` = the tuft / nothing mounted).
+   *  What the performance readout counts, because a wish is not a picture. */
+  shownLow: string;
+  shownHigh: string;
   /** the grounded geometry CLONE per tier URL — ours, and disposed with the
    *  area. Kept per tier instead of thrown away on every swap: there are two
    *  of them at most, the hysteresis makes swaps rare, and re-deriving one
@@ -544,7 +596,7 @@ export interface Ground {
   heightRevision(): number;
   /**
    * Re-decide the level of detail of the prop scatter for a camera position:
-   * resolution tier, instance budget and the far cull, per painted area.
+   * resolution tier, thinning and the far cull, PER INSTANCE.
    *
    * Called by the 1 Hz LOD tick of `main.ts`, which drives the model tiers of
    * the buildings and the figures from the same beat. The scatter's own
@@ -552,11 +604,29 @@ export interface Ground {
    * borrow the buildings' far distance for a plain on/off switch, and a wood
    * that vanishes at the line the houses change tier at was never the same
    * question.
+   *
+   * Every instance is asked at ITS OWN distance since 2026-08-15 and lands in
+   * one of the entry's two buffers or in neither. One area used to be one
+   * answer, which is the wrong shape for a wood: the trees at the player's
+   * feet dropped to the cheap mesh because the far edge of the same wood was
+   * 100 m away, and a 300 m meadow was either wholly drawn or wholly gone.
    */
   tickScatterLod(cameraPos: THREE.Vector3): void;
+  /**
+   * The three detail distances the player set (`game/prefs.ts`, localStorage).
+   *
+   * A LOCAL view setting, so it comes in from the HUD rather than from the
+   * server, and it takes effect AT ONCE: the instances are re-binned against
+   * the camera of the last tick instead of waiting up to a second for the next
+   * one — a settings field that only answers on the next beat reads as broken.
+   */
+  setScatterLod(cfg: ScatterLodCfg): void;
   /** One sample per DRAWN scatter mesh for the performance readout's tier
-   *  split (`game/perfstats.tierCounts`): the tier URLs of the prop and the
-   *  one actually mounted (`''` while the placeholder tuft stands). */
+   *  split (`game/perfstats.tierCounts`): the tier URLs of the entry and the
+   *  URL that mesh really stands on (`''` while the placeholder tuft stands).
+   *  Up to TWO per entry since the per-instance binning — the full and the
+   *  cheap mesh of one wood are drawn at the same time, and a readout that
+   *  counted one of them would miss exactly the load it exists to show. */
   scatterTiers(): { variants: Record<string, string>; url: string }[];
   /**
    * Cut a rectangle out of the ground so one can look into a basement, or
@@ -785,10 +855,15 @@ export function createGround(): Ground {
   let baseKey = '';
   const areaMeshes: AreaMesh[] = [];
   /** Where the camera stood at the last `tickScatterLod` — the scatter LOD's
-   *  only piece of view state. A REBUILD needs it too (an area has to know at
-   *  which tier and with how many instances to come into the world), and that
+   *  only piece of view state. A REBUILD needs it too (an area has to come
+   *  into the world binned, not with every instance at full detail), and that
    *  runs on the terrain refetch, not on the tick. `null` = no tick yet. */
   let lodCam: THREE.Vector3 | null = null;
+  /** The three detail distances in force. The module's DEFAULTS until the HUD
+   *  hands the player's own in (`setScatterLod`) — this file must draw a
+   *  ground before anything has read `localStorage`, and 35/45/120 is what a
+   *  player who never opens the menu plays with anyway. */
+  let lodCfg: ScatterLodCfg = SCATTER_LOD_DEFAULTS;
   /** Disposables this module created, split by LIFETIME: the base plane's go
    *  when the frame moves, the areas' when the terrain is refetched. One
    *  shared bag would keep every material of every edit alive until teardown —
@@ -971,7 +1046,8 @@ export function createGround(): Ground {
   }
 
   /**
-   * Deterministic prop scatter of one area — ONE InstancedMesh per entry.
+   * Deterministic prop scatter of one area — up to TWO InstancedMeshes per
+   * entry (the cheap one from the start, the full one when it is deserved).
    *
    * WHAT GROWS HERE IS THE AREA'S OWN BUSINESS (finding B17). It used to hang
    * on the terrain TYPE, which could only ever say "all forest everywhere
@@ -987,15 +1063,17 @@ export function createGround(): Ground {
    * grows inside a building (finding B18), and the rings of the areas stacked
    * ABOVE this one, so only the topmost area of a spot scatters there.
    *
-   * WHICH TIER is asked for is not decided here either: `tier` and `dist` come
-   * from the caller, which knows where the area lies relative to the camera.
-   * A rebuild (a terrain refetch, a new relief) therefore starts at the tier
-   * and the instance count the area deserves RIGHT NOW, instead of loading
-   * every full-detail mesh in the world first and demoting it a second later.
+   * WHAT IS DRAWN OF IT is not decided here either: the finished entry is
+   * handed straight to `binProp` with the camera of the last tick, so a
+   * rebuild (a terrain refetch, a new relief) comes into the world with the
+   * instances the camera deserves RIGHT NOW — and asks for the full-detail
+   * mesh of a far-away wood exactly as little as the tick would. Without a
+   * camera yet (the very first build) everything is drawn on the cheap mesh
+   * until the first tick, which is a second at most and never a bare ground.
    */
   function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number,
                         occluders: Point2[][], sink: { dispose(): void }[],
-                        centre: THREE.Vector3, dist: number, tier: ScatterTier
+                        centre: THREE.Vector3
   ): ScatterProp[] {
     const out: ScatterProp[] = [];
     // ONE wind question per area, not per entry: how hard it BLOWS hangs on
@@ -1023,7 +1101,7 @@ export function createGround(): Ground {
         : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
       // THE one place the two authors of the wind meet (§ A9): the area's
       // amplitude times this prop's factor. Everything downstream — the tuft
-      // below, `showTier`'s material, the clone-or-share decision — reads this
+      // below, `mountUrl`'s material, the clone-or-share decision — reads this
       // one number off `prop.sway`, so a stone with factor 0 arrives at 0 and
       // takes the existing "no sway, no clone" path without a second rule.
       const entrySway = scatterSway(sway, entry.sway_factor);
@@ -1040,9 +1118,9 @@ export function createGround(): Ground {
       // the reference height is the cone's, whose tip is what bends.
       applySway(mat, entrySway, h);
       sink.push(geo, mat);
-      // Typed on the BASE classes: `showTier` swaps geometry and material for
+      // Typed on the BASE classes: `mountUrl` swaps geometry and material for
       // the loaded ones, which are not a cone and not this material.
-      const inst: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
+      const low: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
         = new THREE.InstancedMesh(geo, mat, points.length);
       // One of each, reused: a big meadow places thousands of instances, and a
       // fresh Vector3 per instance is garbage for nothing.
@@ -1051,6 +1129,12 @@ export function createGround(): Ground {
       const up = new THREE.Vector3(0, 1, 0);
       const at = new THREE.Vector3();
       const s = new THREE.Vector3(1, 1, 1);
+      // The matrices are kept HERE, not in the mesh: they are the source both
+      // instance buffers are filled from per tick, and a mesh's buffer holds
+      // whatever the last binning put into it. `pos` is the same translation
+      // once more, as three tight floats — see `ScatterProp.pos`.
+      const srcMatrix = new Float32Array(points.length * 16);
+      const pos = new Float32Array(points.length * 3);
       points.forEach((p, i) => {
         q.setFromAxisAngle(up, p.yaw);
         // EVERY instance samples its own ground (§ A16): the sampler decides
@@ -1058,110 +1142,169 @@ export function createGround(): Ground {
         // shared height would float half a wood over the slope it grows on.
         // The props stay UPRIGHT on a slope — a tree grows towards the sky,
         // and tilting one into the surface normal is a look, not a fix.
-        m.compose(at.set(p.x, heightAt(p.x, p.z), p.z), q, s);
-        inst.setMatrixAt(i, m);
+        const y = heightAt(p.x, p.z);
+        m.compose(at.set(p.x, y, p.z), q, s);
+        m.toArray(srcMatrix, i * 16);
+        pos[i * 3] = p.x;
+        pos[i * 3 + 1] = y;
+        pos[i * 3 + 2] = p.z;
       });
-      inst.instanceMatrix.needsUpdate = true;
-      inst.castShadow = false;
-      inst.frustumCulled = true;
-      // The distance budget applies from the first frame — an area built at
-      // 100 m shows its quarter straight away and never flashes full density.
-      inst.count = scatterVisibleCount(points.length, dist);
-      inst.visible = inst.count > 0;
+      low.castShadow = false;
+      low.frustumCulled = true;
+      // Nothing is drawn until the entry has been binned (a few lines below,
+      // and every tick after that): a mesh whose buffer holds the matrices of
+      // the last camera position must not be shown at the count of the one
+      // before it.
+      low.count = 0;
+      low.visible = false;
 
       const variants = (entry.variants && typeof entry.variants === 'object')
         ? entry.variants : {};
+      const model = typeof entry.model === 'string' ? entry.model : '';
+      const loUrl = pickVariant(variants, 'low') || model;
+      const hiUrl = pickVariant(variants, 'full') || model;
       const prop: ScatterProp = {
-        inst,
+        low,
+        high: null,
         baseCount: points.length,
+        srcMatrix,
+        pos,
+        // EVERY INSTANCE STARTS AS `low`, and the 1 is the whole point: the
+        // hysteresis answers "whatever is already there" inside the 35…45 m
+        // band, so the starting value decides what a freshly built entry shows
+        // in it. A 0 (full) would download the good mesh for a wood 44 m away
+        // that the next tick demotes anyway; a 2 (hidden) would be a DEAD BAND
+        // — an entry built at 110.4…120 m would stay invisible, because coming
+        // back from hidden needs 0.92·cull, although at that distance it is
+        // plainly low and should be drawn.
+        tiers: new Uint8Array(points.length).fill(1),
+        // …and in NO buffer yet, so the first binning finds every instance
+        // changed and uploads both buffers once.
+        slots: new Uint8Array(points.length).fill(2),
+        // The sphere over the instances themselves, padded by how tall the
+        // prop stands and how far the wind takes it — see `ScatterProp.sphere`
+        // for the two jobs it does. Both meshes share it: they hold subsets of
+        // these very positions, and nothing writes into it after this line.
+        sphere: instanceSphere(pos, h + SWAY_MAX_M),
+        hidden: false,
+        disposed: false,
         variants,
-        model: typeof entry.model === 'string' ? entry.model : '',
+        model,
+        loUrl,
+        hiUrl,
+        // A prop whose two tiers resolve to the same file is ONE mesh, and so
+        // is a tuft (both URLs empty) — see `hasHigh`.
+        hasHigh: !!hiUrl && hiUrl !== loUrl,
         // The authored height wins, the prop's real one governs when none was
         // authored, the flat fallback is the last resort (§ A9).
         targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
         sway: entrySway,
         near: centre,
-        wantUrl: '',
-        shownUrl: '',
+        wantLow: '',
+        wantHigh: '',
+        shownLow: '',
+        shownHigh: '',
         owned: new Map(),
         mats: new Map(),
       };
+      // THE SPHERE IS SET, NOT COMPUTED, and both meshes of the entry get the
+      // same one. three.js would derive it from the instance buffer on the
+      // first frustum test and then keep that answer for ever — measured over
+      // whatever `count` happened to be at that moment, which after a binning
+      // is a subset near the camera. A wood would then be culled by the bounds
+      // of the four trees that were drawn when it was first looked at.
+      low.boundingSphere = prop.sphere;
       // The tuft stands until the first mesh arrives; a prop with no model at
-      // all keeps it forever, and takes part in cull and budget all the same.
-      // NOTHING is downloaded for an area beyond the cull distance: its
+      // all keeps it forever, and takes part in cull and thinning all the same.
+      // NOTHING is downloaded for an entry beyond the cull distance: its
       // instances are not drawn, and a world of far-away woods would otherwise
-      // fetch every mesh in it at build time only to hide it. The tick fetches
-      // it when the area is really approached (`loaded` on the area).
-      if (inst.count > 0 && (prop.model || Object.keys(variants).length)) {
-        showTier(prop, tier);
-      }
+      // fetch every mesh in it at build time only to hide it. `binProp` is
+      // what asks — for this entry, at its own nearest instance.
+      if (lodCam) binProp(prop, lodCam);
+      else fillAll(prop);
       out.push(prop);
     });
     return out;
   }
 
   /**
-   * Which URL a prop's wanted tier resolves to.
+   * The bounding sphere over every instance of an entry, padded by `padM`.
    *
-   * ONE resolution rule for the whole client (`pickVariant`, contract § B1): a
-   * missing `low` falls back to the best tier that exists, and an unknown tier
-   * token in the map is ignored rather than requested. Without `variants` —
-   * an answer from before the server enriched them, or a prop whose URL does
-   * not name a prop of this world — the authored `model` is all there is, and
-   * that is exactly the URL this loaded before tiers existed.
+   * `pos` is the x/y/z triple list of `ScatterProp.pos`, and the padding is
+   * how far the drawn prop reaches beyond the point it stands on — its height
+   * plus the wind. Centre and radius come from the AXIS-ALIGNED box, which is
+   * a hair larger than the tightest sphere and costs one pass instead of two.
    */
-  function tierUrl(prop: ScatterProp, tier: ScatterTier): string {
-    return pickVariant(prop.variants, tier) || prop.model;
+  function instanceSphere(pos: Float32Array, padM: number): THREE.Sphere {
+    let minX = Infinity; let minY = Infinity; let minZ = Infinity;
+    let maxX = -Infinity; let maxY = -Infinity; let maxZ = -Infinity;
+    for (let i = 0; i < pos.length; i += 3) {
+      if (pos[i] < minX) minX = pos[i];
+      if (pos[i] > maxX) maxX = pos[i];
+      if (pos[i + 1] < minY) minY = pos[i + 1];
+      if (pos[i + 1] > maxY) maxY = pos[i + 1];
+      if (pos[i + 2] < minZ) minZ = pos[i + 2];
+      if (pos[i + 2] > maxZ) maxZ = pos[i + 2];
+    }
+    const centre = new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2,
+                                     (minZ + maxZ) / 2);
+    const radius = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + padM;
+    return new THREE.Sphere(centre, radius);
   }
 
   /**
-   * Mount a prop's tier — in place, without touching a single instance matrix.
+   * Mount a URL onto ONE of an entry's two meshes — in place, without touching
+   * a single instance matrix.
+   *
+   * `high` says which mesh is meant, and the full-detail one is CREATED HERE
+   * when its file arrives: an entry whose nearest instance never comes inside
+   * the far distance never has a second InstancedMesh at all, which is what
+   * makes "two meshes per entry" affordable in a world full of distant woods.
    *
    * THE LAST WISH WINS, NEVER THE LAST ANSWER. A load takes as long as it
-   * takes, and a camera that crosses the band twice can have two of them in
-   * flight; each one checks `wantUrl` before it mounts, so an answer that was
-   * superseded while it travelled is filed away (its geometry is derived and
-   * kept for the tier it belongs to) but never shown. Together with the
-   * hysteresis of `scatterTierFor` that is the whole flapping guard: the band
-   * makes swaps rare, this makes a late one harmless.
+   * takes; the answer checks the wish again before it mounts, so a file that
+   * was superseded while it travelled is filed away (its geometry is derived
+   * and kept under its URL) but never shown.
    */
-  function showTier(prop: ScatterProp, tier: ScatterTier): void {
-    const url = tierUrl(prop, tier);
-    if (!url || prop.wantUrl === url) return;
-    prop.wantUrl = url;
+  function mountUrl(prop: ScatterProp, url: string, high: boolean): void {
+    if (!url) return;
+    if ((high ? prop.wantHigh : prop.wantLow) === url) return;
+    if (high) prop.wantHigh = url; else prop.wantLow = url;
     const have = prop.owned.get(url);
-    if (have) {
-      // Been here before — the swap is two assignments and no download.
-      prop.inst.geometry = have;
-      const mat = prop.mats.get(url);
-      if (mat) prop.inst.material = mat;
-      prop.shownUrl = url;
+    const haveMat = prop.mats.get(url);
+    if (have && haveMat) {
+      // Been here before — the mount is two assignments and no download.
+      place(prop, url, high, have, haveMat);
       return;
     }
-    // A LOAD THAT NEVER MOUNTED MUST NOT PIN THE WISH. `wantUrl` is both the
-    // wish and the "already asked" mark, so a failed load would leave the prop
-    // wanting a URL it does not have: the early return above then blocks every
-    // later request for that tier for the life of the area — a full mesh that
-    // failed once while the low one mounted would never be tried again. So the
-    // failing branches hand the field back to what is actually on screen
-    // (`''` = the tuft), and only while this load is still the current wish:
-    // a newer one owns the field, and last wish wins stays untouched.
-    const abandon = () => { if (prop.wantUrl === url) prop.wantUrl = prop.shownUrl; };
+    // A LOAD THAT NEVER MOUNTED MUST NOT PIN THE WISH. `wantLow`/`wantHigh` is
+    // both the wish and the "already asked" mark, so a failed load would leave
+    // the prop wanting a URL it does not have: the early return above then
+    // blocks every later request for that mesh for the life of the area — a
+    // full mesh that failed once while the low one mounted would never be
+    // tried again. So the failing branches hand the field back to what is
+    // actually on screen (`''` = the tuft), and only while this load is still
+    // the current wish: a newer one owns the field, and last wish wins stays
+    // untouched.
+    const abandon = () => {
+      if (high) { if (prop.wantHigh === url) prop.wantHigh = prop.shownHigh; }
+      else if (prop.wantLow === url) prop.wantLow = prop.shownLow;
+    };
     // Only the first mesh of the file is used — a prop that is really several
     // meshes is a v2 problem, and a silently missing prop would be worse than
     // a simplified one. `near` puts this download into the distance queue of
     // `propAssets.ts` instead of at its end: the wood being walked into is
     // fetched before the one across the map.
     void loadGlb(url, prop.near).then((obj) => {
-      // A terrain refetch between request and answer took this instance out
-      // of the scene and disposed it — writing into it would resurrect
-      // nothing and hold the loaded mesh alive. The test is the DISPOSED
-      // mark `clearAreas` leaves, not the parent: since the build-then-swap
-      // an instance is legitimately parentless for as long as its rebuild
-      // takes, and reading that as "gone" would drop the model of every
-      // prop whose file arrives before the swap.
+      // A terrain refetch between request and answer took this entry out of
+      // the scene and disposed it — writing into it would resurrect nothing
+      // and hold the loaded mesh alive. The test is the DISPOSED mark
+      // `clearAreas` leaves, not the parent: since the build-then-swap a mesh
+      // is legitimately parentless for as long as its rebuild takes, and
+      // reading that as "gone" would drop the model of every prop whose file
+      // arrives before the swap.
       if (!obj) { abandon(); return; }
-      if (prop.inst.userData.disposed) return;
+      if (prop.disposed) return;
       let src: THREE.Mesh | null = null;
       obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
       if (!src) { abandon(); return; }
@@ -1174,30 +1317,30 @@ export function createGround(): Ground {
       // The clone is OURS and nothing else disposes it — the owned bag of
       // this rebuild was drained into `areaOwned` long before this answer
       // arrived (the load is asynchronous, the swap is not). So it rides on
-      // the prop and `clearAreas` frees it with the instance. One per tier
-      // URL: the map is the ledger of what has to be freed.
+      // the prop and `clearAreas` frees it with the meshes. One per URL, and
+      // the map is the ledger of what has to be freed — it covers BOTH tiers
+      // of the entry, which is why the two meshes need no ledger of their own.
       prop.owned.set(url, geometry);
       // THE MATERIAL OF A SWAYING PROP IS A CLONE. `loadGlb` caches the file,
       // so `mesh.material` belongs to every area that scatters this tree and
       // to every scene that places it; patching it here would set them all
       // waving. The clone keeps the same cache key, so the extra material
       // costs no extra program.
-      // Whatever this tier already has wins, exactly as the geometry above:
+      // Whatever this URL already has wins, exactly as the geometry above:
       // two loads of one URL can be in flight at once (a band crossed twice
       // while the first was travelling), and a second clone would replace the
       // first in the ledger with nobody left to free it.
       const material = prop.mats.get(url) ?? (prop.sway > 0
         ? (mesh.material as THREE.Material).clone()
         : (mesh.material as THREE.Material));
-      // CENTRAL, in the ONE place a tier is mounted: a swap replaces the
-      // material, so a patch applied anywhere else would be lost the first
-      // time the camera crossed the band.
+      // CENTRAL, in the ONE place a tier is mounted: a mount replaces the
+      // material of a mesh, so a patch applied anywhere else would be lost the
+      // first time an entry loaded its second tier. BOTH meshes of an entry
+      // come through here, so both bend.
       applySway(material, prop.sway, prop.targetH);
       prop.mats.set(url, material);
-      if (prop.wantUrl !== url) return;   // superseded while it loaded
-      prop.inst.geometry = geometry;
-      prop.inst.material = material;
-      prop.shownUrl = url;
+      if ((high ? prop.wantHigh : prop.wantLow) !== url) return;  // superseded
+      place(prop, url, high, geometry, material);
     }).catch(() => {
       // The tuft stands; a missing prop is not a broken world — but the wish
       // is released all the same, see `abandon`.
@@ -1205,14 +1348,185 @@ export function createGround(): Ground {
     });
   }
 
+  /**
+   * Hang a loaded geometry/material pair on one of the entry's meshes.
+   *
+   * The full-detail mesh is BORN HERE — with the buffer at build size, the
+   * shared instance sphere and nothing drawn yet; the very next binning fills
+   * it. That binning is done straight away when a camera is known, because
+   * otherwise the near trees would keep standing on the cheap mesh for up to a
+   * second after their model landed, which is exactly the moment the player is
+   * looking at them.
+   */
+  function place(prop: ScatterProp, url: string, high: boolean,
+                 geometry: THREE.BufferGeometry, material: THREE.Material): void {
+    if (high) {
+      if (!prop.high) {
+        const mesh: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
+          = new THREE.InstancedMesh(geometry, material, prop.baseCount);
+        mesh.castShadow = false;
+        mesh.frustumCulled = true;
+        mesh.boundingSphere = prop.sphere;
+        mesh.count = 0;
+        mesh.visible = false;
+        prop.high = mesh;
+        group.add(mesh);
+      } else {
+        prop.high.geometry = geometry;
+        prop.high.material = material;
+      }
+      prop.shownHigh = url;
+    } else {
+      prop.low.geometry = geometry;
+      prop.low.material = material;
+      prop.shownLow = url;
+    }
+    if (lodCam) binProp(prop, lodCam);
+  }
+
+  /** Copy ONE instance matrix out of the entry's source list into a buffer.
+   *  Sixteen floats by hand rather than `set(subarray(…))`: the subarray is a
+   *  fresh view object, and this runs once per drawn instance per tick. */
+  function copyMatrix(src: Float32Array, i: number,
+                      dst: Float32Array, slot: number): void {
+    const a = i * 16;
+    const b = slot * 16;
+    for (let j = 0; j < 16; j += 1) dst[b + j] = src[a + j];
+  }
+
+  /**
+   * Draw EVERYTHING of an entry on the cheap mesh — the answer while no camera
+   * is known at all (the very first build, before the first LOD tick).
+   *
+   * Not a second LOD rule: it is what "no distance to measure against" has to
+   * mean, and the first tick replaces it a fraction of a second later. The
+   * alternative was a ground that stands bare until then.
+   */
+  function fillAll(prop: ScatterProp): void {
+    prop.hidden = false;
+    prop.tiers.fill(1);
+    prop.slots.fill(1);
+    const buf = prop.low.instanceMatrix.array as Float32Array;
+    for (let i = 0; i < prop.baseCount; i += 1) copyMatrix(prop.srcMatrix, i, buf, i);
+    prop.low.count = prop.baseCount;
+    prop.low.visible = prop.baseCount > 0;
+    prop.low.instanceMatrix.needsUpdate = true;
+    mountUrl(prop, prop.loUrl, false);
+  }
+
+  /**
+   * Sort every instance of ONE entry into the two buffers — the whole
+   * per-object LOD, once per entry per tick.
+   *
+   * THE THREE QUESTIONS ARE ASKED PER INSTANCE (`scene/scatterLod.ts`, all of
+   * it pure and hand-checked): which mesh it deserves at its own distance
+   * (`instanceTier`, with the band's hysteresis reading `prop.tiers`), whether
+   * it survives the thinning out there (`instanceVisible`, a stable hash of
+   * the instance index — the same trees regrow as one walks closer), and
+   * whether it is inside the cull distance at all.
+   *
+   * WHAT COSTS WHAT, because this loop is the price of the feature:
+   *  - the ENTRY is answered first, against its own instance sphere. A wood
+   *    whose nearest possible instance is beyond the cull is switched off
+   *    whole, and a tick that finds it already off returns without touching
+   *    anything at all — which is what most entries of a large world do.
+   *  - inside, the distance is compared SQUARED, and the square root is drawn
+   *    only for an instance that is not already beyond the cull by it. The
+   *    root is needed after that: both the band and the thinning line are
+   *    linear in metres, not in metres squared.
+   *  - the buffers are always refilled, the UPLOAD is not: `needsUpdate` is
+   *    set per mesh and only when that mesh's set of instances really changed
+   *    (an instance entering or leaving its slot). A camera standing still
+   *    costs no vertex-buffer traffic at all.
+   */
+  function binProp(prop: ScatterProp, cam: THREE.Vector3): void {
+    const cfg = lodCfg;
+    if (cam.distanceTo(prop.sphere.center) - prop.sphere.radius > cfg.cullM) {
+      if (prop.hidden) return;
+      prop.hidden = true;
+      // Hidden is the tier every instance really has out here, so the state
+      // stays honest for the tick that brings the entry back.
+      prop.tiers.fill(2);
+      prop.slots.fill(2);
+      prop.low.count = 0;
+      prop.low.visible = false;
+      if (prop.high) { prop.high.count = 0; prop.high.visible = false; }
+      return;
+    }
+    prop.hidden = false;
+    const cull2 = cfg.cullM * cfg.cullM;
+    const loBuf = prop.low.instanceMatrix.array as Float32Array;
+    const hiBuf = prop.high
+      ? (prop.high.instanceMatrix.array as Float32Array) : null;
+    let loN = 0;
+    let hiN = 0;
+    let loDirty = false;
+    let hiDirty = false;
+    let minD = Infinity;
+    for (let i = 0; i < prop.baseCount; i += 1) {
+      const dx = prop.pos[i * 3] - cam.x;
+      const dy = prop.pos[i * 3 + 1] - cam.y;
+      const dz = prop.pos[i * 3 + 2] - cam.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      let tier: InstanceTier = 2;
+      let slot = 2;
+      // The test is written so that a NaN distance FAILS it and keeps the
+      // hidden defaults above — the same discipline as `instanceTier`'s
+      // negated comparisons, and the reason a degenerate position draws
+      // nothing instead of a NaN matrix.
+      if (d2 <= cull2) {
+        const d = Math.sqrt(d2);
+        if (d < minD) minD = d;
+        tier = instanceTier(d, prop.tiers[i] as InstanceTier, cfg);
+        if (tier !== 2 && instanceVisible(i, d, cfg)) {
+          // An instance that deserves the full mesh is drawn on the cheap one
+          // as long as the full one is not there yet — a gap would be worse
+          // than a coarse tree, and the tick after the arrival moves it over.
+          slot = tier === 0 && hiBuf ? 0 : 1;
+        }
+      }
+      prop.tiers[i] = tier;
+      const was = prop.slots[i];
+      if (was !== slot) {
+        prop.slots[i] = slot;
+        // A buffer's CONTENT is exactly the matrices of the instances in its
+        // slot, in index order — so it changed if and only if this slot was
+        // entered or left.
+        if (slot === 0 || was === 0) hiDirty = true;
+        if (slot === 1 || was === 1) loDirty = true;
+      }
+      // Post-increment: the slot an instance is written to is the count BEFORE
+      // it, so the first drawn instance lands at 0 and `count` ends up right.
+      if (slot === 0 && hiBuf) { copyMatrix(prop.srcMatrix, i, hiBuf, hiN); hiN += 1; }
+      else if (slot === 1) { copyMatrix(prop.srcMatrix, i, loBuf, loN); loN += 1; }
+    }
+    prop.low.count = loN;
+    prop.low.visible = loN > 0;
+    if (loDirty) prop.low.instanceMatrix.needsUpdate = true;
+    if (prop.high) {
+      prop.high.count = hiN;
+      prop.high.visible = hiN > 0;
+      if (hiDirty) prop.high.instanceMatrix.needsUpdate = true;
+    }
+    // WHAT TO LOAD hangs on the NEAREST instance of the entry, not on where
+    // the area's edge lies: the cheap mesh as soon as anything of the entry is
+    // drawn at all, the full one as soon as anything could be classed high.
+    // `farM` and not `nearM` on purpose — that is ten metres of walking in
+    // which the file can arrive before the first instance really needs it.
+    if (minD <= cfg.cullM) mountUrl(prop, prop.loUrl, false);
+    if (prop.hasHigh && minD <= cfg.farM) mountUrl(prop, prop.hiUrl, true);
+  }
+
   function clearAreas(): void {
     for (const a of areaMeshes) {
       group.remove(a.mesh);
       a.mesh.geometry.dispose();
       for (const prop of a.scatter) {
-        group.remove(prop.inst);
-        // The mark a pending `loadGlb` reads — see `showTier`.
-        prop.inst.userData.disposed = true;
+        // BOTH meshes, and the full one only exists where it was deserved.
+        group.remove(prop.low);
+        if (prop.high) group.remove(prop.high);
+        // The mark a pending `loadGlb` reads — see `mountUrl`.
+        prop.disposed = true;
         // The grounded CLONES of the loaded tiers, however many arrived (see
         // there). `InstancedMesh.dispose` frees the instance buffers, never
         // the geometry, and these belong to nobody else — the MATERIALS do
@@ -1225,7 +1539,8 @@ export function createGround(): Ground {
         // admin painting terrain rebuilds this every few seconds.
         if (prop.sway > 0) for (const m of prop.mats.values()) m.dispose();
         prop.mats.clear();
-        prop.inst.dispose();
+        prop.low.dispose();
+        prop.high?.dispose();
       }
     }
     areaMeshes.length = 0;
@@ -1328,23 +1643,17 @@ export function createGround(): Ground {
       const occluders = builtAreas.slice(index + 1)
         .filter((b): b is NonNullable<typeof b> => !!b)
         .map((b) => b.ring);
-      // The LOD state of the new area, decided BEFORE its props are built:
-      // distance to the area (sphere minus radius, the one measure), and from
-      // it the tier. `'full'` as the "current" tier means an area inside the
-      // hysteresis band starts detailed — a fresh build has no history to
-      // keep, and the band is near enough to deserve the good mesh. Without a
-      // camera yet (the very first build) every area counts as near, which is
-      // exactly what this loaded before there were tiers.
+      // The area's centre, and it is no longer a LOD distance: every scatter
+      // entry binds its own instances against their own distances (`binProp`,
+      // called from `buildScatter`). What the centre still answers is WHERE
+      // the props of this area stand, which is how the asset queue decides
+      // which wood to fetch first.
       const centre = new THREE.Vector3((minX + maxX) / 2,
                                        heightAt((minX + maxX) / 2, (minZ + maxZ) / 2),
                                        (minZ + maxZ) / 2);
-      const radius = Math.hypot(maxX - minX, maxZ - minZ) / 2;
-      const dist = lodCam ? lodCam.distanceTo(centre) - radius : 0;
-      const tier = scatterTierFor(dist, 'full');
       const scatter = buildScatter(area, built.ring, built.areaM2, occluders,
-                                   nextOwned, centre, dist, tier);
-      next.push({ mesh, scatter, centre, radius, tier,
-                  loaded: scatterCountShare(dist) > 0 });
+                                   nextOwned, centre);
+      next.push({ mesh, scatter, centre });
     });
 
     // THE SWAP. Nothing above touched the scene, so the old ground stood until
@@ -1352,7 +1661,13 @@ export function createGround(): Ground {
     clearAreas();
     for (const a of next) {
       group.add(a.mesh);
-      for (const prop of a.scatter) group.add(prop.inst);
+      for (const prop of a.scatter) {
+        group.add(prop.low);
+        // A full-detail mesh can exist before the swap: `buildScatter` bins
+        // the entry against the camera of the last tick, and a model already
+        // in the asset cache mounts within that very call.
+        if (prop.high) group.add(prop.high);
+      }
       areaMeshes.push(a);
     }
     areaOwned.push(...nextOwned);
@@ -1712,44 +2027,31 @@ export function createGround(): Ground {
       if (!lodCam) lodCam = new THREE.Vector3();
       lodCam.copy(cameraPos);
       for (const a of areaMeshes) {
-        if (!a.scatter.length) continue;
-        // Distance to the area's bounding SPHERE, not to its centre: a large
-        // meadow is under the camera long before its centre is.
-        const d = cameraPos.distanceTo(a.centre) - a.radius;
-        // ONE tier for the whole area, swapped only when the hysteresis band
-        // is really crossed — the loop below runs every second, `showTier`
-        // must not.
-        const tier = scatterTierFor(d, a.tier);
-        const swap = tier !== a.tier;
-        a.tier = tier;
-        // Beyond the cull nothing of this area is drawn, so nothing of it is
-        // downloaded: the tier bookkeeping above still runs (the area comes
-        // back at the tier its distance deserves), the request does not. The
-        // catch-up is `loaded`: an area whose load was skipped asks once, the
-        // first tick it is inside the cull again — a tier swap alone would
-        // miss it, because approaching from far away need not change the tier.
-        const inCull = scatterCountShare(d) > 0;
-        for (const prop of a.scatter) {
-          if (inCull && (swap || !a.loaded)) showTier(prop, tier);
-          // The budget: the tail of a seed-stable instance list is capped, so
-          // a distant wood thins out instead of switching off. `visible` is
-          // now only the far cull — everything nearer stays on screen.
-          prop.inst.count = scatterVisibleCount(prop.baseCount, d);
-          prop.inst.visible = prop.inst.count > 0;
-        }
-        // Leaving the cull RESETS the flag, so re-entering the view distance
-        // asks again. That is what makes a FAILED load heal without a tier
-        // change or a terrain refetch: it stays "not loaded", and the next
-        // approach retries. The common case costs nothing — `showTier`
-        // early-returns for a prop that already stands at that tier.
-        a.loaded = inCull;
+        for (const prop of a.scatter) binProp(prop, cameraPos);
+      }
+    },
+    setScatterLod(cfg) {
+      lodCfg = cfg;
+      // AT ONCE, not on the next beat: the player is looking at the very
+      // meadow whose numbers they just typed. The camera of the last tick is
+      // the one the world is being drawn from, so re-binning against it is
+      // exactly what the next tick would do, a second earlier.
+      if (!lodCam) return;
+      for (const a of areaMeshes) {
+        for (const prop of a.scatter) binProp(prop, lodCam);
       }
     },
     scatterTiers() {
       const out: { variants: Record<string, string>; url: string }[] = [];
       for (const a of areaMeshes) {
         for (const prop of a.scatter) {
-          if (prop.inst.visible) out.push({ variants: prop.variants, url: prop.shownUrl });
+          // One sample per DRAWN mesh: an entry with instances on both tiers
+          // reports both, which is what makes the readout's full/low split add
+          // up to what is really on screen.
+          if (prop.low.visible) out.push({ variants: prop.variants, url: prop.shownLow });
+          if (prop.high?.visible) {
+            out.push({ variants: prop.variants, url: prop.shownHigh });
+          }
         }
       }
       return out;
