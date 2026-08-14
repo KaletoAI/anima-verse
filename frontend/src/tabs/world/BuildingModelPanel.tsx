@@ -15,8 +15,9 @@ import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog, type MeshBackend, type MeshGenerateOpts } from '../../components/MeshBackendDialog'
 import {
-  DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow, TierPicker, TierSummary,
-  type GalleryModel, type ModelTier,
+  BuildDistanceMeshButton, DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow,
+  TierPicker, TierSummary,
+  type BlenderStatus, type GalleryModel, type ModelTier,
 } from '../../components/ModelGallery'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { notifyModel3dChanged } from './topDownSnapshot'
@@ -53,6 +54,8 @@ export interface BuildingModelStatus {
   /** The resolution tiers the subject actually has — a missing one is what
    *  the header badge reports. */
   tiers?: string[]
+  /** Blender refinement state — the gate for the CPU distance-mesh action. */
+  blender?: BlenderStatus
 }
 
 /** Client default when map3d.size is unset (schnittstellen-3d.md). */
@@ -707,7 +710,24 @@ export function BuildingModelPanel({
 
       {/* Stored models — like the image gallery: click previews, the tier
           buttons make a file the model the 3D clients get for that tier. */}
-      <TierSummary tiers={model3d?.tiers} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TierSummary tiers={model3d?.tiers} />
+        {/* The CPU way to the missing low mesh — no backend, no queue, and
+            the only one that works without a mesh→mesh alias. The endpoint
+            follows `enc`, so this one button covers building AND room. */}
+        {(model3d?.tiers || []).includes('full') ? (
+          <BuildDistanceMeshButton
+            url={`/world/locations/${enc}/model3d/lod`}
+            hasLow={(model3d?.tiers || []).includes('low')}
+            blender={model3d?.blender}
+            disabled={!!model3d?.pending}
+            onDone={async () => {
+              await load()
+              notifyModel3dChanged(roomId ? { roomId } : { locationId })
+            }}
+          />
+        ) : null}
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {models.length > 0 ? (
           <NoModelRow noneSelected={noneSelected} onSelect={() => { void select('') }} />

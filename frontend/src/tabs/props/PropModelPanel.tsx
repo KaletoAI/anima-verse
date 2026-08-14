@@ -14,8 +14,9 @@ import {
   MeshBackendDialog, type MeshBackend, type MeshGenerateOpts,
 } from '../../components/MeshBackendDialog'
 import {
-  DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow, TierPicker, TierSummary,
-  type GalleryModel, type ModelTier,
+  BuildDistanceMeshButton, DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow,
+  TierPicker, TierSummary,
+  type BlenderStatus, type GalleryModel, type ModelTier,
 } from '../../components/ModelGallery'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
@@ -28,6 +29,8 @@ interface PropModelInfo {
   /** mesh→mesh aliases (category mesh2mesh); empty = the low-variant action
    *  stays disabled. */
   shrink_backends?: MeshBackend[]
+  /** Blender refinement state — the gate for the CPU distance-mesh action. */
+  blender?: BlenderStatus
 }
 
 export function PropModelPanel({ propId, reloadKey, preview, onPreview,
@@ -139,6 +142,7 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
   }, [shrinkFile, enc, onGenerating, t, toast])
 
   const models = info?.models || []
+  const tiers = info?.tiers || []
   // The row the viewer shows: the explicit preview, else the active file.
   const shownFile = models.find((m) => m.filename === preview)?.filename
     || models.find((m) => m.active)?.filename
@@ -158,7 +162,20 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
         onClose={() => setShrinkFile(null)}
       />
       <div className="ga-form-section-label">{t('3D models')}</div>
-      <TierSummary tiers={info?.tiers} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TierSummary tiers={info?.tiers} />
+        {/* The CPU way to the missing low mesh — no backend, no queue, and
+            the only one that works without a mesh→mesh alias. */}
+        {tiers.includes('full') ? (
+          <BuildDistanceMeshButton
+            url={`/world/props/${enc}/models/lod`}
+            hasLow={tiers.includes('low')}
+            blender={info?.blender}
+            disabled={pending}
+            onDone={async () => { await load(); await onChanged() }}
+          />
+        ) : null}
+      </div>
       {models.length === 0 ? (
         <span className="ga-hint">
           {t('No mesh stored yet — generate one (🧊) or upload a GLB.')}

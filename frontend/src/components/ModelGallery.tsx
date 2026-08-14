@@ -9,7 +9,10 @@
  * dials, upload target) stays with the panel that owns it — this is plain
  * admin UI, not geometry (nothing here belongs in @anima/scene-render).
  */
+import { useCallback, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
+import { apiPost } from '../lib/api'
+import { useToast } from '../lib/Toast'
 
 /** The named resolution tiers, in fallback order (app/core/model_store.TIERS).
  *  `full` is the modelled quality and the default for everything that exists,
@@ -40,8 +43,76 @@ export interface GalleryModel {
   shrinkable?: boolean
   /** Why not — a short server sentence, empty when it is shrinkable. */
   shrink_reason?: string
+  /** What the CPU reduction left of this file (0 = not a reduced mesh). */
+  tris?: number
+  /** The target fraction it was reduced to (0 = not a reduced mesh). */
+  lod_ratio?: number
   /** The file a client without a tier request gets. */
   active?: boolean
+}
+
+/** The state of the Blender refinement runner, as every model status reports
+ *  it (`app/blender/runner.status()`). Only `usable` decides here: without a
+ *  working Blender the CPU reduction cannot run at all. */
+export interface BlenderStatus {
+  enabled?: boolean
+  executable?: string
+  version?: string
+  usable?: boolean
+}
+
+/**
+ * "Build distance mesh" — reduces the subject's FULL mesh on the CPU (Blender
+ * Decimate) and stores the result as the gallery's `low` model.
+ *
+ * The same button for props, buildings and room dioramas: only the endpoint
+ * differs, and it is exactly the character twin's action (FieldModel3D). The
+ * call BLOCKS — a CPU reduction takes seconds, so the triangle counts come
+ * back in the answer instead of being polled for. Hidden without a usable
+ * Blender: an action that can only fail is worse than no action.
+ */
+export function BuildDistanceMeshButton({
+  url, hasLow, blender, disabled = false, onDone,
+}: {
+  /** POST endpoint of this subject's build (…/lod). */
+  url: string
+  /** A low model already exists — the button rebuilds instead of building. */
+  hasLow: boolean
+  /** From the panel's status payload; missing/unusable hides the button. */
+  blender?: BlenderStatus
+  /** Another job of this subject is running. */
+  disabled?: boolean
+  /** Reload the gallery — the build added a file and moved the selection. */
+  onDone: () => void | Promise<unknown>
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const build = useCallback(async () => {
+    setBusy(true)
+    try {
+      const d = await apiPost<{ tris?: number; tris_before?: number }>(url, {})
+      await onDone()
+      toast(`${t('Distance mesh built')}: ${d.tris_before?.toLocaleString()} → `
+        + `${d.tris?.toLocaleString()} ${t('tris')}`)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [url, onDone, t, toast])
+  if (!blender?.usable) return null
+  return (
+    <button
+      type="button"
+      className="ga-btn ga-btn-sm"
+      disabled={busy || disabled}
+      onClick={() => { void build() }}
+      title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}
+    >
+      {hasLow ? t('Rebuild distance mesh') : t('Build distance mesh')}
+    </button>
+  )
 }
 
 /** Which tiers a subject has + the "low missing" hint. A missing tier is not
@@ -89,6 +160,10 @@ function runHint(m: GalleryModel, t: (s: string) => string): string {
   if (m.texture_size) parts.push(`${m.texture_size}²`)
   if (m.source_image) parts.push(`${t('from')} ${m.source_image}`)
   if (m.source_file) parts.push(`${t('from')} ${m.source_file}`)
+  // What the CPU reduction actually achieved — the only place these numbers
+  // are visible, and the answer to "is this low mesh worth serving".
+  if (m.tris) parts.push(`${m.tris.toLocaleString()} ${t('tris')}`)
+  if (m.lod_ratio) parts.push(`${Math.round(m.lod_ratio * 100)} %`)
   return parts.join(' · ')
 }
 

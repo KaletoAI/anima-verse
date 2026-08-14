@@ -1775,6 +1775,11 @@
     "Scatter preview is on": "Bewuchs-Vorschau ist an",
     "The locations are switched off — the map draws no footprints": "Die Orte sind ausgeschaltet — die Karte zeichnet keine Grundflächen",
     "The building roofs are on": "Die Dachansicht ist an",
-    "flat": "flach"
+    "flat": "flach",
+    "Build distance mesh": "Fern-Mesh bauen",
+    "Rebuild distance mesh": "Fern-Mesh neu bauen",
+    "Distance mesh built": "Fern-Mesh gebaut",
+    "Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.": "Baut eine reduzierte Kopie dieses Meshs für die Fernsicht. Das volle Modell bleibt unangetastet — der Client nimmt das, was zur Kamera-Entfernung passt.",
+    "tris": "Dreiecke"
   }
 }
