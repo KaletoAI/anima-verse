@@ -64,15 +64,18 @@ authored. So there are two rasters of the same landscape now:
   everything, coarsened when it must be. It is a PICTURE for the distant view
   and nothing else reads it any more.
 * the TILES — :func:`rasterize_tile`, a 256 m square of the world at the
-  always-fine :data:`DEFAULT_STEP_M`, computed on demand and cached per
+  always-fine :data:`TILE_STEP_M`, computed on demand and cached per
   process. :func:`world_height`, i.e. every rule that asks what the ground
   does, samples THOSE.
 
 Both come out of the SAME evaluation kernel over the SAME lattice
 (:func:`_window_grid`; the lattice is anchored at the world origin, so a tile's
 support points ARE global support points), which is what makes the two agree
-point for point wherever the overview is still at 4 m — the equality the smoke
-run measures. A tile is only rastered where there is something to raster:
+point for point wherever the overview is rastered at the TILE step — the
+equality the smoke run measures, at its own forced step. At its own default
+the overview is twice as coarse, and a coarser grid is a slightly different
+landscape (see :data:`TILE_STEP_M`); that is why nothing but the distant view
+reads it. A tile is only rastered where there is something to raster:
 :func:`tile_index` lists the tiles any authored box reaches into, and a point
 outside every one of them is the flat world, answered without touching a grid.
 """
@@ -91,6 +94,24 @@ logger = get_logger("heightfield")
 #: ``world_heightfield`` row) so a stored grid always says what it is, rather
 #: than being read back against whatever the constant happens to be later.
 DEFAULT_STEP_M = 4.0
+
+#: Distance between two support points INSIDE A TILE, in metres — HALF the
+#: overview's step (decision 2026-08-14). The tiles are the ground every rule
+#: reads (:func:`world_height`), so this, not :data:`DEFAULT_STEP_M`, is the
+#: finest the world ever gets and the Nyquist limit an authored relief wave is
+#: clamped against (``terrain_types.RELIEF_WAVE_MIN`` = 2 × this). Two metres
+#: is what makes a 4 m wave authorable at all: at a 4 m step the editor had to
+#: clamp anything below 8 m away, and a meadow whose swells are a walker's
+#: stride wide could not be described.
+#:
+#: THE OVERVIEW STAYS AT :data:`DEFAULT_STEP_M`. It is a picture for the
+#: distance and nothing reads it any more, so quartering its payload would buy
+#: nobody anything. The two lattices stay congruent because 4 is a multiple of
+#: 2 — every overview support point IS a tile support point — but they are no
+#: longer the same raster: the one-cell ramp of a plateau and the neighbour
+#: test of the relief edge rule both measure in the step of the grid they run
+#: on, so the two answers part company exactly there (§ A16.3).
+TILE_STEP_M = 2.0
 
 #: Support points a grid may have in total. Past this the raster is built at a
 #: COARSER step (doubled until it fits) instead of being cut off: a world twice
@@ -264,8 +285,9 @@ def relief_params(kind: str, entry: Any
     same rule and covers a catalog row that never went through it.
 
     BOTH NUMBERS ARE CLAMPED HERE TOO, and the wave one matters: it is the
-    Nyquist limit of the raster (2 × :data:`DEFAULT_STEP_M`), and a field that
-    cannot carry its own wave would alias differently at every step size.
+    Nyquist limit of the raster the RULES read (2 × :data:`TILE_STEP_M`), and a
+    field that cannot carry its own wave would alias differently at every step
+    size.
     """
     from app.core.terrain_types import (DEFAULT_RELIEF_WAVE_M,
                                         RELIEF_AMPLITUDE_MAX,
@@ -335,7 +357,10 @@ def micro_relief_at(params: Optional[Tuple[int, float, float]],
     There is NO fade at the painted contour, and that is a decision
     (2026-08-13): the field's own bilinear interpolation carries the transition
     over one grid step, and the worst case it can build is atan(2·amp/step) —
-    45° at the maximum amplitude, which is why the amplitude is clamped.
+    on the tile grid the amplitude clamp therefore allows atan(2·2.0/2.0) = 63°
+    where it allowed 45° at the old 4 m step (2026-08-14). It is a theoretical
+    worst case: it needs two adjacent noise corners at the full ±1, which the
+    lattice hands out for one pair of corners in a very long while.
     """
     if not params:
         return 0.0
@@ -434,8 +459,8 @@ def _apply_micro_relief(origin_x: float, origin_z: float, step: float,
     answer, "painted area × its own points" instead of "point × every area".
 
     The second sweep adds the noise where a kind was found. The lattice
-    corners are memoised for the whole grid: at the default 32 m wave over a
-    4 m step, sixty-four support points share the same four corners.
+    corners are memoised for the whole grid: at the default 32 m wave over the
+    2 m tile step, 256 support points share the same four corners.
 
     THE EDGE RULE (user decision 2026-08-13, § A16.2): at a support point one
     of whose four grid neighbours carries NO relief, the noise is clamped to
@@ -790,12 +815,15 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     exactly flat across the whole place, and THE RAMP is the one cell between
     the ring and the untouched landscape.
 
-    A ramp of one cell is what makes the plateau reachable at all: over 4 m a
-    walker climbs ``tan(40°)·4 = 3.36 m`` at the default limit. A place whose
-    centre sits more than that below or above the ground at its rim keeps a
-    rim nobody can cross — legal and sometimes intended (a plateau entered
-    through an opening, which the gate exempts), and the authoring warning in
-    the height tool is about exactly this number. IT IS AN OPT-IN RIM: a
+    A ramp of one cell is what makes the plateau reachable at all — and ONE
+    CELL IS THE STEP OF THE GRID THIS RUNS ON, so on a tile it is
+    :data:`TILE_STEP_M`: over 2 m a walker climbs ``tan(40°)·2 = 1.68 m`` at
+    the default limit, half of what the old 4 m cell bridged (2026-08-14). A
+    place whose centre sits more than that below or above the ground at its rim
+    keeps a rim nobody can cross — legal and sometimes intended (a plateau
+    entered through an opening, which the gate exempts), and the authoring
+    warning in the height tool names exactly this number, computed from the
+    step the server sends rather than pinned. IT IS AN OPT-IN RIM: a
     location without ``level_ground`` builds no ramp at all, because it changes
     no height — there the authored slope simply continues under the place.
 
@@ -935,10 +963,11 @@ def rasterize(areas: Sequence[Dict[str, Any]],
 # ── Tiles: the fine ground the RULES read ───────────────────────────────
 
 #: Edge of one height tile, in metres. 256 is a multiple of
-#: :data:`DEFAULT_STEP_M`, which is the whole requirement: a tile's support
+#: :data:`TILE_STEP_M`, which is the whole requirement: a tile's support
 #: points are then global lattice points and a tile is a WINDOW of the one
 #: world grid rather than a grid of its own. It is also a sensible parcel —
-#: 65 × 65 points, a couple of milliseconds to raster, a few kilobytes to ship.
+#: 129 × 129 points, a few milliseconds to raster, about a hundred kilobytes
+#: to ship.
 TILE_M = 256.0
 
 #: Support points per tile axis — the edges INCLUDED, so tile (tx, tz) covers
@@ -947,7 +976,7 @@ TILE_M = 256.0
 #: never needs a point from the tile next door (so a client may hold any subset
 #: it likes), and the shared points guarantee the ground is continuous across
 #: the seam instead of merely nearly so.
-TILE_POINTS = int(TILE_M / DEFAULT_STEP_M) + 1
+TILE_POINTS = int(TILE_M / TILE_STEP_M) + 1
 
 
 def tile_key(x: float, z: float) -> Tuple[int, int]:
@@ -1007,10 +1036,11 @@ def tile_index_from(areas: Sequence[Dict[str, Any]],
     area_bounds = _union(boxes)
     fp_boxes = [_footprint_box(fp) for fp in (footprints or ())
                 if fp and float(fp[2]) > 0]
-    # The step is the TILE step here, never a coarsened one: tiles are the fine
-    # raster by definition, so the ramp ring they must hold is 4 m wide.
-    boxes += [_grown(box, DEFAULT_STEP_M) for box
-              in _relevant_footprints(fp_boxes, area_bounds, DEFAULT_STEP_M)]
+    # The step is the TILE step here, never the overview's and never a
+    # coarsened one: tiles are the fine raster by definition, so the ramp ring
+    # they must hold is 2 m wide.
+    boxes += [_grown(box, TILE_STEP_M) for box
+              in _relevant_footprints(fp_boxes, area_bounds, TILE_STEP_M)]
     keys: List[Tuple[int, int]] = []
     for box in boxes:
         keys.extend(tiles_of_box(box))
@@ -1028,15 +1058,15 @@ def rasterize_tile(
 
     The same payload shape :func:`sample_height` reads, and the same shape the
     overview has, only with a fixed window: origin ``(tx·256, tz·256)``, step
-    :data:`DEFAULT_STEP_M`, 65 × 65 points. It takes the very inputs
+    :data:`TILE_STEP_M`, 129 × 129 points. It takes the very inputs
     :func:`rasterize` takes, for the same reason: purity, so a smoke run can
     build a world out of literals.
 
     IT IS A WINDOW OF THE OVERVIEW, NOT A SECOND OPINION. Both go through
     :func:`_window_grid` and :func:`level_plateaus` over the world-anchored
-    lattice, so wherever the overview stands at 4 m the two carry the same
-    number at every shared point — the equality the smoke run measures point by
-    point, seams included.
+    lattice, so wherever the overview is rastered at the TILE step the two
+    carry the same number at every shared point — the equality the smoke run
+    measures point by point, seams included, at that forced step.
 
     THE PLATEAUS ARE APPLIED HERE TOO, and over ALL levelling footprints that
     reach into the window — including the ones the tile index calls irrelevant.
@@ -1048,7 +1078,7 @@ def rasterize_tile(
     """
     origin_x = tx * TILE_M
     origin_z = tz * TILE_M
-    step = DEFAULT_STEP_M
+    step = TILE_STEP_M
     boxes = area_boxes(areas)
     relief = relief_inputs(terrain_areas, terrain_catalog)
     heights = _window_grid(origin_x, origin_z, step, TILE_POINTS, TILE_POINTS,
@@ -1099,9 +1129,9 @@ _TILE_INDEX: Optional[Tuple[int, frozenset]] = None
 #: cache at once, and a decorator that only knows its own arguments cannot.
 _TILES: "OrderedDict[Tuple[int, int, int], Dict[str, Any]]" = OrderedDict()
 
-#: How many tiles stay in the process. 512 tiles are 512 × 65² floats, i.e. a
-#: few dozen megabytes at worst and 16 km² of world at best — far more than any
-#: one walker needs, and a tile costs milliseconds to rebuild anyway.
+#: How many tiles stay in the process. 512 tiles are 512 × 129² floats, i.e.
+#: a few hundred megabytes at worst and 16 km² of world at best — far more than
+#: any one walker needs, and a tile costs milliseconds to rebuild anyway.
 TILE_CACHE_MAX = 512
 
 
@@ -1485,5 +1515,5 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
             "rows": tile["rows"], "cols": tile["cols"],
             "heights": tile["heights"],
         }
-    return {"sig": sig, "tile_m": TILE_M, "step_m": DEFAULT_STEP_M,
+    return {"sig": sig, "tile_m": TILE_M, "step_m": TILE_STEP_M,
             "tiles": tiles}

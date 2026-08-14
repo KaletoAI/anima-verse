@@ -46,18 +46,21 @@ DEFAULT_COLOR = "#888888"
 #: this ground stand, in metres, as a half-swing around the authored level
 #: (the noise runs in [−1, 1)). The upper clamp is a WALKABILITY limit, not a
 #: taste one: two neighbouring support points may differ by at most 2·amp over
-#: one grid step, i.e. atan(2·2.0 / 4.0) = 45° at the maximum — past that the
-#: ground would build slopes nobody can climb out of the noise alone. The
+#: one grid step, i.e. atan(2·2.0 / 2.0) = 63° at the maximum on the tile grid
+#: the rules read (45° while that step was 4 m) — past that the ground would
+#: build slopes nobody can climb out of the noise alone. The
 #: lower clamp is the smallest swing that is still visible at all; anything
 #: below it means "no relief", and that is written by leaving the key out.
 RELIEF_AMPLITUDE_MIN, RELIEF_AMPLITUDE_MAX = 0.05, 2.0
 
 #: How wide ONE swell of that relief is, in metres — the edge length of the
-#: noise lattice. The lower clamp is 2 × ``heightfield.DEFAULT_STEP_M``:
-#: NYQUIST. A wave shorter than two support points cannot be carried by the
-#: grid at all, it would only alias into a different, coarser pattern that
-#: changes whenever the raster step doubles.
-RELIEF_WAVE_MIN, RELIEF_WAVE_MAX = 8.0, 200.0
+#: noise lattice. The lower clamp is 2 × ``heightfield.TILE_STEP_M``: NYQUIST.
+#: A wave shorter than two support points cannot be carried by the grid at all,
+#: it would only alias into a different, coarser pattern that changes whenever
+#: the raster step doubles. It follows the TILE step, never the overview's —
+#: the tiles are the raster every rule reads, and since they went to 2 m
+#: (2026-08-14) a 4 m wave is something an author may ask for.
+RELIEF_WAVE_MIN, RELIEF_WAVE_MAX = 4.0, 200.0
 
 #: HOW DEEP A FIGURE STANDS IN THIS GROUND, in metres — the clamp shared by
 #: the two depth keys. The clip ground normalisation puts the LOWEST body point

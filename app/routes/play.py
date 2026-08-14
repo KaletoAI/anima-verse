@@ -2234,7 +2234,7 @@ def get_heightfield_route(user=Depends(get_current_user)):
     and a client fetches those from ``/play/heightfield/tiles``. The two are
     never mixed: a reader takes either the tiles or the overview.
     """
-    from app.core.heightfield import (DEFAULT_STEP_M, TILE_M, get_field,
+    from app.core.heightfield import (TILE_M, TILE_STEP_M, get_field,
                                       tile_index_keys)
     field = get_field()
     return {
@@ -2246,7 +2246,7 @@ def get_heightfield_route(user=Depends(get_current_user)):
         "heights": field.get("heights", []),
         "sig": field.get("sig", ""),
         "tile_m": TILE_M,
-        "tile_step_m": DEFAULT_STEP_M,
+        "tile_step_m": TILE_STEP_M,
         "tiles": tile_index_keys(),
     }
 

@@ -373,15 +373,25 @@ def delete_terrain_area_route(area_id: str) -> Dict[str, Any]:
 
 @router.get("/height-areas")
 def get_height_areas_route() -> Dict[str, Any]:
-    """All authored height areas, the change signature and the grid step."""
-    from app.core.heightfield import DEFAULT_STEP_M, current_step_m
+    """All authored height areas, the change signature and the grid steps."""
+    from app.core.heightfield import (DEFAULT_STEP_M, TILE_STEP_M,
+                                      current_step_m)
     from app.models import heightfield
     return {"areas": heightfield.list_height_areas(),
             "sig": heightfield.height_sig(),
             "step_m": current_step_m(),
-            # The finest step there is, so the editor can say "coarser than
+            # The finest the OVERVIEW gets, so the editor can say "coarser than
             # normal" without a constant of its own.
-            "default_step_m": DEFAULT_STEP_M}
+            "default_step_m": DEFAULT_STEP_M,
+            # …and the step of the TILES, which is a different number since
+            # 2026-08-14. The editor needs it for the one authoring limit that
+            # hangs on a cell width: the ramp around a levelling footprint is
+            # ONE CELL wide (§ A16.1), so the rim it can bridge is
+            # tan(max_slope_deg) · tile_step_m — 1,68 m at the defaults. That
+            # sentence must not carry a constant of its own either; the number
+            # halved the day the tiles did, and a pinned 3,36 would have gone
+            # on promising twice the climb.
+            "tile_step_m": TILE_STEP_M}
 
 
 @router.post("/height-areas")
