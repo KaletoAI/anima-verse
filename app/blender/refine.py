@@ -9,6 +9,7 @@ Best-effort throughout: a host without Blender, a disabled refinement or a
 failing script must never cost an asset that was just generated. Nothing here
 modifies a mesh — measuring only reads.
 """
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -273,6 +274,32 @@ def auto_lod_enabled() -> bool:
     "Build distance meshes on demand" switch; shared by every store."""
     from app.core import config
     return bool(config.get("image_generation.blender_auto_lod", True))
+
+
+# How many distance meshes may be built in the BACKGROUND at the same time,
+# across EVERY store. One payload can name dozens of subjects without a low
+# mesh at once (a scene with forty props, a world map full of buildings), and
+# each build is a full Blender process on the CPU of a machine that also
+# renders images and runs the game. Two is a floor of progress, not a
+# throughput setting: what does not get a slot is simply asked for again on
+# the next payload build.
+MAX_PARALLEL_LOD_BUILDS = 2
+_lod_slots = threading.BoundedSemaphore(MAX_PARALLEL_LOD_BUILDS)
+
+
+def take_lod_slot() -> bool:
+    """Reserve one of the background build slots. False = all of them are
+    busy; the caller skips SILENTLY (there is nothing to report — the same
+    demand comes back with the next payload)."""
+    return _lod_slots.acquire(blocking=False)
+
+
+def free_lod_slot() -> None:
+    """Hand a reserved slot back — always from a ``finally``."""
+    try:
+        _lod_slots.release()
+    except ValueError:                                      # never released twice
+        logger.debug("LOD slot released without being taken")
 
 
 def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:

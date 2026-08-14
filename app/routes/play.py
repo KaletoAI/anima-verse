@@ -1076,20 +1076,17 @@ def play_location_model(location_id: str, request: Request, tier: str = ""):
     the location does not have falls back to the best available one; 404 = no
     model at all. ETag/If-None-Match — the file changes rarely.
 
-    A request for a low variant that does not exist yet ALSO starts the
-    background build (like the character twin ``find_model3d_serving_tier``):
-    this answer stays the full model, the next one has the real thing. The
-    store checks its own gates — switched off or already built does nothing."""
+    A MISSING low variant is not noticed here: every payload lists only the
+    tiers a subject has and every renderer picks from that list, so this route
+    never sees a request for one that does not exist. The build is asked for
+    where the tier list is produced (``location_model3d._demand_low``, i.e. in
+    ``get_client_meta``)."""
     from fastapi.responses import Response
-    from app.core.location_model3d import (LOW_TIER, find_building_model,
-                                           request_low_tier)
+    from app.core.location_model3d import find_building_model
     from app.core.http_files import etag_file_response
-    from app.core.model_store import normalize_tier
     p = find_building_model(location_id, tier=tier)
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    if normalize_tier(tier) == LOW_TIER:
-        request_low_tier(location_id)
     media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
              else "application/octet-stream")
     return etag_file_response(p, request, media)
@@ -1180,23 +1177,17 @@ def play_room_model(room_id: str, request: Request, tier: str = ""):
     """Serves the room's 3D model (GLB bytes) in the requested resolution tier
     (``full`` = default), falling back to the best available one. 404 = no
     model (the client keeps rendering the room as a plain slab).
-    ETag/If-None-Match.
-
-    A request for a low variant that does not exist yet ALSO starts the
-    background build — same contract as the building twin above."""
+    ETag/If-None-Match. A missing low variant is asked for where the tier list
+    is produced — same contract as the building twin above."""
     from fastapi.responses import Response
     from app.models.world import find_location_by_room
-    from app.core.location_model3d import (LOW_TIER, find_building_model,
-                                           request_low_tier)
+    from app.core.location_model3d import find_building_model
     from app.core.http_files import etag_file_response
-    from app.core.model_store import normalize_tier
     loc = find_location_by_room(room_id)
     p = (find_building_model(loc.get("id", ""), room_id=room_id, tier=tier)
          if loc else None)
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    if normalize_tier(tier) == LOW_TIER:
-        request_low_tier(loc.get("id", ""), room_id)
     media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
              else "application/octet-stream")
     return etag_file_response(p, request, media)

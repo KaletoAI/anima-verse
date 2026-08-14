@@ -333,12 +333,18 @@
 >     ETag/304); eine unbekannte Stufe bekommt die beste vorhandene, 404 nur
 >     ohne jedes Mesh. `…/model/meta` liefert zusätzlich
 >     `tiers: {"<stufe>": {signature, url}}`.
->     **Fehlendes `low` stößt den Bau an** (2026-08-15): fordert jemand `low`
->     und es gibt keins, startet der Server im HINTERGRUND die CPU-Reduktion
->     (Blender Decimate, Schalter „Build distance meshes on demand“) und
->     antwortet unverändert mit dem Voll-Mesh — der nächste Abruf hat das
->     echte. Kein Client wartet je auf einen Bau; genau das macht auch der
->     Charakter-Zwilling (`find_model3d_serving_tier`).
+>     **Fehlendes `low` stößt den Bau an — beim PAYLOAD-BAU, nicht beim
+>     Abruf** (2026-08-15): Da ein Payload nur vorhandene Stufen nennt und
+>     `pickVariant()` daraus wählt, fordert nie ein Client ein `low`, das es
+>     nicht gibt — ein Trigger an der Serving-Route wäre toter Code. Er sitzt
+>     deshalb dort, wo die Stufen-Liste eines Subjekts ENTSTEHT
+>     (`props.model_tiers`/Prop-Record für Props, `get_client_meta` für
+>     Gebäude und Räume): fehlt `low`, während ein Voll-Modell da ist, startet
+>     im HINTERGRUND die CPU-Reduktion (Blender Decimate, Schalter „Build
+>     distance meshes on demand“). Kein Payload und kein Abruf wartet je
+>     darauf; höchstens zwei Bauten laufen gleichzeitig, ein gescheitertes
+>     Subjekt wird bis zum Neustart nicht erneut versucht (der Admin-Knopf
+>     darf es trotzdem).
 >     **Signaturen decken ALLE Stufen ab:** die Meta-Signatur ist der Hash
 >     über Dateiname + `created_at` JEDER selektierten Stufe (vorher nur die
 >     aktive Datei — eine neu erzeugte Low-Variante blieb unbemerkt), und

@@ -113,6 +113,12 @@ _lock = threading.Lock()
 _generating: set = set()
 # Props whose distance mesh is being built right now (one build per prop).
 _lod_building: set = set()
+# Props whose distance-mesh build FAILED in this process. The automatic path
+# skips them from then on: the demand comes from payload builds, so without
+# this memory every poll would start the same doomed reduction again. The
+# admin's explicit button ignores it and clears the entry on success. Not
+# persisted — a restart (new Blender, new config) is a fair reason to retry.
+_lod_failed: set = set()
 # Models whose bbox extraction already failed, keyed by (prop_id, model mtime)
 # — keeps the lazy backfill from re-parsing an unmeasurable GLB on every
 # listing. A restart or a re-upload retries.
@@ -555,9 +561,14 @@ def model_tiers(prop_id: str) -> List[str]:
     ``__none__`` sentinel has no tier at all. This is the read behind every
     ``variants`` map that names a prop (scene placements, terrain scatter) —
     only an existing tier may be offered, a guessed one is a 404 dressed up as
-    a model."""
+    a model.
+
+    Being that read, this is also where a MISSING distance mesh is asked for
+    (:func:`_demand_low`)."""
     g = model_gallery(prop_id)
-    return sorted(g.tiers()) if g else []
+    tiers = sorted(g.tiers()) if g else []
+    _demand_low(prop_id, tiers)
+    return tiers
 
 
 def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
@@ -801,6 +812,49 @@ def _auto_bake_vc(prop_id: str) -> None:
                     safe_prop_id(prop_id), res.get("error"))
 
 
+def _reduce_to_low(pid: str, src: Path, ratio: float) -> Dict[str, Any]:
+    """The reduction itself: Blender Decimate, then a NEW gallery file that
+    becomes the ``low`` model. The caller holds the in-flight key.
+
+    A failure is REMEMBERED (``_lod_failed``) and a success forgets it — that
+    memory is what keeps the automatic path from grinding through the same
+    broken mesh on every payload build."""
+    from app.blender import refine
+    out: Dict[str, Any] = {"ok": False, "tier": LOW_TIER, "ratio": ratio,
+                           "tris": None, "tris_before": None, "size": 0,
+                           "size_before": 0, "error": ""}
+    res = refine.build_static_lod(src, ratio)
+    if not res.get("ok"):
+        _lod_failed.add(pid)
+        out["error"] = res.get("error") or "distance mesh not built"
+        return out
+    gallery = model_gallery(pid)
+    if not gallery:
+        out["error"] = "no_model"
+        return out
+    target = gallery.new_path()
+    target.write_bytes(res["blob"])
+    write_model_sidecar(target, {
+        "created_at": utc_now_iso(),
+        "source": "lod",
+        "format": "glb",
+        "rig": "none",
+        "tier": LOW_TIER,
+        "source_file": src.name,
+        "lod_ratio": ratio,
+        "tris": res.get("tris"),
+        "tris_before": res.get("tris_before"),
+    })
+    gallery.select(target.name, LOW_TIER)
+    _lod_failed.discard(pid)
+    logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
+                target.name, res.get("tris_before"), res.get("tris"))
+    out.update(ok=True, tris=res.get("tris"),
+               tris_before=res.get("tris_before"),
+               size=target.stat().st_size, size_before=src.stat().st_size)
+    return out
+
+
 def build_low_tier(prop_id: str, ratio: float = 0.0,
                    force: bool = False) -> Dict[str, Any]:
     """Reduces the prop's full mesh to its distance mesh, BLOCKING (CPU).
@@ -809,7 +863,8 @@ def build_low_tier(prop_id: str, ratio: float = 0.0,
     a gallery keeps its history and the admin can go back to the previous low
     mesh or delete it. ``force`` is the admin's explicit rebuild; without it a
     gallery that already HAS a low tier is left alone (the automatic path,
-    where an existing choice always wins).
+    where an existing choice always wins). ``force`` also ignores the failure
+    memory — the admin may have fixed the very thing that failed.
 
     ``ratio`` 0 takes the configured target for props. One build per prop at a
     time, and the reduced mesh must pass the same static validation as a
@@ -823,10 +878,7 @@ def build_low_tier(prop_id: str, ratio: float = 0.0,
                            "size_before": 0, "error": ""}
     pid = safe_prop_id(prop_id)
     g = model_gallery(pid)
-    if not g:
-        out["error"] = "no_model"
-        return out
-    src = g.find(DEFAULT_TIER, fallback=False)
+    src = g.find(DEFAULT_TIER, fallback=False) if g else None
     if not src or src.suffix.lower() != ".glb":
         out["error"] = "no_model"
         return out
@@ -839,34 +891,7 @@ def build_low_tier(prop_id: str, ratio: float = 0.0,
             return out
         _lod_building.add(pid)
     try:
-        res = refine.build_static_lod(src, ratio)
-        if not res.get("ok"):
-            out["error"] = res.get("error") or "distance mesh not built"
-            return out
-        gallery = model_gallery(pid)
-        if not gallery:
-            out["error"] = "no_model"
-            return out
-        target = gallery.new_path()
-        target.write_bytes(res["blob"])
-        write_model_sidecar(target, {
-            "created_at": utc_now_iso(),
-            "source": "lod",
-            "format": "glb",
-            "rig": "none",
-            "tier": LOW_TIER,
-            "source_file": src.name,
-            "lod_ratio": ratio,
-            "tris": res.get("tris"),
-            "tris_before": res.get("tris_before"),
-        })
-        gallery.select(target.name, LOW_TIER)
-        logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
-                    target.name, res.get("tris_before"), res.get("tris"))
-        out.update(ok=True, tris=res.get("tris"),
-                   tris_before=res.get("tris_before"),
-                   size=target.stat().st_size, size_before=src.stat().st_size)
-        return out
+        return _reduce_to_low(pid, src, ratio)
     finally:
         with _lock:
             _lod_building.discard(pid)
@@ -876,34 +901,73 @@ def request_low_tier(prop_id: str) -> None:
     """Builds the prop's missing distance mesh in the BACKGROUND, if switched
     on ("Build distance meshes on demand").
 
-    Without this, the ``low`` tier of a NEW prop only ever appears through a
-    batch run and a client asking for it keeps getting the full mesh. Same
-    manner as the character store (``model3d.request_lod``): serving never
-    waits. The gates below are the CHEAP ones — a serving route asks on every
-    request, and a thread per request would be the cost this is meant to
-    avoid; :func:`build_low_tier` re-checks them authoritatively."""
+    Called wherever a payload lists this prop's tiers (see
+    :func:`_demand_low`), so it runs on POLLED paths: every gate is ordered by
+    cost — the config flag, the in-process sets and the global slot first, the
+    gallery read and the mesh probe only for a real candidate. The in-flight
+    key is taken BEFORE the thread starts (``model3d.request_lod``'s pattern):
+    two simultaneous payload builds must not start two reductions.
+
+    Serving never waits and nothing is reported back — a distance mesh is an
+    optimisation, and its absence is a fallback, not an error."""
     from app.blender import refine
+    from app.core.model_validate import shrink_capability
     if not refine.auto_lod_enabled():
         return
     pid = safe_prop_id(prop_id)
-    g = model_gallery(pid)
-    if not g or LOW_TIER in g.tiers():
+    if not pid or pid in _lod_failed:
         return
     with _lock:
         if pid in _lod_building:
             return
+    g = model_gallery(pid)
+    src = g.find(DEFAULT_TIER, fallback=False) if g else None
+    if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
+        return
+    # A mesh the store itself calls unreducible never becomes a low variant;
+    # remembering it here is what keeps the probe off the polled path.
+    if not shrink_capability(src)["shrinkable"]:
+        _lod_failed.add(pid)
+        return
+    ratio = refine.lod_ratio("prop")
+    with _lock:
+        if pid in _lod_building:
+            return
+        _lod_building.add(pid)
+    if not refine.take_lod_slot():
+        with _lock:
+            _lod_building.discard(pid)
+        return
 
     def _run() -> None:
         try:
-            res = build_low_tier(pid)
+            res = _reduce_to_low(pid, src, ratio)
             if not res.get("ok"):
                 logger.debug("Prop %s: distance mesh not built (%s)", pid,
                              res.get("error"))
         except Exception as e:                              # noqa: BLE001
+            _lod_failed.add(pid)
             logger.warning("Prop %s: distance-mesh build failed: %s", pid, e)
+        finally:
+            refine.free_lod_slot()
+            with _lock:
+                _lod_building.discard(pid)
 
     threading.Thread(target=_run, daemon=True,
                      name=f"prop-lod-{pid}").start()
+
+
+def _demand_low(prop_id: str, tiers: List[str]) -> None:
+    """A payload just listed this prop's resolution tiers — if ``low`` is
+    missing while a full mesh exists, ask for it in the BACKGROUND.
+
+    This is where the demand belongs, not on the serving route: every payload
+    lists only the tiers a subject HAS, and every renderer picks from that
+    list (``pickVariant``), so nobody ever requests a ``low`` that does not
+    exist. The moment a client is TOLD there is no distance mesh is the
+    moment to build one."""
+    if tiers and LOW_TIER not in tiers:
+        request_low_tier(prop_id)
 
 
 def _store_bbox(prop_id: str) -> None:
@@ -1021,6 +1085,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
     # __none__ sentinel). Empty = no mesh at all.
     tiers = sorted(gallery.tiers()) if gallery else []
     has_model = bool(tiers)
+    # The record IS a client payload (the prop library the 3D client reads),
+    # so this is one of the two places a missing distance mesh is noticed.
+    _demand_low(prop_id, tiers)
     dims = _effective_dims(meta)
     rec: Dict[str, Any] = {
         "id": prop_id,

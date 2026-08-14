@@ -179,17 +179,14 @@ def get_prop_model(prop_id: str, request: Request, tier: str = ""):
     object disappear. ETag + If-None-Match; a 404 is the normal "no model yet"
     state (the record may exist before the mesh does).
 
-    A request for a low variant that does not exist yet ALSO starts the
-    background build (like the character twin ``find_model3d_serving_tier``):
-    this answer stays the full mesh, the next one has the real thing. The
-    store checks its own gates — switched off or already built does nothing."""
-    from app.core.model_store import normalize_tier
-    from app.core.props import LOW_TIER, model_path, request_low_tier
+    A MISSING low variant is not noticed here: every payload lists only the
+    tiers a prop has and every renderer picks from that list, so this route
+    never sees a request for one that does not exist. The build is asked for
+    where the tier list is produced (``props._demand_low``)."""
+    from app.core.props import model_path
     path = model_path(prop_id, tier)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    if normalize_tier(tier) == LOW_TIER:
-        request_low_tier(prop_id)
     return etag_file_response(path, request, "model/gltf-binary",
                               cache_control="public, max-age=3600")
 

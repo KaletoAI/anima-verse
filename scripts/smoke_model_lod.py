@@ -24,7 +24,17 @@ Expected behaviour, derived from the design decisions of
     selection to it; the previous low file stays in the gallery (history),
   - the background trigger obeys "build distance meshes on demand": switched
     off it never calls the fake, switched on it builds the missing low tier,
-    and it does nothing at all once a low tier exists.
+    and it does nothing at all once a low tier exists,
+  - the demand comes from the PAYLOAD BUILD, not from the serving route: the
+    two reads that hand a client a tier list (``props.model_tiers`` and
+    ``location_model3d.get_client_meta``) ask for a missing low mesh, and stop
+    asking once it is there,
+  - a FAILED build is remembered in-process: the automatic path skips that
+    subject from then on, even after the reduction works again — only the
+    admin's ``force`` tries anyway, and a success clears the entry,
+  - at most two background builds run at a time ACROSS the stores; with every
+    slot busy nothing is started and no in-flight key stays stuck (the next
+    demand builds).
 
 Usage:  ./.venv/bin/python scripts/smoke_model_lod.py
 """
@@ -219,9 +229,91 @@ def main() -> int:
     check("a second trigger with a low tier present does nothing",
           not wait_for(lambda: bool(CALLS), 0.5), str(CALLS))
 
-    print("\n[7] the same contract for a room diorama and a building")
-    refine.auto_lod_enabled = lambda: False  # back to the explicit path alone
+    print("\n[7] the demand comes from the PAYLOAD, not from the serving route")
     from app.models.world import add_location, add_room
+    refine.auto_lod_enabled = lambda: False
+    prop3 = props.create_prop(name="Lod Lamp", width_m=0.3, depth_m=0.3,
+                              height_m=1.4)
+    pid3 = prop3["id"]
+    props.save_uploaded_glb(pid3, b"glTF-full-3")
+    seam_loc = add_location(name="Seam Hall", description="smoke")["id"]
+    location_model3d.save_uploaded_building(seam_loc, b"glTF-full-seam")
+    check("both subjects start without a distance mesh",
+          props.model_tiers(pid3) == ["full"]
+          and sorted(location_model3d.get_client_meta(seam_loc)["tiers"]) == ["full"])
+    refine.auto_lod_enabled = lambda: True
+    # The two reads every client payload goes through: the prop's tier list
+    # (scatter entries, room placements, the prop library) and the location
+    # model's client meta (model/meta route, scene-recipe inputs).
+    CALLS.clear()
+    props.model_tiers(pid3)
+    check("listing a prop's tiers asks for the missing low mesh",
+          wait_for(lambda: props.model_tiers(pid3) == ["full", "low"]),
+          str(props.model_tiers(pid3)))
+    CALLS.clear()
+    location_model3d.get_client_meta(seam_loc)
+    check("reading a location model's client meta does the same",
+          wait_for(lambda: sorted(
+              location_model3d.get_client_meta(seam_loc)["tiers"])
+              == ["full", "low"]),
+          str(location_model3d.get_client_meta(seam_loc)["tiers"]))
+    CALLS.clear()
+    props.model_tiers(pid3)
+    location_model3d.get_client_meta(seam_loc)
+    check("with both tiers there, no payload asks again",
+          not wait_for(lambda: bool(CALLS), 0.5), str(CALLS))
+
+    print("\n[8] a failed build is remembered, force may still try")
+    prop4 = props.create_prop(name="Lod Bench", width_m=1.2, depth_m=0.5,
+                              height_m=0.5)
+    pid4 = prop4["id"]
+    refine.auto_lod_enabled = lambda: False
+    props.save_uploaded_glb(pid4, b"glTF-full-4")
+    refine.auto_lod_enabled = lambda: True
+    refine.build_static_lod = fake_failing
+    CALLS.clear()
+    props.request_low_tier(pid4)
+    check("the first automatic attempt runs", wait_for(lambda: bool(CALLS)),
+          str(CALLS))
+    CALLS.clear()
+    props.request_low_tier(pid4)
+    props.model_tiers(pid4)
+    check("...after the failure the automatic path skips the prop",
+          not wait_for(lambda: bool(CALLS), 0.5), str(CALLS))
+    refine.build_static_lod = fake_build_static_lod
+    CALLS.clear()
+    props.model_tiers(pid4)
+    check("...even with a working reduction again (the memory holds)",
+          not wait_for(lambda: bool(CALLS), 0.5), str(CALLS))
+    CALLS.clear()
+    res = props.build_low_tier(pid4, force=True)
+    check("the admin's button ignores the memory", res["ok"] is True, str(res))
+    check("...and the entry is gone after the success",
+          pid4 not in props._lod_failed, str(props._lod_failed))
+
+    print("\n[9] at most two background builds at a time (all stores)")
+    slots = [refine.take_lod_slot(), refine.take_lod_slot()]
+    check("two slots are free at rest", slots == [True, True], str(slots))
+    check("...and the third is not", refine.take_lod_slot() is False)
+    prop5 = props.create_prop(name="Lod Crate", width_m=0.6, depth_m=0.6,
+                              height_m=0.6)
+    pid5 = prop5["id"]
+    refine.auto_lod_enabled = lambda: False
+    props.save_uploaded_glb(pid5, b"glTF-full-5")
+    refine.auto_lod_enabled = lambda: True
+    CALLS.clear()
+    props.request_low_tier(pid5)
+    check("with every slot busy nothing is started",
+          not wait_for(lambda: bool(CALLS), 0.5), str(CALLS))
+    refine.free_lod_slot()
+    refine.free_lod_slot()
+    props.request_low_tier(pid5)
+    check("...and the next demand builds it (no key stayed stuck)",
+          wait_for(lambda: props.model_tiers(pid5) == ["full", "low"]),
+          str(props.model_tiers(pid5)))
+
+    print("\n[10] the same contract for a room diorama and a building")
+    refine.auto_lod_enabled = lambda: False  # back to the explicit path alone
     loc_id = add_location(name="Smoke Hall", description="smoke")["id"]
     room_id_ = add_room(loc_id, "Hall")["id"]
     for room_id, kind_ratio in (("", ratio_building), (room_id_, ratio_room)):

@@ -570,14 +570,20 @@ def _lod_result(build, *args: Any, ratio: float = 0.0,
     the button IS the decision, so it also overrides the "build distance meshes
     on demand" switch and an existing low tier (whose file stays in the
     gallery; the new one is a fresh entry, not an overwrite)."""
-    from app.blender import refine
-    reason = refine.unavailable_reason()
-    if reason:
-        raise HTTPException(status_code=503, detail=reason)
+    from app.blender import refine, runner
     ratio = float(ratio or refine.lod_ratio(kind))
     if not 0.02 <= ratio < 1:
+        # A nonsensical request stays a 400 even on a host without Blender —
+        # the request is wrong either way, and saying so is more useful than
+        # blaming the environment.
         raise HTTPException(status_code=400,
                             detail="ratio must be between 0.02 and 1")
+    # The same gate the panel shows the button behind: usable = switched on,
+    # binary found AND it answers with a version.
+    if not runner.status()["usable"]:
+        raise HTTPException(status_code=503,
+                            detail=refine.unavailable_reason()
+                            or "blender is not usable")
     res = build(*args, ratio=ratio, force=True)
     if not res.get("ok"):
         err = res.get("error", "")
