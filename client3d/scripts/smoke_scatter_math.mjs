@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Smoke check for the pure scatter maths: the sampler shared by the 3D client
- * and the map editor (`packages/scene-render/src/scatter.ts`, sections A-E)
- * and the client's display LOD on top of it
- * (`client3d/src/scene/scatterLod.ts`, section F). Two modules, one subject —
+ * and the map editor (`packages/scene-render/src/scatter.ts`, sections A-E),
+ * the client's display LOD on top of it (`client3d/src/scene/scatterLod.ts`,
+ * sections F-I) and the three distances the player may set for it
+ * (`client3d/src/game/prefs.ts`, section J). Three modules, one subject —
  * where a prop stands and how much of it is drawn are the two halves of the
  * same contract, and splitting them over two files would duplicate this
  * harness and let the halves drift apart.
@@ -431,6 +432,136 @@
  *      0.06 for the boulder (0.06, 0) where the truth is 0 — the stone waves
  *      with the meadow, which is the whole feature undone. Pinned from both
  *      sides.
+ *
+ * ============================================================================
+ * (I) THE LOD PER INSTANCE — `instanceTier` / `instanceVisible` (2026-08-15)
+ * ============================================================================
+ * (F) asks its three questions ONCE PER AREA, and an area is a wood: with one
+ * tier for all of it the tree at the player's feet drops to the cheap mesh
+ * because the far edge of the same wood is 100 m away. The rules here are the
+ * same three questions asked of ONE prop at ITS OWN distance, with the
+ * distances handed in as a `cfg` — which is what lets every case below feed
+ * hand-picked numbers instead of borrowing the module's.
+ *
+ * Two configurations are used throughout:
+ *   DEF  = SCATTER_LOD_DEFAULTS = the constants of (F): 35 / 45 / 120
+ *   CFG2 = { nearM 10, farM 20, cullM 60 } — nothing to do with the module's
+ *          numbers, so a function that ignored its argument fails visibly.
+ *
+ * (I1) THE MESH BAND, PER INSTANCE. Exactly `scatterTierFor`'s rule (F1-F4),
+ *      now with 0 = full, 1 = low and both thresholds still EXCLUSIVE:
+ *        DEF, prev low:  0 m -> 0 · 34.9 -> 0 · 35 -> 1 (not < 35)
+ *        DEF, prev full: 45 -> 0 (not > 45) · 45.001 -> 1 · 100 -> 1
+ *        DEF at 40 m: prev full -> 0, prev low -> 1. ONE distance, two
+ *          answers — the band in one line, as in (F4).
+ *        CFG2, prev low:  9.9 -> 0 · 10 -> 1
+ *        CFG2, prev full: 20 -> 0 · 20.1 -> 1 · at 15 m: full -> 0, low -> 1
+ *          The same shape 25 m nearer, which is the proof that the numbers
+ *          come from the argument and not from the constants.
+ *
+ * (I2) THE CULL EDGE, and it is asymmetric on purpose: hidden BEYOND `cullM`,
+ *      drawn again only under 0.92 * `cullM` = 110.4 m at the default 120.
+ *        DEF: 120 m, prev low -> 1 (120 is still drawn, as in F6)
+ *             120.001 -> 2 · 1000 -> 2 · NaN -> 2 for every prev
+ *        DEF, prev HIDDEN: 119 -> 2 (inside the cull but not yet under the
+ *             re-entry line) · 110.4 -> 2 (not < 110.4) · 110.399 -> 1 · a
+ *             teleport to 30 m -> 0
+ *        CFG2: 0.92 * 60 = 55.2 -> prev hidden at 55.2 -> 2, at 55 -> 1,
+ *             at 60.1 -> 2
+ *      THE POINT OF THE FACTOR, as a walk: a camera drifting across the cull
+ *      edge, 119.9 / 120.1 / 119.9 / 120.1 / 119.9 / 120.1, starting drawn.
+ *      The class changes exactly ONCE (out at the first 120.1) and stays out,
+ *      because coming back needs 110.4. Without the factor each crossing
+ *      would add and remove the prop again — six times over that walk.
+ *
+ * (I3) THE SHARE AT THE INSTANCE'S OWN DISTANCE — `instanceShare(d, cfg)`,
+ *      the line of (F6) with the cfg's numbers:
+ *        share(d) = 1 - (d - farM)/(cullM - farM) * 0.75
+ *        DEF:  0 -> 1 · 45 -> 1 · 60 -> 1 - (15/75)*0.75 = 0.85
+ *              82.5 -> 0.625 · 105 -> 1 - (60/75)*0.75 = 0.4
+ *              120 -> 0.25 · 120.001 -> 0 · NaN -> 0
+ *        CFG2: 40 -> 1 - (20/40)*0.75 = 0.625 — the midpoint again, at a
+ *              distance where DEF still draws everything.
+ *
+ * (I4) WHICH instances survive the thinning — `instanceVisible(i, d, cfg)`.
+ *      Checked by the PROPERTIES the hash has to guarantee, never by a table
+ *      of its outputs: a list of "index 7 is in at 82.5 m" would pin today's
+ *      mix and nothing else, while these four are what the feature promises.
+ *        - inside `farM` everything is drawn: all 1000 indices at 45 m.
+ *        - beyond `cullM` nothing is: 0 of 1000 at 120.001.
+ *        - STABLE: the set at 82.5 m built twice is the same set. This is the
+ *          whole reason a hash is used instead of "the first n" — the set may
+ *          not change while nothing moves.
+ *        - MONOTONE: the set at 105 m (share 0.4) is a SUBSET of the set at
+ *          60 m (share 0.85). Walking closer only ever ADDS trees, so nothing
+ *          pops away in front of the player.
+ *        - the COUNT is the share: over 1000 indices, within +-5 % of
+ *          1000 * share. 850 at 60 m, 625 at 82.5 m, 400 at 105 m, and 625
+ *          again for CFG2 at 40 m. The tolerance is not a rubber band: a fair
+ *          hash has a binomial spread of about 1.1..1.5 % here, so +-5 % is
+ *          roughly three sigma. The textbook `fract(sin(i*12.9898)*43758.5453)`
+ *          fails it at 0.25 (14 % too few), which is how the mix in use was
+ *          chosen.
+ *        - instance 0 is drawn wherever anything of the entry is (its hash is
+ *          0): at 119.9 m it is in, past the cull it is out. That is the
+ *          per-instance form of the "floor of ONE" in (F7).
+ *
+ * (I5) THE RED COUNTER-CHECKS, both built by mutating the source:
+ *      - "no band per instance": the two threshold lines are replaced by
+ *        `return distM > cfg.farM ? 1 : 0`. It answers FULL at 44.9 m for an
+ *        instance that stands at low, where the truth is low, and the flutter
+ *        is countable: over the walk 44.9 / 45.1 / 44.9 / 45.1 / 44.9 / 45.1
+ *        the mutant changes class 6 times and the real rule 0 times. Every
+ *        one of those changes moves a matrix between two instanced buffers.
+ *      - "random instead of a hash": `instanceHash` hands back `Math.random()`.
+ *        Of the set at 82.5 m built twice, about 0.625 * 0.375 * 1000 = 234
+ *        indices are then in the second set that were not in the first —
+ *        asserted as "more than 100", which is some ten sigma away from what
+ *        a fair coin could produce, while the real set gains 0. That is trees
+ *        blinking in and out on every tick with the camera standing still.
+ *
+ * ============================================================================
+ * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
+ * ============================================================================
+ * The three distances are a LOCAL view setting (localStorage), so the same
+ * contract as the audio prefs applies: never throw, never return half a
+ * setting, fall back field by field. Two rules are its own.
+ *
+ * (J1) THE DEFAULTS ARE THE MODULE'S. `DEFAULT_SCATTER_PREFS` is 35/45/120,
+ *      written out because `prefs.ts` has no imports — so the check loads BOTH
+ *      modules and compares the values, and a change to one alone goes red.
+ *      The key is its own and versioned: `av3d.view.scatter.v1`, NOT the audio
+ *      key `av3d.audio.v1`, which a display setting has no business in.
+ *
+ * (J2) READING. null / unparsable / a JSON non-object -> the defaults. A field
+ *      is taken only if it is a finite NUMBER ("45" is not, NaN is not), and
+ *      what is taken is CLAMPED to 5..2000 m rather than refused:
+ *        {"scatterNearM":3}     -> 5 (and 5 < 45 < 120 still climbs -> taken)
+ *        {"scatterCullM":5000}  -> 2000
+ *        {"scatterFarM":"50"}   -> the default 45
+ *      But the triple only means anything TOGETHER, so an unordered one falls
+ *      back completely instead of field by field:
+ *        {"scatterNearM":100}   -> 100 < 45 is false -> all three defaults
+ *      Round trip: `loadScatterPrefs(saveScatterPrefs(p))` returns `p`.
+ *
+ * (J3) TYPING. `checkScatterPrefs(near, far, cull)` is what the menu asks
+ *      before it stores anything:
+ *        (20, 40, 300)      -> ok, taken as typed
+ *        (3, 10, 50)        -> ok, the 3 clamped up to 5
+ *        (40, 20, 300)      -> refused, 'order' — near is not under far
+ *        (20, 40, 40)       -> refused, 'order' — equal is not ordered either
+ *        (NaN, 45, 120)     -> refused, 'number' (an empty number field)
+ *        ('30', 45, 120)    -> refused, 'number' (a string is not a number)
+ *        (2500, 3000, 4000) -> refused, 'order': all three clamp to 2000 and
+ *                              collide there, which is better told to the
+ *                              player than silently drawn.
+ *
+ * (J4) THE TWO SIDES MEET. `scatterLodCfgOf` renames the stored fields into
+ *      the cfg the maths takes, so a setting of 20/40/300 must produce exactly
+ *      that behaviour end to end:
+ *        19 m, prev low  -> 0 (full)      41 m, prev full -> 1 (low)
+ *        301 m           -> 2 (hidden)   share(160) = 1 - (120/260)*0.75
+ *                                                   = 0.653846153...
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -441,6 +572,7 @@ const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
 const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
+const PREFS_SRC = join(ROOT, 'client3d/src/game/prefs.ts');
 
 /** See the header: neither module has a runtime import, so a transpile is all
  *  it takes. Should someone add one, this fails loudly — that is the alarm.
@@ -513,6 +645,30 @@ function dropBudget(source) {
     '  const t = (distM - SCATTER_TIER_FAR) / (SCATTER_CULL_FAR - SCATTER_TIER_FAR);\n'
     + '  return 1 - t * (1 - SCATTER_MIN_SHARE);\n',
     '  return 1;\n');
+}
+
+/** Section (I5)'s first mutant: the per-instance band is gone, so an instance
+ *  in the 35…45 m band no longer keeps the tier it has — the very thrash the
+ *  band exists to prevent, now once per prop instead of once per area. */
+function dropInstanceBand(source) {
+  return source.replace(
+    '  if (distM < cfg.nearM) return 0;\n'
+    + '  if (distM > cfg.farM) return 1;\n'
+    + '  return held;\n',
+    '  return distM > cfg.farM ? 1 : 0;\n');
+}
+
+/** Section (I5)'s second mutant: the index hash is replaced by chance. Each
+ *  tick draws a NEW set of survivors, which is the flickering wood the stable
+ *  hash exists to prevent. */
+function randomInsteadOfHash(source) {
+  return source.replace(
+    '  let h = Math.imul(index | 0, 2654435761) >>> 0;\n'
+    + '  h = Math.imul(h ^ (h >>> 15), 2246822507);\n'
+    + '  h = Math.imul(h ^ (h >>> 13), 3266489909);\n'
+    + '  h ^= h >>> 16;\n'
+    + '  return (h >>> 0) / 4294967296;\n',
+    '  return Math.random();\n');
 }
 
 let failed = 0;
@@ -941,6 +1097,207 @@ async function main() {
     noFactor.scatterSway(0.06, 0), 0.06);
   checkNot('H7 …which is NOT what the real product answers',
     scatterSway(0.06, 0), 0.06);
+
+  console.log('\n(I) the LOD per instance — band, cull edge, stable thinning');
+  const {
+    SCATTER_LOD_DEFAULTS, SCATTER_UNHIDE_FACTOR,
+    instanceTier, instanceShare, instanceVisible,
+  } = await loadTs(LOD_SRC);
+  const DEF = SCATTER_LOD_DEFAULTS;
+  // A configuration that shares no number with the module's, so a function
+  // reading the constants instead of its argument cannot pass (I1)/(I2).
+  const CFG2 = { nearM: 10, farM: 20, cullM: 60 };
+  /** Which of the first `n` instances are drawn at that distance. */
+  const drawn = (visible, d, cfg, n = 1000) => {
+    const out = [];
+    for (let i = 0; i < n; i += 1) if (visible(i, d, cfg)) out.push(i);
+    return out;
+  };
+  /** How often the class CHANGES along a walk — the number the hysteresis is
+   *  there to keep down, and what a buffer refill costs. */
+  const swaps = (tier, prev, dists, cfg) => {
+    let cur = prev;
+    let n = 0;
+    for (const d of dists) {
+      const next = tier(d, cur, cfg);
+      if (next !== cur) n += 1;
+      cur = next;
+    }
+    return n;
+  };
+
+  check('I the defaults are the constants of (F)',
+    [DEF.nearM, DEF.farM, DEF.cullM], [35, 45, 120]);
+  check('I an instance re-appears at 0.92 of the cull distance',
+    SCATTER_UNHIDE_FACTOR, 0.92);
+
+  // (I1) the mesh band, per instance
+  check('I1 a low instance at 0 m -> full', instanceTier(0, 1, DEF), 0);
+  check('I1 a low instance at 34.9 m -> full', instanceTier(34.9, 1, DEF), 0);
+  check('I1 …but at exactly 35 m it stays low', instanceTier(35, 1, DEF), 1);
+  check('I1 a full instance at exactly 45 m stays full',
+    instanceTier(45, 0, DEF), 0);
+  check('I1 …at 45.001 m it drops to low', instanceTier(45.001, 0, DEF), 1);
+  check('I1 …and at 100 m it is low', instanceTier(100, 0, DEF), 1);
+  check('I1 40 m answers differently for the two tiers',
+    [instanceTier(40, 0, DEF), instanceTier(40, 1, DEF)], [0, 1]);
+  check('I1 CFG2 promotes at its own 10 m, not at 35',
+    [instanceTier(9.9, 1, CFG2), instanceTier(10, 1, CFG2)], [0, 1]);
+  check('I1 …demotes at its own 20 m, not at 45',
+    [instanceTier(20, 0, CFG2), instanceTier(20.1, 0, CFG2)], [0, 1]);
+  check('I1 …and holds its own band at 15 m',
+    [instanceTier(15, 0, CFG2), instanceTier(15, 1, CFG2)], [0, 1]);
+
+  // (I2) the cull edge and the way back
+  check('I2 120 m is still drawn', instanceTier(120, 1, DEF), 1);
+  check('I2 120.001 m is hidden', instanceTier(120.001, 1, DEF), 2);
+  check('I2 1000 m is hidden', instanceTier(1000, 0, DEF), 2);
+  check('I2 a NaN distance hides, whatever stood there',
+    [instanceTier(NaN, 0, DEF), instanceTier(NaN, 1, DEF), instanceTier(NaN, 2, DEF)],
+    [2, 2, 2]);
+  check('I2 a hidden instance at 119 m stays hidden', instanceTier(119, 2, DEF), 2);
+  check('I2 …at exactly 110.4 m too (the line is exclusive)',
+    instanceTier(110.4, 2, DEF), 2);
+  check('I2 …and comes back as LOW just under it',
+    instanceTier(110.399, 2, DEF), 1);
+  check('I2 …or as full if it re-appears inside the near distance',
+    instanceTier(30, 2, DEF), 0);
+  check('I2 CFG2 re-appears under its own 55.2 m',
+    [instanceTier(55.2, 2, CFG2), instanceTier(55, 2, CFG2),
+      instanceTier(60.1, 2, CFG2)],
+    [2, 1, 2]);
+  check('I2 drifting across the cull edge costs ONE change, not six',
+    swaps(instanceTier, 1, [119.9, 120.1, 119.9, 120.1, 119.9, 120.1], DEF), 1);
+
+  // (I3) the share at the instance's own distance
+  check('I3 share at 0 m is 1', instanceShare(0, DEF), 1);
+  check('I3 share at 45 m is still 1', instanceShare(45, DEF), 1);
+  check('I3 share at 60 m is 0.85', instanceShare(60, DEF), 0.85);
+  check('I3 share at 82.5 m is 0.625', instanceShare(82.5, DEF), 0.625);
+  check('I3 share at 105 m is 0.4', instanceShare(105, DEF), 0.4);
+  check('I3 share at 120 m is the quarter', instanceShare(120, DEF), 0.25);
+  check('I3 share past the cull is 0', instanceShare(120.001, DEF), 0);
+  check('I3 share of a NaN distance is 0', instanceShare(NaN, DEF), 0);
+  check('I3 CFG2 is at its midpoint 0.625 where DEF still draws everything',
+    [instanceShare(40, CFG2), instanceShare(40, DEF)], [0.625, 1]);
+
+  // (I4) which instances survive — properties, never a table of hashes
+  check('I4 inside the far distance every instance is drawn',
+    drawn(instanceVisible, 45, DEF).length, 1000);
+  check('I4 past the cull distance none is',
+    drawn(instanceVisible, 120.001, DEF).length, 0);
+  check('I4 the set at 82.5 m is the SAME set when asked again',
+    drawn(instanceVisible, 82.5, DEF), drawn(instanceVisible, 82.5, DEF));
+  const near60 = new Set(drawn(instanceVisible, 60, DEF));
+  const far105 = drawn(instanceVisible, 105, DEF);
+  check('I4 what is drawn at 105 m is still drawn at 60 m (nothing pops away)',
+    far105.filter((i) => !near60.has(i)).length, 0);
+  for (const [d, cfg, share, label] of [
+    [60, DEF, 0.85, 'DEF at 60 m'], [82.5, DEF, 0.625, 'DEF at 82.5 m'],
+    [105, DEF, 0.4, 'DEF at 105 m'], [40, CFG2, 0.625, 'CFG2 at 40 m'],
+  ]) {
+    const n = drawn(instanceVisible, d, cfg).length;
+    check(`I4 ${label} draws ${1000 * share} of 1000, within 5 % (got ${n})`,
+      Math.abs(n - 1000 * share) <= 0.05 * 1000 * share, true);
+  }
+  check('I4 instance 0 survives as long as anything of the entry does',
+    [instanceVisible(0, 119.9, DEF), instanceVisible(0, 120.001, DEF)],
+    [true, false]);
+
+  // (I5) the red counter-checks
+  const noInstanceBand = await loadTs(LOD_SRC, dropInstanceBand);
+  check('I5 the "no band" mutant answers full at 44.9 m for a low instance',
+    noInstanceBand.instanceTier(44.9, 1, DEF), 0);
+  checkNot('I5 …which is NOT what the real rule answers there',
+    instanceTier(44.9, 1, DEF), 0);
+  const FLUTTER = [44.9, 45.1, 44.9, 45.1, 44.9, 45.1];
+  check('I5 …and it swaps mesh 6 times over a walk across 45 m',
+    swaps(noInstanceBand.instanceTier, 1, FLUTTER, DEF), 6);
+  check('I5 …where the real rule swaps none',
+    swaps(instanceTier, 1, FLUTTER, DEF), 0);
+  const rolledHash = await loadTs(LOD_SRC, randomInsteadOfHash);
+  const rolledA = new Set(drawn(rolledHash.instanceVisible, 82.5, DEF));
+  const rolledB = drawn(rolledHash.instanceVisible, 82.5, DEF);
+  const churn = rolledB.filter((i) => !rolledA.has(i)).length;
+  check(`I5 the "random" mutant reshuffles the set between two ticks (${churn})`,
+    churn > 100, true);
+
+  console.log('\n(J) the detail distances as a local setting — prefs.ts');
+  const {
+    SCATTER_PREFS_KEY, SCATTER_PREF_MIN_M, SCATTER_PREF_MAX_M,
+    DEFAULT_SCATTER_PREFS, checkScatterPrefs, loadScatterPrefs,
+    saveScatterPrefs, scatterLodCfgOf,
+  } = await loadTs(PREFS_SRC);
+  const PREF_DEFAULTS = {
+    scatterNearM: 35, scatterFarM: 45, scatterCullM: 120,
+  };
+
+  // (J1) the same three numbers on both sides, and a key of its own
+  check('J1 the stored defaults are 35 / 45 / 120', DEFAULT_SCATTER_PREFS,
+    PREF_DEFAULTS);
+  check('J1 …which is exactly SCATTER_LOD_DEFAULTS',
+    scatterLodCfgOf(DEFAULT_SCATTER_PREFS), DEF);
+  check('J1 the store key is its own, not the audio one',
+    SCATTER_PREFS_KEY, 'av3d.view.scatter.v1');
+  check('J1 a distance runs 5 .. 2000 m',
+    [SCATTER_PREF_MIN_M, SCATTER_PREF_MAX_M], [5, 2000]);
+
+  // (J2) reading whatever the store holds
+  check('J2 nothing stored yet -> defaults', loadScatterPrefs(null), PREF_DEFAULTS);
+  check('J2 unparsable text -> defaults',
+    loadScatterPrefs('not json at all'), PREF_DEFAULTS);
+  check('J2 JSON null -> defaults', loadScatterPrefs('null'), PREF_DEFAULTS);
+  check('J2 an array is not a prefs object',
+    loadScatterPrefs('[35,45,120]'), PREF_DEFAULTS);
+  check('J2 an empty object -> defaults', loadScatterPrefs('{}'), PREF_DEFAULTS);
+  check('J2 a numeric string is not a number',
+    loadScatterPrefs('{"scatterFarM":"50"}'), PREF_DEFAULTS);
+  check('J2 null is not a number either',
+    loadScatterPrefs('{"scatterFarM":null}'), PREF_DEFAULTS);
+  check('J2 3 m clamps up to the 5 m floor',
+    loadScatterPrefs('{"scatterNearM":3}'), { ...PREF_DEFAULTS, scatterNearM: 5 });
+  check('J2 5000 m clamps down to the 2000 m ceiling',
+    loadScatterPrefs('{"scatterCullM":5000}'),
+    { ...PREF_DEFAULTS, scatterCullM: 2000 });
+  check('J2 a stored triple that does not climb falls back COMPLETELY',
+    loadScatterPrefs('{"scatterNearM":100}'), PREF_DEFAULTS);
+  check('J2 a stored triple that climbs is taken as it stands',
+    loadScatterPrefs('{"scatterNearM":20,"scatterFarM":40,"scatterCullM":300}'),
+    { scatterNearM: 20, scatterFarM: 40, scatterCullM: 300 });
+  const typed = { scatterNearM: 12, scatterFarM: 24, scatterCullM: 90 };
+  check('J2 the round trip returns what was stored',
+    loadScatterPrefs(saveScatterPrefs(typed)), typed);
+
+  // (J3) what the menu asks before it stores anything
+  check('J3 20 / 40 / 300 is taken as typed',
+    checkScatterPrefs(20, 40, 300),
+    { ok: true, prefs: { scatterNearM: 20, scatterFarM: 40, scatterCullM: 300 } });
+  check('J3 a 3 is taken, clamped up to 5',
+    checkScatterPrefs(3, 10, 50),
+    { ok: true, prefs: { scatterNearM: 5, scatterFarM: 10, scatterCullM: 50 } });
+  check('J3 near above far is refused as unordered',
+    checkScatterPrefs(40, 20, 300), { ok: false, error: 'order' });
+  check('J3 equal is not ordered either',
+    checkScatterPrefs(20, 40, 40), { ok: false, error: 'order' });
+  check('J3 an empty number field is refused as no number',
+    checkScatterPrefs(NaN, 45, 120), { ok: false, error: 'number' });
+  check('J3 a string is refused as no number',
+    checkScatterPrefs('30', 45, 120), { ok: false, error: 'number' });
+  check('J3 three values colliding at the ceiling are refused, not drawn',
+    checkScatterPrefs(2500, 3000, 4000), { ok: false, error: 'order' });
+
+  // (J4) the setting reaches the maths
+  const setCfg = scatterLodCfgOf({
+    scatterNearM: 20, scatterFarM: 40, scatterCullM: 300,
+  });
+  check('J4 the stored fields become a cfg', setCfg,
+    { nearM: 20, farM: 40, cullM: 300 });
+  check('J4 …and 20 / 40 / 300 behaves that way end to end',
+    [instanceTier(19, 1, setCfg), instanceTier(41, 0, setCfg),
+      instanceTier(301, 1, setCfg)],
+    [0, 1, 2]);
+  check('J4 …including the thinning line of the set cull distance',
+    instanceShare(160, setCfg), 1 - (120 / 260) * 0.75);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

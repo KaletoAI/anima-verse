@@ -28,6 +28,17 @@
  * sampler (`@anima/scene-render/scatter.ts`), it is seed-stable, and this
  * module never reorders it — the budget caps the TAIL of a deterministic
  * list, so thinning out a distant wood removes trees but never moves one.
+ *
+ * ONE STEP PER AREA IS TOO COARSE, which is why the second half of this file
+ * exists (`instanceTier`/`instanceVisible`, 2026-08-15). An area is a wood,
+ * not a point: with one tier for all of it the trees at the player's feet drop
+ * to the cheap mesh because the far edge of the same wood is 100 m away, and a
+ * 300 m meadow is either wholly drawn or wholly gone. The per-instance rules
+ * ask the same three questions of ONE prop at ITS OWN distance, and they take
+ * the distances as a `ScatterLodCfg` argument instead of reading the constants
+ * — the numbers above are only their DEFAULTS now, because the player may set
+ * them (`game/prefs.ts`, localStorage). The area-wide functions stay until
+ * their callers are rewired.
  */
 
 /** Nearer than this, an area's props stand at the `full` tier (metres). */
@@ -168,6 +179,9 @@ export function scatterCountShare(distM: number): number {
  * How many of `baseCount` instances to actually draw at that distance —
  * `InstancedMesh.count`, which is why it has to be a whole number.
  *
+ * AREA-WIDE, and that is the older half of this module: the per-instance rules
+ * below answer the same question for ONE prop at its OWN distance.
+ *
  * Rounded, with a floor of ONE as long as anything is drawn at all: a lone
  * landmark tree on a hill has a base count of 1, and multiplying it by the
  * share would delete it at 46 m while a hundred-tree wood beside it stays.
@@ -178,4 +192,163 @@ export function scatterVisibleCount(baseCount: number, distM: number): number {
   const share = scatterCountShare(distM);
   if (share <= 0) return 0;
   return Math.max(1, Math.min(baseCount, Math.round(baseCount * share)));
+}
+
+/* ==========================================================================
+ * PER-INSTANCE LOD — the same three questions, asked of ONE prop
+ * ========================================================================== */
+
+/**
+ * The three distances as ONE value.
+ *
+ * They are an ARGUMENT and no longer a constant read from module scope,
+ * because two callers need different numbers: the smoke check feeds hand-
+ * derived thresholds to derive its expectations from, and the running client
+ * feeds whatever the player set in the menu. A module-level `let` that the
+ * menu writes would work exactly once — it would also make every function
+ * here impure, which is the one thing this file is not allowed to be.
+ */
+export interface ScatterLodCfg {
+  /** Nearer than this an instance stands at the full mesh (metres). */
+  nearM: number;
+  /** Farther than this at the low mesh. In between it keeps what it has. */
+  farM: number;
+  /** Beyond this it is not drawn at all (metres). */
+  cullM: number;
+}
+
+/** What the constants above are: the DEFAULT distances, the ones a player who
+ *  never opens the menu plays with. `prefs.ts` holds the same three numbers as
+ *  its stored defaults (it must stay import-free, so it cannot read them from
+ *  here) and the smoke check pins the two against each other. */
+export const SCATTER_LOD_DEFAULTS: ScatterLodCfg = {
+  nearM: SCATTER_TIER_NEAR,
+  farM: SCATTER_TIER_FAR,
+  cullM: SCATTER_CULL_FAR,
+};
+
+/** What ONE instance is drawn as: 0 = the full mesh, 1 = the low mesh,
+ *  2 = not at all.
+ *
+ *  Numbers and not the `ScatterTier` strings, because this is what a
+ *  `Uint8Array` per scatter entry holds — one byte per instance, read and
+ *  written for every instance of every entry on every LOD tick. A string per
+ *  instance would allocate on a path whose whole point is not to. */
+export type InstanceTier = 0 | 1 | 2;
+
+/** How far back inside the cull distance a hidden instance has to come before
+ *  it is drawn again — 0.92 of it, i.e. 110.4 m at the default 120 m.
+ *
+ *  The cull edge needs the same treatment the 35…45 m band gives the mesh
+ *  swap, and for a harsher reason: a tree that pops in and out with every
+ *  centimetre of camera drift is far more visible than one that swaps mesh.
+ *  A FACTOR rather than a second distance, so a player who sets the cull to
+ *  400 m gets a band that scales with it instead of a 0.4 % sliver. */
+export const SCATTER_UNHIDE_FACTOR = 0.92;
+
+/**
+ * Which of the three classes ONE instance belongs in, given how far away IT is
+ * and what it was drawn as last tick.
+ *
+ * Two hystereses, both of them "the answer inside the band is whatever is
+ * already there":
+ *
+ *   - `nearM`…`farM` between full and low, exclusive on both ends exactly as
+ *     `scatterTierFor` has it — 35 m does not promote, 45 m does not demote.
+ *   - `SCATTER_UNHIDE_FACTOR`·`cullM`…`cullM` between drawn and hidden. Note
+ *     the asymmetry: hiding happens BEYOND the cull distance, showing again
+ *     only well inside it, so the two thresholds cannot chase each other.
+ *
+ * A previously hidden instance that comes back re-enters as `low` and is then
+ * judged by the band like everything else — it kept no memory of the tier it
+ * had before it was culled, and at 0.92·cull it is in low territory anyway.
+ * The one case where that matters is a hand-set cfg whose bands overlap; the
+ * answer there is still a tier and not a crash.
+ *
+ * A NON-FINITE DISTANCE HIDES the instance, unlike `scatterTierFor`, which
+ * keeps the tier and leaves the hiding to `scatterCountShare`. Here one
+ * function answers both questions, so it has to give the answer that draws
+ * nothing rather than the one that draws a NaN matrix.
+ */
+export function instanceTier(
+  distM: number, prev: InstanceTier, cfg: ScatterLodCfg,
+): InstanceTier {
+  // Negated, so a NaN distance lands here instead of in the comparisons below.
+  if (!(distM <= cfg.cullM)) return 2;
+  let held: InstanceTier = prev;
+  if (prev === 2) {
+    if (!(distM < SCATTER_UNHIDE_FACTOR * cfg.cullM)) return 2;
+    held = 1;
+  }
+  if (distM < cfg.nearM) return 0;
+  if (distM > cfg.farM) return 1;
+  return held;
+}
+
+/**
+ * What share of the instances at that distance is drawn — `scatterCountShare`
+ * measured at the instance's own distance and against a given cfg.
+ *
+ * The line is the same one: flat 1 up to `farM`, straight down to
+ * `SCATTER_MIN_SHARE` at `cullM`, nothing beyond. `cullM > farM` need not be
+ * checked before the division: the only branch that divides is the one where
+ * `distM` is above `farM` and at most `cullM`, which cannot be reached unless
+ * the two differ.
+ */
+export function instanceShare(distM: number, cfg: ScatterLodCfg): number {
+  if (!(distM <= cfg.cullM)) return 0;
+  if (distM <= cfg.farM) return 1;
+  const t = (distM - cfg.farM) / (cfg.cullM - cfg.farM);
+  return 1 - t * (1 - SCATTER_MIN_SHARE);
+}
+
+/**
+ * A number in [0,1) that belongs to an instance INDEX and to nothing else.
+ *
+ * This is what makes thinning stable. The area-wide budget could cap the tail
+ * of the list because one distance governed the whole area; per instance there
+ * is no tail — every instance has its own share, and "the first n of them"
+ * would mean a different n per tick and a different SET per tick, i.e. trees
+ * blinking in and out while the player stands still. A hash of the index gives
+ * each instance a fixed place in the queue, so walking towards a wood always
+ * regrows the same trees in the same order.
+ *
+ * The mix is the murmur3 finaliser over the index times the golden-ratio
+ * constant. The textbook `fract(sin(i·12.9898)·43758.5453)` was measured
+ * first and is visibly biased in the low quarter — it drew 14 % too few at a
+ * share of 0.25, exactly where the thinning is supposed to work — while this
+ * one stays inside 3.5 % over the same 1000 indices.
+ *
+ * `hash(0) === 0` falls out of the multiplication and is kept deliberately:
+ * instance 0 survives as long as anything of the entry is drawn at all, which
+ * is the per-instance form of the "floor of ONE" in `scatterVisibleCount` — a
+ * lone landmark tree is instance 0 of a one-instance entry.
+ */
+function instanceHash(index: number): number {
+  let h = Math.imul(index | 0, 2654435761) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), 2246822507);
+  h = Math.imul(h ^ (h >>> 13), 3266489909);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * Whether instance `index` is part of the thinned-out set at its distance.
+ *
+ * Pure and stateless on purpose: the set is not remembered anywhere, it is
+ * recomputed from index and distance every tick and comes out the same. Which
+ * also means the answer is MONOTONE in the distance — an instance that is
+ * drawn 100 m away is drawn at 60 m too, because its hash did not move and
+ * the share only grew. Nothing pops out while the player walks closer.
+ *
+ * Hiding by distance is `instanceTier`'s answer, not this one's; an instance
+ * is drawn when its tier is not 2 AND it is visible here.
+ */
+export function instanceVisible(
+  index: number, distM: number, cfg: ScatterLodCfg,
+): boolean {
+  const share = instanceShare(distM, cfg);
+  if (share >= 1) return true;
+  if (share <= 0) return false;
+  return instanceHash(index) < share;
 }

@@ -1,6 +1,6 @@
 /**
- * Audio preferences — volumes and switches, stored locally in the browser
- * (stage 4, task 2).
+ * Local preferences of this browser: the audio volumes and switches (stage 4,
+ * task 2) and, at the bottom of the file, the scatter detail distances.
  *
  * These are LOCAL settings, deliberately not world state: they say how loud
  * this machine is, which is nothing the server or another player has an
@@ -120,4 +120,152 @@ export function savePrefs(p: Prefs): string {
     ambientOn: p.ambientOn,
     ttsOn: p.ttsOn,
   });
+}
+
+/* ==========================================================================
+ * THE SCATTER DETAIL DISTANCES (per-object scatter LOD, 2026-08-15)
+ * ========================================================================== */
+
+/**
+ * How far away a scattered prop drops to the cheap mesh and when it stops
+ * being drawn — three metre values, and a LOCAL setting for the same reason
+ * the volumes are one: they say what this machine can draw, which is nothing
+ * the server or another player has an opinion about.
+ *
+ * Its OWN storage key, like the performance readout and the minimap switch in
+ * `Hud.tsx`: `PREFS_KEY` is versioned as the AUDIO prefs, and a view setting
+ * has no business in there.
+ *
+ * The field names carry the `scatter` prefix although the object holds nothing
+ * else — they are what is written into the store, and a store key called
+ * `nearM` would be unreadable next to whatever the next view setting brings.
+ * `scatterLodCfgOf` turns them into the `ScatterLodCfg` the maths wants.
+ */
+export interface ScatterPrefs {
+  scatterNearM: number;
+  scatterFarM: number;
+  scatterCullM: number;
+}
+
+/** `localStorage` key. Versioned like `PREFS_KEY`, and separate from it. */
+export const SCATTER_PREFS_KEY = 'av3d.view.scatter.v1';
+
+/** What a distance may be at all (metres). The lower end keeps a typo from
+ *  culling the ground the player stands on; the upper end is far past any
+ *  view distance this client draws, and exists so a pasted 1e9 cannot ask the
+ *  LOD tick to keep an entire continent at the full mesh. */
+export const SCATTER_PREF_MIN_M = 5;
+export const SCATTER_PREF_MAX_M = 2000;
+
+/** The same three numbers as `SCATTER_LOD_DEFAULTS` in
+ *  `scene/scatterLod.ts` — written out rather than imported, because this
+ *  module has no imports (see the header) and the smoke check pins the two
+ *  against each other so they cannot drift apart. */
+export const DEFAULT_SCATTER_PREFS: ScatterPrefs = {
+  scatterNearM: 35,
+  scatterFarM: 45,
+  scatterCullM: 120,
+};
+
+/** A distance out of range is CLAMPED, never refused: a player who types 3000
+ *  wants "as far as it goes", not the default back. */
+function clampM(v: number): number {
+  return Math.min(SCATTER_PREF_MAX_M, Math.max(SCATTER_PREF_MIN_M, v));
+}
+
+/** A stored distance is taken only if it is a finite NUMBER — same rule as
+ *  `volume`, and a numeric string is not a number here either. */
+function distanceM(raw: unknown, fallback: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  return clampM(raw);
+}
+
+/** near < far < cull, strictly. Equal values are refused too: a band of zero
+ *  width is no hysteresis, and `far === cull` would leave the thinning line no
+ *  metres to fall over. */
+export function scatterPrefsOrdered(p: ScatterPrefs): boolean {
+  return p.scatterNearM < p.scatterFarM && p.scatterFarM < p.scatterCullM;
+}
+
+/**
+ * What a menu learns about the three numbers a player typed: either the
+ * finished prefs, or WHY they were not taken — the menu shows a hint and
+ * keeps the old values.
+ *
+ * `'number'` is an empty or unparsable field (a number input hands NaN in),
+ * `'order'` a triple that does not climb. Note that the order is checked on
+ * the CLAMPED values, so 2500 and 3000 collide at the ceiling and are refused
+ * as unordered rather than silently becoming the same distance twice.
+ */
+export type ScatterPrefsCheck =
+  | { ok: true; prefs: ScatterPrefs }
+  | { ok: false; error: 'number' | 'order' };
+
+export function checkScatterPrefs(
+  near: unknown, far: unknown, cull: unknown,
+): ScatterPrefsCheck {
+  const metres: number[] = [];
+  for (const raw of [near, far, cull]) {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      return { ok: false, error: 'number' };
+    }
+    metres.push(clampM(raw));
+  }
+  const prefs: ScatterPrefs = {
+    scatterNearM: metres[0],
+    scatterFarM: metres[1],
+    scatterCullM: metres[2],
+  };
+  if (!scatterPrefsOrdered(prefs)) return { ok: false, error: 'order' };
+  return { ok: true, prefs };
+}
+
+/**
+ * The stored string → three usable distances. Never throws, never returns
+ * half a setting — the same contract as `loadPrefs`, and for the same reason.
+ *
+ * Field by field first, exactly like the volumes. But then the TRIPLE is
+ * checked as a whole and falls back completely if it does not climb: unlike a
+ * volume, these three numbers only mean anything together, and a stored
+ * `near` of 100 next to the default `far` of 45 would leave the band inverted
+ * — the LOD would still answer, it would just answer nonsense forever.
+ */
+export function loadScatterPrefs(raw: string | null): ScatterPrefs {
+  let parsed: unknown = null;
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ...DEFAULT_SCATTER_PREFS };
+  }
+  const p = parsed as Record<string, unknown>;
+  const prefs: ScatterPrefs = {
+    scatterNearM: distanceM(p.scatterNearM, DEFAULT_SCATTER_PREFS.scatterNearM),
+    scatterFarM: distanceM(p.scatterFarM, DEFAULT_SCATTER_PREFS.scatterFarM),
+    scatterCullM: distanceM(p.scatterCullM, DEFAULT_SCATTER_PREFS.scatterCullM),
+  };
+  return scatterPrefsOrdered(prefs) ? prefs : { ...DEFAULT_SCATTER_PREFS };
+}
+
+/** `ScatterPrefs` → the string to store, so that
+ *  `loadScatterPrefs(saveScatterPrefs(p))` returns `p` for any ordered `p`. */
+export function saveScatterPrefs(p: ScatterPrefs): string {
+  return JSON.stringify({
+    scatterNearM: p.scatterNearM,
+    scatterFarM: p.scatterFarM,
+    scatterCullM: p.scatterCullM,
+  });
+}
+
+/** The stored shape → the `ScatterLodCfg` the LOD maths takes. Structural, not
+ *  an imported type: this module stays import-free, and the field names are
+ *  what the two sides agree on. */
+export function scatterLodCfgOf(p: ScatterPrefs): {
+  nearM: number; farM: number; cullM: number;
+} {
+  return { nearM: p.scatterNearM, farM: p.scatterFarM, cullM: p.scatterCullM };
 }
