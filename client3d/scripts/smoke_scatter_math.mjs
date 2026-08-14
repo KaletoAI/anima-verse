@@ -381,6 +381,56 @@
  *      (4, 8.5) where the truth is 4 — every authored correction in the map
  *      editor would be silently ignored. Pinned from both sides: the mutant's
  *      answer is asserted to BE 8.5 and the true answer NOT to be.
+ *
+ * ============================================================================
+ * (H) HOW FAR ONE PROP BENDS — `scatterSway` (sway factor, 2026-08-14)
+ * ============================================================================
+ * Two authors, one number (§ A9): the terrain KIND says how hard it blows over
+ * this ground (`meta.sway_m`, clamped 0.01..0.5 by the caller), the PROP says
+ * how much of that it takes part in (`sway_factor`, 0..1, shipped on the
+ * scatter entry by `GET /play/terrain`). The effective amplitude is the
+ * product, rounded to two decimals — the precision `applySway` bakes into the
+ * shader, and the same test `ground.ts` uses to decide whether the material
+ * has to be cloned at all.
+ *
+ * (H1) THE PLAIN CASE, a meadow at 0.06 m:
+ *      factor 1    -> 0.06 * 1    = 0.06   the full amount
+ *      factor 0.5  -> 0.06 * 0.5  = 0.03
+ *      factor 0.25 -> 0.06 * 0.25 = 0.015  -> rounds to 0.02
+ *      A forest at 0.04 with factor 0.5 -> 0.02.
+ * (H2) THE POINT OF THE FIELD — the boulder: 0.06 * 0 = 0. Exactly zero, so
+ *      the caller's `sway > 0` test fails and the prop keeps the shared,
+ *      unpatched material. A stone in a waving meadow stands still.
+ * (H3) THE FIELD IS ABSENT for every entry the server ships no factor for (a
+ *      tuft, a prop at the default, a foreign URL). undefined/null/NaN and
+ *      non-numbers therefore read as 1, NOT as 0 — reading them as "nothing"
+ *      would stop the wind in every world that never touched the field:
+ *        (0.06, undefined) · (0.06, null) · (0.06, NaN) · (0.06, 'x') -> 0.06
+ *      `null` is the case a plain `Number()` gets wrong (`Number(null) === 0`)
+ *      and it is the one that hurts, because 0 is a LEGAL factor in this
+ *      field: a null on the wire would freeze a whole meadow. Found by this
+ *      check, not by reading the code.
+ * (H4) OUT OF RANGE IS CLAMPED, as the server clamps it: a hand-edited 5
+ *      cannot amplify the wind (0.06 * 1 = 0.06) and a -2 cannot invert it
+ *      (0.06 * 0 = 0). And no wind is no wind whatever the factor:
+ *        (0, 0.5) · (-1, 1) -> 0
+ * (H5) A PRODUCT THAT ROUNDS TO ZERO IS ZERO: 0.04 * 0.1 = 0.004 -> 0.00.
+ *      `applySway` refuses anything under SWAY_MIN_M (0.01), so a value that
+ *      survives the `> 0` test only to be refused by the shader would buy a
+ *      material clone per area that never moves. The rounding is what keeps
+ *      the two tests agreeing. Just above the line: 0.06 * 0.1 = 0.006 ->
+ *      0.01, which the shader does accept.
+ * (H6) THE ONE PLACE IT IS APPLIED. `ground.ts` computes the product ONCE per
+ *      scatter entry and everything downstream reads it off `prop.sway`, so
+ *      the tier swap keeps the factor. Asserted on the SOURCE, the way (E)
+ *      pins the tuft constants: `scatterSway(sway, entry.sway_factor)` occurs
+ *      exactly once, `sway: entrySway` is what the ScatterProp carries, and
+ *      the bare `applySway(mat, sway,` of the old code is gone.
+ * (H7) THE RED COUNTER-CHECK, built by mutating the source: the factor is
+ *      ignored and the ground's amplitude handed back unchanged. It answers
+ *      0.06 for the boulder (0.06, 0) where the truth is 0 — the stone waves
+ *      with the meadow, which is the whole feature undone. Pinned from both
+ *      sides.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -445,6 +495,15 @@ function swapHeightPrecedence(source) {
     + '  if (Number(propH) > 0) return Number(propH);\n',
     '  if (Number(propH) > 0) return Number(propH);\n'
     + '  if (Number(entryH) > 0) return Number(entryH);\n');
+}
+
+/** Section (H7)'s mutant: the prop's factor is ignored and the ground's
+ *  amplitude is handed back as it came — the state of the code before the
+ *  factor existed, where every prop of a waving area waves. */
+function ignoreSwayFactor(source) {
+  return source.replace(
+    '  return Math.round(base * clamped * 100) / 100;\n',
+    '  return Math.round(base * 100) / 100;\n');
 }
 
 /** Section (F8)'s second mutant: the linear part of the budget is gone, so
@@ -736,6 +795,7 @@ async function main() {
   const {
     SCATTER_TIER_NEAR, SCATTER_TIER_FAR, SCATTER_CULL_FAR, SCATTER_MIN_SHARE,
     SCATTER_MODEL_HEIGHT_M, scatterTargetH,
+    SCATTER_SWAY_FACTOR_DEFAULT, scatterSway,
     scatterTierFor, scatterCountShare, scatterVisibleCount,
   } = await loadTs(LOD_SRC);
   // The four numbers everything below is derived from — the plan's, and the
@@ -837,6 +897,50 @@ async function main() {
     swapped.scatterTargetH(4, 8.5), 8.5);
   checkNot('G5 …which is NOT what the real precedence answers',
     scatterTargetH(4, 8.5), 8.5);
+
+  console.log('\n(H) the wind factor — kind × prop, the one effective amplitude');
+  check('H an absent factor means the FULL amount', SCATTER_SWAY_FACTOR_DEFAULT, 1);
+  // (H1) the plain products
+  check('H1 a 0.06 m meadow at factor 1 bends 0.06 m', scatterSway(0.06, 1), 0.06);
+  check('H1 …at 0.5 half as far', scatterSway(0.06, 0.5), 0.03);
+  check('H1 …at 0.25 -> 0.015, rounded to 0.02', scatterSway(0.06, 0.25), 0.02);
+  check('H1 a 0.04 m forest at 0.5 -> 0.02', scatterSway(0.04, 0.5), 0.02);
+  // (H2) the boulder — the reason the field exists
+  check('H2 factor 0 is EXACTLY 0, so no material is ever cloned',
+    scatterSway(0.06, 0), 0);
+  // (H3) no factor is not "no wind"
+  for (const [bad, name] of [[undefined, 'undefined'], [null, 'null'],
+    [NaN, 'NaN'], ['x', 'a string']]) {
+    check(`H3 ${name} reads as the full amount, not as nothing`,
+      scatterSway(0.06, bad), 0.06);
+  }
+  // (H4) the clamp, both ends, and a ground with no wind at all
+  check('H4 a hand-edited 5 cannot amplify the wind', scatterSway(0.06, 5), 0.06);
+  check('H4 a hand-edited -2 cannot invert it', scatterSway(0.06, -2), 0);
+  check('H4 no wind stays no wind however willing the prop',
+    scatterSway(0, 0.5), 0);
+  check('H4 …and a negative amplitude is no wind either', scatterSway(-1, 1), 0);
+  // (H5) the rounding is the shader's own threshold
+  check('H5 0.04 * 0.1 = 0.004 -> 0, below what applySway would accept',
+    scatterSway(0.04, 0.1), 0);
+  check('H5 0.06 * 0.1 = 0.006 -> 0.01, the smallest amplitude there is',
+    scatterSway(0.06, 0.1), 0.01);
+  // (H6) THE one place — asserted on ground.ts, like (E)
+  const swayCalls = groundSrc.match(/scatterSway\(sway, entry\.sway_factor\)/g);
+  check('H6 ground.ts multiplies in exactly ONE place',
+    swayCalls ? swayCalls.length : 0, 1);
+  check('H6 …and that product is what the ScatterProp carries',
+    groundSrc.includes('sway: entrySway,'), true);
+  check('H6 …the tuft bends by it too, not by the area\'s raw amplitude',
+    groundSrc.includes('applySway(mat, entrySway, h);'), true);
+  check('H6 no caller passes the unfactored amplitude any more',
+    groundSrc.includes('applySway(mat, sway,'), false);
+  // (H7) the red counter-check
+  const noFactor = await loadTs(LOD_SRC, ignoreSwayFactor);
+  check('H7 the "ignore the factor" mutant bends the boulder by 0.06 m',
+    noFactor.scatterSway(0.06, 0), 0.06);
+  checkNot('H7 …which is NOT what the real product answers',
+    scatterSway(0.06, 0), 0.06);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

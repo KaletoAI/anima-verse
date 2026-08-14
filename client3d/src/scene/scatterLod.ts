@@ -1,6 +1,6 @@
 /**
- * Pure display maths of the ground scatter: how tall its props stand, and its
- * level of detail.
+ * Pure display maths of the ground scatter: how tall its props stand, how far
+ * they bend in the wind, and its level of detail.
  *
  * Everything here is a function of its arguments: no Three.js, no module
  * state, no DOM — the same discipline as `game/walk.ts`, and what lets
@@ -77,6 +77,45 @@ export function scatterTargetH(entryH?: number, propH?: number): number {
   if (Number(entryH) > 0) return Number(entryH);
   if (Number(propH) > 0) return Number(propH);
   return SCATTER_MODEL_HEIGHT_M;
+}
+
+/** What a scatter entry bends by when it says nothing: the ground's FULL
+ *  deflection. The server stores and ships the factor only when it differs
+ *  (`props.SWAY_FACTOR_DEFAULT`), so an absent field is this. */
+export const SCATTER_SWAY_FACTOR_DEFAULT = 1;
+
+/**
+ * How far ONE scatter entry really bends, in metres (§ A9).
+ *
+ * TWO AUTHORS, ONE NUMBER. The terrain KIND says how hard it blows over this
+ * ground (`meta.sway_m`, already clamped by the caller); the PROP says how
+ * much of that it takes part in (`sway_factor` on the entry, 0..1, from its
+ * library record). A boulder scattered over a waving meadow gets 0 and stands
+ * still while the ferns beside it bend fully — which is the whole point of the
+ * factor, and it cannot be expressed on the kind, where the wind lives.
+ *
+ * The factor is "a finite NUMBER in 0..1, or nothing": absent, null, NaN and
+ * non-numbers read as "not given" and leave the ground's own amplitude alone,
+ * values outside the range are clamped exactly as the server clamps them.
+ *
+ * WHICH IS WHY `Number()` IS NOT ENOUGH HERE, unlike everywhere else in this
+ * file: `Number(null)` is 0, and 0 is a legal factor in this one field — a
+ * `null` on the wire would silently stop a whole meadow instead of falling
+ * back to the default. The type is tested, not just the value.
+ *
+ * ROUNDED TO TWO DECIMALS, and that is not cosmetic: `applySway` bakes the
+ * amplitude into the shader at that precision and refuses anything under
+ * `SWAY_MIN_M`, while `ground.ts` clones a material for every entry whose
+ * value is `> 0`. Rounding here is what keeps those two tests agreeing — a
+ * product of 0.004 would otherwise buy a material clone that never moves.
+ */
+export function scatterSway(swayM: number, factor?: number): number {
+  const base = Number(swayM);
+  if (!(base > 0)) return 0;
+  const clamped = typeof factor === 'number' && Number.isFinite(factor)
+    ? Math.min(Math.max(factor, 0), 1)
+    : SCATTER_SWAY_FACTOR_DEFAULT;
+  return Math.round(base * clamped * 100) / 100;
 }
 
 /** The two resolution tiers a prop mesh can stand at (§ B1 `variants`). The

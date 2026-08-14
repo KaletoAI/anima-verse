@@ -2191,8 +2191,9 @@ def get_terrain_route(user=Depends(get_current_user)):
 
     The scatter entries are enriched with what their prop knows on the way out
     (`variants` = the resolution tiers it HAS, `prop_height_m` = its real
-    height, § A9) — derived here, not stored, so a low variant generated later
-    or a corrected height reaches the clients with the next refetch.
+    height, `sway_factor` = how much of its ground's wind it takes part in,
+    § A9) — derived here, not stored, so a low variant generated later or a
+    corrected height reaches the clients with the next refetch.
     """
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog

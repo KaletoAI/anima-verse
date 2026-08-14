@@ -164,14 +164,14 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
 
 
 def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Add what the PROP knows to every scatter entry naming one — ``variants``
-    and ``prop_height_m``, PAYLOAD ONLY, never stored (§ A9).
+    """Add what the PROP knows to every scatter entry naming one — ``variants``,
+    ``prop_height_m`` and ``sway_factor``, PAYLOAD ONLY, never stored (§ A9).
 
-    The stored entry keeps its exactly three authored fields; both additions
-    are facts about the PROP, not about the painting, so they are derived when
-    the areas are handed out instead of being frozen into the DB (a low variant
-    generated afterwards, or a corrected height, would otherwise never reach a
-    client).
+    The stored entry keeps its exactly three authored fields; every addition is
+    a fact about the PROP, not about the painting, so they are derived when the
+    areas are handed out instead of being frozen into the DB (a low variant
+    generated afterwards, a corrected height, or a boulder later told to stand
+    still would otherwise never reach a client).
 
     ``variants`` is ``{tier: "/assets/props/<id>/model?tier=<tier>"}`` for the
     tiers the prop HAS — the same map and the same ``pickVariant`` rule the
@@ -184,12 +184,18 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     default only ever meant "nobody asked", and it made every wood
     avatar-high.
 
-    Neither key at all when there is no model or when the URL is not the
-    canonical prop URL (a foreign or absolute one names a mesh this world has
-    no record for); a client without them behaves exactly as before.
+    ``sway_factor`` is how much of its ground's wind this prop takes part in —
+    the multiplier on the terrain kind's ``meta.sway_m``. It rides along ONLY
+    when it is not the default 1.0, so an absent key means "bends fully" for
+    every reader: a plain tuft entry without a prop behind it, a prop nobody
+    has touched, and a foreign URL all read the same.
+
+    No key at all when there is no model or when the URL is not the canonical
+    prop URL (a foreign or absolute one names a mesh this world has no record
+    for); a client without them behaves exactly as before.
 
     The areas are enriched IN PLACE (``list_areas`` builds fresh dicts per
-    call) and handed back. Both lookups touch the prop directory, so they are
+    call) and handed back. All lookups touch the prop directory, so they are
     cached together per call: one read per DISTINCT prop, however many areas
     name it.
     """
@@ -209,19 +215,27 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if not prop_id:
                 continue
             if prop_id not in cache:
+                facts = _props.prop_scatter_facts(prop_id)
                 cache[prop_id] = {
                     "variants": variant_urls(
                         f"/assets/props/{prop_id}/model",
                         _props.model_tiers(prop_id)),
-                    "height": _props.prop_height_m(prop_id),
+                    "height": facts.get("height_m", 0.0),
+                    "sway_factor": facts.get(
+                        "sway_factor", _props.SWAY_FACTOR_DEFAULT),
                 }
             known = cache[prop_id]
             if known["variants"]:
                 entry["variants"] = dict(known["variants"])
             # 0.0 is "no such prop", never "no height authored" — a record
-            # always has one (see props.prop_height_m).
+            # always has one (see props.prop_scatter_facts).
             if known["height"] > 0:
                 entry["prop_height_m"] = known["height"]
+            # The default travels as ABSENCE, exactly as it is stored: sending
+            # a 1.0 would make "no factor" and "the full factor" two payload
+            # shapes for one and the same behaviour.
+            if known["sway_factor"] != _props.SWAY_FACTOR_DEFAULT:
+                entry["sway_factor"] = known["sway_factor"]
     return areas
 
 

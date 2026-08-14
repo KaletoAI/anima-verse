@@ -61,7 +61,7 @@ import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
-import { scatterCountShare, scatterTargetH, scatterTierFor,
+import { scatterCountShare, scatterSway, scatterTargetH, scatterTierFor,
   scatterVisibleCount } from './scatterLod';
 import type { ScatterTier } from './scatterLod';
 
@@ -190,6 +190,13 @@ export function patchHole(mat: THREE.Material): void {
  * the loaded models. HOW it bends is not authored and never will be: frequency
  * and wind direction are these two constants, because a catalog of wind
  * settings is a wind machine, not a meadow.
+ *
+ * WHAT bends by how much IS authored, on the second axis: each prop of the
+ * library carries a `sway_factor` (0..1, default 1) that the payload puts on
+ * the scatter entry, and the effective amplitude is the product of the two
+ * (`scatterSway`). The kind answers "how hard does it blow here", the prop
+ * "how much do I move in it" — a boulder set to 0 stands still in the very
+ * meadow whose ferns bend fully.
  *
  * The deflection grows QUADRATICALLY with the height above the ground and is
  * measured against `uSwayRef`, the prop's own height — so the foot stands
@@ -382,10 +389,11 @@ interface ScatterProp {
   model: string;
   /** target height for `groundedGeometry`, already defaulted */
   targetH: number;
-  /** `meta.sway_m` of the AREA's kind, or 0 — how far this prop bends in the
-   *  wind. It hangs on the area, so every entry of one meadow sways together
-   *  or not at all, and it is kept here because `showTier` has to bend the
-   *  material of every tier it mounts. */
+  /** How far THIS prop bends in the wind, in metres — the area kind's
+   *  `meta.sway_m` times the entry's own `sway_factor` (`scatterSway`), or 0.
+   *  The weather hangs on the area, the share on the prop, so a boulder can
+   *  stand still in a meadow whose ferns bend fully. It is kept here because
+   *  `showTier` has to bend the material of every tier it mounts. */
   sway: number;
   /** area centre, handed to `loadGlb` so the download queue serves the props
    *  the camera is looking at first */
@@ -990,9 +998,10 @@ export function createGround(): Ground {
                         centre: THREE.Vector3, dist: number, tier: ScatterTier
   ): ScatterProp[] {
     const out: ScatterProp[] = [];
-    // ONE wind question per area, not per entry: the deflection hangs on the
-    // KIND of the painted shape (§ A9), so a meadow's tufts and its trees can
-    // never disagree about whether it is blowing.
+    // ONE wind question per area, not per entry: how hard it BLOWS hangs on
+    // the KIND of the painted shape (§ A9), so a meadow's tufts and its trees
+    // can never disagree about the weather. How much each of them takes part
+    // in it is the entry's own `sway_factor` below.
     const sway = swayFor(area.kind);
     readScatterList(area).forEach((entry, index) => {
       const points = scatterInstances({
@@ -1012,6 +1021,12 @@ export function createGround(): Ground {
       const h = entry.model
         ? scatterTargetH(entry.height_m, entry.prop_height_m)
         : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
+      // THE one place the two authors of the wind meet (§ A9): the area's
+      // amplitude times this prop's factor. Everything downstream — the tuft
+      // below, `showTier`'s material, the clone-or-share decision — reads this
+      // one number off `prop.sway`, so a stone with factor 0 arrives at 0 and
+      // takes the existing "no sway, no clone" path without a second rule.
+      const entrySway = scatterSway(sway, entry.sway_factor);
       // v1 prop: a low cone in the kind's own colour. A `model` URL is honoured
       // asynchronously below — the tufts stand immediately and are replaced by
       // the mesh when it arrives, so a slow asset never delays the ground.
@@ -1023,7 +1038,7 @@ export function createGround(): Ground {
       });
       // The tuft's material is this entry's own, so it is simply patched —
       // the reference height is the cone's, whose tip is what bends.
-      applySway(mat, sway, h);
+      applySway(mat, entrySway, h);
       sink.push(geo, mat);
       // Typed on the BASE classes: `showTier` swaps geometry and material for
       // the loaded ones, which are not a cone and not this material.
@@ -1064,7 +1079,7 @@ export function createGround(): Ground {
         // The authored height wins, the prop's real one governs when none was
         // authored, the flat fallback is the last resort (§ A9).
         targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
-        sway,
+        sway: entrySway,
         near: centre,
         wantUrl: '',
         shownUrl: '',

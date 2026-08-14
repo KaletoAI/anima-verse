@@ -86,6 +86,14 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     width_m: String(prop.width_m), depth_m: String(prop.depth_m),
     height_m: String(prop.height_m),
   })
+  // The wind factor as a string draft — committed on blur/Enter like the
+  // dims. Its own sync effect (below) is enough: the deps are the primitive
+  // value, so a background poll that changes nothing re-renders without
+  // touching what the admin is typing.
+  const [swayDraft, setSwayDraft] = useState(String(prop.sway_factor ?? 1))
+  useEffect(() => {
+    setSwayDraft(String(prop.sway_factor ?? 1))
+  }, [prop.id, prop.sway_factor])
   // Drafts re-arm on PROP CHANGE only — the background poll reloads the
   // list every few seconds while a generation runs, and resetting on every
   // fresh object identity overwrote whatever the admin was typing (user
@@ -192,6 +200,19 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dims, prop.width_m, prop.depth_m, prop.height_m, patch])
+
+  // An empty or unreadable field is not a factor: it commits the default 1,
+  // and the server answers by dropping the key. Clamped here as well so the
+  // input echoes back what was actually stored.
+  const commitSway = useCallback(() => {
+    const n = parseFloat(swayDraft)
+    const next = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 1
+    if (next === (prop.sway_factor ?? 1)) {
+      setSwayDraft(String(prop.sway_factor ?? 1))
+      return
+    }
+    void patch({ sway_factor: next })
+  }, [swayDraft, prop.sway_factor, patch])
 
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
     const cur = prop.rotation || {}
@@ -402,6 +423,16 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                   onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
               </Field>
             ))}
+            {/* Not a dim — it takes no part in the proportional assist, which
+                is why it stands beside the three instead of among them. */}
+            <Field label={t('Sway factor')} compact>
+              <input className="ga-input" type="number" min={0} max={1} step={0.05}
+                style={{ width: 90 }} value={swayDraft}
+                title={t('How much of its ground’s wind this prop takes part in when it is scattered over a painted area: the terrain kind says how far things bend there, this multiplies it. 1 = the full amount, 0 = stands still whatever blows, empty = 1.')}
+                onChange={(e) => setSwayDraft(e.target.value)}
+                onBlur={commitSway}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+            </Field>
           </div>
           <span className="ga-hint">
             {ratios

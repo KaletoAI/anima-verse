@@ -1311,9 +1311,22 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   im Renderer — es gibt dafür keine weiteren Katalog-Schlüssel. Saat: `grass`
   0,06 und `forest` 0,04; eine Welt-Zeile ersetzt den geteilten Eintrag ganz,
   also fehlt der Schlüssel dort, bis er im Typen-Dialog gesetzt wird.
+  **Wie stark ein EINZELNES Prop davon mitmacht, sagt das Prop** (2026-08-14):
+  jeder Bibliotheks-Eintrag trägt einen `sway_factor` 0..1 (Default 1, im
+  Props-Reiter gesetzt), den `GET /play/terrain` wie `prop_height_m` an den
+  Streu-Eintrag hängt — und nur dann, wenn er vom Default abweicht, so dass ein
+  fehlendes Feld überall „weht ganz" heißt. Die wirksame Auslenkung ist das
+  Produkt `sway_m(Art) × sway_factor(Eintrag)`; ein Findling mit Faktor 0 steht
+  still in derselben Wiese, deren Farne voll wehen. Die Art beantwortet „wie
+  stark weht es hier", das Prop „wie sehr bewege ich mich darin" — es gibt
+  dafür weiterhin keinen Katalog-Schlüssel und keinen Override pro
+  Streu-Eintrag.
 
   ```
   types: [ …, {kind: "grass", …, "meta": {"sway_m": 0.06}} ]
+  # so ausgeliefert (nicht so gespeichert — das Feld hängt am Prop):
+  areas: [ …, {"meta": {"scatter": [{…, "model": "/assets/props/rock/model",
+                                     "sway_factor": 0.0}]}} ]
   ```
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)

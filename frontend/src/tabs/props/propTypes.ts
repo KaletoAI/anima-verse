@@ -25,6 +25,11 @@ export interface PropFull {
   tags: string[]
   marker_count: number
   has_model: boolean
+  /** How much of its ground's wind this prop takes part in (0..1) — the
+   *  multiplier on the terrain kind's sway when the prop is scattered over a
+   *  painted area. Always the EFFECTIVE value on a full record (1 = the full
+   *  amount); the server stores it only when it differs. */
+  sway_factor?: number
   /** Generation subject — feeds the render prompt; the name stays free
    *  display text (empty = the name is used). */
   description?: string

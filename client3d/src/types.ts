@@ -367,8 +367,8 @@ export interface TerrainTypeMeta {
 
 /** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
  *  STORES exactly three fields (`app/models/terrain._sanitize_scatter_list`)
- *  and adds `variants` + `prop_height_m` on delivery; `scene/ground.ts` reads
- *  them and hands them to the shared sampler. */
+ *  and adds `variants`, `prop_height_m` + `sway_factor` on delivery;
+ *  `scene/ground.ts` reads them and hands them to the shared sampler. */
 export interface TerrainScatterEntry {
   /** instances per 100 m2 of the painted area; 0 = nothing is scattered */
   density_per_100m2: number;
@@ -384,6 +384,13 @@ export interface TerrainScatterEntry {
    *  as a tree instead of at the flat fallback (`scatterTargetH`). Absent
    *  (a foreign URL, no model, an old cached answer) = the fallback. */
   prop_height_m?: number;
+  /** How much of its ground's wind the prop behind `model` takes part in
+   *  (0..1) — added by `GET /play/terrain` from the library record, never
+   *  stored on the entry and never authored here. The effective deflection is
+   *  the kind's `meta.sway_m` times this (`scatterSway`), so a boulder at 0
+   *  stands still in a meadow whose ferns bend fully. Absent = 1, the full
+   *  amount: the server ships the key only when it differs. */
+  sway_factor?: number;
   /** The resolution tiers this prop REALLY has, per tier token
    *  (`{full: "/assets/props/<id>/model?tier=full", …}`) — added by
    *  `GET /play/terrain`, never stored and never authored. Resolved with the

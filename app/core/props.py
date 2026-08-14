@@ -80,6 +80,14 @@ LOW_TIER = "low"
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
 
+#: How hard THIS prop bends in the wind — a multiplier on the sway of the
+#: ground it grows on (§ A9), not a length. How far a meadow waves is the
+#: terrain KIND's business (``meta.sway_m``); how much of that a single prop
+#: takes part in is the prop's, so a boulder scattered over a waving meadow can
+#: stand still (0.0) while the ferns beside it bend fully (1.0).
+SWAY_FACTOR_DEFAULT = 1.0
+SWAY_FACTOR_MIN, SWAY_FACTOR_MAX = 0.0, 1.0
+
 # Marker fractions may leave the raw bounding box by half a box per axis —
 # the HEIGHT axis reaches a full box below (deep seats in tall machines);
 # see ``sanitize_markers``.
@@ -194,6 +202,43 @@ def _coerce_dim_m(value: Any, fallback: float = DEFAULT_DIM_M) -> float:
     if v <= 0:
         return fallback
     return round(min(v, 100.0), 3)
+
+
+def _coerce_sway_factor(value: Any) -> Optional[float]:
+    """The wind factor as it is STORED: 0..1 with two decimals, or ``None`` for
+    "write no key at all".
+
+    The catalog-number shape rule (``terrain_types._clamped_meta_number``) with
+    the ONE difference that matters here: zero is a real answer. A stone that
+    stands still in a waving meadow is the whole point of the field, so the
+    value that says nothing is not 0.0 but the DEFAULT — an absent key and a
+    stored 1.0 would mean exactly the same thing to every reader, and only one
+    of them may exist.
+
+    Junk (non-numbers, NaN, inf, an empty string) is no authoring statement
+    either and loses the key too. Numbers outside the range are CLAMPED rather
+    than refused: a typing slip should cost the limit, never the record.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    v = round(min(max(v, SWAY_FACTOR_MIN), SWAY_FACTOR_MAX), 2)
+    return None if v == SWAY_FACTOR_DEFAULT else v
+
+
+def sway_factor_of(meta: Dict[str, Any]) -> float:
+    """The EFFECTIVE wind factor of one sidecar — ``SWAY_FACTOR_DEFAULT``
+    whenever the key is absent or unusable.
+
+    Reading is as forgiving as writing is strict: a hand-edited sidecar makes
+    its prop bend at the limit instead of at NaN, which would scale a whole
+    meadow into an invisible matrix.
+    """
+    v = _coerce_sway_factor(meta.get("sway_factor"))
+    return SWAY_FACTOR_DEFAULT if v is None else v
 
 
 def oriented_dims(bbox: Any, rotation: Any = None) -> List[float]:
@@ -412,9 +457,9 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update the editable sidecar fields (name / category / width_m / depth_m
-    / height_m / tags). Patching any dim clears ``dims_estimated`` — a value
-    the admin set is never redistributed again. None when the prop does not
-    exist."""
+    / height_m / tags / sway_factor). Patching any dim clears
+    ``dims_estimated`` — a value the admin set is never redistributed again.
+    None when the prop does not exist."""
     pid = safe_prop_id(prop_id)
     meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
     if not meta:
@@ -438,6 +483,15 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
         meta["dims_estimated"] = False
     if "tags" in patch:
         meta["tags"] = _coerce_tags(patch.get("tags"))
+    if "sway_factor" in patch:
+        # The default is written as ABSENCE, so clearing the field in the admin
+        # (and every junk value) removes the key instead of storing a 1.0 that
+        # a later default change would silently outvote.
+        factor = _coerce_sway_factor(patch.get("sway_factor"))
+        if factor is None:
+            meta.pop("sway_factor", None)
+        else:
+            meta["sway_factor"] = factor
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
 
@@ -506,24 +560,33 @@ def model_tiers(prop_id: str) -> List[str]:
     return sorted(g.tiers()) if g else []
 
 
-def prop_height_m(prop_id: str) -> float:
-    """The prop's REAL height in metres — the very number the Props tab shows
-    and :func:`list_props` reports; ``0.0`` for an id this world has no record
-    for.
+def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
+    """What a SCATTERED prop contributes to the terrain payload (§ A9), out of
+    ONE sidecar read — ``{}`` for an id this world has no record for.
 
-    The lean single-prop read: the master sidecar and the same
-    ``_effective_dims`` every listing goes through, without the gallery,
-    bbox-backfill and per-run detail :func:`get_prop` collects. It is what a
-    payload asks when it wants to know how tall a prop REALLY is (the terrain
-    scatter default, § A9) — the mesh file cannot say, its normalisation
-    destroyed the scale.
+    Two facts, one read, because a scatter entry needs both at once and a
+    second walk of the prop directory per entry would undo exactly what
+    ``with_scatter_props``' cache is there for:
 
-    A record always answers with a usable height: a prop created without dims
-    stores the ``DEFAULT_DIM_M`` cube, and a legacy sidecar with only
-    ``size_m`` is derived in memory. So ``0.0`` means "no such prop", never
-    "no height authored"."""
+    * ``height_m`` — the prop's REAL height in metres, the very number the
+      Props tab shows. The mesh file cannot say it: its normalisation destroyed
+      the scale, so it is the library record or nothing.
+    * ``sway_factor`` — how much of its ground's wind this prop takes part in
+      (see :data:`SWAY_FACTOR_DEFAULT`).
+
+    The lean read: the master sidecar and the same ``_effective_dims`` every
+    listing goes through, without the gallery, bbox-backfill and per-run detail
+    :func:`get_prop` collects.
+
+    A record always answers with a usable height — a prop created without dims
+    stores the ``DEFAULT_DIM_M`` cube, and a legacy sidecar with only ``size_m``
+    is derived in memory. So an EMPTY dict means "no such prop", never "nothing
+    authored"."""
     meta = read_sidecar(prop_id)
-    return _effective_dims(meta)["height_m"] if meta else 0.0
+    if not meta:
+        return {}
+    return {"height_m": _effective_dims(meta)["height_m"],
+            "sway_factor": sway_factor_of(meta)}
 
 
 def prop_id_from_model_url(url: Any) -> str:
@@ -947,6 +1010,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
             "model_file": active.name if active else "",
             "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
+            # Always the EFFECTIVE factor, never the raw key: the admin field
+            # shows what applies, and "absent" is not a state a form can edit.
+            "sway_factor": sway_factor_of(meta),
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]

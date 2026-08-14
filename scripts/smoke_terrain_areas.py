@@ -111,6 +111,40 @@ Throwaway storage. Hand-derived expectations:
       mutant reports entry.height_m as prop_height_m (3 instead of 8.5) —
       every answer differs from the real one at exactly the checked spot.
 
+ [13] `sway_factor` — how much of its ground's wind ONE prop takes part in
+      (2026-08-14). It lives on the PROP sidecar, not on the scatter entry and
+      not in the terrain catalog: how hard it blows is the kind's business,
+      how far a boulder moves in it is the boulder's.
+      (13a) The sanitizer, driven through `props.update_prop` and read back out
+      of the sidecar FILE, so "the key is gone" is a statement about storage:
+        fresh prop        -> no key
+        0        -> stored 0.0   (0 is LEGAL here; it is what the field is for)
+        0.333    -> stored 0.33  (two decimals, the step the admin field offers)
+        5        -> clamped to 1.0, which is the default -> NO key
+        -2       -> clamped to the legal 0.0
+        1        -> no key (an absent key and a stored 1.0 would be two
+                    spellings of one behaviour, so only one may exist)
+        "junk"   -> no key;  ""  -> no key (the emptied admin field)
+        a patch without the key -> the stored 0.25 survives untouched
+        0.004    -> stored 0.0: it rounds to zero, and unlike the terrain
+                    catalog numbers zero is an answer here, not a silence
+      Reading is forgiving where writing is strict: `sway_factor_of({NaN})` is
+      the default 1.0, and the admin record (`get_prop`) always reports the
+      EFFECTIVE factor rather than the raw key.
+      (13b) The payload, same enrichment as [12] and equally PAYLOAD ONLY.
+      With the stone at 0.0 and the tree untouched:
+        stone entry   -> sway_factor 0.0
+        tree entry    -> NO key (the default travels as absence)
+        tuft entry, foreign URL -> no key either
+      the stored area still has exactly its authored fields, and setting the
+      stone to 0.4 afterwards reaches the NEXT payload without the area being
+      rewritten.
+      RED COUNTER-PROBE, EXECUTED: the terrain catalog's own number rule
+      (`_clamped_meta_number`, "a value that rounds to zero says nothing")
+      applied unchanged to this field answers "no key" for 0 where the truth is
+      a stored 0.0 — and a missing key means the default, so that mutant's
+      stone waves along with the meadow. Pinned from both sides.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
 import asyncio
@@ -460,13 +494,14 @@ check("rock tiers", props.model_tiers(ROCK), ["full"])
 check("mesh-less prop has no tier", props.model_tiers(GHOST), [])
 # The DEFAULT_DIM_M reality: a record ALWAYS answers with a height, and 0.0
 # is reserved for "no such prop".
-check("authored height comes back", props.prop_height_m(TREE), 8.5)
+check("authored height comes back",
+      props.prop_scatter_facts(TREE).get("height_m"), 8.5)
 check("no dims authored -> the DEFAULT_DIM_M cube",
-      props.prop_height_m(ROCK), 1.0)
+      props.prop_scatter_facts(ROCK).get("height_m"), 1.0)
 check("no mesh is still a record with a height",
-      props.prop_height_m(GHOST), 1.0)
-check("unknown prop -> 0.0, the 'no such prop' answer",
-      props.prop_height_m("nope"), 0.0)
+      props.prop_scatter_facts(GHOST).get("height_m"), 1.0)
+check("unknown prop -> {}, the 'no such prop' answer",
+      props.prop_scatter_facts("nope"), {})
 
 # Same prop id, foreign host: the strict parse must still refuse it — and it
 # is what makes the "loose URL" mutant below produce a real variants map.
@@ -533,12 +568,12 @@ check("a fresh read carries neither key (payload only)",
 
 # One read per DISTINCT prop, however often it is named: the payload is
 # refetched on every terrain_sig change, and each read walks a prop directory.
-# Both facts come out of the SAME cache entry — a second walk per mention for
-# the height would undo exactly what the cache is there for.
+# All sidecar facts come out of ONE call — a second walk per mention for the
+# height or the wind factor would undo exactly what the cache is there for.
 _calls = []
-_height_calls = []
+_facts_calls = []
 _real_tiers = props.model_tiers
-_real_height = props.prop_height_m
+_real_facts = props.prop_scatter_facts
 
 
 def counting_tiers(prop_id):
@@ -546,9 +581,9 @@ def counting_tiers(prop_id):
     return _real_tiers(prop_id)
 
 
-def counting_height(prop_id):
-    _height_calls.append(prop_id)
-    return _real_height(prop_id)
+def counting_facts(prop_id):
+    _facts_calls.append(prop_id)
+    return _real_facts(prop_id)
 
 
 _va2 = terrain.save_area(
@@ -558,18 +593,18 @@ _va2 = terrain.save_area(
                           {"density_per_100m2": 1,
                            "model": f"/assets/props/{TREE}/model"}]}})
 props.model_tiers = counting_tiers
-props.prop_height_m = counting_height
+props.prop_scatter_facts = counting_facts
 try:
     served = terrain.with_scatter_props(terrain.list_areas())
 finally:
     props.model_tiers = _real_tiers
-    props.prop_height_m = _real_height
+    props.prop_scatter_facts = _real_facts
 # Seven parsable mentions across the two areas, four distinct props (the two
 # without a mesh are looked up once as well and then remembered as "none").
 check("seven mentions of four props -> four tier lookups", sorted(_calls),
       sorted([TREE, ROCK, GHOST, "nope"]))
-check("…and four height lookups, out of the same cache entry",
-      sorted(_height_calls), sorted([TREE, ROCK, GHOST, "nope"]))
+check("…and four sidecar reads, one per distinct prop for BOTH facts",
+      sorted(_facts_calls), sorted([TREE, ROCK, GHOST, "nope"]))
 _by_id = {a["id"]: (a["meta"].get("scatter") or []) for a in served}
 check("every mention still got its variants",
       [len(e.get("variants") or {})
@@ -621,6 +656,116 @@ check("the loose mutant would really answer the foreign URL",
 check("the echoing mutant would really answer 3 m",
       mutant_echo_entry({"model": f"/assets/props/{TREE}/model",
                          "height_m": 3}), 3.0)
+
+print("[13] sway_factor — the sidecar sanitizer and the payload it feeds")
+# (13a) The sanitizer, through the real update path. Every case is read back
+# out of the sidecar FILE, so "the key is gone" is a fact about storage and
+# not about a return value.
+STONE = make_prop("smoke stone", ["full"], height_m=0.6)
+
+
+def stored_factor(pid):
+    """The RAW sidecar value, or the string 'absent' — the two states the rule
+    distinguishes, in one comparable answer."""
+    meta = props.read_sidecar(pid)
+    return meta["sway_factor"] if "sway_factor" in meta else "absent"
+
+
+check("a fresh prop stores no factor at all", stored_factor(STONE), "absent")
+props.update_prop(STONE, {"sway_factor": 0})
+check("0.0 is a legal, STORED value — the whole point of the field",
+      stored_factor(STONE), 0.0)
+props.update_prop(STONE, {"sway_factor": 0.333})
+check("three decimals round to two", stored_factor(STONE), 0.33)
+props.update_prop(STONE, {"sway_factor": 5})
+check("above the range clamps to 1.0 — and 1.0 is the DEFAULT, so the key goes",
+      stored_factor(STONE), "absent")
+props.update_prop(STONE, {"sway_factor": -2})
+check("below the range clamps to the legal 0.0", stored_factor(STONE), 0.0)
+props.update_prop(STONE, {"sway_factor": 1})
+check("an exact 1.0 is never stored", stored_factor(STONE), "absent")
+props.update_prop(STONE, {"sway_factor": 0.25})
+props.update_prop(STONE, {"sway_factor": "junk"})
+check("junk clears the key instead of storing NaN",
+      stored_factor(STONE), "absent")
+props.update_prop(STONE, {"sway_factor": 0.25})
+props.update_prop(STONE, {"sway_factor": ""})
+check("the emptied admin field clears the key too",
+      stored_factor(STONE), "absent")
+props.update_prop(STONE, {"sway_factor": 0.25})
+props.update_prop(STONE, {"name": "smoke stone"})
+check("a patch that does not name the field leaves it alone",
+      stored_factor(STONE), 0.25)
+# 0.004 rounds to 0.0 — legal here, unlike the terrain catalog numbers, where a
+# value that rounds to zero says nothing. Zero IS the statement in this field.
+props.update_prop(STONE, {"sway_factor": 0.004})
+check("a value that rounds to zero really becomes the stored 0.0",
+      stored_factor(STONE), 0.0)
+props.update_prop(STONE, {"sway_factor": 0.25})
+check("the effective read answers the stored value",
+      props.prop_scatter_facts(STONE).get("sway_factor"), 0.25)
+check("…and the DEFAULT where nothing is stored",
+      props.prop_scatter_facts(TREE).get("sway_factor"),
+      props.SWAY_FACTOR_DEFAULT)
+check("a hand-edited NaN bends at the default, not at NaN",
+      props.sway_factor_of({"sway_factor": float("nan")}),
+      props.SWAY_FACTOR_DEFAULT)
+check("the admin record always reports the EFFECTIVE factor",
+      props.get_prop(TREE).get("sway_factor"), props.SWAY_FACTOR_DEFAULT)
+
+# (13b) The payload. Same enrichment as [12], PAYLOAD ONLY, and the default
+# travels as ABSENCE so no client has to tell "no factor" from "the full one".
+props.update_prop(STONE, {"sway_factor": 0.0})
+_vs = terrain.save_area(
+    {"kind": "grass", "polygon": SQUARE,
+     "meta": {"scatter": [{"density_per_100m2": 3,
+                           "model": f"/assets/props/{STONE}/model"},
+                          {"density_per_100m2": 3,
+                           "model": f"/assets/props/{TREE}/model"},
+                          {"density_per_100m2": 3},
+                          {"density_per_100m2": 3, "model": FOREIGN}]}})
+_sway_entries = next(
+    a["meta"]["scatter"] for a in terrain.with_scatter_props(terrain.list_areas())
+    if a["id"] == _vs["id"])
+check("the stone's 0.0 rides along", _sway_entries[0].get("sway_factor"), 0.0)
+check("a prop at the default sends no key",
+      "sway_factor" in _sway_entries[1], False)
+check("a plain tuft entry sends no key", "sway_factor" in _sway_entries[2], False)
+check("a foreign URL sends no key", "sway_factor" in _sway_entries[3], False)
+_stored_sway = next(a["meta"]["scatter"] for a in terrain.list_areas()
+                    if a["id"] == _vs["id"])
+check("nothing of it is stored on the area",
+      [sorted(e) for e in _stored_sway],
+      [["density_per_100m2", "model"], ["density_per_100m2", "model"],
+       ["density_per_100m2"], ["density_per_100m2", "model"]])
+props.update_prop(STONE, {"sway_factor": 0.4})
+_again = next(
+    a["meta"]["scatter"] for a in terrain.with_scatter_props(terrain.list_areas())
+    if a["id"] == _vs["id"])
+check("a changed factor reaches the next payload without touching the area",
+      _again[0].get("sway_factor"), 0.4)
+
+
+# RED COUNTER-PROBE: the rule that makes 0.0 legal is exactly the one a
+# copy of the terrain-catalog sanitizer would get wrong — there a value of 0
+# says nothing and loses its key, which is how a still stone starts waving.
+def mutant_zero_says_nothing(value):
+    """Mutant: the `_clamped_meta_number` rule, applied unchanged."""
+    num = float(value)
+    if num <= 0:
+        return "absent"
+    v = round(min(max(num, 0.0), 1.0), 2)
+    return "absent" if v <= 0 else v
+
+
+props.update_prop(STONE, {"sway_factor": 0})
+differs("mutant 'zero says nothing' drops the very value the field is for",
+        mutant_zero_says_nothing(0), stored_factor(STONE))
+check("the mutant would really leave no key", mutant_zero_says_nothing(0),
+      "absent")
+check("…so its stone would take the default and wave",
+      props.sway_factor_of({}), props.SWAY_FACTOR_DEFAULT)
+
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])
 
