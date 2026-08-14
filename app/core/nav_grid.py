@@ -40,7 +40,12 @@ catalog and the placed footprints are read ONCE into a :class:`NavContext`
 and every cell sample runs against that prefetched data — never a DB or
 config round trip per cell. The context is cached on the terrain and
 relief signatures plus a placement hash, so it survives every route that
-does not change the world; :func:`invalidate_nav_cache` drops it.
+does not change the world; :func:`invalidate_nav_cache` drops it. The HEIGHT
+of a cell is the one thing not carried in the context since v2 (2026-08-14):
+it comes from ``heightfield.world_height``, i.e. the world's 4 m tiles, which
+keep their own per-generation cache of exactly the same shape — the inputs are
+read once per authoring write, a tile is rastered once, and a sample is a
+lookup.
 """
 
 import hashlib
@@ -135,12 +140,20 @@ class NavContext:
     # Best speed factor of the catalog (>= 1.0) — the A* heuristic divides
     # by it so it stays admissible on fast terrain.
     best_factor: float = 1.0
-    # The world relief (E8), prefetched like everything else here: the SAME
-    # levelled grid ``ground_y`` answers from, so a route judges the ground
-    # the walker will be judged against. ``None`` (or an empty grid) is the
-    # flat world, where every height below is 0 and the whole slope machinery
-    # is inert.
+    # The world relief (E8) as the OVERVIEW raster, prefetched like everything
+    # else here. Since the tiles (v2, 2026-08-14) it answers exactly one
+    # question for a world context — IS there a relief at all
+    # (:attr:`has_relief`) — because the overview may be coarsened and a route
+    # must not be judged on a ground nobody authored. ``None`` (or an empty
+    # grid) is the flat world, where every height below is 0 and the whole
+    # slope machinery is inert.
     height_field: Optional[Dict[str, Any]] = None
+    # Does this context read the WORLD's tiles for its heights? True for the
+    # real one (:func:`build_nav_context`), which is the rule side of "rules
+    # read tiles". A hand-built context leaves it False and is judged against
+    # the ``height_field`` it was handed — that is what makes a cliff testable
+    # without a world behind it.
+    world_tiles: bool = False
     # World points of every authored boundary opening — the ramp ends the
     # steepness rule is not allowed to seal (see ``OPENING_EXEMPT_M``).
     openings: Tuple[Point, ...] = ()
@@ -170,7 +183,13 @@ class NavContext:
     @property
     def has_relief(self) -> bool:
         """Does this world have a relief at all? A flat world skips every
-        height sample — the gate stays exactly as cheap as it was."""
+        height sample — the gate stays exactly as cheap as it was.
+
+        Asked of the OVERVIEW even when the heights come from the tiles: the
+        two are empty together (both are built from the same authored boxes,
+        and without one there is neither a grid nor a tile), and the overview
+        is one prefetched dict rather than a set that would have to be built.
+        """
         return bool(self.height_field
                     and len(self.height_field.get("heights") or []) >= 2)
 
@@ -185,9 +204,21 @@ class NavContext:
         "footprint wins" draws for passability. Under an UNFLAGGED place the
         authored landscape simply runs on, and this reads it like any other
         ground.
+
+        IT IS ``heightfield.world_height`` NOW (v2, 2026-08-14), i.e. the 4 m
+        TILES — the very function the walking gate of ``POST /play/pos`` asks.
+        That identity is the point of the change: a route that led a traveller
+        somewhere the gate then refuses is the two movement models disagreeing
+        about the same square metre, and with the overview coarsened past 4 m
+        (one hill painted 16 km out is enough) they did. A tile is rastered on
+        demand and cached per process, so a cell sample stays a lookup and the
+        prefetch discipline of this file holds.
         """
         if not self.has_relief:
             return 0.0
+        if self.world_tiles:
+            from app.core.heightfield import world_height
+            return world_height(x, z)
         from app.core.heightfield import sample_height
         return sample_height(self.height_field, x, z)
 
@@ -325,7 +356,8 @@ def build_nav_context() -> NavContext:
     ctx = NavContext(areas=areas, catalog=catalog, footprints=footprints,
                      data_bounds=_data_bounds(areas, footprints), sig=key,
                      default_kind=default_kind(), best_factor=best,
-                     height_field=get_field(), openings=tuple(openings),
+                     height_field=get_field(), world_tiles=True,
+                     openings=tuple(openings),
                      max_step_m=max_step_m, max_slope_deg=max_slope_deg)
     _CACHE = (key, ctx)
     return ctx
