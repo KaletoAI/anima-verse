@@ -163,6 +163,103 @@
  *     axes, so (2, 2) is one of its 25 samples -> max lift 5 -> draped.
  * Both readings are taken on support points, so the bilinear reading used here
  * and the drawn sampler the client uses agree on them to the digit.
+ *
+ * ============================================================================
+ * [8] THE TILED FIELD — `sampleCompositeHeight` and the composite rectangles
+ * ============================================================================
+ * § A16.3. Since v2 the same landscape arrives as TWO rasters: a coarsenable
+ * overview over everything, and 256 m tiles in the always-fine 4 m step. The
+ * ladder is fine tile -> overview -> 0, and the two are NEVER mixed for one
+ * point.
+ *
+ * The two fields below are built to DISAGREE on purpose — a precedence check
+ * can prove nothing against two rasters that answer the same. Disagreement is
+ * also the documented state as soon as the overview is coarsened (§ A16.3: the
+ * resolution itself, plus a levelling ramp that is "one cell wide" in either
+ * raster and therefore reaches further in the coarse one).
+ *
+ *   OVERVIEW  origin (0, 0), step 256, 3 x 3 support points at 0, 256, 512,
+ *             heights[j][i] = i + 3j — i.e. the plane
+ *                 ov(x, z) = x/256 + 3·z/256
+ *             (bilinear over a plane IS that plane, so every reading inside
+ *              [0, 512]^2 is the formula; outside it clamps to the border)
+ *   TILES     tile (tx, tz) = the 65 x 65 window of the FINE ramp
+ *                 fine(x, z) = x/128
+ *             at origin (256·tx, 256·tz), step 4: heights[j][i] =
+ *             (256·tx + 4i)/128. Loaded are (0,0) and (1,0). The fine ramp
+ *             climbs TWICE as fast as the overview plane, so any reading says
+ *             at once which raster answered it.
+ *
+ * (25) `tileKeyAt` IS THE ONE KEY MAPPING: (0, 0) -> "0,0"; (255.9, 10) ->
+ *      "0,0"; (256, 0) -> "1,0", because a point on a seam belongs to the tile
+ *      east/south of it; (-1, -300) -> "-1,-2", since floor(-1/256) = -1 and
+ *      floor(-300/256) = floor(-1.171875) = -2 — negative tiles are ordinary.
+ * (26) THE PRECEDENCE TABLE.
+ *      (128, 8) lies in the loaded tile (0,0): fine = 128/128 = 1, while the
+ *          overview would have said 128/256 + 3·8/256 = 0.5 + 0.09375 =
+ *          0.59375. The fine tile wins, and the gap is the proof that it did.
+ *      (384, 8) lies in the loaded tile (1,0): fine = 384/128 = 3, against an
+ *          overview reading of 1.5 + 0.09375 = 1.59375.
+ *      (100, 300) lies in tile "0,1", which is NOT loaded -> the overview:
+ *          100/256 + 3·300/256 = 0.390625 + 3.515625 = 3.90625.
+ *      OUTSIDE EVERYTHING -> 0, the flat world: the same point with no overview
+ *          in the composite at all, an empty composite, and a null one.
+ * (27) NEVER MIXED, and here is where that shows. A (synthetic) short tile at
+ *      (0,0) carrying only 3 x 3 points at step 4, heights[j][i] = i, so its
+ *      support points at x = 0, 4, 8 are 0, 1, 2. At (128, 8) it clamps to its
+ *      own east border and answers 2 — it does NOT let the overview (0.59375)
+ *      fill the part of the tile square it has no support point for. A loaded
+ *      tile answers alone.
+ * (28) THE SEAM IS CONTINUOUS, because both tiles carry the support points on
+ *      x = 256: tile (0,0) as its column i = 64, (0 + 4·64)/128 = 2, and tile
+ *      (1,0) as its column i = 0, (256 + 0)/128 = 2. Read out of either field
+ *      the answer at (256, 12) is that same 2.
+ *      Through the composite, (255.999, 12) is read out of tile (0,0) and — the
+ *      ramp being linear, so bilinear reproduces it — is 255.999/128 =
+ *      1.9999921875, while (256, 12) is read out of tile (1,0) and is 2. The
+ *      difference across the seam is 7.8125e-6: the ramp's own rise over that
+ *      millimetre, not a step.
+ *      RED COUNTER-PROBE: corrupt tile (0,0)'s east column to 9. That field now
+ *      answers 9 at (256, 12) — a seam gap of 7 m against its neighbour — and
+ *      the composite reading just west of the seam becomes
+ *      1.96875·0.00025 + 9·0.99975 = 8.9982421875 (the cell between
+ *      h[3][63] = 252/128 = 1.96875 and the corrupted 9, at tx = 0.99975), so
+ *      the walk across the seam drops 6.9982421875 m. The continuity check
+ *      bites.
+ * (29) THE RECTANGLE HELPERS walk the FINE lattice — a loaded tile's step, 4 m,
+ *      anchored on its origin — and ask the ladder per grid point. The
+ *      rectangle x in [0, 8], z in [248, 264] is half tile, half overview:
+ *        x lines: 0, 4, 8                (the two ends plus the line between)
+ *        z lines: 248, 252, 256, 260, 264
+ *        z = 248, 252 -> tile "0,0" -> x/128 -> 0, 0.03125, 0.0625
+ *        z = 256, 260, 264 -> tile "0,1", not loaded -> the overview, whose
+ *            largest reading here is ov(8, 264) = 0.03125 + 3.09375 = 3.125
+ *            and whose smallest is ov(0, 256) = 3
+ *        max = 3.125 (overview half), min = 0 (tile half, at x = 0)
+ *        -> maxCompositeHeightIn = 3.125, compositeHeightRangeIn = 3.125.
+ *      Both halves are visited, and each supplies one end of the answer.
+ * (30) WHAT THE FINE HALF IS WORTH: over x in [120, 136], z in [0, 8] —
+ *      entirely inside the loaded tile (0,0) — the lattice lines are 120, 124,
+ *      128, 132, 136 and 0, 4, 8, so max = 136/128 = 1.0625, min = 120/128 =
+ *      0.9375, range 0.125.
+ *      RED COUNTER-PROBE: the same rectangle with NO tile loaded is walked on
+ *      the overview's own 256 m lattice — lines 120, 136 and 0, 8 — and answers
+ *      max = ov(136, 8) = 0.53125 + 0.09375 = 0.625, min = ov(120, 0) =
+ *      0.46875, range 0.15625. A veil hung on that maximum floats 0.4375 m
+ *      below the hill the tiles know about, i.e. inside it.
+ * (31) AND WHICH LATTICE IS WALKED IS THE POINT, not a detail — a ramp cannot
+ *      show it, because a plane has its extremes on the rectangle's corners no
+ *      matter how densely you sample it. So: a tile (0,0) of 65 x 65 zeroes
+ *      with a single 5 m spike on its support point i = j = 32, i.e. at
+ *      (128, 128). Over x, z in [120, 136] the FINE lattice asks 120, 124, 128,
+ *      132, 136 on both axes, hits the spike and answers max 5, range 5. The
+ *      overview's own 256 m lattice would ask nothing but the four corners of
+ *      the rectangle — all of them zeroes OF THE SAME TILE — and hang the veil
+ *      at 0, straight through a spike it never sampled.
+ * (32) WITHOUT ANY TILE the overview's grid IS the finest there is, and it is
+ *      walked: an overview of 3 x 3 points at step 4 with a 5 m peak on (4, 4)
+ *      answers max 5 over x, z in [0, 8] — the lines 0, 4, 8 hit the peak. A
+ *      composite that found no lattice at all would answer 0 here.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -202,7 +299,10 @@ function check(label, actual, expected, eps = 1e-9) {
   }
 }
 
-const { sampleWorldHeight } = await loadModule(SRC, 'worldHeight');
+const {
+  sampleWorldHeight, tileKeyAt, sampleCompositeHeight, maxCompositeHeightIn,
+  compositeHeightRangeIn,
+} = await loadModule(SRC, 'worldHeight');
 const { groundLift, plateLift, standY } = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground');
 const { slopeBlocks } = await loadModule(
@@ -343,6 +443,175 @@ const grid = [-4, -2, 0, 2, 4];
 const cross = (vals) => vals.flatMap((x) => vals.map((z) => [x, z]));
 check('the 3x3 probe sees nothing — the finding', maxLift(cross(axis3)), 0);
 check('the drape grid (2 m) finds the hill', maxLift(cross(grid)), 5);
+
+function checkText(label, actual, expected) {
+  if (actual === expected) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual}`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected ${expected}\n       actual   ${actual}`);
+  }
+}
+
+console.log('\n[8] the tiled field — fine tile > overview > 0');
+const TILE_M = 256;
+const TILE_STEP = 4;
+const TILE_N = 65;
+
+// The overview: the plane ov(x, z) = x/256 + 3·z/256 on a coarsened 256 m
+// lattice — heights[j][i] = i + 3j at x, z in {0, 256, 512}.
+const OVERVIEW = {
+  origin_x: 0, origin_z: 0, step_m: 256, rows: 3, cols: 3,
+  heights: [[0, 1, 2], [3, 4, 5], [6, 7, 8]],
+};
+
+/** One tile of the fine ramp fine(x, z) = x/128 — the header's formula written
+ *  out over the 65 x 65 window of tile (tx, tz), nothing recorded. */
+function rampTile(tx, tz) {
+  const originX = tx * TILE_M;
+  const originZ = tz * TILE_M;
+  const heights = [];
+  for (let j = 0; j < TILE_N; j += 1) {
+    const row = [];
+    for (let i = 0; i < TILE_N; i += 1) row.push((originX + i * TILE_STEP) / 128);
+    heights.push(row);
+  }
+  return {
+    origin_x: originX, origin_z: originZ, step_m: TILE_STEP,
+    rows: TILE_N, cols: TILE_N, heights,
+  };
+}
+const TILE_00 = rampTile(0, 0);
+const TILE_10 = rampTile(1, 0);
+const COMPOSITE = {
+  tileM: TILE_M,
+  overview: OVERVIEW,
+  tiles: new Map([['0,0', TILE_00], ['1,0', TILE_10]]),
+};
+
+check('the generated tile carries the ramp at its west edge',
+  TILE_00.heights[0][0], 0);
+check('...and at its east edge, 64 steps of 4 m later',
+  TILE_00.heights[0][64], 2);
+check('the eastern tile starts where the western one ended',
+  TILE_10.heights[0][0], 2);
+
+checkText('the key of the origin', tileKeyAt(TILE_M, 0, 0), '0,0');
+checkText('a point just short of the seam', tileKeyAt(TILE_M, 255.9, 10), '0,0');
+checkText('the seam belongs to the tile east of it',
+  tileKeyAt(TILE_M, 256, 0), '1,0');
+checkText('negative tiles are ordinary tiles',
+  tileKeyAt(TILE_M, -1, -300), '-1,-2');
+
+console.log('[8a] the precedence table');
+check('a point in a loaded tile reads the fine ramp',
+  sampleCompositeHeight(COMPOSITE, 128, 8), 1);
+check('...where the overview would have said something else',
+  sampleWorldHeight(OVERVIEW, 128, 8), 0.59375);
+check('the eastern tile answers for its own square',
+  sampleCompositeHeight(COMPOSITE, 384, 8), 3);
+check('...against an overview reading of', sampleWorldHeight(OVERVIEW, 384, 8),
+  1.59375);
+check('an indexed but unloaded tile falls to the overview',
+  sampleCompositeHeight(COMPOSITE, 100, 300), 3.90625);
+check('no overview under an unloaded tile: the flat world',
+  sampleCompositeHeight(
+    { tileM: TILE_M, overview: null, tiles: new Map([['0,0', TILE_00]]) },
+    100, 300), 0);
+check('an empty composite is flat', sampleCompositeHeight(
+  { tileM: TILE_M, overview: null, tiles: new Map() }, 0, 0), 0);
+check('no composite at all is flat', sampleCompositeHeight(null, 128, 8), 0);
+
+console.log('[8b] the two rasters are never mixed for one point');
+const SHORT_TILE = {
+  origin_x: 0, origin_z: 0, step_m: 4, rows: 3, cols: 3,
+  heights: [[0, 1, 2], [0, 1, 2], [0, 1, 2]],
+};
+check('a loaded tile answers alone, even where it has no support point',
+  sampleCompositeHeight(
+    { tileM: TILE_M, overview: OVERVIEW, tiles: new Map([['0,0', SHORT_TILE]]) },
+    128, 8), 2);
+check('...and that is NOT the overview it refused to mix in',
+  sampleWorldHeight(OVERVIEW, 128, 8), 0.59375);
+
+console.log('[8c] the seam is continuous, because both sides carry the point');
+check('the western tile carries the seam column',
+  sampleWorldHeight(TILE_00, 256, 12), 2);
+check('the eastern tile carries the very same point',
+  sampleWorldHeight(TILE_10, 256, 12), 2);
+const westOfSeam = sampleCompositeHeight(COMPOSITE, 255.999, 12);
+const onSeam = sampleCompositeHeight(COMPOSITE, 256, 12);
+check('a millimetre west of the seam', westOfSeam, 1.9999921875);
+check('on the seam itself', onSeam, 2);
+check('the walk across it is the ramp over that millimetre',
+  onSeam - westOfSeam, 7.8125e-6);
+
+const CORRUPT_00 = {
+  ...TILE_00,
+  heights: TILE_00.heights.map((row) => {
+    const copy = row.slice();
+    copy[64] = 9;
+    return copy;
+  }),
+};
+const CORRUPT = {
+  tileM: TILE_M,
+  overview: OVERVIEW,
+  tiles: new Map([['0,0', CORRUPT_00], ['1,0', TILE_10]]),
+};
+check('RED COUNTER-PROBE: a corrupted border column breaks the shared point',
+  sampleWorldHeight(CORRUPT_00, 256, 12) - sampleWorldHeight(TILE_10, 256, 12), 7);
+check('...and the composite drops seven metres across the seam',
+  sampleCompositeHeight(CORRUPT, 255.999, 12)
+    - sampleCompositeHeight(CORRUPT, 256, 12), 6.9982421875);
+
+console.log('[8d] the rectangle helpers walk the fine lattice');
+check('half tile, half overview: the highest ground',
+  maxCompositeHeightIn(COMPOSITE, 0, 248, 8, 264), 3.125);
+check('...and the rise from the tile floor to the overview',
+  compositeHeightRangeIn(COMPOSITE, 0, 248, 8, 264), 3.125);
+check('inside the loaded tile: the highest ground',
+  maxCompositeHeightIn(COMPOSITE, 120, 0, 136, 8), 1.0625);
+check('...and how much it moves', compositeHeightRangeIn(COMPOSITE, 120, 0, 136, 8),
+  0.125);
+const OVERVIEW_ONLY = { tileM: TILE_M, overview: OVERVIEW, tiles: new Map() };
+check('RED COUNTER-PROBE: without the tile the veil hangs on the coarse plane',
+  maxCompositeHeightIn(OVERVIEW_ONLY, 120, 0, 136, 8), 0.625);
+check('...which is 0.4375 m below the hill — inside it',
+  maxCompositeHeightIn(COMPOSITE, 120, 0, 136, 8)
+    - maxCompositeHeightIn(OVERVIEW_ONLY, 120, 0, 136, 8), 0.4375);
+check('...and a different rise as well',
+  compositeHeightRangeIn(OVERVIEW_ONLY, 120, 0, 136, 8), 0.15625);
+// A spike between two coarse lines — the case that says WHICH lattice is
+// walked. Everything is zero but the support point (128, 128) of tile (0,0).
+const SPIKE_00 = rampTile(0, 0);
+SPIKE_00.heights = SPIKE_00.heights.map((row, j) =>
+  row.map((_, i) => (i === 32 && j === 32 ? 5 : 0)));
+const SPIKE = {
+  tileM: TILE_M, overview: OVERVIEW, tiles: new Map([['0,0', SPIKE_00]]),
+};
+check('the spike sits where the derivation puts it',
+  sampleCompositeHeight(SPIKE, 128, 128), 5);
+check('the fine lattice finds a spike between the coarse lines',
+  maxCompositeHeightIn(SPIKE, 120, 120, 136, 136), 5);
+check('...and calls the ground anything but level',
+  compositeHeightRangeIn(SPIKE, 120, 120, 136, 136), 5);
+check('RED COUNTER-PROBE: the corners of that rectangle are all zero',
+  Math.max(...[[120, 120], [136, 120], [120, 136], [136, 136]].map(
+    ([x, z]) => sampleCompositeHeight(SPIKE, x, z))), 0);
+check('without a tile the overview grid is walked, and it is the finest there is',
+  maxCompositeHeightIn({
+    tileM: TILE_M,
+    overview: { origin_x: 0, origin_z: 0, step_m: 4, rows: 3, cols: 3,
+      heights: [[0, 0, 0], [0, 5, 0], [0, 0, 0]] },
+    tiles: new Map(),
+  }, 0, 0, 8, 8), 5);
+
+check('no composite: a flat world has no maximum',
+  maxCompositeHeightIn(null, 0, 0, 100, 100), 0);
+check('...and no range either', compositeHeightRangeIn(
+  { tileM: TILE_M, overview: null, tiles: new Map() }, 0, 0, 100, 100), 0);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

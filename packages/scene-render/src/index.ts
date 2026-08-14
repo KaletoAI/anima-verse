@@ -30,7 +30,9 @@ export { sampleTerrain, drapeGeometry, TERRAIN_CELLS } from './terrain'
 
 export { sampleWorldHeight, sampleGroundHeight, worldHeightRange,
   maxWorldHeightIn, worldHeightRangeIn } from './worldHeight'
-export type { WorldHeightField } from './worldHeight'
+export { tileKeyAt, sampleCompositeHeight, maxCompositeHeightIn,
+  compositeHeightRangeIn } from './worldHeight'
+export type { WorldHeightField, WorldHeightTiles } from './worldHeight'
 
 export { gridPlate, subdivideOnGrid, gridStepFor, GRID_MAX_CELLS } from './gridMesh'
 export type { GridBox, GridGeometry, PlateGeometry } from './gridMesh'

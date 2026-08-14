@@ -18,6 +18,13 @@
  * `client3d/scripts/smoke_world_height.mjs` — with the same field and the same
  * expected numbers. Change one side, change the table, change the other.
  *
+ * SINCE v2 THE FIELD ARRIVES TWICE (§ A16.3): a coarsenable overview for the
+ * distance, and 256 m tiles in an always-fine 4 m step for everything the
+ * ground DECIDES. `sampleWorldHeight` and its rectangle helpers read ONE field
+ * and are unchanged by that — they are how a single grid is read, overview or
+ * tile alike. The ladder over both lives at the bottom of this file
+ * (`WorldHeightTiles`, `sampleCompositeHeight`).
+ *
  * `three` is not imported here (nor anything else): this is pure arithmetic,
  * which is what lets the smoke transpile the file and run it on its own.
  */
@@ -261,4 +268,165 @@ function scanRect(field: WorldHeightField | null | undefined,
   }
   if (!Number.isFinite(max) || !Number.isFinite(min)) return { min: 0, max: 0 }
   return { min, max }
+}
+
+/**
+ * The TILED height field as a client holds it (§ A16.3) — the coarse overview
+ * plus whichever fine tiles have arrived.
+ *
+ * WHY THERE ARE TWO GRIDS AT ALL: one grid cannot be both. The overview covers
+ * the whole world and is therefore coarsened as soon as somebody paints far
+ * out — measured 4 m → 32 m — and at 32 m the ground a walker is judged against
+ * is no longer the ground anybody authored. So the fine 4 m raster is delivered
+ * in 256 m tiles on demand, every rule reads those, and the overview is a
+ * PICTURE for the distance and nothing else.
+ *
+ * `tileM` is the payload's `tile_m`, never a constant in this file: the tile
+ * size is a server decision, and a renderer that hardcodes 256 keeps answering
+ * with a straight face the day that number moves. `tiles` holds what is LOADED;
+ * which tiles EXIST is the loader's business, and it does not have to be told
+ * here — an unindexed tile and a not-yet-fetched one read the same way, through
+ * the overview.
+ */
+export interface WorldHeightTiles {
+  tileM: number
+  overview: WorldHeightField | null
+  tiles: Map<string, WorldHeightField>
+}
+
+/**
+ * Which tile owns (x, z) — `"tx,tz"`, the key of the tiles map (§ A16.3).
+ *
+ * THE ONE KEY MAPPING. Everything below goes through it so the floor rule lives
+ * in a single place: a second `Math.floor` elsewhere is a second answer to
+ * "which tile", and two answers part company on the seams first — exactly where
+ * a wrong tile is a visible step in the ground.
+ *
+ * A point ON a seam belongs to the tile east/south of it. That choice is
+ * invisible in the height and only decides which array is read: both neighbours
+ * carry the shared support point, with the same number (the 65 × 65 grids
+ * duplicate their borders on purpose).
+ */
+export function tileKeyAt(tileM: number, x: number, z: number): string {
+  return `${Math.floor(x / tileM)},${Math.floor(z / tileM)}`
+}
+
+/**
+ * Height of the world ground at (x, z) from the tiled field — fine tile first.
+ *
+ * THE PRECEDENCE IS BINDING FOR EVERY READER (§ A16.3):
+ *
+ *   the tile containing the point, if it is loaded  → bilinear out of IT
+ *   else the overview                               → bilinear out of IT
+ *   else 0                                          (the flat world)
+ *
+ * The server's own reading (`heightfield.world_height`) is the same ladder
+ * minus its middle rung — it never looks at the overview at all.
+ *
+ * AND THE TWO SOURCES ARE NEVER MIXED for one point, which is the part that
+ * looks over-strict until you see why. A tile and a coarsened overview are not
+ * two accuracies of one number, they are two different landscapes: at 32 m
+ * seven of eight support points per axis are gone, so a 22 m hill has none left
+ * and simply does not exist in the overview — and the levelling ramp around a
+ * footprint (§ A16.1) is "one cell wide", i.e. 32 m there against 4 m in the
+ * tile, so a levelled place reaches differently far in the two rasters even
+ * where resolution alone would explain nothing. Averaging or blending them
+ * would invent ground that neither raster claims.
+ *
+ * A loaded tile therefore answers ALONE, including where it has no support
+ * point for the question: `sampleWorldHeight` clamps to the tile's border, and
+ * that clamp is the tile's statement, not a gap the overview may fill.
+ */
+export function sampleCompositeHeight(c: WorldHeightTiles | null | undefined,
+                                      x: number, z: number): number {
+  if (!c) return 0
+  const tile = c.tileM > 0 ? c.tiles?.get(tileKeyAt(c.tileM, x, z)) : undefined
+  if (tile) return sampleWorldHeight(tile, x, z)
+  // `sampleWorldHeight` answers 0 for a missing field, so the last rung of the
+  // ladder needs no branch of its own.
+  return sampleWorldHeight(c.overview, x, z)
+}
+
+/**
+ * The lattice the rectangle helpers walk: the FINEST grid the composite holds.
+ *
+ * A loaded tile decides it whenever there is one — its `step_m` is the fine 4 m
+ * that never coarsens, and its origin is a multiple of the tile size, hence a
+ * point of the one world-origin-anchored grid. WHICH tile we take is therefore
+ * irrelevant: all tile origins are congruent modulo the step, so they all
+ * describe the same lattice. Without any tile the overview's own grid is the
+ * finest thing there is, and with neither there is no ground to walk at all.
+ */
+function compositeLattice(c: WorldHeightTiles
+): { originX: number; originZ: number; step: number } | null {
+  for (const tile of c.tiles?.values() ?? []) {
+    if (tile && tile.step_m > 0) {
+      return { originX: tile.origin_x, originZ: tile.origin_z, step: tile.step_m }
+    }
+  }
+  const ov = c.overview
+  if (ov && ov.step_m > 0) {
+    return { originX: ov.origin_x, originZ: ov.origin_z, step: ov.step_m }
+  }
+  return null
+}
+
+/** The scan both composite rectangle queries share — the same shape as
+ *  `scanRect`, on the composite ladder instead of one field. */
+function scanCompositeRect(c: WorldHeightTiles | null | undefined,
+                           x0: number, z0: number, x1: number, z1: number
+): { min: number; max: number } {
+  if (!c) return { min: 0, max: 0 }
+  const lat = compositeLattice(c)
+  if (!lat) return { min: 0, max: 0 }
+  const xs = rectLines(Math.min(x0, x1), Math.max(x0, x1), lat.originX, lat.step)
+  const zs = rectLines(Math.min(z0, z1), Math.max(z0, z1), lat.originZ, lat.step)
+  let max = -Infinity
+  let min = Infinity
+  for (const z of zs) {
+    for (const x of xs) {
+      // Every grid point is asked through the composite ladder, so a rectangle
+      // straddling a seam takes each sample from whatever source owns THAT
+      // point — the alternative, picking one source per rectangle, is the
+      // mixing this file refuses one paragraph up. Simplicity over cleverness
+      // on purpose: the callers are the fog quads, which rebuild when the fog
+      // moves and never per frame.
+      const h = sampleCompositeHeight(c, x, z)
+      if (h > max) max = h
+      if (h < min) min = h
+    }
+  }
+  if (!Number.isFinite(max) || !Number.isFinite(min)) return { min: 0, max: 0 }
+  return { min, max }
+}
+
+/**
+ * Highest ground inside a rectangle — `maxWorldHeightIn` on the tiled field.
+ *
+ * Same purpose (the fog quads of § A12 have to hang above the highest thing
+ * under them), same stride guard (`MAX_RECT_LINES`), one difference worth
+ * naming: it reads the BILINEAR height at each sample, not the drawn
+ * `sampleGroundHeight`. On the lattice points it walks, the two are the same
+ * number — a cell corner is a support point, and that is where the drawn planes
+ * meet the field. They can differ only on the rectangle's own edges when those
+ * fall inside a cell, by at most a quarter of that cell's twist. A veil is a
+ * cloud; a quarter twist of a 4 m cell is not what makes a mountain poke
+ * through it.
+ */
+export function maxCompositeHeightIn(c: WorldHeightTiles | null | undefined,
+                                     x0: number, z0: number,
+                                     x1: number, z1: number): number {
+  return scanCompositeRect(c, x0, z0, x1, z1).max
+}
+
+/** How much the ground rises and falls inside a rectangle, in metres —
+ *  `worldHeightRangeIn` on the tiled field, over the samples
+ *  `maxCompositeHeightIn` takes. The fog's tiling decision asks it: a band over
+ *  ground that does not move is one quad, not a hundred that all hang at the
+ *  same height. 0 without any field, because a world with no relief is flat. */
+export function compositeHeightRangeIn(c: WorldHeightTiles | null | undefined,
+                                       x0: number, z0: number,
+                                       x1: number, z1: number): number {
+  const { min, max } = scanCompositeRect(c, x0, z0, x1, z1)
+  return max - min
 }
