@@ -260,6 +260,59 @@
  *      walked: an overview of 3 x 3 points at step 4 with a 5 m peak on (4, 4)
  *      answers max 5 over x, z in [0, 8] — the lines 0, 4, 8 hit the peak. A
  *      composite that found no lattice at all would answer 0 here.
+ *
+ * ============================================================================
+ * [8e] THE DRAWN GROUND OF THE COMPOSITE — `sampleCompositeGroundHeight`
+ * ============================================================================
+ * Task 3 review, finding 1. A renderer does not draw the bilinear field, it
+ * draws two triangles per cell of `cellM` (`gridStepFor`, which DOUBLES the
+ * field's step until the plate fits its budget). Over such a cell the drawn
+ * surface stands up to a quarter of the cell's twist above the field — so a
+ * veil hung on the fine 4 m lattice alone would hang INSIDE the hill the
+ * player sees, and a figure placed at the bilinear height would float or sink.
+ *
+ * THE FIELD FOR THIS SECTION: a flat 3 x 3 overview at step 256 (so the drawn
+ * lattice is anchored at the origin and the overview contributes nothing), and
+ * one loaded tile (0,0) of 65 x 65 zeroes with a single support point lifted —
+ * ONE corner of a cell, which is what a twist is.
+ *
+ * (33) THE TWIST TILE has its 8 m on the support point i = j = 34, i.e. at
+ *      (136, 136); everything else in the tile is 0. On a CELL CORNER the drawn
+ *      ground IS the composite reading — both triangulations meet the field
+ *      there: (136, 136) -> 8 and (128, 128) -> 0, at any cell size.
+ * (34) INSIDE A 4 m CELL, at (134, 134): the cell is [132, 136]^2 with corners
+ *      h00 = h10 = h01 = 0 and h11 = 8, tx = tz = 0.5. tz <= tx, so the drawn
+ *      half is h00 + tx·(h10 − h00) + tz·(h11 − h10) = 0 + 0 + 0.5·8 = 4, while
+ *      the BILINEAR reading of the same point is 0.25 · 8 = 2. The gap is 2 m —
+ *      a quarter of the cell's twist |0 + 8 − 0 − 0| = 8, exactly as the header
+ *      of `sampleGroundHeight` says.
+ * (35) THE SAME POINT ON AN 8 m PLATE, (134, 134) with cellM = 8: the cell is
+ *      [128, 136]^2, whose corners are (128,128) = (136,128) = (128,136) = 0 and
+ *      (136,136) = 8; tx = tz = 6/8 = 0.75, tz <= tx -> 0 + 0.75·0 + 0.75·8 = 6.
+ *      SO THE COARSER PLATE STANDS HIGHER STILL: 6 against the 4 of the 4 m
+ *      cells and the 2 of the field. That is the finding in one number.
+ * (36) THE RECTANGLE HELPERS ON THAT PLATE, x, z in [130, 134] — a rectangle
+ *      wholly inside ONE 8 m cell:
+ *        cellM = 8: the lines are the two ends alone (no multiple of 8 lies
+ *          strictly between 130 and 134), so four samples:
+ *          (130,130): tx = tz = 0.25 -> 0.25·8 = 2
+ *          (134,130): tx = 0.75, tz = 0.25 -> tz <= tx -> 0.25·8 = 2
+ *          (130,134): tx = 0.25, tz = 0.75 -> tz > tx -> 0.25·8 = 2
+ *          (134,134): 6 (case 35)
+ *          -> max 6, min 2, range 4.
+ *        WITHOUT cellM the fine lattice is walked — lines 130, 132, 134 per
+ *          axis — and the highest of those nine samples is the 4 of case (34),
+ *          the lowest 0: max 4, range 4.
+ *      RED COUNTER-PROBE: the bilinear reading of the highest sample is 2
+ *      (case 34), so a veil hung the way task 3 shipped it would sit 6 − 2 =
+ *      4 m below the ground that is drawn — inside the hill.
+ * (37) AND IT CUTS BOTH WAYS: what the plate does NOT have, the veil must not
+ *      clear either. A tile with its 5 m on the support point i = j = 33, i.e.
+ *      at (132, 132), sits BETWEEN the corners of an 8 m grid. Over
+ *      x, z in [128, 136] the fine lattice asks 128, 132, 136 and finds 5,
+ *      while the 8 m plate asks 128 and 136 only — all four corners are 0, and
+ *      0 is exactly how high that ground is drawn at 8 m cells. The helper
+ *      answers for the surface on screen, not for the field under it.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -300,8 +353,8 @@ function check(label, actual, expected, eps = 1e-9) {
 }
 
 const {
-  sampleWorldHeight, tileKeyAt, sampleCompositeHeight, maxCompositeHeightIn,
-  compositeHeightRangeIn,
+  sampleWorldHeight, tileKeyAt, sampleCompositeHeight,
+  sampleCompositeGroundHeight, maxCompositeHeightIn, compositeHeightRangeIn,
 } = await loadModule(SRC, 'worldHeight');
 const { groundLift, plateLift, standY } = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground');
@@ -612,6 +665,66 @@ check('no composite: a flat world has no maximum',
   maxCompositeHeightIn(null, 0, 0, 100, 100), 0);
 check('...and no range either', compositeHeightRangeIn(
   { tileM: TILE_M, overview: null, tiles: new Map() }, 0, 0, 100, 100), 0);
+
+console.log('[8e] the DRAWN ground of the composite — cells, not the field');
+// A flat overview: the drawn lattice is anchored on its origin (0, 0) and the
+// overview itself adds nothing, so every number below comes from the tile.
+const OV_FLAT = {
+  origin_x: 0, origin_z: 0, step_m: 256, rows: 3, cols: 3,
+  heights: [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+};
+/** A 65 x 65 tile of zeroes with ONE support point lifted — the twist of the
+ *  cell that corner belongs to. `i`/`j` are the support point's indices, so the
+ *  point sits at (4i, 4j) metres. */
+function spikeTile(i0, j0, h) {
+  const heights = [];
+  for (let j = 0; j < TILE_N; j += 1) {
+    const row = [];
+    for (let i = 0; i < TILE_N; i += 1) row.push(i === i0 && j === j0 ? h : 0);
+    heights.push(row);
+  }
+  return { origin_x: 0, origin_z: 0, step_m: TILE_STEP, rows: TILE_N, cols: TILE_N, heights };
+}
+// (33) 8 m on the support point (136, 136) — a corner of the 4 m AND of the
+// 8 m grid, which is what makes the two plates disagree between the corners.
+const TWIST = {
+  tileM: TILE_M, overview: OV_FLAT, tiles: new Map([['0,0', spikeTile(34, 34, 8)]]),
+};
+check('the lifted support point sits at (136, 136)',
+  sampleCompositeHeight(TWIST, 136, 136), 8);
+check('a cell corner is the composite reading itself, at 4 m cells',
+  sampleCompositeGroundHeight(TWIST, 136, 136, 4), 8);
+check('...and at 8 m cells', sampleCompositeGroundHeight(TWIST, 136, 136, 8), 8);
+check('the low corner is 0 either way',
+  sampleCompositeGroundHeight(TWIST, 128, 128, 8), 0);
+check('(34) inside the 4 m cell the drawn ground is the triangle plane',
+  sampleCompositeGroundHeight(TWIST, 134, 134, 4), 4);
+check('...where the FIELD says half of that',
+  sampleCompositeHeight(TWIST, 134, 134), 2);
+check('...the gap being a quarter of the cell twist 8',
+  sampleCompositeGroundHeight(TWIST, 134, 134, 4) - sampleCompositeHeight(TWIST, 134, 134),
+  2);
+check('(35) the same point on an 8 m plate stands higher still',
+  sampleCompositeGroundHeight(TWIST, 134, 134, 8), 6);
+check('(36) the rectangle helper on the 8 m plate',
+  maxCompositeHeightIn(TWIST, 130, 130, 134, 134, 8), 6);
+check('...and its rise (the low samples are 2)',
+  compositeHeightRangeIn(TWIST, 130, 130, 134, 134, 8), 4);
+check('...while the fine lattice alone answers',
+  maxCompositeHeightIn(TWIST, 130, 130, 134, 134), 4);
+check('RED COUNTER-PROBE: hung on the bilinear reading the veil sits 4 m low',
+  maxCompositeHeightIn(TWIST, 130, 130, 134, 134, 8)
+    - sampleCompositeHeight(TWIST, 134, 134), 4);
+// (37) The other direction: a spike BETWEEN the corners of the 8 m grid is not
+// on that plate at all, and the veil must not clear a hill nobody drew.
+const BETWEEN = {
+  tileM: TILE_M, overview: OV_FLAT, tiles: new Map([['0,0', spikeTile(33, 33, 5)]]),
+};
+check('the spike sits at (132, 132), between the 8 m corners',
+  sampleCompositeHeight(BETWEEN, 132, 132), 5);
+check('the fine lattice finds it', maxCompositeHeightIn(BETWEEN, 128, 128, 136, 136), 5);
+check('...and the 8 m plate does not have it, so neither does the veil',
+  maxCompositeHeightIn(BETWEEN, 128, 128, 136, 136, 8), 0);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

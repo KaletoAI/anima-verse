@@ -763,6 +763,17 @@ async function startApp(username: string, role: string) {
     // budget are TESTED in — a threshold that decides a swap belongs next to
     // the function that swaps on it. This tick stays the driver.
     terrainGround.tickScatterLod(engine.camera.position);
+    // …and fifth, on the same beat: WHERE the fine height tiles are needed
+    // (§ A16.3). Embodied that is the ground the avatar stands on, in the
+    // overview the point the camera looks at — the same pair `tickSoundtrack`
+    // reads for the ambience, and both are computed by the engine anyway, so
+    // nothing is rayed for this. The ground itself decides what to do with it:
+    // a tick that finds the anchor in the tile it left it in does nothing at
+    // all, and a border crossing starts one batch fetch in the background.
+    const held = getGameState().mode === 'embodied'
+      ? npcs.positionOf(firstMap.avatar) : null;
+    terrainGround.setHeightAnchor(held ? held.x : engine.target.x,
+                                  held ? held.z : engine.target.z);
   }
   // --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ---------
   //

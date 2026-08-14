@@ -34,19 +34,30 @@
  * fetched ONCE and again only when the worldmap poll reports a different
  * signature — `terrain_sig` for the painted areas, `height_sig` for the field.
  * `sync()` takes both and does nothing while they are unchanged.
+ *
+ * THE RELIEF ARRIVES TWICE SINCE v2 (§ A16.3), and this file is where the two
+ * meet: the coarsenable OVERVIEW comes with the signature above, and the fine
+ * 256 m tiles are a WINDOW that follows the player — `setHeightAnchor` says
+ * where, `scene/heightTiles.ts` says which, and every sampler below reads the
+ * pair through the shared composite ladder (tile first, overview behind it).
+ * Nothing waits for a tile: the ground is simply draped again when one lands,
+ * exactly as it is when the overview does.
  */
 import * as THREE from 'three';
-import { AREA_POLYGON_OFFSET, buildAreaGeometry, gridPlate, gridStepFor,
-  maxWorldHeightIn, pickVariant, pointInRing, propGroundFit, sampleGroundHeight,
-  sampleWorldHeight, scatterInstances, scatterSeed, subdivideOnGrid,
-  surfaceMaterial, surfaceTimeUniform, worldHeightRange,
-  worldHeightRangeIn } from '@anima/scene-render';
-import type { GridBox, Point2, ScatterFootprint,
-  SurfaceMaterialSpec, WorldHeightField } from '@anima/scene-render';
-import { fetchHeightfield, fetchTerrain } from '../api';
+import { AREA_POLYGON_OFFSET, buildAreaGeometry, compositeHeightRangeIn,
+  gridPlate, gridStepFor, maxCompositeHeightIn, pickVariant, pointInRing,
+  propGroundFit, sampleCompositeGroundHeight, sampleCompositeHeight,
+  scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
+  surfaceTimeUniform, tileKeyAt, worldHeightRange } from '@anima/scene-render';
+import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
+  WorldHeightTiles } from '@anima/scene-render';
+import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
+import type { HeightTileBatch } from '../api';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, TerrainType,
   WorldBounds } from '../types';
+import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
+  wantedTiles } from './heightTiles';
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { loadGlb } from './propAssets';
@@ -456,6 +467,21 @@ export interface Ground {
   sync(sig: string, bounds: WorldBounds | null,
        locations: readonly MapLocation[], heightSig: string): Promise<boolean>;
   /**
+   * WHERE the fine height tiles are needed, in world metres (§ A16.3).
+   *
+   * The relief is delivered twice since v2: one coarsenable overview for the
+   * whole world, and 256 m tiles at the fine 4 m step around wherever the play
+   * is. This is that "wherever" — the avatar's position while the player is in
+   * control of it, the point the camera looks at otherwise (`main.ts`, which
+   * computes both anyway).
+   *
+   * CHEAP TO CALL and meant to be called on a tick: it does nothing at all
+   * until the anchor crosses into another tile, and then it starts ONE batch
+   * fetch in the background. Nothing waits for it — the ground under the point
+   * is drawn from the overview until the tiles land and is re-draped then.
+   */
+  setHeightAnchor(x: number, z: number): void;
+  /**
    * The world's ground height at a point (§ A16), in metres.
    *
    * THE one height source of the client: the base plate and the painted areas
@@ -582,6 +608,20 @@ function ringBounds(polygon: Point2[]): [number, number, number, number] {
   return [minX, minZ, maxX, maxZ];
 }
 
+/** Channels that have already had their say — see `warnOnce`. */
+const warnedChannels = new Set<string>();
+
+/** Say it ONCE per channel and never again. What this file refuses is
+ *  invisible from the outside — a dropped height tile reads exactly like flat
+ *  ground — so the log is the only place it can still be noticed, and a line
+ *  per poll would bury it. The server warns once on the same endpoint for the
+ *  same reason (`routes/play.py`). */
+function warnOnce(channel: string, message: string): void {
+  if (warnedChannels.has(channel)) return;
+  warnedChannels.add(channel);
+  console.warn(message);
+}
+
 /**
  * The scatter list an area declares, read through a check.
  *
@@ -606,40 +646,85 @@ export function createGround(): Ground {
   let inFlight: Promise<boolean> | null = null;
   let rev = 0;
 
-  /** The world relief (§ A16) and the signature it was fetched for. `null`
-   *  means "not yet arrived", which answers a flat world — the same answer a
-   *  world without a single authored hill gives, and deliberately so: nothing
-   *  waits for the field, the ground is simply draped again when it lands. */
-  let field: WorldHeightField | null = null;
+  /**
+   * The world relief (§ A16.3) — the coarse overview plus the fine tiles that
+   * have arrived, in the ONE shape both renderers sample (`WorldHeightTiles`).
+   *
+   * An empty overview means "not yet arrived", which answers a flat world —
+   * the same answer a world without a single authored hill gives, and
+   * deliberately so: nothing waits for the field, the ground is simply draped
+   * again when it lands.
+   *
+   * MUTATED IN PLACE, never replaced: `heightAt` runs per vertex of the plate
+   * and per figure per frame, and a fresh wrapper object per call would be a
+   * few hundred thousand allocations for nothing.
+   */
+  const relief: WorldHeightTiles = { tileM: 0, overview: null, tiles: new Map() };
   let loadedHeightSig: string | null = null;
   let heightRev = 0;
-  /** `worldHeightRange(field)`, taken ONCE when the field arrives. It walks
-   *  every support point (up to 120 000 of them, § A16) and both readers ask
-   *  on the poll path — the ray start when the field lands, the cell size on
-   *  every single sync. */
+  /** Every tile the world HAS a ground in (`tiles` of `GET /play/heightfield`).
+   *  Not part of `relief`: for the sampler an unindexed tile and an unfetched
+   *  one read the same (through the overview), and a second copy of "which
+   *  tiles exist" is a state that can go stale. This one steers the loading. */
+  let tileIndex: ReadonlySet<string> = new Set<string>();
+  /** Where the fine tiles are wanted, in world metres, and which tile that
+   *  was in when the want set was last computed (`null` = never). Fed by
+   *  `setHeightAnchor` from the client's 1 Hz tick. */
+  let anchorX = 0;
+  let anchorZ = 0;
+  let anchorTile: string | null = null;
+  /** True while the tile loader is fetching or rebuilding. `sync` steps aside
+   *  for it and it steps aside for `sync` (`inFlight`): both re-cut the areas
+   *  and the plate, and two of those at once would have the second clear what
+   *  the first has just mounted. Nothing is lost by stepping aside — neither
+   *  advances a signature, so the next poll does the work. */
+  let tilesBusy = false;
+  /** The world frame of the last `sync`, so the tile loader can rebuild the
+   *  plate without one being handed to it. */
+  let lastBounds: WorldBounds | null = null;
+  /** `worldHeightRange` over EVERYTHING held — the overview when it arrives,
+   *  widened by each tile batch. Taken once per arrival: it walks every support
+   *  point (up to 120 000 of them, § A16) and both readers ask on the poll path
+   *  — the ray start when the field lands, the cell size on every single sync.
+   *
+   *  The tiles have to be in it. A coarsened overview can be missing the 22 m
+   *  hill entirely (seven of eight support points per axis are gone at 32 m),
+   *  and a ray started under that hill finds nothing — a figure falling back to
+   *  the flat world on the very ground it should stand on. It only ever GROWS
+   *  within one signature; an evicted tile does not shrink it back, because a
+   *  ray that starts too high costs nothing while one that starts too low is
+   *  the bug above. */
   let fieldRange = { min: 0, max: 0 };
   /** The cell size plate and areas are cut at — ONE for the whole ground, so
    *  the two always meet on the same lines (`gridStepFor`, gridMesh.ts). 0
    *  while there is no relief at all: then nothing is subdivided. */
   let cellM = 0;
 
+  /** Has any relief arrived at all — the overview, or at least one tile? */
+  const hasRelief = (): boolean => !!relief.overview || relief.tiles.size > 0;
+
   /**
-   * The ground under a point — the DRAWN one (`sampleGroundHeight`), not the
-   * bilinear field.
+   * The ground under a point — the DRAWN one
+   * (`sampleCompositeGroundHeight`), not the bilinear field.
    *
    * The mesh is triangles: within a cell the plate is two planes, and a vertex
    * or a figure placed at the field's bilinear reading sits off that surface by
    * up to a quarter of the cell's twist — a measured metre on a 5 m hill with a
    * 10 m falloff. ONE sampler for the plate, the areas, the props and every
-   * figure is what makes them describe one surface (§ A16).
+   * figure is what makes them describe one surface (§ A16). `cellM` is what
+   * ties it to the mesh: it is the size the ground was really cut at, and the
+   * sampler answers for the very cell the plate is made of.
    */
   const heightAt = (x: number, z: number): number =>
-    (field ? sampleGroundHeight(field, x, z, cellM) : GROUND_Y);
+    (hasRelief() ? sampleCompositeGroundHeight(relief, x, z, cellM) : GROUND_Y);
 
   /** The BILINEAR reading of the field — the server's own (see the interface).
-   *  Used by the walk-rule mirror, never by anything that is drawn. */
+   *  Used by the walk-rule mirror, never by anything that is drawn, and it goes
+   *  through the same ladder: the server judges a step by the fine TILE
+   *  (`heightfield.world_height`), so a mirror reading the overview would
+   *  predict a refusal on ground nobody is walking on. */
   const fieldHeightAt = (x: number, z: number): number =>
-    (field ? sampleWorldHeight(field, x, z) : GROUND_Y);
+    (hasRelief() ? sampleCompositeHeight(relief, x, z) : GROUND_Y);
 
   // THE GROUND HOOK (E8 task 4): a location's tile stands on the ground under
   // its centre, and this is where `scene/tiles.ts` gets that height from. The
@@ -654,25 +739,31 @@ export function createGround(): Ground {
    *  in WORLD metres (both the plate and the subdivided areas are), so the
    *  sample point is the vertex itself. */
   function liftToField(pos: number[]): void {
-    if (!field) return;
+    if (!hasRelief()) return;
     for (let i = 0; i < pos.length; i += 3) {
-      pos[i + 1] += sampleGroundHeight(field, pos[i], pos[i + 2], cellM);
+      pos[i + 1] += sampleCompositeGroundHeight(relief, pos[i], pos[i + 2], cellM);
     }
   }
 
   /** The box the FIELD describes (§ A16): `origin + (cols−1) · step`. Outside
    *  it the ground is the field's border value, which the server pins to 0 —
-   *  flat, and the plate covers it with plain quads. `null` = no relief. */
+   *  flat, and the plate covers it with plain quads. `null` = no relief.
+   *
+   *  THE OVERVIEW ANSWERS IT, not the tiles, and that is exact rather than an
+   *  approximation: the overview is rastered over everything authored anywhere
+   *  (§ A16), and a tile is only ever indexed where it meets one of those very
+   *  boxes. There is no ground outside this box for a tile to hold. */
   function reliefBox(): GridBox | null {
-    const rows = field?.heights?.length ?? 0;
-    const cols = field?.heights?.[0]?.length ?? 0;
-    const step = field?.step_m ?? 0;
-    if (!field || rows < 2 || cols < 2 || !(step > 0)) return null;
+    const ov = relief.overview;
+    const rows = ov?.heights?.length ?? 0;
+    const cols = ov?.heights?.[0]?.length ?? 0;
+    const step = ov?.step_m ?? 0;
+    if (!ov || rows < 2 || cols < 2 || !(step > 0)) return null;
     return {
-      x0: field.origin_x,
-      z0: field.origin_z,
-      x1: field.origin_x + (cols - 1) * step,
-      z1: field.origin_z + (rows - 1) * step,
+      x0: ov.origin_x,
+      z0: ov.origin_z,
+      x1: ov.origin_x + (cols - 1) * step,
+      z1: ov.origin_z + (rows - 1) * step,
     };
   }
 
@@ -790,23 +881,31 @@ export function createGround(): Ground {
    * where the plate only interpolates between two of its vertices — the
    * meadow would sink into the hill it is painted on.
    *
+   * IT IS THE OVERVIEW'S STEP THIS STARTS FROM, not the tiles' fine 4 m, and
+   * that is a mesh decision rather than a height one: the plate spans the whole
+   * world frame and its budget is 40 000 cells whatever raster it samples. The
+   * tiles sharpen every CORNER of that mesh (each vertex is lifted through the
+   * composite ladder) and every reading the rules take — they do not make the
+   * plate finer. The seam where the loaded tiles end sits at 560 m, behind the
+   * fog (`heightTiles.ts`).
+   *
    * A field of nothing but zeroes is FLAT and says so: today's worlds have no
    * relief at all, and giving them forty thousand cells for a surface that is
    * level would be paid every rebuild for nothing.
    */
   function cellFor(bounds: WorldBounds | null): number {
-    const step = field?.step_m ?? 0;
-    const relief = reliefBox();
-    if (!(step > 0) || !relief) return 0;
+    const step = relief.overview?.step_m ?? 0;
+    const box = reliefBox();
+    if (!(step > 0) || !box) return 0;
     if (fieldRange.min === 0 && fieldRange.max === 0) return 0;
     const [px0, pz0, px1, pz1] = plateExtent(bounds);
     // The budget is spent where there IS relief: the field's box, clipped to
     // what the plate shows of it. A hill in the corner of a huge world keeps
     // the native cell size instead of paying for the plain around it.
-    const x0 = Math.max(px0, relief.x0);
-    const z0 = Math.max(pz0, relief.z0);
-    const x1 = Math.min(px1, relief.x1);
-    const z1 = Math.min(pz1, relief.z1);
+    const x0 = Math.max(px0, box.x0);
+    const z0 = Math.max(pz0, box.z0);
+    const x1 = Math.min(px1, box.x1);
+    const z1 = Math.min(pz1, box.z1);
     if (!(x1 > x0) || !(z1 > z0)) return 0;   // the relief is off the plate
     return gridStepFor(x0, z0, x1, z1, step);
   }
@@ -840,8 +939,9 @@ export function createGround(): Ground {
     }
     baseKey = key;
     const plate = gridPlate(wantX0, wantZ0, Math.max(wantX1, wantX0 + 1),
-                            Math.max(wantZ1, wantZ0 + 1),
-                            cellM, field?.origin_x ?? 0, field?.origin_z ?? 0,
+                            Math.max(wantZ1, wantZ0 + 1), cellM,
+                            relief.overview?.origin_x ?? 0,
+                            relief.overview?.origin_z ?? 0,
                             reliefBox());
     liftToField(plate.pos);
     const geo = new THREE.BufferGeometry();
@@ -1149,14 +1249,15 @@ export function createGround(): Ground {
    * nothing else knows about it.
    */
   function drapeArea(flat: THREE.BufferGeometry): THREE.BufferGeometry {
-    if (!(cellM > 0) || !field) return flat;
+    const ov = relief.overview;
+    if (!(cellM > 0) || !ov) return flat;
     const src = flat.index ? flat.toNonIndexed() : flat;
     const pos = Array.from(src.getAttribute('position').array as ArrayLike<number>);
     const uvAttr = src.getAttribute('uv');
     const uv = uvAttr ? Array.from(uvAttr.array as ArrayLike<number>) : null;
     if (src !== flat) src.dispose();
     flat.dispose();
-    const cut = subdivideOnGrid(pos, uv, cellM, field.origin_x, field.origin_z);
+    const cut = subdivideOnGrid(pos, uv, cellM, ov.origin_x, ov.origin_z);
     liftToField(cut.pos);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(cut.pos, 3));
@@ -1269,16 +1370,150 @@ export function createGround(): Ground {
    */
   async function reloadHeight(heightSig: string): Promise<boolean> {
     try {
-      field = await fetchHeightfield();
-      loadedHeightSig = field.sig || heightSig;
+      const payload = await fetchHeightfield();
+      relief.overview = payload;
+      // A NEW SIGNATURE THROWS THE TILES AWAY WITH THE OVERVIEW (§ A16.3).
+      // `height_sig` is the ONE signature of the relief; a tile that outlived it
+      // would be a piece of a world that no longer exists, sitting in front of
+      // the overview that replaced it — and the sampler prefers the tile.
+      relief.tiles.clear();
+      relief.tileM = Number(payload.tile_m) || 0;
+      tileIndex = new Set<string>(Array.isArray(payload.tiles) ? payload.tiles : []);
+      anchorTile = null;   // …so the next anchor recomputes the want set
+      loadedHeightSig = payload.sig || heightSig;
       heightRev += 1;
-      fieldRange = worldHeightRange(field);
+      fieldRange = worldHeightRange(payload);
       // The tiles ray their ground from above the WORLD, so the relief moves
       // the start of that ray — see `setWorldRayStart`.
       setWorldRayStart(fieldRange.max);
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Take over one batch of fine tiles — the merge, with its two refusals.
+   *
+   * A grid comes WITHOUT a `step_m` of its own (every tile of a batch shares
+   * the one at the top level), so it is merged in here; that is the whole
+   * difference between the wire shape and `WorldHeightField`.
+   *
+   * KEY AGAINST ORIGIN IS CHECKED, once per tile. The key says which square of
+   * the world this grid belongs to and the origin says where its support points
+   * are; if the two disagree, the tile is filed under a square it does not
+   * cover, and every reading in it is silently displaced — no error, no gap,
+   * just ground from somewhere else. Cheap to test (two comparisons), and the
+   * alternative is a class of bug that looks like an authoring mistake.
+   *
+   * Answers how many tiles were actually taken.
+   */
+  function takeTiles(batch: HeightTileBatch): number {
+    const step = Number(batch.step_m) || 0;
+    let taken = 0;
+    for (const [key, grid] of Object.entries(batch.tiles || {})) {
+      const [tx, tz] = key.split(',').map(Number);
+      const fits = Number.isFinite(tx) && Number.isFinite(tz)
+        && grid.origin_x === tx * relief.tileM
+        && grid.origin_z === tz * relief.tileM;
+      if (!fits) {
+        warnOnce('tile-origin',
+          `[ground] height tile "${key}" claims origin `
+          + `(${grid.origin_x}, ${grid.origin_z}) — dropped`);
+        continue;
+      }
+      relief.tiles.set(key, {
+        origin_x: grid.origin_x, origin_z: grid.origin_z, step_m: step,
+        rows: grid.rows, cols: grid.cols, heights: grid.heights,
+      });
+      taken += 1;
+    }
+    return taken;
+  }
+
+  /**
+   * Fetch the tiles the anchor wants, in batches, and re-drape ONCE per batch.
+   *
+   * The want set is `scene/heightTiles.wantedTiles` — pure, hand-checked, and
+   * the only place that decides WHICH. Everything policy-shaped about the
+   * loading is in these few lines instead:
+   *
+   *  - ONE loader at a time, and none while `sync` is rebuilding. Both cut the
+   *    same meshes (see `tilesBusy`).
+   *  - A FAILED batch keeps what stands: the tiles that did arrive stay, the
+   *    ones that did not stay wanted, and the next anchor tick or poll asks
+   *    again. The rule `reload` follows for the terrain, per tile.
+   *  - A batch answering for ANOTHER signature is dropped whole. The relief was
+   *    taken over while it was in flight, so its ground belongs to a world that
+   *    is no longer on screen.
+   *  - ONE `rebuildAreas` + `rebuildBase` per arrived batch, never per tile: a
+   *    rebuild is the expensive half and 64 of them would be 64 times the work
+   *    for one picture.
+   *
+   * Never throws — a relief that will not load leaves the ground it drew.
+   */
+  async function refreshTiles(): Promise<void> {
+    if (tilesBusy || inFlight) return;
+    if (!(relief.tileM > 0) || !tileIndex.size) return;
+    const want = wantedTiles(tileIndex, relief.tileM, anchorX, anchorZ,
+                             HEIGHT_TILE_RADIUS_M);
+    // Wanting a tile is USING it: re-inserting moves it to the back of the map,
+    // which is the eviction order below. Without this the cache would drop by
+    // arrival time and throw away the ground under the player's feet in favour
+    // of a tile fetched later and long since left behind.
+    for (const key of want) {
+      const held = relief.tiles.get(key);
+      if (!held) continue;
+      relief.tiles.delete(key);
+      relief.tiles.set(key, held);
+    }
+    const missing = want.filter((k) => !relief.tiles.has(k));
+    if (!missing.length) {
+      evictTiles(want);
+      return;
+    }
+    tilesBusy = true;
+    const sig = loadedHeightSig;
+    try {
+      for (const batch of tileBatches(missing)) {
+        let payload: HeightTileBatch;
+        try {
+          payload = await fetchHeightTiles(batch);
+        } catch {
+          return;   // keep what stands; the missing keys stay wanted
+        }
+        if (loadedHeightSig !== sig || (payload.sig && payload.sig !== sig)) return;
+        if (!takeTiles(payload)) continue;
+        evictTiles(want);
+        heightRev += 1;
+        // The tiles carry the relief the overview coarsened away, so the ray
+        // start has to grow with them — see `fieldRange`.
+        for (const tile of relief.tiles.values()) {
+          const r = worldHeightRange(tile);
+          if (r.max > fieldRange.max) fieldRange.max = r.max;
+          if (r.min < fieldRange.min) fieldRange.min = r.min;
+        }
+        setWorldRayStart(fieldRange.max);
+        cellM = cellFor(lastBounds);
+        await rebuildAreas();
+        rebuildBase(lastBounds);
+      }
+    } finally {
+      tilesBusy = false;
+    }
+  }
+
+  /** Drop the tiles nobody wants until the cache is back under its cap. The
+   *  map is in "last wanted" order (see `refreshTiles`), so the front is the
+   *  oldest — and a tile in the CURRENT want set is never dropped, however old,
+   *  because dropping it would mean fetching it again in the same breath. */
+  function evictTiles(want: readonly string[]): void {
+    if (relief.tiles.size <= HEIGHT_TILE_CACHE_MAX) return;
+    const keep = new Set(want);
+    for (const key of [...relief.tiles.keys()]) {
+      if (relief.tiles.size <= HEIGHT_TILE_CACHE_MAX) break;
+      if (keep.has(key)) continue;
+      relief.tiles.delete(key);
     }
   }
 
@@ -1367,7 +1602,15 @@ export function createGround(): Ground {
   return {
     group,
     sync(sig, bounds, locations, heightSig) {
+      // Remembered FIRST, before any of the doors below close: the tile loader
+      // rebuilds the plate on its own and has to do it in the frame the world
+      // is in now, not in the one of the last sync that got through.
+      lastBounds = bounds;
       if (inFlight) return inFlight;
+      // The tile loader cuts the same meshes, so the two never run together —
+      // and nothing is lost by standing down, because no signature has moved
+      // and the next poll asks the identical question (see `tilesBusy`).
+      if (tilesBusy) return Promise.resolve(false);
       const fpSig = footprintSig(locations);
       const fpMoved = builtFpSig !== null && builtFpSig !== fpSig;
       footprints = locations;
@@ -1385,7 +1628,15 @@ export function createGround(): Ground {
         // changed.
         cellM = cellFor(bounds);
         rebuildBase(bounds);
-        if (!fpMoved) return Promise.resolve(false);
+        if (!fpMoved) {
+          // THE IDLE POLL IS THE TILE LOADER'S SECOND OCCASION (§ A16.3): the
+          // anchor kicks it when it crosses a tile border, and this catches
+          // everything that missed — a batch whose request failed, a want set
+          // computed before the index arrived. It costs a set difference when
+          // there is nothing to fetch.
+          void refreshTiles();
+          return Promise.resolve(false);
+        }
         builtFpSig = fpSig;
         inFlight = rebuildAreas()
           .then(() => true)
@@ -1397,6 +1648,25 @@ export function createGround(): Ground {
         .finally(() => { inFlight = null; });
       return inFlight;
     },
+    setHeightAnchor(x, z) {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+      anchorX = x;
+      anchorZ = z;
+      // A BORDER CROSSING IS THE IMMEDIATE OCCASION, and not the only one: the
+      // idle poll asks again from wherever the anchor stands then, every three
+      // seconds (`sync`). That division is deliberate. The want set does move
+      // with every metre — the radius does — so a crossing alone would let the
+      // rim of the window fall behind a walker; the poll keeps it up with him.
+      // What the crossing buys is the JUMP: a camera flown across the world has
+      // its ground on the way before the next poll would have noticed. One
+      // string compare per tick, and the set difference only when it changed.
+      // `tileKeyAt` is the ONE mapping from a point to a tile; the loader must
+      // not have a second opinion about it.
+      const key = tileKeyAt(relief.tileM, x, z);
+      if (key === anchorTile) return;
+      anchorTile = key;
+      void refreshTiles();
+    },
     heightAt,
     fieldHeightAt,
     groundPointAt(ray) {
@@ -1404,10 +1674,15 @@ export function createGround(): Ground {
       const hits = ray.intersectObject(baseMesh, false);
       return hits.length ? hits[0].point.clone() : null;
     },
+    // BOTH GET `cellM`, and that is the whole of task 3's finding 1: the tiles
+    // bring a 4 m lattice while the plate over a large world is cut at 8 m or
+    // more, and over such a cell the drawn ground stands up to a quarter of the
+    // cell's twist above every reading the fine grid takes. A veil hung on the
+    // fine grid alone would hang inside the hill it covers.
     maxHeightIn: (x0, z0, x1, z1) => (
-      field ? maxWorldHeightIn(field, x0, z0, x1, z1, cellM) : GROUND_Y),
+      hasRelief() ? maxCompositeHeightIn(relief, x0, z0, x1, z1, cellM) : GROUND_Y),
     heightRangeIn: (x0, z0, x1, z1) => (
-      field ? worldHeightRangeIn(field, x0, z0, x1, z1, cellM) : 0),
+      hasRelief() ? compositeHeightRangeIn(relief, x0, z0, x1, z1, cellM) : 0),
     heightRevision: () => heightRev,
     setHole(rect) {
       holeOn.value = rect ? 1 : 0;

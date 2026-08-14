@@ -186,8 +186,71 @@ export async function fetchTerrain(): Promise<TerrainPayload> {
  *  Throws like the terrain call, and for the same reason: a client that
  *  swallowed the failure would drape the world flat and look right while
  *  standing figures in the air. */
-export async function fetchHeightfield(): Promise<WorldHeightField> {
-  return json<WorldHeightField>(await fetch('/play/heightfield'));
+export async function fetchHeightfield(): Promise<HeightfieldPayload> {
+  return json<HeightfieldPayload>(await fetch('/play/heightfield'));
+}
+
+/**
+ * The overview payload plus the TILE INDEX it carries since v2 (§ A16.3).
+ *
+ * The index is the loader's business and not the sampler's, which is why it
+ * lives here and not in `WorldHeightField`: for `sampleCompositeHeight` a tile
+ * that does not exist and one that has not arrived yet read exactly the same
+ * (through the overview), so carrying the index into the shared package would
+ * only add a second state that can go stale.
+ */
+export interface HeightfieldPayload extends WorldHeightField {
+  /** Edge length of a tile in metres — 256 today, and never a constant in the
+   *  client: the tile size is a server decision. */
+  tile_m: number;
+  /** The step INSIDE a tile, always the fine one (4 m) however coarse the
+   *  overview above may have become. */
+  tile_step_m: number;
+  /** Every tile the world has a ground in, as `"tx,tz"`. Anything outside this
+   *  list is flat and is never asked for. */
+  tiles: string[];
+}
+
+/** One tile's grid as the batch endpoint sends it — WITHOUT a `step_m` of its
+ *  own: every tile in a batch shares the one at the top level, and the caller
+ *  merges it in (`ground.ts`). */
+export interface HeightTileGrid {
+  origin_x: number;
+  origin_z: number;
+  rows: number;
+  cols: number;
+  heights: number[][];
+}
+
+/** The answer of `GET /play/heightfield/tiles`. `tiles` holds only what the
+ *  index knows — keys it does not are simply absent, which is the same
+ *  statement as "flat there" and costs neither a raster nor a kilobyte. */
+export interface HeightTileBatch {
+  sig: string;
+  tile_m: number;
+  step_m: number;
+  tiles: Record<string, HeightTileGrid>;
+}
+
+/**
+ * A batch of FINE height tiles (`GET /play/heightfield/tiles`, § A16.3) — the
+ * ground every rule reads and the near view is draped with.
+ *
+ * At most `HEIGHT_TILE_BATCH_MAX` keys per call; the server drops the rest with
+ * a one-shot warning, so `scene/heightTiles.tileBatches` splits before asking.
+ * The keys are the client's own `"tx,tz"` (`tileKeyAt`), the wire wants
+ * `tx:tz,tx:tz` — the comma is the separator BETWEEN keys there, so the pair
+ * has to be spelled with a colon.
+ *
+ * Throws like the two calls above: a swallowed failure would drape the near
+ * ground from the coarse overview and look perfectly fine while standing
+ * figures beside the hill they are walking on.
+ */
+export async function fetchHeightTiles(keys: readonly string[]
+): Promise<HeightTileBatch> {
+  const query = keys.map((k) => k.replace(',', ':')).join(',');
+  return json<HeightTileBatch>(
+    await fetch(`/play/heightfield/tiles?keys=${encodeURIComponent(query)}`));
 }
 
 /** Move the avatar into another room of its current location — the same call
