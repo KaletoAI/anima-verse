@@ -2072,6 +2072,14 @@ html, * {
   top: 10px;
   width: 300px;
   max-width: calc(100% - 20px);
+  /* The pane CLIPS (`overflow: hidden`), so a tall chip used to run off the
+     bottom edge with no way to reach it — a terrain area with its scatter list
+     folded open grows past any pane. Bounded against the pane and scrolled,
+     the same way the tray lists are bounded (`.ga-map-tray-areas`); the 20 px
+     mirror the max-width, 10 px above and below. The wheel listener sits on
+     the canvas box, a SIBLING of the chip, so scrolling here never zooms. */
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
