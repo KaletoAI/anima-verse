@@ -92,14 +92,24 @@ export function BuildDistanceMeshButton({
     setBusy(true)
     try {
       const d = await apiPost<{ tris?: number; tris_before?: number }>(url, {})
-      await onDone()
-      toast(`${t('Distance mesh built')}: ${d.tris_before?.toLocaleString()} → `
-        + `${d.tris?.toLocaleString()} ${t('tris')}`)
+      // The counts come from the Blender stage and may be absent (an older
+      // stage reported none) — then the message says the build happened and
+      // stays quiet about numbers instead of printing "undefined".
+      const counts = d.tris_before && d.tris
+        ? `: ${d.tris_before.toLocaleString()} → ${d.tris.toLocaleString()} ${t('tris')}`
+        : ''
+      toast(`${t('Distance mesh built')}${counts}`)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
+      return
     } finally {
       setBusy(false)
     }
+    // Outside the try: the build SUCCEEDED, and a failing gallery reload must
+    // not be reported as a failed build (the list is one reload away).
+    try {
+      await onDone()
+    } catch { /* the mesh is stored either way */ }
   }, [url, onDone, t, toast])
   if (!blender?.usable) return null
   return (
