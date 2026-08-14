@@ -42,7 +42,7 @@ config round trip per cell. The context is cached on the terrain and
 relief signatures plus a placement hash, so it survives every route that
 does not change the world; :func:`invalidate_nav_cache` drops it. The HEIGHT
 of a cell is the one thing not carried in the context since v2 (2026-08-14):
-it comes from ``heightfield.world_height``, i.e. the world's 4 m tiles, which
+it comes from ``heightfield.world_height``, i.e. the world's 2 m tiles, which
 keep their own per-generation cache of exactly the same shape — the inputs are
 read once per authoring write, a tile is rastered once, and a sample is a
 lookup.
@@ -205,7 +205,7 @@ class NavContext:
         authored landscape simply runs on, and this reads it like any other
         ground.
 
-        IT IS ``heightfield.world_height`` NOW (v2, 2026-08-14), i.e. the 4 m
+        IT IS ``heightfield.world_height`` NOW (v2, 2026-08-14), i.e. the 2 m
         TILES — the very function the walking gate of ``POST /play/pos`` asks.
         That identity is the point of the change: a route that led a traveller
         somewhere the gate then refuses is the two movement models disagreeing

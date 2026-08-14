@@ -2137,7 +2137,7 @@ export function MapTab() {
                   server, never pinned here (`heightMath.plateauRimM`). */}
               {selected.level_ground && plateauRim !== null ? (
                 <div className="ga-map-chip-row ga-map-chip-label">
-                  {t('The ramp to the untouched ground is one grid cell wide ({cell} m), so it carries at most {rim} m. Stands this place further above or below the ground at its rim, the rim is a wall — only openings lead in.')
+                  {t('The ramp to the untouched ground is one grid cell wide ({cell} m), so it carries at most {rim} m. If this place stands further above or below the ground at its rim, the rim is a wall — only openings lead in.')
                     .replace('{cell}', String(tileStepM))
                     .replace('{rim}', String(plateauRim))}
                 </div>

@@ -2446,7 +2446,7 @@ bleibt gitter-kongruent, weil 4 ein Vielfaches von 2 ist: jeder
 Übersichts-Stützpunkt IST ein Kachel-Stützpunkt.
 
 **129 × 129 Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn.** Die
-Duplizierung der Randpunkte ist Absicht und kostet 1,56 % Daten (129²/128²
+Duplizierung der Randpunkte ist Absicht und kostet 1,57 % Daten (129²/128²
 Punkte; die 0,78 % je Achse fallen auf beiden an): bilineares Sampling
 INNERHALB einer Kachel braucht damit nie einen Punkt der Nachbarkachel (ein
 Client darf jede beliebige Teilmenge halten), und weil beide Seiten denselben

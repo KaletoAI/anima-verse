@@ -1129,10 +1129,10 @@ _TILE_INDEX: Optional[Tuple[int, frozenset]] = None
 #: cache at once, and a decorator that only knows its own arguments cannot.
 _TILES: "OrderedDict[Tuple[int, int, int], Dict[str, Any]]" = OrderedDict()
 
-#: How many tiles stay in the process. 512 tiles are 512 × 129² floats, i.e.
-#: a few hundred megabytes at worst and 16 km² of world at best — far more than
-#: any one walker needs, and a tile costs milliseconds to rebuild anyway.
-TILE_CACHE_MAX = 512
+#: How many tiles stay in the process. 128 tiles are 128 × 129² floats
+#: ≈ 68 MB — the same footprint as the old 512 tiles at the 4 m step, and
+#: the client's want-set (~28 tiles) stays well under the limit.
+TILE_CACHE_MAX = 128
 
 
 def invalidate_cache() -> None:
