@@ -2354,6 +2354,10 @@ kein Relief, der Schlüssel verschwindet). Die Obergrenze ist eine
 die Regeln lesen, also `atan(2·2,0/2,0)` = **63°** im Maximum (45°, solange
 dieser Schritt 4 m war) — die Zahl, die der Editor-Hinweis nennt. Es ist ein
 theoretischer Worst Case: er verlangt zwei benachbarte Rausch-Ecken auf ±1.
+Die Obergrenze bleibt bei 2,0 m (Entscheid 2026-08-14), aber der Editor
+**warnt** ab `tile_step_m · tan(max_slope_deg) / 2` (0,84 m bei den Vorgaben),
+also sobald dieser Worst Case die Laufsperre überschreitet — beide Zahlen
+kommen vom Server (`heightMath.reliefWarnAmpM`), geklemmt wird nichts.
 `relief_wave_m` **4**..200 m, fehlend = **32 m**; die Untergrenze ist
 2 × `TILE_STEP_M` (**Nyquist**: eine kürzere Welle kann das Gitter nicht
 tragen, sie würde nur je nach Schrittweite anders aliasen) — sie halbierte

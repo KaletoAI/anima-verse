@@ -2186,6 +2186,8 @@ export function MapTab() {
         <TerrainTypesDialog
           types={terrainTypes}
           sources={typeSources}
+          tileStepM={tileStepM}
+          maxSlopeDeg={maxSlopeDeg}
           onChanged={onTypesChanged}
           onClose={() => setTypesOpen(false)}
         />

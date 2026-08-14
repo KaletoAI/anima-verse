@@ -132,6 +132,49 @@ export function plateauRimM(maxSlopeDeg: number, maxStepM: number,
   return Math.round(g * tileStepM * 100) / 100
 }
 
+/**
+ * FROM WHICH MICRO-RELIEF AMPLITUDE the random hills of a ground kind can get
+ * steeper than a walker climbs, in metres (§ A16.2).
+ *
+ * The noise is bilinear between grid corners, so the steepest thing two
+ * NEIGHBOURING support points can build out of it is the full swing of the
+ * amplitude over one tile step:
+ *
+ *     worst-case flank = atan(2 · amplitude / tile_step_m)
+ *
+ * and it exceeds the walk gate as soon as
+ *
+ *     amplitude > tile_step_m · tan(max_slope_deg) / 2
+ *
+ * which is the number this returns — 0.84 m at the default 40° over the 2 m
+ * tile step. It is a WORST CASE: it needs two adjacent noise corners at ±1, so
+ * it is not what every patch of that ground does, it is what some patch of it
+ * may do. Hence a warning and nothing more — the clamp stays at 2.0 m (user
+ * decision 2026-08-14); a rocky ground that swallows a few impassable spots is
+ * a legitimate thing to author, an accidental one is not.
+ *
+ * IT IS THE SLOPE LIMIT ALONE, deliberately. `max_step_height_m` judges
+ * reports below one metre of travel (`STEP_DISTANCE_M`) and bites earlier on
+ * any steep flank; what this line names is the point from which the ground
+ * breaks the SLOPE rule at all, which is the threshold the field warns at.
+ *
+ * BOTH INPUTS COME FROM THE SERVER, like `plateauRimM` next to it:
+ * `max_slope_deg` from the worldmap payload, `tile_step_m` from
+ * `GET /world/height-areas`. A step pinned here would have gone on promising
+ * the 4 m grid after the tiles halved on 2026-08-14.
+ *
+ * `null` = nothing to say (no step answered yet, or an unusable angle).
+ */
+export function reliefWarnAmpM(maxSlopeDeg: number, tileStepM: number
+): number | null {
+  if (!Number.isFinite(tileStepM) || tileStepM <= 0) return null
+  if (!Number.isFinite(maxSlopeDeg) || maxSlopeDeg <= 0 || maxSlopeDeg >= 90) {
+    return null
+  }
+  const g = Math.tan((maxSlopeDeg * Math.PI) / 180)
+  return Math.round((tileStepM * g / 2) * 100) / 100
+}
+
 /** Is this area's ramp steeper than a walker climbs? */
 export function tooSteep(heightM: number, falloffM: number,
   maxSlopeDeg: number, maxStepM: number): boolean {

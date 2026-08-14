@@ -60,6 +60,31 @@
  *     reliefStepNotice(0 / −1 / NaN, 4) -> null    no answer yet, no sentence
  *     reliefStepNotice(32, 0 / NaN)     -> null    without "the finest" there
  *                                       is no "coarser than normal"
+ *
+ * ---------------------------------------------------------------------------
+ * [3] THE MICRO-RELIEF WARNING of the terrain-type dialog (§ A16.2)
+ * ---------------------------------------------------------------------------
+ * The relief noise is bilinear between grid corners, so the steepest flank two
+ * NEIGHBOURING support points can build is the full swing of the amplitude
+ * over one tile step — `atan(2·amp / tile_step_m)`. It outgrows the walk gate
+ * from
+ *
+ *     amp > tile_step_m · tan(max_slope_deg) / 2
+ *
+ * on, and THAT is what the field warns at (the clamp stays 2.0 m, user
+ * decision 2026-08-14). It is the SLOPE limit alone: `max_step_height_m`
+ * judges reports below one metre of travel, a different question.
+ *   tan 40° = 0.8390996…
+ *     reliefWarnAmpM(40, 2) = 2 · 0.8390996… / 2 = 0.8390996… -> 0.84
+ *     reliefWarnAmpM(40, 4) = 4 · 0.8390996… / 2 = 1.6781992… -> 1.68
+ *                             (the 4 m tile step before 2026-08-14)
+ *   tan 60° = 1.7320508…
+ *     reliefWarnAmpM(60, 2) = 2 · 1.7320508… / 2 = 1.7320508… -> 1.73
+ * Cross-check against the rule it comes from: the worst-case flank AT the
+ * threshold is the limit itself, atan(2 · 0.84 / 2) = 40.03° — 40° up to the
+ * two decimals the number is rounded to.
+ * Nothing to say is `null`: no tile step answered yet (0), and an angle that
+ * judges nothing (0°, 90°, NaN) — a threshold without a gate would be a guess.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -111,7 +136,7 @@ function compare(a, b, eps) {
 }
 
 const { maxGradient, minFalloffFor, tooSteep, reliefStepNotice,
-  STEP_DISTANCE_M } = await loadHeightMath();
+  reliefWarnAmpM, STEP_DISTANCE_M } = await loadHeightMath();
 
 console.log('[1] the steepness warning');
 check('a step counts as a step below one metre of travel', STEP_DISTANCE_M, 1);
@@ -157,6 +182,22 @@ check('...nor a NaN one', reliefStepNotice(NaN, 4), null);
 check('without "the finest" there is no "coarser than normal"',
   reliefStepNotice(32, 0), null);
 check('...and a NaN one is just as silent', reliefStepNotice(32, NaN), null);
+
+console.log('[3] the micro-relief warning');
+check('THE CASE IN FORCE: 40° over the 2 m tile step warns from 0.84 m',
+  reliefWarnAmpM(40, 2), 0.84);
+check('...over the old 4 m step it was 1.68 m', reliefWarnAmpM(40, 4), 1.68);
+check('...and a 60° gate carries 1.73 m of hills',
+  reliefWarnAmpM(60, 2), 1.73);
+// The threshold IS the rule: at that amplitude the worst-case flank of the
+// noise is the gate angle itself, up to the two decimals it is rounded to.
+check('the worst-case flank at the threshold is the gate angle',
+  Math.atan(2 * reliefWarnAmpM(40, 2) / 2) * 180 / Math.PI, 40, 0.05);
+check('no tile step answered yet, no threshold', reliefWarnAmpM(40, 0), null);
+check('...nor a NaN one', reliefWarnAmpM(40, NaN), null);
+check('an angle that gates nothing is no threshold', reliefWarnAmpM(0, 2), null);
+check('...and neither is a vertical one', reliefWarnAmpM(90, 2), null);
+check('...nor a NaN one', reliefWarnAmpM(NaN, 2), null);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

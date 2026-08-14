@@ -64,10 +64,11 @@
  * fields stand there; the row wraps, and the next one added is the point to
  * ask whether the ground is still one thing.
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { reliefWarnAmpM } from './heightMath'
 import type { TerrainType } from './mapTypes'
 // The app's ONE fallback grey — the server's `terrain_types.DEFAULT_COLOR`,
 // held in `TerrainLayer` because that is where an unknown kind is drawn. A
@@ -103,11 +104,13 @@ const COLS = 7
 /** `terrain_types.DEFAULT_RELIEF_WAVE_M` — what an amplitude without a wave
  *  gets, named in the hint so an empty field is not a mystery. */
 const RELIEF_WAVE_DEFAULT = 32
-/** `heightfield.TILE_STEP_M` — the grid step the steepness hint divides by,
- *  mirrored here like the clamps around it. It is the step of the fine height
- *  TILES, i.e. the raster every walk rule reads and the FINEST there is; the
- *  coarsenable overview only ever makes a slope gentler, so the number quoted
- *  here is the worst case. It halved on 2026-08-14 and the hint's angle rose
+/** `heightfield.TILE_STEP_M` — the FALLBACK grid step of the steepness hint,
+ *  for the moment before the server has answered one. It is the step of the
+ *  fine height TILES, i.e. the raster every walk rule reads and the FINEST
+ *  there is; the coarsenable overview only ever makes a slope gentler, so the
+ *  number quoted here is the worst case. The live value comes from the map
+ *  (`GET /world/height-areas` → `tile_step_m`), because a pinned one had to be
+ *  hand-edited when the tiles halved on 2026-08-14 and the hint's angle rose
  *  with it (2 m of amplitude now reach 63° over one cell, not 45°). */
 const GRID_STEP_M = 2
 
@@ -186,23 +189,43 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
 
 /** The steepness hint of the amplitude field: the worst case two neighbouring
  *  support points can build out of the noise alone is `atan(2·amp / step)` —
- *  45° at the clamp of 2 m. An empty field quotes that clamp, so the sentence
- *  says what the limit means before anything is typed.
+ *  63° at the clamp of 2 m over the 2 m tile step. An empty field quotes that
+ *  clamp, so the sentence says what the limit means before anything is typed.
  *
  *  THE TYPED NUMBER IS CLAMPED FIRST, like the server clamps it on save: the
  *  sentence describes what WILL BE STORED, not what stands in the field. A
- *  typed 5 promised "5 m … 68°" while 2 m/45° is what arrives, and a typed
+ *  typed 5 promised "5 m … 79°" while 2 m/63° is what arrives, and a typed
  *  0.02 promised 1° where 0.05 is stored. */
-function amplitudeHint(t: (s: string) => string, raw: string): string {
+function amplitudeHint(t: (s: string) => string, raw: string,
+                      stepM: number): string {
   const typed = parseFloat(raw)
   const amp = Number.isFinite(typed) && typed > 0
     ? Math.min(RELIEF_AMP_MAX, Math.max(RELIEF_AMP_MIN, typed))
     : RELIEF_AMP_MAX
-  const deg = Math.round(Math.atan(2 * amp / GRID_STEP_M) * 180 / Math.PI)
+  const deg = Math.round(Math.atan(2 * amp / stepM) * 180 / Math.PI)
   return t('Height of the random hills of this ground, in metres — empty = flat. {amp} m builds slopes of up to {deg}° over one {step} m grid step.')
     .replace('{amp}', String(amp))
     .replace('{deg}', String(deg))
-    .replace('{step}', String(GRID_STEP_M))
+    .replace('{step}', String(stepM))
+}
+
+/** The steepness WARNING of the amplitude field: from `reliefWarnAmpM` on, the
+ *  worst case above is steeper than the walk gate lets anyone climb, so single
+ *  spots of that ground turn into obstacles. Informative only — the clamp
+ *  stays at 2 m (user decision 2026-08-14), nothing is blocked or corrected.
+ *  The typed number is clamped first, exactly like the hint above it: a typed
+ *  5 is stored as 2, and warning about the 5 would name a ground nobody gets.
+ *  `''` = nothing to warn about (flat, below the threshold, or no threshold
+ *  because the server has not answered a tile step yet). */
+function amplitudeWarn(t: (s: string) => string, raw: string,
+                       warnAmpM: number | null): string {
+  if (warnAmpM === null) return ''
+  const typed = parseFloat(raw)
+  if (!Number.isFinite(typed) || typed <= 0) return ''
+  const amp = Math.min(RELIEF_AMP_MAX, Math.max(RELIEF_AMP_MIN, typed))
+  if (amp <= warnAmpM) return ''
+  return t('Above ~{max} m the random hills get steeper than walkers can climb — spots of this ground become impassable.')
+    .replace('{max}', warnAmpM.toFixed(2))
 }
 
 /** The MOVE sink hint — what the number does, where it stops, and why it is
@@ -237,7 +260,15 @@ function waveHint(t: (s: string) => string): string {
     .replace('{def}', String(RELIEF_WAVE_DEFAULT))
 }
 
-interface BehaviourRowProps extends OwnedMeta {
+/** What the relief fields need from the SERVER to say anything: the step of
+ *  the fine height tiles and the amplitude from which the hills outgrow the
+ *  walk gate. Both travel down from `MapTab` — see `TerrainTypesDialogProps`. */
+interface ReliefLimits {
+  tileStepM: number
+  warnAmpM: number | null
+}
+
+interface BehaviourRowProps extends OwnedMeta, ReliefLimits {
   onMoveAnim: (v: string) => void
   onIdleAnim: (v: string) => void
   onMoveSink: (v: string) => void
@@ -254,10 +285,15 @@ interface BehaviourRowProps extends OwnedMeta {
  *  spans the whole table has no column header over it. */
 function BehaviourRow({
   moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
+  tileStepM, warnAmpM,
   onMoveAnim, onIdleAnim, onMoveSink, onIdleSink, onReliefAmp, onReliefWave,
   onSway,
 }: BehaviourRowProps) {
   const { t } = useI18n()
+  // The grid step the hint divides by: the server's, as soon as it has
+  // answered one, and the mirrored constant only until then.
+  const stepM = tileStepM > 0 ? tileStepM : GRID_STEP_M
+  const ampWarn = amplitudeWarn(t, reliefAmp, warnAmpM)
   return (
     <tr className="ga-tt-behaviour-row">
       <td colSpan={COLS}>
@@ -322,7 +358,7 @@ function BehaviourRow({
               step={RELIEF_AMP_STEP}
               value={reliefAmp}
               placeholder={t('flat')}
-              title={amplitudeHint(t, reliefAmp)}
+              title={amplitudeHint(t, reliefAmp, stepM)}
               onChange={(e) => onReliefAmp(e.target.value)}
             />
           </label>
@@ -354,6 +390,12 @@ function BehaviourRow({
               onChange={(e) => onSway(e.target.value)}
             />
           </label>
+          {/* THE STEEPNESS WARNING of the amplitude, on its own line under the
+              fields rather than squeezed between two of them — it is a whole
+              sentence, and wedging it in would push the wavelength it belongs
+              next to onto the next line. Amber and informative: the value is
+              stored as typed, the clamp stays at 2 m. */}
+          {ampWarn ? <div className="ga-tt-warn">{ampWarn}</div> : null}
         </div>
       </td>
     </tr>
@@ -365,7 +407,7 @@ function BehaviourRow({
  *  whatever put something there. */
 type TypeDraft = TerrainType
 
-interface TypeRowProps {
+interface TypeRowProps extends ReliefLimits {
   type: TerrainType
   source: 'shared' | 'world'
   busy: boolean
@@ -376,7 +418,8 @@ interface TypeRowProps {
 }
 
 function TypeRow({
-  type, source, busy, armedReset, onArmReset, onSave, onReset,
+  type, source, busy, armedReset, tileStepM, warnAmpM,
+  onArmReset, onSave, onReset,
 }: TypeRowProps) {
   const { t } = useI18n()
   const [name, setName] = useState(type.name || '')
@@ -533,6 +576,7 @@ function TypeRow({
       </td>
     </tr>
     <BehaviourRow
+      tileStepM={tileStepM} warnAmpM={warnAmpM}
       moveAnim={moveAnim} onMoveAnim={setMoveAnim}
       idleAnim={idleAnim} onIdleAnim={setIdleAnim}
       moveSink={moveSink} onMoveSink={setMoveSink}
@@ -548,16 +592,26 @@ function TypeRow({
 export interface TerrainTypesDialogProps {
   types: TerrainType[]
   sources: Record<string, 'shared' | 'world'>
+  /** The step of the fine height TILES and the walk gate's slope limit, both
+   *  straight from the server and handed down by `MapTab` — the dialog fetches
+   *  nothing of its own. 0 = not answered yet, and then the relief hint falls
+   *  back to the mirrored constant and the warning simply says nothing. */
+  tileStepM: number
+  maxSlopeDeg: number
   /** Refetch the catalog in `MapTab` — palette and area colours follow it. */
   onChanged: () => Promise<void> | void
   onClose: () => void
 }
 
 export function TerrainTypesDialog({
-  types, sources, onChanged, onClose,
+  types, sources, tileStepM, maxSlopeDeg, onChanged, onClose,
 }: TerrainTypesDialogProps) {
   const { t } = useI18n()
   const { toast } = useToast()
+  /** From which amplitude the micro relief can outclimb the walk gate — out of
+   *  the server's own two numbers, never a constant here (§ A16.2). */
+  const warnAmpM = useMemo(() => reliefWarnAmpM(maxSlopeDeg, tileStepM),
+    [maxSlopeDeg, tileStepM])
   const [busy, setBusy] = useState(false)
   const [armedReset, setArmedReset] = useState('')
 
@@ -697,6 +751,8 @@ export function TerrainTypesDialog({
                     type={ty}
                     source={src}
                     busy={busy}
+                    tileStepM={tileStepM}
+                    warnAmpM={warnAmpM}
                     armedReset={armedReset === ty.kind}
                     onArmReset={(a) => setArmedReset(a ? ty.kind : '')}
                     onSave={putType}
@@ -777,6 +833,7 @@ export function TerrainTypesDialog({
                   fields in the same place, so adding a ground and editing one
                   are one habit. */}
               <BehaviourRow
+                tileStepM={tileStepM} warnAmpM={warnAmpM}
                 moveAnim={newMoveAnim} onMoveAnim={setNewMoveAnim}
                 idleAnim={newIdleAnim} onIdleAnim={setNewIdleAnim}
                 moveSink={newMoveSink} onMoveSink={setNewMoveSink}

@@ -1748,6 +1748,7 @@
     "Relief amplitude (m)": "Relief-Amplitude (m)",
     "Relief wavelength (m)": "Relief-Wellenlänge (m)",
     "Height of the random hills of this ground, in metres — empty = flat. {amp} m builds slopes of up to {deg}° over one {step} m grid step.": "Höhe der zufälligen Hügel dieses Bodens, in Metern — leer = flach. {amp} m baut Hänge von bis zu {deg}° über einen Gitterschritt von {step} m.",
+    "Above ~{max} m the random hills get steeper than walkers can climb — spots of this ground become impassable.": "Über ~{max} m werden die zufälligen Hügel steiler, als Laufende steigen können — Stellen dieses Bodens werden unpassierbar.",
     "Width of one hill of this ground, in metres ({min}–{max}) — empty = {def} m.": "Breite eines Hügels dieses Bodens, in Metern ({min}–{max}) — leer = {def} m.",
     "Sway (m)": "Wehen (m)",
     "still": "still",

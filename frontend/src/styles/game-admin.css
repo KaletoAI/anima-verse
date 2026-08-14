@@ -2294,6 +2294,15 @@ html, * {
   font-size: 11px;
   color: var(--text-muted, #8b949e);
 }
+/* A relief value that stays saved but costs something — amber, not red, and on
+   a line of its own inside the behaviour row (`flex-basis: 100%`) so the whole
+   sentence fits without pushing the fields apart. */
+.ga-tt-warn {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #d29922;
+}
 .ga-tt-center { text-align: center; }
 .ga-tt-kind {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
