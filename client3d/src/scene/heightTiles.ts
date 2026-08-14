@@ -3,7 +3,8 @@
  * as pure arithmetic.
  *
  * Since v2 the world's relief arrives twice: a coarsenable OVERVIEW for the
- * distance, and 256 m tiles at an always-fine 4 m step for everything the
+ * distance, and 256 m tiles at an always-fine step (the server's, 2 m
+ * today) for everything the
  * ground decides (`@anima/scene-render` `WorldHeightTiles`). The overview is
  * one fetch and then it stands; the tiles are a moving window, and this file
  * is the whole of the question "which ones, right now".

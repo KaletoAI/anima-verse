@@ -27,6 +27,7 @@ import {
 import { TerrainTypesDialog } from './TerrainTypesDialog'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { readScatter } from './mapTypes'
+import { plateauRimM } from './heightMath'
 import type {
   EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
   TerrainArea, TerrainMeta,
@@ -302,12 +303,22 @@ export function MapTab() {
   // which is the one state that says nothing at all.
   const [heightStepM, setHeightStepM] = useState(0)
   const [heightStepDefaultM, setHeightStepDefaultM] = useState(0)
+  /** The step of the fine height TILES, straight from the server. 0 = not
+   *  answered yet, and then the plateau-rim line simply says nothing — no
+   *  constant of our own (see `heightMath.plateauRimM`). */
+  const [tileStepM, setTileStepM] = useState(0)
   // The walk limit the steepness warning is measured against. It arrives with
   // the worldmap payload; the fallback is the server's own default
   // (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), so an older server warns with
   // the same number it judges with.
   const [maxSlopeDeg, setMaxSlopeDeg] = useState(DEFAULT_MAX_SLOPE_DEG)
   const [maxStepM, setMaxStepM] = useState(DEFAULT_MAX_STEP_M)
+  /** How high a rim a levelled place can still be entered over — the one cell
+   *  of ramp § A16.1 leaves it, out of the server's own two limits and the
+   *  server's own tile step. `null` until the step is answered. */
+  const plateauRim = useMemo(
+    () => plateauRimM(maxSlopeDeg, maxStepM, tileStepM),
+    [maxSlopeDeg, maxStepM, tileStepM])
   /** The top-down scatter preview — a VIEW, so it survives every mode. */
   const [scatterOn, setScatterOn] = useState(false)
   /** The prop library for the scatter model picker of the area chip — fetched
@@ -471,6 +482,8 @@ export function MapTab() {
       noteHeightStep(r.step_m)
       const def = Number(r.default_step_m)
       if (Number.isFinite(def) && def > 0) setHeightStepDefaultM(def)
+      const tile = Number(r.tile_step_m)
+      if (Number.isFinite(tile) && tile > 0) setTileStepM(tile)
     } catch (e) {
       toast(t('Failed to load heights') + ': ' + (e as Error).message, 'error')
       return false
@@ -2117,6 +2130,18 @@ export function MapTab() {
                   {t('Flatten terrain')}
                 </label>
               </div>
+              {/* THE RIM THE FLATTENING BUILDS, said out loud while the box is
+                  ticked. The ramp to the untouched landscape is exactly ONE
+                  grid cell wide, so the climb it can carry is
+                  tan(max_slope_deg) · tile_step_m — both numbers from the
+                  server, never pinned here (`heightMath.plateauRimM`). */}
+              {selected.level_ground && plateauRim !== null ? (
+                <div className="ga-map-chip-row ga-map-chip-label">
+                  {t('The ramp to the untouched ground is one grid cell wide ({cell} m), so it carries at most {rim} m. Stands this place further above or below the ground at its rim, the rim is a wall — only openings lead in.')
+                    .replace('{cell}', String(tileStepM))
+                    .replace('{rim}', String(plateauRim))}
+                </div>
+              ) : null}
               <div className="ga-map-chip-actions">
                 <button type="button" className="ga-btn ga-btn-sm"
                   title={t('Choose which image this location shows on the map')}

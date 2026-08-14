@@ -470,7 +470,7 @@ export interface Ground {
    * WHERE the fine height tiles are needed, in world metres (§ A16.3).
    *
    * The relief is delivered twice since v2: one coarsenable overview for the
-   * whole world, and 256 m tiles at the fine 4 m step around wherever the play
+   * whole world, and 256 m tiles at the server's fine step around wherever the play
    * is. This is that "wherever" — the avatar's position while the player is in
    * control of it, the point the camera looks at otherwise (`main.ts`, which
    * computes both anyway).
@@ -881,7 +881,7 @@ export function createGround(): Ground {
    * where the plate only interpolates between two of its vertices — the
    * meadow would sink into the hill it is painted on.
    *
-   * IT IS THE OVERVIEW'S STEP THIS STARTS FROM, not the tiles' fine 4 m, and
+   * IT IS THE OVERVIEW'S STEP THIS STARTS FROM, not the tiles' finer one, and
    * that is a mesh decision rather than a height one: the plate spans the whole
    * world frame and its budget is 40 000 cells whatever raster it samples. The
    * tiles sharpen every CORNER of that mesh (each vertex is lifted through the

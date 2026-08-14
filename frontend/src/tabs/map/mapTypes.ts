@@ -306,10 +306,17 @@ export interface HeightAreasResp {
    *  coarsens the relief everywhere. The editor shows it and warns when a save
    *  moves it — see `heightMath.reliefStepNotice`. */
   step_m?: number
-  /** The finest step there is (`heightfield.DEFAULT_STEP_M`) — what "coarser
-   *  than normal" is measured against, so the editor holds no constant of its
-   *  own. */
+  /** The finest step the OVERVIEW gets (`heightfield.DEFAULT_STEP_M`) — what
+   *  "coarser than normal" is measured against, so the editor holds no
+   *  constant of its own. */
   default_step_m?: number
+  /** The step of the fine height TILES (`heightfield.TILE_STEP_M`), a
+   *  different number since 2026-08-14. One authoring limit hangs on it: the
+   *  ramp around a levelling footprint is exactly ONE CELL wide, so the rim it
+   *  can bridge is `tan(max_slope_deg) · tile_step_m` — see
+   *  `heightMath.plateauRimM`. It comes from the server for the same reason
+   *  the two above do: the number halved the day the tiles did. */
+  tile_step_m?: number
 }
 
 /** What `POST`/`PUT /world/height-areas` answer. The step is the one the world

@@ -19,7 +19,8 @@
  * expected numbers. Change one side, change the table, change the other.
  *
  * SINCE v2 THE FIELD ARRIVES TWICE (§ A16.3): a coarsenable overview for the
- * distance, and 256 m tiles in an always-fine 4 m step for everything the
+ * distance, and 256 m tiles in an always-fine step (the server's own, 2 m
+ * today) for everything the
  * ground DECIDES. `sampleWorldHeight` and its rectangle helpers read ONE field
  * and are unchanged by that — they are how a single grid is read, overview or
  * tile alike. The ladder over both lives at the bottom of this file
@@ -277,7 +278,7 @@ function scanRect(field: WorldHeightField | null | undefined,
  * WHY THERE ARE TWO GRIDS AT ALL: one grid cannot be both. The overview covers
  * the whole world and is therefore coarsened as soon as somebody paints far
  * out — measured 4 m → 32 m — and at 32 m the ground a walker is judged against
- * is no longer the ground anybody authored. So the fine 4 m raster is delivered
+ * is no longer the ground anybody authored. So the fine raster is delivered
  * in 256 m tiles on demand, every rule reads those, and the overview is a
  * PICTURE for the distance and nothing else.
  *
@@ -304,7 +305,7 @@ export interface WorldHeightTiles {
  *
  * A point ON a seam belongs to the tile east/south of it. That choice is
  * invisible in the height and only decides which array is read: both neighbours
- * carry the shared support point, with the same number (the 65 × 65 grids
+ * carry the shared support point, with the same number (the tile grids
  * duplicate their borders on purpose).
  */
 export function tileKeyAt(tileM: number, x: number, z: number): string {
@@ -356,7 +357,7 @@ export function sampleCompositeHeight(c: WorldHeightTiles | null | undefined,
 /**
  * The lattice the rectangle helpers walk: the FINEST grid the composite holds.
  *
- * A loaded tile decides it whenever there is one — its `step_m` is the fine 4 m
+ * A loaded tile decides it whenever there is one — its `step_m` is the step
  * that never coarsens, and its origin is a multiple of the tile size, hence a
  * point of the one world-origin-anchored grid. WHICH tile we take is therefore
  * irrelevant: all tile origins are congruent modulo the step, so they all

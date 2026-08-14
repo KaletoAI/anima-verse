@@ -85,7 +85,10 @@ const ANIM_MAX = 40
 const RELIEF_AMP_MIN = 0.05
 const RELIEF_AMP_MAX = 2
 const RELIEF_AMP_STEP = 0.05
-const RELIEF_WAVE_MIN = 8
+// `terrain_types.RELIEF_WAVE_MIN` = 2 × `heightfield.TILE_STEP_M` (Nyquist).
+// It halved on 2026-08-14 with the tile step, which is what made a 4 m swell
+// authorable at all.
+const RELIEF_WAVE_MIN = 4
 const RELIEF_WAVE_MAX = 200
 const RELIEF_WAVE_STEP = 1
 const SINK_MIN = 0
@@ -100,10 +103,13 @@ const COLS = 7
 /** `terrain_types.DEFAULT_RELIEF_WAVE_M` — what an amplitude without a wave
  *  gets, named in the hint so an empty field is not a mystery. */
 const RELIEF_WAVE_DEFAULT = 32
-/** `heightfield.DEFAULT_STEP_M` — the grid step the steepness hint divides by.
- *  It is the FINEST step; a coarsened grid only ever makes the slope gentler,
- *  so the number quoted here is the worst case. */
-const GRID_STEP_M = 4
+/** `heightfield.TILE_STEP_M` — the grid step the steepness hint divides by,
+ *  mirrored here like the clamps around it. It is the step of the fine height
+ *  TILES, i.e. the raster every walk rule reads and the FINEST there is; the
+ *  coarsenable overview only ever makes a slope gentler, so the number quoted
+ *  here is the worst case. It halved on 2026-08-14 and the hint's angle rose
+ *  with it (2 m of amplitude now reach 63° over one cell, not 45°). */
+const GRID_STEP_M = 2
 
 /** Read one of the string meta keys this dialog owns. Everything else in
  *  `meta` belongs to whoever wrote it and travels along untouched. */
