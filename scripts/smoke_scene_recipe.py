@@ -469,6 +469,71 @@ def test_no_building_entrance() -> None:
           outdoor["problems"] == [], str(outdoor["problems"]))
 
 
+def test_rooms_without_layout() -> None:
+    print("\n[4g] problems — a contour over rooms that all lack a layout")
+    # The quiet sealed hull (diagnosis 2026-08-15): the contour is drawn, both
+    # rooms have no ``layout``, so compose_recipe returns None for each. No
+    # recipe = no shell = shell_levels empty, and no_building_entrance can
+    # never fire — this is the finding that does.
+    blind = scene_recipe.compose_scene(
+        {**fixture(), "rooms": [{"id": "a", "name": "A"},
+                                {"id": "b", "name": "B", "layout": {}}]},
+        plan_width_m=PLAN_W)
+    check("exactly one problem, kind rooms_without_layout, at the location",
+          [(p["kind"], p.get("location_id")) for p in blind["problems"]]
+          == [("rooms_without_layout", "loc")], str(blind["problems"]))
+    check("...counting both rooms, with a message for the surfaces to show",
+          blind["problems"][0].get("room_count") == 2
+          and bool(blind["problems"][0].get("message")),
+          str(blind["problems"][0]))
+    # Counter-check: ONE room with a layout is enough — the recipe exists, so
+    # the quiet finding goes and the ordinary entrance rule takes over. Room
+    # "a" here is the fixture room minus its south door (window only), so the
+    # hull is walled on level 0 and still has no way in.
+    one = scene_recipe.compose_scene(
+        {**fixture(), "rooms": [
+            {"id": "a", "name": "A", "layout": {
+                "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0,
+                "openings": [{"edge": 0, "at": 0.5, "type": "window",
+                              "width_m": 2.0, "height_m": 1.2,
+                              "sill_m": 0.9}]}},
+            {"id": "b", "name": "B"}]},
+        plan_width_m=PLAN_W)
+    check("one laid-out room ends it — no_building_entrance takes over",
+          [p["kind"] for p in one["problems"]] == ["no_building_entrance"],
+          str(one["problems"]))
+    # No contour, no finding: without a hull nothing was sealed, and rooms
+    # without a layout are simply rooms nobody placed yet.
+    loose = scene_recipe.compose_scene(
+        {**fixture(), "map3d": {k: v for k, v in fixture()["map3d"].items()
+                                if k != "outline"},
+         "rooms": [{"id": "a", "name": "A"}]}, plan_width_m=PLAN_W)
+    check("without a contour an unplaced room is no finding",
+          loose["problems"] == [], str(loose["problems"]))
+    # And a location without rooms at all keeps quiet too: there is nothing
+    # that HAS no layout, and the empty room list is visible by itself. The
+    # reserved GROUND room counts as nothing here — it never carries a layout
+    # (world_ops._sanitize_rooms_layout strips one), so it must not be blamed
+    # for the missing one. Every migrated location owns it.
+    from app.models.world import GROUND_ROOM_ID
+    empty = scene_recipe.compose_scene({**fixture(), "rooms": []},
+                                       plan_width_m=PLAN_W)
+    check("a contour without any room reports nothing",
+          empty["problems"] == [], str(empty["problems"]))
+    ground = scene_recipe.compose_scene(
+        {**fixture(), "rooms": [{"id": GROUND_ROOM_ID, "name": "Outside"}]},
+        plan_width_m=PLAN_W)
+    check("...and a contour over the GROUND room alone is no finding either",
+          ground["problems"] == [], str(ground["problems"]))
+    with_ground = scene_recipe.compose_scene(
+        {**fixture(), "rooms": [{"id": GROUND_ROOM_ID, "name": "Outside"},
+                                {"id": "a", "name": "A"}]},
+        plan_width_m=PLAN_W)
+    check("beside a real room it drops out of the count (1, not 2)",
+          [(p["kind"], p.get("room_count")) for p in with_ground["problems"]]
+          == [("rooms_without_layout", 1)], str(with_ground["problems"]))
+
+
 def test_contour_wall_texture() -> None:
     print("\n[4b] map3d.wall_kind textures the whole shell")
     plain = scene()
@@ -1947,6 +2012,7 @@ def main() -> int:
     test_doorways()
     test_contour_walls()
     test_no_building_entrance()
+    test_rooms_without_layout()
     test_contour_wall_texture()
     test_area_locations()
     test_elevator()

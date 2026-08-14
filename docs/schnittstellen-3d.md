@@ -2809,12 +2809,21 @@ stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
 — keiner leitet die Regel nach, keiner erfindet eine Reparatur. `kind` ist
 der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
 darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
-zurück). Heute gibt es einen: **`no_building_entrance`** — die Location hat
-eine Kontur, mindestens ein Raum MIT HÜLLE steht auf Etage 0 (eine Kontur
-über lauter Outdoor-/`no_walls`-Räumen ist kein Gebäude, dort könnte der
-Autor gar keine Tür setzen), und **keine einzige** Türschwelle auf Etage 0
-führt nach draußen. Dann kommt niemand hinein, und seit die Fallback-Tür weg
-ist (§ A6) verdeckt das auch nichts mehr.
+zurück; Zahlen stehen NIE im `message`, sondern in eigenen Feldern, weil der
+Satz als Ganzes übersetzt wird). Heute gibt es zwei:
+
+- **`no_building_entrance`** — die Location hat eine Kontur, mindestens ein
+  Raum MIT HÜLLE steht auf Etage 0 (eine Kontur über lauter
+  Outdoor-/`no_walls`-Räumen ist kein Gebäude, dort könnte der Autor gar keine
+  Tür setzen), und **keine einzige** Türschwelle auf Etage 0 führt nach
+  draußen. Dann kommt niemand hinein, und seit die Fallback-Tür weg ist
+  (§ A6) verdeckt das auch nichts mehr.
+- **`rooms_without_layout`** (Diagnose 2026-08-15) — die Location hat eine
+  Kontur und Räume, aber **kein einziger** Raum liefert ein Recipe (Layout
+  fehlt oder ist entartet). Ohne Recipe gibt es auch keine Hülle, also bleibt
+  `shell_levels` leer und `no_building_entrance` schweigt: die gezeichnete
+  Kontur stünde still über gar nichts. `room_count` nennt die Zahl der Räume;
+  der GROUND-Raum zählt nie mit, er trägt vertraglich kein Layout.
 
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
 Fenster-Brüstung/-Sturz/Glas als eigene `walls`-Einträge, Türlücken der

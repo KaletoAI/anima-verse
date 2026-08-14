@@ -265,15 +265,20 @@ export interface SceneDoorway {
  *  DISPLAY it: the floor-plan editor at the affected place, the 3D client as a
  *  hint. Neither re-derives the rule, and neither invents a repair.
  *
- *  `kind` is the stable key (today: `no_building_entrance` = a hull with
- *  rooms but no door leading outside — the old "one door mid in the south
- *  wall" fallback is gone). `message` is the server's English wording; a
- *  surface may translate a kind it knows and falls back to this text. */
+ *  `kind` is the stable key (`no_building_entrance` = a hull with rooms but no
+ *  door leading outside — the old "one door mid in the south wall" fallback is
+ *  gone; `rooms_without_layout` = a contour whose rooms ALL lack a layout, so
+ *  nothing is composed inside it at all). `message` is the server's English
+ *  wording; a surface may translate a kind it knows and falls back to this
+ *  text. Numbers never sit in `message` — it is translated as a whole
+ *  sentence — so they come as their own fields (`room_count`). */
 export interface SceneProblem {
   kind: string
   location_id?: string
   room_id?: string
   message: string
+  /** `rooms_without_layout`: how many rooms the location has. */
+  room_count?: number
 }
 
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and

@@ -950,9 +950,18 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
 # ── Problems ────────────────────────────────────────────────────────────
 
 def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
-              shell_levels: Set[int],
-              doorways: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+              shell_levels: Set[int], doorways: List[Dict[str, Any]],
+              recipes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Findings instead of silent repairs (plan-betreten-und-tueren.md § 4.3).
+
+    ``rooms_without_layout`` — the location has a contour, it has rooms, and
+    not ONE of them composed a recipe (every layout is missing or degenerate).
+    That is the quiet version of the sealed hull: without a recipe there is no
+    shell either, so ``shell_levels`` stays empty and ``no_building_entrance``
+    below can never speak up. The contour then stands over nothing at all.
+    The GROUND room never counts — it has no layout by contract. The room
+    COUNT rides along as its own field: ``message`` is looked up as a whole
+    sentence by the i18n layer, so it must stay free of numbers.
 
     ``no_building_entrance`` — ALL of:
 
@@ -968,7 +977,23 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
     states it; the floor-plan editor and the 3D client display it.
     """
     out: List[Dict[str, Any]] = []
-    if (len(_outline_world(map3d, extent)) >= 3
+    from app.models.world import GROUND_ROOM_ID
+    has_contour = len(_outline_world(map3d, extent)) >= 3
+    # The GROUND room is out: it is the location's open surface and NEVER
+    # carries a layout (the sanitizer strips one), so counting it would blame
+    # the author for a room that cannot be drawn.
+    rooms = [r for r in (location.get("rooms") or [])
+             if isinstance(r, dict) and str(r.get("id") or "") != GROUND_ROOM_ID]
+    if has_contour and rooms and not recipes:
+        out.append({
+            "kind": "rooms_without_layout",
+            "location_id": str(location.get("id") or ""),
+            "room_count": len(rooms),
+            "message": "No room of this location has a floor plan: the drawn "
+                       "contour holds nothing that can be entered. Draw a "
+                       "layout for at least one of its rooms.",
+        })
+    if (has_contour
             and 0 in shell_levels
             and not any(d.get("outside") and int(d.get("level") or 0) == 0
                         for d in doorways)):
@@ -2073,7 +2098,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # What the composer found wrong and did NOT repair behind the
         # author's back (§ 4.3). Always present, empty when all is well;
         # editor and 3D client only display it.
-        "problems": _problems(location, map3d, extent, shell_levels, doorways),
+        "problems": _problems(location, map3d, extent, shell_levels, doorways,
+                              recipes),
     }
     if boundary:
         out["boundary_openings"] = boundary
