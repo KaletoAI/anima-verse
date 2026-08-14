@@ -139,10 +139,11 @@ def select_model(location_id: str, filename: str, room_id: str = "",
 def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
     """All stored models of a stem for the admin UI, newest first:
     ``[{filename, format, created_at, backend, source, source_image,
-    source_file, rotation, tier, selected_for, shrinkable, shrink_reason,
-    active}]``. ``tier`` is what the file was made for, ``selected_for`` the
-    tiers it currently serves, ``source_file`` the stored model a low variant
-    was reduced FROM.
+    source_file, rotation, tier, selected_for, tris, lod_ratio, shrinkable,
+    shrink_reason, active}]``. ``tier`` is what the file was made for,
+    ``selected_for`` the tiers it currently serves, ``source_file`` the stored
+    model a low variant was reduced FROM, ``tris``/``lod_ratio`` what the CPU
+    reduction left of it (0 = not a reduced model).
 
     ``shrinkable`` / ``shrink_reason`` come from the cheap capability probe
     (header + JSON chunk): a mesh without UVs/texture can never be reduced,
@@ -174,6 +175,10 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "offset_z": float(meta.get("offset_z") or 0.0),
             "walk_y": float(meta.get("walk_y") or 0.0),
             "width_m": float(meta.get("width_m") or 0.0),
+            # What the reduction actually cost this file (0 = not a reduced
+            # model, or one from before these numbers were recorded).
+            "tris": int(meta.get("tris") or 0),
+            "lod_ratio": float(meta.get("lod_ratio") or 0.0),
             "shrinkable": bool(cap["shrinkable"]),
             "shrink_reason": cap["reason"],
             "active": bool(active and p.name == active.name),
@@ -373,9 +378,12 @@ def is_pending(location_id: str, room_id: str = "") -> bool:
 
 def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
     """Status for the admin UI: ``{exists, pending, meta, models, backends,
-    default}``. ``meta`` is the ACTIVE model's sidecar, ``models`` the full
-    list (newest first); ``backends`` = all available rig-'none' mesh
-    backends, ``default`` = the admin default only when its rig is 'none'."""
+    default, blender}``. ``meta`` is the ACTIVE model's sidecar, ``models``
+    the full list (newest first); ``backends`` = all available rig-'none' mesh
+    backends, ``default`` = the admin default only when its rig is 'none';
+    ``blender`` = the refinement runner's state, the gate for the CPU
+    distance-mesh action (without a usable Blender the panel hides it instead
+    of offering a button that always fails)."""
     from app.core.model3d import list_mesh_backends
     owner = _owner_id(location_id)
     path = find_building_model(location_id, room_id)
@@ -397,6 +405,8 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
     # normal generate dialog.
     from app.core.model3d import list_shrink_backends
     out["shrink_backends"] = list_shrink_backends()["backends"]
+    from app.blender import runner
+    out["blender"] = runner.status()
     return out
 
 
@@ -665,73 +675,118 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     logger.info("Location model %s%s: uploaded (%d bytes) -> %s", owner,
                 f"/{room_id}" if room_id else "", len(contents), target.name)
     if (tier or DEFAULT_TIER) == DEFAULT_TIER:
-        _build_low_tier(location_id, room_id)
+        request_low_tier(location_id, room_id)
     return meta
 
 
-def _build_low_tier(location_id: str, room_id: str = "") -> None:
-    """Builds the subject's missing distance mesh in the BACKGROUND (CPU).
+def build_low_tier(location_id: str, room_id: str = "", ratio: float = 0.0,
+                   force: bool = False) -> Dict[str, Any]:
+    """Reduces the subject's full model to its distance mesh, BLOCKING (CPU).
+
+    The result is a NEW gallery file selected as ``low`` — never an overwrite:
+    the gallery keeps its history, so the previous low mesh stays selectable
+    (or deletable). ``force`` is the admin's explicit rebuild; without it an
+    existing low tier is left alone, which is what the automatic path wants.
+
+    ``ratio`` 0 takes the configured target for the subject kind (a room
+    diorama tolerates far less reduction than a compact prop). One build per
+    subject at a time, and the reduced mesh must pass the same static
+    validation as a freshly delivered model. Returns ``{ok, tier, ratio, tris,
+    tris_before, size, size_before, error}``.
+    """
+    from app.blender import refine
+    ratio = float(ratio or refine.lod_ratio("room" if room_id else "building"))
+    out: Dict[str, Any] = {"ok": False, "tier": LOW_TIER, "ratio": ratio,
+                           "tris": None, "tris_before": None, "size": 0,
+                           "size_before": 0, "error": ""}
+    owner = _owner_id(location_id)
+    if not owner:
+        out["error"] = "no_model"
+        return out
+    label = f"{owner}{f'/{room_id}' if room_id else ''}"
+    g = _gallery(owner, room_id)
+    src = g.find(DEFAULT_TIER, fallback=False)
+    if not src or src.suffix.lower() != ".glb":
+        out["error"] = "no_model"
+        return out
+    if LOW_TIER in g.tiers() and not force:
+        out["error"] = "low tier already exists"
+        return out
+    key = f"{owner}:{room_id}"
+    with _lock:
+        if key in _lod_building:
+            out["error"] = "a distance mesh of this subject is already being built"
+            return out
+        _lod_building.add(key)
+    try:
+        res = refine.build_static_lod(src, ratio)
+        if not res.get("ok"):
+            out["error"] = res.get("error") or "distance mesh not built"
+            return out
+        gallery = _gallery(owner, room_id)
+        target = gallery.new_path()
+        target.write_bytes(res["blob"])
+        meta: Dict[str, Any] = {
+            "created_at": utc_now_iso(),
+            "source": "lod",
+            "format": "glb",
+            "rig": "none",
+            "tier": LOW_TIER,
+            "source_file": src.name,
+            "lod_ratio": ratio,
+            "tris": res.get("tris"),
+            "tris_before": res.get("tris_before"),
+            "location": owner,
+        }
+        if room_id:
+            meta["room"] = room_id
+        write_sidecar(target, meta)
+        select_model(location_id, target.name, room_id, LOW_TIER)
+        logger.info("Location model %s: distance mesh %s (%s -> %s tris)",
+                    label, target.name, res.get("tris_before"),
+                    res.get("tris"))
+        out.update(ok=True, tris=res.get("tris"),
+                   tris_before=res.get("tris_before"),
+                   size=target.stat().st_size, size_before=src.stat().st_size)
+        return out
+    finally:
+        with _lock:
+            _lod_building.discard(key)
+
+
+def request_low_tier(location_id: str, room_id: str = "") -> None:
+    """Builds the subject's missing distance mesh in the BACKGROUND (CPU), if
+    switched on ("Build distance meshes on demand").
 
     The GPU route fills the low tier only when the alias delivered LOD stages
     (``lod_faces``); a generation without stages and every upload used to
-    leave the tier to a batch run. Same manner as the prop store: one build
-    per subject, the reduced mesh must pass the static validation, an
-    existing low tier is left alone."""
+    leave the tier to a batch run. Same manner as the prop store: serving
+    never waits. The gates below are the CHEAP ones — a serving route asks on
+    every request, and a thread per request would be the cost this is meant to
+    avoid; :func:`build_low_tier` re-checks them authoritatively."""
     from app.blender import refine
     if not refine.auto_lod_enabled():
         return
     owner = _owner_id(location_id)
     if not owner:
         return
-    g = _gallery(owner, room_id)
-    src = g.find(DEFAULT_TIER, fallback=False)
-    if not src or src.suffix.lower() != ".glb":
-        return
-    if LOW_TIER in g.tiers():
+    if LOW_TIER in _gallery(owner, room_id).tiers():
         return
     key = f"{owner}:{room_id}"
     with _lock:
         if key in _lod_building:
             return
-        _lod_building.add(key)
 
     def _run() -> None:
         try:
-            ratio = refine.lod_ratio("room" if room_id else "building")
-            res = refine.build_static_lod(src, ratio)
+            res = build_low_tier(location_id, room_id)
             if not res.get("ok"):
                 logger.debug("Location model %s%s: distance mesh not built "
                              "(%s)", owner, f"/{room_id}" if room_id else "",
                              res.get("error"))
-                return
-            gallery = _gallery(owner, room_id)
-            target = gallery.new_path()
-            target.write_bytes(res["blob"])
-            meta: Dict[str, Any] = {
-                "created_at": utc_now_iso(),
-                "source": "lod",
-                "format": "glb",
-                "rig": "none",
-                "tier": LOW_TIER,
-                "source_file": src.name,
-                "lod_ratio": float(ratio),
-                "tris": res.get("tris"),
-                "tris_before": res.get("tris_before"),
-                "location": owner,
-            }
-            if room_id:
-                meta["room"] = room_id
-            write_sidecar(target, meta)
-            select_model(location_id, target.name, room_id, LOW_TIER)
-            logger.info("Location model %s%s: distance mesh %s (%s -> %s "
-                        "tris)", owner, f"/{room_id}" if room_id else "",
-                        target.name, res.get("tris_before"), res.get("tris"))
         except Exception as e:                              # noqa: BLE001
             logger.warning("Location model %s: distance-mesh build failed: %s",
                            owner, e)
-        finally:
-            with _lock:
-                _lod_building.discard(key)
 
     threading.Thread(target=_run, daemon=True,
                      name=f"locmodel-lod-{owner}").start()
@@ -883,7 +938,7 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
         elif (tier or DEFAULT_TIER) == DEFAULT_TIER:
             # The alias delivered no stages — build the distance mesh locally
             # (CPU, seconds) instead of leaving the tier to a batch run.
-            _build_low_tier(location_id, room_id)
+            request_low_tier(location_id, room_id)
         return {"ok": True, "path": str(path), "meta": meta}
     finally:
         if task_id:

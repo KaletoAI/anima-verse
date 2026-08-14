@@ -611,10 +611,12 @@ def model_file_path(prop_id: str, filename: str) -> Optional[Path]:
 def list_models(prop_id: str) -> List[Dict[str, Any]]:
     """All stored meshes of the prop for the admin gallery, newest first:
     ``[{filename, tier, selected_for, face_num, texture_size, format,
-    created_at, backend, source, source_file, shrinkable, shrink_reason,
-    active}]``. ``tier`` is what the file was made for, ``selected_for`` the
-    tiers it currently serves, ``source_file`` the stored mesh a low variant
-    was reduced FROM, ``active`` the one a client without a tier request gets.
+    created_at, backend, source, source_file, tris, lod_ratio, shrinkable,
+    shrink_reason, active}]``. ``tier`` is what the file was made for,
+    ``selected_for`` the tiers it currently serves, ``source_file`` the stored
+    mesh a low variant was reduced FROM, ``tris``/``lod_ratio`` what the CPU
+    reduction left of it (0 = not a reduced mesh), ``active`` the one a client
+    without a tier request gets.
 
     ``shrinkable`` / ``shrink_reason`` come from the cheap capability probe
     (header + JSON chunk): a vertex-coloured mesh without UVs can never be
@@ -639,6 +641,10 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
             "source_file": meta.get("source_file", ""),
+            # What the reduction actually cost this file (0 = not a reduced
+            # mesh, or one from before these numbers were recorded).
+            "tris": int(meta.get("tris") or 0),
+            "lod_ratio": float(meta.get("lod_ratio") or 0.0),
             "shrinkable": bool(cap["shrinkable"]),
             "shrink_reason": cap["reason"],
             "active": bool(active and p.name == active.name),
@@ -648,13 +654,16 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
 
 def get_model_info(prop_id: str) -> Dict[str, Any]:
     """Gallery status for the admin panel: ``{models, tiers, none_selected,
-    shrink_backends}`` — the prop counterpart of
+    shrink_backends, blender}`` — the prop counterpart of
     ``location_model3d.get_building_info`` minus the img2mesh backend list
     (the props tab already carries that one). ``tiers`` are the resolution
     tiers the prop actually HAS; a missing one is what the admin sees as "low
     missing". ``shrink_backends`` are the mesh→mesh aliases behind "Create low
     variant" — a different list from the img2mesh backends, and empty when
-    none is configured."""
+    none is configured. ``blender`` is the refinement runner's state: without
+    a usable Blender the CPU distance-mesh action cannot run, and the panel
+    hides it instead of offering a button that always fails."""
+    from app.blender import runner
     from app.core.model3d import list_shrink_backends
     g = model_gallery(prop_id)
     return {
@@ -662,6 +671,7 @@ def get_model_info(prop_id: str) -> Dict[str, Any]:
         "tiers": sorted(g.tiers()) if g else [],
         "none_selected": bool(g and g.none_selected()),
         "shrink_backends": list_shrink_backends()["backends"],
+        "blender": runner.status(),
     }
 
 
@@ -791,64 +801,106 @@ def _auto_bake_vc(prop_id: str) -> None:
                     safe_prop_id(prop_id), res.get("error"))
 
 
-def _build_low_tier(prop_id: str) -> None:
-    """Builds the prop's missing distance mesh in the BACKGROUND.
+def build_low_tier(prop_id: str, ratio: float = 0.0,
+                   force: bool = False) -> Dict[str, Any]:
+    """Reduces the prop's full mesh to its distance mesh, BLOCKING (CPU).
+
+    The result is a NEW gallery file selected as ``low`` — never an overwrite:
+    a gallery keeps its history and the admin can go back to the previous low
+    mesh or delete it. ``force`` is the admin's explicit rebuild; without it a
+    gallery that already HAS a low tier is left alone (the automatic path,
+    where an existing choice always wins).
+
+    ``ratio`` 0 takes the configured target for props. One build per prop at a
+    time, and the reduced mesh must pass the same static validation as a
+    freshly delivered model. Returns ``{ok, tier, ratio, tris, tris_before,
+    size, size_before, error}``.
+    """
+    from app.blender import refine
+    ratio = float(ratio or refine.lod_ratio("prop"))
+    out: Dict[str, Any] = {"ok": False, "tier": LOW_TIER, "ratio": ratio,
+                           "tris": None, "tris_before": None, "size": 0,
+                           "size_before": 0, "error": ""}
+    pid = safe_prop_id(prop_id)
+    g = model_gallery(pid)
+    if not g:
+        out["error"] = "no_model"
+        return out
+    src = g.find(DEFAULT_TIER, fallback=False)
+    if not src or src.suffix.lower() != ".glb":
+        out["error"] = "no_model"
+        return out
+    if LOW_TIER in g.tiers() and not force:
+        out["error"] = "low tier already exists"
+        return out
+    with _lock:
+        if pid in _lod_building:
+            out["error"] = "a distance mesh of this prop is already being built"
+            return out
+        _lod_building.add(pid)
+    try:
+        res = refine.build_static_lod(src, ratio)
+        if not res.get("ok"):
+            out["error"] = res.get("error") or "distance mesh not built"
+            return out
+        gallery = model_gallery(pid)
+        if not gallery:
+            out["error"] = "no_model"
+            return out
+        target = gallery.new_path()
+        target.write_bytes(res["blob"])
+        write_model_sidecar(target, {
+            "created_at": utc_now_iso(),
+            "source": "lod",
+            "format": "glb",
+            "rig": "none",
+            "tier": LOW_TIER,
+            "source_file": src.name,
+            "lod_ratio": ratio,
+            "tris": res.get("tris"),
+            "tris_before": res.get("tris_before"),
+        })
+        gallery.select(target.name, LOW_TIER)
+        logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
+                    target.name, res.get("tris_before"), res.get("tris"))
+        out.update(ok=True, tris=res.get("tris"),
+                   tris_before=res.get("tris_before"),
+                   size=target.stat().st_size, size_before=src.stat().st_size)
+        return out
+    finally:
+        with _lock:
+            _lod_building.discard(pid)
+
+
+def request_low_tier(prop_id: str) -> None:
+    """Builds the prop's missing distance mesh in the BACKGROUND, if switched
+    on ("Build distance meshes on demand").
 
     Without this, the ``low`` tier of a NEW prop only ever appears through a
     batch run and a client asking for it keeps getting the full mesh. Same
     manner as the character store (``model3d.request_lod``): serving never
-    waits, one build per prop at a time, and the reduced mesh must pass the
-    static validation before it is stored. A gallery that already HAS a low
-    tier is left alone — the admin's choice (or an earlier build) wins."""
+    waits. The gates below are the CHEAP ones — a serving route asks on every
+    request, and a thread per request would be the cost this is meant to
+    avoid; :func:`build_low_tier` re-checks them authoritatively."""
     from app.blender import refine
     if not refine.auto_lod_enabled():
         return
     pid = safe_prop_id(prop_id)
     g = model_gallery(pid)
-    if not g:
-        return
-    src = g.find(DEFAULT_TIER, fallback=False)
-    if not src or src.suffix.lower() != ".glb":
-        return
-    if "low" in g.tiers():
+    if not g or LOW_TIER in g.tiers():
         return
     with _lock:
         if pid in _lod_building:
             return
-        _lod_building.add(pid)
 
     def _run() -> None:
         try:
-            ratio = refine.lod_ratio("prop")
-            res = refine.build_static_lod(src, ratio)
+            res = build_low_tier(pid)
             if not res.get("ok"):
                 logger.debug("Prop %s: distance mesh not built (%s)", pid,
                              res.get("error"))
-                return
-            gallery = model_gallery(pid)
-            if not gallery:
-                return
-            target = gallery.new_path()
-            target.write_bytes(res["blob"])
-            write_model_sidecar(target, {
-                "created_at": utc_now_iso(),
-                "source": "lod",
-                "format": "glb",
-                "rig": "none",
-                "tier": "low",
-                "source_file": src.name,
-                "lod_ratio": float(ratio),
-                "tris": res.get("tris"),
-                "tris_before": res.get("tris_before"),
-            })
-            gallery.select(target.name, "low")
-            logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
-                        target.name, res.get("tris_before"), res.get("tris"))
         except Exception as e:                              # noqa: BLE001
             logger.warning("Prop %s: distance-mesh build failed: %s", pid, e)
-        finally:
-            with _lock:
-                _lod_building.discard(pid)
 
     threading.Thread(target=_run, daemon=True,
                      name=f"prop-lod-{pid}").start()
@@ -864,7 +916,7 @@ def _store_bbox(prop_id: str) -> None:
     this is the one place a post-ingest step has to be added."""
     _auto_bake_vc(prop_id)
     _auto_retexture(prop_id)
-    _build_low_tier(prop_id)
+    request_low_tier(prop_id)
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return

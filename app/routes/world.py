@@ -559,6 +559,33 @@ def _shrink_start(trigger, *args: Any, **kwargs: Any) -> Dict[str, Any]:
     return {"status": "generating" if started else "already_running"}
 
 
+def _lod_result(build, *args: Any, ratio: float = 0.0,
+                kind: str = "prop") -> Dict[str, Any]:
+    """Run a store's ``build_low_tier`` for the admin's explicit rebuild and
+    map its outcome to the HTTP answer.
+
+    Blocking on purpose (the character twin does the same): a CPU reduction
+    takes seconds, not the minutes a GPU mesh job takes, so the panel gets the
+    triangle counts back instead of polling for them. ``force`` is always set —
+    the button IS the decision, so it also overrides the "build distance meshes
+    on demand" switch and an existing low tier (whose file stays in the
+    gallery; the new one is a fresh entry, not an overwrite)."""
+    from app.blender import refine
+    reason = refine.unavailable_reason()
+    if reason:
+        raise HTTPException(status_code=503, detail=reason)
+    ratio = float(ratio or refine.lod_ratio(kind))
+    if not 0.02 <= ratio < 1:
+        raise HTTPException(status_code=400,
+                            detail="ratio must be between 0.02 and 1")
+    res = build(*args, ratio=ratio, force=True)
+    if not res.get("ok"):
+        err = res.get("error", "")
+        raise HTTPException(status_code=404 if err == "no_model" else 503,
+                            detail=err or "distance mesh build failed")
+    return res
+
+
 @router.post("/locations/{location_id}/model3d/shrink")
 async def location_model3d_shrink(location_id: str, request: Request) -> Dict[str, Any]:
     """Reduce a STORED building model to a low variant (body: {file, backend?,
@@ -573,6 +600,21 @@ async def location_model3d_shrink(location_id: str, request: Request) -> Dict[st
     if not model_file_path(location_id, body["source_file"]):
         raise HTTPException(status_code=404, detail="Model not found")
     return _shrink_start(trigger_shrink, location_id, **body)
+
+
+@router.post("/locations/{location_id}/model3d/lod")
+def location_model3d_lod(location_id: str, ratio: float = 0) -> Dict[str, Any]:
+    """Build the location's distance mesh from its full building model on the
+    CPU (Blender Decimate) — the "Build distance mesh" button.
+
+    ``ratio`` is the target fraction of the triangle count (default: the
+    configured one for buildings). The result is a NEW gallery file selected
+    as ``low``; an existing low model stays stored and can be selected back."""
+    from app.core.location_model3d import build_low_tier
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    return _lod_result(build_low_tier, location_id, "", ratio=ratio,
+                       kind="building")
 
 
 @router.post("/locations/{location_id}/model3d/upload")
@@ -764,6 +806,19 @@ async def room_model3d_shrink(location_id: str, room_id: str,
     if not model_file_path(location_id, body["source_file"], room_id):
         raise HTTPException(status_code=404, detail="Model not found")
     return _shrink_start(trigger_shrink, location_id, room_id=room_id, **body)
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/lod")
+def room_model3d_lod(location_id: str, room_id: str,
+                     ratio: float = 0) -> Dict[str, Any]:
+    """Build the room diorama's distance mesh on the CPU (Blender Decimate) —
+    same contract as the building twin, with the room's own default ratio (a
+    diorama is mostly flat walls and tolerates far less reduction than a
+    compact prop)."""
+    from app.core.location_model3d import build_low_tier
+    _require_room(location_id, room_id)
+    return _lod_result(build_low_tier, location_id, room_id, ratio=ratio,
+                       kind="room")
 
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/upload")
@@ -1340,6 +1395,20 @@ async def prop_model_shrink(prop_id: str, request: Request) -> Dict[str, Any]:
     if not model_file_path(prop_id, body["source_file"]):
         raise HTTPException(status_code=404, detail="Model not found")
     return _shrink_start(trigger_shrink, prop_id, **body)
+
+
+@router.post("/props/{prop_id}/models/lod")
+def prop_model_lod(prop_id: str, ratio: float = 0) -> Dict[str, Any]:
+    """Build the prop's distance mesh from its full mesh on the CPU (Blender
+    Decimate) — the "Build distance mesh" button.
+
+    ``ratio`` is the target fraction of the triangle count (default: the
+    configured one for props). The result is a NEW gallery file selected as
+    ``low``; an existing low mesh stays stored and can be selected back."""
+    from app.core.props import build_low_tier, get_prop
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return _lod_result(build_low_tier, prop_id, ratio=ratio, kind="prop")
 
 
 @router.delete("/props/{prop_id}/models")
