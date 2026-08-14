@@ -251,23 +251,23 @@ class Verifier {
 // chain and the payload's colour vocabulary — the admin preview paints the
 // same primitives in its own preview colours.
 
-/** Tileable surface texture of a kind in WORLD scale. Box and extrude UVs need
- *  a per-piece clone with its own repeat. `use` drives the fallback chain of
- *  surfaceFor: floors fall back to the global "floor" kind, walls deliberately
- *  do not (else floor covering sticks to the wall).
+/** Tileable surface texture of a kind, plus the world size of one tile. Every
+ *  piece needs its OWN clone: the world scale ends up either on this texture's
+ *  repeat (plates) or in the geometry's uvs (walls), and both are per piece.
+ *  `use` drives the fallback chain of surfaceFor: floors fall back to the
+ *  global "floor" kind, walls deliberately do not (else floor covering sticks
+ *  to the wall).
  *
  *  The library's `size_m` IS the world tile size since E4: k = 1, so a metre in
  *  the room is a metre on the map and there is nothing left to convert. */
-function tiledTexture(kind: string | undefined, use: 'floor' | 'wall',
-                      repeat: (tileM: number) => [number, number]): THREE.Texture | null {
+function tiledTexture(kind: string | undefined, use: 'floor' | 'wall'):
+    { tex: THREE.Texture; tileM: number } | null {
   const surf = kind ? surfaceFor(kind, use) : null;
   if (!surf) return null;
   const tex = surf.texture.clone();
   tex.needsUpdate = true;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  const [rx, ry] = repeat(surf.sizeM);
-  tex.repeat.set(rx, ry);
-  return tex;
+  return { tex, tileM: surf.sizeM };
 }
 
 /** Material of a floor plate: the tiled surface texture of its kind, else the
@@ -279,7 +279,13 @@ function plateMaterial(plate: ScenePlate,
   const upper = plate.opacity_role === 'upper';
   const opacity = upper ? (style.upper_floor_opacity ?? 1) : 1;
   const side = solid ? THREE.FrontSide : THREE.DoubleSide;
-  const tex = tiledTexture(plate.texture_kind, 'floor', (tileM) => [1 / tileM, 1 / tileM]);
+  // A plate's uvs ARE its outline in metres (Shape/Extrude geometry), so its
+  // world scale is a plain repeat of one tile per tileM — unlike a wall box,
+  // whose faces are each normalised to 0..1 and therefore carry the scale in
+  // the uvs themselves.
+  const surf = tiledTexture(plate.texture_kind, 'floor');
+  if (surf) surf.tex.repeat.set(1 / surf.tileM, 1 / surf.tileM);
+  const tex = surf?.tex ?? null;
   // Aussehen der ART kommt aus dem geteilten Paket — matt ist der Default und
   // exakt das bisherige Material.
   return surfaceMaterial(THREE, {
@@ -290,22 +296,28 @@ function plateMaterial(plate: ScenePlate,
 }
 
 /** Material of a wall segment: a glass band from the glass vocabulary, else
- *  the tiled wall texture or the wall colour. `len` tiles the texture across
- *  the segment's actual length. */
-function wallMaterial(wall: SceneWall, style: ScenePayload['style'],
-                      len: number): THREE.MeshStandardMaterial {
+ *  the tiled wall texture or the wall colour.
+ *
+ *  Returns the tile size ALONGSIDE the material because the tiling of a wall
+ *  lives in the box's uvs (buildWall/applyWorldScaleWallUVs), not on the
+ *  texture: a repeat computed from the broad face and applied to all six faces
+ *  crushed the texture on every jamb and reveal. `tileM` 0 = nothing to tile. */
+function wallMaterial(wall: SceneWall, style: ScenePayload['style']):
+    { mat: THREE.MeshStandardMaterial; tileM: number } {
   if (wall.glass) {
-    return std({ color: hex(style.glass_color), transparent: true,
-                 opacity: style.glass_opacity ?? 0.25, roughness: 0.3 });
+    return { mat: std({ color: hex(style.glass_color), transparent: true,
+                        opacity: style.glass_opacity ?? 0.25, roughness: 0.3 }),
+             tileM: 0 };
   }
   const upper = wall.opacity_role === 'upper';
   const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
-  const tex = tiledTexture(wall.texture_kind, 'wall',
-    (tileM) => [len / tileM, wall.height / tileM]);
-  return surfaceMaterial(THREE, {
+  const surf = tiledTexture(wall.texture_kind, 'wall');
+  const mat = surfaceMaterial(THREE, {
     material: surfaceMaterialSpec(wall.texture_kind),
-    map: tex, color: hex(style.wall_color), transparent: upper, opacity,
+    map: surf?.tex ?? null, color: hex(style.wall_color),
+    transparent: upper, opacity,
   }) as THREE.MeshStandardMaterial;
+  return { mat, tileM: surf?.tileM ?? 0 };
 }
 
 /** Material of an extra box: the part kind picks colour and opacity from the
@@ -604,7 +616,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const wall of scene.walls) {
     const len = wallLength(wall);
     if (len < 1e-4) continue;
-    const mesh = buildWall(THREE, wall, wallMaterial(wall, style, len));
+    const { mat: wallMat, tileM } = wallMaterial(wall, style);
+    const mesh = buildWall(THREE, wall, wallMat, tileM);
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });
     if (!wall.glass) {

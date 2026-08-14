@@ -978,21 +978,26 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         if (len < 1e-4) continue
         const upper = wall.opacity_role === 'upper'
         let mat: Material
+        // World size of one texture tile; 0 = untextured, nothing to tile.
+        // BoxGeometry normalises the uvs of EVERY face to 0..1, so the tiling
+        // has to go into the geometry (buildWall) — a repeat on the material
+        // is computed from the broad wall face and would crush the texture on
+        // every jamb, reveal and sill of a door or window.
+        let tileM = 0
         if (wall.glass) {
           mat = new THREE.MeshStandardMaterial({
             color: glassColor, transparent: true, opacity: glassOpacity,
           })
         } else {
-          // BoxGeometry UVs are per-face normalized, so a tiled wall needs a
-          // per-mesh texture clone with its own repeat.
           const info = wall.texture_kind ? ensureSurfaceTex(wall.texture_kind) : null
           const kindMat = wall.texture_kind
             ? surfaceListRef.current.map.get(wall.texture_kind)?.material ?? null : null
           if (info?.tex) {
-            const tile = info.sizeM * kFac
+            tileM = info.sizeM * kFac
+            // Still one clone per wall: the uv scale differs per segment, and a
+            // shared texture would have every mesh fight over its filtering.
             const tex = (info.tex as Texture).clone()
             tex.needsUpdate = true
-            tex.repeat.set(len / tile, wall.height / tile)
             mat = surfaceMaterial(THREE, { material: kindMat, map: tex,
               transparent: upper, opacity: upper ? upperWall : 1 })
           } else {
@@ -1000,7 +1005,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
               transparent: upper, opacity: upper ? upperWall : 1 })
           }
         }
-        const box = buildWall(THREE, wall, mat)
+        const box = buildWall(THREE, wall, mat, tileM)
         boxes.add(box)
         // Camera culling with the DELIVERED normal — a wall whose outside
         // faces the camera hides so the interior stays visible.

@@ -58,7 +58,7 @@ export type { PrimitiveTarget, VerifyRow } from './verify'
 
 export {
   buildPlate, buildWall, buildExtra, buildPlaceholder, wallLength,
-  plateTargets, wallTargets,
+  applyWorldScaleWallUVs, plateTargets, wallTargets,
 } from './primitives'
 
 export { FIGURE_ROOT_DROP, rootDropFor, pickVariant, MODEL_TIERS } from './types'
