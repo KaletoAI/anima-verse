@@ -24,9 +24,17 @@ What is checked here, all hand-derived, no snapshots:
   4. The config half of the migration (``config._rewrite_legacy_workflow_specs``)
      against a temp config.json: messaging_frame.target and the imagegen
      defaults are rewritten, living neighbours stay, second run writes nothing.
-  5. The DB half (``migrate_legacy_workflow_specs_once``) against a THROWAWAY
-     world: the legacy profile is rewritten, an already-canonical one is left
-     alone, the world_kv marker is set, and a second run is a no-op.
+  5. The per-character half (``migrate_legacy_workflow_specs_once``) against a
+     THROWAWAY world: the legacy profile is rewritten, an already-canonical one
+     is left alone, the file-backed skill configs
+     (characters/<name>/skills/*.json, field ``imagegen_workflow``) are swept
+     by FIELD NAME across all skill files, the world_kv marker is set, and a
+     second run is a no-op.
+  6. ``unknown_backend_error``: a glob that names no enabled backend is caught
+     BEFORE the render. The ComfyUI era left workflow NAMES here ("Z-Image"),
+     which look canonical after the prefix strip but match no backend — the
+     render used to die deep in the service with a German message about a
+     timeout that never happened.
 
 Usage:  ./.venv/bin/python scripts/smoke_workflow_specs.py
 """
@@ -56,9 +64,10 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import config as cfgmod  # noqa: E402
-from app.core.messaging_frame import parse_target  # noqa: E402
+from app.core.messaging_frame import (  # noqa: E402
+    parse_target, unknown_backend_error)
 from app.core.workflow_spec_migration import (  # noqa: E402
-    PROFILE_SPEC_FIELDS, migrate_legacy_workflow_specs_once,
+    PROFILE_SPEC_FIELDS, SKILL_SPEC_FIELD, migrate_legacy_workflow_specs_once,
     strip_legacy_workflow_prefix)
 
 FAILURES = []
@@ -183,8 +192,8 @@ def main():
               "second run reports no change")
         eq("second run wrote nothing", path.stat().st_mtime_ns, mtime)
 
-    print("5) the DB half against a throwaway world")
-    from app.models.character import (get_character_profile,
+    print("5) the per-character half against a throwaway world")
+    from app.models.character import (get_character_dir, get_character_profile,
                                       save_character_profile)
     from app.models.world import get_world_setting
 
@@ -201,9 +210,38 @@ def main():
         "name": "NoOverride", "description": "no render override at all",
     }, create_new=True)
 
+    # The file-backed skill configs: the sweep goes by FIELD NAME, so a second
+    # skill file with the same field must be caught without naming any skill.
+    def skill_file(character, skill, payload):
+        d = get_character_dir(character, create=True) / "skills"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"{skill}.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return p
+
+    insta = skill_file("Legacy", "instagram", {
+        SKILL_SPEC_FIELD: "workflow:Qwen*", "imagegen_backend": "",
+        "hashtags": ["#demo"]})
+    video = skill_file("Legacy", "video_generation", {
+        SKILL_SPEC_FIELD: "workflow:Z-Image*", "animate_service": "Together*"})
+    canon = skill_file("Canonical", "instagram", {SKILL_SPEC_FIELD: "Krea2"})
+    other = skill_file("Canonical", "video_generation", {"animate_service": "X*"})
+    other_before = other.read_text(encoding="utf-8")
+
     result = migrate_legacy_workflow_specs_once()
     eq("one character touched", result.get("characters"), 1)
     eq("one field rewritten", result.get("fields"), 1)
+    eq("two skill files rewritten", result.get("skill_files"), 2)
+
+    ins = json.loads(insta.read_text(encoding="utf-8"))
+    eq("the instagram skill config lost its prefix", ins[SKILL_SPEC_FIELD], "Qwen*")
+    eq("its siblings survived", ins.get("hashtags"), ["#demo"])
+    eq("a second skill file with the same field is swept too",
+       json.loads(video.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Z-Image*")
+    eq("an already-canonical skill config is untouched",
+       json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Krea2")
+    eq("a skill file without the field is not even rewritten",
+       other.read_text(encoding="utf-8"), other_before)
 
     legacy = (get_character_profile("Legacy") or {}).get("outfit_imagegen") or {}
     eq("the legacy value lost its prefix", legacy.get("workflow"), "Flux*")
@@ -215,19 +253,42 @@ def main():
     eq("a character without an override stays without one",
        (get_character_profile("NoOverride") or {}).get("outfit_imagegen"), None)
 
-    check(bool(get_world_setting("migrated_legacy_workflow_specs")),
+    check(bool(get_world_setting("migrated_legacy_workflow_specs_v2")),
           "the world_kv marker is set")
 
-    # Idempotency: a value planted AFTER the marker must survive, otherwise the
+    # Idempotency: values planted AFTER the marker must survive, otherwise the
     # guard is not doing its job (and the second run is not really a no-op).
     prof = get_character_profile("Canonical") or {}
     prof["outfit_imagegen"] = {"workflow": "workflow:Planted", "loras": []}
     save_character_profile("Canonical", prof)
+    skill_file("Canonical", "instagram", {SKILL_SPEC_FIELD: "workflow:Planted"})
     second = migrate_legacy_workflow_specs_once()
-    eq("second run touches nothing", second, {"characters": 0, "fields": 0})
-    eq("the planted value proves the guard held",
+    eq("second run touches nothing", second,
+       {"characters": 0, "fields": 0, "skill_files": 0})
+    eq("the planted profile value proves the guard held",
        ((get_character_profile("Canonical") or {}).get("outfit_imagegen") or {}
         ).get("workflow"), "workflow:Planted")
+    eq("the planted skill-config value proves it too",
+       json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD],
+       "workflow:Planted")
+
+    print("6) unknown backend: caught before the render, not inside it")
+    pool = ["CivitAI-Z-Image", "Flux2-9B Normal", "Together-Fast"]
+    eq("an exact name passes", unknown_backend_error("Together-Fast", pool), "")
+    eq("a matching glob passes", unknown_backend_error("Flux2*", pool), "")
+    eq("a case-different glob passes", unknown_backend_error("civitai-*", pool), "")
+    eq("an empty glob passes (auto)", unknown_backend_error("", pool), "")
+    err = unknown_backend_error("Z-Image", pool)
+    check(bool(err) and "Z-Image" in err and "Messaging frame" in err,
+          "the ComfyUI workflow name is refused with an actionable hint", repr(err))
+    check(all(n in err for n in pool),
+          "the message lists the backends that ARE offered", repr(err))
+    check("Timeout" not in err and "verfuegbar" not in err,
+          "and it is English, without the bogus timeout claim", repr(err))
+    check(bool(unknown_backend_error("Flux", pool)),
+          "'Flux' does not match 'Flux2-9B Normal' either (no substring magic)")
+    eq("an empty pool refuses everything",
+       bool(unknown_backend_error("Anything", [])), True)
 
     print()
     if FAILURES:

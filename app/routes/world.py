@@ -2145,11 +2145,11 @@ async def post_messaging_frame_generate(request: Request) -> Dict[str, Any]:
     prompt = (body.get("prompt") or "").strip()
     target = (body.get("target") or "").strip()  # backend-name glob, or empty = auto
     if not prompt:
-        raise HTTPException(status_code=400, detail="prompt fehlt")
+        raise HTTPException(status_code=400, detail="Prompt missing")
     from app.core.messaging_frame import generate_frame
     result = await asyncio.to_thread(generate_frame, prompt, target)
     if result.get("status") != "ok":
-        raise HTTPException(status_code=500, detail=result.get("error", "Generierung fehlgeschlagen"))
+        raise HTTPException(status_code=500, detail=result.get("error", "Generation failed"))
     return result
 
 

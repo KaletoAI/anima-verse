@@ -191,6 +191,27 @@ def parse_target(target: str) -> Tuple[str, str]:
     return spec, ""
 
 
+def unknown_backend_error(glob: str, backend_names) -> str:
+    """Checks the glob against the backends the admin select actually offers.
+
+    The ComfyUI era left WORKFLOW names in this field ("Z-Image", "Flux") —
+    after the legacy prefix is stripped they look canonical but match no
+    backend (those are called "CivitAI-Z-Image", "Flux2-9B Normal", ...). The
+    render would then die deep inside the service with a message about a
+    timeout that never happened, so the mismatch is caught here instead.
+
+    Returns the error message, or "" when the glob matches at least one name.
+    """
+    import fnmatch
+    names = [str(n) for n in (backend_names or [])]
+    pattern = (glob or "").strip().lower()
+    if not pattern or any(fnmatch.fnmatch(n.lower(), pattern) for n in names):
+        return ""
+    offered = ", ".join(sorted(names)) if names else "none"
+    return (f"No enabled backend matches '{glob}' — pick a backend in "
+            f"Admin → Settings → Messaging frame. Enabled backends: {offered}")
+
+
 def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
     """Renders the messaging-frame image via the image service and stores it.
 
@@ -219,7 +240,17 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
     except Exception as e:
         return {"status": "error", "error": f"image service missing: {e}"}
 
-    # 3. Generate — everything goes through the image service (its pipeline
+    # 3. The glob must name a backend the pool knows — same list the admin
+    # select offers (/admin/settings/imagegen-targets: enabled image backends).
+    if backend_glob:
+        known = [b.name for b in getattr(image_skill, "backends", [])
+                 if getattr(b, "instance_enabled", False)
+                 and getattr(b, "MEDIA_TYPE", "image") == "image"]
+        unknown = unknown_backend_error(backend_glob, known)
+        if unknown:
+            return {"status": "error", "error": unknown}
+
+    # 4. Generate — everything goes through the image service (its pipeline
     # owns model resolution, seeds, reference slots and the cloud fallback).
     try:
         import json as _json
@@ -279,7 +310,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
         logger.error("Frame generation failed: %s", e)
         return {"status": "error", "error": str(e)[:200]}
 
-    # 4. Chroma key + rembg
+    # 5. Chroma key + rembg
     try:
         processed_bytes, meta = _process_chroma_key(raw_bytes)
     except ValueError as e:
@@ -288,7 +319,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
         logger.error("Post-processing failed: %s", e)
         return {"status": "error", "error": f"Post-processing: {str(e)[:200]}"}
 
-    # 5. Save
+    # 6. Save
     frame_path = get_frame_path()
     frame_path.write_bytes(processed_bytes)
     meta["prompt"] = prompt

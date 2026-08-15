@@ -491,12 +491,11 @@ class InstagramSkill(PluginSkill):
                 if _char_app:
                     _appearances.append({"name": _char_name, "appearance": _char_app})
 
-        # Instagram-spezifischer Workflow (per-Agent Config > .env Default > leer=Character-Default)
+        # Instagram render target (per-agent config > config default > empty =
+        # character default). A backend glob, resolved by the image service.
         _insta_workflow = cfg.get("imagegen_workflow", "").strip()
         if _insta_workflow:
-            if _insta_workflow.startswith("workflow:"):
-                _insta_workflow = _insta_workflow[len("workflow:"):]
-            logger.info("Instagram Workflow: %s", _insta_workflow)
+            logger.info("Instagram render target: %s", _insta_workflow)
 
         image_payload = {
             "prompt": image_prompt,
