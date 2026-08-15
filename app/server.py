@@ -247,6 +247,19 @@ async def lifespan(app: FastAPI):
     except Exception as _ate:
         logger.debug("dead-appearance-token migration failed: %s", _ate)
 
+    # Migration: per-character render overrides saved in the ComfyUI-era
+    # "workflow:<glob>" shape — they resolve to None today, so the configured
+    # backend was silently ignored. Idempotent, world_kv-marked. (The config
+    # side runs in the config load path.)
+    try:
+        from app.core.workflow_spec_migration import (
+            migrate_legacy_workflow_specs_once)
+        _ws = migrate_legacy_workflow_specs_once()
+        if _ws.get("fields"):
+            logger.info("Legacy render specs rewritten: %s", _ws)
+    except Exception as _wse:
+        logger.debug("legacy workflow-spec migration failed: %s", _wse)
+
     # Migration: the pre-per-outfit global 3D-model store (characters/<name>/
     # model/) lost its routes; import its GLB/FBX into the current outfit's v2
     # slot and drop the legacy folder, so the banned serving fallback can go.

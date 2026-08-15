@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""Smoke run for the canonical render-target specs (Config-Altlasten, part B).
+
+A render target is a BACKEND GLOB ("Flux2*", or an exact backend name); the
+prefix ``backend:`` is tolerated legacy. The ComfyUI-era ``workflow:<glob>``
+is dead — ``BackendPool.resolve_spec`` resolves it to None, so whoever
+configured it silently rendered on some other backend.
+
+What is checked here, all hand-derived, no snapshots:
+
+  1. ``messaging_frame.parse_target`` — the sharpest case of the finding: the
+     CANONICAL glob used to be REJECTED ("Ungueltiges Target-Format") while the
+     dead ``workflow:`` form was accepted. Now the glob passes and
+     ``workflow:`` is refused with a message that names the replacement.
+  2. The pure rewriter ``strip_legacy_workflow_prefix`` by hand:
+     ``workflow:Flux`` -> ``Flux``, a bare ``workflow:`` -> empty (= auto),
+     and everything else — bare glob, ``backend:`` spec, empty, non-string —
+     comes back untouched, including surrounding whitespace.
+  3. RED COUNTER-CHECK: the FIELD NAME ``workflow`` is alive and must survive.
+     It holds a backend glob (app/core/expression_regen.py reads
+     ``outfit_imagegen["workflow"]``) — only a ``workflow:`` prefix in the
+     VALUE is legacy. Checked against the consumer's source line AND on the
+     migrated profile, whose key must still be ``workflow``.
+  4. The config half of the migration (``config._rewrite_legacy_workflow_specs``)
+     against a temp config.json: messaging_frame.target and the imagegen
+     defaults are rewritten, living neighbours stay, second run writes nothing.
+  5. The DB half (``migrate_legacy_workflow_specs_once``) against a THROWAWAY
+     world: the legacy profile is rewritten, an already-canonical one is left
+     alone, the world_kv marker is set, and a second run is a no-op.
+
+Usage:  ./.venv/bin/python scripts/smoke_workflow_specs.py
+"""
+import copy
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+
+# Point the storage root at a throwaway directory BEFORE any app import — the
+# config load path writes to the world's config.json (dead-field strip, spec
+# rewrite), and paths.init() falls back to ./worlds/demo when STORAGE_DIR is
+# unset. Same reflex as scripts/smoke_dead_config_fields.py.
+_TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_workflow_specs_")
+os.environ.setdefault("STORAGE_DIR", _TMP_STORAGE.name)
+
+from app.core import paths  # noqa: E402
+
+paths.init(Path(_TMP_STORAGE.name))
+
+from app.core import db  # noqa: E402
+
+db.init_schema()
+
+from app.core import config as cfgmod  # noqa: E402
+from app.core.messaging_frame import parse_target  # noqa: E402
+from app.core.workflow_spec_migration import (  # noqa: E402
+    PROFILE_SPEC_FIELDS, migrate_legacy_workflow_specs_once,
+    strip_legacy_workflow_prefix)
+
+FAILURES = []
+CHECKED = 0
+
+
+def check(ok, label, detail=""):
+    global CHECKED
+    CHECKED += 1
+    print(f"  {'ok  ' if ok else 'FAIL'} {label}{f' — {detail}' if detail else ''}")
+    if not ok:
+        FAILURES.append(label)
+
+
+def eq(label, actual, expected):
+    check(actual == expected, label, f"got {actual!r}, expected {expected!r}")
+
+
+def main():
+    print("1) parse_target: the canonical form is accepted, the dead one is not")
+    for spec, expected in [
+        ("Flux2*", "Flux2*"),            # canonical glob — used to be REJECTED
+        ("Together-Fast", "Together-Fast"),
+        ("  Krea2  ", "Krea2"),
+        ("backend:Together-Fast", "Together-Fast"),
+        ("BACKEND:Krea2", "Krea2"),      # prefix match is case-insensitive
+        ("", ""),                        # empty = auto selection
+    ]:
+        glob, err = parse_target(spec)
+        eq(f"parse_target({spec!r}) -> glob", glob, expected)
+        eq(f"parse_target({spec!r}) -> no error", err, "")
+
+    glob, err = parse_target("workflow:Z-Image")
+    eq("parse_target('workflow:Z-Image') -> no glob", glob, "")
+    check(bool(err) and "workflow:Z-Image" in err and "backend-name glob" in err,
+          "workflow: spec rejected with a message naming the replacement",
+          repr(err))
+    check("ComfyUI" in err, "the message says why (ComfyUI removed)", repr(err))
+
+    glob, err = parse_target("WORKFLOW:Z-Image")
+    check(not glob and bool(err), "the rejection is case-insensitive too", repr(err))
+
+    glob, err = parse_target("nonsense:x")
+    check(not glob and bool(err) and "Invalid target format" in err,
+          "an unknown prefix is rejected as well", repr(err))
+
+    print("2) the rewriter by hand")
+    for value, expected in [
+        ("workflow:Flux", "Flux"),
+        ("workflow:", ""),
+        ("workflow: Flux2*  ", "Flux2*"),
+        ("WORKFLOW:Flux", "Flux"),
+        ("Flux", "Flux"),                 # bare glob: untouched
+        ("backend:Flux", "backend:Flux"),  # tolerated prefix: untouched
+        (" Flux ", " Flux "),             # no destructive trimming
+        ("", ""),
+        (None, None),                     # non-string: untouched
+        (0, 0),
+    ]:
+        eq(f"strip_legacy_workflow_prefix({value!r})",
+           strip_legacy_workflow_prefix(value), expected)
+    eq("running it twice changes nothing more",
+       strip_legacy_workflow_prefix(strip_legacy_workflow_prefix("workflow:Flux")),
+       "Flux")
+
+    print("3) red counter-check: the FIELD NAME 'workflow' stays alive")
+    eq("the bare field name is not a legacy spec",
+       strip_legacy_workflow_prefix("workflow"), "workflow")
+    consumer = (REPO / "app/core/expression_regen.py").read_text(encoding="utf-8")
+    check('_char_override.get("workflow")' in consumer,
+          "expression_regen still reads outfit_imagegen['workflow'] (field name kept)")
+    eq("the migration targets exactly that field",
+       PROFILE_SPEC_FIELDS, (("outfit_imagegen", "workflow"),))
+
+    print("4) the config half against a temp config.json")
+    check("messaging_frame.target" in cfgmod.LEGACY_SPEC_FIELDS,
+          "messaging_frame.target is covered")
+    fixture = {
+        "image_generation": {
+            "outfit_imagegen_default": "workflow:Flux*",
+            "expression_imagegen_default": "backend:Krea2",   # stays
+            "location_imagegen_default": "Together*",         # stays
+            "backends": [{"name": "Krea2", "enabled": True}],  # living neighbour
+        },
+        "random_events": {"event_imagegen_default": "workflow:", "enabled": True},
+        "story_engine": {"imagegen_default": "workflow:Z-Image"},
+        "skills": {"instagram": {"imagegen_default": "Flux2*"}},
+        "messaging_frame": {"target": "workflow:Z-Image",
+                            "prompt": "modern smartphone, pure green screen"},
+        "log_level": "INFO",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.json"
+        cfg = copy.deepcopy(fixture)
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        changed = cfgmod._rewrite_legacy_workflow_specs(cfg, path)
+        check(changed is True, "the rewrite reports a change")
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        for label, dotted, expected in [
+            ("messaging_frame.target", ("messaging_frame", "target"), "Z-Image"),
+            ("outfit default", ("image_generation", "outfit_imagegen_default"), "Flux*"),
+            ("story engine default", ("story_engine", "imagegen_default"), "Z-Image"),
+            ("bare workflow: -> auto", ("random_events", "event_imagegen_default"), ""),
+            ("backend: prefix kept", ("image_generation", "expression_imagegen_default"),
+             "backend:Krea2"),
+            ("bare glob kept", ("image_generation", "location_imagegen_default"), "Together*"),
+            ("nested plugin field kept", ("skills", "instagram", "imagegen_default"), "Flux2*"),
+        ]:
+            node = on_disk
+            for part in dotted:
+                node = node.get(part, {}) if isinstance(node, dict) else {}
+            eq(f"{label} on disk", node, expected)
+        eq("living neighbour untouched",
+           on_disk["image_generation"]["backends"], fixture["image_generation"]["backends"])
+        eq("living top-level key untouched", on_disk.get("log_level"), "INFO")
+        eq("the prompt sibling of target is untouched",
+           on_disk["messaging_frame"]["prompt"], "modern smartphone, pure green screen")
+        eq("no section lost", sorted(on_disk.keys()), sorted(fixture.keys()))
+
+        mtime = path.stat().st_mtime_ns
+        check(cfgmod._rewrite_legacy_workflow_specs(cfg, path) is False,
+              "second run reports no change")
+        eq("second run wrote nothing", path.stat().st_mtime_ns, mtime)
+
+    print("5) the DB half against a throwaway world")
+    from app.models.character import (get_character_profile,
+                                      save_character_profile)
+    from app.models.world import get_world_setting
+
+    save_character_profile("Legacy", {
+        "name": "Legacy", "description": "carries a ComfyUI-era spec",
+        "outfit_imagegen": {"workflow": "workflow:Flux*",
+                            "loras": [{"name": "detail", "strength": 0.7}]},
+    }, create_new=True)
+    save_character_profile("Canonical", {
+        "name": "Canonical", "description": "already canonical",
+        "outfit_imagegen": {"workflow": "Krea2", "loras": []},
+    }, create_new=True)
+    save_character_profile("NoOverride", {
+        "name": "NoOverride", "description": "no render override at all",
+    }, create_new=True)
+
+    result = migrate_legacy_workflow_specs_once()
+    eq("one character touched", result.get("characters"), 1)
+    eq("one field rewritten", result.get("fields"), 1)
+
+    legacy = (get_character_profile("Legacy") or {}).get("outfit_imagegen") or {}
+    eq("the legacy value lost its prefix", legacy.get("workflow"), "Flux*")
+    check("workflow" in legacy, "the KEY is still 'workflow' (field name kept)")
+    eq("the LoRA sibling survived", legacy.get("loras"),
+       [{"name": "detail", "strength": 0.7}])
+    canonical = (get_character_profile("Canonical") or {}).get("outfit_imagegen") or {}
+    eq("the canonical character is untouched", canonical.get("workflow"), "Krea2")
+    eq("a character without an override stays without one",
+       (get_character_profile("NoOverride") or {}).get("outfit_imagegen"), None)
+
+    check(bool(get_world_setting("migrated_legacy_workflow_specs")),
+          "the world_kv marker is set")
+
+    # Idempotency: a value planted AFTER the marker must survive, otherwise the
+    # guard is not doing its job (and the second run is not really a no-op).
+    prof = get_character_profile("Canonical") or {}
+    prof["outfit_imagegen"] = {"workflow": "workflow:Planted", "loras": []}
+    save_character_profile("Canonical", prof)
+    second = migrate_legacy_workflow_specs_once()
+    eq("second run touches nothing", second, {"characters": 0, "fields": 0})
+    eq("the planted value proves the guard held",
+       ((get_character_profile("Canonical") or {}).get("outfit_imagegen") or {}
+        ).get("workflow"), "workflow:Planted")
+
+    print()
+    if FAILURES:
+        print(f"FAILED ({len(FAILURES)} of {CHECKED}):")
+        for f in FAILURES:
+            print(f"  - {f}")
+        return 1
+    print(f"ALL OK ({CHECKED} checks)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

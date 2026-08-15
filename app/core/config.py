@@ -886,6 +886,65 @@ def _strip_dead_config_fields(config: dict, config_path: Path) -> bool:
         return False
 
 
+# Config fields that hold a RENDER TARGET — a backend-name glob ("Flux2*", or
+# an exact name), optionally with the tolerated legacy prefix "backend:". The
+# ComfyUI era also wrote "workflow:<glob>" here; that form resolves to None in
+# BackendPool.resolve_spec, so the configured backend was silently ignored and
+# the caller fell back to auto-selection. The rewrite below drops the prefix.
+# The DB counterpart (per-character overrides) is
+# app/core/workflow_spec_migration.py.
+LEGACY_SPEC_FIELDS: tuple = (
+    "image_generation.outfit_imagegen_default",
+    "image_generation.expression_imagegen_default",
+    "image_generation.location_imagegen_default",
+    "image_generation.prop_imagegen_default",
+    "image_generation.scene_imagegen_default",
+    "image_generation.mesh_imagegen_default",
+    "image_generation.timevariant_imagegen_default",
+    "random_events.event_imagegen_default",
+    "story_engine.imagegen_default",
+    "skills.instagram.imagegen_default",
+    "messaging_frame.target",
+)
+
+
+def _rewrite_legacy_workflow_specs(config: dict, config_path: Path) -> bool:
+    """Rewrites "workflow:<glob>" render targets to the bare glob, at load time.
+
+    Same pattern as _strip_dead_config_fields above: no fallback reader, no
+    alias — the world file gets the canonical spelling once. Idempotent; writes
+    only when something actually changed, and runs BEFORE the secrets overlay
+    so no secret can leak into config.json.
+    """
+    from app.core.workflow_spec_migration import strip_legacy_workflow_prefix
+    changed = False
+    for dotted in LEGACY_SPEC_FIELDS:
+        *parents, key = dotted.split(".")
+        node = config
+        for part in parents:
+            node = node.get(part) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                break
+        if not isinstance(node, dict) or key not in node:
+            continue
+        old = node.get(key)
+        new = strip_legacy_workflow_prefix(old)
+        if new == old:
+            continue
+        node[key] = new
+        changed = True
+        logger.info("Legacy render spec rewritten: %s %r -> %r", dotted, old, new)
+    if not changed:
+        return False
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError as e:
+        logger.error("Failed to rewrite legacy render specs in %s: %s", config_path, e)
+        return False
+
+
 def load(config_path: Optional[Path] = None) -> dict:
     """Load configuration from JSON file, then overlay secrets.json on top.
 
@@ -920,6 +979,7 @@ def load(config_path: Optional[Path] = None) -> dict:
         _seed_default_mesh_backends(_CONFIG, path)
     _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
     _strip_dead_config_fields(_CONFIG, path)
+    _rewrite_legacy_workflow_specs(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
     _migrate_backend_categories(_CONFIG, path)
     _migrate_lora_triggers(_CONFIG, path)
