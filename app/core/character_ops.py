@@ -3014,11 +3014,11 @@ async def generate_outfit_image_core(character_name: str, outfit_id: str, reques
         except Exception as _e:
             logger.debug("outfit-image per-char override read failed: %s", _e)
     if not workflow_name and not backend_name:
-        _outfit_default = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
-        if _outfit_default.startswith("workflow:"):
-            workflow_name = _outfit_default[len("workflow:"):].strip()
-        elif _outfit_default.startswith("backend:"):
-            backend_name = _outfit_default[len("backend:"):].strip()
+        # Configured default (image_generation.outfit_imagegen_default, mirrored
+        # into the env by config._flatten_to_env): a backend glob, handed over
+        # unparsed — the image service resolves it (and tolerates a legacy
+        # "backend:" prefix).
+        workflow_name = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
     # The spec (glob) is resolved by the skill itself at generation time
     # (resolve_imagegen_target) — no pre-resolution here.
 

@@ -1325,17 +1325,12 @@ class ImageService:
 
         # Normalize the render-target spec: the "workflow" field (legacy name)
         # is a backend glob, e.g. from the per-character render match. A leading
-        # "backend:" is a tolerated legacy prefix; "workflow:<glob>" specs come
-        # from old configs (ComfyUI removed) and are ignored.
+        # "backend:" is a tolerated legacy prefix.
         _target_spec = input_data.get("workflow", "").strip() if isinstance(input_data, dict) else ""
         _soft_backend = ""
         if _target_spec.lower().startswith("backend:"):
             if not explicit_backend:
                 explicit_backend = _target_spec.split(":", 1)[1].strip()
-        elif _target_spec.lower().startswith("workflow:"):
-            logger.warning(
-                "Legacy workflow spec '%s' ignoriert (ComfyUI entfernt) — "
-                "bitte einen Backend-Glob verwenden", _target_spec)
         elif _target_spec:
             # Bare glob: try as a backend glob, fall back to default selection.
             _soft_backend = _target_spec

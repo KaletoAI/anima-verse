@@ -1395,7 +1395,7 @@ async function loadImagegenBackendModels(path, backendName) {
 }
 
 // Backend selection for imagegen_target_select fields.
-// Value format: "backend:<name>" (as served by /settings/imagegen-targets)
+// Value format: the bare backend name (as served by /settings/imagegen-targets)
 let IMAGEGEN_TARGETS_CACHE = null;
 
 async function loadImagegenTargets() {

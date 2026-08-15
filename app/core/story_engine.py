@@ -49,7 +49,7 @@ def beat_images_enabled() -> bool:
 
 
 def beat_image_default() -> str:
-    # "workflow:Name" or "backend:Name"
+    # Backend-name glob (a legacy "backend:<glob>" prefix is tolerated)
     return os.environ.get("STORY_ENGINE_IMAGEGEN_DEFAULT", "").strip()
 
 
@@ -397,14 +397,11 @@ class StoryArcEngine:
                 "skip_gallery": True,
                 "auto_enhance": False,
             }
-            # Default-Backend/Workflow aus .env
+            # Configured default render target (story_engine.imagegen_default):
+            # a backend glob, resolved by the image service.
             _beat_img_default = beat_image_default()
             if _beat_img_default:
-                _type, _, _name = _beat_img_default.partition(":")
-                if _type == "workflow" and _name:
-                    input_data["workflow"] = _name
-                elif _type == "backend" and _name:
-                    input_data["backend"] = _name
+                input_data["workflow"] = _beat_img_default
             input_json = _json.dumps(input_data)
             result_text = img_skill.generate_from_input(input_json)
 

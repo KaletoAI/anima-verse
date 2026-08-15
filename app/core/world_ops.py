@@ -2719,7 +2719,6 @@ async def generate_time_variant_core(location_name: str, image_name: str,
     backend = None
     if workflow_name:
         # Match concept: glob + availability instead of an exact name.
-        # Legacy "workflow:*" specs resolve to None and drop through.
         backend = img_skill.resolve_imagegen_target(workflow_name)
     elif backend_name:
         backend = img_skill.match_backend(backend_name)  # backend glob via match concept

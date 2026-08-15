@@ -2143,7 +2143,7 @@ async def post_messaging_frame_generate(request: Request) -> Dict[str, Any]:
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
-    target = (body.get("target") or "").strip()  # "workflow:Name" oder "backend:Name"
+    target = (body.get("target") or "").strip()  # backend-name glob, or empty = auto
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt fehlt")
     from app.core.messaging_frame import generate_frame
