@@ -53,16 +53,26 @@
  * treading water hangs upright with a foot a body length down. One depth put
  * one of them right and the other under or over the lake.
  *
+ * And what a ground GROWS BY ITSELF, since 2026-08-15: `meta.undergrowth`, a
+ * share of the renderer's full tuft density (0..1). It is the one field here
+ * that produces something visible without any authoring at all — a forest
+ * carries undergrowth because it is a forest, not because somebody painted a
+ * second scatter row of grass onto every wood. It does not contradict the
+ * B17 rule above: the scatter LIST is still per area, this is a property of
+ * the KIND like the wind and the relief, and it names no prop.
+ *
  * EVERY KIND IS TWO ROWS (2026-08-13). It was one, and every field the ground
  * grew added a column to it: at nine columns the modal had been widened to
  * 940 px and the sink depth would have been the tenth. The columns are the
  * IDENTITY of a kind now — kind, name, colour, passable, speed, where it comes
  * from, what one can do with it — and the second row underneath carries what
- * the ground DOES: the two clips, the two sink depths, the relief and, since
- * the terrain animations, the wind. That one is indented and muted, because it
- * reads as a continuation of the row above and not as a kind of its own. Seven
- * fields stand there; the row wraps, and the next one added is the point to
- * ask whether the ground is still one thing.
+ * the ground DOES: the two clips, the two sink depths, the relief, the wind
+ * and what grows on it. That one is indented and muted, because it reads as a
+ * continuation of the row above and not as a kind of its own. EIGHT fields
+ * stand there now, and the seventh was where the question "is the ground still
+ * one thing" was left for the next writer: the answer for the undergrowth is
+ * yes — it is the same sentence as the wind, one line further ("what grows
+ * here, how thick, how far it bends"). The NINTH is the point to ask again.
  */
 import { useCallback, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -98,6 +108,16 @@ const SINK_STEP = 0.05
 const SWAY_MIN = 0.01
 const SWAY_MAX = 0.5
 const SWAY_STEP = 0.01
+// `terrain_types.UNDERGROWTH_MIN/MAX`. The floor is 0 and 0 means "no key",
+// exactly like an empty field — there is no smallest visible share here, the
+// layer simply gets thinner.
+const UNDERGROWTH_MIN = 0
+const UNDERGROWTH_MAX = 1
+const UNDERGROWTH_STEP = 0.05
+/** The shared seed's two undergrown kinds, named in the hint so the number in
+ *  an empty field is not a mystery (`shared/terrain/types.json`). */
+const UNDERGROWTH_SEED_FOREST = 0.6
+const UNDERGROWTH_SEED_GRASS = 0.3
 /** How many columns the identity row has — the behaviour row spans all of
  *  them, and so do the two hints. */
 const COLS = 7
@@ -168,6 +188,7 @@ interface OwnedMeta {
   reliefAmp: string
   reliefWave: string
   sway: string
+  undergrowth: string
 }
 
 /** `meta` with the owned keys written — or with the KEY REMOVED where the
@@ -184,6 +205,7 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
   setMetaNum(next, 'sway_m', own.sway)
+  setMetaNum(next, 'undergrowth', own.undergrowth)
   return next
 }
 
@@ -251,6 +273,18 @@ function swayHint(t: (s: string) => string): string {
     .replace('{max}', String(SWAY_MAX))
 }
 
+/** The undergrowth hint — what the number does, that 0 and empty are the same
+ *  bare ground, and where the seeded values come from. The last part is the
+ *  one the field cannot show: a world row REPLACES the shared entry whole
+ *  (override-replace per kind), so the seeded 0.6 of `forest` is gone the
+ *  moment this world saves its own forest row without a value here. */
+function undergrowthHint(t: (s: string) => string): string {
+  return t('How much grows on this ground by itself, without any scatter being authored: 0–{max} of the full tuft density, at knee height between the props. 0 or empty = bare ground. Seeded {forest} on forest and {grass} on grass — saving a row here replaces the shared entry whole, so an empty field really does clear that growth away.')
+    .replace('{max}', String(UNDERGROWTH_MAX))
+    .replace('{forest}', String(UNDERGROWTH_SEED_FOREST))
+    .replace('{grass}', String(UNDERGROWTH_SEED_GRASS))
+}
+
 /** The wavelength hint — how wide one swell is, plus the default an amplitude
  *  without a wave falls back to. */
 function waveHint(t: (s: string) => string): string {
@@ -276,6 +310,7 @@ interface BehaviourRowProps extends OwnedMeta, ReliefLimits {
   onReliefAmp: (v: string) => void
   onReliefWave: (v: string) => void
   onSway: (v: string) => void
+  onUndergrowth: (v: string) => void
 }
 
 /** The SECOND row of a kind: what this ground does to a figure standing or
@@ -285,9 +320,9 @@ interface BehaviourRowProps extends OwnedMeta, ReliefLimits {
  *  spans the whole table has no column header over it. */
 function BehaviourRow({
   moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
-  tileStepM, warnAmpM,
+  undergrowth, tileStepM, warnAmpM,
   onMoveAnim, onIdleAnim, onMoveSink, onIdleSink, onReliefAmp, onReliefWave,
-  onSway,
+  onSway, onUndergrowth,
 }: BehaviourRowProps) {
   const { t } = useI18n()
   // The grid step the hint divides by: the server's, as soon as it has
@@ -390,6 +425,20 @@ function BehaviourRow({
               onChange={(e) => onSway(e.target.value)}
             />
           </label>
+          <label className="ga-tt-field">
+            <span>{t('Undergrowth')}</span>
+            <input
+              className="ga-input ga-tt-num"
+              type="number"
+              min={UNDERGROWTH_MIN}
+              max={UNDERGROWTH_MAX}
+              step={UNDERGROWTH_STEP}
+              value={undergrowth}
+              placeholder={t('bare')}
+              title={undergrowthHint(t)}
+              onChange={(e) => onUndergrowth(e.target.value)}
+            />
+          </label>
           {/* THE STEEPNESS WARNING of the amplitude, on its own line under the
               fields rather than squeezed between two of them — it is a whole
               sentence, and wedging it in would push the wavelength it belongs
@@ -433,6 +482,7 @@ function TypeRow({
   const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
   const [sway, setSway] = useState(metaNumOf(type, 'sway_m'))
+  const [undergrowth, setUndergrowth] = useState(metaNumOf(type, 'undergrowth'))
 
   const speedNum = parseFloat(speed)
   const speedBad = !Number.isFinite(speedNum)
@@ -450,6 +500,7 @@ function TypeRow({
     || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || numChanged(sway, metaNumOf(type, 'sway_m'))
+    || numChanged(undergrowth, metaNumOf(type, 'undergrowth'))
     || (speedBad ? speed !== String(type.speed_factor) : speedNum !== type.speed_factor)
 
   const save = useCallback(async () => {
@@ -462,7 +513,8 @@ function TypeRow({
       kind: type.kind, name, color, passable,
       speed_factor: speedNum,
       meta: withOwnedMeta(type.meta,
-        { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway }),
+        { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
+          undergrowth }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -476,8 +528,9 @@ function TypeRow({
     setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
     setSway(metaNumOf(saved, 'sway_m'))
+    setUndergrowth(metaNumOf(saved, 'undergrowth'))
   }, [color, idleAnim, idleSink, moveAnim, moveSink, name, onSave, passable,
-      reliefAmp, reliefWave, speedBad, speedNum, sway, type])
+      reliefAmp, reliefWave, speedBad, speedNum, sway, type, undergrowth])
 
   return (
     <>
@@ -584,6 +637,7 @@ function TypeRow({
       reliefAmp={reliefAmp} onReliefAmp={setReliefAmp}
       reliefWave={reliefWave} onReliefWave={setReliefWave}
       sway={sway} onSway={setSway}
+      undergrowth={undergrowth} onUndergrowth={setUndergrowth}
     />
     </>
   )
@@ -629,6 +683,7 @@ export function TerrainTypesDialog({
   const [newReliefAmp, setNewReliefAmp] = useState('')
   const [newReliefWave, setNewReliefWave] = useState('')
   const [newSway, setNewSway] = useState('')
+  const [newUndergrowth, setNewUndergrowth] = useState('')
 
   const putType = useCallback(async (draft: TypeDraft): Promise<TerrainType | null> => {
     setBusy(true)
@@ -681,6 +736,7 @@ export function TerrainTypesDialog({
         reliefAmp: newReliefAmp,
         reliefWave: newReliefWave,
         sway: newSway,
+        undergrowth: newUndergrowth,
       }),
     })
     if (!saved) return
@@ -696,9 +752,10 @@ export function TerrainTypesDialog({
     setNewReliefAmp('')
     setNewReliefWave('')
     setNewSway('')
+    setNewUndergrowth('')
   }, [kindClean, newColor, newIdleAnim, newIdleSink, newMoveAnim, newMoveSink,
       newName, newPassable, newReliefAmp, newReliefWave, newSpeedNum, newSway,
-      putType])
+      newUndergrowth, putType])
 
   return (
     <div className="ga-modal-backdrop" onMouseDown={onClose}>
@@ -841,6 +898,7 @@ export function TerrainTypesDialog({
                 reliefAmp={newReliefAmp} onReliefAmp={setNewReliefAmp}
                 reliefWave={newReliefWave} onReliefWave={setNewReliefWave}
                 sway={newSway} onSway={setNewSway}
+                undergrowth={newUndergrowth} onUndergrowth={setNewUndergrowth}
               />
               <tr>
                 <td colSpan={COLS} className="ga-tt-newhint">

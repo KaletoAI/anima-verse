@@ -36,6 +36,13 @@
  * sampler (`@anima/scene-render/scatter.ts`), it is seed-stable, and this
  * module never reorders it — the thinning picks by a hash of the instance
  * INDEX, so walking towards a wood regrows the same trees and never moves one.
+ *
+ * SINCE 2026-08-15 THE SECOND LAYER LIVES HERE TOO: the automatic undergrowth
+ * (`UNDERGROWTH_*` at the bottom of the file). It is the same three questions
+ * with its own numbers — how many tufts a shape carries, how tall they are and
+ * how far the carpet is drawn — and it sits beside the props rather than in a
+ * file of its own because both are read by the same builder in `ground.ts` and
+ * both have to stay import-free for the smoke.
  */
 
 /** Nearer than this, a scattered prop stands on the full mesh (metres). */
@@ -289,6 +296,189 @@ export function instanceVisible(
   index: number, distM: number, cfg: ScatterLodCfg,
 ): boolean {
   const share = instanceShare(distM, cfg);
+  if (share >= 1) return true;
+  if (share <= 0) return false;
+  return instanceHash(index) < share;
+}
+
+/* ==========================================================================
+ * THE UNDERGROWTH (2026-08-15) — the layer NOBODY authored
+ *
+ * A wood reads as a wood when something stands BETWEEN the trunks, and until
+ * now that something was a second scatter row somebody had to paint onto every
+ * single wood. The terrain KIND already knows the answer — forest is
+ * undergrown, a path is not — so it says it in one number
+ * (`meta.undergrowth`, 0..1, § A9) and the client grows the layer itself.
+ *
+ * WHAT LIVES HERE is only the arithmetic of it: how many tufts a painted
+ * shape carries, how tall each one stands, how far the layer is drawn and
+ * which of its instances survive at a distance. WHERE they stand is the
+ * shared sampler (`@anima/scene-render/scatter`), the same one and the same
+ * RNG discipline the authored scatter uses — under a seed of its OWN
+ * (`undergrowthSeed`), which is what keeps the authored props exactly where
+ * they were.
+ * ========================================================================== */
+
+/** The full base density of the layer, in instances per SQUARE METRE — what a
+ *  kind with `undergrowth: 1` gets. Everything else is this times the kind's
+ *  own number, so the catalog value is a share and never a count.
+ *
+ *  0.15/m2 is roughly one tuft every two and a half metres of edge; a forest
+ *  at the seeded 0.6 therefore carries a tuft about every 2.7 m, which fills
+ *  the ground between trees without becoming a lawn one cannot see through. */
+export const UNDERGROWTH_DENSITY_PER_M2 = 0.15;
+
+/** Hard ceiling of the layer PER PAINTED AREA. The density is a rate, and a
+ *  rate over a lake-sized meadow is a number nobody typed: 0.15/m2 over a
+ *  square kilometre is 150 000 instances, i.e. a matrix buffer of ten
+ *  megabytes built in one frame. The cap is deliberately far above what a
+ *  normal wood needs (20 000 tufts cover 133 000 m2 at full density, a 365 m
+ *  square) — it is a guard against the pathological area, not a budget, and
+ *  the caller says so once in the console when it bites. */
+export const UNDERGROWTH_MAX_PER_AREA = 20000;
+
+/** Up to here every tuft of the layer is drawn (metres). */
+export const UNDERGROWTH_FADE_M = 30;
+/**
+ * Beyond this NOTHING of the layer is drawn (metres) — half the scatter's own
+ * default cull distance, and that is the point of a second set of numbers.
+ *
+ * A tuft is knee-high: at 60 m it is a few pixels tall, and the thousands of
+ * them a wood carries cost the same per-instance work as the trees do. The
+ * trees keep their 120 m because a tree at 120 m is still a tree in the
+ * picture; the undergrowth is gone long before it stops being drawn.
+ */
+export const UNDERGROWTH_CULL_M = 60;
+
+/** The share still drawn at the very cull edge — ZERO, and unlike the
+ *  scatter's `SCATTER_MIN_SHARE` (a quarter) that is on purpose. The scatter
+ *  keeps a floor because a wood that fades to nothing POPS when it crosses the
+ *  line, and a quarter of a wood still reads as a wood on the horizon. Neither
+ *  holds for the undergrowth: the last blade of it is invisible long before
+ *  60 m, so there is nothing to pop, and a floor would keep a quarter of every
+ *  meadow's tufts alive out to the edge for a picture nobody can see. Fading
+ *  to 0 also removes the need for the cull hysteresis the props have — the set
+ *  is already empty when the line is reached. */
+export const UNDERGROWTH_MIN_SHARE = 0;
+
+/** How tall ONE tuft of the layer stands, in metres — a span, not a number:
+ *  a floor of blades all exactly the same height reads as a texture, not as
+ *  growth. Knee-high at most, so the layer never hides a figure's feet. */
+export const UNDERGROWTH_H_MIN = 0.4;
+export const UNDERGROWTH_H_MAX = 0.7;
+
+/**
+ * The seed of the undergrowth of ONE area — its OWN namespace.
+ *
+ * NOT `scatterSeed(areaId, index)`: that stream belongs to the authored
+ * entries, and drawing the undergrowth out of it would move every tree of
+ * every wood the moment this feature shipped. A different string is a
+ * different FNV-1a state and therefore a different stream, so the two layers
+ * are independent by construction rather than by an offset somebody has to
+ * keep right.
+ *
+ * It lives HERE and not beside `scatterSeed` in the shared package because the
+ * undergrowth is a CLIENT layer: the map editor's preview draws the authored
+ * scatter, which is what an author placed, and inventing tufts into that
+ * preview would show a density nobody typed.
+ */
+export function undergrowthSeed(areaId: string): string {
+  return `terrain:undergrowth:${areaId}`;
+}
+
+/**
+ * The catalog's share as the density the shared sampler takes (per 100 m2).
+ *
+ * The value crosses a JSON boundary, so "not given" is every non-number and
+ * every non-positive one, and anything above 1 is CLAMPED exactly as the
+ * server clamps it — a hand-edited row must cost a thicker meadow, never a
+ * hundred thousand tufts.
+ */
+export function undergrowthDensityPer100m2(value: number): number {
+  const v = Number(value);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return UNDERGROWTH_DENSITY_PER_M2 * 100 * Math.min(v, 1);
+}
+
+/**
+ * How many tufts one painted shape carries — the sampler's own count rule
+ * (`round(areaM2 / 100 * density)`), capped.
+ *
+ * Written with the SAME expression the sampler evaluates, so the number this
+ * answers and the number `scatterInstances` places cannot drift apart in the
+ * last bit of a float. Its job is the cap message and the smoke check; the
+ * instances themselves come out of the sampler.
+ */
+export function undergrowthCount(areaM2: number, value: number): number {
+  const density = undergrowthDensityPer100m2(value);
+  const area = Number(areaM2);
+  if (!(density > 0) || !Number.isFinite(area) || area <= 0) return 0;
+  return Math.min(Math.round((area / 100) * density), UNDERGROWTH_MAX_PER_AREA);
+}
+
+/** Whether that count really hit the ceiling — the one thing worth saying out
+ *  loud, because from there on the layer is thinner than the catalog asks and
+ *  no picture shows why. */
+export function undergrowthCapped(areaM2: number, value: number): boolean {
+  const density = undergrowthDensityPer100m2(value);
+  const area = Number(areaM2);
+  if (!(density > 0) || !Number.isFinite(area) || area <= 0) return false;
+  return Math.round((area / 100) * density) > UNDERGROWTH_MAX_PER_AREA;
+}
+
+/**
+ * How tall the tuft at `yaw` stands, in metres.
+ *
+ * THE HEIGHT COMES OUT OF THE YAW, and that is not a trick to save work: the
+ * sampler already draws a uniform number in [0, 2pi) for every instance, and
+ * an extra stream would either shift the existing one (moving every tuft) or
+ * need a second PRNG per area. The yaw is uniform, so the height is uniform
+ * over the span, and the correlation between "which way a blade faces" and
+ * "how tall it is" is invisible in a field of them.
+ *
+ * A junk yaw gives the shortest tuft rather than a NaN scale — a NaN matrix
+ * removes an instance from the screen instead of shrinking it.
+ */
+export function undergrowthHeight(yaw: number): number {
+  const t = Number(yaw) / (Math.PI * 2);
+  const frac = Number.isFinite(t) ? t - Math.floor(t) : 0;
+  return UNDERGROWTH_H_MIN + (UNDERGROWTH_H_MAX - UNDERGROWTH_H_MIN) * frac;
+}
+
+/**
+ * What share of the layer is drawn at that distance — flat 1 up to
+ * `UNDERGROWTH_FADE_M`, straight down to `UNDERGROWTH_MIN_SHARE` (0) at
+ * `UNDERGROWTH_CULL_M`, nothing beyond.
+ *
+ * The same line `instanceShare` draws for the props, with its own two
+ * distances and its own floor — and no `cfg`: the player's LOD menu sets the
+ * distances of the OBJECT scatter, which is a picture they can judge (trees
+ * appearing and disappearing). The undergrowth is a carpet that is gone from
+ * the picture at 60 m whatever anyone sets, so it is a constant here and not a
+ * fourth field in a settings dialog.
+ *
+ * A non-finite distance draws nothing, written as a negated comparison for
+ * exactly that reason.
+ */
+export function undergrowthShare(distM: number): number {
+  if (!(distM <= UNDERGROWTH_CULL_M)) return 0;
+  if (distM <= UNDERGROWTH_FADE_M) return 1;
+  const t = (distM - UNDERGROWTH_FADE_M)
+    / (UNDERGROWTH_CULL_M - UNDERGROWTH_FADE_M);
+  return 1 - t * (1 - UNDERGROWTH_MIN_SHARE);
+}
+
+/**
+ * Whether tuft `index` is part of the thinned-out layer at its own distance.
+ *
+ * The very rule `instanceVisible` follows, down to the shared `instanceHash`:
+ * stable (the set does not change while nothing moves) and monotone (walking
+ * closer only ever adds blades). Instance 0 has hash 0 and is therefore drawn
+ * as long as ANY of the layer is — but here that ends at the cull distance
+ * itself, because the share reaches exactly 0 there.
+ */
+export function undergrowthVisible(index: number, distM: number): boolean {
+  const share = undergrowthShare(distM);
   if (share >= 1) return true;
   if (share <= 0) return false;
   return instanceHash(index) < share;

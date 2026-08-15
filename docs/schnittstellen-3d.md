@@ -1346,6 +1346,30 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   areas: [ …, {"meta": {"scatter": [{…, "model": "/assets/props/rock/model",
                                      "sway_factor": 0.0}]}} ]
   ```
+- **`undergrowth` — wie viel auf einem Boden VON SELBST wächst** (2026-08-15).
+  Ein whitelisteter `meta`-Schlüssel, eine Zahl 0…1 (zwei Dezimalen,
+  0/leer/Junk = Schlüssel weg) = Anteil der vollen Unterwuchs-Dichte des
+  Clients. Vertrag für die Renderer: der Client erzeugt auf JEDER Fläche
+  dieser Art eine zusätzliche Büschel-Schicht — Basis-Dichte 0,15 Instanzen/m²
+  × Wert, Positionen aus demselben seed-stabilen Sampler wie die autorierte
+  Streu, aber unter EIGENEM Seed (`terrain:undergrowth:<area_id>`), damit
+  vorhandene Props sich nicht verschieben. Sie respektiert Fußabdrücke und
+  überdeckende Flächen wie normale Streu, weht mit dem `sway_m` der Art (ohne
+  `sway_factor` — sie ist kein Prop), nimmt am Verdeckungs-Korridor teil und
+  hat ein EIGENES, kürzeres LOD: voll sichtbar bis 30 m, danach linear
+  ausgedünnt bis auf 0 bei 60 m (kein 25-%-Sockel wie bei der Objekt-Streu —
+  ein kniehohes Büschel ist an der Kante ohnehin unsichtbar, es gibt also
+  nichts, was poppen könnte). Höhen variieren 0,4…0,7 m, Obergrenze 20 000
+  Instanzen je Fläche. Der Server liefert NUR die Zahl; Position, Höhe,
+  Distanzen und Geometrie gehören dem Renderer, es gibt dafür keine weiteren
+  Katalog-Schlüssel und kein Authoring pro Fläche. Saat: `forest` 0,6 und
+  `grass` 0,3; eine Welt-Zeile ersetzt den geteilten Eintrag ganz, der
+  Schlüssel fehlt dort also, bis er im Typen-Dialog gesetzt wird.
+
+  ```
+  types: [ …, {kind: "forest", …, "meta": {"sway_m": 0.04,
+                                           "undergrowth": 0.6}} ]
+  ```
 
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 

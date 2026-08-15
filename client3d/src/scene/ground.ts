@@ -14,7 +14,9 @@
  *  - how a KIND is painted is shared too (`surfaceMaterial` + the surface-texture
  *    library the tiles already feed);
  *  - what is in THIS file is view state: which meshes stand in the scene, the
- *    prop scatter and its distance cut-off.
+ *    prop scatter and its distance cut-off — and since 2026-08-15 the
+ *    automatic undergrowth, the one layer that is grown here instead of
+ *    authored (the terrain kind says how thick, § A9).
  *
  * GROUND_Y DISCIPLINE, as amended by the world relief (E8 task 3). The ground
  * is still one height and one only — `ground_y(x, z)`, which since § A16 is
@@ -63,7 +65,10 @@ import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterSway,
-  scatterTargetH } from './scatterLod';
+  scatterTargetH, undergrowthCapped,
+  undergrowthDensityPer100m2, undergrowthHeight, UNDERGROWTH_CULL_M,
+  UNDERGROWTH_H_MAX, UNDERGROWTH_H_MIN, UNDERGROWTH_MAX_PER_AREA,
+  undergrowthSeed, undergrowthVisible } from './scatterLod';
 import type { InstanceTier, ScatterLodCfg } from './scatterLod';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -100,10 +105,28 @@ const AREA_OFFSET_MAX = 32;
  *  numbers. */
 const TUFT_RADIUS_M = 0.22;
 const TUFT_HEIGHT_M = 0.8;
+
+/** THE AUTOMATIC UNDERGROWTH (2026-08-15) — the same tuft, one size down.
+ *
+ *  The layer's ONE geometry is built at the MIDDLE of the height span
+ *  (`UNDERGROWTH_H_MIN`…`_H_MAX` in `scatterLod.ts`) and every instance scales
+ *  it to its own height, so a whole meadow of them is one geometry, one
+ *  material and one draw call. The radius keeps the authored tuft's
+ *  proportion (0.22 m at 0.8 m tall), because a blade of grass that grows
+ *  shorter grows thinner too. */
+const UNDERGROWTH_H_REF_M = (UNDERGROWTH_H_MIN + UNDERGROWTH_H_MAX) / 2;
+const UNDERGROWTH_RADIUS_M = UNDERGROWTH_H_REF_M * (TUFT_RADIUS_M / TUFT_HEIGHT_M);
+
 // How tall a scattered MODEL stands is `scatterTargetH` in `scatterLod.ts`:
 // authored height, else the prop's own library height, else the flat
 // fallback. It lives there because it is pure arithmetic that the smoke can
 // load — this file imports three.js and cannot be.
+
+/** Said ONCE per session, not once per area and never per frame: an area that
+ *  hits `UNDERGROWTH_MAX_PER_AREA` is rebuilt on every terrain refetch, and an
+ *  admin painting terrain would otherwise fill the console with the same
+ *  sentence every few seconds. */
+let undergrowthCapNoted = false;
 
 /**
  * THE BASEMENT HOLE (moved here from `main.ts` with E4 task 3).
@@ -351,6 +374,10 @@ interface AreaMesh {
   /** one scatter entry per authored row — empty when nothing grows here
    *  (finding B17: the list hangs on the AREA, not on the terrain type) */
   scatter: ScatterProp[];
+  /** the layer NOBODY authored (§ A9, 2026-08-15) — `null` for a kind whose
+   *  catalog entry carries no `undergrowth`, which is every kind that says
+   *  nothing */
+  undergrowth: Undergrowth | null;
   /** centre of the area's bounding box. NOT a LOD distance any more (that is
    *  per instance since 2026-08-15) — it is what the download queue sorts by,
    *  handed to `loadGlb` as the place the props of this area stand. */
@@ -469,6 +496,37 @@ interface ScatterProp {
    *  camera corridor; the wind alone used to spare a still prop that clone, the
    *  corridor fade patches every scatter material and no longer can. */
   mats: Map<string, THREE.Material>;
+}
+
+/**
+ * The automatic undergrowth of ONE area — ONE InstancedMesh, and that is the
+ * whole difference to a `ScatterProp`.
+ *
+ * There is no model to load and therefore no second tier, no download, no
+ * wish and no `variants`: the layer is the built-in tuft and nothing else, so
+ * what the LOD decides per instance is "drawn or not" and never "which mesh".
+ * It carries the same three arrays for the same reasons as the props do — the
+ * matrices are written once at build time and only copied per tick, the
+ * positions lie beside them as tight triples because that is what the tick
+ * reads, and the sphere lets a whole meadow be switched off without a loop.
+ */
+interface Undergrowth {
+  mesh: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>;
+  /** how many tufts the sampler placed — the size of every array here */
+  baseCount: number;
+  /** the instance matrices as built, 16 floats each (position, yaw and the
+   *  per-instance height scale) — the SOURCE the buffer is filled from */
+  srcMatrix: Float32Array;
+  /** world position of every tuft, 3 floats each — what the tick measures */
+  pos: Float32Array;
+  /** whether each tuft was in the buffer last tick: 0 = drawn, 1 = not. Only
+   *  a change here costs a vertex-buffer upload. */
+  slots: Uint8Array;
+  /** bounding sphere over all of them, padded by the tallest tuft and the
+   *  wind — three.js culls against it, and the tick asks it first */
+  sphere: THREE.Sphere;
+  /** the layer is switched off whole by that sphere test */
+  hidden: boolean;
 }
 
 /** The ground at ONE world point, as `typeAt` reads it out of the payload —
@@ -616,6 +674,11 @@ export interface Ground {
    * answer, which is the wrong shape for a wood: the trees at the player's
    * feet dropped to the cheap mesh because the far edge of the same wood was
    * 100 m away, and a 300 m meadow was either wholly drawn or wholly gone.
+   *
+   * THE AUTOMATIC UNDERGROWTH RIDES ON THE SAME BEAT (2026-08-15) with its own
+   * numbers: no mesh tier to choose, visible to 60 m and thinned from 30 m,
+   * none of it settable — a knee-high tuft is out of the picture long before
+   * the props are.
    */
   tickScatterLod(cameraPos: THREE.Vector3): void;
   /**
@@ -908,6 +971,16 @@ export function createGround(): Ground {
     const raw = Number(catalog.get((kind || '').toLowerCase())?.meta?.sway_m);
     if (!Number.isFinite(raw) || raw <= 0) return 0;
     return Math.min(Math.max(raw, SWAY_MIN_M), SWAY_MAX_M);
+  }
+
+  /** How much grows on a kind ALL BY ITSELF — `meta.undergrowth` (§ A9), 0 for
+   *  a ground nobody said anything about. The clamp is the client's own, like
+   *  every number that arrives over the wire; `undergrowthDensityPer100m2`
+   *  clamps it a second time, and neither of them trusts the other. */
+  function undergrowthFor(kind: string): number {
+    const raw = Number(catalog.get((kind || '').toLowerCase())?.meta?.undergrowth);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.min(raw, 1);
   }
 
   /**
@@ -1238,6 +1311,193 @@ export function createGround(): Ground {
   }
 
   /**
+   * The layer NOBODY authored — the automatic undergrowth of one area (§ A9).
+   *
+   * A wood only reads as a wood when something stands BETWEEN the trunks, and
+   * that something used to be a second scatter row an author had to paint onto
+   * every single wood. The terrain KIND knows the answer already, so it says
+   * it in one number (`meta.undergrowth`, 0..1) and this grows the layer:
+   * tufts of the built-in geometry, placed by the very sampler the authored
+   * scatter uses — under a seed of its OWN, which is what keeps every existing
+   * prop exactly where it stood before this feature existed.
+   *
+   * It is the AREA's ground that decides, exactly as with the wind: the same
+   * footprints stay clear (finding B18), the same areas painted above it hide
+   * it (only the topmost ground of a spot grows anything), it bends by the
+   * kind's own `sway_m` and it dissolves in the camera corridor like every
+   * other thing standing on the ground. What it does NOT share is the
+   * distances: `UNDERGROWTH_*` in `scatterLod.ts`, half the props' cull and a
+   * carpet that fades to nothing rather than to a quarter.
+   *
+   * `null` when the kind says nothing, when the shape encloses nothing or when
+   * every candidate point fell inside a building — the caller then has no
+   * layer at all rather than an empty mesh nobody draws.
+   */
+  function buildUndergrowth(area: TerrainArea, ring: Point2[], areaM2: number,
+                            occluders: Point2[][],
+                            sink: { dispose(): void }[]
+  ): Undergrowth | null {
+    const value = undergrowthFor(area.kind);
+    if (!(value > 0)) return null;
+    // The cap is a guard against the pathological area, not a budget — but a
+    // layer that is thinner than the catalog asks shows nothing of the reason,
+    // so it is said once (see `undergrowthCapNoted`).
+    if (!undergrowthCapNoted && undergrowthCapped(areaM2, value)) {
+      undergrowthCapNoted = true;
+      console.warn(`[ground] undergrowth capped at ${UNDERGROWTH_MAX_PER_AREA}`
+        + ` instances on area ${area.id} (${Math.round(areaM2)} m2 of`
+        + ` ${area.kind} at ${value}) — the layer is thinner than the catalog`
+        + ' asks there');
+    }
+    const points = scatterInstances({
+      ring,
+      areaM2,
+      densityPer100m2: undergrowthDensityPer100m2(value),
+      seed: undergrowthSeed(area.id),
+      footprints,
+      occluders,
+      maxPoints: UNDERGROWTH_MAX_PER_AREA,
+    });
+    if (!points.length) return null;
+
+    // ONE geometry at the middle of the height span, scaled per instance —
+    // see `UNDERGROWTH_H_REF_M`. Built like the authored tuft (a low cone with
+    // its BASE at y = 0, B16), because that is what a tuft is here.
+    const geo = new THREE.ConeGeometry(UNDERGROWTH_RADIUS_M,
+                                       UNDERGROWTH_H_REF_M, 5);
+    geo.translate(0, UNDERGROWTH_H_REF_M / 2, 0);
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
+      roughness: 0.95,
+    });
+    // IT BENDS BY THE GROUND'S OWN AMOUNT, with no factor in between: a
+    // `sway_factor` says how much a PROP takes part in the wind, and the
+    // undergrowth is not a prop — it is what the ground itself grows, so it
+    // always bends fully. The reference height is the geometry's, whose tip
+    // carries the whole deflection; an instance scaled to 0.7 m therefore
+    // bends a little further than one scaled to 0.4 m, which is what a taller
+    // blade does.
+    const growSway = swayFor(area.kind);
+    applySway(mat, growSway, UNDERGROWTH_H_REF_M);
+    applyOcclusionFade(mat);
+    sink.push(geo, mat);
+
+    const mesh: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
+      = new THREE.InstancedMesh(geo, mat, points.length);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const at = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const srcMatrix = new Float32Array(points.length * 16);
+    const pos = new Float32Array(points.length * 3);
+    points.forEach((p, i) => {
+      q.setFromAxisAngle(up, p.yaw);
+      // The height comes out of the instance's own yaw (`undergrowthHeight`),
+      // so no second random stream exists that could shift the first one.
+      const scale = undergrowthHeight(p.yaw) / UNDERGROWTH_H_REF_M;
+      s.set(scale, scale, scale);
+      // Every tuft samples its own ground (§ A16), like every other thing this
+      // module plants — a shared height would float half a meadow.
+      const y = heightAt(p.x, p.z);
+      m.compose(at.set(p.x, y, p.z), q, s);
+      m.toArray(srcMatrix, i * 16);
+      pos[i * 3] = p.x;
+      pos[i * 3 + 1] = y;
+      pos[i * 3 + 2] = p.z;
+    });
+    mesh.castShadow = false;
+    mesh.frustumCulled = true;
+    // Nothing until the layer has been binned, exactly as for the props.
+    mesh.count = 0;
+    mesh.visible = false;
+    const layer: Undergrowth = {
+      mesh,
+      baseCount: points.length,
+      srcMatrix,
+      pos,
+      // In NO buffer yet, so the first binning finds every tuft changed and
+      // uploads once.
+      slots: new Uint8Array(points.length).fill(1),
+      sphere: instanceSphere(pos, UNDERGROWTH_H_MAX + SWAY_MAX_M),
+      hidden: false,
+    };
+    mesh.boundingSphere = layer.sphere;
+    if (lodCam) binUndergrowth(layer, lodCam);
+    else fillAllUndergrowth(layer);
+    return layer;
+  }
+
+  /** Draw the WHOLE layer — the answer while no camera is known at all, the
+   *  twin of `fillAll` and there for the same reason: a ground that stands
+   *  bare until the first LOD tick would be worse than one drawn in full for a
+   *  fraction of a second. */
+  function fillAllUndergrowth(layer: Undergrowth): void {
+    layer.hidden = false;
+    layer.slots.fill(0);
+    const buf = layer.mesh.instanceMatrix.array as Float32Array;
+    for (let i = 0; i < layer.baseCount; i += 1) {
+      copyMatrix(layer.srcMatrix, i, buf, i);
+    }
+    layer.mesh.count = layer.baseCount;
+    layer.mesh.visible = layer.baseCount > 0;
+    layer.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * Sort every tuft of one layer into the buffer or out of it — the whole
+   * undergrowth LOD, once per area per tick.
+   *
+   * ONE question per instance instead of the props' three: there is no mesh to
+   * choose and no hysteresis to keep, because the thinning line reaches 0 at
+   * the cull distance (`UNDERGROWTH_MIN_SHARE`) — a tuft is already gone when
+   * the cull would take it, so nothing can pop across that line and nothing
+   * has to remember what it was.
+   *
+   * The costs are the props' costs and are kept the same way: the layer is
+   * answered against its own sphere first (a meadow across the map is switched
+   * off whole, and a tick that finds it already off returns at once), the
+   * distance is compared SQUARED, and the buffer is uploaded only when its set
+   * really changed.
+   */
+  function binUndergrowth(layer: Undergrowth, cam: THREE.Vector3): void {
+    if (cam.distanceTo(layer.sphere.center) - layer.sphere.radius
+        > UNDERGROWTH_CULL_M) {
+      if (layer.hidden) return;
+      layer.hidden = true;
+      layer.slots.fill(1);
+      layer.mesh.count = 0;
+      layer.mesh.visible = false;
+      return;
+    }
+    layer.hidden = false;
+    const cull2 = UNDERGROWTH_CULL_M * UNDERGROWTH_CULL_M;
+    const buf = layer.mesh.instanceMatrix.array as Float32Array;
+    let n = 0;
+    let dirty = false;
+    for (let i = 0; i < layer.baseCount; i += 1) {
+      const dx = layer.pos[i * 3] - cam.x;
+      const dy = layer.pos[i * 3 + 1] - cam.y;
+      const dz = layer.pos[i * 3 + 2] - cam.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      // Negated on purpose, like `binProp`: a NaN position draws nothing
+      // instead of a NaN matrix.
+      const slot = d2 <= cull2 && undergrowthVisible(i, Math.sqrt(d2)) ? 0 : 1;
+      if (layer.slots[i] !== slot) {
+        layer.slots[i] = slot;
+        dirty = true;
+      }
+      if (slot === 0) {
+        copyMatrix(layer.srcMatrix, i, buf, n);
+        n += 1;
+      }
+    }
+    layer.mesh.count = n;
+    layer.mesh.visible = n > 0;
+    if (dirty) layer.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
    * The bounding sphere over every instance of an entry, padded by `padM`.
    *
    * `pos` is the x/y/z triple list of `ScatterProp.pos`, and the padding is
@@ -1555,6 +1815,13 @@ export function createGround(): Ground {
         prop.low.dispose();
         prop.high?.dispose();
       }
+      // The undergrowth owns no loaded file: its geometry and material went
+      // into the rebuild's own bag (`nextOwned` -> `areaOwned`) and are freed
+      // with it, so only the instance buffers are left here.
+      if (a.undergrowth) {
+        group.remove(a.undergrowth.mesh);
+        a.undergrowth.mesh.dispose();
+      }
     }
     areaMeshes.length = 0;
     drain(areaOwned);
@@ -1666,7 +1933,12 @@ export function createGround(): Ground {
                                        (minZ + maxZ) / 2);
       const scatter = buildScatter(area, built.ring, built.areaM2, occluders,
                                    nextOwned, centre);
-      next.push({ mesh, scatter, centre });
+      // …and what grows here without anybody having said so (§ A9). It reads
+      // the same ring, the same footprints and the same occluders — one
+      // painted shape, two layers on it.
+      const undergrowth = buildUndergrowth(area, built.ring, built.areaM2,
+                                           occluders, nextOwned);
+      next.push({ mesh, scatter, undergrowth, centre });
     });
 
     // THE SWAP. Nothing above touched the scene, so the old ground stood until
@@ -1681,6 +1953,7 @@ export function createGround(): Ground {
         // in the asset cache mounts within that very call.
         if (prop.high) group.add(prop.high);
       }
+      if (a.undergrowth) group.add(a.undergrowth.mesh);
       areaMeshes.push(a);
     }
     areaOwned.push(...nextOwned);
@@ -2048,6 +2321,10 @@ export function createGround(): Ground {
       lodCam.copy(cameraPos);
       for (const a of areaMeshes) {
         for (const prop of a.scatter) binProp(prop, cameraPos);
+        // The undergrowth rides on the same beat with its own, shorter
+        // distances — it has no settable ones, so `setScatterLod` leaves it
+        // alone and the next tick is the only thing that moves it.
+        if (a.undergrowth) binUndergrowth(a.undergrowth, cameraPos);
       }
     },
     setScatterLod(cfg) {

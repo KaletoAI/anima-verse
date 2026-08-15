@@ -362,6 +362,12 @@ export interface TerrainTypeMeta {
    *  of one shape sways together; the area's FILL never moves. Absent = the
    *  scatter stands still. */
   sway_m?: number;
+  /** How much grows on this ground WITHOUT anybody authoring it (§ A9,
+   *  0…1) — the share of the client's full undergrowth density the kind
+   *  carries, seeded 0.6 on `forest` and 0.3 on `grass`. Absent = bare
+   *  ground. Everything else about the layer (where the tufts stand, how
+   *  tall they are, how far they are drawn) belongs to the renderer. */
+  undergrowth?: number;
   [key: string]: unknown;
 }
 

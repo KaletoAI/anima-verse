@@ -10,8 +10,9 @@ DEEP one stands in it while doing either (``meta.move_sink_m`` /
 hangs upright, and the same drop cannot serve both). Since
 2026-08-13 also how BUMPY it is (``meta.relief_amplitude_m`` /
 ``meta.relief_wave_m``, the micro-relief baked into the world heightfield,
-§ A16) and, since 2026-08-14, how far what grows on it WAVES in the wind
-(``meta.sway_m``, § A9). NO terrain
+§ A16), since 2026-08-14 how far what grows on it WAVES in the wind
+(``meta.sway_m``, § A9) and, since 2026-08-15, how much grows there WITHOUT
+anybody authoring it (``meta.undergrowth``, § A9). NO terrain
 property is ever hardcoded anywhere else — every consumer (passability,
 pace, relief, payload, editor palette) reads this catalog.
 
@@ -93,6 +94,20 @@ SINK_KEYS = ("move_sink_m", "idle_sink_m")
 #: the ground, so the tip carries the whole of it while the base stands still.
 #: Frequency and wind direction are fixed in the renderer, not authored.
 SWAY_MIN, SWAY_MAX = 0.01, 0.5
+
+#: HOW MUCH GROWS ON THIS GROUND ALL BY ITSELF, as a share of the renderer's
+#: full undergrowth density (decision 2026-08-15). A wood only reads as a wood
+#: when something stands BETWEEN the trunks, and asking an author to paint a
+#: second scatter row of tufts on every wood is authoring work for something
+#: the KIND already says: forest is undergrown, a path is not. So this is a
+#: dial and not a list — 0…1, where 1 is the client's full base density
+#: (``UNDERGROWTH_DENSITY_PER_M2``, 0.15 instances per square metre) and every
+#: value in between scales it linearly. No key means "bare ground", which is
+#: what every kind without it stays; there is no lower limit but 0 because the
+#: layer thins out continuously and a very small share is simply a few blades.
+#: The renderer owns everything else about it — where the tufts stand (the
+#: shared seed-stable sampler), how tall they are and how far they are drawn.
+UNDERGROWTH_MIN, UNDERGROWTH_MAX = 0.0, 1.0
 
 #: The wave a kind with an amplitude but no authored wave gets — a swell every
 #: 32 m, eight grid cells wide at the default step: the gentle rolling the
@@ -247,6 +262,14 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # meadow's tufts and its trees sway together or not at all.
     if "sway_m" in meta:
         _clamped_meta_number(meta, "sway_m", SWAY_MIN, SWAY_MAX)
+    # AND ONE MORE since the undergrowth decision (2026-08-15): how much grows
+    # on this ground without anybody authoring it. Same shape rule again — no
+    # key means bare, which is what a value of 0 would have to mean anyway.
+    # NOTHING about the layer itself is stored: this is the density DIAL, the
+    # client owns the sampler, the height and the distances (§ A9).
+    if "undergrowth" in meta:
+        _clamped_meta_number(meta, "undergrowth",
+                             UNDERGROWTH_MIN, UNDERGROWTH_MAX)
     return {
         "kind": kind,
         "name": name,

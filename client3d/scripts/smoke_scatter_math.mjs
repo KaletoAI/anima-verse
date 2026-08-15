@@ -533,6 +533,110 @@
  *        19 m, prev low  -> 0 (full)      41 m, prev full -> 1 (low)
  *        301 m           -> 2 (hidden)   share(160) = 1 - (120/260)*0.75
  *                                                   = 0.653846153...
+ *
+ * ============================================================================
+ * (K) THE AUTOMATIC UNDERGROWTH — `undergrowth*` (2026-08-15)
+ * ============================================================================
+ * A terrain KIND says how much grows on it by itself (`meta.undergrowth`,
+ * 0..1, § A9) and the client grows the layer: tufts out of the very sampler of
+ * (C), under a seed of its OWN. Everything below is the arithmetic of that —
+ * how many, how tall, how far, and which of them survive at a distance.
+ *
+ * (K1) HOW MANY. The catalog value is a SHARE of the full base density,
+ *      `UNDERGROWTH_DENSITY_PER_M2` = 0.15/m2, and the count is the sampler's
+ *      own rule fed with it:
+ *        density per 100 m2 = 0.15 * 100 * value = 15 * value
+ *        count = round(areaM2 / 100 * that)      = round(areaM2 * 0.15 * value)
+ *      A 100 m2 patch of the seeded forest (0.6): round(100 * 0.09) = 9 tufts.
+ *      A 1000 m2 meadow at the seeded grass (0.3): round(1000 * 0.045) = 45.
+ *      The two numbers are also what `scatterInstances` really places, which
+ *      is asserted by SAMPLING those two cases and counting the result — the
+ *      count rule and the sampler must not drift apart.
+ *
+ * (K2) THE CEILING, 20 000 per painted area. It is a guard against the
+ *      pathological shape, not a budget: at full density it is reached by
+ *      133 333 m2, a 365 m square.
+ *        1 000 000 m2 at 1.0 -> wants 150 000, gets 20 000, `capped` TRUE
+ *        133 333 m2 at 1.0   -> wants round(19 999.95) = 20 000 — exactly the
+ *                               ceiling and NOT capped, because nothing was
+ *                               taken away
+ *        133 340 m2 at 1.0   -> wants 20 001 -> 20 000, `capped` TRUE. One
+ *                               instance over the line is the whole
+ *                               difference between the two rows above.
+ *
+ * (K3) "NOT GIVEN" AND THE CLAMP, because the value crosses a JSON boundary:
+ *        value 0 / -1 / NaN / 'thick' / null / undefined -> 0 tufts, and
+ *          density 0 — a kind that says nothing grows nothing.
+ *        value 5 -> clamped to 1: over 100 m2 that is round(100*0.15) = 15,
+ *          NOT 75. A hand-edited row costs a thicker meadow, never a
+ *          hundred thousand tufts.
+ *        areaM2 0 / negative / NaN -> 0 tufts whatever the value.
+ *
+ * (K4) HOW TALL, out of the instance's own yaw (0.4 .. 0.7 m):
+ *        h(yaw) = 0.4 + 0.3 * frac(yaw / 2pi)
+ *        yaw 0      -> 0.4      the shortest blade
+ *        yaw pi     -> 0.55     the middle, which is the geometry's own height
+ *        yaw 1.5pi  -> 0.625
+ *        yaw 2pi    -> 0.4      one full turn is the same blade again
+ *        yaw NaN / 'x' -> 0.4   never a NaN scale, which would remove the
+ *                               instance from the screen instead of shrinking
+ *                               it
+ *      The span itself is pinned (0.4 / 0.7) — a knee-high carpet, so it never
+ *      hides a figure's feet.
+ *
+ * (K5) HOW FAR — its OWN ladder, and the numbers are half the props':
+ *        share(d) = 1 up to 30 m, then 1 - (d - 30)/(60 - 30), 0 past 60 m
+ *        0 -> 1 · 30 -> 1 · 37.5 -> 0.75 · 45 -> 0.5 (half way, half the
+ *        carpet) · 52.5 -> 0.25 · 60 -> 0 · 60.001 -> 0 · NaN -> 0
+ *      THE FLOOR IS 0 AND THE PROPS' IS 0.25, which is the one place the two
+ *      ladders disagree on purpose: at 45 m the scatter still draws
+ *      everything (its fade starts at 45) while the undergrowth is already
+ *      halved, and at 60 m the scatter is at 0.85 while the undergrowth is
+ *      gone. Asserted side by side, so a copy of the props' constants cannot
+ *      pass.
+ *
+ * (K6) WHICH tufts survive — the same properties as (I4), never a table:
+ *        - inside 30 m all 1000 are drawn.
+ *        - at 60 m none is (share exactly 0), and that is what makes the
+ *          missing hysteresis right: nothing can pop at the cull line.
+ *        - STABLE: the set at 45 m built twice is the same set.
+ *        - MONOTONE: the set at 52.5 m (0.25) is a SUBSET of the one at
+ *          37.5 m (0.75).
+ *        - the COUNT is the share, within 5 % of 1000 * share: 750 at 37.5 m,
+ *          500 at 45 m, 250 at 52.5 m. The mix in use draws 751 / 511 / 258 —
+ *          inside by 36 / 14 / 4 counts. It is the SAME `instanceHash` the
+ *          props use, so the 0.25 row that chose that hash (see I4) covers
+ *          this ladder too.
+ *        - instance 0 (hash 0) is drawn as long as anything is: at 59.9 m yes,
+ *          at 60 m no.
+ *
+ * (K7) THE SEED NAMESPACE, and this is the case the feature had to buy: the
+ *      undergrowth draws from `undergrowthSeed(areaId)` =
+ *      `terrain:undergrowth:<id>`, NOT from `scatterSeed(areaId, 0)`. Both go
+ *      into the same FNV-1a state, so the same string is the same stream and
+ *      the same points.
+ *        the two seeds differ as strings, and
+ *        sampling one ring with each gives two DIFFERENT point lists.
+ *
+ * (K8) THE RED COUNTER-CHECK, built by mutating the source: `undergrowthSeed`
+ *      hands back `terrain:scatter:<id>:0` — the authored entry 0's seed, i.e.
+ *      exactly the "I forgot the namespace" mistake. The collision is then
+ *      MEASURABLE and not a matter of opinion: sampled over one ring, the
+ *      mutant's first 5 tufts stand on the very points of the authored
+ *      scatter, to the last decimal. Pinned from both sides — the mutant's
+ *      list IS the scatter's, the real one is NOT.
+ *
+ * (K9) THE CLIENT'S WIRING, pinned by reading `ground.ts` the way (E) and (H6)
+ *      do — none of it is arithmetic this file could run:
+ *        - the layer is sampled under `undergrowthSeed(area.id)`, and
+ *          `scatterSeed` is still used exactly once (the authored entries).
+ *        - it hands the sampler its own ceiling (`UNDERGROWTH_MAX_PER_AREA`),
+ *          not the shared `SCATTER_MAX_PER_ENTRY` of 2000.
+ *        - it bends by the ground's own amplitude with NO prop factor
+ *          (`applySway(mat, growSway, …)`) — the undergrowth is not a prop.
+ *        - it takes part in the camera corridor: `applyOcclusionFade` is
+ *          applied to the undergrowth material as well as to the tuft, i.e.
+ *          twice in the file.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -610,6 +714,15 @@ function sinInsteadOfMurmur(source) {
     + '  return (h >>> 0) / 4294967296;\n',
     '  const v = Math.sin(index * 12.9898) * 43758.5453;\n'
     + '  return v - Math.floor(v);\n');
+}
+
+/** Section (K8)'s mutant: the undergrowth loses its own seed namespace and
+ *  draws from the authored scatter's stream instead — the mistake the second
+ *  layer invites, and the one that would move every prop of every wood. */
+function undergrowthWithoutNamespace(source) {
+  return source.replace(
+    '  return `terrain:undergrowth:${areaId}`;\n',
+    '  return `terrain:scatter:${areaId}:0`;\n');
 }
 
 /** Section (I5)'s first mutant: the per-instance band is gone, so an instance
@@ -1220,6 +1333,153 @@ async function main() {
     [0, 1, 2]);
   check('J4 …including the thinning line of the set cull distance',
     instanceShare(160, setCfg), 1 - (120 / 260) * 0.75);
+
+  console.log('\n(K) the automatic undergrowth — the layer nobody authored');
+  const {
+    UNDERGROWTH_DENSITY_PER_M2, UNDERGROWTH_MAX_PER_AREA, UNDERGROWTH_FADE_M,
+    UNDERGROWTH_CULL_M, UNDERGROWTH_MIN_SHARE, UNDERGROWTH_H_MIN,
+    UNDERGROWTH_H_MAX, undergrowthCapped, undergrowthCount,
+    undergrowthDensityPer100m2, undergrowthHeight, undergrowthSeed,
+    undergrowthShare, undergrowthVisible,
+  } = await loadTs(LOD_SRC);
+
+  check('K the full base density is 0.15 tufts per square metre',
+    UNDERGROWTH_DENSITY_PER_M2, 0.15);
+  check('K the layer is drawn to 60 m and thinned from 30 m',
+    [UNDERGROWTH_FADE_M, UNDERGROWTH_CULL_M], [30, 60]);
+  check('K …and it fades to NOTHING, where the props keep a quarter',
+    [UNDERGROWTH_MIN_SHARE, SCATTER_MIN_SHARE], [0, 0.25]);
+  check('K a tuft is knee-high, 0.4 .. 0.7 m',
+    [UNDERGROWTH_H_MIN, UNDERGROWTH_H_MAX], [0.4, 0.7]);
+  check('K the ceiling per painted area is 20 000 tufts',
+    UNDERGROWTH_MAX_PER_AREA, 20000);
+
+  // (K1) how many — the count rule, and the sampler that has to agree with it
+  check('K1 the share becomes a density of 15 * value per 100 m2',
+    [undergrowthDensityPer100m2(0.6), undergrowthDensityPer100m2(0.3)],
+    [9, 4.5]);
+  check('K1 a 100 m2 patch of the seeded forest carries 9 tufts',
+    undergrowthCount(100, 0.6), 9);
+  check('K1 a 1000 m2 meadow of the seeded grass carries 45',
+    undergrowthCount(1000, 0.3), 45);
+  // …and the sampler really places that many. The square of (C) is 400 m2,
+  // so at 0.6 it wants round(400 * 0.09) = 36 and at 0.3 round(400*0.045) = 18.
+  for (const [value, want] of [[0.6, 36], [0.3, 18]]) {
+    const placed = scatterInstances({
+      ring: SQUARE, areaM2: 400, densityPer100m2: undergrowthDensityPer100m2(value),
+      seed: undergrowthSeed('ta_1'), maxPoints: UNDERGROWTH_MAX_PER_AREA,
+    });
+    check(`K1 the sampler places the counted ${want} tufts at value ${value}`,
+      [placed.length, undergrowthCount(400, value)], [want, want]);
+  }
+
+  // (K2) the ceiling, and the line it sits on
+  check('K2 a square kilometre at full density is capped at 20 000',
+    undergrowthCount(1e6, 1), 20000);
+  check('K2 …and says so', undergrowthCapped(1e6, 1), true);
+  check('K2 133 333 m2 lands EXACTLY on the ceiling and is not capped',
+    [undergrowthCount(133333, 1), undergrowthCapped(133333, 1)], [20000, false]);
+  check('K2 …seven metres more is one tuft over the line, and is capped',
+    [undergrowthCount(133340, 1), undergrowthCapped(133340, 1)], [20000, true]);
+
+  // (K3) not given, and the clamp
+  for (const [bad, name] of [[0, '0'], [-1, '-1'], [NaN, 'NaN'],
+    ['thick', 'a string'], [null, 'null'], [undefined, 'undefined']]) {
+    check(`K3 a value of ${name} grows nothing`,
+      [undergrowthCount(400, bad), undergrowthDensityPer100m2(bad),
+        undergrowthCapped(400, bad)],
+      [0, 0, false]);
+  }
+  check('K3 a hand-edited 5 is clamped to the full density, not multiplied',
+    undergrowthCount(100, 5), 15);
+  for (const [bad, name] of [[0, '0'], [-400, 'negative'], [NaN, 'NaN']]) {
+    check(`K3 an area of ${name} grows nothing`, undergrowthCount(bad, 0.6), 0);
+  }
+
+  // (K4) how tall, out of the yaw
+  check('K4 yaw 0 is the shortest blade', undergrowthHeight(0), 0.4);
+  check('K4 yaw pi is the middle — the geometry\'s own height',
+    undergrowthHeight(Math.PI), 0.55);
+  check('K4 yaw 1.5pi', undergrowthHeight(1.5 * Math.PI), 0.625);
+  check('K4 a full turn is the same blade again',
+    undergrowthHeight(TAU), 0.4);
+  for (const [bad, name] of [[NaN, 'NaN'], ['x', 'a string'],
+    [undefined, 'undefined']]) {
+    check(`K4 a yaw of ${name} is the shortest blade, never a NaN scale`,
+      undergrowthHeight(bad), 0.4);
+  }
+
+  // (K5) how far — its own ladder beside the props'
+  check('K5 share at 0 m is 1', undergrowthShare(0), 1);
+  check('K5 …at 30 m still 1', undergrowthShare(30), 1);
+  check('K5 …at 37.5 m 0.75', undergrowthShare(37.5), 0.75);
+  check('K5 …at 45 m half the carpet', undergrowthShare(45), 0.5);
+  check('K5 …at 52.5 m a quarter', undergrowthShare(52.5), 0.25);
+  check('K5 …and at 60 m nothing at all', undergrowthShare(60), 0);
+  check('K5 past the cull distance nothing', undergrowthShare(60.001), 0);
+  check('K5 a NaN distance draws nothing', undergrowthShare(NaN), 0);
+  check('K5 at 45 m the props draw everything while the carpet is halved',
+    [instanceShare(45, DEF), undergrowthShare(45)], [1, 0.5]);
+  check('K5 …and at 60 m they are at 0.85 while it is gone',
+    [instanceShare(60, DEF), undergrowthShare(60)], [0.85, 0]);
+
+  // (K6) which tufts survive — properties, never a table
+  const grown = (d, n = 1000) => {
+    const out = [];
+    for (let i = 0; i < n; i += 1) if (undergrowthVisible(i, d)) out.push(i);
+    return out;
+  };
+  check('K6 inside 30 m every tuft is drawn', grown(30).length, 1000);
+  check('K6 at the cull distance none is — nothing can pop there',
+    grown(60).length, 0);
+  check('K6 the set at 45 m is the SAME set when asked again',
+    grown(45), grown(45));
+  const near375 = new Set(grown(37.5));
+  check('K6 what is drawn at 52.5 m is still drawn at 37.5 m',
+    grown(52.5).filter((i) => !near375.has(i)).length, 0);
+  for (const [d, share] of [[37.5, 0.75], [45, 0.5], [52.5, 0.25]]) {
+    const n = grown(d).length;
+    check(`K6 ${d} m draws ${1000 * share} of 1000, within 5 % (got ${n})`,
+      Math.abs(n - 1000 * share) <= 0.05 * 1000 * share, true);
+  }
+  check('K6 tuft 0 survives as long as anything of the layer does',
+    [undergrowthVisible(0, 59.9), undergrowthVisible(0, 60)], [true, false]);
+
+  // (K7) the seed namespace
+  check('K7 the layer has a seed of its own',
+    undergrowthSeed('ta_1'), 'terrain:undergrowth:ta_1');
+  check('K7 …which is not the authored scatter\'s',
+    undergrowthSeed('ta_1') !== scatterSeed('ta_1', 0), true);
+  const GROW_OPTS = { ring: SQUARE, areaM2: 400, densityPer100m2: 5 };
+  const scatterPts = scatterInstances({ ...GROW_OPTS, seed: scatterSeed('ta_1', 0) });
+  const growPts = scatterInstances({ ...GROW_OPTS, seed: undergrowthSeed('ta_1') });
+  check('K7 …so the two layers stand in different places',
+    JSON.stringify(growPts.slice(0, 5)) !== JSON.stringify(scatterPts.slice(0, 5)),
+    true);
+
+  // (K8) the red counter-check — the namespace removed, the collision measured
+  const collided = await loadTs(LOD_SRC, undergrowthWithoutNamespace);
+  const collidedPts = scatterInstances({
+    ...GROW_OPTS, seed: collided.undergrowthSeed('ta_1'),
+  });
+  check('K8 the "no namespace" mutant grows the tufts ON the authored props',
+    collidedPts.slice(0, 5), scatterPts.slice(0, 5));
+  checkNot('K8 …which is NOT what the real seed does',
+    growPts.slice(0, 5), scatterPts.slice(0, 5));
+
+  // (K9) the client's wiring — read off the source, like (E) and (H6)
+  check('K9 ground.ts samples the layer under the undergrowth seed',
+    groundSrc.includes('seed: undergrowthSeed(area.id),'), true);
+  const seedCalls = groundSrc.match(/scatterSeed\(/g);
+  check('K9 …and still uses scatterSeed exactly once, for the authored rows',
+    seedCalls ? seedCalls.length : 0, 1);
+  check('K9 the layer hands the sampler its OWN ceiling',
+    groundSrc.includes('maxPoints: UNDERGROWTH_MAX_PER_AREA,'), true);
+  check('K9 it bends by the ground\'s amplitude with no prop factor',
+    groundSrc.includes('applySway(mat, growSway, UNDERGROWTH_H_REF_M);'), true);
+  const fadeCalls = groundSrc.match(/applyOcclusionFade\(mat\);/g);
+  check('K9 …and it dissolves in the camera corridor like the tuft does',
+    fadeCalls ? fadeCalls.length : 0, 2);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

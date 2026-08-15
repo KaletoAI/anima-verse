@@ -122,6 +122,24 @@ Throwaway storage. Hand-derived expectations:
       Saat: `grass` 0.06 and `forest` 0.04 carry it in the shared seed, water
       and the rest carry none. The key is independent of every other one.
 
+  [11] ONE MORE since the undergrowth decision (2026-08-15): `undergrowth`,
+      how much grows on this ground WITHOUT anybody authoring a scatter row —
+      a SHARE of the client's full tuft density (§ A9), not a count and not a
+      list of props. Same numeric shape rule, clamp 0…1:
+        0.6 / 0.3     -> unchanged   the seed values of forest and grass
+        5             -> 1.0         a share cannot be more than all of it
+        0.4449        -> 0.44        two decimals, the editor's precision
+        0 / −1 / "dense" / NaN / "" -> the KEY IS GONE (bare ground is
+                                     written by leaving the key out)
+      THE ROUNDING EDGE reads like the SINK depths and not like `sway_m`: the
+      lower clamp is 0, which is itself nothing, so a value that only rounds to
+      zero has to leave no key behind rather than be lifted to a floor.
+        0.004         -> the KEY IS GONE (rounds to 0.0)
+        0.005         -> 0.01        the first share that rounds to something
+      Saat: exactly `forest` 0.6 and `grass` 0.3 carry it — a wood is
+      undergrown because it is a wood, a path is not. The key is independent of
+      every other one and survives the save/read round trip.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_types.py
 """
 import json
@@ -426,6 +444,45 @@ terrain_types.save_world_type(
 check("it survives the save/read round trip",
       (terrain_types.get_type("reed") or {}).get("meta"), {"sway_m": 0.2})
 terrain_types.delete_world_type("reed")
+
+print("[11] what a ground grows all by itself")
+check("the authored share of a wood survives", meta_of({"undergrowth": 0.6}),
+      {"undergrowth": 0.6})
+check("...and the thinner one of a meadow", meta_of({"undergrowth": 0.3}),
+      {"undergrowth": 0.3})
+check("a share of more than everything is clamped to all of it",
+      meta_of({"undergrowth": 5}), {"undergrowth": 1.0})
+check("...and rounded to two decimals", meta_of({"undergrowth": 0.4449}),
+      {"undergrowth": 0.44})
+check("a zero share leaves no key behind (bare ground)",
+      meta_of({"undergrowth": 0}), {})
+check("...and neither does a negative one", meta_of({"undergrowth": -1}), {})
+check("...nor junk", meta_of({"undergrowth": "dense"}), {})
+check("...nor NaN", meta_of({"undergrowth": float("nan")}), {})
+check("...nor an empty string", meta_of({"undergrowth": ""}), {})
+# THE ROUNDING EDGE, the sink-depth way round: the lower clamp is 0 itself, so
+# a share under half a hundredth must leave NO key rather than be lifted.
+check("a share that only rounds to nothing leaves no key",
+      meta_of({"undergrowth": 0.004}), {})
+check("...while the first one that rounds to something stays",
+      meta_of({"undergrowth": 0.005}), {"undergrowth": 0.01})
+check("it travels with the wind, the relief and a free-form neighbour",
+      meta_of({"undergrowth": 0.6, "sway_m": 0.04,
+               "relief_amplitude_m": 0.4, "note": "x"}),
+      {"undergrowth": 0.6, "sway_m": 0.04,
+       "relief_amplitude_m": 0.4, "note": "x"})
+_grown = {k: (e.get("meta") or {}).get("undergrowth")
+          for k, e in terrain_types.effective_catalog().items()
+          if (e.get("meta") or {}).get("undergrowth")}
+check("exactly forest and grass are undergrown in the shared seed", _grown,
+      {"forest": 0.6, "grass": 0.3})
+terrain_types.save_world_type(
+    {"kind": "thicket", "name": "Thicket", "color": "#2f5d3a",
+     "meta": {"undergrowth": 0.9}})
+check("it survives the save/read round trip",
+      (terrain_types.get_type("thicket") or {}).get("meta"),
+      {"undergrowth": 0.9})
+terrain_types.delete_world_type("thicket")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)
