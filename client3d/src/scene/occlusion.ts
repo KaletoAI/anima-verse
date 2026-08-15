@@ -33,10 +33,11 @@
  */
 import * as THREE from 'three';
 
-/** Half-width of the corridor in metres. One metre is a shoulder's worth to
- *  either side of the line of sight: wide enough that a trunk dead ahead really
- *  opens up, narrow enough that the wood around it stays a wood. */
-export const OCC_RADIUS_M = 1.0;
+/** Half-width of the corridor in metres. A shoulder-and-a-half to either side
+ *  of the line of sight: the first sight run (2026-08-16) judged one metre too
+ *  narrow — branches at the corridor's edge still brushed over the figure —
+ *  so the cut is half a metre wider while the wood around it stays a wood. */
+export const OCC_RADIUS_M = 1.5;
 /** Beyond this camera distance to the avatar nothing is thinned at all — the
  *  overview is a MAP, and a corridor cut through a distant town would be a
  *  visible scar for a figure nobody is looking at from behind. */

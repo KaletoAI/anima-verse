@@ -359,8 +359,8 @@ async function main() {
   const feet = { x: 0, y: 0, z: 0 };
   const gate = occlusionUniforms({ x: 0, y: 1.2, z: 25 }, feet, true);
   check('the corridor ends at the avatar\'s chest, 1.2 m up', mm3(gate.b), [0, 1.2, 0]);
-  check('the radius is one metre', gate.radius, OCC_RADIUS_M);
-  check('…and that is 1.0', OCC_RADIUS_M, 1);
+  check('the radius rides the constant', gate.radius, OCC_RADIUS_M);
+  check('…and that is 1.5 (sight run 2026-08-16: 1.0 was too narrow)', OCC_RADIUS_M, 1.5);
   check('at exactly 25 m the gate is shut', mm(gate.strength), 0);
   check('…and the corridor still starts 0.5 m in front of the lens',
     mm3(gate.a), [0, 1.2, 24.5]);
