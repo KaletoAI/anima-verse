@@ -1351,25 +1351,53 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   areas: [ …, {"meta": {"scatter": [{…, "model": "/assets/props/rock/model",
                                      "sway_factor": 0.0}]}} ]
   ```
-- **`undergrowth` — wie viel auf einem Boden VON SELBST wächst** (2026-08-15).
-  Ein whitelisteter `meta`-Schlüssel, eine Zahl 0…1 (zwei Dezimalen,
-  0/leer/Junk = Schlüssel weg) = Anteil der vollen Unterwuchs-Dichte des
-  Clients. Vertrag für die Renderer: der Client erzeugt auf JEDER Fläche
-  dieser Art eine zusätzliche Büschel-Schicht — Basis-Dichte 0,15 Instanzen/m²
-  × Wert, Positionen aus demselben seed-stabilen Sampler wie die autorierte
-  Streu, aber unter EIGENEM Seed (`terrain:undergrowth:<area_id>`), damit
-  vorhandene Props sich nicht verschieben. Sie respektiert Fußabdrücke und
-  überdeckende Flächen wie normale Streu, weht mit dem `sway_m` der Art (ohne
-  `sway_factor` — sie ist kein Prop), nimmt am Verdeckungs-Korridor teil und
-  hat ein EIGENES, kürzeres LOD: voll sichtbar bis 30 m, danach linear
-  ausgedünnt bis auf 0 bei 60 m (kein 25-%-Sockel wie bei der Objekt-Streu —
-  ein kniehohes Büschel ist an der Kante ohnehin unsichtbar, es gibt also
-  nichts, was poppen könnte). Höhen variieren 0,4…0,7 m, Obergrenze 20 000
-  Instanzen je Fläche. Der Server liefert NUR die Zahl; Position, Höhe,
-  Distanzen und Geometrie gehören dem Renderer, es gibt dafür keine weiteren
-  Katalog-Schlüssel und kein Authoring pro Fläche. Saat: `forest` 0,6 und
-  `grass` 0,3; eine Welt-Zeile ersetzt den geteilten Eintrag ganz, der
-  Schlüssel fehlt dort also, bis er im Typen-Dialog gesetzt wird.
+- **`undergrowth` — wie viel auf einem Boden VON SELBST wächst** (2026-08-15,
+  Erzeugung umgebaut 2026-08-16). Ein whitelisteter `meta`-Schlüssel, eine
+  Zahl 0…1 (zwei Dezimalen, 0/leer/Junk = Schlüssel weg) = Anteil der vollen
+  Unterwuchs-Dichte des Clients. Der Server liefert NUR diese Zahl; Position,
+  Höhe, Distanzen und Geometrie gehören dem Renderer, es gibt dafür keine
+  weiteren Katalog-Schlüssel und kein Authoring pro Fläche.
+
+  **Vertrag für die Renderer — KAMERA-LOKAL, nicht pro Fläche.** Der Unterwuchs
+  wird NICHT mehr über die ganze gemalte Form vorgebaut, sondern pro ZELLE
+  eines ursprungsverankerten 64-m-Rasters im Umkreis von 128 m um denselben
+  Anker, den die feinen Höhen-Kacheln nutzen (§ A16.3: der Avatar, solange der
+  Spieler ihn steuert, sonst das Kamera-Bodenziel). Basis-Dichte **0,40
+  Instanzen/m² × Wert** (0,15 vor dem Umbau), Deckel **8000 je Zelle** —
+  ein Schutz gegen handgeschriebenen Unsinn, den die auf 1 geklemmte
+  Katalog-Zahl nie erreicht (volle Dichte will 1638 je Zelle). Der alte
+  Flächen-Deckel von 20 000 ist ersatzlos weg: er war auf einem
+  Quadratkilometer nicht Schutz, sondern die Dichte (0,02/m², sichtbar leerer
+  Wald). Damit ist ein 10-km²-Wald lokal exakt so dicht wie eine kleine Wiese,
+  und die Kosten sind konstant (~21 Zellen à ~983 Büschel bei forest 0,6).
+
+  **Positionen** kommen aus demselben seed-stabilen Sampler wie die autorierte
+  Streu, aber unter EIGENEM Seed **pro (Fläche, Zelle)**:
+  `terrain:undergrowth:<area_id>:<cx>,<cz>`. Der Namensraum hält die Schicht
+  aus dem Strom der autorierten Props (`terrain:scatter:…`), damit sich
+  vorhandene Props nicht verschieben; die Zellkoordinate hält Nachbarzellen
+  auseinander — ohne sie stünde dasselbe Büschel-Muster alle 64 m gestanzt in
+  der Welt. Eine Zelle sampelt über die Flächen, die sie schneiden, in der
+  Terrain-Reihenfolge (last-hit-wins wie `terrain_query`); Fußabdrücke und
+  überdeckende Flächen respektiert sie wie normale Streu.
+
+  **Eine Regel gilt NUR für Zellen, nicht für Formen:** die Zelle ist ihre
+  eigene Bounding-Box, also wird nie ein Kandidat verworfen, weil er den Ring
+  verfehlt — der Sampler läuft mit `triesPerPoint: 1`, damit die
+  verbleibenden Ablehnungen (Fußabdruck, darüberliegende Fläche) SUBTRAHIEREN
+  statt nachgewürfelt zu werden. Beim Sampeln einer FORM ist das Nachwürfeln
+  richtig (ein Ring füllt seine Box nur teilweise); bei einer Zelle würde es
+  eine ganze Zellfüllung in die sichtbare Hälfte quetschen, also doppelte
+  Dichte an jeder Hauswand.
+
+  Die Schicht weht mit dem `sway_m` der Art (ohne `sway_factor` — sie ist kein
+  Prop), nimmt am Verdeckungs-Korridor teil und hat ein EIGENES, kürzeres LOD:
+  voll sichtbar bis 30 m, danach linear ausgedünnt bis auf 0 bei 60 m (kein
+  25-%-Sockel wie bei der Objekt-Streu — ein kniehohes Büschel ist an der
+  Kante ohnehin unsichtbar, es gibt also nichts, was poppen könnte). Höhen
+  variieren 0,4…0,7 m. Saat: `forest` 0,6 und `grass` 0,3; eine Welt-Zeile
+  ersetzt den geteilten Eintrag ganz, der Schlüssel fehlt dort also, bis er im
+  Typen-Dialog gesetzt wird.
 
   ```
   types: [ …, {kind: "forest", …, "meta": {"sway_m": 0.04,

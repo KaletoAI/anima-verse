@@ -300,29 +300,60 @@ export const UNDERGROWTH_ALPHA_TEST = 0.35;
 const UNDERGROWTH_REACH_M = UNDERGROWTH_H_MAX
   + (UNDERGROWTH_H_MAX * UNDERGROWTH_W_RATIO) / 2 + 0.5;
 
-/** The crossed quads of ONE tuft, base at y = 0 (B16), `h` tall and
- *  `h · UNDERGROWTH_W_RATIO` wide.
+/**
+ * The crossed quads of ONE tuft, base at y = 0 (B16), `h` tall and
+ * `h · UNDERGROWTH_W_RATIO` wide.
  *
- *  Two quads, the second turned by `UNDERGROWTH_CROSS_RAD` about +Y. Both
- *  carry the whole texture (0..1 in both UV axes), so a tuft is the same seven
- *  blades seen from two directions rather than two different plants. */
+ * Two cards, the second turned by `UNDERGROWTH_CROSS_RAD` about +Y. Both carry
+ * the whole texture (0..1 in both UV axes), so a tuft is the same seven blades
+ * seen from two directions rather than two different plants.
+ *
+ * THE NORMALS POINT STRAIGHT UP, all eight of them, and that is the one thing
+ * about a grass card that is NOT its geometry. A card's true normal is
+ * horizontal, and under a sun that stands overhead a horizontal normal means
+ * `dot(N, L) = 0`: the whole carpet loses the sun at midday and is lit by the
+ * hemisphere alone. With this world's noon lighting (`scene/engine.ts`: sun
+ * 2.25 at the zenith, hemisphere 1.55, fill 0.5·… ≈ 0.25 at 27° elevation)
+ * that is about 1.55 against the 4.05 the GROUND under it receives — the
+ * carpet reads as a dark stain on a bright meadow, which is the finding this
+ * line answers. Pointing them up is the usual grass-card trick: the tuft is
+ * then lit exactly like the ground it grows out of, and the shading of a field
+ * of them stays flat and even instead of flickering with the yaw of each card.
+ *
+ * AND THAT IS WHY EVERY CARD IS WOUND BOTH WAYS (24 indices over 8 vertices,
+ * not 12). Both faces of a card have to be drawn — but three flips the normal
+ * of a BACK face, so a single winding plus `DoubleSide` would give a tuft the
+ * full 4.05 from one side and, with `N = (0, −1, 0)`, the hemisphere's GROUND
+ * colour and no sun at all from the other: the same tuft would swing by a
+ * factor of 2.6 as the camera orbits past it, which is worse than the even
+ * gloom it replaced. The reversed triangles make both sides FRONT faces, so
+ * the normal is never flipped and the material can stay `FrontSide`. It costs
+ * twelve indices and no vertices, and back-face culling still draws exactly
+ * four triangles per tuft from any one direction.
+ */
 export function undergrowthGeometry(h: number): THREE.BufferGeometry {
   const halfW = (h * UNDERGROWTH_W_RATIO) / 2;
   const c = Math.cos(UNDERGROWTH_CROSS_RAD);
   const s = Math.sin(UNDERGROWTH_CROSS_RAD);
   const pos: number[] = [
-    // quad A, facing +Z
+    // card A, in the xy-plane
     -halfW, 0, 0, halfW, 0, 0, halfW, h, 0, -halfW, h, 0,
-    // quad B, the same quad turned about +Y: (1,0,0) -> (cos, 0, -sin)
+    // card B, the same card turned about +Y: (1,0,0) -> (cos, 0, -sin)
     -halfW * c, 0, halfW * s, halfW * c, 0, -halfW * s,
     halfW * c, h, -halfW * s, -halfW * c, h, halfW * s,
   ];
   const uv = [0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1];
+  const normal: number[] = [];
+  for (let i = 0; i < 8; i += 1) normal.push(0, 1, 0);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  geo.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
-  geo.computeVertexNormals();
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
+  geo.setIndex([
+    0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
+    // …and the same four triangles wound the other way round
+    0, 2, 1, 0, 3, 2, 4, 6, 5, 4, 7, 6,
+  ]);
   geo.computeBoundingSphere();
   return geo;
 }
@@ -354,6 +385,25 @@ export function undergrowthTexture(): THREE.DataTexture {
  * colour, darkened by the same 0.75 the authored tuft uses, which is the
  * "existing tuft colour logic" this look inherits.
  *
+ * THE 0.75 IS KEPT AFTER THE NORMALS WERE TURNED UP, and here is the reason it
+ * became RIGHT rather than too dark. With the card's own horizontal normal the
+ * tuft and the ground it stands on were lit differently — about 1.55 against
+ * 4.05 at noon (see `undergrowthGeometry`) — so 0.75 was a tint riding on top
+ * of a 2.6-fold lighting deficit and the carpet came out at roughly a quarter
+ * of the ground's brightness. Now both carry `N = (0, 1, 0)` and receive the
+ * SAME light, so the whole difference is albedo: the tuft is
+ * `kind · 0.75 · grey`, and the texture's grey runs 0.70…1.00 over the blade's
+ * height (mean ≈ 0.85), i.e. about 0.64 of the ground's own colour. A growth
+ * roughly a third darker than the ground it comes out of is what reads as
+ * growth; 1.0 would make the layer vanish into its ground and 0.5 would make a
+ * meadow look burnt. No sight check was possible, so this is the arithmetic
+ * the next acceptance round can argue against.
+ *
+ * `FrontSide` and not `DoubleSide`, and that is NOT a step back from "both
+ * faces are drawn": the geometry carries every card with both windings, so
+ * both faces ARE drawn and neither of them is a back face whose normal three
+ * would flip. Read `undergrowthGeometry` — the two decisions are one.
+ *
  * The two patches are CHAINED and in this order, like everything else that
  * stands on the ground: the wind first (`applySway`, handed in — it lives in
  * `ground.ts` and importing it here would close a cycle), the camera corridor
@@ -370,7 +420,7 @@ export function undergrowthMaterial(
     color: new THREE.Color(color).multiplyScalar(0.75),
     roughness: 0.95,
     alphaTest: UNDERGROWTH_ALPHA_TEST,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
   });
   // IT BENDS BY THE GROUND'S OWN AMOUNT, with no prop factor in between: a
   // `sway_factor` says how much a PROP takes part in the wind, and the
@@ -559,6 +609,32 @@ export function createUndergrowthField(opts: {
      *  tested as an occluder saves a point-in-ring per candidate. */
     const meetsCell = (b: readonly [number, number, number, number]): boolean => (
       b[2] >= x0 && b[0] <= x1 && b[3] >= z0 && b[1] <= z1);
+    /**
+     * The placed locations whose footprint can reach into this cell — the same
+     * rejection once more, and the one that matters most.
+     *
+     * `pointInFootprint` turns the point into the square's own frame, i.e. two
+     * multiplications and a sine per candidate PER LOCATION; a world with two
+     * hundred places would spend that two hundred times on each of ~983
+     * candidates of every cell, and building a cell is the one thing that
+     * happens while the player walks.
+     *
+     * THE BOX IS THE TURNED SQUARE'S CIRCUMSCRIBED ONE (`half · √2` on both
+     * axes), so the yaw never has to be read here and no footprint can be
+     * dropped that would have blocked something: whatever the turn, the square
+     * stays inside the circle of that radius. Anything that is not a square at
+     * all (unplaced, no edge, junk) blocks nothing anywhere and goes now.
+     */
+    const nearFootprints = footprints.filter((fp) => {
+      const cxp = fp?.pos_x;
+      const czp = fp?.pos_z;
+      const w = fp?.plan_width_m;
+      if (typeof cxp !== 'number' || !Number.isFinite(cxp)) return false;
+      if (typeof czp !== 'number' || !Number.isFinite(czp)) return false;
+      if (typeof w !== 'number' || !(w > 0)) return false;
+      const reach = (w / 2) * Math.SQRT2;
+      return meetsCell([cxp - reach, czp - reach, cxp + reach, czp + reach]);
+    });
     const out: CellLayer[] = [];
     areas.forEach((area, index) => {
       // A shape whose kind grows nothing, or whose value is so small that a
@@ -579,7 +655,7 @@ export function createUndergrowthField(opts: {
         areaM2: cell * cell,
         densityPer100m2: undergrowthDensityPer100m2(area.value),
         seed: undergrowthCellSeed(area.id, cx, cz),
-        footprints,
+        footprints: nearFootprints,
         occluders,
         maxPoints: UNDERGROWTH_MAX_PER_CELL,
         // ONE TRY PER WANTED TUFT, and that is the whole difference between

@@ -265,26 +265,48 @@
  * ============================================================================
  * (F) THE LOOK — crossed quads with an alpha cut, built for real
  * ============================================================================
- * (F1) THE GEOMETRY of one tuft at the reference height 0.55 m: TWO quads,
- *      eight vertices, twelve indices, base at y = 0 (B16) and
- *      0.55 · 1.0 = 0.55 m wide.
- *        quad A lies in the xz-plane's +Z face: x = ±0.275, z = 0
- *        quad B is A turned by 80° about +Y, so its own +X axis is
+ * (F1) THE GEOMETRY of one tuft at the reference height 0.55 m: TWO cards,
+ *      eight vertices, base at y = 0 (B16) and 0.55 · 1.0 = 0.55 m wide.
+ *        card A lies in the xy-plane: x = ±0.275, z = 0
+ *        card B is A turned by 80° about +Y, so its own +X axis is
  *          (cos 80°, 0, −sin 80°) = (0.173648, 0, −0.984808)
  *          -> its first vertex is (−0.275 · 0.173648, 0, +0.275 · 0.984808)
  *             = (−0.0477533, 0, 0.2708221)
- *        NOT 90°: two quads at a right angle look the same from four
+ *        NOT 90°: two cards at a right angle look the same from four
  *        directions and a field of them shows the pattern.
  *
+ * (F1b) THE NORMALS POINT UP — all eight of them (0, 1, 0), which is not what
+ *      `computeVertexNormals` would give a vertical card. A card's own normal
+ *      is horizontal, so under a sun at the zenith `dot(N, L)` is 0 and the
+ *      whole carpet loses the sun at midday: with this world's noon lighting
+ *      (sun 2.25 overhead, hemisphere 1.55, fill ≈ 0.25) that is 1.55 against
+ *      the 4.05 the GROUND beneath receives — a dark stain on a bright meadow.
+ *      Pointing them up lights the tuft exactly like the ground it grows from.
+ *
+ * (F1c) …AND EVERY CARD IS WOUND BOTH WAYS: 24 indices over those same 8
+ *      vertices, the second twelve being the first four triangles reversed.
+ *      three flips the normal of a BACK face, so one winding plus `DoubleSide`
+ *      would give a tuft 4.05 from one side and — at N = (0, −1, 0) — the
+ *      hemisphere's ground colour with no sun from the other, i.e. the same
+ *      tuft swinging by 2.6× as the camera orbits it. Both windings make both
+ *      faces FRONT faces, so nothing is ever flipped and the material stays
+ *      `FrontSide`. Back-face culling still draws four triangles per tuft from
+ *      any one direction.
+ *
  * (F2) THE MATERIAL is alpha-CUT and not transparent: `alphaTest` 0.35,
- *      `transparent` false, `side` DoubleSide, `castShadow` off on the mesh.
- *      That is what keeps a cell of a thousand tufts in the opaque pass — one
- *      draw call, no sorting.
+ *      `transparent` false, `castShadow` off on the mesh. That is what keeps a
+ *      cell of a thousand tufts in the opaque pass — one draw call, no
+ *      sorting. `side` is `FrontSide` for the reason in (F1c), and that is not
+ *      a step back from "both faces are drawn": the geometry draws them.
  *
  * (F3) THE TINT is the kind's own colour times 0.75 (the authored tuft's
  *      logic), because the texture is greyscale: #6a994e -> (0.4·0.75,
  *      0.6·0.75, 0.306·0.75) in linear-ish terms — asserted through three's
  *      own `Color` so the colour space of the comparison is three's, not ours.
+ *      KEPT after (F1b): the tuft and its ground now take the same light, so
+ *      0.75 is pure albedo — times the texture's mean grey of ≈ 0.85 that is
+ *      about 0.64 of the ground's own colour, a growth a third darker than
+ *      what it grows out of.
  *
  * (F4) THE CHAIN IS ABSOLUTE. `applySway` first, `applyOcclusionFade` after
  *      it, both CHAINED into `onBeforeCompile` — so the combined program cache
@@ -348,6 +370,30 @@
  *      painted over this shape) are exactly the ones that have to SUBTRACT.
  *      Asserted from both sides: the same cell sampled the sampler's default
  *      way tops itself back up to the full 983.
+ *
+ * (G8) A FOOTPRINT ON THE OTHER SIDE OF THE WORLD COSTS NOTHING. Every
+ *      candidate of every cell used to be turned into the frame of EVERY
+ *      placed location (`pointInFootprint`: two multiplications and a sine
+ *      each), so a world with two hundred places paid two hundred of those on
+ *      each of ~983 candidates per cell — while the player walks. The cell now
+ *      keeps only the footprints whose CIRCUMSCRIBED box (`half · √2`, so the
+ *      turn never has to be read and nothing that could block is dropped)
+ *      meets it.
+ *
+ *      MEASURED, not asserted about the source alone: the footprint handed in
+ *      is an object whose `pos_x` is a getter that counts its reads. Both the
+ *      pre-filter and `pointInFootprint` read that field exactly once into a
+ *      local before doing anything else, so the count is "how often was this
+ *      place looked at at all".
+ *        a 10 m place at (5000, 5000), anchor (32, 32): 21 reads — ONE box
+ *          test per built cell (A1) and not one per candidate.
+ *        a 20 m place at (32, 32): its circumscribed box runs 17.86 … 46.14 on
+ *          both axes, so it lies wholly inside the anchor's own cell 0 … 64
+ *          and inside no other -> 21 + 983, the 21 box tests plus one
+ *          evaluation for each candidate of that single cell. That second row
+ *          is what proves the counter would have noticed a miss.
+ *      And the far place changes no tuft: the cell's instance count is the
+ *      same 983 with it and without it.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -735,17 +781,31 @@ async function main() {
     UNDERGROWTH_H_REF_M, 0.55);
   const geo = undergrowthGeometry(UNDERGROWTH_H_REF_M);
   const gp = geo.getAttribute('position');
-  check('F1 two quads: eight vertices, twelve indices',
-    [gp.count, geo.getIndex().count], [8, 12]);
-  check('F1 quad A spans +-0.275 m at z = 0',
+  check('F1 two cards: eight vertices', gp.count, 8);
+  check('F1 card A spans +-0.275 m at z = 0',
     [gp.getX(0), gp.getY(0), gp.getZ(0), gp.getX(1)],
     [-0.275, 0, 0, 0.275], 1e-6);
-  check('F1 …and quad B is it turned by 80 degrees, not 90',
+  check('F1 …and card B is it turned by 80 degrees, not 90',
     [gp.getX(4), gp.getY(4), gp.getZ(4)],
     [-0.0477533, 0, 0.2708221], 1e-6);
   geo.computeBoundingBox();
   check('F1 the tuft STANDS on the ground (B16): y runs 0 .. 0.55',
     [geo.boundingBox.min.y, geo.boundingBox.max.y], [0, 0.55], 1e-6);
+  const gn = geo.getAttribute('normal');
+  const upNormals = [];
+  for (let i = 0; i < gn.count; i += 1) {
+    upNormals.push([gn.getX(i), gn.getY(i), gn.getZ(i)]);
+  }
+  check('F1b every normal points STRAIGHT UP, not out of the card',
+    upNormals, new Array(8).fill([0, 1, 0]));
+  const idx = geo.getIndex();
+  check('F1c …and every card is wound both ways: 24 indices, not 12',
+    idx.count, 24);
+  const tri = (n) => [idx.getX(n * 3), idx.getX(n * 3 + 1), idx.getX(n * 3 + 2)];
+  const rev = (t) => [t[0], t[2], t[1]];
+  check('F1c …the second twelve being the first four triangles reversed',
+    [tri(4), tri(5), tri(6), tri(7)],
+    [rev(tri(0)), rev(tri(1)), rev(tri(2)), rev(tri(3))]);
 
   const dataTex = undergrowthTexture();
   check('F the one shared texture is a 64 x 64 DataTexture',
@@ -755,8 +815,8 @@ async function main() {
     [mat.alphaTest, UNDERGROWTH_ALPHA_TEST], [0.35, 0.35]);
   check('F2 …and is NOT transparent — it stays in the opaque pass',
     mat.transparent, false);
-  check('F2 …and both faces of a quad are drawn',
-    mat.side, THREE.DoubleSide);
+  check('F2 …and it never draws a BACK face, so no normal is ever flipped',
+    mat.side, THREE.FrontSide);
   check('F2 …through the blade texture', mat.map === dataTex, true);
   const want = new THREE.Color('#6a994e').multiplyScalar(0.75);
   check('F3 the tint is the kind\'s colour times 0.75',
@@ -881,6 +941,36 @@ async function main() {
     + 'double density against the border', topped.length, 983);
   halved.dispose();
 
+  // (G8) the footprint pre-filter, measured on a counting footprint
+  const counting = (x, z, w) => {
+    const fp = { pos_z: z, plan_width_m: w, yaw_deg: 0, reads: 0 };
+    // BOTH the cell's pre-filter and `pointInFootprint` read the centre's x
+    // EXACTLY once into a local before doing anything else, so this counter is
+    // "how often was this place looked at at all".
+    Object.defineProperty(fp, 'pos_x', {
+      get() { fp.reads += 1; return x; },
+      enumerable: true,
+    });
+    return fp;
+  };
+  const far = counting(5000, 5000, 10);
+  const withFar = createUndergrowthField({ heightAt: () => 0, applySway });
+  withFar.setAreas([area], [far]);
+  withFar.setAnchor(32, 32);
+  check('G8 a place on the other side of the world costs one box test per '
+    + 'built cell and not one per candidate', far.reads, midCell.length);
+  check('G8 …and it changes no tuft: the anchor cell still carries its 983',
+    withFar.group.children[0].instanceMatrix.count, 983);
+  withFar.dispose();
+  const near = counting(32, 32, 20);
+  const withNear = createUndergrowthField({ heightAt: () => 0, applySway });
+  withNear.setAreas([area], [near]);
+  withNear.setAnchor(32, 32);
+  check('G8 …while a place INSIDE the anchor cell — and inside no other — is '
+    + 'asked once per candidate on top of that',
+    near.reads, midCell.length + 983);
+  withNear.dispose();
+
   console.log('\n(H) the wiring, pinned by reading the source');
   const ugSrc = await readFile(UG_SRC, 'utf8');
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
@@ -888,6 +978,13 @@ async function main() {
     ugSrc.includes('seed: undergrowthCellSeed(area.id, cx, cz),'), true);
   check('H …and hands the sampler its own per-cell ceiling',
     ugSrc.includes('maxPoints: UNDERGROWTH_MAX_PER_CELL,'), true);
+  check('H the cell subtracts its rejections instead of re-rolling them',
+    ugSrc.includes('triesPerPoint: 1,'), true);
+  check('H the footprints are cut to the cell by their circumscribed box',
+    /const reach = \(w \/ 2\) \* Math\.SQRT2;\s*return meetsCell\(/.test(ugSrc),
+    true);
+  check('H …and it is the cut list the sampler gets',
+    ugSrc.includes('footprints: nearFootprints,'), true);
   check('H the chain is wind first, camera corridor after it',
     /applySway\(mat, swayM, UNDERGROWTH_H_REF_M\);\s*applyOcclusionFade\(mat\);/
       .test(ugSrc), true);
