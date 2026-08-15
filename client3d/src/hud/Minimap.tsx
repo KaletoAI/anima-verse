@@ -5,8 +5,9 @@
  * scrolling and no zoom. That is the point of it in a stage about the fog of
  * war: a map that panned along with the avatar would say where one is looking
  * but never how much of the world is still dark. The painted terrain is filled
- * polygons, the known places are dots on top of it, everything else stays the
- * dark backdrop — and the backdrop is the fog.
+ * polygons, the world's RELIEF is a shading layer over them, the known places
+ * are dots on top of that, and everything else stays the dark backdrop — and
+ * the backdrop is the fog.
  *
  * PRESENTATIONAL, and cheap by construction. It owns no state and asks the
  * scene nothing: `main.ts` publishes a finished slice on the minimap store of
@@ -16,11 +17,15 @@
  * still costs neither.
  *
  * All the arithmetic is in `game/minimap.ts` and hand-checked in
- * `client3d/scripts/smoke_walk_math.mjs`; nothing here computes a coordinate of its own.
+ * `client3d/scripts/smoke_walk_math.mjs`; the shading is `hillshadeImage` of
+ * `@anima/scene-render` (hand-checked in `smoke_hillshade.mjs`, computed in
+ * `main.ts` once per field). Nothing here computes a coordinate or a grey of
+ * its own — this file only says where the finished picture lands.
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
 import { minimapLayout, worldToPx, yawToCompassDeg, MINIMAP_SIZE_PX } from '../game/minimap';
+import type { MinimapRelief } from '../game/minimap';
 import { getMinimap, subscribeMinimap } from './bus';
 
 /** Canvas backdrop — everything the avatar does not know about stays this.
@@ -46,10 +51,37 @@ const ROSE_R = 14;
  *  differ by a quarter turn. */
 const canvasAngle = (bearingDeg: number) => (bearingDeg - 90) * Math.PI / 180;
 
+/** One shading image as a bitmap the canvas can stretch — the ONE place in
+ *  this app that turns the shared RGBA answer into pixels. Kept as a `cols ×
+ *  rows` off-screen canvas so `drawImage` does the scaling, smoothed, on every
+ *  redraw; `null` when the browser gives no 2D context. */
+function reliefBitmap(relief: MinimapRelief): HTMLCanvasElement | null {
+  const { image } = relief;
+  const src = document.createElement('canvas');
+  src.width = image.cols;
+  src.height = image.rows;
+  const sctx = src.getContext('2d');
+  if (!sctx) return null;
+  // `createImageData` + `set`, not `new ImageData(data, …)`: the shared answer
+  // is a plain `Uint8ClampedArray` over an unspecified buffer kind, and the
+  // constructor's typing insists on a plain `ArrayBuffer` one. The copy is a
+  // few hundred kilobytes ONCE per field — `putImageData` copies anyway.
+  const bits = sctx.createImageData(image.cols, image.rows);
+  bits.data.set(image.data);
+  sctx.putImageData(bits, 0, 0);
+  return src;
+}
+
 export function Minimap() {
   const { t } = useI18n();
   const state = useSyncExternalStore(subscribeMinimap, getMinimap);
   const ref = useRef<HTMLCanvasElement | null>(null);
+  /** The shading, rasterised once per FIELD and kept across redraws: the slice
+   *  is republished on every step, the relief only when the world's heights
+   *  change. Keyed on the published object, which `main.ts` replaces exactly
+   *  then. */
+  const relief = useRef<{ src: MinimapRelief | null; bitmap: HTMLCanvasElement | null }>(
+    { src: null, bitmap: null });
   /** the north letter, read once per render — the draw runs outside React */
   const north = t('N');
 
@@ -86,6 +118,32 @@ export function Minimap() {
         ctx.closePath();
         ctx.fillStyle = area.color;
         ctx.fill();
+      }
+      // THE RELIEF over the painted ground and under everything else: hills as
+      // light and shadow (`hillshadeImage`, the routine the 2D player map
+      // shades with — nothing here computes a grey of its own). Over the areas
+      // because it modulates the ground; under the places and the avatar
+      // because those are not ground and keep their colours exactly.
+      //
+      // WHERE IT LANDS, and why it needs no flip: pixel (i, j) IS the support
+      // point (origin_x + i·step, origin_z + j·step), row 0 the smallest z =
+      // the northernmost line. The destination rectangle is half a step larger
+      // on every side, so the smoothed `drawImage` puts pixel centre
+      // (j + 0.5)/rows of the rectangle back on the support point itself — and
+      // `worldToPx` grows py with z, so row 0 lands at the SMALLEST py. North
+      // is up, exactly as it is for every dot on this canvas.
+      if (state.relief) {
+        if (relief.current.src !== state.relief) {
+          relief.current = { src: state.relief, bitmap: reliefBitmap(state.relief) };
+        }
+        const { bitmap } = relief.current;
+        const { image, origin_x: ox, origin_z: oz, step_m: step } = state.relief;
+        if (bitmap) {
+          const nw = worldToPx({ x: ox - step / 2, z: oz - step / 2 }, layout);
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(bitmap, nw.px, nw.py,
+            image.cols * step * layout.scale, image.rows * step * layout.scale);
+        }
       }
       // The known places on top of the ground: a dot each, big enough to find
       // on a 160-pixel canvas and small enough not to be a floor plan.

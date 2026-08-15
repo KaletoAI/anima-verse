@@ -28,7 +28,8 @@ import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
 import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
-import type { MinimapArea, MinimapDot } from './game/minimap';
+import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
+import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
 import { footprintSignature, locationsSignature, terrainColor } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
@@ -2479,6 +2480,13 @@ async function startApp(username: string, role: string) {
   // the embodied view, and a map left standing with a dot from minutes ago
   // would be worse than none.
   let minimapSig = '';
+  // The shaded relief, kept across publishes and rebuilt only when the ground
+  // module has taken over a new field. The signature below carries the height
+  // revision for exactly that reason: without it a world whose relief arrived
+  // after the first publish would stay flat on the map until an unrelated
+  // input moved the signature — the lesson `mapLocSig` already taught.
+  let reliefRev = -1;
+  let relief: MinimapRelief | null = null;
   setInterval(() => {
     if (getGameState().mode !== 'embodied') {
       if (minimapSig === '') return;
@@ -2493,9 +2501,25 @@ async function startApp(username: string, role: string) {
     const frame = worldBounds
       ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
     const spot = pos ? `${Math.round(pos.x)},${Math.round(pos.z)}` : '';
-    const sig = `${terrainGround.revision()}|${mapLocSig}|${spot}|${yawDeg}|${frame}`;
+    const heightRev = terrainGround.heightRevision();
+    const sig = `${terrainGround.revision()}|${heightRev}|${mapLocSig}`
+      + `|${spot}|${yawDeg}|${frame}`;
     if (sig === minimapSig) return;
     minimapSig = sig;
+    // ONE hillshade per field, never per publish: the shading walks every
+    // support point of the world (up to 120 000, § A16) and this tick runs
+    // four times a second. The 2D player map shades the same overview with the
+    // same call and the same exaggeration — the light over a landscape is not
+    // a thing two pictures of it may decide separately.
+    if (reliefRev !== heightRev) {
+      reliefRev = heightRev;
+      const field = terrainGround.heightField();
+      const image = hillshadeImage(field, { zFactor: MAP_RELIEF_Z_FACTOR });
+      relief = image && field
+        ? { image, origin_x: field.origin_x, origin_z: field.origin_z,
+            step_m: field.step_m }
+        : null;
+    }
     // The colours come from the world's OWN terrain catalog, never from a
     // table in the client — a kind an admin invented this morning is on the
     // map this afternoon.
@@ -2511,6 +2535,7 @@ async function startApp(username: string, role: string) {
       .map((l) => ({ x: l.pos_x as number, z: l.pos_z as number }));
     setMinimap({
       areas,
+      relief,
       locations: dots,
       avatar: pos ? { x: pos.x, z: pos.z } : null,
       // The published yaw is the QUANTISED one, so the drawn wedge and the

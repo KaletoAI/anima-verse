@@ -50,7 +50,7 @@ import { AREA_POLYGON_OFFSET, buildAreaGeometry, compositeHeightRangeIn,
   scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
   surfaceTimeUniform, tileKeyAt, worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
-  WorldHeightTiles } from '@anima/scene-render';
+  WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
 import type { HeightTileBatch } from '../api';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
@@ -594,6 +594,12 @@ export interface Ground {
    *  (the veil's height comes from the field) — a signature of its own,
    *  because the field arrives long after the first fog is built. */
   heightRevision(): number;
+  /** The OVERVIEW height field itself (§ A16), for readers that DRAW the
+   *  relief instead of standing on it — the minimap shades it. `null` until
+   *  the first field has arrived. Everything that asks how high the ground is
+   *  at a point uses `heightAt`/`fieldHeightAt` instead: those go through the
+   *  fine tiles, and this deliberately does not. */
+  heightField(): WorldHeightField | null;
   /**
    * Re-decide the level of detail of the prop scatter for a camera position:
    * resolution tier, thinning and the far cull, PER INSTANCE.
@@ -2014,6 +2020,13 @@ export function createGround(): Ground {
     heightRangeIn: (x0, z0, x1, z1) => (
       hasRelief() ? compositeHeightRangeIn(relief, x0, z0, x1, z1, cellM) : 0),
     heightRevision: () => heightRev,
+    // THE OVERVIEW FIELD ITSELF, for the readers that draw the relief instead
+    // of standing on it (the minimap's hillshade). The overview and nothing
+    // else on purpose (§ A16.3): a picture of the whole world is the distant
+    // view, and the fine tiles only exist around the camera — a map mixing the
+    // two would be sharp in one square and coarse everywhere else. `null` until
+    // the first field has arrived, which is "no relief" for every caller.
+    heightField: () => relief.overview,
     setHole(rect) {
       holeOn.value = rect ? 1 : 0;
       if (rect) holeRect.value.set(rect[0], rect[1], rect[2], rect[3]);

@@ -200,7 +200,7 @@ export function perfEnabled(): boolean { return perfOn; }
 // standing still costs nothing at all.
 
 const emptyMinimap: MinimapState = {
-  areas: [], locations: [], avatar: null, yaw: 0, bounds: null,
+  areas: [], relief: null, locations: [], avatar: null, yaw: 0, bounds: null,
 };
 let minimap: MinimapState = emptyMinimap;
 const minimapListeners = new Set<() => void>();

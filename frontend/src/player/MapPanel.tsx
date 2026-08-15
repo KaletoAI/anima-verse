@@ -23,6 +23,13 @@
  *   2. `TerrainAreas`  — `terrain.areas` in delivered order (= z-order),
  *                        colour from the catalog (`typeColor`, grey when the
  *                        kind is unknown), even-odd like the editor.
+ *   2a. `ReliefLayer`  — the world's HILLS as light and shadow
+ *                        (`hillshadeImage` of `@anima/scene-render`, the same
+ *                        routine the 3D client's minimap uses). Over the
+ *                        terrain colours, because it modulates the ground;
+ *                        UNDER everything from the footprints upwards, because
+ *                        places, routes and figures are not ground and must
+ *                        keep their colours exactly.
  *   3. `Footprints`    — the location squares in REAL size via
  *                        `footprintScreenCorners`, name label by label mode,
  *                        📍 on the avatar's location, 🔥/❗ event pin.
@@ -48,6 +55,21 @@
  *     (the nice values are 0.25/0.5/1/2/5/10/20/50/100/200/500 m, so the bar
  *     lands between 70 and 140 px at every zoom.)
  *
+ *   RELIEF IMAGE placement (`ReliefLayer`, and the reason it needs no flip):
+ *     the shading image carries one pixel per SUPPORT POINT, its row 0 being
+ *     the field's row 0, i.e. the smallest z = the NORTHERNMOST line. The
+ *     destination rectangle is half a step larger on every side, so a smoothly
+ *     scaled `<image>` puts pixel centre `(i + 0.5)/cols` of the rectangle on
+ *     the support point itself. With field origin (−100, −100), step 32,
+ *     5 × 5 points, view {cx: 0, cz: 0, pxPerM: 2} on 800 × 600:
+ *       top edge    z = −116 -> y = 300 + (−116)·2 = 68
+ *       bottom edge z = −100 + 4.5·32 = 44 -> y = 300 + 44·2 = 388
+ *       row 0 centre = 68 + (0.5/5)·(388 − 68) = 100, and worldToScreen of the
+ *         support point z = −100 is 300 + (−100)·2 = 100 — the same pixel.
+ *     Row 0 lands at y 100 and row 4 at y 356: NORTH IS UP, no axis flip, which
+ *     is `mapMath`'s "east is right, south is down" holding for the image too.
+ *     A flip would read every hill as a hollow.
+ *
  *   FOOT POINT of a travel line (`nearestOnPolyline`, hand-derived there):
  *     route [(0,0), (10,0), (10,10)], the server reports the walker at
  *     `pos` (4, 1). Segment 0 has direction (10,0) and |d|² = 100, so
@@ -57,6 +79,8 @@
  *     the target, never behind the walker.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render'
+import type { WorldHeightField } from '@anima/scene-render'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAuth } from '../lib/AuthGate'
 import { apiGet } from '../lib/api'
@@ -166,6 +190,77 @@ function TerrainAreas({ areas, types }: {
       ) : null))}
     </g>
   )
+}
+
+/**
+ * Layer 2a — the RELIEF as light and shadow.
+ *
+ * The shading itself is `hillshadeImage` from `@anima/scene-render`, the same
+ * call the 3D client's minimap makes with the same `MAP_RELIEF_Z_FACTOR`: two
+ * pictures of one landscape must be lit by one lamp, and nothing in this file
+ * computes a normal, a gradient or a grey of its own. What IS decided here is
+ * only where the finished rectangle lands — through `worldToScreen`, the
+ * panel's own projection, exactly like every other layer.
+ *
+ * The rectangle is half a step larger than the support grid on every side, so
+ * the browser's smooth scaling lands pixel centres on support points (the
+ * arithmetic is in the file header). `preserveAspectRatio="none"` because the
+ * rectangle already has the field's aspect and the view may not: the fit is
+ * given by the world coordinates, not chosen.
+ */
+function ReliefLayer({ relief, field }: { relief: Relief; field: WorldHeightField }) {
+  const { view, w, h } = useMapView()
+  const step = field.step_m
+  // The shape comes from the IMAGE, never a second reading of `heights`: the
+  // shared routine takes it from the data it actually found (a ragged field is
+  // read as what it carries), and two opinions about it would displace the
+  // whole rectangle by a cell.
+  const a = worldToScreen(field.origin_x - step / 2, field.origin_z - step / 2,
+    view, w, h)
+  const b = worldToScreen(field.origin_x + (relief.cols - 0.5) * step,
+    field.origin_z + (relief.rows - 0.5) * step, view, w, h)
+  return (
+    <image href={relief.url} x={a.x} y={a.y}
+      width={Math.max(0, b.x - a.x)} height={Math.max(0, b.y - a.y)}
+      preserveAspectRatio="none" pointerEvents="none"
+      style={{ imageRendering: 'auto' }} />
+  )
+}
+
+/** A shading ready to hang into the SVG: the picture plus the grid it covers. */
+interface Relief {
+  url: string
+  cols: number
+  rows: number
+}
+
+/**
+ * The ONE place in this app that turns the shared RGBA answer into something a
+ * browser draws: an off-screen canvas of exactly `cols × rows` pixels, put out
+ * as a data URL. The SVG scales it, smoothed, wherever `ReliefLayer` says.
+ *
+ * `null` on a field without relief and on a canvas that gives no context —
+ * then no rectangle is drawn at all, not a transparent one.
+ */
+function hillshadeUrl(field: WorldHeightField | null): Relief | null {
+  const img = hillshadeImage(field, { zFactor: MAP_RELIEF_Z_FACTOR })
+  if (!img) return null
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = img.cols
+    canvas.height = img.rows
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    // `createImageData` + `set`, not `new ImageData(data, …)`: the shared
+    // answer is a plain `Uint8ClampedArray` over an unspecified buffer kind,
+    // and the constructor's typing insists on a plain `ArrayBuffer` one.
+    const bits = ctx.createImageData(img.cols, img.rows)
+    bits.data.set(img.data)
+    ctx.putImageData(bits, 0, 0)
+    return { url: canvas.toDataURL('image/png'), cols: img.cols, rows: img.rows }
+  } catch {
+    return null
+  }
 }
 
 /** Layer 3 — the location squares in real size, plus label, position pin and
@@ -341,6 +436,30 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     return () => { cancelled = true }
   }, [sig, data])
 
+  // The RELIEF, on the very same rule and off the very same poll — its own
+  // signature (`height_sig`, § A16), never a poll of its own: the overview
+  // grid is the largest thing the map fetches and it only changes when someone
+  // edits the world's heights. The OVERVIEW is the right source here (§ A16.3:
+  // a reader asks either the tiles or the overview, never both) — a 2D map is
+  // the far view, and the fine tiles exist for the ground one stands on.
+  const [height, setHeight] = useState<WorldHeightField | null>(null)
+  const heightSig = data?.height_sig || ''
+  const loadedHeightSig = useRef('')
+  useEffect(() => {
+    if (!heightSig || loadedHeightSig.current === heightSig) return
+    let cancelled = false
+    apiGet<WorldHeightField>('/play/heightfield').then((p) => {
+      if (cancelled) return
+      loadedHeightSig.current = heightSig
+      setHeight(p)
+    }).catch(() => { /* flat-looking map until the next poll tick retries */ })
+    return () => { cancelled = true }
+  }, [heightSig, data])
+
+  // Shaded ONCE per field: the walk over up to 120 000 support points has no
+  // business in a re-render that only moved the view by a pixel.
+  const relief = useMemo(() => hillshadeUrl(height), [height])
+
   // The view: restored from localStorage, or fitted to the world once the
   // bounds and the pane size are known. The enlarge overlay (`autoFit`) always
   // fits and never writes the docked panel's view back.
@@ -456,6 +575,7 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
         <MapCanvas view={view} onViewChange={setView}>
           <GroundLayer bounds={bounds} color={groundColor} />
           <TerrainAreas areas={terrain?.areas || []} types={types} />
+          {relief && height ? <ReliefLayer relief={relief} field={height} /> : null}
           <Footprints locations={data.locations} currentId={current}
             events={data.events_by_location || {}} labelMode={labelMode} />
           <TravelLines chars={data.characters} />

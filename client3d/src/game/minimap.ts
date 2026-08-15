@@ -19,6 +19,7 @@
  * in `hud/Minimap.tsx` only strokes what these functions return, and `main.ts`
  * only publishes the inputs.
  */
+import type { HillshadeImage } from '@anima/scene-render';
 import type { WorldBounds } from '../types';
 
 /** A world point on the ground plane, `[x, z]` in metres — the shape the
@@ -41,6 +42,27 @@ export interface MinimapDot {
 }
 
 /**
+ * The world RELIEF as a finished shading layer, plus where its rectangle sits.
+ *
+ * The image comes from `hillshadeImage` (`@anima/scene-render`) — the same
+ * routine, the same lamp and the same `MAP_RELIEF_Z_FACTOR` the 2D player map
+ * shades with. `main.ts` computes it ONCE per height revision, not per publish:
+ * the walk goes over every support point of the world, while this slice is
+ * republished four times a second.
+ *
+ * The geometry travels with it because the image alone says nothing about where
+ * it belongs: pixel `(i, j)` is the support point
+ * `(origin_x + i·step_m, origin_z + j·step_m)`, row 0 being the smallest z, the
+ * NORTHERNMOST line.
+ */
+export interface MinimapRelief {
+  image: HillshadeImage;
+  origin_x: number;
+  origin_z: number;
+  step_m: number;
+}
+
+/**
  * The bus slice `main.ts` publishes and `Minimap.tsx` draws. Everything the
  * picture needs and nothing else — the component asks no question of the
  * scene, and the scene renders no pixel of the map.
@@ -48,6 +70,9 @@ export interface MinimapDot {
 export interface MinimapState {
   /** painted terrain, BOTTOM TO TOP (list order = the server's z order) */
   areas: MinimapArea[];
+  /** the relief over the painted ground, or null while the world is flat or
+   *  its field has not arrived */
+  relief: MinimapRelief | null;
   /** the places the avatar knows about */
   locations: MinimapDot[];
   /** the avatar's metre position, or null while no figure stands on the map */

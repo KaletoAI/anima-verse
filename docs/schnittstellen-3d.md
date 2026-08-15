@@ -2425,9 +2425,30 @@ Aufschlag von rund einem Drittel entsteht je zur Hälfte aus „welche Art liegt
 oben" und der Rausch-Auswertung; er fällt auf dem SCHREIB-Pfad an, nie beim
 Laufen.
 
-**Was hier NICHT passiert:** der 2D-Spielerkarte fehlt das Relief in v1
-bewusst; der Editor zeigt Höhenflächen als eigene Ebene mit Zahl-Label, ohne
-Hillshade.
+**Die 2D-Karten schattieren das Relief** (seit 2026-08-15). Spielerkarte
+(`frontend/src/player/MapPanel.tsx`) und Minimap des 3D-Clients
+(`client3d/src/hud/Minimap.tsx`) legen dieselbe Schattierung über ihre
+Terrain-Farben: `hillshadeImage()` aus `@anima/scene-render` — Normale aus dem
+Höhen-Gradienten, Licht aus Nordwest (Azimut 315°, Höhe 45°), neutrales Grau
+moduliert, Alpha proportional zur Hangneigung (maximal 0,35; **ebener Grund
+schreibt Alpha 0**, eine flache Welt sieht also exakt aus wie zuvor). Beide
+rufen mit `MAP_RELIEF_Z_FACTOR` = 3, der kartografischen Überhöhung: die Quelle
+ist die **Übersicht** (`GET /play/heightfield`, § A16.3 — ein Leser fragt
+entweder Kacheln oder Übersicht, und eine Karte ist die Fernsicht), die bis auf
+32 m pro Zelle vergröbert; ohne Überhöhung bleibt ein 5-m-Hügel dort rund eine
+von 255 Stufen und damit unsichtbar. Nachgeladen wird **nur bei Wechsel von
+`height_sig`**, über den jeweils schon vorhandenen Worldmap-Poll — kein
+eigener Poll, kein Regler, kein Server-Code. Die Mathe liegt einmal im
+geteilten Paket, die Verbraucher entscheiden nur, wo das fertige Rechteck
+landet (ihre eigene Karten-Projektion, `drawImage`/`<image>` mit Glättung);
+Zeile 0 des Bildes ist die nördlichste Gitterlinie und landet in beiden
+Projektionen oben, ohne Achsen-Spiegelung.
+
+**Was hier NICHT passiert:** der Karten-EDITOR bleibt bewusst ohne Hillshade —
+er zeigt Höhenflächen als eigene Ebene mit Zahl-Label
+(`frontend/src/tabs/map/HeightLayer.tsx`), weil ein schattiertes Bild eine
+zweite, hübschere Antwort auf „wie hoch ist es hier" wäre, die niemand mit der
+Zahl vergleichen kann, die die Regeln benutzen.
 
 **Verifikation:** `scripts/smoke_heightfield.py` (Rasterung, Rampe,
 Überlappung inkl. Senke, Sanitizer-Klemmen, Signatur/Store/`ground_y`, die
@@ -2442,7 +2463,9 @@ Reader-Klemmen und die rote Gegenprobe mit vertauschten Durchgängen), der
 Sanitizer der beiden Katalog-Felder in `scripts/smoke_terrain_types.py` [9],
 plus die `.mjs`-Tabelle des geteilten Samplers
 (`client3d/scripts/smoke_world_height.mjs`, Abschnitt [4] die kombinierte
-Höhenquelle des Client-Spiegels) und die Gitter-/Drape-Mathe in
+Höhenquelle des Client-Spiegels), die handgerechnete Schattierungs-Tabelle
+(`client3d/scripts/smoke_hillshade.mjs` — Lampe, Rampen, Gipfel, Überhöhung und
+die roten Gegenproben gegen vertauschte Achse und gespiegelten Gradienten) und die Gitter-/Drape-Mathe in
 `client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt
 inkl. Naht-Gegenprobe, Kontur-Zelle gegen die gemessene Plattenfläche,
 Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung). Regel und Routing:
