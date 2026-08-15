@@ -2822,7 +2822,7 @@ stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
 der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
 darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
 zurück; Zahlen stehen NIE im `message`, sondern in eigenen Feldern, weil der
-Satz als Ganzes übersetzt wird). Heute gibt es zwei:
+Satz als Ganzes übersetzt wird). Heute gibt es drei:
 
 - **`no_building_entrance`** — die Location hat eine Kontur, mindestens ein
   Raum MIT HÜLLE steht auf Etage 0 (eine Kontur über lauter
@@ -2836,6 +2836,13 @@ Satz als Ganzes übersetzt wird). Heute gibt es zwei:
   `shell_levels` leer und `no_building_entrance` schweigt: die gezeichnete
   Kontur stünde still über gar nichts. `room_count` nennt die Zahl der Räume;
   der GROUND-Raum zählt nie mit, er trägt vertraglich kein Layout.
+- **`openings_without_walls`** (Diagnose 2026-08-15) — mindestens ein Raum hat
+  Öffnungen im Layout, bekommt aber wegen `no_walls` (bzw. Outdoor
+  `always_visible`) gar keine Wände: Tür, Fenster, Glas und Schwelle
+  entstehen nirgends, während die 2D-Planzeichnung sie weiter zeigt. Ein
+  wandloser Raum OHNE Öffnungen ist erlaubt (offene Zone, Pavillon) und
+  bleibt still — nur die Kombination meldet sich, einmal pro Location mit
+  `room_count` der betroffenen Räume.
 
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
 Fenster-Brüstung/-Sturz/Glas als eigene `walls`-Einträge, Türlücken der

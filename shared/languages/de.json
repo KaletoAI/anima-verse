@@ -1300,6 +1300,7 @@
     "Room name:": "Raum-Name:",
     "Room width (m)": "Raum-Breite (m)",
     "Rooms": "Räume",
+    "Rooms have doors or windows drawn, but their walls are switched off — nothing of it is built in 3D. Check 'Render walls' in the room layout.": "In Räumen sind Türen oder Fenster eingezeichnet, ihre Wände sind aber abgeschaltet — davon wird in 3D nichts gebaut. Im Raum-Layout „Render walls“ prüfen.",
     "Rooms on this level: {n}": "Räume auf dieser Etage: {n}",
     "Rotate the map icon 90° inside the footprint": "Das Kartensymbol um 90° innerhalb der Grundfläche drehen",
     "Rotation": "Drehung",

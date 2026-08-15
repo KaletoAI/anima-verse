@@ -534,6 +534,66 @@ def test_rooms_without_layout() -> None:
           == [("rooms_without_layout", 1)], str(with_ground["problems"]))
 
 
+def test_openings_without_walls() -> None:
+    print("\n[4h] problems — openings drawn into a room whose walls are off")
+    # The trap of 2026-08-15: the author unticked "Render walls" on every room
+    # while doors and windows stayed authored. The 2D plan keeps drawing them,
+    # 3D builds nothing — and nothing said so. Room "a" of the fixture carries
+    # exactly 2 openings (window north, door south to outside).
+    loc = fixture()
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["no_walls"] = True
+    blind = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    check("exactly one problem, kind openings_without_walls, at the location",
+          [(p["kind"], p.get("location_id")) for p in blind["problems"]]
+          == [("openings_without_walls", "loc")], str(blind["problems"]))
+    check("...counting the one room, with a message for the surfaces to show",
+          blind["problems"][0].get("room_count") == 1
+          and bool(blind["problems"][0].get("message")),
+          str(blind["problems"][0]))
+    # THE regression guard of this bug: what the finding claims must be true
+    # of the geometry. Walls off ⇒ not one threshold, not one pane.
+    check("...and it is true: no doorway and no glass exist",
+          not blind["doorways"]
+          and not [w for w in blind["walls"] if w.get("glass")],
+          f"{len(blind['doorways'])} doorways, "
+          f"{len([w for w in blind['walls'] if w.get('glass')])} panes")
+    # Counter-check: walls back on ⇒ the finding goes AND the very same two
+    # openings become geometry — the door a threshold, the window a glass
+    # segment between sill and head.
+    walled = scene()
+    check("walls on ⇒ the finding is gone",
+          walled["problems"] == [], str(walled["problems"]))
+    check("...and the door builds a threshold, the window a pane",
+          len(walled["doorways"]) == 1
+          and len([w for w in walled["walls"] if w.get("glass")
+                   and w.get("room_id") == "a"]) == 1,
+          f"{len(walled['doorways'])} doorways, "
+          f"{len([w for w in walled['walls'] if w.get('glass')])} panes")
+    # A wall-less room WITHOUT openings is a legal open zone (pavilion, an
+    # area inside an area model) — the combination is the trap, not the flag.
+    bare = scene_recipe.compose_scene(
+        {**fixture(), "rooms": [{"id": "a", "name": "A", "layout": {
+            "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0,
+            "no_walls": True}}]}, plan_width_m=PLAN_W)
+    check("a wall-less room without openings stays silent",
+          bare["problems"] == [], str(bare["problems"]))
+    # The outdoor zone loses its walls the same way (§ A5), so a door drawn
+    # into one is the same trap. The fixture's own openings-free "garden"
+    # never spoke up in any of the cases above.
+    outdoor = scene_recipe.compose_scene(
+        {**fixture(), "rooms": [{"id": "garden", "name": "Garden", "layout": {
+            "x": 0.1, "y": 0.6, "w": 0.3, "d": 0.2, "level": 0,
+            "always_visible": True,
+            "openings": [{"edge": 0, "at": 0.5, "type": "door",
+                          "width_m": 1.0, "height_m": 2.1}]}}]},
+        plan_width_m=PLAN_W)
+    check("an OUTDOOR room with a drawn door reports the same way",
+          [(p["kind"], p.get("room_count")) for p in outdoor["problems"]]
+          == [("openings_without_walls", 1)], str(outdoor["problems"]))
+
+
 def test_contour_wall_texture() -> None:
     print("\n[4b] map3d.wall_kind textures the whole shell")
     plain = scene()
@@ -782,8 +842,9 @@ def test_no_walls() -> None:
     # A room without a shell has no wall, hence no door — and the hull takes
     # its holes from the doors. So the contour closes here (5 pieces before,
     # 4 whole edges now) instead of keeping the gap the door used to cut.
-    # There is nothing to report: no walled room is left on level 0, and an
-    # outdoor zone is not a building one puts a door into.
+    # `no_building_entrance` has nothing to report: no walled room is left on
+    # level 0, and an outdoor zone is not a building one puts a door into.
+    # The lost openings are what `openings_without_walls` says instead ([4h]).
     contour_before = [w for w in base["walls"] if not w.get("room_id")]
     contour = [w for w in sc["walls"] if not w.get("room_id")]
     check("the shell-less room takes its hull hole with it",
@@ -2013,6 +2074,7 @@ def main() -> int:
     test_contour_walls()
     test_no_building_entrance()
     test_rooms_without_layout()
+    test_openings_without_walls()
     test_contour_wall_texture()
     test_area_locations()
     test_elevator()

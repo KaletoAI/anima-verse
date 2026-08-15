@@ -975,6 +975,15 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
     Then nobody can get in, and since the "one door mid in the south wall"
     fallback is gone (§ 4.2) nothing hides it any more. The composer only
     states it; the floor-plan editor and the 3D client display it.
+
+    ``openings_without_walls`` — at least one room carries openings in its
+    layout while its walls are switched off (``no_walls``, or the outdoor
+    ``always_visible``). ``_room_wall_edges`` yields nothing for such a room,
+    so door, window, glass and threshold all silently cease to exist in 3D —
+    while the 2D floor plan keeps drawing the very openings the author
+    authored. A wall-less room WITHOUT openings is perfectly legal (open
+    zone, pavilion) and stays quiet; only the combination is the trap. Fires
+    once per location, with the number of affected rooms as its own field.
     """
     out: List[Dict[str, Any]] = []
     from app.models.world import GROUND_ROOM_ID
@@ -1006,6 +1015,20 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
             "message": "No outside door on the ground floor: this building "
                        "cannot be entered from outside. Draw a door leading "
                        "outside on one of its ground-floor rooms.",
+        })
+    # Openings drawn into a room whose walls are off: the recipe carries them,
+    # but no wall is ever split there, so nothing of them is built.
+    wall_less = [r for r in recipes
+                 if (r.get("no_walls") or r.get("always_visible"))
+                 and (r.get("openings") or [])]
+    if wall_less:
+        out.append({
+            "kind": "openings_without_walls",
+            "location_id": str(location.get("id") or ""),
+            "room_count": len(wall_less),
+            "message": "Rooms have doors or windows drawn, but their walls "
+                       "are switched off — nothing of it is built in 3D. "
+                       "Check 'Render walls' in the room layout.",
         })
     return out
 

@@ -268,16 +268,19 @@ export interface SceneDoorway {
  *  `kind` is the stable key (`no_building_entrance` = a hull with rooms but no
  *  door leading outside — the old "one door mid in the south wall" fallback is
  *  gone; `rooms_without_layout` = a contour whose rooms ALL lack a layout, so
- *  nothing is composed inside it at all). `message` is the server's English
- *  wording; a surface may translate a kind it knows and falls back to this
- *  text. Numbers never sit in `message` — it is translated as a whole
- *  sentence — so they come as their own fields (`room_count`). */
+ *  nothing is composed inside it at all; `openings_without_walls` = rooms with
+ *  drawn openings whose walls are switched off, so none of them is built).
+ *  `message` is the server's English wording; a surface may translate a kind
+ *  it knows and falls back to this text. Numbers never sit in `message` — it
+ *  is translated as a whole sentence — so they come as their own fields
+ *  (`room_count`). */
 export interface SceneProblem {
   kind: string
   location_id?: string
   room_id?: string
   message: string
-  /** `rooms_without_layout`: how many rooms the location has. */
+  /** `rooms_without_layout`: how many rooms the location has.
+   *  `openings_without_walls`: how many rooms are affected. */
   room_count?: number
 }
 
