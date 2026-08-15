@@ -991,7 +991,16 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
   // Heuristik (dominante Lage + Tür-Referenz) — bei modellierten Böden
   // (Podest, Löcher, versenkte Lounge) ist sie von außen nicht messbar.
   // Spots/Sitze filtern dann relativ zum deklarierten Boden.
-  if (declaredFloor !== undefined) floor = declaredFloor;
+  //
+  // IM RAHMEN DER TREFFER, nicht im Rahmen des Payloads: `floor` ist bis hier
+  // eine WELT-Höhe (Strahl-Treffer) und wird auch als solche weitergegeben
+  // (Steh-Spots, Raummitte unten), während `walk_y_world` ein KACHEL-Meter ist
+  // — das Rezept rechnet um den Kachelboden y = 0, und die Kachel steht auf
+  // ihrem Plateau (E8 Task 4, dieselbe Lehre wie in `tileWalkY`). Ohne den
+  // Aufschlag fände der Spot-Filter unten auf jedem Plateau keine einzige
+  // Probe mehr (Deklaration still wirkungslos), und bei kleinem Plateau sänke
+  // die Raummitte um genau die Plateauhöhe ein.
+  if (declaredFloor !== undefined) floor = tile.center.y + declaredFloor;
   const spots = samples
     .filter((s) => Math.abs(s.p.y - floor) < 0.12)               // eben genug = begehbar
     .sort((a, b) => a.p.distanceToSquared(base) - b.p.distanceToSquared(base))

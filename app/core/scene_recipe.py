@@ -801,8 +801,14 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     A doorway is EXACTLY the gap an opening cuts out of a wall — same source,
     same clamp (``_room_wall_edges``), no second derivation. Hence ``width_m``
     is the CLEAR width after the edge clamp, not the authored width for
-    anyone to re-clamp, and ``base_y`` is the foot of the wall the gap
-    belongs to. The consumer rule is: nothing is recalculated.
+    anyone to re-clamp. The consumer rule is: nothing is recalculated.
+
+    ``base_y`` LEAVES this function as the foot of the wall the gap belongs to
+    and is the finished number only after :func:`compose_scene` has run
+    :func:`threshold_base_y` over it — the payload's ``base_y`` is the STANDING
+    height of the adjoining rooms (§ B doorways), and where a room diorama
+    declares one, that is not knowable here: it lives on the model spec, which
+    is composed later.
 
     ONE gap in the wall = ONE entry. Two candidates are the same hole when all
     three of ``_same_gap`` hold: same wall DIRECTION, the two wall faces no

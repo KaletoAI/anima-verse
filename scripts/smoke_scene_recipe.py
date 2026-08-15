@@ -1112,11 +1112,13 @@ def test_threshold_base_y() -> None:
     check("two rooms: the HIGHER standing height wins — 0.10 vs 0.177 → 0.177",
           near(tby([(0.10, None), (0.10, 0.177)]), 0.177),
           str(tby([(0.10, None), (0.10, 0.177)])))
-    # Red counter-check: the other end of the same pair. One steps OVER a
-    # threshold, so the low side must NOT win — with `min` the kitchen door
-    # would sit 7.7 cm inside the kitchen floor.
-    check("...and it is really the maximum: min would answer 0.10",
-          not near(min(0.10, 0.177), 0.177), str(min(0.10, 0.177)))
+    # Red counter-check on the REAL function: one steps OVER a threshold, so
+    # the low side must not win. A `min` in there would answer 0.10 and put the
+    # kitchen door 7.7 cm inside the kitchen floor — this check falls over the
+    # moment it does.
+    check("...and the low side does NOT win — the function never answers 0.10",
+          not near(tby([(0.10, None), (0.10, 0.177)]), 0.10),
+          str(tby([(0.10, None), (0.10, 0.177)])))
     check("a declaration BELOW the foot is still the standing height",
           near(tby([(0.10, 0.05)]), 0.05), str(tby([(0.10, 0.05)])))
     check("no side at all is 0, never a crash", near(tby([]), 0.0))
@@ -1176,6 +1178,22 @@ def test_threshold_base_y() -> None:
           "m.baseY + DOOR_MARK_LIFT" in src)
     check("...and hangs in the TILE frame, like the walls",
           "tile.group.add(root)" in src)
+    # Same error class, same pin (review 2026-08-16): the walkability sampler
+    # let a DECLARED `walk_y_world` — a tile metre — stand in for `floor`, which
+    # is a world ray hit and is written back as one (`center.setY`). On a tile
+    # whose plateau is 0.05 m the pool's declared 0.12 sank the room centre to
+    # 0.13 instead of 0.17; on a high plateau the spot filter (|y − floor| <
+    # 0.12) matched nothing at all and the declaration was silently dropped.
+    # The sampler raycasts a THREE scene, so there is nothing pure to compute
+    # here — the conversion is pinned instead.
+    tiles_ts = (Path(__file__).resolve().parents[1]
+                / "client3d" / "src" / "scene" / "tiles.ts")
+    tsrc = tiles_ts.read_text(encoding="utf-8") if tiles_ts.exists() else ""
+    check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
+    check("the declared walk height enters the sampler as a WORLD height",
+          "floor = tile.center.y + declaredFloor" in tsrc)
+    check("...and never raw, in the payload's own frame",
+          "floor = declaredFloor" not in tsrc)
 
 
 def test_elevator() -> None:
