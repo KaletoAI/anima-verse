@@ -67,8 +67,9 @@ import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
-import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
-import { isWaterClass } from './naturalGroundMath';
+import { applyNaturalGround, NG_EDGE_ATTRIBUTE,
+  setNaturalGroundField } from './naturalGround';
+import { isWaterClass, ngRefineEdgeBand } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
@@ -1057,9 +1058,15 @@ export function createGround(): Ground {
    * `uvScaleM` is how many metres one UV unit spans: the shape geometry's UVs
    * ARE the world coordinates (1 unit = 1 m), the base plane's run 0..1 over
    * its whole edge.
+   *
+   * `edgeFade` is for the painted-area DRAPES alone: their geometry carries
+   * the distance to their own ring (`drapeArea`), so their material may fade
+   * out along it. The base plate has no ring and no such attribute — it is
+   * what the drapes fade out ONTO, and it stays opaque.
    */
   function materialFor(kind: string, uvScaleM: number,
-                       sink: { dispose(): void }[]): THREE.Material {
+                       sink: { dispose(): void }[],
+                       edgeFade = false): THREE.Material {
     const lib = surfaceFor(kind, 'wall');
     const spec: SurfaceMaterialSpec | null = surfaceMaterialSpec(kind);
     let map: THREE.Texture | null = null;
@@ -1087,8 +1094,11 @@ export function createGround(): Ground {
     // full shader of their own — scrolling normal maps, sky fresnel, roughness
     // mask — and a second sample of the water texture blended into it would
     // fight every one of them. It is the CLASS that decides, never the colour
-    // or the kind's name (`isWaterClass`).
-    if (!isWaterClass(spec?.class)) applyNaturalGround(mat);
+    // or the kind's name (`isWaterClass`). It also means a painted lake keeps
+    // a HARD shore: the soft edge rides on this patch, and water is out of it
+    // — a shoreline that dissolved into the meadow behind it would be a bank
+    // nobody could see, and the water shader is where a shore would belong.
+    if (!isWaterClass(spec?.class)) applyNaturalGround(mat, edgeFade);
     sink.push(mat);
     return mat;
   }
@@ -2071,24 +2081,46 @@ export function createGround(): Ground {
    * world metres and the cut interpolates them linearly — a texture that ran
    * seamlessly across an area border still does.
    *
-   * The input geometry is consumed: it is either handed back untouched (a flat
-   * world subdivides nothing) or disposed here, because from that moment on
-   * nothing else knows about it.
+   * AND IT CARRIES ITS OWN RIM. Every vertex gets the distance to the nearest
+   * edge of the area's ring as the `aEdgeDist` attribute, which is what lets
+   * the ground shader fade the area out over its last metre and a half
+   * (`scene/naturalGround.ts`, stage 4) instead of ending it on a drawn line.
+   * The ring is known HERE and nowhere else — the fragment shader has no idea
+   * what shape it is drawing — and the same pass refines the triangles
+   * wherever that distance cannot be interpolated across one
+   * (`ngRefineEdgeBand`): a flat world's earcut triangles have all three
+   * corners ON the ring, and a linear reading of "0, 0, 0" would fade the
+   * whole area away. The refinement happens AFTER the lift, so it splits the
+   * drape's own planes and describes the very same surface.
+   *
+   * The input geometry is consumed: it is read out and disposed here, because
+   * from that moment on nothing else knows about it.
    */
-  function drapeArea(flat: THREE.BufferGeometry): THREE.BufferGeometry {
+  function drapeArea(flat: THREE.BufferGeometry,
+                     ring: readonly Point2[]): THREE.BufferGeometry {
     const ov = relief.overview;
-    if (!(cellM > 0) || !ov) return flat;
     const src = flat.index ? flat.toNonIndexed() : flat;
     const pos = Array.from(src.getAttribute('position').array as ArrayLike<number>);
     const uvAttr = src.getAttribute('uv');
     const uv = uvAttr ? Array.from(uvAttr.array as ArrayLike<number>) : null;
     if (src !== flat) src.dispose();
     flat.dispose();
-    const cut = subdivideOnGrid(pos, uv, cellM, ov.origin_x, ov.origin_z);
-    liftToField(cut.pos);
+    // The relief cut, when there is a relief: without one the earcut triangles
+    // go into the band refinement as they are — they lie flat, and flat is the
+    // one thing a subdivision would not change about them.
+    let cutPos = pos;
+    let cutUv = uv;
+    if (cellM > 0 && ov) {
+      const cut = subdivideOnGrid(pos, uv, cellM, ov.origin_x, ov.origin_z);
+      cutPos = cut.pos;
+      cutUv = uv ? cut.uv : null;
+      liftToField(cutPos);
+    }
+    const band = ngRefineEdgeBand(cutPos, cutUv, ring);
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(cut.pos, 3));
-    if (uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(cut.uv, 2));
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(band.pos, 3));
+    if (band.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(band.uv, 2));
+    geo.setAttribute(NG_EDGE_ATTRIBUTE, new THREE.Float32BufferAttribute(band.dist, 1));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     return geo;
@@ -2116,11 +2148,23 @@ export function createGround(): Ground {
       if (!built) return;   // a ring that encloses nothing has nothing to draw
       // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
       // so the texture runs seamlessly across area borders.
-      const mesh = new THREE.Mesh(drapeArea(built.geometry),
-                                  materialFor(area.kind, 1, nextOwned));
+      const mesh = new THREE.Mesh(drapeArea(built.geometry, built.ring),
+                                  materialFor(area.kind, 1, nextOwned, true));
       mesh.receiveShadow = true;
       // LIST ORDER decides what covers what — the server sorted the areas
       // bottom to top (z_order, then paint order), so the index IS the layer.
+      //
+      // AND SINCE THE FRINGE, that order is also the BLEND order. The drapes
+      // are transparent materials now (`applyNaturalGround`, stage 4), so
+      // three draws them after everything opaque — the base plate first of all,
+      // which is what the lowest area's rim fades onto — and within that pass
+      // `renderOrder` beats the distance sort, so area 1 is on the screen
+      // before area 2 blends over it. Nothing here changes about DEPTH: the
+      // drapes still write it, still ride the `polygonOffset` ladder below and
+      // still sit on the sub-millimetre y ladder, which together are what keeps
+      // coplanar ground from z-fighting. A transparent material that stopped
+      // writing depth would gain nothing (the pass is already ordered) and
+      // would lose the ground its occlusion of what is drawn after it.
       mesh.renderOrder = index + 1;
       const mat = mesh.material as THREE.Material;
       const bias = -Math.min((index + 1) * AREA_POLYGON_OFFSET, AREA_OFFSET_MAX);

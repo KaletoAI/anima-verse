@@ -23,6 +23,12 @@
  *                   against the fragment's own height: lower than its
  *                   surroundings darkens by up to 12 %, higher brightens by up
  *                   to 6 %.
+ *   (4) SOFT EDGE   a painted area fades out over the last 1.5 m of itself
+ *                   along a noise-shifted line, so what lies under it comes
+ *                   through instead of a drawn border. The distance to the
+ *                   area's ring is a per-vertex attribute (`aEdgeDist`), and
+ *                   only a material that HAS that attribute may compile the
+ *                   branch — the base plate must not.
  * The amplitudes live in `naturalGroundMath.ts` and the GLSL is PRINTED out of
  * them, so a hand check on the function and a string check on the composed
  * shader measure one number rather than two copies of it.
@@ -135,7 +141,33 @@
  * not import any of this (view polish is not geometry, § B2).
  *
  * ---------------------------------------------------------------------------
- * [8] THE RED COUNTER-CHECKS — four mutants, four losses
+ * [9] THE SOFT EDGE — the band, the attribute, the two programs
+ * ---------------------------------------------------------------------------
+ * The band by hand, on `ngEdgeAlpha`: 0 at the ring, 0.15625 a quarter of the
+ * way in, 0.5 at 0.75 m (the smoothstep of a half is a half, exactly), 0.84375
+ * at three quarters, 1 from 1.5 m — and 1 from 2 m WHATEVER the noise does,
+ * which is what "the core is opaque" means as a number. The noise moves the
+ * edge by half a metre either way: at 0.75 m it reads 0.925926 with the noise
+ * at 1 and 0.074074 with it at 0.
+ * The distance itself: to a SEGMENT and not to its line, over a CLOSED ring
+ * (the edge from the last corner back to the first is an edge).
+ * THE REFINEMENT is checked on the case that makes it necessary — a flat
+ * world's earcut triangles, whose every corner lies on the ring. Unrefined,
+ * the interpolated distance is 0 across the whole face and the area would fade
+ * away completely; refined, the middle of it is opaque and a point 0.75 m in
+ * still reads 0.75. Reading it the way the GPU does (barycentric, in the
+ * triangle the point falls in) is the point: corners are not the question.
+ * The surface must not move (a tilted plane comes back exactly), the winding
+ * must not flip (a flipped piece is a hole), and the whole thing must stay
+ * cheap.
+ * THE TWO PROGRAMS: the drape carries the `NG_EDGE_FADE` define, is
+ * transparent and says so in its cache key; the base plate has none of the
+ * three and therefore never compiles the branch that reads an attribute it
+ * has not got. Both still WRITE depth — the coplanar `renderOrder` +
+ * `polygonOffset` ladder of `ground.ts` rests on that.
+ *
+ * ---------------------------------------------------------------------------
+ * [8] THE RED COUNTER-CHECKS — eight mutants, eight losses
  * ---------------------------------------------------------------------------
  * (a) ASSIGNMENT INSTEAD OF CHAIN. The bundle is rebuilt with the line that
  *     calls the previous callback deleted. Fed a material that already carries
@@ -151,6 +183,19 @@
  * (d) THE FLAT WORLD. The neutrality test drops out of `setNaturalGroundField`,
  *     so a world nobody has shaped is shaded against its own zero — the mutant
  *     answers strength 1 for the very field the truth answers 0 for.
+ * (e) THE HALF TEXEL. `+ 0.5` drops out of the world -> UV mapping, which puts
+ *     every support point on a texel CORNER and slides the whole shading half
+ *     a support cell. This is the mutant the mapping was made a function for:
+ *     while the line stood twice, one copy could lose it and every string
+ *     check still found the other.
+ * (f) THE BAND REFINEMENT gives up before its first pass. A coarse drape then
+ *     reports "edge" in its middle, i.e. alpha 0 — the area vanishes where the
+ *     truth is fully opaque.
+ * (g) THE FRINGE ITSELF: the alpha line goes and the area ends on the drawn
+ *     line of its polygon again, with everything else about the patch intact.
+ * (h) AN UNPRINTABLE CONSTANT (1.505 m). The module must refuse to LOAD;
+ *     without the assert `toFixed` would round it to 1.51 and the shader would
+ *     spend a different number than the maths does.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -205,6 +250,7 @@ async function loadClient(mutate) {
   const dir = await mkdtemp(join(ROOT, 'client3d/scripts/.smoke-'));
   try {
     const entry = 'export { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY,\n'
+      + '  NG_EDGE_ATTRIBUTE, NG_EDGE_CACHE_KEY, NG_EDGE_DEFINE, ngLit,\n'
       + '  ngHeightTex, ngField, ngFieldSize, ngStrength }\n'
       + `  from '${NG_SRC}';\n`
       + `export { patchHole, HOLE_CACHE_KEY } from '${GROUND_SRC}';\n`
@@ -286,6 +332,41 @@ function shadeTheFlatWorld(text) {
   return text.replace(test, 'if (false) {');
 }
 
+/** Section [8e]'s mutant, and the reason the mapping stands in a function at
+ *  all: the HALF TEXEL drops out of the world -> UV line. Support point i then
+ *  addresses the corner of texel i instead of its centre and the whole shading
+ *  slides half a support cell — a lie no screenshot shows. */
+function dropTheHalfTexel(text) {
+  const line = '( ( p - uNgField.xy ) / uNgField.z + 0.5 ) / uNgFieldSize';
+  if (!text.includes(line)) throw new Error('the field mapping is no longer where the probe looks');
+  return text.replace(line, '( ( p - uNgField.xy ) / uNgField.z ) / uNgFieldSize');
+}
+
+/** Section [8f]'s mutant: the band refinement gives up before its first pass,
+ *  so a drape keeps the triangles it came in with. */
+function refineNothing(source) {
+  const line = 'export const NG_EDGE_PASSES = 8;';
+  if (!source.includes(line)) throw new Error('the pass budget is no longer where the probe looks');
+  return source.replace(line, 'export const NG_EDGE_PASSES = 0;');
+}
+
+/** Section [8g]'s mutant: the alpha line goes, and with it the whole fringe —
+ *  the area ends on the drawn line of its polygon again. */
+function dropTheFringe(text) {
+  const line = 'diffuseColor.a *= smoothstep( 0.0, ';
+  if (!text.includes(line)) throw new Error('the fringe line is no longer where the probe looks');
+  return text.replace(line, 'diffuseColor.rgb *= vec3( 1.0 ); // ');
+}
+
+/** Section [8h]'s mutant: a constant that two decimals cannot print. The
+ *  module must refuse to LOAD; without the assert `toFixed` would round it and
+ *  the shader would fade over 1.51 m while the maths says 1.505. */
+function unprintableConstant(text) {
+  const line = 'NG_EDGE_BAND_M = 1.5;';
+  if (!text.includes(line)) throw new Error('the band width is no longer where the probe looks');
+  return text.replace(line, 'NG_EDGE_BAND_M = 1.505;');
+}
+
 /** The stub shader: three's own anchor lines, in three's own order, and
  *  nothing else. What the patches do to these strings is the whole subject. */
 function stubShader() {
@@ -318,6 +399,13 @@ const NG_MARKS = [
   ['frag', 'uniform sampler2D uNgHeight;'],
   ['frag', 'uniform float uNgStrength;'],
   ['frag', 'varying vec2 vNgWorld;'],
+  // THE WORLD -> FIELD MAPPING, in ONE function and with the half texel in it.
+  // Both readers go through this; a second copy of the line is a second chance
+  // to lose the `+ 0.5` and shift the whole shading by half a support cell,
+  // which is what the mutant of [8e] measures.
+  ['frag', 'vec2 ngFieldUvOf( vec2 p ) {'],
+  ['frag', 'return ( ( p - uNgField.xy ) / uNgField.z + 0.5 ) / uNgFieldSize;'],
+  ['frag', 'return texture2D( uNgHeight, ngFieldUvOf( p ) ).r;'],
   // the value noise, over WORLD metres and out of a hash — no second image
   ['frag', 'return fract( sin( dot( p, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );'],
   // (1) the second sample: 0.23x the scale, half a UV across, blended at most
@@ -332,15 +420,23 @@ const NG_MARKS = [
   ['frag', 'diffuseColor.rgb *= 1.0 + 0.08 * ngTint;'],
   ['frag', 'float ngLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );'],
   ['frag', 'diffuseColor.rgb = mix( vec3( ngLum ), diffuseColor.rgb, 1.0 + 0.08 * ngSat );'],
-  // (3) the four taps of the 3 m ring, the span, and THE SIGN
+  // (3) the taps of the 3 m ring, the span, and THE SIGN. The taps themselves
+  //     are checked against `ngAoTaps()` in [1] instead of being copied here.
   ['frag', 'if ( uNgStrength > 0.0 ) {'],
-  ['frag', 'vec2 ngRing = vec2( 3.00 );'],
   ['frag', 'float ngOwn = ngHeightAt( vNgWorld );'],
-  ['frag', 'float ngAround = 0.25 * ( ngHeightAt( vNgWorld + vec2( ngRing.x, 0.0 ) )'],
   ['frag', 'float ngT = clamp( ( ngAround - ngOwn ) / 2.00, -1.0, 1.0 );'],
   ['frag', 'float ngShade = ngT > 0.0 ? -0.12 * ngT : -0.06 * ngT;'],
+  ['frag', 'vec2 ngUv = ngFieldUvOf( vNgWorld );'],
   ['frag', 'diffuseColor.rgb *= 1.0 + ngShade * uNgStrength * ngIn;'],
   ['frag', 'diffuseColor.rgb = clamp( diffuseColor.rgb, 0.0, 1.0 );'],
+  // (4) the soft edge. The lines are PRINTED on every ground material and the
+  //     `NG_EDGE_FADE` define decides who compiles them — see [9].
+  ['vert', 'attribute float aEdgeDist;'],
+  ['vert', 'varying float vNgEdge;'],
+  ['vert', 'vNgEdge = aEdgeDist;'],
+  ['frag', 'varying float vNgEdge;'],
+  ['frag', 'float ngEdgePush = ( ngNoise( vNgWorld / 2.00 + vec2( 5.0, 23.0 ) ) * 2.0 - 1.0 ) * 0.50;'],
+  ['frag', 'diffuseColor.a *= smoothstep( 0.0, 1.50, vNgEdge + ngEdgePush );'],
 ];
 const NG_UNIFORMS = ['uNgHeight', 'uNgField', 'uNgFieldSize', 'uNgStrength'];
 /** What `patchHole` writes — the predecessor the chain has to keep (the lines
@@ -381,18 +477,66 @@ const allOf = (marks) => marks.map(([, text]) => text);
 /** Shading terms to four decimals — these are shares of an albedo, and
  *  comparing raw doubles would only measure the division by the span. */
 const q = (v) => Math.round(v * 10000) / 10000;
+/** …and six, where the hand value is a smoothstep of thirds (0.925926). */
+const q6 = (v) => Math.round(v * 1e6) / 1e6;
+
+/** A plane over the ground, for the check that the band refinement does not
+ *  move the surface: any tilt will do as long as it is not flat. */
+const tiltY = (x, z) => 3 + 0.1 * x + 0.2 * z;
+
+/**
+ * Read a refined drape the way the GPU does: find the triangle a point falls
+ * in and interpolate its vertex values barycentrically.
+ *
+ * That is the whole question the `aEdgeDist` attribute has to answer — not
+ * "what is at the corners" but "what does the fragment between them get" —
+ * and it is why the coarse-drape case in [9] is a check and not a hope.
+ */
+function sampleTri(band, x, z) {
+  for (let t = 0; t + 8 < band.pos.length; t += 9) {
+    const ax = band.pos[t]; const az = band.pos[t + 2];
+    const bx = band.pos[t + 3]; const bz = band.pos[t + 5];
+    const cx = band.pos[t + 6]; const cz = band.pos[t + 8];
+    const det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(det) < 1e-12) continue;
+    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / det;
+    const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / det;
+    const l3 = 1 - l1 - l2;
+    if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+    const i = t / 3;
+    return { d: l1 * band.dist[i] + l2 * band.dist[i + 1] + l3 * band.dist[i + 2],
+             y: l1 * band.pos[t + 1] + l2 * band.pos[t + 4] + l3 * band.pos[t + 7] };
+  }
+  return null;
+}
+const sampleBand = (band, x, z) => sampleTri(band, x, z)?.d ?? NaN;
+const sampleBandY = (band, x, z) => sampleTri(band, x, z)?.y ?? NaN;
+
+/** Do all pieces of a refined drape run the same way round? A piece wound
+ *  against its parent faces down and is culled away — a hole in the ground. */
+function windings(band) {
+  const signs = new Set();
+  for (let t = 0; t + 8 < band.pos.length; t += 9) {
+    const cross = (band.pos[t + 3] - band.pos[t]) * (band.pos[t + 8] - band.pos[t + 2])
+      - (band.pos[t + 5] - band.pos[t + 2]) * (band.pos[t + 6] - band.pos[t]);
+    if (Math.abs(cross) > 1e-9) signs.add(Math.sign(cross));
+  }
+  return signs.size === 1 ? 'all one way' : `${signs.size} windings`;
+}
 
 async function main() {
   const THREE = await import('three');
   const { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY,
+    NG_EDGE_ATTRIBUTE, NG_EDGE_CACHE_KEY, NG_EDGE_DEFINE, ngLit,
     ngHeightTex, ngField, ngFieldSize, ngStrength,
     patchHole, HOLE_CACHE_KEY, isWaterClass, surfaceMaterial } = await loadClient();
   const M = await loadMath();
 
   /** One material through the patch(es), with its composed shader. */
-  function patched(before = null, mat = new THREE.MeshStandardMaterial({ color: 0x6a994e })) {
+  function patched(before = null, mat = new THREE.MeshStandardMaterial({ color: 0x6a994e }),
+                   edgeFade = false) {
     if (before) before(mat);
-    applyNaturalGround(mat);
+    applyNaturalGround(mat, edgeFade);
     const shader = stubShader();
     mat.onBeforeCompile(shader, null);
     return { mat, shader };
@@ -421,8 +565,28 @@ async function main() {
   check('the AO stands inside the strength guard (0 reads nothing)',
     meadow.shader.fragmentShader.indexOf('if ( uNgStrength > 0.0 ) {')
       < meadow.shader.fragmentShader.indexOf('float ngOwn ='), true);
-  check('…and the field is never sampled outside it',
-    meadow.shader.fragmentShader.split('ngHeightAt( vNgWorld').length - 1, 5);
+  // THE MAPPING, ONCE. Two readers need the world -> texture coordinate (the
+  // height itself and the "is the fragment over the raster at all" test), and
+  // the half texel in it is the difference between shading the hill and
+  // shading half a support cell beside it. One function, one occurrence of the
+  // arithmetic — counted, so a second copy cannot creep back in.
+  check('the world -> field mapping is written exactly ONCE',
+    meadow.shader.fragmentShader.split('- uNgField.xy').length - 1, 1);
+  check('…and both readers go through that one function',
+    meadow.shader.fragmentShader.split('ngFieldUvOf(').length - 1, 3);
+  // THE RING, out of `ngAoTaps` and not out of a shader somebody typed: the
+  // tap offsets, how many there are, and the divisor of their mean.
+  const tapLines = M.ngAoTaps()
+    .map(([dx, dz]) => `ngHeightAt( vNgWorld + vec2( ${dx.toFixed(2)}, ${dz.toFixed(2)} ) )`);
+  check('every tap of ngAoTaps() is read, at its own offset',
+    tapLines.filter((l) => meadow.shader.fragmentShader.includes(l)).length,
+    M.ngAoTaps().length);
+  check('…the mean divides by the LENGTH of that list, not by a typed 0.25',
+    meadow.shader.fragmentShader.includes(`float ngAround = ( 1.0 / ${M.ngAoTaps().length}.0 ) * (`),
+    true);
+  check('…and the field is read once per tap plus once for the fragment itself',
+    meadow.shader.fragmentShader.split('ngHeightAt( vNgWorld').length - 1,
+    M.ngAoTaps().length + 1);
   check('nothing of the colour work lands in the vertex shader',
     meadow.shader.vertexShader.includes('diffuseColor'), false);
   check('the cache key is the patch\'s own', meadow.mat.customProgramCacheKey(),
@@ -432,6 +596,23 @@ async function main() {
   const second = patched();
   check('a second material answers the SAME key (one program for all of them)',
     second.mat.customProgramCacheKey(), meadow.mat.customProgramCacheKey());
+  // THE PRINTER, and why it may print two decimals. `toFixed` rounds silently:
+  // a constant of 0.125 would reach the maths as 0.125 and the GPU as 0.13, and
+  // "one number" would quietly be two. So the printer refuses what it cannot
+  // print, at LOAD time — the mutant of [8h] is the other half of this.
+  check('the GLSL printer gives back exactly what it was handed',
+    [ngLit(0.5), ngLit(3), ngLit(-3), ngLit(0.08)], ['0.50', '3.00', '-3.00', '0.08']);
+  check('…and refuses a number two decimals would round',
+    (() => { try { ngLit(0.125); return 'printed'; } catch { return 'refused'; } })(), 'refused');
+  const ngSrc = await readFile(NG_SRC, 'utf8');
+  const imported = [...new Set((/import \{([\s\S]*?)\} from '\.\/naturalGroundMath'/
+    .exec(ngSrc)?.[1] ?? '').match(/NG_[A-Z0-9_]+/g) ?? [])].sort();
+  const swept = [...new Set((/const NG_PRINTED_AMOUNTS = \[([\s\S]*?)\];/
+    .exec(ngSrc)?.[1] ?? '').match(/NG_[A-Z0-9_]+/g) ?? [])].sort();
+  check('every amount the module imports is checked at load, and none is missing',
+    swept, imported);
+  check('…and there is more than a handful of them (the probe reads something)',
+    imported.length > 8, true);
 
   console.log('\n[2] the chain — basement hole and natural ground on one material');
   const drape = patched((m) => patchHole(m));
@@ -594,7 +775,7 @@ async function main() {
   console.log('\n[7] the wiring, pinned by reading the source');
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
   check('materialFor patches the hole first',
-    /patchHole\(mat\);\n(\s*\/\/[^\n]*\n)*\s*if \(!isWaterClass\(spec\?\.class\)\) applyNaturalGround\(mat\);/
+    /patchHole\(mat\);\n(\s*\/\/[^\n]*\n)*\s*if \(!isWaterClass\(spec\?\.class\)\) applyNaturalGround\(mat, edgeFade\);/
       .test(groundSrc), true);
   check('…and that is the only place it is applied',
     groundSrc.split('applyNaturalGround(').length - 1, 1);
@@ -610,6 +791,115 @@ async function main() {
   const shared = await readFile(join(ROOT, 'packages/scene-render/src/materials.ts'), 'utf8');
   check('…and the shared package knows nothing of it either',
     shared.includes('naturalGround'), false);
+  // WHO GETS THE FRINGE: the painted-area drapes, and the base plate does not.
+  check('the drape is built from its own ring and asks for the fringe',
+    /drapeArea\(built\.geometry, built\.ring\),\n\s*materialFor\(area\.kind, 1, nextOwned, true\)/
+      .test(groundSrc), true);
+  check('…while the base plate takes the material without one',
+    /materialFor\(kind, Math\.min\(w, d\), baseOwned\)/.test(groundSrc), true);
+  check('the drape writes the distance attribute the shader reads',
+    /geo\.setAttribute\(NG_EDGE_ATTRIBUTE, new THREE\.Float32BufferAttribute\(band\.dist, 1\)\)/
+      .test(groundSrc), true);
+  check('…out of the refinement, and after the lift (same surface, more triangles)',
+    /liftToField\(cutPos\);[\s\S]{0,200}?const band = ngRefineEdgeBand\(cutPos, cutUv, ring\);/
+      .test(groundSrc), true);
+
+  console.log('\n[9] the soft edge — the band, the attribute, the two programs');
+  check('at the ring the ground is gone, and half way through the band it is half there',
+    [M.ngEdgeAlpha(0), M.ngEdgeAlpha(0.75), M.ngEdgeAlpha(1.5)], [0, 0.5, 1]);
+  check('…a quarter and three quarters of the way, on the smoothstep curve',
+    [M.ngEdgeAlpha(0.375), M.ngEdgeAlpha(1.125)], [0.15625, 0.84375]);
+  check('…and the CORE is opaque, whatever the noise does to the edge',
+    [M.ngEdgeAlpha(M.NG_EDGE_OPAQUE_M, 0), M.ngEdgeAlpha(20, 0), M.ngEdgeAlpha(20, 1)],
+    [1, 1, 1]);
+  check('the noise moves the edge, and measurably',
+    [q6(M.ngEdgeAlpha(0.75, 1)), q6(M.ngEdgeAlpha(0.75, 0))], [0.925926, 0.074074]);
+  check('…by half a metre either way, which is what the opaque distance adds up from',
+    [M.NG_EDGE_BAND_M, M.NG_EDGE_NOISE_M, M.NG_EDGE_OPAQUE_M], [1.5, 0.5, 2]);
+  check('a distance is to the SEGMENT, not to its line (a corner measures as a corner)',
+    [M.ngSegmentDistance(0, 0, 1, -1, 1, 1), q6(M.ngSegmentDistance(0, 0, 1, 1, 2, 2)),
+      M.ngSegmentDistance(3, 4, 0, 0, 0, 0)],
+    [1, q6(Math.SQRT2), 5]);
+  const square = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  check('the ring is CLOSED — the edge from the last corner back to the first counts',
+    [M.ngEdgeDistance(5, 5, square), M.ngEdgeDistance(1, 5, square),
+      M.ngEdgeDistance(5, 0.75, square), M.ngEdgeDistance(0, 3, square),
+      M.ngEdgeDistance(9.5, 9.5, square)], [5, 1, 0.75, 0, 0.5]);
+  check('…and a ring with no edge at all is infinitely far from everywhere',
+    [M.ngEdgeDistance(1, 1, []), M.ngEdgeDistance(1, 1, null)], [Infinity, Infinity]);
+
+  // THE REFINEMENT, on the case that makes it necessary: a flat world's earcut
+  // triangles have EVERY corner on the ring, so an unrefined drape reads
+  // distance 0 across its whole face — the area would fade away completely.
+  const coarse = [0, 0, 0, 10, 0, 0, 10, 0, 10,
+                  0, 0, 0, 10, 0, 10, 0, 0, 10];
+  const band = M.ngRefineEdgeBand(coarse, null, square);
+  check('the coarse drape comes in with every corner on the ring',
+    [0, 1, 2, 3, 4, 5].map((n) => M.ngEdgeDistance(coarse[n * 3], coarse[n * 3 + 2], square)),
+    [0, 0, 0, 0, 0, 0]);
+  check('…and comes out with one distance per vertex',
+    band.dist.length, band.pos.length / 3);
+  check('the middle of the area is OPAQUE after the refinement',
+    sampleBand(band, 5, 5) >= M.NG_EDGE_OPAQUE_M, true);
+  check('…and the fringe of it still is the fringe, to the centimetre',
+    [q(sampleBand(band, 0.75, 5)), q(sampleBand(band, 5, 0.75)),
+      q(sampleBand(band, 9.25, 5))], [0.75, 0.75, 0.75]);
+  check('nothing moved: the refined mesh stays inside the ring it was cut from',
+    [Math.min(...band.pos.filter((_, i) => i % 3 === 0)),
+      Math.max(...band.pos.filter((_, i) => i % 3 === 0))], [0, 10]);
+  // The height is INTERPOLATED, never resampled: the drape arrives lifted onto
+  // the relief, and a midpoint lifted a second time would leave the plate.
+  const tilted = coarse.map((v, i) => (i % 3 === 1 ? tiltY(coarse[i - 1], coarse[i + 1]) : v));
+  const lifted = M.ngRefineEdgeBand(tilted, null, square);
+  check('the refinement describes the very same surface (the plane is preserved)',
+    [q(sampleBandY(lifted, 5, 5)), q(sampleBandY(lifted, 2.5, 7.5))],
+    [q(tiltY(5, 5)), q(tiltY(2.5, 7.5))]);
+  check('…and every piece keeps its parent\'s winding (a flipped one would be culled)',
+    windings(band), 'all one way');
+  check('the UVs are carried along when there are any',
+    M.ngRefineEdgeBand(coarse, coarse.filter((_, i) => i % 3 !== 1), square).uv.length,
+    (band.pos.length / 3) * 2);
+  check('…and stay null when there were none', band.uv, null);
+  check('a triangle deep inside a huge area is not touched at all',
+    M.ngRefineEdgeBand([100, 0, 100, 200, 0, 100, 200, 0, 200], null,
+      [[0, 0], [1000, 0], [1000, 1000], [0, 1000]]).pos.length / 9, 1);
+  check('…and the whole of a small area is worth only a few hundred triangles',
+    band.pos.length / 9 < 400, true);
+
+  // THE TWO PROGRAMS. The plate has no `aEdgeDist` attribute, so it must not
+  // compile a line that reads one — an unbound attribute reads as 0 on most
+  // drivers, which would fade the plate out along its whole rim. The lines are
+  // printed on both; the DEFINE is what separates them.
+  const plate = patched();
+  const drapeEdge = patched(null, new THREE.MeshStandardMaterial({ color: 0x6a994e }), true);
+  check('the drape defines the fringe on', drapeEdge.mat.defines?.[NG_EDGE_DEFINE], '');
+  check('…and the base plate does not', plate.mat.defines?.[NG_EDGE_DEFINE], undefined);
+  check('…which is the only difference in their defines',
+    Object.keys(drapeEdge.mat.defines ?? {}).filter((k) => !(k in (plate.mat.defines ?? {}))),
+    [NG_EDGE_DEFINE]);
+  check('the drape blends, the plate stays opaque',
+    [drapeEdge.mat.transparent, plate.mat.transparent], [true, false]);
+  check('…and the drape still WRITES depth (the coplanar ladder rests on it)',
+    [drapeEdge.mat.depthWrite, plate.mat.depthWrite], [true, true]);
+  check('the fringe is a program of its own, and says so in the key',
+    [plate.mat.customProgramCacheKey(), drapeEdge.mat.customProgramCacheKey()],
+    [NG_CACHE_KEY, `${NG_CACHE_KEY}+${NG_EDGE_CACHE_KEY}`]);
+  check('…and chained after the hole it is all three, in order',
+    patched((m) => patchHole(m), new THREE.MeshStandardMaterial({}), true)
+      .mat.customProgramCacheKey(),
+    `${HOLE_CACHE_KEY}+${NG_CACHE_KEY}+${NG_EDGE_CACHE_KEY}`);
+  check('every line that reads the attribute stands inside the define',
+    [...drapeEdge.shader.vertexShader.matchAll(/#ifdef NG_EDGE_FADE([\s\S]*?)#endif/g)]
+      .map((m) => m[1]).join('').includes(NG_EDGE_ATTRIBUTE), true);
+  check('…and the attribute is named nowhere else in the vertex shader',
+    drapeEdge.shader.vertexShader.split(NG_EDGE_ATTRIBUTE).length - 1, 2);
+  check('…nor anywhere in the fragment shader (it travels as a varying)',
+    drapeEdge.shader.fragmentShader.includes(NG_EDGE_ATTRIBUTE), false);
+  check('the alpha is the LAST thing the stage does, after the colour clamp',
+    drapeEdge.shader.fragmentShader.indexOf('diffuseColor.rgb = clamp(')
+      < drapeEdge.shader.fragmentShader.indexOf('diffuseColor.a *='), true);
+  check('…and the colour work never touches alpha',
+    drapeEdge.shader.fragmentShader.split('diffuseColor.a').length - 1, 1);
 
   console.log('\n[8] the RED counter-checks — the chain, the sign, the flat world');
   const red = await loadClient(assignInsteadOfChain);
@@ -653,6 +943,48 @@ async function main() {
     shaded.ngStrength.value, 1);
   setNaturalGroundField(flat);
   check('…while the truth answers 0 for the very same field', ngStrength.value, 0);
+
+  const shifted = await loadClient(dropTheHalfTexel);
+  const shiftedMat = new THREE.MeshStandardMaterial({});
+  shifted.applyNaturalGround(shiftedMat);
+  const shiftedShader = stubShader();
+  shiftedMat.onBeforeCompile(shiftedShader, null);
+  check('without the half texel the mapping is not the one the maths describes',
+    marksIn(shiftedShader, NG_MARKS).length, NG_MARKS.length - 1);
+  check('…and it is exactly the mapping line that is missing',
+    shiftedShader.fragmentShader
+      .includes('return ( ( p - uNgField.xy ) / uNgField.z + 0.5 ) / uNgFieldSize;'), false);
+  check('…while the truth writes it, once, for both readers',
+    [meadow.shader.fragmentShader.split('+ 0.5 ) / uNgFieldSize').length - 1,
+      meadow.shader.fragmentShader.split('ngFieldUvOf(').length - 1], [1, 3]);
+
+  const coarseOnly = await loadMath(refineNothing);
+  check('without the refinement the middle of a coarse area reads EDGE and fades away',
+    [sampleBand(coarseOnly.ngRefineEdgeBand(coarse, null, square), 5, 5),
+      coarseOnly.ngEdgeAlpha(0)], [0, 0]);
+  check('…while the truth carries the ground through, opaque',
+    [sampleBand(band, 5, 5) >= M.NG_EDGE_OPAQUE_M, M.ngEdgeAlpha(sampleBand(band, 5, 5))],
+    [true, 1]);
+
+  const hard = await loadClient(dropTheFringe);
+  const hardMat = new THREE.MeshStandardMaterial({});
+  hard.applyNaturalGround(hardMat, true);
+  const hardShader = stubShader();
+  hardMat.onBeforeCompile(hardShader, null);
+  check('without the alpha line the area ends on a drawn line again',
+    hardShader.fragmentShader.includes('diffuseColor.a'), false);
+  check('…while everything else about it is untouched (the probe measures the fringe)',
+    marksIn(hardShader, NG_MARKS).length, NG_MARKS.length - 1);
+
+  let printed = 'loaded';
+  try {
+    await loadClient(unprintableConstant);
+  } catch (e) {
+    printed = /does not survive two decimals/.test(String(e?.message ?? e))
+      ? 'refused at load' : `threw something else: ${e}`;
+  }
+  check('a constant two decimals cannot print stops the module at LOAD',
+    printed, 'refused at load');
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
