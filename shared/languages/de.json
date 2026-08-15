@@ -1135,7 +1135,7 @@
     "Place this room on the current level.": "Diesen Raum auf der aktuellen Etage platzieren.",
     "Place, move and turn locations": "Orte platzieren, verschieben und drehen",
     "Placement": "Position",
-    "Placement is deterministic per area and skips the footprints of placed locations. Ground covered by an area painted on top of this one stays bare. Switch on “Scatter preview” to see the very points the 3D world plants.": "Die Platzierung ist je Fläche deterministisch und spart die Grundflächen platzierter Orte aus. Boden, den eine darüber gemalte Fläche verdeckt, bleibt kahl. „Streu-Vorschau\" zeigt genau die Punkte, die die 3D-Welt bepflanzt.",
+    "Placement is deterministic per area and skips the footprints of placed locations. Ground covered by an area painted on top of this one stays bare. Switch on “Scatter preview” to see the very points the 3D world plants — the automatic undergrowth of the ground type is grown by the 3D client alone and never appears here.": "Die Platzierung ist je Fläche deterministisch und spart die Grundflächen platzierter Orte aus. Boden, den eine darüber gemalte Fläche verdeckt, bleibt kahl. „Streu-Vorschau\" zeigt genau die Punkte, die die 3D-Welt bepflanzt — den automatischen Unterwuchs der Bodenart erzeugt allein der 3D-Client, er erscheint hier nicht.",
     "Placement on the world tile — saved with the location.": "Platzierung auf der Welt-Kachel — wird mit dem Ort gespeichert.",
     "Places": "Orte",
     "Placing a copy of “{name}” — click the map": "Kopie von „{name}“ wird platziert — auf die Karte klicken",

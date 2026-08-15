@@ -339,7 +339,7 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
           + {t('Scatter')}
         </button>
         <span className="ga-map-chip-label">
-          {t('Placement is deterministic per area and skips the footprints of placed locations. Ground covered by an area painted on top of this one stays bare. Switch on “Scatter preview” to see the very points the 3D world plants.')}
+          {t('Placement is deterministic per area and skips the footprints of placed locations. Ground covered by an area painted on top of this one stays bare. Switch on “Scatter preview” to see the very points the 3D world plants — the automatic undergrowth of the ground type is grown by the 3D client alone and never appears here.')}
         </span>
       </div>
     </div>

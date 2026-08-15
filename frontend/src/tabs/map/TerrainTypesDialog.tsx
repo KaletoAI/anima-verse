@@ -506,7 +506,7 @@ function TypeRow({
   const save = useCallback(async () => {
     if (speedBad) return
     // `meta` is free-form and belongs to whoever wrote it — this dialog owns
-    // exactly SEVEN keys in it and hands the rest back untouched. The numbers
+    // exactly EIGHT keys in it and hands the rest back untouched. The numbers
     // are sent unclamped on purpose: the server clamps, and the row refills
     // from its answer, so a typed 5 shows up as the stored 2.
     const saved = await onSave({
