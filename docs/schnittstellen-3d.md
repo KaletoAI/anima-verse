@@ -2464,8 +2464,10 @@ Sanitizer der beiden Katalog-Felder in `scripts/smoke_terrain_types.py` [9],
 plus die `.mjs`-Tabelle des geteilten Samplers
 (`client3d/scripts/smoke_world_height.mjs`, Abschnitt [4] die kombinierte
 Höhenquelle des Client-Spiegels), die handgerechnete Schattierungs-Tabelle
-(`client3d/scripts/smoke_hillshade.mjs` — Lampe, Rampen, Gipfel, Überhöhung und
-die roten Gegenproben gegen vertauschte Achse und gespiegelten Gradienten) und die Gitter-/Drape-Mathe in
+(`client3d/scripts/smoke_hillshade.mjs` — Lampe, Rampen, Gipfel, Überhöhung
+[dreifach überhöht gezeichnet: aus dieser Ebene liest NIEMAND eine Neigung ab]
+und die roten Gegenproben gegen vertauschte Achse und gespiegelten
+Gradienten) und die Gitter-/Drape-Mathe in
 `client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt
 inkl. Naht-Gegenprobe, Kontur-Zelle gegen die gemessene Plattenfläche,
 Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung). Regel und Routing:

@@ -125,12 +125,13 @@
  *
  * It is needed because the 2D maps read the OVERVIEW grid, and that grid
  * coarsens itself until the whole painted world fits its point budget — up to
- * 32 m per cell (§ A16). A 5 m hill spread over 32 m is a slope of 0.156, whose
- * alpha is `0.35 · 0.156/1.012 = 0.054` → 14 of 255, and whose grey sits 22
- * steps off neutral: `0.054 · 22 ≈ 1.2` of 255 in the final composite, which is
- * below what a screen shows and far below what an eye finds. At `zFactor` 3 the
- * same hill answers alpha 41 and a grey 60 off neutral — a tenth of the range,
- * i.e. visible. Both 2D consumers therefore pass `MAP_RELIEF_Z_FACTOR`.
+ * 32 m per cell (§ A16). Measured on that grid (5 m rise per 32 m cell, an
+ * interior point, central difference): at `zFactor` 1 the hill answers grey 140
+ * (12 off neutral) at alpha 14 — a composite shift of `0.054 · 12 ≈ 0.7` of
+ * 255, below what a screen shows and far below what an eye finds. At
+ * `zFactor` 3 the same hill answers grey 154 (26 off neutral) at alpha 38 —
+ * `0.149 · 26 ≈ 3.9` of 255, visible. Both 2D consumers therefore pass
+ * `MAP_RELIEF_Z_FACTOR`.
  *
  * NOT the default, though, and not a constant of the math: the 3D client stands
  * on the true field, and anything measuring against the world (a slope check, a
