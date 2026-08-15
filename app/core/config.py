@@ -773,7 +773,7 @@ def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Use-Case-Prompt-Struktur geseedet/ergaenzt -> %s", config_path)
+        logger.info("Use-case prompt structure seeded/extended -> %s", config_path)
         return True
     except OSError as e:
         logger.error("Failed to seed use_cases to %s: %s", config_path, e)
@@ -839,9 +839,22 @@ DEAD_CONFIG_FIELDS: dict = {
     "random_events": ("event_image_denoise_strength",),
 }
 
+# The same names again, this time at the TOP LEVEL of config.json. Older worlds
+# predate the sectioning: worlds/demo and worlds/hotopia carry
+# item_image_width/height as top-level keys and have no "inventory" section at
+# all, so a section-only strip would walk straight past them. None of the dead
+# names is a living top-level key (they have no schema entry anywhere), so
+# sweeping all of them at both depths is safe and keeps the two lists from
+# drifting apart.
+DEAD_TOPLEVEL_FIELDS: tuple = tuple(sorted(
+    {k for keys in DEAD_CONFIG_FIELDS.values() for k in keys}))
+
 
 def _strip_dead_config_fields(config: dict, config_path: Path) -> bool:
     """Removes the DEAD_CONFIG_FIELDS from config.json, once, at load time.
+
+    Sweeps both depths: inside the owning section AND at the top level, where
+    worlds older than the sectioning still carry some of them.
 
     Same pattern as _strip_legacy_imagegen_prompt_fields: no fallback reader,
     no alias — the fields are gone from code, so they go from the world file
@@ -857,6 +870,10 @@ def _strip_dead_config_fields(config: dict, config_path: Path) -> bool:
             if key in sec:
                 del sec[key]
                 changed = True
+    for key in DEAD_TOPLEVEL_FIELDS:
+        if key in config:
+            del config[key]
+            changed = True
     if not changed:
         return False
     try:

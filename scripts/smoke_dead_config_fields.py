@@ -18,29 +18,44 @@ shrink without this file disagreeing:
     inventory        : item_image_width, item_image_height
     random_events    : event_image_denoise_strength
 
+The fields live at TWO depths: normally inside their section, but worlds older
+than the sectioning (worlds/demo, worlds/hotopia) carry
+``item_image_width``/``item_image_height`` at the top level and have no
+``inventory`` section at all — test 5 is the hand case for that.
+
 The point of the file is the pair of counter-checks:
   * the LIVING neighbours of the dead fields survive — most sharply
     ``scene_prompt_collage`` falls while ``scene_prompt_multi_ref`` and
-    ``scene_prompt_only_background`` (read in app/core/scene_render.py) stay;
+    ``scene_prompt_only_background`` (read in app/core/scene_render.py) stay,
+    and a living TOP-LEVEL key (``log_level``) is not caught by the flat sweep;
   * the seeding source is really gone — the two fields that used to reappear
     in freshly created worlds (``mapfit_imagegen_default`` /
     ``map_tile_vision_analysis``) came from schema entries in
     app/core/config_schema.py that ``_apply_schema_defaults``
     (app/routes/admin_settings.py) materializes into config.json on every
-    admin save round-trip. Test 5 shows today's schema produces neither;
-    test 6 puts the two removed schema entries back and shows the SAME call
-    then does produce them — without that red run, test 5 would pass on any
+    admin save round-trip. Test 6 shows today's schema produces neither;
+    test 7 puts the two removed schema entries back and shows the SAME call
+    then does produce them — without that red run, test 6 would pass on any
     broken assertion.
 
 Usage:  ./.venv/bin/python scripts/smoke_dead_config_fields.py
 """
 import copy
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Point the storage root at a throwaway directory BEFORE any app import.
+# paths.init() falls back to ./worlds/demo when STORAGE_DIR is unset (see
+# app/core/paths.py) and get_storage_dir() auto-initializes on first call —
+# so an import that touches config/paths at module level would write into the
+# tracked demo world. Same reflex as ANIMATION_CLIPS_DIR in the 3D smokes.
+_TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_dead_config_")
+os.environ.setdefault("STORAGE_DIR", _TMP_STORAGE.name)
 
 from app.core import config as cfgmod  # noqa: E402
 
@@ -158,7 +173,36 @@ def main():
               "clean config -> no write")
         check(clean == LIVING, "clean config untouched")
 
-    print("5) today's schema prefill seeds neither reappearing field")
+        print("5) top-level strays (worlds older than the sectioning)")
+        check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
+              == {k for keys in EXPECTED_DEAD.values() for k in keys},
+              "DEAD_TOPLEVEL_FIELDS == the same 13 names, flat")
+        # worlds/demo and worlds/hotopia look exactly like this: the two item
+        # sizes sit at the top level and there is NO inventory section.
+        old = {
+            "item_image_width": 256,
+            "item_image_height": 256,
+            "log_level": "INFO",
+            "storage_dir": "./storage",
+            "image_generation": {"mapfit_backend": "comfy-1",
+                                 "scene_prompt_multi_ref": "keep me"},
+            "inventory": {"item_image_width": 128, "max_items": 50},
+        }
+        check(cfgmod._strip_dead_config_fields(old, path) is True,
+              "returns True — the top-level strays count as a change")
+        check("item_image_width" not in old and "item_image_height" not in old,
+              "both top-level item sizes are gone")
+        check("item_image_width" not in old["inventory"],
+              "the section variant falls too")
+        check("mapfit_backend" not in old["image_generation"],
+              "the section sweep still works alongside")
+        check(old["log_level"] == "INFO" and old["storage_dir"] == "./storage",
+              "living TOP-LEVEL fields stay")
+        check(old["image_generation"].get("scene_prompt_multi_ref") == "keep me"
+              and old["inventory"].get("max_items") == 50,
+              "living section fields stay")
+
+    print("6) today's schema prefill seeds neither reappearing field")
     from app.routes import admin_settings  # noqa: E402
     data = {}
     admin_settings._apply_schema_defaults(data)
@@ -170,7 +214,7 @@ def main():
     check(not seeded_dead,
           f"no dead field materialized at all (got {seeded_dead})")
 
-    print("6) red counter-check: the old schema entries WOULD seed them")
+    print("7) red counter-check: the old schema entries WOULD seed them")
     from app.core.config_schema import SECTIONS
     legacy = copy.deepcopy(SECTIONS)
     legacy["image_generation"]["fields"]["mapfit_imagegen_default"] = {
