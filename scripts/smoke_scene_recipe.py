@@ -1096,6 +1096,88 @@ def test_doorways() -> None:
           f"{wider[:8]} vs {base_sig[:8]}")
 
 
+def test_threshold_base_y() -> None:
+    print("\n[3e] thresholds stand where one STANDS (finding 2026-08-16)")
+    # The finding: the 3D client lifted every threshold quad itself, against
+    # its own sampled room floors — and it compared a TILE-LOCAL `base_y` with
+    # WORLD room centres while doing it, so on "Haus von Kai" the quads floated
+    # 0.130 over a floor at 0.100 (living room), 0.207 over 0.100 (kitchen) and
+    # 0.150 over 0.000 (pool). The height belongs to the server, and the rule is
+    # this pure function — fed here with exactly those numbers.
+    tby = scene_recipe.threshold_base_y
+    check("no declaration: the wall's own foot, 0.10 — as before",
+          near(tby([(0.10, None)]), 0.10), str(tby([(0.10, None)])))
+    check("a room that DECLARES its walkable surface (0.12) sets the threshold",
+          near(tby([(0.10, 0.12)]), 0.12), str(tby([(0.10, 0.12)])))
+    check("two rooms: the HIGHER standing height wins — 0.10 vs 0.177 → 0.177",
+          near(tby([(0.10, None), (0.10, 0.177)]), 0.177),
+          str(tby([(0.10, None), (0.10, 0.177)])))
+    # Red counter-check: the other end of the same pair. One steps OVER a
+    # threshold, so the low side must NOT win — with `min` the kitchen door
+    # would sit 7.7 cm inside the kitchen floor.
+    check("...and it is really the maximum: min would answer 0.10",
+          not near(min(0.10, 0.177), 0.177), str(min(0.10, 0.177)))
+    check("a declaration BELOW the foot is still the standing height",
+          near(tby([(0.10, 0.05)]), 0.05), str(tby([(0.10, 0.05)])))
+    check("no side at all is 0, never a crash", near(tby([]), 0.0))
+
+    # ── the same rule through the whole composer ────────────────────────
+    # Room "a" has no `model_offset_y`, so its diorama's lower edge is the room
+    # plate 0.10 plus the diorama clearance 0.02 = 0.12, and `walk_y` counts
+    # from there: walk_y 0 → 0.12, walk_y 0.057 → 0.177.
+    def with_metas(metas: dict, loc=None) -> list:
+        return scene_recipe.compose_scene(loc or fixture(), plan_width_m=PLAN_W,
+                                          room_metas=metas)["doorways"]
+
+    plain = with_metas({})
+    check("no diorama anywhere: base_y stays the wall foot 0.10",
+          len(plain) == 1 and near(plain[0]["base_y"], 0.10), str(plain))
+    lifted = with_metas({"a": {"width_m": 3.0, "walk_y": 0}})
+    check("room a declares its floor (0.12): its OUTSIDE door lifts with it",
+          len(lifted) == 1 and near(lifted[0]["base_y"], 0.12), str(lifted))
+    # Party wall a|b: a keeps the foot, b's diorama declares 0.177.
+    b_room = {"id": "b", "name": "B", "layout": {
+        "x": 0.5, "y": 0.1, "w": 0.2, "d": 0.3, "level": 0}}
+    party = door_fixture(extra_rooms=(b_room,), a_openings=[
+        {"edge": 1, "at": 0.5, "type": "door", "width_m": 1.6, "to": "b"}])
+    joined = with_metas({"b": {"width_m": 3.0, "walk_y": 0.057}}, party)
+    check("a door between 0.10 and 0.177 lies at 0.177 — one steps OVER it",
+          len(joined) == 1 and near(joined[0]["base_y"], 0.177), str(joined))
+    check("...and the order of the rooms does not decide it",
+          near(with_metas({"a": {"width_m": 3.0, "walk_y": 0.057},
+                           "b": {"width_m": 3.0, "walk_y": 0}},
+                          party)[0]["base_y"], 0.177),
+          str(with_metas({"a": {"width_m": 3.0, "walk_y": 0.057},
+                          "b": {"width_m": 3.0, "walk_y": 0}}, party)))
+    # A room meta WITHOUT walk_y declares nothing — a diorama alone is not a
+    # statement about where its floor is (that is the "no automatic repair"
+    # rule of the model contract).
+    check("a diorama without walk_y changes nothing",
+          near(with_metas({"a": {"width_m": 3.0}})[0]["base_y"], 0.10),
+          str(with_metas({"a": {"width_m": 3.0}})))
+    # The height moves with the meta, so the payload has to be re-fetched.
+    sigs = {scene_recipe.compose_scene(fixture(), plan_width_m=PLAN_W,
+                                       room_metas=m)["signature"]
+            for m in ({}, {"a": {"width_m": 3.0, "walk_y": 0}})}
+    check("a changed walk_y moves the signature", len(sigs) == 2, str(sigs))
+
+    # ── source pin: the client does NOT recompute this any more ─────────
+    # There is no client smoke over `main.ts` (its door tests cover
+    # `game/doors.ts`, the payload reader), so the removal is pinned here: the
+    # two functions that did the recomputing are gone, and the quad hangs in
+    # the tile frame where `base_y` is stated.
+    main_ts = (Path(__file__).resolve().parents[1]
+               / "client3d" / "src" / "main.ts")
+    src = main_ts.read_text(encoding="utf-8") if main_ts.exists() else ""
+    check("client3d/src/main.ts is where it is", bool(src), str(main_ts))
+    check("no doorFloorY/doorMarkY left — nothing recomputes the height",
+          "doorFloorY" not in src and "doorMarkY" not in src)
+    check("the quad takes base_y + the lift straight from the payload",
+          "m.baseY + DOOR_MARK_LIFT" in src)
+    check("...and hangs in the TILE frame, like the walls",
+          "tile.group.add(root)" in src)
+
+
 def test_elevator() -> None:
     print("\n[5] elevator primitives")
     sc = scene()
@@ -2071,6 +2153,7 @@ def main() -> int:
     test_room_floor_offset()
     test_no_walls()
     test_doorways()
+    test_threshold_base_y()
     test_contour_walls()
     test_no_building_entrance()
     test_rooms_without_layout()

@@ -947,6 +947,29 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     return out
 
 
+def threshold_base_y(sides: List[Tuple[float, Optional[float]]]) -> float:
+    """The height a threshold LIES AT: the standing height of the rooms it
+    joins (finding 2026-08-16, floating thresholds).
+
+    ``sides`` is one ``(wall_foot_y, declared_walk_y_world)`` pair per adjoining
+    room, both in scene metres. A room whose diorama DECLARES its walkable
+    surface (the admin's ``walk_y``, resolved to ``walk_y_world`` on the model
+    spec) says where one stands in that room; without a declaration the foot of
+    the wall the gap was cut from is the floor, exactly as before.
+
+    Two rooms → the HIGHER standing height wins: one steps OVER a threshold,
+    never into it. An outside door has ONE side, the room's — the ground side
+    is what the boundary marks cover.
+
+    A pure function on purpose: this rule is the whole computation, and the
+    smoke feeds it the numbers of the finding directly instead of reading them
+    back out of a payload.
+    """
+    if not sides:
+        return 0.0
+    return max(foot if walk is None else float(walk) for foot, walk in sides)
+
+
 # ── Problems ────────────────────────────────────────────────────────────
 
 def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
@@ -2058,6 +2081,21 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             models.append(diorama)
         models.extend(_prop_models(recipe, storey, extent, lift))
         markers.extend(_markers(recipe, room, storey, extent, lift))
+
+    # A threshold lies at the STANDING height of the rooms it joins, and THIS
+    # is where that is decided (finding 2026-08-16: the 3D client recomputed
+    # the height against its own sampled room floors — and mixed tile-local
+    # metres with world metres while doing it, so every quad floated 10–15 cm
+    # over the floor). The declared walkable surface is read off the diorama
+    # spec that already carries it, so no room's floor is derived twice.
+    stand_by_room = {str(spec.get("room_id") or ""): _num(spec["walk_y_world"])
+                     for spec in models
+                     if spec.get("role") == "room"
+                     and spec.get("walk_y_world") is not None}
+    for door in doorways:
+        door["base_y"] = _r(threshold_base_y(
+            [(_num(door["base_y"]), stand_by_room.get(room_id))
+             for room_id in door["rooms"]]))
 
     # Per-room recipe vocabulary in PLAN FRACTIONS — the 2D editor's ghost
     # openings draw from here instead of re-deriving the mirroring locally

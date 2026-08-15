@@ -171,11 +171,11 @@ const DEFAULT_MAX_SLOPE_DEG = 40;
 // recipe, the diorama or any shared render code, and `game/doors.ts` (pure
 // maths, hand-checked in client3d/scripts/smoke_walk_math.mjs) says WHERE the gaps are.
 //
-// One unit quad and one material for every marker of every tile: a threshold
-// differs only in position, direction and size, so per-marker geometry would
-// buy nothing. Pre-rotated into the XZ plane, so a marker only needs the
-// heading (`rotation.y`) — with `rotation.x` also set, the two Euler angles
-// would compose and the quad would stand up.
+// One unit quad for every marker of every tile: a threshold differs only in
+// position, direction and size, so per-marker geometry would buy nothing.
+// Pre-rotated into the XZ plane, so a marker only needs the heading
+// (`rotation.y`) — with `rotation.x` also set, the two Euler angles would
+// compose and the quad would stand up.
 const DOOR_MARK_GEO = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 /** The gold of the UI (`--gold` of the HUD), at the opacity of a hint. */
 const DOOR_MARK_MAT = new THREE.MeshBasicMaterial({
@@ -188,9 +188,21 @@ const DOOR_MARK_MAT = new THREE.MeshBasicMaterial({
 const DOOR_MARK_LOCKED_MAT = new THREE.MeshBasicMaterial({
   color: 0x9b3b2f, transparent: true, opacity: 0.6, depthWrite: false,
 });
+/** The two looks of a threshold, CLONED per tile. The door marks of a tile
+ *  hang in `tile.group`, and the occlusion fade walks that group and writes
+ *  `opacity` into every material it meets (`applyTileOcclusion`) — with the two
+ *  singletons up there, one fading tile would dim the thresholds of the whole
+ *  map. The pair rides on the marker group; the lock look swaps between the two
+ *  by identity, so it has to be the tile's own pair. */
+type DoorMarkMats = { open: THREE.Material; locked: THREE.Material };
 /** Depth of the threshold ACROSS the wall, as a share of the doorway's width —
  *  never thinner than the wall it fills, or it would vanish inside it. */
 const DOOR_MARK_DEPTH = 0.3;
+/** How far the threshold quad lies ABOVE the floor the payload names
+ *  (`doorways[].base_y`), so it cannot sink into it. Centimetres, not a share
+ *  of anything: a storey is three real metres since E4 (k = 1), so two
+ *  centimetres are two centimetres. */
+const DOOR_MARK_LIFT = 0.02;
 
 /**
  * "Zoom to" a figure. With the camera's 45° vertical FOV the visible height is
@@ -853,17 +865,21 @@ async function startApp(username: string, role: string) {
     if (perfEnabled()) measurePerfHeavy();
   }, LOD_TICK_MS);
 
-  /** Threshold quads per location, one child group per storey. They live in
-   *  `engine.scene` and not in `tile.group` on purpose: a rebuild throws the
-   *  tile group away wholesale, and an overlay that is rebuilt from the SAME
-   *  payload wants its own bookkeeping — the same reason the event pins and the
-   *  wall-segment cache keep theirs. */
+  /** Threshold quads per location, one child group per storey. The group hangs
+   *  in `tile.group` — TILE-LOCAL, exactly like the walls the gaps were cut
+   *  from: the payload states `base_y` in tile metres, and a tile stands on its
+   *  own plateau (`footprintCentre`), so anything anchored in world metres
+   *  drifts by the plateau height the moment the ground is not flat. The MAP
+   *  keeps its own bookkeeping all the same — the group is rebuilt from the
+   *  same payload as the tile but on its own occasion (`mountWithDoors`), and
+   *  the lock look is repainted by id. */
   const doorMarks = new Map<string, THREE.Group>();
   /** Thresholds at the AUTHORED BOUNDARY OPENINGS of a location, one group per
    *  tile (task C2). They exist only to be shown LOCKED: an open way in needs
    *  no marker (walking through it is the offer), a barred one has to be
-   *  visible from the cell next door. Same overlay rules as the door marks —
-   *  own bookkeeping, own group in `engine.scene`, nothing in `tile.group`. */
+   *  visible from the cell next door. Unlike the door marks these stay in
+   *  `engine.scene`: they lie on the WORLD ground at the edge of the cell
+   *  (`groundY`), which is the neighbour's height and not the tile's plateau. */
   const boundaryMarks = new Map<string, THREE.Group>();
   /** What the locked look was last painted for: the published lock map, the
    *  location it was answered for and the avatar's room. Starts as "nothing",
@@ -876,62 +892,50 @@ async function startApp(username: string, role: string) {
   };
 
   /** Both threshold overlays of a tile — they are built together and a tile
-   *  that goes away takes both with it. */
+   *  that goes away takes both with it. Unhooked from whatever they hang in:
+   *  the door marks ride in `tile.group`, the boundary marks in `engine.scene`
+   *  (they lie on the WORLD ground of the neighbouring cell). */
   function dropDoorMarks(locId: string) {
     for (const map of [doorMarks, boundaryMarks]) {
       const old = map.get(locId);
       if (!old) continue;
-      engine.scene.remove(old);
+      old.parent?.remove(old);
+      // The tile's own material pair goes with it — unhooked before the tile is
+      // freed, so nothing else ever disposes it (`dropTile`).
+      const mats = old.userData.mats as DoorMarkMats | undefined;
+      mats?.open.dispose();
+      mats?.locked.dispose();
       map.delete(locId);
     }
   }
 
-  /**
-   * The floor one actually steps on in a doorway. `baseY` is the foot of the
-   * WALL the gap sits in and always exists; a room's own floor may be higher,
-   * because it is a sampled diorama plate and not the wall's base
-   * (`sampleRoomWalkables` lifts `roomCenters` onto it, the same number the
-   * avatar walks at), so the higher of the two wins.
-   */
-  function doorFloorY(tile: Tile, m: DoorMarker): number {
-    let y = m.baseY;
-    for (const id of m.roomIds) {
-      const c = tile.roomCenters.get(id);
-      if (c && c.y > y) y = c.y;
-    }
-    return y;
-  }
-
-  /** Height the threshold QUAD lies at: the floor plus two centimetres, so it
-   *  cannot sink into it. The lift used to be scaled by the scene's `k` (a
-   *  whole storey was 0.63 m at Willowbrook's k = 0.21, where a fixed
-   *  centimetre offset would have been a step) — with k = 1 a storey is three
-   *  real metres and two centimetres is two centimetres. */
-  function doorMarkY(tile: Tile, m: DoorMarker): number {
-    return doorFloorY(tile, m) + 0.02;
-  }
-
-  /** A doorway as a waypoint for a walking figure: its centre, on the floor a
-   *  figure stands on there. */
+  /** A doorway as a waypoint for a walking figure: its centre, on the floor the
+   *  payload names there (`base_y`, the standing height of the rooms the gap
+   *  joins — the server resolves it, § B doorways). `m.mid` is TILE-LOCAL like
+   *  every payload vector, so the walk gets it turned into the world, `base_y`
+   *  with it: a tile stands on its plateau and a scene metre is not a world
+   *  metre. */
   function doorStop(tile: Tile, m: DoorMarker): THREE.Vector3 {
-    // `m.mid` is TILE-LOCAL (the callers ask `doors.ts` without an origin) —
-    // the walk needs it in the world.
-    return tileToWorld(tile, m.mid.x, m.mid.z, doorFloorY(tile, m));
+    return tileToWorld(tile, m.mid.x, m.mid.z, m.baseY);
   }
 
   /** (Re)build the thresholds of one tile from its payload. Called after every
-   *  mount — the mount is what fills `roomCenters` with the sampled floor the
-   *  markers are laid on. */
+   *  mount, which is also what puts the tile's scene group in place. */
   function buildDoorMarks(tile: Tile, scene: ScenePayload) {
     dropDoorMarks(tile.loc.id);
     if (!tile.isBuilding) return;
-    // The payload is TILE-LOCAL while the scene is absolute — the C1 lesson of
-    // the collision round, where segments sat 45 m from the figure. Asked in
-    // the TILE frame (origin 0/0) and turned into the world below: since E4 the
-    // footprint may stand rotated, so baking the centre in before the turn
-    // would misplace every threshold of a turned location.
+    // Everything below stays in the TILE frame — the group hangs in
+    // `tile.group`, which carries the footprint's position, its plateau height
+    // and its yaw, exactly as it does for the walls. Nothing is turned into the
+    // world here and NOTHING is recomputed: `base_y` is the standing height the
+    // server resolved (§ B doorways), and the client that used to lift it
+    // against its own sampled room floors was mixing tile metres with world
+    // metres — the floating thresholds of 2026-08-16.
     const root = new THREE.Group();
     root.visible = false;
+    const mats: DoorMarkMats = { open: DOOR_MARK_MAT.clone(),
+                                 locked: DOOR_MARK_LOCKED_MAT.clone() };
+    root.userData.mats = mats;
     for (const { level } of scene.levels) {
       const marks = doorMarkers(scene, level);
       if (!marks.length) continue;
@@ -941,21 +945,19 @@ async function startApp(username: string, role: string) {
       const storey = new THREE.Group();
       storey.userData.level = level;
       for (const m of marks) {
-        const mesh = new THREE.Mesh(DOOR_MARK_GEO, DOOR_MARK_MAT);
+        const mesh = new THREE.Mesh(DOOR_MARK_GEO, mats.open);
         // The rooms ride along so the lock look can be bound LATER, by id: the
         // verdict is per avatar and arrives with its own poll, while this
         // geometry comes from the shared, signature-cached recipe. Nothing
         // about a lock is stored in the payload (§ 3 decision 2).
         mesh.userData.rooms = m.roomIds;
         mesh.scale.set(m.width, 1, Math.max(m.width * DOOR_MARK_DEPTH, thickness));
-        // World +x turned onto the wall direction: a rotation by φ about Y maps
-        // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x). The
-        // direction is turned into the world first — it is stated in the tile
-        // frame like every other payload vector.
-        const along = tileDirToWorld(tile, m.along.x, m.along.z);
-        mesh.rotation.y = Math.atan2(-along.z, along.x);
-        const at = tileToWorld(tile, m.mid.x, m.mid.z);
-        mesh.position.set(at.x, doorMarkY(tile, m), at.z);
+        // Local +x turned onto the wall direction: a rotation by φ about Y maps
+        // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x). Both
+        // the direction and the point stay TILE-LOCAL — the tile's own turn is
+        // applied to the whole group, once.
+        mesh.rotation.y = Math.atan2(-m.along.z, m.along.x);
+        mesh.position.set(m.mid.x, m.baseY + DOOR_MARK_LIFT, m.mid.z);
         // Late, so the quad is not swallowed by the fading walls it lies
         // between, and unpickable — the selection-ring lesson: an overlay that
         // catches the ray steals the click that was meant for the tile.
@@ -965,8 +967,12 @@ async function startApp(username: string, role: string) {
       }
       root.add(storey);
     }
-    if (!root.children.length) return;
-    engine.scene.add(root);
+    if (!root.children.length) {
+      mats.open.dispose();
+      mats.locked.dispose();
+      return;
+    }
+    tile.group.add(root);
     doorMarks.set(tile.loc.id, root);
     // Fresh markers wear the open look; the next frame paints the locks (see
     // the frame hook). Repainting HERE would run during boot, where the
@@ -998,12 +1004,16 @@ async function startApp(username: string, role: string) {
     const state = getGameState();
     const locks = locId === state.lockedLoc ? state.lockedRooms : NO_LOCKS;
     const here = tile ? avatarRoomId(tile) ?? '' : '';
+    // The tile's OWN pair (see `DoorMarkMats`) — the two module singletons are
+    // the templates, never what a mesh wears.
+    const mats = root.userData.mats as DoorMarkMats | undefined;
+    if (!mats) return;
     for (const storey of root.children) {
       for (const mesh of storey.children) {
         const rooms = (mesh.userData.rooms as string[] | undefined) ?? [];
         // `null` = open; a locked room WITHOUT a sentence is still locked.
         const locked = doorwayLock(rooms, locks, here) !== null;
-        (mesh as THREE.Mesh).material = locked ? DOOR_MARK_LOCKED_MAT : DOOR_MARK_MAT;
+        (mesh as THREE.Mesh).material = locked ? mats.locked : mats.open;
       }
     }
   }
@@ -4123,10 +4133,12 @@ async function startApp(username: string, role: string) {
    * or moves a place. A tile built before its ground was known would stand on
    * the flat world for good.
    *
-   * A full rebuild rather than moving the group: the scene mount anchors
-   * doorway thresholds, room centres and marker heights as WORLD points via
-   * `tileToWorld`, so a group that quietly slid up would leave them behind at
-   * the old height. Rebuilding is the path a MOVED location already takes
+   * A full rebuild rather than moving the group: the scene mount anchors room
+   * centres and marker heights as WORLD points via `tileToWorld`, so a group
+   * that quietly slid up would leave them behind at the old height. (The
+   * doorway thresholds ride IN the group since the floating-threshold finding
+   * and would follow on their own — the sampled room floors do not.)
+   * Rebuilding is the path a MOVED location already takes
    * (`rebuildMovedTiles`) and costs the same; it happens on an authoring edit,
    * never per frame — the revision counter is compared, not the field.
    */

@@ -2859,6 +2859,7 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
   doorways: [ { level, at_world: [x,z], along: [ux,uz], width_m,
                 base_y, rooms: [room_id, …], outside } ],
                                            # IMMER da, leer = keine Tür
+                                           # base_y = STEH-Höhe der Raumseite
   problems: [ { kind, location_id?, room_id?, message } ],
                                            # IMMER da, leer = alles sauber
   outdoor_rooms: [ room_id, … ]
@@ -2874,8 +2875,24 @@ zweite Ableitung.
 - **Konsumentenregel: nichts nachrechnen.** `width_m` ist die LICHTE Breite
   in Welt-Metern NACH der Kantenklemmung — nicht die autorierte `width_m`,
   die noch jemand klemmen müsste; `at_world` ist die Mitte dieser lichten Lücke,
-  `along` die Einheitsrichtung der Wand (die Schwelle läuft ENTLANG davon),
-  `base_y` der Fuß genau der Wand, zu der die Lücke gehört.
+  `along` die Einheitsrichtung der Wand (die Schwelle läuft ENTLANG davon).
+- **`base_y` IST die Steh-Höhe der Raumseite** (Befund 2026-08-16,
+  schwebende Schwellen). Der Server rechnet sie: wo das Diorama eines
+  angrenzenden Raums seine begehbare Fläche DEKLARIERT (Admin-Dial `walk_y`,
+  aufgelöst als `walk_y_world` am Modell-Spec), ist das die Steh-Höhe dieses
+  Raums, sonst der Fuß genau der Wand, zu der die Lücke gehört. Grenzt die Tür
+  an ZWEI Räume, gewinnt die HÖHERE Steh-Höhe — man tritt ÜBER eine Schwelle,
+  nie hinein. Eine Außentür hat nur die Raumseite; die Geländeseite decken die
+  Grenz-Marken (`boundary_openings`). Die Regel steht als reine Funktion in
+  `scene_recipe.threshold_base_y` und ist in `scripts/smoke_scene_recipe.py`
+  [3e] von Hand nachgerechnet.
+  **Konsumenten heben NICHT nach:** die Zahl ist ein Kachel-Meter wie jede
+  andere im Payload, gehört also in den Kachel-Rahmen (die Schwellen-Quads
+  hängen dort, wo auch die Wände hängen) plus höchstens einen konstanten
+  Zeichen-Offset gegen Z-Fighting. Der 3D-Client hatte die Höhe gegen seine
+  eigenen abgetasteten Raumböden gehoben und dabei Kachel- mit Welt-Metern
+  vermischt — Ergebnis: jede Schwelle schwebte 10–15 cm, auf einer Kachel mit
+  Plateau beliebig weit.
 - **Eine Lücke in der Wand = EIN Eintrag.** Zwei Kandidaten sind dasselbe
   Loch, wenn drei geometrische Fragen zugleich mit Ja beantwortet werden:
   gleiche Wand-RICHTUNG (zuerst — zwei in dieselbe Ecke geklemmte Türen
