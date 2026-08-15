@@ -43,12 +43,14 @@
  * `scene/impostors.ts`). The window, the thinning over it and the whole
  * geometry of one billboard are arithmetic and therefore live here.
  *
- * SINCE 2026-08-15 THE SECOND LAYER LIVES HERE TOO: the automatic undergrowth
- * (`UNDERGROWTH_*` at the bottom of the file). It is the same three questions
- * with its own numbers — how many tufts a shape carries, how tall they are and
- * how far the carpet is drawn — and it sits beside the props rather than in a
- * file of its own because both are read by the same builder in `ground.ts` and
- * both have to stay import-free for the smoke.
+ * SINCE 2026-08-15 THE SECOND LAYER'S NUMBERS LIVE HERE TOO: the automatic
+ * undergrowth (`UNDERGROWTH_*` at the bottom of the file). It is the same
+ * three questions with its own numbers — how dense the carpet is, how tall
+ * its tufts are and how far it is drawn — and they sit beside the props'
+ * because both are read on the same LOD tick and both have to stay
+ * import-free for the smoke. Everything of that layer which is NOT a plain
+ * number (the camera-local cell raster, the blade texture, the meshes) is
+ * `scene/undergrowth.ts`.
  */
 
 /** Nearer than this, a scattered prop stands on the full mesh (metres). */
@@ -586,7 +588,7 @@ export function impostorBakeVerdict(
 }
 
 /* ==========================================================================
- * THE UNDERGROWTH (2026-08-15) — the layer NOBODY authored
+ * THE UNDERGROWTH (2026-08-15, rebuilt 2026-08-16) — the layer NOBODY authored
  *
  * A wood reads as a wood when something stands BETWEEN the trunks, and until
  * now that something was a second scatter row somebody had to paint onto every
@@ -594,32 +596,71 @@ export function impostorBakeVerdict(
  * undergrown, a path is not — so it says it in one number
  * (`meta.undergrowth`, 0..1, § A9) and the client grows the layer itself.
  *
- * WHAT LIVES HERE is only the arithmetic of it: how many tufts a painted
- * shape carries, how tall each one stands, how far the layer is drawn and
- * which of its instances survive at a distance. WHERE they stand is the
- * shared sampler (`@anima/scene-render/scatter`), the same one and the same
- * RNG discipline the authored scatter uses — under a seed of its OWN
- * (`undergrowthSeed`), which is what keeps the authored props exactly where
- * they were.
+ * WHAT LIVES HERE is only the arithmetic of it: how many tufts one CELL of the
+ * camera-local raster carries, how tall each one stands, how far the layer is
+ * drawn and which of its instances survive at a distance. The cell raster
+ * itself — which cells are wanted, and under which seed each of them samples —
+ * is `scene/undergrowth.ts`, together with the blade texture and the meshes.
+ *
+ * IT IS NO LONGER GROWN PER PAINTED AREA, and that is the whole of the
+ * 2026-08-16 rescue. A rate over a lake-sized shape is a number nobody typed,
+ * so the old build capped each area at 20 000 instances — which on a square
+ * kilometre of deep forest thinned the layer to 0.02/m2 and made it
+ * effectively invisible, exactly the acceptance finding. The layer is only
+ * ever seen out to `UNDERGROWTH_CULL_M`, so it is now grown where it is seen:
+ * per 64 m CELL around the anchor, which makes a 10 km2 wood locally exactly
+ * as dense as a small meadow and costs a constant amount whatever the world
+ * looks like.
  * ========================================================================== */
 
 /** The full base density of the layer, in instances per SQUARE METRE — what a
  *  kind with `undergrowth: 1` gets. Everything else is this times the kind's
  *  own number, so the catalog value is a share and never a count.
  *
- *  0.15/m2 is roughly one tuft every two and a half metres of edge; a forest
- *  at the seeded 0.6 therefore carries a tuft about every 2.7 m, which fills
- *  the ground between trees without becoming a lawn one cannot see through. */
-export const UNDERGROWTH_DENSITY_PER_M2 = 0.15;
+ *  0.40/m2 (0.15 before the camera-local rebuild) puts a tuft every 1.6 m of
+ *  edge at full value; a forest at the seeded 0.6 therefore carries one about
+ *  every 2 m, which is a floor one walks THROUGH rather than a scattering of
+ *  bushes one walks past. The old number was chosen against a per-area budget
+ *  that had to pay for the whole shape at once — a cell of 64 m pays for
+ *  4096 m2 and nothing else, so the density can be what the picture needs. */
+export const UNDERGROWTH_DENSITY_PER_M2 = 0.40;
 
-/** Hard ceiling of the layer PER PAINTED AREA. The density is a rate, and a
- *  rate over a lake-sized meadow is a number nobody typed: 0.15/m2 over a
- *  square kilometre is 150 000 instances, i.e. a matrix buffer of ten
- *  megabytes built in one frame. The cap is deliberately far above what a
- *  normal wood needs (20 000 tufts cover 133 000 m2 at full density, a 365 m
- *  square) — it is a guard against the pathological area, not a budget, and
- *  the caller says so once in the console when it bites. */
-export const UNDERGROWTH_MAX_PER_AREA = 20000;
+/** Edge of ONE cell of the layer's raster, in metres — ORIGIN-ANCHORED, so a
+ *  cell is a fixed square of the world and not a square around the player.
+ *  That is what makes a cell's content re-derivable: the same ground gives the
+ *  same tufts whichever direction it was walked into from.
+ *
+ *  64 m is the compromise between the two costs a cell has. Smaller cells
+ *  cross more borders per metre walked (a rebuild each time) and cost a draw
+ *  call each; bigger ones make every single crossing expensive and force the
+ *  radius out. At 64 m one crossing rebuilds about five cells of ~1000
+ *  instances — a few milliseconds, once every 64 m. */
+export const UNDERGROWTH_CELL_M = 64;
+
+/** How far around the anchor cells are held, in metres.
+ *
+ *  TWO CELL WIDTHS, i.e. more than twice the cull distance, and the margin is
+ *  the point: nothing beyond `UNDERGROWTH_CULL_M` (60 m) is DRAWN, so a radius
+ *  of exactly that would build a cell the very moment something in it became
+ *  visible — a hitch at the edge of the picture every time. At 128 m a cell is
+ *  built a whole cell-width before the player can see anything in it, and the
+ *  LOD keeps it at zero instances until then, which costs nothing per tick. */
+export const UNDERGROWTH_CELL_RADIUS_M = 128;
+
+/** Hard ceiling of the layer PER CELL — a guard, not a budget.
+ *
+ *  A cell of 64 m at the full base density wants round(4096/100 · 40) = 1638
+ *  tufts, so 8000 is roughly five times what the densest legal ground asks
+ *  and CANNOT be reached through `undergrowthDensityPer100m2` (the catalog
+ *  value is clamped to 1). It exists for the same reason the sampler has a
+ *  ceiling at all: a hand-edited density that crosses the JSON boundary must
+ *  cost a thicker cell, never a hundred thousand instances built in one frame.
+ *
+ *  There is deliberately NO "capped" report beside it any more. The old
+ *  per-area ceiling was reached by ordinary worlds and silently thinned them,
+ *  which is what the console line existed to explain; a ceiling nothing can
+ *  reach has nothing to explain. */
+export const UNDERGROWTH_MAX_PER_CELL = 8000;
 
 /** Up to here every tuft of the layer is drawn (metres). */
 export const UNDERGROWTH_FADE_M = 30;
@@ -652,25 +693,6 @@ export const UNDERGROWTH_H_MIN = 0.4;
 export const UNDERGROWTH_H_MAX = 0.7;
 
 /**
- * The seed of the undergrowth of ONE area — its OWN namespace.
- *
- * NOT `scatterSeed(areaId, index)`: that stream belongs to the authored
- * entries, and drawing the undergrowth out of it would move every tree of
- * every wood the moment this feature shipped. A different string is a
- * different FNV-1a state and therefore a different stream, so the two layers
- * are independent by construction rather than by an offset somebody has to
- * keep right.
- *
- * It lives HERE and not beside `scatterSeed` in the shared package because the
- * undergrowth is a CLIENT layer: the map editor's preview draws the authored
- * scatter, which is what an author placed, and inventing tufts into that
- * preview would show a density nobody typed.
- */
-export function undergrowthSeed(areaId: string): string {
-  return `terrain:undergrowth:${areaId}`;
-}
-
-/**
  * The catalog's share as the density the shared sampler takes (per 100 m2).
  *
  * The value crosses a JSON boundary, so "not given" is every non-number and
@@ -685,29 +707,32 @@ export function undergrowthDensityPer100m2(value: number): number {
 }
 
 /**
- * How many tufts one painted shape carries — the sampler's own count rule
- * (`round(areaM2 / 100 * density)`), capped.
+ * How many tufts ONE cell of the raster samples — the sampler's own count rule
+ * (`round(areaM2 / 100 * density)`) over a cell's 4096 m2, capped.
  *
  * Written with the SAME expression the sampler evaluates, so the number this
- * answers and the number `scatterInstances` places cannot drift apart in the
- * last bit of a float. Its job is the cap message and the smoke check; the
- * instances themselves come out of the sampler.
+ * answers and the number `scatterInstances` draws cannot drift apart in the
+ * last bit of a float.
+ *
+ * IT IS A NUMBER OF CANDIDATES, not a promise of instances, and the difference
+ * is what makes the density right at a border: the cell always draws this many
+ * points over its whole 4096 m2 and then DROPS the ones that do not belong to
+ * the shape being sampled, that stand on a building's footprint or that lie
+ * under ground painted over it. A cell that is half wood and half meadow
+ * therefore carries half of this from each — which is the same tufts per
+ * square metre as a cell that is all wood, wherever the painted borders
+ * happen to run.
+ *
+ * The area-wide `undergrowthCount`/`undergrowthCapped` pair this replaces went
+ * with the per-area build: there is no "the shape wanted more than it got" to
+ * report when the shape is not the unit any more (see
+ * `UNDERGROWTH_MAX_PER_CELL`).
  */
-export function undergrowthCount(areaM2: number, value: number): number {
+export function undergrowthCellCount(value: number): number {
   const density = undergrowthDensityPer100m2(value);
-  const area = Number(areaM2);
-  if (!(density > 0) || !Number.isFinite(area) || area <= 0) return 0;
-  return Math.min(Math.round((area / 100) * density), UNDERGROWTH_MAX_PER_AREA);
-}
-
-/** Whether that count really hit the ceiling — the one thing worth saying out
- *  loud, because from there on the layer is thinner than the catalog asks and
- *  no picture shows why. */
-export function undergrowthCapped(areaM2: number, value: number): boolean {
-  const density = undergrowthDensityPer100m2(value);
-  const area = Number(areaM2);
-  if (!(density > 0) || !Number.isFinite(area) || area <= 0) return false;
-  return Math.round((area / 100) * density) > UNDERGROWTH_MAX_PER_AREA;
+  if (!(density > 0)) return 0;
+  const cellM2 = UNDERGROWTH_CELL_M * UNDERGROWTH_CELL_M;
+  return Math.min(Math.round((cellM2 / 100) * density), UNDERGROWTH_MAX_PER_CELL);
 }
 
 /**
