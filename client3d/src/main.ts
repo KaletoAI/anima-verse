@@ -30,7 +30,7 @@ import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
 import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
-import { footprintSignature, locationsSignature, terrainColor } from './game/minimap';
+import { footprintSignature, locationsSignature, minimapAnchor, terrainColor } from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -135,9 +135,9 @@ const LOD_TICK_MS = 1000;
  *  slow enough that the digits stay readable instead of blurring. */
 const PERF_UI_MS = 300;
 /** How often the minimap slice is reconsidered (Etappe 5, task 3). Four times
- *  a second: the picture only changes when the avatar crosses a cell boundary
- *  or the camera turns, both of which are slower than that — and a slice
- *  published per frame would re-render React sixty times a second for a dot
+ *  a second: the picture only changes when the avatar has walked its four
+ *  metres or the camera turns, both of which are slower than that — and a slice
+ *  published per frame would re-render React sixty times a second for a window
  *  that has not moved. Nothing is published unless something changed. */
 const MINIMAP_MS = 250;
 /**
@@ -2487,11 +2487,18 @@ async function startApp(username: string, role: string) {
   // the known places with their POINTS (`mapLocSig`, computed when the payload
   // is taken — the count alone missed a location that MOVED, and the dot then
   // sat at the old metre until an unrelated input happened to move the
-  // signature), the avatar's position to the metre and the camera yaw in whole
-  // degrees. Everything smaller than that (a step of a few
+  // signature), the WINDOW ANCHOR the map is centred on and the camera yaw in
+  // whole degrees. Everything smaller than that (a step of a few
   // centimetres, a fraction of a degree of orbit) would redraw a 160-pixel
-  // canvas and re-render React for a picture nobody could tell apart — the map
-  // is 160 px wide, so a sub-metre move cannot even reach a pixel of it.
+  // canvas and re-render React for a picture nobody could tell apart.
+  //
+  // The anchor, not the raw position: since the map is a sight-radius WINDOW
+  // that travels with the figure, every published metre would move the whole
+  // picture — so `minimapAnchor` re-centres it in steps of
+  // `MINIMAP_FOLLOW_STEP_M` (4 m ≈ half a pixel) and hands the same object back
+  // in between. The avatar dot is drawn on the anchor as well, so it sits in
+  // the middle of the window by construction and can never disagree with the
+  // ground around it.
   //
   // Leaving the mode publishes the empty slice once: the minimap belongs to
   // the embodied view, and a map left standing with a dot from minutes ago
@@ -2504,20 +2511,23 @@ async function startApp(username: string, role: string) {
   // input moved the signature — the lesson `mapLocSig` already taught.
   let reliefRev = -1;
   let relief: MinimapRelief | null = null;
+  /** Centre of the sight window, moved in 4 m steps — see the note above. */
+  let mapAnchor: MinimapDot | null = null;
   setInterval(() => {
     if (getGameState().mode !== 'embodied') {
       if (minimapSig === '') return;
       minimapSig = '';
+      mapAnchor = null;
       setMinimap(null);
       return;
     }
-    const pos = npcs.positionOf(avatarName);
+    mapAnchor = minimapAnchor(mapAnchor, npcs.positionOf(avatarName));
     // Whole degrees: the compass needle turns in 45° steps (Q/E) plus the free
     // orbit, and a degree is finer than the needle can show anyway.
     const yawDeg = Math.round(engine.yaw * 180 / Math.PI);
     const frame = worldBounds
       ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
-    const spot = pos ? `${Math.round(pos.x)},${Math.round(pos.z)}` : '';
+    const spot = mapAnchor ? `${mapAnchor.x},${mapAnchor.z}` : '';
     const heightRev = terrainGround.heightRevision();
     const sig = `${terrainGround.revision()}|${heightRev}|${mapLocSig}`
       + `|${spot}|${yawDeg}|${frame}`;
@@ -2554,7 +2564,7 @@ async function startApp(username: string, role: string) {
       areas,
       relief,
       locations: dots,
-      avatar: pos ? { x: pos.x, z: pos.z } : null,
+      avatar: mapAnchor,
       // The published yaw is the QUANTISED one, so the drawn wedge and the
       // signature can never disagree about where the avatar looks.
       yaw: yawDeg * Math.PI / 180,

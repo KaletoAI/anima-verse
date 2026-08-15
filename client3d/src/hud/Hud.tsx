@@ -683,7 +683,7 @@ export function Hud({ avatar, username, role }: {
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}
 
-      {/* Minimap (Etappe 5, task 3): the whole world, north up, top right.
+      {/* Minimap (Etappe 5, task 3): as far as one can see, north up, top right.
           Only in the embodied mode — in the overview one IS looking at the
           map, and a second small copy of it would say nothing. The switch in
           the game menu is the other half of the condition. */}

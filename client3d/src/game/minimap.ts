@@ -2,12 +2,21 @@
  * The minimap projection — world METRE to canvas pixel, camera yaw to compass
  * bearing (stage 5 task 3; put on the metre world in E4 task 2).
  *
- * The minimap shows the WHOLE world frame at once (`world_bounds` of § A12, the
- * unfiltered extent over all placed locations) fitted into a square canvas,
- * north up, with no scrolling and no zoom of its own. That is deliberate: a map
- * that panned with the avatar would answer "where am I looking" but never "how
- * much of the world is still dark", and the fog of war is what this picture is
- * about.
+ * TWO FRAMINGS, one projection. Embodied, the map is a WINDOW around the
+ * avatar: north up, the figure in the middle, and a radius of exactly the
+ * distance one can see in the 3D view (`MINIMAP_VIEW_RADIUS_M`). Without a
+ * figure on the map it falls back to the WHOLE world frame (`world_bounds` of
+ * § A12, the unfiltered extent over all placed locations), contain-fitted.
+ * `minimapView` is the one place that chooses; every drawing path goes through
+ * `worldToPx` and therefore needs to know neither which of the two it is in.
+ *
+ * The whole frame used to be the only framing, on the argument that a panning
+ * map cannot say "how much of the world is still dark". On a metre world it
+ * showed up to a kilometre and a half across 160 pixels, where a metre is a
+ * tenth of a pixel and the relief is a smudge — it answered the fog question
+ * and no other. The window answers the one a player standing in the world
+ * asks, and it is the same ground the eye has: the veil closes at the radius,
+ * so the map stops exactly where sight does.
  *
  * It draws the painted TERRAIN AREAS coarsely (the polygons of `/play/terrain`,
  * in list order, in their catalog colours) with the known places as dots on
@@ -107,6 +116,33 @@ export const MINIMAP_SIZE_PX = 160;
  *  in the middle of a sane window. */
 export const MINIMAP_MIN_SPAN_M = 10;
 
+/**
+ * Radius of the embodied window in metres — THE SIGHT RADIUS, and that is the
+ * whole of the zoom rule. There is no slider and no setting: the map shows the
+ * ground one can actually see, so what stands on it is what one could walk up
+ * to and look at.
+ *
+ * The number is the far end of the scene fog, `new THREE.Fog(…, 220, 520)` in
+ * `scene/engine.ts` — past it the 3D view is a flat veil and a map dot would
+ * promise sight that is not there. It is repeated here rather than imported
+ * because `engine.ts` is `three`-bound and this module is pure (see the head of
+ * the file); `scene/heightTiles.ts` derives its own 560 m from the same 520 and
+ * says so. All three move together or none does.
+ */
+export const MINIMAP_VIEW_RADIUS_M = 520;
+
+/**
+ * How far the avatar walks before the window is re-anchored, in metres.
+ *
+ * The map follows the figure, but not per frame and not per step: at a 160 px
+ * canvas over a 1 040 m window one metre is 0.15 px, so re-anchoring on every
+ * published position would redraw the canvas for a picture nobody can tell
+ * apart. Four metres is a good half pixel — the smallest move that can show at
+ * all — and the avatar dot is drawn on the ANCHOR, so it never leaves the
+ * middle while the ground under it lags by less than that.
+ */
+export const MINIMAP_FOLLOW_STEP_M = 4;
+
 /** Fill for a kind the terrain catalog does not know — the same neutral grey
  *  the server hands out for a type without a colour
  *  (`app/core/terrain_types.py: DEFAULT_COLOR`). THE one fallback colour of
@@ -137,8 +173,76 @@ export function minimapLayout(bounds: WorldBounds | null | undefined,
 }
 
 /**
+ * The WINDOW fit: a square of `radiusM` metres in every direction around
+ * `center`, filling the canvas edge to edge.
+ *
+ * Fixed scale — `sizePx / (2 · radiusM)` — so the map has ONE known metre
+ * ruler instead of one per world, and the centre lands on the canvas centre by
+ * construction: that is what puts the avatar in the middle. North stays up,
+ * the window never turns with the camera; the compass rose is what says where
+ * one looks.
+ *
+ * A point `radiusM` metres away lands exactly on the edge — `0` or `sizePx` —
+ * which is one past the last pixel on the far sides. Deliberate: the mapping is
+ * continuous and the canvas is the clip. Anything outside simply misses the
+ * canvas and is thereby not drawn, which is all the culling this picture needs.
+ *
+ * No centre (no figure on the map) or a non-positive radius gives scale 0 and
+ * the canvas centre, the same "nothing to draw" answer `minimapLayout` gives
+ * for an empty world.
+ */
+export function minimapWindowLayout(center: { x: number; z: number } | null | undefined,
+                                    radiusM: number,
+                                    sizePx: number): MinimapLayout {
+  if (!center || !(radiusM > 0)) return { scale: 0, offX: sizePx / 2, offY: sizePx / 2 };
+  const scale = sizePx / (2 * radiusM);
+  return { scale, offX: sizePx / 2 - center.x * scale, offY: sizePx / 2 - center.z * scale };
+}
+
+/**
+ * WHICH OF THE TWO FRAMINGS applies — the one decision, made once per redraw.
+ *
+ * A figure on the map means the embodied window around it; without one there is
+ * nothing to centre on and the whole world frame is what is left. Every drawing
+ * path takes the layout from here, so terrain, relief, places and the avatar
+ * can never be framed differently from one another.
+ */
+export function minimapView(avatar: { x: number; z: number } | null | undefined,
+                            bounds: WorldBounds | null | undefined,
+                            sizePx: number): MinimapLayout {
+  return avatar
+    ? minimapWindowLayout(avatar, MINIMAP_VIEW_RADIUS_M, sizePx)
+    : minimapLayout(bounds, sizePx);
+}
+
+/**
+ * Where the window is centred, given where it was centred and where the avatar
+ * stands now: the old anchor while the figure has not walked more than
+ * `MINIMAP_FOLLOW_STEP_M`, a fresh one once it has.
+ *
+ * Returning the PREVIOUS object identity on a small move is the point — the
+ * publisher puts the anchor into its redraw signature, so an unchanged anchor
+ * is an unchanged picture and costs neither a publish nor a canvas.
+ *
+ * No position (no figure yet, or the mode was left) clears the anchor: a window
+ * kept around a metre from minutes ago would be worse than none.
+ */
+export function minimapAnchor(prev: MinimapDot | null,
+                              pos: { x: number; z: number } | null | undefined,
+                              stepM: number = MINIMAP_FOLLOW_STEP_M): MinimapDot | null {
+  if (!pos) return null;
+  if (prev && Math.hypot(pos.x - prev.x, pos.z - prev.z) <= stepM) return prev;
+  return { x: pos.x, z: pos.z };
+}
+
+/**
  * A world point in canvas pixels. `py` grows with the world's z, and north is
  * `-z`, so north ends up UP on the canvas without any extra flip.
+ *
+ * THE one world→pixel routine of the minimap, whichever framing the layout came
+ * from — the polygons, the relief rectangle, the place dots and the avatar all
+ * go through here. That is what makes the framing a single decision instead of
+ * four agreeing ones.
  */
 export function worldToPx(p: { x: number; z: number },
                           layout: MinimapLayout): { px: number; py: number } {

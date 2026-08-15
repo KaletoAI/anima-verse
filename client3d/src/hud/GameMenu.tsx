@@ -209,7 +209,7 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
         <Choice label={t('Minimap')} value={minimapOn} options={onOff}
           onPick={onMinimapChange} />
         <p className="hud-menu-hint">
-          {t('The whole world in the top right corner, north up, with your position and heading. Only while you are in the world.')}
+          {t('The ground within sight in the top right corner, north up, with your position and heading. Only while you are in the world.')}
         </p>
         <Choice label={t('Performance readout')} value={perfOn} options={onOff}
           onPick={onPerfChange} />

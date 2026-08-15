@@ -1,13 +1,16 @@
 /**
  * The minimap of the embodied mode (Etappe 5, task 3).
  *
- * ONE canvas, top right, showing the WHOLE world frame at once — north up, no
- * scrolling and no zoom. That is the point of it in a stage about the fog of
- * war: a map that panned along with the avatar would say where one is looking
- * but never how much of the world is still dark. The painted terrain is filled
- * polygons, the world's RELIEF is a shading layer over them, the known places
- * are dots on top of that, and everything else stays the dark backdrop — and
- * the backdrop is the fog.
+ * ONE canvas, top right, north up: a WINDOW around the avatar as wide as one
+ * can see (`MINIMAP_VIEW_RADIUS_M` — the scene's own fog end), with the figure
+ * in the middle. Without a figure it falls back to the whole world frame. The
+ * painted terrain is filled polygons, the world's RELIEF is a shading layer
+ * over them, the known places are dots on top of that, and everything else
+ * stays the dark backdrop — and the backdrop is the fog.
+ *
+ * Nothing is clipped by hand: what lies outside the window misses the canvas
+ * and is thereby not drawn — places included, which is why none of them is
+ * pinned to the rim.
  *
  * PRESENTATIONAL, and cheap by construction. It owns no state and asks the
  * scene nothing: `main.ts` publishes a finished slice on the minimap store of
@@ -24,7 +27,7 @@
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
-import { minimapLayout, worldToPx, yawToCompassDeg, MINIMAP_SIZE_PX } from '../game/minimap';
+import { minimapView, worldToPx, yawToCompassDeg, MINIMAP_SIZE_PX } from '../game/minimap';
 import type { MinimapRelief } from '../game/minimap';
 import { getMinimap, subscribeMinimap } from './bus';
 
@@ -102,7 +105,10 @@ export function Minimap() {
     ctx.fillStyle = FOG_FILL;
     ctx.fillRect(0, 0, size, size);
 
-    const layout = minimapLayout(state.bounds, size);
+    // The framing is decided ONCE, here, and everything below strokes through
+    // `worldToPx` with it: the window around the avatar while one stands in the
+    // world, the whole frame while no figure is on the map.
+    const layout = minimapView(state.avatar, state.bounds, size);
     if (layout.scale > 0) {
       // The painted ground first, in the order it was published — that order
       // IS the layering (`z_order`, then paint order), so a path drawn over a
@@ -132,6 +138,12 @@ export function Minimap() {
       // (j + 0.5)/rows of the rectangle back on the support point itself — and
       // `worldToPx` grows py with z, so row 0 lands at the SMALLEST py. North
       // is up, exactly as it is for every dot on this canvas.
+      //
+      // The window framing changes NOTHING about that: it is another offset and
+      // another scale in the same `worldToPx`, so the half-step rectangle keeps
+      // landing on the support points — it simply reaches past the canvas edges
+      // now, and the shading one can see is the shading of the ground one is
+      // standing on.
       if (state.relief) {
         if (relief.current.src !== state.relief) {
           relief.current = { src: state.relief, bitmap: reliefBitmap(state.relief) };
@@ -161,8 +173,9 @@ export function Minimap() {
       const bearing = yawToCompassDeg(state.yaw);
       const mid = canvasAngle(bearing);
       const half = WEDGE_HALF_DEG * Math.PI / 180;
-      // The wedge reaches a bit beyond the cell the avatar stands on, with a
-      // floor for the wide maps where a cell is only a pixel or two.
+      // The wedge is a reading aid, not a measurement: a couple of metres of
+      // reach, with a floor for the framings where a metre is a fraction of a
+      // pixel (the sight window at 160 px is one such).
       const reach = Math.max(layout.scale * 1.8, 14);
       ctx.beginPath();
       ctx.moveTo(px, py);
