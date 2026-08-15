@@ -107,6 +107,27 @@ const AREA_Y_MAX_M = 0.01;
  *  from the one below it, and a world with two hundred painted areas must not
  *  ask the driver for a two-hundred-fold offset. */
 const AREA_OFFSET_MAX = 32;
+/**
+ * Where the painted areas sit in the TRANSPARENT pass: drawn far BEFORE
+ * everything else in it, at `BASE + index + 1`.
+ *
+ * The areas became transparent materials with the soft edge (§ stage 4 of
+ * `scene/naturalGround.ts`), and that moved them out of the opaque pass — where
+ * they were drawn before every overlay in the world — into the pass three sorts
+ * by `renderOrder`. At the natural ladder (1, 2, 3, …) they would land AFTER
+ * every overlay that leaves its render order at the default 0: the fog clouds,
+ * the selection ring under an NPC, a path line, the door and boundary marks.
+ * Those overlays deliberately do not write depth, so the opaque CORE of a drape
+ * drawn after them simply paints over them — a selection ring vanishes on a
+ * painted meadow, and every painted area punches a hole in the fog.
+ *
+ * A large negative base restores the old truth ("the ground is drawn first")
+ * without touching anything else: the areas keep their order AMONG themselves,
+ * which is what stacks them, and they stay behind the whole of the default-0
+ * world. Ten thousand is simply more layers than any world will ever paint.
+ * Exported so the smoke can pin the number instead of a copy of it.
+ */
+export const AREA_RENDER_ORDER_BASE = -10000;
 
 /** Fallback tuft size when a scatter entry names no model — HIP-HIGH next to a
  *  1.70 m figure, not knee-high (finding 2 of the E8 acceptance round: the old
@@ -2093,11 +2114,16 @@ export function createGround(): Ground {
    * whole area away. The refinement happens AFTER the lift, so it splits the
    * drape's own planes and describes the very same surface.
    *
+   * A `null` ring is a kind that gets NO fringe — water, today: its material
+   * carries its own shader and never compiles the branch, so refining its
+   * triangles and filling a buffer nothing reads would be work for a picture
+   * that does not change.
+   *
    * The input geometry is consumed: it is read out and disposed here, because
    * from that moment on nothing else knows about it.
    */
   function drapeArea(flat: THREE.BufferGeometry,
-                     ring: readonly Point2[]): THREE.BufferGeometry {
+                     ring: readonly Point2[] | null): THREE.BufferGeometry {
     const ov = relief.overview;
     const src = flat.index ? flat.toNonIndexed() : flat;
     const pos = Array.from(src.getAttribute('position').array as ArrayLike<number>);
@@ -2116,11 +2142,15 @@ export function createGround(): Ground {
       cutUv = uv ? cut.uv : null;
       liftToField(cutPos);
     }
-    const band = ngRefineEdgeBand(cutPos, cutUv, ring);
+    const band = ring ? ngRefineEdgeBand(cutPos, cutUv, ring) : null;
+    const outPos = band ? band.pos : cutPos;
+    const outUv = band ? band.uv : cutUv;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(band.pos, 3));
-    if (band.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(band.uv, 2));
-    geo.setAttribute(NG_EDGE_ATTRIBUTE, new THREE.Float32BufferAttribute(band.dist, 1));
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(outPos, 3));
+    if (outUv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(outUv, 2));
+    if (band) {
+      geo.setAttribute(NG_EDGE_ATTRIBUTE, new THREE.Float32BufferAttribute(band.dist, 1));
+    }
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     return geo;
@@ -2146,26 +2176,33 @@ export function createGround(): Ground {
     areas.forEach((area, index) => {
       const built = builtAreas[index];
       if (!built) return;   // a ring that encloses nothing has nothing to draw
+      // WHO GETS A FRINGE is decided once, here, and reaches the geometry and
+      // the material as the same answer — the class the material is built from
+      // (`isWaterClass`, the very source `materialFor` reads). A lake keeps its
+      // hard shore, and its drape is spared the refinement and the attribute.
+      const softEdge = !isWaterClass(surfaceMaterialSpec(area.kind)?.class);
       // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
       // so the texture runs seamlessly across area borders.
-      const mesh = new THREE.Mesh(drapeArea(built.geometry, built.ring),
-                                  materialFor(area.kind, 1, nextOwned, true));
+      const mesh = new THREE.Mesh(drapeArea(built.geometry, softEdge ? built.ring : null),
+                                  materialFor(area.kind, 1, nextOwned, softEdge));
       mesh.receiveShadow = true;
       // LIST ORDER decides what covers what — the server sorted the areas
       // bottom to top (z_order, then paint order), so the index IS the layer.
       //
       // AND SINCE THE FRINGE, that order is also the BLEND order. The drapes
       // are transparent materials now (`applyNaturalGround`, stage 4), so
-      // three draws them after everything opaque — the base plate first of all,
-      // which is what the lowest area's rim fades onto — and within that pass
-      // `renderOrder` beats the distance sort, so area 1 is on the screen
-      // before area 2 blends over it. Nothing here changes about DEPTH: the
-      // drapes still write it, still ride the `polygonOffset` ladder below and
-      // still sit on the sub-millimetre y ladder, which together are what keeps
-      // coplanar ground from z-fighting. A transparent material that stopped
-      // writing depth would gain nothing (the pass is already ordered) and
-      // would lose the ground its occlusion of what is drawn after it.
-      mesh.renderOrder = index + 1;
+      // three draws them in the transparent pass, sorted by `renderOrder`
+      // rather than by distance: area 1 is on the screen before area 2 blends
+      // over it. The ladder starts at `AREA_RENDER_ORDER_BASE`, which is what
+      // keeps the ground UNDER the overlays of the world (read it — a natural
+      // 1, 2, 3 would paint the drapes over every selection ring and over the
+      // fog). Nothing here changes about DEPTH: the drapes still write it,
+      // still ride the `polygonOffset` ladder below and still sit on the
+      // sub-millimetre y ladder, which together are what keeps coplanar ground
+      // from z-fighting. A transparent material that stopped writing depth
+      // would gain nothing (the pass is already ordered) and would lose the
+      // ground its occlusion of what is drawn after it.
+      mesh.renderOrder = AREA_RENDER_ORDER_BASE + index + 1;
       const mat = mesh.material as THREE.Material;
       const bias = -Math.min((index + 1) * AREA_POLYGON_OFFSET, AREA_OFFSET_MAX);
       mat.polygonOffset = true;

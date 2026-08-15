@@ -160,11 +160,17 @@
  * The surface must not move (a tilted plane comes back exactly), the winding
  * must not flip (a flipped piece is a hole), and the whole thing must stay
  * cheap.
+ * THE EDGE NAME is quantised, and that is what makes the marks conforming: the
+ * grid clip hands the two owners of a shared edge the same intersection as two
+ * different doubles (it interpolates from both ends), and a raw key would name
+ * that edge twice and let its owners disagree about splitting it.
  * THE TWO PROGRAMS: the drape carries the `NG_EDGE_FADE` define, is
  * transparent and says so in its cache key; the base plate has none of the
  * three and therefore never compiles the branch that reads an attribute it
  * has not got. Both still WRITE depth — the coplanar `renderOrder` +
- * `polygonOffset` ladder of `ground.ts` rests on that.
+ * `polygonOffset` ladder of `ground.ts` rests on that — and the drapes' ladder
+ * starts at a large NEGATIVE base, which is what keeps the transparent ground
+ * behind every overlay that leaves its render order at the default 0.
  *
  * ---------------------------------------------------------------------------
  * [8] THE RED COUNTER-CHECKS — eight mutants, eight losses
@@ -196,6 +202,11 @@
  * (h) AN UNPRINTABLE CONSTANT (1.505 m). The module must refuse to LOAD;
  *     without the assert `toFixed` would round it to 1.51 and the shader would
  *     spend a different number than the maths does.
+ * (i) THE OLD RENDER-ORDER LADDER (1, 2, 3 …). Harmless while the drapes were
+ *     opaque, fatal once they are not: in the transparent pass they would be
+ *     drawn after every overlay that keeps the default order 0, and those write
+ *     no depth — the opaque core of a painted area would paint over the
+ *     selection ring under an NPC and punch a hole in the fog.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -253,7 +264,7 @@ async function loadClient(mutate) {
       + '  NG_EDGE_ATTRIBUTE, NG_EDGE_CACHE_KEY, NG_EDGE_DEFINE, ngLit,\n'
       + '  ngHeightTex, ngField, ngFieldSize, ngStrength }\n'
       + `  from '${NG_SRC}';\n`
-      + `export { patchHole, HOLE_CACHE_KEY } from '${GROUND_SRC}';\n`
+      + `export { patchHole, HOLE_CACHE_KEY, AREA_RENDER_ORDER_BASE } from '${GROUND_SRC}';\n`
       + `export { isWaterClass } from '${MATH_SRC}';\n`
       + "export { surfaceMaterial } from '@anima/scene-render';\n";
     const built = await esbuild.build({
@@ -439,6 +450,10 @@ const NG_MARKS = [
   ['frag', 'diffuseColor.a *= smoothstep( 0.0, 1.50, vNgEdge + ngEdgePush );'],
 ];
 const NG_UNIFORMS = ['uNgHeight', 'uNgField', 'uNgFieldSize', 'uNgStrength'];
+/** The drapes' place in the transparent pass, as `ground.ts` writes it — one
+ *  regular expression for the truth in [9] and for the mutant in [8i], so the
+ *  two sides cannot drift. */
+const AREA_ORDER_RE = /mesh\.renderOrder = AREA_RENDER_ORDER_BASE \+ index \+ 1;/;
 /** What `patchHole` writes — the predecessor the chain has to keep (the lines
  *  are the subject of `smoke_surface_patch.mjs`, here they are the witness). */
 const HOLE_MARKS = [
@@ -529,7 +544,8 @@ async function main() {
   const { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY,
     NG_EDGE_ATTRIBUTE, NG_EDGE_CACHE_KEY, NG_EDGE_DEFINE, ngLit,
     ngHeightTex, ngField, ngFieldSize, ngStrength,
-    patchHole, HOLE_CACHE_KEY, isWaterClass, surfaceMaterial } = await loadClient();
+    patchHole, HOLE_CACHE_KEY, AREA_RENDER_ORDER_BASE,
+    isWaterClass, surfaceMaterial } = await loadClient();
   const M = await loadMath();
 
   /** One material through the patch(es), with its composed shader. */
@@ -792,16 +808,22 @@ async function main() {
   check('…and the shared package knows nothing of it either',
     shared.includes('naturalGround'), false);
   // WHO GETS THE FRINGE: the painted-area drapes, and the base plate does not.
+  // ONE decision, out of the class the material is built from, reaching the
+  // geometry and the material alike — so a lake is spared the refinement and
+  // the attribute as well as the branch.
   check('the drape is built from its own ring and asks for the fringe',
-    /drapeArea\(built\.geometry, built\.ring\),\n\s*materialFor\(area\.kind, 1, nextOwned, true\)/
+    /const softEdge = !isWaterClass\(surfaceMaterialSpec\(area\.kind\)\?\.class\);[\s\S]{0,300}?drapeArea\(built\.geometry, softEdge \? built\.ring : null\),\n\s*materialFor\(area\.kind, 1, nextOwned, softEdge\)/
       .test(groundSrc), true);
+  check('…and a kind without a fringe gets neither refinement nor attribute',
+    /const band = ring \? ngRefineEdgeBand\(cutPos, cutUv, ring\) : null;/.test(groundSrc)
+      && /if \(band\) \{\n\s*geo\.setAttribute\(NG_EDGE_ATTRIBUTE/.test(groundSrc), true);
   check('…while the base plate takes the material without one',
     /materialFor\(kind, Math\.min\(w, d\), baseOwned\)/.test(groundSrc), true);
   check('the drape writes the distance attribute the shader reads',
     /geo\.setAttribute\(NG_EDGE_ATTRIBUTE, new THREE\.Float32BufferAttribute\(band\.dist, 1\)\)/
       .test(groundSrc), true);
   check('…out of the refinement, and after the lift (same surface, more triangles)',
-    /liftToField\(cutPos\);[\s\S]{0,200}?const band = ngRefineEdgeBand\(cutPos, cutUv, ring\);/
+    /liftToField\(cutPos\);[\s\S]{0,200}?const band = ring \? ngRefineEdgeBand\(cutPos, cutUv, ring\) : null;/
       .test(groundSrc), true);
 
   console.log('\n[9] the soft edge — the band, the attribute, the two programs');
@@ -856,6 +878,30 @@ async function main() {
     [q(tiltY(5, 5)), q(tiltY(2.5, 7.5))]);
   check('…and every piece keeps its parent\'s winding (a flipped one would be culled)',
     windings(band), 'all one way');
+  // THE EDGE NAME, which is what makes the refinement seam-free. The two
+  // triangles that share an edge do NOT hold bit-identical endpoints: the grid
+  // clip interpolates the same intersection from both directions, `a + (b−a)·t`
+  // against `b + (a−b)·(1−t)`, which is one real number and two doubles. A raw
+  // key would name that edge twice and let its owners disagree about splitting
+  // it — precisely the alpha seam the marks exist to prevent.
+  const { ngEdgeKey } = M;
+  const vert = (x, z) => ({ x, y: 0, z, u: 0, v: 0, d: 0 });
+  const lerpFwd = (a, b, t) => a + (b - a) * t;
+  const lerpBack = (a, b, t) => b + (a - b) * (1 - t);
+  const cut = [0.1, 0.3, 0.7].map((t) => [lerpFwd(-7.3, 12.9, t), lerpBack(-7.3, 12.9, t)]);
+  check('the two directions of one clip really are different doubles',
+    cut.some(([f, b]) => f !== b), true);
+  check('…and still name the same edge',
+    cut.map(([f, b]) => ngEdgeKey(vert(f, 3), vert(9, 4))
+      === ngEdgeKey(vert(b, 3), vert(9, 4))), [true, true, true]);
+  check('…as does the same edge read backwards',
+    ngEdgeKey(vert(1, 2), vert(3, 4)), ngEdgeKey(vert(3, 4), vert(1, 2)));
+  const oneUlpAbove5 = 5 + Number.EPSILON * 4;   // the ulp at 5 is 4·EPSILON
+  check('one ULP away is a different double…', oneUlpAbove5 === 5, false);
+  check('…and still the same vertex',
+    ngEdgeKey(vert(oneUlpAbove5, 2), vert(9, 9)), ngEdgeKey(vert(5, 2), vert(9, 9)));
+  check('…while a real neighbour a millimetre away is NOT',
+    ngEdgeKey(vert(5.001, 2), vert(9, 9)) === ngEdgeKey(vert(5, 2), vert(9, 9)), false);
   check('the UVs are carried along when there are any',
     M.ngRefineEdgeBand(coarse, coarse.filter((_, i) => i % 3 !== 1), square).uv.length,
     (band.pos.length / 3) * 2);
@@ -895,6 +941,21 @@ async function main() {
     drapeEdge.shader.vertexShader.split(NG_EDGE_ATTRIBUTE).length - 1, 2);
   check('…nor anywhere in the fragment shader (it travels as a varying)',
     drapeEdge.shader.fragmentShader.includes(NG_EDGE_ATTRIBUTE), false);
+  // WHERE THE TRANSPARENT GROUND SITS IN THE PASS. Turning the drapes
+  // transparent moved them out of the opaque pass, where they were drawn
+  // before everything, into the one three sorts by `renderOrder` — and every
+  // overlay that leaves its order at the default 0 (fog clouds, selection
+  // rings, path lines, door marks) writes no depth, so a drape drawn after
+  // them paints its opaque core straight over them.
+  check('the drape ladder starts far in FRONT of the default overlays',
+    [AREA_RENDER_ORDER_BASE < 0, AREA_RENDER_ORDER_BASE + 1 + 200 < 0], [true, true]);
+  check('…and keeps the stacking order among the areas themselves',
+    [1, 2, 3].map((i) => AREA_RENDER_ORDER_BASE + i),
+    [AREA_RENDER_ORDER_BASE + 1, AREA_RENDER_ORDER_BASE + 2, AREA_RENDER_ORDER_BASE + 3]);
+  check('…which is the ladder ground.ts really builds',
+    AREA_ORDER_RE.test(groundSrc), true);
+  check('the base plate stays where it was (it is opaque; the pass ignores it)',
+    /mesh\.renderOrder = 0;/.test(groundSrc), true);
   check('the alpha is the LAST thing the stage does, after the colour clamp',
     drapeEdge.shader.fragmentShader.indexOf('diffuseColor.rgb = clamp(')
       < drapeEdge.shader.fragmentShader.indexOf('diffuseColor.a *='), true);
@@ -975,6 +1036,21 @@ async function main() {
     hardShader.fragmentShader.includes('diffuseColor.a'), false);
   check('…while everything else about it is untouched (the probe measures the fringe)',
     marksIn(hardShader, NG_MARKS).length, NG_MARKS.length - 1);
+
+  // [8i] THE OLD LADDER. Before the fringe the drapes were opaque and the
+  // opaque pass drew them before every overlay in the world; transparent, the
+  // natural 1, 2, 3 puts them AFTER everything that leaves its render order at
+  // 0 — and those overlays write no depth, so the drape's opaque core paints
+  // over them. The mutant is the line as it read then.
+  const oldLadder = groundSrc.replace(
+    'mesh.renderOrder = AREA_RENDER_ORDER_BASE + index + 1;',
+    'mesh.renderOrder = index + 1;');
+  check('the old ladder is really a different line', oldLadder === groundSrc, false);
+  check('…and it would put the painted ground OVER the default-0 overlays',
+    [AREA_ORDER_RE.test(oldLadder), /mesh\.renderOrder = index \+ 1;/.test(oldLadder)],
+    [false, true]);
+  check('…while the truth starts the ladder in front of them',
+    [AREA_ORDER_RE.test(groundSrc), AREA_RENDER_ORDER_BASE + 1 < 0], [true, true]);
 
   let printed = 'loaded';
   try {

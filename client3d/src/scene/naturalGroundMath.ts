@@ -381,6 +381,12 @@ function ngSplitInside(t: readonly NgVert[], ring: readonly NgPoint2[]): boolean
   return ngMisses(ngEdgeDistance(x, z, ring), (t[0].d + t[1].d + t[2].d) / 3);
 }
 
+/** How finely an edge's endpoints are told apart when they are named, in
+ *  metres: a tenth of a millimetre. Two vertices nearer than that are the same
+ *  vertex for every purpose this module has — the band is measured in
+ *  decimetres — while a real neighbour is centimetres away at the very least. */
+export const NG_EDGE_KEY_M = 1e-4;
+
 /**
  * The name of an edge, the same from both triangles that own it.
  *
@@ -389,14 +395,29 @@ function ngSplitInside(t: readonly NgVert[], ring: readonly NgPoint2[]): boolean
  * against a split one — no gap in the surface (the midpoint lies on the line),
  * but a step in the alpha along it, which reads as a hairline seam through the
  * fringe. Marking EDGES rather than triangles means both owners see the same
- * decision. Endpoints are compared as printed numbers because the coordinates
- * are literally the same floats on both sides: they come from the same clip and
- * the same midpoints.
+ * decision.
+ *
+ * THE COORDINATES ARE QUANTISED FIRST, and that is not tidiness. The vertices
+ * a shared edge is made of are NOT bit-identical from both sides: the grid clip
+ * (`subdivideOnGrid`) walks the two triangles in opposite directions and
+ * interpolates the very same intersection as `a + (b − a)·t` on one side and as
+ * `b + (a − b)·(1 − t)` on the other, which are the same real number and two
+ * different doubles. A raw key would then name one edge twice, and exactly
+ * those two triangles would disagree about splitting it — the seam this
+ * function exists to prevent. Rounding to `NG_EDGE_KEY_M` folds the last bits
+ * away, and the same rounding orders the pair so the name is direction-blind.
+ *
+ * Exported so the smoke can pin that behaviour on hand-built endpoints.
  */
-function ngEdgeKey(a: NgVert, b: NgVert): string {
-  const first = a.x < b.x || (a.x === b.x && a.z <= b.z);
-  const [p, q] = first ? [a, b] : [b, a];
-  return `${p.x},${p.z}|${q.x},${q.z}`;
+export function ngEdgeKey(a: { x: number; z: number },
+                          b: { x: number; z: number }): string {
+  const ax = Math.round(a.x / NG_EDGE_KEY_M);
+  const az = Math.round(a.z / NG_EDGE_KEY_M);
+  const bx = Math.round(b.x / NG_EDGE_KEY_M);
+  const bz = Math.round(b.z / NG_EDGE_KEY_M);
+  return (ax < bx || (ax === bx && az <= bz))
+    ? `${ax},${az}|${bx},${bz}`
+    : `${bx},${bz}|${ax},${az}`;
 }
 
 /**
