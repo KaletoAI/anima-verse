@@ -30,7 +30,10 @@ import { fogRects, SHOW_ALL_KEY } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
 import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
-import { footprintSignature, locationsSignature, minimapAnchor, terrainColor } from './game/minimap';
+import {
+  footprintSignature, locationsSignature, minimapAnchor, minimapFollowStepM,
+  minimapRadius, terrainColor, MINIMAP_SIZE_PX,
+} from './game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
@@ -135,8 +138,8 @@ const LOD_TICK_MS = 1000;
  *  slow enough that the digits stay readable instead of blurring. */
 const PERF_UI_MS = 300;
 /** How often the minimap slice is reconsidered (Etappe 5, task 3). Four times
- *  a second: the picture only changes when the avatar has walked its four
- *  metres or the camera turns, both of which are slower than that — and a slice
+ *  a second: the picture only changes when the avatar has walked its follow
+ *  step or the camera turns, both of which are slower than that — and a slice
  *  published per frame would re-render React sixty times a second for a window
  *  that has not moved. Nothing is published unless something changed. */
 const MINIMAP_MS = 250;
@@ -2495,10 +2498,10 @@ async function startApp(username: string, role: string) {
   // The anchor, not the raw position: since the map is a sight-radius WINDOW
   // that travels with the figure, every published metre would move the whole
   // picture — so `minimapAnchor` re-centres it in steps of
-  // `MINIMAP_FOLLOW_STEP_M` (4 m ≈ half a pixel) and hands the same object back
-  // in between. The avatar dot is drawn on the anchor as well, so it sits in
-  // the middle of the window by construction and can never disagree with the
-  // ground around it.
+  // `MINIMAP_FOLLOW_STEP_PX` (0.6 px, i.e. 3.9 m at the full sight radius) and
+  // hands the same object back in between. The avatar dot is drawn on the
+  // anchor as well, so it sits in the middle of the window by construction and
+  // can never disagree with the ground around it.
   //
   // Leaving the mode publishes the empty slice once: the minimap belongs to
   // the embodied view, and a map left standing with a dot from minutes ago
@@ -2511,7 +2514,7 @@ async function startApp(username: string, role: string) {
   // input moved the signature — the lesson `mapLocSig` already taught.
   let reliefRev = -1;
   let relief: MinimapRelief | null = null;
-  /** Centre of the sight window, moved in 4 m steps — see the note above. */
+  /** Centre of the sight window, moved half a pixel at a time — see above. */
   let mapAnchor: MinimapDot | null = null;
   setInterval(() => {
     if (getGameState().mode !== 'embodied') {
@@ -2521,7 +2524,12 @@ async function startApp(username: string, role: string) {
       setMinimap(null);
       return;
     }
-    mapAnchor = minimapAnchor(mapAnchor, npcs.positionOf(avatarName));
+    // The step follows the WINDOW, so it is derived from the same
+    // `minimapRadius(worldBounds)` the drawing side frames with — a small world
+    // has a narrower window and must therefore re-anchor sooner, or the picture
+    // would jump by several pixels at a time.
+    mapAnchor = minimapAnchor(mapAnchor, npcs.positionOf(avatarName),
+      minimapFollowStepM(minimapRadius(worldBounds), MINIMAP_SIZE_PX));
     // Whole degrees: the compass needle turns in 45° steps (Q/E) plus the free
     // orbit, and a degree is finer than the needle can show anyway.
     const yawDeg = Math.round(engine.yaw * 180 / Math.PI);

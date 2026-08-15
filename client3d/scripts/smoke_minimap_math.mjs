@@ -12,13 +12,26 @@
  * two, and the anchor that moves it.
  *
  * ============================================================================
- * [1] The radius IS the sight radius
+ * [1] The radius IS the sight radius — capped at half the world
  * ============================================================================
  * `MINIMAP_VIEW_RADIUS_M` is 520 m because the scene fog closes the 3D view at
  * 520 m (`scene/engine.ts`: `new THREE.Fog(0x9fc7e8, 220, 520)`). The two are
  * separate literals — `engine.ts` is `three`-bound, `minimap.ts` is pure — so
  * this file reads the fog call out of the ENGINE SOURCE and compares. A change
  * to the fog that forgets the map fails here rather than in someone's eyes.
+ *
+ * `minimapRadius(bounds) = min(520, max(span, MINIMAP_MIN_SPAN_M) / 2)` with
+ * `span` the longer axis of the world frame:
+ *   - 2 000 × 2 000 m -> min(520, 1000) = 520      the sight radius binds
+ *   - 400 × 400 m     -> min(520,  200) = 200      half the world binds
+ *   - 400 × 100 m     -> span is the LONGER axis   -> 200
+ *   - 6 × 6 m         -> the 10 m floor           -> 5
+ *   - min == max (one placed location, § A12 warns of it) -> the floor, 5,
+ *     never 0 — that is what the floor is for
+ *   - no bounds at all -> the same 5: no world to be half of
+ * THE POINT of the cap: in a small world the window then has EXACTLY the scale
+ * of the old whole-frame fit, `sizePx / max(w, d)` = `sizePx / (2 · span/2)`.
+ * The window never zooms a small world OUT — it only ever zooms in.
  *
  * ============================================================================
  * [2] `minimapWindowLayout(center, radiusM, sizePx)`
@@ -52,33 +65,52 @@
  *     canvas, i.e. NOT DRAWN. No rim clamping in v1: a dot on the edge would
  *     claim a place is within sight when it is not.
  *   - the same window on the real 160 px canvas: scale = 160/1040 = 2/13 =
- *     0.15384615384615385, so a metre is 0.15 px and the 4 m follow step is
- *     0.6153846153846154 px — the half pixel the step was chosen for.
+ *     0.15384615384615385, so a metre is 0.15 px.
  *   - no centre / radius 0: scale 0 and the canvas centre — the same "nothing
  *     to draw" answer the whole-frame fit gives for an empty world.
  *
  * ============================================================================
  * [3] `minimapView(avatar, bounds, sizePx)` — which framing applies
  * ============================================================================
- * A figure on the map -> the window around it. No figure -> the whole world
- * frame, unchanged (`minimapLayout`, checked in `smoke_walk_math.mjs`). The
- * bounds of a 2 000 × 2 000 m world and those of a 200 × 100 m one give the
- * SAME window scale — that is what "fixed ruler" means.
+ * A figure on the map -> the window around it, at `minimapRadius(bounds)`. No
+ * figure -> the whole world frame, unchanged (`minimapLayout`, checked in
+ * `smoke_walk_math.mjs`).
+ *   - the 2 km world: the window of [2], 0.24615… px/m against the whole
+ *     frame's 0.128 — the zoom the whole point of this is.
+ *   - a 400 m world: radius 200, scale 256/400 = 0.64 — and that IS the whole
+ *     frame's own scale for it, to the last bit. The cap hands the small world
+ *     back exactly as it was framed before.
+ *   - a 400 × 100 m world: radius 200 again (the longer axis), scale 0.64 —
+ *     the contain fit's scale as well, since the longer axis decides there too.
  *
  * ============================================================================
- * [4] `minimapAnchor(prev, pos)` — when the window moves
+ * [4] `minimapFollowStepM` + `minimapAnchor(prev, pos, stepM)`
  * ============================================================================
- * The old anchor while the figure is within `MINIMAP_FOLLOW_STEP_M` (4 m) of
- * it, a fresh one past that, and the SAME OBJECT back in the first case so the
- * publisher's signature can compare it away.
- *   - no anchor yet, pos (10, 20)                 -> (10, 20)
- *   - anchor (10, 20), pos (13, 20)   distance 3  -> the old one, identically
- *   - anchor (10, 20), pos (14, 20)   distance 4  -> still the old one
- *     (the step is the tolerance, not the trigger)
- *   - anchor (10, 20), pos (14.5, 20) distance 4.5-> (14.5, 20)
+ * The step is a PIXEL budget, `MINIMAP_FOLLOW_STEP_PX` = 0.6 px, turned into
+ * metres by the radius: `stepM = 0.6 · 2 · radius / sizePx`.
+ *   - radius 520, 160 px -> 0.6 · 1040 / 160 = 3.9 m      (the full sight window)
+ *   - radius 200, 160 px -> 0.6 ·  400 / 160 = 1.5 m      (a 400 m world)
+ *   - radius   5, 160 px -> 0.6 ·   10 / 160 = 0.0375 m   (the degenerate floor)
+ *   - radius  50, 160 px -> 0.375 m — where a fixed 4 m step would have jerked
+ *     the picture by 4 · (160/100) = 6.4 px at a time. That is the case this
+ *     rule exists for.
+ *   - `stepM · scale` is 0.6 px for every one of them — the invariant.
+ *
+ * `minimapAnchor` keeps the old anchor while the figure is within `stepM` of
+ * it, takes a fresh one past that, and hands the SAME OBJECT back in the first
+ * case so the publisher's signature can compare it away. With the 3.9 m step:
+ *   - no anchor yet, pos (10, 20)                    -> (10, 20)
+ *   - anchor (10, 20), pos (13, 20)   distance 3     -> the old one, identically
+ *   - anchor (10, 20), pos (14, 20)   distance 4     -> (14, 20)
+ *   - THE BOUNDARY, on a 3-4-5 triangle so the distance is exact in binary:
+ *     anchor (10, 20), pos (13, 24), distance exactly 5 against a step of 5 ->
+ *     the old anchor (the step is the tolerance, not the trigger), and against
+ *     a step of 4.999 -> a fresh one
  *   - anchor (10, 20), pos (13, 23)   distance √18 = 4.2426…  -> moves
  *     (the test is a RADIUS, not a per-axis box: 3 m east and 3 m south is
- *     more than four metres of walking)
+ *     more walking than 3.9 m)
+ *   - with the 1.5 m step of a 400 m world, those same 3 m MOVE the window —
+ *     the small world follows sooner, which is the pixel budget at work
  *   - anchor (10, 20), pos null (no figure, mode left) -> null
  *
  * ============================================================================
@@ -184,21 +216,45 @@ function differs(label, mutant, correct, eps = 1e-12) {
   }
 }
 
-const { minimapWindowLayout, minimapView, minimapAnchor, minimapLayout, worldToPx,
-  MINIMAP_VIEW_RADIUS_M, MINIMAP_FOLLOW_STEP_M, MINIMAP_SIZE_PX } = await loadMinimap();
+const { minimapWindowLayout, minimapView, minimapRadius, minimapFollowStepM,
+  minimapAnchor, minimapLayout, worldToPx, MINIMAP_VIEW_RADIUS_M,
+  MINIMAP_FOLLOW_STEP_PX, MINIMAP_MIN_SPAN_M, MINIMAP_SIZE_PX } = await loadMinimap();
 
-// --- [1] the radius is the fog's ------------------------------------------
+// --- [1] the radius is the fog's, capped at half the world -----------------
 console.log('\n[1] the window radius IS the sight radius of the 3D view');
-check('the documented radius', MINIMAP_VIEW_RADIUS_M, 520);
-check('the documented follow step', MINIMAP_FOLLOW_STEP_M, 4);
+check('the documented sight radius', MINIMAP_VIEW_RADIUS_M, 520);
+check('the documented follow step', MINIMAP_FOLLOW_STEP_PX, 0.6);
 const engineSrc = await readFile(ENGINE_TS, 'utf8');
 const fogCall = /new THREE\.Fog\(([^)]*)\)/.exec(engineSrc);
 check('engine.ts still builds the scene fog', Boolean(fogCall), true);
-const fogEnd = fogCall ? Number(fogCall[1].split(',')[2].trim()) : NaN;
-check('…and its FAR end is what the map shows', fogEnd, MINIMAP_VIEW_RADIUS_M);
+// The probe is a TEXT read of foreign source, so it has to say when it stopped
+// being able to read it at all — "expected 520, actual null" would send the
+// next reader looking for a broken map instead of a rewritten fog line.
+const fogEnd = fogCall ? Number((fogCall[1].split(',')[2] ?? '').trim()) : NaN;
+if (Number.isFinite(fogEnd)) {
+  check('…and its FAR end is what the map shows', fogEnd, MINIMAP_VIEW_RADIUS_M);
+} else {
+  failed += 1;
+  console.log('  FAIL the fog end is no longer a number literal in engine.ts —'
+    + ' update this coupling probe (and check MINIMAP_VIEW_RADIUS_M by hand)');
+}
+
+console.log('\n[1b] …but never wider than half the world');
+check('a 2 km world: the sight radius binds',
+  minimapRadius({ min_x: -1000, min_z: -1000, max_x: 1000, max_z: 1000 }), 520);
+check('a 400 m world: half the world binds',
+  minimapRadius({ min_x: -200, min_z: -200, max_x: 200, max_z: 200 }), 200);
+check('the LONGER axis is the span',
+  minimapRadius({ min_x: 0, min_z: 0, max_x: 400, max_z: 100 }), 200);
+check('a 6 m world falls onto the 10 m floor',
+  minimapRadius({ min_x: 0, min_z: 0, max_x: 6, max_z: 6 }), MINIMAP_MIN_SPAN_M / 2);
+check('ONE placed location (min == max) is caught by the floor, never radius 0',
+  minimapRadius({ min_x: 5, min_z: 5, max_x: 5, max_z: 5 }), 5);
+check('no bounds at all likewise', minimapRadius(null), 5);
+check('…and undefined', minimapRadius(undefined), 5);
 
 // --- [2] the window fit ----------------------------------------------------
-console.log('\n[2] the window: a fixed metre ruler, the avatar in the middle');
+console.log('\n[2] the window: one ruler per radius, the avatar in the middle');
 const AVATAR = { x: 100, z: -200 };
 const W = minimapWindowLayout(AVATAR, 520, 256);
 const s = 16 / 65;
@@ -222,8 +278,6 @@ check('a place 900 m east lands off the canvas', far.px, 349.53846153846155, 1e-
 check('…which is past the edge, so it is simply not drawn', far.px > 256, true);
 const W160 = minimapWindowLayout(AVATAR, MINIMAP_VIEW_RADIUS_M, MINIMAP_SIZE_PX);
 check('on the real 160 px canvas a metre is 0.15 px', W160.scale, 2 / 13);
-check('…so the 4 m follow step is a good half pixel',
-  MINIMAP_FOLLOW_STEP_M * W160.scale, 0.6153846153846154, 1e-15);
 check('no figure to centre on -> nothing to draw',
   minimapWindowLayout(null, 520, 256), { scale: 0, offX: 128, offY: 128 });
 check('a zero radius likewise', minimapWindowLayout(AVATAR, 0, 256),
@@ -236,27 +290,58 @@ check('a figure on the map is framed by its sight',
   minimapView(AVATAR, BOUNDS, 256), W);
 check('no figure falls back to the whole world frame',
   minimapView(null, BOUNDS, 256), minimapLayout(BOUNDS, 256));
-check('the window scale does not depend on the world at all',
-  minimapView(AVATAR, { min_x: 0, min_z: 0, max_x: 200, max_z: 100 }, 256).scale,
-  minimapView(AVATAR, BOUNDS, 256).scale);
 check('nothing placed and no figure -> nothing to draw',
   minimapView(null, null, 256), { scale: 0, offX: 128, offY: 128 });
+// The cap, at the consumer: a small world must come out with the scale it had
+// before the window existed — the window may zoom IN, never out.
+const SMALL = { min_x: -200, min_z: -200, max_x: 200, max_z: 200 };
+check('a 400 m world is framed at 0.64 px/m', minimapView(AVATAR, SMALL, 256).scale, 0.64);
+check('…which is exactly the whole-frame fit it had before',
+  minimapView(AVATAR, SMALL, 256).scale, minimapLayout(SMALL, 256).scale);
+const FLAT = { min_x: 0, min_z: 0, max_x: 400, max_z: 100 };
+check('a 400 x 100 m world too (the longer axis decides on both sides)',
+  minimapView(AVATAR, FLAT, 256).scale, minimapLayout(FLAT, 256).scale);
+check('the 2 km world is the one that gets zoomed IN',
+  minimapView(AVATAR, BOUNDS, 256).scale > minimapLayout(BOUNDS, 256).scale, true);
 
-// --- [4] the follow anchor -------------------------------------------------
-console.log('\n[4] the window follows in 4 m steps, not per metre');
-const A0 = minimapAnchor(null, { x: 10, z: 20 });
+// --- [4] the follow step and the anchor ------------------------------------
+console.log('\n[4] the window follows a PIXEL budget, not a metre one');
+const STEP = minimapFollowStepM(520, 160);
+check('the full sight window steps 3.9 m', STEP, 3.9, 1e-12);
+check('a 400 m world steps 1.5 m', minimapFollowStepM(200, 160), 1.5, 1e-12);
+check('the degenerate floor steps 3.75 cm',
+  minimapFollowStepM(5, 160), 0.0375, 1e-12);
+check('a 100 m world steps 37.5 cm — where 4 m would have been 6.4 px',
+  minimapFollowStepM(50, 160), 0.375, 1e-12);
+for (const r of [520, 200, 50, 5]) {
+  check(`radius ${r}: the step is 0.6 px on the canvas`,
+    minimapFollowStepM(r, 160) * minimapWindowLayout({ x: 0, z: 0 }, r, 160).scale,
+    MINIMAP_FOLLOW_STEP_PX, 1e-12);
+}
+check('the canvas edge defaults to the real one',
+  minimapFollowStepM(520), minimapFollowStepM(520, MINIMAP_SIZE_PX));
+
+console.log('\n[4b] the anchor moves only past that step');
+const A0 = minimapAnchor(null, { x: 10, z: 20 }, STEP);
 check('the first position anchors the window', A0, { x: 10, z: 20 });
-check('three metres keep the anchor', minimapAnchor(A0, { x: 13, z: 20 }), A0);
+check('three metres keep the anchor', minimapAnchor(A0, { x: 13, z: 20 }, STEP), A0);
 check('…and hand back the very same object',
-  minimapAnchor(A0, { x: 13, z: 20 }) === A0, true);
-check('exactly four metres still keep it',
-  minimapAnchor(A0, { x: 14, z: 20 }) === A0, true);
-check('four and a half move it', minimapAnchor(A0, { x: 14.5, z: 20 }),
-  { x: 14.5, z: 20 });
+  minimapAnchor(A0, { x: 13, z: 20 }, STEP) === A0, true);
+check('four metres move it', minimapAnchor(A0, { x: 14, z: 20 }, STEP),
+  { x: 14, z: 20 });
+// The boundary on a 3-4-5 triangle, so the distance is exactly 5 in binary and
+// the <= is tested rather than a rounding of it.
+check('a distance of exactly the step still keeps the anchor',
+  minimapAnchor(A0, { x: 13, z: 24 }, 5) === A0, true);
+check('…and a hair more moves it', minimapAnchor(A0, { x: 13, z: 24 }, 4.999),
+  { x: 13, z: 24 });
 check('the tolerance is a radius, not a box (3 east + 3 south = 4.24 m)',
-  minimapAnchor(A0, { x: 13, z: 23 }), { x: 13, z: 23 });
-check('no figure clears the anchor', minimapAnchor(A0, null), null);
-check('…and so does an undefined position', minimapAnchor(A0, undefined), null);
+  minimapAnchor(A0, { x: 13, z: 23 }, STEP), { x: 13, z: 23 });
+check('the same 3 m DO move the window of a 400 m world',
+  minimapAnchor(A0, { x: 13, z: 20 }, minimapFollowStepM(200, 160)), { x: 13, z: 20 });
+check('no figure clears the anchor', minimapAnchor(A0, null, STEP), null);
+check('…and so does an undefined position',
+  minimapAnchor(A0, undefined, STEP), null);
 
 // --- [5] the relief rectangle in the window --------------------------------
 console.log('\n[5] the half-step relief rectangle keeps landing on the support points');

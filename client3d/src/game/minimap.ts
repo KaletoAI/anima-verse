@@ -4,8 +4,9 @@
  *
  * TWO FRAMINGS, one projection. Embodied, the map is a WINDOW around the
  * avatar: north up, the figure in the middle, and a radius of exactly the
- * distance one can see in the 3D view (`MINIMAP_VIEW_RADIUS_M`). Without a
- * figure on the map it falls back to the WHOLE world frame (`world_bounds` of
+ * distance one can see in the 3D view — capped at half the world, so a world
+ * smaller than the sight radius is never zoomed out (`minimapRadius`). Without
+ * a figure on the map it falls back to the WHOLE world frame (`world_bounds` of
  * § A12, the unfiltered extent over all placed locations), contain-fitted.
  * `minimapView` is the one place that chooses; every drawing path goes through
  * `worldToPx` and therefore needs to know neither which of the two it is in.
@@ -117,10 +118,11 @@ export const MINIMAP_SIZE_PX = 160;
 export const MINIMAP_MIN_SPAN_M = 10;
 
 /**
- * Radius of the embodied window in metres — THE SIGHT RADIUS, and that is the
- * whole of the zoom rule. There is no slider and no setting: the map shows the
- * ground one can actually see, so what stands on it is what one could walk up
- * to and look at.
+ * FARTHEST radius of the embodied window in metres — THE SIGHT RADIUS, and
+ * that is the whole of the zoom rule. There is no slider and no setting: the
+ * map shows the ground one can actually see, so what stands on it is what one
+ * could walk up to and look at. A world smaller than that gets `minimapRadius`
+ * instead — see there.
  *
  * The number is the far end of the scene fog, `new THREE.Fog(…, 220, 520)` in
  * `scene/engine.ts` — past it the 3D view is a flat veil and a map dot would
@@ -132,16 +134,23 @@ export const MINIMAP_MIN_SPAN_M = 10;
 export const MINIMAP_VIEW_RADIUS_M = 520;
 
 /**
- * How far the avatar walks before the window is re-anchored, in metres.
+ * How far the avatar walks before the window is re-anchored — IN PIXELS OF THE
+ * MAP, not in metres of the world.
  *
- * The map follows the figure, but not per frame and not per step: at a 160 px
- * canvas over a 1 040 m window one metre is 0.15 px, so re-anchoring on every
- * published position would redraw the canvas for a picture nobody can tell
- * apart. Four metres is a good half pixel — the smallest move that can show at
- * all — and the avatar dot is drawn on the ANCHOR, so it never leaves the
- * middle while the ground under it lags by less than that.
+ * The map follows the figure, but not per frame and not per step: re-anchoring
+ * on every published position would redraw the canvas for a picture nobody can
+ * tell apart. What "nobody can tell apart" means, though, is a pixel budget, and
+ * a fixed metre budget only reads as one at ONE scale. At the full 520 m sight
+ * radius a metre is 0.15 px on the 160 px canvas, so four metres are 0.6 px —
+ * the right number. In a small world at, say, a 50 m radius a metre is 1.6 px
+ * and those same four metres would be a 6.4 px jerk of the whole picture, four
+ * times a second.
+ *
+ * So the step is 0.6 px and `minimapFollowStepM` turns it into metres for
+ * whatever radius applies. The avatar dot is drawn on the ANCHOR, so it never
+ * leaves the middle while the ground under it lags by less than that.
  */
-export const MINIMAP_FOLLOW_STEP_M = 4;
+export const MINIMAP_FOLLOW_STEP_PX = 0.6;
 
 /** Fill for a kind the terrain catalog does not know — the same neutral grey
  *  the server hands out for a type without a colour
@@ -176,11 +185,10 @@ export function minimapLayout(bounds: WorldBounds | null | undefined,
  * The WINDOW fit: a square of `radiusM` metres in every direction around
  * `center`, filling the canvas edge to edge.
  *
- * Fixed scale — `sizePx / (2 · radiusM)` — so the map has ONE known metre
- * ruler instead of one per world, and the centre lands on the canvas centre by
- * construction: that is what puts the avatar in the middle. North stays up,
- * the window never turns with the camera; the compass rose is what says where
- * one looks.
+ * One scale for the whole picture — `sizePx / (2 · radiusM)` — and the centre
+ * lands on the canvas centre by construction: that is what puts the avatar in
+ * the middle. North stays up, the window never turns with the camera; the
+ * compass rose is what says where one looks.
  *
  * A point `radiusM` metres away lands exactly on the edge — `0` or `sizePx` —
  * which is one past the last pixel on the far sides. Deliberate: the mapping is
@@ -200,25 +208,70 @@ export function minimapWindowLayout(center: { x: number; z: number } | null | un
 }
 
 /**
+ * HOW WIDE the window is for this world: the sight radius, or half the world if
+ * the world is smaller than that.
+ *
+ *     radius = min(MINIMAP_VIEW_RADIUS_M, max(span, MINIMAP_MIN_SPAN_M) / 2)
+ *
+ * with `span` the LONGER axis of the world frame. The sight radius is the
+ * promise the map makes about scale; the half span is what keeps the promise it
+ * used to make about coverage. In a world of a kilometre and a half the first
+ * one binds and the map is the ground one can see; in a 400 m world the second
+ * does and the map comes out exactly as wide as the old whole-frame fit —
+ * `sizePx / max(w, d)` and `sizePx / (2 · span/2)` are the same number — so no
+ * small world is zoomed OUT by the window.
+ *
+ * The `MINIMAP_MIN_SPAN_M` floor is the same one the whole-frame fit uses, and
+ * it is why the radius can never be 0: a world with one placed location has
+ * `min == max` on both axes (§ A12 warns about exactly that), which would
+ * otherwise divide the canvas by nothing. No bounds at all is that same case —
+ * there is no world to be half of, and a 10 m window is a sane nothing.
+ */
+export function minimapRadius(bounds: WorldBounds | null | undefined): number {
+  const span = bounds
+    ? Math.max(bounds.max_x - bounds.min_x, bounds.max_z - bounds.min_z) : 0;
+  return Math.min(MINIMAP_VIEW_RADIUS_M, Math.max(span, MINIMAP_MIN_SPAN_M) / 2);
+}
+
+/**
+ * The follow step in METRES for a given radius: `MINIMAP_FOLLOW_STEP_PX`
+ * divided by the scale that radius gives, which is the same as
+ *
+ *     stepM = stepPx · 2 · radiusM / sizePx.
+ *
+ * Constant on the CANVAS by construction — `stepM · scale` is `stepPx` for
+ * every radius — which is the whole point of counting the step in pixels.
+ */
+export function minimapFollowStepM(radiusM: number,
+                                   sizePx: number = MINIMAP_SIZE_PX): number {
+  return MINIMAP_FOLLOW_STEP_PX * 2 * radiusM / sizePx;
+}
+
+/**
  * WHICH OF THE TWO FRAMINGS applies — the one decision, made once per redraw.
  *
  * A figure on the map means the embodied window around it; without one there is
  * nothing to centre on and the whole world frame is what is left. Every drawing
  * path takes the layout from here, so terrain, relief, places and the avatar
  * can never be framed differently from one another.
+ *
+ * The radius comes from `minimapRadius` — the same call `main.ts` derives its
+ * follow step from, so the window's width and the step that moves it are never
+ * two opinions.
  */
 export function minimapView(avatar: { x: number; z: number } | null | undefined,
                             bounds: WorldBounds | null | undefined,
                             sizePx: number): MinimapLayout {
   return avatar
-    ? minimapWindowLayout(avatar, MINIMAP_VIEW_RADIUS_M, sizePx)
+    ? minimapWindowLayout(avatar, minimapRadius(bounds), sizePx)
     : minimapLayout(bounds, sizePx);
 }
 
 /**
  * Where the window is centred, given where it was centred and where the avatar
- * stands now: the old anchor while the figure has not walked more than
- * `MINIMAP_FOLLOW_STEP_M`, a fresh one once it has.
+ * stands now: the old anchor while the figure has not walked more than `stepM`,
+ * a fresh one once it has. The step comes from `minimapFollowStepM` over the
+ * radius the window actually has — it is a pixel budget, not a metre one.
  *
  * Returning the PREVIOUS object identity on a small move is the point — the
  * publisher puts the anchor into its redraw signature, so an unchanged anchor
@@ -229,7 +282,7 @@ export function minimapView(avatar: { x: number; z: number } | null | undefined,
  */
 export function minimapAnchor(prev: MinimapDot | null,
                               pos: { x: number; z: number } | null | undefined,
-                              stepM: number = MINIMAP_FOLLOW_STEP_M): MinimapDot | null {
+                              stepM: number): MinimapDot | null {
   if (!pos) return null;
   if (prev && Math.hypot(pos.x - prev.x, pos.z - prev.z) <= stepM) return prev;
   return { x: pos.x, z: pos.z };
