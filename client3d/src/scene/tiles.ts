@@ -4,6 +4,7 @@ import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-ren
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { acceptsWalkHit, plateLift, standY, type GroundModelInfo } from '../game/ground';
+import { applyOcclusionFade } from './occlusion';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
@@ -860,8 +861,8 @@ export function buildTile(loc: WorldLocation): Tile {
     tile.groundPlate = plinth;
 
     const spec = buildingSpec(style, loc);
-    // Hülle in eigene Gruppe kapseln, damit ein Server-Modell (AV3D-9) sie
-    // später ersetzen kann — build() fügt direkt in tile.group ein.
+    // Wrap the shell in a group of its own so a server model can replace it
+    // later (AV3D-9) — `build()` adds straight into `tile.group`.
     const before = new Set(group.children);
     spec.build(tile, rnd);
     const shell = new THREE.Group();
@@ -872,6 +873,19 @@ export function buildTile(loc: WorldLocation): Tile {
       }
     }
     group.add(shell);
+    // The shell stands between the camera and an embodied avatar as readily as
+    // a tree does, so it takes part in the corridor fade (`scene/occlusion.ts`).
+    // Only the SHELL: the socle plate under it is ground and stays whole, and it
+    // was added to the group before the capture above. Every material in here is
+    // built per tile (`std()` makes a new one per call), so there is no shared
+    // cache to poison and nothing to clone.
+    shell.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        applyOcclusionFade(m);
+      }
+    });
     tile.shell = shell;
     tile.height = spec.h;
     addLabel();

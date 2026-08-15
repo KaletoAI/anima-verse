@@ -642,9 +642,15 @@ async function main() {
   // it takes part, and the product is what a stone with factor 0 arrives at.
   check('…the tuft material of every entry is patched',
     /applySway\(mat, entrySway, h\);/.test(groundSrc), true);
+  // The clone used to be the WIND's doing (a still prop was patched by nobody
+  // and could share the cache). Since the camera corridor patches every scatter
+  // material (`scene/occlusion.ts`), the shared cache material can no longer be
+  // handed out at all — the reason changed, the requirement for the wind did
+  // not: patching the cached material would set every scene that ever placed
+  // this prop waving.
   check('…a swaying prop draws through a CLONE of the cached GLB material',
-    /prop\.sway > 0\n?\s*\? \(mesh\.material as THREE\.Material\)\.clone\(\)/.test(groundSrc),
-    true);
+    /const material = prop\.mats\.get\(url\) \?\? \(mesh\.material as THREE\.Material\)\.clone\(\);/
+      .test(groundSrc), true);
   // ONE mount path for BOTH meshes of an entry since the per-instance LOD:
   // the full and the cheap mesh come through `mountUrl`, so both bend.
   check('…and the patch is applied where a tier is MOUNTED (mountUrl)',

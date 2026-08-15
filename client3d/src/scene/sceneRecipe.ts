@@ -11,6 +11,7 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
+import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import {
   preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
@@ -1045,11 +1046,12 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // hier würde sie nur dupliziert.
   tile.shellMats = [];
   tile.roofMats = [];
-  // Flächen-Location: das Modell IST die Location und bleibt sichtbar — es
-  // wandert nicht in roofParts/roofMats, die der Crossfade wegblendet. Die
-  // Cutouts übernehmen die Rolle des Aufdeckens (setEnabled am selben
-  // fade-Zustand). Ohne Fade braucht es auch keine Material-Klone; die
-  // Cutout-Routine klont ohnehin selbst.
+  // An AREA location: the model IS the location and stays visible — it does not
+  // go into roofParts/roofMats, which the crossfade takes away. The cutouts do
+  // the revealing instead (`setEnabled` on the same fade state). Without a fade
+  // there is no need for material clones either; the cutout routine clones on
+  // its own account anyway — which is why the corridor fade below reaches only
+  // the shell branch.
   tile.roofParts = area ? [] : [model];
   tile.facadeMats = [];
   model.traverse((o) => {
@@ -1059,6 +1061,14 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
       const clone = (m: THREE.Material) => {
         const c = m.clone();
         c.transparent = true;
+        // The shell of a location is in the way of an embodied avatar exactly
+        // like a tree is, so it takes part in the corridor fade
+        // (`scene/occlusion.ts`). Patched on the CLONE this line just made —
+        // the loaded model's own material belongs to `loadGlb`'s cache and to
+        // every other tile that shows the same building. An `area` model takes
+        // no clone and no patch: it IS the location's ground, which the fade
+        // deliberately leaves whole.
+        applyOcclusionFade(c);
         tile.roofMats.push(c as THREE.MeshStandardMaterial);
         return c;
       };

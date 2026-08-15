@@ -37,6 +37,7 @@ import {
 } from './game/soundtrack';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileDirToWorld, tileGroundY, tileToWorld, worldToTile, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
+import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
 import { anchorRawOpenings, entryOfferNear, freeBoundaryOf, inwardOf, type EntryTile, type LocalOpening } from './game/enterLocation';
@@ -3168,6 +3169,24 @@ async function startApp(username: string, role: string) {
     // already holds the avatar's — the edge would not fire on re-entry and the
     // view would stay on the wrong floor, which IS the finding.
     if (!embodied) followedStorey.clear();
+  });
+
+  // --- The view corridor camera -> avatar (`scene/occlusion.ts`) ------------
+  //
+  // ONE evaluation per frame, ONE write of the shared uniforms — the pattern of
+  // the surface clock (`updateSurfaceMaterials` in `scene/engine.ts`): however
+  // many materials carry the patch, they all read these four objects, so a wood
+  // costs the same as a single bush. Both ends are known here and nowhere else:
+  // the camera is the engine's, the avatar's chest is the figure's position
+  // plus the constant in the module.
+  //
+  // Not embodied (or no figure on the map yet) means strength 0, and the
+  // shader's own guard then discards nothing at all — an overview client draws
+  // exactly the picture it drew before this existed.
+  engine.addFrameHook(() => {
+    const embodied = getGameState().mode === 'embodied';
+    updateOcclusion(engine.camera.position,
+                    embodied ? npcs.positionOf(avatarName) : null, embodied);
   });
 
   const walkGoal = new THREE.Vector3();

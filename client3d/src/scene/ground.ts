@@ -60,6 +60,7 @@ import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
+import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterSway,
   scatterTargetH } from './scatterLod';
@@ -462,12 +463,11 @@ interface ScatterProp {
    *  of them at most, the hysteresis makes swaps rare, and re-deriving one
    *  means re-uploading a vertex buffer for a mesh we already had. */
   owned: Map<string, THREE.BufferGeometry>;
-  /** the material each loaded tier is drawn with. Whose it is depends on
-   *  `sway`: standing still it is the GLB's own, out of `loadGlb`'s cache and
-   *  shared with every other area — never disposed here. Swaying, it is a
-   *  CLONE of it carrying the shader patch, ours, and freed with the area:
-   *  patching the cached material would set every scene that ever placed this
-   *  prop waving, wind or no wind. */
+  /** the material each loaded tier is drawn with — ALWAYS a CLONE of the GLB's
+   *  own, ours, and freed with the area. Patching the cached material would set
+   *  every scene that ever placed this prop waving and dissolve it in the
+   *  camera corridor; the wind alone used to spare a still prop that clone, the
+   *  corridor fade patches every scatter material and no longer can. */
   mats: Map<string, THREE.Material>;
 }
 
@@ -1123,6 +1123,10 @@ export function createGround(): Ground {
       // The tuft's material is this entry's own, so it is simply patched —
       // the reference height is the cone's, whose tip is what bends.
       applySway(mat, entrySway, h);
+      // …and the corridor between camera and avatar takes it away where it
+      // stands in the way (`scene/occlusion.ts`). Chained after the wind, so
+      // the key of a swaying tuft reads `ground-sway@x+occlusion-corridor`.
+      applyOcclusionFade(mat);
       sink.push(geo, mat);
       // Typed on the BASE classes: `mountUrl` swaps geometry and material for
       // the loaded ones, which are not a cone and not this material.
@@ -1327,23 +1331,26 @@ export function createGround(): Ground {
       // the map is the ledger of what has to be freed — it covers BOTH tiers
       // of the entry, which is why the two meshes need no ledger of their own.
       prop.owned.set(url, geometry);
-      // THE MATERIAL OF A SWAYING PROP IS A CLONE. `loadGlb` caches the file,
-      // so `mesh.material` belongs to every area that scatters this tree and
-      // to every scene that places it; patching it here would set them all
-      // waving. The clone keeps the same cache key, so the extra material
-      // costs no extra program.
+      // THE MATERIAL OF A SCATTERED PROP IS ALWAYS A CLONE. `loadGlb` caches
+      // the file, so `mesh.material` belongs to every area that scatters this
+      // tree and to every scene that places it; patching it here would set them
+      // all waving and dissolve a placed tree in a room the moment the player
+      // walks past a wood. Until the corridor fade only a SWAYING prop had to
+      // be cloned (a still one was patched by nobody); the corridor patch
+      // applies to every scatter material, so the shared cache material can no
+      // longer be handed out at all. The clone keeps the same cache key, so the
+      // extra material costs no extra program.
       // Whatever this URL already has wins, exactly as the geometry above:
       // two loads of one URL can be in flight at once (a band crossed twice
       // while the first was travelling), and a second clone would replace the
       // first in the ledger with nobody left to free it.
-      const material = prop.mats.get(url) ?? (prop.sway > 0
-        ? (mesh.material as THREE.Material).clone()
-        : (mesh.material as THREE.Material));
+      const material = prop.mats.get(url) ?? (mesh.material as THREE.Material).clone();
       // CENTRAL, in the ONE place a tier is mounted: a mount replaces the
       // material of a mesh, so a patch applied anywhere else would be lost the
       // first time an entry loaded its second tier. BOTH meshes of an entry
-      // come through here, so both bend.
+      // come through here, so both bend — and both open up for the camera.
       applySway(material, prop.sway, prop.targetH);
+      applyOcclusionFade(material);
       prop.mats.set(url, material);
       if ((high ? prop.wantHigh : prop.wantLow) !== url) return;  // superseded
       place(prop, url, high, geometry, material);
@@ -1539,11 +1546,11 @@ export function createGround(): Ground {
         // (they came with the shared GLB) and are left alone.
         for (const geo of prop.owned.values()) geo.dispose();
         prop.owned.clear();
-        // The tier MATERIALS are ours only where the wind blows (see
-        // `ScatterProp.mats`): a swaying prop draws through a clone of the
-        // cached one, and a clone nobody frees is a leak per rebuild — an
+        // The tier MATERIALS are ALL ours (see `ScatterProp.mats`): every
+        // scattered prop draws through a clone of the cached one since the
+        // corridor fade, and a clone nobody frees is a leak per rebuild — an
         // admin painting terrain rebuilds this every few seconds.
-        if (prop.sway > 0) for (const m of prop.mats.values()) m.dispose();
+        for (const m of prop.mats.values()) m.dispose();
         prop.mats.clear();
         prop.low.dispose();
         prop.high?.dispose();
