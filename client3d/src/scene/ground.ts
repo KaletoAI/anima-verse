@@ -67,6 +67,8 @@ import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
+import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
+import { isWaterClass } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
@@ -1076,6 +1078,17 @@ export function createGround(): Ground {
     // areas alike. Patching only the plane would leave a painted meadow lying
     // over the open cellar.
     patchHole(mat);
+    // …and then, on everything that is not water, the natural-ground stages
+    // (`scene/naturalGround.ts`): anti-tile, colour patches, height AO. CHAINED
+    // after the hole, so the key of an open-world ground reads
+    // `ground-hole+natural-ground`.
+    //
+    // WATER AND ICE STEP ASIDE. Those two arrive from `surfaceMaterial` with a
+    // full shader of their own — scrolling normal maps, sky fresnel, roughness
+    // mask — and a second sample of the water texture blended into it would
+    // fight every one of them. It is the CLASS that decides, never the colour
+    // or the kind's name (`isWaterClass`).
+    if (!isWaterClass(spec?.class)) applyNaturalGround(mat);
     sink.push(mat);
     return mat;
   }
@@ -2203,6 +2216,12 @@ export function createGround(): Ground {
       loadedHeightSig = payload.sig || heightSig;
       heightRev += 1;
       fieldRange = worldHeightRange(payload);
+      // The relief reaches the ground SHADER here and nowhere else (§ A16, the
+      // AO of `scene/naturalGround.ts`): the overview is packed into a data
+      // texture once per signature, and every patched ground material reads it
+      // through shared uniforms — nothing recompiles, and a world with no
+      // relief at all switches the stage off instead of shading against zero.
+      setNaturalGroundField(payload);
       // The tiles ray their ground from above the WORLD, so the relief moves
       // the start of that ray — see `setWorldRayStart`.
       setWorldRayStart(fieldRange.max);
@@ -2570,6 +2589,11 @@ export function createGround(): Ground {
       }
       drain(baseOwned);
       drain(areaOwned);
+      // The height texture of the ground shader is module state, not a member
+      // of this closure, so it outlives the group it was built for — hand it
+      // back explicitly or a client that tears its world down keeps the whole
+      // overview on the GPU.
+      setNaturalGroundField(null);
     },
   };
 }
