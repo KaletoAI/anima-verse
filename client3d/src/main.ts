@@ -37,6 +37,7 @@ import {
 } from './game/soundtrack';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileDirToWorld, tileGroundY, tileToWorld, worldToTile, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
+import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
@@ -477,6 +478,11 @@ async function startApp(username: string, role: string) {
   reportBootStage('figures');
   setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
   setPropLoadFocus(engine.target);   // GLB-Queue: Modelle nahe der Kamera zuerst
+  // The far scatter billboards are baked with the app's OWN renderer — one
+  // WebGL context, and the offscreen passes borrow it between frames
+  // (`scene/impostors.ts`). A second renderer would mean a second context and
+  // a second copy of every texture the props already uploaded.
+  setImpostorRenderer(engine.renderer);
   const npcs = new NpcManager(figures);
   // The figures walk on the world's relief (§ A16): the manager re-derives a
   // traveller's point every frame, so it gets the sampler rather than a height

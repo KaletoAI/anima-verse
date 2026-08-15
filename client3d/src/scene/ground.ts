@@ -16,7 +16,10 @@
  *  - what is in THIS file is view state: which meshes stand in the scene, the
  *    prop scatter and its distance cut-off — and since 2026-08-15 the
  *    automatic undergrowth, the one layer that is grown here instead of
- *    authored (the terrain kind says how thick, § A9).
+ *    authored (the terrain kind says how thick, § A9), plus the FAR half of
+ *    the scatter: beyond the cull line an entry with a model is drawn as
+ *    billboards out to 400 m (`scene/impostors.ts` bakes them, this file bins
+ *    them onto the entry's own positions).
  *
  * GROUND_Y DISCIPLINE, as amended by the world relief (E8 task 3). The ground
  * is still one height and one only — `ground_y(x, z)`, which since § A16 is
@@ -62,14 +65,17 @@ import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
 import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
+import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
+  releaseImpostor } from './impostors';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
-import { instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterSway,
+import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
+  instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterSway,
   scatterTargetH, undergrowthCapped,
   undergrowthDensityPer100m2, undergrowthHeight, UNDERGROWTH_CULL_M,
   UNDERGROWTH_H_MAX, UNDERGROWTH_H_MIN, UNDERGROWTH_MAX_PER_AREA,
   undergrowthSeed, undergrowthVisible } from './scatterLod';
-import type { InstanceTier, ScatterLodCfg } from './scatterLod';
+import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
  *  the level every height in the payload is measured from. Since E8 the ground
@@ -508,12 +514,42 @@ interface ScatterProp {
    *  of them at most, the hysteresis makes swaps rare, and re-deriving one
    *  means re-uploading a vertex buffer for a mesh we already had. */
   owned: Map<string, THREE.BufferGeometry>;
+  /** the FAR half of the entry: its billboards beyond the cull line
+   *  (`scene/impostors.ts`). `null` until an instance of the entry really
+   *  stands out there AND the bake has landed — an entry nobody has looked at
+   *  from a distance never allocates one, and one whose prop cannot be baked
+   *  never will. */
+  impostor: ImpostorLayer | null;
   /** the material each loaded tier is drawn with — ALWAYS a CLONE of the GLB's
    *  own, ours, and freed with the area. Patching the cached material would set
    *  every scene that ever placed this prop waving and dissolve it in the
    *  camera corridor; the wind alone used to spare a still prop that clone, the
    *  corridor fade patches every scatter material and no longer can. */
   mats: Map<string, THREE.Material>;
+}
+
+/**
+ * The billboards of ONE scatter entry — the entry's far half.
+ *
+ * It carries NO positions of its own, and that is the whole promise of the
+ * stage (§ A9): the matrices are composed per tick out of `ScatterProp.pos`,
+ * the very array the meshes are binned from, so a tree crossing the cull line
+ * swaps its representation exactly where it stood.
+ *
+ * NO `slots` LEDGER EITHER, unlike every other layer here. The others upload
+ * their buffer only when the SET of drawn instances changed; a billboard turns
+ * with the camera, so its matrix is different whenever the camera moved at all
+ * and there is nothing a ledger could save. What keeps that affordable is the
+ * beat: this is the 1 Hz LOD tick, not a frame hook.
+ */
+interface ImpostorLayer {
+  mesh: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>;
+  /** the quad this entry's billboards are drawn on, in world metres — derived
+   *  once from the entry's target height and the bake's frame */
+  quad: ImpostorQuad;
+  /** the whole layer is switched off by its sphere test, so a tick that finds
+   *  it off again does nothing at all */
+  hidden: boolean;
 }
 
 /**
@@ -697,6 +733,12 @@ export interface Ground {
    * numbers: no mesh tier to choose, visible to 60 m and thinned from 30 m,
    * none of it settable — a knee-high tuft is out of the picture long before
    * the props are.
+   *
+   * AND SO DOES THE FAR HALF (2026-08-15): beyond the cull distance an entry
+   * with a model is drawn as billboards out to 400 m (`scene/impostors.ts`),
+   * on the very positions its meshes stand on. That stage is asked FIRST in
+   * `binProp`, because the entry-wide early-out that switches a distant wood
+   * off is exactly the case its billboards exist for.
    */
   tickScatterLod(cameraPos: THREE.Vector3): void;
   /**
@@ -1307,6 +1349,9 @@ export function createGround(): Ground {
         shownHigh: '',
         owned: new Map(),
         mats: new Map(),
+        // The far half is grown on demand, by the very tick that finds an
+        // instance of this entry beyond the cull line (`binImpostors`).
+        impostor: null,
       };
       // THE SPHERE IS SET, NOT COMPUTED, and both meshes of the entry get the
       // same one. three.js would derive it from the instance buffer on the
@@ -1705,6 +1750,115 @@ export function createGround(): Ground {
     mountUrl(prop, prop.loUrl, false);
   }
 
+  /** One of each for the billboard matrices, reused across every entry and
+   *  every tick: composing a matrix per drawn billboard is the price of the
+   *  stage, and a fresh Vector3 per instance would be garbage for nothing. */
+  const impM = new THREE.Matrix4();
+  const impQ = new THREE.Quaternion();
+  const impUp = new THREE.Vector3(0, 1, 0);
+  const impAt = new THREE.Vector3();
+  const impScale = new THREE.Vector3();
+
+  /** Switch an entry's far half off whole — the answer to every sphere test
+   *  that misses, and to a bake that has not landed yet. A layer that is
+   *  already off costs nothing. */
+  function hideImpostors(prop: ScatterProp): void {
+    const layer = prop.impostor;
+    if (!layer || layer.hidden) return;
+    layer.hidden = true;
+    layer.mesh.count = 0;
+    layer.mesh.visible = false;
+  }
+
+  /**
+   * Draw the entry's billboards — every instance between the cull line and
+   * `IMPOSTOR_FAR_M`, on the very positions the meshes use.
+   *
+   * WHAT IT REFUSES, in the order it refuses it, because that order is what
+   * keeps a world of woods affordable:
+   *  - an entry WITHOUT a model has no far half at all. The built-in tuft is a
+   *    cone in the ground's own colour; a billboard of it would be a smudge,
+   *    and knee-high growth is out of the picture long before 120 m anyway.
+   *  - an entry whose nearest instance is beyond `IMPOSTOR_FAR_M`, and one
+   *    whose FARTHEST instance is still inside the cull distance: the first
+   *    has nothing left to draw, the second is drawn entirely as meshes. Both
+   *    are answered from the instance sphere, without a loop.
+   *  - a prop that has not been baked yet draws NOTHING — no placeholder, no
+   *    grey quad. The bake is asked for here (`impostorBake`, which starts one
+   *    pass in the background and answers null meanwhile), so the wood appears
+   *    a tick later rather than flashing a stand-in first.
+   *
+   * The matrix of one billboard is `impostorQuad` (its size and how high its
+   * centre stands) and `impostorYaw` (which way it turns) — both pure, both
+   * checked by hand in `client3d/scripts/smoke_impostors.mjs`. The yaw is
+   * around Y and nothing else: a tree stands upright, and a quad that tilted
+   * back towards a camera looking down from 60° would lay the whole wood over.
+   */
+  function binImpostors(prop: ScatterProp, cam: THREE.Vector3,
+                        cfg: ScatterLodCfg): void {
+    if (!prop.loUrl) return;
+    const centreD = cam.distanceTo(prop.sphere.center);
+    // Nothing of the entry can be inside the window: too far for a billboard,
+    // or near enough that every instance of it is a mesh.
+    if (centreD - prop.sphere.radius > IMPOSTOR_FAR_M
+        || centreD + prop.sphere.radius <= cfg.cullM) {
+      hideImpostors(prop);
+      return;
+    }
+    let layer = prop.impostor;
+    if (!layer) {
+      // A CLAIM, not a lookup: the bake cache may not free a texture this
+      // mesh is drawing with, so the entry holds it until `clearAreas`
+      // releases it again (`scene/impostors.ts`).
+      const bake = acquireImpostor(prop.loUrl, prop.near);
+      if (!bake) return;   // nothing is drawn until the texture is there
+      layer = {
+        mesh: createImpostorMesh(bake, prop.baseCount),
+        quad: impostorQuad(prop.targetH, bake.frame),
+        hidden: true,
+      };
+      // The instances of this entry are what it holds, so it is culled against
+      // the entry's own sphere — set, never computed, for the reason
+      // `ScatterProp.sphere` gives.
+      layer.mesh.boundingSphere = prop.sphere;
+      prop.impostor = layer;
+      group.add(layer.mesh);
+    }
+    layer.hidden = false;
+    const cull2 = cfg.cullM * cfg.cullM;
+    const far2 = IMPOSTOR_FAR_M * IMPOSTOR_FAR_M;
+    const buf = layer.mesh.instanceMatrix.array as Float32Array;
+    impScale.set(layer.quad.w, layer.quad.h, 1);
+    let n = 0;
+    for (let i = 0; i < prop.baseCount; i += 1) {
+      const px = prop.pos[i * 3];
+      const py = prop.pos[i * 3 + 1];
+      const pz = prop.pos[i * 3 + 2];
+      const dx = px - cam.x;
+      const dy = py - cam.y;
+      const dz = pz - cam.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      // Written so a NaN position fails the test and is simply not drawn — the
+      // discipline of `binProp` and `instanceTier`, and the reason a
+      // degenerate instance costs no NaN matrix.
+      if (!(d2 > cull2 && d2 <= far2)) continue;
+      const d = Math.sqrt(d2);
+      if (!impostorVisible(i, d, cfg)) continue;
+      impQ.setFromAxisAngle(impUp, impostorYaw(px, pz, cam.x, cam.z));
+      // The quad's CENTRE stands above the point the instance sits on, by
+      // exactly as much as puts the baked foot on the ground (`impostorQuad`).
+      impM.compose(impAt.set(px, py + layer.quad.centreY, pz), impQ, impScale);
+      impM.toArray(buf, n * 16);
+      n += 1;
+    }
+    layer.mesh.count = n;
+    layer.mesh.visible = n > 0;
+    // ALWAYS uploaded when anything is drawn, unlike the mesh buffers: every
+    // billboard turns with the camera, so a tick that drew something wrote
+    // something new. See `ImpostorLayer` for why there is no ledger.
+    if (n > 0) layer.mesh.instanceMatrix.needsUpdate = true;
+  }
+
   /**
    * Sort every instance of ONE entry into the two buffers — the whole
    * per-object LOD, once per entry per tick.
@@ -1732,6 +1886,11 @@ export function createGround(): Ground {
    */
   function binProp(prop: ScatterProp, cam: THREE.Vector3): void {
     const cfg = lodCfg;
+    // THE FAR HALF FIRST, and outside the entry-wide early-out below on
+    // purpose: an entry whose nearest instance lies beyond the cull distance
+    // is switched off there as a whole, and that is exactly the entry whose
+    // billboards have to be drawn.
+    binImpostors(prop, cam, cfg);
     if (cam.distanceTo(prop.sphere.center) - prop.sphere.radius > cfg.cullM) {
       if (prop.hidden) return;
       prop.hidden = true;
@@ -1745,6 +1904,18 @@ export function createGround(): Ground {
       return;
     }
     prop.hidden = false;
+    // WHERE AN IMPOSTOR STANDS, THE CULL HYSTERESIS HAS NOTHING LEFT TO DO.
+    // `instanceTier` lets a HIDDEN instance back in only at 0.92·cull, so that
+    // a tree at the line does not pop in and out with every centimetre of
+    // camera drift. Beyond the line this entry now shows a billboard instead
+    // of nothing, so there is no pop to damp — and keeping the band would open
+    // a 9.6 m gap in which the billboard is already gone and the mesh not yet
+    // there. So an instance of an impostor-capable entry re-enters as `low`
+    // and is judged by the 35…45 m band like everything else; the swap itself
+    // happens at ONE line, between two pictures of the same tree in the same
+    // place. An entry without a model (the built-in tuft) has no far half and
+    // keeps the band.
+    const hasFarHalf = !!prop.loUrl;
     const cull2 = cfg.cullM * cfg.cullM;
     const loBuf = prop.low.instanceMatrix.array as Float32Array;
     const hiBuf = prop.high
@@ -1768,7 +1939,8 @@ export function createGround(): Ground {
       if (d2 <= cull2) {
         const d = Math.sqrt(d2);
         if (d < minD) minD = d;
-        tier = instanceTier(d, prop.tiers[i] as InstanceTier, cfg);
+        const prev = prop.tiers[i] as InstanceTier;
+        tier = instanceTier(d, hasFarHalf && prev === 2 ? 1 : prev, cfg);
         if (tier !== 2 && instanceVisible(i, d, cfg)) {
           // An instance that deserves the full mesh is drawn on the cheap one
           // as long as the full one is not there yet — a gap would be worse
@@ -1832,6 +2004,20 @@ export function createGround(): Ground {
         prop.mats.clear();
         prop.low.dispose();
         prop.high?.dispose();
+        // …and the far half, where one was ever grown. Its MATERIAL is the
+        // entry's own and goes; the baked TEXTURE does not — it belongs to the
+        // bake cache of `scene/impostors.ts`, is shared by every entry
+        // scattering that prop and outlives this ground on purpose (an admin
+        // painting terrain rebuilds the areas every few seconds, and re-baking
+        // the same tree each time would be a GPU pass per edit).
+        if (prop.impostor) {
+          group.remove(prop.impostor.mesh);
+          disposeImpostorMesh(prop.impostor.mesh);
+          prop.impostor = null;
+          // …and the claim on the shared texture goes with the mesh that held
+          // it — one release per `acquireImpostor` in `binImpostors`.
+          releaseImpostor(prop.loUrl);
+        }
       }
       // The undergrowth owns no loaded file: its geometry and material went
       // into the rebuild's own bag (`nextOwned` -> `areaOwned`) and are freed

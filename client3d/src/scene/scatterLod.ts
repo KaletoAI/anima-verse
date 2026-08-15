@@ -37,6 +37,12 @@
  * module never reorders it — the thinning picks by a hash of the instance
  * INDEX, so walking towards a wood regrows the same trees and never moves one.
  *
+ * AND SINCE 2026-08-15 A THIRD DISTANCE CLASS: beyond the cull line the props
+ * do not simply stop — the entries that HAVE a model are drawn as upright
+ * billboards out to `IMPOSTOR_FAR_M` (`IMPOSTOR_*` below, the render side in
+ * `scene/impostors.ts`). The window, the thinning over it and the whole
+ * geometry of one billboard are arithmetic and therefore live here.
+ *
  * SINCE 2026-08-15 THE SECOND LAYER LIVES HERE TOO: the automatic undergrowth
  * (`UNDERGROWTH_*` at the bottom of the file). It is the same three questions
  * with its own numbers — how many tufts a shape carries, how tall they are and
@@ -299,6 +305,244 @@ export function instanceVisible(
   if (share >= 1) return true;
   if (share <= 0) return false;
   return instanceHash(index) < share;
+}
+
+/* ==========================================================================
+ * THE FAR IMPOSTORS (2026-08-15) — what stands BEYOND the cull line
+ *
+ * The cull distance ends the MESHES, and it used to end the wood with them: a
+ * forest 130 m away was bare ground, and the player walked into a world that
+ * grew itself out of nothing. An impostor is not a second asset and not a
+ * second authoring step — it is a RENDER stage: one billboard quad per
+ * instance, its texture baked from the entry's own low mesh at runtime
+ * (`scene/impostors.ts`), standing at the very positions the meshes would
+ * stand at.
+ *
+ * WHAT IS ARITHMETIC AND THEREFORE LIVES HERE: the distance window, the
+ * thinning over it, the yaw of one billboard and the size and height of its
+ * quad. The GPU half — baking the texture, filling the instance buffer — is
+ * the other file's, and none of it decides geometry.
+ *
+ * THE POSITIONS ARE THE MESHES' OWN. That is the whole promise of the stage:
+ * the same seed-stable sampler output, the same array, only a different
+ * distance window — so a tree crossing the cull line swaps its billboard for
+ * its mesh WHERE IT STOOD and never jumps a metre.
+ * ========================================================================== */
+
+/** Beyond this nothing of the scatter is drawn at all, in metres — the end of
+ *  the impostor window and the end of the wood.
+ *
+ *  400 m sits inside the fog band (the veil closes the view at 520 m,
+ *  `scene/engine.ts`), which is what makes the stage affordable to end: a
+ *  billboard that vanishes at 400 m does so behind enough haze that nobody
+ *  sees it go. A CONSTANT and not a preference: the object-LOD menu sets the
+ *  three MESH distances, and a fourth number for a stage that costs one draw
+ *  call per entry would be a setting for the sake of having one. */
+export const IMPOSTOR_FAR_M = 400;
+
+/** The share of billboards still drawn immediately before that edge — the
+ *  props' own `SCATTER_MIN_SHARE`, over its own span. A quarter of a wood
+ *  still reads as a wood on the horizon, which is the very reason the meshes
+ *  keep a floor rather than fading to nothing. */
+export const IMPOSTOR_MIN_SHARE = 0.25;
+
+/**
+ * How far the bake camera is raised above the horizon, in radians (10°).
+ *
+ * NOT frontal-flat, and not a look: the player's camera hangs above the world
+ * (18° close up, 62° far out, `scene/engine.ts`), so a billboard baked dead
+ * level shows a tree from an angle nobody ever looks from — the crown reads
+ * flat and the ground contact reads wrong. Ten degrees is the compromise that
+ * still lets the same texture serve the near end of the window, where the
+ * player's own angle is shallow.
+ *
+ * It is a CONSTANT of the geometry, not of the renderer: `impostorQuad` needs
+ * the very angle the bake used to put the tree's foot on the ground, so both
+ * sides read this one number.
+ */
+export const IMPOSTOR_ELEV_RAD = (10 * Math.PI) / 180;
+
+/** How much air the baked image keeps around the prop (2.5 % per side). The
+ *  quad is drawn with `alphaTest`, so a silhouette touching the texture border
+ *  would be cut off by the clamp rather than fading — and the rim costs
+ *  nothing but a few transparent texels. */
+export const IMPOSTOR_BAKE_PAD = 1.05;
+
+/**
+ * Whether ONE instance at that distance belongs to the impostor stage at all.
+ *
+ * The window is `(cullM, IMPOSTOR_FAR_M]` — open at the near end and closed at
+ * the far one, which is exactly the complement of what the meshes draw
+ * (`instanceTier` hides at `distM > cullM`). One line, two representations,
+ * and never both: at 120.0 m the mesh has it, at 120.1 m the billboard does.
+ *
+ * A cull distance a player pushed past `IMPOSTOR_FAR_M` empties the window
+ * rather than inverting it — the meshes then reach further than the stage
+ * that exists to replace them, which is a legitimate setting and not a case
+ * to correct. A non-finite distance draws nothing (negated comparison).
+ */
+export function impostorInWindow(distM: number, cfg: ScatterLodCfg): boolean {
+  return distM > cfg.cullM && distM <= IMPOSTOR_FAR_M;
+}
+
+/**
+ * What share of the billboards is drawn at that distance: flat 1 at the cull
+ * line, straight down to `IMPOSTOR_MIN_SHARE` at `IMPOSTOR_FAR_M`.
+ *
+ * ITS OWN SPAN, not a continuation of `instanceShare`. The mesh line ends at a
+ * quarter because drawing a mesh is expensive; a billboard is two triangles,
+ * so the stage starts full and spends its own 280 m getting thin. The visible
+ * consequence is honest and worth naming: crossing the cull line OUTWARD the
+ * wood gets fuller, because trees the mesh thinning had taken away come back
+ * as billboards. Nothing MOVES while that happens — the two thinnings share
+ * `instanceHash`, so the meshes drawn inside the line are a subset of the
+ * billboards drawn outside it.
+ */
+export function impostorShare(distM: number, cfg: ScatterLodCfg): number {
+  if (!impostorInWindow(distM, cfg)) return 0;
+  const span = IMPOSTOR_FAR_M - cfg.cullM;
+  if (!(span > 0)) return 0;
+  const t = (distM - cfg.cullM) / span;
+  return 1 - t * (1 - IMPOSTOR_MIN_SHARE);
+}
+
+/**
+ * Whether billboard `index` is part of the thinned-out stage at its distance.
+ *
+ * The rule of `instanceVisible`, down to the shared `instanceHash`: stable
+ * while nothing moves, monotone as the player walks closer, and instance 0
+ * survives as long as anything of the entry is drawn.
+ */
+export function impostorVisible(
+  index: number, distM: number, cfg: ScatterLodCfg,
+): boolean {
+  const share = impostorShare(distM, cfg);
+  if (share >= 1) return true;
+  if (share <= 0) return false;
+  return instanceHash(index) < share;
+}
+
+/**
+ * Which way ONE billboard turns: the yaw, in radians, that faces its quad at
+ * the camera — AROUND THE Y AXIS AND NOTHING ELSE.
+ *
+ * That is the whole difference to the usual "full" billboard, and the reason
+ * the camera's HEIGHT is not an argument here: a tree stands upright. A quad
+ * that also tilts back towards a camera looking down from 60° would lay the
+ * trunk over the ground and the wood would tip as the player zooms out.
+ *
+ * The angle is `atan2(dx, dz)` and not `atan2(dz, dx)`: a rotation by θ about
+ * +Y takes the quad's own normal (0, 0, 1) to (sin θ, 0, cos θ), so the sine
+ * belongs to x. An instance the camera stands exactly on gives 0 — atan2(0, 0)
+ * is 0 in JS, and a quad seen edge-on from directly above is invisible either
+ * way.
+ */
+export function impostorYaw(px: number, pz: number,
+                            camX: number, camZ: number): number {
+  return Math.atan2(camX - px, camZ - pz);
+}
+
+/** What the bake framed, as ratios of the prop's own model — everything
+ *  `impostorQuad` needs to turn a target height into a quad, and nothing about
+ *  pixels. */
+export interface ImpostorFrame {
+  /** how many MODEL heights the image spans vertically (> 1: the padding and
+   *  the raised camera both add air) */
+  spanH: number;
+  /** the image's width divided by its height — the quad's aspect */
+  aspect: number;
+}
+
+/**
+ * The orthographic frame the bake renders in, from the prop's own box.
+ *
+ * `heightM` is the model's bounding-box height, `radiusM` its horizontal reach
+ * measured FROM THE MODEL ORIGIN (the largest of |min.x|, |max.x|, |min.z|,
+ * |max.z|) — from the origin and not from the box centre, because the instance
+ * matrix puts the model's ORIGIN on the scattered point. A frame centred on
+ * the box would draw a lopsided tree half a metre beside its own position, and
+ * the mesh it swaps with does not move either (`groundedGeometry` lifts the
+ * box but never recentres it).
+ *
+ * Vertically the frame is centred on the box, and it has to allow for the
+ * raised camera: the image's up axis is (0, cos e, −sin e), so a point at the
+ * box's rim contributes `(height/2)·cos e` and its DEPTH another
+ * `radius·sin e`. Both padded by `IMPOSTOR_BAKE_PAD`.
+ *
+ * `null` for a degenerate model (no height, no width, junk numbers) — such a
+ * prop gets no billboard at all rather than a quad scaled by an infinity.
+ */
+export function impostorFrame(heightM: number, radiusM: number): ImpostorFrame | null {
+  if (!(heightM > 0) || !(radiusM > 0)) return null;
+  const halfW = radiusM * IMPOSTOR_BAKE_PAD;
+  const halfH = ((heightM / 2) * Math.cos(IMPOSTOR_ELEV_RAD)
+    + radiusM * Math.sin(IMPOSTOR_ELEV_RAD)) * IMPOSTOR_BAKE_PAD;
+  if (!(halfH > 0)) return null;
+  return { spanH: (2 * halfH) / heightM, aspect: halfW / halfH };
+}
+
+/** One billboard's quad in world metres: its size, and how far its CENTRE
+ *  stands above the point the instance sits on. */
+export interface ImpostorQuad {
+  w: number;
+  h: number;
+  centreY: number;
+}
+
+/**
+ * The quad ONE instance of an entry is drawn on.
+ *
+ * `targetH` is the entry's own drawn height (`scatterTargetH`) — the same
+ * number the mesh is scaled to, which is what makes the swap at the cull line
+ * a swap and not a jump in size. The image spans `spanH` model heights, so the
+ * quad spans `targetH · spanH`, and its width follows the frame's aspect.
+ *
+ * THE CENTRE OFFSET IS WHERE THE FOOT GOES. In the baked image the model's
+ * base sits `(height/2)·cos e` BELOW the image centre (the frame is centred on
+ * the box, the camera looks down by `e`). Scaled into the world that is
+ * `targetH·cos e / 2`, so lifting the quad centre by exactly that puts the
+ * tree's foot on the ground the instance stands on — independently of how much
+ * air the padding added, which grows the quad symmetrically about its centre.
+ */
+export function impostorQuad(targetH: number, frame: ImpostorFrame): ImpostorQuad {
+  const h = targetH * frame.spanH;
+  return {
+    w: h * frame.aspect,
+    h,
+    centreY: (targetH * Math.cos(IMPOSTOR_ELEV_RAD)) / 2,
+  };
+}
+
+/**
+ * The four world corners of one billboard, in the order
+ * bottom-left, bottom-right, top-right, top-left as seen from the camera.
+ *
+ * Nothing draws through this — the renderer composes an instance matrix from
+ * `impostorYaw` and `impostorQuad` and lets the GPU transform the quad. It
+ * exists so the SHAPE is checkable without a GPU (§ B5a): the four corners are
+ * what a billboard IS, and the one property that must never be lost is
+ * visible in them — every corner keeps the y of its own edge, whatever the
+ * camera does. A full billboard tilts, and its corners say so.
+ *
+ * `cx, cy, cz` is the quad's centre (the instance's ground point lifted by
+ * `ImpostorQuad.centreY`).
+ */
+export function impostorCorners(cx: number, cy: number, cz: number,
+                                w: number, h: number,
+                                camX: number, camZ: number): number[][] {
+  const yaw = impostorYaw(cx, cz, camX, camZ);
+  // The quad's own +X axis under a rotation of `yaw` about +Y. The vertical
+  // axis is (0, 1, 0) and stays it — see the doc comment.
+  const rx = Math.cos(yaw) * (w / 2);
+  const rz = -Math.sin(yaw) * (w / 2);
+  const top = cy + h / 2;
+  const bottom = cy - h / 2;
+  return [
+    [cx - rx, bottom, cz - rz],
+    [cx + rx, bottom, cz + rz],
+    [cx + rx, top, cz + rz],
+    [cx - rx, top, cz - rz],
+  ];
 }
 
 /* ==========================================================================
