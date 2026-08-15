@@ -545,6 +545,46 @@ export function impostorCorners(cx: number, cy: number, cz: number,
   ];
 }
 
+/**
+ * How ONE bake attempt of `scene/impostors.ts` ended.
+ *
+ *  - `baked` — there is a texture.
+ *  - `unbakeable` — the file ARRIVED and there is still nothing to render: no
+ *    mesh in it, an empty box, a degenerate frame (`impostorFrame` → null).
+ *  - `load-failed` — the GLB did not arrive. `loadGlb` already retried it three
+ *    times with backoff before it answered null, so this is a backend that went
+ *    away, not a broken prop.
+ *  - `no-renderer` — the tick ran before `setImpostorRenderer`. Nothing was
+ *    even tried, and nothing was learnt about the prop.
+ */
+export type ImpostorBakeAttempt =
+  'baked' | 'unbakeable' | 'load-failed' | 'no-renderer';
+
+/**
+ * What the bake cache is allowed to REMEMBER of such an attempt — `store` the
+ * texture, `refuse` the prop for the session, or `retry` on the next contact.
+ *
+ * NOT ARITHMETIC, and it sits in this import-free module for one reason: it is
+ * the only part of the bake that can be checked without a GPU
+ * (`smoke_impostors.mjs` section (G)), and the decision it makes is invisible
+ * until an hour later, when a wood that a single dropped request touched is
+ * still bare.
+ *
+ * ONLY A PROP THAT CANNOT BE BAKED IS REFUSED. The refusal exists so the tick
+ * does not queue the same hopeless job every second — it is a statement about
+ * the MODEL, and the two failures above that say nothing about the model must
+ * not produce one: a backend restarting for ten seconds would otherwise cost
+ * every prop it was asked for its billboards for the whole session, and only a
+ * reload would bring them back.
+ */
+export function impostorBakeVerdict(
+  attempt: ImpostorBakeAttempt,
+): 'store' | 'refuse' | 'retry' {
+  if (attempt === 'baked') return 'store';
+  if (attempt === 'unbakeable') return 'refuse';
+  return 'retry';
+}
+
 /* ==========================================================================
  * THE UNDERGROWTH (2026-08-15) — the layer NOBODY authored
  *

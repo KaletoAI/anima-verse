@@ -42,8 +42,8 @@
  */
 import * as THREE from 'three';
 import { loadGlb } from './propAssets';
-import { IMPOSTOR_ELEV_RAD, impostorFrame } from './scatterLod';
-import type { ImpostorFrame } from './scatterLod';
+import { IMPOSTOR_ELEV_RAD, impostorBakeVerdict, impostorFrame } from './scatterLod';
+import type { ImpostorBakeAttempt, ImpostorFrame } from './scatterLod';
 
 /** Edge length of one baked impostor texture, in pixels.
  *
@@ -86,7 +86,9 @@ interface CacheEntry {
 
 /** The app's renderer, handed in once at boot (`main.ts`). Null before that
  *  and in every context without a canvas — the bake then simply answers
- *  nothing and the stage stays empty, which is exactly today's picture. */
+ *  nothing and the stage stays empty, which is exactly today's picture. A tick
+ *  that runs in that window LEARNS NOTHING and remembers nothing (see `bake`):
+ *  the props it asked about are asked again once the renderer is there. */
 let renderer: THREE.WebGLRenderer | null = null;
 
 /** Wire the ONE renderer of the app into the bake. Called once, from `main.ts`
@@ -97,8 +99,10 @@ export function setImpostorRenderer(r: THREE.WebGLRenderer): void {
 }
 
 /** Baked props by URL, in "last used" order. A row whose `bake` is `null`
- *  marks a prop that CANNOT be baked (no file, no mesh, a degenerate box) —
- *  remembered so the tick does not queue the same hopeless job every second. */
+ *  marks a prop that CANNOT be baked (no mesh in the file, an empty or
+ *  degenerate box) — remembered so the tick does not queue the same hopeless
+ *  job every second. A prop whose file merely did not ARRIVE gets no row at
+ *  all; see `impostorBakeVerdict`. */
 const cache = new Map<string, CacheEntry>();
 /** Bakes in flight, so two entries scattering the same tree share one pass. */
 const inFlight = new Map<string, Promise<void>>();
@@ -193,18 +197,47 @@ export function releaseImpostor(url: string): void {
  * the origin with no transform of its own, so nothing measured through the
  * object's world matrix moves while it is in there.
  *
- * The pass never throws: a prop that cannot be baked is remembered as `null`
- * and its entry keeps the picture it has (nothing beyond the cull line).
+ * The pass never throws, and WHAT IT REMEMBERS OF A FAILURE is decided by
+ * `impostorBakeVerdict` and not here: only a prop that cannot be baked at all
+ * becomes a refusal (`bake: null`, so the tick stops asking). A download that
+ * did not arrive and a tick that ran before the renderer was wired in leave the
+ * cache UNTOUCHED — the entry keeps the picture it has for now (nothing beyond
+ * the cull line) and the next contact with the window tries again, because a
+ * backend that restarts for ten seconds must not cost a wood its billboards for
+ * the rest of the session.
  */
 async function bake(url: string, near?: THREE.Vector3): Promise<void> {
-  let result: CacheEntry = { bake: null, target: null, refs: 0 };
-  try {
-    const obj = await loadGlb(url, near);
-    if (obj && renderer) result = render(renderer, obj) ?? result;
-  } catch {
-    // …and the refusal is what is remembered, so nothing queues this again.
+  const gl = renderer;
+  let attempt: ImpostorBakeAttempt = 'no-renderer';
+  let baked: CacheEntry | null = null;
+  if (gl) {
+    let obj: THREE.Object3D | null = null;
+    try {
+      obj = await loadGlb(url, near);
+    } catch {
+      obj = null;   // it answers null itself; a throw is the same accident
+    }
+    if (!obj) {
+      // `loadGlb` has already retried three times with backoff before it says
+      // this, so it is the backend that went away, not a broken prop.
+      attempt = 'load-failed';
+    } else {
+      try {
+        baked = render(gl, obj);
+        attempt = baked ? 'baked' : 'unbakeable';
+      } catch {
+        // The file is HERE and measuring or drawing it still failed — that is a
+        // property of this model, so it stays a refusal rather than a job the
+        // tick re-queues every second for the rest of the session.
+        attempt = 'unbakeable';
+      }
+    }
   }
-  cache.set(url, result);
+  const verdict = impostorBakeVerdict(attempt);
+  if (verdict === 'retry') return;
+  cache.set(url, verdict === 'store' && baked
+    ? baked
+    : { bake: null, target: null, refs: 0 });
   evict();
 }
 

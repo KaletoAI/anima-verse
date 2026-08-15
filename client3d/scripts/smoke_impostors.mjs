@@ -154,6 +154,32 @@
  * `instanceTier` is drawing a full mesh.
  *
  * ============================================================================
+ * (G) WHAT A FAILED BAKE IS REMEMBERED AS
+ * ============================================================================
+ * The bake keeps a row of `null` for a prop it cannot bake, so the LOD tick
+ * stops queueing the same hopeless job every second. That memory must be about
+ * the MODEL and nothing else, and `impostorBakeVerdict` is where the four ways
+ * an attempt can end are sorted:
+ *
+ *   baked       -> store    (there is a texture)
+ *   unbakeable  -> refuse   (the file arrived, there is nothing to render)
+ *   load-failed -> retry    (the file did not arrive — `loadGlb` had already
+ *                            tried three times, so this is a backend that went
+ *                            away, not a broken prop)
+ *   no-renderer -> retry    (the tick ran before `setImpostorRenderer`;
+ *                            nothing was even attempted)
+ *
+ * (G2) THE RED COUNTER-CHECK is the bug this section exists for, and it is
+ * exactly one character wide: a verdict that answers "refuse" to everything
+ * that is not `baked` — the shape the code had — turns ONE dropped request into
+ * a wood that stays bare for the whole session, and nothing on screen ever says
+ * why. The mutant is transpiled and asked, and it refuses both transients.
+ *
+ * The bake itself is still un-smoke-able (it needs a GPU); what section (F)
+ * pins instead is that this verdict is what the pass obeys — that a `retry`
+ * leaves the cache untouched rather than writing a refusal into it.
+ *
+ * ============================================================================
  * (F) THE WIRING, pinned by reading the source
  * ============================================================================
  * None of this can be called from here — it lives inside closures over fetched
@@ -212,6 +238,13 @@ function windowWithoutCull(source) {
                         'return distM > 0 && distM <= IMPOSTOR_FAR_M;');
 }
 
+/** Section (G2)'s mutant: every failure is held against the PROP, which is
+ *  what turns one dropped download into a session without billboards. */
+function refuseEveryFailure(source) {
+  return source.replace("if (attempt === 'unbakeable') return 'refuse';",
+                        "if (attempt !== 'baked') return 'refuse';");
+}
+
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected) {
@@ -234,9 +267,9 @@ const um3 = (p) => p.map(um);
 async function main() {
   const lod = await loadTs(LOD_SRC);
   const { IMPOSTOR_BAKE_PAD, IMPOSTOR_ELEV_RAD, IMPOSTOR_FAR_M,
-    IMPOSTOR_MIN_SHARE, impostorCorners, impostorFrame, impostorInWindow,
-    impostorQuad, impostorShare, impostorVisible, impostorYaw, instanceTier,
-    instanceVisible, SCATTER_LOD_DEFAULTS } = lod;
+    IMPOSTOR_MIN_SHARE, impostorBakeVerdict, impostorCorners, impostorFrame,
+    impostorInWindow, impostorQuad, impostorShare, impostorVisible, impostorYaw,
+    instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS } = lod;
   const cfg = SCATTER_LOD_DEFAULTS;   // 35 / 45 / 120, the defaults a player never touches
 
   console.log('\n(A) the window — where the meshes stop, the billboards start');
@@ -377,6 +410,21 @@ async function main() {
   check('E …ON TOP of a full mesh',
     [instanceTier(60, 1, cfg) !== 2, impostorInWindow(60, cfg)], [true, false]);
 
+  console.log('\n(G) what a failed bake is remembered as');
+  check('G a texture is stored', impostorBakeVerdict('baked'), 'store');
+  check('G a prop that cannot be baked is refused',
+    impostorBakeVerdict('unbakeable'), 'refuse');
+  check('G a file that did not arrive is tried again',
+    impostorBakeVerdict('load-failed'), 'retry');
+  check('G …and so is a tick that ran before the renderer',
+    impostorBakeVerdict('no-renderer'), 'retry');
+  const harsh = await loadTs(LOD_SRC, refuseEveryFailure);
+  check('G2 the "every failure is the prop\'s fault" mutant refuses a dropped download',
+    harsh.impostorBakeVerdict('load-failed'), 'refuse');
+  check('G2 …and the truth does not',
+    [harsh.impostorBakeVerdict('no-renderer'), impostorBakeVerdict('no-renderer')],
+    ['refuse', 'retry']);
+
   console.log('\n(F) the wiring, read off the source');
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
   const impSrc = await readFile(IMP_SRC, 'utf8');
@@ -397,6 +445,15 @@ async function main() {
     groundSrc.includes('releaseImpostor(prop.loUrl);'), true);
   check('F …so the LRU can only evict what nobody draws',
     impSrc.includes('if (entry.refs <= 0)'), true);
+  check('F the pass obeys the verdict rather than deciding itself',
+    impSrc.includes('const verdict = impostorBakeVerdict(attempt);'), true);
+  check('F …and a "retry" leaves the cache untouched',
+    impSrc.includes("if (verdict === 'retry') return;"), true);
+  check('F …with nothing written before it',
+    impSrc.indexOf('const verdict = impostorBakeVerdict(attempt);')
+      < impSrc.indexOf('cache.set(url, verdict'), true);
+  check('F a missing renderer is one of the attempts, not a silent refusal',
+    impSrc.includes("let attempt: ImpostorBakeAttempt = 'no-renderer';"), true);
   check('F the bake borrows the app renderer and creates none',
     impSrc.includes('new THREE.WebGLRenderer'), false);
   check('F …which main.ts hands it once',
