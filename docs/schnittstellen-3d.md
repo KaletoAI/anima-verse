@@ -1320,7 +1320,12 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Wasser-Klasse). Die Auslenkung wächst QUADRATISCH mit der Höhe über dem
   Boden (Fuß steht, Spitze trägt die volle Zahl), jede Instanz bekommt aus
   ihrer Weltlage eine eigene Phase, und Frequenz wie Windrichtung stehen fest
-  im Renderer — es gibt dafür keine weiteren Katalog-Schlüssel. Saat: `grass`
+  im Renderer — es gibt dafür keine weiteren Katalog-Schlüssel. **Die Zahl gilt
+  je Instanz, nicht je Geometrie** (2026-08-15): wo eine Instanz eigens
+  skaliert wird (der Unterwuchs skaliert jedes Büschel auf seine Höhe), teilt
+  der Renderer die Amplitude durch diese Skalierung — eine 0,7-m- und eine
+  0,4-m-Instanz derselben Geometrie lenken die Spitze beide um genau `sway_m`
+  aus. Saat: `grass`
   0,06 und `forest` 0,04; eine Welt-Zeile ersetzt den geteilten Eintrag ganz,
   also fehlt der Schlüssel dort, bis er im Typen-Dialog gesetzt wird.
   **Wie stark ein EINZELNES Prop davon mitmacht, sagt das Prop** (2026-08-14):

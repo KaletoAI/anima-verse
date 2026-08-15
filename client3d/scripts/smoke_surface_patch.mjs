@@ -155,6 +155,36 @@
  * that says nothing (0) writes nothing at all and claims no key.
  *
  * ---------------------------------------------------------------------------
+ * [8b] THE INSTANCE SCALE — `sway_m` is METRES, whatever an instance is scaled to
+ * ---------------------------------------------------------------------------
+ * § A9 promises that `sway_m` IS the maximum deflection of a blade's TIP. The
+ * displacement is written into `transformed`, which is still in OBJECT
+ * coordinates, so the instance matrix multiplies it afterwards — and since the
+ * automatic undergrowth scales every tuft to its own height, that multiplier
+ * is no longer 1 for everybody:
+ *
+ *   the layer's geometry stands (0.4 + 0.7)/2 = 0.55 m tall
+ *   a 0.7 m blade is therefore scaled by 0.7 / 0.55 = 1.2727…
+ *   with sway_m = 0.06 its tip moved 0.06 · 1.2727… = 0.0764 m
+ *
+ * — 27 % more than the number the catalog names, and a 0.4 m blade moved 27 %
+ * less. So the instanced branch divides the direction by the instance's own
+ * uniform scale, read off the length of the matrix's FIRST COLUMN:
+ *
+ *   `normalize( … ) / max( length( instanceMatrix[ 0 ].xyz ), 1e-6 )`
+ *
+ * The divisor is exactly 1 for every unscaled user — the authored scatter,
+ * whose instances carry rotation and translation only — so nothing that waved
+ * before this line existed moves differently now, which is why the displacement
+ * line itself is byte-for-byte the one section [8] checks. The NON-instanced
+ * branch has no divisor at all: there is one prop, and its own scale is the
+ * mesh's own business.
+ *
+ * The red counter-check is the formula as it stood: the mutant drops the
+ * divisor, and its shader then names no `instanceMatrix[ 0 ]` at all while
+ * everything else about the bend is intact.
+ *
+ * ---------------------------------------------------------------------------
  * [9] THE CHAIN AGAIN — three writers, one slot
  * ---------------------------------------------------------------------------
  * The rule inherited from the hole patch: every further patch CHAINS. Water,
@@ -296,6 +326,17 @@ function phaseInSync(text) {
   const hash = /fract\( sin\( dot\( instanceMatrix\[ 3 \]\.xz[^\n]*/;
   if (!hash.test(text)) throw new Error('the phase hash is no longer where the probe looks');
   return text.replace(hash, '0.0;');
+}
+
+/** Section [8b]'s mutant: the amplitude is no longer divided by the instance's
+ *  own scale — the formula as it stood, under which a tuft scaled to 1.27 of
+ *  its geometry deflected 1.27 · sway_m. */
+function swayIgnoresInstanceScale(text) {
+  const divisor = ' / max( length( instanceMatrix[ 0 ].xyz ), 1e-6 )';
+  if (!text.includes(divisor)) {
+    throw new Error('the sway no longer divides by the instance scale');
+  }
+  return text.split(divisor).join('');
 }
 
 /** Section [11b]'s mutant: `applySway` ASSIGNS instead of chaining — same
@@ -562,6 +603,25 @@ async function main() {
     marksIn(stillShader, SWAY_MARKS), []);
   check('…and claims no cache key of its own',
     Object.prototype.hasOwnProperty.call(stillMat, 'customProgramCacheKey'), false);
+
+  console.log('\n[8b] the instance scale — sway_m stays metres however tall the blade');
+  const SCALED = 'normalize( ( vec4( 0.8, 0.0, 0.6, 0.0 ) * instanceMatrix ).xyz )'
+    + ' / max( length( instanceMatrix[ 0 ].xyz ), 1e-6 )';
+  check('the instanced branch divides by the instance\'s own scale',
+    grass.shader.vertexShader.includes(SCALED), true);
+  check('…while the lone prop has no divisor',
+    grass.shader.vertexShader.includes('vec3 swayDir = vec3( 0.8, 0.0, 0.6 );'), true);
+  check('…and the displacement line itself is untouched (the unscaled user is 1)',
+    marksIn(grass.shader, SWAY_MARKS), allOf(SWAY_MARKS));
+  const unscaled = await loadGround(swayIgnoresInstanceScale);
+  const undergrown = new THREE.MeshStandardMaterial({ color: 0x6a994e });
+  unscaled.applySway(undergrown, 0.06, 0.55);
+  const undergrownShader = stubShader();
+  undergrown.onBeforeCompile(undergrownShader, null);
+  check('the "no divisor" mutant lets the instance scale eat the metres',
+    undergrownShader.vertexShader.includes('instanceMatrix[ 0 ]'), false);
+  check('…while its bend is otherwise intact (the probe measures the divisor)',
+    marksIn(undergrownShader, SWAY_MARKS), allOf(SWAY_MARKS));
 
   console.log('\n[9] the chain again — water, hole and wind in one shader');
   const all = surfaceMaterial(THREE, { material: { class: 'water' }, color: 0x336699 });

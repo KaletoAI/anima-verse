@@ -231,9 +231,11 @@ export function patchHole(mat: THREE.Material): void {
  * compiled programs.
  */
 const SWAY_SPEED = 1.7;
-/** Unit vector, so `sway_m` really is metres — and WORLD-fixed: the instance's
- *  own yaw is rotated out below, otherwise every blade would bend along its
- *  own turn and a field would look combed rather than blown. */
+/** A unit vector, so `sway_m` really is metres — the instanced branch of the
+ *  shader divides it by the instance's own scale for exactly that reason (see
+ *  `applySway`). WORLD-fixed: the instance's own yaw is rotated out below,
+ *  otherwise every blade would bend along its own turn and a field would look
+ *  combed rather than blown. */
 const SWAY_DIR: [number, number] = [0.8, 0.6];
 /** Mirror of the server clamp (`terrain_types.SWAY_MIN/MAX`) — the client
  *  never trusts a number it did not clamp itself; a hand-edited row must not
@@ -267,9 +269,12 @@ const swayPatched = new WeakSet<THREE.Material>();
  * today, and that is exactly why the discipline has to be in the code and not
  * in the caller's memory.
  *
- * `refH` is the height the prop is scaled to, i.e. the y at which the
+ * `refH` is the height of the GEOMETRY, i.e. the object-space y at which the
  * deflection reaches `swayM`. A value that says nothing (no model height yet)
- * falls back to one metre rather than dividing by zero.
+ * falls back to one metre rather than dividing by zero. Together with the
+ * scale division in the instanced branch below that is the whole of the § A9
+ * promise: whatever an instance is scaled to, the tip of it moves `sway_m`
+ * metres and no more.
  *
  * The whole displacement rides on `#include <begin_vertex>`: `transformed` is
  * still in OBJECT coordinates there and the geometry is grounded (B16), so its
@@ -309,10 +314,23 @@ export function applySway(mat: THREE.Material, swayM: number,
     // The hash degrades in float32 far from the origin: at ~1 km the dot
     // product is around 1e5, where consecutive positions no longer separate
     // and the phases start to cluster. Harmless at the world sizes we render.
+    // THE AMPLITUDE IS WORLD METRES, AND THE INSTANCE SCALE WOULD EAT THAT.
+    // `transformed` is still in OBJECT coordinates here, so everything written
+    // into it is multiplied by the instance's own scale afterwards: a tuft
+    // scaled to 1.27 of its geometry (the automatic undergrowth scales every
+    // blade to its own height) deflected by 1.27·sway_m, and § A9 promises
+    // `sway_m` IS the maximum deflection of the tip. So the direction carries
+    // the correction — divided by the instance's uniform scale, read off the
+    // length of the matrix's first column, it is no longer a unit vector but
+    // the vector that becomes `sway_m` metres AFTER the instance transform.
+    // The divisor is exactly 1 for every unscaled user (the authored scatter,
+    // whose instances carry rotation and translation only), so nothing that
+    // waved before this line existed moves differently now. `max(…, 1e-6)`
+    // keeps a degenerate zero-scale instance from dividing by zero.
     const bend = `
   {
     #ifdef USE_INSTANCING
-      vec3 swayDir = normalize( ( vec4( ${SWAY_DIR[0]}, 0.0, ${SWAY_DIR[1]}, 0.0 ) * instanceMatrix ).xyz );
+      vec3 swayDir = normalize( ( vec4( ${SWAY_DIR[0]}, 0.0, ${SWAY_DIR[1]}, 0.0 ) * instanceMatrix ).xyz ) / max( length( instanceMatrix[ 0 ].xyz ), 1e-6 );
       float swayPhase = fract( sin( dot( instanceMatrix[ 3 ].xz, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ) * 6.2831853;
     #else
       vec3 swayDir = vec3( ${SWAY_DIR[0]}, 0.0, ${SWAY_DIR[1]} );
@@ -1374,9 +1392,9 @@ export function createGround(): Ground {
     // `sway_factor` says how much a PROP takes part in the wind, and the
     // undergrowth is not a prop — it is what the ground itself grows, so it
     // always bends fully. The reference height is the geometry's, whose tip
-    // carries the whole deflection; an instance scaled to 0.7 m therefore
-    // bends a little further than one scaled to 0.4 m, which is what a taller
-    // blade does.
+    // carries the whole deflection; every instance is scaled to its own height
+    // and the shader divides the amplitude by that scale, so a 0.7 m blade and
+    // a 0.4 m one both move `sway_m` at the tip (§ A9).
     const growSway = swayFor(area.kind);
     applySway(mat, growSway, UNDERGROWTH_H_REF_M);
     applyOcclusionFade(mat);
