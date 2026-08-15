@@ -179,6 +179,7 @@ node_modules/
 *.tmp
 *.temp
 *.bak
+*.bak-*
 *.swp
 *~
 

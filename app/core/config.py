@@ -781,11 +781,11 @@ def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
 
 
 def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> bool:
-    """Entfernt die alten Style-Felder, die jetzt in den Use-Cases leben.
+    """Removes the old style fields that now live in the use cases.
 
     - Backends:  prompt_prefix / negative_prompt
-    Funktional sind sie bereits tot (kein Env-Mirror/Leser mehr) — das hier
-    raeumt nur die config.json auf. Idempotent.
+    They are functionally dead already (no env mirror, no reader left) — this
+    only tidies up config.json. Idempotent.
     """
     ig = config.get("image_generation", {})
     changed = False
@@ -794,7 +794,7 @@ def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> boo
             for k in ("prompt_prefix", "negative_prompt"):
                 if k in be:
                     del be[k]; changed = True
-    # Verstreute Prefix/Suffix-Felder -> jetzt in den Use-Cases.
+    # Scattered prefix/suffix fields -> now part of the use cases.
     for k in ("profile_image_prompt_prefix", "outfit_image_prompt_prefix",
               "map_2d_image_prompt_suffix"):
         if k in ig:
@@ -804,10 +804,68 @@ def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> boo
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Legacy Image-Gen Style-Felder entfernt (Workflow/Backend) -> %s", config_path)
+        logger.info("Legacy image-gen style fields removed (workflow/backend) -> %s", config_path)
         return True
     except OSError as e:
         logger.error("Failed to strip legacy imagegen fields from %s: %s", config_path, e)
+        return False
+
+
+# Config fields whose feature was removed: no schema entry, no reader, no
+# writer anywhere in app/ frontend/ client3d/ packages/ plugins/ — they only
+# sat in the per-world config.json and misled whoever read it. Grouped by
+# section; the strip below is the single place that knows them.
+#   image_generation — ComfyUI era (comfy_default_workflow, comfyui_workflows,
+#     unet_weight_dtype), the removed grid-map fit/edge pipeline (mapfit_*,
+#     map_image_prompt_suffix, map_tile_vision_analysis, commit 245f1bf) and
+#     the dropped collage scene mode (scene_prompt_collage — its living
+#     siblings scene_prompt_multi_ref / scene_prompt_only_background stay).
+#   chat / inventory / random_events — single leftovers; item image size runs
+#     through ui.downscale_item_max_dim instead.
+DEAD_CONFIG_FIELDS: dict = {
+    "image_generation": (
+        "comfy_default_workflow",
+        "comfyui_workflows",
+        "mapfit_backend",
+        "mapfit_workflow_file",
+        "mapfit_imagegen_default",
+        "map_image_prompt_suffix",
+        "map_tile_vision_analysis",
+        "unet_weight_dtype",
+        "scene_prompt_collage",
+    ),
+    "chat": ("auto_wake_stamina",),
+    "inventory": ("item_image_width", "item_image_height"),
+    "random_events": ("event_image_denoise_strength",),
+}
+
+
+def _strip_dead_config_fields(config: dict, config_path: Path) -> bool:
+    """Removes the DEAD_CONFIG_FIELDS from config.json, once, at load time.
+
+    Same pattern as _strip_legacy_imagegen_prompt_fields: no fallback reader,
+    no alias — the fields are gone from code, so they go from the world file
+    too. Idempotent; writes only when something was actually removed, and runs
+    BEFORE the secrets overlay so no secret can leak into config.json.
+    """
+    changed = False
+    for section, keys in DEAD_CONFIG_FIELDS.items():
+        sec = config.get(section)
+        if not isinstance(sec, dict):
+            continue
+        for key in keys:
+            if key in sec:
+                del sec[key]
+                changed = True
+    if not changed:
+        return False
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info("Dead config fields removed (feature gone) -> %s", config_path)
+        return True
+    except OSError as e:
+        logger.error("Failed to strip dead config fields from %s: %s", config_path, e)
         return False
 
 
@@ -844,6 +902,7 @@ def load(config_path: Optional[Path] = None) -> dict:
     if fresh_world:
         _seed_default_mesh_backends(_CONFIG, path)
     _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
+    _strip_dead_config_fields(_CONFIG, path)
     _seed_default_marketplace_catalogs(_CONFIG, path)
     _migrate_backend_categories(_CONFIG, path)
     _migrate_lora_triggers(_CONFIG, path)
