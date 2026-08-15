@@ -113,6 +113,31 @@
  *
  * `maxAlpha` stays low (0.35) for the same reason the panels want the layer at
  * all: the terrain colours have to stay readable through it.
+ *
+ * ============================================================================
+ * THE VERTICAL EXAGGERATION — why a map needs one at all
+ * ============================================================================
+ * `zFactor` multiplies BOTH gradient components before anything above is
+ * computed, which is exactly the cartographer's vertical exaggeration: the
+ * relief is read as if every height were `zFactor` times what it is. It is not
+ * a gain on the output — it moves the SURFACE, so shading and slope alpha stay
+ * the one consistent picture of one (steeper) landscape.
+ *
+ * It is needed because the 2D maps read the OVERVIEW grid, and that grid
+ * coarsens itself until the whole painted world fits its point budget — up to
+ * 32 m per cell (§ A16). A 5 m hill spread over 32 m is a slope of 0.156, whose
+ * alpha is `0.35 · 0.156/1.012 = 0.054` → 14 of 255, and whose grey sits 22
+ * steps off neutral: `0.054 · 22 ≈ 1.2` of 255 in the final composite, which is
+ * below what a screen shows and far below what an eye finds. At `zFactor` 3 the
+ * same hill answers alpha 41 and a grey 60 off neutral — a tenth of the range,
+ * i.e. visible. Both 2D consumers therefore pass `MAP_RELIEF_Z_FACTOR`.
+ *
+ * NOT the default, though, and not a constant of the math: the 3D client stands
+ * on the true field, and anything measuring against the world (a slope check, a
+ * future contour) must get the unexaggerated relief unless it asks otherwise.
+ * A negative factor is clamped to 0 rather than mirroring the ground — it would
+ * turn every hill into a hollow, which is the one defect of a hillshade a
+ * reader cannot un-see (`smoke_hillshade.mjs` section [7]).
  */
 import type { WorldHeightField } from './worldHeight'
 
@@ -132,6 +157,10 @@ export interface HillshadeOpts {
   /** Opacity of the steepest slope, 0…1. Default 0.35 — enough to read the
    *  relief, little enough to keep the terrain colours underneath. */
   maxAlpha?: number
+  /** Vertical exaggeration: the height gradient is multiplied by it BEFORE the
+   *  shading and the slope alpha (see the header). Default 1 = the true
+   *  relief; the 2D maps pass `MAP_RELIEF_Z_FACTOR`. Clamped at 0. */
+  zFactor?: number
 }
 
 /** The finished overlay: `cols · rows` pixels in RGBA order, one per support
@@ -148,6 +177,13 @@ export interface HillshadeImage {
 const DEFAULT_AZIMUTH_DEG = 315
 const DEFAULT_ALTITUDE_DEG = 45
 const DEFAULT_MAX_ALPHA = 0.35
+const DEFAULT_Z_FACTOR = 1
+/** The vertical exaggeration the 2D MAPS shade with — the player map and the
+ *  minimap both pass it, so the same landscape reads the same in both. Three,
+ *  because the overview grid they read is coarsened to as much as 32 m per cell
+ *  and an ordinary 5 m hill is otherwise about one of 255 steps (header). It is
+ *  not a default of the math: whoever wants the true relief simply omits it. */
+export const MAP_RELIEF_Z_FACTOR = 3
 /** The lowest lamp that still shades: `sin alt` divides the grey, and below a
  *  degree the reference is so small that every visible slope clips to white. */
 const MIN_ALTITUDE_DEG = 1
@@ -194,6 +230,7 @@ export function hillshadeImage(field: WorldHeightField | null | undefined,
     opt(opts?.altitudeDeg, DEFAULT_ALTITUDE_DEG)))
   const altitude = altitudeDeg * DEG
   const maxAlpha = Math.min(1, Math.max(0, opt(opts?.maxAlpha, DEFAULT_MAX_ALPHA)))
+  const zFactor = Math.max(0, opt(opts?.zFactor, DEFAULT_Z_FACTOR))
 
   // The lamp, in world axes — the derivation in the header, written out.
   const cosAlt = Math.cos(altitude)
@@ -215,8 +252,10 @@ export function hillshadeImage(field: WorldHeightField | null | undefined,
       const iW = i > 0 ? i - 1 : i
       const iE = i < cols - 1 ? i + 1 : i
       const spanX = (iE - iW) * step
-      const hx = (heightAt(heights, j, iE) - heightAt(heights, j, iW)) / spanX
-      const hz = (heightAt(heights, jS, i) - heightAt(heights, jN, i)) / spanZ
+      // The exaggeration multiplies the GRADIENT, i.e. it tilts the surface
+      // itself — everything below then reads that steeper landscape.
+      const hx = zFactor * (heightAt(heights, j, iE) - heightAt(heights, j, iW)) / spanX
+      const hz = zFactor * (heightAt(heights, jS, i) - heightAt(heights, jN, i)) / spanZ
 
       const grad = Math.sqrt(hx * hx + hz * hz)
       const len = Math.sqrt(grad * grad + 1)

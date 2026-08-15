@@ -34,7 +34,7 @@ export { tileKeyAt, sampleCompositeHeight, sampleCompositeGroundHeight,
   maxCompositeHeightIn, compositeHeightRangeIn } from './worldHeight'
 export type { WorldHeightField, WorldHeightTiles } from './worldHeight'
 
-export { hillshadeImage } from './hillshade'
+export { hillshadeImage, MAP_RELIEF_Z_FACTOR } from './hillshade'
 export type { HillshadeOpts, HillshadeImage } from './hillshade'
 
 export { gridPlate, subdivideOnGrid, gridStepFor, GRID_MAX_CELLS } from './gridMesh'

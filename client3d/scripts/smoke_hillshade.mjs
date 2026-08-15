@@ -138,6 +138,51 @@
  * un-see, and the reason this is a signed check and not a "looks about right".
  *
  * ============================================================================
+ * [7a] THE VERTICAL EXAGGERATION — the number both 2D maps shade with
+ * ============================================================================
+ * `zFactor` multiplies BOTH gradient components before anything else, so it
+ * tilts the surface rather than gaining the output. The 2D maps read the
+ * OVERVIEW grid, which coarsens to as much as 32 m per cell, and a 5 m hill on
+ * such a cell contributes about one of 255 steps to the finished picture —
+ * hence `MAP_RELIEF_Z_FACTOR` = 3 in both consumers.
+ *
+ * RAMP A AT zFactor 3: hx = hz = 3 · 0.5 = 1.5.
+ *   len = √(2.25 + 2.25 + 1) = √5.5 = 2.34520788
+ *   N·L = (−1.5·(−0.5) + 0.70710678 + (−1.5)·(−0.5)) / 2.34520788
+ *       = 2.20710678 / 2.34520788 = 0.94111349
+ *   grey  = round(255 · 0.5 · 0.94111349/0.70710678)
+ *         = round(255 · 0.66546773) = round(169.69427) = 170
+ *   grad = √4.5 = 2.12132034, grad/len = √(4.5/5.5) = 0.90453403
+ *   alpha = round(255 · 0.35 · 0.90453403) = round(80.72967) = 81
+ *
+ * The GREY FELL (178 → 170) and that is not a defect: at hx = hz = 1.5 the ramp
+ * has tipped PAST the lamp's own slope (section [4]: the brightest face is the
+ * one at 0.70710678), so Lambert brings it down again. The alpha is where the
+ * exaggeration pays — 52 → 81 — and on the case a map is actually about, a
+ * hill against its own back side, both do:
+ *
+ * THE PEAK AT zFactor 3 (heights [[0,0,0],[0,1,0],[0,0,0]], step 2):
+ *   NORTH FLANK (1, 0): hx = 0, hz = 3 · 0.5 = 1.5, len = √3.25 = 1.80277564
+ *       N·L = (0.70710678 + 0.75)/1.80277564 = 1.45710678/1.80277564
+ *           = 0.80825740
+ *       grey  = round(255 · 0.57152429) = round(145.73869) = 146
+ *       alpha = round(255 · 0.35 · 1.5/1.80277564) = round(89.25 · 0.83205029)
+ *             = round(74.26049) = 74
+ *   SOUTH FLANK (1, 2): hz = −1.5, so N·L = (0.70710678 − 0.75)/1.80277564
+ *       = −0.02379 — NEGATIVE. The face has turned more than 45° away from a
+ *       lamp standing 45° up, so it lies in its own shadow: lit = 0, grey 0,
+ *       alpha 74 unchanged (steepness, not aspect).
+ *   The measured contrast north − south therefore goes from 154 − 74 = 80 to
+ *   146 − 0 = 146, at nearly twice the opacity. THAT is what the factor buys.
+ *
+ * COUNTER-PROBE, and the one that keeps this an addition rather than a change:
+ * `zFactor` 1 must be the value the file already answered — 178/52 on ramp A,
+ * 154/40 on the peak's north flank. `zFactor` 0 flattens the world (128/0
+ * everywhere, exactly the flat field of section [2]), and a NEGATIVE factor is
+ * clamped to 0 instead of mirroring the ground: −3 would read every hill as a
+ * hollow, which is the very defect section [7] exists to catch.
+ *
+ * ============================================================================
  * [8] THE OPTIONS, AND [9] WHAT A BROKEN PAYLOAD DOES
  * ============================================================================
  * maxAlpha scales the alpha and nothing else (0 → the layer is invisible but
@@ -218,7 +263,7 @@ function checkPixel(label, img, i, j, grey, alpha) {
   }
 }
 
-const { hillshadeImage } = await loadModule(SRC, 'hillshade');
+const { hillshadeImage, MAP_RELIEF_Z_FACTOR } = await loadModule(SRC, 'hillshade');
 
 /** A 3 × 3 field at origin (0, 0) with step 2 — the geometry of every field in
  *  sections [2] to [7]; only the heights differ. */
@@ -307,6 +352,29 @@ check('the hill reads north minus south as',
   pixel(peakImg, 1, 0)[0] - pixel(peakImg, 1, 2)[0], 80);
 check('...and the hollow as the very same number, negated',
   pixel(hollowImg, 1, 0)[0] - pixel(hollowImg, 1, 2)[0], -80);
+
+console.log('[7a] the vertical exaggeration both 2D maps shade with');
+check('and the constant they share is', MAP_RELIEF_Z_FACTOR, 3);
+const Z3 = { zFactor: MAP_RELIEF_Z_FACTOR };
+checkPixel('ramp A tilted three times as steep', hillshadeImage(RAMP_NW, Z3), 1, 1,
+  170, 81);
+check('...the opacity is what grew', pixel(hillshadeImage(RAMP_NW, Z3), 1, 1)[3]
+  > pixel(nwImg, 1, 1)[3], true);
+const peak3 = hillshadeImage(PEAK, Z3);
+checkPixel('the peak\'s north flank, exaggerated', peak3, 1, 0, 146, 74);
+checkPixel('...and its south flank, now in its own shadow', peak3, 1, 2, 0, 74);
+check('the contrast north minus south rises from 80 to',
+  pixel(peak3, 1, 0)[0] - pixel(peak3, 1, 2)[0], 146);
+checkPixel('zFactor 1 is the untouched file, to the digit',
+  hillshadeImage(RAMP_NW, { zFactor: 1 }), 1, 1, 178, 52);
+checkPixel('...on the peak as well', hillshadeImage(PEAK, { zFactor: 1 }), 1, 0,
+  154, 40);
+checkPixel('zFactor 0 flattens the world', hillshadeImage(PEAK, { zFactor: 0 }),
+  1, 0, 128, 0);
+checkPixel('a negative factor is clamped to 0, never mirrored',
+  hillshadeImage(PEAK, { zFactor: -3 }), 1, 0, 128, 0);
+checkPixel('rubbish falls back to the true relief',
+  hillshadeImage(RAMP_NW, { zFactor: NaN }), 1, 1, 178, 52);
 
 console.log('[8] the options');
 checkPixel('maxAlpha 0 hides the layer without touching its greys',
