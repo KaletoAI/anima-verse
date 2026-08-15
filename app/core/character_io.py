@@ -377,6 +377,21 @@ def import_character_from_zip(
         target.write_bytes(zf.read(member))
         file_count += 1
 
+    # The skill configs come back verbatim, so an OLD export (or a marketplace
+    # pack built from one) smuggles ComfyUI-era "workflow:<glob>" render
+    # targets back into the world long after the boot migration ran. Same
+    # rewriter, no duplicate logic.
+    try:
+        from app.core.workflow_spec_migration import (
+            rewrite_skill_configs_of_character)
+        _fixed = rewrite_skill_configs_of_character(char_dir)
+        if _fixed:
+            logger.info("Import: %s — %d legacy render spec(s) rewritten",
+                        character_name, _fixed)
+    except Exception as e:
+        logger.warning("Import: legacy render-spec rewrite failed for %s: %s",
+                       character_name, e)
+
     # Restore DB — `characters` first so FK-like consumers see it.
     db_stats: Dict[str, int] = {}
     db_tables: List[str] = list(manifest.get("db_tables") or [])

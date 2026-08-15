@@ -35,6 +35,10 @@ What is checked here, all hand-derived, no snapshots:
      which look canonical after the prefix strip but match no backend — the
      render used to die deep in the service with a German message about a
      timeout that never happened.
+  7. The import hole: a character ZIP carries skills/*.json verbatim, so an old
+     export (or a marketplace pack built from one) would smuggle legacy specs
+     back into the world long AFTER the boot migration ran. The import runs the
+     same rewriter.
 
 Usage:  ./.venv/bin/python scripts/smoke_workflow_specs.py
 """
@@ -227,6 +231,12 @@ def main():
     canon = skill_file("Canonical", "instagram", {SKILL_SPEC_FIELD: "Krea2"})
     other = skill_file("Canonical", "video_generation", {"animate_service": "X*"})
     other_before = other.read_text(encoding="utf-8")
+    # A broken file must not abort the sweep around it — otherwise the guard
+    # stays unset and the whole migration repeats silently on every boot.
+    # 0xff is not valid UTF-8: that is a UnicodeDecodeError, NOT a
+    # JSONDecodeError (both are ValueError, which is what the sweep catches).
+    binary = get_character_dir("Legacy", create=True) / "skills" / "broken.json"
+    binary.write_bytes(b"\xff\xfe not json at all")
 
     result = migrate_legacy_workflow_specs_once()
     eq("one character touched", result.get("characters"), 1)
@@ -242,6 +252,8 @@ def main():
        json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Krea2")
     eq("a skill file without the field is not even rewritten",
        other.read_text(encoding="utf-8"), other_before)
+    eq("the unreadable file is skipped, not repaired",
+       binary.read_bytes(), b"\xff\xfe not json at all")
 
     legacy = (get_character_profile("Legacy") or {}).get("outfit_imagegen") or {}
     eq("the legacy value lost its prefix", legacy.get("workflow"), "Flux*")
@@ -254,7 +266,7 @@ def main():
        (get_character_profile("NoOverride") or {}).get("outfit_imagegen"), None)
 
     check(bool(get_world_setting("migrated_legacy_workflow_specs_v2")),
-          "the world_kv marker is set")
+          "the world_kv marker is set (the broken file did not abort the sweep)")
 
     # Idempotency: values planted AFTER the marker must survive, otherwise the
     # guard is not doing its job (and the second run is not really a no-op).
@@ -289,6 +301,24 @@ def main():
           "'Flux' does not match 'Flux2-9B Normal' either (no substring magic)")
     eq("an empty pool refuses everything",
        bool(unknown_backend_error("Anything", [])), True)
+
+    print("7) the import hole: an old ZIP must not smuggle the legacy spec back")
+    # "Canonical" still carries the value planted after the marker — a genuine
+    # legacy spec inside the export. The boot migration is long done here
+    # (guard set), so only the import-side rewrite can clean this up.
+    from app.core.character_io import (export_character_to_zip,
+                                       import_character_from_zip)
+    blob = export_character_to_zip("Canonical")
+    import io as _io
+    import zipfile as _zip
+    with _zip.ZipFile(_io.BytesIO(blob)) as zf:
+        in_zip = json.loads(zf.read("files/skills/instagram.json"))
+    eq("the export really carries the legacy spec (else the test is empty)",
+       in_zip.get(SKILL_SPEC_FIELD), "workflow:Planted")
+    res = import_character_from_zip(blob, overwrite=True)
+    eq("the import succeeded", res.get("status"), "success")
+    eq("the re-imported skill config is canonical",
+       json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Planted")
 
     print()
     if FAILURES:

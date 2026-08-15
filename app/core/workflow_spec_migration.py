@@ -67,43 +67,68 @@ def strip_legacy_workflow_prefix(value: str) -> str:
     return stripped[len(LEGACY_PREFIX):].strip()
 
 
+def rewrite_skill_config_file(path) -> bool:
+    """Rewrite ``imagegen_workflow`` in ONE skill config file.
+
+    Returns True when the file was changed. A file without the field, with an
+    already-canonical value, or one that cannot be read as JSON text is left
+    alone — a single broken file must never abort the sweep around it (that
+    would leave the guard unset and repeat silently on every boot). ``OSError``
+    covers unreadable files, ``ValueError`` covers both ``JSONDecodeError`` and
+    the ``UnicodeDecodeError`` of a binary file.
+    """
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.debug("Skipping unreadable skill config %s: %s", path, e)
+        return False
+    if not isinstance(cfg, dict) or SKILL_SPEC_FIELD not in cfg:
+        return False
+    old = cfg.get(SKILL_SPEC_FIELD)
+    new = strip_legacy_workflow_prefix(old)
+    if new == old:
+        return False
+    cfg[SKILL_SPEC_FIELD] = new
+    try:
+        path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+    except OSError as e:
+        logger.warning("Failed to rewrite %s: %s", path, e)
+        return False
+    logger.info("Legacy render spec rewritten: %s/%s.%s %r -> %r",
+                path.parent.parent.name, path.name, SKILL_SPEC_FIELD, old, new)
+    return True
+
+
+def rewrite_skill_configs_of_character(char_dir) -> int:
+    """Rewrite the skill configs of ONE character directory.
+
+    Used by the boot sweep and by the character import — an old export ZIP
+    carries its skills/*.json verbatim and would smuggle legacy specs back into
+    the world long after the migration ran.
+    """
+    skills_dir = char_dir / "skills"
+    if not skills_dir.is_dir():
+        return 0
+    return sum(1 for p in sorted(skills_dir.glob("*.json"))
+               if rewrite_skill_config_file(p))
+
+
 def rewrite_skill_config_files() -> int:
     """Rewrite ``imagegen_workflow`` in every per-character skill config file.
 
-    Walks ``characters/*/skills/*.json`` of the current world; a file without
-    the field, or with an already-canonical value, is not rewritten. Returns
-    the number of files changed. Creates no directory (read paths must not).
+    Walks ``characters/*/skills/*.json`` of the current world and returns the
+    number of files changed. Reads the characters root through
+    ``get_user_characters_dir()``, which materializes ``characters/`` for a
+    brand-new world — the one directory the world gets anyway; no character or
+    skills directory is ever created here.
     """
     from app.models.character import get_user_characters_dir
-    changed = 0
     root = get_user_characters_dir()
     if not root.is_dir():
         return 0
-    for skills_dir in sorted(root.glob("*/skills")):
-        for path in sorted(skills_dir.glob("*.json")):
-            try:
-                cfg = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
-                logger.debug("Skipping unreadable skill config %s: %s", path, e)
-                continue
-            if not isinstance(cfg, dict) or SKILL_SPEC_FIELD not in cfg:
-                continue
-            old = cfg.get(SKILL_SPEC_FIELD)
-            new = strip_legacy_workflow_prefix(old)
-            if new == old:
-                continue
-            cfg[SKILL_SPEC_FIELD] = new
-            try:
-                path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
-                                encoding="utf-8")
-            except OSError as e:
-                logger.warning("Failed to rewrite %s: %s", path, e)
-                continue
-            changed += 1
-            logger.info("Legacy render spec rewritten: %s.%s %r -> %r",
-                        path.parent.parent.name + "/" + path.name,
-                        SKILL_SPEC_FIELD, old, new)
-    return changed
+    return sum(rewrite_skill_configs_of_character(d)
+               for d in sorted(root.iterdir()) if d.is_dir())
 
 
 def migrate_legacy_workflow_specs_once() -> Dict[str, int]:

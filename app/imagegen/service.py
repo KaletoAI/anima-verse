@@ -1349,8 +1349,12 @@ class ImageService:
             backend = self._wait_for_explicit_backend(
                 explicit_backend, has_input_image=_has_input_image)
             if not backend:
-                return f"Fehler: Backend '{explicit_backend}' nicht verfuegbar (Timeout)."
-            logger.info("Explizites Backend: %s", explicit_backend)
+                # Fail-fast, not a timeout: the pool probes the matching
+                # candidates once and gives up (recovery is picked up by the
+                # 30s channel_health poller).
+                return (f"Error: backend '{explicit_backend}' is not available "
+                        f"(disabled, offline, or cooling down).")
+            logger.info("Explicit backend: %s", explicit_backend)
         elif _soft_backend:
             backend = self._wait_for_explicit_backend(
                 _soft_backend, has_input_image=_has_input_image)
