@@ -760,53 +760,6 @@ SECTIONS = {
                                "off — locations then only become known by other "
                                "means.",
             },
-            # --- Far backdrop (the world-edge mountain ring, § A17) ---
-            "backdrop_enabled": {
-                "type": "bool",
-                "label": "Far backdrop",
-                "default": False,
-                "description": "Draw a distant mountain silhouette around the "
-                               "horizon of the 3D world. PURE OPTICS — it "
-                               "blocks nothing and is never walked to; what "
-                               "keeps a traveller out of the distance is "
-                               "painted impassable terrain. The ring follows "
-                               "the camera at a fixed distance, so it looks "
-                               "the same in a 200 m world and a 16 km one.",
-            },
-            "backdrop_arc": {
-                "type": "str",
-                "label": "Backdrop directions",
-                "default": "",
-                "description": "Which compass directions carry mountains, as "
-                               "a comma-separated list of N, NE, E, SE, S, "
-                               "SW, W, NW (e.g. \"N\" or \"N,NE,NW\"). Each "
-                               "entry covers 45° centred on its direction, "
-                               "and neighbours grow into one range. Empty = "
-                               "all around.",
-            },
-            "backdrop_height_m": {
-                "type": "float",
-                "label": "Backdrop height (m)",
-                "default": 120.0,
-                "min": 20,
-                "max": 300,
-                "step": 10,
-                "description": "How high the ridge line stands, in world "
-                               "metres (120 m ≈ a range of hills at the edge "
-                               "of sight). Lower ranges sink into the haze, "
-                               "higher ones climb the sky.",
-            },
-            "backdrop_seed": {
-                "type": "int",
-                "label": "Backdrop seed",
-                "default": 1,
-                "min": 0,
-                "description": "Which mountains are drawn. The silhouette is "
-                               "a pure function of this number, so the same "
-                               "seed always draws the same skyline — change "
-                               "it for a different range, keep it and every "
-                               "client sees the same one.",
-            },
         },
     },
     "ui": {

@@ -5,7 +5,7 @@ No world, no DB: a hand-built config dict goes into
 ``config._strip_dead_config_fields`` against a temp file, and the admin
 schema prefill runs on an empty dict.
 
-The fixture is the table of the 13 fields from the finding — written out by
+The fixture is the table of the 17 fields from the finding — written out by
 hand here, so the constant in app/core/config.py cannot quietly grow or
 shrink without this file disagreeing:
 
@@ -17,6 +17,14 @@ shrink without this file disagreeing:
     chat             : auto_wake_stamina
     inventory        : item_image_width, item_image_height
     random_events    : event_image_denoise_strength
+    game             : backdrop_enabled, backdrop_arc, backdrop_height_m,
+                       backdrop_seed
+
+The four ``game.backdrop_*`` entries joined on 2026-08-16, when the far
+backdrop was removed after crashing at runtime. They are the first dead
+fields the strip has to catch that were LIVE settings a moment ago, so test 6
+carries real weight for them: the schema entries have to be gone too, or
+every admin save would seed them straight back in.
 
 The fields live at TWO depths: normally inside their section, but worlds older
 than the sectioning (worlds/demo, worlds/hotopia) carry
@@ -77,6 +85,8 @@ EXPECTED_DEAD = {
     "chat": {"auto_wake_stamina"},
     "inventory": {"item_image_width", "item_image_height"},
     "random_events": {"event_image_denoise_strength"},
+    "game": {"backdrop_enabled", "backdrop_arc", "backdrop_height_m",
+             "backdrop_seed"},
 }
 
 # Living neighbours that must survive the strip untouched.
@@ -91,6 +101,9 @@ LIVING = {
     "inventory": {"max_items": 50},
     "random_events": {"enabled": True},
     "ui": {"downscale_item_max_dim": 768},                  # image_postprocess.py
+    # The two walk limits are the sharpest neighbours of the dead backdrop
+    # keys: same section, and they DO still travel in the worldmap payload.
+    "game": {"max_step_height_m": 0.4, "max_slope_deg": 40.0},
 }
 
 
@@ -103,7 +116,7 @@ def check(cond, msg):
 
 
 def build_fixture() -> dict:
-    """A world config carrying all 13 dead fields plus living neighbours."""
+    """A world config carrying all 17 dead fields plus living neighbours."""
     cfg = copy.deepcopy(LIVING)
     dead_values = {
         "comfy_default_workflow": "flux.json",
@@ -119,6 +132,10 @@ def build_fixture() -> dict:
         "item_image_width": 512,
         "item_image_height": 512,
         "event_image_denoise_strength": 0.6,
+        "backdrop_enabled": True,
+        "backdrop_arc": "N,NE",
+        "backdrop_height_m": 120.0,
+        "backdrop_seed": 1,
     }
     for section, keys in EXPECTED_DEAD.items():
         for key in keys:
@@ -130,14 +147,14 @@ def main():
     print("1) the constant matches the finding's table")
     actual = {s: set(k) for s, k in cfgmod.DEAD_CONFIG_FIELDS.items()}
     check(actual == EXPECTED_DEAD,
-          f"DEAD_CONFIG_FIELDS == 13 fields of the table (got {actual})")
-    check(sum(len(v) for v in actual.values()) == 13,
-          "13 fields in total")
+          f"DEAD_CONFIG_FIELDS == 17 fields of the table (got {actual})")
+    check(sum(len(v) for v in actual.values()) == 17,
+          "17 fields in total")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "config.json"
 
-        print("2) the strip removes exactly the 13 and persists")
+        print("2) the strip removes exactly the 17 and persists")
         cfg = build_fixture()
         changed = cfgmod._strip_dead_config_fields(cfg, path)
         check(changed is True, "returns True on the first run")
@@ -176,7 +193,7 @@ def main():
         print("5) top-level strays (worlds older than the sectioning)")
         check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
               == {k for keys in EXPECTED_DEAD.values() for k in keys},
-              "DEAD_TOPLEVEL_FIELDS == the same 13 names, flat")
+              "DEAD_TOPLEVEL_FIELDS == the same 17 names, flat")
         # worlds/demo and worlds/hotopia look exactly like this: the two item
         # sizes sit at the top level and there is NO inventory section.
         old = {

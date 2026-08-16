@@ -2297,8 +2297,7 @@ def get_heightfield_route(user=Depends(get_current_user)):
 
 
 #: One-shot state of the two warnings below, one flag per channel — the route
-#: is a client fetch path, so a warning per request would drown the log (the
-#: ``backdrop.py`` pattern).
+#: is a client fetch path, so a warning per request would drown the log.
 _TILE_KEY_WARNED: Dict[str, bool] = {}
 
 

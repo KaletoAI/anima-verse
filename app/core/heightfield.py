@@ -1421,7 +1421,7 @@ def parse_tile_keys(raw: str, cap: int = TILE_BATCH_MAX
     unreadable token is SKIPPED rather than failing the request, because the
     tiles a client did name are still the ground it is missing, and a batch
     that answers nothing turns one typo into a flat world. What is dropped is
-    said once, by the route (§ A16.3, the ``backdrop.py`` pattern).
+    said once, by the route (§ A16.3, one warning per channel).
 
     Duplicates collapse to their FIRST position — a client that asks for the
     same tile twice gets it once, and the order it asked in survives, which is

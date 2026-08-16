@@ -191,7 +191,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     )
     from app.core.discovery import get_discovery_range_m
     from app.core.exploration import explored_sig
-    from app.core.backdrop import get_backdrop
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
@@ -538,8 +537,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "text": ev.get("text") or "",
         })
 
-    backdrop = get_backdrop()
-
     return {
         "avatar": avatar,
         "current_location_id": (get_character_current_location(avatar) if avatar else ""),
@@ -581,18 +578,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # thing the walker needs — the map itself.
         "max_step_height_m": get_max_step_height_m(),
         "max_slope_deg": get_max_slope_deg(),
-        # The FAR BACKDROP (§ A17), riding along for the same reasons as the
-        # walk limits: it is a world setting, it reveals nothing about the
-        # world (a silhouette at the horizon is visible from everywhere, so it
-        # is never fogged), and this poll already runs. PURE OPTICS — no
-        # collision, no routing, no height.
-        # The compass segments of `game.backdrop_arc` are resolved to finished
-        # degree ranges HERE, in this contract's figure compass (§ A1.8:
-        # 0 = South, 90 = East, 180 = North, 270 = West); the renderer only
-        # sweeps what it is given.
-        # `None` = switched off, and the key then stays OUT of the payload —
-        # exactly what an older server sends, so absent and off are one state.
-        **({"backdrop": backdrop} if backdrop else {}),
     }
 
 

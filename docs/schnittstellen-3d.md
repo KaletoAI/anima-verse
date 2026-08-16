@@ -482,8 +482,7 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 `locations` · `characters` · `events_by_location` · `world_bounds` ·
 `terrain_sig` · `height_sig` · `fogged` · `max_step_height_m` ·
-`max_slope_deg` · `backdrop` (**optionaler Schlüssel** — nur wenn die
-Fernkulisse eingeschaltet ist, § A17).
+`max_slope_deg`.
 
 | Wurzelfeld | Typ | Bedeutung |
 |---|---|---|
@@ -493,7 +492,6 @@ Fernkulisse eingeschaltet ist, § A17).
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
-| `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
 
 **Warum die beiden Grenzwerte hier reisen (E8 Task 1).** Der Server beurteilt
 jeden gemeldeten Punkt mit genau diesen zwei Zahlen, und der Client spiegelt
@@ -2678,7 +2676,7 @@ wiederholter Schlüssel verdrängt also keinen anderen. Unlesbare Tokens
 (fehlender Doppelpunkt, keine ganze Zahl) werden **übersprungen**, nicht als
 Fehler beantwortet — die genannten Kacheln sind ja trotzdem der fehlende Boden.
 Beides, Junk-Tokens UND die über dem Kap abgeschnittenen Schlüssel, wird
-**je einmal** im Log gesagt (Muster `backdrop.py`, ein Kanal pro Fall): eine
+**je einmal** im Log gesagt (ein Warn-Kanal pro Fall): eine
 verworfene Kachel sieht auf der Client-Seite aus wie flacher Boden, das Log ist
 also die einzige Stelle, an der sie noch auffallen kann.
 
@@ -2751,52 +2749,11 @@ Kacheln sind bei 129² Punkten mehrere hundert MB Python-Floats (bei 65² waren
 es rund 70). Persistiert wird weiterhin nur die Übersicht, weil nur sie eine
 Drittelsekunde kostet.
 
-## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload — neu 2026-08-14
+## A17. Die Fernkulisse — ausgebaut 2026-08-16
 
-**Reine Optik: der Server autoriert, der Renderer zeichnet.** Die Fernkulisse
-ist ein Gebirgs-Schattenriss am Welthorizont — kein Kollisionskörper, keine
-Höhe, kein Nav-Einfluss, nichts, wohin man laufen könnte. Wer die Ferne
-sperren will, malt unpassierbares Gelände; die Kulisse schließt den Blick,
-nicht den Weg. Sie reist im Worldmap-Poll mit, aus denselben Gründen wie die
-beiden Laufgrenzen (§ A1.3): sie ist eine Welt-Einstellung, dieser Poll läuft
-ohnehin, und sie wird **nie gefoggt** — eine Silhouette am Horizont ist von
-überall sichtbar und verrät nichts über die Welt. **Fehlt der Schlüssel, ist
-sie aus** (das ist auch, was ein älterer Server schickt): absent und
-ausgeschaltet sind für den Client ein und derselbe Zustand, es gibt keinen
-Default-Ring.
-
-```jsonc
-"backdrop": {
-  "height_m": 120.0,                     // Kammhöhe in Welt-Metern
-  "seed": 1,                             // uint32, Profil ist reine Funktion
-  "arcs": [[157.5, 202.5]]               // fertige Winkelbereiche in Grad
-}
-```
-
-**Die Bögen sind serverseitig fertig gerechnet** (`app/core/backdrop.py`). Die
-Autorierung nennt Himmelsrichtungen (`game.backdrop_arc`, kommasepariert aus
-{N, NE, E, SE, S, SW, W, NW}; leer = Vollring), der Client bekommt nur noch
-Grad. Verbindlich ist der Figuren-Kompass dieses Vertrags (§ A1.8): **0 = Süd,
-90 = Ost, 180 = Nord, 270 = West**, also Bodenrichtung
-`(x, z) = (sin a, cos a)` bei x nach Osten und z nach Süden. Jedes Segment
-deckt 45° zentriert auf seine Richtung ab (N = 180 ± 22,5 → `[157.5, 202.5]`),
-benachbarte Segmente wachsen zu EINEM Bogen zusammen, und **ein Bogen wickelt
-nicht um**: `0 ≤ start < 360` und `start < end ≤ start + 360`, ein über 0
-laufender Lauf wird also als `[337.5, 382.5]` geliefert und nicht in zwei
-Stücke zerlegt — der Renderer streicht nur von `start` nach `end`. Der
-Vollring ist der eine Bogen `[0, 360]`. Die drei Zahlen sind validiert und
-geklemmt: `height_m` auf [20; 300] (Default 120), `seed` auf uint32 (Default
-1), Unbrauchbares fällt auf den Default zurück (Muster `relief.py`, ein
-Warn-Log pro Einstellung). Autoriert wird in `/admin/settings → Game`
-(`backdrop_enabled` / `backdrop_arc` / `backdrop_height_m` / `backdrop_seed`);
-die Seite ist serverseitig gerendert, die FELDER erscheinen also erst nach
-einem Server-Neustart — die WERTE wirken danach mit dem nächsten Poll.
-
-**Verifikation:** `scripts/smoke_backdrop.py` (Kompass gegen die
-Richtungsformel, die Handfälle "N" / "N,S" / "N,NE,NW" / Vollring / Junk, die
-Klemmen und der Payload-Block; rote Gegenprobe mit der gespiegelten
-Grad-Konvention 0 = Nord), Client-Seite in
-`client3d/scripts/smoke_backdrop_math.mjs`.
+Fernkulisse 2026-08-16 ausgebaut — Laufzeit-Absturz, Rückbau auf
+User-Entscheid. Der Worldmap-Payload führt kein solches Feld mehr,
+Server wie Client kennen es nicht.
 
 ---
 
