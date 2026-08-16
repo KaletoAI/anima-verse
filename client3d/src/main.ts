@@ -4,6 +4,7 @@ import { initDebug3d } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { drawCallsOf, requestedBackend } from './render/backend';
 import { setSurfaceBackend } from './render/surface';
+import { initBench } from './render/bench';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
@@ -503,6 +504,7 @@ async function startApp(username: string, role: string) {
   // (`scene/impostors.ts`). A second renderer would mean a second context and
   // a second copy of every texture the props already uploaded.
   setImpostorRenderer(engine.renderer);
+  initBench(engine);   // ?bench=auto / window.__bench — inert without it (render/bench.ts)
   const npcs = new NpcManager(figures);
   // The figures walk on the world's relief (§ A16): the manager re-derives a
   // traveller's point every frame, so it gets the sampler rather than a height

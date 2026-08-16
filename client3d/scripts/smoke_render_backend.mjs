@@ -65,9 +65,9 @@ check(m.drawCallsOf({ info: { render: { calls: 1, drawCalls: 42 } } }) === 42, '
 check(m.drawCallsOf({ info: { render: { calls: 7 } } }) === 7, '[3] drawCallsOf webgl fallback');
 
 // [4]
-check(m.gpuFrameMs({ info: { render: { timestamp: 0 } } }) === null, '[4] gpuFrameMs null when unresolved');
-check(m.gpuFrameMs({ info: { render: {} } }) === null, '[4] gpuFrameMs null without the field (WebGL)');
-check(m.gpuFrameMs({ info: { render: { timestamp: 2.5 } } }) === 2.5, '[4] gpuFrameMs passes a resolved value');
+check(m.gpuFrameMs({ info: { render: { calls: 1, timestamp: 0 } } }) === null, '[4] gpuFrameMs null when unresolved');
+check(m.gpuFrameMs({ info: { render: { calls: 1 } } }) === null, '[4] gpuFrameMs null without the field (WebGL)');
+check(m.gpuFrameMs({ info: { render: { calls: 1, timestamp: 2.5 } } }) === 2.5, '[4] gpuFrameMs passes a resolved value');
 
 console.log(fails ? `\n${fails} FAILED` : '\nall ok');
 process.exit(fails ? 1 : 0);

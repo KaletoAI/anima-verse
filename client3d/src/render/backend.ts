@@ -102,7 +102,7 @@ export function drawCallsOf(r: { info: { render: { calls: number; drawCalls?: nu
 
 /** GPU time of the last resolved frame in ms (WebGPU with timestamp queries
  *  and `resolveTimestampsAsync`), else null — never a misleading 0. */
-export function gpuFrameMs(r: { info: { render: { timestamp?: number } } }): number | null {
+export function gpuFrameMs(r: { info: { render: { calls: number; timestamp?: number } } }): number | null {
   const ts = r.info.render.timestamp;
   return ts && ts > 0 ? ts : null;
 }
