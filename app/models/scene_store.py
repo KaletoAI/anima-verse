@@ -1,11 +1,11 @@
-"""DB-Zugriff für Szenen (plan-room-conversation §7).
+"""DB access for scenes (plan-room-conversation §7).
 
-Eine Szene = zusammenhängender Wahrnehmungs-Lauf in einem Raum. Pro Raum gibt es
-höchstens EINE offene Szene; sie wird bei jeder Äußerung getoucht (last_activity +
-Teilnehmer). Verstummt der Raum (Idle), schließt der Loop die Szene, konsolidiert
-ihre Roh-Wahrnehmungen in eine Summary und prunt die Perceptions.
+A scene = one connected run of perception in a room. There is at most ONE open
+scene per room; every utterance touches it (last_activity + participants). Once
+the room falls silent (idle), the loop closes the scene, consolidates its raw
+perceptions into a summary and prunes the perceptions.
 
-Diese Schicht schreibt/liest nur — Idle-Erkennung + Konsolidierung liegen in
+This layer only reads/writes — idle detection + consolidation live in
 ``app/core/scene_manager.py``.
 """
 from __future__ import annotations
@@ -30,13 +30,13 @@ def _row(r) -> Dict[str, Any]:
 
 
 def get_recent_scenes_for(character_name: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """Zuletzt konsolidierte Szenen, an denen der Character beteiligt war —
-    für die „Was bisher geschah"-Recap-Leiste im Chat. Neueste zuerst."""
+    """Most recently consolidated scenes the character took part in — for the
+    "the story so far" recap bar in the chat. Newest first."""
     if not character_name:
         return []
     conn = get_connection()
-    # Name steht als JSON-String (mit Anführungszeichen) in participants → grobes
-    # LIKE-Vorfilter, danach exakt gegen die geparste Liste prüfen.
+    # The name sits in participants as a JSON string (with quotes) → rough LIKE
+    # pre-filter, then an exact check against the parsed list.
     like = f"%{json.dumps(character_name, ensure_ascii=False)}%"
     rows = conn.execute(
         "SELECT * FROM scenes WHERE status='consolidated' AND summary != '' "
@@ -53,8 +53,8 @@ def get_recent_scenes_for(character_name: str, limit: int = 5) -> List[Dict[str,
 
 
 def touch_scene(location_id: str, room_id: str, speaker: str, ts: str) -> int:
-    """Öffnet die Szene des Raums oder aktualisiert sie (last_activity + Teilnehmer).
-    Gibt die scene-id zurück. Keine Szene ohne Location."""
+    """Opens the room's scene or refreshes it (last_activity + participants).
+    Returns the scene id. No scene without a location."""
     if not location_id:
         return 0
     room_id = room_id or ""
@@ -85,7 +85,7 @@ def touch_scene(location_id: str, room_id: str, speaker: str, ts: str) -> int:
 
 
 def get_open_scene(location_id: str, room_id: str) -> Optional[Dict[str, Any]]:
-    """Die aktuell offene Szene eines Raums (oder None)."""
+    """The currently open scene of a room (or None)."""
     if not location_id:
         return None
     conn = get_connection()
@@ -96,11 +96,53 @@ def get_open_scene(location_id: str, room_id: str) -> Optional[Dict[str, Any]]:
 
 
 def get_idle_open_scenes(cutoff_ts: str) -> List[Dict[str, Any]]:
-    """Offene Szenen, deren letzte Aktivität älter als ``cutoff_ts`` ist (verebbt)."""
+    """Open scenes whose last activity is older than ``cutoff_ts`` (ebbed away)."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM scenes WHERE status='open' AND last_activity_ts < ? "
         "ORDER BY last_activity_ts", (cutoff_ts,)).fetchall()
+    return [_row(r) for r in rows]
+
+
+def get_aged_open_scenes(cutoff_ts: str) -> List[Dict[str, Any]]:
+    """Open scenes that STARTED before ``cutoff_ts`` — the age half of the
+    safety net (``memory.scene_max_hours``).
+
+    Deliberately looks at ``started_ts``, not ``last_activity_ts``: a room with
+    constant traffic refreshes its last activity with every utterance and would
+    never show up in :func:`get_idle_open_scenes`. Same string comparison on the
+    same ISO/UTC stamps as the idle query.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM scenes WHERE status='open' AND started_ts < ? "
+        "ORDER BY started_ts", (cutoff_ts,)).fetchall()
+    return [_row(r) for r in rows]
+
+
+# Perceptions of a scene = the perceptions of the utterances in the scene's
+# room and time window — the exact set ``prune_scene_perceptions`` deletes.
+_SCENE_PERCEPTION_COUNT_SQL = """
+    SELECT COUNT(*) FROM perceptions p WHERE p.utterance_id IN (
+        SELECT u.id FROM utterances u
+        WHERE u.location_id = s.location_id AND u.room_id = s.room_id
+          AND u.ts >= s.started_ts AND u.ts <= s.last_activity_ts)
+"""
+
+
+def get_oversized_open_scenes(min_perceptions: int) -> List[Dict[str, Any]]:
+    """Open scenes holding at least ``min_perceptions`` raw perceptions — the
+    size half of the safety net (``memory.scene_max_perceptions``).
+
+    Each row carries an extra ``perception_count`` key.
+    """
+    if min_perceptions <= 0:
+        return []
+    conn = get_connection()
+    rows = conn.execute(
+        f"SELECT * FROM (SELECT s.*, ({_SCENE_PERCEPTION_COUNT_SQL}) AS perception_count "
+        "FROM scenes s WHERE s.status='open') WHERE perception_count >= ? "
+        "ORDER BY perception_count DESC", (min_perceptions,)).fetchall()
     return [_row(r) for r in rows]
 
 
@@ -111,7 +153,7 @@ def mark_consolidated(scene_id: int, summary: str) -> None:
 
 
 def get_scene_utterances(scene: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Roh-Äußerungen einer Szene (Raum + Zeitfenster started..last_activity)."""
+    """Raw utterances of a scene (room + time window started..last_activity)."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT id, ts, speaker, addressees, content FROM utterances "
@@ -122,8 +164,8 @@ def get_scene_utterances(scene: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def prune_scene_perceptions(scene: Dict[str, Any]) -> int:
-    """Verwirft die Roh-Perceptions einer konsolidierten Szene (Raum + Zeitfenster).
-    Utterances (kanonische Wahrheit) bleiben für die Beobachter-/Gott-Sicht."""
+    """Drops the raw perceptions of a consolidated scene (room + time window).
+    Utterances (the canonical truth) stay for the observer/god view."""
     with transaction() as conn:
         cur = conn.execute(
             "DELETE FROM perceptions WHERE utterance_id IN ("
