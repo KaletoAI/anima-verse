@@ -24,10 +24,11 @@ import {
   type HeightTool, type MapPrimary, type MapSub, type PaintShape,
   type TerrainMode,
 } from './TerrainTools'
-import { TerrainTypesDialog } from './TerrainTypesDialog'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { readScatter } from './mapTypes'
-import { plateauRimM } from './heightMath'
+import {
+  DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M, plateauRimM,
+} from './heightMath'
 import type {
   EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
   TerrainArea, TerrainMeta,
@@ -153,15 +154,6 @@ const YAW_QUARTER = 90
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
 
-/** Fallbacks for the two walk limits (§ A1.3) — the server's own defaults
- *  (`app/core/relief.DEFAULT_MAX_SLOPE_DEG` / `DEFAULT_MAX_STEP_M`), used
- *  until the worldmap payload has answered and on a server too old to send
- *  them. BOTH are needed: the step limit is the binding one at these numbers
- *  (0.4 m per metre against tan 40° = 0.84), so warning on the slope alone
- *  would call ramps walkable that the server refuses. */
-const DEFAULT_MAX_SLOPE_DEG = 40
-const DEFAULT_MAX_STEP_M = 0.4
-
 /** Zoom floor for the roof views: under one pixel per metre even a big house
  *  is a smudge, and each picture costs a request plus a GL context. */
 const ROOF_MIN_PX_PER_M = 1
@@ -264,15 +256,11 @@ export function MapTab() {
   // running draft and the selected area.
   const [mode, setMode] = useState<TerrainMode>('select')
   const [terrainTypes, setTerrainTypes] = useState<TerrainType[]>([])
-  // Where each effective kind comes from — only the type manager needs it, and
-  // it arrives in the same answer as the catalog, so it is kept here too.
-  const [typeSources, setTypeSources] = useState<Record<string, 'shared' | 'world'>>({})
   // Did the catalog FAIL to load? Without this an empty `typeMap` is
   // indistinguishable from "you have not picked a type yet", and every write
   // gets refused with a hint the user cannot act on — the fix is Reload, not
   // a different click.
   const [typesError, setTypesError] = useState(false)
-  const [typesOpen, setTypesOpen] = useState(false)
   // The long layer explanation, open or not. Here rather than in the hint
   // block itself, which only exists while painting — help that closed itself
   // whenever the user looked at a location would have to be reopened after
@@ -495,14 +483,15 @@ export function MapTab() {
   useEffect(() => { void reloadTerrain() }, [reloadTerrain])
   useEffect(() => { void reloadHeights() }, [reloadHeights])
 
-  /** The catalog. Read on mount and after every write of the type manager —
-   *  never on a timer: it changes only when someone edits the types, and the
-   *  palette plus every area colour follow from this one state. */
+  /** The catalog. Read on mount and on Reload — never on a timer: it changes
+   *  only when someone edits the types in the Terrain tab, and the palette
+   *  plus every area colour follow from this one state. Switching tabs
+   *  remounts this one, so coming back from an edit reads the fresh catalog by
+   *  itself. */
   const reloadTypes = useCallback(async () => {
     try {
       const r = await apiGet<TerrainTypesResp>('/world/terrain-types')
       setTerrainTypes(r.types || [])
-      setTypeSources(r.sources || {})
       setTypesError(false)
     } catch (e) {
       toast(t('Failed to load terrain types') + ': ' + (e as Error).message, 'error')
@@ -524,12 +513,6 @@ export function MapTab() {
     if (ok.every(Boolean)) toast(t('Map reloaded'), 'success')
   }, [reload, reloadHeights, reloadTerrain, reloadTypes, t, toast])
 
-  /** What the type manager gets: the same reload, minus the boolean it now
-   *  returns. The dialog AWAITS this — it closes on the refreshed catalog, not
-   *  on the request — so the wrapper has to stay a promise, and stable, or the
-   *  dialog's own callbacks would be rebuilt on every render of this tab. */
-  const onTypesChanged = useCallback(async () => { await reloadTypes() }, [reloadTypes])
-
   /** Why a write has no usable kind. A catalog that never arrived is not the
    *  user picking the wrong thing, and "pick a type first" is unactionable
    *  when there is no palette to pick from — say what actually helps. */
@@ -544,8 +527,8 @@ export function MapTab() {
     return m
   }, [terrainTypes])
 
-  // A kind the type manager just removed must not stay armed — the next
-  // painted ring would be posted with a kind the server no longer knows.
+  // A kind removed in the Terrain tab must not stay armed — the next painted
+  // ring would be posted with a kind the server no longer knows.
   useEffect(() => {
     if (paintKind && !typeMap[paintKind]) setPaintKind('')
   }, [paintKind, typeMap])
@@ -583,14 +566,13 @@ export function MapTab() {
   // Is a modal covering the canvas? The handler is bound once, so this cannot
   // be read from the state directly.
   const modalRef = useRef(false)
-  modalRef.current = typesOpen || !!picker || !!gen
+  modalRef.current = !!picker || !!gen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      // While a dialog is open, Escape is the reflex for CLOSING IT — and the
-      // type manager is only reachable from paint mode, so acting on the
-      // canvas here would silently throw away a half-drawn polygon behind a
-      // window that stays open regardless. Not this handler's key.
+      // While a dialog is open, Escape is the reflex for CLOSING IT — acting
+      // on the canvas here would silently throw away a half-drawn polygon
+      // behind a window that stays open regardless. Not this handler's key.
       if (modalRef.current) return
       if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (draftRef.current.length) {
         setDraft([])
@@ -1915,7 +1897,6 @@ export function MapTab() {
             onCloseDraft={closeDraft}
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
             areaCount={terrain?.areas.length || 0}
-            onManageTypes={() => setTypesOpen(true)}
             typesError={typesError}
             heightM={newHeightM}
             onHeightM={setNewHeightM}
@@ -2181,17 +2162,6 @@ export function MapTab() {
           ) : null}
         </div>
       </div>
-
-      {typesOpen ? (
-        <TerrainTypesDialog
-          types={terrainTypes}
-          sources={typeSources}
-          tileStepM={tileStepM}
-          maxSlopeDeg={maxSlopeDeg}
-          onChanged={onTypesChanged}
-          onClose={() => setTypesOpen(false)}
-        />
-      ) : null}
 
       {picker ? (
         <div className="ga-modal-backdrop" onMouseDown={() => setPicker(null)}>

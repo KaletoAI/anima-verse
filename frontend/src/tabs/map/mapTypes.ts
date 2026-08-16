@@ -188,6 +188,15 @@ export interface TerrainType {
    *  (finding 3, 2026-08-13) — a footprint only neutralises a factor of 0,
    *  which is a ground nobody meant to be walked rather than a slow one. */
   speed_factor: number
+  /** WHICH GROUND MATERIAL this kind wears — the `kind` of the surface-texture
+   *  library, said out loud (2026-08-16). It used to be matched by NAME, which
+   *  meant a type could never wear a differently named texture and renaming a
+   *  library entry undressed every ground using it. The name match is gone
+   *  without a fallback: absent or empty = the default ground, exactly what a
+   *  type without a same-named library entry rendered before. Nothing is
+   *  validated against the library on save — the Terrain tab MARKS a value the
+   *  library does not hold instead (§ A1.5). */
+  surface?: string
   /** Free-form, with four contracted keys: `meta.move_anim`, the animation
    *  clip a MOVING figure plays on this ground instead of walk/run (§ A9 —
    *  "swim" on water), `meta.idle_anim`, the one a STANDING figure plays

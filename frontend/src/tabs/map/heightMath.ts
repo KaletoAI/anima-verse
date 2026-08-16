@@ -35,6 +35,20 @@
  *  mirror of `app/core/relief.STEP_DISTANCE_M` (and of `walk.ts`). */
 export const STEP_DISTANCE_M = 1
 
+/** Fallbacks for the two walk limits (§ A1.3) — the server's own defaults
+ *  (`app/core/relief.DEFAULT_MAX_SLOPE_DEG` / `DEFAULT_MAX_STEP_M`), used
+ *  until the worldmap payload has answered and on a server too old to send
+ *  them. BOTH are needed where a RAMP is judged: the step limit is the binding
+ *  one at these numbers (0.4 m per metre against tan 40° = 0.84), so warning
+ *  on the slope alone would call ramps walkable that the server refuses.
+ *
+ *  They live HERE, next to the arithmetic that reads them, because two places
+ *  ask the same question: the map editor's ramps and the terrain tab's micro
+ *  relief. A second copy of the fallback is a second opinion about a server
+ *  default, and the one that is not touched is the one that goes stale. */
+export const DEFAULT_MAX_SLOPE_DEG = 40
+export const DEFAULT_MAX_STEP_M = 0.4
+
 /** The steepest gradient (metres of rise per metre of ground) a walker takes,
  *  from the two limits together. 0 when neither says anything usable. */
 export function maxGradient(maxSlopeDeg: number, maxStepM: number): number {

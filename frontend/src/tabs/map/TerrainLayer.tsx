@@ -69,8 +69,9 @@ const FILL_OPACITY = 0.45
 /** A kind the catalog does not know: grey, and marked as unknown. The SAME
  *  grey the server (`app/core/terrain_types.py: DEFAULT_COLOR`) and the 3D
  *  minimap (`terrainColor`) fall back to — one unknown, one colour. THE one
- *  fallback colour of this app: the type editor (`TerrainTypesDialog`) takes
- *  its new-row default from here instead of keeping a second literal. */
+ *  fallback colour of this app: the type editor (the Terrain tab's
+ *  `TerrainDetail`) takes its new-kind default from here instead of keeping a
+ *  second literal. */
 export const UNKNOWN_COLOR = '#888888'
 const COL_SELECTED = '#58a6ff'
 const COL_DRAFT = '#3fb950'

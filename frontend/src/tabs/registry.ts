@@ -12,6 +12,7 @@ import { ItemsTab } from './items/ItemsTab'
 import { WorldTab } from './world/WorldTab'
 import { MapTab } from './map/MapTab'
 import { SurfaceTexturesTab } from './map/SurfaceTexturesTab'
+import { TerrainTab } from './terrain/TerrainTab'
 import { PropsTab } from './props/PropsTab'
 import { WorldDevTab } from './world-dev/WorldDevTab'
 import { SchedulerTab } from './scheduler/SchedulerTab'
@@ -31,6 +32,7 @@ export type TabId =
   | 'items'
   | 'world'
   | 'map'
+  | 'terrain'
   | 'surface-textures'
   | 'props'
   | 'world-dev'
@@ -57,6 +59,7 @@ export const TABS: TabSpec[] = [
   { id: 'items', label: 'Items', Component: ItemsTab },
   { id: 'world', label: 'World', Component: WorldTab },
   { id: 'map', label: 'Map', Component: MapTab },
+  { id: 'terrain', label: 'Terrain', Component: TerrainTab },
   { id: 'surface-textures', label: 'Surface textures', Component: SurfaceTexturesTab },
   { id: 'props', label: 'Props', Component: PropsTab },
   { id: 'world-dev', label: 'World Dev', Component: WorldDevTab },

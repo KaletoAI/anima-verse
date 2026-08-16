@@ -467,10 +467,6 @@ export interface TerrainToolbarProps {
   onCloseDraft: () => void
   onDiscardDraft: () => void
   areaCount: number
-  /** Open the type manager. It sits IN the palette because that is where the
-   *  vocabulary is missing something — and it is the only surface that can
-   *  answer "there is no kind for this" with anything but a shrug. */
-  onManageTypes: () => void
   /** The heights mode (§ A16): the two numbers the NEXT drawn area gets, how
    *  many height areas there are, and the walk limit the steepness warning is
    *  measured against. Which gesture is armed is the shared `sub` switch. */
@@ -497,7 +493,7 @@ export interface TerrainToolbarProps {
 export function TerrainToolbar({
   mode, onPrimary, sub, onSub, types, paintKind, onPaintKind, shape, onShape,
   widthM, onWidth, draftLen, onCloseDraft, onDiscardDraft, areaCount,
-  onManageTypes, typesError,
+  typesError,
   heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
   maxStepM, gridStepM, gridStepDefaultM,
 }: TerrainToolbarProps) {
@@ -590,10 +586,10 @@ export function TerrainToolbar({
       ) : null}
 
       {/* The palette and the way into the type editor. The CHIPS only mean
-          something while painting (they arm the next stroke), but "Manage…"
-          is the only door to passability, speed and the move animation of a
-          type — and one edits those while looking at the area one drew, not
-          while holding a brush (user finding 2026-08-13: the button was
+          something while painting (they arm the next stroke), but the link is
+          the only door to passability, speed, surface and the move animation
+          of a type — and one edits those while looking at the area one drew,
+          not while holding a brush (user finding 2026-08-13: the button was
           reachable in Paint alone). */}
       {mode === 'paint' || mode === 'edit-area' ? (
         <span className="ga-terrain-palette">
@@ -607,11 +603,15 @@ export function TerrainToolbar({
             <TypeChip key={ty.kind} type={ty} armed={ty.kind === paintKind}
               onPick={() => onPaintKind(ty.kind)} />
           ))}
-          <button type="button" className="ga-btn ga-btn-sm"
-            title={t('Add terrain types or change colour, passability and speed')}
-            onClick={onManageTypes}>
-            {t('Manage…')}
-          </button>
+          {/* The vocabulary is EDITED in its own tab (Terrain), not in a modal
+              over the canvas: a ground has five aspects and a dozen fields,
+              and the palette is where one notices the vocabulary is missing
+              something — not where one wants to author it. The link is a plain
+              hash href, which is exactly how this app switches tabs. */}
+          <a className="ga-btn ga-btn-sm" href="#/terrain"
+            title={t('Open the Terrain tab — add kinds or change colour, surface, passability, speed and relief')}>
+            {t('Manage terrain types')}
+          </a>
         </span>
       ) : null}
 

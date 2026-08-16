@@ -173,6 +173,16 @@ html, * {
 
 .ga-btn:hover { background: var(--border, #30363d); }
 
+/* A LINK that is a button: a download href, or the way from the map palette
+   into the Terrain tab (`#/terrain` — a hash href is how this app switches
+   tabs). Without this it keeps the underline and the baseline of running
+   text and reads as a stray word between real buttons. */
+a.ga-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .ga-btn-primary {
   background: var(--secondary, #238636);
   border-color: #2ea043;
