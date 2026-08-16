@@ -730,6 +730,22 @@ SCHEMA_STATEMENTS = [
         sig        TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
+
+    # ── The EXPLORATION MEMORY (Fog-Gedaechtnis, 2026-08-16) ─────────────────
+    # Where a character has actually stood, as 64 m cells anchored at the world
+    # origin: cell (cx, cz) covers [cx*64, (cx+1)*64) on both axes. The overview
+    # veil spares these in addition to the known location footprints.
+    # Append-only by design — nothing deletes a cell, which is what lets the row
+    # count serve as the signature. See app/core/exploration.py.
+    # No extra index: the primary key IS the lookup ("all cells of one
+    # character" is its leading column), and every write is an
+    # INSERT OR IGNORE against exactly that key.
+    """CREATE TABLE IF NOT EXISTS explored_cells (
+        character_id TEXT    NOT NULL,
+        cx           INTEGER NOT NULL,
+        cz           INTEGER NOT NULL,
+        PRIMARY KEY (character_id, cx, cz)
+    )""",
 ]
 
 

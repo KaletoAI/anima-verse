@@ -163,7 +163,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     Painted terrain is deliberately NOT in here — clients fetch
     ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
     The world RELIEF travels the same way: ``height_sig`` is the trigger,
-    ``GET /play/heightfield`` the payload (§ A16).
+    ``GET /play/heightfield`` the payload (§ A16), and so does the avatar's
+    EXPLORATION MEMORY — ``explored_sig`` here, ``GET /play/explored`` there
+    (§ A12).
     The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
     along: the client mirrors the height gate of ``POST /play/pos`` and needs
     the very numbers the server judges with.
@@ -188,6 +190,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.discovery import get_discovery_range_m
+    from app.core.exploration import explored_sig
     from app.core.backdrop import get_backdrop
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
@@ -558,6 +561,16 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # cached answer is the same string whenever the cache is warm, and a
         # cold one falls back to the full computation.
         "height_sig": height_sig(),
+        # Signature of the AVATAR's exploration memory (Fog-Gedaechtnis,
+        # 2026-08-16). Third of the same kind: when it changes, clients refetch
+        # `GET /play/explored` — the list of 64 m cells the overview veil spares
+        # in addition to the known footprints. It is the row count of an
+        # append-only table (`core/exploration.explored_sig`), so this poll pays
+        # one indexed COUNT and never touches the cells themselves.
+        # PER AVATAR, and empty without one: the memory is that character's, and
+        # an unembodied session has nothing to spare (the admin's `show_all`
+        # view draws no veil at all, so it needs none either).
+        "explored_sig": explored_sig(avatar) if avatar else "",
         "fogged": fogged,
         # The two WALK LIMITS (§ A12, E8 task 1). They are world settings the
         # server judges every reported point with (`POST /play/pos`, § A15),

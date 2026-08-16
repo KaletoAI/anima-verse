@@ -965,6 +965,14 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         discover_in_range(avatar, x, z, locations=_locs)
     except Exception as e:
         logger.debug("sight discovery failed for %s: %s", avatar, e)
+    # THE EXPLORATION MEMORY (2026-08-16), for the same reason and at the same
+    # place: an ACCEPTED point is where the avatar really stood, and that is
+    # what the overview veil spares from now on. It costs nothing per report —
+    # `mark_explored` returns without a query while the figure stays inside the
+    # cell it was last marked in, which at four reports a second is nearly
+    # always (see app/core/exploration.py).
+    from app.core.exploration import mark_explored
+    mark_explored(avatar, x, z)
     # Walking is player-driven movement, and that is the clearest wake signal
     # there is — the same rule ``/play/enter-room`` and ``/play/travel`` apply
     # (a sleeping avatar must not walk a road in its sleep). It sits AFTER the
@@ -2215,6 +2223,35 @@ def get_terrain_route(user=Depends(get_current_user)):
         "areas": terrain.with_scatter_props(terrain.list_areas()),
         "sig": terrain.terrain_sig(),
     }
+
+
+@router.get("/play/explored")
+def get_explored_route(user=Depends(get_current_user)):
+    """The avatar's EXPLORATION MEMORY — the ground it has already been on.
+
+    ``{"cells": ["cx,cz", ...], "sig": "<count>"}``, where a cell is the
+    ``EXPLORED_CELL_M`` (64 m) square anchored at the world origin
+    (``app/core/exploration.py``). The overview veil of the 3D client spares
+    these in addition to the footprints of the known locations (§ A12).
+
+    Auth exactly like ``/play/terrain``: any logged-in user, no ``all`` flag.
+    It is not FOGGED — it IS the fog's own record — but it is strictly PER
+    AVATAR: the answer is the taken-over character's memory and nobody else's.
+    WITHOUT an avatar the answer is EMPTY (``cells: []``, ``sig: ""``), never
+    somebody else's map: an unembodied session has explored nothing.
+
+    Refetched on ``explored_sig`` of the worldmap poll, never polled itself —
+    the same bargain as ``/play/heightfield``, and for the same reason. The
+    list is FLAT and complete: a long-lived world can reach tens of thousands
+    of cells (60 000 cells = 245 km² of walked ground ≈ 600 kB of JSON), which
+    is affordable a few times per session and would not be on a 3-second poll.
+    """
+    from app.core.exploration import explored_cells, explored_sig
+    from app.models.account import get_active_character
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return {"cells": [], "sig": ""}
+    return {"cells": explored_cells(avatar), "sig": explored_sig(avatar)}
 
 
 @router.get("/play/heightfield")

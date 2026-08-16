@@ -972,11 +972,12 @@ def advance_all_journeys() -> None:
     STANDS in the target: nothing is crossed then, and the write changes no
     location.
 
-    The tick ALSO carries DISCOVERY BY SIGHT (E6): after the positions are
-    written, ``_discover_by_sight`` reveals what everybody now stands close
-    enough to. It runs as a second pass over the same character list and the
-    same location snapshot — after, so a traveller sees what THIS tick walked
-    it past, not what the last one did.
+    The tick ALSO carries what a POSITION IMPLIES: after the positions are
+    written, ``_note_positions`` reveals what everybody now stands close enough
+    to (discovery by sight, E6) and records the ground they stand on in the
+    exploration memory (2026-08-16). It runs as a second pass over the same
+    character list and the same location snapshot — after, so a traveller sees
+    what THIS tick walked it past, not what the last one did.
     """
     from app.core.world_geometry import location_at_point
     from app.models.character import (get_character_current_location,
@@ -1027,12 +1028,21 @@ def advance_all_journeys() -> None:
             _settle_arrival(name, j, st)
         except Exception as e:
             logger.warning("advance journey failed for %s: %s", name, e)
-    _discover_by_sight(names, locations)
+    _note_positions(names, locations)
 
 
-def _discover_by_sight(names: List[str],
-                       locations: List[Dict[str, Any]]) -> None:
-    """Reveal what everybody now stands close enough to (E6, discovery.py).
+def _note_positions(names: List[str],
+                    locations: List[Dict[str, Any]]) -> None:
+    """What everybody's CURRENT point implies — the two additive records.
+
+    1. DISCOVERY BY SIGHT (E6, ``core/discovery.py``): a place within sight
+       range becomes known.
+    2. The EXPLORATION MEMORY (2026-08-16, ``core/exploration.py``): the 3×3
+       block of 64 m cells around the point is recorded as explored, so the
+       overview veil spares walked ground. Marked for EVERY character, not only
+       for the avatar — today's NPC is tomorrow's taken-over avatar, and the
+       memory is per character either way. It is nearly free: a character that
+       has not left its cell since the last tick costs no query at all.
 
     EVERY character with a point, not only the travellers: a scheduler jump, a
     teleport spell or an admin move puts someone beside a hut just as a road
@@ -1058,6 +1068,7 @@ def _discover_by_sight(names: List[str],
     character, and only the roster says who is still playable.
     """
     from app.core.discovery import discover_in_range
+    from app.core.exploration import mark_explored
     from app.models.character import list_character_positions
     points = {p["name"]: p for p in list_character_positions()}
     for name in names:
@@ -1068,6 +1079,7 @@ def _discover_by_sight(names: List[str],
             discover_in_range(name, pos["x"], pos["z"], locations=locations)
         except Exception as e:
             logger.debug("sight discovery failed for %s: %s", name, e)
+        mark_explored(name, pos["x"], pos["z"])
 
 
 class TravelTicker:

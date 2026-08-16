@@ -1728,6 +1728,53 @@ einer leeren Fläche.
 |---|---|---|
 | `world_bounds` | `{"min_x", "min_z", "max_x", "max_z"} \| null` | Ausdehnung der Welt in METERN über ALLE platzierten Orte UND alle gemalten Terrain-Flächen, **vor** dem Filter berechnet. `null`, wenn nichts platziert und nichts gemalt ist. Regel und Randfälle: § A1.3 |
 | `fogged` | `bool` | `true` = gefilterte Sicht (`= not show_all`). Clients zeigen daran „hier ist noch Nebel" an, statt eine leere Karte zu vermuten |
+| `explored_sig` | `string` | Signatur des **Erkundungs-Gedächtnisses** des Avatars (siehe unten). Ändert sie sich, holt der Client `GET /play/explored` neu. `""` ohne übernommenen Charakter |
+
+### Der Schleier hat ein Gedächtnis — neu 2026-08-16
+
+Der **Übersichts-Schleier** (nur `client3d`, nur die Übersichts-Kamera; im
+verkörperten Nahmodus gibt es weiterhin gar keinen Schleier) spart seit
+2026-08-16 **zwei** Dinge aus: die Grundflächen der **bekannten Orte** — das
+war er immer — **und** die **erkundeten Zellen**, also den Boden, auf dem der
+Avatar schon gestanden hat. Vorher blieb ein Wald zwischen zwei Orten für
+immer bedeckt, egal wie oft man hindurchging (Befund B14, Option 2).
+
+Das **Gedächtnis ist Server-Wahrheit** (`app/core/exploration.py`, Tabelle
+`explored_cells`), nicht Client-Zustand:
+
+- **Raster:** Zellen von `EXPLORED_CELL_M` = **64 m**, **im Weltursprung
+  verankert** — Zelle `(cx, cz)` deckt `[cx·64, (cx+1)·64)` auf beiden Achsen,
+  `cx = floor(x / 64)`. Dieselbe Kantenlänge wie die Schleier-Kachelung
+  (`FOG_TILE_M`) und derselbe Anker wie das Höhengitter (§ A16): eine Welt, die
+  an ihrem Rand wächst, darf keine schon erkundete Zelle verschieben. Eine
+  ausgesparte Zelle **ersetzt** damit genau eine Kachel, statt ein Loch in ein
+  Quad schneiden zu müssen.
+- **Markiert wird 3×3** um die Zelle der Position (Nahsicht, kein Fußabdruck),
+  und zwar an genau den zwei Stellen, an denen ein Punkt geschrieben wird:
+  bei einer **akzeptierten** `POST /play/pos`-Meldung (eine abgelehnte hat
+  niemanden bewegt und merkt sich nichts) und im **Reise-Ticker**
+  (`advance_all_journeys`) für jeden Charakter mit Punkt.
+- **Rein additiv, pro Charakter.** Nichts löscht je eine Zelle, es gibt keine
+  UI dafür, und das Gedächtnis eines NPC ist nicht das des Avatars.
+
+**`GET /play/explored`** — Auth wie `/play/terrain` (jeder eingeloggte Nutzer,
+kein `all`-Flag), aber strikt für den **eigenen** übernommenen Charakter; ohne
+Avatar ist die Antwort leer, nie die eines anderen.
+
+```json
+{"cells": ["-1,0", "0,0", "0,1"], "sig": "3"}
+```
+
+`sig` ist die Zeilenzahl — weil die Tabelle nur wächst, ist sie eine
+Revisionsnummer. Der Client holt den Payload **nur bei Signatur-Wechsel**
+(Muster `height_sig`/`terrain_sig`), nie im 3-s-Poll: die Liste ist flach und
+vollständig, und eine lange gespielte Welt kann Zehntausende Zellen haben
+(60 000 Zellen = 245 km² erkundeter Boden ≈ 600 kB JSON). Das ist ein paar Mal
+pro Sitzung bezahlbar und im Poll nicht.
+
+**„Gelände ist nie gefoggt" bleibt** — der Schleier ist ein Übersichts-Effekt
+über der Landschaft, kein Vorhang vor ihr. Das Gedächtnis nimmt ihm nur dort
+Fläche weg, wo der Spieler ohnehin war; es verrät nichts Neues.
 
 `world_bounds` ist bewusst UNGEFILTERT: Kartenrahmen, Zoom-Anschlag und
 Mini-Map-Maßstab dürfen nicht springen, sobald der Avatar einen Ort entdeckt.
