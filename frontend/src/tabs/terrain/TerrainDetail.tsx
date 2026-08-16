@@ -263,7 +263,8 @@ export interface TerrainDetailProps {
   /** The surface-texture library as the picker needs it (`GET
    *  /assets/surface-textures`). Empty while it loads or after a failed
    *  fetch — and then NOTHING is marked missing, because "not in the list" and
-   *  "no list" are not the same statement. */
+   *  "no list" are not the same statement. A stored id is still offered and
+   *  still selected in that case, just without a verdict on it. */
   surfaces: SurfaceKind[]
   /** The step of the fine height TILES and the walk gate's slope limit, both
    *  straight from the server. 0 = not answered yet, and then the relief hint
@@ -323,11 +324,15 @@ export function TerrainDetail({
   const warnAmpM = reliefWarnAmpM(maxSlopeDeg, tileStepM)
   const ampWarn = amplitudeWarn(t, reliefAmp, warnAmpM)
 
-  // A stored surface the library does not (or no longer) hold: the ground
-  // renders the default, which is worth saying where it is picked. An EMPTY
-  // library says nothing at all — a failed fetch must not mark every entry.
-  const surfaceMissing = !!surface && surfaces.length > 0
-    && !surfaces.some((s) => s.kind === surface)
+  // A stored surface the library does not hold has to stay SELECTABLE either
+  // way — a `<select>` whose value matches no option shows the first one
+  // instead, so an empty or failed library would display "none" over a stored
+  // id and write that emptiness back on the next save.
+  const surfaceUnlisted = !!surface && !surfaces.some((s) => s.kind === surface)
+  // Whether it is also MISSING is a different statement, and only a library
+  // that actually answered can make it: with an empty list "not in the list"
+  // is no evidence at all, so nothing gets marked.
+  const surfaceMissing = surfaceUnlisted && surfaces.length > 0
 
   // A field the user cannot fix by typing further is not "dirty", it is
   // wrong — but it still has to enable `Save` so the marking is reachable.
@@ -559,13 +564,16 @@ export function TerrainDetail({
               onChange={(e) => setSurface(e.target.value)}
             >
               <option value="">{t('— none (default ground) —')}</option>
-              {/* A stored value the library does not hold stays SELECTABLE and
-                  is marked, the way the LoRA library marks a missing LoRA: it
-                  is a legitimate reference to something that may come back, and
-                  dropping it from the list would silently rewrite the entry on
-                  the next save. */}
-              {surfaceMissing ? (
-                <option value={surface}>{`${surface} ${t('(missing)')}`}</option>
+              {/* A stored value the library does not hold stays SELECTABLE, the
+                  way the LoRA library keeps a missing LoRA: it is a legitimate
+                  reference to something that may come back, and dropping it
+                  from the list would silently rewrite the entry on the next
+                  save. The "(missing)" LABEL is what hangs on an answered
+                  library — an empty one shows the bare id and no verdict. */}
+              {surfaceUnlisted ? (
+                <option value={surface}>
+                  {surfaceMissing ? `${surface} ${t('(missing)')}` : surface}
+                </option>
               ) : null}
               {surfaces.map((s) => (
                 <option key={s.kind} value={s.kind}>{s.name}</option>
