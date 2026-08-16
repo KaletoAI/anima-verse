@@ -617,13 +617,32 @@ export function impostorBakeVerdict(
  *  kind with `undergrowth: 1` gets. Everything else is this times the kind's
  *  own number, so the catalog value is a share and never a count.
  *
- *  0.40/m2 (0.15 before the camera-local rebuild) puts a tuft every 1.6 m of
- *  edge at full value; a forest at the seeded 0.6 therefore carries one about
- *  every 2 m, which is a floor one walks THROUGH rather than a scattering of
- *  bushes one walks past. The old number was chosen against a per-area budget
- *  that had to pay for the whole shape at once — a cell of 64 m pays for
- *  4096 m2 and nothing else, so the density can be what the picture needs. */
-export const UNDERGROWTH_DENSITY_PER_M2 = 0.40;
+ *  0.80/m2 (0.40 before the acceptance of 2026-08-16, 0.15 before the
+ *  camera-local rebuild) puts a tuft every 1.1 m of edge at full value; a
+ *  forest at the seeded 0.6 carries one about every 1.4 m. That is the
+ *  difference the finding named: at 0.40 the layer read as SEPARATE tufts one
+ *  walks past, and a closed floor of grass needs the neighbours to touch —
+ *  which at ~1.1 m spacing they do, because a tuft is drawn
+ *  `UNDERGROWTH_W_RATIO` times its own height wide (`scene/undergrowth.ts`),
+ *  i.e. about 0.69 m at the reference height.
+ *
+ *  WHAT IT COSTS, and why the number can be this high: the cells are
+ *  camera-local, so the world's size never enters. A cell of 64 m at full
+ *  value wants round(64²/100 · 80) = 3277 tufts, and the 5-9 cells that carry
+ *  anything drawable inside `UNDERGROWTH_CULL_M` therefore put roughly
+ *  15 000-30 000 crossed quads into the frame — instanced, so a handful of
+ *  draw calls, and the per-cell ceiling of 8000 is still more than twice what
+ *  the densest legal ground asks for.
+ *
+ *  THE OVERDRAW GUARD, because that is the cost this layer really pays:
+ *  alpha-tested quads cost FILL RATE, not draw calls, and a carpet seen at a
+ *  grazing angle overdraws the same pixels many times over. If the sight
+ *  acceptance stutters, the first lever is THIS constant (halving it halves
+ *  the fill) and the second is the near end of the LOD ladder,
+ *  `UNDERGROWTH_FADE_M` (30 m) — beyond it the layer is already thinned
+ *  linearly to nothing at `UNDERGROWTH_CULL_M`. Neither is a per-world dial:
+ *  they are the two numbers to turn here. */
+export const UNDERGROWTH_DENSITY_PER_M2 = 0.80;
 
 /** Edge of ONE cell of the layer's raster, in metres — ORIGIN-ANCHORED, so a
  *  cell is a fixed square of the world and not a square around the player.
@@ -633,7 +652,7 @@ export const UNDERGROWTH_DENSITY_PER_M2 = 0.40;
  *  64 m is the compromise between the two costs a cell has. Smaller cells
  *  cross more borders per metre walked (a rebuild each time) and cost a draw
  *  call each; bigger ones make every single crossing expensive and force the
- *  radius out. At 64 m one crossing rebuilds about five cells of ~1000
+ *  radius out. At 64 m one crossing rebuilds about five cells of ~2000
  *  instances — a few milliseconds, once every 64 m. */
 export const UNDERGROWTH_CELL_M = 64;
 
@@ -649,9 +668,9 @@ export const UNDERGROWTH_CELL_RADIUS_M = 128;
 
 /** Hard ceiling of the layer PER CELL — a guard, not a budget.
  *
- *  A cell of 64 m at the full base density wants round(4096/100 · 40) = 1638
- *  tufts, so 8000 is roughly five times what the densest legal ground asks
- *  and CANNOT be reached through `undergrowthDensityPer100m2` (the catalog
+ *  A cell of 64 m at the full base density wants round(4096/100 · 80) = 3277
+ *  tufts, so 8000 is nearly two and a half times what the densest legal ground
+ *  asks and CANNOT be reached through `undergrowthDensityPer100m2` (the catalog
  *  value is clamped to 1). It exists for the same reason the sampler has a
  *  ceiling at all: a hand-edited density that crosses the JSON boundary must
  *  cost a thicker cell, never a hundred thousand instances built in one frame.

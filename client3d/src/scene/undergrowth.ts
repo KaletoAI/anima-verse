@@ -161,10 +161,22 @@ export function undergrowthCellSeed(areaId: string,
  *  here. */
 export const UNDERGROWTH_TEX_SIZE = 64;
 
-/** How many blades one texture carries. Inside the 6-9 the design asked for:
- *  an ODD number, so the middle blade sits on the texture's centre line and
- *  the two crossed quads do not read as a repeated pair. */
-export const UNDERGROWTH_BLADES = 7;
+/** How many blades one texture carries — raised from 7 with the density
+ *  (2026-08-16): a fuller tuft is the second half of "a closed floor instead
+ *  of separate bushes", because a denser field of THIN tufts still reads as a
+ *  field of tufts. An ODD number, so the middle blade sits on the texture's
+ *  centre line and the two crossed quads do not read as a repeated pair.
+ *
+ *  NINE IS THE CEILING OF THE GEOMETRY, not a taste: a blade is
+ *  `BLADE_HALF_W` wide at the root and antialiased over one further texel, so
+ *  it covers 2 · (0.045 · 64 + 0.5) = 6.68 texels, against a root spacing of
+ *  64/N. At N = 9 that spacing is 7.11 texels and the roots still stand APART
+ *  — which is what keeps "the strongest blade wins" and "the summed width of
+ *  the blades" the same picture (the row-ink property the smoke measures) and
+ *  keeps the outermost blade inside the texture. At N = 11 (5.82) the roots
+ *  would run into each other and the layer would need a thinner blade to go
+ *  with it, which is a second knob for no visible gain. */
+export const UNDERGROWTH_BLADES = 9;
 
 /** Half the width of a blade AT ITS ROOT, as a share of the texture edge. */
 const BLADE_HALF_W = 0.045;
@@ -212,7 +224,7 @@ const BLADE_SHADE_SPAN = 0.3;
  * summed coverage of one ROW is exactly the summed WIDTH of the blades that
  * cross it (a unit box filter reproduces the area of a ramp of unit slope
  * exactly, whatever the phase). So "the tip is narrower than the foot" is not
- * an impression — it is 39.85 texels of ink in row 0 against 2.22 in row 46,
+ * an impression — it is 51.26 texels of ink in row 0 against 2.22 in row 46,
  * and the smoke derives both by hand.
  */
 export function undergrowthTexturePixels(
@@ -270,10 +282,19 @@ export function undergrowthTexturePixels(
  *  per cell and kind. */
 export const UNDERGROWTH_H_REF_M = (UNDERGROWTH_H_MIN + UNDERGROWTH_H_MAX) / 2;
 
-/** How wide a tuft is drawn, as a share of its height. A tuft of grass is
- *  about as wide as it is tall, and the texture spreads its seven blades over
- *  exactly this width — at the reference height that is a blade every 8 cm. */
-const UNDERGROWTH_W_RATIO = 1.0;
+/** How wide a tuft is drawn, as a share of its height — a QUARTER wider than
+ *  the 1.0 it was until 2026-08-16, and the reason is the neighbour and not
+ *  the tuft. At the raised base density (`UNDERGROWTH_DENSITY_PER_M2`, 0.80)
+ *  tufts stand about 1.1 m apart at full value; at the reference height 1.0
+ *  drew them 0.55 m wide, so half a metre of bare ground stayed between two of
+ *  them and the layer read as separate bushes. 1.25 makes it 0.69 m, and with
+ *  the yaw of each card and the taller instances of the height span the
+ *  silhouettes now touch — a floor rather than a pattern.
+ *
+ *  The texture spreads its nine blades over exactly this width: at the
+ *  reference height that is a blade every 7.6 cm, i.e. the blades stayed the
+ *  same size on screen while the tuft grew. */
+const UNDERGROWTH_W_RATIO = 1.25;
 
 /** The angle between the two crossed quads, in radians (80°).
  *
@@ -305,7 +326,7 @@ const UNDERGROWTH_REACH_M = UNDERGROWTH_H_MAX
  * `h · UNDERGROWTH_W_RATIO` wide.
  *
  * Two cards, the second turned by `UNDERGROWTH_CROSS_RAD` about +Y. Both carry
- * the whole texture (0..1 in both UV axes), so a tuft is the same seven blades
+ * the whole texture (0..1 in both UV axes), so a tuft is the same nine blades
  * seen from two directions rather than two different plants.
  *
  * THE NORMALS POINT STRAIGHT UP, all eight of them, and that is the one thing
@@ -615,7 +636,7 @@ export function createUndergrowthField(opts: {
      *
      * `pointInFootprint` turns the point into the square's own frame, i.e. two
      * multiplications and a sine per candidate PER LOCATION; a world with two
-     * hundred places would spend that two hundred times on each of ~983
+     * hundred places would spend that two hundred times on each of ~2000
      * candidates of every cell, and building a cell is the one thing that
      * happens while the player walks.
      *

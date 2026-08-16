@@ -1372,14 +1372,22 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   wird NICHT mehr über die ganze gemalte Form vorgebaut, sondern pro ZELLE
   eines ursprungsverankerten 64-m-Rasters im Umkreis von 128 m um denselben
   Anker, den die feinen Höhen-Kacheln nutzen (§ A16.3: der Avatar, solange der
-  Spieler ihn steuert, sonst das Kamera-Bodenziel). Basis-Dichte **0,40
-  Instanzen/m² × Wert** (0,15 vor dem Umbau), Deckel **8000 je Zelle** —
-  ein Schutz gegen handgeschriebenen Unsinn, den die auf 1 geklemmte
-  Katalog-Zahl nie erreicht (volle Dichte will 1638 je Zelle). Der alte
-  Flächen-Deckel von 20 000 ist ersatzlos weg: er war auf einem
-  Quadratkilometer nicht Schutz, sondern die Dichte (0,02/m², sichtbar leerer
-  Wald). Damit ist ein 10-km²-Wald lokal exakt so dicht wie eine kleine Wiese,
-  und die Kosten sind konstant (~21 Zellen à ~983 Büschel bei forest 0,6).
+  Spieler ihn steuert, sonst das Kamera-Bodenziel). Basis-Dichte **0,80
+  Instanzen/m² × Wert** (0,40 bis zur Sicht-Abnahme 2026-08-16, 0,15 vor dem
+  Umbau), Deckel **8000 je Zelle** — ein Schutz gegen handgeschriebenen Unsinn,
+  den die auf 1 geklemmte Katalog-Zahl nie erreicht (volle Dichte will 3277 je
+  Zelle). Der alte Flächen-Deckel von 20 000 ist ersatzlos weg: er war auf
+  einem Quadratkilometer nicht Schutz, sondern die Dichte (0,02/m², sichtbar
+  leerer Wald). Damit ist ein 10-km²-Wald lokal exakt so dicht wie eine kleine
+  Wiese, und die Kosten sind konstant (~21 Zellen à ~1966 Büschel bei
+  forest 0,6).
+
+  Die Verdopplung von 0,40 auf 0,80 ist die Antwort auf den Abnahme-Befund
+  „vereinzelte Grasbüschel“: bei 0,40 steht bei vollem Wert alle 1,6 m ein
+  Büschel, bei 0,80 alle 1,1 m — und weil ein Büschel 1,25 × seiner Höhe breit
+  gezeichnet wird (~0,69 m bei der Referenzhöhe 0,55 m), berühren sich die
+  Silhouetten und die Schicht liest sich als geschlossene Grasdecke. Beides
+  gehört dem Renderer; der Server liefert weiterhin nur die 0…1.
 
   **Positionen** kommen aus demselben seed-stabilen Sampler wie die autorierte
   Streu, aber unter EIGENEM Seed **pro (Fläche, Zelle)**:

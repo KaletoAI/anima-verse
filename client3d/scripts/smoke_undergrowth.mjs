@@ -121,38 +121,46 @@
  * ============================================================================
  * (C) HOW MANY — the density, per CELL and no longer per shape
  * ============================================================================
- * (C1) THE BASE DENSITY IS 0.40/m2 (0.15 before the rebuild). The catalog
- *      value is a SHARE of it, so the density handed to the sampler is
- *        per 100 m2 = 0.40 · 100 · min(value, 1) = 40 · value
- *      forest 0.6 -> 24 · grass 0.3 -> 12 · full 1.0 -> 40.
+ * (C1) THE BASE DENSITY IS 0.80/m2 (0.40 before the sight acceptance of
+ *      2026-08-16, 0.15 before the camera-local rebuild). The catalog value is
+ *      a SHARE of it, so the density handed to the sampler is
+ *        per 100 m2 = 0.80 · 100 · min(value, 1) = 80 · value
+ *      forest 0.6 -> 48 · grass 0.3 -> 24 · full 1.0 -> 80.
+ *      In spacing, which is what the finding was about: 1/√0.8 = 1.12 m
+ *      between tufts at full value and 1.44 m at the seeded forest 0.6,
+ *      against a tuft drawn 1.25 · 0.55 = 0.69 m wide — the silhouettes touch,
+ *      which is the difference between a floor of grass and single bushes.
  *
  * (C2) ONE FULL CELL is 64 · 64 = 4096 m2, so
- *        count = round(4096/100 · 40 · value) = round(1638.4 · value)
- *        0.6 -> round(983.04)  =  983      the number the design names
- *        0.3 -> round(491.52)  =  492
- *        1.0 -> round(1638.4)  = 1638
- *      and the sampler really places 983 of them in a cell that lies wholly
+ *        count = round(4096/100 · 80 · value) = round(3276.8 · value)
+ *        0.6 -> round(1966.08) = 1966     the number the design names
+ *        0.3 -> round(983.04)  =  983
+ *        1.0 -> round(3276.8)  = 3277
+ *      and the sampler really places 1966 of them in a cell that lies wholly
  *      inside the shape — the count rule and `scatterInstances` must not drift
  *      apart in the last bit of a float.
  *
  * (C3) THE CEILING IS 8000 PER CELL AND CANNOT BE REACHED. The catalog value
- *      is clamped to 1, so the densest legal ground asks for 1638 — a fifth of
- *      it. That is the difference to the old per-area ceiling, which ordinary
- *      worlds hit and were silently thinned by: 1 km2 at 0.6 wanted 90 000
- *      tufts, got 20 000, i.e. 0.02/m2. Pinned as "the cap is above what full
- *      density asks", not as a number the code can produce.
+ *      is clamped to 1, so the densest legal ground asks for 3277 — 41 % of
+ *      it, and the cap would first bite at a value of 8000/3276.8 = 2.44,
+ *      which the clamp forbids. That is the difference to the old per-area
+ *      ceiling, which ordinary worlds hit and were silently thinned by: 1 km2
+ *      at 0.6 wanted 90 000 tufts, got 20 000, i.e. 0.02/m2. Pinned as "the
+ *      cap is above what full density asks", not as a number the code can
+ *      produce.
  *
  * (C4) "NOT GIVEN" AND THE CLAMP, because the value crosses a JSON boundary:
  *        0 / −1 / NaN / 'thick' / null / undefined -> density 0, count 0
- *        5 -> clamped to 1 -> 1638, not 8192
+ *        5 -> clamped to 1 -> 3277, not 16384
  *
  * ============================================================================
  * (D) THE BLADE TEXTURE — a pure pixel function
  * ============================================================================
  * 64 × 64 RGBA, ROW 0 AT THE BOTTOM (a `DataTexture` is uploaded unflipped and
- * the quad's v = 0 is its foot). Seven blades, blade `i`:
- *   rootX  = (i + 0.5)/7 · 64      -> 4.571, 13.714, 22.857, 32, 41.143,
- *                                     50.286, 59.429
+ * the quad's v = 0 is its foot). NINE blades since 2026-08-16 (seven before —
+ * a fuller tuft is the other half of the closed grass floor), blade `i`:
+ *   rootX  = (i + 0.5)/9 · 64      -> 3.556, 10.667, 17.778, 24.889, 32,
+ *                                     39.111, 46.222, 53.333, 60.444
  *   height = [0.55, 0.725, 0.90][i mod 3] · 64 -> 35.2, 46.4, 57.6 in turn
  *   bend   = ±0.12 · 64 = ±7.68, + for even i
  *   x(t)   = rootX + bend · t²,  halfW(t) = 2.88 · (1 − t),  t = py/height
@@ -161,23 +169,24 @@
  *
  * (D1) THE SHAPE OF THE ARRAY: 64 · 64 · 4 = 16384 bytes, `Uint8ClampedArray`.
  *
- * (D2) A BLADE IS OPAQUE DOWN THE MIDDLE. Blade 3 has rootX = 3.5/7 · 64 = 32
- *      exactly, bend −7.68, height 35.2. In row 0 (py = 0.5):
- *        t = 0.5/35.2 = 0.01420455,  x = 32 − 7.68 · t² = 31.99845
- *        halfW = 2.88 · (1 − t) = 2.83909
- *        c = 31 -> px 31.5, |dx| = 0.49845, cov = 2.83909 − 0.49845 + 0.5
- *                  = 2.84 -> clamped to 1 -> alpha 255
- *        c = 32 -> px 32.5, |dx| = 0.50155 -> likewise 255
+ * (D2) A BLADE IS OPAQUE DOWN THE MIDDLE. Blade 4 has rootX = 4.5/9 · 64 = 32
+ *      exactly, bend +7.68 (even i), height 46.4. In row 0 (py = 0.5):
+ *        t = 0.5/46.4 = 0.01077586,  x = 32 + 7.68 · t² = 32.00089
+ *        halfW = 2.88 · (1 − t) = 2.84897
+ *        c = 31 -> px 31.5, |dx| = 0.50089, cov = 2.84897 − 0.50089 + 0.5
+ *                  = 2.848 -> clamped to 1 -> alpha 255
+ *        c = 32 -> px 32.5, |dx| = 0.49911 -> likewise 255
  *
- * (D3) …AND TRANSPARENT BETWEEN BLADES. Blades 3 and 4 sit at 32 and 41.143,
- *      so c = 36 (px 36.5) is 4.50 from the one and 4.64 from the other, both
- *      well past halfW + 0.5 = 3.34 -> alpha 0.
+ * (D3) …AND TRANSPARENT BETWEEN BLADES — still, at nine of them, which is the
+ *      point of the count's own ceiling. Blades 4 and 5 sit at 32.001 and
+ *      39.111, so c = 35 (px 35.5) is 3.50 from the one and 3.61 from the
+ *      other, both past their halfW + 0.5 (3.35 and 3.36) -> alpha 0.
  *
  * (D4) THE EDGE IS ANTIALIASED, which is what the alpha cut of 0.35 is set
- *      against. Still blade 3, row 0, c = 29 -> px 29.5, |dx| = 2.49845:
- *        cov = 2.83909 − 2.49845 + 0.5 = 0.84064 -> alpha = round(214.36)
- *        = 214.  No other blade reaches that column (blade 2 stands at
- *        22.858 with halfW 2.855, i.e. 6.64 away).
+ *      against. Still blade 4, row 0, c = 29 -> px 29.5, |dx| = 2.50089:
+ *        cov = 2.84897 − 2.50089 + 0.5 = 0.84808 -> alpha = round(216.26)
+ *        = 216.  No other blade reaches that column (blade 3 stands at
+ *        24.888 with halfW 2.839, i.e. 4.61 away).
  *
  * (D5) THE TIP IS NARROWER THAN THE FOOT, and it is measurable exactly. The
  *      summed coverage of ONE ROW is the summed WIDTH of the blades crossing
@@ -185,12 +194,15 @@
  *      exactly, whatever the phase (true while halfW ≥ 0.5, which holds in
  *      both rows below).
  *        row 0  (py = 0.5): every blade crosses it, 2·halfW = 5.76 · (1 −
- *          0.5/h) with h = 35.2 (three blades), 46.4 (two), 57.6 (two):
- *          3 · 5.678182 + 2 · 5.697931 + 2 · 5.708 = 39.8464
+ *          0.5/h), and nine blades are three of each height:
+ *          3 · 5.678182 + 3 · 5.697931 + 3 · 5.71 = 51.2583
  *        row 46 (py = 46.5): 35.2 is long gone and 46.4 ends at py = 46.4, so
- *          only the two 57.6 blades are left:
- *          t = 46.5/57.6 = 0.807292, 2·halfW = 5.76 · 0.192708 = 1.11 each
- *          -> 2.22
+ *          only the three 57.6 blades (i = 2, 5, 8) are long enough — but
+ *          blade 8 has LEANED OUT of the texture: t = 46.5/57.6 = 0.807292,
+ *          x = 60.444 + 7.68 · t² = 65.45, and its whole 1.11-texel width
+ *          lies past the last texel centre (63.5), so it writes nothing.
+ *          Blades 2 and 5 stand at 22.78 and 34.11:
+ *          2·halfW = 5.76 · 0.192708 = 1.11 each -> 2.22
  *      Both to a tolerance that only covers the 8-bit rounding of the alpha
  *      channel (±0.5/255 per texel).
  *
@@ -209,29 +221,34 @@
  * (D8) HOW MUCH INK THE FOOT CARRIES, exactly. Over the ten lowest rows the
  *      row rule of (D5) applies to every blade (halfW is near its maximum and
  *      the leaning tips have not yet reached each other — at py = 9.5 the
- *      largest lean is 7.68 · 0.27² = 0.56 texels against a spacing of 9.14,
- *      so no two blades overlap and "max" and "sum" are the same picture):
+ *      largest lean is 7.68 · 0.27² = 0.56 texels, and neighbours lean the
+ *      OTHER way, so 1.12 texels of relative shift against a spacing of 7.11
+ *      and a covered half-extent of 2.6: no two blades overlap and "max" and
+ *      "sum" are the same picture):
  *        Σ_{r=0}^{9} 5.76 · (1 − (r + 0.5)/h) = 5.76 · [10 − 50/h]
- *        h = 35.2 -> 49.418 (three blades)
- *        h = 46.4 -> 51.393 (two)
- *        h = 57.6 -> 52.600 (two)
- *        -> 3·49.418 + 2·51.393 + 2·52.600 = 356.24
+ *        h = 35.2 -> 49.418     three blades of each height, so
+ *        h = 46.4 -> 51.393     3 · (49.418 + 51.393 + 52.600) = 460.23
+ *        h = 57.6 -> 52.600
  *      The WHOLE texture is deliberately not pinned to a number: above the
  *      foot the blades lean across each other (±7.68 texels at the tip against
- *      a spacing of 9.14), and a texel takes the strongest blade rather than
- *      the sum, so the total is a little under the 2.88 · Σh = 903 the widths
- *      alone would give. What IS derivable is a BOUND, and it is the one worth
- *      having: the ink is at most 903 texels and an antialiased edge adds at
- *      most one partly covered texel per side per row, i.e. 2 · (3·35 + 2·46 +
- *      2·58) = 626 — so at most 1529 of the 4096 texels carry any alpha at all
- *      and at least 2567 are pure hole. A tuft is mostly hole, which is what
- *      an alpha cut is for.
+ *      a spacing of 7.11), and a texel takes the strongest blade rather than
+ *      the sum, so the total is under the 2.88 · Σh = 2.88 · 417.6 = 1202.7
+ *      the widths alone would give. What IS derivable is a BOUND, and it is
+ *      the one worth having: the ink is at most 1202.7 texels and an
+ *      antialiased edge adds at most one partly covered texel per side per
+ *      row, i.e. 2 · (3·35 + 3·46 + 3·58) = 834 — so at most 2037 of the 4096
+ *      texels carry any alpha at all and at least 2059 are pure hole. A tuft
+ *      is mostly hole even at nine blades, which is what an alpha cut is for.
  *
  * (D9) THE RED COUNTER-CHECK: the alpha is written as a flat 255. The picture
  *      is then a solid square — 4096 texels of ink and not one transparent
  *      texel — so a material with `alphaTest` would draw two solid crossed
  *      boards. That the REAL function leaves thousands of texels fully
- *      transparent is the counter-assertion.
+ *      transparent is the counter-assertion, and it is stated against (D8)'s
+ *      own bounds rather than against a recorded number: under a THIRD of the
+ *      mutant's ink (at most 1202.7 of 4096) and at least 2059 pure holes
+ *      where the mutant has none. Nine blades instead of seven move both, and
+ *      the bound moves with them.
  *
  * ============================================================================
  * (E) THE LOD LADDER — moved here from section (K) of smoke_scatter_math
@@ -266,12 +283,14 @@
  * (F) THE LOOK — crossed quads with an alpha cut, built for real
  * ============================================================================
  * (F1) THE GEOMETRY of one tuft at the reference height 0.55 m: TWO cards,
- *      eight vertices, base at y = 0 (B16) and 0.55 · 1.0 = 0.55 m wide.
- *        card A lies in the xy-plane: x = ±0.275, z = 0
+ *      eight vertices, base at y = 0 (B16) and 0.55 · 1.25 = 0.6875 m wide —
+ *      the width ratio went from 1.0 to 1.25 with the density (2026-08-16), so
+ *      that neighbours 1.1 m apart touch instead of standing alone.
+ *        card A lies in the xy-plane: x = ±0.34375, z = 0
  *        card B is A turned by 80° about +Y, so its own +X axis is
  *          (cos 80°, 0, −sin 80°) = (0.173648, 0, −0.984808)
- *          -> its first vertex is (−0.275 · 0.173648, 0, +0.275 · 0.984808)
- *             = (−0.0477533, 0, 0.2708221)
+ *          -> its first vertex is (−0.34375 · 0.173648, 0, +0.34375 · 0.984808)
+ *             = (−0.0596916, 0, 0.3385277)
  *        NOT 90°: two cards at a right angle look the same from four
  *        directions and a field of them shows the pattern.
  *
@@ -330,7 +349,7 @@
  *
  * (G2) THE ANCHOR BUILDS THE WANT SET: after `setAnchor(32, 32)` the group
  *      holds one mesh per cell of (A1) — 21 — and each of them has room for
- *      exactly the 983 instances of (C2), because the shape covers the whole
+ *      exactly the 1966 instances of (C2), because the shape covers the whole
  *      cell.
  *
  * (G3) NOTHING IS DRAWN UNTIL IT IS BINNED: every mesh is `visible === false`
@@ -340,10 +359,13 @@
  * (G4) WHAT THE TICK DRAWS, as an area integral. The layer is thinned from
  *      30 m and gone at 60 m, so the drawn instances of a camera standing on
  *      flat ground at the anchor are
- *        0.24/m2 · ∫₀^60 share(r) · 2πr dr
- *        = 0.24 · [ π·30² + 2π·(r² − r³/90) from 30 to 60 ]
- *        = 0.24 · [ 2827.43 + 2π·(1200 − 600) ]
- *        = 0.24 · [ 2827.43 + 3769.91 ] = 0.24 · 6597.34 = 1583
+ *        0.48/m2 · ∫₀^60 share(r) · 2πr dr
+ *        = 0.48 · [ π·30² + 2π·(r² − r³/90) from 30 to 60 ]
+ *        = 0.48 · [ 2827.43 + 2π·(1200 − 600) ]
+ *        = 0.48 · [ 2827.43 + 3769.91 ] = 0.48 · 6597.34 = 3167
+ *      — the fill-rate figure the density decision was taken against: about
+ *      three thousand crossed quads in view, i.e. six thousand alpha-tested
+ *      triangles after back-face culling.
  *      to within a few per cent — the hash is a hash, not a quota. And EVERY
  *      drawn instance is within 60 m of the camera, which is the property the
  *      integral is only a consequence of.
@@ -358,8 +380,8 @@
  *
  * (G7) A BORDER DOES NOT THICKEN THE CARPET. Paint a second shape with no
  *      undergrowth of its own over the eastern half of the world and the wood
- *      keeps only its western half — about 983/2 ≈ 492 tufts per full cell,
- *      NOT 983 squeezed into half the ground.
+ *      keeps only its western half — about 1966/2 ≈ 983 tufts per full cell,
+ *      NOT 1966 squeezed into half the ground.
  *
  *      That is what `triesPerPoint: 1` buys and why the cell case needs it.
  *      The shared sampler re-rolls a rejected candidate up to twelve times,
@@ -369,13 +391,13 @@
  *      and the rejections that are left (a building's footprint, ground
  *      painted over this shape) are exactly the ones that have to SUBTRACT.
  *      Asserted from both sides: the same cell sampled the sampler's default
- *      way tops itself back up to the full 983.
+ *      way tops itself back up to the full 1966.
  *
  * (G8) A FOOTPRINT ON THE OTHER SIDE OF THE WORLD COSTS NOTHING. Every
  *      candidate of every cell used to be turned into the frame of EVERY
  *      placed location (`pointInFootprint`: two multiplications and a sine
  *      each), so a world with two hundred places paid two hundred of those on
- *      each of ~983 candidates per cell — while the player walks. The cell now
+ *      each of ~1966 candidates per cell — while the player walks. The cell now
  *      keeps only the footprints whose CIRCUMSCRIBED box (`half · √2`, so the
  *      turn never has to be read and nothing that could block is dropped)
  *      meets it.
@@ -389,11 +411,11 @@
  *          test per built cell (A1) and not one per candidate.
  *        a 20 m place at (32, 32): its circumscribed box runs 17.86 … 46.14 on
  *          both axes, so it lies wholly inside the anchor's own cell 0 … 64
- *          and inside no other -> 21 + 983, the 21 box tests plus one
+ *          and inside no other -> 21 + 1966, the 21 box tests plus one
  *          evaluation for each candidate of that single cell. That second row
  *          is what proves the counter would have noticed a miss.
  *      And the far place changes no tuft: the cell's instance count is the
- *      same 983 with it and without it.
+ *      same 1966 with it and without it.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -644,17 +666,17 @@ async function main() {
       offsets(cell00, 0, 0, CELL).slice(0, 5), 1e-9), false);
 
   console.log('\n(C) how many — the density, per cell');
-  check('C1 the base density is 0.40 tufts per square metre',
-    UNDERGROWTH_DENSITY_PER_M2, 0.40);
-  check('C1 the share becomes 40 * value per 100 m2',
+  check('C1 the base density is 0.80 tufts per square metre',
+    UNDERGROWTH_DENSITY_PER_M2, 0.80);
+  check('C1 the share becomes 80 * value per 100 m2',
     [undergrowthDensityPer100m2(0.6), undergrowthDensityPer100m2(0.3),
-      undergrowthDensityPer100m2(1)], [24, 12, 40]);
-  check('C2 a full cell of the seeded forest carries 983 tufts',
-    undergrowthCellCount(0.6), 983);
-  check('C2 …of the seeded grass 492, at full value 1638',
-    [undergrowthCellCount(0.3), undergrowthCellCount(1)], [492, 1638]);
-  check('C2 …and the sampler really places 983 of them',
-    cell00.length, 983);
+      undergrowthDensityPer100m2(1)], [48, 24, 80]);
+  check('C2 a full cell of the seeded forest carries 1966 tufts',
+    undergrowthCellCount(0.6), 1966);
+  check('C2 …of the seeded grass 983, at full value 3277',
+    [undergrowthCellCount(0.3), undergrowthCellCount(1)], [983, 3277]);
+  check('C2 …and the sampler really places 1966 of them',
+    cell00.length, 1966);
   check('C3 the ceiling is 8000 per cell', UNDERGROWTH_MAX_PER_CELL, 8000);
   check('C3 …which full density does not come near',
     undergrowthCellCount(1) < UNDERGROWTH_MAX_PER_CELL, true);
@@ -664,28 +686,28 @@ async function main() {
       [undergrowthCellCount(bad), undergrowthDensityPer100m2(bad)], [0, 0]);
   }
   check('C4 a hand-edited 5 is clamped to full density, not multiplied',
-    undergrowthCellCount(5), 1638);
+    undergrowthCellCount(5), 3277);
 
   console.log('\n(D) the blade texture — a pure pixel function');
   const N = UNDERGROWTH_TEX_SIZE;
   const tex = undergrowthTexturePixels(N);
   const at = (r, c) => (r * N + c) * 4;
-  check('D1 the texture is 64 x 64 and seven blades wide',
-    [N, UNDERGROWTH_BLADES], [64, 7]);
+  check('D1 the texture is 64 x 64 and nine blades wide',
+    [N, UNDERGROWTH_BLADES], [64, 9]);
   check('D1 …and comes back as RGBA bytes',
     [tex.length, tex instanceof Uint8ClampedArray], [64 * 64 * 4, true]);
   check('D2 a blade is opaque down its middle',
     [tex[at(0, 31) + 3], tex[at(0, 32) + 3]], [255, 255]);
   check('D3 …and there is nothing at all between two blades',
-    tex[at(0, 36) + 3], 0);
+    tex[at(0, 35) + 3], 0);
   check('D4 the blade edge is antialiased, not a hard step',
-    tex[at(0, 29) + 3], 214);
+    tex[at(0, 29) + 3], 216);
   const rowInk = (r) => {
     let sum = 0;
     for (let c = 0; c < N; c += 1) sum += tex[at(r, c) + 3] / 255;
     return sum;
   };
-  check('D5 the foot row carries 39.85 texels of ink', rowInk(0), 39.8464, 0.15);
+  check('D5 the foot row carries 51.26 texels of ink', rowInk(0), 51.2583, 0.15);
   check('D5 …and the row at 46.5 only 2.22 — the taper, measured',
     rowInk(46), 2.22, 0.05);
   let topInk = 0;
@@ -696,8 +718,8 @@ async function main() {
     [179, 179, 179, 254]);
   let footInk = 0;
   for (let r = 0; r < 10; r += 1) footInk += rowInk(r);
-  check('D8 the ten lowest rows carry exactly 356.24 texels of ink',
-    footInk, 356.24, 0.5);
+  check('D8 the ten lowest rows carry exactly 460.23 texels of ink',
+    footInk, 460.234, 0.5);
   let ink = 0;
   let clear = 0;
   for (let r = 0; r < N; r += 1) {
@@ -707,10 +729,10 @@ async function main() {
       if (a === 0) clear += 1;
     }
   }
-  check('D8 the whole texture stays under the 903 texels the widths allow',
-    ink < 903.2, true);
-  check('D8 …so at least 2567 of its 4096 texels are pure hole',
-    clear >= 2567, true);
+  check('D8 the whole texture stays under the 1202.7 texels the widths allow',
+    ink < 1202.7, true);
+  check('D8 …so at least 2059 of its 4096 texels are pure hole',
+    clear >= 2059, true);
 
   // (D9) the red counter-check
   const solid = await loadField(opaqueTexture);
@@ -724,7 +746,7 @@ async function main() {
   check('D9 the "always opaque" mutant is a solid square, not a tuft',
     [solidInk, solidClear], [64 * 64, 0]);
   check('D9 …which is measurably not what the real function draws',
-    [ink < solidInk / 4, clear > 2567], [true, true]);
+    [ink < solidInk / 3, clear >= 2059], [true, true]);
 
   console.log('\n(E) the LOD ladder — its own numbers, beside the props\'');
   check('E the layer is drawn to 60 m and thinned from 30 m',
@@ -782,12 +804,12 @@ async function main() {
   const geo = undergrowthGeometry(UNDERGROWTH_H_REF_M);
   const gp = geo.getAttribute('position');
   check('F1 two cards: eight vertices', gp.count, 8);
-  check('F1 card A spans +-0.275 m at z = 0',
+  check('F1 card A spans +-0.34375 m at z = 0',
     [gp.getX(0), gp.getY(0), gp.getZ(0), gp.getX(1)],
-    [-0.275, 0, 0, 0.275], 1e-6);
+    [-0.34375, 0, 0, 0.34375], 1e-6);
   check('F1 …and card B is it turned by 80 degrees, not 90',
     [gp.getX(4), gp.getY(4), gp.getZ(4)],
-    [-0.0477533, 0, 0.2708221], 1e-6);
+    [-0.0596916, 0, 0.3385277], 1e-6);
   geo.computeBoundingBox();
   check('F1 the tuft STANDS on the ground (B16): y runs 0 .. 0.55',
     [geo.boundingBox.min.y, geo.boundingBox.max.y], [0, 0.55], 1e-6);
@@ -850,9 +872,9 @@ async function main() {
   grown3d.setAnchor(32, 32);
   check('G2 the anchor builds one mesh per wanted cell',
     grown3d.group.children.length, midCell.length);
-  check('G2 …each with room for the cell\'s own 983 tufts',
+  check('G2 …each with room for the cell\'s own 1966 tufts',
     grown3d.group.children.map((m) => m.instanceMatrix.count),
-    midCell.map(() => 983));
+    midCell.map(() => 1966));
   check('G3 and nothing is DRAWN until the first tick',
     grown3d.group.children.some((m) => m.visible || m.count > 0), false);
   check('G3 …nor does any of it cast a shadow',
@@ -873,8 +895,8 @@ async function main() {
       if (d > farthest) farthest = d;
     }
   }
-  check('G4 the tick draws the 1583 tufts the thinning integral asks for',
-    Math.abs(drawn - 1583) <= 0.08 * 1583, true);
+  check('G4 the tick draws the 3167 tufts the thinning integral asks for',
+    Math.abs(drawn - 3167) <= 0.08 * 3167, true);
   check(`G4 …and not one of them past the cull distance (${farthest.toFixed(1)} m)`,
     farthest <= UNDERGROWTH_CULL_M, true);
 
@@ -911,8 +933,8 @@ async function main() {
   // The anchor's own cell (-1, 0) runs x −64 … 0, so it lies wholly west of
   // the path and keeps everything — and it is built FIRST, the want set being
   // nearest-first.
-  check('G7 a cell wholly west of the border still carries its 983',
-    halved.group.children[0].instanceMatrix.count, 983);
+  check('G7 a cell wholly west of the border still carries its 1966',
+    halved.group.children[0].instanceMatrix.count, 1966);
   // The want set at (−32, 32) is (A1) shifted one column west, so the columns
   // east of the border (cx = 0 and 1) grow nothing at all: 21 cells less
   // cx = 0 (five rows) and cx = 1 (three, being a |cx| = 2 column) -> 13.
@@ -928,7 +950,7 @@ async function main() {
     triesPerPoint: 1,
   });
   check('G7 half the cell covered keeps about half the tufts, not all of them',
-    Math.abs(straddling.length - 492) <= 0.1 * 492, true);
+    Math.abs(straddling.length - 983) <= 0.1 * 983, true);
   const topped = scatterInstances({
     ring: cellRing(-1, 0),
     areaM2: CELL * CELL,
@@ -937,8 +959,8 @@ async function main() {
     occluders: [[[-32, -BIG], [BIG, -BIG], [BIG, BIG], [-32, BIG]]],
     maxPoints: UNDERGROWTH_MAX_PER_CELL,
   });
-  check('G7 …while the sampler\'s DEFAULT re-roll tops it back up to 983 — '
-    + 'double density against the border', topped.length, 983);
+  check('G7 …while the sampler\'s DEFAULT re-roll tops it back up to 1966 — '
+    + 'double density against the border', topped.length, 1966);
   halved.dispose();
 
   // (G8) the footprint pre-filter, measured on a counting footprint
@@ -959,8 +981,8 @@ async function main() {
   withFar.setAnchor(32, 32);
   check('G8 a place on the other side of the world costs one box test per '
     + 'built cell and not one per candidate', far.reads, midCell.length);
-  check('G8 …and it changes no tuft: the anchor cell still carries its 983',
-    withFar.group.children[0].instanceMatrix.count, 983);
+  check('G8 …and it changes no tuft: the anchor cell still carries its 1966',
+    withFar.group.children[0].instanceMatrix.count, 1966);
   withFar.dispose();
   const near = counting(32, 32, 20);
   const withNear = createUndergrowthField({ heightAt: () => 0, applySway });
@@ -968,7 +990,7 @@ async function main() {
   withNear.setAnchor(32, 32);
   check('G8 …while a place INSIDE the anchor cell — and inside no other — is '
     + 'asked once per candidate on top of that',
-    near.reads, midCell.length + 983);
+    near.reads, midCell.length + 1966);
   withNear.dispose();
 
   console.log('\n(H) the wiring, pinned by reading the source');

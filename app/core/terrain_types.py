@@ -110,7 +110,7 @@ SWAY_MIN, SWAY_MAX = 0.01, 0.5
 #: second scatter row of tufts on every wood is authoring work for something
 #: the KIND already says: forest is undergrown, a path is not. So this is a
 #: dial and not a list — 0…1, where 1 is the client's full base density
-#: (``UNDERGROWTH_DENSITY_PER_M2``, 0.40 instances per square metre) and every
+#: (``UNDERGROWTH_DENSITY_PER_M2``, 0.80 instances per square metre) and every
 #: value in between scales it linearly. No key means "bare ground", which is
 #: what every kind without it stays; there is no lower limit but 0 because the
 #: layer thins out continuously and a very small share is simply a few blades.
@@ -124,8 +124,12 @@ SWAY_MIN, SWAY_MAX = 0.01, 0.5
 #: old per-shape build a ceiling of 20 000 instances had to cap huge areas,
 #: which turned this dial into a lie on exactly the grounds that need it most
 #: (0.6 over a square kilometre came out at 0.02/m²) — that is why the base
-#: density could be raised from 0.15 to 0.40 at the same time. Contract detail
-#: for the renderers: ``docs/schnittstellen-3d.md`` § A9.
+#: density could be raised from 0.15 to 0.40 at the same time. The sight
+#: acceptance of 2026-08-16 then took it from 0.40 to 0.80: at 0.40 a full
+#: value put a tuft every 1.6 m and the layer read as SEPARATE clumps of grass,
+#: while 0.80 puts one every 1.1 m — close enough for the tufts to touch and
+#: read as a closed floor. Contract detail for the renderers:
+#: ``docs/schnittstellen-3d.md`` § A9.
 UNDERGROWTH_MIN, UNDERGROWTH_MAX = 0.0, 1.0
 
 #: The wave a kind with an amplitude but no authored wave gets — a swell every
