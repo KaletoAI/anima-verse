@@ -564,7 +564,7 @@ immer sichtbar, nur Locations verstecken sich.
 
 ```
 { default_kind: str,          # Boden der unbemalten Welt
-  types:  [ {kind, name, color, passable, speed_factor, meta}, … ],
+  types:  [ {kind, name, color, passable, speed_factor, surface?, meta}, … ],
   areas:  [ {id, kind, polygon, z_order, meta}, … ],
   sig:    str }               # identisch mit worldmap.terrain_sig
 ```
@@ -635,9 +635,19 @@ immer sichtbar, nur Locations verstecken sich.
   Eintrag **ersetzen** (Override-Replace wie die Aktivitäten-Bibliothek).
   Eine Welt-Zeile löschen holt den geteilten Eintrag zurück.
 - `kind` ist die ID (klein, ohne Leerzeichen), `name` der Anzeigetext,
-  `color` (`#rrggbb`) die Farbe der 2D-Schemakarte. `kind` SOLL auf eine
-  Oberflächen-Art (§ A9) passen, damit der 3D-Boden eine echte Textur
-  bekommt — Konvention, nicht erzwungen.
+  `color` (`#rrggbb`) die Farbe der 2D-Schemakarte.
+- **`surface` sagt, welche Oberflächen-Art (§ A9) den Boden bekleidet**
+  (2026-08-16) — die ID aus `/assets/surface-textures`, vom Autor gesetzt.
+  Bis dahin entschied der NAME: eine Art trug die gleichnamige
+  Bibliothek-Art. Dieser Namensabgleich ist **ersatzlos weg**. Ein Typ ohne
+  `surface` — und ebenso einer, dessen `surface` die Bibliothek nicht kennt —
+  rendert den Standardboden aus `color`, genau wie vorher ein Typ ohne
+  gleichnamigen Eintrag. Renderer greifen NIE auf `kind` zurück: zwei Typen
+  dürfen dasselbe Material tragen, ein Typ ein anders benanntes, und das
+  Umbenennen eines Bibliothek-Eintrags zieht keinem Boden mehr die Textur
+  aus. Bestandswelten füllt eine einmalige Boot-Migration
+  (`app/core/terrain_surface_migration.py`) mit genau der Zuordnung, die die
+  alte Regel ableitete.
 - `types[].meta` ist **frei-form mit GENAU ZWEI vertraglichen Schlüsseln**:
   `move_anim` und `idle_anim` (§ A9). Was auf einem Boden WÄCHST, hängt seit
   Befund B17 an der Fläche, nicht an der Art; eine alte `meta.scatter` an einem Typ liegt

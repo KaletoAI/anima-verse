@@ -219,6 +219,34 @@
  *     while the sway lines stay — the probe measures the chain, not a broken
  *     module. This is the mutation the review of task 1 declared binding for
  *     every further patch on these materials.
+ *
+ * ===========================================================================
+ * THE THIRD SUBJECT: WHICH SURFACE A GROUND WEARS (2026-08-16)
+ * ===========================================================================
+ *
+ * ---------------------------------------------------------------------------
+ * [13] THE FIELD, NEVER THE NAME — `surfaceOfType` and the chain around it
+ * ---------------------------------------------------------------------------
+ * The library used to be asked for an entry called exactly like the terrain
+ * kind (`surfaceFor(area.kind, 'wall')`), so `grass` wore `grass` because of
+ * the spelling. The server ships the assignment now (`types[].surface`,
+ * § A1.5) and the name match is gone WITHOUT a fallback. `surfaceOfType` is
+ * that reading, pure and exported, so it can be checked by value instead of
+ * by regex:
+ *   {kind:'grass', surface:'deep_forest'} -> 'deep_forest'   the field wins
+ *   {surface:'  Deep_Forest '}            -> 'deep_forest'   id shape
+ *   {kind:'grass'}                        -> ''              THE RED ONE
+ *   {kind:'grass', surface:'   '}         -> ''
+ *   undefined / null                      -> ''
+ * The third line is the counter-check of the whole change: `grass` IS an id
+ * the library holds, and a fallback to `kind` would answer 'grass' here.
+ *
+ * The rest of the chain lives in the closure and is pinned against the source
+ * the way [7] pins the composition: `materialFor` resolves `surfaceOf(kind)`
+ * first and asks the library about THAT id (texture and material class), the
+ * fringe question does the same, the preload loads the named surfaces — and
+ * NO library call in the module names a terrain kind any more, which is the
+ * one assertion that catches a half-migrated caller.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -285,7 +313,7 @@ async function loadGround(mutate) {
     // The shared module is re-exported THROUGH the bundle on purpose: the
     // bundle carries its own instance of it, and the sway's clock has to be
     // measured on the instance the sway actually writes (section [10]).
-    const entry = `export { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey } from '${GROUND_SRC}';\n`
+    const entry = `export { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey, surfaceOfType } from '${GROUND_SRC}';\n`
       + "export { updateSurfaceMaterials, surfaceTimeUniform } from '@anima/scene-render';\n";
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
@@ -431,7 +459,7 @@ const allOf = (marks) => marks.map(([, text]) => text);
 async function main() {
   const THREE = await import('three');
   const { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky } = await loadMaterials();
-  const { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey,
+  const { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey, surfaceOfType,
     updateSurfaceMaterials: tickSurfaces, surfaceTimeUniform } = await loadGround();
 
   /** One painted area's material, built the way `materialFor` builds it. */
@@ -715,6 +743,40 @@ async function main() {
   // the full and the cheap mesh come through `mountUrl`, so both bend.
   check('…and the patch is applied where a tier is MOUNTED (mountUrl)',
     /applySway\(material, prop\.sway, prop\.targetH\);/.test(groundSrc), true);
+
+  console.log('\n[13] which surface a kind wears — the field, never the name');
+  check('a type that names a material answers it',
+    surfaceOfType({ kind: 'grass', surface: 'deep_forest' }), 'deep_forest');
+  check('…trimmed and lowercased like every id over the wire',
+    surfaceOfType({ kind: 'grass', surface: '  Deep_Forest ' }), 'deep_forest');
+  // THE RED COUNTER-CHECK of this whole change: a type whose kind IS a library
+  // id and that names no material must come out empty. Under the old rule it
+  // wore the same-named texture; a fallback to `kind` would show up right here.
+  check('a type that names none answers NOTHING, even when its kind is an id',
+    surfaceOfType({ kind: 'grass', name: 'Grass' }), '');
+  check('…and so does an empty assignment',
+    surfaceOfType({ kind: 'grass', surface: '   ' }), '');
+  check('a kind the catalog does not know at all answers nothing',
+    surfaceOfType(undefined), '');
+  check('…and neither does a null entry', surfaceOfType(null), '');
+  // The chain in `materialFor` reads the SURFACE, so both library questions —
+  // the texture and the material class — are asked about the named entry and
+  // not about the terrain kind. Pinned against the source, like [7].
+  check('materialFor resolves the kind to its surface first',
+    /const surface = surfaceOf\(kind\);/.test(groundSrc), true);
+  check('…asks the library for THAT id (texture)',
+    /const lib = surfaceFor\(surface, 'wall'\);/.test(groundSrc), true);
+  check('…and for THAT id (material class)',
+    /surfaceMaterialSpec\(surface\);/.test(groundSrc), true);
+  check('the fringe question reads the surface of the area\'s kind too',
+    /isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\)/
+      .test(groundSrc), true);
+  check('the preload loads the named SURFACES, not the kinds',
+    /preloadSurfaceTexture\(s\)/.test(groundSrc), true);
+  // …and nowhere in this module does a terrain kind still reach the library.
+  check('no library question is asked about a terrain kind any more',
+    /surfaceFor\(kind,|surfaceMaterialSpec\(kind\)|surfaceMaterialSpec\(area\.kind\)|preloadSurfaceTexture\(k\)/
+      .test(groundSrc), false);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

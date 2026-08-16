@@ -313,11 +313,20 @@ export interface PosReport {
  *  ground property is ever hardcoded in a client: colour, passability and
  *  pace all come from here. */
 export interface TerrainType {
-  /** the id — follows the surface-texture kind rule, so a kind that names a
-   *  library entry gets a real texture on the 3D ground */
+  /** the id — of the terrain catalog alone. It says NOTHING about the ground
+   *  material any more: which surface a kind wears is `surface` below. */
   kind: string;
   /** display name; falls back to the kind */
   name: string;
+  /** WHICH SURFACE-LIBRARY ENTRY SKINS THIS GROUND (2026-08-16) — a kind of
+   *  `/assets/surface-textures`, said by the author instead of matched by
+   *  name. Absent = no material was named, and the ground keeps the
+   *  procedural fallback in `color`; a value the library does not hold means
+   *  the same, and is the admin tab's business to flag, never the renderer's
+   *  to guess around. There is NO fallback to `kind`: two types may share one
+   *  material, a type may wear a differently named one, and renaming a
+   *  library entry no longer undresses a ground behind the author's back. */
+  surface?: string;
   /** `#rrggbb`, the schematic fill of this kind (2D map, minimap, and the
    *  3D fallback when the surface library has no texture for it) */
   color: string;

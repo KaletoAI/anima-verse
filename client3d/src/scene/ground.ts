@@ -827,6 +827,26 @@ function readScatterList(area: TerrainArea): TerrainScatterEntry[] {
   return raw.filter((e): e is TerrainScatterEntry => !!e && typeof e === 'object');
 }
 
+/**
+ * WHICH SURFACE-LIBRARY ENTRY A TERRAIN TYPE WEARS — the type says so, and
+ * this reads what it says. Nothing else.
+ *
+ * It used to be the NAME: `surfaceFor(area.kind, …)` asked the library for an
+ * entry called exactly like the terrain kind, so `grass` wore `grass` because
+ * of the spelling and for no other reason. A type could never wear
+ * `deep_forest`, renaming a library entry undressed every ground using it, and
+ * two types could not share one material. The server ships the assignment now
+ * (`types[].surface`, § A1.5) and the name match is GONE — no fallback to
+ * `kind`, because a fallback is exactly the guess the field exists to replace.
+ *
+ * A type that names nothing (or that the catalog does not know at all) answers
+ * '' — the caller then gets no library entry and the ground falls back to the
+ * catalog colour, which is what a kind without a same-named entry did before.
+ */
+export function surfaceOfType(type: TerrainType | undefined | null): string {
+  return String(type?.surface ?? '').trim().toLowerCase();
+}
+
 export function createGround(): Ground {
   const group = new THREE.Group();
   group.name = 'terrain-ground';
@@ -1044,14 +1064,23 @@ export function createGround(): Ground {
     return Math.min(raw, 1);
   }
 
+  /** The surface-library id of a terrain kind — the catalog entry's own
+   *  answer (`surfaceOfType`), '' for a kind that names none or that the
+   *  catalog does not know. THE one place a kind becomes a material here. */
+  function surfaceOf(kind: string): string {
+    return surfaceOfType(catalog.get((kind || '').toLowerCase()));
+  }
+
   /**
    * Material of one ground kind.
    *
    * Texture first (the surface-texture library the tiles already feed), the
-   * catalog colour second. The library entry is asked for THIS KIND ALONE:
-   * `surfaceFor(kind, 'floor')` would fall back to the global indoor `floor`
-   * kind, which is the wrong ground for a painted meadow — the `'wall'` chain
-   * is the one that asks for the kind and nothing else (`tiles.ts`).
+   * catalog colour second. WHICH library entry is asked for is the TYPE's
+   * answer, never the kind's spelling (`surfaceOf`) — a kind that names no
+   * surface gets no texture and keeps its colour. The lookup goes through the
+   * `'wall'` chain: `surfaceFor(id, 'floor')` would fall back to the global
+   * indoor `floor` kind, which is the wrong ground for a painted meadow — the
+   * `'wall'` chain asks for the named entry and nothing else (`tiles.ts`).
    *
    * `uvScaleM` is how many metres one UV unit spans: the shape geometry's UVs
    * ARE the world coordinates (1 unit = 1 m), the base plane's run 0..1 over
@@ -1065,8 +1094,9 @@ export function createGround(): Ground {
   function materialFor(kind: string, uvScaleM: number,
                        sink: { dispose(): void }[],
                        edgeFade = false): THREE.Material {
-    const lib = surfaceFor(kind, 'wall');
-    const spec: SurfaceMaterialSpec | null = surfaceMaterialSpec(kind);
+    const surface = surfaceOf(kind);
+    const lib = surfaceFor(surface, 'wall');
+    const spec: SurfaceMaterialSpec | null = surfaceMaterialSpec(surface);
     let map: THREE.Texture | null = null;
     if (lib) {
       // Every piece gets its OWN clone: `repeat` is per mesh, and the cached
@@ -1943,10 +1973,13 @@ export function createGround(): Ground {
     const areas = payload?.areas ?? [];
     // Textures first, ALL of them: `surfaceFor` only hands out fully loaded
     // images (a clone of a loading texture stays blank), so the whole ground
-    // is built once the library has what it needs.
-    const kinds = new Set<string>([payload?.default_kind || '',
-      ...areas.map((a) => a.kind)]);
-    await Promise.all([...kinds].map((k) => preloadSurfaceTexture(k)));
+    // is built once the library has what it needs. What is loaded are the
+    // SURFACES the types name, not the kinds themselves — the kind is a
+    // catalog id and has not been a texture id since the assignment became
+    // explicit.
+    const surfaces = new Set<string>([surfaceOf(payload?.default_kind || ''),
+      ...areas.map((a) => surfaceOf(a.kind))]);
+    await Promise.all([...surfaces].map((s) => preloadSurfaceTexture(s)));
 
     const next: AreaMesh[] = [];
     const nextOwned: { dispose(): void }[] = [];
@@ -1966,7 +1999,7 @@ export function createGround(): Ground {
       // the material as the same answer — the class the material is built from
       // (`isWaterClass`, the very source `materialFor` reads). A lake keeps its
       // hard shore, and its drape is spared the refinement and the attribute.
-      const softEdge = !isWaterClass(surfaceMaterialSpec(area.kind)?.class);
+      const softEdge = !isWaterClass(surfaceMaterialSpec(surfaceOf(area.kind))?.class);
       // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
       // so the texture runs seamlessly across area borders.
       const mesh = new THREE.Mesh(drapeArea(built.geometry, softEdge ? built.ring : null),

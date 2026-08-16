@@ -140,6 +140,42 @@ Throwaway storage. Hand-derived expectations:
       undergrown because it is a wood, a path is not. The key is independent of
       every other one and survives the save/read round trip.
 
+  [12] WHICH SURFACE A KIND WEARS IS SAID, NOT GUESSED (2026-08-16).
+      `surface` names the kind of the surface-texture library that skins this
+      ground. It is a key of the ENTRY (not of `meta`) and follows the shape
+      rule of the clip keys letter for letter:
+        "  grass  "   -> "grass"    (trimmed)
+        "g" * 45      -> "g" * 40   (40 characters like a `kind`)
+        "" / "   "    -> the KEY IS GONE, never an empty string
+        no key at all -> no key in the result either
+      NOTHING is validated against the library on save: the library grows a
+      texture tomorrow that an author wants to name today, so an unknown id
+      is stored verbatim (the admin tab flags it — the LoRA "(missing)"
+      pattern).
+      Saat: exactly the five kinds the library holds under their own name
+      carry the assignment — grass, forest, sand, water, deep_water map to
+      themselves; `path` and `rock` carry NONE (the library has no entry of
+      either name, so the old rule never dressed them either).
+      Payload: `GET /play/terrain` types[] carries the field through
+      verbatim — the clients read it and nothing else.
+      Round trip: a world row stores and returns it; an empty one stores
+      nothing and the entry comes back without the key.
+
+ [12b] THE MIGRATION, on a throwaway world (`terrain_surface_migration`).
+      Bestandswelten must not be undressed by dropping the name match, so
+      the assignment the old rule DERIVED is written out once:
+        row "moor" (no surface) + library holding "moor"  -> surface "moor"
+        row "bog"  (no surface) + library NOT holding it  -> still no key
+        row "fen"  with surface "dark_stone" already set  -> untouched
+                   (the field is the author's, a repair never overwrites it)
+      Idempotence is the world_kv marker, not the content: a SECOND call
+      returns {} and leaves a row added afterwards alone.
+      THE RED COUNTER-CHECK — the name fallback is really dead: that row
+      added afterwards is called "heath", the library holds "heath", and the
+      catalog answers NO surface for it. Under the old rule it would have
+      worn the heath texture; now nothing anywhere re-derives the name, so
+      it renders the default ground until an author says otherwise.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_types.py
 """
 import json
@@ -483,6 +519,97 @@ check("it survives the save/read round trip",
       (terrain_types.get_type("thicket") or {}).get("meta"),
       {"undergrowth": 0.9})
 terrain_types.delete_world_type("thicket")
+
+print("[12] the surface a kind wears, said out loud")
+
+
+def surface_of(raw):
+    """`surface` as the sanitizer leaves it — the key or its absence."""
+    entry = terrain_types.sanitize_type({"kind": "meadow", **raw})
+    return entry.get("surface", "<no key>")
+
+
+check("an assignment is trimmed", surface_of({"surface": "  grass  "}), "grass")
+check("...and capped at 40 characters like a kind",
+      surface_of({"surface": "g" * 45}), "g" * 40)
+check("an empty assignment leaves no key behind",
+      surface_of({"surface": ""}), "<no key>")
+check("...and neither do blanks", surface_of({"surface": "   "}), "<no key>")
+check("...nor no key at all", surface_of({}), "<no key>")
+# The library is a living thing: a texture generated tomorrow must be
+# nameable today, so a save NEVER checks the id against it.
+check("an id the library does not hold is stored verbatim",
+      surface_of({"surface": "not_generated_yet"}), "not_generated_yet")
+check("it lives on the ENTRY, not in meta",
+      terrain_types.sanitize_type(
+          {"kind": "meadow", "surface": "grass"})["meta"], {})
+
+_seed = {k: terrain_types.effective_catalog()[k].get("surface", "<no key>")
+         for k in sorted(SHARED_KINDS)}
+check("the seed names its materials explicitly", _seed,
+      {"deep_water": "deep_water", "forest": "forest", "grass": "grass",
+       "path": "<no key>", "rock": "<no key>", "sand": "sand",
+       "water": "water"})
+
+terrain_types.save_world_type(
+    {"kind": "clay", "name": "Clay", "color": "#a9744f",
+     "surface": "dark_stone"})
+check("it survives the save/read round trip",
+      (terrain_types.get_type("clay") or {}).get("surface"), "dark_stone")
+terrain_types.save_world_type(
+    {"kind": "clay", "name": "Clay", "color": "#a9744f", "surface": ""})
+check("...and clearing it leaves no key",
+      (terrain_types.get_type("clay") or {}).get("surface", "<no key>"),
+      "<no key>")
+terrain_types.delete_world_type("clay")
+
+from app.routes.play import get_terrain_route  # noqa: E402
+_payload_types = {t["kind"]: t.get("surface", "<no key>")
+                  for t in get_terrain_route(user=None)["types"]}
+check("/play/terrain carries the assignment of grass",
+      _payload_types.get("grass"), "grass")
+check("...and the missing one of a path", _payload_types.get("path"),
+      "<no key>")
+
+print("[12b] the boot migration writes what the name match derived")
+from app.core import terrain_surface_migration as tsm  # noqa: E402
+from app.models.world import get_world_setting  # noqa: E402
+
+for _kind in ("moor", "bog"):
+    terrain_types.save_world_type({"kind": _kind, "name": _kind.title(),
+                                   "color": "#556b2f"})
+terrain_types.save_world_type({"kind": "fen", "name": "Fen",
+                               "color": "#556b2f", "surface": "dark_stone"})
+check("the marker is unset before the run",
+      bool(get_world_setting("migrated_terrain_surface_v1")), False)
+# A library of exactly two ids: "moor" is held under its own name, "bog" is
+# not — the two sides of the rule the migration reproduces. "fen" is held as
+# well and must STILL be left alone, because it already has an answer.
+_stats = tsm.migrate_terrain_surfaces_once({"moor", "fen", "heath"})
+check("exactly the one row the old rule dressed is assigned",
+      _stats.get("assigned"), 1)
+check("a kind the library holds under its own name gets it",
+      (terrain_types.get_type("moor") or {}).get("surface"), "moor")
+check("a kind it does not hold gets nothing",
+      (terrain_types.get_type("bog") or {}).get("surface", "<no key>"),
+      "<no key>")
+check("an authored assignment is never overwritten",
+      (terrain_types.get_type("fen") or {}).get("surface"), "dark_stone")
+check("the marker is set after the run",
+      get_world_setting("migrated_terrain_surface_v1"), "1")
+
+# THE RED COUNTER-CHECK: a row created AFTER the migration, whose kind the
+# library holds under exactly that name. Under the old rule it would have worn
+# that texture; nothing derives it any more.
+terrain_types.save_world_type({"kind": "heath", "name": "Heath",
+                               "color": "#8a9a5b"})
+check("a second run is a no-op (the marker, not the content)",
+      tsm.migrate_terrain_surfaces_once({"moor", "fen", "heath"}), {})
+check("...and the name match is dead: a same-named library id dresses nobody",
+      (terrain_types.get_type("heath") or {}).get("surface", "<no key>"),
+      "<no key>")
+for _kind in ("moor", "bog", "fen", "heath"):
+    terrain_types.delete_world_type(_kind)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

@@ -810,9 +810,12 @@ async function main() {
   // WHO GETS THE FRINGE: the painted-area drapes, and the base plate does not.
   // ONE decision, out of the class the material is built from, reaching the
   // geometry and the material alike — so a lake is spared the refinement and
-  // the attribute as well as the branch.
+  // the attribute as well as the branch. The class is asked about the SURFACE
+  // the type names (`surfaceOf`, 2026-08-16), which is the very id
+  // `materialFor` builds the material from — the two must not ask different
+  // questions, or a lake would get a fringe its material knows nothing about.
   check('the drape is built from its own ring and asks for the fringe',
-    /const softEdge = !isWaterClass\(surfaceMaterialSpec\(area\.kind\)\?\.class\);[\s\S]{0,300}?drapeArea\(built\.geometry, softEdge \? built\.ring : null\),\n\s*materialFor\(area\.kind, 1, nextOwned, softEdge\)/
+    /const softEdge = !isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\);[\s\S]{0,300}?drapeArea\(built\.geometry, softEdge \? built\.ring : null\),\n\s*materialFor\(area\.kind, 1, nextOwned, softEdge\)/
       .test(groundSrc), true);
   check('…and a kind without a fringe gets neither refinement nor attribute',
     /const band = ring \? ngRefineEdgeBand\(cutPos, cutUv, ring\) : null;/.test(groundSrc)

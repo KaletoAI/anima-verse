@@ -21,9 +21,18 @@ shared seed ``shared/terrain/types.json`` ships the defaults, a world row
 in ``terrain_types`` replaces the whole entry of the same kind. Deleting a
 world row brings the shared entry back; shared entries are never deleted.
 
-``kind`` follows the surface-texture id rule and SHOULD match a
-surface-texture kind so the 3D ground can pick up a real texture — that
-link is a convention, never enforced here.
+WHICH GROUND MATERIAL A KIND WEARS IS SAID, NOT GUESSED (2026-08-16):
+``surface`` names the kind of the surface-texture library (a string, the
+library's own id) that both renderers skin this ground with. It used to be
+the NAME: a terrain kind was skinned by the library entry that happened to
+be called the same, which meant a type could never wear "deep_forest",
+renaming a library entry silently undressed every ground using it, and two
+types could not share one material. The match by name is gone without a
+fallback — a type without ``surface`` renders the default ground, exactly as
+a type without a same-named library entry did before. Nothing is validated
+against the library on save: the library is a living thing, and a texture
+generated tomorrow must be nameable today (the admin tab marks a value the
+library does not hold, the way the LoRA library marks a missing LoRA).
 """
 
 import json
@@ -188,23 +197,27 @@ def _clamped_meta_number(meta: Dict[str, Any], key: str,
     meta[key] = value
 
 
-def _trimmed_meta_string(meta: Dict[str, Any], key: str,
+def _trimmed_meta_string(holder: Dict[str, Any], key: str,
                          limit: int = 40) -> None:
-    """One optional string ``meta`` key, IN PLACE — trimmed, capped or GONE.
+    """One optional string key, IN PLACE — trimmed, capped or GONE.
 
     The shape rule of the animation keys: they name a clip KIND out of the
     open vocabulary of ``shared/models/clips``, so nothing is validated against
     a list; what is enforced is the shape (a trimmed string, ``limit``
     characters like a ``kind``) and that an empty one leaves no key behind —
     "no animation" must not be an empty string every reader has to test for.
+
+    ``holder`` is usually ``meta``, but the rule is about the SHAPE of an
+    optional string and not about where it lives: ``surface`` is a key of the
+    entry itself and follows it letter for letter, so the two cannot drift.
     """
-    if key not in meta:
+    if key not in holder:
         return
-    value = str(meta.get(key) or "").strip()[:limit]
+    value = str(holder.get(key) or "").strip()[:limit]
     if value:
-        meta[key] = value
+        holder[key] = value
     else:
-        meta.pop(key)
+        holder.pop(key)
 
 
 def sanitize_type(raw: Any) -> Dict[str, Any]:
@@ -280,7 +293,7 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     if "undergrowth" in meta:
         _clamped_meta_number(meta, "undergrowth",
                              UNDERGROWTH_MIN, UNDERGROWTH_MAX)
-    return {
+    entry = {
         "kind": kind,
         "name": name,
         "color": color or DEFAULT_COLOR,
@@ -288,12 +301,22 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
         "speed_factor": round(speed, 2),
         "meta": meta,
     }
+    # WHICH GROUND MATERIAL THIS KIND WEARS (2026-08-16) — the library id, said
+    # out loud instead of matched by name (see the module doc). Same shape rule
+    # as the clip keys, applied to the ENTRY rather than to `meta`: it is a
+    # reference like `kind`, not a free-form extra. Nothing is checked against
+    # the library here — the library changes, a stored reference does not, and
+    # a save must never fail because a texture has not been generated yet.
+    if "surface" in raw:
+        entry["surface"] = raw.get("surface")
+        _trimmed_meta_string(entry, "surface")
+    return entry
 
 
 def _world_types() -> Dict[str, Dict[str, Any]]:
     conn = get_connection()
     rows = conn.execute(
-        "SELECT kind, name, color, passable, speed_factor, meta "
+        "SELECT kind, name, color, passable, speed_factor, meta, surface "
         "FROM terrain_types").fetchall()
     out: Dict[str, Dict[str, Any]] = {}
     for r in rows:
@@ -301,10 +324,17 @@ def _world_types() -> Dict[str, Dict[str, Any]]:
             meta = json.loads(r[5] or "{}")
         except ValueError:
             meta = {}
-        out[r[0]] = {"kind": r[0], "name": r[1] or r[0],
-                     "color": r[2] or DEFAULT_COLOR, "passable": bool(r[3]),
-                     "speed_factor": float(r[4]),
-                     "meta": meta if isinstance(meta, dict) else {}}
+        entry = {"kind": r[0], "name": r[1] or r[0],
+                 "color": r[2] or DEFAULT_COLOR, "passable": bool(r[3]),
+                 "speed_factor": float(r[4]),
+                 "meta": meta if isinstance(meta, dict) else {}}
+        # An empty column leaves NO key — the same rule the sanitizer writes
+        # by, so a row that names no material reads exactly like a seed entry
+        # that names none.
+        surface = str(r[6] or "").strip()
+        if surface:
+            entry["surface"] = surface
+        out[r[0]] = entry
     return out
 
 
@@ -351,14 +381,16 @@ def save_world_type(raw: Any) -> Dict[str, Any]:
     with transaction() as conn:
         conn.execute(
             "INSERT INTO terrain_types (kind, name, color, passable, "
-            "speed_factor, meta, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "speed_factor, meta, surface, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(kind) DO UPDATE SET name=excluded.name, "
             "color=excluded.color, passable=excluded.passable, "
             "speed_factor=excluded.speed_factor, meta=excluded.meta, "
-            "updated_at=excluded.updated_at",
+            "surface=excluded.surface, updated_at=excluded.updated_at",
             (entry["kind"], entry["name"], entry["color"],
              1 if entry["passable"] else 0, entry["speed_factor"],
-             json.dumps(entry["meta"], ensure_ascii=False), utc_now_iso()))
+             json.dumps(entry["meta"], ensure_ascii=False),
+             entry.get("surface", ""), utc_now_iso()))
     _note_relief_write()
     return entry
 

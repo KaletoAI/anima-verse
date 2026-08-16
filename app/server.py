@@ -145,6 +145,20 @@ async def lifespan(app: FastAPI):
     except Exception as _kme:
         logger.warning("surface kind-meta migration failed: %s", _kme)
 
+    # A terrain kind now SAYS which surface it wears (terrain_types.surface);
+    # the old "same name = same material" match is gone without a fallback.
+    # Writes the assignment the old rule derived into every world row, once,
+    # so no existing ground is undressed. Runs AFTER the two library
+    # migrations above — it asks the library which ids exist.
+    try:
+        from app.core.terrain_surface_migration import (
+            migrate_terrain_surfaces_once)
+        _ts = migrate_terrain_surfaces_once()
+        if _ts.get("assigned"):
+            logger.info("Terrain surfaces assigned: %s", _ts)
+    except Exception as _tse:
+        logger.warning("terrain surface migration failed: %s", _tse)
+
     # Prop-Marker benennen jetzt die OBERFLAECHE; der Sitz-Absatz reist als
     # root_offset im Payload mit. Hebt die gespeicherten Brueche um genau
     # diesen Betrag an, damit sich optisch nichts bewegt (2026-07-28).

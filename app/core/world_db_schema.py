@@ -679,6 +679,7 @@ SCHEMA_STATEMENTS = [
         passable     INTEGER NOT NULL DEFAULT 1,
         speed_factor REAL NOT NULL DEFAULT 1.0,
         meta         TEXT DEFAULT '{}',
+        surface      TEXT DEFAULT '',
         updated_at   TEXT NOT NULL
     )""",
 
@@ -826,6 +827,13 @@ ALTER_MIGRATIONS = [
     # radius, decided who heard it, and the room columns already say where.
     ("utterances", "pos_x", "REAL"),
     ("utterances", "pos_z", "REAL"),
+    # Explicit surface assignment (Aug 2026): which kind of the surface-texture
+    # library skins this ground. It used to be the NAME that decided — a
+    # library entry called like the terrain kind — and that match is gone
+    # without a fallback. Existing rows are filled once at boot
+    # (app/core/terrain_surface_migration.py), so a world that relied on the
+    # name keeps exactly the ground it had.
+    ("terrain_types", "surface", "TEXT DEFAULT ''"),
 ]
 
 
