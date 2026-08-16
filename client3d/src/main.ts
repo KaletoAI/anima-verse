@@ -54,6 +54,7 @@ import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import { BASE_MARGIN_M, createGround } from './scene/ground';
+import { createBackdrop } from './scene/backdrop';
 import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
@@ -629,6 +630,26 @@ async function startApp(username: string, role: string) {
     terrainGround.setScatterLod(scatterLodCfgOf(p));
   };
 
+  // --- The far backdrop (§ A17) ---------------------------------------------
+  //
+  // The plate ends at `world_bounds` + 60 m and behind it there is nothing.
+  // The backdrop is the mountain silhouette that closes the view there — pure
+  // scenery, no collision and no nav, authored per world in the settings and
+  // riding along on the worldmap poll. It hangs off the CAMERA TARGET at a
+  // fixed 380 m, which is why the frame hook below carries it: the ring is the
+  // same picture whether the world is 200 m or 16 km across.
+  //
+  // Only its POSITION is written — never its rotation. The ridge is built in
+  // world directions (§ A1.8), so a group that merely translates keeps north
+  // in the north while the player walks, which is the whole point of a
+  // horizon. It is deliberately NOT fogged over (`fogGroup` covers the plate
+  // only): a silhouette on the horizon gives nothing away.
+  const backdrop = createBackdrop();
+  engine.scene.add(backdrop.group);
+  engine.addFrameHook(() => {
+    backdrop.group.position.set(engine.target.x, 0, engine.target.z);
+  });
+
   /** The map payload's own METRE data, kept for the pieces that already speak
    *  metres (the terrain frame, the minimap) while the tile loop waits for
    *  task 3. Both move with every poll. */
@@ -1138,6 +1159,17 @@ async function startApp(username: string, role: string) {
     maxSlopeDeg = map.max_slope_deg ?? DEFAULT_MAX_SLOPE_DEG;
   }
   takeWalkLimits(firstMap);
+  /** The backdrop rides in the SAME payload as the walk limits and for the
+   *  same reasons (§ A17): it is a world setting and this poll runs anyway, so
+   *  an admin who switches the range on reaches a running client within one
+   *  poll. A MISSING block is the ring being off — that is also what an older
+   *  server sends, and the two are one state here. `sync` compares the payload
+   *  with what stands and rebuilds only on a real change, so nine polls out of
+   *  ten cost a string comparison. */
+  function takeBackdrop(map: WorldMap): void {
+    backdrop.sync(map.backdrop ?? null);
+  }
+  takeBackdrop(firstMap);
   /** What the veil currently standing was built from. The poll runs every
    *  three seconds and nearly always finds the same inputs — rebuilding
    *  regardless would throw away and re-allocate a dozen geometries per poll
@@ -1790,6 +1822,7 @@ async function startApp(username: string, role: string) {
     void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
                             map.height_sig ?? '');
     takeWalkLimits(map);
+    takeBackdrop(map);
     rebuildMovedTiles(map);
     // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
     // just discovered is simply in the payload from one poll to the next. The
@@ -1838,6 +1871,12 @@ async function startApp(username: string, role: string) {
   let updateSoundtrack: (() => void) | null = null;
   engine.onDayNight = (night) => {
     for (const tile of tiles.values()) applyNightGlow(tile, night);
+    // The far range takes the time of day from the SAME hook (§ A17): its
+    // material is unlit, so without this it would keep its daylight rock
+    // colour and glow over a dark world. The engine has just set the sky it is
+    // mixed towards, so reading the background here is reading the current
+    // sky, not last hour's.
+    backdrop.setDayNight(night, engine.scene.background as THREE.Color);
     updateSoundtrack?.();
   };
 
@@ -2814,6 +2853,7 @@ async function startApp(username: string, role: string) {
       void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
                               map.height_sig ?? '');
       takeWalkLimits(map);
+      takeBackdrop(map);
       fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);

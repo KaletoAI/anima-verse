@@ -822,10 +822,6 @@ def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> boo
 #     siblings scene_prompt_multi_ref / scene_prompt_only_background stay).
 #   chat / inventory / random_events — single leftovers; item image size runs
 #     through ui.downscale_item_max_dim instead.
-#   game — the far backdrop (the world-edge mountain ring), removed 2026-08-16
-#     after it crashed at runtime; the four settings outlive the feature in
-#     every world that switched it on, so the strip clears them on the next
-#     boot.
 DEAD_CONFIG_FIELDS: dict = {
     "image_generation": (
         "comfy_default_workflow",
@@ -841,12 +837,6 @@ DEAD_CONFIG_FIELDS: dict = {
     "chat": ("auto_wake_stamina",),
     "inventory": ("item_image_width", "item_image_height"),
     "random_events": ("event_image_denoise_strength",),
-    "game": (
-        "backdrop_enabled",
-        "backdrop_arc",
-        "backdrop_height_m",
-        "backdrop_seed",
-    ),
 }
 
 # The same names again, this time at the TOP LEVEL of config.json. Older worlds
