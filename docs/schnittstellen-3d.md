@@ -672,7 +672,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   ohne Mesh bekommen den Schlüssel nicht, und ohne `variants` lädt ein Client
   weiter `model`. Welche Stufe er wann nimmt, ist **Anzeige-Politik des
   Clients** (Distanz-Hysterese, Sichtweite, Instanz-Budget — in
-  `development_instructions/plan-scatter-lod.md` festgehalten), kein
+  `development_instructions/done/plan-scatter-lod.md` festgehalten), kein
   Payload-Vertrag: gespeichert bleiben die drei Felder oben.
 - **Der Server hängt an denselben Eintrag zusätzlich `prop_height_m`** — die
   ECHTE Höhe des Props in Metern aus seinem Bibliotheks-Datensatz

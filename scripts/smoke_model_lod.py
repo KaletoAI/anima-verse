@@ -9,7 +9,7 @@ checked is therefore the STORE semantics around the reduction; the Blender
 step itself has its own smokes (``smoke_blender_*``).
 
 Expected behaviour, derived from the design decisions of
-``development_instructions/plan-distance-mesh-props-dioramen.md``:
+``development_instructions/done/plan-distance-mesh-props-dioramen.md``:
 
   - a subject without a full model answers ``no_model`` and builds nothing,
   - a build writes a NEW gallery file, selects it as ``low`` and leaves the
