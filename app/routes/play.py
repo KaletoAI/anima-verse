@@ -1403,6 +1403,12 @@ async def play_party_leave(user=Depends(get_current_user)):
     return {"ok": res.get("status") == "ok", **res}
 
 
+# How long the delayed silence check waits for the room's respond turns
+# (SYSTEM seconds). Long enough for a slow chat model plus a queued chime,
+# short enough that the narration still belongs to the same beat.
+_SILENCE_CHECK_TIMEOUT_S = 90.0
+
+
 async def _storyteller_fallback(actor: str, text: str, location_id: str,
                                 room_id: str, volume: str) -> None:
     """Storyteller fallback (plan-room-conversation, option 3): if no present
@@ -1423,6 +1429,47 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
         logger.info("Storyteller-Fallback narrierte für %s (scope=%s)", actor, scope)
     except Exception as e:  # noqa: BLE001
         logger.warning("storyteller fallback failed: %s", e)
+
+
+async def _storyteller_after_silence(actor: str, text: str, location_id: str,
+                                     room_id: str, volume: str,
+                                     after_utterance_id: int,
+                                     watch: "list | None" = None) -> None:
+    """Delayed storyteller fallback (R1 / A9-rest): characters WERE present,
+    but did every one of them stay silent?
+
+    A respond turn that answers ``SKIP`` records no utterance at all, so an
+    avatar line into a room full of silent characters used to vanish. This
+    waits until the room's respond turns have settled, then asks the pure
+    rule in ``silence_check`` whether the room really stayed silent — and only
+    then lets the storyteller narrate.
+
+    On timeout NOTHING is narrated: a turn still running may yet answer, and a
+    late storyteller line on top of it reads as a double reaction. Silence is
+    the cheaper mistake. Fire-and-forget like the immediate fallback — every
+    error is logged, none is raised.
+    """
+    import asyncio
+    try:
+        from app.core.agent_loop import get_agent_loop
+        from app.core.silence_check import should_narrate_silence
+        from app.models import perception_store
+        loop = get_agent_loop()
+        key = loop.room_key(location_id, room_id, actor)
+        settled = await loop.wait_room_responds_settled(
+            key, timeout_s=_SILENCE_CHECK_TIMEOUT_S, names=watch)
+        if not settled:
+            logger.debug("silence check for %s skipped — responds still pending", actor)
+            return
+        rows = await asyncio.to_thread(perception_store.get_room_utterances_since,
+                                       location_id, room_id, after_utterance_id)
+        if not should_narrate_silence(rows, actor, STORYTELLER_SPEAKER):
+            return
+        logger.info("Storyteller silence check: nobody answered %s in %s/%s",
+                    actor, location_id, room_id)
+        await _storyteller_fallback(actor, text, location_id, room_id, volume)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("storyteller silence check failed: %s", e)
 
 
 @router.post("/play/say")
@@ -1595,11 +1642,29 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     # 4) Storyteller-Fallback (Option 3): klinkt sich NIEMAND ein (kein anwesender
     #    Character — z.B. allein mit einem Bären), reagiert die Welt. Hintergrund,
     #    blockiert den POST nicht. Lautstärke → Scope (schreien = ortsweit).
-    if not reactions.get("obligatory") and not reactions.get("chime"):
+    #    A wind-down closer counts as a speaker too: the dispatcher hands the
+    #    room to ONE character for a farewell beat, so the immediate fallback
+    #    must not narrate over it — that case goes through the delayed check.
+    _speakers = list(reactions.get("obligatory") or []) + \
+        list(reactions.get("chime") or []) + \
+        list(reactions.get("winddown") or [])
+    if not _speakers:
         try:
             asyncio.create_task(_storyteller_fallback(avatar, content, loc, room, volume))
         except Exception as e:  # noqa: BLE001
             logger.debug("play_say storyteller fallback schedule failed: %s", e)
+    elif uid:
+        # 4b) Characters ARE present (R1): they may still all stay silent —
+        #     a respond turn answering SKIP records no utterance. The check
+        #     runs DELAYED, after the room's respond turns settled; only then
+        #     is silence real. Needs the utterance id as the marker of "since
+        #     when", so without one there is nothing to compare against.
+        try:
+            _watch = _speakers
+            asyncio.create_task(_storyteller_after_silence(
+                avatar, content, loc, room, volume, uid, _watch))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("play_say silence check schedule failed: %s", e)
 
     return {"ok": uid is not None, "utterance_id": uid,
             "bumped": reactions.get("obligatory", []),

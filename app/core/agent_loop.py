@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now
 from app.core.turn_trace import begin_trace, set_trace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
@@ -397,6 +397,66 @@ class AgentLoop:
         except Exception as e:  # noqa: BLE001
             logger.debug("pending-obligatory rooms failed: %s", e)
         return keys
+
+    def room_key(self, location_id: str, room_id: str, who: str = "") -> str:
+        """Public form of ``_room_key`` for callers outside the loop (the
+        storyteller silence check in ``/play/say``) — same bucket key the
+        respond lane uses, so both sides talk about the same room."""
+        return self._room_key(location_id, room_id, who)
+
+    def _respond_pending_in_room(self, room_key: str, watch: set) -> bool:
+        """Is a respond turn for this room still running or waiting?
+
+        A queue entry is only a NAME — the room it belongs to is derived the
+        same way the worker derives its lock (``_char_room_key``). That reads
+        the character's CURRENT place, so someone who walked out mid-wait no
+        longer counts for this room; ``watch`` (the names the dispatch just
+        bumped) keeps them counted anyway, which also covers the open world,
+        where two people in one conversation can sit in neighbouring cells.
+        """
+        for name in list(self._respond_active.keys()) + list(self._respond_queue):
+            if not name:
+                continue
+            if name in watch:
+                return True
+            try:
+                if self._char_room_key(name) == room_key:
+                    return True
+            except Exception:  # noqa: BLE001 — a lookup miss must not block
+                continue
+        return False
+
+    async def wait_room_responds_settled(self, room_key: str,
+                                         timeout_s: float = 90.0,
+                                         names: Optional[Sequence[str]] = None
+                                         ) -> bool:
+        """Wait until the room has no respond turn active or queued any more.
+
+        Returns True when it settled, False on timeout. Poll (~1 s) against
+        the event loop's monotonic clock — this is a technical wait, not game
+        time, so no game clock is involved.
+
+        No lead-in wait needed: ``bump_respond`` appends to ``_respond_queue``
+        SYNCHRONOUSLY inside ``dispatch_room_reactions``, so by the time the
+        caller's task runs, everything this utterance triggered is already
+        queued.
+
+        While the loop is paused (admin pause, world freeze, world sleep) the
+        dispatcher stalls but the queue KEEPS its entries — so a frozen world
+        runs into the timeout and returns False instead of pretending the
+        room fell silent.
+        """
+        watch = {n for n in (names or []) if n}
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout_s))
+        while True:
+            if not self._respond_pending_in_room(room_key, watch):
+                return True
+            if loop.time() >= deadline:
+                logger.info("wait_room_responds_settled: timeout (%.0fs) for room %s",
+                            timeout_s, room_key)
+                return False
+            await asyncio.sleep(1)
 
     def _recently_conversed(self, npc: str, leaver: str, loc: str, room: str) -> bool:
         """True if the NPC perceived the leaver in this room recently

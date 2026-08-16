@@ -112,6 +112,27 @@ def get_room_utterances(location_id: str, room_id: str = "",
     return [_row_to_dict(r) for r in reversed(rows)]
 
 
+def get_room_utterances_since(location_id: str, room_id: str,
+                              after_id: int,
+                              limit: int = 50) -> List[Dict[str, Any]]:
+    """Speech acts of ONE room newer than ``after_id``, oldest first.
+
+    Ordering by id, not by ts: the caller (the storyteller silence check,
+    ``app/core/silence_check.py``) asks "did anything happen AFTER this
+    utterance", and only the id answers that without ties — several lines can
+    share a timestamp.
+
+    Both keys are matched exactly, empty included: an empty ``location_id``
+    with an empty ``room_id`` is the wilderness bucket, not a wildcard.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM utterances WHERE location_id=? AND room_id=? AND id>? "
+        "ORDER BY id ASC LIMIT ?",
+        (location_id or "", room_id or "", int(after_id), limit)).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
                               limit: int = 100,
                               include_meta_lines: bool = False
