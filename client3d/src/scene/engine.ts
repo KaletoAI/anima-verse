@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 import { setWaterSky } from '../render/water.tsl';
-import { createModelEnv, createRenderer, type ActiveBackend, type AnyRenderer,
+import { createModelEnv, createRenderer, drawCallsOf, type ActiveBackend, type AnyRenderer,
          type RenderBackend, type RendererBoot } from '../render/backend';
 
 /**
@@ -59,6 +59,11 @@ export class Engine {
    *  WebGPU render() returns after command submission, so this is CPU work
    *  only in both paths — GPU time is a separate reading. */
   lastFrameCpuMs = 0;
+  /** Draw calls / triangles of the last rendered frame, read right after
+   *  render(): under WebGPU three resets `renderer.info` at the START of each
+   *  loop tick, so a read inside a frame hook (before render) sees zeros. */
+  lastDrawCalls = 0;
+  lastTriangles = 0;
   /** Sun position from the game time (0..24); drives light, colours, sky. */
   private sunAngle = Math.PI * 0.35;   // default: late morning
   /** 0 = bright day, 1 = deep night — for window lights and the like. */
@@ -492,5 +497,7 @@ export class Engine {
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
     this.lastFrameCpuMs = performance.now() - t0;
+    this.lastDrawCalls = drawCallsOf(this.renderer);
+    this.lastTriangles = this.renderer.info.render.triangles;
   }
 }

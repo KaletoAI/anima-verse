@@ -30,7 +30,7 @@
 import * as THREE from 'three';
 import { MeshStandardNodeMaterial, type Node, type NodeBuilder } from 'three/webgpu';
 import { clamp, dot, float, materialColor, materialRoughness, mix, normalMap,
-         positionViewDirection, positionWorld, renderGroup, texture, transformedNormalView,
+         normalView, positionViewDirection, positionWorld, renderGroup, texture,
          uniform, uv, vec2, vec3, vec4 } from 'three/tsl';
 import { surfaceTimeUniform, type SurfaceMaterialSpec } from '@anima/scene-render';
 
@@ -148,7 +148,8 @@ export class WaterNodeMaterial extends MeshStandardNodeMaterial {
     // NodeMaterial always hands a vec4 in here (`vec4(outgoingLight, alpha)`);
     // the base signature is just untyped.
     const out = outputNode as Node<'vec4'>;
-    const facing = clamp(dot(positionViewDirection, transformedNormalView), 0, 1);
+    // normalView is the normal AFTER the normal map in 0.185 (transformedNormalView is its deprecated alias)
+    const facing = clamp(dot(positionViewDirection, normalView), 0, 1);
     const fres = float(1).sub(facing).pow(3);
     const k = clamp(fres.mul(this.uSkyMixNode), 0, 1).mul(this.maskR);
     const rgb = mix(out.rgb, uSky, k);

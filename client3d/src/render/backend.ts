@@ -82,16 +82,16 @@ export async function createRenderer(backend: RenderBackend): Promise<RendererBo
 }
 
 /** Neutral IBL for server models with a real metal-roughness texture — the
- *  PMREM class of the renderer that runs (the WebGPU one is a different class
- *  and bakes asynchronously). */
+ *  PMREM class of the renderer that runs (the WebGPU one is a different class). */
 export async function createModelEnv(boot: RendererBoot): Promise<THREE.Texture> {
   if (boot.backend === 'webgl') {
     return new THREE.PMREMGenerator(boot.renderer as THREE.WebGLRenderer)
       .fromScene(new RoomEnvironment(), 0.04).texture;
   }
+  // The renderer is initialised (createRenderer awaited init), so the plain
+  // fromScene is the right call — 0.185 deprecates fromSceneAsync in favour of it.
   const gen = new GPUPMREMGenerator(boot.renderer as WebGPURenderer);
-  const rt = await gen.fromSceneAsync(new RoomEnvironment(), 0.04);
-  return rt.texture;
+  return gen.fromScene(new RoomEnvironment(), 0.04).texture;
 }
 
 /** Draw calls of the last frame — the WebGPU Info counts render() calls under

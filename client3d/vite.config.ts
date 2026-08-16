@@ -32,6 +32,7 @@ export default defineConfig({
         main: 'index.html',
         figureTest: 'figure-test.html',
         floorplan: 'floorplan.html',
+        webgpuSmoke: 'webgpu-smoke.html',
       },
     },
   },

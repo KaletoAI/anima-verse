@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import * as api from './api';
 import { initDebug3d } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
-import { drawCallsOf, requestedBackend } from './render/backend';
+import { requestedBackend } from './render/backend';
 import { setSurfaceBackend } from './render/surface';
 import { initBench } from './render/bench';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
@@ -861,8 +861,8 @@ async function startApp(username: string, role: string) {
       fps: fpsNow,
       // Read outside the frame hook, so these are the counters of the frame
       // that was last rendered — which is exactly what should be displayed.
-      triangles: info.render.triangles,
-      calls: drawCallsOf(engine.renderer),
+      triangles: engine.lastTriangles,
+      calls: engine.lastDrawCalls,
       vertices: perfHeavy.vertices,
       geometries: info.memory.geometries,
       textures: info.memory.textures,

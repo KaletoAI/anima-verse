@@ -28,7 +28,7 @@
  * is `null` there, never a misleading 0.
  */
 import type { Engine } from '../scene/engine';
-import { drawCallsOf, gpuFrameMs } from './backend';
+import { gpuFrameMs } from './backend';
 
 export interface BenchSample {
   dt: number;
@@ -166,8 +166,8 @@ export function initBench(engine: Engine): void {
       dt,
       cpuMs: engine.lastFrameCpuMs,
       gpuMs: gpuFrameMs(gl),
-      calls: drawCallsOf(gl),
-      tris: gl.info.render.triangles,
+      calls: engine.lastDrawCalls,
+      tris: engine.lastTriangles,
     });
     if (canResolve) {
       // fills info.render.timestamp for a later frame; three coalesces
