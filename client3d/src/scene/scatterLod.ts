@@ -279,8 +279,14 @@ export function instanceShare(distM: number, cfg: ScatterLodCfg): number {
  * is the floor the area-wide budget had to spell out ("at least ONE as long as
  * anything is drawn"), and here it costs no rule at all — a lone landmark tree
  * is instance 0 of a one-instance entry.
+ *
+ * EXPORTED because the undergrowth's per-tuft shade uses the same mixer over
+ * a different key (`undergrowthShade` in `scene/undergrowth.ts` folds the
+ * tuft's POSITION into it). One mixer, measured once — and read the note
+ * there for why the shade must not be keyed on the index this function is
+ * usually called with.
  */
-function instanceHash(index: number): number {
+export function instanceHash(index: number): number {
   let h = Math.imul(index | 0, 2654435761) >>> 0;
   h = Math.imul(h ^ (h >>> 15), 2246822507);
   h = Math.imul(h ^ (h >>> 13), 3266489909);
@@ -620,17 +626,26 @@ export function impostorBakeVerdict(
  *  0.80/m2 (0.40 before the acceptance of 2026-08-16, 0.15 before the
  *  camera-local rebuild) puts a tuft every 1.1 m of edge at full value; a
  *  forest at the seeded 0.6 carries one about every 1.4 m. That is the
- *  difference the finding named: at 0.40 the layer read as SEPARATE tufts one
- *  walks past, and a closed floor of grass needs the neighbours to touch —
- *  which at ~1.1 m spacing they do, because a tuft is drawn
- *  `UNDERGROWTH_W_RATIO` times its own height wide (`scene/undergrowth.ts`),
- *  i.e. about 0.69 m at the reference height.
+ *  difference the first finding named: at 0.40 the layer read as SEPARATE
+ *  tufts one walks past.
+ *
+ *  THE DENSITY STAYED WHERE IT IS WHEN THE TUFT SHRANK to 60 % (the sight
+ *  round of 2026-08-16: "the blades could be a little smaller, and they lack
+ *  volume"), and the spacing has to be read together with that. A tuft is
+ *  drawn `UNDERGROWTH_W_RATIO` times its own height wide
+ *  (`scene/undergrowth.ts`), i.e. 0.41 m at the new reference height against
+ *  0.69 m before — so at ~1.1 m spacing the silhouettes no longer touch, and
+ *  the closed floor of the earlier round is now carried by the THIRD quad
+ *  (three planes in a star instead of two crossed cards) rather than by the
+ *  width of a single tuft. Turning this number up is the lever if the next
+ *  sight round finds the ground bare again; it is not a lever for the SIZE of
+ *  a blade, which is what the finding was about.
  *
  *  WHAT IT COSTS, and why the number can be this high: the cells are
  *  camera-local, so the world's size never enters. A cell of 64 m at full
  *  value wants round(64²/100 · 80) = 3277 tufts, and the 5-9 cells that carry
  *  anything drawable inside `UNDERGROWTH_CULL_M` therefore put roughly
- *  15 000-30 000 crossed quads into the frame — instanced, so a handful of
+ *  15 000-30 000 tufts of three quads each into the frame — instanced, so a handful of
  *  draw calls, and the per-cell ceiling of 8000 is still more than twice what
  *  the densest legal ground asks for.
  *
@@ -707,9 +722,20 @@ export const UNDERGROWTH_MIN_SHARE = 0;
 
 /** How tall ONE tuft of the layer stands, in metres — a span, not a number:
  *  a floor of blades all exactly the same height reads as a texture, not as
- *  growth. Knee-high at most, so the layer never hides a figure's feet. */
-export const UNDERGROWTH_H_MIN = 0.4;
-export const UNDERGROWTH_H_MAX = 0.7;
+ *  growth.
+ *
+ *  SIXTY PER CENT OF THE 0.4 … 0.7 m IT WAS (sight round of 2026-08-16, "the
+ *  blades could be a little smaller"): 0.24 … 0.42 m, i.e. ankle- to
+ *  shin-high on the 1.70 m reference figure instead of knee-high. The width
+ *  goes with it — `UNDERGROWTH_W_RATIO` is a ratio of the height, so the
+ *  absolute width falls by the same factor and a tuft keeps its proportions.
+ *
+ *  What it costs is stated where it is paid: the spacing argument in
+ *  `UNDERGROWTH_DENSITY_PER_M2` above (the silhouettes of two neighbours no
+ *  longer meet) and the fill rate in `scene/undergrowth.ts` (three quads at
+ *  36 % of their old area each = 54 % of the pixels the old two covered). */
+export const UNDERGROWTH_H_MIN = 0.24;
+export const UNDERGROWTH_H_MAX = 0.42;
 
 /**
  * The catalog's share as the density the shared sampler takes (per 100 m2).

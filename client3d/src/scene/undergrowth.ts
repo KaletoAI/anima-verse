@@ -41,13 +41,24 @@
  * occluders — the very last-hit-wins order `terrain_query` reads. Nothing here
  * decides geometry that the shared module could decide.
  *
- * THE LOOK IS CROSS QUADS, NOT CONES. The first build drew a five-sided cone
- * per tuft, which from eye level reads as "strange pointed cones coming out of
- * the ground" (the other half of the same finding). Two crossed quads carrying
- * a procedurally generated blade texture with an alpha cut is what a grass
- * tuft is in every renderer that has one — and the texture is generated here,
- * from `undergrowthTexturePixels`, so it is a pure function of a size and
+ * THE LOOK IS A STAR OF QUADS, NOT CONES. The first build drew a five-sided
+ * cone per tuft, which from eye level reads as "strange pointed cones coming
+ * out of the ground" (the other half of the same finding). Crossed quads
+ * carrying a procedurally generated blade texture with an alpha cut is what a
+ * grass tuft is in every renderer that has one — and the texture is generated
+ * here, from `undergrowthTexturePixels`, so it is a pure function of a size and
  * checkable by hand rather than an asset nobody can diff.
+ *
+ * THREE PLANES SINCE THE SIGHT ROUND OF 2026-08-16, not two, and the tuft is
+ * 60 % of the size it was. Word for word: "one sees very much that it is
+ * always a ROW of blades, and it lacks volume — the blades could be a little
+ * smaller (60 %) and they should have different shades of colour." Two cards
+ * seen from the side ARE a row: one of them is edge-on and the other is a flat
+ * board. A third plane means no direction can catch fewer than two of them at
+ * a useful angle, which is what "volume" means for a card tuft. The three
+ * answers to that finding live in `undergrowthGeometry` (the star),
+ * `UNDERGROWTH_H_MIN/MAX` in `scene/scatterLod.ts` (the size) and
+ * `undergrowthTint` (the shades).
  *
  * THE AUTHORED SCATTER IS UNTOUCHED. `ground.ts` still grows the tuft cones of
  * `meta.scatter` exactly as before — those are what an author placed, and this
@@ -57,7 +68,7 @@ import * as THREE from 'three';
 import { pointInRing, scatterInstances } from '@anima/scene-render';
 import type { Point2, ScatterFootprint } from '@anima/scene-render';
 import { applyOcclusionFade } from './occlusion';
-import { UNDERGROWTH_CELL_M, UNDERGROWTH_CELL_RADIUS_M,
+import { instanceHash, UNDERGROWTH_CELL_M, UNDERGROWTH_CELL_RADIUS_M,
   undergrowthCellCount, UNDERGROWTH_CULL_M, undergrowthDensityPer100m2,
   undergrowthHeight, UNDERGROWTH_H_MAX, UNDERGROWTH_H_MIN,
   UNDERGROWTH_MAX_PER_CELL, undergrowthVisible } from './scatterLod';
@@ -155,17 +166,17 @@ export function undergrowthCellSeed(areaId: string,
  * the smoke checks the picture rather than a hash of it.
  * ========================================================================== */
 
-/** Edge of the generated texture in texels. 64 is what a knee-high tuft is
- *  worth on screen: at 60 m it is a few pixels tall, at arm's length the blade
- *  edges are what one sees, and both are served by a mip chain that starts
- *  here. */
+/** Edge of the generated texture in texels. 64 is what a shin-high tuft is
+ *  worth on screen: at 60 m it is a pixel or two tall, at arm's length the
+ *  blade edges are what one sees, and both are served by a mip chain that
+ *  starts here. */
 export const UNDERGROWTH_TEX_SIZE = 64;
 
 /** How many blades one texture carries — raised from 7 with the density
  *  (2026-08-16): a fuller tuft is the second half of "a closed floor instead
  *  of separate bushes", because a denser field of THIN tufts still reads as a
  *  field of tufts. An ODD number, so the middle blade sits on the texture's
- *  centre line and the two crossed quads do not read as a repeated pair.
+ *  centre line and the planes of the star do not read as a repeated pair.
  *
  *  NINE IS THE CEILING OF THE GEOMETRY, not a taste: a blade is
  *  `BLADE_HALF_W` wide at the root and antialiased over one further texel, so
@@ -283,26 +294,40 @@ export function undergrowthTexturePixels(
 export const UNDERGROWTH_H_REF_M = (UNDERGROWTH_H_MIN + UNDERGROWTH_H_MAX) / 2;
 
 /** How wide a tuft is drawn, as a share of its height — a QUARTER wider than
- *  the 1.0 it was until 2026-08-16, and the reason is the neighbour and not
- *  the tuft. At the raised base density (`UNDERGROWTH_DENSITY_PER_M2`, 0.80)
- *  tufts stand about 1.1 m apart at full value; at the reference height 1.0
- *  drew them 0.55 m wide, so half a metre of bare ground stayed between two of
- *  them and the layer read as separate bushes. 1.25 makes it 0.69 m, and with
- *  the yaw of each card and the taller instances of the height span the
- *  silhouettes now touch — a floor rather than a pattern.
+ *  the 1.0 it was until 2026-08-16, so that a tuft keeps the proportions of a
+ *  spreading clump rather than a single stalk.
+ *
+ *  IT IS A RATIO AND STAYS ONE, which is what made the 60 % size reduction of
+ *  the sight round a single edit: the height span moved to 0.24 … 0.42 m and
+ *  the absolute width followed by itself, from 0.69 m to 0.41 m at the
+ *  reference height. What did NOT follow is the density (`scatterLod.ts`), so
+ *  the neighbours 1.1 m apart no longer touch — see the note there; the volume
+ *  now comes from the third plane below and not from the width of one tuft.
  *
  *  The texture spreads its nine blades over exactly this width: at the
- *  reference height that is a blade every 7.6 cm, i.e. the blades stayed the
- *  same size on screen while the tuft grew. */
+ *  reference height that is a blade every 4.6 cm. */
 const UNDERGROWTH_W_RATIO = 1.25;
 
-/** The angle between the two crossed quads, in radians (80°).
+/**
+ * The three planes of one tuft, in DEGREES about +Y — a star, not a cross.
  *
- *  NOT the perfect 90° the technique is usually drawn with: two quads at a
- *  right angle are symmetric under a quarter turn, so a field of them shows
- *  the same silhouette from four directions and the eye finds the pattern. A
- *  slight twist costs nothing and breaks it. */
-const UNDERGROWTH_CROSS_RAD = (80 * Math.PI) / 180;
+ * TWO CARDS ARE A ROW SEEN FROM THE SIDE, and that is the finding this list
+ * answers: with two planes there is always a direction that catches one of
+ * them edge-on (invisible) and the other flat-on (a board), and a field of
+ * them reads as rows of flat blades. A plane is edge-on exactly when the view
+ * runs along it, so with the gaps below the WORST direction (straight along
+ * one plane) still meets the other two at 55° and 63°, i.e. both of them show
+ * sin 55° = 0.82 and sin 63° = 0.89 of their full width. There is no direction
+ * left from which a tuft is a flat board, which is what "volume" means here.
+ *
+ * 0 / 55 / 118 AND NOT 0 / 60 / 120, for the reason the old pair was 80° and
+ * not 90°: three planes at exactly 60° are symmetric under a third of a turn,
+ * so a field of them shows the same silhouette from six directions and the eye
+ * finds the grid. The uneven gaps (55°, 63°, 62°) cost nothing and break it —
+ * and they are what the smoke's red counter-check measures, since a
+ * fully symmetric star differs from this one only in the angle.
+ */
+const UNDERGROWTH_STAR_DEG = [0, 55, 118];
 
 /** The alpha a texel needs to be drawn at all.
  *
@@ -310,7 +335,7 @@ const UNDERGROWTH_CROSS_RAD = (80 * Math.PI) / 180;
  *  be thousands of instances: an alpha-tested material stays in the OPAQUE
  *  pass, writes depth and needs no sorting, so a cell of a thousand tufts is
  *  one draw call whatever order they stand in. A transparent one would have to
- *  be sorted per frame and would still show the seams where two quads cross.
+ *  be sorted per frame and would still show the seams where the quads cross.
  *  0.35 sits below the antialiased edge of a blade (which reaches ~0.5 at the
  *  outermost covered texel) and well above the mip bleed between blades. */
 export const UNDERGROWTH_ALPHA_TEST = 0.35;
@@ -322,14 +347,22 @@ const UNDERGROWTH_REACH_M = UNDERGROWTH_H_MAX
   + (UNDERGROWTH_H_MAX * UNDERGROWTH_W_RATIO) / 2 + 0.5;
 
 /**
- * The crossed quads of ONE tuft, base at y = 0 (B16), `h` tall and
+ * The star of quads of ONE tuft, base at y = 0 (B16), `h` tall and
  * `h · UNDERGROWTH_W_RATIO` wide.
  *
- * Two cards, the second turned by `UNDERGROWTH_CROSS_RAD` about +Y. Both carry
+ * THREE cards, turned by `UNDERGROWTH_STAR_DEG` about +Y. All of them carry
  * the whole texture (0..1 in both UV axes), so a tuft is the same nine blades
- * seen from two directions rather than two different plants.
+ * seen from three directions rather than three different plants.
  *
- * THE NORMALS POINT STRAIGHT UP, all eight of them, and that is the one thing
+ * WHAT THE THIRD PLANE COSTS, since it is fill rate and not draw calls: one
+ * quad covers `h · 1.25 · h` of screen at a given distance, so the star is
+ * 3/2 of the old pair's area at equal size — but the tuft shrank to 60 %, i.e.
+ * 36 % of the area PER QUAD, and 3 · 0.36 / (2 · 1.00) = 0.54. The layer
+ * therefore draws just over HALF the pixels it did before this round, at 1.5×
+ * the vertex and index work (12 vertices and 36 indices per tuft against 8 and
+ * 24, six drawn triangles after back-face culling against four).
+ *
+ * THE NORMALS POINT STRAIGHT UP, all twelve of them, and that is the one thing
  * about a grass card that is NOT its geometry. A card's true normal is
  * horizontal, and under a sun that stands overhead a horizontal normal means
  * `dot(N, L) = 0`: the whole carpet loses the sun at midday and is lit by the
@@ -341,42 +374,168 @@ const UNDERGROWTH_REACH_M = UNDERGROWTH_H_MAX
  * then lit exactly like the ground it grows out of, and the shading of a field
  * of them stays flat and even instead of flickering with the yaw of each card.
  *
- * AND THAT IS WHY EVERY CARD IS WOUND BOTH WAYS (24 indices over 8 vertices,
- * not 12). Both faces of a card have to be drawn — but three flips the normal
+ * AND THAT IS WHY EVERY CARD IS WOUND BOTH WAYS (36 indices over 12 vertices,
+ * not 18). Both faces of a card have to be drawn — but three flips the normal
  * of a BACK face, so a single winding plus `DoubleSide` would give a tuft the
  * full 4.05 from one side and, with `N = (0, −1, 0)`, the hemisphere's GROUND
  * colour and no sun at all from the other: the same tuft would swing by a
  * factor of 2.6 as the camera orbits past it, which is worse than the even
  * gloom it replaced. The reversed triangles make both sides FRONT faces, so
  * the normal is never flipped and the material can stay `FrontSide`. It costs
- * twelve indices and no vertices, and back-face culling still draws exactly
- * four triangles per tuft from any one direction.
+ * eighteen indices and no vertices, and back-face culling still draws exactly
+ * six triangles per tuft from any one direction.
+ *
+ * The forward windings come FIRST, all of them, and the reversed ones after —
+ * so "the second half is the first half reversed" stays one assertion however
+ * many planes the star has.
  */
 export function undergrowthGeometry(h: number): THREE.BufferGeometry {
   const halfW = (h * UNDERGROWTH_W_RATIO) / 2;
-  const c = Math.cos(UNDERGROWTH_CROSS_RAD);
-  const s = Math.sin(UNDERGROWTH_CROSS_RAD);
-  const pos: number[] = [
-    // card A, in the xy-plane
-    -halfW, 0, 0, halfW, 0, 0, halfW, h, 0, -halfW, h, 0,
-    // card B, the same card turned about +Y: (1,0,0) -> (cos, 0, -sin)
-    -halfW * c, 0, halfW * s, halfW * c, 0, -halfW * s,
-    halfW * c, h, -halfW * s, -halfW * c, h, halfW * s,
-  ];
-  const uv = [0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1];
+  const pos: number[] = [];
+  const uv: number[] = [];
   const normal: number[] = [];
-  for (let i = 0; i < 8; i += 1) normal.push(0, 1, 0);
+  for (const deg of UNDERGROWTH_STAR_DEG) {
+    // The card turned about +Y: its own +X axis is (cos, 0, −sin), so the
+    // plane at 0° is the xy-plane and nothing is special about the first one.
+    const c = Math.cos((deg * Math.PI) / 180);
+    const s = Math.sin((deg * Math.PI) / 180);
+    pos.push(-halfW * c, 0, halfW * s, halfW * c, 0, -halfW * s,
+             halfW * c, h, -halfW * s, -halfW * c, h, halfW * s);
+    uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+    for (let i = 0; i < 4; i += 1) normal.push(0, 1, 0);
+  }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
-  geo.setIndex([
-    0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
-    // …and the same four triangles wound the other way round
-    0, 2, 1, 0, 3, 2, 4, 6, 5, 4, 7, 6,
-  ]);
+  const index: number[] = [];
+  for (let q = 0; q < UNDERGROWTH_STAR_DEG.length; q += 1) {
+    const v = q * 4;
+    index.push(v, v + 1, v + 2, v, v + 2, v + 3);
+  }
+  // …and the same triangles wound the other way round, in the same order.
+  // The bound is read ONCE: `index.length` grows with every push, and the
+  // loop would otherwise reverse its own reversals for ever.
+  const forward = index.length;
+  for (let t = 0; t < forward; t += 3) {
+    index.push(index[t], index[t + 2], index[t + 1]);
+  }
+  geo.setIndex(index);
   geo.computeBoundingSphere();
   return geo;
+}
+
+/* ==========================================================================
+ * (3b) THE SHADE OF ONE TUFT — why a carpet of one colour reads as a texture
+ *
+ * "They should have different shades of colour" (sight round 2026-08-16). A
+ * field of instances of ONE material is one colour to the last pixel, and at
+ * the density of this layer that is what makes it read as a printed texture
+ * rather than as growth: real grass is a hundred slightly different greens.
+ *
+ * THE MECHANISM IS `instanceColor`, three's own per-instance tint — one extra
+ * vec3 attribute, no second material, no second draw call. In three 0.185 it
+ * arrives through `color_vertex` (`vColor.rgb *= instanceColor.rgb` under
+ * `USE_INSTANCING_COLOR`) and is applied in the fragment shader as
+ * `diffuseColor *= vColor` (`WebGLProgram` defines `USE_COLOR` for the
+ * fragment prefix whenever `instancingColor` is on). Neither chunk is anywhere
+ * near the two anchors this file's patches replace — `applySway` inserts after
+ * `begin_vertex`, `applyOcclusionFade` after `project_vertex` and before
+ * `clipping_planes_fragment` — so the chain and the tint are independent, and
+ * the shade is a MULTIPLIER on the material colour, not a replacement of it.
+ * ========================================================================== */
+
+/** How far the shade swings in brightness, as a share. ±12 % on the material
+ *  colour, and it is worth naming that this is a LINEAR multiplier (the tint
+ *  meets `diffuseColor`, which is in the working colour space): ±12 % of light
+ *  is about ±5 % of an sRGB code value, i.e. deliberately a shading and not a
+ *  patchwork. */
+const SHADE_BRIGHT = 0.12;
+/** …and how far it swings in hue, on the same scale: the red channel up and
+ *  the blue down is a step towards yellow-green, the other way round is a step
+ *  towards a deeper, colder green. Half the brightness swing, because a
+ *  meadow's greens differ mostly in light and only a little in hue. */
+const SHADE_HUE = 0.06;
+
+/**
+ * The two ends of the shade, as per-channel multipliers on the material
+ * colour.
+ *
+ * THEY SUM TO EXACTLY (2, 2, 2), and that is the whole no-drift argument: the
+ * mix parameter is a hash, i.e. uniform on [0, 1], so the MEAN tint over a
+ * field is (A + B)/2 = (1, 1, 1) — the material colour itself, unchanged. Any
+ * other pair (say a multiplicative brightness with a hue factor riding on top)
+ * would leave a residue in the mean and the whole carpet would drift away from
+ * the terrain kind's own green, which is the one thing this feature must not
+ * do. Written as `1 ∓ (bright ± hue)` per channel so the sum is exact by
+ * construction and not by rounding:
+ *   A = (1 − 0.12 − 0.06, 1 − 0.12, 1 − 0.12 + 0.06) = (0.82, 0.88, 0.94)
+ *   B = (1 + 0.12 + 0.06, 1 + 0.12, 1 + 0.12 − 0.06) = (1.18, 1.12, 1.06)
+ * A is the darker, colder end and B the brighter, yellower one.
+ */
+export const UNDERGROWTH_TINT_A: readonly [number, number, number] = [
+  1 - SHADE_BRIGHT - SHADE_HUE, 1 - SHADE_BRIGHT, 1 - SHADE_BRIGHT + SHADE_HUE,
+];
+export const UNDERGROWTH_TINT_B: readonly [number, number, number] = [
+  1 + SHADE_BRIGHT + SHADE_HUE, 1 + SHADE_BRIGHT, 1 + SHADE_BRIGHT - SHADE_HUE,
+];
+
+/**
+ * The shade of ONE tuft as a number in [0, 1) — hashed from WHERE IT STANDS.
+ *
+ * NOT FROM ITS INDEX, and that is not a matter of taste. The LOD thins the
+ * layer by `instanceHash(index) < share` (`undergrowthVisible`), so a shade
+ * keyed on the index would be perfectly correlated with the thinning: at
+ * share 0.5 exactly the instances with hash < 0.5 survive, i.e. only the DARK
+ * half of the palette would be left, and the carpet would visibly turn colour
+ * between 30 m and 60 m. The position is independent of the index, so the
+ * thinned-out field keeps the full spread of shades.
+ *
+ * A tuft also keeps its shade when its cell is dropped and rebuilt (the
+ * position is the same), which is what stops the whole window from repainting
+ * itself at a cell border.
+ *
+ * The coordinates are folded into one 32-bit key at CENTIMETRE resolution —
+ * finer than any two tufts of this layer will ever stand apart — with the two
+ * odd primes a spatial hash uses, and the mixing is `instanceHash`'s own
+ * murmur3 finaliser. A junk coordinate gives the middle of the palette rather
+ * than a NaN colour, for the reason `undergrowthHeight` gives the shortest
+ * blade: an instance must never be removed by arithmetic.
+ *
+ * `Math.fround` FIRST, and it is not decoration: the position the instance
+ * buffer carries is a float32, and a candidate whose centimetre rounding falls
+ * within one ulp of a boundary (about one tuft in six hundred at these world
+ * coordinates) would hash differently before and after that round trip. Keying
+ * on the position AS STORED makes the shade re-derivable from the instance
+ * buffer alone — which is exactly how the smoke measures it, at the consumer
+ * rather than at the producer.
+ */
+export function undergrowthShade(x: number, z: number): number {
+  const xv = Math.fround(Number(x));
+  const zv = Math.fround(Number(z));
+  if (!Number.isFinite(xv) || !Number.isFinite(zv)) return 0.5;
+  const xi = Math.round(xv * 100) | 0;
+  const zi = Math.round(zv * 100) | 0;
+  return instanceHash((Math.imul(xi, 73856093) ^ Math.imul(zi, 19349663)) | 0);
+}
+
+/**
+ * The per-channel multiplier of a tuft whose shade is `h` — a straight mix
+ * between the two ends, so `h = 0` is A, `h = 1` is B and `h = 0.5` is exactly
+ * the material colour.
+ *
+ * PLAIN RGB, no HSL round trip. A hue conversion per instance would be three
+ * branches and a division inside the build loop of a few thousand tufts per
+ * cell, for a difference nobody can see at ±6 % of one channel.
+ */
+export function undergrowthTint(h: number): [number, number, number] {
+  const v = Number(h);
+  const t = Number.isFinite(v) ? Math.min(Math.max(v, 0), 1) : 0.5;
+  return [
+    UNDERGROWTH_TINT_A[0] + (UNDERGROWTH_TINT_B[0] - UNDERGROWTH_TINT_A[0]) * t,
+    UNDERGROWTH_TINT_A[1] + (UNDERGROWTH_TINT_B[1] - UNDERGROWTH_TINT_A[1]) * t,
+    UNDERGROWTH_TINT_A[2] + (UNDERGROWTH_TINT_B[2] - UNDERGROWTH_TINT_A[2]) * t,
+  ];
 }
 
 /** The ONE blade texture of the session — one `DataTexture` shared by every
@@ -419,6 +578,12 @@ export function undergrowthTexture(): THREE.DataTexture {
  * growth; 1.0 would make the layer vanish into its ground and 0.5 would make a
  * meadow look burnt. No sight check was possible, so this is the arithmetic
  * the next acceptance round can argue against.
+ *
+ * AND THE PER-TUFT SHADE RIDES ON TOP OF IT WITHOUT MOVING IT: `instanceColor`
+ * multiplies this colour per instance, and the two ends of that mix sum to
+ * exactly (2, 2, 2), so the MEAN over a field is this colour to the last bit
+ * (`undergrowthTint`). The number above therefore still says what the layer
+ * looks like as a whole.
  *
  * `FrontSide` and not `DoubleSide`, and that is NOT a step back from "both
  * faces are drawn": the geometry carries every card with both windings, so
@@ -486,6 +651,13 @@ interface CellLayer {
    *  filled from, never rewritten (which is what keeps the wind's phase, read
    *  off `instanceMatrix` in the shader, stable across every re-bin) */
   srcMatrix: Float32Array;
+  /** the per-tuft shade as built, 3 floats each — the SOURCE of
+   *  `mesh.instanceColor`, and it exists for the same reason `srcMatrix` does.
+   *  The binning COMPACTS the drawn instances into the front of the buffer, so
+   *  a tuft's slot is not its index; a colour buffer left in index order would
+   *  hand every tuft its neighbour's shade and repaint the whole carpet on
+   *  every LOD tick. */
+  srcColor: Float32Array;
   /** world position of every tuft, 3 tight floats each — what the tick reads */
   pos: Float32Array;
   /** whether each tuft was in the buffer last tick: 0 = drawn, 1 = not. Only a
@@ -603,6 +775,17 @@ export function createUndergrowthField(opts: {
     for (let j = 0; j < 16; j += 1) dst[b + j] = src[a + j];
   }
 
+  /** …and the same for the shade, which has to travel with the matrix into
+   *  the same slot — see `CellLayer.srcColor`. */
+  function copyColor(src: Float32Array, i: number,
+                     dst: Float32Array, slot: number): void {
+    const a = i * 3;
+    const b = slot * 3;
+    dst[b] = src[a];
+    dst[b + 1] = src[a + 1];
+    dst[b + 2] = src[a + 2];
+  }
+
   /**
    * Build every layer of ONE cell.
    *
@@ -702,7 +885,9 @@ export function createUndergrowthField(opts: {
       const up = new THREE.Vector3(0, 1, 0);
       const at = new THREE.Vector3();
       const s = new THREE.Vector3();
+      const tint = new THREE.Color();
       const srcMatrix = new Float32Array(kept.length * 16);
+      const srcColor = new Float32Array(kept.length * 3);
       const pos = new Float32Array(kept.length * 3);
       kept.forEach((p, i) => {
         q.setFromAxisAngle(up, p.yaw);
@@ -718,6 +903,18 @@ export function createUndergrowthField(opts: {
         pos[i * 3] = p.x;
         pos[i * 3 + 1] = y;
         pos[i * 3 + 2] = p.z;
+        // The shade of this tuft, hashed from where it stands and NOT from its
+        // index — see `undergrowthShade`. `setColorAt` is what brings
+        // `mesh.instanceColor` into existence at all; the values are written
+        // into `srcColor` in the same pass, because from the first binning on
+        // the buffer is filled by slot and no longer by index.
+        // `setRGB` without a colour space writes the working space, i.e. the
+        // multiplier reaches `diffuseColor` exactly as it is meant here.
+        const [tr, tg, tb] = undergrowthTint(undergrowthShade(p.x, p.z));
+        mesh.setColorAt(i, tint.setRGB(tr, tg, tb));
+        srcColor[i * 3] = tr;
+        srcColor[i * 3 + 1] = tg;
+        srcColor[i * 3 + 2] = tb;
       });
       mesh.castShadow = false;
       mesh.frustumCulled = true;
@@ -730,6 +927,7 @@ export function createUndergrowthField(opts: {
         mesh,
         baseCount: kept.length,
         srcMatrix,
+        srcColor,
         pos,
         // In NO buffer yet, so the first binning finds every tuft changed and
         // uploads once.
@@ -788,6 +986,12 @@ export function createUndergrowthField(opts: {
     layer.hidden = false;
     const cull2 = UNDERGROWTH_CULL_M * UNDERGROWTH_CULL_M;
     const buf = layer.mesh.instanceMatrix.array as Float32Array;
+    // The shade travels into the SAME slot as the matrix. `instanceColor` is
+    // built by `setColorAt` in `buildCell` and is never null here; a layer
+    // whose colours stayed in index order would give every drawn tuft the
+    // shade of whichever tuft the compaction happened to displace, i.e. a
+    // carpet that repaints itself once a second while the player walks.
+    const colBuf = layer.mesh.instanceColor?.array as Float32Array | undefined;
     let n = 0;
     let dirty = false;
     for (let i = 0; i < layer.baseCount; i += 1) {
@@ -804,12 +1008,16 @@ export function createUndergrowthField(opts: {
       }
       if (slot === 0) {
         copyMatrix(layer.srcMatrix, i, buf, n);
+        if (colBuf) copyColor(layer.srcColor, i, colBuf, n);
         n += 1;
       }
     }
     layer.mesh.count = n;
     layer.mesh.visible = n > 0;
-    if (dirty) layer.mesh.instanceMatrix.needsUpdate = true;
+    if (dirty) {
+      layer.mesh.instanceMatrix.needsUpdate = true;
+      if (layer.mesh.instanceColor) layer.mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   /** Build what the want set asks for and drop what it does not. The set is
