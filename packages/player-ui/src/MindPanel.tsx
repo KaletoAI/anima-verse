@@ -74,6 +74,11 @@ interface BondItem {
   memories_count: number; history_recent: BondEvent[]
 }
 
+interface ScheduleSlot {
+  hour: number; location: string; location_name: string; role: string; sleep: boolean
+}
+interface ScheduleResponse { avatar: string; enabled: boolean; slots: ScheduleSlot[] }
+
 type HistoryKind = 'daily' | 'weekly' | 'monthly' | 'history' | 'evolution'
 interface HistoryDailyItem { date: string; partner: string; content: string }
 interface HistoryPeriodItem { week?: string; month?: string; content: string }
@@ -826,9 +831,48 @@ function HistoryView({ character }: { character: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Sektion „Tagesplan" — read-only, der Rhythmus des Avatars (R5)
+// ---------------------------------------------------------------------------
+/** The avatar's daily schedule as a plain hour → activity list. Read-only:
+ *  editing lives in the Game-Admin scheduler, this is what the player sees. */
+function ScheduleView({ data }: { data: ScheduleResponse | null }) {
+  const { t } = useI18n()
+  if (!data) return <EmptyState small icon="journal" title={t('Loading…')} />
+  const slots = data.enabled ? (data.slots || []) : []
+  if (slots.length === 0) {
+    return <EmptyState small icon="journal" title={t('No daily schedule set')} />
+  }
+  return (
+    <div style={{ height: '100%', minHeight: 0, overflow: 'auto',
+                  display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {slots.map((s) => (
+        <div key={s.hour} style={{ display: 'flex', gap: 10, alignItems: 'baseline',
+                                   padding: '4px 6px', borderRadius: 6,
+                                   background: 'rgba(255,255,255,0.04)' }}>
+          <span style={{ flex: '0 0 44px', opacity: 0.55, fontSize: '0.8em',
+                         fontVariantNumeric: 'tabular-nums' }}>
+            {String(s.hour).padStart(2, '0')}:00
+          </span>
+          {s.sleep ? (
+            <span style={{ opacity: 0.75 }}>💤 {t('Asleep')}</span>
+          ) : (
+            <span style={{ flex: 1, minWidth: 0, lineHeight: 1.3 }}>
+              {s.role || <span style={{ opacity: 0.5 }}>{t('free')}</span>}
+              {s.location_name && (
+                <span style={{ opacity: 0.55, fontSize: '0.8em' }}> · 📍 {s.location_name}</span>
+              )}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Haupt-Panel: Navi links (schmal → nur Icons) + Sektions-Inhalt rechts
 // ---------------------------------------------------------------------------
-type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history' | 'thoughts'
+type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history' | 'thoughts' | 'schedule'
 
 export function MindPanel({ character, alwaysLabels = false, withThoughts = false }: {
   character: string
@@ -861,14 +905,32 @@ export function MindPanel({ character, alwaysLabels = false, withThoughts = fals
   const [memRelated, setMemRelated] = useState('')
   const openMemories = (partner = '') => { setMemRelated(partner); setSection('memories') }
 
+  // The daily schedule is served for the AVATAR only (GET /play/schedule
+  // resolves it server-side). The section therefore appears exactly when this
+  // panel shows the avatar — in the Game-Admin, looking at somebody else, it
+  // stays hidden rather than showing the wrong person's rhythm.
+  const [schedule, setSchedule] = useState<ScheduleResponse | null>(null)
+  useEffect(() => {
+    let alive = true
+    apiGet<ScheduleResponse>('/play/schedule')
+      .then((d) => { if (alive) setSchedule(d) })
+      .catch(() => { if (alive) setSchedule(null) })
+    return () => { alive = false }
+  }, [])
+  const isAvatar = !!character && schedule?.avatar === character
+  useEffect(() => {
+    if (section === 'schedule' && !isAvatar) setSection('today')
+  }, [section, isAvatar])
+
   const sections = useMemo(() => ([
     { id: 'today' as SectionId, icon: '☀️', label: t('Today') },
     { id: 'diary' as SectionId, icon: '📔', label: t('Diary') },
     { id: 'memories' as SectionId, icon: '🧠', label: t('Memories') },
     { id: 'bonds' as SectionId, icon: '🤝', label: t('Relationships') },
     { id: 'history' as SectionId, icon: '🕰️', label: t('History') },
+    ...(isAvatar ? [{ id: 'schedule' as SectionId, icon: '🗓️', label: t('Daily schedule') }] : []),
     ...(withThoughts ? [{ id: 'thoughts' as SectionId, icon: '💭', label: t('Thoughts') }] : []),
-  ]), [t, withThoughts])
+  ]), [t, withThoughts, isAvatar])
 
   if (!character) {
     return <EmptyState icon="journal" title={t('No active character')} />
@@ -902,6 +964,7 @@ export function MindPanel({ character, alwaysLabels = false, withThoughts = fals
         {section === 'memories' && <MemoriesView character={character} initialRelated={memRelated} />}
         {section === 'bonds' && <BondsView character={character} onOpenMemories={openMemories} />}
         {section === 'history' && <HistoryView character={character} />}
+        {section === 'schedule' && isAvatar && <ScheduleView data={schedule} />}
         {section === 'thoughts' && withThoughts && <MindThoughtsSection character={character} />}
       </div>
     </div>

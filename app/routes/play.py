@@ -1695,6 +1695,38 @@ def _state_block(name: str) -> dict:
     return blk
 
 
+def _present_characters(avatar: str) -> list:
+    """Names of the OTHER characters standing in the avatar's current room.
+
+    The ONE presence source of the player surface: /play/others lists them,
+    and the give/cast target gate accepts exactly these names."""
+    if not avatar:
+        return []
+    from app.core.room_entry import _list_characters_in_room
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room)
+    loc = get_character_current_location(avatar) or ""
+    if not loc:
+        return []
+    room = get_character_current_room(avatar) or ""
+    return [c for c in _list_characters_in_room(loc, room) if c and c != avatar]
+
+
+def _require_present_target(avatar: str, raw_target) -> str:
+    """Gate for every targeted player action: the target must be a character
+    standing in the avatar's room. Exact name match only — no first-/last-name
+    resolution (house rule)."""
+    target = str(raw_target or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="target required")
+    present = _present_characters(avatar)
+    if target not in present:
+        detail = (f"{target} is not here. You can only reach characters in this room"
+                  + (f": {', '.join(present)}." if present else " — and nobody else is here."))
+        raise HTTPException(status_code=400, detail=detail)
+    return target
+
+
 @router.get("/play/others")
 async def play_others(user=Depends(get_current_user)):
     """Zustand ALLER anwesenden anderen Charaktere (wie /play/self, je Character).
@@ -1706,14 +1738,7 @@ async def play_others(user=Depends(get_current_user)):
         return out
     out["avatar"] = avatar
     try:
-        from app.core.room_entry import _list_characters_in_room
-        from app.models.character import (get_character_current_location,
-                                          get_character_current_room)
-        loc = get_character_current_location(avatar) or ""
-        room = get_character_current_room(avatar) or ""
-        present = ([c for c in _list_characters_in_room(loc, room) if c and c != avatar]
-                   if loc else [])
-        out["characters"] = [_state_block(c) for c in present]
+        out["characters"] = [_state_block(c) for c in _present_characters(avatar)]
         # Relationship of the avatar TO each present character. Built ONCE
         # per request, then looked up per character.
         try:
@@ -2017,23 +2042,22 @@ async def play_use_item(request: Request, user=Depends(get_current_user)):
     return {"ok": bool(res), "result": res}
 
 
-@router.post("/play/cast-self")
-async def play_cast_self(request: Request, user=Depends(get_current_user)):
-    """Cast a spell from the inventory on the avatar itself — through
-    spell_engine.execute_cast (honours copy_on_give, effect-item handover, cast
-    activity). NOT consume_item (the spell would vanish despite copy_on_give)."""
+async def _cast_from_inventory(avatar: str, target: str, item_id: str) -> dict:
+    """Cast a spell item of the avatar on ``target`` — the ONE cast path behind
+    /play/cast-self and /play/cast.
+
+    Runs through spell_engine.execute_cast (honours copy_on_give, effect-item
+    handover, cast activity). NOT consume_item (the spell would vanish despite
+    copy_on_give)."""
     import asyncio
     from app.core.spell_engine import build_spell_catalog, execute_cast
-    avatar = _require_avatar()
-    body = await request.json()
-    item_id = str((body or {}).get("item_id") or "").strip()
     spell = next((s for s in build_spell_catalog(avatar) if s.get("id") == item_id), None)
     if not spell:
         raise HTTPException(status_code=404, detail="not a spell or not in inventory")
     # Off the event loop: execute_cast sets the spell's cast activity via
     # set_pose_intent, which resolves it against the pose catalog and may
     # block on an embedding call. The result is used below, so it is awaited.
-    res = await asyncio.to_thread(execute_cast, avatar, avatar, spell)
+    res = await asyncio.to_thread(execute_cast, avatar, target, spell)
     # Make the effect visible as a storyteller line (location_id explicit — the
     # storyteller has no own location, otherwise the fan-out goes nowhere; the
     # anchor gives it the caster's point out in the open, where an empty
@@ -2050,11 +2074,157 @@ async def play_cast_self(request: Request, user=Depends(get_current_user)):
                              volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
                              source="spell", anchor=avatar)
     except Exception as _e:  # noqa: BLE001
-        logger.debug("self-cast narration failed: %s", _e)
+        logger.debug("cast narration failed: %s", _e)
     return {"ok": True, "spell_name": spell.get("name") or item_id,
+            "target": target,
             "success": bool(res.get("success")),
             "chance": int(res.get("chance") or 0), "roll": int(res.get("roll") or 0),
+            "delivered_item_name": res.get("delivered_item_name") or "",
             "hint": res.get("hint") or ""}
+
+
+@router.post("/play/cast-self")
+async def play_cast_self(request: Request, user=Depends(get_current_user)):
+    """Cast a spell from the inventory on the avatar itself."""
+    avatar = _require_avatar()
+    body = await request.json()
+    item_id = str((body or {}).get("item_id") or "").strip()
+    return await _cast_from_inventory(avatar, avatar, item_id)
+
+
+@router.post("/play/cast")
+async def play_cast(request: Request, user=Depends(get_current_user)):
+    """Cast a spell from the inventory on a chosen target.
+
+    Body: {item_id, target?} — an empty/own target is the self-cast. Any other
+    target must be present in the avatar's room (same source as /play/others)."""
+    avatar = _require_avatar()
+    body = await request.json()
+    item_id = str((body or {}).get("item_id") or "").strip()
+    target = str((body or {}).get("target") or "").strip() or avatar
+    if target != avatar:
+        target = _require_present_target(avatar, target)
+    return await _cast_from_inventory(avatar, target, item_id)
+
+
+@router.post("/play/give")
+async def play_give(request: Request, user=Depends(get_current_user)):
+    """Give an inventory item to a character present in the room.
+
+    Uses gift_item — the same transfer path as the chat composer's gift: it
+    moves the piece (instead of copying it), refuses non-transferable items and
+    records the relationship boost."""
+    from app.models.inventory import gift_item, get_item, get_equipped_item_ids
+    avatar = _require_avatar()
+    body = await request.json()
+    item_id = str((body or {}).get("item_id") or "").strip()
+    if not item_id:
+        raise HTTPException(status_code=400, detail="item_id required")
+    target = _require_present_target(avatar, (body or {}).get("target"))
+    # A worn piece is refused rather than silently taken off: unequipping is a
+    # separate, visible act, and the paper doll offers it one click away.
+    try:
+        worn = item_id in set(get_equipped_item_ids(avatar) or [])
+    except Exception:
+        worn = False
+    if worn:
+        raise HTTPException(status_code=400,
+                            detail="You are wearing this — take it off first.")
+    res = gift_item(avatar, target, item_id)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "give failed")
+    # Direct action is world-visible: narrator line -> NPCs can react.
+    try:
+        from app.core.i18n import t
+        from app.core.perception import announce_action
+        from app.models.character import get_character_language
+        lang = get_character_language(avatar) or "de"
+        _nm = res.get("item_name") or (get_item(item_id) or {}).get("name") or item_id
+        announce_action(avatar, t("{actor} hands {item} to {target}.", lang).format(
+            actor=avatar, item=_nm, target=target), source="inventory")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("give narration failed: %s", e)
+    return {"ok": True, "target": target, **res}
+
+
+@router.post("/play/drop")
+async def play_drop(request: Request, user=Depends(get_current_user)):
+    """Put an inventory item down in the avatar's current room."""
+    from app.models.inventory import drop_item
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room)
+    avatar = _require_avatar()
+    body = await request.json()
+    item_id = str((body or {}).get("item_id") or "").strip()
+    if not item_id:
+        raise HTTPException(status_code=400, detail="item_id required")
+    loc = get_character_current_location(avatar) or ""
+    room = get_character_current_room(avatar) or ""
+    if not loc:
+        raise HTTPException(status_code=400, detail="You are nowhere to put this down.")
+    res = drop_item(avatar, loc, room, item_id)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "drop failed")
+    # Direct action is world-visible: narrator line -> NPCs can react.
+    try:
+        from app.core.i18n import t
+        from app.core.perception import announce_action
+        from app.models.character import get_character_language
+        lang = get_character_language(avatar) or "de"
+        announce_action(avatar, t("{actor} puts {item} down.", lang).format(
+            actor=avatar, item=res.get("item_name") or item_id), source="inventory")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("drop narration failed: %s", e)
+    return {"ok": True, **res}
+
+
+@router.get("/play/item/{item_id}")
+async def play_item_detail(item_id: str, user=Depends(get_current_user)):
+    """Detail of ONE item the avatar owns — description, category/slots,
+    effects, rarity and the image URL. Anything not in the avatar's inventory
+    is a 404: the player surface never browses the world item catalogue."""
+    from app.core.i18n import localized
+    from app.models.account import get_active_character
+    from app.models.character import get_character_language
+    from app.models.inventory import get_character_inventory, get_item
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+    inv = (get_character_inventory(avatar) or {}).get("inventory") or []
+    entry = next((e for e in inv if e.get("item_id") == item_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="not in your inventory")
+    item = get_item(item_id) or {}
+    lang = get_character_language(avatar) or "de"
+    op = item.get("outfit_piece") or {}
+    spell = None
+    try:
+        from app.core.spell_engine import build_spell_catalog
+        # Keyed by the spell item's own id — the same key the cast path uses,
+        # NOT clone_item_id (that is the item a spell hands over).
+        spell = next((s for s in (build_spell_catalog(avatar) or [])
+                      if s.get("id") == item_id), None)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("item detail spell catalog failed: %s", e)
+    return {
+        "item_id": item_id,
+        "name": localized(item, "name", lang) or item_id,
+        "description": (localized(item, "description", lang) or "").strip(),
+        "category": item.get("category") or "",
+        "rarity": item.get("rarity") or "",
+        "quantity": entry.get("quantity", 1),
+        "equipped": bool(entry.get("equipped")),
+        "consumable": bool(item.get("consumable")),
+        "transferable": bool(item.get("transferable", True)),
+        "is_outfit": bool(op),
+        "slots": op.get("slots") or [],
+        "outfit_types": op.get("outfit_types") or [],
+        "covers": op.get("covers") or [],
+        "is_spell": bool(spell),
+        "incantation": (spell or {}).get("incantation", "") if spell else "",
+        "effects": item.get("effects") or {},
+        "image_url": (f"/inventory/items/{item_id}/image" if item.get("image") else ""),
+    }
 
 
 def _build_gallery_payload(character: str) -> dict:
@@ -2401,6 +2571,50 @@ async def play_journal(user=Depends(get_current_user)):
                          "ts": e.get("timestamp", "")} for e in (d.get("entries") or [])]
     except Exception as e:
         logger.debug("play_journal diary failed: %s", e)
+    return out
+
+
+@router.get("/play/schedule")
+async def play_schedule(user=Depends(get_current_user)):
+    """Daily schedule of the avatar (read-only, R5). Same data as the admin
+    scheduler route, but avatar-resolved server-side and with the location id
+    already resolved to its name."""
+    from app.core.i18n import localized
+    from app.models.account import get_active_character
+    out = {"avatar": "", "enabled": False, "slots": []}
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return out
+    out["avatar"] = avatar
+    try:
+        from app.models.character import (get_character_daily_schedule,
+                                          get_character_language)
+        lang = get_character_language(avatar) or "de"
+        sched = get_character_daily_schedule(avatar) or {}
+        out["enabled"] = bool(sched.get("enabled"))
+        names = {}
+        try:
+            from app.models.world import list_locations
+            for loc in list_locations() or []:
+                lid = (loc.get("id") or loc.get("name") or "").strip()
+                if lid:
+                    names[lid] = localized(loc, "name", lang) or lid
+        except Exception as e:  # noqa: BLE001
+            logger.debug("play_schedule locations failed: %s", e)
+        slots = []
+        for s in (sched.get("slots") or []):
+            try:
+                hour = int(s.get("hour"))
+            except (TypeError, ValueError):
+                continue
+            lid = (s.get("location") or "").strip()
+            slots.append({"hour": hour, "location": lid,
+                          "location_name": names.get(lid, lid),
+                          "role": (s.get("role") or "").strip(),
+                          "sleep": bool(s.get("sleep"))})
+        out["slots"] = sorted(slots, key=lambda x: x["hour"])
+    except Exception as e:  # noqa: BLE001
+        logger.debug("play_schedule failed: %s", e)
     return out
 
 

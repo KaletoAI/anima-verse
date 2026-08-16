@@ -6,12 +6,19 @@
  * zeigen ihr Icon und sind per Klick ablegbar. Anziehen/Use/Set-Wechsel über die
  * Liste. Quelle: GET /play/belongings; Setter: /play/{equip,unequip,use-item},
  * /play/self/outfit.
+ *
+ * A click on an item row opens the detail modal (GET /play/item/{id}) with the
+ * targeted actions: Give, Drop and Cast. Their targets are ALWAYS the
+ * characters present in the room (GET /play/others) — the server gate accepts
+ * exactly those names.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
+import { useToast } from './Toast'
 
 // Anker-Positionen (x%, y%) im KOORDINATENSYSTEM DES BILDES (silhouette.svg ist
 // 896×1216, die Figur liegt zentral). Hier werden die Symbole der getragenen
@@ -76,9 +83,182 @@ function catOf(it: Item): Cat {
 }
 const CAT_EMOJI: Record<Cat, string> = { all: '🎒', outfit: '👕', consumable: '🧪', spell: '✨', other: '📦' }
 
+interface ItemDetail {
+  item_id: string; name: string; description: string; category: string
+  rarity: string; quantity: number; equipped: boolean; consumable: boolean
+  transferable: boolean; is_outfit: boolean; slots: string[]
+  outfit_types: string[]; covers: string[]; is_spell: boolean; incantation: string
+  effects: Record<string, unknown>; image_url: string
+}
+
+/**
+ * Item detail + the targeted actions (Give / Drop / Cast).
+ *
+ * Portal-rendered to document.body: the panel lives inside react-grid-layout's
+ * transform context, where a position:fixed modal would be clipped.
+ */
+function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
+  itemId: string
+  slotLabels: Record<string, string>
+  onClose: () => void
+  /** Reload the belongings; `closePanel` also closes the whole inventory
+   *  (what the old self-cast button did — the spell plays out in the scene). */
+  onChanged: (closePanel?: boolean) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [item, setItem] = useState<ItemDetail | null>(null)
+  const [present, setPresent] = useState<string[]>([])
+  const [recipient, setRecipient] = useState('')
+  // '' = the avatar itself, the default of every cast (the old button's only
+  // option); any other value is a character present in the room.
+  const [castTarget, setCastTarget] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    apiGet<ItemDetail>(`/play/item/${encodeURIComponent(itemId)}`)
+      .then((d) => { if (alive) setItem(d) })
+      .catch((e) => { if (alive) { toast((e as Error).message, 'error'); onClose() } })
+    apiGet<{ characters?: Array<{ name: string }> }>('/play/others')
+      .then((d) => {
+        if (!alive) return
+        const names = (d.characters || []).map((c) => c.name).filter(Boolean)
+        setPresent(names)
+        setRecipient(names[0] || '')
+      })
+      .catch(() => { if (alive) setPresent([]) })
+    return () => { alive = false }
+  }, [itemId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = async (url: string, body: Record<string, unknown>,
+                     okMsg: string, closePanel = false) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await apiPost(url, body)
+      toast(okMsg, 'success')
+      onChanged(closePanel)
+      onClose()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const effects = Object.entries(item?.effects || {})
+  const canGive = !!item && item.transferable && !item.equipped && present.length > 0
+  const giveHint = !item ? ''
+    : !item.transferable ? t('This item cannot be handed over.')
+      : item.equipped ? t('You are wearing this — take it off first.')
+        : present.length === 0 ? t('Nobody else is here.') : ''
+
+  return createPortal(
+    <div className="ga-modal-backdrop" onMouseDown={onClose}>
+      <div className="ga-modal" style={{ maxWidth: 520 }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="ga-modal-header">
+          <span>{item ? item.name : t('Loading…')}</span>
+          <button className="ga-modal-close" onClick={onClose}>×</button>
+        </div>
+        {item && (
+          <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 12 }}>
+              {item.image_url && (
+                <img src={item.image_url} alt="" style={{
+                  width: 110, height: 110, objectFit: 'cover', borderRadius: 8,
+                  flex: '0 0 auto', background: 'rgba(255,255,255,0.06)',
+                }} />
+              )}
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.86em' }}>
+                <Fact label={t('Category')} value={item.category} />
+                <Fact label={t('Rarity')} value={item.rarity} />
+                <Fact label={t('Quantity')} value={String(item.quantity)} />
+                <Fact label={t('Slots')}
+                  value={(item.slots || []).map((s) => t(slotLabels[s] || s)).join(', ')} />
+                <Fact label={t('Incantation')} value={item.incantation} />
+              </div>
+            </div>
+
+            {item.description && (
+              <div style={{ lineHeight: 1.4, fontSize: '0.9em' }}>{item.description}</div>
+            )}
+
+            {effects.length > 0 && (
+              <div>
+                <div style={{ fontSize: '0.74em', opacity: 0.55, letterSpacing: 0.4 }}>{t('Effects')}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 3 }}>
+                  {effects.map(([k, v]) => (
+                    <span key={k} style={{
+                      fontSize: '0.76em', border: '1px solid rgba(255,255,255,0.2)',
+                      borderRadius: 9, padding: '1px 8px',
+                    }}>{k.replace(/_/g, ' ')}: {String(v)}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Actions ───────────────────────────────────────────── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8,
+                          borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 10 }}>
+              {item.is_spell && (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ flex: '0 0 auto', fontSize: '0.8em', opacity: 0.7 }}>{t('Cast on')}</span>
+                  <select className="ga-input" style={{ flex: 1, minWidth: 0 }} value={castTarget}
+                    onChange={(e) => setCastTarget(e.target.value)}>
+                    <option value="">{t('Yourself')}</option>
+                    {present.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  <button className="ga-btn" disabled={busy}
+                    onClick={() => run('/play/cast', { item_id: item.item_id, target: castTarget },
+                      t('Spell cast'), true)}>{t('Cast')}</button>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span style={{ flex: '0 0 auto', fontSize: '0.8em', opacity: 0.7 }}>{t('Give to')}</span>
+                <select className="ga-input" style={{ flex: 1, minWidth: 0 }} value={recipient}
+                  disabled={!canGive} onChange={(e) => setRecipient(e.target.value)}>
+                  {present.length === 0 && <option value="">{t('-- none --')}</option>}
+                  {present.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <button className="ga-btn" disabled={busy || !canGive}
+                  onClick={() => run('/play/give', { item_id: item.item_id, target: recipient },
+                    t('Handed over'))}>{t('Give')}</button>
+              </div>
+              {giveHint && <div style={{ fontSize: '0.76em', opacity: 0.55 }}>{giveHint}</div>}
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <button className="ga-btn" disabled={busy}
+                  onClick={() => run('/play/drop', { item_id: item.item_id }, t('Put down'))}>
+                  {t('Drop')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+/** One label/value line of the detail head — renders nothing without a value. */
+function Fact({ label, value }: { label: string; value: string }) {
+  if (!value) return null
+  return (
+    <div style={{ display: 'flex', gap: 8, minWidth: 0 }}>
+      <span style={{ flex: '0 0 auto', opacity: 0.55 }}>{label}</span>
+      <span style={{ flex: 1, minWidth: 0, textAlign: 'right', overflow: 'hidden',
+                     textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+    </div>
+  )
+}
+
 export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n()
+  const { toast } = useToast()
   const [data, setData] = useState<Belongings>(EMPTY)
+  // Item whose detail modal is open ('' = none).
+  const [detailId, setDetailId] = useState('')
   const [cat, setCat] = useState<Cat>('all')
   const [slotFilter, setSlotFilter] = useState('')
   // Outfit-type filter, next to the slot filter. The vocabulary comes from
@@ -119,8 +299,10 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
       await apiPost(url, body)
       await refresh()
       if (closeAfter) onClose?.()  // e.g. close inventory after self-cast (like the old UI)
-    } catch { /* ignore */ } finally { setBusy(false) }
-  }, [busy, refresh, onClose])
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally { setBusy(false) }
+  }, [busy, refresh, onClose, toast])
 
   const filtered = useMemo(() => {
     let list = data.items
@@ -204,9 +386,10 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
             const sub = it.description || fallback
             const rarityColor = RARITY_COLOR[it.rarity] || RARITY_COLOR.common
             return (
-              <div key={it.item_id} title={it.rarity || 'common'} style={{
+              <div key={it.item_id} title={t('Open item details')}
+                onClick={() => setDetailId(it.item_id)} style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
-                borderRadius: 6, borderLeft: `3px solid ${rarityColor}`,
+                borderRadius: 6, borderLeft: `3px solid ${rarityColor}`, cursor: 'pointer',
                 background: it.equipped ? 'rgba(120,170,255,0.14)' : 'rgba(255,255,255,0.04)',
               }}>
                 <ItemIcon itemId={it.item_id} hasImage={it.image} emoji={CAT_EMOJI[catOf(it)]} size={40} />
@@ -222,14 +405,14 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
                 {it.is_outfit && (
                   it.equipped
                     ? <span style={{ fontSize: '0.72em', opacity: 0.6 }}>{t('worn')}</span>
-                    : <button disabled={busy} style={btn()} onClick={() => act('/play/equip', { item_id: it.item_id })}>{t('Wear')}</button>
+                    : <button disabled={busy} style={btn()}
+                        onClick={(e) => { e.stopPropagation(); act('/play/equip', { item_id: it.item_id }) }}>{t('Wear')}</button>
                 )}
-                {/* Spell: casten (execute_cast, respektiert copy_on_give) — NICHT consume. */}
-                {it.is_spell && (
-                  <button disabled={busy} style={btn()} onClick={() => act('/play/cast-self', { item_id: it.item_id }, true)}>{t('Cast')}</button>
-                )}
+                {/* Casting lives in the detail modal — it needs the target
+                    choice (yourself or someone present in the room). */}
                 {!it.is_spell && it.consumable && (
-                  <button disabled={busy} style={btn()} onClick={() => act('/play/use-item', { item_id: it.item_id })}>{t('Use')}</button>
+                  <button disabled={busy} style={btn()}
+                    onClick={(e) => { e.stopPropagation(); act('/play/use-item', { item_id: it.item_id }) }}>{t('Use')}</button>
                 )}
               </div>
             )
@@ -289,6 +472,12 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
           {data.items.length}/{data.max_slots || '∞'} {t('items')}
         </div>
       </div>
+
+      {detailId && (
+        <ItemDetailModal itemId={detailId} slotLabels={data.slot_labels}
+          onClose={() => setDetailId('')}
+          onChanged={(closePanel) => { void refresh(); if (closePanel) onClose?.() }} />
+      )}
     </div>
   )
 }
