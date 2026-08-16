@@ -14,6 +14,7 @@
 // gegen die Spec, ε = 0,01 m, Ausgabe als Konsolen-Tabelle.
 import * as THREE from 'three';
 import { Engine } from './scene/engine';
+import { requestedBackend } from './render/backend';
 import { applyTileFade, buildTile, setSurfaceTextures, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { getSurfaceTextures } from './api';
@@ -35,7 +36,7 @@ const say = (t: string) => {
   msg.style.display = t ? 'block' : 'none';
 };
 
-const engine = new Engine(document.body);
+const engine = await Engine.create(document.body, requestedBackend(location.search));
 setModelEnvironment(engine.modelEnv);
 (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (wie main)
 engine.setGameHour(11);

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
+import { createModelEnv, createRenderer, type ActiveBackend, type AnyRenderer,
+         type RenderBackend, type RendererBoot } from '../render/backend';
 
 /**
  * Closest the camera may get to its target. Derived from the smallest figure
@@ -42,13 +43,21 @@ export function isTypingTarget(e: Event): boolean {
 export class Engine {
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
-  renderer: THREE.WebGLRenderer;
+  renderer: AnyRenderer;
+  /** which backend really runs — `webgl` (default), `webgpu`, or three's silent
+   *  `webgl-fallback` of the WebGPU renderer (`render/backend.ts`) */
+  active: ActiveBackend;
   labelRenderer: CSS2DRenderer;
   sun: THREE.DirectionalLight;
   hemi!: THREE.HemisphereLight;
   fill!: THREE.DirectionalLight;
   /** neutral IBL for server models that carry a real metal-roughness texture */
   modelEnv: THREE.Texture;
+  /** JS time of the last `frame()` in ms, the render() call included — the
+   *  CPU share the WebGPU measurement compares (`render/bench.ts`). Under
+   *  WebGPU render() returns after command submission, so this is CPU work
+   *  only in both paths — GPU time is a separate reading. */
+  lastFrameCpuMs = 0;
   /** Sun position from the game time (0..24); drives light, colours, sky. */
   private sunAngle = Math.PI * 0.35;   // default: late morning
   /** 0 = bright day, 1 = deep night — for window lights and the like. */
@@ -111,7 +120,18 @@ export class Engine {
    *  A CLICK keeps its meaning in both modes — see `ORBIT_DRAG_PX`. */
   orbitOnDrag = false;
 
-  constructor(container: HTMLElement) {
+  /**
+   * Boot with the requested backend. `webgl` runs the old constructor path
+   * step for step; `webgpu` needs an awaited renderer init and an async PMREM
+   * bake — hence a factory in front of the constructor.
+   */
+  static async create(container: HTMLElement, backend: RenderBackend): Promise<Engine> {
+    const boot = await createRenderer(backend);
+    const env = await createModelEnv(boot);
+    return new Engine(container, boot, env);
+  }
+
+  private constructor(container: HTMLElement, boot: RendererBoot, modelEnv: THREE.Texture) {
     // near 0.2 (was 0.5) so MIN_DIST = 0.8 stays clear of the near plane: at
     // the closest zoom the figure's front faces sit ~0.7 m from the lens, and
     // the free pitch (right mouse) can bring geometry closer still. Trade-off:
@@ -121,18 +141,19 @@ export class Engine {
     // the scene at 520 m anyway, so no co-planar surface loses its ordering.
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.2, 800);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Renderer + shadow map + colour space come ready from `render/backend.ts`
+    // (`createRenderer`); the IBL is baked there too, because the WebGPU bake
+    // is asynchronous. The order in which the DOM sees renderer canvas and
+    // label layer is unchanged.
+    this.renderer = boot.renderer;
+    this.active = boot.active;
     container.appendChild(this.renderer.domElement);
 
     this.labelRenderer = new CSS2DRenderer();
     this.labelRenderer.domElement.className = 'label-layer';
     container.appendChild(this.labelRenderer.domElement);
 
-    this.modelEnv = new THREE.PMREMGenerator(this.renderer)
-      .fromScene(new RoomEnvironment(), 0.04).texture;
+    this.modelEnv = modelEnv;
 
     this.scene.background = new THREE.Color(0x9fc7e8);
     this.scene.fog = new THREE.Fog(0x9fc7e8, 220, 520);
@@ -405,6 +426,7 @@ export class Engine {
   }
 
   private frame() {
+    const t0 = performance.now();
     const dt = Math.min(this.clock.getDelta(), 0.1);
     // ONE time value for everything that moves by itself: the water surfaces
     // and, since the terrain animations, the swaying scatter (shared uniform).
@@ -467,5 +489,6 @@ export class Engine {
     for (const fn of this.frameHooks) fn(dt);
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
+    this.lastFrameCpuMs = performance.now() - t0;
   }
 }

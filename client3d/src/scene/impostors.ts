@@ -41,6 +41,7 @@
  * never fire.
  */
 import * as THREE from 'three';
+import type { AnyRenderer } from '../render/backend';
 import { loadGlb } from './propAssets';
 import { IMPOSTOR_ELEV_RAD, impostorBakeVerdict, impostorFrame } from './scatterLod';
 import type { ImpostorBakeAttempt, ImpostorFrame } from './scatterLod';
@@ -89,12 +90,12 @@ interface CacheEntry {
  *  nothing and the stage stays empty, which is exactly today's picture. A tick
  *  that runs in that window LEARNS NOTHING and remembers nothing (see `bake`):
  *  the props it asked about are asked again once the renderer is there. */
-let renderer: THREE.WebGLRenderer | null = null;
+let renderer: AnyRenderer | null = null;
 
 /** Wire the ONE renderer of the app into the bake. Called once, from `main.ts`
  *  beside `setPropLoadFocus` — see the file header for why there is no second
  *  renderer here. */
-export function setImpostorRenderer(r: THREE.WebGLRenderer): void {
+export function setImpostorRenderer(r: AnyRenderer): void {
   renderer = r;
 }
 
@@ -274,7 +275,7 @@ function bakeLights(scene: THREE.Scene): void {
  * put back: this runs inside the app's own frame loop, and a pass that left
  * the target set would draw the next frame of the world into a 128² texture.
  */
-function render(gl: THREE.WebGLRenderer, obj: THREE.Object3D): CacheEntry | null {
+function render(gl: AnyRenderer, obj: THREE.Object3D): CacheEntry | null {
   const box = new THREE.Box3().setFromObject(obj);
   if (box.isEmpty()) return null;
   const heightM = box.max.y - box.min.y;
@@ -330,7 +331,10 @@ function render(gl: THREE.WebGLRenderer, obj: THREE.Object3D): CacheEntry | null
     // instead of a rule this file relies on.
     scene.remove(obj);
     if (parent) parent.add(obj);
-    gl.setRenderTarget(prevTarget);
+    // Type-only cast: the two renderers type `getRenderTarget` differently
+    // (WebGLRenderTarget vs. its base RenderTarget); the value is whatever the
+    // same renderer handed out two lines up.
+    gl.setRenderTarget(prevTarget as THREE.WebGLRenderTarget | null);
     gl.setClearColor(prevClear, prevAlpha);
   }
   return { bake: { texture: target.texture, frame }, target, refs: 0 };

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as api from './api';
 import { initDebug3d } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
+import { drawCallsOf, requestedBackend } from './render/backend';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
@@ -476,7 +477,8 @@ async function startApp(username: string, role: string) {
   // it while the world runs (`applyShowAll`), which is why it is a `let`.
   const isAdmin = role === 'admin';
   let showAll = isAdmin && localStorage.getItem(SHOW_ALL_KEY) === '1';
-  const engine = new Engine(app);
+  const engine = await Engine.create(app, requestedBackend(location.search));
+  console.info('[render] backend:', engine.active);
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
   (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // Debug-Hook (Szene vermessen)
@@ -856,7 +858,7 @@ async function startApp(username: string, role: string) {
       // Read outside the frame hook, so these are the counters of the frame
       // that was last rendered — which is exactly what should be displayed.
       triangles: info.render.triangles,
-      calls: info.render.calls,
+      calls: drawCallsOf(engine.renderer),
       vertices: perfHeavy.vertices,
       geometries: info.memory.geometries,
       textures: info.memory.textures,
