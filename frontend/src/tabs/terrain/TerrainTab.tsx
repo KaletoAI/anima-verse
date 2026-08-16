@@ -13,22 +13,23 @@
  * effective catalog on the left with its origin marked (world row or shared
  * seed), the selected kind or the create form on the right.
  *
- * WHAT IT READS, and why each of the four:
+ * WHAT IT READS, and why each of the three:
  *   - `GET /world/terrain-types` — the effective catalog plus `sources`, the
  *     one answer that says which kinds exist and where each comes from.
  *   - `GET /assets/surface-textures` — the library the Surface picker offers.
  *     A failed fetch leaves the picker with "none" alone and marks NOTHING as
  *     missing: an empty list is not evidence that a stored id is gone.
- *   - `GET /world/height-areas` — for `tile_step_m` alone, the grid step the
- *     relief hint divides by.
- *   - `GET /play/worldmap` — for `max_slope_deg` alone, the walk gate the
- *     relief WARNING is measured against.
- * The last two are the two numbers the amplitude sentence needs (§ A16.2).
- * They used to travel down from `MapTab` as props; the tab fetches them itself,
- * because a tab that hangs off another tab's state is a tab in name only. Both
- * are best-effort: without them the hint falls back to the mirrored constant
- * and the warning simply says nothing, which is what it did before the server
- * had answered anyway.
+ *   - `GET /world/height-areas` — for `tile_step_m` and `max_slope_deg`, the
+ *     two numbers the amplitude sentence needs (§ A16.2): the grid step the
+ *     relief hint divides by, and the walk gate the WARNING is measured
+ *     against. It used to take a second fetch of `/play/worldmap` for the
+ *     slope alone — the whole map, per mount, for one float; the route carries
+ *     both walk limits since 2026-08-16. It is best-effort: without it the
+ *     hint falls back to the mirrored constant and the warning simply says
+ *     nothing, which is what it did before the server had answered anyway.
+ * The two relief numbers used to travel down from `MapTab` as props; the tab
+ * fetches them itself, because a tab that hangs off another tab's state is a
+ * tab in name only.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ListHeader } from '../../components/ListHeader'
@@ -85,21 +86,19 @@ export function TerrainTab() {
       .catch(() => setSurfaces([]))
   }, [])
 
-  // The two relief numbers, once and best-effort — a tab that cannot say how
-  // steep 2 m get is still a tab that edits ground.
+  // The two relief numbers, in ONE fetch and best-effort — a tab that cannot
+  // say how steep 2 m get is still a tab that edits ground.
   useEffect(() => {
     apiGet<HeightAreasResp>('/world/height-areas')
       .then((r) => {
         const tile = r?.tile_step_m
         if (Number.isFinite(tile) && (tile as number) > 0) setTileStepM(tile as number)
-      })
-      .catch(() => { /* the hint falls back to the mirrored constant */ })
-    apiGet<{ max_slope_deg?: number }>('/play/worldmap')
-      .then((r) => {
         const deg = r?.max_slope_deg
         if (Number.isFinite(deg) && (deg as number) > 0) setMaxSlopeDeg(deg as number)
       })
-      .catch(() => { /* the warning keeps the server's own default */ })
+      // The hint falls back to the mirrored constant, the warning keeps the
+      // server's own default.
+      .catch(() => { /* both fall back */ })
   }, [])
 
   /** Write one entry. Answers the SANITIZED row so the form can refill from

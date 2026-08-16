@@ -326,6 +326,13 @@ export interface HeightAreasResp {
    *  `heightMath.plateauRimM`. It comes from the server for the same reason
    *  the two above do: the number halved the day the tiles did. */
   tile_step_m?: number
+  /** The walk gate: steepest slope a figure climbs (`game.max_slope_deg`) and
+   *  the highest single step it takes (`game.max_step_height_m`). The same two
+   *  numbers `/play/worldmap` carries — here so an editor that shows a relief
+   *  amplitude can say when it becomes unwalkable without pulling the whole
+   *  map for two floats. */
+  max_slope_deg?: number
+  max_step_height_m?: number
 }
 
 /** What `POST`/`PUT /world/height-areas` answer. The step is the one the world

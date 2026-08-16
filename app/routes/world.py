@@ -373,9 +373,19 @@ def delete_terrain_area_route(area_id: str) -> Dict[str, Any]:
 
 @router.get("/height-areas")
 def get_height_areas_route() -> Dict[str, Any]:
-    """All authored height areas, the change signature and the grid steps."""
+    """All authored height areas, the change signature, the grid steps and the
+    two walk limits.
+
+    The limits ride along because every editor that shows a relief number has
+    to say what it COSTS, and both halves of that sentence are server settings:
+    an amplitude is harmless until ``tan(max_slope_deg) · tile_step_m`` is
+    exceeded. They are the same two values ``/play/worldmap`` carries, out of
+    the same ``core.relief`` getters — sending them here spares the terrain
+    editor a second, far heavier fetch of the whole map for two floats.
+    """
     from app.core.heightfield import (DEFAULT_STEP_M, TILE_STEP_M,
                                       current_step_m)
+    from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.models import heightfield
     return {"areas": heightfield.list_height_areas(),
             "sig": heightfield.height_sig(),
@@ -391,7 +401,11 @@ def get_height_areas_route() -> Dict[str, Any]:
             # sentence must not carry a constant of its own either; the number
             # halved the day the tiles did, and a pinned 3,36 would have gone
             # on promising twice the climb.
-            "tile_step_m": TILE_STEP_M}
+            "tile_step_m": TILE_STEP_M,
+            # The walk gate, so the editor can turn an amplitude into "this
+            # becomes unwalkable" instead of just showing a number.
+            "max_slope_deg": get_max_slope_deg(),
+            "max_step_height_m": get_max_step_height_m()}
 
 
 @router.post("/height-areas")
