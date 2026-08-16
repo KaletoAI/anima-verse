@@ -3,7 +3,8 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials, drapeGeometry,
   pickVariant, placeModelSpec, plateTargets,
-  SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
+  SpecVerifier, VERIFY_EPS, wallLength, wallTargets } from '@anima/scene-render';
+import { surfaceMaterialFor } from '../render/surface';
 import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
@@ -289,7 +290,7 @@ function plateMaterial(plate: ScenePlate,
   const tex = surf?.tex ?? null;
   // Aussehen der ART kommt aus dem geteilten Paket — matt ist der Default und
   // exakt das bisherige Material.
-  return surfaceMaterial(THREE, {
+  return surfaceMaterialFor(THREE, {
     material: surfaceMaterialSpec(plate.texture_kind),
     map: tex, color: hex(style.floor_color),
     transparent: upper, opacity, side,
@@ -313,7 +314,7 @@ function wallMaterial(wall: SceneWall, style: ScenePayload['style']):
   const upper = wall.opacity_role === 'upper';
   const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
   const surf = tiledTexture(wall.texture_kind, 'wall');
-  const mat = surfaceMaterial(THREE, {
+  const mat = surfaceMaterialFor(THREE, {
     material: surfaceMaterialSpec(wall.texture_kind),
     map: surf?.tex ?? null, color: hex(style.wall_color),
     transparent: upper, opacity,

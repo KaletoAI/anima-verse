@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
+import { sampleTerrain, worldToLocalXZ } from '@anima/scene-render';
+import { surfaceMaterialFor } from '../render/surface';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { acceptsWalkHit, plateLift, standY, type GroundModelInfo } from '../game/ground';
@@ -577,7 +578,7 @@ function groundPlate(widthM: number, tex: THREE.Texture,
                      at: { x: number; y: number; z: number; yaw: number }): THREE.Mesh {
   // Die Kachel-Oberfläche geht durch dieselbe Fabrik wie die Szenen-Platten:
   // eine Wasser-Location soll auf der Karte so aussehen wie im Raum.
-  const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
+  const mat = surfaceMaterialFor(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
   const cos = Math.cos(at.yaw);
   const sin = Math.sin(at.yaw);
   /** The lift of one TILE-LOCAL point over the tile floor. The world lookup is

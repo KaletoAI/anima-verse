@@ -14,6 +14,9 @@
  *     reads (two normal layers + mask), setupOutput overridden (fresnel-to-sky
  *     BEFORE fog — the place of `opaque_fragment`), sky reachable
  * [4] red checks: a matte spec is refused, wave_m below 0.05 clamps
+ * [5] the factory switch (render/surface.ts): webgl -> the package material
+ *     with its GLSL patch, webgpu -> the node material for water, and still
+ *     the classic material for every other class
  *
  * The bundle re-exports the shared package THROUGH itself on purpose (same
  * rule as smoke_surface_patch.mjs [10]): the clock has to be measured on the
@@ -26,6 +29,7 @@ import { DataTexture, RGBAFormat, UnsignedByteType } from 'three';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SRC = join(ROOT, 'client3d/src/render/water.tsl.ts');
+const SURFACE = join(ROOT, 'client3d/src/render/surface.ts');
 let fails = 0;
 const check = (ok, msg) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${msg}`); if (!ok) fails++; };
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
@@ -119,6 +123,37 @@ console.log('\n[4] red checks');
   try { mk({ class: 'glow' }); } catch { threw = true; }
   check(threw, 'a glow spec is refused');
   check(near(mk({ class: 'water', wave_m: 0.001 }).waterUniforms.uWaveM.value, 0.05), 'wave_m clamps to 0.05');
+}
+
+console.log('\n[5] the factory switch (render/surface.ts)');
+{
+  // `surfaceMaterial` draws its wave normal map on a 2D canvas — a stub is
+  // enough, CanvasTexture only reads width/height.
+  const stubCanvas = () => ({
+    width: 1, height: 1,
+    getContext: () => ({
+      fillStyle: '', fillRect() {},
+      createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+      putImageData() {},
+    }),
+  });
+  globalThis.document = { createElement: () => stubCanvas() };
+  const s = await load(`export * from '${SURFACE}';\n`, 'surface.mjs');
+  const THREE = await import('three');
+  s.setSurfaceBackend('webgl');
+  const gl = s.surfaceMaterialFor(THREE, { material: { class: 'water' } });
+  check(gl.isNodeMaterial !== true && gl.customProgramCacheKey?.() === 'anima-water',
+        'webgl -> the package material with the GLSL patch');
+  s.setSurfaceBackend('webgpu');
+  const gpu = s.surfaceMaterialFor(THREE, { material: { class: 'water', wave_m: 3 } });
+  check(m.isWaterNodeMaterial(gpu) || gpu.isWaterNodeMaterial === true, 'webgpu -> the water node material');
+  check(near(gpu.waterUniforms.uWaveM.value, 3), 'the spec reaches the node material');
+  const matte = s.surfaceMaterialFor(THREE, { material: { class: 'matte' } });
+  check(matte.isMeshStandardMaterial === true && matte.isNodeMaterial !== true,
+        'webgpu -> other classes stay the classic material (three converts them)');
+  const fb = (s.setSurfaceBackend('webgl-fallback'), s.surfaceMaterialFor(THREE, { material: { class: 'ice' } }));
+  check(fb.isWaterNodeMaterial === true, 'webgl-fallback of the WebGPU renderer is the node path too');
+  check(s.waveNormalTexture() === s.waveNormalTexture(), 'ONE wave normal texture');
 }
 
 console.log(fails ? `\n${fails} FAILED` : '\nall ok');

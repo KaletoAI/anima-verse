@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
+import { setWaterSky } from '../render/water.tsl';
 import { createModelEnv, createRenderer, type ActiveBackend, type AnyRenderer,
          type RenderBackend, type RendererBoot } from '../render/backend';
 
@@ -208,6 +209,7 @@ export class Engine {
     // Water surfaces mirror the sky (Fresnel in the shared material) — that
     // alone turns the lake orange in the evening and dark at night.
     setSurfaceSky(sky.getHex());
+    setWaterSky(sky.getHex());   // the TSL water of the WebGPU path, same colour
 
     this.nightFactor = THREE.MathUtils.clamp(1 - day * 3, 0, 1);
     this.onDayNight?.(this.nightFactor);

@@ -55,10 +55,14 @@ import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry, compositeHeightRangeIn,
   gridPlate, gridStepFor, maxCompositeHeightIn, pickVariant, pointInRing,
   propGroundFit, sampleCompositeGroundHeight, sampleCompositeHeight,
-  scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
+  scatterInstances, scatterSeed, subdivideOnGrid,
   surfaceTimeUniform, tileKeyAt, worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
   WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
+// The renderer switch under the package's name: `smoke_surface_patch.mjs` [7]
+// pins the `materialFor` line by source, and on the WebGL path this IS the
+// package's `surfaceMaterial` (only water on WebGPU takes the TSL twin).
+import { surfaceMaterialFor as surfaceMaterial } from '../render/surface';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
 import type { HeightTileBatch } from '../api';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
