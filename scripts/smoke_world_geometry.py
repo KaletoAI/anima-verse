@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """Smoke run for the pure world-geometry helpers (Seamless World, E1 Task 1).
 
-No DB, no storage — pure functions only.
+Pure functions — with ONE exception that decides how this file has to start:
+``ground_y`` reads the world heightfield since E8 task 2 (see
+``app/core/world_geometry``), and the heightfield reads ``world.db``. Without a
+storage override this smoke therefore opened the RUNNING server's world — which
+made it fail with ``no such column`` after every schema change until the next
+restart, while claiming in this very docstring that it used no DB at all. So
+``STORAGE_DIR`` points at a throwaway directory BEFORE any app import
+(``smoke_dead_config_fields.py`` is where that pattern is written out) and the
+empty world it creates is what section [1] measures: an unshaped world is flat.
 
 Hand-derived expectations (all numbers worked out by hand, § B5a style):
 
-  [1] ground_y is the ONE v1 constant: ground_y(0, 0) == 0.0 and
+  [1] ground_y over an UNSHAPED world is 0 everywhere — nobody painted a height
+      area, so there is no relief: ground_y(0, 0) == 0.0 and
       ground_y(123.4, -56.7) == 0.0.
 
   [2] Rotation round-trip. Centre (10, 20), yaw 90° (clockwise around +y,
@@ -36,10 +45,30 @@ Hand-derived expectations (all numbers worked out by hand, § B5a style):
 
 Usage:  ./.venv/bin/python scripts/smoke_world_geometry.py
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root, pointed at a throwaway world BEFORE any app import — see
+# the docstring. `paths.get_storage_dir()` auto-initializes on first call and
+# falls back to ./worlds/demo, so an import that touches paths at module level
+# would reach the running server's DB.
+_TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_world_geometry_")
+os.environ["STORAGE_DIR"] = _TMP_STORAGE.name
+
+from app.core import paths  # noqa: E402
+
+paths.init(_TMP_STORAGE.name)
+
+from app.core import db  # noqa: E402
+
+# The empty world needs its TABLES: `ground_y` asks the heightfield, which asks
+# the terrain-type catalog, which reads a table. A missing one is the same
+# `OperationalError` a stale schema was.
+db.init_schema()
 
 from app.core.world_geometry import (  # noqa: E402
     footprint_corners, ground_y, local_to_world, location_at_point,
@@ -63,7 +92,7 @@ def close(label, actual, expected, tol=1e-9):
     check(label, abs(actual - expected) <= tol, True)
 
 
-print("[1] ground_y")
+print("[1] ground_y — an unshaped world is flat")
 check("origin", ground_y(0.0, 0.0), 0.0)
 check("anywhere", ground_y(123.4, -56.7), 0.0)
 
