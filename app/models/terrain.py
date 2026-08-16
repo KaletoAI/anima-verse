@@ -5,6 +5,11 @@ from the terrain-type catalog plus its outline in world metres. Areas may
 overlap; ``z_order`` (then paint order) decides which one answers a point
 query — the topmost wins, mirroring how the editor paints.
 
+An area drawn with the LINE tool carries its recipe in ``meta.stroke`` — the
+clicked centre line, the width of the ribbon it became and how that line is
+bent on the way (straight/jagged/wavy). The polygon stays the truth; the
+recipe only lets the editor put its handles back on the line.
+
 An area also declares what GROWS on it: ``meta.scatter`` is a LIST of prop
 scatters (model, density, target height), authored per area since finding
 B17 — a forest with two kinds of tree and a clearing without any is one
@@ -40,6 +45,20 @@ MAX_SCATTER_ENTRIES = 8
 #: Longest ``model`` URL a scatter entry may name. Truncating one would only
 #: produce a 404 that looks like a configured model.
 MODEL_URL_MAX = 300
+#: How a stroke recipe bends its centre line before it is widened. The same
+#: three the editor offers (``mapMath.STROKE_STYLES``); absent means straight,
+#: which is what every line drawn before the styles existed is.
+STROKE_STYLES = ("straight", "jagged", "wavy")
+#: Roughly how far apart the deflections of a decorated line sit, in metres.
+#: Below the lower bound a line is a saw blade nobody can see the shape of,
+#: above the upper one the deflections are further apart than most lines are
+#: long.
+STROKE_SPACING_MIN_M = 2.0
+STROKE_SPACING_MAX_M = 100.0
+#: How far those deflections swing to either side of the line, in metres —
+#: from "a hand-drawn wobble" to "a river delta".
+STROKE_AMPLITUDE_MIN_M = 0.5
+STROKE_AMPLITUDE_MAX_M = 30.0
 
 
 def _finite(value: Any) -> Any:
@@ -108,9 +127,12 @@ def _sanitize_scatter_list(raw: Any) -> List[Dict[str, Any]]:
     return [_sanitize_scatter_entry(entry) for entry in raw]
 
 
-def _sanitize_polygon(raw: Any) -> List[List[float]]:
-    if not isinstance(raw, list) or not 3 <= len(raw) <= MAX_POINTS:
-        raise ValueError("polygon needs 3..256 points")
+def _sanitize_points(raw: Any, minimum: int, what: str) -> List[List[float]]:
+    """A list of ``[x, z]`` world metres, whitelisted and rounded — the outline
+    of an area (``minimum`` 3) and the centre line of a stroke recipe
+    (``minimum`` 2) are the same kind of list under two names."""
+    if not isinstance(raw, list) or not minimum <= len(raw) <= MAX_POINTS:
+        raise ValueError(f"{what} needs {minimum}..{MAX_POINTS} points")
     pts: List[List[float]] = []
     for pt in raw:
         # A vertex may be any 2-element sequence of numbers. Everything else
@@ -120,16 +142,72 @@ def _sanitize_polygon(raw: Any) -> List[List[float]]:
         try:
             x, z = float(pt[0]), float(pt[1])
         except (TypeError, ValueError, IndexError, KeyError, OverflowError):
-            raise ValueError("polygon points must be [x, z] numbers")
+            raise ValueError(f"{what} points must be [x, z] numbers")
         # isfinite first: every NaN comparison is False, so a plain range
         # check would wave NaN through and poison every later JSON response
         # (Starlette encodes with allow_nan=False -> 500).
         if not (math.isfinite(x) and math.isfinite(z)):
-            raise ValueError("polygon coordinate must be a finite number")
+            raise ValueError(f"{what} coordinate must be a finite number")
         if abs(x) > MAX_COORD or abs(z) > MAX_COORD:
-            raise ValueError("polygon coordinate out of range")
+            raise ValueError(f"{what} coordinate out of range")
         pts.append([round(x, 2), round(z, 2)])
     return pts
+
+
+def _sanitize_polygon(raw: Any) -> List[List[float]]:
+    return _sanitize_points(raw, 3, "polygon")
+
+
+def _sanitize_stroke(raw: Any) -> Dict[str, Any]:
+    """``meta.stroke`` as a whitelist — the RECIPE of an area that was drawn as
+    a line (``frontend/src/tabs/map/mapMath.decorateStroke`` →
+    ``strokeToPolygon``).
+
+    It is a recipe and nothing more: ``polygon`` stays the truth for every
+    point query and every renderer, and an area whose recipe is dropped is
+    simply an ordinary painted area again. That is exactly why it is
+    whitelisted — the editor regenerates the polygon FROM these fields, so a
+    stray key or a NaN spacing would reshape ground on the next edit.
+
+    * ``points`` / ``width_m`` — the clicked centre line (2..256 points, the
+      same rounding and the same range as an outline) and the width of the
+      ribbon it becomes. Both are required: without them there is nothing to
+      regenerate, and a half-recipe would put the editor's handles where the
+      shape is not.
+    * ``style`` — ``straight`` (the line as clicked), ``jagged`` (triangular
+      spikes across the line) or ``wavy`` (a soft sine). Anything else loses
+      the key, and a missing style IS straight — the state every stroke drawn
+      before the styles existed is in.
+    * ``spacing_m`` — roughly how far apart the deflections sit, clamped to
+      2..100 m; ``amplitude_m`` — how far they swing to either side, clamped
+      to 0.5..30 m. Junk loses the key and the client's own default applies;
+      clamping rather than refusing, because they are knobs, not a form.
+
+    Raises ValueError when the recipe is not an object or its line is junk —
+    a client that sends one at all is the editor, and a broken one is a defect
+    worth a 400, not a shape to guess at.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("meta.stroke must be an object")
+    width = _finite(raw.get("width_m"))
+    if width is None or width <= 0:
+        raise ValueError("meta.stroke needs a positive width_m")
+    out: Dict[str, Any] = {
+        "points": _sanitize_points(raw.get("points"), 2, "meta.stroke"),
+        "width_m": round(width, 2),
+    }
+    style = raw.get("style")
+    if isinstance(style, str) and style.strip() in STROKE_STYLES:
+        out["style"] = style.strip()
+    spacing = _finite(raw.get("spacing_m"))
+    if spacing is not None:
+        out["spacing_m"] = round(min(max(spacing, STROKE_SPACING_MIN_M),
+                                     STROKE_SPACING_MAX_M), 2)
+    amplitude = _finite(raw.get("amplitude_m"))
+    if amplitude is not None:
+        out["amplitude_m"] = round(min(max(amplitude, STROKE_AMPLITUDE_MIN_M),
+                                       STROKE_AMPLITUDE_MAX_M), 2)
+    return out
 
 
 def sanitize_area(raw: Any) -> Dict[str, Any]:
@@ -157,6 +235,11 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
     # pair of brackets — so it is kept as sent rather than dropped.
     if "scatter" in meta:
         meta["scatter"] = _sanitize_scatter_list(meta["scatter"])
+    # The other key this module owns: the recipe of a line-drawn area. The
+    # polygon next to it stays the truth — this only has to survive well
+    # enough for the editor to regenerate it.
+    if "stroke" in meta:
+        meta["stroke"] = _sanitize_stroke(meta["stroke"])
     return {"id": area_id, "kind": kind,
             "polygon": _sanitize_polygon(raw.get("polygon")),
             "z_order": z_order,

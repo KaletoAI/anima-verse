@@ -145,6 +145,26 @@ Throwaway storage. Hand-derived expectations:
       a stored 0.0 — and a missing key means the default, so that mutant's
       stone waves along with the meadow. Pinned from both sides.
 
+ [14] meta.stroke whitelist — the RECIPE of an area drawn with the line
+      tool (`mapMath.decorateStroke` -> `strokeToPolygon`). The polygon next
+      to it stays the truth, but the editor REGENERATES that polygon from
+      these fields, so a stray key or a NaN spacing would reshape ground on
+      the next edit.
+      Required, or the recipe is refused outright (ValueError): `points`
+      (2..256 [x, z] numbers, rounded and range-checked exactly like an
+      outline — one point is not a line) and `width_m` (a positive number).
+      Optional and whitelisted:
+        style       "straight"/"jagged"/"wavy", trimmed; anything else loses
+                    the key, and a missing style IS straight — the state of
+                    every line drawn before the styles existed
+        spacing_m   clamped to 2..100 m: 0.5 -> 2.0, 500 -> 100.0, and
+                    10.567 -> 10.57 on the 2-decimal grid
+        amplitude_m clamped to 0.5..30 m: 0 -> 0.5, -3 -> 0.5, 100 -> 30.0
+      Junk (NaN, None, a word) loses the key, and then the client's own
+      default applies; junk keys inside the recipe are dropped; foreign meta
+      keys next to `stroke` survive; and the recipe survives a save/read
+      round trip.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
 import asyncio
@@ -765,6 +785,90 @@ check("the mutant would really leave no key", mutant_zero_says_nothing(0),
       "absent")
 check("…so its stone would take the default and wave",
       props.sway_factor_of({}), props.SWAY_FACTOR_DEFAULT)
+
+print("[14] meta.stroke whitelist — the recipe of a line-drawn area")
+
+LINE = [[0, 0], [10, 0]]
+
+
+def stroke_of(recipe):
+    return terrain.sanitize_area(
+        {"kind": "water", "polygon": SQUARE,
+         "meta": {"stroke": recipe}})["meta"]["stroke"]
+
+
+check("the bare recipe survives as sent",
+      stroke_of({"points": LINE, "width_m": 3}),
+      {"points": [[0.0, 0.0], [10.0, 0.0]], "width_m": 3.0})
+check("junk keys inside the recipe are dropped",
+      stroke_of({"points": LINE, "width_m": 3, "colour": "red"}),
+      {"points": [[0.0, 0.0], [10.0, 0.0]], "width_m": 3.0})
+for style in terrain.STROKE_STYLES:
+    check(f"style {style!r} is kept",
+          stroke_of({"points": LINE, "width_m": 3, "style": style}).get("style"),
+          style)
+check("a style is trimmed",
+      stroke_of({"points": LINE, "width_m": 3, "style": "  wavy  "})["style"],
+      "wavy")
+for bad in ("dotted", "", 7, None, ["jagged"]):
+    check(f"style {bad!r} loses the key",
+          "style" in stroke_of({"points": LINE, "width_m": 3, "style": bad}),
+          False)
+for raw, want in ((0.5, 2.0), (2, 2.0), (10.567, 10.57), (100, 100.0),
+                  (500, 100.0), ("8", 8.0)):
+    check(f"spacing {raw!r} -> {want}",
+          stroke_of({"points": LINE, "width_m": 3, "spacing_m": raw})["spacing_m"],
+          want)
+for raw, want in ((0, 0.5), (-3, 0.5), (0.789, 0.79), (30, 30.0), (100, 30.0)):
+    check(f"amplitude {raw!r} -> {want}",
+          stroke_of({"points": LINE, "width_m": 3,
+                     "amplitude_m": raw})["amplitude_m"], want)
+for bad in (float("nan"), float("inf"), None, "wide", ["2"]):
+    check(f"spacing/amplitude {bad!r} lose their keys",
+          [k for k in stroke_of({"points": LINE, "width_m": 3,
+                                 "spacing_m": bad, "amplitude_m": bad})],
+          ["points", "width_m"])
+check("a full recipe travels whole",
+      stroke_of({"points": LINE, "width_m": 3.456, "style": "jagged",
+                 "spacing_m": 12, "amplitude_m": 1.5}),
+      {"points": [[0.0, 0.0], [10.0, 0.0]], "width_m": 3.46,
+       "style": "jagged", "spacing_m": 12.0, "amplitude_m": 1.5})
+raises_value_error("a recipe that is not an object raises",
+                   lambda: stroke_of("a line"))
+raises_value_error("a recipe without a width raises",
+                   lambda: stroke_of({"points": LINE}))
+for bad in (0, -2, float("nan"), "wide"):
+    raises_value_error(f"width {bad!r} raises",
+                       lambda bad=bad: stroke_of({"points": LINE, "width_m": bad}))
+raises_value_error("one point is not a line",
+                   lambda: stroke_of({"points": [[0, 0]], "width_m": 3}))
+raises_value_error(
+    "257 line points raise",
+    lambda: stroke_of({"points": [[i, i] for i in range(257)], "width_m": 3}))
+raises_value_error("a junk vertex raises",
+                   lambda: stroke_of({"points": [[0, 0], {"x": 1}], "width_m": 3}))
+raises_value_error(
+    "a line coordinate out of range raises",
+    lambda: stroke_of({"points": [[0, 0], [1e9, 0]], "width_m": 3}))
+raises_value_error(
+    "a non-finite line coordinate raises",
+    lambda: stroke_of({"points": [[0, 0], [float("nan"), 0]], "width_m": 3}))
+check("foreign meta keys survive next to the recipe",
+      terrain.sanitize_area({"kind": "water", "polygon": SQUARE,
+                             "meta": {"foo": 1,
+                                      "stroke": {"points": LINE,
+                                                 "width_m": 3}}})["meta"],
+      {"foo": 1, "stroke": {"points": [[0.0, 0.0], [10.0, 0.0]],
+                            "width_m": 3.0}})
+
+_str = terrain.save_area(
+    {"kind": "water", "polygon": SQUARE,
+     "meta": {"stroke": {"points": LINE, "width_m": 3, "style": "wavy",
+                         "spacing_m": 8, "amplitude_m": 2}}})
+check("the recipe survives the save/read round trip",
+      next(a["meta"] for a in terrain.list_areas() if a["id"] == _str["id"]),
+      {"stroke": {"points": [[0.0, 0.0], [10.0, 0.0]], "width_m": 3.0,
+                  "style": "wavy", "spacing_m": 8.0, "amplitude_m": 2.0}})
 
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])
