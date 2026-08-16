@@ -2245,80 +2245,16 @@ a.ga-btn {
 .ga-terrain-help p { margin: 0 0 6px; }
 .ga-terrain-help p:last-child { margin-bottom: 0; }
 
-/* Terrain-type manager dialog. Wider than the default modal because the row
-   with `Reset` armed (Save · Really reset · Cancel) pushes a 560 px table into
-   sideways scrolling. It had grown to 940 px, one column per field the ground
-   gained; since 2026-08-13 a kind is TWO rows — identity above, behaviour
-   below — and 760 px carries the identity row again.
-
-   The selector needs BOTH classes: `.ga-modal` sets `max-width: 560px` and is
-   declared FURTHER DOWN in this file, so a single `.ga-tt-modal` of equal
-   specificity loses the tie-break and the widening is silently dead. */
-.ga-modal.ga-tt-modal { max-width: 760px; }
-.ga-tt-hint {
-  font-size: 11px;
-  color: var(--text-muted, #8b949e);
-  line-height: 1.4;
-}
-.ga-tt-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.ga-tt-table th {
-  text-align: left;
-  font-weight: 600;
-  color: var(--text-muted, #8b949e);
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--border, #30363d);
-  white-space: nowrap;
-}
-.ga-tt-table td {
-  padding: 3px 6px;
-  vertical-align: middle;
-}
-.ga-tt-table tfoot tr:first-child td {
-  border-top: 1px solid var(--border, #30363d);
-  padding-top: 8px;
-}
-/* The SECOND row of a kind: what the ground does to a figure on it. Indented
-   and muted so it reads as a continuation of the row above; the line under it
-   is what separates one kind from the next, so the identity row carries none. */
-.ga-tt-behaviour-row td {
-  padding: 0 6px 6px;
-  border-bottom: 1px solid var(--border, #30363d);
-}
-.ga-tt-behaviour {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 14px;
-  padding-left: 18px;
-  border-left: 2px solid var(--border, #30363d);
-  margin-left: 4px;
-}
-.ga-tt-field {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-muted, #8b949e);
-}
-/* A relief value that stays saved but costs something — amber, not red, and on
-   a line of its own inside the behaviour row (`flex-basis: 100%`) so the whole
-   sentence fits without pushing the fields apart. */
-.ga-tt-warn {
-  flex-basis: 100%;
-  font-size: 11px;
-  line-height: 1.4;
-  color: #d29922;
-}
-.ga-tt-center { text-align: center; }
+/* What is left of the terrain-type MANAGER DIALOG. The dialog itself is gone
+   (2026-08-16) — a ground is edited in its own tab now, in the standard
+   list-detail shell, so the modal width, the two-row table, the behaviour row
+   and the dialog's footer hints went with it. These four rules survive because
+   the FIELDS they style moved into the tab and into the map editor's own
+   chips; the `tt` in their names is simply where they were born. */
 .ga-tt-kind {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: nowrap;
 }
-.ga-tt-input { padding: 3px 6px; font-size: 12px; min-width: 90px; }
 .ga-tt-num { padding: 3px 6px; font-size: 12px; width: 72px; }
 /* A value the server would refuse — marked where it is typed, not as a toast
    after a round trip. */
@@ -2331,17 +2267,6 @@ a.ga-btn {
   border-radius: 4px;
   background: none;
   cursor: pointer;
-}
-.ga-tt-actions {
-  display: flex;
-  gap: 4px;
-  justify-content: flex-end;
-  white-space: nowrap;
-}
-.ga-tt-newhint {
-  font-size: 11px;
-  color: var(--text-muted, #8b949e);
-  padding-top: 0;
 }
 /* Scatter — what a painted AREA grows, edited in its chip (finding B17).
    `.ga-tt-scatter-on` marks the fold-out button of an area that grows
