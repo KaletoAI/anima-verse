@@ -21,6 +21,16 @@ Meter-Ebene ohne Zellen-Nachbarschaft, in der ein Schritt nichts mehr bedeutet.
 
 Dazu kommt `CancelTravel` (dieselbe Datei), der eine laufende Reise abbricht.
 
+`GoToCharacter` (`plugins/movement/skill_go_to_character.py`, Entscheid A10) ist
+kein zweiter Bewegungs-Skill, sondern eine Ziel-Auflösung davor: Eingabe ist ein
+**Personenname** (exakt, case-insensitiv, keine Vor-/Nachnamen-Auflösung), Ziel
+ist deren **tatsächlicher** `current_location`/`current_room` — bei laufender
+Reise also die nächste Zelle, nicht das Reiseziel. Gleicher Raum → keine Aktion;
+sonst delegiert der Skill an `SetLocationSkill.execute` (ganze Regelkette bleibt).
+Eine fremde Location muss in den `known_locations` des Akteurs stehen, sonst
+verweigert der Skill mit der Liste der bekannten Orte — er lehrt kein neues
+Wissen. Sichtbarkeit wie SetLocation: Party-Follower haben ihn nicht.
+
 Cross-Location-SetLocation ist seit der Reise-Engine (2026-07) keine
 Sofort-Teleportation und kein AgentLoop-Schrittmechanismus mehr, sondern eine
 **server-autoritative Reise** (`app/core/travel_engine.py`): `start_journey`

@@ -1,6 +1,6 @@
 name: movement
 version: "1.0.0"
-description: Structured movement — SetLocation (named places, timed journeys over the metre map) and CancelTravel; brings the travel/places prompt sections
+description: Structured movement — SetLocation (named places, timed journeys over the metre map), GoToCharacter (join a named person where they actually are) and CancelTravel; brings the travel/places prompt sections
 enabled_default: true        # core verbs: load even without a config entry
 
 skills:
@@ -8,6 +8,10 @@ skills:
     module: skill_set_location.py
     class: SetLocationSkill
     default_enabled: true    # replaces the entry in the core default-skill list
+  - skill_id: go_to_character
+    module: skill_go_to_character.py
+    class: GoToCharacterSkill
+    default_enabled: true    # same availability as SetLocation — it delegates to it
   - skill_id: cancel_travel
     module: skill_set_location.py
     class: CancelTravelSkill
