@@ -168,7 +168,37 @@
  *   bend   = ±0.12 · 64 = ±7.68, + for even i
  *   x(t)   = rootX + bend · t²,  halfW(t) = 2.88 · (1 − t),  t = py/height
  *   cov    = clamp(halfW − |px − x| + 0.5, 0, 1),  px = c + 0.5, py = r + 0.5
- *   grey   = round(255 · (0.7 + 0.3 · py/64))     written EVERYWHERE
+ *   grey   = (0.7 + 0.3 · py/64) / 1.26           written EVERYWHERE
+ *
+ * SINCE 2026-08-16 THE TEXTURE IS RGB AND NOT GREY, which is the whole point
+ * of this round: "better simply give the blades different colours — a little
+ * more brown, a little more green". Every texel is `grey` times the TINT of
+ * the blade that covers it, and a texel no blade covers is `grey` alone. The
+ * tint of blade `i` is a point on a brown↔green ramp whose two ends mirror in
+ * (1, 1, 1) — BROWN (1.20, 0.86, 0.97), GREEN (0.80, 1.14, 1.03) — taken at
+ * the ramp position `BLADE_RAMP[i]/8`, times a brightness `1 − 0.10 · (u −
+ * 0.5)` (the dry end is the lighter one):
+ *   i:  0     1     2     3     4     5     6     7     8
+ *   k:  5     1     6     0     8     2     7     3     4
+ *   u: .625  .125  .750  .000  1.00  .250  .875  .375  .500
+ * so blade 3 is the BROWNEST (u = 0) and blade 4 the GREENEST (u = 1), and the
+ * two of them stand side by side in the texture.
+ *
+ * THE ALPHA DID NOT MOVE ONE BIT. The winner of a maximum is the same texel
+ * whether the clamp is applied before or after it, so every check below that
+ * measures INK — (D5), (D6), (D8), (D9) — reads the alpha channel and is
+ * untouched by the colour; they were written that way from the start. The ONE
+ * check that read a colour channel was (D7), and it now reads a texel no blade
+ * covers, where the answer is still a plain grey.
+ *
+ * THE 1.26 IN `grey` IS HEADROOM AND NOT A DARKENING. The old texture already
+ * ran to 1.00 at a blade's tip, and a multiplier with mean 1 must exceed 1
+ * somewhere, so an eight-bit channel would clamp — flattening exactly the
+ * brown blades this round exists for. The grey is therefore divided by the
+ * largest tint any blade carries (1.20 · 1.05 = 1.26) and the MATERIAL
+ * multiplies the same factor back (0.75 · 1.26 = 0.945, checked in (F3)): the
+ * product is the albedo it always was, and the brightest byte the texture
+ * writes is the 254 it always wrote.
  *
  * (D1) THE SHAPE OF THE ARRAY: 64 · 64 · 4 = 16384 bytes, `Uint8ClampedArray`.
  *
@@ -216,10 +246,14 @@
  *
  * (D7) THE GREY IS THE ROW'S OWN and is written into every texel, transparent
  *      ones included — a black transparent texel bleeds a dark rim into every
- *      mip level.
- *        row 0  -> round(255 · (0.7 + 0.3 · 0.5/64))  = round(179.098) = 179
- *        row 63 -> round(255 · (0.7 + 0.3 · 63.5/64)) = round(254.402) = 254
- *      and R = G = B in both.
+ *      mip level. Measured where NO blade stands, so the tint is (1, 1, 1) and
+ *      the answer is a plain grey:
+ *        row 0, c = 35 (the gap of (D3)):
+ *          round(255 · (0.7 + 0.3 · 0.5/64)/1.26)  = round(142.141) = 142
+ *        row 63 — above every blade, so the whole row is neutral:
+ *          round(255 · (0.7 + 0.3 · 63.5/64)/1.26) = round(201.907) = 202
+ *      and R = G = B in both. Before the ramp these were 179 and 254; the
+ *      whole difference is the 1.26 the material gives back.
  *
  * (D8) HOW MUCH INK THE FOOT CARRIES, exactly. Over the ten lowest rows the
  *      row rule of (D5) applies to every blade (halfW is near its maximum and
@@ -252,6 +286,67 @@
  *      mutant's ink (at most 1202.7 of 4096) and at least 2059 pure holes
  *      where the mutant has none. Nine blades instead of seven move both, and
  *      the bound moves with them.
+ *
+ * (D10) A BROWN BLADE AND A GREEN ONE, by hand, at the roots of the two that
+ *      sit at the ends of the ramp. Both hand coordinates are in row 0, where
+ *      the neutral grey is 142.141 before rounding.
+ *      BLADE 3, the brownest (u = 0, so tint = BROWN · 1.05 = (1.26, 0.903,
+ *      1.0185)). Its root is at 3.5/9 · 64 = 24.8889, it bends −7.68 (odd i)
+ *      and is 35.2 long, so in row 0 it stands at
+ *        t = 0.5/35.2 = 0.0142045,  x = 24.8889 − 7.68 · t² = 24.88735
+ *        halfW = 2.88 · (1 − t) = 2.83909
+ *      and c = 24 (px 24.5, |dx| 0.387) and c = 25 (px 25.5, |dx| 0.613) are
+ *      both far inside it — the unclamped coverage is 2.95 and 2.73, so both
+ *      texels come out at alpha 255. The colours are
+ *        R = round(142.141 · 1.26)   = round(179.098) = 179
+ *        G = round(142.141 · 0.903)  = round(128.353) = 128
+ *        B = round(142.141 · 1.0185) = round(144.771) = 145
+ *      i.e. R − G = +51: measurably a warm khaki and not a grey.
+ *      BLADE 4, the greenest (u = 1, tint = GREEN · 0.95 = (0.76, 1.083,
+ *      0.9785)). It is the blade of (D2), standing at 32.0009 in row 0, so
+ *      c = 31 and c = 32 are its opaque middle:
+ *        R = round(142.141 · 0.76)   = round(108.027) = 108
+ *        G = round(142.141 · 1.083)  = round(153.939) = 154
+ *        B = round(142.141 · 0.9785) = round(139.085) = 139
+ *      i.e. G − R = +46, the other way round. The two blades stand 7.1 texels
+ *      apart in the same tuft, which is what "variance per blade" means.
+ *      AND THE TWO ENDS MIRROR: blade 3's tint divided by its own brightness
+ *      1.05 plus blade 4's divided by 0.95 is (1.20 + 0.80, 0.86 + 1.14,
+ *      0.97 + 1.03) = (2, 2, 2) exactly — the same no-drift construction the
+ *      per-tuft mix of (F6a) uses, read back out of the built table.
+ *
+ * (D11) NO DRIFT ON THE TEXTURE ITSELF, which is the property that lets a
+ *      brown blade be that brown at all. Every blade PIXEL is compared with
+ *      the neutral of its own row (read straight out of the texture, at a
+ *      texel of that row no blade covers) and averaged with the alpha as the
+ *      weight — so an antialiased edge counts for what it covers.
+ *      THE EXPECTED ANSWER IS 1 PER CHANNEL, and here is why it is not merely
+ *      close to it. A blade's ink is Σ_rows 2·halfW ≈ 2.88 · h, i.e. LINEAR in
+ *      its height, and the blades come in three heights taken in turn — so a
+ *      pixel mean is a height-weighted blade mean. `BLADE_RAMP` is chosen so
+ *      that each of the three height classes carries ramp values summing to
+ *      12 = 3 · 4:
+ *        i ≡ 0 (h .55): 5, 0, 7   i ≡ 1 (h .725): 1, 8, 3   i ≡ 2 (h .90): 6, 2, 4
+ *      hence the weighted mean of d = u − 0.5 is 0 whatever the heights are.
+ *      With tint(d) = (1 − 2e·d)(1 − S·d) the only surviving term is the
+ *      quadratic one, 2eS · mean(d²), and mean(d²) = mean(a²)/64 with a = k−4:
+ *        Σ w·a² = .55(1+16+9) + .725(9+16+1) + .90(4+4+0) = 40.35,  Σ w = 6.525
+ *        mean(d²) = (40.35/6.525)/64 = 0.09662
+ *      so with S = 0.10
+ *        red   1 + 2 · 0.20 · 0.10 · 0.09662 = 1.0039
+ *        green 1 − 2 · 0.14 · 0.10 · 0.09662 = 0.9973
+ *        blue  1 − 2 · 0.03 · 0.10 · 0.09662 = 0.9994
+ *      — asserted to ±2 %, the band the acceptance named, with the derived
+ *      figure a fifth of it. (Blade 8 leans out of the texture at its top and
+ *      loses some ink, and it costs nothing: its ramp value is 4, i.e. its
+ *      tint is exactly (1, 1, 1), so the weight it loses carries no colour.)
+ *
+ * (D12) THE RED COUNTER-CHECK: the ramp is flattened, every blade to the
+ *      middle (`BLADE_RAMP` all 4). Every tint is then exactly (1, 1, 1), so
+ *      the mutant's texture is greyscale again — R = G = B at BOTH hand
+ *      coordinates of (D10), i.e. the +51 and the +46 collapse to 0 — while
+ *      its alpha, its ink and its neutral grey are bit for bit the real ones.
+ *      That is the pin that "the difference is the ramp and nothing else".
  *
  * ============================================================================
  * (E) THE LOD LADDER — moved here from section (K) of smoke_scatter_math
@@ -341,13 +436,17 @@
  *      a step back from "both faces are drawn": the geometry draws them.
  *
  * (F3) THE TINT is the kind's own colour times 0.75 (the authored tuft's
- *      logic), because the texture is greyscale: #6a994e -> (0.4·0.75,
- *      0.6·0.75, 0.306·0.75) in linear-ish terms — asserted through three's
- *      own `Color` so the colour space of the comparison is three's, not ours.
- *      KEPT after (F1b): the tuft and its ground now take the same light, so
- *      0.75 is pure albedo — times the texture's mean grey of ≈ 0.85 that is
- *      about 0.64 of the ground's own colour, a growth a third darker than
- *      what it grows out of.
+ *      logic) times the 1.26 of headroom the texture gave up for its blade
+ *      ramp, i.e. times 0.945 — asserted through three's own `Color` so the
+ *      colour space of the comparison is three's, not ours. The second factor
+ *      is bookkeeping: the texture's mean brightness fell by exactly 1.26, so
+ *      `colour · texture` is what it was before the ramp existed, and a
+ *      material that kept 0.75 would have DARKENED the layer by a fifth.
+ *      THE 0.75 IS KEPT after (F1b): the tuft and its ground now take the same
+ *      light, so it is pure albedo — times the texture's mean grey of ≈ 0.85
+ *      (before the headroom division, which the 0.945 cancels) that is about
+ *      0.64 of the ground's own colour, a growth a third darker than what it
+ *      grows out of.
  *
  * (F4) THE CHAIN IS ABSOLUTE. `applySway` first, `applyOcclusionFade` after
  *      it, both CHAINED into `onBeforeCompile` — so the combined program cache
@@ -362,20 +461,35 @@
  * ============================================================================
  * (F6) THE SHADE OF ONE TUFT — `instanceColor`, and no drift
  * ============================================================================
- * The third answer to the sight round: "they should have different shades of
- * colour". Every tuft carries a per-instance MULTIPLIER on the material
- * colour, mixed between two ends out of a hash of WHERE IT STANDS.
+ * The COARSE of the two colour scales: every tuft carries a per-instance
+ * MULTIPLIER on the material colour, mixed between two ends out of a hash of
+ * WHERE IT STANDS. (The fine one is the per-blade ramp of (D10), inside the
+ * texture, which no instance tint could reach.)
  *
- * (F6a) THE TWO ENDS, by hand from the two swings (brightness 0.12, hue 0.06,
- *      written per channel as `1 ∓ (bright ± hue)` so the pair sums exactly):
- *        A = (1 − 0.12 − 0.06, 1 − 0.12, 1 − 0.12 + 0.06) = (0.82, 0.88, 0.94)
- *        B = (1 + 0.12 + 0.06, 1 + 0.12, 1 + 0.12 − 0.06) = (1.18, 1.12, 1.06)
- *      A is the darker, colder green and B the brighter, yellower one; A + B
- *      is (2, 2, 2) to the last bit.
+ * (F6a) THE TWO ENDS, by hand from the three swings. Re-aimed in the follow-up
+ *      round of 2026-08-16 — "one does not see the colour shades per tuft" —
+ *      onto the dry-to-fresh axis the eye actually reads: red against green,
+ *      with blue nearly still, because straw and grass differ by 30 % in red
+ *      and by 5 % in blue. Written per channel as `1 ± swing` so the pair sums
+ *      exactly:
+ *        A = (1 + 0.24, 1 − 0.10, 1 − 0.05) = (1.24, 0.90, 0.95)  dry
+ *        B = (1 − 0.24, 1 + 0.10, 1 + 0.05) = (0.76, 1.10, 1.05)  fresh
+ *      A + B is (2, 2, 2) to the last bit — the pin the round named
+ *      explicitly, and the one thing widening the spread may not break.
+ *      WHAT REALLY MOVED is the split between colour and brightness, and it is
+ *      measured as such: split an end into its luma and what is left over.
+ *        old A (0.82, 0.88, 0.94): luma 0.8716, i.e. 12.8 % of DARKNESS, and
+ *          A/luma = (0.9408, 1.0097, 1.0785), i.e. 5.9 % of colour on red
+ *        new A (1.24, 0.90, 0.95): luma 0.9759, i.e. 2.4 % of darkness, and
+ *          A/luma = (1.2706, 0.9222, 0.9735), i.e. 27.1 % of colour on red
+ *      — four and a half times the hue difference at a fifth of the brightness
+ *      difference. A brightness difference between neighbouring tufts reads as
+ *      a shadow on uneven ground, which is why the old one was invisible AS
+ *      COLOUR however large it was.
  *
  * (F6b) THE MIX IS STRAIGHT: h = 0 -> A, h = 1 -> B, h = 0.5 -> (1, 1, 1),
- *      i.e. exactly the material colour. h = 0.25 -> (0.91, 0.94, 0.97) and
- *      h = 0.75 -> (1.09, 1.06, 1.03) fall out of the same line. Junk (NaN, a
+ *      i.e. exactly the material colour. h = 0.25 -> (1.12, 0.95, 0.975) and
+ *      h = 0.75 -> (0.88, 1.05, 1.025) fall out of the same line. Junk (NaN, a
  *      string, undefined) is the MIDDLE and never a NaN colour — an instance
  *      must not be removed by arithmetic (the rule `undergrowthHeight`
  *      follows for the scale).
@@ -387,8 +501,8 @@
  *      on a 1 m grid, within 2 % per channel.
  *      THE RED COUNTER-CHECK is a ONE-SIDED mixture (the mutant halves the
  *      mix parameter, so the field only ever draws from A to the middle): its
- *      mean h is ≈ 0.25 and its mean tint therefore ≈ (0.91, 0.94, 0.97) —
- *      9 % off on red, i.e. four times outside the band the real one holds.
+ *      mean h is ≈ 0.25 and its mean tint therefore ≈ (1.12, 0.95, 0.975) —
+ *      12 % off on red, i.e. six times outside the band the real one holds.
  *
  * (F6d) THE HASH IS ON THE POSITION AND NOT ON THE INDEX, and that is not a
  *      matter of taste: the LOD thins the layer by `instanceHash(index) <
@@ -580,6 +694,17 @@ function noAlphaTest(text) {
   return text.replace(anchor, '');
 }
 
+/** Section (D12)'s mutant: the blade ramp is flattened to its middle, so every
+ *  blade carries the tint (1, 1, 1) and the texture is greyscale again — the
+ *  picture this round exists to replace. The headroom division stays (it hangs
+ *  on `BLADE_BROWN`, not on the ramp), so the mutant differs from the real
+ *  texture in the COLOUR CHANNELS ALONE. */
+function flatBladeRamp(text) {
+  const anchor = 'BLADE_RAMP = [5, 1, 6, 0, 8, 2, 7, 3, 4]';
+  if (!text.includes(anchor)) throw new Error('the blade ramp is no longer where the probe looks');
+  return text.replace(anchor, 'BLADE_RAMP = [4, 4, 4, 4, 4, 4, 4, 4, 4]');
+}
+
 /** Section (F1a)'s mutant: the star becomes fully symmetric, so a field of
  *  tufts repeats every third of a turn. */
 function symmetricStar(text) {
@@ -672,7 +797,8 @@ async function main() {
     undergrowthTexture, undergrowthTexturePixels, undergrowthTint,
     wantedUndergrowthCells, applySway,
     UNDERGROWTH_ALPHA_TEST, UNDERGROWTH_H_REF_M, UNDERGROWTH_TEX_SIZE,
-    UNDERGROWTH_BLADES, UNDERGROWTH_TINT_A, UNDERGROWTH_TINT_B,
+    UNDERGROWTH_BLADES, UNDERGROWTH_BLADE_TINTS,
+    UNDERGROWTH_TINT_A, UNDERGROWTH_TINT_B,
   } = field;
   const TAU = Math.PI * 2;
 
@@ -819,9 +945,10 @@ async function main() {
   let topInk = 0;
   for (let r = 58; r < N; r += 1) topInk += rowInk(r);
   check('D6 the top tenth of the texture is empty', topInk, 0);
-  check('D7 the grey is the row\'s own, and greyscale',
-    [tex[at(0, 0)], tex[at(0, 0) + 1], tex[at(0, 0) + 2], tex[at(63, 0)]],
-    [179, 179, 179, 254]);
+  check('D7 where no blade stands the colour is the row\'s plain grey',
+    [tex[at(0, 35)], tex[at(0, 35) + 1], tex[at(0, 35) + 2],
+      tex[at(63, 0)], tex[at(63, 0) + 1], tex[at(63, 0) + 2]],
+    [142, 142, 142, 202, 202, 202]);
   let footInk = 0;
   for (let r = 0; r < 10; r += 1) footInk += rowInk(r);
   check('D8 the ten lowest rows carry exactly 460.23 texels of ink',
@@ -853,6 +980,79 @@ async function main() {
     [solidInk, solidClear], [64 * 64, 0]);
   check('D9 …which is measurably not what the real function draws',
     [ink < solidInk / 3, clear >= 2059], [true, true]);
+
+  // (D10) the two ends of the ramp, at the roots of the blades that carry them
+  check('D10 there is one tint per blade', UNDERGROWTH_BLADE_TINTS.length,
+    UNDERGROWTH_BLADES);
+  check('D10 blade 3 is the brownest — BROWN times its own 1.05 of brightness',
+    [...UNDERGROWTH_BLADE_TINTS[3]], [1.26, 0.903, 1.0185], 1e-12);
+  check('D10 …and blade 4 the greenest — GREEN times 0.95',
+    [...UNDERGROWTH_BLADE_TINTS[4]], [0.76, 1.083, 0.9785], 1e-12);
+  // The two ends MIRROR in (1, 1, 1), read back out of the built table by
+  // dividing each end by the brightness it carries. Same construction as
+  // (F6a), one scale finer.
+  check('D10 …so the two ends of the ramp sum to exactly (2, 2, 2)',
+    [UNDERGROWTH_BLADE_TINTS[3][0] / 1.05 + UNDERGROWTH_BLADE_TINTS[4][0] / 0.95,
+      UNDERGROWTH_BLADE_TINTS[3][1] / 1.05 + UNDERGROWTH_BLADE_TINTS[4][1] / 0.95,
+      UNDERGROWTH_BLADE_TINTS[3][2] / 1.05 + UNDERGROWTH_BLADE_TINTS[4][2] / 0.95],
+    [2, 2, 2], 1e-12);
+  const rgb = (t, r, c) => [t[at(r, c)], t[at(r, c) + 1], t[at(r, c) + 2]];
+  check('D10 the brown blade\'s root texels really are brown (179/128/145)',
+    [rgb(tex, 0, 24), rgb(tex, 0, 25)], [[179, 128, 145], [179, 128, 145]]);
+  check('D10 …i.e. red 51 above green, on an opaque texel',
+    [rgb(tex, 0, 24)[0] - rgb(tex, 0, 24)[1], tex[at(0, 24) + 3]], [51, 255]);
+  check('D10 the green blade\'s root texels really are green (108/154/139)',
+    [rgb(tex, 0, 31), rgb(tex, 0, 32)], [[108, 154, 139], [108, 154, 139]]);
+  check('D10 …i.e. green 46 above red, the other way round',
+    [rgb(tex, 0, 31)[1] - rgb(tex, 0, 31)[0], tex[at(0, 31) + 3]], [46, 255]);
+
+  // (D11) no drift on the texture itself — every blade pixel against the
+  // neutral of its OWN row, read out of the texture at a texel of that row no
+  // blade covers, and weighted by how much of the texel the blade covers.
+  const channelMean = (t) => {
+    const sum = [0, 0, 0];
+    let weight = 0;
+    for (let r = 0; r < N; r += 1) {
+      let neutral = 0;
+      for (let c = 0; c < N && !neutral; c += 1) {
+        if (t[at(r, c) + 3] === 0) neutral = t[at(r, c)];
+      }
+      if (!neutral) continue;
+      for (let c = 0; c < N; c += 1) {
+        const a = t[at(r, c) + 3];
+        if (!a) continue;
+        weight += a / 255;
+        for (let k = 0; k < 3; k += 1) sum[k] += (a / 255) * (t[at(r, c) + k] / neutral);
+      }
+    }
+    return sum.map((v) => v / weight);
+  };
+  const texMean = channelMean(tex);
+  check(`D11 the mean over the blade pixels is the neutral grey within 2 % `
+    + `(got ${texMean.map((v) => v.toFixed(4)).join(', ')})`,
+    texMean.every((v) => Math.abs(v - 1) <= 0.02), true);
+  check('D11 …and it is the derived 1.0039 / 0.9973 / 0.9994, not merely inside '
+    + 'the band', texMean, [1.0039, 0.9973, 0.9994], 0.004);
+
+  // (D12) the red counter-check — the ramp flattened to its middle
+  const flatRamp = await loadField(flatBladeRamp);
+  const flatTex = flatRamp.undergrowthTexturePixels(N);
+  check('D12 the "flat ramp" mutant gives every blade the neutral tint',
+    [...flatRamp.UNDERGROWTH_BLADE_TINTS[3], ...flatRamp.UNDERGROWTH_BLADE_TINTS[4]],
+    [1, 1, 1, 1, 1, 1], 1e-12);
+  check('D12 …so the two blades of (D10) come out the row\'s plain grey, both '
+    + 'of them the same 142', [rgb(flatTex, 0, 24), rgb(flatTex, 0, 31)],
+    [[142, 142, 142], [142, 142, 142]]);
+  check('D12 …i.e. the red-minus-green of (D10) collapses to nothing',
+    [rgb(flatTex, 0, 24)[0] - rgb(flatTex, 0, 24)[1],
+      rgb(flatTex, 0, 31)[1] - rgb(flatTex, 0, 31)[0]], [0, 0]);
+  // …while everything that is NOT the ramp is untouched: same silhouette, same
+  // neutral. That is what makes the difference above attributable to the ramp.
+  let flatInk = 0;
+  for (let i = 3; i < flatTex.length; i += 4) flatInk += flatTex[i] / 255;
+  check('D12 …and its alpha and its neutral grey are the real ones, bit for bit',
+    [flatInk, flatTex[at(0, 35)], flatTex[at(63, 0)]],
+    [ink, tex[at(0, 35)], tex[at(63, 0)]], 1e-9);
 
   console.log('\n(E) the LOD ladder — its own numbers, beside the props\'');
   check('E the layer is drawn to 60 m and thinned from 30 m',
@@ -976,9 +1176,16 @@ async function main() {
   check('F2 …and it never draws a BACK face, so no normal is ever flipped',
     mat.side, THREE.FrontSide);
   check('F2 …through the blade texture', mat.map === dataTex, true);
-  const want = new THREE.Color('#6a994e').multiplyScalar(0.75);
-  check('F3 the tint is the kind\'s colour times 0.75',
+  // 0.75 of albedo times the 1.26 of headroom the texture gave up for its
+  // blade ramp — one number, and the second half of it is bookkeeping: the
+  // texture's mean brightness fell by the same 1.26.
+  const want = new THREE.Color('#6a994e').multiplyScalar(0.945);
+  check('F3 the tint is the kind\'s colour times 0.75 · 1.26',
     [mat.color.r, mat.color.g, mat.color.b], [want.r, want.g, want.b], 1e-9);
+  checkNot('F3 …and NOT the bare 0.75, which would darken the layer by a fifth',
+    [mat.color.r, mat.color.g, mat.color.b],
+    (() => { const c = new THREE.Color('#6a994e').multiplyScalar(0.75);
+      return [c.r, c.g, c.b]; })(), 1e-9);
   check('F4 wind and camera corridor are BOTH on it, in that order',
     mat.customProgramCacheKey(), 'ground-sway@0.06+occlusion-corridor');
 
@@ -991,10 +1198,23 @@ async function main() {
   checkNot('F5 …which the real material does not', mat.alphaTest, 0);
 
   console.log('\n(F6) the shade of one tuft — instanceColor, and no drift');
-  check('F6a the dark end is 0.82 / 0.88 / 0.94 of the kind\'s colour',
-    [...UNDERGROWTH_TINT_A], [0.82, 0.88, 0.94], 1e-12);
-  check('F6a …and the bright end 1.18 / 1.12 / 1.06',
-    [...UNDERGROWTH_TINT_B], [1.18, 1.12, 1.06], 1e-12);
+  check('F6a the dry end is 1.24 / 0.90 / 0.95 of the kind\'s colour',
+    [...UNDERGROWTH_TINT_A], [1.24, 0.90, 0.95], 1e-12);
+  check('F6a …and the fresh end 0.76 / 1.10 / 1.05',
+    [...UNDERGROWTH_TINT_B], [0.76, 1.10, 1.05], 1e-12);
+  // The swing is on RED AGAINST GREEN and not on brightness — the axis the
+  // round before got wrong. Split each end into its luma and the colour that
+  // is left over, and assert both halves side by side against the old pair, so
+  // a spread that merely got wider could not pass for one that got re-aimed.
+  const luma = (t) => 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+  const chromaR = (t) => t[0] / luma(t);
+  check('F6a …and only 2.4 % of it is brightness, where the old end had 12.8 %',
+    [luma(UNDERGROWTH_TINT_A), luma([0.82, 0.88, 0.94])], [0.9759, 0.8716],
+    5e-4);
+  check('F6a …while the COLOUR on red is 27.1 % against the old 5.9 % — four '
+    + 'and a half times as far',
+    [chromaR(UNDERGROWTH_TINT_A), chromaR([0.82, 0.88, 0.94])],
+    [1.2706, 0.9408], 5e-4);
   check('F6a …so the two of them sum to exactly (2, 2, 2)',
     [UNDERGROWTH_TINT_A[0] + UNDERGROWTH_TINT_B[0],
       UNDERGROWTH_TINT_A[1] + UNDERGROWTH_TINT_B[1],
@@ -1007,7 +1227,7 @@ async function main() {
     undergrowthTint(0.5), [1, 1, 1], 1e-12);
   check('F6b h = 0.25 and h = 0.75 sit on the same line',
     [undergrowthTint(0.25), undergrowthTint(0.75)],
-    [[0.91, 0.94, 0.97], [1.09, 1.06, 1.03]], 1e-12);
+    [[1.12, 0.95, 0.975], [0.88, 1.05, 1.025]], 1e-12);
   for (const [bad, name] of [[NaN, 'NaN'], ['x', 'a string'],
     [undefined, 'undefined']]) {
     check(`F6b a shade of ${name} is the middle, never a NaN colour`,
@@ -1032,8 +1252,8 @@ async function main() {
     tintMean.every((v) => Math.abs(v - 1) <= 0.02), true);
   const oneSided = await loadField(oneSidedTint);
   const driftMean = meanTint(oneSided.undergrowthTint, oneSided.undergrowthShade);
-  check('F6c the "one-sided mix" mutant drifts to the dark end of the palette',
-    driftMean, [0.91, 0.94, 0.97], 0.02);
+  check('F6c the "one-sided mix" mutant drifts to the dry end of the palette',
+    driftMean, [1.12, 0.95, 0.975], 0.02);
   check('F6c …i.e. measurably outside the band the real mix holds',
     Math.abs(driftMean[0] - 1) > 0.04, true);
 
@@ -1258,6 +1478,15 @@ async function main() {
     true);
   check('H …and it is the cut list the sampler gets',
     ugSrc.includes('footprints: nearFootprints,'), true);
+  // The headroom is the one invariant that spans two constants: the texture
+  // divides its grey by `BLADE_TINT_MAX` and the material multiplies it back.
+  // Drop either half and the layer changes brightness by a fifth, which no
+  // single-value check would notice — so both halves are pinned together.
+  check('H the texture divides its grey by the tint headroom…',
+    ugSrc.includes('BLADE_SHADE_SPAN * (py / n)) / BLADE_TINT_MAX'), true);
+  check('H …and the material hands exactly that factor back',
+    /multiplyScalar\(UNDERGROWTH_ALBEDO\s*\*\s*BLADE_TINT_MAX\)/.test(ugSrc),
+    true);
   check('H the shade is written at build and compacted at every binning',
     ugSrc.includes('mesh.setColorAt(i, tint.setRGB(tr, tg, tb));')
       && ugSrc.includes('if (colBuf) copyColor(layer.srcColor, i, colBuf, n);'),

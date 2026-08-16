@@ -60,6 +60,19 @@
  * `UNDERGROWTH_H_MIN/MAX` in `scene/scatterLod.ts` (the size) and
  * `undergrowthTint` (the shades).
  *
+ * AND THE COLOUR CAME BACK A SECOND TIME, because the third of those answers
+ * did not land: "one does not see the colour shades per tuft — better simply
+ * give the blades different colours, a little more brown, a little more green,
+ * variance per blade or at least per tuft". So the layer now varies its colour
+ * at BOTH scales, and both are built so the average cannot move:
+ *   · per BLADE, in the texture — it stopped being greyscale, and each of the
+ *     nine blades sits at its own place on a brown↔green ramp (`BLADE_RAMP`);
+ *   · per TUFT, in `instanceColor` — the same axis, with four times the COLOUR
+ *     difference the round before dared and a fifth of its brightness
+ *     difference (`SHADE_R`), so two neighbouring clumps are a khaki one
+ *     beside a green one rather than two shades of the same green.
+ * Neither touches the geometry, the density or the LOD of the round before.
+ *
  * THE AUTHORED SCATTER IS UNTOUCHED. `ground.ts` still grows the tuft cones of
  * `meta.scatter` exactly as before — those are what an author placed, and this
  * round is about the layer nobody placed.
@@ -201,12 +214,139 @@ const BLADE_BEND = 0.12;
  *  would end on a straight line instead of a tip (the same reason the far
  *  impostors keep `IMPOSTOR_BAKE_PAD`). */
 const BLADE_HEIGHTS = [0.55, 0.725, 0.90];
-/** How dark the root is and how much brighter the tip gets. The texture is
- *  GREYSCALE — the colour comes from the material, which is tinted with the
- *  terrain kind's own — so this is the only shading it carries: a blade a
- *  little darker where it stands in its own shadow. */
+/** How dark the root is and how much brighter the tip gets — the texture's
+ *  BRIGHTNESS envelope, one shade per row: a blade a little darker where it
+ *  stands in its own shadow. Until 2026-08-16 this WAS the texture (it was
+ *  greyscale and the colour came from the material alone); it is now the grey
+ *  that the per-blade ramp below multiplies. */
 const BLADE_SHADE_MIN = 0.7;
 const BLADE_SHADE_SPAN = 0.3;
+
+/* --- the colour of ONE blade, and why the texture stopped being grey ------
+ *
+ * "One does not see the colour shades per tuft. Better simply give the blades
+ * different colours — a little more brown, a little more green, variance per
+ * BLADE or at least per tuft" (sight round, 2026-08-16, after b23ce4f). The
+ * round before had put the whole variance on `instanceColor`, i.e. ONE shade
+ * per tuft — and a tuft is 41 cm across, so at ten metres the eye reads a
+ * clump as one flat patch of colour and the layer still looked printed. Nine
+ * blades over those 41 cm is a colour every 4.6 cm, a quarter of a degree of
+ * arc at the same distance: it does not read as nine separate colours but as
+ * the RESOLUTION real grass has. And it is free, because the blades are
+ * already drawn one by one in a texture nobody has to fetch.
+ *
+ * THE TWO ENDS ARE MIRRORS IN (1, 1, 1), exactly like `UNDERGROWTH_TINT_A/B`
+ * below and for exactly the same reason: `BROWN + GREEN = (2, 2, 2)` per
+ * channel, so a ramp whose positions average 0.5 leaves the MEAN colour of the
+ * texture untouched and the flat colour of a meadow is still the terrain
+ * kind's own. A pair that did not mirror (say the brown end alone pulled from
+ * a photograph) would tilt every painted area in the world.
+ *
+ * WHY BLUE BARELY MOVES. Dry straw against fresh grass differs almost entirely
+ * in red against green — normalised to their own means, straw is about
+ * (1.26, 1.06, 0.68) and grass about (0.97, 1.39, 0.65), i.e. the blue RATIO
+ * between the two is 1.05 while the red ratio is 1.30. The swing below follows
+ * that: ±0.20 on red, ∓0.14 on green, ∓0.03 on blue. Against the seeded forest
+ * colour #6a994e the brownest blade comes out a yellow khaki and the greenest
+ * a saturated green — two colours anyone would name apart.
+ */
+
+/** The dry-brown end of the ramp, as RELATIVE multipliers on the row's grey. */
+const BLADE_BROWN: readonly [number, number, number] = [1.20, 0.86, 0.97];
+/** …and the fresh-green end, its mirror in (1, 1, 1). Written out rather than
+ *  computed so both ends can be read at once; the smoke pins the sum. */
+const BLADE_GREEN: readonly [number, number, number] = [0.80, 1.14, 1.03];
+
+/** How far the ramp swings in BRIGHTNESS on top of the hue, brown end up: dry
+ *  grass is the lighter of the two. Tied to the ramp position rather than
+ *  given its own stream, so there is one number per blade and no second knob
+ *  that could drift the mean. */
+const BLADE_BRIGHT_SPAN = 0.10;
+
+/**
+ * WHERE EACH BLADE SITS ON THE RAMP — a permutation of 0 … 8 over 8, one entry
+ * per blade, and it is chosen and not hashed.
+ *
+ * A HASH WOULD NOT AVERAGE OUT. Nine samples of a uniform hash have a standard
+ * error of about 0.1 on their mean, i.e. the texture would sit a few per cent
+ * off neutral in a direction nobody chose — and since it is ONE texture shared
+ * by every tuft in the world, that offset is not noise but a permanent tint. A
+ * permutation of 0 … 8 has mean exactly 4, i.e. ramp position exactly 0.5.
+ *
+ * AND IT IS BALANCED PER HEIGHT CLASS, which is the finer half of the same
+ * argument. The blades come in three lengths (`BLADE_HEIGHTS`, taken in turn),
+ * and a long blade covers proportionally more texels than a short one — the
+ * ink of a blade is Σ_rows 2·halfW ≈ 2.88·h, i.e. LINEAR in its height. A mean
+ * over blades is therefore not the mean over PIXELS unless each height class
+ * averages to the middle on its own. The three classes here are
+ *   i ≡ 0 (h 0.55): 5, 0, 7   i ≡ 1 (h 0.725): 1, 8, 3   i ≡ 2 (h 0.90): 6, 2, 4
+ * and each sums to 12 = 3 · 4. So the pixel-weighted mean of (k − 4) is 0
+ * WHATEVER the three heights are, and the channel mean over blade pixels is 1
+ * up to the one term that cannot vanish (see below).
+ *
+ * THE ONE RESIDUE, derived rather than measured. With d = k/8 − 0.5 the tint
+ * of a blade is (1 − 2e·d)(1 − S·d) = 1 − (2e + S)·d + 2eS·d², so the weighted
+ * mean is 1 + 2eS·mean(d²): the linear term dies with mean(d) = 0, the
+ * quadratic one does not. mean(d²) = mean(a²)/64 with a = k − 4 weighted by
+ * height: Σ w·a² = 0.55·(1+16+9) + 0.725·(9+16+1) + 0.90·(4+4+0) = 40.35 over
+ * Σ w = 6.525, i.e. 6.184/64 = 0.0966. With S = 0.10 that leaves
+ *   red   1 + 2·0.20·0.10·0.0966 = 1.0039   (+0.39 %)
+ *   green 1 − 2·0.14·0.10·0.0966 = 0.9973   (−0.27 %)
+ *   blue  1 − 2·0.03·0.10·0.0966 = 0.9994   (−0.06 %)
+ * — a tenth of the ±2 % the acceptance allows, and the smoke measures exactly
+ * this quantity on the built pixels.
+ *
+ * THE ORDER IS NOT SORTED, on purpose: a monotone ramp would paint the texture
+ * brown on one side and green on the other, and since every card of every tuft
+ * carries the SAME texture the whole world would lean the same way. Neighbours
+ * here are 4 … 8 ramp steps apart everywhere except the last pair, which is
+ * where the balance constraint leaves no freedom.
+ */
+const BLADE_RAMP = [5, 1, 6, 0, 8, 2, 7, 3, 4];
+
+/**
+ * The per-channel multiplier of every blade, in blade order — a pure function
+ * of the two ends, the ramp and the brightness swing.
+ *
+ * Exported because it is the thing the smoke names: "blade 3 is the brown one"
+ * is an assertion about this table, and the pixels at its root are then the
+ * measurement at the consumer.
+ */
+export const UNDERGROWTH_BLADE_TINTS: readonly (readonly [number, number, number])[]
+  = BLADE_RAMP.map((k) => {
+    const u = k / (BLADE_RAMP.length - 1);
+    const bright = 1 - BLADE_BRIGHT_SPAN * (u - 0.5);
+    return [
+      (BLADE_BROWN[0] + (BLADE_GREEN[0] - BLADE_BROWN[0]) * u) * bright,
+      (BLADE_BROWN[1] + (BLADE_GREEN[1] - BLADE_BROWN[1]) * u) * bright,
+      (BLADE_BROWN[2] + (BLADE_GREEN[2] - BLADE_BROWN[2]) * u) * bright,
+    ] as [number, number, number];
+  });
+
+/** The colour of a texel NO blade covers — dead neutral, so the transparent
+ *  ground between the blades bleeds the row's plain grey into the mip chain
+ *  and not the colour of whichever blade happened to stand nearest. */
+const BLADE_TINT_NEUTRAL: readonly [number, number, number] = [1, 1, 1];
+
+/**
+ * THE HEADROOM THE GREY GIVES UP, and the one place this feature costs
+ * something.
+ *
+ * A texel is eight bits. The old texture already ran up to 1.00 of full scale
+ * at the tip of a blade, so a multiplier above 1 anywhere — and a mean of 1
+ * FORCES one, on whichever channel is above the mean — would clamp, which
+ * would flatten the brown blades' red at their tips and destroy the very
+ * no-drift property this is all built around. So the grey ramp is divided by
+ * the largest multiplier any blade carries (1.20 · 1.05 = 1.26), which makes
+ * `grey · tint` reach exactly 1.00 for the brownest blade and less for every
+ * other one: nothing is ever clamped, and the brightest byte the texture
+ * writes is the 254 it always wrote.
+ *
+ * THE MATERIAL TAKES THE SAME FACTOR BACK (`undergrowthMaterial`), so the
+ * layer's albedo is the SAME PRODUCT as before to the last digit — this is
+ * bookkeeping between two constants, not a change of look.
+ */
+const BLADE_TINT_MAX = BLADE_BROWN[0] * (1 + BLADE_BRIGHT_SPAN / 2);
 
 /**
  * The blade texture as RGBA texels, ROW 0 AT THE BOTTOM — the roots.
@@ -231,6 +371,14 @@ const BLADE_SHADE_SPAN = 0.3;
  * at this spacing, so the maximum and a sum are the same picture, and the
  * maximum cannot exceed 1.
  *
+ * THE COLOUR IS THE WINNING BLADE'S (`UNDERGROWTH_BLADE_TINTS`) times the
+ * row's own grey, and a texel no blade reaches gets that grey unchanged. So
+ * the alpha is exactly what it was before the colour arrived — the winner of a
+ * maximum is the same texel whether the maximum is clamped before or after —
+ * and every hand value about the SILHOUETTE (the ink per row, the taper, the
+ * empty top tenth) still holds to the bit. Only the three colour channels
+ * moved.
+ *
  * THE ONE PROPERTY WORTH NAMING, because the whole look hangs on it: the
  * summed coverage of one ROW is exactly the summed WIDTH of the blades that
  * cross it (a unit box filter reproduces the area of a ramp of unit slope
@@ -250,33 +398,46 @@ export function undergrowthTexturePixels(
       heightPx: BLADE_HEIGHTS[i % BLADE_HEIGHTS.length] * n,
       bend: BLADE_BEND * n * (i % 2 === 0 ? 1 : -1),
       halfW0: BLADE_HALF_W * n,
+      tint: UNDERGROWTH_BLADE_TINTS[i % UNDERGROWTH_BLADE_TINTS.length],
     });
   }
   for (let r = 0; r < n; r += 1) {
     // Height of this row's centre above the texture's BOTTOM edge, in texels —
     // row 0 IS the bottom, see the doc comment.
     const py = r + 0.5;
-    // The grey is the row's own — it never depends on which blade won, so a
-    // mip level that blends two blades blends one shade and not a seam.
-    const grey = Math.round(255 * (BLADE_SHADE_MIN + BLADE_SHADE_SPAN * (py / n)));
+    // The brightness is the row's own and the colour the blade's, so a mip
+    // level that blends two blades blends two colours at ONE brightness — no
+    // seam, and the shading over a blade's height stays the shading it was.
+    // Divided by the headroom the tint needs, which `undergrowthMaterial`
+    // gives straight back — see `BLADE_TINT_MAX`.
+    const grey = (BLADE_SHADE_MIN + BLADE_SHADE_SPAN * (py / n)) / BLADE_TINT_MAX;
     for (let c = 0; c < n; c += 1) {
       const px = c + 0.5;
-      let cov = 0;
-      for (const b of blades) {
-        const t = py / b.heightPx;
+      // The STRONGEST blade, kept unclamped while the search runs: the winner
+      // decides the colour and the clamp is applied to its coverage after.
+      let best = 0;
+      let win = -1;
+      for (let b = 0; b < blades.length; b += 1) {
+        const bl = blades[b];
+        const t = py / bl.heightPx;
         if (t > 1) continue;
-        const x = b.rootX + b.bend * t * t;
-        const halfW = b.halfW0 * (1 - t);
+        const x = bl.rootX + bl.bend * t * t;
+        const halfW = bl.halfW0 * (1 - t);
         const v = halfW - Math.abs(px - x) + 0.5;
-        if (v > cov) cov = v > 1 ? 1 : v;
+        if (v > best) {
+          best = v;
+          win = b;
+        }
       }
+      const cov = best > 1 ? 1 : best;
+      const tint = win >= 0 ? blades[win].tint : BLADE_TINT_NEUTRAL;
       const o = (r * n + c) * 4;
-      out[o] = grey;
-      out[o + 1] = grey;
-      out[o + 2] = grey;
-      // The grey is written EVERYWHERE, the alpha only where a blade stands:
+      // The colour is written EVERYWHERE, the alpha only where a blade stands:
       // a transparent texel that is black bleeds a dark rim into every mip
       // level, and the alpha cut below cannot take that back.
+      out[o] = Math.round(255 * grey * tint[0]);
+      out[o + 1] = Math.round(255 * grey * tint[1]);
+      out[o + 2] = Math.round(255 * grey * tint[2]);
       out[o + 3] = Math.round(255 * cov);
     }
   }
@@ -339,6 +500,12 @@ const UNDERGROWTH_STAR_DEG = [0, 55, 118];
  *  0.35 sits below the antialiased edge of a blade (which reaches ~0.5 at the
  *  outermost covered texel) and well above the mip bleed between blades. */
 export const UNDERGROWTH_ALPHA_TEST = 0.35;
+
+/** How dark the tuft is against the ground it grows out of — the authored
+ *  tuft's own factor, and the whole albedo argument in `undergrowthMaterial`
+ *  hangs on it. It is NOT the number that reaches the material: the texture's
+ *  headroom division is undone there as well (`BLADE_TINT_MAX`). */
+const UNDERGROWTH_ALBEDO = 0.75;
 
 /** How far a tuft reaches beyond the point it stands on, in metres — the
  *  tallest blade plus half the widest quad plus the wind's own maximum
@@ -433,6 +600,13 @@ export function undergrowthGeometry(h: number): THREE.BufferGeometry {
  * the density of this layer that is what makes it read as a printed texture
  * rather than as growth: real grass is a hundred slightly different greens.
  *
+ * THE FOLLOW-UP ROUND FOUND THIS HALF TOO TIMID — "one does not see the colour
+ * shades per tuft" — and it was: mostly a BRIGHTNESS difference, which
+ * disappears into the shading of the ground. The swing below is now on red
+ * against green instead, and it is the COARSE of the two scales the layer
+ * varies at; the fine one is the per-blade ramp in the texture
+ * (`BLADE_RAMP`), which no instance tint could reach.
+ *
  * THE MECHANISM IS `instanceColor`, three's own per-instance tint — one extra
  * vec3 attribute, no second material, no second draw call. In three 0.185 it
  * arrives through `color_vertex` (`vColor.rgb *= instanceColor.rgb` under
@@ -445,39 +619,59 @@ export function undergrowthGeometry(h: number): THREE.BufferGeometry {
  * the shade is a MULTIPLIER on the material colour, not a replacement of it.
  * ========================================================================== */
 
-/** How far the shade swings in brightness, as a share. ±12 % on the material
- *  colour, and it is worth naming that this is a LINEAR multiplier (the tint
- *  meets `diffuseColor`, which is in the working colour space): ±12 % of light
- *  is about ±5 % of an sRGB code value, i.e. deliberately a shading and not a
- *  patchwork. */
-const SHADE_BRIGHT = 0.12;
-/** …and how far it swings in hue, on the same scale: the red channel up and
- *  the blue down is a step towards yellow-green, the other way round is a step
- *  towards a deeper, colder green. Half the brightness swing, because a
- *  meadow's greens differ mostly in light and only a little in hue. */
-const SHADE_HUE = 0.06;
+/**
+ * How far the per-tuft shade swings, PER CHANNEL — the same dry-to-fresh axis
+ * the blade ramp runs along, re-aimed by the sight round of 2026-08-16.
+ *
+ * WHAT THE FIRST TRY GOT WRONG WAS THE AXIS, not really the size. b23ce4f
+ * swung ±12 % of brightness with ±6 % of hue riding on it, i.e. it was a
+ * SHADING; and a brightness difference between neighbouring tufts reads as a
+ * shadow, as the ground being uneven, not as two different plants. Split the
+ * old end (0.82, 0.88, 0.94) into its luma and what is left, and the whole
+ * thing is 12.8 % of darkness carrying 5.9 % of colour. "One does not see the
+ * colour shades per tuft", word for word, and correctly so.
+ *
+ * THE NEW END IS THE OTHER WAY ROUND: (1.24, 0.90, 0.95) is 2.4 % of darkness
+ * carrying 27.1 % of colour — four and a half times the hue difference at a
+ * fifth of the brightness difference. The swing is on red against green,
+ * ±0.24 and ∓0.10, with blue almost still (∓0.05) for the reason given at
+ * `BLADE_BROWN`: straw and grass differ by 30 % in red and by 5 % in blue. Two
+ * neighbouring tufts at opposite ends are then a khaki clump beside a green
+ * one — the "tell them apart at a glance" the round asked for.
+ *
+ * THIS ONE IS LINEAR, unlike the blade ramp. `instanceColor` meets
+ * `diffuseColor` in the working colour space, so ±0.24 is ±24 % of light,
+ * while the blade ramp's ±0.20 sits in an sRGB-ENCODED texture and is decoded
+ * to +49 % / −39 %. That is why the two are not the same number even though
+ * they are meant to read as comparable steps on screen — and it is why the
+ * ramp can afford to be the smaller of the two.
+ */
+const SHADE_R = 0.24;
+const SHADE_G = 0.10;
+const SHADE_B = 0.05;
 
 /**
  * The two ends of the shade, as per-channel multipliers on the material
- * colour.
+ * colour: A the dry, brown-leaning end and B the fresh, green one.
  *
  * THEY SUM TO EXACTLY (2, 2, 2), and that is the whole no-drift argument: the
  * mix parameter is a hash, i.e. uniform on [0, 1], so the MEAN tint over a
  * field is (A + B)/2 = (1, 1, 1) — the material colour itself, unchanged. Any
- * other pair (say a multiplicative brightness with a hue factor riding on top)
- * would leave a residue in the mean and the whole carpet would drift away from
- * the terrain kind's own green, which is the one thing this feature must not
- * do. Written as `1 ∓ (bright ± hue)` per channel so the sum is exact by
+ * other pair (say a brown end read off a photograph, with the green end chosen
+ * to taste) would leave a residue in the mean and the whole carpet would drift
+ * away from the terrain kind's own green, which is the one thing this feature
+ * must not do. Written as `1 ± swing` per channel so the sum is exact by
  * construction and not by rounding:
- *   A = (1 − 0.12 − 0.06, 1 − 0.12, 1 − 0.12 + 0.06) = (0.82, 0.88, 0.94)
- *   B = (1 + 0.12 + 0.06, 1 + 0.12, 1 + 0.12 − 0.06) = (1.18, 1.12, 1.06)
- * A is the darker, colder end and B the brighter, yellower one.
+ *   A = (1 + 0.24, 1 − 0.10, 1 − 0.05) = (1.24, 0.90, 0.95)
+ *   B = (1 − 0.24, 1 + 0.10, 1 + 0.05) = (0.76, 1.10, 1.05)
+ * The pin the acceptance round of 2026-08-16 named explicitly: widening the
+ * spread may move A and B, never their sum.
  */
 export const UNDERGROWTH_TINT_A: readonly [number, number, number] = [
-  1 - SHADE_BRIGHT - SHADE_HUE, 1 - SHADE_BRIGHT, 1 - SHADE_BRIGHT + SHADE_HUE,
+  1 + SHADE_R, 1 - SHADE_G, 1 - SHADE_B,
 ];
 export const UNDERGROWTH_TINT_B: readonly [number, number, number] = [
-  1 + SHADE_BRIGHT + SHADE_HUE, 1 + SHADE_BRIGHT, 1 + SHADE_BRIGHT - SHADE_HUE,
+  1 - SHADE_R, 1 + SHADE_G, 1 + SHADE_B,
 ];
 
 /**
@@ -486,7 +680,7 @@ export const UNDERGROWTH_TINT_B: readonly [number, number, number] = [
  * NOT FROM ITS INDEX, and that is not a matter of taste. The LOD thins the
  * layer by `instanceHash(index) < share` (`undergrowthVisible`), so a shade
  * keyed on the index would be perfectly correlated with the thinning: at
- * share 0.5 exactly the instances with hash < 0.5 survive, i.e. only the DARK
+ * share 0.5 exactly the instances with hash < 0.5 survive, i.e. only the DRY
  * half of the palette would be left, and the carpet would visibly turn colour
  * between 30 m and 60 m. The position is independent of the index, so the
  * thinned-out field keeps the full spread of shades.
@@ -526,7 +720,8 @@ export function undergrowthShade(x: number, z: number): number {
  *
  * PLAIN RGB, no HSL round trip. A hue conversion per instance would be three
  * branches and a division inside the build loop of a few thousand tufts per
- * cell, for a difference nobody can see at ±6 % of one channel.
+ * cell, and the axis it would buy — a rotation at constant saturation — is not
+ * the axis dry-to-fresh runs along anyway (`SHADE_R`).
  */
 export function undergrowthTint(h: number): [number, number, number] {
   const v = Number(h);
@@ -539,8 +734,10 @@ export function undergrowthTint(h: number): [number, number, number] {
 }
 
 /** The ONE blade texture of the session — one `DataTexture` shared by every
- *  cell and every kind, because the tint is the MATERIAL's job. Built on first
- *  use and handed back by `dispose`. */
+ *  cell and every kind. It carries the blade-to-blade colour and nothing else:
+ *  the terrain kind's own colour is the MATERIAL's job and the tuft-to-tuft
+ *  spread is `instanceColor`'s, so a second kind never needs a second texture.
+ *  Built on first use and handed back by `dispose`. */
 export function undergrowthTexture(): THREE.DataTexture {
   const n = UNDERGROWTH_TEX_SIZE;
   const tex = new THREE.DataTexture(new Uint8Array(undergrowthTexturePixels(n)),
@@ -561,9 +758,13 @@ export function undergrowthTexture(): THREE.DataTexture {
 /**
  * The tuft material of ONE terrain kind.
  *
- * The texture is greyscale, so `color` is the whole tint — the kind's own
- * colour, darkened by the same 0.75 the authored tuft uses, which is the
- * "existing tuft colour logic" this look inherits.
+ * `color` is the kind's own colour, darkened by the same 0.75 the authored
+ * tuft uses — the "existing tuft colour logic" this look inherits — and then
+ * multiplied BACK UP by `BLADE_TINT_MAX`, the headroom the texture gave up so
+ * its per-blade ramp would never clamp an eight-bit channel. Those two are one
+ * number, `0.75 · 1.26 = 0.945`, and the second factor is bookkeeping and not
+ * a decision: the texture's mean brightness fell by exactly the same 1.26, so
+ * the product `colour · texture` is what it was before the ramp existed.
  *
  * THE 0.75 IS KEPT AFTER THE NORMALS WERE TURNED UP, and here is the reason it
  * became RIGHT rather than too dark. With the card's own horizontal normal the
@@ -572,18 +773,20 @@ export function undergrowthTexture(): THREE.DataTexture {
  * of a 2.6-fold lighting deficit and the carpet came out at roughly a quarter
  * of the ground's brightness. Now both carry `N = (0, 1, 0)` and receive the
  * SAME light, so the whole difference is albedo: the tuft is
- * `kind · 0.75 · grey`, and the texture's grey runs 0.70…1.00 over the blade's
- * height (mean ≈ 0.85), i.e. about 0.64 of the ground's own colour. A growth
- * roughly a third darker than the ground it comes out of is what reads as
- * growth; 1.0 would make the layer vanish into its ground and 0.5 would make a
- * meadow look burnt. No sight check was possible, so this is the arithmetic
- * the next acceptance round can argue against.
+ * `kind · 0.75 · grey`, and the grey (before the headroom division, which the
+ * 0.945 cancels) runs 0.70…1.00 over the blade's height, mean ≈ 0.85 — i.e.
+ * about 0.64 of the ground's own colour. A growth roughly a third darker than
+ * the ground it comes out of is what reads as growth; 1.0 would make the layer
+ * vanish into its ground and 0.5 would make a meadow look burnt. No sight
+ * check was possible, so this is the arithmetic the next acceptance round can
+ * argue against.
  *
- * AND THE PER-TUFT SHADE RIDES ON TOP OF IT WITHOUT MOVING IT: `instanceColor`
- * multiplies this colour per instance, and the two ends of that mix sum to
- * exactly (2, 2, 2), so the MEAN over a field is this colour to the last bit
- * (`undergrowthTint`). The number above therefore still says what the layer
- * looks like as a whole.
+ * AND NEITHER SPREAD MOVES IT: the per-blade ramp in the texture averages to
+ * (1, 1, 1) over the blade pixels and the per-tuft `instanceColor` mix has two
+ * ends summing to exactly (2, 2, 2), so the mean over a field is this colour
+ * to the last bit (`undergrowthTint`, `BLADE_RAMP`). The number above
+ * therefore still says what the layer looks like as a whole — which is the
+ * point of building both spreads that way.
  *
  * `FrontSide` and not `DoubleSide`, and that is NOT a step back from "both
  * faces are drawn": the geometry carries every card with both windings, so
@@ -603,7 +806,8 @@ export function undergrowthMaterial(
 ): THREE.Material {
   const mat = new THREE.MeshStandardMaterial({
     map: tex,
-    color: new THREE.Color(color).multiplyScalar(0.75),
+    color: new THREE.Color(color).multiplyScalar(UNDERGROWTH_ALBEDO
+                                                 * BLADE_TINT_MAX),
     roughness: 0.95,
     alphaTest: UNDERGROWTH_ALPHA_TEST,
     side: THREE.FrontSide,
