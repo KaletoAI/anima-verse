@@ -13,7 +13,7 @@
  * worldmap rows and silently return nothing. They share their geometry through
  * `MapGeometry` and part ways after it.
  */
-import type { MapBounds } from './mapMath'
+import type { MapBounds, StrokeStyle } from './mapMath'
 import type { Map3D } from '../world/worldTypes'
 
 export type { Map3D }
@@ -209,10 +209,17 @@ export interface TerrainType {
 }
 
 /**
- * The RECIPE of an area drawn as a line: a centre line in world metres plus a
- * width. It lives in `meta.stroke` and is exactly that — a recipe. The polygon
- * stays the truth for the server, for point queries and for every renderer;
- * this only lets the editor put the handles back on the line the user drew.
+ * The RECIPE of an area drawn as a line: a centre line in world metres, the
+ * width of the ribbon it becomes, and how the line is BENT on the way. It
+ * lives in `meta.stroke` and is exactly that — a recipe. The polygon stays the
+ * truth for the server, for point queries and for every renderer; this only
+ * lets the editor put the handles back on the line the user drew and generate
+ * the very same outline again.
+ *
+ * The three decoration fields are absent for a straight line, which is what
+ * every stroke drawn before the styles existed is: `MapTab.readStroke` fills
+ * them in for the editor, `MapTab.storedStroke` strips them again on the way
+ * back, and the server whitelists all five (`app/models/terrain.py`).
  *
  * `meta` is free-form JSON the server passes through verbatim, so nothing
  * guarantees a stored `stroke` has this shape — read it through a check, never
@@ -221,6 +228,12 @@ export interface TerrainType {
 export interface TerrainStroke {
   points: Array<[number, number]>
   width_m: number
+  /** absent = `straight`, the line as it was clicked */
+  style?: StrokeStyle
+  /** roughly how far apart the deflections sit, in metres */
+  spacing_m?: number
+  /** how far they swing to either side of the line, in metres */
+  amplitude_m?: number
 }
 
 /** An area's `meta`. Free-form by contract — the known key is named, the rest

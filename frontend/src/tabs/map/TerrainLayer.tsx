@@ -59,7 +59,10 @@ import { useMemo } from 'react'
 import { cleanRing, polygonArea, scatterInstances, scatterSeed } from '@anima/scene-render'
 import type { ScatterFootprint } from '@anima/scene-render'
 import { useMapView } from './MapCanvas'
-import { strokeToPolygon, worldPolyToPath, worldToScreen } from './mapMath'
+import {
+  decorateStroke, strokeToPolygon, worldPolyToPath, worldToScreen,
+  type StrokeDeco,
+} from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
 import { readScatter } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
@@ -163,6 +166,9 @@ export interface TerrainLayerProps {
   /** Width of that stroke in metres — the outline preview is regenerated from
    *  it while a line point is being dragged. */
   centerlineWidthM: number
+  /** …and with the stored recipe's decoration, so a dragged wavy line follows
+   *  the pointer as the wavy line it is. */
+  centerlineDeco: StrokeDeco
   /** The polygon being painted (world metres) and the cursor it follows. */
   draft: Array<[number, number]>
   draftCursor: { x: number; z: number } | null
@@ -171,6 +177,10 @@ export interface TerrainLayerProps {
   draftLine: boolean
   /** Width the line draft would get, in metres. */
   draftWidthM: number
+  /** …and how the toolbar would bend it. The preview draws the ribbon the
+   *  save will produce, deflections included — a straight preview under a
+   *  jagged setting would be the one thing nobody could check by eye. */
+  draftDeco: StrokeDeco
   /** Colour of the armed paint kind. */
   draftColor: string
   /** The cursor sits inside the close tolerance of the first vertex — the
@@ -194,7 +204,8 @@ export interface TerrainLayerProps {
 
 export function TerrainLayer({
   part = 'all', areas, types, groundColor, editing, editable, selectedId,
-  centerline, centerlineWidthM, draft, draftCursor, draftLine, draftWidthM,
+  centerline, centerlineWidthM, centerlineDeco, draft, draftCursor, draftLine,
+  draftWidthM, draftDeco,
   draftColor, draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
   scatterPreview, footprints,
 }: TerrainLayerProps) {
@@ -215,8 +226,11 @@ export function TerrainLayer({
    *  every cursor move. The centre line alone is not a preview: the width is
    *  what actually gets painted, and only the generated outline shows it. */
   const draftRibbon = useMemo(() => (
-    draftLine && draftPts.length >= 2 ? strokeToPolygon(draftPts, draftWidthM) : null
-  ), [draftLine, draftPts, draftWidthM])
+    draftLine && draftPts.length >= 2
+      ? strokeToPolygon(decorateStroke(draftPts, draftDeco.style,
+        draftDeco.spacingM, draftDeco.amplitudeM).points, draftWidthM)
+      : null
+  ), [draftDeco, draftLine, draftPts, draftWidthM])
 
   /**
    * The scatter of every area, sampled ONCE per data change — in WORLD
@@ -290,7 +304,9 @@ export function TerrainLayer({
   // degenerate on the way, the stored polygon is shown instead of nothing.
   const outlineOf = centerline
     ? (pts: Array<[number, number]>) => (
-      strokeToPolygon(pts, centerlineWidthM) || selected?.polygon || [])
+      strokeToPolygon(decorateStroke(pts, centerlineDeco.style,
+        centerlineDeco.spacingM, centerlineDeco.amplitudeM).points,
+      centerlineWidthM) || selected?.polygon || [])
     : undefined
   // Are the handles on screen? Only then do they draw the outline themselves,
   // and only then does the static selection outline step aside.

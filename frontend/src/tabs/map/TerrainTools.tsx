@@ -26,6 +26,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import type { PropRef } from '../../lib/refs'
 import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
+import { STROKE_STYLES, type StrokeStyle } from './mapMath'
 import { typeColor } from './TerrainLayer'
 import type {
   HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType,
@@ -127,6 +128,18 @@ export const MAX_STROKE_POINTS = 100
 export const STROKE_WIDTH_MIN_M = 0.5
 export const STROKE_WIDTH_MAX_M = 50
 export const STROKE_WIDTH_DEFAULT_M = 3
+
+/** How far apart the deflections of a decorated line sit, in metres, and how
+ *  far they swing to either side. Both are the SERVER's clamps
+ *  (`app/models/terrain.STROKE_SPACING_MIN_M` …), mirrored here so a knob
+ *  cannot ask for something the store would quietly correct. The defaults are
+ *  a bank one can see the shape of: a deflection every 10 m, 2 m out. */
+export const STROKE_SPACING_MIN_M = 2
+export const STROKE_SPACING_MAX_M = 100
+export const STROKE_SPACING_DEFAULT_M = 10
+export const STROKE_AMPLITUDE_MIN_M = 0.5
+export const STROKE_AMPLITUDE_MAX_M = 30
+export const STROKE_AMPLITUDE_DEFAULT_M = 2
 
 /** The width as it may be stored: inside the range, on the 2-decimal metre
  *  grid the server keeps coordinates on. */
@@ -359,7 +372,9 @@ export const HEIGHT_DEFAULT_M = 3
 export const FALLOFF_DEFAULT_M = 10
 
 /**
- * A metre knob of the relief — the `WidthField` pattern, with a sign.
+ * A metre knob with a NAMED clamp — the `WidthField` pattern, with a sign and
+ * a limit that says itself. The relief's height and ramp are typed into it,
+ * and so are the spacing and the swing of a decorated line.
  *
  * Its own text draft, so a half-typed "−" or "0." is not clamped mid-keystroke;
  * committed on blur and on Enter (which is stopped here, or it would finish
@@ -375,7 +390,7 @@ export const FALLOFF_DEFAULT_M = 10
  * the input and names the limit right there. Nothing is refused: the value is
  * still committed, clamped, exactly as the server stores it.
  */
-function HeightNum({ label, title, value, step, min, max, onCommit }: {
+function MetreNum({ label, title, value, step, min, max, onCommit }: {
   label: string; title: string; value: number; step: number
   min: number; max: number; onCommit: (v: number) => void
 }) {
@@ -462,6 +477,18 @@ export interface TerrainToolbarProps {
   onShape: (s: PaintShape) => void
   widthM: number
   onWidth: (m: number) => void
+  /** How the next line is BENT: the style, and the two numbers that shape its
+   *  deflections. They only apply to `line` and only past `straight`. */
+  strokeStyle: StrokeStyle
+  onStrokeStyle: (s: StrokeStyle) => void
+  spacingM: number
+  onSpacingM: (m: number) => void
+  amplitudeM: number
+  onAmplitudeM: (m: number) => void
+  /** The spacing the point budget FORCED on the running draft, or 0 when the
+   *  one asked for holds (`mapMath.decorateStroke`). A line drawn coarser than
+   *  its own field claims has to say so. */
+  cappedSpacingM: number
   /** Vertices in the running draft. */
   draftLen: number
   onCloseDraft: () => void
@@ -492,7 +519,9 @@ export interface TerrainToolbarProps {
 
 export function TerrainToolbar({
   mode, onPrimary, sub, onSub, types, paintKind, onPaintKind, shape, onShape,
-  widthM, onWidth, draftLen, onCloseDraft, onDiscardDraft, areaCount,
+  widthM, onWidth, strokeStyle, onStrokeStyle, spacingM, onSpacingM,
+  amplitudeM, onAmplitudeM, cappedSpacingM,
+  draftLen, onCloseDraft, onDiscardDraft, areaCount,
   typesError,
   heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
   maxStepM, gridStepM, gridStepDefaultM,
@@ -534,6 +563,31 @@ export function TerrainToolbar({
       {icon} {label}
     </button>
   )
+  /** How a line style presents itself. Driven off `STROKE_STYLES`, so the
+   *  toolbar offers exactly the styles `decorateStroke` can draw — a fourth
+   *  one would appear here by adding it there. */
+  const styleWords = (s: StrokeStyle) => (s === 'jagged'
+    ? { icon: '⋀', label: t('Jagged'),
+      title: t('Triangular spikes of random height, across the line') }
+    : s === 'wavy'
+      ? { icon: '∿', label: t('Wavy'),
+        title: t('A soft wave of random phase and height, across the line') }
+      : { icon: '╱', label: t('Straight'),
+        title: t('The line exactly as it is clicked') })
+  const styleBtn = (s: StrokeStyle) => {
+    const w = styleWords(s)
+    return (
+      <button
+        key={s}
+        type="button"
+        className={'ga-btn ga-btn-sm' + (strokeStyle === s ? ' ga-btn-primary' : '')}
+        title={w.title}
+        onClick={() => onStrokeStyle(s)}
+      >
+        {w.icon} {w.label}
+      </button>
+    )
+  }
   return (
     <>
       {/* WHAT is being edited. Three subjects, not four tools: drawing ground
@@ -581,7 +635,46 @@ export function TerrainToolbar({
             {shapeBtn('line', '➜', t('Line'),
               t('Click a centre line; it becomes an area of the width below'))}
           </span>
-          {isLine ? <WidthField widthM={widthM} onWidth={onWidth} /> : null}
+          {isLine ? (
+            <>
+              <WidthField widthM={widthM} onWidth={onWidth} />
+              {/* HOW the centre line runs before it is widened. A river bank
+                  drawn with the ruler reads as a canal, and the two numbers
+                  are only asked for once there is something to shape — a
+                  spacing next to a straight line would be a dead knob. */}
+              <span className="ga-terrain-modes">
+                {STROKE_STYLES.map((s) => styleBtn(s))}
+              </span>
+              {strokeStyle === 'straight' ? null : (
+                <>
+                  <MetreNum
+                    label={t('Spacing')}
+                    title={t('Roughly how far apart the deflections sit along the line. It is an average, not a raster — every deflection has a size of its own.')}
+                    value={spacingM} step={1}
+                    min={STROKE_SPACING_MIN_M} max={STROKE_SPACING_MAX_M}
+                    onCommit={onSpacingM} />
+                  <MetreNum
+                    label={t('Swing')}
+                    title={t('How far the deflections reach out to either side of the clicked line. The ribbon is that much wider than its width alone.')}
+                    value={amplitudeM} step={0.5}
+                    min={STROKE_AMPLITUDE_MIN_M} max={STROKE_AMPLITUDE_MAX_M}
+                    onCommit={onAmplitudeM} />
+                </>
+              )}
+              {/* One area holds 256 outline points and a deflection costs two
+                  of them, so a dense line on a long stroke is thinned out
+                  instead of refused on save — and says so, because a line
+                  drawn coarser than its own field claims is the kind of
+                  silence that gets read as a broken knob. */}
+              {cappedSpacingM > 0 ? (
+                <span className="ga-map-arm warn"
+                  title={t('An area may hold 256 outline points, and every deflection spends two of them. The line still gets its style — just at the closest spacing that fits. Shorten the line or set a wider spacing to draw the one you asked for.')}>
+                  {t('Too many deflections for one area — this line is drawn with one every {n} m.')
+                    .replace('{n}', String(Math.round(cappedSpacingM * 10) / 10))}
+                </span>
+              ) : null}
+            </>
+          ) : null}
         </>
       ) : null}
 
@@ -676,12 +769,12 @@ export function TerrainToolbar({
         <>
           {drawingHeights ? (
             <>
-              <HeightNum
+              <MetreNum
                 label={t('Height')}
                 title={t('How high the ground stands inside the new area. Negative digs a hollow.')}
                 value={heightM} step={0.5}
                 min={-HEIGHT_MAX_M} max={HEIGHT_MAX_M} onCommit={onHeightM} />
-              <HeightNum
+              <MetreNum
                 label={t('Ramp')}
                 title={t('Over how many metres before the outline the ground climbs to that height. 0 = a wall at the edge.')}
                 value={falloffM} step={0.5}
@@ -772,6 +865,7 @@ export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayer
           <p>{t('Ground nobody painted keeps the default kind, so there is no need to paint a base layer under everything else.')}</p>
           <p>{t('Select an area and use “Bring forward” or “Send back” in its chip to move it one layer at a time.')}</p>
           <p>{t('The Line tool reads your clicks as a centre line and turns it into an area of the width you set; you then edit that area by its centre-line points and its width, not by its outline, until you convert it into an ordinary area.')}</p>
+          <p>{t('A jagged or wavy line hangs deflections of random size off that centre line before it is widened — the spacing and the swing say how far apart and how far out. The line is set for the NEXT stroke; an area keeps the style it was drawn with.')}</p>
         </div>
       ) : null}
     </div>
@@ -845,6 +939,14 @@ export function TerrainAreaChip({
           style={{ background: typeColor(types, area.kind) }} />
         <strong>{known?.name || area.kind}</strong>
         {stroke ? <span className="ga-map-chip-tag">{t('line')}</span> : null}
+        {/* WHICH line, when it is not the plain one. The style is set for the
+            NEXT line in the toolbar; here it is a read-out, so an area whose
+            outline nobody can place any more can at least be recognised. */}
+        {stroke && stroke.style && stroke.style !== 'straight' ? (
+          <span className="ga-map-chip-tag">
+            {stroke.style === 'jagged' ? t('jagged') : t('wavy')}
+          </span>
+        ) : null}
         <button type="button" className="ga-modal-close"
           title={t('Clear selection')} onClick={onClose}>×</button>
       </div>
@@ -1249,12 +1351,12 @@ export function HeightAreaChip({
         <span>{t('{n} points').replace('{n}', String(area.polygon.length))}</span>
       </div>
       <div className="ga-map-chip-row">
-        <HeightNum
+        <MetreNum
           label={t('Height')}
           title={t('How high the ground stands inside this area. Negative digs a hollow.')}
           value={area.height_m} step={0.5}
           min={-HEIGHT_MAX_M} max={HEIGHT_MAX_M} onCommit={onHeight} />
-        <HeightNum
+        <MetreNum
           label={t('Ramp')}
           title={t('Over how many metres before the outline the ground climbs to that height. 0 = a wall at the edge.')}
           value={area.falloff_m} step={0.5}

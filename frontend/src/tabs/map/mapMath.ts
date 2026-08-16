@@ -50,7 +50,7 @@
  *   pointInPolygon(0, 0, [[0,0], [1,1]]) -> false  (fewer than 3 points is
  *     not an area at all — the server fails closed the same way)
  */
-import { worldToLocalXZ } from '@anima/scene-render'
+import { seededRandom, worldToLocalXZ } from '@anima/scene-render'
 
 /** Viewport state: world point at the canvas centre + zoom. */
 export interface View {
@@ -373,6 +373,215 @@ const STROKE_EPS = 1e-9
  *  The `+ 0` normalizes −0 to 0 — otherwise a mirrored side produces "-0",
  *  which `===` calls equal but JSON writes out as a different number. */
 const round2 = (v: number): number => Math.round(v * 100) / 100 + 0
+
+/** How a centre line is BENT before it is widened. `straight` is the line as
+ *  clicked; the other two hang deflections off it, so a river bank or a forest
+ *  edge stops looking like a ruler. */
+export type StrokeStyle = 'straight' | 'jagged' | 'wavy'
+
+/** The styles in the order the toolbar offers them — straight first, because
+ *  that is what the tool did before and still does by default. */
+export const STROKE_STYLES: readonly StrokeStyle[] = ['straight', 'jagged', 'wavy']
+
+/** Is this one of the three? Anything else — a foreign `meta.stroke`, a client
+ *  that knows a style this one does not — is read as the straight line the
+ *  polygon was generated from, never guessed at. */
+export function isStrokeStyle(value: unknown): value is StrokeStyle {
+  return typeof value === 'string'
+    && (STROKE_STYLES as readonly string[]).includes(value)
+}
+
+/** What a line's decoration is set to: the toolbar's setting for the next
+ *  line, the stored recipe's for one that already exists. */
+export interface StrokeDeco {
+  style: StrokeStyle
+  spacingM: number
+  amplitudeM: number
+}
+
+/**
+ * Points a DECORATED centre line may end up with.
+ *
+ * The budget is the server's 256-point polygon limit, counted where it is
+ * actually spent: a mitred ribbon is `2n` points wide (`strokeToPolygon`), so
+ * 120 centre points make a 240-point outline — the safety distance under 256
+ * the plan asks for. Cap the centre line at 240 instead and every dense line
+ * would generate a 480-point polygon and be refused on save, which is not a
+ * cap but a wall.
+ *
+ * It is a bound on the MITRED case, and deliberately only that: deflections
+ * sharp enough to bevel add two points per join, and such a line overruns 256
+ * the way any hairpin chain already does — `MapTab.strokePolygon` refuses it
+ * with the count in the message.
+ */
+export const MAX_DECORATED_POINTS = 120
+
+/** The smallest deflection, as a fraction of the amplitude. Deflections have
+ *  random size (that is what keeps them from reading as a pattern), but one of
+ *  nearly zero is a kink nobody drew — the field says how far the line swings,
+ *  not how far its biggest swing goes. */
+const DEFLECTION_MIN_FACTOR = 0.4
+
+/** Deflections per full wave of the `wavy` style. Four samples per period is
+ *  the coarsest a sine still reads as a curve rather than as a zigzag, and it
+ *  keeps ONE spacing field meaning the same thing in both styles: how far
+ *  apart the deflections sit. */
+const WAVE_SPACINGS_PER_PERIOD = 4
+
+/** The seed of one decoration — the clicked line itself, so the same stroke
+ *  drawn twice gets the same spikes, and no two lines share a pattern. Fed to
+ *  `seededRandom` (@anima/scene-render), the ONE PRNG of this repo. */
+export function strokeSeed(points: Array<[number, number]>): string {
+  let s = 'terrain:stroke'
+  for (const p of points) s += `:${p?.[0]},${p?.[1]}`
+  return s
+}
+
+/** A decorated centre line, plus what had to be given up to fit the budget. */
+export interface DecoratedStroke {
+  /** The line as `strokeToPolygon` should read it: the clicked points with the
+   *  deflections woven in, in walking order. */
+  points: Array<[number, number]>
+  /** The spacing actually used — larger than the one asked for when the cap
+   *  below thinned the deflections out. */
+  spacingM: number
+  /** `MAX_DECORATED_POINTS` raised the spacing. The toolbar says so; silently
+   *  drawing something coarser than the field claims would be a lie. */
+  capped: boolean
+}
+
+/**
+ * Bend a clicked centre line — the step BEFORE `strokeToPolygon`.
+ *
+ * A pure function of its arguments: the same line, style and numbers give the
+ * same points, always, in every client. The randomness is seeded from the
+ * clicked points themselves (`strokeSeed`), so redrawing the same line gives
+ * the same river and dragging one of its points reshapes the whole pattern —
+ * which is what dragging a point of a hand-drawn line looks like anyway.
+ *
+ * The deflections sit at arc length `spacing/2`, `3·spacing/2`, … along the
+ * line, each one pushed sideways along the local unit normal `(dz, −dx)` —
+ * side A of `strokeToPolygon`, the same convention, so nothing here invents a
+ * second idea of "sideways". How far, and to which side:
+ *
+ *   jagged — alternating sides, so the deflections form a triangle wave, with
+ *            each spike's height drawn at random from
+ *            `[0.4·amplitude, amplitude]`.
+ *   wavy   — a sine of random phase over the same random heights: the same
+ *            deflections, following a curve instead of a zigzag.
+ *
+ * The phase is drawn FIRST and in both styles, so switching between them
+ * leaves the heights alone and only changes the shape they are hung on.
+ *
+ * The clicked points all survive, in order — the decoration is woven between
+ * them, never instead of them.
+ *
+ * Left unchanged, and returned as the very array it was given: the `straight`
+ * style, a style this build does not know, a spacing or amplitude that is not
+ * a positive number, a line with fewer than two distinct points or a
+ * non-finite coordinate, and a line of zero length. A decoration that cannot
+ * be computed is no decoration, never half of one.
+ *
+ * Verification cases (hand-derived, § B5a — arithmetic, not screenshots),
+ * `A` = amplitude, `m_i` = the random height of the i-th deflection:
+ *
+ *   [(0,0),(100,0)], jagged, spacing 10, A 2: length 100, deflections at
+ *     5, 15, …, 95 -> 10 of them, 12 points in all. Segment direction (1,0)
+ *     has normal (0,−1), so side A is NEGATIVE z and the sides alternate from
+ *     there:
+ *     [(0,0),(5,−m0),(15,m1),(25,−m2),…,(95,m9),(100,0)] with 0.8 <= m_i <= 2
+ *   the same line, wavy: the same 10 positions and the same heights, the side
+ *     given by sin(phase + i·π/2) instead — |z| <= 2 throughout, and NOT the
+ *     alternating sequence above (which is what tells the two styles apart).
+ *   [(0,0),(10,0),(10,10)], jagged, spacing 10, A 2: length 20, deflections at
+ *     5 (on the first segment, normal (0,−1)) and 15 (on the second, direction
+ *     (0,1), normal (1,0)) -> [(0,0),(5,−m0),(10,0),(10−m1,5),(10,10)]: the
+ *     clicked corner (10,0) is still in there, between the two.
+ *   [(0,0),(1000,0)], jagged, spacing 2, A 2: 500 deflections would be 502
+ *     points, so the cap bites — room is 120 − 2 = 118 deflections, spacing
+ *     becomes 1000/118 = 8.4745…, and 118 of them fit (the last at
+ *     117.5 · 8.4745… = 995.76 < 1000): 120 points, `capped` true, and the
+ *     240-point outline they generate is exactly the budget.
+ *   [(0,0),(100,0)], jagged, spacing 10, A 0 -> the input array itself, since
+ *     a deflection of no height is no deflection.
+ *   [(0,0),(100,0)], straight, spacing 10, A 2 -> the input array itself.
+ */
+export function decorateStroke(points: Array<[number, number]>,
+  style: StrokeStyle, spacingM: number, amplitudeM: number,
+  seed: string = strokeSeed(points)): DecoratedStroke {
+  const plain: DecoratedStroke = { points, spacingM, capped: false }
+  if (style !== 'jagged' && style !== 'wavy') return plain
+  if (!Number.isFinite(spacingM) || spacingM <= 0) return plain
+  if (!Number.isFinite(amplitudeM) || amplitudeM <= 0) return plain
+
+  // 1. the line as the ribbon builder will read it: finite, no repeated click.
+  const line: Array<[number, number]> = []
+  for (const p of points) {
+    if (!p || p.length < 2) return plain
+    const [x, z] = p
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return plain
+    const prev = line[line.length - 1]
+    if (prev && Math.abs(prev[0] - x) < STROKE_EPS
+      && Math.abs(prev[1] - z) < STROKE_EPS) continue
+    line.push([x, z])
+  }
+  if (line.length < 2) return plain
+
+  // 2. where each clicked point sits along the line, and how long it is.
+  const cum = [0]
+  for (let i = 1; i < line.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(line[i][0] - line[i - 1][0],
+      line[i][1] - line[i - 1][1]))
+  }
+  const total = cum[cum.length - 1]
+  if (!(total > 0)) return plain
+
+  // 3. the budget (see MAX_DECORATED_POINTS): the clicked points are already
+  //    spent, the rest is what the deflections may take. Asking for more
+  //    thins them out — the line still gets its style, at the density that
+  //    fits, and `capped` says the field's number is not the one drawn.
+  const room = MAX_DECORATED_POINTS - line.length
+  if (room <= 0) return { points: line, spacingM, capped: true }
+  let spacing = spacingM
+  let capped = false
+  if (spacing < total / room) {
+    spacing = total / room
+    capped = true
+  }
+
+  // 4. walk the line and weave the two lists together.
+  const rnd = seededRandom(seed)
+  const phase = rnd() * Math.PI * 2
+  const out: Array<[number, number]> = [line[0]]
+  let seg = 1
+  let i = 0
+  for (let d = spacing / 2; d < total - STROKE_EPS; d += spacing, i++) {
+    // Every clicked point the walk has passed goes in before the deflection.
+    while (seg < line.length - 1 && cum[seg] <= d) {
+      out.push(line[seg])
+      seg++
+    }
+    const [ax, az] = line[seg - 1]
+    const [bx, bz] = line[seg]
+    const len = cum[seg] - cum[seg - 1]
+    const f = (d - cum[seg - 1]) / len
+    const nx = (bz - az) / len
+    const nz = -(bx - ax) / len
+    const height = amplitudeM
+      * (DEFLECTION_MIN_FACTOR + (1 - DEFLECTION_MIN_FACTOR) * rnd())
+    const side = style === 'jagged'
+      ? (i % 2 === 0 ? 1 : -1)
+      : Math.sin(phase + (i * 2 * Math.PI) / WAVE_SPACINGS_PER_PERIOD)
+    const off = height * side
+    out.push([round2(ax + f * (bx - ax) + off * nx),
+      round2(az + f * (bz - az) + off * nz)])
+  }
+  while (seg < line.length) {
+    out.push(line[seg])
+    seg++
+  }
+  return { points: out, spacingM: spacing, capped }
+}
 
 /**
  * A centre LINE plus a width becomes the AREA polygon the world actually

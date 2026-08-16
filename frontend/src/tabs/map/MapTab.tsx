@@ -8,8 +8,9 @@ import { renderTopDownSnapshot } from '../world/topDownSnapshot'
 import type { ScenePayload } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
 import {
-  FIT_FALLBACK_PX_PER_M, areaInRect, fitBounds, pointInPolygon,
-  strokeToPolygon, visibleWorldRect, type MapBounds, type View,
+  FIT_FALLBACK_PX_PER_M, areaInRect, decorateStroke, fitBounds, isStrokeStyle,
+  pointInPolygon, strokeToPolygon, visibleWorldRect,
+  type MapBounds, type StrokeDeco, type StrokeStyle, type View,
 } from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
@@ -19,7 +20,8 @@ import { HeightLayer } from './HeightLayer'
 import {
   FALLOFF_DEFAULT_M, HEIGHT_DEFAULT_M, HeightAreaChip, HeightAreaList,
   MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
-  MIN_STROKE_POINTS, MapDisplayPanel, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip,
+  MIN_STROKE_POINTS, MapDisplayPanel, STROKE_AMPLITUDE_DEFAULT_M,
+  STROKE_SPACING_DEFAULT_M, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip,
   TerrainAreaList, TerrainLayerHint, TerrainToolbar, primaryOf,
   type HeightTool, type MapPrimary, type MapSub, type PaintShape,
   type TerrainMode,
@@ -193,6 +195,11 @@ const polygonArea = (poly: Array<[number, number]>): number => {
   return Math.abs(s) / 2
 }
 
+/** A stored number of the recipe, or the default the editor draws with. A
+ *  recipe written before the styles existed carries none of them. */
+const recipeNum = (v: unknown, fallback: number): number => (
+  typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : fallback)
+
 /**
  * `meta.stroke` as the editor may act on it — or null.
  *
@@ -201,11 +208,17 @@ const polygonArea = (poly: Array<[number, number]>): number => {
  * about what is stored. Every field is therefore checked before a single
  * handle is hung on it: a foreign or half-written `stroke` makes the area an
  * ordinary one, which is always editable, instead of crashing the tab.
+ *
+ * The decoration is FILLED IN here — a recipe without a style is the straight
+ * line it was drawn as, and its two numbers are the defaults the toolbar
+ * offers. `storedStroke` strips them again on the way back, so absence keeps
+ * meaning "straight" in the DB while the editor works with a whole recipe.
  */
 function readStroke(area: TerrainArea | null): TerrainStroke | null {
   const raw: unknown = area?.meta?.stroke
   if (!raw || typeof raw !== 'object') return null
-  const { points, width_m: width } = raw as { points?: unknown; width_m?: unknown }
+  const { points, width_m: width, style, spacing_m: spacing,
+    amplitude_m: amplitude } = raw as Record<string, unknown>
   if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) return null
   if (!Array.isArray(points) || points.length < MIN_STROKE_POINTS) return null
   const pts: Array<[number, number]> = []
@@ -216,7 +229,52 @@ function readStroke(area: TerrainArea | null): TerrainStroke | null {
     if (typeof z !== 'number' || !Number.isFinite(z)) return null
     pts.push([x, z])
   }
-  return { points: pts, width_m: width }
+  return {
+    points: pts,
+    width_m: width,
+    style: isStrokeStyle(style) ? style : 'straight',
+    spacing_m: recipeNum(spacing, STROKE_SPACING_DEFAULT_M),
+    amplitude_m: recipeNum(amplitude, STROKE_AMPLITUDE_DEFAULT_M),
+  }
+}
+
+/** What an ordinary painted area is decorated with: nothing. The two numbers
+ *  ride along because the layer's props take a whole setting, and a straight
+ *  line ignores them. */
+const STRAIGHT_DECO: StrokeDeco = {
+  style: 'straight',
+  spacingM: STROKE_SPACING_DEFAULT_M,
+  amplitudeM: STROKE_AMPLITUDE_DEFAULT_M,
+}
+
+/** The decoration of a recipe, in the shape the math and the layer take it. */
+const strokeDeco = (s: TerrainStroke): StrokeDeco => ({
+  style: s.style || 'straight',
+  spacingM: recipeNum(s.spacing_m, STROKE_SPACING_DEFAULT_M),
+  amplitudeM: recipeNum(s.amplitude_m, STROKE_AMPLITUDE_DEFAULT_M),
+})
+
+/** The recipe as it is STORED: the decoration only when there IS one. A
+ *  straight line says so by absence — which is also the state of every stroke
+ *  drawn before the styles existed, so the two are the same thing and not two
+ *  spellings of it. */
+function storedStroke(s: TerrainStroke): TerrainStroke {
+  const bare: TerrainStroke = { points: s.points, width_m: s.width_m }
+  if (!s.style || s.style === 'straight') return bare
+  const deco = strokeDeco(s)
+  return {
+    ...bare, style: deco.style,
+    spacing_m: deco.spacingM, amplitude_m: deco.amplitudeM,
+  }
+}
+
+/** The centre line as the RIBBON reads it: the clicked points with the
+ *  recipe's deflections woven in (`mapMath.decorateStroke`). Every generation
+ *  of a stroke outline — save, drag, width change, preview — goes through
+ *  here, so no two of them can disagree about the shape. */
+const strokeLine = (s: TerrainStroke): Array<[number, number]> => {
+  const d = strokeDeco(s)
+  return decorateStroke(s.points, d.style, d.spacingM, d.amplitudeM).points
 }
 
 /** A world coordinate for the chip. `fmtM` decides its precision by
@@ -274,6 +332,12 @@ export function MapTab() {
   // a setting in name only.
   const [paintShape, setPaintShape] = useState<PaintShape>('area')
   const [strokeWidthM, setStrokeWidthM] = useState(STROKE_WIDTH_DEFAULT_M)
+  // …and HOW it runs: straight as clicked, or bent into spikes or a wave.
+  // Same reason these live here as the width does — a style that reset itself
+  // whenever the user looked at a location would be a setting in name only.
+  const [strokeStyle, setStrokeStyle] = useState<StrokeStyle>('straight')
+  const [strokeSpacingM, setStrokeSpacingM] = useState(STROKE_SPACING_DEFAULT_M)
+  const [strokeAmplitudeM, setStrokeAmplitudeM] = useState(STROKE_AMPLITUDE_DEFAULT_M)
   const [draft, setDraft] = useState<Array<[number, number]>>([])
   const [draftCursor, setDraftCursor] = useState<{ x: number; z: number } | null>(null)
   const [selArea, setSelArea] = useState('')
@@ -914,6 +978,23 @@ export function MapTab() {
    *  an ordinary outline (and then everything below edits the polygon). */
   const selStroke = useMemo(() => readStroke(selectedArea), [selectedArea])
 
+  /** What the toolbar arms for the NEXT line. */
+  const draftDeco = useMemo<StrokeDeco>(() => ({
+    style: strokeStyle, spacingM: strokeSpacingM, amplitudeM: strokeAmplitudeM,
+  }), [strokeAmplitudeM, strokeSpacingM, strokeStyle])
+
+  /** The spacing the point budget FORCED on the line being drawn, 0 while the
+   *  one asked for holds (`mapMath.decorateStroke`). Measured on the draft as
+   *  it stands, so the sentence appears at the click that makes the line too
+   *  long — not one save too late. */
+  const cappedSpacingM = useMemo(() => {
+    if (mode !== 'paint' || paintShape !== 'line') return 0
+    if (draft.length < MIN_STROKE_POINTS) return 0
+    const d = decorateStroke(draft, draftDeco.style, draftDeco.spacingM,
+      draftDeco.amplitudeM)
+    return d.capped ? d.spacingM : 0
+  }, [draft, draftDeco, mode, paintShape])
+
   /**
    * The footprints the scatter preview keeps clear (finding B18).
    *
@@ -1128,25 +1209,34 @@ export function MapTab() {
     }
   }, [newFalloffM, newHeightM, noteHeightStep, reloadHeights, t, toast])
 
+  /** The recipe the toolbar currently arms — the clicked line plus everything
+   *  set next to the Line button. ONE place builds it, so the three ways of
+   *  finishing a line (button, Enter, double-click) cannot arm three different
+   *  things. */
+  const draftStroke = useCallback((pts: Array<[number, number]>): TerrainStroke => ({
+    points: pts, width_m: strokeWidthM, style: strokeStyle,
+    spacing_m: strokeSpacingM, amplitude_m: strokeAmplitudeM,
+  }), [strokeAmplitudeM, strokeSpacingM, strokeStyle, strokeWidthM])
+
   /** Finish the running centre line into a new area. Same rules as
    *  `commitDraft` — the draft survives a failed write — plus the recipe: the
-   *  clicked line and its width travel along in `meta.stroke`, so the area can
-   *  be dragged back into shape later. */
-  const commitStroke = useCallback(async (pts: Array<[number, number]>,
-    widthM: number) => {
+   *  clicked line, its width and its style travel along in `meta.stroke`, so
+   *  the area can be dragged back into shape later and regenerates the very
+   *  same outline when it is. */
+  const commitStroke = useCallback(async (recipe: TerrainStroke) => {
     if (draftBusyRef.current) return
-    if (pts.length < MIN_STROKE_POINTS) {
+    if (recipe.points.length < MIN_STROKE_POINTS) {
       toast(t('A line needs at least {n} points')
         .replace('{n}', String(MIN_STROKE_POINTS)), 'error')
       return
     }
-    const poly = strokePolygon(pts, widthM)
+    const poly = strokePolygon(strokeLine(recipe), recipe.width_m)
     if (!poly) return
     draftBusyRef.current = true
     try {
       await apiPost('/world/terrain-areas', {
         kind: paintKind, polygon: poly,
-        meta: { stroke: { points: pts, width_m: widthM } },
+        meta: { stroke: storedStroke(recipe) },
       })
       setDraft([])
       setDraftCursor(null)
@@ -1162,10 +1252,10 @@ export function MapTab() {
    *  and on nothing else. */
   const closeDraft = useCallback(() => {
     if (mode === 'heights') void commitHeightDraft(draft)
-    else if (paintShape === 'line') void commitStroke(draft, strokeWidthM)
+    else if (paintShape === 'line') void commitStroke(draftStroke(draft))
     else void commitDraft(draft)
-  }, [commitDraft, commitHeightDraft, commitStroke, draft, mode, paintShape,
-    strokeWidthM])
+  }, [commitDraft, commitHeightDraft, commitStroke, draft, draftStroke, mode,
+    paintShape])
 
   /** One click while drawing: close the ring, or drop another vertex.
    *
@@ -1216,11 +1306,10 @@ export function MapTab() {
    *  no longer produces its own outline would put the handles somewhere the
    *  shape is not. A regeneration that fails the checks writes nothing, and
    *  the area keeps the shape it had. */
-  const putStroke = useCallback((a: TerrainArea, pts: Array<[number, number]>,
-    widthM: number) => {
-    const poly = strokePolygon(pts, widthM)
+  const putStroke = useCallback((a: TerrainArea, recipe: TerrainStroke) => {
+    const poly = strokePolygon(strokeLine(recipe), recipe.width_m)
     if (!poly) return
-    const meta: TerrainMeta = { ...a.meta, stroke: { points: pts, width_m: widthM } }
+    const meta: TerrainMeta = { ...a.meta, stroke: storedStroke(recipe) }
     patchAreaLocal(a.id, { polygon: poly, meta })
     void putArea(a, { polygon: poly, meta })
   }, [patchAreaLocal, putArea, strokePolygon])
@@ -1246,11 +1335,11 @@ export function MapTab() {
       const tag = document.activeElement?.tagName || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       e.preventDefault()
-      void commitStroke(draft, strokeWidthM)
+      void commitStroke(draftStroke(draft))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [commitStroke, draft, mode, paintShape, strokeWidthM])
+  }, [commitStroke, draft, draftStroke, mode, paintShape])
 
   /**
    * Double-click finishes a line too — and has to undo half of itself first.
@@ -1272,8 +1361,8 @@ export function MapTab() {
       const [bx, bz] = pts[pts.length - 1]
       if (Math.hypot(ax - bx, az - bz) * view.pxPerM <= DBLCLICK_MERGE_PX) pts.pop()
     }
-    void commitStroke(pts, strokeWidthM)
-  }, [commitStroke, paintShape, strokeWidthM, view.pxPerM])
+    void commitStroke(draftStroke(pts))
+  }, [commitStroke, draftStroke, paintShape, view.pxPerM])
 
   const moveVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedArea
@@ -1287,8 +1376,8 @@ export function MapTab() {
     }
     if (selStroke) {
       if (i < 0 || i >= selStroke.points.length) return
-      putStroke(a, selStroke.points.map(
-        (p, k) => (k === i ? [x, z] as [number, number] : p)), selStroke.width_m)
+      putStroke(a, { ...selStroke, points: selStroke.points.map(
+        (p, k) => (k === i ? [x, z] as [number, number] : p)) })
       return
     }
     if (i < 0 || i >= a.polygon.length) return
@@ -1307,7 +1396,7 @@ export function MapTab() {
           .replace('{n}', String(MIN_STROKE_POINTS)), 'error')
         return
       }
-      putStroke(a, selStroke.points.filter((_, k) => k !== i), selStroke.width_m)
+      putStroke(a, { ...selStroke, points: selStroke.points.filter((_, k) => k !== i) })
       return
     }
     if (i < 0 || i >= a.polygon.length) return
@@ -1331,7 +1420,7 @@ export function MapTab() {
       }
       const pts = [...selStroke.points]
       pts.splice(i, 0, [x, z])
-      putStroke(a, pts, selStroke.width_m)
+      putStroke(a, { ...selStroke, points: pts })
       return
     }
     if (a.polygon.length >= MAX_POINTS) {
@@ -1348,7 +1437,7 @@ export function MapTab() {
   const setStrokeAreaWidth = useCallback((widthM: number) => {
     const a = selectedArea
     if (!a || !selStroke || widthM === selStroke.width_m) return
-    putStroke(a, selStroke.points, widthM)
+    putStroke(a, { ...selStroke, width_m: widthM })
   }, [putStroke, selStroke, selectedArea])
 
   /** Drop the recipe, keep the shape. The polygon is already the truth, so
@@ -1771,10 +1860,12 @@ export function MapTab() {
     selectedId: selArea,
     centerline: selStroke ? selStroke.points : null,
     centerlineWidthM: selStroke ? selStroke.width_m : 0,
+    centerlineDeco: selStroke ? strokeDeco(selStroke) : STRAIGHT_DECO,
     draft,
     draftCursor,
     draftLine: paintingLine,
     draftWidthM: strokeWidthM,
+    draftDeco,
     draftColor: typeColor(typeMap, paintKind),
     draftWillClose,
     onVertexMove: moveVertex,
@@ -1893,6 +1984,13 @@ export function MapTab() {
             onShape={switchShape}
             widthM={strokeWidthM}
             onWidth={setStrokeWidthM}
+            strokeStyle={strokeStyle}
+            onStrokeStyle={setStrokeStyle}
+            spacingM={strokeSpacingM}
+            onSpacingM={setStrokeSpacingM}
+            amplitudeM={strokeAmplitudeM}
+            onAmplitudeM={setStrokeAmplitudeM}
+            cappedSpacingM={cappedSpacingM}
             draftLen={draft.length}
             onCloseDraft={closeDraft}
             onDiscardDraft={() => { setDraft([]); setDraftCursor(null) }}
