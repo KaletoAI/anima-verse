@@ -192,7 +192,12 @@ export function TerrainTab() {
                       <span className="ga-list-row-sub">
                         {ty.kind}
                         {ty.passable ? '' : ` · ${t('impassable')}`}
-                        {ty.surface ? ` · ${ty.surface}` : ''}
+                        {/* Named or NOT named — since the assignment became
+                            explicit, "no surface" is a state worth seeing in
+                            the list: it is what a kind whose same-named
+                            texture used to skin it by itself now looks like,
+                            and one click on the right fixes it. */}
+                        {ty.surface ? ` · ${ty.surface}` : ` · ${t('no surface')}`}
                       </span>
                     </span>
                     <span className={'ga-source ga-source-' + src}>
