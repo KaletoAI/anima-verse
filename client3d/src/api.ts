@@ -178,6 +178,28 @@ export async function fetchTerrain(): Promise<TerrainPayload> {
   return json<TerrainPayload>(await fetch('/play/terrain'));
 }
 
+/** The avatar's EXPLORATION MEMORY (`GET /play/explored`, § A12): the 64 m
+ *  cells it has already stood in, as `"cx,cz"` keys, plus the signature the
+ *  worldmap poll carries. */
+export interface ExploredPayload {
+  cells: string[];
+  sig: string;
+}
+
+/** The ground the avatar has walked (`GET /play/explored`, § A12) — what the
+ *  overview veil spares in addition to the known footprints.
+ *
+ *  Fetched exactly like the terrain and the relief, on its own signature
+ *  (`WorldMap.explored_sig`): the list is complete and flat, which is
+ *  affordable a few times per session and would not be on a three-second poll.
+ *
+ *  Throws like every other game call — but the CALLER treats a failure as "no
+ *  memory yet" rather than as a broken world: a veil that covers walked ground
+ *  is last week's picture, not a wrong one. */
+export async function fetchExplored(): Promise<ExploredPayload> {
+  return json<ExploredPayload>(await fetch('/play/explored'));
+}
+
 /** The world RELIEF (`GET /play/heightfield`, § A16): a grid of support points
  *  in world metres. Fetched and refetched exactly like the terrain, on its own
  *  signature (`WorldMap.height_sig`) — it is by far the largest thing the map

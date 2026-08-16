@@ -247,6 +247,11 @@ export interface WorldMap {
    *  when it changes, `/play/heightfield` is refetched and the ground is
    *  draped again. Missing (an older server) means a flat world. */
   height_sig?: string;
+  /** Signature of the AVATAR's exploration memory (§ A12, 2026-08-16), the
+   *  same trigger once more: when it changes, `/play/explored` is refetched and
+   *  the overview veil is cut again. `""` without an avatar, missing from an
+   *  older server — both mean "no memory", i.e. the veil as it was before. */
+  explored_sig?: string;
   /** `true` = this is the filtered view, so unknown places stay hidden.
    *  `false` = the admin's unfiltered view (`?all=1`), no fog at all. */
   fogged: boolean;

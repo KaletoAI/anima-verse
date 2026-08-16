@@ -42,6 +42,16 @@
  * unconditionally is 3659, and a world with three 240 m hills in it is 1899.
  * At n = 10 the three rows read 36 / 559 / 399, at n = 50 265 / 1857 / 989.
  *
+ * THE VEIL HAS A MEMORY since 2026-08-16 (finding B14, option 2): besides the
+ * known footprints it also spares every 64 m cell the avatar has already stood
+ * in — the server's record, `GET /play/explored`, fetched on its own signature.
+ * A wood between two places therefore clears by being walked through instead of
+ * staying dark for the rest of the world's life. It costs quads only where the
+ * memory reaches: a run with no explored cell under it is left exactly as the
+ * paragraphs above describe it, and only a run that touches one is cut onto the
+ * cell raster. The avatar's own close-up mode is unchanged — it draws no veil
+ * at all (option 1, `main.ts`).
+ *
  * PURE like `walk.ts` and `soundtrack.ts`: no `three`, no DOM, no imports and
  * no module state. That is what lets `client3d/scripts/smoke_walk_math.mjs` check every
  * case by hand — the caller in `main.ts` only turns the rectangles into quads.
@@ -154,6 +164,41 @@ export const FOG_TILE_M = 64;
  */
 export const FOG_FLAT_EPS_M = 0.25;
 
+/**
+ * Edge length of one EXPLORATION cell in metres (Fog-Gedächtnis, 2026-08-16).
+ *
+ * The server remembers where the avatar has stood as cells of this size,
+ * anchored at the WORLD ORIGIN (`app/core/exploration.py`), and the veil spares
+ * them in addition to the known footprints — a wood between two places clears
+ * by being walked through instead of staying dark forever (finding B14,
+ * option 2).
+ *
+ * It is the SAME number as `FOG_TILE_M`, and that is the whole reason this fits
+ * into the existing tiling instead of needing a new one: a spared cell is one
+ * tile that is not built, never a hole cut into a quad. Both sides say the
+ * number themselves — the server in `EXPLORED_CELL_M`, the client here — and
+ * `client3d/scripts/smoke_fog_memory.mjs` pins that they agree.
+ */
+export const EXPLORED_CELL_M = 64;
+
+/** The cell index a world coordinate falls into. `Math.floor`, so −1 m is cell
+ *  −1 and the raster stays continuous across the origin — the twin of
+ *  `exploration.cell_of`. */
+export function exploredCellOf(v: number): number {
+  return Math.floor(v / EXPLORED_CELL_M);
+}
+
+/** Wire form of one cell, `"cx,cz"` — what `GET /play/explored` sends and what
+ *  the lookup set below is keyed by (`exploration.cell_key`). */
+export function exploredCellKey(cx: number, cz: number): string {
+  return `${cx},${cz}`;
+}
+
+/** The cells the avatar has already been in, as `exploredCellKey` strings.
+ *  An empty set (or none at all) is a world nobody has walked yet, and then
+ *  everything below behaves exactly as it did before the memory existed. */
+export type ExploredCells = ReadonlySet<string>;
+
 /** How much the ground rises and falls inside an axis-aligned world rectangle,
  *  in metres — `worldHeightRangeIn` of the ground module, handed in as a
  *  function because this module imports nothing (see the header). A caller
@@ -215,6 +260,14 @@ export function footprintBox(fp: FogFootprint): FogBox | null {
  * rectangle, over relief it is cut into `FOG_TILE_M` tiles. Omitting it tiles
  * everything, which is what this did before the query existed.
  *
+ * `explored` is the avatar's MEMORY (see `EXPLORED_CELL_M`): every cell in it
+ * is spared, on top of the footprints. A run that touches no explored cell is
+ * untouched by this and keeps the counts in the module header; a run that does
+ * is cut on the ORIGIN-ANCHORED cell raster and the explored cells simply
+ * produce no rectangle. Those pieces are never tiled afterwards — a cell is
+ * `FOG_TILE_M` wide, so each piece is already at most one tile in both axes,
+ * which is exactly what the relief tiling exists to guarantee.
+ *
  * Bands are NOT merged with each other afterwards, exactly as the grid version
  * did not merge rows into columns: two stacked bands with identical runs are
  * rare on the shapes a discovered map makes, and every rectangle costs the
@@ -227,7 +280,8 @@ export function footprintBox(fp: FogFootprint): FogBox | null {
 export function fogRects(bounds: FogBounds | null | undefined,
                          known: FogFootprint[],
                          marginM: number,
-                         heightRange?: FogHeightRange): FogRect[] {
+                         heightRange?: FogHeightRange,
+                         explored?: ExploredCells): FogRect[] {
   if (!bounds) return [];
   const margin = Number.isFinite(marginM) ? marginM : 0;
   const x0 = bounds.min_x - margin;
@@ -258,6 +312,46 @@ export function fogRects(bounds: FogBounds | null | undefined,
   cuts.sort((a, b) => a - b);
 
   const rects: FogRect[] = [];
+  /**
+   * The MEMORY's share of one run (2026-08-16). Answers whether it handled the
+   * run: `false` means no explored cell lies under it and the caller carries on
+   * exactly as before.
+   *
+   * When it does handle it, the run is cut on the ORIGIN-ANCHORED cell raster —
+   * `cx` from `exploredCellOf(x)` to the cell the far edge falls in — and every
+   * cell the avatar has NOT been in becomes one rectangle, clipped to the run.
+   * The explored ones produce nothing, which is the hole in the veil.
+   *
+   * The far edge is asked at `x + w − EPS_M`: a run ending exactly on a cell
+   * border belongs to the cell BEFORE it, and without the nudge every such run
+   * would carry an empty column of zero width along.
+   */
+  const spare = (x: number, z: number, w: number, d: number): boolean => {
+    const cx0 = exploredCellOf(x);
+    const cx1 = exploredCellOf(x + w - EPS_M);
+    const cz0 = exploredCellOf(z);
+    const cz1 = exploredCellOf(z + d - EPS_M);
+    let any = false;
+    for (let cx = cx0; cx <= cx1 && !any; cx++) {
+      for (let cz = cz0; cz <= cz1; cz++) {
+        if (explored!.has(exploredCellKey(cx, cz))) { any = true; break; }
+      }
+    }
+    if (!any) return false;
+    for (let cx = cx0; cx <= cx1; cx++) {
+      const px0 = Math.max(x, cx * EXPLORED_CELL_M);
+      const px1 = Math.min(x + w, (cx + 1) * EXPLORED_CELL_M);
+      if (px1 - px0 <= EPS_M) continue;
+      for (let cz = cz0; cz <= cz1; cz++) {
+        if (explored!.has(exploredCellKey(cx, cz))) continue;
+        const pz0 = Math.max(z, cz * EXPLORED_CELL_M);
+        const pz1 = Math.min(z + d, (cz + 1) * EXPLORED_CELL_M);
+        if (pz1 - pz0 <= EPS_M) continue;
+        rects.push({ x: px0, z: pz0, w: px1 - px0, d: pz1 - pz0 });
+      }
+    }
+    return true;
+  };
   /** One run of the sweep, cut into tiles of at most `FOG_TILE_M` (see there)
    *  — but ONLY where the ground under it moves. The pieces are EQUAL —
    *  dividing by the count instead of stepping by the tile size avoids a sliver
@@ -269,6 +363,13 @@ export function fogRects(bounds: FogBounds | null | undefined,
    *  tile to save quads over the flat half of a hillside, which is paying the
    *  rebuild to save the frame. */
   const push = (x: number, z: number, w: number, d: number): void => {
+    // THE MEMORY FIRST (2026-08-16). Explored ground is spared whatever the
+    // relief under it does — a cover over a hill one has walked over is still a
+    // cover over ground one knows. Only a run that ACTUALLY touches an explored
+    // cell is cut this way: without that every run in a walked world would be
+    // cut onto the cell raster, which is the quad census the flat-world case
+    // exists to keep down.
+    if (explored && explored.size && spare(x, z, w, d)) return;
     // Whole unless the ground is DEMONSTRABLY level: no query, or a range that
     // is not a number, means tile — the picture the veil had before.
     if (heightRange && heightRange(x, z, x + w, z + d) <= FOG_FLAT_EPS_M) {

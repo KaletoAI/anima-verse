@@ -27,6 +27,7 @@ import {
 import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
 import { fogRects, SHOW_ALL_KEY } from './game/fog';
+import type { ExploredCells } from './game/fog';
 import { createFogClouds } from './game/fogClouds';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
 import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
@@ -1175,6 +1176,52 @@ async function startApp(username: string, role: string) {
    *  for a picture that does not change. `null` until the first build: every
    *  string is a possible key, so the sentinel must not be one. */
   let fogKey: string | null = null;
+  /** The avatar's EXPLORATION MEMORY (§ A12, 2026-08-16): the 64 m cells it has
+   *  already stood in, which the veil spares in addition to the footprints. The
+   *  server owns it (`app/core/exploration.py`); this is only what arrived
+   *  last. Empty until the first fetch answers, and empty forever without an
+   *  avatar — both are "the veil as it was before the memory existed". */
+  let exploredCells: ExploredCells = new Set<string>();
+  /** The signature the current `exploredCells` came with, PREFIXED WITH THE
+   *  AVATAR it belongs to. `null` until the first fetch, so that even a server
+   *  answering `""` (no avatar) is fetched exactly once instead of never.
+   *
+   *  The prefix is what makes a TAKEOVER safe: the memory is per character, and
+   *  two characters that happen to have walked the same number of cells would
+   *  otherwise share a signature and the client would go on showing the
+   *  previous one's map. */
+  let exploredSig: string | null = null;
+  /** Guards against a second fetch while one is in flight — the poll runs every
+   *  three seconds and the payload can be hundreds of kilobytes. */
+  let exploredPending = false;
+  /**
+   * Refetch the memory when its signature moved, and rebuild the veil once it
+   * is in. The `terrainGround.sync` bargain exactly: the sig rides on the poll,
+   * the payload has its own endpoint and is fetched a few times per session.
+   *
+   * A FAILURE IS SWALLOWED on purpose (a `debug` line, no toast, no offline
+   * flag): a veil that still covers ground one has walked is last week's
+   * picture and nothing worse, and the signature is deliberately NOT taken
+   * over, so the next poll simply tries again.
+   */
+  function syncExplored(map: WorldMap): void {
+    const who = map.avatar ?? '';
+    const sig = `${who}|${map.explored_sig ?? ''}`;
+    if (sig === exploredSig || exploredPending) return;
+    exploredPending = true;
+    void api.fetchExplored().then((payload) => {
+      // The payload's OWN signature, not the poll's: between the poll and this
+      // answer the avatar may have walked into another cell, and taking the
+      // poll's would leave the client one refetch short of the truth forever.
+      exploredSig = `${who}|${payload.sig}`;
+      exploredCells = new Set(payload.cells);
+      rebuildFog();
+    }).catch((e) => {
+      console.debug('explored memory fetch failed', e);
+    }).finally(() => {
+      exploredPending = false;
+    });
+  }
   /** The known footprints, as the veil is cut around them: the tile's OWN
    *  centre, edge and rotation — what is DRAWN, so the hole and the tile in it
    *  can never disagree (a location with no `plan_width_m` is drawn at the
@@ -1200,7 +1247,14 @@ async function startApp(username: string, role: string) {
     // and the field arrives well after the first fog was built (its own fetch
     // on its own signature). Without this the clouds would keep the flat
     // world's height until some location happened to move.
-    const key = `${fogged}|${frame}|${holes}|${terrainGround.heightRevision()}`;
+    // The MEMORY is part of the key for the same reason the relief is: it
+    // arrives on its own fetch, well after the first veil was built. Its SIZE
+    // is enough of a key — the set only ever grows (the server never deletes a
+    // cell, § A12), so a different count is a different set, and hashing tens
+    // of thousands of keys on every poll to learn that would be the one
+    // expensive thing in this function.
+    const key = `${fogged}|${frame}|${holes}|${terrainGround.heightRevision()}`
+      + `|${exploredCells.size}`;
     if (key === fogKey) return;
     fogKey = key;
     for (const child of fogGroup.children) {
@@ -1214,7 +1268,8 @@ async function startApp(username: string, role: string) {
     // query in keeps `game/fog.ts` importless, exactly like the footprints.
     for (const r of fogRects(worldBounds, holeList, BASE_MARGIN_M,
                              (x0, z0, x1, z1) =>
-                               terrainGround.heightRangeIn(x0, z0, x1, z1))) {
+                               terrainGround.heightRangeIn(x0, z0, x1, z1),
+                             exploredCells)) {
       // The geometry comes out LARGER than the rectangle — the cloud edge
       // needs room to fade, and neighbouring rectangles overlap into each
       // other so no seam opens between them (see `fogClouds.ts`). The centre
@@ -1234,6 +1289,10 @@ async function startApp(username: string, role: string) {
     }
   }
   rebuildFog();
+  // The memory the veil is cut around, on its first fetch — deliberately not
+  // awaited: the map must stand now, and the walked ground clears one fetch
+  // later (the same deal `terrainGround.sync` gets for the relief).
+  syncExplored(firstMap);
   // THE VEIL IS AN OVERVIEW DEVICE (finding B14, the user's option 1).
   //
   // `fogRects` subtracts the footprints of the KNOWN places from the world
@@ -1252,9 +1311,11 @@ async function startApp(username: string, role: string) {
   // back.
   //
   // Option 2 — a fog with a MEMORY, walked ground permanently free and
-  // persisted like `known_locations` — is a data model, a payload field and
-  // new client geometry. It is booked as an E7/E8 package, not smuggled in as
-  // a side effect of this.
+  // persisted like `known_locations` — LANDED on 2026-08-16 and stands beside
+  // option 1 rather than replacing it: the overview keeps its veil, and that
+  // veil now spares the 64 m cells the avatar has already been in on top of the
+  // known footprints (`exploredCells` above, § A12). Close up there is still no
+  // veil at all, for the reasons in the paragraph before this one.
   //
   // The cover drifts and takes the time of day. Both are one uniform each, so
   // this rides in the engine's frame loop rather than bringing a timer: with
@@ -1769,6 +1830,11 @@ async function startApp(username: string, role: string) {
     // bounds are computed unfiltered and do not move while one discovers, but
     // a world can gain a location anywhere at any time.
     fogged = map.fogged;
+    // The MEMORY grows while one walks — the server marks every accepted point
+    // (§ A12), so `explored_sig` moves and the cells are refetched. Before
+    // `rebuildFog`, so a poll that changes nothing else still costs only the
+    // signature comparison.
+    syncExplored(map);
     rebuildFog();   // a no-op unless the frame, the switch or a footprint moved
     // The trigger asks the SAME question the reveal answers — `placeableOf`,
     // not a hand-written filter next to it. A cheaper test that forgot the
