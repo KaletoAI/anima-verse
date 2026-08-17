@@ -29,7 +29,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import utc_now, game_local_now
+from app.core.timeutils import utc_now, game_time
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -260,18 +260,14 @@ async def _run_storyteller_agent(
 
     scope_label = "the whole place" if scope == "location" else "this room"
 
-    # ── Clock / time of day (in-game) ──────────────────────────────────
-    _now = game_local_now()
-    current_time = _now.strftime("%H:%M")
-    _hour = _now.hour
-    if 6 <= _hour < 12:
-        time_of_day = "morning"
-    elif 12 <= _hour < 18:
-        time_of_day = "afternoon"
-    elif 18 <= _hour < 22:
-        time_of_day = "evening"
-    else:
-        time_of_day = "night"
+    # ── Clock / date / time of day (game clock + world calendar) ───────
+    # The bucket comes from the calendar now (the season's sunrise/sunset
+    # plus the configured noon/evening hours), not from hardcoded 6/12/18/22
+    # boundaries — a winter evening starts earlier than a summer one.
+    _now = game_time()
+    current_time = _now.time_hhmm()
+    time_of_day = _now.day_bucket()
+    game_date = _now.date_label(_lang)
 
     # ── Render the template ────────────────────────────────────────────
     sys_prompt, user_prompt = render_task(
@@ -285,6 +281,7 @@ async def _run_storyteller_agent(
         scope_label=scope_label,
         current_time=current_time,
         time_of_day=time_of_day,
+        game_date=game_date,
         setting_block=setting_block,
         active_events_block=active_events_block,
         present_people_block=present_people_block,

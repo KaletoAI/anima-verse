@@ -5,7 +5,7 @@
 
    Required:
      character_name, personality, location_name, activity, feeling,
-     time_of_day, action_instruction
+     time_of_day, game_date, action_instruction
 
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block             — active status modifiers (drunk, exhausted, …)
@@ -44,6 +44,7 @@ Current situation:
 - Activity: {{ activity }}
 - Mood: {{ feeling }}
 - Time: {{ time_of_day }}
+- Date: {{ game_date }}
 {% if effects_block %}
 - Active effects:
 {{ effects_block }}

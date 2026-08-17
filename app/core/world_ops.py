@@ -333,11 +333,17 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
 
     # Journeys are a pure function of the GAME clock — read it ONCE for the
     # whole payload so every character in one response shares the same now.
-    from app.core.timeutils import game_now, game_speed_factor, to_world_tz
+    from app.core.game_time import GameTime
+    from app.core.timeutils import game_speed_factor, game_time
     from app.core.travel_engine import (get_journey, journey_state,
                                         segment_pace_m_s)
-    _now_game = game_now()
+    from app.models.character import get_character_language
+    _now_game = game_time()
     _factor = game_speed_factor()
+    # Display language for the ready-made time labels below — the avatar's,
+    # like every other localized string this endpoint hands out. Without an
+    # avatar (admin overview) the base language is what is left.
+    _lang = (get_character_language(avatar) if avatar else "") or "en"
 
     # How far the avatar sees OUT IN THE OPEN (E6, § A12). Deliberately the
     # SAME number that discovers a place by coming close to it
@@ -444,6 +450,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 _speed = float(_j.get("speed_m_s") or 0.0)
                 # …and the pace this very segment is baked at (terrain).
                 _pace = segment_pace_m_s(_j["waypoints"], _st)
+                _eta = GameTime.parse(_st["eta_game"])
                 travel = {
                     "target_id": _j["target"],
                     # x/z ONLY — the baked cumulative game seconds (t_cum) are
@@ -457,11 +464,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                                    for w in _j["waypoints"]]),
                     "progress_m": None if _thin else _st["progress_m"],
                     "total_m": None if _thin else _st["total_m"],
-                    # Same instant, WORLD-timezone offset: clients slice the
-                    # HH:MM out of this, which must be game wall-clock — the
-                    # engine stores the stamp in UTC (§ A11).
-                    "eta_game": (None if _thin
-                                 else to_world_tz(_st["eta_game"]).isoformat()),
+                    # Arrival on the WORLD CALENDAR (§ A11): the canonical
+                    # stamp `Y0002-D109T14:00:00` — there is no world
+                    # timezone any more. Clients never slice it: the two
+                    # display fields beside it are computed here, server-side.
+                    "eta_game": None if _thin else _st["eta_game"],
+                    "eta_hhmm": None if _thin else _eta.time_hhmm(),
+                    "eta_label": None if _thin else _eta.label(_lang),
                     # The journey's GAME pace as a REAL-seconds one — null on
                     # a frozen world (factor 0): nothing moves, so nothing may
                     # extrapolate. Successor of v1's cell_seconds_real, with
@@ -546,6 +555,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         "locations": locations,
         "characters": characters,
         "events_by_location": events_by_location,
+        # The WORLD CLOCK this payload was computed with — the same instant
+        # every journey above was placed on, handed over ready to render
+        # (canonical stamp, calendar parts, hour_fraction for the sun, label).
+        # Clients display it, they never derive a game hour themselves.
+        "game_time": _now_game.to_dict(_lang),
         "world_bounds": world_bounds,
         # Signature of the painted terrain (areas + world type rows), read
         # ONCE per payload: when it changes, clients refetch /play/terrain.

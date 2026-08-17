@@ -16,7 +16,7 @@ import random
 import uuid
 from datetime import date, datetime
 
-from app.core.timeutils import utc_now_iso, game_now_iso
+from app.core.timeutils import utc_now_iso, game_time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -1417,11 +1417,12 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
                     active.append({
                         "name": cond_name,
                         "source": f"item:{item.get('name', item_id)}",
-                        # Wer das Item ueberreicht/geschenkt hat (Schenkender) — fuer
-                        # die {giver}-Substitution + Anzeige im Mind-Tab. Bleibt fuer
-                        # die Dauer der Condition gespeichert.
+                        # Who handed over / gifted the item (the giver) — for the
+                        # {giver} substitution and the Mind-tab display. Kept for
+                        # the lifetime of the condition.
                         "source_character": (giver or "").strip(),
-                        "started_at": game_now_iso(),  # in-world duration -> game clock
+                        # in-world duration -> canonical GAME-time stamp
+                        "started_at": game_time().canonical(),
                         "duration_hours": max(1, duration),
                     })
                     profile["active_conditions"] = active

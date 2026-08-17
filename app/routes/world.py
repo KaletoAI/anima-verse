@@ -150,25 +150,72 @@ async def unfreeze_world(
 
 
 @router.get("/game-time")
-async def get_game_time() -> Dict[str, Any]:
-    """Game clock info: both nows, anchors, factor, frozen (for the header
-    clock — the frontend ticks locally from the anchors)."""
+async def get_game_time(lang: str = Query("en")) -> Dict[str, Any]:
+    """Game clock info: system now, the world instant fully rendered, anchors,
+    factor, freeze and the world CALENDAR.
+
+    The clients tick locally from `game.total_seconds` + `factor` and derive
+    their display with the `calendar` block — they never parse a date."""
     from app.core.timeutils import get_game_clock_info
-    return get_game_clock_info()
+    return get_game_clock_info(lang or "en")
+
+
+def _game_time_from_body(raw: Any) -> Any:
+    """Read the `game_time` field of the POST body into a ``GameTime``.
+
+    Two accepted shapes — a canonical world stamp ``"Y0002-D109T14:00:00"``
+    or the structured form ``{year, season, day, hour, minute}`` the header
+    popover sends. Real dates/ISO strings are NOT accepted any more: the game
+    clock runs on the world calendar (plan-game-calendar §2.7). Every problem
+    raises ``ValueError`` with a message the caller turns into a 400.
+    """
+    from app.core.game_time import GameTime
+    if isinstance(raw, str):
+        return GameTime.parse(raw.strip())
+    if not isinstance(raw, dict):
+        raise ValueError("game_time must be a canonical stamp or an object")
+
+    def _int(key: str, required: bool = True, default: int = 0) -> int:
+        value = raw.get(key)
+        if value is None or value == "":
+            if required:
+                raise ValueError(f"game_time.{key} is required")
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"game_time.{key} must be a number")
+
+    season = str(raw.get("season") or "").strip()
+    if not season:
+        raise ValueError("game_time.season is required")
+    year = _int("year")
+    if year < 1:
+        raise ValueError("game_time.year is 1-based")
+    return GameTime.from_season(
+        year, season, _int("day"),
+        _int("hour", required=False), _int("minute", required=False),
+        _int("second", required=False))
 
 
 @router.post("/game-time")
 async def post_game_time(
     request: Request,
+    lang: str = Query("en"),
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Sets game time and/or tick factor. Body: {game_time?: ISO, factor?: number}."""
-    from app.core.timeutils import (get_game_clock_info, parse_iso,
-                                    set_game_factor, set_game_time)
+    """Sets game time and/or tick factor.
+
+    Body: ``{game_time?: {year, season, day, hour, minute} | "Y0002-D109T14:00:00",
+    factor?: number}``."""
+    from app.core.timeutils import (get_game_clock_info, set_game_factor,
+                                    set_game_time)
     data = await request.json()
-    raw_time = (data.get("game_time") or "").strip() if isinstance(data.get("game_time"), str) else ""
+    raw_time = data.get("game_time")
+    if isinstance(raw_time, str) and not raw_time.strip():
+        raw_time = None
     raw_factor = data.get("factor")
-    if not raw_time and raw_factor is None:
+    if raw_time is None and raw_factor is None:
         raise HTTPException(status_code=400, detail="game_time or factor required")
     # Factor first: set_game_factor re-anchors at the CURRENT game time; an
     # explicit game_time afterwards wins as the new anchor.
@@ -180,14 +227,14 @@ async def post_game_time(
         if factor < 0:
             raise HTTPException(status_code=400, detail="factor must be >= 0")
         set_game_factor(factor)
-    if raw_time:
+    if raw_time is not None:
         try:
-            set_game_time(parse_iso(raw_time))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="game_time must be an ISO datetime")
-    info = get_game_clock_info()
-    logger.info("Game time set: game_now=%s factor=%s",
-                info["game_now"], info["factor"])
+            set_game_time(_game_time_from_body(raw_time))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    info = get_game_clock_info(lang or "en")
+    logger.info("Game time set: game=%s factor=%s",
+                info["game"]["canonical"], info["factor"])
     return info
 
 

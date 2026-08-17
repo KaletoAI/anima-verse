@@ -7,7 +7,7 @@ Storage: world.db — Tabellen characters, character_state
 """
 from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_now_iso
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
@@ -99,8 +99,15 @@ def _record_state_change(character_name: str, change_type: str, value: str, meta
     Lightweight log used by the Diary to show location/activity changes.
     Max 200 entries per character (oldest trimmed).
     Optional metadata dict is stored alongside (e.g. effect changes).
+
+    Two stamps: ``ts`` is SYSTEM time (ordering, ring-buffer trimming),
+    ``game_ts`` the canonical GAME time. Everything the world sees — the hour
+    in the character's "Recently experienced" block, the diary day — is read
+    off ``game_ts``; it cannot be derived from ``ts`` afterwards, because the
+    clock re-anchors on set/factor/freeze.
     """
     ts = utc_now_iso()
+    game_ts = game_time().canonical()
     state_entry = {
         "timestamp": ts,
         "type": change_type,
@@ -111,9 +118,10 @@ def _record_state_change(character_name: str, change_type: str, value: str, meta
     try:
         with transaction() as conn:
             conn.execute("""
-                INSERT INTO state_history (character_name, ts, state_json)
-                VALUES (?, ?, ?)
-            """, (character_name, ts, json.dumps(state_entry, ensure_ascii=False)))
+                INSERT INTO state_history (character_name, ts, game_ts, state_json)
+                VALUES (?, ?, ?, ?)
+            """, (character_name, ts, game_ts,
+                  json.dumps(state_entry, ensure_ascii=False)))
         # Trim: max 200 entries per character
         conn = get_connection()
         total = conn.execute(
@@ -230,7 +238,7 @@ _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
                     "outfit_intent",        # intent container (May 2026)
                     "current_activity_detail",
                     "movement_target",
-                    "state_flag_since")     # flag -> ISO ts (flag lifecycle)
+                    "state_flag_since")     # flag -> canonical GameTime (lifecycle)
 # Entfernt in Schritt 8 (Cleanup, May 2026):
 # - runtime_outfit_skip → outfit_intent.forbidden_slots
 # - equipped_pieces_meta → Items eindeutig, Farbe im prompt_fragment
@@ -3776,7 +3784,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
     _since = dict(profile.get("state_flag_since") or {})
     if value:
-        _since["is_sleeping"] = game_now_iso()  # in-world duration stamp
+        # in-world duration stamp -> canonical GAME time
+        _since["is_sleeping"] = game_time().canonical()
     else:
         _since.pop("is_sleeping", None)
     profile["state_flag_since"] = _since
@@ -3787,9 +3796,10 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
     save_character_profile(character_name, profile)
-    # Schlaf-Längen-Messung für die Tages-Konsolidierung (plan-history-
-    # consolidation-cleanup.md, Phase 2): Einschlafen merkt die Startzeit,
-    # Aufwachen prüft, ob es Hauptschlaf war (≥ Schwelle) → Tages-Eintrag.
+    # Sleep-length measurement for the daily consolidation (plan-history-
+    # consolidation-cleanup.md, phase 2): falling asleep records the start
+    # time, waking up checks whether it was the main sleep (>= threshold)
+    # -> daily entry.
     if value != was:
         try:
             from app.core import day_consolidation as _dc
@@ -3814,7 +3824,8 @@ def set_state_flag(character_name: str, flag: str, value) -> None:
     profile[flag] = value if isinstance(value, str) and value else bool(value)
     since = dict(profile.get("state_flag_since") or {})
     if value:
-        since[flag] = game_now_iso()  # in-world duration stamp
+        # in-world duration stamp -> canonical GAME time
+        since[flag] = game_time().canonical()
     else:
         since.pop(flag, None)
     profile["state_flag_since"] = since
@@ -3828,7 +3839,8 @@ def stamp_state_flag_since(character_name: str, flag: str) -> None:
         return
     profile = get_character_profile(character_name) or {}
     since = dict(profile.get("state_flag_since") or {})
-    since[flag] = game_now_iso()  # in-world duration stamp
+    # in-world duration stamp -> canonical GAME time
+    since[flag] = game_time().canonical()
     profile["state_flag_since"] = since
     save_character_profile(character_name, profile)
 

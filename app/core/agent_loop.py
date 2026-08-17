@@ -1401,11 +1401,11 @@ class AgentLoop:
     def _record_turn(self, name: str, started_at: datetime, outcome: str,
                      turn_info: Optional[Dict[str, Any]] = None) -> None:
         info = turn_info or {}
-        # Game time at turn end — same format as thoughts.game_ts (ISO with
-        # world-tz offset); '' when the game clock is unavailable.
+        # Game time at turn end — same format as thoughts.game_ts (canonical
+        # GameTime string); '' when the game clock is unavailable.
         try:
-            from app.core.timeutils import game_local_now
-            _game_ts = game_local_now().isoformat(timespec="seconds")
+            from app.core.timeutils import game_time
+            _game_ts = game_time().canonical()
         except Exception:
             _game_ts = ""
         self._recent.append({

@@ -36,17 +36,24 @@ def travel_section(character_name: str) -> str:
         if not j:
             return ""
         from app.models.world import get_location_name
-        from app.core.timeutils import game_now, to_world_tz
+        from app.core.game_time import GameTime
+        from app.core.timeutils import game_time
         target_name = get_location_name(j["target"]) or j["target"]
-        st = journey_state(j["waypoints"], j["started_at_game"], game_now())
+        now = game_time()
+        st = journey_state(j["waypoints"], j["started_at_game"], now)
         if st["arrived"]:
             body = f"You have arrived at {target_name}."
         else:
             remaining = max(0.0, st["total_m"] - st["progress_m"])
-            eta_local = to_world_tz(st["eta_game"])
+            eta = GameTime.parse(st["eta_game"])
+            # The world knows one clock, so no "(game time)" disclaimer is
+            # needed — but an arrival on a LATER day has to say so, or the
+            # bare HH:MM reads as "in a moment".
+            eta_text = (eta.time_hhmm() if eta.day_index == now.day_index
+                        else eta.label())
             body = (f"You are travelling to {target_name} — about "
                     f"{remaining:.0f} m to go, arriving around "
-                    f"{eta_local:%H:%M} (game time). The journey continues "
+                    f"{eta_text}. The journey continues "
                     f"automatically. RECONSIDER on every turn whether it "
                     f"still fits: if something here matters more now (a "
                     f"conversation, an event), cancel it with CancelTravel. "

@@ -28,7 +28,7 @@ import threading
 import time
 from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now, game_local_now
+from app.core.timeutils import parse_iso, utc_now, game_time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -255,20 +255,19 @@ def _do_generate(event_id: str,
                   location_id: str,
                   image_prompt: str,
                   resolved: bool) -> Optional[Path]:
-    """Synchrone Generierung (bereits in der Queue serialisiert).
+    """Synchronous generation (already serialized in the queue).
 
-    Returns Pfad zum gespeicherten Bild oder None.
+    Returns the path of the stored image, or None.
     """
     from app.models.world import get_background_path
     from app.models.events import update_event_fields
 
-    # Referenzbild: aktuelles Location-Background. Tageszeit (Stunde) wird
-    # mitgegeben, damit get_background_path das passende Tag/Nacht-Bild
-    # waehlt — gleiche Logik wie der /background-Endpoint. Ohne Stunde
-    # waere die Auswahl rein zufaellig zwischen allen Bg-Bildern, was zu
-    # einer "alten" oder Tag/Nacht-falschen Vorlage fuer das Event-Bild
-    # fuehrt.
-    bg_path = get_background_path(location_id, hour=game_local_now().hour)
+    # Reference image: the location's current background. The time of day
+    # (GAME hour) is passed along so get_background_path picks the matching
+    # day/night image — same logic as the /background endpoint. Without the
+    # hour the pick would be purely random across all background images,
+    # giving the event image a stale or day/night-wrong template.
+    bg_path = get_background_path(location_id, hour=game_time().hour)
     if not bg_path or not bg_path.exists():
         logger.info("Event-Bild [%s]: kein Background — skip", event_id)
         return None

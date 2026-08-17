@@ -151,6 +151,11 @@ class RetrospectSkill(PluginSkill):
     # ------------------------------------------------------------------
 
     def _gather_recent_summaries(self, character_name: str) -> str:
+        """The last five daily summaries, labelled with their WORLD date.
+
+        The store keys them by game day (``Y0002-D109``); a character reflects
+        on "Winter, day 19 · Year 2", never on a storage key.
+        """
         try:
             from app.utils.history_manager import load_daily_summaries_combined
             daily = load_daily_summaries_combined(character_name) or {}
@@ -158,8 +163,23 @@ class RetrospectSkill(PluginSkill):
             return ""
         if not daily:
             return ""
+        try:
+            from app.models.character import get_character_language
+            lang = (get_character_language(character_name) or "en").strip() or "en"
+        except Exception:
+            lang = "en"
         items = sorted(daily.items())[-5:]
-        return "\n".join(f"- {day}: {text}" for day, text in items if text)
+        return "\n".join(f"- {self._day_label(day, lang)}: {text}"
+                         for day, text in items if text)
+
+    @staticmethod
+    def _day_label(day_key: str, lang: str) -> str:
+        """World date of a game day key, falling back to the raw key."""
+        from app.core.game_time import GameTime
+        try:
+            return GameTime.parse(f"{day_key}T00:00:00").date_label(lang)
+        except (ValueError, TypeError):
+            return day_key
 
     def _gather_recent_memories(self, character_name: str) -> str:
         try:

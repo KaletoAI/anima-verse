@@ -491,6 +491,7 @@ Fernkulisse eingeschaltet ist, § A17).
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
 | `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen der planierenden Orte** (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1; seit 2026-08-13 zählen nur Orte mit `level_ground`, und das Setzen/Löschen des Flags ändert die Signatur für sich allein) UND über das **Mikro-Relief der gemalten Terrain-Arten** (§ A16.2: relief-tragende Flächen samt der flachen Flächen darüber und den beiden Katalog-Zahlen; relief-freies Malen zählt nicht mit). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.3) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
+| `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, auf den alle Reisen unten gerechnet wurden. Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `is_night`, `day_bucket`. **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
@@ -539,7 +540,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
-| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
   mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim
@@ -1454,7 +1455,9 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | `waypoints` | `[[x, z], …] \| null` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne Zeiten** — die beim Start gebackenen Zeitmarken (`t_cum`) bleiben serverintern, der Client rechnet über die STRECKE. Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg). **`null` im gefoggten Payload für JEDEN außer dem Avatar** — siehe Fog-Absatz unten |
 | `progress_m` | `float \| null` | bereits gelaufene Strecke **entlang der Polylinie**, in Metern. **`null` im gefoggten Payload für JEDEN außer dem Avatar** (E6) — siehe Fog-Absatz unten |
 | `total_m` | `float \| null` | Gesamtlänge der Polylinie in Metern. **Gefoggt `null`** wie `progress_m` |
-| `eta_game` | ISO-Zeit `\| null` | nominelle Ankunft auf der **Spieluhr**; trägt den Offset der **Weltzeitzone** (`server.timezone`) — ein HH:MM-Slice ergibt direkt Spiel-Wanduhrzeit. **Gefoggt `null`** wie `progress_m` |
+| `eta_game` | Kalenderzeit `\| null` | nominelle Ankunft auf der **Spieluhr**, als **kanonischer Weltkalender-Stempel** `"Y0002-D109T14:00:00"` (Jahr 4-stellig, Tag im Jahr 3-stellig). Kein ISO-Datum, **keine Weltzeitzone** — die gibt es nicht mehr. Der Client PARST das Feld nicht: es ist der Vergleichs-/Sortierwert, die Anzeige kommt aus den beiden Feldern darunter. **Gefoggt `null`** wie `progress_m` |
+| `eta_hhmm` | `str \| null` | Ankunftszeit als fertiges `"HH:MM"` — vom Server gerendert. **Gefoggt `null`** wie `progress_m` |
+| `eta_label` | `str \| null` | Ankunft als vollständiges, lokalisiertes Kalender-Label (z. B. `"Summer, day 17 · 14:23 · Year 3"`; Sprache = die des Avatars). Für Reisen, die über Mitternacht laufen, ist das die einzige vollständige Angabe. **Gefoggt `null`** wie `progress_m` |
 | `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ). **Gefoggt `null`** wie `progress_m` |
 | `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0). **Gefoggt `null`** wie `progress_m` |
 
@@ -1557,12 +1560,13 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 - **Freeze:** steht die Spieluhr, stehen alle Reisen. `progress_m` bleibt
   konstant, `speed_m_s_real` und `pace_m_s_real` sind `null` — genau dann
   darf nicht extrapoliert werden.
-- **Der Payload liefert bewusst keine Spiel-Jetzt-Referenz.** Ein laufender
-  Restzeit-Countdown rechnet daher näherungsweise
-  `(total_m − progress_m) / speed_m_s_real` in ECHTEN Sekunden — NICHT
-  `eta_game` gegen eine lokale Uhr (die Spieluhr läuft mit Faktor und kann
-  springen). Der ANGEZEIGTE Ankunftszeitpunkt kommt immer aus `eta_game`
-  (siehe Nominal-Absatz oben).
+- **Ein laufender Restzeit-Countdown rechnet in ECHTEN Sekunden**,
+  näherungsweise `(total_m − progress_m) / speed_m_s_real` — NICHT `eta_game`
+  gegen eine lokale Uhr (die Spieluhr läuft mit Faktor und kann springen).
+  Das Wurzelfeld `game_time` nennt zwar das Spiel-Jetzt dieses Payloads, aber
+  nur zum ANZEIGEN: zwischen zwei Polls läuft es nicht weiter. Der
+  ANGEZEIGTE Ankunftszeitpunkt kommt immer aus `eta_hhmm`/`eta_label` —
+  fertig gerendert, weil kein Client einen Weltkalender rechnen soll.
 - **Fog (§ A12) gilt auch für Reisende:** ein Charakter in einer dem Avatar
   unbekannten Location fehlt komplett — mitsamt seiner Reise. Der
   `target_id` im eigenen Block wird NICHT verschwiegen (wie
@@ -1580,9 +1584,10 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   Kartenmarke für einen Ort, den der Avatar nicht kennt. **Dasselbe sagen
   aber auch die Zahlen daneben**: aus Position, Restweg (`total_m −
   progress_m`), Ankunftszeit und Tempo lässt sich das unbekannte Ziel
-  einkreisen. Gefoggt sind für jeden außer dem Avatar deshalb ALLE sechs
+  einkreisen. Gefoggt sind für jeden außer dem Avatar deshalb ALLE acht
   Felder `null` — `waypoints`, `progress_m`, `total_m`, `eta_game`,
-  `speed_m_s_real`, `pace_m_s_real`. Die Schlüssel bleiben stehen, damit
+  `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`. Die Schlüssel
+  bleiben stehen, damit
   „nicht mitgeteilt" von „leer" unterscheidbar ist. Es bleibt genau
   **`target_id`**, eine opake Id, die der Fog nie verborgen hat (wie
   `movement_target_id`, dessen NAMEN die Figurenliste sehr wohl
@@ -1614,11 +1619,11 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 
 **Ein Vokabular mit dem Spieler-Panel.** `GET /play/scene` trägt für den
 Avatar denselben Block in Ein-Personen-Form: `target_id`, `eta_game`,
-`progress_m` und `total_m` bedeuten dort dasselbe (`eta_game` ebenfalls mit
-Weltzeitzonen-Offset). Zusätzlich nur `target_name`, `eta_hhmm` (fertiges
-Label, weil der Browser die Spielzeitzone nicht kennt) und `arrived`; die
-`waypoints` fehlen — das Panel zeichnet keine Karte. `POST /play/travel`
-antwortet mit genau diesem Block unter `journey`.
+`eta_hhmm`, `eta_label`, `progress_m` und `total_m` bedeuten dort dasselbe —
+`eta_game` also auch dort der kanonische Kalender-Stempel, die Anzeige
+weiterhin aus den beiden gerenderten Feldern. Zusätzlich nur `target_name`
+und `arrived`; die `waypoints` fehlen — das Panel zeichnet keine Karte.
+`POST /play/travel` antwortet mit genau diesem Block unter `journey`.
 
 **Verifikation** — numerisch nach dem Prinzip § B5a: der Verify-Modus difft
 die Welt-Position der Figur gegen den aus `waypoints`/`progress_m`
@@ -1682,10 +1687,11 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben (§ A11), solange ein Avatar aktiv ist |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
-| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE sechs Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id`. Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
+| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE acht Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id`. Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
 | `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
 | `world_bounds` | **nein** | siehe unten |
 | `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |
+| `game_time` | **nein** | die Spieluhr sieht jeder — Tageszeit ist keine Ortskenntnis |
 | `max_step_height_m`, `max_slope_deg` | **nein** | die zwei Lauf-Grenzwerte (§ A1.3, § A15 Nr. 8). Regeln sind keine Ortskenntnis — ein Grenzwert verrät nichts über die Welt |
 | `avatar`, `current_location_id` | nein | der Avatar sieht sich selbst |
 

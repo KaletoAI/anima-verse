@@ -13,9 +13,10 @@ the verbs-only contract stays untouched.
 
 Timestamps are SYSTEM time (``utc_now_iso``), like every other persistence
 stamp; the retention cutoff is computed in system time too, not game time.
-``game_ts`` carries the GAME time the thought was had (ISO *with* the world's
-timezone offset) — it is stored at creation because the game clock re-anchors
-on set/factor/freeze and therefore cannot be derived from ``ts`` afterwards.
+``game_ts`` carries the GAME time the thought was had (canonical GameTime
+string, ``Y0002-D109T14:00:00``) — it is stored at creation because the game
+clock re-anchors on set/factor/freeze and therefore cannot be derived from
+``ts`` afterwards.
 """
 from __future__ import annotations
 
@@ -24,15 +25,15 @@ from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
-from app.core.timeutils import game_local_now, utc_now_iso
+from app.core.timeutils import game_time, utc_now_iso
 
 logger = get_logger("thought_store")
 
 
 def _game_ts() -> str:
-    """Game time at creation, ISO with world-tz offset; '' if unavailable."""
+    """Game time at creation as a canonical GameTime string; '' if unavailable."""
     try:
-        return game_local_now().isoformat(timespec="seconds")
+        return game_time().canonical()
     except Exception:
         return ""
 
@@ -119,6 +120,29 @@ def thoughts_of_range(character_name: str, start_ts: str,
         return [dict(r) for r in rows]
     except Exception as e:
         logger.warning("thoughts_of_range(%s) failed: %s",
+                       character_name, e)
+        return []
+
+
+def thoughts_of_game_range(character_name: str, start_game_ts: str,
+                           end_game_ts: str) -> List[Dict[str, Any]]:
+    """Same as :func:`thoughts_of_range`, but over GAME time (``game_ts``).
+
+    This is what "the thoughts of game day Y0002-D109" needs: the canonical
+    GameTime string sorts lexicographically in chronological order, so a plain
+    string range is an exact window. ``start`` inclusive, ``end`` exclusive.
+    """
+    if not character_name or not start_game_ts or not end_game_ts:
+        return []
+    try:
+        rows = get_connection().execute(
+            "SELECT id, ts, game_ts, location_id, room_id, content FROM thoughts"
+            " WHERE character_name=? AND game_ts >= ? AND game_ts < ?"
+            " ORDER BY game_ts ASC, id ASC",
+            (character_name, start_game_ts, end_game_ts)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("thoughts_of_game_range(%s) failed: %s",
                        character_name, e)
         return []
 

@@ -11,6 +11,7 @@ placeholders:
   scope_label: "this room" or "the whole place"
   current_time: Wall-clock time, format "HH:MM"
   time_of_day: "morning" | "afternoon" | "evening" | "night"
+  game_date: In-world calendar date, e.g. "Summer, day 17 · Year 3"
   setting_block: Optional "Setting: Indoor/Outdoor …" line (empty if not set)
   active_events_block: Pre-formatted list of currently active events at the place (empty if none)
   present_people_block: Pre-formatted bullet list of witnesses (name + outfit per line)
@@ -40,6 +41,7 @@ Strict rules:
 Place: {{ location_name }}{% if room_name %} — {{ room_name }}{% endif %}
 Reach: {{ scope_label }}
 Time: {{ current_time }} ({{ time_of_day }})
+Date: {{ game_date }}
 {% if setting_block %}{{ setting_block }}
 {% endif %}
 {{ subject_name }}{% if subject_profile %} — {{ subject_profile }}{% endif %}{% if subject_outfit %} — {{ subject_outfit }}{% endif %}{% if subject_mood %} — mood: {{ subject_mood }}{% endif %}

@@ -2,7 +2,7 @@
 task: consolidation
 purpose: Daily summary — collapse one day's episodic memories into a 3-5 sentence narrative (memory_service._consolidate_episodics_to_daily)
 placeholders:
-  day_str: Date string "YYYY-MM-DD"
+  game_date: World-calendar date of the day ("Winter, day 19 · Year 2")
   character_name: Character whose day is being summarized
   existing: Existing daily summary text (empty if none)
   lang_instruction: Optional language instruction (empty for English)
@@ -13,7 +13,7 @@ placeholders:
 You are a summarization assistant. Summarize ONLY what the material below states — never add, guess or embellish a fact, a motive or a person that is not in it. Reply with ONLY the summary — no JSON, no explanation, no commentary.
 
 ## user
-Summarize the day {{ day_str }} for {{ character_name }}.
+Summarize the day {{ game_date }} for {{ character_name }}.
 
 {% if existing %}
 Existing daily summary:

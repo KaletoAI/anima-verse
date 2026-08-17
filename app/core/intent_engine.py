@@ -12,9 +12,9 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 
-from app.core.timeutils import utc_now
+from app.core.game_time import GameDuration
+from app.core.timeutils import game_time, utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -68,6 +68,10 @@ def strip_intent_tags(text: str) -> str:
 def _parse_delay(delay_str: str) -> int:
     """Convert delay string to seconds.
     Supported: 0/now/sofort, 30m, 2h, 1d, HH:MM (today or tomorrow).
+
+    The result is an IN-WORLD delay (it is added to the game clock in
+    :func:`_schedule_intent`), so the HH:MM form is resolved against the GAME
+    clock — "at 20:00" means the world's 20:00, not the server's.
     """
     s = delay_str.strip().lower()
     if not s or s in ('0', 'now', 'sofort', 'immediately', 'jetzt'):
@@ -80,13 +84,13 @@ def _parse_delay(delay_str: str) -> int:
         return int(v * factor)
     tm = re.fullmatch(r'(\d{1,2}):(\d{2})', s)
     if tm:
-        now = utc_now()
+        now = game_time()
         target = now.replace(hour=int(tm.group(1)), minute=int(tm.group(2)),
-                              second=0, microsecond=0)
+                             second=0)
         if target <= now:
-            target += timedelta(days=1)
-        return int((target - now).total_seconds())
-    logger.warning("Unbekanntes delay-Format: %s", delay_str)
+            target = target + GameDuration.of(days=1)
+        return int((target - now).seconds)
+    logger.warning("Unknown delay format: %s", delay_str)
     return 0
 
 
@@ -229,10 +233,11 @@ def _submit_to_task_queue(intent: Intent, character_name: str) -> None:
 def _schedule_intent(intent: Intent, character_name: str,
                      scheduler_manager: Any) -> None:
     try:
-        # delay_seconds is an in-world delay — run_date must be a GAME-time
-        # stamp (character scheduler jobs dispatch on the game clock).
-        from app.core.timeutils import game_now
-        run_at = (game_now() + timedelta(seconds=intent.delay_seconds)).isoformat()
+        # delay_seconds is an in-world delay — run_date must be a canonical
+        # GAME-time stamp (character scheduler jobs dispatch on the game clock).
+        run_at = (game_time()
+                  + GameDuration.of(seconds=intent.delay_seconds)).canonical()
+        # The job id only has to be unique — SYSTEM time is the right clock here.
         job_id = f"intent_{character_name}_{int(utc_now().timestamp())}_{intent.type}"
 
         if intent.type == "send_message":

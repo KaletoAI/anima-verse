@@ -371,6 +371,20 @@ def build_memory_today(character_name: str) -> Dict[str, Any]:
     }
 
 
+def game_label(game_ts: Any, lang: str = "en") -> str:
+    """Ready-made world-calendar label for a persisted GAME stamp.
+
+    ``""`` for an empty stamp (rows written before the column existed) and
+    for anything that is not a canonical ``Y0002-D109T14:00:00`` string. The
+    SERVER renders the label — clients never parse a game stamp themselves.
+    """
+    from app.core.game_time import GameTime
+    try:
+        return GameTime.parse(game_ts).label(lang)
+    except (ValueError, TypeError):
+        return ""
+
+
 def build_debug_activity(character_name: str) -> Dict[str, Any]:
     """Game-Admin debug: why is a (non-avatar) character behaving this way?
 
@@ -407,7 +421,10 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
         # (agent_loop._record_turn) — not name/ts/action.
         thoughts_recent = [
             {"ts": r.get("started_at", ""),
+             # Both clocks side by side: `ts` is SYSTEM time, `game_ts` the
+             # canonical world stamp, `game_label` its rendered form.
              "game_ts": r.get("game_ts", ""),
+             "game_label": game_label(r.get("game_ts", "")),
              "action": (r.get("outcome", "")
                         + (f" — {r['preview']}" if r.get("preview") else ""))}
             for r in recent if r.get("agent") == character_name
@@ -805,13 +822,34 @@ def _evolution_diff(prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
+def _day_key_label(day_key: str, lang: str = "en") -> str:
+    """Readable world date of a game day key ("" when it is not one)."""
+    from app.core.game_time import GameTime
+    try:
+        return GameTime.parse(f"{day_key}T00:00:00").date_label(lang)
+    except (ValueError, TypeError):
+        return ""
+
+
+def _week_key_label(week_key: str, lang: str = "en") -> str:
+    """Readable label of a game week key ("" when it is not one)."""
+    from app.core.memory_service import _week_start
+    start = _week_start(week_key)
+    return start.date_label(lang) if start is not None else ""
+
+
 def build_memory_history(character_name: str,
                          kind: str = "daily",
                          limit: int = 60,
-                         offset: int = 0) -> Dict[str, Any]:
+                         offset: int = 0,
+                         lang: str = "en") -> Dict[str, Any]:
     """Tab "History": daily | weekly | monthly | history | diary | evolution.
 
     Default: `daily` (last 60 entries across all partners).
+
+    Every date key here is a GAME calendar key (``Y0002-D109`` /
+    ``Y0002-W016`` / ``Y0002-S01``); the server ships the readable ``label``
+    alongside it so the client never has to know the world calendar.
     """
     from app.core.db import get_connection
     import json as _json
@@ -826,7 +864,8 @@ def build_memory_history(character_name: str,
             ORDER BY date_key DESC, partner ASC
             LIMIT ? OFFSET ?
         """, (character_name, limit, offset)).fetchall()
-        items = [{"date": r[0], "partner": r[1] or "", "content": r[2]} for r in rows]
+        items = [{"date": r[0], "label": _day_key_label(r[0], lang),
+                  "partner": r[1] or "", "content": r[2]} for r in rows]
         total = conn.execute(
             "SELECT COUNT(*) FROM summaries WHERE character_name=? AND kind='daily'",
             (character_name,),
@@ -837,13 +876,16 @@ def build_memory_history(character_name: str,
     if kind == "weekly":
         from app.core.memory_service import load_weekly_summaries
         weekly = load_weekly_summaries(character_name)
-        items = [{"week": k, "content": v} for k, v in sorted(weekly.items(), reverse=True)]
+        items = [{"week": k, "label": _week_key_label(k, lang), "content": v}
+                 for k, v in sorted(weekly.items(), reverse=True)]
         return {"character": character_name, "kind": kind, "items": items}
 
     if kind == "monthly":
         from app.core.memory_service import load_monthly_summaries
         monthly = load_monthly_summaries(character_name)
-        items = [{"month": k, "content": v} for k, v in sorted(monthly.items(), reverse=True)]
+        from app.core.memory_service import season_label
+        items = [{"month": k, "label": season_label(k, lang), "content": v}
+                 for k, v in sorted(monthly.items(), reverse=True)]
         return {"character": character_name, "kind": kind, "items": items}
 
     if kind == "history":
@@ -853,17 +895,21 @@ def build_memory_history(character_name: str,
 
     if kind == "diary":
         rows = conn.execute("""
-            SELECT id, ts, content, tags
+            SELECT id, ts, game_ts, content, tags
             FROM diary_entries
             WHERE character_name=?
-            ORDER BY ts DESC
+            ORDER BY game_ts DESC, ts DESC
             LIMIT ? OFFSET ?
         """, (character_name, limit, offset)).fetchall()
         items = []
         for r in rows:
-            try: tags = _json.loads(r[3] or "[]")
+            try: tags = _json.loads(r[4] or "[]")
             except Exception: tags = []
-            items.append({"id": r[0], "ts": r[1], "content": r[2], "tags": tags})
+            day_key = (r[2] or "")[:10]
+            items.append({"id": r[0], "ts": r[1], "game_ts": r[2] or "",
+                          "date": day_key,
+                          "label": _day_key_label(day_key, lang),
+                          "content": r[3], "tags": tags})
         total = conn.execute(
             "SELECT COUNT(*) FROM diary_entries WHERE character_name=?",
             (character_name,),
@@ -1185,8 +1231,13 @@ def build_active_conditions(character_name: str) -> Dict[str, Any]:
 
     Expired conditions are filtered out. Icons/labels come from the prompt
     filters (Game Admin -> Conditions).
+
+    A condition's lifetime is a WORLD duration ("drunk for 3 hours" means three
+    in-world hours), so ``started_at`` is a canonical GameTime and the
+    remaining time is counted on the game clock.
     """
-    from datetime import datetime as _dt
+    from app.core.game_time import GameDuration, GameTime
+    from app.core.timeutils import game_time
     from app.core.prompt_filters import load_filters
     from app.models.character import get_character_profile
 
@@ -1215,7 +1266,7 @@ def build_active_conditions(character_name: str) -> Dict[str, Any]:
             if name:
                 meta_by_name.setdefault(name, dict(meta, label=meta["label"] or name))
 
-    now = _dt.now()
+    now_game = game_time()
     result = []
     for cond in active:
         name = (cond.get("name") or "").strip()
@@ -1226,13 +1277,13 @@ def build_active_conditions(character_name: str) -> Dict[str, Any]:
         remaining_h = None
         if duration_h:
             try:
-                started = _dt.fromisoformat(cond["started_at"])
-                elapsed_s = (now - started).total_seconds()
-                total_s = duration_h * 3600
-                if elapsed_s > total_s:
+                started = GameTime.parse(cond["started_at"])
+                elapsed = now_game - started
+                total = GameDuration.of(hours=duration_h)
+                if elapsed > total:
                     continue
-                remaining_h = round((total_s - elapsed_s) / 3600, 1)
-            except (ValueError, KeyError):
+                remaining_h = round((total - elapsed).hours, 1)
+            except (ValueError, KeyError, TypeError):
                 pass
         meta = meta_by_name.get(name.lower(), {})
         result.append({

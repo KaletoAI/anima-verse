@@ -1,20 +1,28 @@
-"""Character Memory System - Langzeitgedaechtnis pro Character.
+"""Character memory system — long-term memory per character.
 
-Ersetzt das alte Knowledge-System mit kontextbasiertem Retrieval,
-natuerlichem Decay und Memory-Typen (episodic, semantic, commitment).
+Replaces the old knowledge system with context-based retrieval, natural decay
+and memory types (episodic, semantic, commitment).
 
-Storage: world.db — Tabellen memories, mood_history
+Storage: world.db — tables ``memories``, ``mood_history``.
+
+**Two stamps per memory, and they are not interchangeable** (plan-game-calendar
+.md §1): ``ts`` is SYSTEM time (ordering, decay, access bookkeeping), while
+``game_ts`` is the canonical GAME time the memory was formed at. Everything the
+character reads about WHEN something happened comes off ``game_ts`` — a real
+date has no business inside the world. A row without a game stamp gets no time
+prefix at all rather than falling back to the system stamp.
 """
 import json
 import math
 import os
 import re
 import uuid
-from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+from app.core.game_time import GameTime
+from app.core.timeutils import game_time, parse_iso, utc_now, utc_now_iso
 from typing import Any, Dict, List, Optional
 
+from app.core.i18n import t
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
 
@@ -65,9 +73,9 @@ def _now_iso() -> str:
 
 
 def _row_to_entry(row) -> Dict[str, Any]:
-    """Konvertiert eine DB-Row in das Legacy-Entry-Dict-Format."""
+    """Converts a DB row into the entry dict format."""
     d = dict(row)
-    # Legacy-Felder aus meta wiederherstellen
+    # Restore the fields that live in the meta JSON column
     meta = {}
     try:
         meta = json.loads(d.get("meta") or "{}")
@@ -76,11 +84,12 @@ def _row_to_entry(row) -> Dict[str, Any]:
     entry = {
         "id": d.get("id", ""),
         "timestamp": d.get("ts", ""),
+        "game_ts": d.get("game_ts", "") or "",
         "memory_type": d.get("tier", "semantic"),
         "content": d.get("content", ""),
         "tags": [],
         "source_ids": [],
-        **meta,  # Alle meta-Felder (context, importance, access_count, etc.)
+        **meta,  # all meta fields (context, importance, access_count, ...)
     }
     try:
         entry["tags"] = json.loads(d.get("tags") or "[]")
@@ -110,7 +119,7 @@ META_KEYS = ("context", "importance", "access_count", "last_accessed",
 # Entry fields that are stored in their own columns, not in `meta` — knowing
 # them is what lets the builder below tell "belongs elsewhere" from "typo".
 _ROW_KEYS = ("id", "memory_type", "tier", "content", "timestamp", "ts",
-             "tags", "source_ids")
+             "game_ts", "tags", "source_ids")
 
 
 def _build_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -132,11 +141,12 @@ def _build_meta(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _entry_to_row(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """Konvertiert ein Entry-Dict in DB-Felder."""
+    """Converts an entry dict into DB fields."""
     meta = _build_meta(entry)
     return {
         "tier": entry.get("memory_type", "semantic"),
         "ts": entry.get("timestamp", _now_iso()),
+        "game_ts": entry.get("game_ts", "") or "",
         "content": entry.get("content", ""),
         "source_ids": json.dumps(entry.get("source_ids", []), ensure_ascii=False),
         "tags": json.dumps(entry.get("tags", []), ensure_ascii=False),
@@ -190,37 +200,38 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
                     row_id = int(raw_id[4:])
 
                 if row_id and str(row_id) in existing_ids:
-                    # Update bestehender Row
+                    # Update of an existing row
                     conn.execute("""
                         UPDATE memories
-                        SET tier=?, ts=?, content=?, source_ids=?, tags=?, meta=?
+                        SET tier=?, ts=?, game_ts=?, content=?, source_ids=?,
+                            tags=?, meta=?
                         WHERE id=? AND character_name=?
                     """, (
-                        row["tier"], row["ts"], row["content"],
+                        row["tier"], row["ts"], row["game_ts"], row["content"],
                         row["source_ids"], row["tags"], row["meta"],
                         row_id, character_name,
                     ))
                     entry_ids_seen.add(str(row_id))
                 elif not raw_id or raw_id.startswith("mem_") and not (raw_id[4:].isdigit()):
-                    # Neuer Eintrag (hex-ID aus altem System)
+                    # New entry (hex id from the old system)
                     cur = conn.execute("""
                         INSERT INTO memories
-                        (character_name, tier, ts, content, source_ids, tags, meta)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (character_name, row["tier"], row["ts"], row["content"],
-                          row["source_ids"], row["tags"], row["meta"]))
+                        (character_name, tier, ts, game_ts, content, source_ids, tags, meta)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (character_name, row["tier"], row["ts"], row["game_ts"],
+                          row["content"], row["source_ids"], row["tags"], row["meta"]))
                     entry_ids_seen.add(str(cur.lastrowid))
                 else:
-                    # Unbekannte oder neue Entry
+                    # Unknown or new entry
                     cur = conn.execute("""
                         INSERT INTO memories
-                        (character_name, tier, ts, content, source_ids, tags, meta)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (character_name, row["tier"], row["ts"], row["content"],
-                          row["source_ids"], row["tags"], row["meta"]))
+                        (character_name, tier, ts, game_ts, content, source_ids, tags, meta)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (character_name, row["tier"], row["ts"], row["game_ts"],
+                          row["content"], row["source_ids"], row["tags"], row["meta"]))
                     entry_ids_seen.add(str(cur.lastrowid))
 
-            # Geloeschte Entries entfernen
+            # Remove deleted entries
             to_delete = existing_ids - entry_ids_seen
             for del_id in to_delete:
                 conn.execute(
@@ -239,13 +250,17 @@ def add_memory(character_name: str,
     context: str = "",
     related_character: str = "",
     timestamp: str = "",
+    game_ts: str = "",
     extra_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Fuegt eine neue Memory hinzu.
+    """Adds a new memory.
 
-    Cap-Enforcement (MEMORY_MAX_SEMANTIC) erfolgt ausschliesslich im
-    Background-Konsolidierungsjob (memory_service._cleanup_phase) — niemals
-    synchron beim Schreiben, damit Aufrufer (Chat, Room-Entry, ...) nicht
-    blockieren.
+    Cap enforcement (MEMORY_MAX_SEMANTIC) happens exclusively in the background
+    consolidation job (memory_service._cleanup_phase) — never synchronously on
+    write, so callers (chat, room entry, ...) never block.
+
+    ``timestamp`` is the SYSTEM stamp, ``game_ts`` the canonical GAME stamp;
+    both default to "now" on their own clock. A caller that back-dates one
+    should back-date the other too — they describe the same instant.
     """
     content = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', content).strip()
     if not content:
@@ -254,6 +269,7 @@ def add_memory(character_name: str,
     entry = {
         "id": _new_id(),
         "timestamp": timestamp or _now_iso(),
+        "game_ts": game_ts or game_time().canonical(),
         "memory_type": memory_type,
         "content": content,
         "context": context,
@@ -271,19 +287,20 @@ def add_memory(character_name: str,
         with transaction() as conn:
             conn.execute("""
                 INSERT INTO memories
-                (character_name, tier, ts, content, source_ids, tags, meta)
-                VALUES (?, ?, ?, ?, '[]', ?, ?)
+                (character_name, tier, ts, game_ts, content, source_ids, tags, meta)
+                VALUES (?, ?, ?, ?, ?, '[]', ?, ?)
             """, (
                 character_name,
                 memory_type,
                 entry["timestamp"],
+                entry["game_ts"],
                 content,
                 json.dumps(tags or [], ensure_ascii=False),
                 json.dumps(meta, ensure_ascii=False),
             ))
     except Exception as e:
-        logger.error("add_memory DB-Fehler fuer %s: %s", character_name, e)
-    logger.debug("+1 memory [%s] fuer %s: %s", memory_type, character_name, content[:80])
+        logger.error("add_memory DB error for %s: %s", character_name, e)
+    logger.debug("+1 memory [%s] for %s: %s", memory_type, character_name, content[:80])
     return entry
 
 
@@ -376,6 +393,7 @@ def upsert_relationship_memory(character_name: str,
             facts = facts[-max_facts:]
         existing["content"] = "\n".join(facts)
         existing["timestamp"] = _now_iso()
+        existing["game_ts"] = game_time().canonical()
         save_memories(character_name, entries)
         return existing
     else:
@@ -591,44 +609,78 @@ def retrieve_relevant_memories(character_name: str,
 # Prompt-Section Builder (ersetzt build_knowledge_prompt_section)
 # ---------------------------------------------------------------------------
 
-def _format_memory_timestamp(iso_ts: str) -> str:
-    """Kompaktes, LLM-lesbares Datum."""
+# Recency thresholds in GAME days — the difference of two ``day_index``
+# values, so "1" means "yesterday or later", not "within 24 h".
+_MARK_CURRENT_DAYS = 1
+_MARK_RECENT_DAYS = 2
+_RELATIVE_DAYS_LIMIT = 7   # beyond that the world date is more useful
+
+# The two markers, as ONE definition — the header explains them and the entry
+# lines carry them, and the two must never drift apart.
+MARK_CURRENT = "[CURRENT]"
+MARK_RECENT = "[RECENT]"
+
+
+def _game_days_ago(game_ts: str) -> Optional[int]:
+    """Whole GAME days between a canonical stamp and now (None if unusable)."""
     try:
-        dt = parse_iso(iso_ts)
+        return game_time().day_index - GameTime.parse(game_ts).day_index
+    except (ValueError, TypeError):
+        return None
+
+
+def _format_memory_timestamp(game_ts: str, lang: str = "en") -> str:
+    """Compact, LLM-readable WORLD date of a memory.
+
+    Reads the GAME stamp only. A row without one (pre-migration, or unparsable)
+    yields "" and the entry goes into the prompt without a time prefix — the
+    system stamp is deliberately NOT used as a fallback, because a real date
+    inside the world is worse than no date at all.
+    """
+    try:
+        gt = GameTime.parse(game_ts)
     except (ValueError, TypeError):
         return ""
-    now = utc_now()
-    delta = now.date() - dt.date()
-    time_str = dt.strftime("%H:%M")
-    if delta.days == 0:
-        return f"heute {time_str}"
-    elif delta.days == 1:
-        return f"gestern {time_str}"
-    elif delta.days < 7:
-        return f"vor {delta.days} Tagen"
-    else:
-        return dt.strftime("%d.%m. %H:%M")
+    days = game_time().day_index - gt.day_index
+    time_str = gt.time_hhmm()
+    if days <= 0:
+        return t("today {time}", lang).format(time=time_str)
+    if days == 1:
+        return t("yesterday {time}", lang).format(time=time_str)
+    if days < _RELATIVE_DAYS_LIMIT:
+        return t("{days} days ago", lang).format(days=days)
+    return f"{gt.date_label(lang)} {time_str}"
 
 
 def build_memory_prompt_section(character_name: str,
     partner_name: str = "",
     current_message: str = "") -> str:
-    """Baut den Memory-Abschnitt fuer den System-Prompt.
+    """Builds the memory section of the system prompt.
 
-    Gruppiert nach Typ: episodic, semantic, commitment, relationships.
-    Kontextbasiert abgerufen statt statisch Top-N.
+    Grouped by type: episodic, semantic, commitment, relationships. Retrieved
+    by context instead of a static top-N.
 
-    `partner_name` ist der aktuelle Konversationspartner (Charaktername).
-    Wenn gesetzt, fuegt der Header einen Disambiguierungs-Hinweis ein,
-    damit das LLM bei TalkTo nicht den falschen Adressaten als "User"
-    interpretiert.
+    ``partner_name`` is the current conversation partner (a character name).
+    When set, the header adds a disambiguation hint so the LLM does not read
+    the wrong addressee as "the user" during a TalkTo.
+
+    Every time reference is WORLD time (``game_ts``); entries without a game
+    stamp appear undated rather than carrying a real-world date.
     """
     memories = retrieve_relevant_memories(character_name,
         current_message=current_message)
     if not memories:
         return ""
 
-    # Gruppieren nach memory_type
+    try:
+        from app.models.character import get_character_language
+        lang = (get_character_language(character_name) or "en").strip() or "en"
+    except Exception:
+        lang = "en"
+    mark_current = t(MARK_CURRENT, lang)
+    mark_recent = t(MARK_RECENT, lang)
+
+    # Group by memory_type
     episodic = []
     semantic = []
     commitments = []
@@ -640,28 +692,25 @@ def build_memory_prompt_section(character_name: str,
         character_exists = None  # type: ignore
 
     for mem in memories:
-        ts = _format_memory_timestamp(mem.get("timestamp", ""))
+        ts = _format_memory_timestamp(mem.get("game_ts", ""), lang)
         ts_prefix = f"({ts}) " if ts else ""
         related = mem.get("related_character", "")
         content = mem.get("content", "")
 
-        # Dangling-Filter: Memory/Commitment, das einen nicht (mehr) in der Welt
-        # existierenden Character referenziert, NICHT in den Prompt ziehen (Daten
-        # bleiben erhalten). Greift nur bei gesetztem related_character.
+        # Dangling filter: a memory/commitment referencing a character that
+        # does not (or no longer) exists in the world is kept in storage but
+        # not pulled into the prompt. Only applies with related_character set.
         if related and character_exists is not None and not character_exists(related):
             continue
 
-        # Recency-Marker fuer sehr aktuelle Eintraege (< 2 Tage)
+        # Recency marker for very fresh entries — counted in GAME days.
         recency_marker = ""
-        try:
-            mem_ts = parse_iso(mem.get("timestamp", ""))
-            mem_age_days = (utc_now() - mem_ts).total_seconds() / 86400
-            if mem_age_days <= 1.0:
-                recency_marker = "[AKTUELL] "
-            elif mem_age_days <= 2.0:
-                recency_marker = "[KÜRZLICH] "
-        except (ValueError, TypeError):
-            pass
+        days_ago = _game_days_ago(mem.get("game_ts", ""))
+        if days_ago is not None:
+            if days_ago <= _MARK_CURRENT_DAYS:
+                recency_marker = f"{mark_current} "
+            elif days_ago <= _MARK_RECENT_DAYS:
+                recency_marker = f"{mark_recent} "
 
         mtype = mem.get("memory_type", "semantic")
         if mtype == "episodic":
@@ -685,7 +734,7 @@ def build_memory_prompt_section(character_name: str,
         )
     header += (
         ". Only state what you actually know, never invent details.\n"
-        "Entries marked [AKTUELL] or [KÜRZLICH] are very recent — "
+        f"Entries marked {mark_current} or {mark_recent} are very recent — "
         "prioritize them over older entries when relevant:"
     )
     parts.append(header)

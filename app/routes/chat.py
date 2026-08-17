@@ -2298,9 +2298,15 @@ def _build_full_system_prompt(character_name: str,
     current_room_id = get_character_current_room(character_name)
     current_activity = get_effective_activity(character_name)
 
-    from app.core.timeutils import game_local_now as _lnow
-    now = _lnow()  # in-game clock in the world timezone (storage stays real UTC)
-    time_line = f"Current time: {now.strftime('%H:%M')} ({now.strftime('%A, %d %B %Y')})"
+    from app.core.timeutils import game_time
+    from app.models.character import get_character_language as _get_lang
+    # Game clock + world calendar (storage stays real UTC). The date label
+    # carries season, day and year — and the weekday name when the world has
+    # weeks at all. No real-world date reaches the character anymore.
+    _now_game = game_time()
+    _date_lang = _get_lang(character_name) or "de"
+    time_line = (f"Current time: {_now_game.time_hhmm()} — "
+                 f"{_now_game.date_label(_date_lang)}")
     situation_parts = [time_line]
 
     if _has("locations_enabled") and current_location:
@@ -2473,7 +2479,8 @@ def _build_full_system_prompt(character_name: str,
     history_summary_block = ""
     if _has("memory_enabled"):
         from app.utils.history_manager import build_longterm_summary_prompt_section
-        longterm_section = build_longterm_summary_prompt_section(character_name) or ""
+        longterm_section = build_longterm_summary_prompt_section(
+            character_name, _date_lang) or ""
         from app.models.memory import memory_amount as _mem_amt2
         daily_summary_section = build_daily_summary_prompt_section(
             character_name,
@@ -2521,7 +2528,7 @@ def _build_full_system_prompt(character_name: str,
             from app.models.world import get_location_by_id
             from app.core import day_consolidation as _dc
             _parts = []
-            # Stufe 2b: vergangene Tage
+            # Stage 2b: past days
             from app.models.memory import memory_amount as _mem_amt
             _days = _dc.recent_daily_entries(
                 character_name,
@@ -2529,11 +2536,18 @@ def _build_full_system_prompt(character_name: str,
                                "memory.daily_entries_in_prompt", 7))
             if _days:
                 # recent_daily_entries returns newest-first; the prompt reads
-                # chronologically -> oldest first.
+                # chronologically -> oldest first. The key is a game day
+                # ("Y0002-D109") — the character reads the world date, never
+                # the raw key.
+                def _day_label(dk: str) -> str:
+                    try:
+                        return _dc.parse_day_key(dk).date_label(_date_lang)
+                    except (AttributeError, ValueError, TypeError):
+                        return dk
                 _parts.append("Earlier days:\n" + "\n".join(
-                    f"- {dk}: {txt.strip()}" for dk, txt in reversed(_days)
-                    if (txt or "").strip()))
-            # Stufe 2: heutige Szenen (nach dem Cursor — eingeklappte fallen raus)
+                    f"- {_day_label(dk)}: {txt.strip()}"
+                    for dk, txt in reversed(_days) if (txt or "").strip()))
+            # Stage 2: today's scenes (after the cursor — folded ones drop out)
             _cursor = _dc.get_cursor(character_name)
             _lines = []
             for sc in scene_store.get_recent_scenes_for(

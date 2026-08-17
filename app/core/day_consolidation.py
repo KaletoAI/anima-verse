@@ -1,24 +1,32 @@
-"""Tages-Konsolidierung (plan-history-consolidation-cleanup.md, Phase 2).
+"""Day consolidation (plan-history-consolidation-cleanup.md, phase 2).
 
-Beim Hauptschlaf — bzw. als Stau-Fallback — werden die Szenen des Wach-Blocks
-eines Characters zu EINEM Tages-Eintrag verdichtet (Tabelle ``summaries``,
-kind='daily', partner=''). Danach liest man einen Tag als einen Eintrag statt
-mehrere Szenen.
+On the main sleep — or as a backlog fallback — a character's scenes of one
+wake block are condensed into ONE day entry (table ``summaries``, kind='daily',
+partner=''). From then on a day reads as one entry instead of several scenes.
 
-Auslöser-Kriterium ist die SCHLAF-LÄNGE (nicht die Uhrzeit — sonst kippt es bei
-Nachtschicht). Szenen sind geteilt (mehrere Teilnehmer) → wir löschen sie NICHT,
-sondern führen pro Character einen Cursor (world_kv): Szenen bis zum Cursor sind
-in Tages-Einträge eingeklappt, neuere werden im Prompt einzeln gezeigt.
+The trigger criterion is the SLEEP LENGTH (not the clock time — that would tip
+over on a night shift). Scenes are shared (several participants), so we do NOT
+delete them; instead every character carries a cursor (world_kv): scenes up to
+the cursor are folded into day entries, newer ones are still shown one by one.
+
+**The day is the GAME day** (plan-game-calendar.md, decision E4): keys are
+``Y0002-D109`` (``GameTime.day_key``), never a real calendar date. Rows the
+world writes with SYSTEM stamps (scenes, chat messages, memories) are sorted
+into game days by :func:`game_time_at` — see its docstring for what that
+projection can and cannot promise.
 """
-from typing import Any, Dict, List, Tuple
+from datetime import timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
+from app.core.game_time import DAY_SECONDS, GameTime
 from app.core.log import get_logger
-from app.core.timeutils import utc_now, utc_now_iso, parse_iso, game_now
+from app.core.timeutils import (_start_of_day_key, game_time, game_time_at,
+                                parse_iso, utc_now, utc_now_iso)
 
 logger = get_logger("day_consolidation")
 
-# Config-Defaults (admin-überschreibbar via memory.*)
+# Config defaults (admin-overridable via memory.*)
 _DEFAULT_MAIN_SLEEP_MIN_HOURS = 4
 _DEFAULT_MAX_BLOCK_OPEN_HOURS = 30
 
@@ -28,6 +36,48 @@ _DEFAULT_MAX_BLOCK_OPEN_HOURS = 30
 # history has. Both in SYSTEM time; module constants, no config sprawl.
 THOUGHTS_OF_DAY_CHARS = 2000
 THOUGHT_RETENTION_DAYS = 7
+
+
+# --- system stamp → game day ------------------------------------------------
+#
+# The projection itself (``game_time_at``, ``system_window_of_game_day``) is
+# clock mathematics and lives in ``app.core.timeutils`` next to the clock. What
+# stays here are the day-KEY helpers the consolidation speaks in.
+
+
+def game_day_of(when: Any) -> str:
+    """``day_key`` of the game day a SYSTEM stamp falls into ("" if unusable)."""
+    gt = game_time_at(when)
+    return gt.day_key() if gt is not None else ""
+
+
+def parse_day_key(day_key: str) -> Optional[GameTime]:
+    """Start of the game day named by a ``day_key``, or ``None``.
+
+    The counterpart of :meth:`GameTime.day_key` — ``Y0002-D109`` becomes the
+    :class:`GameTime` of that day at 00:00:00.
+    """
+    return _start_of_day_key(day_key)
+
+
+def recent_game_day_keys(days: int, skip_today: bool = False) -> List[str]:
+    """The last ``days`` game days as ``day_key``s, oldest first.
+
+    ``skip_today`` leaves out the day currently running (used where today is
+    handled separately). Days before the world epoch are not produced.
+    """
+    if days <= 0:
+        return []
+    today_index = game_time().day_index
+    keys: List[str] = []
+    for i in range(days, 0, -1):
+        index = today_index - i
+        if index < 0:
+            continue  # before the world epoch — the world is not that old yet
+        keys.append(GameTime(index * DAY_SECONDS).day_key())
+    if not skip_today:
+        keys.append(GameTime(today_index * DAY_SECONDS).day_key())
+    return keys
 
 
 def thoughts_of_day_block(character_name: str, start_ts: str,
@@ -45,6 +95,10 @@ def thoughts_of_day_block(character_name: str, start_ts: str,
     except Exception as e:
         logger.debug("thoughts_of_day_block(%s): %s", character_name, e)
         return ""
+    return _thought_lines(rows)
+
+
+def _thought_lines(rows: List[Dict[str, Any]]) -> str:
     lines: List[str] = []
     used = 0
     for row in rows:
@@ -64,19 +118,30 @@ def thoughts_of_day_block(character_name: str, start_ts: str,
     return "\n".join(lines)
 
 
-def thoughts_of_date(character_name: str, date_key: str) -> str:
-    """``thoughts_of_day_block`` for a calendar day ("YYYY-MM-DD") — the shape
-    the memory/diary consolidations work in. An unusable date yields ""."""
-    if not character_name or not date_key or len(date_key) < 10:
+def thoughts_of_date(character_name: str, day_key: str) -> str:
+    """``thoughts_of_day_block`` for one GAME day (``Y0002-D109``) — the shape
+    the memory consolidations work in.
+
+    Thoughts carry their own game stamp (``thoughts.game_ts``), so this is an
+    exact window, not a projection. A key that is not a game day yields "" and
+    says so in the log — a real date reaching here is a defect, not a case to
+    fall back for.
+    """
+    if not character_name or not day_key:
+        return ""
+    start = parse_day_key(day_key)
+    if start is None:
+        logger.warning("thoughts_of_date(%s): %r is not a game day key",
+                       character_name, day_key)
         return ""
     try:
-        from datetime import timedelta
-        day = parse_iso(f"{date_key[:10]}T00:00:00+00:00")
-        return thoughts_of_day_block(character_name, day.isoformat(),
-                                     (day + timedelta(days=1)).isoformat())
+        from app.models.thought_store import thoughts_of_game_range
+        rows = thoughts_of_game_range(character_name, start.canonical(),
+                                      start.next_day_start().canonical())
     except Exception as e:
-        logger.debug("thoughts_of_date(%s, %s): %s", character_name, date_key, e)
+        logger.debug("thoughts_of_date(%s, %s): %s", character_name, day_key, e)
         return ""
+    return _thought_lines(rows)
 
 
 def _cfg(key: str, default):
@@ -117,11 +182,11 @@ def set_cursor(character_name: str, ts: str) -> None:
     _kv_set(f"day_cursor:{character_name}", ts or "")
 
 
-# --- Konsolidierung ---------------------------------------------------------
+# --- Consolidation ----------------------------------------------------------
 
 def consolidate_block_for(character_name: str, reason: str = "") -> int:
-    """Verdichtet die noch nicht eingeklappten Szenen des Characters zu einem
-    Tages-Eintrag. Gibt die Anzahl eingeklappter Szenen zurück (0 = nichts)."""
+    """Condenses the character's not-yet-folded scenes into one day entry.
+    Returns the number of scenes folded (0 = nothing)."""
     if not character_name:
         return 0
     from app.models import scene_store
@@ -131,17 +196,14 @@ def consolidate_block_for(character_name: str, reason: str = "") -> int:
               and (s.get("summary") or "").strip()]
     now = utc_now_iso()
     if not scenes:
-        set_cursor(character_name, now)  # leerer Block geschlossen
+        set_cursor(character_name, now)  # empty block closed
         return 0
     scenes.sort(key=lambda s: s.get("last_activity_ts") or "")
     new_cursor = scenes[-1].get("last_activity_ts") or now
-    # date_key = LOKALES Datum des Block-Endes (Welt-Zeitzone), damit „der Tag"
-    # dem Kalender des Spielers entspricht (Storage/cursor bleiben UTC).
-    try:
-        from app.core.timeutils import to_local, parse_iso
-        date_key = to_local(parse_iso(new_cursor)).strftime("%Y-%m-%d")
-    except Exception:
-        date_key = (new_cursor or now)[:10]
+    # The day of the block is the GAME day its last scene happened in (E4).
+    # Scenes carry SYSTEM stamps, so the game day is projected — see
+    # game_time_at(); the cursor and all storage stay SYSTEM time.
+    date_key = game_day_of(new_cursor) or game_time().day_key()
     # Inner life of the same wake block — the window this consolidation
     # already knows (cursor → new cursor). Private to this character.
     thoughts_block = thoughts_of_day_block(character_name, cursor or "", new_cursor) \
@@ -150,8 +212,9 @@ def consolidate_block_for(character_name: str, reason: str = "") -> int:
     summary = _summarize_day(character_name, scenes, thoughts_block)
     if summary:
         _save_daily(character_name, date_key, summary)
-        # Tages-Eintrag auch als (gröberes) Memory ablegen → memory_service-Rollup
-        # (daily→weekly→monthly) greift darauf, Quelle = Szenen statt chat_messages.
+        # Store the day entry as a (coarser) memory as well → the
+        # memory_service rollup (daily→weekly→monthly) picks it up, sourced
+        # from scenes instead of chat_messages.
         try:
             from app.models.memory import add_memory
             add_memory(character_name, summary, memory_type="daily", importance=2,
@@ -161,7 +224,7 @@ def consolidate_block_for(character_name: str, reason: str = "") -> int:
             logger.debug("daily memory add failed for %s: %s", character_name, e)
     set_cursor(character_name, new_cursor)
     _prune_thoughts(character_name)
-    logger.info("Tag konsolidiert: %s (%d Szenen, date=%s, reason=%s)",
+    logger.info("Day consolidated: %s (%d scenes, day=%s, reason=%s)",
                 character_name, len(scenes), date_key, reason or "?")
     return len(scenes)
 
@@ -171,12 +234,11 @@ def _prune_thoughts(character_name: str) -> int:
     ``THOUGHT_RETENTION_DAYS`` go. What mattered lives on in the day entry —
     same deal as chat-history summarization. System time, like the stamps."""
     try:
-        from datetime import timedelta
         from app.models.thought_store import prune_before
         cutoff = (utc_now() - timedelta(days=THOUGHT_RETENTION_DAYS)).isoformat()
         gone = prune_before(character_name, cutoff)
         if gone:
-            logger.info("Gedanken-Retention %s: %d Roh-Gedanken älter als %d Tage entfernt",
+            logger.info("Thought retention %s: %d raw thoughts older than %d days removed",
                         character_name, gone, THOUGHT_RETENTION_DAYS)
         return gone
     except Exception as e:
@@ -186,10 +248,10 @@ def _prune_thoughts(character_name: str) -> int:
 
 def _summarize_day(character_name: str, scenes: List[Dict[str, Any]],
                    thoughts_block: str = "") -> str:
-    """LLM-Verdichtung mehrerer Szenen-Summaries eines Tages zu EINEM Eintrag.
+    """LLM condensation of several scene summaries of one day into ONE entry.
 
-    ``thoughts_block`` ist das Innenleben des Wach-Blocks (privat, nur dieser
-    Character) — es färbt den Rückblick, ersetzt die Szenen aber nicht.
+    ``thoughts_block`` is the inner life of the wake block (private, this
+    character only) — it colours the recap but does not replace the scenes.
     """
     try:
         from app.core.llm_router import llm_call
@@ -229,7 +291,11 @@ def _save_daily(character_name: str, date_key: str, content: str) -> None:
 
 
 def recent_daily_entries(character_name: str, limit: int = 7) -> List[Tuple[str, str]]:
-    """(date_key, content) der jüngsten Tages-Einträge, neueste zuerst."""
+    """(day_key, content) of the most recent day entries, newest first.
+
+    ``day_key`` sorts lexicographically in chronological order, so the plain
+    ``ORDER BY`` keeps working on the game calendar.
+    """
     try:
         rows = get_connection().execute(
             "SELECT date_key, content FROM summaries WHERE character_name=? "
@@ -240,19 +306,19 @@ def recent_daily_entries(character_name: str, limit: int = 7) -> List[Tuple[str,
         return []
 
 
-# --- Trigger (vom periodic-Job aufgerufen) ----------------------------------
+# --- Trigger (called by the periodic job) -----------------------------------
 
 def maybe_consolidate(character_name: str) -> int:
-    """Prüft die Auslöser und konsolidiert ggf.:
-      1) Hauptschlaf: beim Aufwachen wurde `woke_main_sleep:<c>` gesetzt.
-      2) Stau-Fallback: offener Block (Cursor) älter als max_block_open_hours.
+    """Checks the triggers and consolidates if due:
+      1) main sleep: on waking, `woke_main_sleep:<c>` was set.
+      2) backlog fallback: open block (cursor) older than max_block_open_hours.
     """
     flag_key = f"woke_main_sleep:{character_name}"
     if _kv_get(flag_key):
         _kv_set(flag_key, "")
         return consolidate_block_for(character_name, "main_sleep")
 
-    # Fallback: ältester noch nicht eingeklappter Block zu alt?
+    # Fallback: is the oldest not-yet-folded block too old?
     cursor = get_cursor(character_name)
     max_hours = int(_cfg("memory.max_block_open_hours", _DEFAULT_MAX_BLOCK_OPEN_HOURS))
     try:
@@ -275,23 +341,25 @@ def note_sleep_start(character_name: str) -> None:
     measurement). GAME time — sleeping is an in-world duration; with a game
     factor >1 a real-time measurement would never reach the main-sleep
     threshold (an in-game night lasts minutes of real time)."""
-    _kv_set(f"sleep_start:{character_name}", game_now().isoformat(timespec="seconds"))
+    _kv_set(f"sleep_start:{character_name}", game_time().canonical())
 
 
 def note_wake(character_name: str) -> None:
-    """Beim Aufwachen: war es Hauptschlaf (≥ Schwelle)? Dann Flag für den
-    periodic-Job setzen, der die Tages-Konsolidierung übernimmt (LLM dort)."""
+    """On waking: was this the main sleep (≥ threshold)? Then set the flag for
+    the periodic job that runs the day consolidation (the LLM call is there)."""
     start = _kv_get(f"sleep_start:{character_name}")
     _kv_set(f"sleep_start:{character_name}", "")
     if not start:
         return
     try:
         # GAME hours (see note_sleep_start).
-        slept_h = (game_now() - parse_iso(start)).total_seconds() / 3600.0
-    except Exception:
+        slept_h = (game_time() - GameTime.parse(start)).hours
+    except ValueError:
+        logger.warning("%s: sleep_start %r is not a game stamp — sleep length unknown",
+                       character_name, start)
         return
     min_h = float(_cfg("memory.main_sleep_min_hours", _DEFAULT_MAIN_SLEEP_MIN_HOURS))
     if slept_h >= min_h:
         _kv_set(f"woke_main_sleep:{character_name}", utc_now_iso())
-        logger.info("%s: Hauptschlaf erkannt (%.1fh ≥ %.1fh) → Tages-Konsolidierung vorgemerkt",
+        logger.info("%s: main sleep detected (%.1fh ≥ %.1fh) → day consolidation queued",
                     character_name, slept_h, min_h)

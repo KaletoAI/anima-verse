@@ -1,19 +1,114 @@
-"""Memory Service - Extraction, Consolidation und Background-Worker.
+"""Memory service — extraction, consolidation and background worker.
 
-Extrahiert Memories aus Chat-Austausch (beide Seiten) und
-konsolidiert aeltere Memories periodisch.
+Extracts memories from a chat exchange (both sides) and periodically
+consolidates older memories.
+
+The rollup ladder runs on the GAME calendar (plan-game-calendar.md, decision
+E4): day → week → season, keyed ``Y0002-D109`` / ``Y0002-W016`` / ``Y0002-S01``.
+A week is a block of ``len(week_days)`` game days (7 when the world has no
+weekdays), a "monthly" summary is one SEASON of the world calendar — the
+calendar has no months. All three keys sort lexicographically in chronological
+order, so the plain SQL ordering keeps working.
 """
 import json
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+from app.core.game_time import GameDuration, GameTime, get_calendar
+from app.core.timeutils import game_time, parse_iso, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 
 logger = get_logger("memory_service")
+
+
+# ---------------------------------------------------------------------------
+# Game-calendar keys of the rollup ladder
+# ---------------------------------------------------------------------------
+
+_WEEK_KEY_RE = re.compile(r"^Y(\d{4,})-W(\d{3,})$")
+
+
+def _week_length() -> int:
+    """Days per week — the world's weekday count, 7 when it has none."""
+    return len(get_calendar().week_days) or 7
+
+
+def _week_key(when: GameTime) -> str:
+    """``Y0002-W016`` — the week of the year the given instant falls into.
+
+    Weeks are counted inside the year (the last one is short when the year
+    length is not a multiple of the week length), which keeps the key sortable
+    and readable without needing a year-crossing week index.
+    """
+    parts = when.parts()
+    index = (parts.day_of_year - 1) // _week_length() + 1
+    return f"Y{parts.year:04d}-W{index:03d}"
+
+
+def _week_start(week_key: str) -> Optional[GameTime]:
+    """First day of the week a ``_week_key`` names, or ``None``."""
+    match = _WEEK_KEY_RE.match(week_key or "")
+    if not match:
+        return None
+    year, index = int(match.group(1)), int(match.group(2))
+    if year < 1 or index < 1:
+        return None
+    try:
+        return GameTime.from_parts(year, (index - 1) * _week_length() + 1)
+    except ValueError:
+        return None
+
+
+def _season_key(when: GameTime) -> str:
+    """``Y0002-S01`` — the season the given instant falls into.
+
+    The season is the world calendar's counterpart of a month; it is what the
+    ``kind='monthly'`` rollup collapses into.
+    """
+    parts = when.parts()
+    return f"Y{parts.year:04d}-S{parts.season_index + 1:02d}"
+
+
+def memory_day_key(entry: Dict[str, Any]) -> str:
+    """Game day a memory belongs to ("" when it cannot be told).
+
+    Exact, not projected: a memory row carries its own canonical ``game_ts``,
+    written when it was formed, so the rollup groups by the world day the
+    memory actually happened on.
+
+    ``day_consolidation.game_day_of`` (back-projecting the SYSTEM stamp) is
+    only the fallback for rows that predate the calendar migration and were
+    not backfilled — after the migration there should be none. The projection
+    re-derives the game time from the CURRENT anchor and factor, so it drifts
+    for old rows as soon as the world clock is set or sped up; that is why it
+    is the fallback and not the source.
+    """
+    from app.core.day_consolidation import game_day_of
+    raw = (entry.get("game_ts") or "").strip()
+    if raw:
+        try:
+            return GameTime.parse(raw).day_key()
+        except (ValueError, TypeError):
+            pass
+    return game_day_of(entry.get("timestamp", ""))
+
+
+def season_label(season_key: str, lang: str = "en") -> str:
+    """Readable name of a season key for the prompt ("Winter · Year 2").
+
+    The season name is localized through the calendar, so a prompt written in
+    the character's language does not carry an English season into it.
+    """
+    try:
+        year, index = season_key.split("-S")
+        seasons = get_calendar().seasons
+        name = seasons[(int(index) - 1) % len(seasons)].name_for(lang) if seasons else ""
+        return f"{name} · Year {int(year[1:])}" if name else season_key
+    except (ValueError, IndexError, ZeroDivisionError):
+        return season_key
 
 
 # ---------------------------------------------------------------------------
@@ -632,59 +727,60 @@ def _llm_summarize(system_prompt: str, user_prompt: str, character_name: str) ->
 # ---------------------------------------------------------------------------
 
 def _consolidate_episodics_to_daily(character_name: str) -> int:
-    """Konsolidiert episodische Memories aelter als SHORT_TERM_DAYS zu Tages-Summaries.
+    """Collapses episodic memories older than SHORT_TERM_DAYS into day summaries.
 
-    Pro Tag: Episodische Memories + bestehende Tages-Summary → neue Tages-Summary.
-    Episodische Originale werden geloescht.
+    Per GAME day: episodic memories + the existing day summary → a new day
+    summary; the episodic originals are then deleted. The day comes from the
+    memory's own canonical ``game_ts`` (:func:`memory_day_key`), and the age
+    threshold is counted in GAME days as well, so the whole ladder moves at
+    the speed of the world.
     """
+    from app.core.day_consolidation import parse_day_key
     from app.models.memory import load_memories, save_memories
     from app.utils.history_manager import (get_memory_thresholds,
                                             load_daily_summaries_combined,
                                             save_daily_summary)
 
     thresholds = get_memory_thresholds()
-    cutoff = utc_now() - timedelta(days=thresholds["short_term_days"])
+    cutoff = game_time().minus_clamped(
+        GameDuration.of(days=thresholds["short_term_days"])).day_key()
 
     entries = load_memories(character_name)
 
-    # Episodische Memories aelter als Kurzzeit nach Tag gruppieren
+    # Episodic memories older than the short term, grouped by game day
     by_day: Dict[str, List[Dict[str, Any]]] = {}
     for e in entries:
         if e.get("memory_type") != "episodic":
             continue
-        try:
-            ts = parse_iso(e.get("timestamp", ""))
-            if ts >= cutoff:
-                continue  # Zu frisch
-            day_str = ts.strftime("%Y-%m-%d")
-            by_day.setdefault(day_str, []).append(e)
-        except (ValueError, TypeError):
-            continue
+        day_key = memory_day_key(e)
+        if not day_key or day_key >= cutoff:
+            continue  # unusable stamp, or still inside the short term
+        by_day.setdefault(day_key, []).append(e)
 
     if not by_day:
         return 0
 
-    # Episodische → Tages-Konsolidierung schreibt in den partner-leeren Slot
-    # ('') der summaries-Tabelle. Vorhandene Texte (alle Partner kombiniert)
-    # werden als Kontext gelesen, damit Episodics nicht widersprechen.
+    # Episodic → day consolidation writes into the partner-empty slot ('') of
+    # the summaries table. Existing texts (all partners combined) are read as
+    # context so the episodics do not contradict them.
     existing_daily = load_daily_summaries_combined(character_name)
     removed_total = 0
     ids_to_remove = set()
 
-    # Max 3 Tage pro Durchlauf konsolidieren (LLM-Budget)
+    # At most 3 days per run (LLM budget)
     days_processed = 0
-    for day_str, day_entries in sorted(by_day.items()):
+    for day_key, day_entries in sorted(by_day.items()):
         if days_processed >= 3:
             break
 
         contents = "\n".join(f"- {e.get('content', '')}" for e in day_entries if e.get('content', '').strip())
         if not contents:
-            # Alle Episodics dieses Tages sind leer → nur loeschen
+            # Every episodic of that day is empty → just delete
             for e in day_entries:
                 ids_to_remove.add(e.get("id"))
             removed_total += len(day_entries)
             continue
-        existing = existing_daily.get(day_str, "")
+        existing = existing_daily.get(day_key, "")
 
         lang_instruction = _lang_instruction(character_name)
 
@@ -692,14 +788,17 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
         # character, empty when the journal has nothing for the date.
         try:
             from app.core.day_consolidation import thoughts_of_date
-            thoughts_of_day = thoughts_of_date(character_name, day_str)
+            thoughts_of_day = thoughts_of_date(character_name, day_key)
         except Exception:
             thoughts_of_day = ""
+
+        day_start = parse_day_key(day_key)
+        game_date = day_start.date_label() if day_start else day_key
 
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
             "consolidation_daily",
-            day_str=day_str,
+            game_date=game_date,
             character_name=character_name,
             existing=existing,
             lang_instruction=lang_instruction,
@@ -708,15 +807,15 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
 
         summary = _llm_summarize(sys_prompt, user_prompt, character_name)
         if summary:
-            save_daily_summary(character_name, day_str, summary)
+            save_daily_summary(character_name, day_key, summary)
             for e in day_entries:
                 ids_to_remove.add(e.get("id"))
             removed_total += len(day_entries)
             days_processed += 1
-            logger.info("Tages-Konsolidierung %s [%s]: %d Episodics → Summary",
-                        character_name, day_str, len(day_entries))
+            logger.info("Day consolidation %s [%s]: %d episodics → summary",
+                        character_name, day_key, len(day_entries))
 
-    # Episodische Originale loeschen
+    # Delete the episodic originals
     if ids_to_remove:
         new_entries = [e for e in entries if e.get("id") not in ids_to_remove]
         save_memories(character_name, new_entries)
@@ -730,7 +829,7 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
 
 def load_weekly_summaries(character_name: str) -> Dict[str, str]:
     """Weekly summaries from the ``summaries`` table (kind='weekly',
-    partner=''). Returns {week_key: summary_text}, key = 'YYYY-WNN'."""
+    partner=''). Returns {week_key: summary_text}, key = 'Y0002-W016'."""
     from app.core.db import get_connection
     try:
         rows = get_connection().execute(
@@ -781,51 +880,55 @@ def delete_weekly_summaries(character_name: str, week_keys) -> None:
 
 
 def _consolidate_daily_to_weekly(character_name: str) -> int:
-    """Konsolidiert Tages-Summaries aelter als MID_TERM_DAYS zu Wochen-Summaries."""
+    """Collapses day summaries older than MID_TERM_DAYS into week summaries.
+
+    A "week" is a block of game days (``_week_key``); the age threshold counts
+    GAME days.
+    """
+    from app.core.day_consolidation import parse_day_key
     from app.utils.history_manager import (get_memory_thresholds,
                                             load_daily_summaries_combined)
 
     thresholds = get_memory_thresholds()
-    cutoff = (utc_now() - timedelta(days=thresholds["mid_term_days"])).date()
+    cutoff = game_time().minus_clamped(
+        GameDuration.of(days=thresholds["mid_term_days"]))
 
-    # Wochen-Konsolidierung verdichtet ueber alle Partner — kombinierter
-    # Text pro Tag (alle Partner-Slots zusammen).
+    # The weekly consolidation condenses across all partners — one combined
+    # text per day (all partner slots together).
     daily = load_daily_summaries_combined(character_name)
     if not daily:
         return 0
 
-    # Tages-Summaries nach Kalenderwoche gruppieren (leere ueberspringen)
-    from datetime import date as date_type
-    by_week: Dict[str, Dict[str, str]] = {}  # {week_key: {date: summary}}
-    empty_days = []  # Leere Eintraege zum Aufraeumen
-    for day_str, summary in daily.items():
-        try:
-            d = date_type.fromisoformat(day_str)
-            if d >= cutoff:
-                continue  # Zu frisch
-            if not summary or not summary.strip():
-                empty_days.append(day_str)  # Leere Eintraege merken
-                continue
-            iso = d.isocalendar()
-            week_key = f"{iso[0]}-W{iso[1]:02d}"
-            by_week.setdefault(week_key, {})[day_str] = summary
-        except (ValueError, TypeError):
+    # Group day summaries by game week (skipping empty ones)
+    by_week: Dict[str, Dict[str, str]] = {}  # {week_key: {day_key: summary}}
+    empty_days = []  # empty entries, to be cleaned up
+    for day_key, summary in daily.items():
+        day = parse_day_key(day_key)
+        if day is None:
+            logger.warning("daily summary of %s has a non-game day key %r — skipped",
+                           character_name, day_key)
             continue
+        if day >= cutoff:
+            continue  # too fresh
+        if not summary or not summary.strip():
+            empty_days.append(day_key)
+            continue
+        by_week.setdefault(_week_key(day), {})[day_key] = summary
 
     if not by_week and not empty_days:
         return 0
 
     existing_weekly = load_weekly_summaries(character_name)
     removed_total = 0
-    days_to_remove = list(empty_days)  # Leere Eintraege immer loeschen
+    days_to_remove = list(empty_days)  # empty entries always go
 
-    # Max 2 Wochen pro Durchlauf
+    # At most 2 weeks per run
     weeks_processed = 0
     for week_key, week_days in sorted(by_week.items()):
         if weeks_processed >= 2:
             break
         if week_key in existing_weekly:
-            # Bereits konsolidiert — Tages-Summaries loeschen
+            # Already consolidated — drop the day summaries
             days_to_remove.extend(week_days.keys())
             removed_total += len(week_days)
             continue
@@ -834,7 +937,7 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
             f"- {d}: {s}" for d, s in sorted(week_days.items()) if s and s.strip()
         )
         if not entries_text:
-            # Alle Eintraege dieser Woche sind leer → nur loeschen
+            # Every entry of that week is empty → just delete
             days_to_remove.extend(week_days.keys())
             removed_total += len(week_days)
             continue
@@ -853,7 +956,7 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
             days_to_remove.extend(week_days.keys())
             removed_total += len(week_days)
             weeks_processed += 1
-            logger.info("Wochen-Konsolidierung %s [%s]: %d Tage → Summary",
+            logger.info("Week consolidation %s [%s]: %d days → summary",
                         character_name, week_key, len(week_days))
 
     if days_to_remove:
@@ -868,8 +971,12 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
 # ---------------------------------------------------------------------------
 
 def load_monthly_summaries(character_name: str) -> Dict[str, str]:
-    """Monthly summaries from the ``summaries`` table (kind='monthly',
-    partner=''). Returns {month_key: summary_text}, key = 'YYYY-MM'."""
+    """Season summaries from the ``summaries`` table (kind='monthly',
+    partner=''). Returns {season_key: summary_text}, key = 'Y0002-S01'.
+
+    The DB ``kind`` stays 'monthly' — it names the TIER (the coarsest one),
+    and the world calendar's coarsest bucket below a year is the season.
+    """
     from app.core.db import get_connection
     try:
         rows = get_connection().execute(
@@ -882,72 +989,75 @@ def load_monthly_summaries(character_name: str) -> Dict[str, str]:
         return {}
 
 
-def save_monthly_summary(character_name: str, month_key: str, summary: str):
-    _save_rollup_summary(character_name, "monthly", month_key, summary)
+def save_monthly_summary(character_name: str, season_key: str, summary: str):
+    _save_rollup_summary(character_name, "monthly", season_key, summary)
 
 
 def _consolidate_weekly_to_monthly(character_name: str) -> int:
-    """Konsolidiert Wochen-Summaries aelter als LONG_TERM_DAYS zu Monats-Summaries."""
+    """Collapses week summaries older than LONG_TERM_DAYS into SEASON summaries.
+
+    The world calendar has no months, so the coarsest tier is the season the
+    week started in; the age threshold counts GAME days.
+    """
     from app.utils.history_manager import get_memory_thresholds
 
     thresholds = get_memory_thresholds()
-    cutoff = (utc_now() - timedelta(days=thresholds["long_term_days"])).date()
+    cutoff = game_time().minus_clamped(
+        GameDuration.of(days=thresholds["long_term_days"]))
 
     weekly = load_weekly_summaries(character_name)
     if not weekly:
         return 0
 
-    # Wochen nach Monat gruppieren
-    from datetime import date as date_type
-    by_month: Dict[str, Dict[str, str]] = {}  # {month_key: {week_key: summary}}
+    # Group weeks by season
+    by_season: Dict[str, Dict[str, str]] = {}  # {season_key: {week_key: summary}}
     for week_key, summary in weekly.items():
-        try:
-            # week_key = "YYYY-WNN" → Montag der Woche
-            year, wk = week_key.split("-W")
-            d = date_type.fromisocalendar(int(year), int(wk), 1)
-            if d >= cutoff:
-                continue
-            month_key = d.strftime("%Y-%m")
-            by_month.setdefault(month_key, {})[week_key] = summary
-        except (ValueError, TypeError):
+        start = _week_start(week_key)
+        if start is None:
+            logger.warning("weekly summary of %s has a non-game week key %r — skipped",
+                           character_name, week_key)
             continue
+        if start >= cutoff:
+            continue
+        by_season.setdefault(_season_key(start), {})[week_key] = summary
 
-    if not by_month:
+    if not by_season:
         return 0
 
-    existing_monthly = load_monthly_summaries(character_name)
+    existing_seasons = load_monthly_summaries(character_name)
     removed_total = 0
     weeks_to_remove = []
 
-    # Max 1 Monat pro Durchlauf
-    for month_key, month_weeks in sorted(by_month.items()):
-        if month_key in existing_monthly:
-            weeks_to_remove.extend(month_weeks.keys())
-            removed_total += len(month_weeks)
+    # At most 1 season per run
+    for season_key, season_weeks in sorted(by_season.items()):
+        if season_key in existing_seasons:
+            weeks_to_remove.extend(season_weeks.keys())
+            removed_total += len(season_weeks)
             continue
 
         entries_text = "\n".join(
-            f"- {w}: {s}" for w, s in sorted(month_weeks.items())
+            f"- {w}: {s}" for w, s in sorted(season_weeks.items())
         )
 
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
             "consolidation_monthly",
-            month_key=month_key,
+            season_key=season_key,
+            season_label=season_label(season_key),
             character_name=character_name,
             lang_instruction=_lang_instruction(character_name),
             entries_text=entries_text)
 
         summary = _llm_summarize(sys_prompt, user_prompt, character_name)
         if summary:
-            save_monthly_summary(character_name, month_key, summary)
-            weeks_to_remove.extend(month_weeks.keys())
-            removed_total += len(month_weeks)
-            logger.info("Monats-Konsolidierung %s [%s]: %d Wochen → Summary",
-                        character_name, month_key, len(month_weeks))
-        break  # Max 1 Monat pro Durchlauf
+            save_monthly_summary(character_name, season_key, summary)
+            weeks_to_remove.extend(season_weeks.keys())
+            removed_total += len(season_weeks)
+            logger.info("Season consolidation %s [%s]: %d weeks → summary",
+                        character_name, season_key, len(season_weeks))
+        break  # at most 1 season per run
 
-    # Wochen-Eintraege loeschen (in einen Monat eingeklappt)
+    # Delete the week entries (folded into a season)
     if weeks_to_remove:
         delete_weekly_summaries(character_name, weeks_to_remove)
 
@@ -1046,29 +1156,28 @@ def _migrate_three_tier(character_name: str) -> int:
                                             load_daily_summaries_combined,
                                             save_daily_summary)
 
+    from app.core.day_consolidation import parse_day_key
+
     thresholds = get_memory_thresholds()
-    cutoff = utc_now() - timedelta(days=thresholds["short_term_days"])
+    cutoff = game_time().minus_clamped(
+        GameDuration.of(days=thresholds["short_term_days"])).day_key()
 
     entries = load_memories(character_name)
     if not entries:
         return 0
 
-    # Phase 1: Episodische Memories → Tages-Summaries
+    # Phase 1: episodic memories → day summaries (keyed by GAME day)
     by_day: Dict[str, List[Dict[str, Any]]] = {}
     for e in entries:
         if e.get("memory_type") != "episodic":
             continue
-        try:
-            ts = parse_iso(e.get("timestamp", ""))
-            if ts >= cutoff:
-                continue
-            day_str = ts.strftime("%Y-%m-%d")
-            by_day.setdefault(day_str, []).append(e)
-        except (ValueError, TypeError):
+        day_key = memory_day_key(e)
+        if not day_key or day_key >= cutoff:
             continue
+        by_day.setdefault(day_key, []).append(e)
 
     if not by_day:
-        # Keine alten Episodics — trotzdem Wochen/Monats-Konsolidierung versuchen
+        # No old episodics — still try the week/season consolidation
         _consolidate_daily_to_weekly(character_name)
         _consolidate_weekly_to_monthly(character_name)
         return 0
@@ -1077,39 +1186,41 @@ def _migrate_three_tier(character_name: str) -> int:
     ids_to_remove = set()
     total_migrated = 0
 
-    for day_str, day_entries in sorted(by_day.items()):
-        # Wenn schon eine Tages-Summary existiert, Episodics direkt loeschen
-        if day_str in existing_daily and existing_daily[day_str]:
+    for day_key, day_entries in sorted(by_day.items()):
+        # A day summary already exists → delete the episodics right away
+        if day_key in existing_daily and existing_daily[day_key]:
             for e in day_entries:
                 ids_to_remove.add(e.get("id"))
             total_migrated += len(day_entries)
             continue
 
-        # LLM-Summary generieren
+        # Generate the LLM summary
+        day_start = parse_day_key(day_key)
         contents = "\n".join(f"- {e.get('content', '')}" for e in day_entries)
-        prompt = f"""Fasse den Tag {day_str} fuer {character_name} zusammen.
+        from app.core.prompt_templates import render_task
+        sys_prompt, user_prompt = render_task(
+            "consolidation_daily",
+            game_date=day_start.date_label() if day_start else day_key,
+            character_name=character_name,
+            existing="",
+            lang_instruction=_lang_instruction(character_name),
+            contents=contents,
+            thoughts_of_day="")
 
-Einzelne Erinnerungen dieses Tages:
-{contents}
-
-Schreibe 3-5 kompakte Saetze aus der Perspektive von {character_name} (dritte Person).
-Fokussiere auf: Schluesselmomente, beteiligte Personen, Emotionen, Entscheidungen.
-Antworte NUR mit der Zusammenfassung."""
-
-        summary = _llm_summarize(prompt, character_name)
+        summary = _llm_summarize(sys_prompt, user_prompt, character_name)
         if summary:
-            save_daily_summary(character_name, day_str, summary)
+            save_daily_summary(character_name, day_key, summary)
             for e in day_entries:
                 ids_to_remove.add(e.get("id"))
             total_migrated += len(day_entries)
-        # Wenn LLM fehlschlaegt: Episodics bleiben, naechster Versuch beim naechsten Start
+        # If the LLM fails the episodics stay — next start tries again
 
-    # Episodische Originale loeschen
+    # Delete the episodic originals
     if ids_to_remove:
         new_entries = [e for e in entries if e.get("id") not in ids_to_remove]
         save_memories(character_name, new_entries)
 
-    # Phase 2+3: Wochen/Monats-Konsolidierung
+    # Phase 2+3: week/season consolidation
     _consolidate_daily_to_weekly(character_name)
     _consolidate_weekly_to_monthly(character_name)
 

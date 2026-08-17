@@ -1,28 +1,63 @@
-"""Diary / Timeline — Generierte Tagesansicht pro Character.
+"""Diary / timeline — generated day view per character.
 
-Aggregiert Daten aus bestehenden Quellen (keine Duplikation):
-- mood_history.json → Stimmungsaenderungen
-- Chat-History → Gedanken-Eintraege (Tool-Calls, Aktionen)
-- instagram_feed.json → Posts und Kommentare
-- assignments.json → Fortschritt und Abschluesse
+Aggregates data from existing sources (no duplication):
+- mood_history → mood changes
+- state_history → location/activity/condition/outfit changes
+- chat history → thought entries (tool calls, actions)
+- instagram feed → posts and comments
+- assignments → progress and completions
 
-Storage: storage/users/{username}/characters/{char}/diary.json
-  → Wird bei Bedarf neu generiert (Generate-Button), nicht realtime geschrieben.
-  → Einzige Ausnahme: daily_summary (LLM-generiert, wird persistent gespeichert).
+Only ``daily_summary`` entries are persisted (table ``diary_entries``);
+everything else is regenerated on demand.
+
+**A diary day is a GAME day** (plan-game-calendar.md, decision E4). The date of
+an entry is a ``day_key`` like ``Y0002-D109``, never a real calendar date — a
+diary is in-world content, and the world has no 17th of August. Persisted
+entries carry their own canonical stamp (``diary_entries.game_ts``); the
+aggregated sources carry SYSTEM stamps only, so the game day is turned into a
+SYSTEM window once (``timeutils.system_window_of_game_day``) and every
+collector selects against that window instead of matching a date prefix.
 """
 import json
 import re
 import uuid
-from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+from app.core.game_time import GameTime
+from app.core.timeutils import (game_time, game_time_at, parse_iso,
+                                system_window_of_game_day, utc_now_iso)
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
 
 logger = get_logger("diary")
+
+# SYSTEM window of one game day: (start_iso inclusive, end_iso exclusive).
+Window = Tuple[str, str]
+
+
+def _in_window(ts: Any, window: Window) -> bool:
+    """Whether a SYSTEM stamp falls into the window.
+
+    Plain string comparison: both ends are ISO stamps with the same UTC
+    offset, so lexicographic order IS chronological order. Sub-second format
+    differences (``…:00+00:00`` vs ``…:00.123456+00:00``) can only shift a row
+    at the very edge of the window by under a second, which no day boundary
+    cares about.
+    """
+    if not isinstance(ts, str) or not ts:
+        return False
+    return window[0] <= ts < window[1]
+
+
+def _game_hhmm(ts: Any) -> str:
+    """WORLD clock time of a SYSTEM stamp ("" when unusable).
+
+    The diary shows the hour the world was at, not the hour the server was at.
+    """
+    gt = game_time_at(ts)
+    return gt.time_hhmm() if gt is not None else ""
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +117,7 @@ def _load_stored(character_name: str) -> List[Dict[str, Any]]:
     try:
         conn = get_connection()
         rows = conn.execute(
-            "SELECT id, ts, content, tags, meta FROM diary_entries "
+            "SELECT id, ts, game_ts, content, tags, meta FROM diary_entries "
             "WHERE character_name=? ORDER BY ts ASC",
             (character_name,),
         ).fetchall()
@@ -90,14 +125,15 @@ def _load_stored(character_name: str) -> List[Dict[str, Any]]:
         for r in rows:
             meta = {}
             try:
-                meta = json.loads(r[4] or "{}")
+                meta = json.loads(r[5] or "{}")
             except Exception:
                 pass
             entry = {
                 "id": meta.get("str_id", str(r[0])),
                 "type": meta.get("type", "daily_summary"),
-                "content": r[2] or "",
+                "content": r[3] or "",
                 "timestamp": r[1] or "",
+                "game_ts": r[2] or "",
                 "metadata": meta.get("metadata", {}),
                 "_db_id": r[0],
             }
@@ -150,6 +186,7 @@ def _save_stored(character_name: str, entries: List[Dict[str, Any]]) -> None:
                 if not str_id:
                     continue
                 ts = entry.get("timestamp", utc_now_iso())
+                game_ts = entry.get("game_ts", "") or ""
                 content = entry.get("content", "")
                 tags = json.dumps([entry.get("type", "daily_summary")], ensure_ascii=False)
                 meta_blob = json.dumps({
@@ -160,27 +197,60 @@ def _save_stored(character_name: str, entries: List[Dict[str, Any]]) -> None:
 
                 if str_id in str_to_db:
                     conn.execute(
-                        "UPDATE diary_entries SET ts=?, content=?, tags=?, meta=? WHERE id=?",
-                        (ts, content, tags, meta_blob, str_to_db[str_id]),
+                        "UPDATE diary_entries SET ts=?, game_ts=?, content=?, "
+                        "tags=?, meta=? WHERE id=?",
+                        (ts, game_ts, content, tags, meta_blob, str_to_db[str_id]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO diary_entries (character_name, ts, content, tags, meta) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (character_name, ts, content, tags, meta_blob),
+                        "INSERT INTO diary_entries "
+                        "(character_name, ts, game_ts, content, tags, meta) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (character_name, ts, game_ts, content, tags, meta_blob),
                     )
     except Exception as e:
         logger.error("_save_stored diary DB-Fehler fuer %s: %s", character_name, e)
 
 
-def add_summary(character_name: str, content: str, date: str) -> Dict[str, Any]:
-    """Store a daily summary (LLM-generated). Only type that gets persisted."""
+def _day_start_stamp(day_key: str) -> str:
+    """Canonical game stamp of a game day's start ("" for a non-day-key)."""
+    try:
+        return GameTime.parse(f"{day_key}T00:00:00").canonical()
+    except (ValueError, TypeError):
+        return ""
+
+
+def resolve_day_key(day_key: Optional[str]) -> str:
+    """The game day to work on — the given one, or today's."""
+    key = (day_key or "").strip()
+    return key or game_time().day_key()
+
+
+def day_label(day_key: str, lang: str = "en") -> str:
+    """Readable world date of a game day ("" for a non-day-key).
+
+    The server renders, clients display — a client never learns the calendar.
+    """
+    try:
+        return GameTime.parse(f"{day_key}T00:00:00").date_label(lang)
+    except (ValueError, TypeError):
+        return ""
+
+
+def add_summary(character_name: str, content: str, day_key: str) -> Dict[str, Any]:
+    """Store a daily summary (LLM-generated). Only type that gets persisted.
+
+    ``day_key`` is the GAME day the entry is about (``Y0002-D109``); the game
+    stamp is that day's start, so the entry sorts and filters with it. The
+    system ``timestamp`` records only when the text was written.
+    """
     entry = {
         "id": uuid.uuid4().hex[:8],
         "type": "daily_summary",
         "content": content,
         "timestamp": utc_now_iso(),
-        "metadata": {"date": date},
+        "game_ts": _day_start_stamp(day_key) or game_time().canonical(),
+        "metadata": {"date": day_key},
     }
     stored = _load_stored(character_name)
     stored.append(entry)
@@ -188,12 +258,12 @@ def add_summary(character_name: str, content: str, date: str) -> Dict[str, Any]:
     return entry
 
 
-def has_daily_summary(character_name: str, date: Optional[str] = None) -> bool:
-    if not date:
-        date = utc_now().strftime("%Y-%m-%d")
+def has_daily_summary(character_name: str, day_key: Optional[str] = None) -> bool:
+    """Whether a daily summary already exists for that GAME day."""
+    key = resolve_day_key(day_key)
     stored = _load_stored(character_name)
     return any(
-        e.get("type") == "daily_summary" and e.get("timestamp", "").startswith(date)
+        e.get("type") == "daily_summary" and (e.get("game_ts") or "").startswith(key)
         for e in stored
     )
 
@@ -202,14 +272,14 @@ def has_daily_summary(character_name: str, date: Optional[str] = None) -> bool:
 # Source collectors — each returns List[Dict] with type/content/timestamp
 # ---------------------------------------------------------------------------
 
-def _collect_mood(character_name: str, date: str) -> List[Dict[str, Any]]:
+def _collect_mood(character_name: str, window: Window) -> List[Dict[str, Any]]:
     """Mood changes from mood_history DB table."""
     try:
         conn = get_connection()
         rows = conn.execute(
             "SELECT ts, mood FROM mood_history "
-            "WHERE character_name=? AND ts LIKE ? ORDER BY ts ASC",
-            (character_name, f"{date}%"),
+            "WHERE character_name=? AND ts>=? AND ts<? ORDER BY ts ASC",
+            (character_name, window[0], window[1]),
         ).fetchall()
         result = []
         for r in rows:
@@ -234,7 +304,7 @@ def _collect_mood(character_name: str, date: str) -> List[Dict[str, Any]]:
         result = []
         for e in entries_raw:
             ts = e.get("timestamp", "")
-            if not ts.startswith(date):
+            if not _in_window(ts, window):
                 continue
             mood = e.get("mood", "")
             if mood:
@@ -515,7 +585,8 @@ def _process_state_entry(e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return _render_unknown_fallback(change_type, value, meta, ts)
 
 
-def _collect_state_changes(character_name: str, date: str) -> List[Dict[str, Any]]:
+def _collect_state_changes(character_name: str, window: Window,
+                           day_key: str) -> List[Dict[str, Any]]:
     """Location and activity changes from state_history DB table.
 
     Consecutive identical activities (same value + same partner) collapse
@@ -524,18 +595,26 @@ def _collect_state_changes(character_name: str, date: str) -> List[Dict[str, Any
     pings — if a character was at the same location for hours, only one
     entry with the time range is emitted.
     """
-    raw_entries = _read_state_history_raw(character_name, date)
+    raw_entries = _read_state_history_raw(character_name, window, day_key)
     return _aggregate_state_entries(raw_entries)
 
 
-def _read_state_history_raw(character_name: str, date: str) -> List[Dict[str, Any]]:
-    """Return raw state_history entries for the day, oldest first."""
+def _read_state_history_raw(character_name: str, window: Window,
+                            day_key: str) -> List[Dict[str, Any]]:
+    """Return raw state_history entries for the game day, oldest first.
+
+    The day is selected on ``game_ts`` — the exact world stamp written with
+    the row — not on the back-projected system window: back-projection uses
+    the CURRENT anchor and factor, so every speed change would shuffle old
+    rows into neighbouring game days. ``window`` is only left for the legacy
+    JSON fallback below, whose entries carry no game stamp.
+    """
     try:
         conn = get_connection()
         rows = conn.execute(
             "SELECT ts, state_json FROM state_history "
-            "WHERE character_name=? AND ts LIKE ? ORDER BY ts ASC",
-            (character_name, f"{date}%"),
+            "WHERE character_name=? AND game_ts LIKE ? ORDER BY game_ts ASC",
+            (character_name, f"{day_key}T%"),
         ).fetchall()
         out = []
         for r in rows:
@@ -565,7 +644,7 @@ def _read_state_history_raw(character_name: str, date: str) -> List[Dict[str, An
         out = []
         for e in raw_entries:
             ts = e.get("timestamp", "")
-            if not ts.startswith(date):
+            if not _in_window(ts, window):
                 continue
             out.append({
                 "timestamp": ts,
@@ -626,10 +705,11 @@ def _aggregate_state_entries(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # Aggregate: keep start, expose end via end_timestamp + content range.
             processed["end_timestamp"] = last["timestamp"]
             processed["repeat_count"] = len(run)
-            # Reformat content with a time-range hint (HH:MM - HH:MM).
+            # Reformat content with a time-range hint (HH:MM - HH:MM) — the
+            # WORLD clock, which is the only clock the diary talks about.
             try:
-                start_hm = first["timestamp"][11:16]
-                end_hm = last["timestamp"][11:16]
+                start_hm = _game_hhmm(first["timestamp"])
+                end_hm = _game_hhmm(last["timestamp"])
                 if start_hm and end_hm and start_hm != end_hm:
                     processed["content"] = f"{processed['content']} ({start_hm} - {end_hm})"
             except Exception:
@@ -638,11 +718,15 @@ def _aggregate_state_entries(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
-def _collect_chat_events(character_name: str, date: str) -> List[Dict[str, Any]]:
+def _collect_chat_events(character_name: str, window: Window) -> List[Dict[str, Any]]:
     """Thought-driven messages and TalkTo results from chat history.
 
-    Scans this character's own chats (outgoing thoughts + TalkTo)
-    AND other characters' chats (incoming TalkTo where this character was the target).
+    Scans this character's own chats (outgoing thoughts + TalkTo) AND other
+    characters' chats (incoming TalkTo where this character was the target).
+    Legacy JSON chat files only — live chat lives in ``chat_messages`` — so the
+    files are no longer pre-filtered by a date in their NAME (a game day has no
+    such name): every file is read and its messages are matched against the
+    window.
     """
     from app.models.character import get_character_dir, get_user_characters_dir
 
@@ -651,8 +735,8 @@ def _collect_chat_events(character_name: str, date: str) -> List[Dict[str, Any]]
     # --- Own chat: outgoing thoughts + TalkTo ---
     chat_dir = get_character_dir(character_name) / "chats"
     if chat_dir.exists():
-        for chat_file in chat_dir.glob(f"*{date}*"):
-            _parse_chat_file(chat_file, date, character_name, result, is_own=True)
+        for chat_file in chat_dir.glob("*.json"):
+            _parse_chat_file(chat_file, window, character_name, result, is_own=True)
 
     # --- Other characters' chats: incoming TalkTo ---
     chars_dir = get_user_characters_dir()
@@ -663,8 +747,8 @@ def _collect_chat_events(character_name: str, date: str) -> List[Dict[str, Any]]
             other_chat_dir = char_dir / "chats"
             if not other_chat_dir.exists():
                 continue
-            for chat_file in other_chat_dir.glob(f"*{date}*"):
-                _parse_chat_file(chat_file, date, character_name, result,
+            for chat_file in other_chat_dir.glob("*.json"):
+                _parse_chat_file(chat_file, window, character_name, result,
                                  is_own=False, sender_name=char_dir.name)
 
     return result
@@ -672,7 +756,7 @@ def _collect_chat_events(character_name: str, date: str) -> List[Dict[str, Any]]
 
 def _parse_chat_file(
     chat_file: Path,
-    date: str,
+    window: Window,
     character_name: str,
     result: List[Dict[str, Any]],
     is_own: bool = True,
@@ -688,7 +772,7 @@ def _parse_chat_file(
             continue
         content = msg.get("content", "")
         ts = msg.get("timestamp", "")
-        if not ts.startswith(date):
+        if not _in_window(ts, window):
             continue
 
         if is_own:
@@ -710,7 +794,7 @@ def _parse_chat_file(
                     })
 
 
-def _collect_instagram(character_name: str, date: str) -> List[Dict[str, Any]]:
+def _collect_instagram(character_name: str, window: Window) -> List[Dict[str, Any]]:
     """Instagram posts and comments — reads from DB events table or feed.json fallback."""
     try:
         from app.models.instagram import load_feed
@@ -732,7 +816,7 @@ def _collect_instagram(character_name: str, date: str) -> List[Dict[str, Any]]:
             agent = post.get("agent_name", "")
 
             # Posts by this character
-            if agent == character_name and ts.startswith(date):
+            if agent == character_name and _in_window(ts, window):
                 caption = post.get("caption", "")
                 result.append({
                     "type": "instagram_post",
@@ -744,7 +828,7 @@ def _collect_instagram(character_name: str, date: str) -> List[Dict[str, Any]]:
             # Comments by this character on any post
             for comment in post.get("comments", []):
                 cts = comment.get("timestamp", "")
-                if comment.get("author") == character_name and cts.startswith(date):
+                if comment.get("author") == character_name and _in_window(cts, window):
                     post_author = post.get("agent_name", "")
                     result.append({
                         "type": "instagram_comment",
@@ -757,7 +841,7 @@ def _collect_instagram(character_name: str, date: str) -> List[Dict[str, Any]]:
     return result
 
 
-def _collect_assignments(character_name: str, date: str) -> List[Dict[str, Any]]:
+def _collect_assignments(character_name: str, window: Window) -> List[Dict[str, Any]]:
     """Assignment progress from assignments.json."""
     from app.models.assignments import _load_all
     result = []
@@ -769,7 +853,7 @@ def _collect_assignments(character_name: str, date: str) -> List[Dict[str, Any]]
             title = a.get("title", a.get("id", ""))
             for p in participant.get("progress", []):
                 ts = p.get("timestamp", "")
-                if not ts.startswith(date):
+                if not _in_window(ts, window):
                     continue
                 note = p.get("note", "")
                 # Detect completion vs update
@@ -788,7 +872,7 @@ def _collect_assignments(character_name: str, date: str) -> List[Dict[str, Any]]
 
 def _enrich_with_relationships(
     entries: List[Dict[str, Any]], character_name: str,
-    date: str) -> None:
+    window: Window) -> None:
     """Tag existing diary entries with relationship sentiment if a matching
     relationship history entry exists (matched by timestamp within 120s)."""
     try:
@@ -812,7 +896,7 @@ def _enrich_with_relationships(
 
         for h in rel.get("history", []):
             ts = h.get("timestamp", "")
-            if not ts.startswith(date):
+            if not _in_window(ts, window):
                 continue
             try:
                 dt = parse_iso(ts)
@@ -866,7 +950,7 @@ def _enrich_with_relationships(
         used_events.add(ri)
 
 
-def _collect_event_resolutions(character_name: str, date: str) -> List[Dict[str, Any]]:
+def _collect_event_resolutions(character_name: str, window: Window) -> List[Dict[str, Any]]:
     """Sammelt Loesungsversuche + geloeste Events in denen der Character aktiv war.
 
     Quelle: `events`-Tabelle, pro Event gibt es `resolution.attempts: [...]` mit
@@ -890,7 +974,7 @@ def _collect_event_resolutions(character_name: str, date: str) -> List[Dict[str,
             if character_name != who and character_name not in joint:
                 continue
             when = att.get("when") or ""
-            if not when or not str(when).startswith(date):
+            if not _in_window(when, window):
                 continue
             solution_text = (att.get("text") or "").strip()
             outcome = att.get("outcome") or "fail"
@@ -920,52 +1004,80 @@ def _collect_event_resolutions(character_name: str, date: str) -> List[Dict[str,
 # ---------------------------------------------------------------------------
 
 def generate_for_day(character_name: str,
-    date: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Generate diary entries for a day by pulling from all sources.
+    day_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Generate diary entries for one GAME day by pulling from all sources.
 
-    Merges data from mood_history, chat history, instagram, assignments.
-    Also includes stored daily_summary entries.
-    Returns chronologically sorted list.
+    ``day_key`` is a game day (``Y0002-D109``), defaulting to today's. All
+    aggregated sources carry SYSTEM stamps, so the day is resolved to a system
+    window once and handed to every collector. A key that is not a game day
+    yields nothing and says so in the log — a real date arriving here is a
+    defect, not a case to fall back for.
+
+    Returns a chronologically sorted list.
     """
-    if not date:
-        date = utc_now().strftime("%Y-%m-%d")
+    key = resolve_day_key(day_key)
+    window = system_window_of_game_day(key)
+    if window is None:
+        logger.warning("generate_for_day(%s): %r is not a game day key",
+                       character_name, day_key)
+        return []
 
     entries = []
-    entries.extend(_collect_mood(character_name, date))
-    entries.extend(_collect_state_changes(character_name, date))
-    entries.extend(_collect_chat_events(character_name, date))
-    entries.extend(_collect_instagram(character_name, date))
-    entries.extend(_collect_event_resolutions(character_name, date))
-    entries.extend(_collect_assignments(character_name, date))
+    entries.extend(_collect_mood(character_name, window))
+    entries.extend(_collect_state_changes(character_name, window, key))
+    entries.extend(_collect_chat_events(character_name, window))
+    entries.extend(_collect_instagram(character_name, window))
+    entries.extend(_collect_event_resolutions(character_name, window))
+    entries.extend(_collect_assignments(character_name, window))
 
-    # Add stored daily summaries
+    # Add stored daily summaries — those carry their own game stamp.
     for e in _load_stored(character_name):
-        if e.get("type") == "daily_summary" and e.get("timestamp", "").startswith(date):
+        if e.get("type") == "daily_summary" and (e.get("game_ts") or "").startswith(key):
             entries.append(e)
 
     # Sort chronologically
     entries.sort(key=lambda x: x.get("timestamp", ""))
 
     # Tag entries that had relationship impact
-    _enrich_with_relationships(entries, character_name, date)
+    _enrich_with_relationships(entries, character_name, window)
 
     return entries
 
 
 def get_available_dates_fast(character_name: str) -> List[str]:
-    """Fast date detection — checks DB timestamps and file timestamps."""
-    from app.models.character import get_character_dir
-    dates = set()
+    """The GAME days that have data, newest first.
 
-    # Mood history dates from DB
+    The sources are SYSTEM-stamped, so each distinct stamp is projected onto
+    its game day (``game_day_of``). Projecting the STAMPS, not a truncated real
+    date, is what makes this correct at a speed factor > 1: one real day then
+    covers many game days, and a ``substr(ts, 1, 10)`` would collapse them all
+    into one. Stored diary entries bring their own game stamp and need no
+    projection.
+    """
+    from app.core.day_consolidation import game_day_of
+    from app.models.character import get_character_dir
+    days = set()
+
+    def _add(ts: Any) -> None:
+        key = game_day_of(ts)
+        if key:
+            days.add(key)
+
+    conn = None
     try:
         conn = get_connection()
+    except Exception:
+        conn = None
+
+    # Mood history
+    try:
+        if conn is None:
+            raise RuntimeError("no DB connection")
         for r in conn.execute(
-            "SELECT DISTINCT substr(ts, 1, 10) FROM mood_history WHERE character_name=?",
+            "SELECT DISTINCT ts FROM mood_history WHERE character_name=?",
             (character_name,),
         ).fetchall():
-            if r[0] and len(r[0]) == 10:
-                dates.add(r[0])
+            _add(r[0])
     except Exception:
         # Fallback: JSON
         mood_path = get_character_dir(character_name) / "mood_history.json"
@@ -973,68 +1085,72 @@ def get_available_dates_fast(character_name: str) -> List[str]:
             try:
                 data = json.loads(mood_path.read_text(encoding="utf-8"))
                 for e in (data.get("entries", []) if isinstance(data, dict) else []):
-                    ts = e.get("timestamp", "")
-                    if len(ts) >= 10:
-                        dates.add(ts[:10])
+                    _add(e.get("timestamp", ""))
             except Exception:
                 pass
 
-    # State history dates from DB
+    # State history — carries its own game stamp, so the day is read off it
+    # instead of being projected (same selection the day view uses).
     try:
-        conn = get_connection()
+        if conn is None:
+            raise RuntimeError("no DB connection")
         for r in conn.execute(
-            "SELECT DISTINCT substr(ts, 1, 10) FROM state_history WHERE character_name=?",
+            "SELECT DISTINCT substr(game_ts, 1, instr(game_ts, 'T') - 1) "
+            "FROM state_history WHERE character_name=? AND game_ts LIKE '%T%'",
             (character_name,),
         ).fetchall():
-            if r[0] and len(r[0]) == 10:
-                dates.add(r[0])
+            if r[0]:
+                days.add(r[0])
     except Exception:
         # Fallback: JSON
         state_path = get_character_dir(character_name) / "state_history.json"
         if state_path.exists():
             try:
                 for e in json.loads(state_path.read_text(encoding="utf-8")):
-                    ts = e.get("timestamp", "")
-                    if len(ts) >= 10:
-                        dates.add(ts[:10])
+                    _add(e.get("timestamp", ""))
             except Exception:
                 pass
 
-    # Chat history dates from DB
+    # Chat history
     try:
-        conn = get_connection()
+        if conn is None:
+            raise RuntimeError("no DB connection")
         for r in conn.execute(
-            "SELECT DISTINCT substr(ts, 1, 10) FROM chat_messages WHERE character_name=?",
+            "SELECT DISTINCT ts FROM chat_messages WHERE character_name=?",
             (character_name,),
         ).fetchall():
-            if r[0] and len(r[0]) == 10:
-                dates.add(r[0])
+            _add(r[0])
     except Exception:
-        # Fallback: Chat files
+        # Fallback: legacy chat files — the file NAME carries a real date, so
+        # the messages inside are what gets projected.
         chat_dir = get_character_dir(character_name) / "chats"
         if chat_dir.exists():
             for f in chat_dir.glob("*.json"):
-                m = re.search(r'(\d{4}-\d{2}-\d{2})', f.name)
-                if m:
-                    dates.add(m.group(1))
+                try:
+                    for msg in json.loads(f.read_text(encoding="utf-8")):
+                        _add(msg.get("timestamp", ""))
+                except Exception:
+                    continue
 
-    # Stored diary dates (daily summaries)
+    # Stored diary entries carry their own game stamp
     for e in _load_stored(character_name):
-        ts = e.get("timestamp", "")
-        if len(ts) >= 10:
-            dates.add(ts[:10])
+        stamp = e.get("game_ts") or ""
+        if len(stamp) >= 10:
+            days.add(stamp[:10])
 
-    return sorted(dates, reverse=True)
+    return sorted(days, reverse=True)
 
 
-def build_daily_summary_input(character_name: str, date: Optional[str] = None) -> str:
-    """Build text summary of day's events for LLM consumption.
+def build_daily_summary_input(character_name: str,
+                              day_key: Optional[str] = None) -> str:
+    """Build a text summary of one GAME day's events for LLM consumption.
 
     Deduplicates consecutive identical entries (e.g. same mood repeated),
-    truncates long thought messages, and limits total length to fit
-    within small model context windows.
+    truncates long thought messages, and limits total length to fit within
+    small model context windows. Every time is the WORLD clock — the character
+    writing this diary has never seen the server's clock.
     """
-    entries = generate_for_day(character_name, date)
+    entries = generate_for_day(character_name, day_key)
     entries = [e for e in entries if e.get("type") != "daily_summary"]
     if not entries:
         return ""
@@ -1042,8 +1158,7 @@ def build_daily_summary_input(character_name: str, date: Optional[str] = None) -
     lines = []
     last_content = ""
     for e in entries:
-        ts = e.get("timestamp", "")
-        time_str = ts[11:16] if len(ts) >= 16 else ""
+        time_str = _game_hhmm(e.get("timestamp", ""))
         etype = ENTRY_TYPES.get(e.get("type", ""), e.get("type", ""))
         content = e.get("content", "")
 

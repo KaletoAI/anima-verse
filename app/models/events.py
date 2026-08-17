@@ -1,19 +1,28 @@
-"""Location Events - Situative Ereignisse pro Ort.
+"""Location events — situational happenings per place.
 
-Speichert kurzlebige Ereignisse die allen Characteren am selben Ort
-in den System-Prompt injiziert werden.
+Stores short-lived events that are injected into the system prompt of every
+character at the same place.
 
-Storage: storage/users/{username}/events.json
+Storage: world.db, table ``events`` (kind='world_event'); the event dict itself
+lives in the ``payload`` JSON column.
+
+**Two stamps per event.** ``ts``/``created_at`` is SYSTEM time (ordering,
+technical bookkeeping). ``game_ts`` is the canonical GAME time the event
+started at, and so is ``expires_at``: an event's TTL is a WORLD duration — a
+storm that lasts two hours lasts two hours *in the world*, which with a game
+factor > 1 is minutes of real time. Everything a character or the UI reads
+about WHEN an event happened comes off ``game_ts``.
 """
 import json
 import uuid
-from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso
+from app.core.game_time import GameDuration, GameTime
+from app.core.i18n import t
+from app.core.timeutils import game_time, game_time_at, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-# TTL-Optionen in Stunden (Label -> Stunden, 0 = kein Ablauf)
+# TTL options in GAME hours (label -> hours, 0 = never expires)
 TTL_OPTIONS = {
     "1h": 1,
     "6h": 6,
@@ -39,11 +48,10 @@ def _get_events_file() -> Path:
 
 
 def _row_to_event(row) -> Dict[str, Any]:
-    """Konvertiert eine DB-Zeile (id, ts, payload) in ein Event-Dict."""
-    # row: (id, ts, payload)
+    """Converts a DB row (id, ts, game_ts, payload) into an event dict."""
     payload = {}
     try:
-        payload = json.loads(row[2] or "{}")
+        payload = json.loads(row[3] or "{}")
     except Exception:
         pass
     # Ensure the event's "id" string field stays consistent
@@ -51,22 +59,26 @@ def _row_to_event(row) -> Dict[str, Any]:
         payload["id"] = str(row[0])
     if "created_at" not in payload:
         payload["created_at"] = row[1] or ""
+    # The column is the authority for the game stamp; the payload copy exists
+    # so the dict stays self-contained once it leaves this module.
+    if not payload.get("game_ts"):
+        payload["game_ts"] = row[2] or ""
     return payload
 
 
 def _load_events() -> List[Dict[str, Any]]:
-    """Laedt alle Events aus der DB."""
+    """Loads all events from the DB."""
     try:
         conn = get_connection()
         rows = conn.execute(
-            "SELECT id, ts, payload FROM events "
+            "SELECT id, ts, game_ts, payload FROM events "
             "WHERE kind='world_event' ORDER BY ts ASC"
         ).fetchall()
         events = [_row_to_event(r) for r in rows]
         return events
     except Exception as e:
-        logger.warning("_load_events DB-Fehler: %s", e)
-        # Fallback: JSON-Datei
+        logger.warning("_load_events DB error: %s", e)
+        # Fallback: JSON file
         path = _get_events_file()
         if not path.exists():
             return []
@@ -75,29 +87,34 @@ def _load_events() -> List[Dict[str, Any]]:
             events = data.get("events", [])
         except Exception:
             return []
-        # Migration: alte Events ohne TTL-Felder ergaenzen (nur im JSON-Fallback)
+        # Fill in TTL fields old JSON dumps may lack (JSON fallback only).
+        # The TTL is GAME hours, so the expiry is a game stamp too.
         for evt in events:
             if "ttl_hours" not in evt:
                 evt["ttl_hours"] = DEFAULT_TTL_HOURS
+            if not evt.get("game_ts"):
+                gt = game_time_at(evt.get("created_at"))
+                evt["game_ts"] = gt.canonical() if gt is not None else ""
             if "expires_at" not in evt and evt.get("ttl_hours", 0) > 0:
                 try:
-                    created = parse_iso(evt["created_at"])
-                    evt["expires_at"] = (created + timedelta(hours=evt["ttl_hours"])).isoformat()
+                    started = GameTime.parse(evt["game_ts"])
+                    evt["expires_at"] = (
+                        started + GameDuration.of(hours=evt["ttl_hours"])).canonical()
                 except (ValueError, TypeError, KeyError):
                     pass
         return events
 
 
 def _save_events(events: List[Dict[str, Any]]):
-    """Speichert Events in die DB (Upsert via string-id in payload).
+    """Saves events to the DB (upsert via the string id inside the payload).
 
-    Das events-Schema hat nur (id INTEGER, ts, kind, character_name, payload).
-    Die event-string-ID wird im payload gespeichert; zum Loeschen brauchen wir
-    eine Lookup-Runde via payload-JSON-Extraktion.
+    The events schema is (id INTEGER, ts, game_ts, kind, character_name,
+    payload). The event's string id lives in the payload, so deleting needs a
+    lookup round via payload JSON extraction.
     """
     try:
         with transaction() as conn:
-            # Alle vorhandenen world_event-Zeilen laden (id-integer -> event-string-id)
+            # Load all existing world_event rows (integer id -> event string id)
             existing_rows = conn.execute(
                 "SELECT id, payload FROM events WHERE kind='world_event'"
             ).fetchall()
@@ -113,31 +130,32 @@ def _save_events(events: List[Dict[str, Any]]):
 
             new_ids = {e.get("id") for e in events if e.get("id")}
 
-            # Geloeschte Events entfernen
+            # Remove deleted events
             for str_id, db_id in existing_map.items():
                 if str_id not in new_ids:
                     conn.execute("DELETE FROM events WHERE id=?", (db_id,))
 
-            # Upsert: vorhandene aktualisieren, neue einfuegen
+            # Upsert: update existing rows, insert new ones
             for evt in events:
                 str_id = evt.get("id")
                 if not str_id:
                     continue
                 ts = evt.get("created_at", utc_now_iso())
+                game_ts = evt.get("game_ts", "") or ""
                 payload_str = json.dumps(evt, ensure_ascii=False)
                 if str_id in existing_map:
                     conn.execute(
-                        "UPDATE events SET ts=?, payload=? WHERE id=?",
-                        (ts, payload_str, existing_map[str_id]),
+                        "UPDATE events SET ts=?, game_ts=?, payload=? WHERE id=?",
+                        (ts, game_ts, payload_str, existing_map[str_id]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO events (ts, kind, character_name, payload) "
-                        "VALUES (?, 'world_event', NULL, ?)",
-                        (ts, payload_str),
+                        "INSERT INTO events (ts, game_ts, kind, character_name, payload) "
+                        "VALUES (?, ?, 'world_event', NULL, ?)",
+                        (ts, game_ts, payload_str),
                     )
     except Exception as e:
-        logger.error("_save_events DB-Fehler: %s", e)
+        logger.error("_save_events DB error: %s", e)
 
 
 def add_event(text: str,
@@ -146,16 +164,19 @@ def add_event(text: str,
     category: str = "",
     escalation_of: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Erstellt ein neues Ereignis.
+    """Creates a new event.
 
-    location_id=None -> globales Event.
-    category: ambient, social, disruption, danger (leer = unkategorisiert)
-    escalation_of: Event-ID des Vorgaenger-Events (Eskalationskette)
-    metadata: Optionales Dict fuer zusaetzliche Event-Daten (z.B. Secret-Hint-Infos).
+    location_id=None -> global event.
+    category: ambient, social, disruption, danger (empty = uncategorized)
+    escalation_of: event id of the preceding event (escalation chain)
+    metadata: optional dict for extra event data (e.g. secret-hint info).
+
+    ``ttl_hours`` are GAME hours: how long the happening lasts *in the world*.
     """
     if ttl_hours is None:
         ttl_hours = DEFAULT_TTL_HOURS
     now = utc_now()
+    started = game_time()
     events = _load_events()
     event = {
         "id": f"evt_{uuid.uuid4().hex[:8]}",
@@ -164,7 +185,9 @@ def add_event(text: str,
         "category": category or "",
         "ttl_hours": ttl_hours,
         "created_at": now.isoformat(),
-        "expires_at": (now + timedelta(hours=ttl_hours)).isoformat() if ttl_hours > 0 else None,
+        "game_ts": started.canonical(),
+        "expires_at": ((started + GameDuration.of(hours=ttl_hours)).canonical()
+                       if ttl_hours > 0 else None),
     }
     if escalation_of:
         event["escalation_of"] = escalation_of
@@ -172,41 +195,47 @@ def add_event(text: str,
         event["metadata"] = metadata
     events.append(event)
     _save_events(events)
-    logger.info("Event erstellt: %s [%s] (location=%s, ttl=%dh)",
+    logger.info("Event created: %s [%s] (location=%s, ttl=%d game hours)",
                 event["id"], category or "?", location_id, ttl_hours)
     return event
 
 
 def _is_expired(event: Dict[str, Any]) -> bool:
-    """Prueft ob ein Event abgelaufen ist."""
+    """Whether an event's WORLD lifetime has run out.
+
+    ``expires_at`` is a canonical game stamp — the TTL counts world hours, so
+    a frozen world freezes the event with it. A stamp that is not a game time
+    (unmigrated, hand-edited) never expires: silently dropping an event over
+    an unreadable field is worse than keeping it around.
+    """
     expires_at = event.get("expires_at")
     if not expires_at:
-        return False  # kein Ablauf (ttl=0)
+        return False  # no expiry (ttl=0)
     try:
-        return utc_now() > parse_iso(expires_at)
+        return game_time() > GameTime.parse(expires_at)
     except (ValueError, TypeError):
         return False
 
 
 def _cleanup_expired(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Entfernt abgelaufene Events und speichert wenn noetig."""
+    """Removes expired events and saves when needed."""
     active = [e for e in events if not _is_expired(e)]
     if len(active) < len(events):
-        # Event-gekoppelte Block-Rules mit aufraeumen.
+        # Clean up the block rules coupled to those events as well.
         try:
             from app.models.rules import delete_rules_by_event
             for e in events:
                 if _is_expired(e) and e.get("id"):
                     delete_rules_by_event(e["id"])
         except Exception as _e:
-            logger.debug("delete_rules_by_event(cleanup) fehlgeschlagen: %s", _e)
+            logger.debug("delete_rules_by_event(cleanup) failed: %s", _e)
         _save_events(active)
-        logger.info("%d abgelaufene Events entfernt", len(events) - len(active))
+        logger.info("%d expired events removed", len(events) - len(active))
     return active
 
 
 def list_events(location_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Listet aktive Events. Optional gefiltert nach Location."""
+    """Lists active events. Optionally filtered by location."""
     events = _cleanup_expired(_load_events())
     if location_id is not None:
         events = [e for e in events if e.get("location_id") == location_id or e.get("location_id") is None]
@@ -214,55 +243,56 @@ def list_events(location_id: Optional[str] = None) -> List[Dict[str, Any]]:
 
 
 def get_all_events() -> List[Dict[str, Any]]:
-    """Alle aktiven Events (abgelaufene werden automatisch entfernt)."""
+    """All active events (expired ones are removed automatically)."""
     return _cleanup_expired(_load_events())
 
 
-RESOLVED_TTL_HOURS = 2  # Geloeste Events bleiben noch 2h sichtbar
+RESOLVED_TTL_HOURS = 2  # a resolved event stays visible for 2 more GAME hours
 
 
 def resolve_event(event_id: str,
     resolved_by: str = "", resolved_text: str = "") -> Optional[Dict[str, Any]]:
-    """Markiert ein Event als geloest.
+    """Marks an event as resolved.
 
-    - Nur disruption/danger Events koennen geloest werden
-    - TTL wird auf RESOLVED_TTL_HOURS (2h) ab jetzt verkuerzt
-    - resolved_by: Name des Characters der es geloest hat
-    - resolved_text: Kurze Beschreibung der Loesung
+    - only disruption/danger events can be resolved
+    - the TTL is shortened to RESOLVED_TTL_HOURS (2 GAME hours) from now
+    - resolved_by: name of the character who resolved it
+    - resolved_text: short description of the resolution
     """
     events = _load_events()
     for evt in events:
         if evt.get("id") != event_id:
             continue
         if evt.get("category", "") not in ("disruption", "danger"):
-            return None  # Nur lösbare Events
+            return None  # only resolvable events
         if evt.get("resolved"):
-            return evt  # Bereits gelöst
+            return evt  # already resolved
 
-        now = utc_now()
         evt["resolved"] = True
         evt["resolved_by"] = resolved_by
         evt["resolved_text"] = resolved_text
-        evt["resolved_at"] = now.isoformat()
-        # TTL auf 2h ab jetzt verkuerzen
-        evt["expires_at"] = (now + timedelta(hours=RESOLVED_TTL_HOURS)).isoformat()
+        evt["resolved_at"] = utc_now().isoformat()
+        evt["resolved_game_ts"] = game_time().canonical()
+        # Shorten the remaining lifetime to 2 world hours from now.
+        evt["expires_at"] = (
+            game_time() + GameDuration.of(hours=RESOLVED_TTL_HOURS)).canonical()
 
         _save_events(events)
-        logger.info("Event geloest: %s von %s — %s", event_id, resolved_by, resolved_text[:60])
-        # Sofortiges Aufraeumen der gekoppelten Block-Rules — der Weg ist
-        # frei, sobald geloest, nicht erst nach dem Resolved-TTL.
+        logger.info("Event resolved: %s by %s — %s", event_id, resolved_by, resolved_text[:60])
+        # Clean up the coupled block rules immediately — the way is clear as
+        # soon as it is resolved, not only after the resolved TTL.
         try:
             from app.models.rules import delete_rules_by_event
             delete_rules_by_event(event_id)
         except Exception as _e:
-            logger.debug("delete_rules_by_event(resolve) fehlgeschlagen: %s", _e)
-        # After-Bild der Location generieren (Linger-Anzeige). Laeuft
-        # in Background-Thread und blockt den Resolve-Pfad nicht.
+            logger.debug("delete_rules_by_event(resolve) failed: %s", _e)
+        # Generate the "after" image of the location (linger display). Runs
+        # in a background thread and does not block the resolve path.
         try:
             from app.core.event_images import trigger_resolved_image_from_text
             trigger_resolved_image_from_text(event_id)
         except Exception as _e:
-            logger.debug("trigger_resolved_image_from_text fehlgeschlagen: %s", _e)
+            logger.debug("trigger_resolved_image_from_text failed: %s", _e)
         return evt
     return None
 
@@ -270,16 +300,20 @@ def resolve_event(event_id: str,
 def record_attempt(event_id: str,
     who: str, text: str, outcome: str, reason: str = "",
     joint_with: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
-    """Protokolliert einen Loesungsversuch am Event.
+    """Records an attempt to resolve the event.
 
     outcome: "success" | "fail"
-    joint_with: weitere beteiligte Characters (gemeinsame Versuche)
+    joint_with: further participating characters (joint attempts)
 
-    Resolution-Schema auf dem Event:
+    Resolution schema on the event:
       resolution = {
         "attempts": [{when, who, text, outcome, reason, joint_with}, ...],
-        "last_attempt_at": iso-timestamp,
+        "last_attempt_at": iso timestamp,
       }
+
+    ``when``/``last_attempt_at`` stay SYSTEM stamps: they are a technical log
+    of who tried what and when the server saw it, not something the world
+    reads back.
     """
     events = _load_events()
     for evt in events:
@@ -297,16 +331,16 @@ def record_attempt(event_id: str,
         })
         resolution["last_attempt_at"] = now.isoformat()
         _save_events(events)
-        logger.info("Event-Attempt %s: %s von %s (%s)", event_id, outcome, who, reason[:60])
+        logger.info("Event attempt %s: %s by %s (%s)", event_id, outcome, who, reason[:60])
         return evt
     return None
 
 
 def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
-    """Schreibt einzelne Felder ins payload-JSON eines Events.
+    """Writes individual fields into an event's payload JSON.
 
-    Wird z.B. fuer image_path / resolved_image_path beim Spawn bzw. der
-    Aufloesung eines Events genutzt. Werte mit None werden geloescht.
+    Used e.g. for image_path / resolved_image_path when an event spawns or is
+    resolved. A value of None deletes the field.
     """
     events = _load_events()
     for evt in events:
@@ -323,7 +357,7 @@ def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
 
 
 def get_event(event_id: str) -> Optional[Dict[str, Any]]:
-    """Liefert ein Event per ID, oder None."""
+    """Returns an event by id, or None."""
     for evt in _load_events():
         if evt.get("id") == event_id:
             return evt
@@ -331,17 +365,17 @@ def get_event(event_id: str) -> Optional[Dict[str, Any]]:
 
 
 def delete_event(event_id: str) -> bool:
-    """Loescht ein Event anhand der ID."""
+    """Deletes an event by id."""
     events = _load_events()
     new_events = [e for e in events if e.get("id") != event_id]
     if len(new_events) < len(events):
         _save_events(new_events)
-        logger.info("Event geloescht: %s", event_id)
+        logger.info("Event deleted: %s", event_id)
         try:
             from app.models.rules import delete_rules_by_event
             delete_rules_by_event(event_id)
         except Exception as _e:
-            logger.debug("delete_rules_by_event(delete) fehlgeschlagen: %s", _e)
+            logger.debug("delete_rules_by_event(delete) failed: %s", _e)
         return True
     return False
 
@@ -366,6 +400,14 @@ def build_events_prompt_section(location_id: Optional[str] = None,
     """
     if not location_id:
         return ""
+
+    lang = "en"
+    if character_name:
+        try:
+            from app.models.character import get_character_language
+            lang = (get_character_language(character_name) or "en").strip() or "en"
+        except Exception:
+            lang = "en"
 
     # Events at the current place (every category)
     local_events = list_events(location_id=location_id)
@@ -406,7 +448,7 @@ def build_events_prompt_section(location_id: Optional[str] = None,
     if local_events:
         lines.append("Events at your location:")
         for evt in local_events:
-            ts = _format_event_timestamp(evt.get("created_at", ""))
+            ts = _format_event_timestamp(evt.get("game_ts", ""), lang)
             prefix = f"[{ts}] " if ts else ""
             cat = evt.get("category", "")
             cat_tag = f"[{cat.upper()}] " if cat else ""
@@ -422,7 +464,7 @@ def build_events_prompt_section(location_id: Optional[str] = None,
     if nearby_events:
         lines.append("Events nearby (you can hear/sense them from your location):")
         for evt in nearby_events:
-            ts = _format_event_timestamp(evt.get("created_at", ""))
+            ts = _format_event_timestamp(evt.get("game_ts", ""), lang)
             prefix = f"[{ts}] " if ts else ""
             cat = evt.get("category", "").upper()
             lines.append(f"- {prefix}[{cat}] {evt['text']}")
@@ -430,20 +472,38 @@ def build_events_prompt_section(location_id: Optional[str] = None,
     return "\n" + "\n".join(lines)
 
 
-def _format_event_timestamp(iso_ts: str) -> str:
-    """Compact, LLM-readable date."""
+_RELATIVE_DAYS_LIMIT = 7   # beyond that the world date is more useful
+
+
+def _format_event_timestamp(game_ts: str, lang: str = "en") -> str:
+    """Compact, LLM-readable WORLD date of an event.
+
+    Reads the GAME stamp only. An event without one (pre-migration) yields ""
+    and is rendered without a time prefix — a real-world date inside the world
+    is worse than no date at all.
+    """
     try:
-        dt = parse_iso(iso_ts)
+        gt = GameTime.parse(game_ts)
     except (ValueError, TypeError):
         return ""
-    now = utc_now()
-    delta = now.date() - dt.date()
-    time_str = dt.strftime("%H:%M")
-    if delta.days == 0:
-        return f"heute {time_str}"
-    elif delta.days == 1:
-        return f"gestern {time_str}"
-    elif delta.days < 7:
-        return f"vor {delta.days} Tagen"
-    else:
-        return dt.strftime("%d.%m. %H:%M")
+    days = game_time().day_index - gt.day_index
+    time_str = gt.time_hhmm()
+    if days <= 0:
+        return t("today {time}", lang).format(time=time_str)
+    if days == 1:
+        return t("yesterday {time}", lang).format(time=time_str)
+    if days < _RELATIVE_DAYS_LIMIT:
+        return t("{days} days ago", lang).format(days=days)
+    return f"{gt.date_label(lang)} {time_str}"
+
+
+def event_game_label(event: Dict[str, Any], lang: str = "en") -> str:
+    """Full world label of an event for API payloads ("" without a stamp).
+
+    The clients render, they never compute (docs/schnittstellen-3d.md) — so
+    the server ships the finished string, not a stamp plus formatting rules.
+    """
+    try:
+        return GameTime.parse(event.get("game_ts") or "").label(lang)
+    except (ValueError, TypeError):
+        return ""

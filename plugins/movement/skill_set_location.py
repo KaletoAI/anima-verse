@@ -307,7 +307,8 @@ class SetLocationSkill(PluginSkill):
         from app.models.account import is_player_controlled as _is_player
         if is_cross_location and not _is_player(character_name):
             from app.core.travel_engine import start_journey, journey_state
-            from app.core.timeutils import game_now, to_world_tz
+            from app.core.game_time import GameTime
+            from app.core.timeutils import game_time
             j, reason = start_journey(character_name, location_id)
             if j is None:
                 logger.info("No journey %s -> %s for %s: %s",
@@ -332,15 +333,19 @@ class SetLocationSkill(PluginSkill):
                 return (f"You do not know the way to {location_name} (yet). "
                         f"You have to be led there first or discover a place "
                         f"nearby.")
-            st = journey_state(j["waypoints"], j["started_at_game"], game_now())
-            eta_local = to_world_tz(st["eta_game"])
+            now = game_time()
+            st = journey_state(j["waypoints"], j["started_at_game"], now)
+            eta = GameTime.parse(st["eta_game"])
             logger.info("Journey: %s -> %s (%.0f m, ETA %s)",
                         character_name, location_name, st["total_m"],
                         st["eta_game"])
+            # The world has one clock — HH:MM for an arrival today, the full
+            # calendar label once the road runs past midnight.
+            eta_text = (eta.time_hhmm() if eta.day_index == now.day_index
+                        else eta.label())
             return (f"You set off for {location_name} "
                     f"({st['total_m']:.0f} m of road). Estimated arrival: "
-                    f"{eta_local:%H:%M} (game time). The journey continues "
-                    f"automatically.")
+                    f"{eta_text}. The journey continues automatically.")
 
         rooms = get_location_rooms(matched_location)
 

@@ -59,11 +59,12 @@ def _expr_version(name: str) -> str:
 
 
 def _bg_version(location_id: str, room: str) -> str:
-    """Cache-Buster-Token fürs Hintergrundbild: ändert sich, wenn ein Event-Bild
-    aktiv wird/fertig generiert ist (oder das normale Background-File wechselt)."""
+    """Cache-buster token for the background image: it changes when an event
+    image becomes active / finishes generating (or the regular background file
+    changes)."""
     import hashlib
     import os
-    from app.core.timeutils import game_local_now
+    from app.core.timeutils import game_time
     p = None
     try:
         from app.core.event_images import get_effective_background_event
@@ -73,8 +74,8 @@ def _bg_version(location_id: str, room: str) -> str:
     if not p or not p.exists():
         try:
             from app.models.world import get_background_path
-            p = get_background_path(location_id, room=room, hour=game_local_now().hour,
-                                    stable=True)
+            p = get_background_path(location_id, room=room,
+                                    hour=game_time().hour, stable=True)
         except Exception:
             p = None
     if p and p.exists():
@@ -83,11 +84,12 @@ def _bg_version(location_id: str, room: str) -> str:
 
 
 def _bg_id(location_id: str, room: str) -> str:
-    """Dateiname (bg_id) des aktuell gewaehlten Hintergrundbilds — Event-Bild hat
-    Vorrang, sonst die regulaere Auswahl. Das Frontend pinnt damit das <img>
-    (``/background?file=<bg_id>``) und koppelt die Figuren-Positionen an genau
-    dieses Bild. Tageszeit via UTC, konsistent zu :func:`_bg_version`."""
-    from app.core.timeutils import game_local_now
+    """File name (``bg_id``) of the currently chosen background image — an
+    event image wins, otherwise the regular selection. The frontend pins the
+    ``<img>`` with it (``/background?file=<bg_id>``) and ties the figure
+    positions to exactly that image. Time of day comes from the GAME clock,
+    consistent with :func:`_bg_version`."""
+    from app.core.timeutils import game_time
     try:
         from app.core.event_images import get_effective_background_event
         p = get_effective_background_event(location_id)
@@ -97,8 +99,8 @@ def _bg_id(location_id: str, room: str) -> str:
         pass
     try:
         from app.models.world import get_background_path
-        p = get_background_path(location_id, room=room, hour=game_local_now().hour,
-                                stable=True)
+        p = get_background_path(location_id, room=room,
+                                hour=game_time().hour, stable=True)
         if p and p.exists():
             return p.name
     except Exception:
@@ -264,7 +266,7 @@ async def play_scene(user=Depends(get_current_user), limit: int = 100):
         # already polling this route for the room chips). Null while standing
         # still. The worldmap payload carries the same journey for EVERY
         # character, in metres, for the map to draw (E3 Task 6).
-        "travel": _travel_block(avatar),
+        "travel": _travel_block(avatar, lang),
         "capabilities": _player_capabilities(avatar),
     }
 
@@ -335,39 +337,39 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     return {"ok": True, "room_id": room_id}
 
 
-def _travel_block(name: str):
+def _travel_block(name: str, lang: str = "en"):
     """The character's running journey for the player UI, or None.
 
     Derived from the STORED journey and the game clock (``journey_state`` is
     a pure function of it) — nothing is recomputed, no route is walked here.
-    The ETA is formatted as the world's own wall clock: the game clock has a
-    timezone of its own and the browser knows nothing about it, so ``HH:MM``
-    is produced here and shown verbatim.
 
     ONE vocabulary with the worldmap block (§ A11): ``target_id``,
-    ``eta_game``, ``progress_m`` and ``total_m`` mean the same thing in both
-    payloads — ``eta_game`` therefore carries the WORLD-timezone offset here
-    too (it used to be the raw UTC stamp), so a client that slices HH:MM out
-    of it gets game wall-clock time either way. ``eta_hhmm``, ``target_name``
-    and ``arrived`` are this block's extras: the single-avatar panel needs a
-    ready-made label, the worldmap has ``movement_target_name`` and reports
-    arrival by dropping the block.
+    ``eta_game``, ``eta_hhmm``, ``eta_label``, ``progress_m`` and ``total_m``
+    mean the same thing in both payloads. ``eta_game`` is the CANONICAL world
+    calendar stamp (``Y0002-D109T14:00:00``) — there is no world timezone any
+    more, and no client parses it: ``eta_hhmm`` and ``eta_label`` are the
+    ready-made display strings, produced here. ``target_name`` and ``arrived``
+    are this block's extras: the single-avatar panel needs a ready-made label,
+    the worldmap has ``movement_target_name`` and reports arrival by dropping
+    the block.
     """
     try:
-        from app.core.timeutils import game_now, to_world_tz
+        from app.core.game_time import GameTime
+        from app.core.timeutils import game_time
         from app.core.travel_engine import get_journey, journey_state
         from app.models.world import get_location_name
         j = get_journey(name)
         if not j:
             return None
-        st = journey_state(j["waypoints"], j["started_at_game"], game_now())
+        st = journey_state(j["waypoints"], j["started_at_game"], game_time())
         target_id = j["target"]
-        eta_world = to_world_tz(st["eta_game"])
+        eta = GameTime.parse(st["eta_game"])
         return {
             "target_id": target_id,
             "target_name": get_location_name(target_id) or target_id,
-            "eta_game": eta_world.isoformat(),
-            "eta_hhmm": f"{eta_world:%H:%M}",
+            "eta_game": st["eta_game"],
+            "eta_hhmm": eta.time_hhmm(),
+            "eta_label": eta.label(lang),
             "progress_m": st["progress_m"],
             "total_m": st["total_m"],
             "arrived": st["arrived"],
@@ -509,7 +511,7 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
         set_is_sleeping(avatar, False)
         logger.info("travel: %s woke up by setting off for %s",
                     avatar, target_id)
-    return {"journey": _travel_block(avatar), "reason": ""}
+    return {"journey": _travel_block(avatar, lang), "reason": ""}
 
 
 @router.post("/play/travel/cancel")
@@ -1910,21 +1912,33 @@ async def play_notices(user=Depends(get_current_user)):
 
 @router.get("/play/news")
 async def play_news(user=Depends(get_current_user)):
-    """News-Channel für den Avatar: aktive (nicht-resolvte) Events am eigenen Ort
-    + globale Events, neueste zuerst. danger/disruption = "breaking". Liefert auch
-    den welt-konfigurierten Präsentations-Stil (modern/newspaper/flyer)."""
+    """News channel for the avatar: active (unresolved) events at its own
+    location + global events, newest first. danger/disruption = "breaking".
+    Also ships the world-configured presentation style (modern/newspaper/flyer).
+
+    Each item carries the finished WORLD-time label (``game_label``); an event
+    without a game stamp yields "" and is shown without a time. ``created_at``
+    stays SYSTEM time and is used for ordering only. ``edition_label`` is the
+    current WORLD time for the masthead — the reader lives in the world, so no
+    real-world clock appears in this panel.
+    """
     from app.models.account import get_active_character
     from app.models.world import get_world_setting
     out = {"avatar": "", "style": get_world_setting("news.style", "modern") or "modern",
-           "title": get_world_setting("news.title", "") or "", "items": []}
+           "title": get_world_setting("news.title", "") or "",
+           "edition_label": "", "items": []}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
     out["avatar"] = avatar
     try:
-        from app.models.character import get_character_current_location
-        from app.models.events import list_events
+        from app.models.character import (get_character_current_location,
+                                          get_character_language)
+        from app.core.timeutils import game_time
+        from app.models.events import event_game_label, list_events
         loc = get_character_current_location(avatar) or ""
+        lang = get_character_language(avatar) or "de"
+        out["edition_label"] = game_time().label(lang)
         items = []
         for e in (list_events(location_id=loc) or []):
             if e.get("resolved"):
@@ -1935,6 +1949,7 @@ async def play_news(user=Depends(get_current_user)):
                 "text": e.get("text", "") or "",
                 "category": cat,
                 "created_at": e.get("created_at", "") or "",
+                "game_label": event_game_label(e, lang),
                 "location_id": e.get("location_id") or "",
                 "global": e.get("location_id") is None,
                 "breaking": cat in ("danger", "disruption"),

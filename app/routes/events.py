@@ -1,4 +1,4 @@
-"""Event routes - Situative Ereignisse + Outfit-SSE-Stream"""
+"""Event routes — situational world events + the outfit/state SSE streams."""
 import asyncio
 import json as _json
 
@@ -6,11 +6,25 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Dict, Any
 from app.core.log import get_logger
-from app.models.events import add_event, get_all_events, delete_event
+from app.models.events import (add_event, event_game_label, get_all_events,
+                               delete_event)
 
 logger = get_logger("events")
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+
+def _game_label(stamp: Any, lang: str) -> str:
+    """Readable world label of a canonical GAME stamp ("" when there is none).
+
+    The counterpart of :func:`event_game_label` for the other game stamp an
+    event carries, its ``expires_at``.
+    """
+    from app.core.game_time import GameTime
+    try:
+        return GameTime.parse(stamp or "").label(lang)
+    except (ValueError, TypeError):
+        return ""
 
 
 @router.get("/image-stream")
@@ -42,11 +56,11 @@ async def event_image_stream(request: Request) -> StreamingResponse:
 
 @router.get("/outfit-stream")
 async def outfit_event_stream(request: Request) -> StreamingResponse:
-    """SSE-Stream fuer Outfit-Change-Events.
+    """SSE stream of outfit-change events.
 
-    Multiuser: Filter nach allowed_characters — User sieht nur Events zu
-    Characters die ihm zugeordnet sind. Admin mit allowed=[] sieht keine
-    (muss sich Characters zuweisen). Unauthenticated: 401.
+    Multi-user: filtered by allowed_characters — a user only sees events for
+    the characters assigned to them. An admin with allowed=[] sees none (they
+    have to assign characters first). Unauthenticated: 401.
     """
     from app.core.outfit_events import subscribe
     from app.core.auth_dependency import get_current_user_optional
@@ -105,20 +119,31 @@ async def state_event_stream(request: Request) -> StreamingResponse:
 
 
 @router.get("")
-def list_events_route() -> Dict[str, Any]:
-    """Listet alle Events eines Users."""
-    events = get_all_events()
+def list_events_route(lang: str = "en") -> Dict[str, Any]:
+    """Lists all active events.
+
+    Every event carries its world stamp (``game_ts``) plus the finished
+    ``game_label`` for that stamp — the client renders, it never formats a
+    calendar itself. An event without a game stamp gets an empty label.
+
+    ``expires_at`` is a GAME stamp too (an event's TTL is a world duration),
+    so it gets the same treatment: ``expires_label`` is the readable form, and
+    an event that never expires has neither.
+    """
+    events = [{**evt, "game_label": event_game_label(evt, lang),
+               "expires_label": _game_label(evt.get("expires_at"), lang)}
+              for evt in get_all_events()]
     return {"events": events}
 
 
 @router.post("")
 async def create_event_route(request: Request) -> Dict[str, Any]:
-    """Erstellt ein neues Event."""
+    """Creates a new event."""
     body = await request.json()
     text = body.get("text", "").strip()
     location_id = body.get("location_id") or None
-    # category: ambient | social | disruption | danger (leer = unkategorisiert).
-    # danger/disruption werden in der Player-News als "Breaking" hervorgehoben.
+    # category: ambient | social | disruption | danger (empty = uncategorized).
+    # danger/disruption are highlighted as "Breaking" in the player news.
     category = (body.get("category") or "").strip().lower()
 
     ttl_hours = body.get("ttl_hours")
@@ -136,7 +161,7 @@ async def create_event_route(request: Request) -> Dict[str, Any]:
 @router.delete("/{event_id}")
 def delete_event_route(
     event_id: str) -> Dict[str, Any]:
-    """Loescht ein Event."""
+    """Deletes an event."""
     deleted = delete_event(event_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Event not found")

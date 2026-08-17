@@ -21,7 +21,7 @@ This module now only provides:
 """
 from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now
+from app.core.timeutils import parse_iso
 from typing import Any, Dict, Set
 
 from app.core.log import get_logger
@@ -85,8 +85,15 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
                         else (profile.get("pose_flavor")
                               or profile.get("pose_key") or "")) or "None"
     data["feeling"] = profile.get("current_feeling", "") or "Neutral"
-    from app.core.timeutils import game_local_now as _lnow
-    data["time_of_day"] = _lnow().strftime("%H:%M")  # in-game clock (world TZ)
+    from app.core.timeutils import game_time
+    from app.models.character import get_character_language
+    # Season names are localized data fields — same language source the room
+    # names below use.
+    _lang = get_character_language(character_name) or "de"
+    _now_game = game_time()
+    data["time_of_day"] = _now_game.time_hhmm()          # game clock, HH:MM
+    # In-world calendar date ("Summer, day 17 · Year 3"), never a real date.
+    data["game_date"] = _now_game.date_label(_lang)
 
     if PRESENCE in sections:
         presence_lines, elsewhere_lines, anyone_nearby = _load_presence(
@@ -367,11 +374,19 @@ _RECENT_WINDOW_HOURS = 6
 _RECENT_MAX_ENTRIES = 24
 
 
-def _time_str(ts: str) -> str:
-    """'HH:MM' from ISO string, empty on error."""
+def _time_str(game_ts: str) -> str:
+    """'HH:MM' of a canonical GAME stamp, empty when there is none.
+
+    The character is told WORLD hours, so this reads ``state_history.game_ts``
+    — never the SYSTEM stamp next to it. A row without a game stamp
+    (pre-migration, or an unusable ``ts`` at backfill time) simply shows no
+    time; a system hour presented as a world hour is exactly the confusion the
+    world calendar exists to prevent.
+    """
+    from app.core.game_time import GameTime
     try:
-        return ts[11:16]
-    except Exception:
+        return GameTime.parse(game_ts).time_hhmm()
+    except (ValueError, TypeError):
         return ""
 
 
@@ -427,7 +442,12 @@ def _enrich_activity_events(events: list, character_name: str) -> None:
 
 def _lookup_chat_partner(character_name: str, ts: str,
                           window_seconds: int = 120) -> str:
-    """Sucht in chat_messages den juengsten Partner um ``ts`` herum."""
+    """Finds the closest chat partner around ``ts`` in chat_messages.
+
+    ``ts`` is SYSTEM time here — chat_messages is system-stamped, so this
+    lookup stays on the technical clock even though the block is shown in
+    GAME time.
+    """
     if not character_name or not ts:
         return ""
     try:
@@ -456,17 +476,23 @@ def _lookup_chat_partner(character_name: str, ts: str,
 def build_recent_activity_section(character_name: str,
                                    hours: int = _RECENT_WINDOW_HOURS,
                                    max_entries: int = _RECENT_MAX_ENTRIES) -> str:
-    """Build the "## Recently experienced" block from state_history."""
+    """Build the "## Recently experienced" block from state_history.
+
+    The window is 6 GAME hours: what the character remembers experiencing is
+    world time, so a frozen or fast-running world shifts the window with it.
+    ``game_ts`` is canonical, so a lexicographic comparison orders correctly.
+    """
     try:
-        from datetime import timedelta
         from app.core.db import get_connection
+        from app.core.game_time import GameDuration
+        from app.core.timeutils import game_time
         import json as _json
 
-        cutoff = (utc_now() - timedelta(hours=hours)).isoformat()
+        cutoff = game_time().minus_clamped(GameDuration.of(hours=hours)).canonical()
         conn = get_connection()
         rows = conn.execute(
-            "SELECT state_json FROM state_history "
-            "WHERE character_name=? AND ts>=? ORDER BY ts ASC",
+            "SELECT state_json, game_ts FROM state_history "
+            "WHERE character_name=? AND game_ts>=? ORDER BY game_ts ASC",
             (character_name, cutoff),
         ).fetchall()
         if not rows:
@@ -477,7 +503,7 @@ def build_recent_activity_section(character_name: str,
         _DROP_ACTIVITY_VALUES = {"none", "skip", "greeting"}
 
         events: list = []
-        for (sj,) in rows:
+        for sj, row_game_ts in rows:
             try:
                 d = _json.loads(sj or "{}")
             except Exception:
@@ -493,8 +519,12 @@ def build_recent_activity_section(character_name: str,
             meta = d.get("metadata") or {}
             if not isinstance(meta, dict):
                 meta = {}
+            # ``ts`` stays SYSTEM time — it is only used to look up a chat
+            # partner in chat_messages, which is system-stamped too. The time
+            # the character is SHOWN comes off ``game_ts``.
             ts = d.get("timestamp") or ""
-            entry = {"ts": ts, "type": t, "value": val,
+            entry = {"ts": ts, "game_ts": row_game_ts or "",
+                     "type": t, "value": val,
                      "partner": (meta.get("partner") or "").strip(),
                      "reason": (meta.get("reason") or "").strip(),
                      "action": (meta.get("action") or "").strip(),
@@ -523,18 +553,18 @@ def build_recent_activity_section(character_name: str,
             if collapsed:
                 last = collapsed[-1]
                 if last["type"] == e["type"] and last["value"] == e["value"]:
-                    last["end_ts"] = e["ts"]
+                    last["end_game_ts"] = e["game_ts"]
                     if e.get("partner") and not last.get("partner"):
                         last["partner"] = e["partner"]
                     continue
-            collapsed.append(dict(e, end_ts=e["ts"]))
+            collapsed.append(dict(e, end_game_ts=e["game_ts"]))
 
         collapsed = collapsed[-max_entries:]
 
         lines: list = []
         for e in collapsed:
-            start = _time_str(e["ts"])
-            end = _time_str(e.get("end_ts") or "")
+            start = _time_str(e.get("game_ts") or "")
+            end = _time_str(e.get("end_game_ts") or "")
             if end and end != start:
                 time_str = f"{start}-{end}"
             else:

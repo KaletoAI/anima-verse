@@ -7,6 +7,7 @@ placeholders:
   category_description: Category description
   current_time: Wall-clock time, format "HH:MM"
   time_of_day: "morning" | "afternoon" | "evening" | "night"
+  game_date: In-world calendar date, e.g. "Summer, day 17 · Year 3"
   location_description: Location description text
   setting_block: Optional pre-formatted "Setting: Indoor/Outdoor ..." line (empty if location.indoor is unset)
   rooms_block: Optional pre-formatted "Rooms: ..." line (empty if none)
@@ -35,6 +36,7 @@ The image_prompt MUST:
 Generate a random event for the location "{{ location_name }}".
 Category: {{ category }} — {{ category_description }}
 Time: {{ current_time }} ({{ time_of_day }})
+Date: {{ game_date }}
 Location: {{ location_description }}
 {% if setting_block %}{{ setting_block }}
 {% endif %}

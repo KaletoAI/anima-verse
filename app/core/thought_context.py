@@ -14,7 +14,7 @@ Returns a kwargs dict that can be passed straight into
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, game_local_now
+from app.core.timeutils import parse_iso, utc_now, game_time
 from typing import Any, Dict, List, Tuple
 
 from app.core.log import get_logger
@@ -74,9 +74,13 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     from app.core.perception import prompt_place
     from app.models.character import (
         get_character_profile, get_character_current_location,
-        get_character_language_instruction)
+        get_character_language, get_character_language_instruction)
 
     profile = get_character_profile(character_name)
+    # Same language source the localized room names below use — the season
+    # name in the date label is a localized data field, not UI chrome.
+    lang = get_character_language(character_name) or "de"
+    now_game = game_time()
     location_id = profile.get("current_location", "") or ""
     room_id = profile.get("current_room", "") or ""
     # Off the map (no location AND no point) keeps saying "Unknown" — the
@@ -101,7 +105,10 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
                      else (profile.get("pose_flavor")
                            or profile.get("pose_key") or "")) or "None",
         "feeling": (profile.get("current_feeling", "") or "Neutral"),
-        "time_of_day": game_local_now().strftime("%H:%M"),  # in-game clock (world TZ)
+        "time_of_day": now_game.time_hhmm(),   # game clock, HH:MM
+        # In-world calendar date ("Summer, day 17 · Year 3") — the character
+        # knows the season and the day, never a real-world date.
+        "game_date": now_game.date_label(lang),
         # Defaults for optional blocks — keep them present so StrictUndefined
         # doesn't raise on missing keys.
         "inbox_block": _build_inbox_block(character_name),
@@ -298,20 +305,24 @@ def _build_general_task(profile: Dict[str, Any]) -> str:
     return (profile.get("character_task", "") or "").strip()
 
 
-def _due_hint(timestamp: str, delay_minutes: int) -> str:
-    """Turns "promised at T, due T+minutes" into a short GAME-time hint.
+def _due_hint(game_ts: str, delay_minutes: int) -> str:
+    """Turns "promised at T, due T+minutes" into a short due hint.
 
-    Returns "" when the timestamp is unreadable — a wrong due date is worse
-    than none at all.
+    Both ends are GAME time: a promise made in the world comes due in the
+    world. The memory row carries its own canonical game stamp
+    (``memories.game_ts``), and the delay is counted in world minutes off it.
+
+    Returns "" when the game stamp is missing or unreadable (pre-migration
+    rows) — a wrong due date is worse than none at all.
     """
-    from app.core.timeutils import game_now, parse_iso
-    from datetime import timedelta
+    from app.core.game_time import GameDuration, GameTime
+    from app.core.timeutils import game_time
     try:
-        due = parse_iso(timestamp) + timedelta(minutes=int(delay_minutes))
+        due = GameTime.parse(game_ts) + GameDuration.of(minutes=int(delay_minutes))
     except Exception:
         return ""
     try:
-        remaining = (due - game_now()).total_seconds() / 60.0
+        remaining = (due - game_time()).minutes
     except Exception:
         return ""
     if remaining <= 0:
@@ -329,8 +340,8 @@ def _build_commitments_block(character_name: str) -> str:
         from app.models.memory import load_memories
         from app.models.character import character_exists
         memories = load_memories(character_name)
-        # Dangling-Filter: Commitments gegenueber einem nicht (mehr) existierenden
-        # Character ausblenden (related_character gesetzt aber nicht in der Welt).
+        # Dangling filter: hide commitments made towards a character that does
+        # not (or no longer) exist (related_character set but not in the world).
         open_ones = [
             m for m in memories
             if m.get("memory_type") == "commitment"
@@ -355,7 +366,7 @@ def _build_commitments_block(character_name: str) -> str:
             except (TypeError, ValueError):
                 minutes = 0
             if minutes > 0:
-                due = _due_hint(m.get("timestamp", ""), minutes)
+                due = _due_hint(m.get("game_ts", ""), minutes)
                 if due:
                     suffix = f" (due: {due})"
             lines.append(f"- {content}{suffix}")
@@ -831,7 +842,7 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
         ).fetchone()
         if not row:
             return ""
-        # Partner = die Seite die NICHT character_name ist
+        # Partner = whichever side is NOT character_name
         ts, p_partner, p_char = row
         partner = p_partner if p_char == character_name else p_char
         if not partner:
@@ -1185,8 +1196,10 @@ def _build_daily_schedule_block(character_name: str) -> str:
                 continue
             slot_by_hour[h] = s
 
-        now = utc_now()
-        cur_h = now.hour
+        # A daily schedule is an IN-WORLD rhythm — it has to follow the game
+        # clock. This read the system clock, so every slot fired at the wrong
+        # in-world hour as soon as the world clock was offset or sped up.
+        cur_h = game_time().hour
         next_h = (cur_h + 1) % 24
 
         def _fmt(slot: Dict[str, Any], hour: int) -> str:

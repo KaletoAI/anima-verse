@@ -17,7 +17,8 @@ from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
-from app.core.timeutils import game_now, utc_now_iso, parse_iso
+from app.core.game_time import GameDuration, GameTime
+from app.core.timeutils import game_time, utc_now_iso
 
 logger = get_logger("intents")
 
@@ -241,17 +242,18 @@ def auto_track_progress(character_name: str, tool_type: str,
 def expire_overdue() -> int:
     """Active intents whose ``expires_at`` has passed are set to ``expired``.
 
-    ``expires_at`` is a GAME-time stamp (it comes from the at_time trigger's
-    ``run_date``, which is in-world time) — compare against the game clock.
+    ``expires_at`` is a canonical GAME-time stamp (it comes from the at_time
+    trigger's ``run_date``, which is in-world time) — compare against the
+    game clock.
     """
-    now = game_now()
+    now = game_time()
     n = 0
     for it in list_intents(status="active"):
         exp = (it.get("expires_at") or "").strip()
         if not exp:
             continue
         try:
-            if parse_iso(exp) <= now:
+            if GameTime.parse(exp) <= now:
                 update_intent(it["id"], status="expired")
                 n += 1
         except Exception:
@@ -362,11 +364,10 @@ def _when_to_trigger(when: str) -> Dict[str, Any]:
     if low.startswith("in:"):
         secs = _parse_duration_to_seconds(w[3:])
         if secs > 0:
-            from datetime import timedelta
-            # "in 2h" is an in-world delay — run_date is a GAME-time stamp
-            # (the scheduler dispatches character jobs on the game clock).
-            return {"kind": "at_time",
-                    "run_date": (game_now() + timedelta(seconds=secs)).isoformat()}
+            # "in 2h" is an in-world delay — run_date is a canonical GAME-time
+            # stamp (the scheduler dispatches character jobs on the game clock).
+            run_at = game_time() + GameDuration.of(seconds=secs)
+            return {"kind": "at_time", "run_date": run_at.canonical()}
         return {"kind": "standing"}
     if low.startswith("at_location:"):
         name = w.split(":", 1)[1].strip()

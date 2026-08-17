@@ -5,7 +5,7 @@ Storage: world.db — Tabellen summaries, chat_messages
 import json
 import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
@@ -689,12 +689,11 @@ def refresh_summary_if_uncovered(
 
 def load_daily_summaries(character_name: str,
                          partner: str = "") -> Dict[str, Dict[str, str]]:
-    """Laedt alle Tages-Summaries aus DB.
+    """Loads all day summaries from the DB. Keys are GAME days ("Y0002-D109").
 
     Returns:
-        Wenn `partner` leer: {date_str: {partner_name: summary_text, ...}}
-        Wenn `partner` gesetzt: {date_str: summary_text} (Legacy-Form fuer
-        einzelne Partner-Filter)
+        `partner` empty: {day_key: {partner_name: summary_text, ...}}
+        `partner` set:   {day_key: summary_text} (single-partner form)
     """
     try:
         conn = get_connection()
@@ -720,17 +719,17 @@ def load_daily_summaries(character_name: str,
 
 
 def load_daily_summaries_combined(character_name: str) -> Dict[str, str]:
-    """Variante von load_daily_summaries fuer Konsumenten, die nicht
-    partner-aware sind (Wochen-/Monats-Konsolidierung).
+    """Variant of load_daily_summaries for consumers that are not partner-aware
+    (the week/season consolidation).
 
-    Faltet pro Tag alle Partner-Eintraege in einen kombinierten String:
+    Folds all partner entries of a day into one combined string:
         "Mit Kahiro: ...
          Mit Rosi: ...
-         <Allgemein>: ..."
+         <general>: ..."
     """
-    by_day = load_daily_summaries(character_name)  # {date: {partner: text}}
+    by_day = load_daily_summaries(character_name)  # {day_key: {partner: text}}
     flat: Dict[str, str] = {}
-    for day_str, by_partner in by_day.items():
+    for day_key, by_partner in by_day.items():
         if not by_partner:
             continue
         parts = []
@@ -742,17 +741,17 @@ def load_daily_summaries_combined(character_name: str) -> Dict[str, str]:
             else:
                 parts.append(text)
         if parts:
-            flat[day_str] = "\n".join(parts)
+            flat[day_key] = "\n".join(parts)
     return flat
 
 
-def save_daily_summary(character_name: str, date_str: str, summary: str,
+def save_daily_summary(character_name: str, day_key: str, summary: str,
                        partner: str = ""):
-    """Speichert/ueberschreibt eine Tages-Summary in der DB.
+    """Stores/overwrites a day summary in the DB. ``day_key`` is a GAME day
+    ("Y0002-D109").
 
-    `partner` ist der Konversationspartner (Charaktername). Pflicht fuer
-    neue Schreibwege — Aufrufer ohne Partner schreiben in den
-    Legacy-Slot ('').
+    `partner` is the conversation partner (character name). Mandatory for new
+    write paths — callers without a partner write into the legacy slot ('').
     """
     try:
         with transaction() as conn:
@@ -761,9 +760,9 @@ def save_daily_summary(character_name: str, date_str: str, summary: str,
                 VALUES (?, 'daily', ?, ?, ?)
                 ON CONFLICT(character_name, kind, date_key, partner) DO UPDATE SET
                     content=excluded.content
-            """, (character_name, date_str, partner, summary))
+            """, (character_name, day_key, partner, summary))
     except Exception as e:
-        logger.error("save_daily_summary DB-Fehler fuer %s/%s: %s",
+        logger.error("save_daily_summary DB error for %s/%s: %s",
                      character_name, partner, e)
 
 
@@ -799,30 +798,28 @@ def delete_daily_summaries(character_name: str, date_keys: List[str],
 def get_recent_daily_summaries(character_name: str,
                                days: int = 0,
                                partner: str = "") -> List[Dict[str, str]]:
-    """Gibt die letzten N Tage mit Summaries zurueck (aelteste zuerst).
+    """The last N GAME days that have summaries (oldest first).
 
-    Returns: [{"date": "2026-02-23", "partner": "Kahiro", "summary": "..."}, ...]
-    Wenn `partner` gesetzt: nur Summaries dieses Partners.
+    Returns: [{"date": "Y0002-D109", "partner": "Kahiro", "summary": "..."}, ...]
+    `partner` set: only that partner's summaries.
     """
     if days <= 0:
         days = int(os.environ.get("DAILY_SUMMARY_DAYS", "7"))
 
-    summaries = load_daily_summaries(character_name)  # date -> {partner: text}
+    summaries = load_daily_summaries(character_name)  # day_key -> {partner: text}
     if not summaries:
         return []
 
-    today = date.today()
+    from app.core.day_consolidation import recent_game_day_keys
     result: List[Dict[str, str]] = []
-    for i in range(days, 0, -1):
-        day = today - timedelta(days=i)
-        day_str = day.isoformat()
-        per_partner = summaries.get(day_str) or {}
+    for day_key in recent_game_day_keys(days, skip_today=True):
+        per_partner = summaries.get(day_key) or {}
         if not per_partner:
             continue
         for p, text in per_partner.items():
             if partner and p != partner:
                 continue
-            result.append({"date": day_str, "partner": p, "summary": text})
+            result.append({"date": day_key, "partner": p, "summary": text})
     return result
 
 
@@ -842,10 +839,14 @@ def build_daily_summary_prompt_section(character_name: str,
 
     Format:
     Recent days:
-    - Feb 23 with Kahiro: Summary text...
-    - Feb 23 with Rosi:   Summary text...
-    - Feb 24 with Kahiro: Summary text...
+    - Winter, day 17 · Year 2 with Kahiro: Summary text...
+    - Winter, day 17 · Year 2 with Rosi:   Summary text...
+    - Winter, day 18 · Year 2 with Kahiro: Summary text...
     """
+    from app.core.day_consolidation import parse_day_key
+    from app.core.game_time import GameDuration
+    from app.core.timeutils import game_time
+
     thresholds = get_memory_thresholds()
     if max_days <= 0:
         max_days = thresholds["mid_term_days"]
@@ -856,16 +857,16 @@ def build_daily_summary_prompt_section(character_name: str,
     if not recent:
         return ""
 
-    # Nur Tage aelter als SHORT_TERM_DAYS (Chat-History deckt die Kurzzeit ab)
-    cutoff = date.today() - timedelta(days=short)
+    # Only days older than SHORT_TERM_DAYS (the chat history covers the rest)
+    cutoff = game_time().minus_clamped(GameDuration.of(days=short))
     lines = []
     for entry in recent:
-        try:
-            d = date.fromisoformat(entry["date"])
-            if d > cutoff:
-                continue  # Innerhalb Kurzzeit — Chat-History reicht
-            label = d.strftime("%b %d")
-        except ValueError:
+        day = parse_day_key(entry["date"])
+        if day is not None:
+            if day > cutoff:
+                continue  # inside the short term — the chat history is enough
+            label = day.date_label()
+        else:
             label = entry["date"]
         partner_label = entry.get("partner") or ""
         if partner_label:
@@ -878,17 +879,22 @@ def build_daily_summary_prompt_section(character_name: str,
     return "\nRecent days:\n" + "\n".join(lines)
 
 
-def build_longterm_summary_prompt_section(character_name: str) -> str:
-    """Baut den Prompt-Abschnitt fuer Langzeit-Gedaechtnis (Stufe 3: Wochen + Monate).
+def build_longterm_summary_prompt_section(character_name: str,
+                                          lang: str = "en") -> str:
+    """Prompt section for long-term memory (tier 3: weeks + seasons).
+
+    ``lang`` localizes the season names, so the section speaks the same
+    language as the rest of the prompt.
 
     Format:
     Long-term memories:
-    Months:
-    - 2026-01: Summary...
+    Seasons:
+    - Winter · Year 2: Summary...
     Weeks:
-    - 2026-W10: Summary...
+    - Y0002-W016: Summary...
     """
-    from app.core.memory_service import load_monthly_summaries, load_weekly_summaries
+    from app.core.memory_service import (season_label, load_monthly_summaries,
+                                         load_weekly_summaries)
 
     monthly = load_monthly_summaries(character_name)
     weekly = load_weekly_summaries(character_name)
@@ -899,9 +905,9 @@ def build_longterm_summary_prompt_section(character_name: str) -> str:
     parts = ["\nLong-term memories:"]
 
     if monthly:
-        parts.append("Months:")
-        for month_key in sorted(monthly.keys()):
-            parts.append(f"- {month_key}: {monthly[month_key]}")
+        parts.append("Seasons:")
+        for season_key in sorted(monthly.keys()):
+            parts.append(f"- {season_label(season_key, lang)}: {monthly[season_key]}")
 
     if weekly:
         parts.append("Weeks:")
@@ -912,17 +918,26 @@ def build_longterm_summary_prompt_section(character_name: str) -> str:
 
 
 def _get_today_messages(character_name: str) -> List[Dict[str, str]]:
-    """Laedt nur die Nachrichten von heute aus der DB."""
-    return _get_day_messages(character_name, date.today())
+    """Only the messages of the game day currently running."""
+    from app.core.timeutils import game_time
+    return _get_day_messages(character_name, game_time().day_key())
 
 
-def _get_day_messages(character_name: str, day: date) -> List[Dict[str, str]]:
-    """Laedt Nachrichten fuer einen bestimmten Tag aus der DB.
+def _get_day_messages(character_name: str, day_key: str) -> List[Dict[str, str]]:
+    """Messages of ONE GAME day ("Y0002-D109") from the DB.
 
-    Liefert pro Zeile: role, content, partner, metadata, ts.
-    Aufrufer entscheiden, wie sie nach Partner gruppieren oder filtern.
+    Chat messages carry SYSTEM stamps only (``chat_messages.ts``) — there is
+    no game stamp on the chat storage path — so the game day is turned into a
+    system window by ``timeutils.system_window_of_game_day``. With a game
+    factor > 1 that window is correspondingly shorter than a real day, which
+    is exactly the point of decision E4: a rollup per day the world
+    experienced, not per day the server ran.
     """
-    day_str = day.isoformat()
+    from app.core.timeutils import system_window_of_game_day
+    window = system_window_of_game_day(day_key)
+    if window is None:
+        logger.debug("_get_day_messages: %r is not a game day key", day_key)
+        return []
     try:
         conn = get_connection()
         rows = conn.execute("""
@@ -930,7 +945,7 @@ def _get_day_messages(character_name: str, day: date) -> List[Dict[str, str]]:
             WHERE character_name=?
               AND ts >= ? AND ts < ?
             ORDER BY ts ASC
-        """, (character_name, f"{day_str}T00:00:00", f"{day_str}T23:59:59")).fetchall()
+        """, (character_name, window[0], window[1])).fetchall()
         result = []
         for r in rows:
             role, content, partner, metadata, ts = r
@@ -945,7 +960,7 @@ def _get_day_messages(character_name: str, day: date) -> List[Dict[str, str]]:
             })
         return result
     except Exception as e:
-        logger.debug("_get_day_messages DB-Fehler fuer %s/%s: %s", character_name, day_str, e)
+        logger.debug("_get_day_messages DB error for %s/%s: %s", character_name, day_key, e)
         return []
 
 
@@ -1046,26 +1061,30 @@ def _create_daily_summary(messages: List[Dict[str, str]],
 
 
 def _update_daily_summary(character_name: str):
-    """Aktualisiert die Tages-Summary fuer heute — pro Konversationspartner
-    eine eigene Summary."""
-    today_messages = _get_today_messages(character_name)
+    """Updates today's day summary — one per conversation partner.
+
+    "Today" is the GAME day (decision E4), so the entry is keyed and rewritten
+    per game day, not per real day.
+    """
+    from app.core.timeutils import game_time
+    today_key = game_time().day_key()
+    today_messages = _get_day_messages(character_name, today_key)
     if not today_messages:
         return
 
     grouped = _group_by_partner(today_messages)
-    today_str = date.today().isoformat()
     for partner, msgs in grouped.items():
         if len(msgs) < 4:
-            # Zu wenige Nachrichten fuer eine sinnvolle Summary
+            # too few messages for a meaningful summary
             continue
         summary = _create_daily_summary(msgs,
                                         character_name=character_name,
                                         partner_name=partner)
         if summary:
-            save_daily_summary(character_name, today_str, summary,
+            save_daily_summary(character_name, today_key, summary,
                                partner=partner)
-            logger.info("Daily summary %s↔%s %s: aktualisiert (%d Nachrichten)",
-                        character_name, partner, today_str, len(msgs))
+            logger.info("Daily summary %s↔%s %s: updated (%d messages)",
+                        character_name, partner, today_key, len(msgs))
 
 
 def _is_bad_summary(summary: str) -> bool:
@@ -1086,26 +1105,25 @@ def _is_bad_summary(summary: str) -> bool:
 
 
 def backfill_missing_daily_summaries(character_name: str):
-    """Erstellt fehlende Tages-Summaries fuer vergangene Tage — pro Partner.
+    """Creates missing day summaries for past GAME days — one per partner.
 
-    Prueft die letzten 7 Tage. Ueberspringt heute (wird separat aktualisiert)
-    und (Tag, Partner)-Paare die bereits eine Summary haben.
+    Checks the last 7 game days. Skips today (updated separately) and
+    (day, partner) pairs that already have a summary.
     """
-    existing = load_daily_summaries(character_name)  # {date: {partner: text}}
-    today = date.today()
+    from app.core.day_consolidation import recent_game_day_keys
+
+    existing = load_daily_summaries(character_name)  # {day_key: {partner: text}}
     days = int(os.environ.get("DAILY_SUMMARY_DAYS", "7"))
 
     backfilled = 0
-    max_backfill_per_run = 2  # Cap pro Durchlauf, damit die Queue nicht blockt
+    max_backfill_per_run = 2  # cap per run so the queue does not block
 
-    for i in range(1, days + 1):
+    # newest first — the recent days matter most when the cap cuts the run off
+    for day_key in reversed(recent_game_day_keys(days, skip_today=True)):
         if backfilled >= max_backfill_per_run:
             break
 
-        day = today - timedelta(days=i)
-        day_str = day.isoformat()
-
-        messages = _get_day_messages(character_name, day)
+        messages = _get_day_messages(character_name, day_key)
         if not messages:
             continue
 
@@ -1113,7 +1131,7 @@ def backfill_missing_daily_summaries(character_name: str):
         if not grouped:
             continue
 
-        existing_for_day = existing.get(day_str) or {}
+        existing_for_day = existing.get(day_key) or {}
 
         for partner, msgs in grouped.items():
             if backfilled >= max_backfill_per_run:
@@ -1129,8 +1147,8 @@ def backfill_missing_daily_summaries(character_name: str):
                                             character_name=character_name,
                                             partner_name=partner)
             if summary:
-                save_daily_summary(character_name, day_str, summary,
+                save_daily_summary(character_name, day_key, summary,
                                    partner=partner)
-                logger.info("Daily summary backfill %s↔%s %s (%d Nachrichten)",
-                            character_name, partner, day_str, len(msgs))
+                logger.info("Daily summary backfill %s↔%s %s (%d messages)",
+                            character_name, partner, day_key, len(msgs))
                 backfilled += 1

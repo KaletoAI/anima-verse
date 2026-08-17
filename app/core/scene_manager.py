@@ -54,18 +54,23 @@ DEFAULT_SCENE_MAX_PERCEPTIONS = 400
 # Until a wilderness scene has a spatial key of its own, AGE is the only exit.
 # Seven days is not invented here: ``day_consolidation.THOUGHT_RETENTION_DAYS``
 # is the same decision for the same kind of row (raw material with no other way
-# out) and uses the same horizon, the daily recap reads back 7 days
-# (``recent_daily_entries``, DAILY_SUMMARY_DAYS), and everything that reads the
-# wilderness stream reads its TAIL (small limits, recent lines). So a week
-# outlasts every reader by a wide margin while still bounding growth — and it
-# is 7× the 24 h ceiling a stuck located scene gets.
+# out) and uses the same horizon, and everything that reads the wilderness
+# stream reads its TAIL (small limits, recent lines). So a week outlasts every
+# reader by a wide margin while still bounding growth — and it is 7× the 24 h
+# ceiling a stuck located scene gets.
 #
-# SYSTEM time, not game time, although the horizon is about the world: the ts
+# SYSTEM days, not game days, although the horizon is about the world: the ts
 # columns are stamped with ``utc_now_iso`` (like every other technical stamp —
 # scene idle, thought retention, the 24 h valve), so comparing them against a
 # game clock that can be stopped or run at a tick factor would re-date old rows
 # whenever the factor changes. Retention is storage hygiene, and storage
 # hygiene runs on the wall clock.
+#
+# That makes the horizon deliberately ASYMMETRIC to the readers: the daily
+# recap reads back 7 GAME days (``recent_daily_entries``, DAILY_SUMMARY_DAYS),
+# which at a factor > 1 is a much shorter real span than these 7 system days.
+# The retention therefore keeps rows LONGER than any reader needs, never
+# shorter — which is the safe direction for a cleanup rule.
 WILDERNESS_RETENTION_DAYS = 7
 
 

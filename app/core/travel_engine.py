@@ -13,7 +13,7 @@ POLYLINE with baked times:
         "waypoints": [[x, z, t_cum], ...],   # world metres + cumulative
                                              # GAME seconds since the start
                                              # (waypoint 0 carries 0.0)
-        "started_at_game": "<iso>",          # GAME clock stamp
+        "started_at_game": "Y0002-D109T14:00:00",   # canonical GAME stamp
         "speed_m_s": 1.4,                    # world setting at journey start
         "entry_edge": "W",                   # WORLD edge of the target's
                                              # opening the route aims at
@@ -35,11 +35,11 @@ location ids) is discarded on read together with its movement target.
 """
 import asyncio
 import math
-from datetime import timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
-from app.core.timeutils import game_speed_factor, parse_iso
+from app.core.timeutils import game_speed_factor, game_time
 
 logger = get_logger("travel_engine")
 
@@ -112,8 +112,13 @@ def _reject_speed(raw: Any) -> float:
 
 
 def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
-                  now_game) -> Dict[str, Any]:
+                  now_game: GameTime) -> Dict[str, Any]:
     """Position on ``waypoints`` at game time ``now_game`` — pure, no I/O.
+
+    ``started_at_game`` is a canonical world-calendar stamp
+    (``Y0002-D109T14:00:00``), ``now_game`` a :class:`GameTime`. The journey
+    maths itself stays in plain GAME SECONDS — only the type at the edge is
+    calendar-aware.
 
     Returns ``{pos, seg, arrived, eta_game, progress_m, total_m}``:
 
@@ -122,7 +127,7 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
     seg         index of the segment being walked (0-based); a waypoint's
                 own instant belongs to the segment STARTING there
     arrived     the elapsed time has reached the last waypoint's ``t_cum``
-    eta_game    ISO stamp of the arrival (start + the last ``t_cum``)
+    eta_game    canonical GAME stamp of the arrival (start + last ``t_cum``)
     progress_m  metres walked so far, ``total_m`` the polyline length
 
     Robustness the caller may rely on:
@@ -140,20 +145,20 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
             pts.append((float(wp[0]), float(wp[1]), float(wp[2])))
         except (TypeError, ValueError, IndexError):
             continue
-    started = parse_iso(started_at_game)
+    started = GameTime.parse(started_at_game)
     if not pts:
         # Nothing to walk: an empty polyline is an arrived journey at no
         # point at all — the callers treat `arrived` as "settle it".
         return {"pos": (0.0, 0.0), "seg": 0, "arrived": True,
-                "eta_game": started.isoformat(), "progress_m": 0.0,
+                "eta_game": started.canonical(), "progress_m": 0.0,
                 "total_m": 0.0}
 
     lengths = [math.dist((pts[i][0], pts[i][1]), (pts[i + 1][0], pts[i + 1][1]))
                for i in range(len(pts) - 1)]
     total_m = round(sum(lengths), 2)
     total_t = pts[-1][2]
-    eta_game = (started + timedelta(seconds=total_t)).isoformat()
-    elapsed = max(0.0, (now_game - started).total_seconds())
+    eta_game = (started + GameDuration.of(seconds=total_t)).canonical()
+    elapsed = max(0.0, (now_game - started).seconds)
 
     if len(pts) == 1 or elapsed >= total_t:
         last = pts[-1]
@@ -354,7 +359,6 @@ def start_journey(character_name: str,
     the ticker, not here.
     """
     from app.core.nav_grid import build_nav_context, route, segment_costs
-    from app.core.timeutils import game_now_iso
     from app.core.world_geometry import placed_footprint
     from app.models.character import (get_character_current_location,
                                       get_character_pos, get_character_profile,
@@ -448,14 +452,14 @@ def start_journey(character_name: str,
                           round(t_cum, 3)])
 
     journey = {"target": target_id, "waypoints": waypoints,
-               "started_at_game": game_now_iso(), "speed_m_s": speed,
+               "started_at_game": game_time().canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
     profile = get_character_profile(character_name)
     profile["journey"] = journey
     profile["movement_target"] = target_id
     save_character_profile(character_name, profile)
 
-    st = journey_state(waypoints, journey["started_at_game"], _game_now())
+    st = journey_state(waypoints, journey["started_at_game"], game_time())
     try:
         from app.core.state_events import publish as _publish_state
         _publish_state("travel_started", character_name, target_id=target_id,
@@ -476,11 +480,6 @@ def cancel_journey(character_name: str) -> None:
         _publish_state("travel_cancelled", character_name)
     except Exception:
         pass
-
-
-def _game_now():
-    from app.core.timeutils import game_now
-    return game_now()
 
 
 # Lateral spacing of party followers next to their leader, in metres.
@@ -931,7 +930,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         logger.debug("try_roll_on_entry failed for %s", name, exc_info=True)
     # check_discover_rules is deliberately NOT called HERE: arriving already
     # discovers the target (``save_character_current_location``), and the
-    # sight pass at the end of every tick (``_discover_by_sight``) has long
+    # sight pass at the end of every tick (``_note_positions``) has long
     # revealed everything else within range. The rule's own roll belongs to
     # the thought turn, where its CONDITION is evaluated against a character
     # that is about to think. (Its message has no reader anywhere today — the
@@ -989,7 +988,7 @@ def advance_all_journeys() -> None:
     # anyway, so there is nothing left to be lazy about.
     locations: List[Dict[str, Any]] = list_locations()
     names = list_available_characters()
-    now = _game_now()
+    now = game_time()
     for name in names:
         try:
             j = get_journey(name)

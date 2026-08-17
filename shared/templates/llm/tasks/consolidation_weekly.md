@@ -2,9 +2,9 @@
 task: consolidation
 purpose: Weekly summary — collapse a week's daily summaries into a 5-8 sentence narrative (memory_service._consolidate_daily_to_weekly)
 placeholders:
-  week_key: Week key "YYYY-WNN"
+  week_key: Game-calendar week key "Y0002-W016" (a block of game days)
   character_name: Character whose week is being summarized
-  entries_text: Bullet list of "- YYYY-MM-DD: <daily summary>" entries
+  entries_text: Bullet list of "- Y0002-D109: <daily summary>" entries
   lang_instruction: Optional "\nWrite the summary in <Language>." or empty
 ---
 ## system

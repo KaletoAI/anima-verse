@@ -15,13 +15,23 @@ import random
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import utc_now
+from app.core.timeutils import game_time, utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 logger = get_logger("thought")
 
 _thought_runner: Optional["ThoughtRunner"] = None
+
+
+def _char_lang(character_name: str) -> str:
+    """The character's own language — season names in a world date are
+    localized data fields, so they follow it."""
+    try:
+        from app.models.character import get_character_language
+        return get_character_language(character_name) or "de"
+    except Exception:
+        return "de"
 
 
 def _user_notification_tool_names() -> frozenset:
@@ -43,6 +53,13 @@ def _within_max_age(rows: list) -> list:
     the same three duplicates from two days earlier penalise every single turn.
     The window is GAME time, so a frozen world freezes it too.
 
+    Only ``game_ts`` is measured. The row's other stamp, ``ts``, is SYSTEM
+    time — comparing it against a :class:`GameTime` cutoff would mix the two
+    clocks, which is exactly what the calendar rework removes. A row without
+    a usable ``game_ts`` (written before the column existed) is KEPT rather
+    than silently dropped; the entry-count window still bounds how far back
+    such a row can reach.
+
     0 disables the age limit and restores the pure entry-count window.
     """
     from app.core import config
@@ -50,20 +67,20 @@ def _within_max_age(rows: list) -> list:
     max_age = float(config.get("chat.anti_rep_max_age_hours", 12) or 0)
     if max_age <= 0 or not rows:
         return rows
-    from datetime import timedelta
-    from app.core.timeutils import game_now, parse_iso
+    from app.core.game_time import GameDuration, GameTime
+    from app.core.timeutils import game_time
 
-    cutoff = game_now() - timedelta(hours=max_age)
+    cutoff = game_time().minus_clamped(GameDuration.of(hours=max_age))
     fresh = []
     for r in rows:
-        stamp = r.get("game_ts") or r.get("ts")
+        stamp = r.get("game_ts")
         if not stamp:
             fresh.append(r)  # undatable entry: do not silently drop it
             continue
         try:
-            if parse_iso(stamp) >= cutoff:
+            if GameTime.parse(stamp) >= cutoff:
                 fresh.append(r)
-        except Exception:
+        except ValueError:
             fresh.append(r)
     return fresh
 
@@ -308,7 +325,7 @@ class ThoughtRunner:
         _turn_info: Dict[str, Any] = {"tools": [], "intents": [], "preview": "",
                                       "rp_response": "", "tool_response": ""}
 
-        # Character-Daten sammeln
+        # Collect character data
         task = (profile.get("character_task", "") or "").strip()
         location_id = profile.get("current_location", "")
         location_name = get_location_name(location_id) if location_id else "Unbekannt"
@@ -316,8 +333,10 @@ class ThoughtRunner:
                     else (profile.get("pose_flavor")
                           or profile.get("pose_key") or "")) or "Keine"
         feeling = profile.get("current_feeling", "") or "Neutral"
-        now = utc_now()
-        time_of_day = now.strftime("%H:%M")
+        # (No clock is read here: the only consumer is the rp_first tool
+        # context below, which takes time_of_day/game_date out of
+        # load_prompt_data — off the GAME clock. The two locals that used to
+        # sit here came off the SYSTEM clock and were never read.)
 
         # Build LLM and tools (via the router, task from the llm_task
         # parameter, default "thought").
@@ -463,7 +482,8 @@ class ThoughtRunner:
             _ctx_parts.append(
                 f"Character: {character_name}.\n"
                 f"Aufgabe: {_td.get('task', '')}\n"
-                f"Uhrzeit: {_td.get('time_of_day', '')}."
+                f"Uhrzeit: {_td.get('time_of_day', '')} "
+                f"({_td.get('game_date', '')})."
             )
             # Prio 2: Tool-Instruktionen (immer)
             _ctx_parts.append(tool_instr_block)
@@ -874,8 +894,12 @@ class ThoughtRunner:
                 if not clean_content or clean_content.strip().upper() == "SKIP":
                     logger.info("%s: Gedanken-Nachricht nach Bereinigung leer/SKIP — nicht gespeichert", character_name)
                     return _turn_info
+                # Two clocks, two jobs: the stored ``timestamp`` orders the
+                # history and stays SYSTEM time, while the stamp INSIDE the
+                # message text is what the character reads back later — so it
+                # is the world's own date, not a real-world one.
                 ts = utc_now()
-                date_str = ts.strftime("%d.%m.%Y %H:%M")
+                date_str = game_time().label(_char_lang(character_name))
                 from app.models.account import get_player_identity as _get_pi_save
                 save_message({
                     "role": "assistant",

@@ -1,12 +1,16 @@
-"""Activity Engine - Condition-Auswertung, Visibility, Cooldowns, Duration, Triggers.
+"""Activity Engine - condition evaluation, visibility, cooldowns, duration, triggers.
 
-Zentrale Logik fuer erweiterte Spezial-Aktivitaeten.
-Wird von set_activity_skill.py und chat.py genutzt.
+Central logic for the extended special activities.
+Used by set_activity_skill.py and chat.py.
+
+All time here is GAME time (:class:`GameTime`): conditions, daily schedule
+slots and the hourly stat tick are things the world experiences, so they run
+on the game clock, never on system time.
 """
 import re
-from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_now, game_local_now
+from app.core.game_time import GameTime
+from app.core.timeutils import game_time
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -95,53 +99,58 @@ def _evaluate_single_condition_inner(
     if cond == "alone":
         return _check_alone(character_name, location_id)
 
-    # --- night / day mit optionalem Minuten-Offset auf den Startzeitpunkt ---
-    # Beispiele:
-    #   night       — 18:00 bis 06:00
-    #   night-30    — Start 30 Min FRUEHER: 17:30 bis 06:00
-    #   night+30    — Start 30 Min SPAETER: 18:30 bis 06:00
-    #   day         — 06:00 bis 18:00
-    #   day-30      — 05:30 bis 18:00
-    #   day+30      — 06:30 bis 18:00
-    # Der Offset verschiebt nur den START — das Ende bleibt 06:00 bzw. 18:00.
-    # Negativ (-) = Vorbereitungsfenster, positiv (+) = Verzoegerung.
+    # --- night / day with an optional minute offset on the START of the window ---
+    # The window bounds are the SUNSET and SUNRISE of the current season
+    # (world calendar, app/core/game_time.py) — with the default calendar those
+    # are 18:00 / 06:00, so an unconfigured world behaves exactly as before.
+    # Examples (default calendar):
+    #   night       — sunset (18:00) until sunrise (06:00)
+    #   night-30    — starts 30 min EARLIER: 17:30 until sunrise
+    #   night+30    — starts 30 min LATER:   18:30 until sunrise
+    #   day         — sunrise (06:00) until sunset (18:00)
+    #   day-30      — 05:30 until sunset
+    #   day+30      — 06:30 until sunset
+    # The offset shifts only the START — the end stays sunrise resp. sunset.
+    # Negative (-) = preparation window, positive (+) = delay.
     td_match = re.match(r"^(night|day)(?:([+-])(\d+))?$", cond)
     if td_match:
         base = td_match.group(1)
         sign = td_match.group(2) or ""
         offset_min = int(td_match.group(3) or 0)
         if sign == "+":
-            shift = offset_min        # Start spaeter
+            shift = offset_min        # start later
         else:
-            shift = -offset_min       # Start frueher (default fuer "-")
-        now = game_local_now()  # night/day rules follow the game clock
-        now_min = now.hour * 60 + now.minute
+            shift = -offset_min       # start earlier (default for "-")
+        now = game_time()  # night/day rules follow the game clock
+        now_min = now.minutes_of_day
+        sunrise_min = now.sunrise_min
+        sunset_min = now.sunset_min
         lbl_offset = f"{sign}{offset_min}" if offset_min else ""
         if base == "night":
-            start_min = 18 * 60 + shift
-            end_min = 6 * 60
-            # Normalisieren in [0, 1440)
+            start_min = sunset_min + shift
+            end_min = sunrise_min
+            # Normalise into [0, 1440)
             start_min %= 24 * 60
-            # Wrap-Around: night liegt typischerweise um Mitternacht herum.
+            # Wrap-around: night usually spans midnight.
             if start_min < end_min:
-                # Start liegt VOR end_min (z.B. shift gross negativ +
-                # ueberlauf nicht passiert) — ungewoehnlich aber moeglich
+                # Start lies BEFORE end_min (e.g. a large negative shift that
+                # did not wrap) — unusual but possible.
                 in_window = start_min <= now_min < end_min
             else:
-                # Normaler Fall: Fenster spannt ueber Mitternacht
+                # Normal case: the window spans midnight
                 in_window = (now_min >= start_min) or (now_min < end_min)
             if in_window:
                 return True, ""
             return False, f"Nur nachts verfuegbar (night{lbl_offset})"
         else:  # day
-            start_min = 6 * 60 + shift
-            end_min = 18 * 60
+            start_min = sunrise_min + shift
+            end_min = sunset_min
             start_min_norm = start_min % (24 * 60)
             if start_min < 0:
-                # Stark negativer Offset zieht Day-Beginn vor Mitternacht
+                # A strongly negative offset pulls the start before midnight
                 in_window = (now_min >= start_min_norm) or (now_min < end_min)
             elif start_min_norm >= end_min:
-                # Stark positiver Offset oder ueberlauf — Fenster leer
+                # Strongly positive offset or overflow — empty window
                 in_window = False
             else:
                 in_window = start_min_norm <= now_min < end_min
@@ -250,7 +259,7 @@ def _evaluate_single_condition_inner(
                 # Kein aktiver Schedule — schedule-Bedingungen matchen nicht
                 # (weder sleeping noch awake werden erzwungen).
                 return False, "Tagesablauf nicht aktiv"
-            current_hour = game_local_now().hour  # daily schedule = in-game hours
+            current_hour = game_time().hour  # daily schedule = in-game hours
             slot = next((s for s in schedule.get("slots", [])
                          if s.get("hour") == current_hour), None)
             if target in ("sleeping", "sleep"):
@@ -633,13 +642,17 @@ def validate_condition_references(condition: str) -> List[str]:
     return warns
 
 
-def cleanup_expired_conditions(character_name: str) -> int:
-    """Entfernt abgelaufene Conditions (``duration_hours`` ueberschritten) aus
-    ``active_conditions``. Liefert die Anzahl entfernter Conditions.
+# Conditions whose ``started_at`` could not be parsed — warned about once each.
+_UNPARSABLE_CONDITION_STAMPS: set = set()
 
-    Wird sowohl aus ``apply_effects`` (Item/Danger) als auch periodisch
-    (periodic_jobs status_tick) aufgerufen — so klingen Effekte mit Abklingzeit
-    auch ohne neuen Item-/Danger-Trigger zuverlaessig ab.
+
+def cleanup_expired_conditions(character_name: str) -> int:
+    """Remove expired conditions (``duration_hours`` exceeded) from
+    ``active_conditions``. Returns the number of removed conditions.
+
+    Called both from ``apply_effects`` (item/danger) and periodically
+    (periodic_jobs status_tick) — so effects with a cooldown reliably fade
+    even without a new item/danger trigger.
     """
     try:
         from app.models.character import get_character_profile, save_character_profile
@@ -647,7 +660,7 @@ def cleanup_expired_conditions(character_name: str) -> int:
         _conditions = (_prof or {}).get("active_conditions", []) or []
         if not _conditions:
             return 0
-        _now = game_now()  # condition durations are in-world -> game clock
+        _now = game_time()  # condition durations are in-world -> game clock
         _active = []
         for cond in _conditions:
             if not isinstance(cond, dict):
@@ -656,12 +669,26 @@ def cleanup_expired_conditions(character_name: str) -> int:
             duration_h = cond.get("duration_hours", 0)
             if duration_h:
                 try:
-                    started = parse_iso(cond["started_at"])
-                    if (_now - started).total_seconds() > float(duration_h) * 3600:
-                        logger.info("Condition '%s' abgelaufen fuer %s", cond.get("name"), character_name)
-                        continue  # Abgelaufen — nicht behalten
+                    # ``started_at`` is a canonical GAME-time stamp.
+                    started = GameTime.parse(cond["started_at"])
+                    if (_now - started).hours > float(duration_h):
+                        logger.info("Condition '%s' expired for %s",
+                                    cond.get("name"), character_name)
+                        continue  # expired — drop it
                 except (ValueError, KeyError, TypeError):
-                    pass
+                    # Unusable stamp: KEEP the condition (unchanged behaviour —
+                    # a broken stamp must not silently delete state). Logged
+                    # once per condition so a bad stamp is findable without
+                    # spamming the periodic tick.
+                    _warn_key = (character_name, str(cond.get("name") or ""),
+                                 str(cond.get("started_at") or ""))
+                    if _warn_key not in _UNPARSABLE_CONDITION_STAMPS:
+                        _UNPARSABLE_CONDITION_STAMPS.add(_warn_key)
+                        logger.warning(
+                            "Condition '%s' of %s has an unusable started_at "
+                            "(%r) — kept, cannot expire",
+                            cond.get("name"), character_name,
+                            cond.get("started_at"))
             _active.append(cond)
         removed = len(_conditions) - len(_active)
         if removed:
@@ -735,19 +762,20 @@ def apply_effects(character_name: str,
     return changes
 
 
-_LAST_HOURLY_TICK: Dict[str, str] = {}  # key: "character_name" -> ISO timestamp
+# key: "character_name" -> GameTime of the last tick (RAM only, never persisted)
+_LAST_HOURLY_TICK: Dict[str, GameTime] = {}
 
 def apply_hourly_status_tick(character_name: str):
-    """Wendet stuendliche Veraenderung auf alle Status-Werte an.
+    """Apply the hourly change to all status values.
 
-    Liest bar_hourly aus dem Template pro Trait-Feld.
-    Positiv = steigt pro Stunde, negativ = sinkt pro Stunde, 0 = keine Aenderung.
-    Character-Config kann den Template-Wert ueberschreiben via {stat_key}_hourly.
+    Reads ``bar_hourly`` from the template per trait field.
+    Positive = rises per hour, negative = falls per hour, 0 = no change.
+    The character config can override the template value via {stat_key}_hourly.
 
-    Wird vom ThoughtLoop aufgerufen (jede 60s), fuehrt aber nur einmal pro
-    Stunde pro Character die Aenderung durch.
+    Called by the ThoughtLoop (every 60 s), but performs the change only once
+    per GAME hour per character.
     """
-    # Feature-Gate: status_effects aus -> kein Hourly-Tick
+    # Feature gate: status_effects off -> no hourly tick
     try:
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "status_effects_enabled"):
@@ -757,20 +785,14 @@ def apply_hourly_status_tick(character_name: str):
 
     tick_key = character_name
     # Hourly = one GAME hour (factor >1 -> decay ticks faster in real time).
-    now = game_now()
+    now = game_time()
 
-    # Pruefen ob eine Stunde seit dem letzten Tick vergangen ist
-    last_tick_iso = _LAST_HOURLY_TICK.get(tick_key)
-    if last_tick_iso:
-        try:
-            from datetime import timedelta
-            last_tick = parse_iso(last_tick_iso)
-            if (now - last_tick).total_seconds() < 3600:
-                return  # Noch keine Stunde her
-        except (ValueError, TypeError):
-            pass
+    # Check whether a game hour has passed since the last tick
+    last_tick = _LAST_HOURLY_TICK.get(tick_key)
+    if last_tick is not None and (now - last_tick).seconds < 3600:
+        return  # less than an hour ago
 
-    _LAST_HOURLY_TICK[tick_key] = now.isoformat()
+    _LAST_HOURLY_TICK[tick_key] = now
 
     try:
         from app.models.character import get_character_profile, get_character_config, save_character_profile

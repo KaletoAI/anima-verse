@@ -17,11 +17,11 @@ tool call (compliance re-evaluation, partner handling, stat hooks). If the
 verb is unavailable the flag is hard-cleared as a fallback.
 """
 import json
-from datetime import timedelta
 from typing import List
 
+from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
-from app.core.timeutils import parse_iso, game_now
+from app.core.timeutils import game_time
 
 logger = get_logger("flag_lifecycle")
 
@@ -129,7 +129,7 @@ def decay_tick() -> None:
             stamp_state_flag_since)
     except Exception:
         return
-    now = game_now()  # flag durations are in-world -> game clock
+    now = game_time()  # flag durations are in-world -> game clock
     for name in list_available_characters():
         try:
             profile = get_character_profile(name) or {}
@@ -141,14 +141,15 @@ def decay_tick() -> None:
                 set_at = None
                 if ts:
                     try:
-                        set_at = parse_iso(ts)
+                        # ``state_flag_since`` holds canonical GAME-time stamps.
+                        set_at = GameTime.parse(ts)
                     except (ValueError, TypeError):
                         set_at = None
                 if set_at is None:
                     stamp_state_flag_since(name, spec.flag)
                     continue
                 ttl = _ttl_minutes(spec)
-                if now - set_at >= timedelta(minutes=ttl):
+                if now - set_at >= GameDuration.of(minutes=ttl):
                     _clear_via_verb(spec, name, f"ttl {ttl}min")
         except Exception as e:
             logger.debug("decay tick failed for %s: %s", name, e)

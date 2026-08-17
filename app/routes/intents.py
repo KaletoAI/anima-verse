@@ -1,15 +1,15 @@
-"""Intents routes — CRUD API fuer vereinheitlichte Vorhaben & Aufgaben.
+"""Intents routes — CRUD API for unified plans & tasks.
 
-Loest die alten /assignments-Routes ab: human-gesetzte Aufgaben und
-character-eigene Vorhaben leben jetzt in einem Store (siehe
+Replaces the old /assignments routes: human-set tasks and a character's own
+plans now live in one store (see
 development_instructions/plan-intents-unified.md).
 """
-from datetime import timedelta
 from fastapi import APIRouter, HTTPException, Request
 from typing import Any, Dict, List, Optional
 
+from app.core.game_time import GameDuration
 from app.core.log import get_logger
-from app.core.timeutils import utc_now
+from app.core.timeutils import game_time
 from app.models.intents import (
     create_intent, get_intent, list_intents, update_intent,
     delete_intent, cancel_intent, complete_intent, add_progress,
@@ -65,11 +65,15 @@ async def create_route(request: Request) -> Dict[str, Any]:
         trigger = ({"kind": "at_location", "location_id": location_id}
                    if location_id else {"kind": "standing"})
 
+    # An intent's deadline is a WORLD deadline ("finish this within two
+    # hours" means two in-world hours), so it is a canonical GameTime — the
+    # same shape intent_engine._schedule_intent and the migration produce.
     expires_at = (data.get("expires_at") or "").strip()
     dur = data.get("duration_minutes")
     if not expires_at and dur:
         try:
-            expires_at = (utc_now() + timedelta(minutes=int(dur))).isoformat()
+            expires_at = (game_time()
+                          + GameDuration.of(minutes=int(dur))).canonical()
         except Exception:
             expires_at = ""
 

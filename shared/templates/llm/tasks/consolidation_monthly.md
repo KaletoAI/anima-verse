@@ -1,17 +1,18 @@
 ---
 task: consolidation
-purpose: Monthly summary — collapse a month's weekly summaries into a 5-10 sentence narrative (memory_service._consolidate_weekly_to_monthly)
+purpose: Season summary — collapse a season's weekly summaries into a 5-10 sentence narrative (memory_service._consolidate_weekly_to_monthly)
 placeholders:
-  month_key: Month key "YYYY-MM"
-  character_name: Character whose month is being summarized
-  entries_text: Bullet list of "- YYYY-WNN: <weekly summary>" entries
+  season_key: Game-calendar season key "Y0002-S01"
+  season_label: Readable season name ("Winter · Year 2")
+  character_name: Character whose season is being summarized
+  entries_text: Bullet list of "- Y0002-W016: <weekly summary>" entries
   lang_instruction: Optional "\nWrite the summary in <Language>." or empty
 ---
 ## system
 You are a summarization assistant. Summarize ONLY what the material below states — never add, guess or embellish a fact, a motive or a person that is not in it. Reply with ONLY the summary — no JSON, no explanation, no commentary.
 
 ## user
-Summarize the month {{ month_key }} for {{ character_name }}.
+Summarize the season {{ season_label }} ({{ season_key }}) for {{ character_name }}.
 
 Weekly summaries:
 {{ entries_text }}

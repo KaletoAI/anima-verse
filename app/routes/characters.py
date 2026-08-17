@@ -1730,9 +1730,12 @@ def get_character_thoughts(character_name: str, limit: int = 50,
     ``limit`` is capped at 200. ``has_more`` says whether another page exists.
 
     Every row carries both clocks: ``ts`` = SYSTEM time (UTC), ``game_ts`` =
-    GAME time as ISO WITH the world's timezone offset (empty for rows written
-    before the column existed).
+    GAME time as the canonical world-calendar stamp ``Y0002-D109T14:00:00``
+    (empty for rows written before the column existed), plus ``game_label``
+    — the rendered form of that stamp. The server renders, the client only
+    displays; ``game_label`` is empty whenever ``game_ts`` is.
     """
+    from app.core.character_ops import game_label
     from app.models.thought_store import list_thoughts
     from app.models.world import get_location_by_id
     if not get_character_dir(character_name).exists():
@@ -1763,6 +1766,7 @@ def get_character_thoughts(character_name: str, limit: int = 50,
 
     return {"thoughts": [{"ts": r["ts"],
                           "game_ts": r.get("game_ts", "") or "",
+                          "game_label": game_label(r.get("game_ts", "") or ""),
                           **_names(r.get("location_id", ""), r.get("room_id", "")),
                           "present": r.get("present") or [],
                           "nearby": r.get("nearby") or [],
@@ -2543,10 +2547,16 @@ def memory_relationships(character_name: str,
 def memory_history(character_name: str,
                    kind: str = "daily",
                    limit: int = 60,
-                   offset: int = 0) -> Dict[str, Any]:
-    """Tab "Verlauf": daily | weekly | monthly | history | diary | evolution.
+                   offset: int = 0,
+                   lang: str = "en") -> Dict[str, Any]:
+    """Tab "History": daily | weekly | monthly | history | diary | evolution.
 
-    Standard: `daily` (letzte 60 Eintraege ueber alle Partner).
+    Default: `daily` (last 60 entries across all partners).
+
+    ``lang`` picks the language of the readable world-date ``label`` that
+    accompanies every game-calendar key — the server renders it, the client
+    only displays it. Same query-parameter convention as ``/diary`` and
+    ``/events``.
     """
     return character_ops.build_memory_history(
-        character_name, kind=kind, limit=limit, offset=offset)
+        character_name, kind=kind, limit=limit, offset=offset, lang=lang)

@@ -387,8 +387,9 @@ def _drive_consolidation_daily_diary(agent: str, avatar: str) -> PreviewResult:
     Build it via diary.build_daily_summary_input."""
     try:
         from app.models.diary import build_daily_summary_input
-        day = utc_now().date().isoformat()
-        day_text = build_daily_summary_input(agent, day) or ""
+        # No day key: the diary defaults to the current GAME day (a real date
+        # would not select anything — diary days are game days).
+        day_text = build_daily_summary_input(agent) or ""
     except Exception as e:
         return {"ok": False, "output": "",
                 "note": f"build_daily_summary_input failed: {e}"}

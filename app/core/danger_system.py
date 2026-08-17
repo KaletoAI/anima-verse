@@ -8,9 +8,8 @@ Locations koennen folgende Felder haben:
 Zustandswerte (stamina, courage, stress) existieren bereits in
 character_profile["status_effects"] und werden vom activity_engine verwaltet.
 """
-from datetime import datetime
-
-from app.core.timeutils import parse_iso, utc_now
+from app.core.game_time import GameDuration, GameTime
+from app.core.timeutils import game_time
 from typing import Any, Dict, List, Tuple
 
 from app.core.log import get_logger
@@ -210,7 +209,9 @@ def build_status_prompt_section(character_name: str) -> str:
         condition_lines: List[str] = []
         condition_names: List[str] = []
         if active_conditions:
-            now = utc_now()
+            # Conditions run on the WORLD clock: "drunk for 3 hours" means three
+            # in-world hours, and ``started_at`` is a canonical GameTime.
+            now_game = game_time()
             modifiers_config = _load_status_modifiers()
             modifier_by_condition = {}
             for mod in modifiers_config:
@@ -223,10 +224,10 @@ def build_status_prompt_section(character_name: str) -> str:
                 duration_h = cond.get("duration_hours", 0)
                 if duration_h:
                     try:
-                        started = parse_iso(cond["started_at"])
-                        if (now - started).total_seconds() > duration_h * 3600:
-                            continue  # Abgelaufen
-                    except (ValueError, KeyError):
+                        started = GameTime.parse(cond["started_at"])
+                        if (now_game - started) > GameDuration.of(hours=duration_h):
+                            continue  # expired
+                    except (ValueError, KeyError, TypeError):
                         pass
                 cond_name = cond.get("name", "")
                 if not cond_name:
@@ -271,16 +272,16 @@ def build_condition_reminder(character_name: str) -> str:
         if not active:
             return ""
 
-        now = utc_now()
+        now_game = game_time()   # condition lifetimes are WORLD durations
         names: List[str] = []
         for cond in active:
             duration_h = cond.get("duration_hours", 0) or 0
             if duration_h:
                 try:
-                    started = parse_iso(cond["started_at"])
-                    if (now - started).total_seconds() > duration_h * 3600:
+                    started = GameTime.parse(cond["started_at"])
+                    if (now_game - started) > GameDuration.of(hours=duration_h):
                         continue
-                except (ValueError, KeyError):
+                except (ValueError, KeyError, TypeError):
                     pass
             name = (cond.get("name") or "").strip()
             if name:

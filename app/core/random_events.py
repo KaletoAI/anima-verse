@@ -22,7 +22,8 @@ import random
 import re
 from datetime import datetime, timedelta
 
-from app.core.timeutils import parse_iso, utc_now, game_local_now
+from app.core.game_time import GameTime
+from app.core.timeutils import parse_iso, utc_now, game_time
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -86,15 +87,16 @@ def default_event_settings() -> Dict[str, Any]:
 # Public API
 # ---------------------------------------------------------------------------
 
-# Last generator roll in GAME time — the base probability is "per hour",
+# Last generator roll as a GAME stamp — the base probability is "per hour",
 # which means per GAME hour since the game clock exists: with factor 60 an
 # in-game hour passes per real minute and the roll must keep pace. The 60s
 # periodic tick is the natural upper bound on roll frequency.
-_LAST_GENERATE_GAME: list = [None]
+# RAM only (reset on restart), so it holds a GameTime, not a serialized form.
+_LAST_GENERATE_GAME: List[Optional[GameTime]] = [None]
 
 
 def check_and_generate():
-    """Prueft alle besetzten Locations und generiert ggf. Events.
+    """Check every occupied location and generate events where due.
 
     Called from the periodic tick (60s); internally gated to one roll per
     GAME hour (see _LAST_GENERATE_GAME).
@@ -102,13 +104,12 @@ def check_and_generate():
     if not is_enabled():
         return
 
-    from app.core.timeutils import game_now
-    _now_g = game_now()
+    _now_g = game_time()
     _last = _LAST_GENERATE_GAME[0]
     if _last is not None:
-        _delta = (_now_g - _last).total_seconds()
+        _delta = (_now_g - _last).seconds
         if 0 <= _delta < 3600:
-            return  # noch keine Game-Stunde vergangen
+            return  # not a full game hour yet
         # negative delta = game clock was set backwards -> re-anchor
     _LAST_GENERATE_GAME[0] = _now_g
 
@@ -493,18 +494,12 @@ def _generate_event(loc_id: str,
         mood = get_character_current_feeling(c) or ""
         char_infos.append(f"{c} (mood: {mood})" if mood else c)
 
-    # Time of day + clock (in-game)
-    _now = game_local_now()
-    hour = _now.hour
-    current_time = _now.strftime("%H:%M")
-    if 6 <= hour < 12:
-        time_desc = "morning"
-    elif 12 <= hour < 18:
-        time_desc = "afternoon"
-    elif 18 <= hour < 22:
-        time_desc = "evening"
-    else:
-        time_desc = "night"
+    # Clock, date and day bucket from the game clock + world calendar. The
+    # bucket follows the season's sunrise/sunset and the calendar's noon/
+    # evening hours instead of hardcoded 6/12/18/22 boundaries.
+    _now = game_time()
+    current_time = _now.time_hhmm()
+    time_desc = _now.day_bucket()
 
     # Letztes Event (Repeat-Vermeidung)
     last_event = ""
@@ -517,14 +512,17 @@ def _generate_event(loc_id: str,
     cat_info = CATEGORIES.get(category, {})
     cat_desc = cat_info.get("description", category)
 
-    # Sprache des Accounts
+    # Account language
     from app.models.account import get_user_profile
     _profile = get_user_profile()
     _lang = _profile.get("system_language", "de") or "de"
     LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
     lang_name = LANG_NAMES.get(_lang, _lang)
+    # In-world calendar date — the season name is a localized data field, so
+    # it follows the same language as the rest of this prompt.
+    game_date = _now.date_label(_lang)
 
-    # Indoor/Outdoor-Setting der Location als Prompt-Hinweis (leer wenn nicht gesetzt).
+    # Indoor/outdoor setting of the location as a prompt hint (empty if unset).
     indoor_flag = (location.get("indoor") or "").strip().lower()
     if indoor_flag == "indoor":
         setting_block = ("Setting: Indoor (enclosed location — fit interior themes: "
@@ -544,6 +542,7 @@ def _generate_event(loc_id: str,
         category_description=cat_desc,
         current_time=current_time,
         time_of_day=time_desc,
+        game_date=game_date,
         location_description=loc_desc,
         setting_block=setting_block,
         rooms_block=f"Rooms: {', '.join(rooms[:6])}" if rooms else "",
