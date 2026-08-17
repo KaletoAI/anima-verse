@@ -242,7 +242,7 @@ SCHEMA_STATEMENTS = [
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
         kind           TEXT NOT NULL,          -- daily | weekly | monthly | history
-        date_key       TEXT NOT NULL,          -- YYYY-MM-DD oder ISO-Week
+        date_key       TEXT NOT NULL,          -- game calendar key: Y0002-D109 (daily) | Y0002-W016 (weekly) | Y0002-S01 (monthly/season); literal 'current' for kind='history'
         partner        TEXT NOT NULL DEFAULT '', -- Konversationspartner (Charaktername) — leer fuer kind='history' (sliding window)
         content        TEXT NOT NULL,
         meta           TEXT DEFAULT '{}',
@@ -758,8 +758,31 @@ ALTER_MIGRATIONS = [
     ("thoughts", "present", "TEXT DEFAULT ''"),
     # thoughts: game time at thought creation (the game clock cannot be derived
     # from ts retroactively — anchors re-anchor on set/factor/freeze).
-    # Stored as ISO WITH world-timezone offset (game_local_now().isoformat()).
+    # Stored as a canonical GameTime string (``Y0002-D109T14:23:45``).
     ("thoughts", "game_ts", "TEXT DEFAULT ''"),
+    # memories: game time the memory was formed at (canonical GameTime). The
+    # ts column stays SYSTEM time (ordering, decay, technical bookkeeping);
+    # everything the LLM reads ("today 14:20", "3 days ago") comes off game_ts,
+    # because a real date has no business inside the world. Old rows are
+    # backfilled once by app/core/game_calendar_migration.py (group
+    # ``memories``); a row that stays empty simply gets no time prefix.
+    ("memories", "game_ts", "TEXT DEFAULT ''"),
+    # events: game time the event started (canonical GameTime). ts stays the
+    # SYSTEM stamp for ordering; the prompt/UI time of an event is game time,
+    # and so is its TTL (``expires_at``) — a storm lasting two hours means two
+    # WORLD hours. Backfilled by the ``events`` migration group.
+    ("events", "game_ts", "TEXT DEFAULT ''"),
+    # state_history: game time of the state change (canonical GameTime). ts
+    # stays the SYSTEM stamp (ordering, ring-buffer trimming); the hour the
+    # character is TOLD about ("Recently experienced" in the system prompt) is
+    # world time, so it comes off game_ts. Backfilled by the ``state_history``
+    # migration group; a row that stays empty simply gets no time shown.
+    ("state_history", "game_ts", "TEXT DEFAULT ''"),
+    # diary_entries: the game day the entry belongs to (canonical GameTime).
+    # A diary date is in-world content, so it is dated by game day
+    # (``Y0002-D109``), not by the server's calendar. Backfilled by the
+    # ``diary`` migration group.
+    ("diary_entries", "game_ts", "TEXT DEFAULT ''"),
     # thoughts: characters in OTHER rooms of the location at thought time
     # (JSON list of "Name (room)" snapshots, room names frozen at write time).
     # Makes "same building, different room" visible in the admin journal.

@@ -996,6 +996,114 @@ SECTIONS = {
             },
         },
     },
+    "game_calendar": {
+        "label": "Game calendar",
+        "icon": "🗓️",
+        "fields": {
+            "_calendar_note": {"type": "note", "text": (
+                "Game time is a WORLD calendar of seasons and days — there are "
+                "no real dates, no months and no timezone in it. A point in "
+                "game time is a count of seconds since Year 1, Day 1, 00:00, "
+                "and season/day/hour are derived from the calendar below.\n"
+                "Changing season lengths therefore RE-LABELS existing "
+                "timestamps: the stored seconds stay untouched, so every "
+                "distance (travel times, flag lifetimes, memory windows) is "
+                "preserved — but an old stamp may now read as a different "
+                "season or day.")},
+            "week_days": {
+                "type": "str",
+                "label": "Weekday names",
+                "default": "",
+                "description": "Comma-separated weekday names, e.g. "
+                               "'Moonday, Sunday, Fireday'. Empty = the world "
+                               "has no weeks: no weekday in labels or prompts, "
+                               "and schedules cannot use a weekday field. The "
+                               "week length is simply the number of names.",
+            },
+            "year_label": {
+                "type": "str",
+                "label": "Year label",
+                "default": "Year {n}",
+                "description": "Display pattern for the year, '{n}' is the "
+                               "1-based year number. Empty = the year is "
+                               "hidden everywhere (labels then read "
+                               "'Summer, day 17 · 14:23').",
+            },
+            "day_bucket_noon": {
+                "type": "int",
+                "label": "Morning ends at (hour)",
+                "default": 12,
+                "min": 0,
+                "max": 23,
+                "description": "Boundary morning → afternoon INSIDE daylight. "
+                               "Night is decided first, by the season's "
+                               "sunrise/sunset — these two hours only split "
+                               "the lit part of the day into morning / "
+                               "afternoon / evening.",
+            },
+            "day_bucket_evening": {
+                "type": "int",
+                "label": "Afternoon ends at (hour)",
+                "default": 17,
+                "min": 0,
+                "max": 23,
+                "description": "Boundary afternoon → evening inside daylight. "
+                               "Should be later than 'Morning ends at'; from "
+                               "the season's sunset onwards the bucket is "
+                               "'night' regardless.",
+            },
+        },
+    },
+    "game_seasons": {
+        "label": "Game calendar — seasons",
+        "icon": "🗓️",
+        "nav_sub": True,
+        "is_array": True,
+        "item_label_field": "name",
+        "fields": {
+            "key": {
+                "type": "str",
+                "label": "Key",
+                "required": True,
+                "description": "Stable id referenced by rules and schedules "
+                               "(e.g. 'summer'). Renaming it breaks every "
+                               "rule that names the season — change the "
+                               "display name instead.",
+            },
+            "name": {
+                "type": "str",
+                "label": "Name",
+                "required": True,
+                "description": "Display name shown in labels and prompts. "
+                               "Localizable via name_<lang> fields.",
+            },
+            "days": {
+                "type": "int",
+                "label": "Days",
+                "default": 30,
+                "min": 1,
+                "max": 1000,
+                "description": "Length of this season in game days. The year "
+                               "length is the sum over all seasons.",
+            },
+            "sunrise": {
+                "type": "str",
+                "label": "Sunrise (HH:MM)",
+                "default": "06:00",
+                "description": "Start of daylight in this season — used by "
+                               "night/day rules, the day bucket and the 3D "
+                               "lighting. Invalid values fall back to 06:00.",
+            },
+            "sunset": {
+                "type": "str",
+                "label": "Sunset (HH:MM)",
+                "default": "18:00",
+                "description": "End of daylight in this season. From this "
+                               "time on it is night again. Invalid values "
+                               "fall back to 18:00.",
+            },
+        },
+    },
 }
 
 

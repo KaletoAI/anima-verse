@@ -108,6 +108,19 @@ async def lifespan(app: FastAPI):
     from app.models.world import migrate_location_ids
     migrate_location_ids()
 
+    # World calendar: the game clock stopped being a datetime. Every persisted
+    # GAME stamp (clock anchor, sleep starts, thought game_ts, condition /
+    # state-flag / journey stamps, scheduler + intent run dates) is rewritten
+    # ONCE into the canonical GameTime form. Idempotent by format — an already
+    # migrated world converts nothing. See plan-game-calendar.md §2.4.
+    try:
+        from app.core.game_calendar_migration import migrate_game_calendar_once
+        _gc = migrate_game_calendar_once()
+        if any(_gc.values()):
+            logger.info("Game calendar migration: %s", _gc)
+    except Exception as _gce:
+        logger.warning("game calendar migration failed: %s", _gce)
+
     # 3D-Massstab: EIN Rahmen (das Bezugsquadrat = der Fussabdruck der
     # Location, Kante map3d.plan_width_m) + EIN Skalierungsfaktor.
     # Traegt plan_width_m/storey_height_m aus den alten Modell-Feldern

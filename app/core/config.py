@@ -1003,7 +1003,26 @@ def load(config_path: Optional[Path] = None) -> dict:
     if _BOOT_RESTART_SNAPSHOT is None:
         _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
 
+    _invalidate_config_derived_caches()
     return _CONFIG
+
+
+def _invalidate_config_derived_caches() -> None:
+    """Drop module caches that were built FROM this config.
+
+    The world calendar (`game_calendar`/`game_seasons`) is cached in
+    `app.core.game_time` and the game-clock anchors in `app.core.timeutils`;
+    both must follow an admin save immediately, or the header keeps showing
+    seasons the config no longer has. Imported lazily — those modules import
+    config themselves.
+    """
+    try:
+        from app.core.game_time import invalidate_calendar_cache
+        invalidate_calendar_cache()
+        from app.core import timeutils
+        timeutils.invalidate_game_clock_cache()
+    except Exception as e:   # never let a cache reset break load/save
+        logger.debug("cache invalidation after config change failed: %s", e)
 
 
 def _collect_restart_values(cfg: dict) -> dict:
@@ -1176,6 +1195,7 @@ def save(data: dict, config_path: Optional[Path] = None) -> None:
             pass
 
     _CONFIG = data
+    _invalidate_config_derived_caches()
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
