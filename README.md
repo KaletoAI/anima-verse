@@ -308,8 +308,8 @@ worlds/{world}/
 ```
 
 Cross-world, read-only resources shared by every world live under `shared/` (character/expression/
-pose/soul templates, LLM prompt templates, item catalog, activity definitions, world-dev JSON
-schemas). Model binaries fetched by `fetch_models.sh` live under `models/` (gitignored).
+pose/soul templates, LLM prompt templates, item catalog, activity definitions, world-dev prompt
+specifications — `character`, `location`, `map`). Model binaries fetched by `fetch_models.sh` live under `models/` (gitignored).
 
 The repository ships a pre-populated `demo/` world as a starter; `worlds/demo/` **is** tracked in
 git. Pass `--world <new-name>` to begin from a clean slate — the directory is created on first

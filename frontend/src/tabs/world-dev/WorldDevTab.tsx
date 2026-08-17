@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ModelPicker, type PickerOption } from '../../components/ModelPicker'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
 import { usePersistentState } from '../../lib/usePersistentState'
+import {
+  MapDraftPreview,
+  type MapDraftCounts, type MapDraftWarning, type MapPreviewResponse,
+} from './MapDraftPreview'
 
 interface ModelEntry {
   name: string
@@ -49,6 +54,46 @@ interface TemplateInfo {
   name: string
   label: string
 }
+
+/**
+ * The map schema is the one type that is not applied through a per-type
+ * `/apply-*` route: a map draft is a whole LAYOUT, so it gets its own
+ * preview → apply → restore triple (`plan-freie-weltkarte-e10-…`, § 2.3) and
+ * its own inline picture (`MapDraftPreview`) instead of an Apply button next
+ * to the extracted JSON.
+ *
+ * `mode` is shared with the other schemas on purpose. It carries the same two
+ * values there (`new` / `edit`) and means the same thing — start from nothing
+ * or start from what exists — only the target differs: a location/character
+ * picks ONE record via `edit_location_id`, a map has exactly one map, so the
+ * server injects the existing one and no target select appears.
+ */
+const MAP_SCHEMA = 'map'
+
+/** How a map draft is written into the world. `merge` adds its areas next to
+ *  what is there; `replace_terrain` clears the painted ground AND the relief
+ *  first (placements are never cleared — only the listed ones move). */
+type ApplyMode = 'merge' | 'replace_terrain'
+
+interface ApplyMapResponse {
+  status?: string
+  applied?: MapDraftCounts
+  warnings?: MapDraftWarning[]
+  snapshot_id?: string
+}
+
+/** One entry of `GET /world-dev/map-snapshots` — the undo the map editor
+ *  itself does not have. */
+interface MapSnapshot {
+  id: string
+  created_at?: string
+  counts?: Partial<MapDraftCounts>
+}
+
+/** What a confirmation modal is about. `null` = no modal. */
+type PendingAction =
+  | { kind: 'apply'; mode: ApplyMode }
+  | { kind: 'restore'; snapshotId: string }
 
 export function WorldDevTab() {
   const { t } = useI18n()
@@ -102,6 +147,20 @@ export function WorldDevTab() {
   const [draft, setDraft] = usePersistentState('worlddev.draft', '')
   const [usage, setUsage] = usePersistentState<UsageStats | null>('worlddev.usage', null)
 
+  // The map draft lives next to `extracted`, not inside it: it is applied
+  // through its own route with its own confirmation, so a generic
+  // "Apply map_data" button would write a whole world layout on one click.
+  const [mapDraft, setMapDraft] = usePersistentState<Record<string, unknown> | null>(
+    'worlddev.mapDraft', null)
+  const [preview, setPreview] = useState<MapPreviewResponse | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+  const [snapshots, setSnapshots] = useState<MapSnapshot[]>([])
+  const [snapshotId, setSnapshotId] = useState('')
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+  const [applying, setApplying] = useState(false)
+  const [applied, setApplied] = useState(false)
+
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -149,6 +208,10 @@ export function WorldDevTab() {
     setExtracted({})
     setDraft('')
     setUsage(null)
+    setMapDraft(null)
+    setPreview(null)
+    setPreviewError('')
+    setApplied(false)
   }, [])
 
   const send = useCallback(async () => {
@@ -179,7 +242,11 @@ export function WorldDevTab() {
           message: userMsg,
           schema,
           character_template: schema === 'character' ? template : '',
-          edit_location_id: mode === 'edit' ? editTarget : '',
+          // The map has exactly one instance, so it takes the mode itself
+          // ("new" = draw from scratch, "edit" = the server injects the
+          // existing map) and never an edit target.
+          mode: schema === MAP_SCHEMA ? mode : undefined,
+          edit_location_id: mode === 'edit' && schema !== MAP_SCHEMA ? editTarget : '',
           context_location_ids: Array.from(contextLocations),
           context_character_names: Array.from(contextCharacters),
         }),
@@ -196,6 +263,7 @@ export function WorldDevTab() {
       let buffer = ''
       let acc = ''
       const localExtracted: ExtractedData = {}
+      let localMap: Record<string, unknown> | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -238,6 +306,12 @@ export function WorldDevTab() {
             ] as const) {
               if (evt[k]) localExtracted[k] = evt[k]
             }
+            // The map block arrives like every other extracted type, but is
+            // kept out of `extracted` — it has its own preview and its own
+            // apply (see MAP_SCHEMA).
+            if (evt.map_data && typeof evt.map_data === 'object') {
+              localMap = evt.map_data as Record<string, unknown>
+            }
           } catch {
             /* drop malformed chunks */
           }
@@ -247,6 +321,12 @@ export function WorldDevTab() {
       setMessages((prev) => [...prev, { role: 'assistant', content: acc }])
       setPending('')
       setExtracted(localExtracted)
+      if (localMap) {
+        // A new draft supersedes the previous one — and the "applied" state
+        // with it, so the map-editor link never points at an older result.
+        setMapDraft(localMap)
+        setApplied(false)
+      }
     } catch (e) {
       toast(t('Chat failed') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -350,6 +430,109 @@ export function WorldDevTab() {
     }
   }, [extracted, schema, model, provider, validateModel, validateProvider, t, toast])
 
+  /* ------------------------------------------------------------- map draft */
+
+  const isMap = schema === MAP_SCHEMA
+
+  // Every new draft is normalised by the SERVER before it is drawn: line
+  // recipes widened, unknown kinds dropped, coordinates clamped, warnings
+  // collected. The picture must show what an apply would write, so the
+  // preview never renders the raw model JSON.
+  useEffect(() => {
+    if (!mapDraft) { setPreview(null); setPreviewError(''); return }
+    let cancelled = false
+    setPreviewing(true)
+    setPreviewError('')
+    apiPost<MapPreviewResponse>('/world-dev/preview-map', { map_data: mapDraft })
+      .then((res) => {
+        if (cancelled) return
+        setPreview(res)
+      })
+      .catch((e: Error) => {
+        if (cancelled) return
+        setPreview(null)
+        setPreviewError(e.message)
+      })
+      .finally(() => { if (!cancelled) setPreviewing(false) })
+    return () => { cancelled = true }
+  }, [mapDraft])
+
+  const loadSnapshots = useCallback(async () => {
+    try {
+      const list = await apiGet<MapSnapshot[]>('/world-dev/map-snapshots')
+      setSnapshots(Array.isArray(list) ? list : [])
+    } catch {
+      // A world that never applied a map has no snapshot store yet — an empty
+      // list is the honest answer, not an error the user can act on.
+      setSnapshots([])
+    }
+  }, [])
+
+  // The snapshot list is read only while the map schema is selected: it is a
+  // per-world store that nothing else in this tab touches.
+  useEffect(() => { if (isMap) void loadSnapshots() }, [isMap, loadSnapshots])
+
+  const runApply = useCallback(async (applyMode: ApplyMode) => {
+    if (!mapDraft) return
+    setApplying(true)
+    try {
+      const res = await apiPost<ApplyMapResponse>('/world-dev/apply-map', {
+        map_data: mapDraft,
+        mode: applyMode,
+        snapshot: true,
+      })
+      const a = res.applied
+      toast(a
+        ? t('Applied {a} areas, {h} height areas, {p} positions')
+          .replace('{a}', String(a.areas ?? 0))
+          .replace('{h}', String(a.heights ?? 0))
+          .replace('{p}', String(a.positions ?? 0))
+        : t('Applied'), 'success')
+      setApplied(true)
+      await loadSnapshots()
+      if (res.snapshot_id) setSnapshotId(res.snapshot_id)
+    } catch (e) {
+      toast(t('Apply failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setApplying(false)
+    }
+  }, [loadSnapshots, mapDraft, t, toast])
+
+  const runRestore = useCallback(async (id: string) => {
+    if (!id) return
+    setApplying(true)
+    try {
+      const res = await apiPost<{ restored?: MapDraftCounts }>(
+        '/world-dev/map-restore', { snapshot_id: id })
+      const r = res.restored
+      toast(r
+        ? t('Restored {a} areas, {h} height areas, {p} positions')
+          .replace('{a}', String(r.areas ?? 0))
+          .replace('{h}', String(r.heights ?? 0))
+          .replace('{p}', String(r.positions ?? 0))
+        : t('Snapshot restored'), 'success')
+      setApplied(true)
+    } catch (e) {
+      toast(t('Restore failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setApplying(false)
+    }
+  }, [t, toast])
+
+  /** The map editor is a tab of this very SPA — switching means setting the
+   *  hash the shell listens on (`App.readHashTab`), not a page load. */
+  const openMapEditor = useCallback(() => {
+    window.location.hash = '#/map'
+  }, [])
+
+  const confirmPending = useCallback(() => {
+    const action = pendingAction
+    setPendingAction(null)
+    if (!action) return
+    if (action.kind === 'apply') void runApply(action.mode)
+    else void runRestore(action.snapshotId)
+  }, [pendingAction, runApply, runRestore])
+
   const targetOptions = useMemo(() => {
     if (schema === 'character') return characters.map((c) => ({ id: c.name, label: c.display_name || c.name }))
     return locations.map((l) => ({ id: l.id, label: l.name || l.id }))
@@ -433,8 +616,11 @@ export function WorldDevTab() {
             }}
             title={t('Mode')}
           >
-            <option value="new">{t('Create new')}</option>
-            <option value="edit">{t('Edit')}</option>
+            {/* Same two values everywhere — only the wording follows the
+                subject: a map is drawn from scratch or reworked, a record is
+                created or edited. */}
+            <option value="new">{isMap ? t('New map') : t('Create new')}</option>
+            <option value="edit">{isMap ? t('Edit existing map') : t('Edit')}</option>
           </select>
           <select
             className="ga-input ga-wd-compact-select"
@@ -465,7 +651,8 @@ export function WorldDevTab() {
               ))}
             </select>
           ) : null}
-          {mode === 'edit' ? (
+          {/* A map has exactly one instance — there is nothing to pick. */}
+          {mode === 'edit' && !isMap ? (
             <select
               className="ga-input ga-wd-target-select"
               value={editTarget}
@@ -574,6 +761,83 @@ export function WorldDevTab() {
         ) : null}
       </div>
 
+      {isMap ? (
+        <div className="ga-wd-extracted">
+          <div className="ga-form-section-label">{t('Map draft')}</div>
+          {previewing ? (
+            <div className="ga-form-hint">{t('Checking the draft…')}</div>
+          ) : null}
+          {previewError ? (
+            <div className="ga-form-hint" style={{ color: '#f85149' }}>
+              {t('Preview failed')}: {previewError}
+            </div>
+          ) : null}
+          {!mapDraft && !previewing ? (
+            <div className="ga-form-hint">
+              {t('Describe the layout in the chat — the draft appears here as a map.')}
+            </div>
+          ) : null}
+          {preview ? (
+            <MapDraftPreview
+              normalized={preview.normalized}
+              warnings={preview.warnings || []}
+              counts={preview.counts}
+            />
+          ) : null}
+          <div className="ga-form-row" style={{ marginTop: 6 }}>
+            <button
+              className="ga-btn ga-btn-primary ga-btn-sm"
+              disabled={!preview || applying}
+              onClick={() => setPendingAction({ kind: 'apply', mode: 'merge' })}
+              title={t('Add the draft next to what the world already has')}
+            >
+              {t('Apply (merge)')}
+            </button>
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!preview || applying}
+              onClick={() => setPendingAction({ kind: 'apply', mode: 'replace_terrain' })}
+              title={t('Clear all painted ground and relief first, then write the draft')}
+            >
+              {t('Apply (replace terrain)')}
+            </button>
+            {applied ? (
+              <button className="ga-btn ga-btn-sm" onClick={openMapEditor}>
+                {t('Open in map editor')}
+              </button>
+            ) : null}
+          </div>
+          <div className="ga-form-row" style={{ marginTop: 4 }}>
+            <span className="ga-wd-context-label" style={{ flex: '0 0 auto' }}>
+              {t('Snapshots')}
+            </span>
+            <select
+              className="ga-input ga-wd-target-select"
+              value={snapshotId}
+              onChange={(e) => setSnapshotId(e.target.value)}
+              title={t('A snapshot of the whole map is taken before every apply')}
+            >
+              <option value="">— {t('select snapshot')} —</option>
+              {snapshots.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {(s.created_at || s.id)
+                    + (s.counts
+                      ? ` · ${s.counts.areas ?? 0}/${s.counts.heights ?? 0}/${s.counts.positions ?? 0}`
+                      : '')}
+                </option>
+              ))}
+            </select>
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!snapshotId || applying}
+              onClick={() => setPendingAction({ kind: 'restore', snapshotId })}
+            >
+              {t('Restore snapshot')}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {Object.keys(extracted).length > 0 ? (
         <div className="ga-wd-extracted">
           <div className="ga-form-section-label">{t('Extracted JSON')}</div>
@@ -631,6 +895,114 @@ export function WorldDevTab() {
           {streaming ? t('…') : t('Send')}
         </button>
       </div>
+
+      {pendingAction ? (
+        <ConfirmMapAction
+          action={pendingAction}
+          counts={preview?.counts}
+          warningCount={preview?.warnings?.length || 0}
+          snapshots={snapshots}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={confirmPending}
+        />
+      ) : null}
     </div>
+  )
+}
+
+/**
+ * The one confirmation of the map flow — a real dialog, portalled to
+ * `document.body`. No native browser dialog: the app builds its own inputs and
+ * confirmations, and a native box could not carry the numbers below.
+ *
+ * It states WHAT will be written, and that a snapshot is taken first, because
+ * the map editor itself has no undo — the snapshot is the only way back.
+ */
+function ConfirmMapAction({
+  action, counts, warningCount, snapshots, onCancel, onConfirm,
+}: {
+  action: PendingAction
+  counts?: MapDraftCounts
+  warningCount: number
+  snapshots: MapSnapshot[]
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const { t } = useI18n()
+  const isRestore = action.kind === 'restore'
+  const snap = isRestore
+    ? snapshots.find((s) => s.id === action.snapshotId) : undefined
+  const title = isRestore
+    ? t('Restore this snapshot?')
+    : action.mode === 'replace_terrain'
+      ? t('Replace the terrain with this draft?')
+      : t('Merge this draft into the map?')
+
+  return createPortal(
+    <div className="ga-modal-backdrop" onClick={onCancel}>
+      <div
+        className="ga-modal"
+        role="dialog"
+        aria-label={title}
+        style={{ maxWidth: 520, width: 'min(520px, 92vw)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ga-modal-header">
+          <span>{title}</span>
+          <button type="button" className="ga-modal-close" onClick={onCancel}>×</button>
+        </div>
+        <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {isRestore ? (
+            <>
+              <div>
+                {t('The whole map is set back to the snapshot: painted ground, relief and every position it recorded.')}
+              </div>
+              <div className="ga-form-hint">
+                {snap?.created_at || action.snapshotId}
+                {snap?.counts
+                  ? ` · ${t('{a} areas · {h} height areas · {p} positions')
+                    .replace('{a}', String(snap.counts.areas ?? 0))
+                    .replace('{h}', String(snap.counts.heights ?? 0))
+                    .replace('{p}', String(snap.counts.positions ?? 0))}`
+                  : ''}
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                {t('This writes {a} terrain areas, {h} height areas and {p} location positions into the world.')
+                  .replace('{a}', String(counts?.areas ?? 0))
+                  .replace('{h}', String(counts?.heights ?? 0))
+                  .replace('{p}', String(counts?.positions ?? 0))}
+              </div>
+              {action.mode === 'replace_terrain' ? (
+                <div style={{ color: '#d29922' }}>
+                  {t('Every existing terrain area and height area is deleted first. Location positions are kept — only the listed places move.')}
+                </div>
+              ) : null}
+              {warningCount > 0 ? (
+                <div className="ga-form-hint">
+                  {t('{n} warnings are still open — they do not block the apply.')
+                    .replace('{n}', String(warningCount))}
+                </div>
+              ) : null}
+              <div className="ga-form-hint">
+                {t('A snapshot of the current map is taken first, so you can restore it from the list below.')}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="ga-modal-footer"
+          style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onCancel}>
+            {t('Cancel')}
+          </button>
+          <button type="button" className="ga-btn ga-btn-primary ga-btn-sm" onClick={onConfirm}>
+            {isRestore ? t('Restore') : t('Apply')}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }

@@ -240,6 +240,168 @@ def _format_context_characters(character_names: list) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Map schema context — the four placeholders `map.md` carries (E10 task 1).
+# Everything the model needs to draw a map it cannot guess: which ground kinds
+# exist in THIS world, which places may be positioned and how big they are,
+# how far the world reaches today, and (edit mode) what is already painted.
+# ---------------------------------------------------------------------------
+
+def _format_terrain_kinds() -> str:
+    """`{terrain_kinds}` — the world's EFFECTIVE terrain catalog as a list.
+
+    Passability is spelled out in words rather than as a flag: it is the one
+    property that makes a placement wrong, and "impassable" has to survive
+    being skim-read.
+    """
+    from app.core.terrain_types import effective_catalog
+    lines: List[str] = []
+    for kind, entry in sorted(effective_catalog().items()):
+        name = str(entry.get("name") or kind)
+        passable = bool(entry.get("passable", True))
+        try:
+            speed = float(entry.get("speed_factor", 1.0))
+        except (TypeError, ValueError):
+            speed = 1.0
+        lines.append(f"- `{kind}` — {name}, "
+                     f"{'passable' if passable else '**IMPASSABLE**'}, "
+                     f"walking pace ×{speed:g}")
+    return "\n".join(lines) or "No terrain kinds configured."
+
+
+def _format_placeable_locations(location_ids: Optional[List[str]] = None) -> str:
+    """`{placeable_locations}` — the places the model may position.
+
+    Only EXISTING locations (decision D1): creating places is the `location`
+    schema's job, so the map task never invents one. ``location_ids`` narrows
+    the list to what the user ticked in the UI; None offers all of them.
+
+    The footprint edge comes from ``location_model3d.derive_plan_width_m`` —
+    the ONE scale-anchor function ``world_geometry.placed_footprint`` and the
+    overlap warning use too, so the number the model is told to keep apart is
+    the number it is later measured against.
+    """
+    from app.core.location_model3d import derive_plan_width_m
+    from app.models.world import list_locations
+
+    wanted = set(location_ids or [])
+    lines: List[str] = []
+    for loc in list_locations():
+        loc_id = loc.get("id") or ""
+        if wanted and loc_id not in wanted:
+            continue
+        width = derive_plan_width_m(loc_id, loc.get("map3d"))
+        px, pz = loc.get("pos_x"), loc.get("pos_z")
+        if px is None or pz is None:
+            where = "unplaced"
+        else:
+            where = (f"currently at x={float(px):g}, z={float(pz):g}, "
+                     f"yaw {float(loc.get('yaw_deg') or 0.0):g}°")
+        indoor = str(loc.get("indoor") or "").strip() or "unspecified"
+        size = f"footprint {width:g} m" if width > 0 else "footprint not set"
+        desc = " ".join(str(loc.get("description") or "").split())
+        if len(desc) > 160:
+            desc = desc[:160].rstrip() + "…"
+        parts = [f"`{loc_id}` — **{loc.get('name') or loc_id}**",
+                 size, indoor, where]
+        line = " · ".join(parts)
+        if desc:
+            line += f"\n  {desc}"
+        lines.append(f"- {line}")
+    if not lines:
+        return ("No locations available — create places with the `location` "
+                "schema first, then come back to lay out the map.")
+    return "\n".join(lines)
+
+
+def _format_world_bounds() -> str:
+    """`{world_bounds}` — how far the world reaches today, in metres."""
+    from app.core.map_layout_apply import current_world_bounds
+    box = current_world_bounds()
+    if not box:
+        return ("The world has no extent yet — nothing is painted and no place "
+                "is positioned. Propose your own `bounds`; a few hundred metres "
+                "per side is a village, a few thousand a region.")
+    span_x = box["max_x"] - box["min_x"]
+    span_z = box["max_z"] - box["min_z"]
+    return (f"The world currently spans x {box['min_x']:g} … {box['max_x']:g} "
+            f"and z {box['min_z']:g} … {box['max_z']:g} metres "
+            f"({span_x:g} × {span_z:g} m). Stay inside this box, or declare a "
+            f"larger one in `bounds` and stay inside that.")
+
+
+def _format_existing_map() -> str:
+    """`{existing_map}` — the map as it stands, simplified (edit mode only).
+
+    Polygons are boiled down to at most 12 points
+    (``map_layout_apply.simplify_polygon``): the model has to recognise the
+    shapes it is asked to change, not reproduce them to the centimetre, and a
+    full map at 256 points per area would be most of the prompt.
+    """
+    from app.core.map_layout_apply import SIMPLIFY_MAX_POINTS, simplify_polygon
+    from app.core.location_model3d import derive_plan_width_m
+    from app.models.heightfield import list_height_areas
+    from app.models.terrain import list_areas
+    from app.models.world import list_locations
+
+    def _pts(polygon: Any) -> str:
+        simple = simplify_polygon(polygon, SIMPLIFY_MAX_POINTS)
+        return json.dumps([[round(x, 1), round(z, 1)] for x, z in simple])
+
+    blocks: List[str] = []
+
+    area_lines: List[str] = []
+    for area in list_areas():
+        meta = area.get("meta") if isinstance(area.get("meta"), dict) else {}
+        label = str(meta.get("label") or "").strip()
+        stroke = meta.get("stroke") if isinstance(meta.get("stroke"), dict) else None
+        head = f"- `{area.get('kind')}`"
+        if label:
+            head += f" \"{label}\""
+        head += f" (z_order {area.get('z_order', 0)})"
+        if stroke:
+            line = simplify_polygon(stroke.get("points"), SIMPLIFY_MAX_POINTS) \
+                or [[round(float(p[0]), 1), round(float(p[1]), 1)]
+                    for p in (stroke.get("points") or [])]
+            head += (f" — stroke width {stroke.get('width_m')} m, style "
+                     f"{stroke.get('style') or 'straight'}, centre line "
+                     + json.dumps([[round(x, 1), round(z, 1)] for x, z in line]))
+        else:
+            head += " — polygon " + _pts(area.get("polygon"))
+        area_lines.append(head)
+    blocks.append("### Painted areas\n\n"
+                  + ("\n".join(area_lines) if area_lines
+                     else "None — nothing is painted yet."))
+
+    height_lines: List[str] = []
+    for h in list_height_areas():
+        meta = h.get("meta") if isinstance(h.get("meta"), dict) else {}
+        label = str(meta.get("label") or "").strip()
+        head = "- " + (f"\"{label}\" " if label else "")
+        head += (f"height {h.get('height_m')} m, falloff "
+                 f"{h.get('falloff_m')} m — polygon " + _pts(h.get("polygon")))
+        height_lines.append(head)
+    blocks.append("### Height areas\n\n"
+                  + ("\n".join(height_lines) if height_lines
+                     else "None — the ground is flat."))
+
+    place_lines: List[str] = []
+    for loc in list_locations():
+        px, pz = loc.get("pos_x"), loc.get("pos_z")
+        if px is None or pz is None:
+            continue
+        width = derive_plan_width_m(loc.get("id") or "", loc.get("map3d"))
+        place_lines.append(
+            f"- `{loc.get('id')}` **{loc.get('name') or ''}** at "
+            f"x={float(px):g}, z={float(pz):g}, yaw "
+            f"{float(loc.get('yaw_deg') or 0.0):g}°"
+            + (f", footprint {width:g} m" if width > 0 else ""))
+    blocks.append("### Placed locations\n\n"
+                  + ("\n".join(place_lines) if place_lines
+                     else "None — no place is positioned yet."))
+    return "\n\n".join(blocks)
+
+
 def _extract_json_block(text: str, block_type: str) -> Dict[str, Any] | None:
     """Extracts a JSON from ```json:<block_type> ... ``` code blocks."""
     import re
@@ -356,6 +518,14 @@ def _extract_character_json(text: str) -> Dict[str, Any] | None:
     return _extract_json_block(text, "character")
 
 
+def _extract_map_json(text: str) -> Dict[str, Any] | None:
+    """```json:map ... ``` — a whole map layout (terrain, heights, placements).
+
+    Expects: {summary, bounds?, terrain_areas[], height_areas[], locations[]}
+    """
+    return _extract_json_block(text, "map")
+
+
 # Sub-Block-Extraktoren fuer granulare Updates (LLM muss nicht das gesamte
 # Character-JSON neu generieren wenn nur ein Outfit / eine Soul-Section /
 # einzelne Profil-Felder geaendert werden sollen).
@@ -409,6 +579,10 @@ async def world_dev_chat(request: Request):
     character_template = data.get("character_template", "")
     user_id = data.get("user_id", "")
     edit_location_id = data.get("edit_location_id", "")
+    # `map` schema only: "new" starts from an empty sheet, "edit" hands the
+    # model the map as it stands (decision D5 — without it the iteration
+    # breaks off after the first apply).
+    map_mode = (data.get("mode") or "new").strip().lower()
     context_location_ids = data.get("context_location_ids", [])
     context_character_names = data.get("context_character_names", [])
     # Completion budget from the UI field next to the model picker.
@@ -492,6 +666,20 @@ async def world_dev_chat(request: Request):
                 f"## World setup\n\nThe world this content goes into:\n\n{_ws_text}\n\n"
                 if _ws_text else ""
             )
+            # The map schema's four placeholders. Computed ONLY for `map` —
+            # every one of them costs DB reads (catalog, locations, painted
+            # areas), and no other schema contains the placeholder to fill.
+            if schema == "map":
+                terrain_kinds = _format_terrain_kinds()
+                placeable_locations = _format_placeable_locations(
+                    context_location_ids or None)
+                world_bounds_text = _format_world_bounds()
+                existing_map = (_format_existing_map() if map_mode == "edit"
+                                else "The map is empty — you are drawing it "
+                                     "from scratch.")
+            else:
+                terrain_kinds = placeable_locations = ""
+                world_bounds_text = existing_map = ""
             system_prompt = _load_schema(
                 schema,
                 existing_locations=existing_locations,
@@ -499,6 +687,10 @@ async def world_dev_chat(request: Request):
                 existing_outfit_types=existing_outfit_types,
                 generable_fields=generable_fields,
                 selected_template=selected_template_text,
+                terrain_kinds=terrain_kinds,
+                placeable_locations=placeable_locations,
+                world_bounds=world_bounds_text,
+                existing_map=existing_map,
                 world_setup_block=world_setup_block)
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
@@ -682,6 +874,13 @@ async def world_dev_chat(request: Request):
             if profile_patch_data:
                 yield f"data: {json.dumps({'profile_patch_data': profile_patch_data})}\n\n"
 
+            # A whole map layout. It travels RAW — the frontend runs it through
+            # /world-dev/preview-map, which is the ONE normalizer, so the
+            # preview and the apply can never disagree about what was drawn.
+            map_data = _extract2(_extract_map_json)
+            if map_data:
+                yield f"data: {json.dumps({'map_data': map_data})}\n\n"
+
             character_data = _extract2(_extract_character_json)
             if character_data:
                 # Validate fields — auto-request missing ones
@@ -732,7 +931,8 @@ async def world_dev_chat(request: Request):
             import re as _re
             _fence_types = _re.findall(r'```json:([\w-]+)', full_response)
             if _fence_types and not any([location_data, outfit_data, soul_data,
-                                         profile_patch_data, character_data]):
+                                         profile_patch_data, character_data,
+                                         map_data]):
                 _warn = (f"The json:{_fence_types[0]} block could not be parsed — "
                          f"the output appears to be cut off mid-JSON. Ask the "
                          f"model to output the COMPLETE JSON block again (or to "
@@ -795,6 +995,151 @@ async def apply_world_data(request: Request):
 
     logger.info("WorldDev: Location '%s' applied for user %s", name, user_id)
     return {"status": "success", "location": result}
+
+
+# ---------------------------------------------------------------------------
+# Map layout — preview, apply, snapshot, restore (E10 task 1)
+# ---------------------------------------------------------------------------
+
+def _map_world_context() -> Tuple[Dict[str, Any], Dict[str, Any], Any, str]:
+    """(catalog, locations_by_id, world bounds, default terrain kind).
+
+    The four world facts ``map_layout_apply.sanitize_map_layout`` needs handed
+    in — it is a pure function on purpose, so this is the ONE place that reads
+    them out of the world.
+    """
+    from app.core import config
+    from app.core.location_model3d import derive_plan_width_m
+    from app.core.map_layout_apply import current_world_bounds
+    from app.core.terrain_types import effective_catalog
+    from app.models.world import list_locations
+
+    locations_by_id: Dict[str, Any] = {}
+    for loc in list_locations():
+        loc_id = loc.get("id") or ""
+        if not loc_id:
+            continue
+        locations_by_id[loc_id] = {
+            "name": loc.get("name") or loc_id,
+            "plan_width_m": derive_plan_width_m(loc_id, loc.get("map3d")),
+        }
+    default_kind = str(config.get("game.default_terrain_kind", "grass")
+                       or "grass")
+    return (effective_catalog(), locations_by_id, current_world_bounds(),
+            default_kind)
+
+
+def _normalize_map_body(map_data: Any) -> Tuple[Dict[str, Any],
+                                                List[Dict[str, str]]]:
+    """Run one raw draft through the sanitizer, turning its hard errors into
+    a 400. Used by BOTH preview and apply, so the two can never disagree."""
+    from app.core.map_layout_apply import sanitize_map_layout
+    catalog, locations_by_id, bounds, default_kind = _map_world_context()
+    try:
+        return sanitize_map_layout(map_data, catalog=catalog,
+                                   locations_by_id=locations_by_id,
+                                   bounds=bounds, default_kind=default_kind)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/preview-map")
+async def preview_map(request: Request):
+    """Normalize a map draft WITHOUT writing anything.
+
+    Body:     {"map_data": {...the json:map block...}}
+    Returns:  {"status": "ok",
+               "normalized": {summary, bounds, terrain_areas[], height_areas[],
+                              locations[]},
+               "warnings": [{code, ref, message}, ...],
+               "counts": {areas, heights, positions}}
+
+    The normalized layout is exactly what an apply would write (plus `name` /
+    `plan_width_m` / `why` on each placement, so the draft can be drawn
+    without a second round trip) — the preview map and the applied map are
+    the same geometry by construction.
+    """
+    from app.core.map_layout_apply import layout_counts
+    data = await request.json()
+    normalized, warnings = _normalize_map_body(data.get("map_data"))
+    return {"status": "ok", "normalized": normalized, "warnings": warnings,
+            "counts": layout_counts(normalized)}
+
+
+@router.post("/apply-map")
+async def apply_map(request: Request):
+    """Write a map draft to the world.
+
+    Body:     {"map_data": {...}, "mode": "merge"|"replace_terrain",
+               "snapshot": true}
+    Returns:  {"status": "success",
+               "applied": {areas, heights, positions},
+               "warnings": [{code, ref, message}, ...],
+               "snapshot_id": "<id>"|null}
+
+    ``mode`` ``merge`` paints on top of what is there; ``replace_terrain``
+    deletes every painted area and height area first (placements are never
+    wiped — only the locations the layout names are moved).
+
+    ``snapshot`` (default true) freezes the whole painted world first, so
+    ``/world-dev/map-restore`` can undo the apply. That is the undo the map
+    editor itself does not have.
+    """
+    from app.core.map_layout_apply import (apply_map_layout, map_snapshot)
+    data = await request.json()
+    mode = (data.get("mode") or "merge").strip()
+    if mode not in ("merge", "replace_terrain"):
+        raise HTTPException(status_code=400,
+                            detail=f"unknown mode '{mode}' "
+                                   f"(merge | replace_terrain)")
+    normalized, warnings = _normalize_map_body(data.get("map_data"))
+
+    snapshot_id = None
+    if data.get("snapshot", True):
+        try:
+            snapshot_id = map_snapshot()
+        except OSError as e:
+            # A cache directory we cannot write is not a reason to refuse the
+            # apply — but the user must know the undo is missing.
+            logger.warning("Map snapshot failed: %s", e)
+            warnings = warnings + [{
+                "code": "snapshot_failed", "ref": "",
+                "message": f"Could not write the undo snapshot: {e}"}]
+    try:
+        applied = apply_map_layout(normalized, mode=mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("WorldDev: map layout applied (%s) %s", mode, applied)
+    return {"status": "success", "applied": applied, "warnings": warnings,
+            "snapshot_id": snapshot_id}
+
+
+@router.get("/map-snapshots")
+def get_map_snapshots():
+    """The stored map snapshots, newest first:
+    ``[{id, created_at, counts: {areas, heights, positions}}]``."""
+    from app.core.map_layout_apply import list_snapshots
+    return list_snapshots()
+
+
+@router.post("/map-restore")
+async def restore_map_snapshot(request: Request):
+    """Put a snapshot back — the undo for an apply.
+
+    Body:     {"snapshot_id": "<id>"}
+    Returns:  {"status": "success",
+               "restored": {areas, heights, positions}}
+    """
+    from app.core.map_layout_apply import restore_snapshot
+    data = await request.json()
+    snapshot_id = (data.get("snapshot_id") or "").strip()
+    if not snapshot_id:
+        raise HTTPException(status_code=400, detail="snapshot_id required")
+    try:
+        restored = restore_snapshot(snapshot_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": "success", "restored": restored}
 
 
 def _get_generable_fields(template_name: str) -> tuple[set, set]:
