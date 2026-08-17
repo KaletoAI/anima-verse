@@ -35,6 +35,7 @@ export function createHud(opts: { username: string; avatar: string; onLogout: ()
     <div class="hud-title">⚜ Anima Verse — Weltkarte</div>
     <div class="hud-right">
       <span class="hud-status" title="Verbindung"></span>
+      <span class="hud-clock" title="Game time"></span>
       <span class="hud-user"></span>
       <button class="hud-logout">Abmelden</button>
     </div>`;
@@ -61,10 +62,17 @@ export function createHud(opts: { username: string; avatar: string; onLogout: ()
   document.body.appendChild(hints);
 
   const statusEl = bar.querySelector('.hud-status') as HTMLElement;
+  const clockEl = bar.querySelector('.hud-clock') as HTMLElement;
   return {
     setOnline(ok: boolean) {
       statusEl.className = 'hud-status ' + (ok ? 'ok' : 'err');
       statusEl.title = ok ? 'Verbunden' : 'Backend nicht erreichbar';
+    },
+    /** The world clock as the SERVER rendered it (`game_time.label` of the
+     *  worldmap payload, § A11) — the client shows the string, it never
+     *  derives a time of its own. Empty payload → the slot stays empty. */
+    setClock(label: string) {
+      clockEl.textContent = label ? '🕰 ' + label : '';
     },
   };
 }

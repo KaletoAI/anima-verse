@@ -113,6 +113,7 @@ html, body, #app {
 }
 .hud-status.ok { background: #6fbf5a; box-shadow: 0 0 5px #6fbf5a; }
 .hud-status.err { background: #d9534f; box-shadow: 0 0 5px #d9534f; }
+.hud-clock { color: #f2d98c; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hud-logout {
   background: transparent;
   border: 1px solid rgba(242, 205, 110, 0.5);

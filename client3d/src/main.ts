@@ -1797,6 +1797,7 @@ async function startApp(username: string, role: string) {
       lastMap = map;
       mapStamp += 1;
       hud.setOnline(true);
+      hud.setClock(map.game_time?.label ?? '');
       takeRoomsFrom(map);
       updatePins(map);
       refreshSelection(map);
