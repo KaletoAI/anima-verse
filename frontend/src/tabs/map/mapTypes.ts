@@ -66,9 +66,15 @@ export interface WorldmapTravel {
    *  but route, distance and timing are thinned out for foreign travellers. */
   progress_m: number | null
   total_m: number | null
-  /** ISO stamp on the GAME clock, in the world timezone — an HH:MM slice is
-   *  game wall-clock time. `null` under the fog (§ A12). */
+  /** Arrival on the WORLD CALENDAR as the canonical stamp
+   *  `Y0002-D109T14:00:00` — there is no world timezone any more, and no
+   *  client parses this. `null` under the fog (§ A12). */
   eta_game: string | null
+  /** The same arrival rendered by the SERVER: `eta_hhmm` is the clock time
+   *  ("14:00"), `eta_label` the full calendar label ("Summer, day 17 · 14:00
+   *  · Year 3"). `null` under the fog, like everything else in this block. */
+  eta_hhmm: string | null
+  eta_label: string | null
   speed_m_s_real: number | null
   pace_m_s_real: number | null
 }

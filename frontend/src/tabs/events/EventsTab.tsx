@@ -18,6 +18,13 @@ interface WorldEvent {
   category?: string
   created_at?: string
   expires_at?: string | null
+  // World-calendar labels rendered by the server. `game_label` is when the
+  // event started, `expires_label` when it runs out — both world time, because
+  // an event's TTL is a world duration. `created_at`/`expires_at` are stamps,
+  // not display text: created_at is the SYSTEM stamp and expires_at a
+  // canonical GameTime string, neither of which reads as a date.
+  game_label?: string
+  expires_label?: string
 }
 
 type NewsStyle = 'modern' | 'newspaper' | 'flyer'
@@ -45,13 +52,8 @@ const NEWS_STYLES: Array<{ value: NewsStyle; label: string; hint: string }> = [
   { value: 'flyer', label: 'Old flyer (b/w)', hint: 'High-contrast black & white notice — low-tech worlds.' },
 ]
 
-function fmt(iso: string | undefined | null): string {
-  if (!iso) return '—'
-  return iso.slice(0, 16).replace('T', ' ')
-}
-
 export function EventsTab() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { toast } = useToast()
   const [events, setEvents] = useState<WorldEvent[] | null>(null)
   const [locations, setLocations] = useState<LocationRef[]>([])
@@ -78,13 +80,15 @@ export function EventsTab() {
 
   const reload = useCallback(async () => {
     try {
-      const data = await apiGet<{ events: WorldEvent[] }>('/events')
+      // lang picks the language of the world-date labels the server renders.
+      const data = await apiGet<{ events: WorldEvent[] }>(
+        `/events?lang=${encodeURIComponent(lang)}`)
       setEvents(data.events || [])
       setError(null)
     } catch (e) {
       setError((e as Error).message)
     }
-  }, [])
+  }, [lang])
 
   useEffect(() => {
     loadLocations().then(setLocations).catch(() => setLocations([]))
@@ -251,8 +255,8 @@ export function EventsTab() {
                         <span className="ga-sched-muted">—</span>
                       )}
                     </td>
-                    <td className="ga-sched-muted" style={{ fontSize: 12 }}>{fmt(e.created_at)}</td>
-                    <td className="ga-sched-muted" style={{ fontSize: 12 }}>{fmt(e.expires_at)}</td>
+                    <td className="ga-sched-muted" style={{ fontSize: 12 }}>{e.game_label || '—'}</td>
+                    <td className="ga-sched-muted" style={{ fontSize: 12 }}>{e.expires_label || '—'}</td>
                     <td className="ga-or-actions-col">
                       <button
                         className="ga-btn ga-btn-sm ga-btn-danger"

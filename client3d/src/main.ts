@@ -1880,13 +1880,16 @@ async function startApp(username: string, role: string) {
     updateSoundtrack?.();
   };
 
-  // Time of day of the world -> lighting (kept up to date every 60 s)
-  async function pollGameHour() {
-    const h = await api.getGameHour();
-    if (h != null) engine.setGameHour(h);
+  // Time of day of the world -> lighting. ONE source: the worldmap payload
+  // carries the world clock (`game_time.hour_fraction`, § A11) and is polled
+  // every 3 s anyway — so this only re-reads the freshest snapshot every 60 s
+  // instead of firing a second HTTP poll of its own.
+  function takeGameHour() {
+    const h = lastMap?.game_time?.hour_fraction;
+    if (typeof h === 'number') engine.setGameHour(h);
   }
-  void pollGameHour();
-  setInterval(pollGameHour, 60_000);
+  takeGameHour();
+  setInterval(takeGameHour, 60_000);
 
   // Fallback für Backends ohne room_id im Worldmap-Payload (Prä-AV3D-8)
   async function pollRooms() {

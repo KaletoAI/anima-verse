@@ -19,9 +19,15 @@ import { apiGet } from './api'
 
 export interface ThoughtEntry {
   ts: string
-  /** GAME time of the thought, ISO WITH the world's timezone offset. Empty
-   *  for rows written before the column existed. */
+  /** GAME time of the thought as the canonical world-calendar stamp
+   *  (`Y0002-D109T14:00:00`). Empty for rows written before the column
+   *  existed. Kept for callers that need the raw instant — the display uses
+   *  `game_label` below. */
   game_ts?: string
+  /** The stamp above already rendered by the SERVER ("Summer, day 17 · 14:23
+   *  · Year 3"). Empty whenever `game_ts` is — clients never format a game
+   *  stamp themselves. */
+  game_label?: string
   location_name: string
   room_name: string
   present: string[]
@@ -43,17 +49,12 @@ function dayOf(ts: string): string {
   const d = new Date(ts)
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
 }
-/** "2026-07-30T14:23:45+02:00" → "14:23" — textual slice, NO Date(): the
- *  string already carries the world-timezone wall time, and parsing it would
- *  re-render it in the browser's timezone. */
-function gameClockOf(gameTs?: string): string {
-  if (!gameTs || gameTs.length < 16) return ''
-  return gameTs.slice(11, 16)
-}
-/** Same string → "30.07.2026" (day of the game calendar). */
-function gameDayOf(gameTs?: string): string {
-  if (!gameTs || gameTs.length < 10) return ''
-  return `${gameTs.slice(8, 10)}.${gameTs.slice(5, 7)}.${gameTs.slice(0, 4)}`
+/** The clock part of the server-rendered world-calendar label ("Summer, day
+ *  17 · 14:23 · Year 3" → "14:23") for the narrow time column. The full label
+ *  goes into the tooltip; nothing here parses a game stamp. */
+function gameClockOf(gameLabel?: string): string {
+  const m = /\b(\d{2}:\d{2})\b/.exec(gameLabel || '')
+  return m ? m[1] : ''
 }
 const sepStyle: React.CSSProperties = {
   margin: '6px 0 2px', fontSize: '0.74em', opacity: 0.55, letterSpacing: 0.4,
@@ -124,9 +125,9 @@ export function MindThoughtsSection({ character }: { character: string }) {
                                fontVariantNumeric: 'tabular-nums', paddingTop: 7,
                                display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <span>{clockOf(e.ts)}</span>
-                  {gameClockOf(e.game_ts) ? (
-                    <span title={`${t('Game time')}: ${gameDayOf(e.game_ts)} ${gameClockOf(e.game_ts)}`}>
-                      🕰 {gameClockOf(e.game_ts)}
+                  {e.game_label ? (
+                    <span title={`${t('Game time')}: ${e.game_label}`}>
+                      🕰 {gameClockOf(e.game_label) || e.game_label}
                     </span>
                   ) : null}
                 </span>

@@ -528,7 +528,9 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
     // destination — then the tooltip says nothing about it, never the raw id.
     const target = c.movement_target_name || ''
     if (!c.movement_target_id || !target) return c.name
-    const eta = c.travel?.eta_game ? c.travel.eta_game.slice(11, 16) : ''
+    // The arrival time comes rendered from the server (`eta_hhmm`) — the
+    // canonical `eta_game` stamp is never sliced by a client.
+    const eta = c.travel?.eta_hhmm || ''
     return `${c.name} — ${travellingTo} ${target}`
       + (eta ? ` (${arrivesAt} ${eta})` : '')
   }, [travellingTo, arrivesAt])

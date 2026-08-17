@@ -16,7 +16,10 @@ interface NewsItem {
   id: string
   text: string
   category: string
+  /** SYSTEM stamp — ordering only, never shown. The reader lives in the world. */
   created_at: string
+  /** Finished WORLD-time label from the server; "" without a game stamp. */
+  game_label: string
   location_id: string
   global: boolean
   breaking: boolean
@@ -26,6 +29,8 @@ interface NewsFeed {
   avatar: string
   style: NewsStyle
   title: string
+  /** Current WORLD time for the masthead; "" when unavailable. */
+  edition_label: string
   items: NewsItem[]
 }
 
@@ -34,11 +39,6 @@ const DEFAULT_TITLE: Record<NewsStyle, string> = {
   modern: 'Channel',
   newspaper: 'The Daily',
   flyer: 'Notice',
-}
-
-function timeLabel(iso: string): string {
-  if (!iso) return ''
-  return iso.slice(0, 16).replace('T', ' ')
 }
 
 export function NewsPanel() {
@@ -75,7 +75,7 @@ export function NewsPanel() {
       <div className="news-masthead">
         <div className="news-title">{title}</div>
         <div className="news-sub">
-          {t('Edition')} · {timeLabel(new Date().toISOString())}
+          {t('Edition')}{feed?.edition_label ? ` · ${feed.edition_label}` : ''}
         </div>
       </div>
 
@@ -89,7 +89,7 @@ export function NewsPanel() {
               <div className="news-item-body">{it.text}</div>
               <div className="news-item-meta">
                 <span className="news-cat">{it.category}</span>
-                <span className="news-time">{timeLabel(it.created_at)}</span>
+                {it.game_label ? <span className="news-time">{it.game_label}</span> : null}
               </div>
             </article>
           ))}
@@ -106,7 +106,7 @@ export function NewsPanel() {
             <div className="news-item-meta">
               {it.category ? <span className="news-cat">{it.category}</span> : null}
               {it.global ? <span className="news-scope">{t('world')}</span> : null}
-              <span className="news-time">{timeLabel(it.created_at)}</span>
+              {it.game_label ? <span className="news-time">{it.game_label}</span> : null}
             </div>
           </article>
         ))}

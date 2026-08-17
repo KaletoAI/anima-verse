@@ -27,6 +27,11 @@
     }
   },
   "translations": {
+    "[CURRENT]": "[AKTUELL]",
+    "[RECENT]": "[KÜRZLICH]",
+    "today {time}": "heute {time}",
+    "yesterday {time}": "gestern {time}",
+    "{days} days ago": "vor {days} Tagen",
     "(game time)": "(Spielzeit)",
     "\"once\" applies a discrete one-shot effect; cooldown blocks the LLM from re-setting it.": "\"einmalig\" wendet einen diskreten one-shot Effekt an; Cooldown blockt das LLM beim erneuten Setzen.",
     "(missing)": "(fehlt)",
@@ -1366,6 +1371,7 @@
     "Secret updated": "Geheimnis aktualisiert",
     "secret(s) generated": "Geheimnis(se) generiert",
     "Secrets": "Geheimnisse",
+    "Seasons": "Jahreszeiten",
     "Seed saved": "Seed gespeichert",
     "Seeding error": "Fehler beim Seeding",
     "Seeding failed": "Seeding fehlgeschlagen",

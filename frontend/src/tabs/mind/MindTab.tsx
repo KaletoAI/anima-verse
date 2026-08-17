@@ -25,7 +25,7 @@ interface DebugActivity {
   reasons: string[]
   mood_recent: { timestamp?: string; mood?: string; source?: string }[]
   state_recent: { ts: string; type: string; value: string }[]
-  thoughts_recent: { ts: string; game_ts?: string; action: string }[]
+  thoughts_recent: { ts: string; game_ts?: string; game_label?: string; action: string }[]
   block_rules: {
     id: string; name: string; action: string; message: string
     condition?: string; condition_met?: boolean; blocking?: boolean
@@ -44,17 +44,12 @@ function fmtTs(iso?: string): string {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
 }
 
-/** "2026-07-30T14:23:45+02:00" → "14:23" — textual slice, NO Date(): the game
- *  timestamp already carries the world-timezone wall time, so parsing it would
- *  re-render it in the browser's timezone. */
-function fmtGameClock(gameTs?: string): string {
-  if (!gameTs || gameTs.length < 16) return ''
-  return gameTs.slice(11, 16)
-}
-/** Same string → "30.07.2026" (day of the game calendar). */
-function fmtGameDay(gameTs?: string): string {
-  if (!gameTs || gameTs.length < 10) return ''
-  return `${gameTs.slice(8, 10)}.${gameTs.slice(5, 7)}.${gameTs.slice(0, 4)}`
+/** The clock part of a rendered world-calendar label ("Summer, day 17 · 14:23
+ *  · Year 3" → "14:23"). The SERVER renders the label; this only picks the
+ *  short form for the inline badge — no game stamp is ever parsed here. */
+function fmtGameClock(gameLabel?: string): string {
+  const m = /\b(\d{2}:\d{2})\b/.exec(gameLabel || '')
+  return m ? m[1] : ''
 }
 
 export function MindTab() {
@@ -210,9 +205,9 @@ export function MindTab() {
                     <li key={i}>
                       <span className="ts">
                         {fmtTs(th.ts)}
-                        {fmtGameClock(th.game_ts) ? (
-                          <span title={`${t('Game time')}: ${fmtGameDay(th.game_ts)} ${fmtGameClock(th.game_ts)}`}>
-                            {' · 🕰 '}{fmtGameClock(th.game_ts)}
+                        {th.game_label ? (
+                          <span title={`${t('Game time')}: ${th.game_label}`}>
+                            {' · 🕰 '}{fmtGameClock(th.game_label) || th.game_label}
                           </span>
                         ) : null}
                       </span>

@@ -177,9 +177,16 @@ export interface MapTravel {
    *  and route length are thinned out along with the waypoints. */
   progress_m: number | null;
   total_m: number | null;
-  /** arrival in GAME wall-clock time (world timezone, ISO); `null` under the
-   *  fog (§ A12) — the arrival time would date the hidden route. */
+  /** Arrival on the WORLD CALENDAR as the canonical stamp
+   *  `Y0002-D109T14:00:00` (§ A11) — there is no world timezone any more and
+   *  no client parses this. `null` under the fog (§ A12) — the arrival time
+   *  would date the hidden route. */
   eta_game: string | null;
+  /** The same arrival ALREADY RENDERED by the server: `eta_hhmm` is the clock
+   *  time ("14:00") the walking mark shows, `eta_label` the full calendar
+   *  label ("Summer, day 17 · 14:00 · Year 3"). `null` under the fog. */
+  eta_hhmm: string | null;
+  eta_label: string | null;
   /** NOMINAL pace of the journey in metres per REAL second; `null` on a
    *  frozen world. The fallback when the segment pace is missing. */
   speed_m_s_real: number | null;
@@ -230,6 +237,33 @@ export interface WorldBounds {
   max_z: number;
 }
 
+/**
+ * One instant on the WORLD CALENDAR, rendered by the server (§ A11,
+ * plan-game-calendar): seasons and days instead of a real date, and no
+ * timezone anywhere. The client displays these fields and reads
+ * `hour_fraction` for the sun — it never parses `canonical`.
+ */
+export interface GameTimeInfo {
+  /** sortable stamp `Y0002-D109T14:00:00` */
+  canonical: string;
+  total_seconds: number;
+  year: number;
+  day_of_year: number;
+  season: string;
+  season_name: string;
+  day_of_season: number;
+  hour: number;
+  minute: number;
+  /** hour of day 0..24 as a fraction — what the sun position is set from */
+  hour_fraction: number;
+  /** e.g. "Summer, day 17 · 14:23 · Year 3" */
+  label: string;
+  /** "HH:MM" */
+  time: string;
+  is_night: boolean;
+  day_bucket: string;
+}
+
 export interface WorldMap {
   avatar: string;
   current_location_id: string;
@@ -237,6 +271,11 @@ export interface WorldMap {
   locations: MapLocation[];
   characters: MapCharacter[];
   events_by_location: Record<string, MapEvent[]>;
+  /** The WORLD CLOCK this payload was computed with — the instant every
+   *  journey above was placed on, handed over ready to render. The sun takes
+   *  its hour from `hour_fraction` HERE (one source, no extra poll); nothing
+   *  in the client derives a game hour itself. */
+  game_time?: GameTimeInfo;
   /** § A12; `null` when nothing is placed */
   world_bounds: WorldBounds | null;
   /** Signature of the painted terrain (areas + world type rows). When it

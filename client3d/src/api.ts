@@ -554,16 +554,7 @@ export async function getSurfaceTextures(): Promise<ApiSurfaceTexture[]> {
   }
 }
 
-/** Spielzeit der Welt (Stunde 0..24, fraktional); null wenn nicht verfügbar. */
-export async function getGameHour(): Promise<number | null> {
-  try {
-    const res = await fetch('/world/game-time');
-    if (!res.ok) return null;
-    const data = await res.json();
-    const t = new Date(data.game_now);
-    if (isNaN(t.getTime())) return null;
-    return t.getUTCHours() + t.getUTCMinutes() / 60;
-  } catch {
-    return null;
-  }
-}
+// The world's time of day has NO fetch of its own any more: the worldmap
+// payload carries the rendered world clock (`game_time`, § A11) on the poll
+// that runs every 3 s regardless, and `main.ts` takes the sun's hour from
+// there. One source, and no client ever parses a game stamp.

@@ -60,15 +60,16 @@ export interface Neighbor {
 export type Dir = 'north' | 'south' | 'east' | 'west'
 
 /** The avatar's running journey (E3): where it is headed, when it gets there
- *  and how far it still has to walk. `eta_hhmm` is the arrival on the GAME
- *  world's own wall clock, formatted by the server — the game clock has a
- *  timezone of its own that no browser knows, so it is shown as it is.
- *  Null/absent = standing still. */
+ *  and how far it still has to walk. The arrival comes on the WORLD CALENDAR:
+ *  `eta_game` is the canonical stamp `Y0002-D109T14:00:00` (never parsed by a
+ *  client), `eta_hhmm` the clock time and `eta_label` the full calendar label
+ *  — both rendered by the server. Null/absent = standing still. */
 export interface TravelInfo {
   target_id: string
   target_name: string
   eta_game: string
   eta_hhmm: string
+  eta_label: string
   progress_m: number
   total_m: number
   arrived: boolean

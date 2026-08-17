@@ -28,7 +28,12 @@ interface DiaryEntry {
   repeat_count?: number
   metadata?: Record<string, any>
 }
-interface DiaryResponse { entries: DiaryEntry[]; types: Record<string, string>; icons: Record<string, string> }
+interface DiaryResponse {
+  entries: DiaryEntry[]; types: Record<string, string>; icons: Record<string, string>
+  date?: string; date_label?: string
+}
+/** One selectable game day: the key the API filters by + its world label. */
+interface DiaryDate { date: string; date_label: string }
 
 interface TodayStatus {
   location: string; location_id?: string; room?: string; room_id?: string
@@ -80,8 +85,11 @@ interface ScheduleSlot {
 interface ScheduleResponse { avatar: string; enabled: boolean; slots: ScheduleSlot[] }
 
 type HistoryKind = 'daily' | 'weekly' | 'monthly' | 'history' | 'evolution'
-interface HistoryDailyItem { date: string; partner: string; content: string }
-interface HistoryPeriodItem { week?: string; month?: string; content: string }
+// The keys are world-calendar keys (Y0002-D109 / -W016 / -S01); `label` is the
+// readable world date the server renders for them — the client never formats
+// a calendar itself.
+interface HistoryDailyItem { date: string; label?: string; partner: string; content: string }
+interface HistoryPeriodItem { week?: string; month?: string; label?: string; content: string }
 interface EvolutionItem {
   ts: string; trigger: string; beliefs: string; lessons: string; goals: string
   diff: null | Record<'beliefs' | 'lessons' | 'goals', { removed: string[]; added: string[] }>
@@ -392,10 +400,12 @@ function TodayView({ character, onOpenMemories }: { character: string; onOpenMem
 // Sektion „Tagebuch“ — Datum/Typ-Filter, Suche, Zeitstrahl, Tagesrückblick
 // ---------------------------------------------------------------------------
 function DiaryView({ character }: { character: string }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const enc = encodeURIComponent(character)
   const LIMIT = 100
-  const [dates, setDates] = useState<string[]>([])
+  // Game days: `date` is the world-day key the server filters by, `date_label`
+  // its readable world date. The client never derives one from the other.
+  const [dates, setDates] = useState<DiaryDate[]>([])
   const [date, setDate] = useState<string>('')        // '' = heute (Server-Default)
   const [typeFilter, setTypeFilter] = useState<string>('')
   const [q, setQ] = useState('')
@@ -406,8 +416,9 @@ function DiaryView({ character }: { character: string }) {
   const [genState, setGenState] = useState<'' | 'generating' | 'done' | 'exists' | 'empty' | 'error'>('')
 
   useEffect(() => {
-    apiGet<string[]>(`/diary/me/${enc}/dates`).then(setDates).catch(() => setDates([]))
-  }, [enc])
+    apiGet<DiaryDate[]>(`/diary/me/${enc}/dates?lang=${encodeURIComponent(lang)}`)
+      .then(setDates).catch(() => setDates([]))
+  }, [enc, lang])
 
   const load = async (newOffset: number, append: boolean) => {
     const params = new URLSearchParams()
@@ -472,7 +483,9 @@ function DiaryView({ character }: { character: string }) {
         <select className="ga-input" style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)}>
           <option value="">{t('Today')}</option>
           <option value="all">{t('All days')}</option>
-          {dates.map((d) => <option key={d} value={d}>{d}</option>)}
+          {dates.map((d) => (
+            <option key={d.date} value={d.date}>{d.date_label || d.date}</option>
+          ))}
         </select>
         <select className="ga-input" style={inputStyle} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">{t('All types')}</option>
@@ -712,7 +725,7 @@ function BondsView({ character, onOpenMemories }: {
 // Sektion „Verlauf“ — daily/weekly/monthly-Summaries, Gesamt, Evolution-Diffs
 // ---------------------------------------------------------------------------
 function HistoryView({ character }: { character: string }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const enc = encodeURIComponent(character)
   const LIMIT = 30
   const [kind, setKind] = useState<HistoryKind>('daily')
@@ -721,7 +734,7 @@ function HistoryView({ character }: { character: string }) {
   const [offset, setOffset] = useState(0)
 
   const load = async (newOffset: number, append: boolean) => {
-    const params = new URLSearchParams({ kind, limit: String(LIMIT), offset: String(newOffset) })
+    const params = new URLSearchParams({ kind, limit: String(LIMIT), offset: String(newOffset), lang })
     try {
       const d = await apiGet<any>(`/characters/${enc}/memory/history?${params.toString()}`)
       setResp(d)
@@ -734,7 +747,7 @@ function HistoryView({ character }: { character: string }) {
   const kinds: Array<{ id: HistoryKind; label: string }> = [
     { id: 'daily', label: t('Daily') },
     { id: 'weekly', label: t('Weekly') },
-    { id: 'monthly', label: t('Monthly') },
+    { id: 'monthly', label: t('Seasons') },
     { id: 'history', label: t('Overall') },
     { id: 'evolution', label: t('Evolution') },
   ]
@@ -811,7 +824,10 @@ function HistoryView({ character }: { character: string }) {
               <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2,
                                     padding: '4px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
                 <div style={{ display: 'flex', gap: 8, fontSize: '0.74em', opacity: 0.55 }}>
-                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{it.date || it.week || it.month}</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}
+                        title={it.date || it.week || it.month}>
+                    {it.label || it.date || it.week || it.month}
+                  </span>
                   {it.partner ? <span>· {it.partner}</span> : null}
                 </div>
                 <div style={{ lineHeight: 1.35 }}>{it.content}</div>

@@ -610,7 +610,7 @@ export class NpcManager {
       // fogged traveller has no waypoints but is just as much on its way, and
       // its arrival time is in the payload all the same (§ A11).
       const travelling = !!st.char.travel;
-      const eta = st.char.travel?.eta_game ? ` ${st.char.travel.eta_game.slice(11, 16)}` : '';
+      const eta = st.char.travel?.eta_hhmm ? ` ${st.char.travel.eta_hhmm}` : '';
       npc.labelName.textContent = (travelling ? `🚶${eta} ` : '') + st.char.name;
       this.updateTravelLine(npc, npc.route);
     }

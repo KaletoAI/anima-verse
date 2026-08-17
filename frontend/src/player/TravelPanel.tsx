@@ -144,7 +144,11 @@ export function TravelPanel({
               🚶 {t('On the road to')} <strong>{travel.target_name}</strong>
             </div>
             <div style={{ fontSize: '0.76em', opacity: 0.75 }}>
-              {t('Arrival')} {travel.eta_hhmm} {t('(game time)')} · {remaining} m {t('to go')}
+              {/* Arrival on the world calendar — clock time inline, the full
+                  label ("Summer, day 17 · 14:00 · Year 3") in the tooltip. */}
+              {t('Arrival')}{' '}
+              <span title={travel.eta_label || undefined}>{travel.eta_hhmm}</span>
+              {' · '}{remaining} m {t('to go')}
             </div>
             <button onClick={onCancelTravel} disabled={busy}
               style={{
