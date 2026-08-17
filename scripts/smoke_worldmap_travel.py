@@ -3,8 +3,8 @@
 
 Checks the ``travel`` block of ``world_ops.build_worldmap_payload`` against
 docs/schnittstellen-3d.md § A11 (metre polyline): the block carries
-``{target_id, waypoints, progress_m, total_m, eta_game, speed_m_s_real,
-pace_m_s_real}`` and NOTHING else — every cell field of v1 (``path``/``seg``/
+``{target_id, waypoints, progress_m, total_m, eta_game, eta_hhmm, eta_label,
+speed_m_s_real, pace_m_s_real}`` and NOTHING else — every cell field of v1 (``path``/``seg``/
 ``frac``/``progress_cells``/``cell_seconds_real``) is gone without
 replacement.
 
@@ -28,13 +28,17 @@ The seed:
                  probe that tells `speed_m_s_real` (nominal) and
                  `pace_m_s_real` (this segment) apart
 
-    server.timezone = Europe/Berlin  (+02:00 in August — so a world-tz stamp
-                                      is provably not the UTC one)
+    server.timezone = Europe/Berlin  (the DISPLAY timezone of system stamps;
+                                      the game clock has none, so it must not
+                                      shift the arrival stamp by one minute)
 
 The hand-built journey (identical for both travellers):
 
     waypoints = [[0, 0, 0.0], [30, 0, 30.0], [30, 40, 70.0]]
-    speed_m_s = 1.0        started_at_game = 2026-08-09T12:00:00+00:00
+    speed_m_s = 1.0        started_at_game = Y0001-D001T12:00:00
+
+``started_at_game`` is a canonical world-calendar stamp — game time knows
+seasons and days, not dates, and has no timezone at all.
 
     leg 1: (0,0) -> (30,0)   = 30 m, baked at t_cum 30 s
     leg 2: (30,0) -> (30,40) = 40 m, baked at t_cum 70 s
@@ -56,10 +60,13 @@ Hand-derived expectations:
         frac       = (35 − 30) / 40           = 0.125
         progress_m = 30 + 40 × 0.125          = 35.0
         total_m    = 30 + 40                  = 70.0
-        eta_game   = 12:00:00 UTC + 70 s      = 12:01:10 UTC
-                   = 2026-08-09T14:01:10+02:00 in the world timezone
-                     (the HH:MM slice [11:16] a client cuts out = "14:01",
-                      i.e. game WALL-CLOCK time, § A11)
+        eta_game   = Y0001-D001T12:00:00 + 70 s = Y0001-D001T12:01:10
+                     — canonical, and unmoved by server.timezone
+        eta_hhmm   = "12:01"   (rendered server-side; no client slices a
+                     stamp any more, § A11)
+        eta_label  = "Spring, day 1 · 12:01 · Year 1" — the default calendar
+                     (4 seasons × 30 days, year_label "Year {n}") applied to
+                     day 1 of year 1
         waypoints  = [[0.0, 0.0], [30.0, 0.0], [30.0, 40.0]]  — x/z ONLY,
                      the baked t_cum stays server-internal
         speed_m_s_real = null — the clock stands (factor 0), so nothing may
@@ -121,8 +128,8 @@ Hand-derived expectations:
         target. So in a FOGGED payload a foreign traveller keeps its ROW and
         its ``target_id``, and everything else in the block is null:
           fogged, npc_near (visible, travelling) -> waypoints, progress_m,
-                    total_m, eta_game, speed_m_s_real, pace_m_s_real ALL
-                    null; target_id still B; the keys all stay (so "not
+                    total_m, eta_game, eta_hhmm, eta_label, speed_m_s_real,
+                    pace_m_s_real ALL null; target_id still B; the keys all stay (so "not
                     told" stays distinguishable from "empty")
           fogged, demo_avatar (itself)           -> the full block
           show_all, npc_near                     -> the full block
@@ -133,7 +140,6 @@ import os
 import shutil
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -152,6 +158,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import config  # noqa: E402
+from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_ops import build_worldmap_payload  # noqa: E402
 from app.models.character import (  # noqa: E402
@@ -164,15 +171,20 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_ISO = "2026-08-09T12:00:00+00:00"
-START_DT = datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)
+START = "Y0001-D001T12:00:00"
+START_GT = GameTime.parse(START)
+ETA = "Y0001-D001T12:01:10"
+ETA_LABEL = "Spring, day 1 · 12:01 · Year 1"
 WAYPOINTS = [[0.0, 0.0, 0.0], [30.0, 0.0, 30.0], [30.0, 40.0, 70.0]]
 # Same points, same nominal speed — leg 2 baked at half the pace (soft ground).
 SLOW_WAYPOINTS = [[0.0, 0.0, 0.0], [30.0, 0.0, 30.0], [30.0, 40.0, 110.0]]
 SPEED = 1.0
 # Exactly the fields § A11 lists — no more, no less.
 FIELDS = {"target_id", "waypoints", "progress_m", "total_m", "eta_game",
-          "speed_m_s_real", "pace_m_s_real"}
+          "eta_hhmm", "eta_label", "speed_m_s_real", "pace_m_s_real"}
+# What the fog withholds from a foreign traveller: everything but target_id.
+THIN_NUMBERS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
+                "speed_m_s_real", "pace_m_s_real")
 # The v1 cell vocabulary, dropped without replacement.
 V1_FIELDS = ("path", "seg", "frac", "progress_cells", "cell_seconds_real")
 
@@ -222,7 +234,7 @@ def give_journey(name: str, target: str, waypoints=None) -> None:
     prof = get_character_profile(name)
     prof["journey"] = {"target": target,
                        "waypoints": [list(w) for w in (waypoints or WAYPOINTS)],
-                       "started_at_game": START_ISO, "speed_m_s": SPEED,
+                       "started_at_game": START, "speed_m_s": SPEED,
                        "entry_edge": ""}
     prof["movement_target"] = target
     save_character_profile(name, prof)
@@ -232,7 +244,7 @@ def freeze_at(seconds: float) -> None:
     """Stand the game clock still at START + ``seconds``. Freeze FIRST: the
     freeze hook re-anchors, so a time set afterwards is the one that stays."""
     set_world_frozen(True)
-    set_game_time(START_DT + timedelta(seconds=seconds))
+    set_game_time(START_GT + GameDuration.of(seconds=seconds))
 
 
 def char(payload, name: str) -> dict:
@@ -246,8 +258,8 @@ def names(payload) -> list:
     return sorted(c["name"] for c in payload["characters"])
 
 
-# The world clock has an offset of its own — a UTC stamp would pass a
-# same-instant check while breaking every client that slices HH:MM out.
+# The DISPLAY timezone of SYSTEM stamps is deliberately not UTC here: the
+# game clock has no timezone, so this must not move the arrival stamp.
 config._CONFIG.setdefault("server", {})["timezone"] = "Europe/Berlin"
 
 A = place("Alder Camp", 0.0, 0.0)
@@ -281,10 +293,9 @@ def main() -> int:
           [[0.0, 0.0], [30.0, 0.0], [30.0, 40.0]])
     check("progress_m = 30 + 40 × 0.125", tr.get("progress_m"), 35.0)
     check("total_m = 30 + 40", tr.get("total_m"), 70.0)
-    check("eta_game in world time", tr.get("eta_game"),
-          "2026-08-09T14:01:10+02:00")
-    check("… the HH:MM a client slices out", (tr.get("eta_game") or "")[11:16],
-          "14:01")
+    check("eta_game is canonical and timezone-free", tr.get("eta_game"), ETA)
+    check("… with the HH:MM rendered server-side", tr.get("eta_hhmm"), "12:01")
+    check("… and the calendar label beside it", tr.get("eta_label"), ETA_LABEL)
     check("speed_m_s_real is null while frozen", tr.get("speed_m_s_real"), None)
     check("pace_m_s_real is null while frozen", tr.get("pace_m_s_real"), None)
 
@@ -344,8 +355,7 @@ def main() -> int:
     tr = char(allv, "demo_avatar").get("travel") or {}
     check("progress_m = total_m", (tr.get("progress_m"), tr.get("total_m")),
           (70.0, 70.0))
-    check("eta_game unchanged", tr.get("eta_game"),
-          "2026-08-09T14:01:10+02:00")
+    check("eta_game unchanged", tr.get("eta_game"), ETA)
 
     print("\n[5] fog holds for travellers too")
     freeze_at(35.0)
@@ -369,9 +379,8 @@ def main() -> int:
     fog = build_worldmap_payload("demo_avatar", show_all=False)
     near = char(fog, "npc_near").get("travel") or {}
     check("someone else's waypoints are withheld", near.get("waypoints"), None)
-    check("… and the five numbers with them",
-          [f for f in ("progress_m", "total_m", "eta_game", "speed_m_s_real",
-                       "pace_m_s_real") if near.get(f) is not None], [])
+    check("… and the seven fields with them",
+          [f for f in THIN_NUMBERS if near.get(f) is not None], [])
     check("… the opaque target_id stays", near.get("target_id"), B)
     check("… and every key is there, only null", sorted(near), sorted(FIELDS))
     own = char(fog, "demo_avatar").get("travel") or {}

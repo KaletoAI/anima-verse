@@ -97,7 +97,6 @@ import math
 import os
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -117,6 +116,7 @@ from app.core import config, travel_engine  # noqa: E402
 from app.core.config_schema import SECTIONS  # noqa: E402
 from app.core.discovery import (  # noqa: E402
     discover_in_range, get_discovery_range_m, locations_within)
+from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
     footprint_distance, point_in_footprint)
@@ -136,8 +136,9 @@ from app.routes.play import play_pos  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_DT = datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc)
-START_ISO = START_DT.isoformat()
+# Game time is the world calendar: a canonical stamp, no date, no timezone.
+START = "Y0001-D001T12:00:00"
+START_GT = GameTime.parse(START)
 USER = {"username": "demo", "role": "user"}
 AVATAR = "demo_avatar"
 WALKER = "demo_walker"
@@ -262,14 +263,14 @@ def give_journey(name: str, target: str, waypoints) -> None:
     prof["movement_target"] = target
     prof["journey"] = {"target": target,
                        "waypoints": [list(w) for w in waypoints],
-                       "started_at_game": START_ISO, "speed_m_s": 1.0,
+                       "started_at_game": START, "speed_m_s": 1.0,
                        "entry_edge": ""}
     save_character_profile(name, prof)
 
 
 def tick_at(seconds: float) -> None:
     """Pin the game clock to START + seconds and run ONE ticker pass."""
-    set_game_time(START_DT + timedelta(seconds=seconds))
+    set_game_time(START_GT + GameDuration.of(seconds=seconds))
     travel_engine.advance_all_journeys()
 
 
@@ -301,7 +302,7 @@ def park(x: float, z: float) -> None:
 
 # ── the world ───────────────────────────────────────────────────────────
 set_game_factor(0.0)                  # the game clock stands still — pinned
-set_game_time(START_DT)
+set_game_time(START_GT)
 travel_engine.game_speed_factor = lambda: 1.0   # …the goal window runs at 1×
 
 ALPHA = place("Smoke Alpha", 50.0, 50.0)
@@ -451,7 +452,9 @@ def main() -> int:
     char_mod.list_character_positions = counting_bulk
     char_mod.get_character_pos = counting_single
     try:
-        travel_engine._discover_by_sight(_cast, _list_locations())
+        # The sight pass is `_note_positions` since the exploration memory
+        # joined it (2026-08-16) — same pass, one more record per point.
+        travel_engine._note_positions(_cast, _list_locations())
     finally:
         char_mod.list_character_positions = real_bulk
         char_mod.get_character_pos = real_single

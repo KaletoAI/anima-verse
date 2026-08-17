@@ -23,9 +23,10 @@ Task 1, steps 1-3) — NOT recorded from a run:
   3. Column set after migration ⊇ {id, character_name, ts, game_ts,
      location_id, room_id, content, present}.
   4. New row — the INSERT of ``thought_store.add_thought`` writes 7 values with
-     ``game_ts`` in third position. Inserting
-     game_ts='2026-07-30T14:23:45+02:00' must read back byte-identically
-     (SQLite TEXT, no timezone normalisation anywhere in the path).
+     ``game_ts`` in third position. ``game_ts`` is a CANONICAL game stamp
+     (``Y0002-D109T14:23:45``), not an ISO datetime — the game clock runs on
+     the world calendar and has no timezone. Inserting it must read back
+     byte-identically (SQLite TEXT, no normalisation anywhere in the path).
   5. Old row — a row inserted the pre-migration way (columns listed WITHOUT
      game_ts) must yield '' for game_ts, never NULL: the ALTER declares
      ``DEFAULT ''``. The route maps with ``r.get("game_ts", "") or ""``, so ''
@@ -33,7 +34,7 @@ Task 1, steps 1-3) — NOT recorded from a run:
   6. The SELECT column list of ``list_thoughts`` (id, ts, game_ts,
      location_id, room_id, content, present) must execute against the migrated
      table and return, for the two rows above, game_ts values
-     ['2026-07-30T14:23:45+02:00', ''].
+     ['Y0002-D109T14:23:45', ''].
 
 Exit code 0 = all checks passed; any failure prints FAIL and exits 1.
 """
@@ -48,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.world_db_schema import ALTER_MIGRATIONS, SCHEMA_STATEMENTS  # noqa: E402
 
-GAME_TS = "2026-07-30T14:23:45+02:00"
+GAME_TS = "Y0002-D109T14:23:45"   # canonical GameTime, not an ISO stamp
 
 _failures: list[str] = []
 

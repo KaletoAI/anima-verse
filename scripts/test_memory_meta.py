@@ -146,26 +146,32 @@ check("a non-commitment is never touched",
       _run_completion(["123"], mtype="semantic"), False)
 
 print("8) the due hint reads minutes, not prose")
-from datetime import datetime, timezone  # noqa: E402
 from app.core import thought_context as tc, timeutils  # noqa: E402
+from app.core.game_time import GameTime  # noqa: E402
 
-NOW = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
-orig_now = timeutils.game_now
-timeutils.game_now = lambda: NOW
+# Both ends of a due hint are GAME time: a promise made in the world comes due
+# in the world, so the stamp is the memory's canonical `game_ts` and the clock
+# pinned here is the GAME clock. `_due_hint` imports `game_time` inside the
+# function, so patching the module attribute is enough.
+NOW = GameTime.parse("Y0002-D215T12:00:00")
+orig_game_time = timeutils.game_time
+timeutils.game_time = lambda: NOW
 try:
     # promised at 11:30 with 120 minutes → due 13:30 → 90 minutes left → hours
     check("90 minutes out reads as hours",
-          tc._due_hint("2026-08-03T11:30:00+00:00", 120), "in 1 h")
+          tc._due_hint("Y0002-D215T11:30:00", 120), "in 1 h")
     # promised at 11:50 with 30 minutes → due 12:20 → 20 minutes left
     check("20 minutes out reads as minutes",
-          tc._due_hint("2026-08-03T11:50:00+00:00", 30), "in 20 min")
-    # promised yesterday with 60 minutes → long past
+          tc._due_hint("Y0002-D215T11:50:00", 30), "in 20 min")
+    # promised the game day before with 60 minutes → long past
     check("past due says so",
-          tc._due_hint("2026-08-02T11:00:00+00:00", 60), "overdue")
-    check("an unreadable timestamp yields nothing",
+          tc._due_hint("Y0002-D214T11:00:00", 60), "overdue")
+    check("an unreadable game stamp yields nothing",
           tc._due_hint("kaputt", 120), "")
+    check("a missing game stamp yields nothing",
+          tc._due_hint("", 120), "")
 finally:
-    timeutils.game_now = orig_now
+    timeutils.game_time = orig_game_time
 
 
 print()

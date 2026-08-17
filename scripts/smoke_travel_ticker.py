@@ -7,7 +7,7 @@ Runs against a THROWAWAY storage directory — never touches a real world.
 Rules every expectation below is derived from BY HAND:
 
   * ``journey_state`` is a pure function of the GAME clock. The clock is
-    pinned here: ``set_game_factor(0.0)`` stops it, ``set_game_time(t)``
+    pinned here: ``set_game_factor(0.0)`` stops it, ``set_game_time(GameTime)``
     jumps it exactly — so "tick at t = 30 s" is an exact statement, not a
     race against wall time.
   * The ticker's GOAL WINDOW (``_at_goal``) reads the clock FACTOR, and a
@@ -224,7 +224,6 @@ Usage:  ./.venv/bin/python scripts/smoke_travel_ticker.py
 import os
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -239,6 +238,7 @@ db.init_schema()
 
 from app.core import state_events, travel_engine  # noqa: E402
 from app.core.party_engine import add_to_party  # noqa: E402
+from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
@@ -254,8 +254,9 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_DT = datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)
-START_ISO = START_DT.isoformat()
+# Game time is the world calendar: a canonical stamp, no date, no timezone.
+START = "Y0001-D001T12:00:00"
+START_GT = GameTime.parse(START)
 
 # The route of the module docstring — [x, z, t_cum], 1 m per game second.
 ROUTE = [[0.0, 0.0, 0.0], [0.0, 5.0, 5.0], [0.0, 30.0, 30.0],
@@ -302,7 +303,7 @@ def set_map3d(location_id: str, **fields) -> None:
 
 
 def give_journey(name: str, target: str, entry_edge: str = "W",
-                 waypoints=None, started: str = START_ISO) -> None:
+                 waypoints=None, started: str = START) -> None:
     """Hand-written journey on the profile — the ticker's INPUT, so the
     expectations below never depend on what the router happens to route."""
     prof = get_character_profile(name)
@@ -316,7 +317,7 @@ def give_journey(name: str, target: str, entry_edge: str = "W",
 
 def tick_at(seconds: float) -> None:
     """Pin the game clock to START + seconds and run ONE ticker pass."""
-    set_game_time(START_DT + timedelta(seconds=seconds))
+    set_game_time(START_GT + GameDuration.of(seconds=seconds))
     travel_engine.advance_all_journeys()
 
 
@@ -373,7 +374,7 @@ update_location_position(SHED, 0.0, 32.0)
 set_map3d(SHED, plan_width_m=2.0)
 
 set_game_factor(0.0)                  # the game clock stands still — pinned
-set_game_time(START_DT)
+set_game_time(START_GT)
 set_factor(1.0)                       # …but the goal window runs at 1× (see
 #                                       the module docstring); [7e] varies it.
 

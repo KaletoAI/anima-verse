@@ -227,7 +227,6 @@ import math
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -245,6 +244,7 @@ from fastapi import HTTPException  # noqa: E402
 
 from app.core import config, relief, scene_recipe  # noqa: E402
 from app.core.config_schema import SECTIONS  # noqa: E402
+from app.core.game_time import GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models.account import set_active_character  # noqa: E402
 from app.models.character import (  # noqa: E402
@@ -259,7 +259,8 @@ from app.routes.play import play_pos  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_DT = datetime(2026, 8, 13, 12, 0, 0, tzinfo=timezone.utc)
+# Game time is the world calendar — a canonical stamp, never a date.
+START_GT = GameTime.parse("Y0001-D001T12:00:00")
 USER = {"username": "demo", "role": "user"}
 AVATAR = "demo_avatar"
 
@@ -439,7 +440,7 @@ def refusal_of(res):
 
 
 set_game_factor(0.0)
-set_game_time(START_DT)
+set_game_time(START_GT)
 
 CLIFF = place("Smoke Cliff", 1000.0, 1000.0)
 TURNED = place("Smoke Cliff Turned", 1200.0, 1000.0, yaw=90.0)

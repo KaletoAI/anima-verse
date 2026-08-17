@@ -80,7 +80,8 @@ Hand-derived expectations:
     npc_open    location-less at (30, 0)  -> 30 m from the avatar
     npc_trav    location-less at (100, 0) -> 100 m from the avatar, WITH a
                 journey (target C, a 4000 m polyline started at the current
-                game time, so it is still on its first leg)
+                game time — a canonical world-calendar stamp — so it is still
+                on its first leg)
     game.discovery_range_m = 50 m (the sight range, § A12; the same number
                 that discovers places by coming close)
 
@@ -96,12 +97,12 @@ Hand-derived expectations:
         for most of its length, and a figure that blinks out for the whole
         trip is what § A11 warns against. What goes is everything the route
         could be RECONSTRUCTED from — waypoints, progress_m, total_m,
-        eta_game, speed_m_s_real, pace_m_s_real are ALL null, while the
-        opaque target_id and the character's own pos stay:
-          fogged, npc_trav      -> the five fields + waypoints null,
+        eta_game, eta_hhmm, eta_label, speed_m_s_real, pace_m_s_real are ALL
+        null, while the opaque target_id and the character's own pos stay:
+          fogged, npc_trav      -> the seven fields + waypoints null,
                                    target_id = C, pos = {"x": 100, "z": 0}
           fogged, demo_avatar   -> its own block is FULL (waypoints and all
-                                   five numbers present)
+                                   seven fields present)
           show_all, npc_trav    -> full block, nothing thinned
 
   [7] no avatar (avatar None, show_all=False) — deliberately the LAST case,
@@ -139,7 +140,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import config  # noqa: E402
-from app.core.timeutils import game_now  # noqa: E402
+from app.core.timeutils import game_time  # noqa: E402
 from app.core.world_ops import build_worldmap_payload  # noqa: E402
 from app.models.character import (  # noqa: E402
     enter_offmap_sleep, get_character_current_location, get_character_pos,
@@ -217,9 +218,11 @@ def char(payload, name: str) -> dict:
     return {}
 
 
-# The five travel numbers the fog withholds from a foreign traveller (§ A11).
-THIN_FIELDS = ("progress_m", "total_m", "eta_game", "speed_m_s_real",
-               "pace_m_s_real")
+# The seven travel numbers the fog withholds from a foreign traveller
+# (§ A11). The arrival is three of them: the canonical game stamp plus the
+# two ready-made display strings the server computes beside it.
+THIN_FIELDS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
+               "speed_m_s_real", "pace_m_s_real")
 
 
 def sight_range(metres: float) -> None:
@@ -243,7 +246,7 @@ def give_journey(name: str, target: str, start_x: float) -> None:
     prof["journey"] = {
         "target": target,
         "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
-        "started_at_game": game_now().isoformat(),
+        "started_at_game": game_time().canonical(),
         "speed_m_s": 1.0,
         "entry_edge": "",
     }

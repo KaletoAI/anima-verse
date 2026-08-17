@@ -32,8 +32,12 @@ Hand-derived expectations:
       legal pace" would re-time every new journey).
 
   [2] ``journey_state`` with waypoints [[0,0,0], [10,0,10], [10,20,40]]
-      (10 m in 10 s, then 20 m in 30 s — factor ⅔):
-      total_m = 30.0, eta = start + 40 s.
+      (10 m in 10 s, then 20 m in 30 s — factor ⅔). Game time is the world
+      calendar, so the start stamp is the canonical string
+      ``Y0001-D001T12:00:00`` and ``now_game`` a ``GameTime``; midday of day
+      one is chosen so the "clock set back" case below (t = −5 s) is still a
+      representable instant — a ``GameTime`` cannot lie before the epoch.
+      total_m = 30.0, eta = start + 40 s = ``Y0001-D001T12:00:40``.
         t = 0  → (0,0),  seg 0, progress_m 0
         t = 5  → (5,0),  seg 0, progress_m 5   (half of segment 0)
         t = 10 → (10,0), seg 1, progress_m 10  (the joint belongs to seg 1)
@@ -97,8 +101,9 @@ Hand-derived expectations:
       own position — its first waypoint is that point, and no opening of
       any location is inserted.
 
-  [7] The ticker: a journey whose start stamp lies an hour in the past is
-      finished, so ``advance_all_journeys`` settles the arrival — the
+  [7] The ticker: with the game clock pinned (factor 0 at
+      ``Y0001-D010T12:00:00``) a journey whose start stamp lies a game hour in
+      the past is finished, so ``advance_all_journeys`` settles the arrival — the
       character stands in MARKET, movement_target and journey are gone.
       (The in-flight position write is Task 3's; this only pins that an
       arrival never hangs.)
@@ -109,7 +114,6 @@ import math
 import os
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -125,7 +129,9 @@ db.init_schema()
 from app.core import config, travel_engine  # noqa: E402
 from app.core.boundary_entry import opening_world_point  # noqa: E402
 from app.core.config_schema import SECTIONS  # noqa: E402
-from app.core.timeutils import game_now, parse_iso  # noqa: E402
+from app.core.game_time import GameDuration, GameTime  # noqa: E402
+from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
+                                set_game_time)
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
     get_character_profile, get_movement_target,
@@ -138,8 +144,9 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_ISO = "2026-08-09T12:00:00+00:00"
-START_DT = datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)
+# Canonical world-calendar stamps — game time has no dates and no timezone.
+START = "Y0001-D001T12:00:00"
+START_GT = GameTime.parse(START)
 
 
 def check(label, actual, expected):
@@ -183,8 +190,8 @@ def set_map3d(location_id: str, **fields) -> None:
 
 
 def state_at(waypoints, seconds):
-    return travel_engine.journey_state(waypoints, START_ISO,
-                                       START_DT + timedelta(seconds=seconds))
+    return travel_engine.journey_state(
+        waypoints, START, START_GT + GameDuration.of(seconds=seconds))
 
 
 def loc_dict(cx, cz, width, yaw=0.0, openings=None, tile_rotation=0):
@@ -231,7 +238,7 @@ check("t=0 pos", rounded(st["pos"]), (0.0, 0.0))
 check("t=0 arrived", st["arrived"], False)
 approx("t=0 progress_m", st["progress_m"], 0.0)
 approx("total_m", st["total_m"], 30.0)
-check("eta_game", st["eta_game"], (START_DT + timedelta(seconds=40)).isoformat())
+check("eta_game", st["eta_game"], "Y0001-D001T12:00:40")
 st = state_at(WPS, 5)
 check("t=5 pos", rounded(st["pos"]), (5.0, 0.0))
 check("t=5 seg", st["seg"], 0)
@@ -274,7 +281,7 @@ save_character_profile("legacy_npc", {"current_location": ""}, create_new=True)
 prof = get_character_profile("legacy_npc")
 prof["movement_target"] = "loc_old"
 prof["journey"] = {"target": "loc_old", "path": ["loc_a", "loc_old"],
-                   "started_at_game": START_ISO, "seconds_per_cell": 60.0}
+                   "started_at_game": START, "seconds_per_cell": 60.0}
 save_character_profile("legacy_npc", prof)
 check("old journey is not returned",
       travel_engine.get_journey("legacy_npc"), None)
@@ -376,7 +383,7 @@ if isinstance(journey, dict):
     approx("the last t_cum is the polyline length / 1.4",
            ts[-1], polyline_length(wps) / 1.4, tol=0.05)
     st = travel_engine.journey_state(wps, journey["started_at_game"],
-                                     parse_iso(journey["started_at_game"]))
+                                     GameTime.parse(journey["started_at_game"]))
     check("state at the start stamp is the start point", rounded(st["pos"]),
           (0.0, 0.0))
     approx("progress_m at the start", st["progress_m"], 0.0)
@@ -407,12 +414,15 @@ check("target gone", get_movement_target("wild_npc"), "")
 
 # ── [7] the ticker still settles arrivals ───────────────────────────────
 print("[7] a finished journey is settled by the ticker (Task 3 rebuilds it)")
+# Pin the game clock: the position is a pure function of it, so a stopped
+# clock at a known instant makes "the journey has finished" exact.
+set_game_factor(0.0)
+set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
 prof = get_character_profile("demo_npc")
-# Back-date the start so the whole route lies in the past — the position is
-# a pure function of the game clock, so this IS "the journey has finished".
+# Back-date the start so the whole route lies in the past.
 prof["journey"] = dict(prof["journey"],
-                       started_at_game=(game_now() - timedelta(hours=1)
-                                        ).isoformat())
+                       started_at_game=(game_time()
+                                        - GameDuration.of(hours=1)).canonical())
 save_character_profile("demo_npc", prof)
 travel_engine.advance_all_journeys()
 check("arrived at the target", get_character_current_location("demo_npc"),

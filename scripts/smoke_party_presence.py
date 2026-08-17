@@ -182,15 +182,18 @@ def test_presence_context() -> None:
     print("\n[5] thought context — alone_here")
     from app.core.thought_context import _build_presence
 
-    block, alone = _build_presence(FARAWAY, LOC_TOWER)
+    # _build_presence splits by ROOM: (same room, other rooms, alone_known).
+    # The characters here carry no room, so everything lands in the room block.
+    block, elsewhere, alone = _build_presence(FARAWAY, LOC_TOWER, "")
     check("alone at a known location -> alone_here True",
-          block == "" and alone is True, f"block={block!r} alone={alone}")
+          block == "" and elsewhere == "" and alone is True,
+          f"block={block!r} elsewhere={elsewhere!r} alone={alone}")
 
-    block, alone = _build_presence(LEADER, "")
+    block, elsewhere, alone = _build_presence(LEADER, "", "")
     check("unknown location -> NOT reported as alone",
           block == "" and alone is False, f"block={block!r} alone={alone}")
 
-    block, alone = _build_presence(LEADER, LOC_LAKE)
+    block, elsewhere, alone = _build_presence(LEADER, LOC_LAKE, "")
     check("someone else here -> block filled, alone_here False",
           bool(block) and alone is False, f"alone={alone} block={block!r}")
 
@@ -202,7 +205,8 @@ def test_thought_template() -> None:
     base = {
         "character_name": LEADER, "personality": "", "location_name": "Lake",
         "activity": "standing in front of demo_far", "feeling": "calm",
-        "time_of_day": "17:21", "has_assignments": False,
+        "time_of_day": "17:21", "game_date": "Summer, day 17 · Year 3",
+        "has_assignments": False,
         "action_instruction": "Decide what to do.",
     }
     optional = ("effects_block", "state_flags_block", "outfit_self_block",
@@ -212,7 +216,7 @@ def test_thought_template() -> None:
                 "activity_hint_block", "daily_schedule_block", "tracker_block",
                 "recent_thoughts", "arc_block", "retrospective_block",
                 "tools_hint", "lang_instruction", "outfit_avatar_block",
-                "recent_chat_block")
+                "recent_chat_block", "elsewhere_block")
     base.update({k: "" for k in optional})
 
     alone = render("chat/agent_thought.md",
@@ -239,16 +243,22 @@ def test_presence_block_formatter() -> None:
     from app.core.system_prompt_builder import (_format_presence_block,
                                                 load_prompt_data, PRESENCE)
 
-    empty = _format_presence_block("Lake", [], False)
+    # (location, same-room lines, other-room lines, anyone_nearby)
+    empty = _format_presence_block("Lake", [], [], False)
+    # The requirement is the wording-independent one: the block must EXIST and
+    # must state the absence. (The room split rephrased the sentence from an
+    # uppercase "ALONE" to "you are alone in this room" — the requirement did
+    # not change with it.)
     check("the empty case is spelled out, not omitted",
-          "nobody" in empty and "ALONE" in empty, empty.replace("\n", " | "))
+          "nobody" in empty and "alone" in empty.lower(),
+          empty.replace("\n", " | "))
 
     data = load_prompt_data(FARAWAY, {PRESENCE})
     hint = data.get("nearby_hint", "")
     check("a lone character still gets a nearby_hint",
           bool(hint), hint.replace("\n", " | "))
     check("...and it states the absence",
-          "ALONE" in hint, hint.replace("\n", " | "))
+          "alone" in hint.lower(), hint.replace("\n", " | "))
 
 
 def main() -> int:

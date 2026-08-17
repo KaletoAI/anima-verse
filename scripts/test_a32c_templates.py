@@ -103,6 +103,7 @@ THOUGHT_CTX = {
     "activity": "sweeping the steps",
     "feeling": "Neutral",
     "time_of_day": "14:20",
+    "game_date": "Summer, day 17 · Year 3",
     "inbox_block": "",
     "events_block": "- A cart lost a wheel by the well.",
     "assignments_block": "",

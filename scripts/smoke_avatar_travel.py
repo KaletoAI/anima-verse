@@ -26,8 +26,11 @@ Rules every expectation below is derived from BY HAND:
     the route can never quietly stop applying the gate. The ticker's
     arrival gate stays the SECOND net (Task 3), not the first.
   * ``journey_state`` is a pure function of the GAME clock, which is pinned
-    here (``set_game_factor(0.0)`` + ``set_game_time``) so the ETA is an
-    exact statement, not a race against wall time.
+    here (``set_game_factor(0.0)`` + ``set_game_time(GameTime)``) so the ETA
+    is an exact statement, not a race against wall time. Game time is the
+    world calendar: the clock is pinned to ``Y0001-D001T12:00:00`` and every
+    arrival stamp is canonical, never an ISO datetime and never in a
+    timezone.
   * The grid compass is GONE: ``compute_avatar_neighbors``,
     ``move_avatar_step``, ``neighbor_access`` and the two ``/world/avatar/*``
     routes existed for a world of square cells that E1 deleted. Deletion
@@ -49,10 +52,10 @@ The world used below (all grass unless painted):
 Hand-derived expectations:
 
   [1] HOME → MARKET starts a journey: the answer carries
-      ``journey.target_id`` = MARKET, the ETA as the world-timezone ISO
-      stamp of ``journey_state(...)['eta_game']`` plus its HH:MM slice
-      (one vocabulary with the worldmap block, § A11) and the walked
-      distance; the profile holds a v2 journey (waypoints, no ``path``)
+      ``journey.target_id`` = MARKET, the ETA as the CANONICAL game stamp of
+      ``journey_state(...)['eta_game']`` plus the two display strings the
+      server renders from it (``eta_hhmm``, ``eta_label`` — one vocabulary
+      with the worldmap block, § A11) and the walked distance; the profile holds a v2 journey (waypoints, no ``path``)
       with ``movement_target`` = MARKET, and the avatar still STANDS in
       HOME — the ticker performs arrivals, the route does not.
 
@@ -85,7 +88,7 @@ Hand-derived expectations:
       ``smoke_enterable`` part 6, which the compass carried away.)
 
   [7] ``GET /play/scene`` carries the running journey in a ``travel`` block
-      (target id + name + ETA HH:MM + metres) and ``null`` when there is
+      (target id + name + canonical ETA + its HH:MM + metres) and ``null`` when there is
       none — the player UI's poll channel.
 
   [8] The destination list's data source: ``GET /play/worldmap`` (fogged)
@@ -110,7 +113,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -128,8 +130,9 @@ db.init_schema()
 from fastapi import HTTPException  # noqa: E402
 
 from app.core import travel_engine  # noqa: E402
-from app.core.timeutils import (game_now, set_game_factor,  # noqa: E402
-                                set_game_time, to_world_tz)
+from app.core.game_time import GameTime  # noqa: E402
+from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
+                                set_game_time)
 from app.core.party_engine import add_to_party  # noqa: E402
 from app.models import terrain  # noqa: E402
 from app.models.account import set_active_character  # noqa: E402
@@ -147,7 +150,7 @@ from app.routes.play import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_DT = datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)
+START_GT = GameTime.parse("Y0001-D001T12:00:00")
 USER = {"username": "demo", "role": "user"}
 
 
@@ -221,7 +224,7 @@ def new_character(name: str, location_id: str, x: float, z: float,
 
 # ── the world ───────────────────────────────────────────────────────────
 set_game_factor(0.0)
-set_game_time(START_DT)
+set_game_time(START_GT)
 
 HOME = place("Smoke Home", 0.0, 0.0, "S")
 MARKET = place("Smoke Market", 100.0, 0.0, "W")
@@ -264,14 +267,18 @@ def main() -> int:
         check("the answered target name", block.get("target_name"),
               "Smoke Market")
         state = travel_engine.journey_state(
-            journey["waypoints"], journey["started_at_game"], game_now())
+            journey["waypoints"], journey["started_at_game"], game_time())
         # ONE vocabulary with the worldmap block (§ A11, E3 Task 6):
-        # eta_game carries the WORLD-timezone offset in both payloads, so a
-        # client may slice HH:MM out of either one.
-        check("the answered eta_game (world timezone)", block.get("eta_game"),
-              to_world_tz(state["eta_game"]).isoformat())
-        check("the answered ETA in world wall-clock time",
-              block.get("eta_hhmm"), f"{to_world_tz(state['eta_game']):%H:%M}")
+        # eta_game is the CANONICAL game stamp in both payloads, and both
+        # render the display strings beside it server-side — no client ever
+        # slices a stamp.
+        eta = GameTime.parse(state["eta_game"])
+        check("the answered eta_game (canonical)", block.get("eta_game"),
+              state["eta_game"])
+        check("the answered ETA as game wall-clock time",
+              block.get("eta_hhmm"), eta.time_hhmm())
+        check("the answered ETA label", block.get("eta_label"),
+              eta.label("en"))
         check("the answered distance", block.get("total_m"), state["total_m"])
         check("the journey is v2 (waypoints, no path)",
               "waypoints" in journey and "path" not in journey, True)
@@ -391,9 +398,10 @@ def main() -> int:
     check("the travelling target name", trav.get("target_name"), "Smoke Market")
     journey = travel_engine.get_journey("demo_avatar")
     state = travel_engine.journey_state(
-        journey["waypoints"], journey["started_at_game"], game_now())
-    check("the ETA in world wall-clock time", trav.get("eta_hhmm"),
-          f"{to_world_tz(state['eta_game']):%H:%M}")
+        journey["waypoints"], journey["started_at_game"], game_time())
+    check("the canonical ETA", trav.get("eta_game"), state["eta_game"])
+    check("the ETA in game wall-clock time", trav.get("eta_hhmm"),
+          GameTime.parse(state["eta_game"]).time_hhmm())
     check("the total distance", trav.get("total_m"), state["total_m"])
     asyncio.run(play_travel_cancel(user=USER))
 

@@ -14,8 +14,9 @@ Rules every expectation below is derived from BY HAND:
     ``unplaced_target`` reads to the character exactly like an
     ``unknown_target``; only the ``travel_failed`` record keeps them apart.
   * ``journey_state`` is a pure function of the GAME clock, which is pinned
-    here (``set_game_factor(0.0)`` + ``set_game_time``) so the ETA text is
-    an exact statement, not a race against wall time.
+    here (``set_game_factor(0.0)`` + ``set_game_time(GameTime)``) so the ETA
+    text is an exact statement, not a race against wall time. Game time is
+    the world calendar — the clock is pinned to ``Y0001-D001T12:00:00``.
   * The avatar is excluded from journeys (Task 5 owns avatar travel): a
     cross-location SetLocation by a player-controlled character stays the
     INSTANT move it was.
@@ -41,8 +42,9 @@ Hand-derived expectations:
   [2] HOME → MARKET starts a journey: a v2 journey dict on the profile
       (waypoints, no ``path``), ``movement_target`` = MARKET, the character
       still stands in HOME (the ticker performs the arrival, not the skill)
-      and the answer names the target plus the ETA as HH:MM of
-      ``to_world_tz(journey_state(...)["eta_game"])``. No travel_failed
+      and the answer names the target plus the ETA: the HH:MM of
+      ``journey_state(...)["eta_game"]`` while the arrival falls on the SAME
+      game day, the full calendar label once it does not. No travel_failed
       record is written for a successful start.
 
   [3] SECRET is placed but unknown → no journey, no movement target, a
@@ -106,7 +108,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -122,8 +123,9 @@ db.init_schema()
 
 from app.core import travel_engine  # noqa: E402
 from app.core.db import get_connection  # noqa: E402
-from app.core.timeutils import (game_now, set_game_factor,  # noqa: E402
-                                set_game_time, to_world_tz)
+from app.core.game_time import GameTime  # noqa: E402
+from app.core.timeutils import (game_time, set_game_factor,  # noqa: E402
+                                set_game_time)
 from app.models import terrain  # noqa: E402
 from app.models.account import save_user_profile  # noqa: E402
 from app.models.inventory import add_item, add_to_inventory  # noqa: E402
@@ -139,7 +141,7 @@ from app.plugins.loader import discover_packages  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-START_DT = datetime(2026, 8, 9, 12, 0, 0, tzinfo=timezone.utc)
+START_GT = GameTime.parse("Y0001-D001T12:00:00")
 
 
 def check(label, actual, expected):
@@ -219,7 +221,11 @@ movement_pkg = next((p for p in discover_packages(force=True)
                      if p.id == "movement"), None)
 check_true("the movement package was discovered", movement_pkg is not None)
 verb_ids = sorted(e.skill_id for e in (movement_pkg.skills if movement_pkg else []))
-check("the movement verbs", verb_ids, ["cancel_travel", "setlocation"])
+# `go_to_character` joined the package after this check was written (it is a
+# SetLocation onto a person's place, not a grid step) — the deletion test is
+# about `move`, so the new verb belongs in the expectation.
+check("the movement verbs", verb_ids,
+      ["cancel_travel", "go_to_character", "setlocation"])
 grep = subprocess.run(
     ["grep", "-rn", "-e", "MoveSkill", "-e", "skill_move",
      "-e", "surroundings_section", "app", "plugins"],
@@ -233,7 +239,12 @@ grep = subprocess.run(
     ["grep", "-rnE", r"\bMove\b", "--include=*.md",
      "shared/templates", "plugins"],
     cwd=REPO, capture_output=True, text=True)
-check("no template advertises the Move verb", grep.stdout.strip(), "")
+# "Move to where a specific person currently is" in the GoToCharacter
+# description is English PROSE, not a verb the LLM is told to call — that
+# skill's id is `go_to_character`.
+leftover = [ln for ln in grep.stdout.splitlines()
+            if "skills/go_to_character.md" not in ln]
+check("no template advertises the Move verb", "\n".join(leftover), "")
 grep = subprocess.run(
     ["grep", "-rnE", "-e", "Move/SetLocation", "-e", "SetLocation/Move",
      "--include=*.py", "app", "plugins"],
@@ -243,7 +254,7 @@ check("no Python line pairs Move with SetLocation any more",
 
 # ── the world ───────────────────────────────────────────────────────────
 set_game_factor(0.0)
-set_game_time(START_DT)
+set_game_time(START_GT)
 
 HOME = add_location(name="Smoke Home", description="set-location v2 smoke")["id"]
 update_location_position(HOME, 0.0, 0.0)
@@ -300,9 +311,14 @@ check("the character has NOT arrived yet (the ticker does that)",
 if journey is not None:
     check("the journey is v2 (waypoints, no path)",
           "waypoints" in journey and "path" not in journey, True)
+    now = game_time()
     state = travel_engine.journey_state(journey["waypoints"],
-                                        journey["started_at_game"], game_now())
-    eta_text = f"{to_world_tz(state['eta_game']):%H:%M}"
+                                        journey["started_at_game"], now)
+    eta = GameTime.parse(state["eta_game"])
+    # Same game day → the bare clock time; a trip crossing midnight gets the
+    # full calendar label instead (the skill's own rule).
+    eta_text = (eta.time_hhmm() if eta.day_index == now.day_index
+                else eta.label())
     check_true(f"the answer carries the ETA {eta_text}", eta_text in answer,
                answer)
     check_true("the answer names the target", "Smoke Market" in answer, answer)

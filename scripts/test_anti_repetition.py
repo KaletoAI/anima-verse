@@ -381,7 +381,7 @@ def case_10_repetition_age_window():
     single turn. Hand-derived expectations below use a fixed fake clock.
     """
     print("10. repetition age window")
-    from datetime import datetime, timedelta, timezone
+    from app.core.game_time import GameDuration, GameTime
     from app.models import thought_store
     from app.core import thoughts as thoughts_mod
     from app.core import timeutils
@@ -390,17 +390,19 @@ def case_10_repetition_age_window():
     config._CONFIG["chat"]["anti_rep_step"] = 0        # shipped default
     config._CONFIG["chat"]["anti_rep_max_age_hours"] = 12
 
-    NOW = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+    # Game time, so a canonical world-calendar stamp — and late enough in the
+    # world that the 49 h old entries below stay on this side of the epoch.
+    NOW = GameTime.parse("Y0001-D003T12:00:00")
     journal = []  # (content, age_in_hours)
 
     def fake_list_thoughts(character_name, limit=50, before=None):
         return [{"content": c,
-                 "game_ts": (NOW - timedelta(hours=age)).isoformat()}
+                 "game_ts": (NOW - GameDuration.of(hours=age)).canonical()}
                 for c, age in journal[::-1]][:limit]
 
-    orig_list, orig_now = thought_store.list_thoughts, timeutils.game_now
+    orig_list, orig_now = thought_store.list_thoughts, timeutils.game_time
     thought_store.list_thoughts = fake_list_thoughts
-    timeutils.game_now = lambda: NOW
+    timeutils.game_time = lambda: NOW
     try:
         # Two repetitions, but all three entries are 49 h old → window drops
         # every one of them → nothing left to compare → no override at all.
@@ -428,7 +430,7 @@ def case_10_repetition_age_window():
               abs(ov.get("frequency_penalty", 0) - 0.3) < 1e-9, f"got {ov}")
     finally:
         thought_store.list_thoughts = orig_list
-        timeutils.game_now = orig_now
+        timeutils.game_time = orig_now
         _pin_config()
 
 
