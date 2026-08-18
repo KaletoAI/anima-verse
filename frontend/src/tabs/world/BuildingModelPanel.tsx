@@ -184,10 +184,11 @@ export function BuildingModelPanel({
           ...(opts?.lod_faces ? { lod_faces: opts.lod_faces } : {}),
           ...(opts?.tier ? { tier: opts.tier } : {}) })
         .then((d) => {
-          // already_running = double-click guard for the SAME image; jobs
-          // from different images queue up on the backend channel.
+          // already_running = double-click guard for the SAME image with the
+          // SAME backend and tier; other images — and the same image through
+          // another backend — queue up on the backend channel.
           toast(d?.status === 'already_running'
-            ? t('This image is already being meshed — the model appears when it finishes.')
+            ? t('This image is already being meshed with this backend — the model appears when it finishes.')
             : t('Generating the 3D model…'))
           setPreview('')
           startPoll()

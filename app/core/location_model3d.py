@@ -367,12 +367,17 @@ def migrate_scale_frame_once() -> Dict[str, int]:
     return stats
 
 
-def _gen_key(owner_id: str, room_id: str = "", source_image: str = "") -> str:
-    """Job key: guards ONE generation per (target, source image) — several
-    models from DIFFERENT images may run/queue concurrently (the backend
-    GPU channel serializes them anyway); only a double-click of the same
-    job is rejected."""
-    return f"{owner_id}:{_stem(room_id)}:{source_image}"
+def _gen_key(owner_id: str, room_id: str = "", source_image: str = "",
+             backend_glob: str = "", tier: str = "") -> str:
+    """Job key: guards ONE generation per (target, source image, backend,
+    tier) — several models from DIFFERENT images, and the SAME image through
+    DIFFERENT backends or tiers, may run/queue concurrently (the backend GPU
+    channel serializes them anyway); only a double-click of the identical job
+    is rejected. Backend and tier are part of the key on purpose: comparing
+    meshing methods on one picture means queueing that picture several times
+    (bug report 2026-08-18 — the old image-only key swallowed every run after
+    the first)."""
+    return f"{owner_id}:{_stem(room_id)}:{source_image}:{backend_glob}:{tier}"
 
 
 def is_pending(location_id: str, room_id: str = "") -> bool:
@@ -1057,7 +1062,8 @@ def _run(location_id: str, source_image: str, backend_glob: str,
         logger.error("Location model generation for %s failed: %s", owner, e)
     finally:
         with _lock:
-            _generating.discard(_gen_key(owner, room_id, source_image))
+            _generating.discard(_gen_key(owner, room_id, source_image,
+                                         backend_glob, tier))
 
 
 def trigger_generation(location_id: str, *, source_image: str,
@@ -1068,7 +1074,9 @@ def trigger_generation(location_id: str, *, source_image: str,
     """Start a building/room-model generation in the background. Generations
     from different source images run concurrently as far as the backend GPU
     channel allows (it serializes per backend); False only when THIS image
-    is already being meshed for this target (double-click guard). ``tier``
+    is already being meshed for this target with THIS backend and tier
+    (double-click guard — a different backend on the same image is a new,
+    legitimate job). ``tier``
     says which resolution slot the result becomes (a low run is the same
     chain with a smaller face_num/texture_size).
 
@@ -1077,10 +1085,11 @@ def trigger_generation(location_id: str, *, source_image: str,
     owner = _owner_id(location_id)
     if not owner:
         return False
+    key = _gen_key(owner, room_id, source_image, backend_glob, tier)
     with _lock:
-        if _gen_key(owner, room_id, source_image) in _generating:
+        if key in _generating:
             return False
-        _generating.add(_gen_key(owner, room_id, source_image))
+        _generating.add(key)
     threading.Thread(target=_run,
                      args=[location_id, source_image, backend_glob, room_id,
                            face_num, texture_size, tier, lod_faces],

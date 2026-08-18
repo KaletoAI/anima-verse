@@ -1573,6 +1573,7 @@
     "This character is sleeping. A message will wake them up.": "Dieser Charakter schläft gerade. Eine Nachricht weckt ihn auf.",
     "This file is the model the clients get for this tier.": "Diese Datei ist das Modell, das die Clients für diese Stufe bekommen.",
     "This image is already being meshed — the model appears when it finishes.": "Dieses Bild wird bereits gemesht — das Modell erscheint, sobald es fertig ist.",
+    "This image is already being meshed with this backend — the model appears when it finishes.": "Dieses Bild wird mit diesem Backend bereits gemesht — das Modell erscheint, sobald es fertig ist.",
     "This is the generated mesh of the current outfit. An upload here overrides it.": "Dies ist das generierte Mesh des aktuellen Outfits. Ein Upload hier überschreibt es.",
     "This kind is already generating on that backend.": "Diese Art wird auf diesem Backend bereits generiert.",
     "This tab has not been ported yet.": "Dieser Reiter ist noch nicht portiert.",
