@@ -608,10 +608,16 @@
    only its own inner layout. It sizes itself to its content instead of taking
    the dock's equal share: the menu is a short, finished list, and stretching
    it to half the screen next to a full Self panel would look like something
-   was missing. */
+   was missing. It may SHRINK, though (flex-shrink 1, not 0): with more
+   settings than the viewport is tall, a non-shrinking panel grows out of the
+   dock past the bottom edge and the body's `overflow: auto` never gets a
+   height to scroll in — the lower settings were simply unreachable (Firefox
+   report 2026-08-18). Shrinking hands the overflow to the panel body, which
+   already scrolls. `max-height: 100%` is the belt to that braces. */
 #hud .hud-dock .hud-panel.hud-menu-panel {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-height: 0;
+  max-height: 100%;
 }
 #hud .hud-menu-section + .hud-menu-section {
   margin-top: 18px;
