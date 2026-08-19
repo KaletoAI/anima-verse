@@ -414,6 +414,10 @@ def compose_recipe(room: Dict[str, Any],
             # ``variants`` URLs, and the signature below moves when a prop
             # gets a new mesh (the URL alone never changes).
             entry["model_tiers"] = prop.get("model_tiers") or []
+            # …and the same per ACTIVE model variant (E2.3), element 0 being
+            # the primary one. The scene spec turns this into `model_variants`
+            # and keeps `variants` pointing at element 0.
+            entry["variant_tiers"] = prop.get("variant_tiers") or []
             entry["model_sig"] = prop.get("model_signature") or ""
         idx = len(placements)
         placements.append(entry)
@@ -499,8 +503,15 @@ def compose_recipe(room: Dict[str, Any],
             except (TypeError, ValueError):
                 spacing = 0.0
             prop = prop_store.get_prop(pid)
-            for placed in _scatter_props(seed, count, outline_m, keepouts,
-                                         spacing):
+            # WHICH of the prop's model variants each copy shows (E2.3): the
+            # copies of one scatter source walk the active variants in the
+            # fixed order `(scatter_seed + instance) mod count`, so twenty
+            # pines are four kinds of pine in the same arrangement for every
+            # renderer — and the same arrangement again after a reload, since
+            # both inputs are stored numbers.
+            variant_count = len(prop.get("variant_tiers") or []) if prop else 0
+            for i, placed in enumerate(_scatter_props(seed, count, outline_m,
+                                                      keepouts, spacing)):
                 entry: Dict[str, Any] = {
                     "prop_id": pid,
                     "at": [_r(placed["at"][0]), _r(placed["at"][1])],
@@ -517,7 +528,10 @@ def compose_recipe(room: Dict[str, Any],
                     entry["has_model"] = bool(prop.get("has_model"))
                     if prop.get("has_model"):
                         entry["model_tiers"] = prop.get("model_tiers") or []
+                        entry["variant_tiers"] = prop.get("variant_tiers") or []
                         entry["model_sig"] = prop.get("model_signature") or ""
+                        entry["variant"] = prop_store.scatter_variant_index(
+                            seed, i, variant_count)
                 placements.append(entry)
 
     payload: Dict[str, Any] = {

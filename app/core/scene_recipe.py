@@ -1516,8 +1516,16 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     the height of a prop on a slope is NEVER set by hand (user rule): manual
     anchor and scattered copy alike get the ground under their own anchor
     added here. A flat room passes ``None`` and keeps every existing number.
+
+    MODEL VARIANTS (E2.3, § B2 addendum): a prop may carry several meshes of
+    the same object. ``model_variants`` is one tier-map per ACTIVE variant, in
+    the prop's own order, and ``variant`` says which of them THIS placement
+    shows. ``variants`` stays what it always was — the PRIMARY variant's tier
+    map, i.e. ``model_variants[0]`` — so a consumer that never heard of
+    variants renders exactly what it rendered before. The index is resolved
+    here, not in the renderers: the same copy must show the same mesh in the
+    3D client, in the admin preview and in the smoke.
     """
-    from urllib.parse import quote
     from app.core import props as prop_store
     level = int(recipe.get("level") or 0)
     room_id = recipe.get("room_id") or ""
@@ -1534,12 +1542,15 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         anchor_v = _num(at[1])
         has_model = bool(placement.get("has_model"))
         prop = prop_store.get_prop(pid) if pid else None
+        model_variants = (_prop_variant_urls(pid, placement)
+                          if has_model else [])
         spec: Dict[str, Any] = {
             "role": "prop",
             "id": pid,
-            "variants": (_variants(f"/assets/props/{quote(pid)}/model",
-                                   placement.get("model_tiers"))
-                         if has_model else {}),
+            # The PRIMARY variant's tier map — unchanged for every prop that
+            # has one variant, which is every prop until an admin adds a
+            # second one.
+            "variants": model_variants[0] if model_variants else {},
             "room_id": room_id,
             "level": level,
             "fix_euler": _fix_euler((prop or {}).get("rotation")),
@@ -1550,11 +1561,72 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             "bottom_y": _r(floor_y + _num(placement.get("offset_y"))
                            + (lift(anchor_u, anchor_v) if lift else 0.0)),
         }
+        # Only a prop that really HAS more than one variant says so: a
+        # one-element list beside an identical `variants` map would be the
+        # same fact twice in every payload of every world.
+        if len(model_variants) > 1:
+            spec["model_variants"] = model_variants
+            spec["variant"] = _variant_index(placement, len(model_variants))
         if not has_model:
             spec["placeholder_dims"] = {"w": _r(dims[0]), "d": _r(dims[1]),
                                         "h": _r(dims[2])}
         out.append(spec)
     return out
+
+
+def _prop_variant_urls(prop_id: str,
+                       placement: Dict[str, Any]) -> List[Dict[str, str]]:
+    """One tier-map per ACTIVE model variant of a prop, in the prop's own
+    order (§ B2 addendum) — element 0 is the PRIMARY variant.
+
+    Each map is built exactly like the single ``variants`` map has always
+    been (:func:`_variants`), plus the ``variant`` query the serving route
+    reads (``…/model?variant=2&tier=low``); the primary one keeps the bare URL
+    it always had, so nothing already cached by a client is invalidated by the
+    feature existing.
+
+    A recipe that carries no ``variant_tiers`` (a prop with one variant)
+    yields the single primary map — the same list ``[variants]``, so the
+    caller has one shape to reason about.
+
+    The URL index is the entry's OWN ``variant`` number, never its position in
+    the list: switching variant 1 off leaves the payload with 0 and 2, and a
+    position would serve the very mesh the admin just switched off.
+    """
+    from urllib.parse import quote
+    base = f"/assets/props/{quote(prop_id)}/model"
+    entries = placement.get("variant_tiers")
+    if not isinstance(entries, list) or not entries:
+        return [_variants(base, placement.get("model_tiers"))]
+    out: List[Dict[str, str]] = []
+    for pos, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        idx = int(entry.get("variant") or 0)
+        # The PRIMARY variant (list position 0) keeps the bare URL it has
+        # always had, whatever its store index — that identity is what keeps
+        # existing client caches valid.
+        out.append(_variants(base if pos == 0 else f"{base}?variant={idx}",
+                             entry.get("tiers")))
+    return out
+
+
+def _variant_index(placement: Dict[str, Any], count: int) -> int:
+    """WHICH variant this placement shows — the resolved index into
+    ``model_variants``.
+
+    Scattered copies carry the number the recipe already computed with the
+    one formula ``(scatter_seed + instance) mod count``
+    (``props.scatter_variant_index``); a manually placed prop carries whatever
+    the editor set, and 0 — the primary variant — until it sets anything. Out
+    of range wraps rather than 404s: the variant count moves when an admin
+    adds or deletes a mesh, and a stored index must not make a placement
+    disappear."""
+    try:
+        i = int(placement.get("variant") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return i % count if count > 0 else 0
 
 
 # ── Markers, figures ────────────────────────────────────────────────────

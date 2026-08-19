@@ -25,6 +25,29 @@ Everything that describes ONE generation run (backend, face_num,
 texture_size) lives on that run's sidecar; the master record describes the
 OBJECT (2026-08-03, plan-3d-lod-und-betreten.md).
 
+MODEL VARIANTS (2026-08-19, "Prop-Welt statt Dioramen" E2.3). One prop may
+carry SEVERAL active meshes of the same object, so a scattered wood is not the
+same tree twenty times. A variant is a whole gallery of its own — its own
+resolution tiers, its own history — and the variants are an ORDERED LIST on
+the master record::
+
+    "model_variants": [{"stem": "model", "active": true},
+                       {"stem": "model-v2", "active": true}]
+
+The stem is what separates them on disk: variant 0 keeps the historic
+``model`` stem (``model_<ts>.glb``), every further one gets ``model-v<n>``, and
+``selection.json`` is already keyed BY STEM, so each variant selects its own
+tiers without a second mechanism. The stem is STORED, not derived from the
+position — deleting a variant in the middle must not rename the files of the
+one behind it. A record without the key has exactly one variant, the primary.
+
+How many ACTIVE variants a prop may have is ``image_generation.prop_variant_max``
+(default 4). The FIRST ACTIVE variant is the **primary** one: it is what
+``/assets/props/<id>/model`` serves without a ``variant`` parameter, what the
+dims/bbox are measured from, and what every payload publishes as its single
+``variants`` map — a consumer that knows nothing about variants keeps rendering
+exactly what it rendered before.
+
 ``prop_id`` = slug of the name + a short hash (stable, file-safe).
 
 REAL SIZE. The mesh normalization destroys the real scale (the height_m /
@@ -76,6 +99,19 @@ SOURCE_NAME = "source.png"
 SIDECAR_NAME = "sidecar.json"
 # Tier a mesh→mesh reduction always writes into (see trigger_shrink).
 LOW_TIER = "low"
+
+# ── Model variants (E2.3) ───────────────────────────────────────────────
+#: Sidecar key holding the ordered variant list.
+VARIANTS_KEY = "model_variants"
+#: How many ACTIVE variants a prop may carry when nothing is configured.
+DEFAULT_VARIANT_MAX = 4
+#: Hard ceiling for the configured value — a prop is placed many times over,
+#: and every active variant is another mesh every client downloads.
+VARIANT_MAX_CAP = 16
+#: The stems a variant may carry: the historic base stem, or ``model-v<n>``
+#: with n = 2…99. Validated on read, because the stem decides which files a
+#: gallery matches and must never become a path escape.
+_VARIANT_STEM_RE = re.compile(rf"^{MODEL_STEM}(-v[2-9][0-9]?)?$")
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
@@ -198,6 +234,114 @@ def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
         raise ValueError("bad prop id")
     (d / SIDECAR_NAME).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# ── Model variants ──────────────────────────────────────────────────────
+
+def variant_max() -> int:
+    """How many ACTIVE model variants one prop may carry — config
+    ``image_generation.prop_variant_max`` (default 4), clamped to 1…16.
+
+    The cap is on the ACTIVE ones, because that is what costs: every active
+    variant is another mesh a client downloads for the same object."""
+    from app.core import config as _cfg
+    try:
+        v = int(_cfg.get("image_generation.prop_variant_max",
+                         DEFAULT_VARIANT_MAX) or DEFAULT_VARIANT_MAX)
+    except (TypeError, ValueError):
+        v = DEFAULT_VARIANT_MAX
+    return max(1, min(v, VARIANT_MAX_CAP))
+
+
+def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The prop's ordered variant records, sanitized:
+    ``[{"stem": str, "active": bool}, …]``.
+
+    A record without the key — every prop that predates the feature — has
+    exactly ONE variant on the historic ``model`` stem. Entries with an
+    unusable or duplicate stem are dropped individually; an empty result
+    falls back to that same single primary variant, so this never answers
+    with "this prop has no variants at all"."""
+    raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    if isinstance(raw, list):
+        for entry in raw[:VARIANT_MAX_CAP]:
+            if not isinstance(entry, dict):
+                continue
+            stem = str(entry.get("stem") or "").strip()
+            if not _VARIANT_STEM_RE.match(stem) or stem in seen:
+                continue
+            seen.add(stem)
+            out.append({"stem": stem, "active": bool(entry.get("active", True))})
+    return out or [{"stem": MODEL_STEM, "active": True}]
+
+
+def _free_stem(entries: List[Dict[str, Any]]) -> str:
+    """The next unused variant stem — the base stem when it is free, else
+    ``model-v<n>`` with the smallest free n. A DELETED variant frees its stem
+    again; that is fine, its files went with it."""
+    used = {e["stem"] for e in entries}
+    if MODEL_STEM not in used:
+        return MODEL_STEM
+    for n in range(2, VARIANT_MAX_CAP + 2):
+        stem = f"{MODEL_STEM}-v{n}"
+        if stem not in used:
+            return stem
+    return ""
+
+
+def _active_indices(entries: List[Dict[str, Any]]) -> List[int]:
+    """Indices of the ACTIVE variants, in order, capped at :func:`variant_max`.
+    A list without a single active entry answers with the first one — a prop
+    that renders nothing at all is a state the ``__none__`` selection sentinel
+    already owns, and it must not be reachable by toggling."""
+    idx = [i for i, e in enumerate(entries) if e.get("active")]
+    return (idx or [0])[:variant_max()]
+
+
+def _stem_of(prop_id: str, variant: Any = None,
+             meta: Optional[Dict[str, Any]] = None) -> str:
+    """File stem of ONE variant of a prop — ``None`` (or a negative index)
+    means the PRIMARY variant, i.e. the first active one. ``''`` when the
+    index names no variant this prop has."""
+    entries = _variant_list(read_sidecar(prop_id) if meta is None else meta)
+    if variant is None:
+        return entries[_active_indices(entries)[0]]["stem"]
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return ""
+    if i < 0:
+        return entries[_active_indices(entries)[0]]["stem"]
+    return entries[i]["stem"] if i < len(entries) else ""
+
+
+def primary_variant(prop_id: str) -> int:
+    """Index of the prop's PRIMARY variant — the first active one. This is
+    what every unqualified read resolves to (``/model`` without a ``variant``
+    parameter, the bbox measurement, the payload's single ``variants`` map)."""
+    return _active_indices(_variant_list(read_sidecar(prop_id)))[0]
+
+
+def scatter_variant_index(seed: Any, instance: Any, count: Any) -> int:
+    """WHICH active variant one scattered copy shows: ``(seed + instance) mod
+    count``.
+
+    The one formula behind the whole feature, in one place (§ B2 addendum).
+    It is deliberately the cheapest thing that varies: the server resolves it
+    per copy into the placement's ``variant`` index, and both renderers read
+    that number instead of deriving it — the same copy shows the same mesh in
+    the 3D client, in the admin preview and in the numeric smoke.
+
+    ``count`` 0 or less has nothing to choose from and answers 0."""
+    try:
+        n = int(count)
+        if n <= 0:
+            return 0
+        return (int(seed) + int(instance)) % n
+    except (TypeError, ValueError):
+        return 0
 
 
 # ── Field coercion ──────────────────────────────────────────────────────
@@ -543,20 +687,26 @@ def delete_prop(prop_id: str) -> bool:
 
 # ── Files ───────────────────────────────────────────────────────────────
 
-def model_gallery(prop_id: str) -> Optional[ModelGallery]:
-    """The prop's mesh gallery (None for an invalid id)."""
+def model_gallery(prop_id: str, variant: Any = None) -> Optional[ModelGallery]:
+    """The mesh gallery of ONE variant (None for an invalid id or an index
+    this prop has no variant for). ``variant=None`` is the primary one."""
     d = _prop_dir(prop_id)
-    return ModelGallery(d, MODEL_STEM, (".glb",)) if d else None
+    if not d:
+        return None
+    stem = _stem_of(prop_id, variant)
+    return ModelGallery(d, stem, (".glb",)) if stem else None
 
 
-def model_path(prop_id: str, tier: str = "") -> Optional[Path]:
-    """The ACTIVE mesh of ``tier`` — a tier the prop does not have falls back
-    to the best available one, so a prop without a low variant still renders."""
-    g = model_gallery(prop_id)
+def model_path(prop_id: str, tier: str = "",
+               variant: Any = None) -> Optional[Path]:
+    """The ACTIVE mesh of ``tier`` in one variant — a tier the variant does
+    not have falls back to the best available one, so a prop without a low
+    variant still renders."""
+    g = model_gallery(prop_id, variant)
     return g.find(tier) if g else None
 
 
-def model_tiers(prop_id: str) -> List[str]:
+def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
     """The resolution tiers the prop actually HAS, sorted ('' id or no mesh →
     empty list).
 
@@ -568,10 +718,137 @@ def model_tiers(prop_id: str) -> List[str]:
 
     Being that read, this is also where a MISSING distance mesh is asked for
     (:func:`_demand_low`)."""
-    g = model_gallery(prop_id)
+    g = model_gallery(prop_id, variant)
     tiers = sorted(g.tiers()) if g else []
-    _demand_low(prop_id, tiers)
+    _demand_low(prop_id, variant, tiers)
     return tiers
+
+
+def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
+    """Every ACTIVE variant that HAS a mesh, in payload order:
+    ``[{"variant": <store index>, "tiers": [...]}, …]``.
+
+    This is what becomes ``model_variants`` in the scene payload, and the
+    reason element 0 is the primary variant is the whole compatibility
+    contract: ``variants`` (the single map every existing consumer reads) is
+    element 0 of this list. Variants without a mesh are DROPPED — an entry
+    with no tier would be a placement that renders nothing, and the copies
+    picking it would simply be missing from the wood.
+
+    The store index rides along because it is NOT the position: switching
+    variant 1 off leaves the payload with variants 0 and 2, and the serving
+    URL of the second entry must say ``?variant=2``. A list position as the
+    URL index would silently serve the mesh the admin just switched off."""
+    entries = _variant_list(read_sidecar(prop_id))
+    out: List[Dict[str, Any]] = []
+    for i in _active_indices(entries):
+        tiers = model_tiers(prop_id, i)
+        if tiers:
+            out.append({"variant": i, "tiers": tiers})
+    return out
+
+
+def list_variants(prop_id: str) -> List[Dict[str, Any]]:
+    """The prop's variants for the admin strip: ``[{index, stem, active,
+    tiers, has_model, model_file, model_url, signature}]`` — every variant,
+    active or not, in order.
+
+    ``model_url`` is the canonical serving URL WITH its ``variant`` parameter
+    (the primary one keeps the bare URL, which is the very string stored on
+    scatter entries)."""
+    entries = _variant_list(read_sidecar(prop_id))
+    primary = _active_indices(entries)[0]
+    out: List[Dict[str, Any]] = []
+    for i, entry in enumerate(entries):
+        g = model_gallery(prop_id, i)
+        tiers = sorted(g.tiers()) if g else []
+        active_file = g.find() if g else None
+        base = f"/assets/props/{prop_id}/model"
+        out.append({
+            "index": i,
+            "stem": entry["stem"],
+            "active": bool(entry["active"]),
+            "primary": i == primary,
+            "tiers": tiers,
+            "has_model": bool(tiers),
+            "model_file": active_file.name if active_file else "",
+            "model_url": (base if i == primary else f"{base}?variant={i}") if tiers else "",
+            "signature": g.signature() if g else "",
+        })
+    return out
+
+
+def add_variant(prop_id: str) -> int:
+    """Append an EMPTY variant slot and return its index; ``-1`` when the prop
+    does not exist or the active cap is already reached.
+
+    The slot carries no mesh yet — a generation targeted at it fills it. This
+    is what "generating appends instead of replacing" runs on."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return -1
+    entries = _variant_list(meta)
+    if len(_active_indices(entries)) >= variant_max():
+        return -1
+    stem = _free_stem(entries)
+    if not stem:
+        return -1
+    entries.append({"stem": stem, "active": True})
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return len(entries) - 1
+
+
+def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
+    """Switch one variant on or off. Switching the LAST active one off is
+    refused: a prop with no active variant would render nothing, and that
+    state belongs to the ``__none__`` selection sentinel, not to a toggle."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= i < len(entries):
+        return False
+    if not active and len([e for e in entries if e["active"]]) <= 1:
+        return False
+    entries[i]["active"] = bool(active)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
+def delete_variant(prop_id: str, variant: int) -> bool:
+    """Remove one variant WITH its stored meshes and its selection entry.
+    Refused for the last remaining variant — a prop always has one."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= i < len(entries) or len(entries) <= 1:
+        return False
+    g = model_gallery(pid, i)
+    if g:
+        g.delete()
+        # The stem's selection entry survives its files (``delete`` only
+        # re-points what is left), and a freed stem may be handed out again —
+        # so it goes with the variant.
+        g.forget()
+    entries.pop(i)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    _store_bbox(pid)
+    return True
 
 
 def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
@@ -615,14 +892,16 @@ def prop_id_from_model_url(url: Any) -> str:
     return safe_prop_id(m.group(1)) if m else ""
 
 
-def model_file_path(prop_id: str, filename: str) -> Optional[Path]:
+def model_file_path(prop_id: str, filename: str,
+                    variant: Any = None) -> Optional[Path]:
     """Path of ONE stored mesh by filename (the admin previews non-active
-    files with it). Validated against the stem; None when missing/foreign."""
-    g = model_gallery(prop_id)
+    files with it). Validated against the variant's stem; None when
+    missing/foreign."""
+    g = model_gallery(prop_id, variant)
     return g.file(filename) if g else None
 
 
-def list_models(prop_id: str) -> List[Dict[str, Any]]:
+def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
     """All stored meshes of the prop for the admin gallery, newest first:
     ``[{filename, tier, selected_for, face_num, texture_size, format,
     created_at, backend, source, source_file, tris, lod_ratio, shrinkable,
@@ -636,7 +915,7 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
     (header + JSON chunk): a vertex-coloured mesh without UVs can never be
     reduced, and the admin must see that on the row instead of starting a job
     that fails permanently."""
-    g = model_gallery(prop_id)
+    g = model_gallery(prop_id, variant)
     if not g:
         return []
     active = g.find()
@@ -666,9 +945,9 @@ def list_models(prop_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def get_model_info(prop_id: str) -> Dict[str, Any]:
-    """Gallery status for the admin panel: ``{models, tiers, none_selected,
-    shrink_backends, blender}`` — the prop counterpart of
+def get_model_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
+    """Gallery status of ONE variant for the admin panel: ``{models, tiers,
+    none_selected, shrink_backends, blender}`` — the prop counterpart of
     ``location_model3d.get_building_info`` minus the img2mesh backend list
     (the props tab already carries that one). ``tiers`` are the resolution
     tiers the prop actually HAS; a missing one is what the admin sees as "low
@@ -679,9 +958,9 @@ def get_model_info(prop_id: str) -> Dict[str, Any]:
     hides it instead of offering a button that always fails."""
     from app.blender import runner
     from app.core.model3d import list_shrink_backends
-    g = model_gallery(prop_id)
+    g = model_gallery(prop_id, variant)
     return {
-        "models": list_models(prop_id),
+        "models": list_models(prop_id, variant),
         "tiers": sorted(g.tiers()) if g else [],
         "none_selected": bool(g and g.none_selected()),
         "shrink_backends": list_shrink_backends()["backends"],
@@ -690,28 +969,29 @@ def get_model_info(prop_id: str) -> Dict[str, Any]:
 
 
 def select_model(prop_id: str, filename: str,
-                 tier: str = DEFAULT_TIER) -> bool:
-    """Make a stored mesh the active one of ``tier``. An EMPTY filename
-    deselects — on the default tier that persists the "render nothing"
-    sentinel, on any other tier the tier ceases to exist. False when the prop
-    or the file does not exist."""
-    g = model_gallery(prop_id) if read_sidecar(prop_id) else None
+                 tier: str = DEFAULT_TIER, variant: Any = None) -> bool:
+    """Make a stored mesh the active one of ``tier`` in one variant. An EMPTY
+    filename deselects — on the default tier that persists the "render
+    nothing" sentinel, on any other tier the tier ceases to exist. False when
+    the prop, the variant or the file does not exist."""
+    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
     if not g or not g.select(filename, tier):
         return False
     if (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER:
         # The mesh the dims are derived from changed — re-measure it.
-        _store_bbox(prop_id)
+        _store_bbox(prop_id, variant)
     return True
 
 
-def delete_model(prop_id: str, filename: str = "") -> bool:
-    """Remove ONE stored mesh (+ its sidecar) or ALL of them. A selection
-    pointing at a removed file moves to the newest remaining one (default
-    tier) or is dropped (any other tier)."""
-    g = model_gallery(prop_id) if read_sidecar(prop_id) else None
+def delete_model(prop_id: str, filename: str = "",
+                 variant: Any = None) -> bool:
+    """Remove ONE stored mesh (+ its sidecar) or ALL of a variant's. A
+    selection pointing at a removed file moves to the newest remaining one
+    (default tier) or is dropped (any other tier)."""
+    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
     if not g or not g.delete(filename):
         return False
-    _store_bbox(prop_id)
+    _store_bbox(prop_id, variant)
     return True
 
 
@@ -724,11 +1004,11 @@ def source_path(prop_id: str) -> Optional[Path]:
 
 
 def save_uploaded_glb(prop_id: str, contents: bytes,
-                      tier: str = DEFAULT_TIER) -> bool:
-    """Store an uploaded GLB as a NEW mesh of the prop and make it the active
-    one of its tier. The prop record must already exist (created first);
-    validation is the caller's job."""
-    g = model_gallery(prop_id) if read_sidecar(prop_id) else None
+                      tier: str = DEFAULT_TIER, variant: Any = None) -> bool:
+    """Store an uploaded GLB as a NEW mesh of one variant and make it the
+    active one of its tier. The prop record must already exist (created
+    first); validation is the caller's job."""
+    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
     if not g:
         return False
     target = g.new_path()
@@ -743,17 +1023,20 @@ def save_uploaded_glb(prop_id: str, contents: bytes,
     g.select(target.name, tier)
     logger.info("Prop %s: model uploaded (%d bytes) -> %s",
                 safe_prop_id(prop_id), len(contents), target.name)
-    _store_bbox(prop_id)
+    _store_bbox(prop_id, variant)
     return True
 
 
 # ── Model bounding box ──────────────────────────────────────────────────
 
 def _extract_bbox(prop_id: str) -> Optional[List[float]]:
-    """Edge lengths ``[bx, by, bz]`` of the model's AABB in MESH units on the
-    RAW mesh axes (no orientation fix applied), round 5 — None when the model
-    is missing, unreadable or degenerate (a zero-volume box carries no
-    proportions)."""
+    """Edge lengths ``[bx, by, bz]`` of the PRIMARY variant's AABB in MESH
+    units on the RAW mesh axes (no orientation fix applied), round 5 — None
+    when the model is missing, unreadable or degenerate (a zero-volume box
+    carries no proportions).
+
+    Only the primary variant is measured: the dims describe the OBJECT, and
+    four meshes of the same chair must not each redistribute them."""
     mp = model_path(prop_id)
     if not mp:
         return None
@@ -786,12 +1069,12 @@ def _retexture_file(path: Optional[Path], label: str) -> None:
                     (res.get("data") or {}).get("bytes_saved", 0))
 
 
-def _auto_retexture(prop_id: str) -> None:
-    """Re-encodes the prop's ACTIVE model (see ``_retexture_file``)."""
-    _retexture_file(model_path(prop_id), f"Prop {prop_id}")
+def _auto_retexture(prop_id: str, variant: Any = None) -> None:
+    """Re-encodes one variant's ACTIVE model (see ``_retexture_file``)."""
+    _retexture_file(model_path(prop_id, variant=variant), f"Prop {prop_id}")
 
 
-def _auto_bake_vc(prop_id: str) -> None:
+def _auto_bake_vc(prop_id: str, variant: Any = None) -> None:
     """Converts a vertex-colour (Triposplat) model to a textured one, if
     switched on. Runs BEFORE the re-encode on purpose: the baked texture is a
     fresh PNG, and the retexture step turns it into JPEG in the same ingest.
@@ -799,7 +1082,7 @@ def _auto_bake_vc(prop_id: str) -> None:
     (``MeshNotShrinkable``) — the whole alias family was a dead end."""
     from app.blender import refine
     from app.core.model_validate import validate_static_glb
-    path = model_path(prop_id)
+    path = model_path(prop_id, variant=variant)
     if (not refine.auto_bake_vc_enabled() or not path
             or not refine.needs_vc_bake(path)):
         return
@@ -815,23 +1098,31 @@ def _auto_bake_vc(prop_id: str) -> None:
                     safe_prop_id(prop_id), res.get("error"))
 
 
-def _reduce_to_low(pid: str, src: Path, ratio: float) -> Dict[str, Any]:
+def _lod_key(prop_id: str, variant: Any = None) -> str:
+    """In-flight / failure key of ONE variant's distance mesh. Every variant
+    reduces on its own, so a broken second mesh must not silence the first."""
+    return f"{safe_prop_id(prop_id)}#{_stem_of(prop_id, variant) or '?'}"
+
+
+def _reduce_to_low(pid: str, src: Path, ratio: float,
+                   variant: Any = None) -> Dict[str, Any]:
     """The reduction itself: Blender Decimate, then a NEW gallery file that
-    becomes the ``low`` model. The caller holds the in-flight key.
+    becomes the variant's ``low`` model. The caller holds the in-flight key.
 
     A failure is REMEMBERED (``_lod_failed``) and a success forgets it — that
     memory is what keeps the automatic path from grinding through the same
     broken mesh on every payload build."""
     from app.blender import refine
+    key = _lod_key(pid, variant)
     out: Dict[str, Any] = {"ok": False, "tier": LOW_TIER, "ratio": ratio,
                            "tris": None, "tris_before": None, "size": 0,
                            "size_before": 0, "error": ""}
     res = refine.build_static_lod(src, ratio)
     if not res.get("ok"):
-        _lod_failed.add(pid)
+        _lod_failed.add(key)
         out["error"] = res.get("error") or "distance mesh not built"
         return out
-    gallery = model_gallery(pid)
+    gallery = model_gallery(pid, variant)
     if not gallery:
         out["error"] = "no_model"
         return out
@@ -849,7 +1140,7 @@ def _reduce_to_low(pid: str, src: Path, ratio: float) -> Dict[str, Any]:
         "tris_before": res.get("tris_before"),
     })
     gallery.select(target.name, LOW_TIER)
-    _lod_failed.discard(pid)
+    _lod_failed.discard(key)
     logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
                 target.name, res.get("tris_before"), res.get("tris"))
     out.update(ok=True, tris=res.get("tris"),
@@ -858,9 +1149,9 @@ def _reduce_to_low(pid: str, src: Path, ratio: float) -> Dict[str, Any]:
     return out
 
 
-def build_low_tier(prop_id: str, ratio: float = 0.0,
-                   force: bool = False) -> Dict[str, Any]:
-    """Reduces the prop's full mesh to its distance mesh, BLOCKING (CPU).
+def build_low_tier(prop_id: str, ratio: float = 0.0, force: bool = False,
+                   variant: Any = None) -> Dict[str, Any]:
+    """Reduces one variant's full mesh to its distance mesh, BLOCKING (CPU).
 
     The result is a NEW gallery file selected as ``low`` — never an overwrite:
     a gallery keeps its history and the admin can go back to the previous low
@@ -880,7 +1171,7 @@ def build_low_tier(prop_id: str, ratio: float = 0.0,
                            "tris": None, "tris_before": None, "size": 0,
                            "size_before": 0, "error": ""}
     pid = safe_prop_id(prop_id)
-    g = model_gallery(pid)
+    g = model_gallery(pid, variant)
     src = g.find(DEFAULT_TIER, fallback=False) if g else None
     if not src or src.suffix.lower() != ".glb":
         out["error"] = "no_model"
@@ -888,21 +1179,22 @@ def build_low_tier(prop_id: str, ratio: float = 0.0,
     if LOW_TIER in g.tiers() and not force:
         out["error"] = "low tier already exists"
         return out
+    key = _lod_key(pid, variant)
     with _lock:
-        if pid in _lod_building:
+        if key in _lod_building:
             out["error"] = "a distance mesh of this prop is already being built"
             return out
-        _lod_building.add(pid)
+        _lod_building.add(key)
     try:
-        return _reduce_to_low(pid, src, ratio)
+        return _reduce_to_low(pid, src, ratio, variant)
     finally:
         with _lock:
-            _lod_building.discard(pid)
+            _lod_building.discard(key)
 
 
-def request_low_tier(prop_id: str) -> None:
-    """Builds the prop's missing distance mesh in the BACKGROUND, if switched
-    on ("Build distance meshes on demand").
+def request_low_tier(prop_id: str, variant: Any = None) -> None:
+    """Builds one variant's missing distance mesh in the BACKGROUND, if
+    switched on ("Build distance meshes on demand").
 
     Called wherever a payload lists this prop's tiers (see
     :func:`_demand_low`), so it runs on POLLED paths and every gate is ordered
@@ -924,46 +1216,49 @@ def request_low_tier(prop_id: str) -> None:
     if not refine.auto_lod_enabled():
         return
     pid = safe_prop_id(prop_id)
-    if not pid or pid in _lod_failed:
+    if not pid:
+        return
+    key = _lod_key(pid, variant)
+    if key in _lod_failed:
         return
     with _lock:
-        if pid in _lod_building:
+        if key in _lod_building:
             return
-        _lod_building.add(pid)
+        _lod_building.add(key)
     if not refine.take_lod_slot():
         with _lock:
-            _lod_building.discard(pid)
+            _lod_building.discard(key)
         return
     started = False
     try:
-        g = model_gallery(pid)
+        g = model_gallery(pid, variant)
         src = g.find(DEFAULT_TIER, fallback=False) if g else None
         if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
             return
         # A mesh the store itself calls unreducible never becomes a low
         # variant; remembering it is what keeps the probe off the polled path.
         if not shrink_capability(src)["shrinkable"]:
-            _lod_failed.add(pid)
+            _lod_failed.add(key)
             return
         ratio = refine.lod_ratio("prop")
 
         def _run() -> None:
             try:
-                res = _reduce_to_low(pid, src, ratio)
+                res = _reduce_to_low(pid, src, ratio, variant)
                 if not res.get("ok"):
                     logger.debug("Prop %s: distance mesh not built (%s)", pid,
                                  res.get("error"))
             except Exception as e:                          # noqa: BLE001
-                _lod_failed.add(pid)
+                _lod_failed.add(key)
                 logger.warning("Prop %s: distance-mesh build failed: %s",
                                pid, e)
             finally:
                 refine.free_lod_slot()
                 with _lock:
-                    _lod_building.discard(pid)
+                    _lod_building.discard(key)
 
         threading.Thread(target=_run, daemon=True,
-                         name=f"prop-lod-{pid}").start()
+                         name=f"prop-lod-{key}").start()
         started = True
     finally:
         # Whatever ends this call without a running thread — a rejected
@@ -972,11 +1267,11 @@ def request_low_tier(prop_id: str) -> None:
         if not started:
             refine.free_lod_slot()
             with _lock:
-                _lod_building.discard(pid)
+                _lod_building.discard(key)
 
 
-def _demand_low(prop_id: str, tiers: List[str]) -> None:
-    """A payload just listed this prop's resolution tiers — if ``low`` is
+def _demand_low(prop_id: str, variant: Any, tiers: List[str]) -> None:
+    """A payload just listed one variant's resolution tiers — if ``low`` is
     missing while a full mesh exists, ask for it in the BACKGROUND.
 
     This is where the demand belongs, not on the serving route: every payload
@@ -985,20 +1280,26 @@ def _demand_low(prop_id: str, tiers: List[str]) -> None:
     exist. The moment a client is TOLD there is no distance mesh is the
     moment to build one."""
     if tiers and LOW_TIER not in tiers:
-        request_low_tier(prop_id)
+        request_low_tier(prop_id, variant)
 
 
-def _store_bbox(prop_id: str) -> None:
+def _store_bbox(prop_id: str, variant: Any = None) -> None:
     """Everything that happens once a model has landed: re-encode its
     textures, measure it, persist ``bbox`` on the sidecar (one
     read-modify-write) and redistribute still-estimated dims over the fresh
     proportions. A failed measurement leaves the sidecar untouched.
 
     Called from all three ingest paths (generate, shrink variant, upload), so
-    this is the one place a post-ingest step has to be added."""
-    _auto_bake_vc(prop_id)
-    _auto_retexture(prop_id)
-    request_low_tier(prop_id)
+    this is the one place a post-ingest step has to be added.
+
+    The per-file work (bake, re-encode, distance mesh) belongs to the variant
+    that just received the mesh; the MEASUREMENT belongs to the object and is
+    therefore only redone when the primary variant was the one that changed."""
+    _auto_bake_vc(prop_id, variant)
+    _auto_retexture(prop_id, variant)
+    request_low_tier(prop_id, variant)
+    if variant is not None and _stem_of(prop_id, variant) != _stem_of(prop_id):
+        return
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return
@@ -1097,15 +1398,26 @@ def _all_prop_ids() -> List[str]:
 
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
     meta = _ensure_bbox(prop_id, meta)
-    gallery = model_gallery(prop_id)
-    # Which resolution tiers the prop HAS — the selection decides, not the
-    # presence of files (an admin may have switched the prop off with the
-    # __none__ sentinel). Empty = no mesh at all.
-    tiers = sorted(gallery.tiers()) if gallery else []
-    has_model = bool(tiers)
+    entries = _variant_list(meta)
+    active_idx = _active_indices(entries)
+    # Which resolution tiers each ACTIVE variant HAS — the selection decides,
+    # not the presence of files (an admin may have switched a variant off with
+    # the __none__ sentinel). Element 0 is the PRIMARY variant, so
+    # `variant_tiers[0] == model_tiers` whenever the prop has a mesh at all —
+    # that identity IS the "primary variant" contract every unchanged consumer
+    # rides on (§ B2 addendum).
+    galleries = [model_gallery(prop_id, i) for i in active_idx]
+    tier_lists = [sorted(g.tiers()) if g else [] for g in galleries]
     # The record IS a client payload (the prop library the 3D client reads),
-    # so this is one of the two places a missing distance mesh is noticed.
-    _demand_low(prop_id, tiers)
+    # so this is one of the two places a missing distance mesh is noticed —
+    # for every variant, not just the primary one.
+    for i, vt in zip(active_idx, tier_lists):
+        _demand_low(prop_id, i, vt)
+    gallery = galleries[0]
+    tiers = tier_lists[0]
+    variant_tiers = [{"variant": i, "tiers": vt}
+                     for i, vt in zip(active_idx, tier_lists) if vt]
+    has_model = bool(tiers)
     dims = _effective_dims(meta)
     rec: Dict[str, Any] = {
         "id": prop_id,
@@ -1121,14 +1433,20 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         "marker_count": len(meta.get("markers") or []),
         "has_model": has_model,
         "model_tiers": tiers,
+        # Every active variant that has a mesh, in payload order:
+        # `[{variant: <store index>, tiers: [...]}, …]`, element 0 being the
+        # primary one (its `tiers` IS `model_tiers`). The store index is not
+        # the position — a switched-off variant leaves a gap — and it is what
+        # the serving URL names. Turns into `model_variants` on a spec.
+        "variant_tiers": variant_tiers,
     }
     if full:
         has_source = source_path(prop_id) is not None
         # Per-run facts of the ACTIVE mesh (they live on its own sidecar since
         # the gallery rebuild) — the admin panel shows what the current model
         # was made with.
-        active = gallery.find() if gallery else None
-        run = read_model_sidecar(active) if active else {}
+        active_file = gallery.find() if gallery else None
+        run = read_model_sidecar(active_file) if active_file else {}
         rec.update({
             "description": meta.get("description") or "",
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
@@ -1139,13 +1457,21 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             "backend": run.get("backend") or "",
             "face_num": int(run.get("face_num") or 0),
             "texture_size": int(run.get("texture_size") or 0),
-            "model_signature": gallery.signature() if gallery else "",
+            # Over ALL active variants: adding, removing or re-generating one
+            # of them must move the scene signature, or a client that already
+            # holds the room keeps showing the old cast of meshes.
+            "model_signature": hashlib.md5(
+                "|".join(f"{i}:{g.signature() if g else ''}"
+                         for i, g in zip(active_idx, galleries)
+                         ).encode()).hexdigest()[:12],
+            "variant_count": len(variant_tiers),
+            "variant_max": variant_max(),
             "backend_image": meta.get("backend_image") or "",
             "prompt": meta.get("prompt") or "",
             "negative": meta.get("negative") or "",
             "source_generated_at": meta.get("source_generated_at") or "",
             "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
-            "model_file": active.name if active else "",
+            "model_file": active_file.name if active_file else "",
             "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
             # Always the EFFECTIVE factor, never the raw key: the admin field
             # shows what applies, and "absent" is not a state a form can edit.
@@ -1243,12 +1569,17 @@ def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
 
 # ── Generation state (populated by the generation chain, A2) ─────────────
 
-def _gen_key(prop_id: str, backend_glob: str) -> str:
-    return f"{prop_id}|{(backend_glob or '').strip().lower()}"
+def _gen_key(prop_id: str, variant: Any, backend_glob: str) -> str:
+    """Double-start key: prop, VARIANT and backend. Two variants of the same
+    prop may generate side by side — they are two objects to the GPU — while
+    the same variant on the same backend stays one job."""
+    return (f"{prop_id}|{'' if variant is None else int(variant)}"
+            f"|{(backend_glob or '').strip().lower()}")
 
 
 def is_pending(prop_id: str = "") -> List[str]:
-    """Prop ids with at least one running generation (any backend)."""
+    """Prop ids with at least one running generation (any variant, any
+    backend)."""
     with _lock:
         ids = sorted({k.split("|", 1)[0] for k in _generating})
     if not prop_id:
@@ -1410,7 +1741,8 @@ def _generate(prop_id: str, prompt: str, negative: str,
               mesh_only: bool = False,
               image_only: bool = False,
               tier: str = DEFAULT_TIER,
-              lod_faces: Any = None) -> Dict[str, Any]:
+              lod_faces: Any = None,
+              variant: Any = None) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries)."""
@@ -1452,7 +1784,7 @@ def _generate(prop_id: str, prompt: str, negative: str,
             from app.core.model3d import list_mesh_backends
             mesh_backend_glob = str(
                 list_mesh_backends("none").get("default") or "").strip()
-        g = model_gallery(prop_id)
+        g = model_gallery(prop_id, variant)
         if not g:
             error = "bad prop id"
             return {"ok": False, "error": error}
@@ -1496,13 +1828,17 @@ def _generate(prop_id: str, prompt: str, negative: str,
 
         meta = _materialize_dims(prop_id, read_sidecar(prop_id))
         meta["source"] = "generated"
-        bbox = _extract_bbox(prop_id)
-        if bbox:
-            meta["bbox"] = bbox
-            _redistribute_dims(meta)
+        # Only the PRIMARY variant informs the object's proportions — a second
+        # chair mesh must not redistribute the dims the admin sees.
+        if _stem_of(prop_id, variant) == _stem_of(prop_id):
+            bbox = _extract_bbox(prop_id)
+            if bbox:
+                meta["bbox"] = bbox
+                _redistribute_dims(meta)
         _write_sidecar(prop_id, meta)
-        logger.info("Prop %s: model generated (%s, backend %s)",
-                    prop_id, path.name, res.get("backend", ""))
+        logger.info("Prop %s: model generated into variant %s (%s, backend %s)",
+                    prop_id, _stem_of(prop_id, variant), path.name,
+                    res.get("backend", ""))
         return {"ok": True}
     finally:
         if task_id:
@@ -1513,7 +1849,8 @@ def _generate(prop_id: str, prompt: str, negative: str,
 
 
 def _shrink(prop_id: str, source_file: str, backend_glob: str,
-            face_num: Any = None, texture_size: Any = None) -> Dict[str, Any]:
+            face_num: Any = None, texture_size: Any = None,
+            variant: Any = None) -> Dict[str, Any]:
     """Blocking mesh→mesh reduction of ONE stored mesh (worker thread, see
     trigger_shrink). Adds a NEW file to the prop's gallery and makes it the
     ``low`` variant; the source file and the prop's dims stay untouched — the
@@ -1521,7 +1858,7 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
     must not move them."""
     from app.core.task_queue import get_task_queue
     from app.imagegen.service import get_image_service
-    g = model_gallery(prop_id)
+    g = model_gallery(prop_id, variant)
     src = g.file(source_file) if g else None
     if not g or not src:
         return {"ok": False, "error": "source model missing"}
@@ -1571,7 +1908,8 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
 
 
 def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
-                   face_num: Any = None, texture_size: Any = None) -> bool:
+                   face_num: Any = None, texture_size: Any = None,
+                   variant: Any = None) -> bool:
     """Start a low-variant reduction of a STORED mesh in the background.
     False when the prop/file is unknown or this very file is already being
     reduced (double-click guard). The result always lands in tier ``low``.
@@ -1582,14 +1920,14 @@ def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False
-    g = model_gallery(pid)
+    g = model_gallery(pid, variant)
     src = g.file(source_file) if g else None
     if not g or not src:
         return False
     cap = shrink_capability(src)
     if not cap["shrinkable"]:
         raise MeshNotShrinkable(cap["reason"])
-    key = _gen_key(pid, f"shrink:{source_file}")
+    key = _gen_key(pid, variant, f"shrink:{source_file}")
     with _lock:
         if key in _generating:
             return False
@@ -1598,7 +1936,7 @@ def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
     def _run() -> None:
         try:
             _shrink(pid, source_file, backend_glob, face_num=face_num,
-                    texture_size=texture_size)
+                    texture_size=texture_size, variant=variant)
         except Exception as e:
             logger.error("Prop shrink for %s failed: %s", pid, e)
         finally:
@@ -1609,6 +1947,39 @@ def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
     return True
 
 
+def target_variant(prop_id: str) -> int:
+    """Which variant a NEWLY generated mesh belongs in — the rule behind
+    "generating APPENDS a variant instead of replacing one" (E2.3).
+
+    In order:
+
+    1. the first ACTIVE variant that carries no mesh yet — a freshly created
+       prop has exactly one such slot, so its first generation still fills
+       variant 0 and nothing about a one-mesh prop changed;
+    2. a freshly appended slot, while the active cap allows one;
+    3. at the cap, the LAST active variant — the new mesh joins its gallery as
+       another stored file and becomes its active one. Nothing is lost (a
+       gallery keeps its history), and the cap is not quietly exceeded.
+
+    A re-mesh does NOT go through here: it names its variant explicitly, so
+    "make a better version of THIS one" replaces inside that gallery."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return 0
+    entries = _variant_list(meta)
+    active = _active_indices(entries)
+    for i in active:
+        g = model_gallery(pid, i)
+        if not (g and g.tiers()):
+            return i
+    if len(active) < variant_max():
+        fresh = add_variant(pid)
+        if fresh >= 0:
+            return fresh
+    return active[-1]
+
+
 def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        image_backend_glob: str = "",
                        mesh_backend_glob: str = "",
@@ -1617,18 +1988,26 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        mesh_only: bool = False,
                        image_only: bool = False,
                        tier: str = DEFAULT_TIER,
-                       lod_faces: Any = None) -> bool:
+                       lod_faces: Any = None,
+                       variant: Any = None) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
-    False only while THIS prop+backend combination is already generating
-    (double-click guard), or when the prop does not exist.
+    False only while THIS prop+variant+backend combination is already
+    generating (double-click guard), or when the prop does not exist.
+
+    ``variant`` names the model variant the mesh lands in. ``None`` lets
+    :func:`target_variant` decide, which APPENDS a variant while the cap
+    allows — that is the plain "generate" button. A re-mesh passes the index
+    it is refining (and so does ``image_only``, which touches no mesh at all).
 
     ``lod_faces`` additionally asks the mesh alias for reduced stages of the
-    same bake; the smallest one lands as the prop's ``low`` variant."""
+    same bake; the smallest one lands as that variant's ``low`` tier."""
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False
-    key = _gen_key(pid, mesh_backend_glob)
+    if variant is None and not image_only:
+        variant = target_variant(pid)
+    key = _gen_key(pid, variant, mesh_backend_glob)
     with _lock:
         if key in _generating:
             return False
@@ -1639,7 +2018,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
             _generate(pid, prompt, negative, image_backend_glob,
                       mesh_backend_glob, face_num=face_num,
                       texture_size=texture_size, mesh_only=mesh_only,
-                      image_only=image_only, tier=tier, lod_faces=lod_faces)
+                      image_only=image_only, tier=tier, lod_faces=lod_faces,
+                      variant=variant)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:

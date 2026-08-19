@@ -67,7 +67,9 @@ export {
   applyWorldScaleWallUVs, plateTargets, wallTargets,
 } from './primitives'
 
-export { FIGURE_ROOT_DROP, rootDropFor, pickVariant, MODEL_TIERS } from './types'
+export {
+  FIGURE_ROOT_DROP, rootDropFor, pickVariant, pickModelVariant, MODEL_TIERS,
+} from './types'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
   disposeSurfaceMaterials, surfaceTimeUniform } from './materials'

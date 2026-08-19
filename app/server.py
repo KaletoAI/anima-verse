@@ -67,6 +67,7 @@ from app.routes import observer as observer_route
 from app.routes import play as play_route
 from app.routes import api_images as api_images_route
 from app.routes import assist as assist_route
+from app.routes import prop_variants as prop_variants_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import initialize_channels, get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
@@ -586,6 +587,11 @@ app.include_router(group_chat.router, tags=["group_chat"])
 app.include_router(scheduler.router, prefix="/scheduler", tags=["scheduler"])
 app.include_router(instagram.router, tags=["instagram"])
 app.include_router(world.router, tags=["world"])
+# Prop MODEL VARIANTS — the variant-scoped twins of the prop gallery routes
+# above. Registered AFTER world.router: the paths are disjoint
+# (…/props/{id}/variants/…), so this is order-independent, but the variant
+# routes are an extension of the prop library and belong beside it.
+app.include_router(prop_variants_route.router)
 app.include_router(telegram.router, tags=["telegram"])
 app.include_router(templates.router)
 app.include_router(story.router)

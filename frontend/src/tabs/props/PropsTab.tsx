@@ -39,8 +39,10 @@ export function PropsTab() {
   const [creating, setCreating] = useState(false)
   // Prop id whose 🧊 regenerate waits in the backend dialog (every 3D
   // generate button goes through the dialog — face count / texture size
-  // are per-run overrides).
-  const [regen, setRegen] = useState<{ id: string; meshOnly: boolean } | null>(null)
+  // are per-run overrides). `variant` is the model variant a RE-MESH refines;
+  // the plain regenerate has none, because it appends one.
+  const [regen, setRegen] = useState<
+    { id: string; meshOnly: boolean; variant?: number } | null>(null)
   // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
   // final prompt; the mesh stays until re-meshed from the new image).
   const [imgRegen, setImgRegen] = useState<PropFull | null>(null)
@@ -180,6 +182,13 @@ export function PropsTab() {
                       <span className="ga-source">{t('generating…')}</span>
                     ) : null}
                     {!p.has_model ? <span className="ga-source">{t('no model')}</span> : null}
+                    {/* Several meshes of the same object — worth seeing from
+                        the list, a scattered prop looks different with them. */}
+                    {(p.variant_count || 0) > 1 ? (
+                      <span className="ga-tag" title={t('Model variants of this prop')}>
+                        ×{p.variant_count}
+                      </span>
+                    ) : null}
                   </button>
                 </li>
               )
@@ -205,7 +214,8 @@ export function PropsTab() {
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
-            onRegenerateMesh={() => setRegen({ id: selectedProp.id, meshOnly: true })}
+            onRegenerateMesh={(variant) =>
+              setRegen({ id: selectedProp.id, meshOnly: true, variant })}
             onRegenerateImage={() => setImgRegen(selectedProp)}
             onGenerating={startPoll}
             onRefresh={() => {
@@ -219,8 +229,8 @@ export function PropsTab() {
         <MeshBackendDialog
           open={regen !== null}
           title={regen?.meshOnly
-            ? t('Re-mesh from the source image')
-            : t('Regenerate prop model')}
+            ? `${t('Re-mesh from the source image')} · ${t('Variant')} ${(regen.variant || 0) + 1}`
+            : t('Regenerate prop model — as another variant')}
           backends={meshBackends}
           defaultBackend={meshBackends.length === 1 ? meshBackends[0].name : ''}
           generateLabel={regen?.meshOnly ? t('Mesh') : t('Regenerate')}
@@ -229,8 +239,14 @@ export function PropsTab() {
             const target = regen
             setRegen(null)
             if (!target) return
+            // A RE-MESH refines the variant the detail has open, so it goes to
+            // that variant's route; the plain regenerate stays unqualified,
+            // which is what makes it APPEND another variant.
+            const base = `/world/props/${encodeURIComponent(target.id)}`
             void apiPost<{ status?: string }>(
-              `/world/props/${encodeURIComponent(target.id)}/generate`,
+              target.meshOnly
+                ? `${base}/variants/${target.variant || 0}/generate`
+                : `${base}/generate`,
               { mesh_backend: backend,
                 ...(target.meshOnly ? { mesh_only: true } : {}),
                 ...(opts.face_num ? { face_num: opts.face_num } : {}),
@@ -242,7 +258,7 @@ export function PropsTab() {
                   ? t('This prop is already generating.')
                   : target.meshOnly
                     ? t('Meshing the source image…')
-                    : t('Regenerating the model…'))
+                    : t('Generating another model variant…'))
                 startPoll()
               })
               .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))

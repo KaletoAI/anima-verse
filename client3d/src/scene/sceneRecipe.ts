@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials, drapeGeometry,
-  pickVariant, placeModelSpec, plateTargets,
+  pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
 import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
@@ -198,7 +198,7 @@ class Verifier {
   skip(spec: SceneModelSpec): void {
     this.skipped += 1;
     console.warn(`[scene] ${spec.role}:${spec.id} übersprungen — Mesh nicht ladbar `
-      + `(${pickVariant(spec.variants) || 'ohne URL'})`);
+      + `(${pickModelVariant(spec) || 'ohne URL'})`);
     this.v.check(`${spec.role}:${spec.id}`, 'geladen', 0, 1);
   }
 
@@ -790,8 +790,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // Tier (§ B1 variants): the caller says which tier this mount loads —
     // view state (camera distance / open detail view, Etappe 3 of
     // plan-3d-lod-und-betreten.md); a missing tier falls back to the best
-    // existing one inside pickVariant.
-    const url = pickVariant(spec.variants, tierOf(spec, tiers));
+    // existing one inside pickVariant. WELCHE Modell-Variante eines Props
+    // (E2.3) gilt, steht in der Spec (`variant`) — `pickModelVariant` wählt
+    // sie und danach die Stufe; ohne Varianten ist es dasselbe wie zuvor.
+    const url = pickModelVariant(spec, tierOf(spec, tiers));
     if (url) {
       const raw = await loadGlb(url, tile.center);
       if (stale()) return;
@@ -955,7 +957,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
   if (!placements) return;
   await Promise.all(placements.map(async (rec) => {
     if ((group === 'building') !== (rec.spec.role === 'building')) return;
-    const url = pickVariant(rec.spec.variants, tier);
+    const url = pickModelVariant(rec.spec, tier);
     if (!url || url === rec.url) return;
     if (rec.wantUrl === url) return;            // same swap already in flight
     rec.wantUrl = url;

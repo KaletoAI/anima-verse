@@ -285,6 +285,7 @@ SECTIONS = {
                     "scene_imagegen_default",
                     "mesh_imagegen_default",
                     "timevariant_imagegen_default",
+                    "prop_variant_max",
                 ],
             },
             {
@@ -389,6 +390,7 @@ SECTIONS = {
             "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Backend-name glob for mood/activity variants — resolved by availability + cost."},
             "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Backend-name glob (e.g. 'Flux*') — resolved by availability + cost."},
             "prop_imagegen_default": {"type": "imagegen_select", "label": "Prop Default (Match)", "description": "Backend-name glob for prop SOURCE renders (props library + ✨ Furnish product shots) — resolved by availability + cost. Empty = pool default."},
+            "prop_variant_max": {"type": "int", "label": "Prop Model Variants (max)", "default": 4, "min": 1, "max": 16, "description": "How many ACTIVE 3D model variants one prop may carry. Scatter and repeated placements spread over the variants, so a wood is not the same tree twenty times. Every active variant is another mesh a client downloads for the same object — raise it only for props that are placed in large numbers. Generating a model appends a variant until this cap is reached."},
             "scene_imagegen_default": {"type": "imagegen_select", "label": "Scene Render Default (Match)", "description": "Backend-name glob (e.g. 'Krea2') for the player's 'Rendered' environment view — composes the room background + present characters (expression images as references) into one image. Empty = location default."},
             "scene_render_mode": {"type": "select", "label": "Scene Render Mode", "choices": ["multi_ref", "only_background"], "default": "multi_ref", "description": "How the 'Rendered' view builds its request. 'multi_ref': background + the present characters' expression images as reference images, pose from text. 'only_background': only the background as reference — every person is described in text (appearance + pose). Both work with any generate backend (Qwen, Flux, Krea2, …)."},
             "scene_render_cooldown_s": {"type": "int", "label": "Scene Render Cooldown (s)", "default": 120, "min": 0, "description": "Minimum seconds between fresh scene generations (cache misses) — panel remounts and signature churn (variant updates, presence changes) must not burn renders back to back. While cooling down, the newest existing scene image is served. 0 = off; the ⟳ button always bypasses. SYSTEM time."},

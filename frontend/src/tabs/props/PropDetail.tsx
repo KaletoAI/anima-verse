@@ -5,7 +5,10 @@
  *
  * The prop's meshes are a GALLERY (`PropModelPanel`, one active file per
  * resolution tier) — upload and tier assignment live there, and clicking a
- * row previews that file in the viewer here.
+ * row previews that file in the viewer here. Since E2.3 a prop carries
+ * SEVERAL such galleries, one per MODEL VARIANT (`PropVariantStrip`): the
+ * selected variant decides which mesh the viewer shows, which gallery the
+ * panel edits and which slot a re-mesh writes into.
  *
  * Markers are OBJECT-LOCAL (`at` = [u, v, w] fractions of the model bounding
  * box), so they travel with the prop into any room.
@@ -19,9 +22,10 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { PropModelPanel } from './PropModelPanel'
+import { PropVariantStrip } from './PropVariantStrip'
 import { orientedDims } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
-import type { PropFull, PropMarker } from './propTypes'
+import type { PropFull, PropMarker, PropVariant } from './propTypes'
 
 type DimKey = 'width_m' | 'depth_m' | 'height_m'
 
@@ -56,9 +60,12 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   onChanged: () => Promise<unknown>
   onDelete: () => void
   armedDelete: boolean
-  /** Re-mesh the EXISTING source image (skips the image render). */
-  onRegenerateMesh: () => void
-  /** Re-run the source→mesh chain with the stored description/name. */
+  /** Re-mesh the EXISTING source image (skips the image render) INTO the
+   *  variant the admin currently has open — the index travels with the call,
+   *  because the dialog that runs it lives in the container. */
+  onRegenerateMesh: (variant: number) => void
+  /** Re-run the source→mesh chain with the stored description/name — this
+   *  APPENDS another model variant. */
   onRegenerate: () => void
   /** Render a NEW source image only — the mesh stays until re-meshed. */
   onRegenerateImage: () => void
@@ -73,8 +80,59 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
   // Which stored mesh the viewer shows ('' = the active one the clients get).
+  // A filename is only valid inside ONE variant's gallery, so switching the
+  // variant drops it as surely as switching the prop does.
   const [previewFile, setPreviewFile] = useState('')
-  useEffect(() => { setPreviewFile('') }, [prop.id])
+
+  // ── Model variants (E2.3) ──────────────────────────────────────────────
+  // ONE reload key for everything that reads this prop's meshes: the
+  // container's cacheBump (a background generation finished) plus every local
+  // change made here — a gallery row selected or deleted, a variant added,
+  // toggled or removed. The strip and the gallery must never disagree about
+  // which tiers exist, so they reload off the same number.
+  const [localBump, setLocalBump] = useState(0)
+  const reloadKey = cacheBump + localBump
+  const meshesChanged = useCallback(async () => {
+    setLocalBump((n) => n + 1)
+    return onChanged()
+  }, [onChanged])
+
+  const [variants, setVariants] = useState<PropVariant[]>([])
+  const [variantMax, setVariantMax] = useState(1)
+  // The variant everything below the strip works on. Index, not stem: that is
+  // what every variant-scoped route takes.
+  const [variant, setVariant] = useState(0)
+  // Dropping the list with the selection matters: a record of the PREVIOUS
+  // prop would otherwise answer for the same index until the reload lands.
+  useEffect(() => { setVariant(0); setVariants([]) }, [prop.id])
+  useEffect(() => { setPreviewFile('') }, [prop.id, variant])
+  const loadVariants = useCallback(async () => {
+    try {
+      const d = await apiGet<{ variants?: PropVariant[]; max?: number }>(
+        `/world/props/${enc}/variants`)
+      const list = d.variants || []
+      setVariants(list)
+      setVariantMax(d.max || 1)
+      // Clamping belongs HERE and not in an effect of its own: a deletion
+      // shortens the list, and a separate effect would fight the strip, which
+      // selects the freshly added slot before its record has arrived.
+      setVariant((i) => (list.length ? Math.min(i, list.length - 1) : 0))
+    } catch {
+      setVariants([])
+    }
+  }, [enc])
+  useEffect(() => { void loadVariants() }, [loadVariants, reloadKey])
+  const shownVariant = variants.find((v) => v.index === variant) || null
+  // Until the list has arrived the prop record answers for the first variant —
+  // `has_model` there IS the primary variant's state, so the viewer does not
+  // flash its empty box on every prop switch.
+  const shownHasMesh = shownVariant
+    ? shownVariant.has_model
+    : variant === 0 && prop.has_model
+  // The bbox/dims belong to the PROP, and the stored one was measured on the
+  // primary variant — so only that one may re-measure them live. Otherwise
+  // looking at a second variant would silently re-proportion the object.
+  const primaryShown = !!shownVariant?.primary
 
   const [nameDraft, setNameDraft] = useState(prop.name)
   const [descDraft, setDescDraft] = useState(prop.description || '')
@@ -356,7 +414,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={pending}
               onClick={onRegenerate}
-              title={t('Re-render the source image from the stored description (name as fallback) and mesh it again — the new mesh joins the gallery, dims and markers stay.')}>
+              title={`${t('Re-render the source image from the stored description (name as fallback) and mesh it as ANOTHER model variant of this prop — the existing variants stay, dims and markers too. At the limit the run lands in the last variant.')} ${t('Maximum active variants:')} ${variantMax}`}>
               🧊 {pending ? t('Generating…') : t('Regenerate')}
             </button>
             {/* The whole props/<id>/ folder travels: sidecar, meshes,
@@ -587,7 +645,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             <button
               type="button"
               className={`ga-btn ga-btn-sm${placing === 'add' ? ' ga-btn-primary' : ''}`}
-              disabled={!prop.has_model}
+              // Placing means clicking the mesh in the viewer — so it needs a
+              // mesh SHOWN there, not just one somewhere on the prop.
+              disabled={!(shownHasMesh || previewFile)}
               onClick={() => setPlacing((cur) => (cur === 'add' ? null : 'add'))}
               title={t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
             >
@@ -657,25 +717,30 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                 🔄
               </button>
             </div>
+            {/* The re-mesh targets the SELECTED variant — that is the whole
+                difference to 🧊 above, which appends another one. */}
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={pending || !srcOk}
-              onClick={onRegenerateMesh}
-              title={t('Mesh THIS image again — no new render; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
-              ⚙ {t('3D from this image')}
+              onClick={() => onRegenerateMesh(variant)}
+              title={t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
+              ⚙ {t('3D from this image')} · {t('Variant')} {variant + 1}
             </button>
           </div>
           <div style={{ flex: '1 1 260px', minWidth: 240 }}>
-          {prop.has_model || previewFile ? (
+          {shownHasMesh || previewFile ? (
             <Model3DViewer
               url={previewFile
                 // A file picked in the gallery below — including ones no tier
                 // serves (only the admin route hands those out).
-                ? `/world/props/${enc}/models/files/${encodeURIComponent(previewFile)}?v=${cacheBump}`
-                : `/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
+                ? `/world/props/${enc}/variants/${variant}/models/files/${encodeURIComponent(previewFile)}?v=${reloadKey}`
+                // The serving URL of the SELECTED variant; `variant` is
+                // explicit even for the primary one, so the preview cannot
+                // quietly fall back to another mesh.
+                : `/assets/props/${enc}/model?variant=${variant}&v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
               format="glb"
               height={340}
               rotation={prop.rotation}
-              onBounds={(b) => setLiveBbox(b.size)}
+              onBounds={(b) => { if (primaryShown) setLiveBbox(b.size) }}
               markers={markers.map((m) => ({
                 at: m.at, animation: m.animation, facing: m.facing,
               }))}
@@ -701,7 +766,9 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             />
           ) : (
             <div className="ga-empty">
-              {t('No model yet — generate it or upload a GLB below.')}
+              {variants.length > 1
+                ? t('This variant has no model yet — mesh the source image into it or upload a GLB below.')
+                : t('No model yet — generate it or upload a GLB below.')}
             </div>
           )}
           </div>
@@ -734,14 +801,28 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             </>
           ) : null}
 
-          {/* The prop's mesh gallery: every stored run, one active file per
-              resolution tier, upload and delete. */}
+          {/* The prop's model variants — several meshes of the same object.
+              The selected chip decides what the viewer above and the gallery
+              below show and act on. */}
+          <PropVariantStrip
+            propId={prop.id}
+            variants={variants}
+            max={variantMax}
+            selected={variant}
+            onSelect={setVariant}
+            onChanged={meshesChanged}
+            disabled={pending}
+          />
+
+          {/* The SELECTED variant's mesh gallery: every stored run, one active
+              file per resolution tier, upload and delete. */}
           <PropModelPanel
             propId={prop.id}
-            reloadKey={cacheBump}
+            variant={variant}
+            reloadKey={reloadKey}
             preview={previewFile}
             onPreview={setPreviewFile}
-            onChanged={onChanged}
+            onChanged={meshesChanged}
             pending={pending}
             onGenerating={onGenerating}
           />

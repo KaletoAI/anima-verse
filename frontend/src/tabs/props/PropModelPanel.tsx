@@ -1,5 +1,5 @@
 /**
- * PropModelPanel — the mesh gallery of one prop.
+ * PropModelPanel — the mesh gallery of ONE model variant of a prop.
  *
  * A prop keeps SEVERAL meshes like a building or a room does (the shared
  * gallery, app/core/model_store.py): one active file per resolution tier
@@ -8,6 +8,13 @@
  * into a chosen tier, reduces one to a low variant (mesh→mesh) and deletes
  * single files. Its counterpart on the world tab is `BuildingModelPanel`; the
  * rows themselves are the shared `ModelGallery` components.
+ *
+ * Since E2.3 a prop carries several such galleries — one per MODEL VARIANT,
+ * picked in `PropVariantStrip` above. Every call here therefore goes to the
+ * variant-scoped routes (`/world/props/{id}/variants/{i}/…`); the unqualified
+ * ones remain on the server as the shorthand for the primary variant, but a
+ * panel that used them would silently edit variant 1 while the admin looks at
+ * variant 3.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -33,9 +40,12 @@ interface PropModelInfo {
   blender?: BlenderStatus
 }
 
-export function PropModelPanel({ propId, reloadKey, preview, onPreview,
+export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   onChanged, pending = false, onGenerating }: {
   propId: string
+  /** Index of the model variant this gallery belongs to (0 = the first one;
+   *  the primary variant is the first ACTIVE one, which the strip marks). */
+  variant: number
   /** Bumped by the container when a generation finished — reloads the list. */
   reloadKey: number
   /** Filename the detail viewer shows ('' = the active model). */
@@ -53,6 +63,9 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(propId)
+  // Everything this panel touches belongs to ONE variant — one base, so a
+  // route can never be reached unqualified by accident.
+  const base = `/world/props/${enc}/variants/${variant}`
   const [info, setInfo] = useState<PropModelInfo | null>(null)
   const [armedDel, setArmedDel] = useState<string | null>(null)
   const [uploadTier, setUploadTier] = useState<ModelTier>(DEFAULT_MODEL_TIER)
@@ -60,11 +73,11 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
 
   const load = useCallback(async () => {
     try {
-      setInfo(await apiGet<PropModelInfo>(`/world/props/${enc}/models`))
+      setInfo(await apiGet<PropModelInfo>(`${base}/models`))
     } catch {
       setInfo(null)
     }
-  }, [enc])
+  }, [base])
 
   useEffect(() => {
     setArmedDel(null)
@@ -73,19 +86,19 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
 
   const select = useCallback(async (filename: string, tier: ModelTier) => {
     try {
-      await apiPost(`/world/props/${enc}/models/select`, { file: filename, tier })
+      await apiPost(`${base}/models/select`, { file: filename, tier })
       await load()
       await onChanged()
       toast(t('Active model set'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, load, onChanged, t, toast])
+  }, [base, load, onChanged, t, toast])
 
   const remove = useCallback(async (filename: string) => {
     setArmedDel(null)
     try {
-      await apiDelete(`/world/props/${enc}/models?file=${encodeURIComponent(filename)}`)
+      await apiDelete(`${base}/models?file=${encodeURIComponent(filename)}`)
       if (preview === filename) onPreview('')
       await load()
       await onChanged()
@@ -93,17 +106,18 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, preview, onPreview, load, onChanged, t, toast])
+  }, [base, preview, onPreview, load, onChanged, t, toast])
 
   // Upload a GLB as a NEW mesh of the chosen tier (validated server-side;
-  // surface the 422 reasons instead of a bare status code).
+  // surface the 422 reasons instead of a bare status code). The variant route
+  // takes the tier as a FORM field, not as a query parameter.
   const upload = useCallback(async (file: File) => {
     if (!file) return
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch(
-        `/world/props/${enc}/upload?tier=${encodeURIComponent(uploadTier)}`,
+      fd.append('tier', uploadTier)
+      const res = await fetch(`${base}/upload`,
         { method: 'POST', body: fd, credentials: 'same-origin' })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
@@ -118,7 +132,7 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, uploadTier, onPreview, load, onChanged, t, toast])
+  }, [base, uploadTier, onPreview, load, onChanged, t, toast])
 
   // Stored mesh waiting in the low-variant dialog (mesh→mesh reduction of
   // THAT file — the prop's dims stay untouched, they belong to the full mesh).
@@ -128,7 +142,7 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
     const file = shrinkFile
     setShrinkFile(null)
     if (!file) return
-    void apiPost<{ status?: string }>(`/world/props/${enc}/models/shrink`,
+    void apiPost<{ status?: string }>(`${base}/models/shrink`,
       { file, backend,
         ...(opts?.face_num ? { face_num: opts.face_num } : {}),
         ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}) })
@@ -139,7 +153,7 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
         onGenerating?.()
       })
       .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
-  }, [shrinkFile, enc, onGenerating, t, toast])
+  }, [shrinkFile, base, onGenerating, t, toast])
 
   const models = info?.models || []
   const tiers = info?.tiers || []
@@ -161,14 +175,19 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
         onGenerate={shrink}
         onClose={() => setShrinkFile(null)}
       />
-      <div className="ga-form-section-label">{t('3D models')}</div>
+      {/* Which variant these rows belong to — the strip above selects it, and
+          without the reminder a gallery of four files reads as "the prop's"
+          rather than "this variant's". */}
+      <div className="ga-form-section-label">
+        {t('3D models')} · {t('Variant')} {variant + 1}
+      </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <TierSummary tiers={info?.tiers} />
         {/* The CPU way to the missing low mesh — no backend, no queue, and
             the only one that works without a mesh→mesh alias. */}
         {tiers.includes('full') ? (
           <BuildDistanceMeshButton
-            url={`/world/props/${enc}/models/lod`}
+            url={`${base}/models/lod`}
             hasLow={tiers.includes('low')}
             blender={info?.blender}
             disabled={pending}
@@ -178,7 +197,9 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
       </div>
       {models.length === 0 ? (
         <span className="ga-hint">
-          {t('No mesh stored yet — generate one (🧊) or upload a GLB.')}
+          {/* "Generate" (🧊) appends ANOTHER variant since E2.3 — the action
+              that fills THIS slot is the re-mesh beside the source image. */}
+          {t('No mesh in this variant yet — mesh the source image into it (⚙ “3D from this image”) or upload a GLB.')}
         </span>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -206,7 +227,7 @@ export function PropModelPanel({ propId, reloadKey, preview, onPreview,
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm"
           onClick={() => uploadRef.current?.click()}
-          title={t('Upload a GLB as a new mesh of this prop.')}>
+          title={t('Upload a GLB as a new mesh of the selected variant.')}>
           ⬆ {t('Upload model')}
         </button>
         <input ref={uploadRef} type="file" accept=".glb" style={{ display: 'none' }}

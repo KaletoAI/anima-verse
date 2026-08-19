@@ -88,6 +88,31 @@ export function pickVariant(
   return ''
 }
 
+/** URL des Meshes, das DIESE Platzierung zeigt — Modell-Variante zuerst,
+ *  Auflösungsstufe danach (§ B2-Nachtrag, E2.3).
+ *
+ *  DIE Stelle, an der ein Prop mit mehreren Varianten zu einer Datei wird, und
+ *  zwar für beide Renderer: aus `model_variants` wird die Karte mit dem Index
+ *  `variant` genommen, aus ihr die Stufe wie eh und je (`pickVariant`). Ohne
+ *  `model_variants` ist das Ergebnis Zeichen für Zeichen das alte
+ *  `pickVariant(spec.variants, tier)` — ein Prop mit einer Variante merkt von
+ *  der Liste nichts.
+ *
+ *  Der Index wird MODULO gerechnet, nicht geklemmt: die Variantenzahl bewegt
+ *  sich, wenn der Admin ein Mesh ergänzt oder löscht, und eine Platzierung
+ *  darf davon nicht verschwinden. */
+export function pickModelVariant(
+  spec: Pick<SceneModelSpec, 'variants' | 'model_variants' | 'variant'>,
+  tier: string = 'full',
+): string {
+  const list = spec.model_variants
+  if (!Array.isArray(list) || list.length === 0) return pickVariant(spec.variants, tier)
+  const n = list.length
+  const raw = Number(spec.variant)
+  const i = Number.isFinite(raw) ? ((raw % n) + n) % n : 0
+  return pickVariant(list[i] || spec.variants, tier)
+}
+
 /** EINE Platzierungs-Spec für Gebäude, Raum-Diorama und Prop gleichermaßen —
  *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
 export interface SceneModelSpec {
@@ -108,6 +133,19 @@ export interface SceneModelSpec {
    *  und sonst die beste vorhandene — `pickVariant()` macht genau das, und
    *  beide Renderer benutzen sie (plan-3d-lod-und-betreten.md, 2026-08-03). */
   variants: Partial<Record<ModelTier, string>> & Record<string, string>
+  /** Props mit MEHREREN Modell-Varianten (E2.3, § B2-Nachtrag): eine
+   *  Stufen-Karte je AKTIVER Variante, in der Reihenfolge des Props.
+   *  Element 0 IST `variants` — die primäre Variante. Fehlt das Feld, hat das
+   *  Prop genau eine Variante; nur ein Prop mit mehr als einer schickt es.
+   *  Nicht anfassen ohne `variant`: welche Variante DIESE Platzierung zeigt,
+   *  steht dort und wird vom Server bestimmt. */
+  model_variants?: (Partial<Record<ModelTier, string>> & Record<string, string>)[]
+  /** Index in `model_variants` für DIESE Platzierung (fehlt = 0 = primär).
+   *  Der Server löst ihn auf — bei Streu-Kopien mit der einen Formel
+   *  `(scatter_seed + Instanz) mod Anzahl`, sonst aus der Platzierung selbst.
+   *  Kein Renderer würfelt hier: dieselbe Kopie zeigt in beiden Renderern
+   *  dasselbe Mesh. */
+  variant?: number
   room_id?: string
   level: number
   /** Orientierungs-Fix, Euler 'YXZ' in Grad — VOR dem Messen. Yaw außen,

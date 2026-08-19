@@ -164,27 +164,44 @@ def get_surface_texture(filename: str, request: Request):
 def list_props():
     """Prop library — the lean client shape: a bare array
     ``[{id, name, category, width_m, depth_m, height_m, tags, marker_count,
-    has_model}, …]``. The three dims are the object's REAL extent in metres
-    after its orientation fix (x/y/z = width/height/depth). An empty list is
-    the normal starting state."""
+    has_model, model_tiers, variant_tiers}, …]``. The three dims are the
+    object's REAL extent in metres after its orientation fix (x/y/z =
+    width/height/depth). ``variant_tiers`` lists the prop's ACTIVE model
+    variants (E2.3) as ``{variant, tiers}`` — element 0 is the primary one,
+    whose ``tiers`` IS ``model_tiers``. An empty list is the normal starting
+    state."""
     from app.core.props import list_props as _list
     return _list()
 
 
 @router.get("/props/{prop_id}/model")
-def get_prop_model(prop_id: str, request: Request, tier: str = ""):
+def get_prop_model(prop_id: str, request: Request, tier: str = "",
+                   variant: str = ""):
     """Serves a prop's GLB mesh in the requested resolution tier (``full`` =
     default, ``low`` = overview mesh). A tier the prop does not have falls
     back to the best available one — a missing low variant must never make an
     object disappear. ETag + If-None-Match; a 404 is the normal "no model yet"
     state (the record may exist before the mesh does).
 
+    ``variant`` picks one of the prop's MODEL variants (E2.3) — several
+    meshes of the same object, so a scattered wood is not one tree twenty
+    times. Absent = the PRIMARY variant, which is what every payload's
+    ``variants`` map points at and therefore what every consumer that knows
+    nothing about variants keeps getting. An index the prop has no variant for
+    is a 404, never a silent other mesh.
+
     A MISSING low variant is not noticed here: every payload lists only the
     tiers a prop has and every renderer picks from that list, so this route
     never sees a request for one that does not exist. The build is asked for
     where the tier list is produced (``props._demand_low``)."""
     from app.core.props import model_path
-    path = model_path(prop_id, tier)
+    idx: object = None
+    if str(variant).strip():
+        try:
+            idx = int(str(variant).strip())
+        except ValueError:
+            return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    path = model_path(prop_id, tier, variant=idx)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "model/gltf-binary",

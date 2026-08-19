@@ -61,8 +61,12 @@ def variant_urls(base_url: str, tiers: Sequence[str]) -> Dict[str, str]:
     There is exactly one way to name a tier so there is exactly one way to
     resolve it: every consumer picks with the single ``pickVariant`` rule of
     ``@anima/scene-render``. Only tiers the subject actually HAS belong in
-    here — an invented one is a 404 that looks like a configured model."""
-    return {str(t): f"{base_url}?tier={t}" for t in tiers if t}
+    here — an invented one is a 404 that looks like a configured model.
+
+    A base URL that already carries a query (a prop's ``?variant=<i>``, E2.3)
+    gets the tier appended to it instead of a second ``?``."""
+    sep = "&" if "?" in base_url else "?"
+    return {str(t): f"{base_url}{sep}tier={t}" for t in tiers if t}
 
 
 def read_sidecar(model_path: Path) -> Dict[str, Any]:
@@ -288,6 +292,15 @@ class ModelGallery:
         """Tiers whose active file is ``filename`` (admin gallery list)."""
         return sorted(t for t, name in self.selection().items()
                       if name == filename)
+
+    def forget(self) -> None:
+        """Drop this stem's WHOLE selection entry — for a stem that ceases to
+        exist (a deleted prop model variant). ``select('')`` cannot do it: on
+        the default tier it writes the ``__none__`` sentinel, which is a
+        statement about a subject that is still there."""
+        sel = self._read_all()
+        if sel.pop(self.stem, None) is not None:
+            self._write_all(sel)
 
     def delete(self, filename: str = "") -> bool:
         """Remove ONE stored file (+ its sidecar) or ALL files of the stem.

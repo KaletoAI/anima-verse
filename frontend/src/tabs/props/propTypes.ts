@@ -56,6 +56,42 @@ export interface PropFull {
   source_generated_at?: string
   model_url?: string
   source_url?: string
+  /** Every ACTIVE model variant that HAS a mesh, in payload order — element 0
+   *  is the primary variant, so its `tiers` is what an unqualified `/model`
+   *  request serves. `variant` is the STORE INDEX, not the position in this
+   *  list: a switched-off variant leaves a gap. Anything that addresses a
+   *  variant over the API uses that number, never the array position. */
+  variant_tiers?: Array<{ variant: number; tiers: string[] }>
+  /** How many active variants actually carry a mesh. */
+  variant_count?: number
+  /** Configured ceiling on ACTIVE variants (image_generation.prop_variant_max). */
+  variant_max?: number
+}
+
+/**
+ * One model variant of a prop (`GET /world/props/{id}/variants`).
+ *
+ * A prop carries an ORDERED list of variants — several meshes of the SAME
+ * object, so a scattered wood is not one tree twenty times. Each variant is a
+ * whole mesh gallery of its own (own `full`/`low` tiers, own history). The
+ * FIRST ACTIVE one is the PRIMARY variant: it is what `/assets/props/{id}/model`
+ * serves without a `variant` parameter, i.e. what every consumer that knows
+ * nothing about variants keeps getting.
+ */
+export interface PropVariant {
+  index: number
+  /** File stem this variant's meshes are stored under (informational). */
+  stem: string
+  /** Switched off variants keep their meshes but are not rendered. */
+  active: boolean
+  primary: boolean
+  /** Resolution tiers this variant HAS (`full` / `low`). */
+  tiers: string[]
+  has_model: boolean
+  model_file: string
+  /** Canonical serving URL WITH its `variant` parameter ('' = no mesh yet). */
+  model_url: string
+  signature: string
 }
 
 export interface ImageBackendInfo {
