@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
 from app.core.scatter_curves import curve_map, tessellate
+from app.core.world_geometry import polygon_bounds, polygon_signed_area
 from app.imagegen.base import BackendBusyError
 
 if TYPE_CHECKING:  # type-only — the composer is imported where it is used
@@ -195,7 +196,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
-    from app.core.world_geometry import placed_footprint
+    from app.core.world_geometry import placed_boundary, placed_footprint
     from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import list_areas, terrain_sig
 
@@ -259,6 +260,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # every map client needs, and none of them should have to dig for it.
         # None whenever the geometry has no usable anchor.
         _width = _fp[2] if _fp is not None else None
+        # The drawn footprint travels with the row (contract v6 "Gebiete"):
+        # the same local-metre points the sanitizer stored, so a map client
+        # draws the polygon through the ONE § A1.1 pin transform instead of
+        # falling back to the square. None whenever the location has no area.
+        _bd = placed_boundary(loc)
         entry = {
             "id": lid,
             "name": loc.get("name") or "",
@@ -266,6 +272,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "pos_z": loc.get("pos_z"),
             "yaw_deg": float(loc.get("yaw_deg") or 0.0),
             "plan_width_m": _width,
+            "boundary": [[x, z] for x, z in _bd[3]] if _bd is not None else None,
             # A transit tile (a road cell) is walked THROUGH, never travelled
             # TO — the flag lets a client's destination list drop them, the
             # way the LLM's target list does (movement/blocks.py). Same field
@@ -691,6 +698,47 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["plan_width_m"] = round(v, 2)
         except (TypeError, ValueError):
             pass
+    # Location boundary (contract v6 "Gebiete"): the DRAWN footprint as a
+    # closed point sequence in LOCAL METRES around the pin — the square is
+    # only its special case, and a location without a boundary has no area at
+    # all (there is no 10 m fallback any more). Concave outlines are allowed
+    # and a self-intersection is a WARNING, never a rejection
+    # (scene_recipe.boundary_self_intersects), so nothing is dropped for it
+    # here. Stored open (a repeated closing point is removed), at most 64
+    # points, rounded to the centimetre.
+    bd = raw.get("boundary")
+    if isinstance(bd, list):
+        bpts: List[List[float]] = []
+        for pt in bd[:64]:
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                continue
+            try:
+                bx, bz = float(pt[0]), float(pt[1])
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(bx) and math.isfinite(bz)):
+                continue
+            bpts.append([round(bx, 2), round(bz, 2)])
+        if len(bpts) >= 2 and bpts[0] == bpts[-1]:
+            bpts = bpts[:-1]
+        if len(bpts) >= 3:
+            # ONE winding in storage: CLOCKWISE in map view, which with x
+            # east and z south is a POSITIVE shoelace sum (world_geometry).
+            # Everything downstream may therefore assume the direction
+            # instead of measuring it.
+            if polygon_signed_area(bpts) < 0:
+                bpts.reverse()
+            bounds = polygon_bounds(bpts)
+            width = max(bounds[2] - bounds[0], bounds[3] - bounds[1]) \
+                if bounds else 0.0
+            # A boundary with no extent encloses nothing — it is not an area,
+            # so it is not kept (and the submitted plan_width_m stands).
+            if width > 0:
+                out["boundary"] = bpts
+                # v6 Nr. 2: ``plan_width_m`` is a COMPUTED quantity, not a
+                # dial — the wider side of the boundary's bounding box.
+                # Whatever the client submitted is overwritten here.
+                out["plan_width_m"] = round(width, 2)
     # Storey height in REAL metres — stacks the room-layout levels. One dial
     # in the same unit as every other length (× k at render time); it
     # replaced the pair "model height ÷ model storeys" (real) and

@@ -978,6 +978,49 @@ def threshold_base_y(sides: List[Tuple[float, Optional[float]]]) -> float:
 
 # ── Problems ────────────────────────────────────────────────────────────
 
+# A room corner is "out" only past this much — the boundary is stored to the
+# centimetre, so a plan drawn flush against an edge must not be flagged.
+_BOUNDARY_TOL_M = 0.01
+
+
+def rooms_outside_boundary(recipes: List[Dict[str, Any]], boundary: Any,
+                           extent: float) -> List[str]:
+    """The ids of rooms whose floor plan sticks out of the location boundary.
+
+    Both sides are LOCAL METRES around the pin: the boundary is stored that
+    way, and a room's outline is reference-square fractions turned into
+    metres by the ONE mapping ``(frac − 0.5) × extent`` (``_w``) — the same
+    one the plates, walls and clips use, so "outside" means here what it
+    means in the composed scene. The room rectangle needs no special case:
+    ``compose_recipe`` already resolved it into the unit-square outline.
+
+    Measured with ``polygon_distance``, which is 0 anywhere INSIDE the
+    polygon including its edges — a plan drawn flush against the boundary is
+    legal, only a point further than ``_BOUNDARY_TOL_M`` out counts. Tested
+    are the outline corners AND each edge's midpoint: with a concave
+    boundary (a U), a room edge can cross the opening while both corners
+    stand inside the arms, and the midpoint is the cheap witness for that.
+    Ids come back in recipe order; an empty list means everything fits.
+    """
+    from app.core.world_geometry import polygon_area, polygon_distance
+    if polygon_area(boundary) <= 0:
+        return []
+    out: List[str] = []
+    for recipe in recipes:
+        outline = _room_outline_world(recipe, extent)
+        if not outline:
+            continue
+        probes = list(outline)
+        n = len(outline)
+        probes.extend(((outline[i][0] + outline[(i + 1) % n][0]) / 2.0,
+                       (outline[i][1] + outline[(i + 1) % n][1]) / 2.0)
+                      for i in range(n))
+        if any(polygon_distance(px, pz, boundary) > _BOUNDARY_TOL_M
+               for px, pz in probes):
+            out.append(str(recipe.get("room_id") or ""))
+    return out
+
+
 def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
               shell_levels: Set[int], doorways: List[Dict[str, Any]],
               recipes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1013,6 +1056,18 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
     authored. A wall-less room WITHOUT openings is perfectly legal (open
     zone, pavilion) and stays quiet; only the combination is the trap. Fires
     once per location, with the number of affected rooms as its own field.
+
+    ``boundary_self_intersection`` — the drawn location boundary crosses
+    itself (contract v6 Nr. 1). Concave is fine, a bow tie is not: the
+    triangulated level plate, the ramp ring and every point-in-location test
+    become ambiguous there. Still only a warning — the outline is stored as
+    drawn and nothing is repaired behind the author's back.
+
+    ``room_outside_boundary`` — a room's floor plan reaches out of that
+    boundary (contract v6 Nr. 9), so it would stand on ground the location
+    does not own. Only checked when a valid boundary exists; the affected
+    room ids ride along as their own field, since ``message`` is translated
+    as a whole sentence.
     """
     out: List[Dict[str, Any]] = []
     from app.models.world import GROUND_ROOM_ID
@@ -1058,6 +1113,30 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
             "message": "Rooms have doors or windows drawn, but their walls "
                        "are switched off — nothing of it is built in 3D. "
                        "Check 'Render walls' in the room layout.",
+        })
+    # The drawn location boundary (v6): its own two findings. Both are pure
+    # geometry over the stored local-metre points, so they read the same for
+    # the floor-plan editor and the 3D client.
+    from app.core.world_geometry import polygon_self_intersects
+    boundary = (map3d or {}).get("boundary")
+    if polygon_self_intersects(boundary):
+        out.append({
+            "kind": "boundary_self_intersection",
+            "location_id": str(location.get("id") or ""),
+            "message": "The drawn location boundary crosses itself: what is "
+                       "inside and what is outside is ambiguous there. "
+                       "Redraw the outline without crossing edges.",
+        })
+    stray = rooms_outside_boundary(recipes, boundary, extent)
+    if stray:
+        out.append({
+            "kind": "room_outside_boundary",
+            "location_id": str(location.get("id") or ""),
+            "room_ids": stray,
+            "room_count": len(stray),
+            "message": "Rooms reach out of the location boundary: their "
+                       "floor plan stands on ground this location does not "
+                       "cover. Move them inside or widen the boundary.",
         })
     return out
 

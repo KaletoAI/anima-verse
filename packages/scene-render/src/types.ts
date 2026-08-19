@@ -269,19 +269,25 @@ export interface SceneDoorway {
  *  door leading outside — the old "one door mid in the south wall" fallback is
  *  gone; `rooms_without_layout` = a contour whose rooms ALL lack a layout, so
  *  nothing is composed inside it at all; `openings_without_walls` = rooms with
- *  drawn openings whose walls are switched off, so none of them is built).
+ *  drawn openings whose walls are switched off, so none of them is built;
+ *  `boundary_self_intersection` = the drawn location boundary crosses itself,
+ *  so inside/outside is ambiguous (v6 Nr. 1); `room_outside_boundary` = a
+ *  room's floor plan reaches out of that boundary (v6 Nr. 9)).
  *  `message` is the server's English wording; a surface may translate a kind
  *  it knows and falls back to this text. Numbers never sit in `message` — it
  *  is translated as a whole sentence — so they come as their own fields
- *  (`room_count`). */
+ *  (`room_count`, `room_ids`). */
 export interface SceneProblem {
   kind: string
   location_id?: string
   room_id?: string
   message: string
   /** `rooms_without_layout`: how many rooms the location has.
-   *  `openings_without_walls`: how many rooms are affected. */
+   *  `openings_without_walls` / `room_outside_boundary`: how many rooms are
+   *  affected. */
   room_count?: number
+  /** `room_outside_boundary`: which rooms stick out, in recipe order. */
+  room_ids?: string[]
 }
 
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and

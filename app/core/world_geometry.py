@@ -430,6 +430,37 @@ def polygons_overlap(points_a: Any, points_b: Any) -> bool:
     return False
 
 
+def polygon_self_intersects(points: Any) -> bool:
+    """Whether the outline crosses itself (contract v6 Nr. 1 — a WARNING,
+    never a rejection: the sanitizer stores such an outline unchanged).
+
+    Every pair of NON-ADJACENT edges is tested with the exact segment
+    predicate; adjacent edges are skipped because they share a vertex by
+    construction and a grazing touch already counts as a hit there. Edge i
+    runs from point i to point i+1, the last one back to point 0, so on
+    ``n`` points edge 0 and edge n-1 are adjacent too.
+
+    Hand-derived on the bow tie (0,0) (4,4) (4,0) (0,4): the only
+    non-adjacent pairs are (e0, e2) and (e1, e3). e0 is the diagonal z = x,
+    e2 runs (4,0) → (0,4) i.e. x + z = 4 — they meet at (2,2), inside both
+    segments -> True. The L-shape of the polygon smoke has no such pair.
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return False
+    n = len(pts)
+    for i in range(n):
+        a0, a1 = pts[i], pts[(i + 1) % n]
+        for j in range(i + 1, n):
+            if j == i + 1 or (i == 0 and j == n - 1):
+                continue        # adjacent edges share a vertex by design
+            b0, b1 = pts[j], pts[(j + 1) % n]
+            if _segments_intersect(a0[0], a0[1], a1[0], a1[1],
+                                   b0[0], b0[1], b1[0], b1[1]):
+                return True
+    return False
+
+
 # Deterministic scan rows for the interior-point search: binary fractions,
 # widest spacing first, never 0 or 1 (those rows graze the outline).
 _INTERIOR_ROWS = (0.5, 0.25, 0.75, 0.375, 0.625, 0.125, 0.875,
