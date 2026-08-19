@@ -23,6 +23,10 @@ and counted (``unparsable``) — never guessed at, never dropped.
 
 Every group runs in its own try/except: one broken table must not stop the
 others, because a half-migrated world is exactly what we cannot have.
+
+One group is NOT a stamp conversion but rides along because it is the same
+one-time, additive boot pass: ``atmosphere`` moves the old world-wide
+temperature/weather from ``world_kv`` onto the seasons of the world calendar.
 """
 
 from __future__ import annotations
@@ -44,7 +48,11 @@ EPOCH_REAL_NAIVE = datetime(2026, 1, 1, 0, 0, 0)
 
 _COUNTER_KEYS = ("anchor", "sleep_start", "thoughts", "profiles", "scheduler",
                  "cron_fields", "intents", "summaries", "memories", "events",
-                 "diary", "state_history", "clamped", "unparsable")
+                 "diary", "state_history", "atmosphere", "clamped",
+                 "unparsable")
+
+# The two world_kv keys the world-wide atmosphere used to live in.
+_ATMOSPHERE_KEYS = ("world.temperature", "world.weather")
 
 # Rows per UPDATE batch for the table-wide backfills (memories/events/diary).
 # A world can hold tens of thousands of memories, and one giant executemany
@@ -159,6 +167,64 @@ def _migrate_sleep_start(stats: Dict[str, int]) -> None:
             continue
         set_world_setting(key, canonical)
         stats["sleep_start"] += 1
+
+
+def _migrate_atmosphere(stats: Dict[str, int]) -> None:
+    """world_kv ``world.temperature``/``world.weather`` → per-season config.
+
+    The world used to carry ONE temperature and ONE weather for all of time;
+    they belong to the season now (`game_seasons`). The old pair therefore
+    becomes the starting atmosphere of every season that does not define its
+    own — which, on a world whose season list was just materialized from
+    `Calendar.default()`, means all of them: the user's explicit setting beats
+    a shipped default. The config is saved, then the two keys are dropped, so
+    a second boot finds nothing and does nothing.
+    """
+    from app.core import config
+    from app.core.db import get_connection, transaction
+    from app.core.game_time import TEMPERATURE_LEVELS, WEATHER_KINDS
+
+    placeholders = ",".join("?" * len(_ATMOSPHERE_KEYS))
+    rows = get_connection().execute(
+        f"SELECT key, value FROM world_kv WHERE key IN ({placeholders})",
+        _ATMOSPHERE_KEYS,
+    ).fetchall()
+    if not rows:
+        return
+    old = {r[0]: (r[1] or "").strip().lower() for r in rows}
+
+    wanted = {}
+    temperature = old.get("world.temperature", "")
+    weather = old.get("world.weather", "")
+    if temperature in TEMPERATURE_LEVELS:
+        wanted["temperature"] = temperature
+    if weather in WEATHER_KINDS:
+        wanted["weather"] = weather
+
+    if wanted:
+        cfg = config.get_all()
+        seasons = cfg.get("game_seasons")
+        # A season list that is the shipped default has no "own" values yet.
+        overwrite = config.game_seasons_are_defaults()
+        changed = 0
+        for season in seasons if isinstance(seasons, list) else []:
+            if not isinstance(season, dict):
+                continue
+            for field_name, value in wanted.items():
+                current = season.get(field_name)
+                has_own = isinstance(current, str) and current.strip()
+                if (overwrite or not has_own) and current != value:
+                    season[field_name] = value
+                    changed += 1
+        if changed:
+            config.save(cfg)
+            stats["atmosphere"] += changed
+
+    with transaction() as conn:
+        conn.execute(
+            f"DELETE FROM world_kv WHERE key IN ({placeholders})",
+            _ATMOSPHERE_KEYS,
+        )
 
 
 def _migrate_thoughts(stats: Dict[str, int]) -> None:
@@ -706,6 +772,7 @@ def migrate_game_calendar_once() -> Dict[str, int]:
         ("events", _migrate_events),
         ("diary", _migrate_diary),
         ("state_history", _migrate_state_history),
+        ("atmosphere", _migrate_atmosphere),
     )
     for label, fn in groups:
         try:

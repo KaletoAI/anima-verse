@@ -266,13 +266,13 @@ async def wake_world_route(
 
 @router.get("/settings")
 async def get_world_settings() -> Dict[str, Any]:
-    """Gibt Welt-Settings + Pose-Settings zurueck."""
+    """World-level settings (news channel presentation)."""
     return world_ops.build_world_settings_payload()
 
 
 @router.put("/settings")
 async def put_world_settings(request: Request) -> Dict[str, Any]:
-    """Setzt Welt-Settings + Pose-Settings."""
+    """Set world-level settings from the request body."""
     data = await request.json()
     return world_ops.apply_world_settings(data)
 

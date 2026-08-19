@@ -398,6 +398,9 @@ function renderSection(key) {
 
     let html = '<div class="section active">';
     html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label + '</h1>';
+    // Section-level description (what the whole section is for) — array
+    // sections have no top-level fields to hang a note on.
+    if (sec.description) html += '<div class="desc" style="margin-bottom:14px; white-space:pre-line;">' + sec.description + '</div>';
 
     // Top-level fields (skip for array sections — fields are rendered per item)
     if (sec.fields && !sec.is_array) {

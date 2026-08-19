@@ -347,11 +347,11 @@ def _save_world_data(data: Dict[str, Any]):
 # === Welt-Settings (world_kv) ===
 
 def get_world_setting(key: str, default: str = "") -> str:
-    """Liest einen Welt-Setting-Wert aus world_kv.
+    """Read a world setting value from world_kv.
 
-    Konvention: Keys sind ``world.<feld>``, z.B. ``world.temperature``,
-    ``world.weather``. Werte sind Strings — komplexere Strukturen sind
-    selbst zu serialisieren.
+    Convention: keys are ``<area>.<field>``, e.g. ``news.style`` or
+    ``game_time.factor``. Values are strings — anything more structured has
+    to serialize itself.
     """
     try:
         conn = get_connection()
@@ -365,7 +365,7 @@ def get_world_setting(key: str, default: str = "") -> str:
 
 
 def set_world_setting(key: str, value: str) -> None:
-    """Schreibt einen Welt-Setting-Wert in world_kv."""
+    """Write a world setting value into world_kv."""
     try:
         with transaction() as conn:
             conn.execute(
@@ -426,26 +426,9 @@ def set_world_sleeping(sleeping: bool) -> None:
     set_world_setting(WORLD_SLEEPING_KEY, "1" if sleeping else "0")
 
 
-# Erlaubte Werte fuer Welt-Wetter / Temperatur — reine LLM-Hinweise,
-# keine Compliance-Logik. Siehe plan-outfit-system-rethink.md §1.2.
-WORLD_TEMPERATURE_VALUES = ("freezing", "cold", "mild", "hot")
-WORLD_WEATHER_VALUES     = ("dry", "rain", "snow")
-
-
-def get_world_temperature() -> str:
-    return get_world_setting("world.temperature", "mild")
-
-
-def set_world_temperature(value: str) -> None:
-    set_world_setting("world.temperature", value)
-
-
-def get_world_weather() -> str:
-    return get_world_setting("world.weather", "dry")
-
-
-def set_world_weather(value: str) -> None:
-    set_world_setting("world.weather", value)
+# Temperature and weather are NOT world-level any more: they belong to the
+# SEASON (`game_seasons` in the world config, see app/core/game_time.Season).
+# `GameTime.atmosphere()` is the one reader.
 
 
 # === Orte ===

@@ -9,9 +9,11 @@ that count plus the world's :class:`Calendar`.
 
 Three types live here:
 
-* :class:`Calendar` — the per-world definition (seasons, their lengths and
-  sunrise/sunset, optional weekday names, the year label, the day buckets).
-  Loaded from config via :func:`get_calendar` and cached.
+* :class:`Calendar` — the per-world definition (seasons, their lengths,
+  sunrise/sunset and atmosphere, optional weekday names, the year label, the
+  day buckets). Loaded from config via :func:`get_calendar` and cached. The
+  world's temperature and weather are a property of the SEASON, not of the
+  world — see :meth:`GameTime.atmosphere`.
 * :class:`GameTime` — a point in world time. Immutable, ordered, and
   serialised as the canonical string ``Y0003-D047T14:23:45`` (4-digit year,
   3-digit day-of-year, 24 h time). Lexicographic order of that string equals
@@ -45,11 +47,22 @@ _DEFAULT_EVENING_HOUR = 17
 _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 _CANONICAL_RE = re.compile(r"^Y(\d{4,})-D(\d{3,})T(\d{2}):(\d{2}):(\d{2})$")
 
+# The world's atmosphere is a property of the SEASON, not of the world: a
+# season carries the temperature level and the weather the world sees while it
+# lasts, plus a free-text note the LLM gets verbatim. These are soft hints for
+# the prompt (variable ``game_weather``), never compliance logic.
+TEMPERATURE_LEVELS = ("freezing", "cold", "mild", "hot")
+WEATHER_KINDS = ("dry", "rain", "snow")
+
+_DEFAULT_TEMPERATURE = "mild"
+_DEFAULT_WEATHER = "dry"
+
+# key, display name, temperature, weather
 _DEFAULT_SEASONS = (
-    ("spring", "Spring"),
-    ("summer", "Summer"),
-    ("autumn", "Autumn"),
-    ("winter", "Winter"),
+    ("spring", "Spring", "mild", "rain"),
+    ("summer", "Summer", "hot", "dry"),
+    ("autumn", "Autumn", "cold", "rain"),
+    ("winter", "Winter", "freezing", "snow"),
 )
 
 
@@ -84,6 +97,15 @@ def _format_hhmm(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _pick_level(value: Any, allowed: Tuple[str, ...], fallback: str) -> str:
+    """Normalize a configured atmosphere level; anything unknown → fallback."""
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in allowed:
+            return v
+    return fallback
+
+
 @dataclass(frozen=True)
 class Season:
     """One season of the world calendar.
@@ -91,6 +113,10 @@ class Season:
     ``names`` holds localized display names collected from ``name_<lang>``
     config fields (the ``localized()`` convention); ``key`` is the stable id
     that rules, schedules and cron expressions reference.
+
+    ``temperature``/``weather``/``weather_note`` are the season's ATMOSPHERE —
+    what the world feels like while this season lasts. They are soft LLM hints
+    with no code effect; the note is free text and reaches the prompt verbatim.
     """
 
     key: str
@@ -99,6 +125,9 @@ class Season:
     sunrise_min: int = _DEFAULT_SUNRISE_MIN
     sunset_min: int = _DEFAULT_SUNSET_MIN
     names: Dict[str, str] = field(default_factory=dict)
+    temperature: str = _DEFAULT_TEMPERATURE
+    weather: str = _DEFAULT_WEATHER
+    weather_note: str = ""
 
     def name_for(self, lang: str = "en") -> str:
         """Localized season name, falling back to the base ``name``."""
@@ -115,6 +144,40 @@ class Season:
     @property
     def sunset(self) -> str:
         return _format_hhmm(self.sunset_min)
+
+    def atmosphere_label(self, lang: str = "en") -> str:
+        """``"freezing, snow — often fog in the morning"``.
+
+        The two levels are translatable UI/prompt words; the note is user text
+        and stays raw.
+        """
+        from app.core.i18n import t
+        head = f"{t(self.temperature, lang)}, {t(self.weather, lang)}"
+        note = (self.weather_note or "").strip()
+        return f"{head} — {note}" if note else head
+
+    def atmosphere(self, lang: str = "en") -> dict:
+        """The season's atmosphere as the payload dict every surface uses."""
+        return {
+            "season": self.key,
+            "temperature": self.temperature,
+            "weather": self.weather,
+            "note": (self.weather_note or "").strip(),
+            "label": self.atmosphere_label(lang),
+        }
+
+    def to_config(self) -> dict:
+        """The season as one ``game_seasons`` config item (schema field names)."""
+        return {
+            "key": self.key,
+            "name": self.name,
+            "days": self.days,
+            "sunrise": self.sunrise,
+            "sunset": self.sunset,
+            "temperature": self.temperature,
+            "weather": self.weather,
+            "weather_note": self.weather_note,
+        }
 
 
 @dataclass(frozen=True)
@@ -173,13 +236,19 @@ class Calendar:
 
     @classmethod
     def default(cls) -> "Calendar":
-        """The shipped default: 4 seasons × 30 days, 06:00/18:00, no weeks."""
+        """The shipped default: 4 seasons × 30 days, 06:00/18:00, no weeks.
+
+        Each season also ships an atmosphere (spring mild/rain, summer hot/dry,
+        autumn cold/rain, winter freezing/snow) so a fresh world has a visible,
+        editable starting point instead of an empty list.
+        """
         return cls(
             seasons=tuple(
                 Season(key=key, name=name, days=30,
                        sunrise_min=_DEFAULT_SUNRISE_MIN,
-                       sunset_min=_DEFAULT_SUNSET_MIN)
-                for key, name in _DEFAULT_SEASONS
+                       sunset_min=_DEFAULT_SUNSET_MIN,
+                       temperature=temperature, weather=weather)
+                for key, name, temperature, weather in _DEFAULT_SEASONS
             ),
             week_days=(),
             year_label=_DEFAULT_YEAR_LABEL,
@@ -193,9 +262,10 @@ class Calendar:
 
         A broken calendar must never take the server down: every unusable
         value falls back to its default (garbage weekday list → no weeks,
-        invalid ``HH:MM`` → 06:00/18:00, ``days`` < 1 → 1, empty or unusable
-        season list → the default seasons). Duplicate season keys get a
-        numeric suffix so ``season_by_key`` stays unambiguous.
+        invalid ``HH:MM`` → 06:00/18:00, ``days`` < 1 → 1, unknown temperature
+        or weather level → ``mild``/``dry``, empty or unusable season list →
+        the default seasons). Duplicate season keys get a numeric suffix so
+        ``season_by_key`` stays unambiguous.
         """
         cal = cfg_calendar if isinstance(cfg_calendar, dict) else {}
 
@@ -235,6 +305,7 @@ class Calendar:
                 for k, v in raw.items()
                 if k.startswith("name_") and isinstance(v, str) and v.strip()
             }
+            note = raw.get("weather_note")
             seasons.append(Season(
                 key=key,
                 name=name or key.replace("_", " ").title(),
@@ -242,6 +313,11 @@ class Calendar:
                 sunrise_min=_parse_hhmm(raw.get("sunrise"), _DEFAULT_SUNRISE_MIN),
                 sunset_min=_parse_hhmm(raw.get("sunset"), _DEFAULT_SUNSET_MIN),
                 names=names,
+                temperature=_pick_level(raw.get("temperature"),
+                                        TEMPERATURE_LEVELS, _DEFAULT_TEMPERATURE),
+                weather=_pick_level(raw.get("weather"),
+                                    WEATHER_KINDS, _DEFAULT_WEATHER),
+                weather_note=str(note).strip() if isinstance(note, str) else "",
             ))
 
         if not seasons:
@@ -305,12 +381,35 @@ def calendar_to_dict(calendar: Optional[Calendar] = None, lang: str = "en") -> d
                 "days": s.days,
                 "sunrise": s.sunrise,
                 "sunset": s.sunset,
+                "temperature": s.temperature,
+                "weather": s.weather,
+                "weather_note": s.weather_note,
             }
             for s in cal.seasons
         ],
         "year_days": cal.year_days,
         "week_days": list(cal.week_days),
         "year_label": cal.year_label,
+    }
+
+
+def default_seasons_config() -> List[dict]:
+    """The shipped seasons as ``game_seasons`` config items.
+
+    Used to MATERIALIZE the section for a world that has none, so the admin
+    page shows the four seasons that are actually in effect instead of an
+    empty list (the next admin save then persists them).
+    """
+    return [s.to_config() for s in Calendar.default().seasons]
+
+
+def default_calendar_config() -> dict:
+    """The shipped ``game_calendar`` object (same values as the schema)."""
+    return {
+        "week_days": "",
+        "year_label": _DEFAULT_YEAR_LABEL,
+        "day_bucket_noon": _DEFAULT_NOON_HOUR,
+        "day_bucket_evening": _DEFAULT_EVENING_HOUR,
     }
 
 
@@ -519,6 +618,21 @@ class GameTime:
         if not cal.seasons:
             return ""
         return cal.seasons[self.parts(cal).season_index].name_for(lang)
+
+    def atmosphere(self, lang: str = "en",
+                   calendar: Optional[Calendar] = None) -> dict:
+        """Temperature/weather of the season this instant falls into.
+
+        ``{"season", "temperature", "weather", "note", "label"}`` — the label
+        reads e.g. ``"freezing, snow — often fog in the morning"``. This is
+        what the LLM gets alongside the game time (``game_weather``) and what
+        clients render; a calendar without seasons yields the shipped default
+        levels and an empty season key.
+        """
+        cal = _cal(calendar)
+        if not cal.seasons:
+            return Season(key="", name="", days=1).atmosphere(lang)
+        return cal.seasons[self.parts(cal).season_index].atmosphere(lang)
 
     @property
     def weekday(self) -> Optional[int]:
@@ -755,6 +869,8 @@ class GameTime:
             "time": f"{p.hour:02d}:{p.minute:02d}",
             "is_night": self.is_night(cal),
             "day_bucket": self.day_bucket(cal),
+            "atmosphere": (season.atmosphere(lang) if season
+                           else Season(key="", name="", days=1).atmosphere(lang)),
         }
 
 
@@ -770,7 +886,11 @@ __all__ = [
     "EPOCH",
     "DAY_HOURS",
     "DAY_SECONDS",
+    "TEMPERATURE_LEVELS",
+    "WEATHER_KINDS",
     "get_calendar",
     "invalidate_calendar_cache",
     "calendar_to_dict",
+    "default_seasons_config",
+    "default_calendar_config",
 ]

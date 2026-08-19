@@ -1572,37 +1572,28 @@ def update_location_with_extras(location_id: str,
 # --- World-level settings ---------------------------------------------------
 
 def build_world_settings_payload() -> Dict[str, Any]:
-    """Return world settings (atmosphere + news channel)."""
-    from app.models.world import (
-        get_world_temperature, get_world_weather,
-        get_world_setting,
-        WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
-    )
+    """Return world settings (news channel).
+
+    Temperature and weather used to live here as world-wide values; they are
+    per-season now (`game_seasons` in the world config, Admin settings →
+    Game calendar — seasons).
+    """
+    from app.models.world import get_world_setting
     return {
-        "world": {
-            "temperature": get_world_temperature(),
-            "weather": get_world_weather(),
-        },
         "news": {
             # Presentation style of the player news channel.
             "style": get_world_setting("news.style", "modern") or "modern",
             "title": get_world_setting("news.title", "") or "",
         },
         "choices": {
-            "temperature": list(WORLD_TEMPERATURE_VALUES),
-            "weather":     list(WORLD_WEATHER_VALUES),
-            "news_style":  ["modern", "newspaper", "flyer"],
+            "news_style": ["modern", "newspaper", "flyer"],
         },
     }
 
 
 def apply_world_settings(data: Dict[str, Any]) -> Dict[str, Any]:
     """Set world settings from a parsed request body."""
-    from app.models.world import (
-        set_world_temperature, set_world_weather,
-        set_world_setting, WORLD_TEMPERATURE_VALUES, WORLD_WEATHER_VALUES,
-    )
-    world = data.get("world") or {}
+    from app.models.world import set_world_setting
     news = data.get("news") or {}
     if "style" in news:
         v = (news.get("style") or "").strip().lower()
@@ -1610,14 +1601,6 @@ def apply_world_settings(data: Dict[str, Any]) -> Dict[str, Any]:
             set_world_setting("news.style", v)
     if "title" in news:
         set_world_setting("news.title", (news.get("title") or "").strip())
-    if "temperature" in world:
-        v = (world.get("temperature") or "").strip().lower()
-        if v in WORLD_TEMPERATURE_VALUES:
-            set_world_temperature(v)
-    if "weather" in world:
-        v = (world.get("weather") or "").strip().lower()
-        if v in WORLD_WEATHER_VALUES:
-            set_world_weather(v)
     return {"status": "ok"}
 
 
@@ -2015,7 +1998,11 @@ async def generate_location_background(location_name: str,
 
     # Generate image (blocking, in a thread) — style/negative from the use case.
     from app.core.prompt_compose import compose as _compose
-    _composed = _compose(use_case="location", subject=prompt, backend=backend)
+    from app.core.prompt_compose import outdoor_conditions as _conditions
+    # An open-air location is painted in TODAY's weather; an interior is not
+    # (its light comes from the use-case style, and there is no snow indoors).
+    _composed = _compose(use_case="location", subject=prompt, backend=backend,
+                         conditions=_conditions(is_outdoor_room(location, "")))
     full_prompt = _composed.prompt
     negative = _composed.negative
     for _w in _composed.warnings:
@@ -2234,6 +2221,21 @@ def is_outdoor_room(location: Dict[str, Any], room_id: str) -> bool:
     return resolve_indoor_flag(location, room) == "outdoor"
 
 
+def gallery_conditions(location: Dict[str, Any], room_id: str,
+                       use_case: str) -> str:
+    """The outdoor weather clause for a gallery render — ``""`` when none.
+
+    Two conditions have to hold. The render must be a PICTURE OF THE WORLD
+    (use case ``location``): the ``room_model*``/``building*``/``map`` cases
+    are isolated 3D-asset renders on a plain ground with deliberately flat,
+    shadowless lighting, and a snowstorm would wreck exactly that. And the
+    place has to be open air — the room's flag wins over the location's.
+    """
+    from app.core.prompt_compose import outdoor_conditions
+    return outdoor_conditions(use_case == "location"
+                              and is_outdoor_room(location, room_id))
+
+
 def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
     """The finished prompt for a render occasion, without generating it.
 
@@ -2281,7 +2283,9 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
             hints.append(_sh)
     from app.core.prompt_compose import compose as _compose
     composed = _compose(use_case=use_case, subject=subject, backend=backend,
-                        hints=hints)
+                        hints=hints,
+                        conditions=gallery_conditions(location, room_id,
+                                                      use_case))
 
     # LLM stage: explicit request from the dialog button wins; without the
     # field the use-case flag decides (auto-prefill). Explicit false = off.
@@ -2440,7 +2444,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 if _sh:
                     _hints.append(_sh)
             _composed = _compose(use_case=_uc_name, subject=prompt,
-                                 backend=backend, hints=_hints)
+                                 backend=backend, hints=_hints,
+                                 conditions=gallery_conditions(
+                                     location, room_id, _uc_name))
             # Opt-in LLM stage on top of the mechanical result. Blocking call
             # -> thread. The cache makes a batch/regenerate series ONE call.
             if _cfg.use_case_llm_compose(_uc_name):
@@ -2723,6 +2729,14 @@ async def generate_time_variant_core(location_name: str, image_name: str,
         # below) — repeating them here doubled the frame, and the literal
         # "16:9 aspect ratio" fought the real canvas from params.width/height.
         prompt = f"{description}, {_TIME_VARIANT_CLAUSES[(is_room, target_type == 'night')]}"
+
+        # Weather of the current season on top — but ONLY outdoors and ONLY
+        # the weather. The time of day is the one thing the user picked here
+        # (target_type), so the clock's own day bucket must stay out of it or
+        # a "night" variant would arrive carrying "morning".
+        if is_outdoor_room(location, source_room_id):
+            from app.core.timeutils import game_time as _gt
+            prompt += f", {_gt().atmosphere()['label']}"
 
 
     # Core image SERVICE (wave-6 split) — NOT the skill-manager lookup: the

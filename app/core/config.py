@@ -1003,8 +1003,43 @@ def load(config_path: Optional[Path] = None) -> dict:
     if _BOOT_RESTART_SNAPSHOT is None:
         _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
 
+    _materialize_game_calendar_defaults(_CONFIG)
+
     _invalidate_config_derived_caches()
     return _CONFIG
+
+
+# True while `game_seasons` in memory is the SHIPPED default list rather than
+# something the world configured. The one-time atmosphere migration needs the
+# distinction: on a materialized list no season has an "own" value yet.
+_GAME_SEASONS_MATERIALIZED = False
+
+
+def game_seasons_are_defaults() -> bool:
+    """True when the loaded `game_seasons` came from `Calendar.default()`."""
+    return _GAME_SEASONS_MATERIALIZED
+
+
+def _materialize_game_calendar_defaults(cfg: dict) -> None:
+    """Put the shipped calendar into the config IN MEMORY when it has none.
+
+    `game_seasons` is an is_array section, and the admin's schema-default pass
+    only fills fields of EXISTING items — an unconfigured world would show an
+    empty season list while `get_calendar()` silently runs on
+    `Calendar.default()`. Materializing here makes the effective calendar the
+    visible one; nothing is written to disk (the next admin save persists it).
+    """
+    global _GAME_SEASONS_MATERIALIZED
+    from app.core.game_time import default_calendar_config, default_seasons_config
+
+    seasons = cfg.get("game_seasons")
+    _GAME_SEASONS_MATERIALIZED = not (isinstance(seasons, list) and seasons)
+    if _GAME_SEASONS_MATERIALIZED:
+        cfg["game_seasons"] = default_seasons_config()
+
+    calendar = cfg.get("game_calendar")
+    if not isinstance(calendar, dict) or not calendar:
+        cfg["game_calendar"] = default_calendar_config()
 
 
 def _invalidate_config_derived_caches() -> None:
@@ -1174,7 +1209,7 @@ def get_all() -> dict:
 
 def save(data: dict, config_path: Optional[Path] = None) -> None:
     """Save configuration. Sensitive fields are split out into secrets.json (gitignored)."""
-    global _CONFIG
+    global _CONFIG, _GAME_SEASONS_MATERIALIZED
     path = config_path or _CONFIG_PATH
     secrets_path = path.parent / "secrets.json"
 
@@ -1195,6 +1230,8 @@ def save(data: dict, config_path: Optional[Path] = None) -> None:
             pass
 
     _CONFIG = data
+    if isinstance(data.get("game_seasons"), list) and data["game_seasons"]:
+        _GAME_SEASONS_MATERIALIZED = False
     _invalidate_config_derived_caches()
 
 

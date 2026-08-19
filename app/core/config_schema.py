@@ -8,6 +8,10 @@ admin UI rendering and server-side validation.
 # Field types: str, int, float, bool, text (multiline), select, password, json_str
 # "array" and "object" are handled by section-level definitions
 
+# The season atmosphere levels are owned by the calendar module — the schema
+# only offers them as dropdown choices (one source, no drifting copy).
+from app.core.game_time import TEMPERATURE_LEVELS, WEATHER_KINDS  # noqa: E402
+
 # Every scene-prompt default ever shipped. The earlier defaults-prefill wrote
 # these into configs as explicit values on save — treat them as "not
 # customized" (cleared on settings load, ignored at render time) so built-in
@@ -1060,6 +1064,16 @@ SECTIONS = {
         "nav_sub": True,
         "is_array": True,
         "item_label_field": "name",
+        "description": (
+            "A season defines how long it lasts, when the sun is up — and what "
+            "the world feels like while it lasts. Temperature and weather are "
+            "the ATMOSPHERE OF THE SEASON, not of the world: there is no "
+            "world-wide weather switch, the season in effect decides. The LLM "
+            "receives them together with the game time, as the "
+            "<code>game_weather</code> prompt variable, and they are soft "
+            "hints only — no code reacts to them, the model decides how to "
+            "play them."
+        ),
         "fields": {
             "key": {
                 "type": "str",
@@ -1101,6 +1115,35 @@ SECTIONS = {
                 "description": "End of daylight in this season. From this "
                                "time on it is night again. Invalid values "
                                "fall back to 18:00.",
+            },
+            "temperature": {
+                "type": "select",
+                "label": "Temperature",
+                "choices": list(TEMPERATURE_LEVELS),
+                "default": "mild",
+                "description": "How cold or warm the world is during this "
+                               "season. Reaches the chat LLM with the game "
+                               "time; the model decides what that means for "
+                               "clothing and behaviour.",
+            },
+            "weather": {
+                "type": "select",
+                "label": "Weather",
+                "choices": list(WEATHER_KINDS),
+                "default": "dry",
+                "description": "The season's prevailing weather. A hint for "
+                               "the LLM, not a simulation — there is no "
+                               "per-day weather roll.",
+            },
+            "weather_note": {
+                "type": "str",
+                "label": "Weather note",
+                "default": "",
+                "placeholder": "e.g. often fog in the morning, thunderstorms "
+                               "in the afternoon",
+                "description": "Free text appended to the atmosphere line "
+                               "verbatim — use it for anything the two "
+                               "dropdowns cannot say. Empty = nothing extra.",
             },
         },
     },

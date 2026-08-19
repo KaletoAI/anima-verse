@@ -105,6 +105,11 @@ Hand-derived expectations:
           season "Alpha" day 9, weekday 1 → "Tirsday, Alpha, day 9 · 00:00"
         to_dict hour_fraction for 14:23:45 = 14 + 23/60 + 45/3600
           = 14.395833…
+        the season's atmosphere rides along in both payloads: the default
+          calendar ships summer hot/dry, so to_dict()["atmosphere"] is
+          {"season": "summer", "temperature": "hot", "weather": "dry",
+           "note": "", "label": "hot, dry"} and calendar_to_dict lists
+          temperature/weather/weather_note per season
 
 Usage:  ./.venv/bin/python scripts/smoke_game_time.py
 """
@@ -468,13 +473,18 @@ check("to_dict weekday (no weeks)", payload["weekday"], None)
 approx("to_dict hour_fraction", payload["hour_fraction"],
        14 + 23 / 60 + 45 / 3600)
 
+check("to_dict atmosphere", payload["atmosphere"],
+      {"season": "summer", "temperature": "hot", "weather": "dry",
+       "note": "", "label": "hot, dry"})
+
 cal_payload = game_time.calendar_to_dict(DEFAULT)
 check("calendar_to_dict year_days", cal_payload["year_days"], 120)
 check("calendar_to_dict week_days", cal_payload["week_days"], [])
 check("calendar_to_dict first season",
       cal_payload["seasons"][0],
       {"key": "spring", "name": "Spring", "days": 30,
-       "sunrise": "06:00", "sunset": "18:00"})
+       "sunrise": "06:00", "sunset": "18:00",
+       "temperature": "mild", "weather": "rain", "weather_note": ""})
 
 check("no datetime lookalikes on GameTime",
       [n for n in ("strftime", "month", "date", "astimezone", "isoformat",

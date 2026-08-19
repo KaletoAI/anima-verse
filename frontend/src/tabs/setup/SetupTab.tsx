@@ -6,40 +6,30 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 
 /**
- * Game-Admin "Setup" tab — World briefing (description) + world atmosphere
- * settings under one Save button (in the DetailToolbar above).
+ * Game-Admin "Setup" tab — the world briefing (description) under the Save
+ * button in the DetailToolbar above.
  *
  * - description: free-form world briefing, injected into LLM templates
  *   via the world_setup variable
- * - world.temperature / weather: soft LLM hints (Plan §1.2)
+ *
+ * Temperature and weather used to live here as world-wide values; they are a
+ * property of the SEASON now and are edited in Admin settings.
  */
-interface WorldSettings {
-  world: { temperature: string; weather: string }
-  choices: { temperature: string[]; weather: string[] }
-}
-
 export function SetupTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [description, setDescription] = useState('')
   const [origDescription, setOrigDescription] = useState('')
-  const [settings, setSettings] = useState<WorldSettings | null>(null)
-  const [origSettings, setOrigSettings] = useState<WorldSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   const reload = useCallback(async () => {
     setLoading(true)
     try {
-      const [d, s] = await Promise.all([
-        apiGet<{ description?: string }>('/admin/world-setup'),
-        apiGet<WorldSettings>('/world/settings'),
-      ])
+      const d = await apiGet<{ description?: string }>('/admin/world-setup')
       const text = d.description || ''
       setDescription(text)
       setOrigDescription(text)
-      setSettings(s)
-      setOrigSettings(JSON.parse(JSON.stringify(s)))
     } catch (e) {
       toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -52,34 +42,25 @@ export function SetupTab() {
   }, [reload])
 
   const save = useCallback(async () => {
-    if (!settings) return
     setSaving(true)
     try {
-      // Save both independent endpoints in parallel — the Save above covers everything.
-      await Promise.all([
-        apiPut('/admin/world-setup', { description }),
-        apiPut('/world/settings', { world: settings.world }),
-      ])
+      await apiPut('/admin/world-setup', { description })
       setOrigDescription(description)
-      setOrigSettings(JSON.parse(JSON.stringify(settings)))
       toast(t('Saved'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setSaving(false)
     }
-  }, [description, settings, t, toast])
+  }, [description, t, toast])
 
   const revert = useCallback(() => {
     setDescription(origDescription)
-    if (origSettings) setSettings(JSON.parse(JSON.stringify(origSettings)))
-  }, [origDescription, origSettings])
+  }, [origDescription])
 
-  if (loading || !settings) return <div className="ga-loading">{t('Loading…')}</div>
+  if (loading) return <div className="ga-loading">{t('Loading…')}</div>
 
-  const dirty =
-    description !== origDescription ||
-    JSON.stringify(settings) !== JSON.stringify(origSettings)
+  const dirty = description !== origDescription
 
   return (
     <div className="ga-page-scroll">
@@ -115,36 +96,12 @@ export function SetupTab() {
 
       <div className="ga-form" style={{ maxWidth: 1100, marginTop: 32 }}>
         <h3>{t('World atmosphere')}</h3>
-        <div className="ga-form-hint" style={{ marginBottom: 8 }}>
-          {t('Soft hints for the chat-LLM. No code effect — the model can choose how to react.')}
-        </div>
-        <div className="ga-form-row">
-          <Field label={t('Temperature')}>
-            <select
-              className="ga-input"
-              value={settings.world.temperature}
-              onChange={(e) =>
-                setSettings({ ...settings, world: { ...settings.world, temperature: e.target.value } })
-              }
-            >
-              {settings.choices.temperature.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t('Weather')}>
-            <select
-              className="ga-input"
-              value={settings.world.weather}
-              onChange={(e) =>
-                setSettings({ ...settings, world: { ...settings.world, weather: e.target.value } })
-              }
-            >
-              {settings.choices.weather.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </Field>
+        <div className="ga-form-hint">
+          {t('Temperature and weather are configured per season in ')}
+          <a href="/admin/settings" target="_blank" rel="noreferrer">
+            /admin/settings → Game calendar — seasons
+          </a>
+          .
         </div>
       </div>
     </div>
