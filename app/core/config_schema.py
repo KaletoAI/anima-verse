@@ -261,6 +261,122 @@ SECTIONS = {
     "image_generation": {
         "label": "Media Generation",
         "icon": "🎨",
+        # Generic section paging: a section with `pages` is split into several
+        # navigation sub-entries, each rendering only the listed fields and
+        # sub_arrays (in the listed order). Purely a presentation concern —
+        # the section is still saved as a whole, and the Python side keeps
+        # iterating `fields`/`sub_arrays` without knowing about pages.
+        # Fields/sub_arrays not named by any page fall back onto the FIRST
+        # page, so a newly added field can never become invisible.
+        "pages": [
+            {
+                "id": "general",
+                "label": "General & defaults",
+                "icon": "⚙️",
+                "description": "Master switch, post-processing hand-off and the default backend match per render occasion.",
+                "fields": [
+                    "enabled",
+                    "postprocess_enabled",
+                    "postprocess_trigger_url",
+                    "outfit_imagegen_default",
+                    "expression_imagegen_default",
+                    "location_imagegen_default",
+                    "prop_imagegen_default",
+                    "scene_imagegen_default",
+                    "mesh_imagegen_default",
+                    "timevariant_imagegen_default",
+                ],
+            },
+            {
+                "id": "backends",
+                "label": "Backends",
+                "icon": "🔌",
+                "description": "Every image, video and mesh backend with its endpoint, model and capabilities.",
+                "sub_arrays": ["backends"],
+            },
+            {
+                "id": "use_cases",
+                "label": "Use-cases (styles)",
+                "icon": "🎭",
+                "description": "Per render occasion and prompt family: style, negative prompt and instruction.",
+                "sub_arrays": ["use_cases"],
+            },
+            {
+                "id": "lora",
+                "label": "LoRA library",
+                "icon": "🧬",
+                "description": "The consolidated LoRA library — one entry per LoRA with its backends and trigger words.",
+                "sub_arrays": ["lora_triggers"],
+            },
+            {
+                "id": "scene",
+                "label": "Scene rendering",
+                "icon": "🖼",
+                "description": "How a location scene is rendered from references, and the prompts behind both modes.",
+                "fields": [
+                    "scene_render_mode",
+                    "scene_render_cooldown_s",
+                    "scene_prompt_multi_ref",
+                    "scene_prompt_only_background",
+                ],
+            },
+            {
+                "id": "refs",
+                "label": "Reference renders & sizes",
+                "icon": "📐",
+                "description": "Pose prompts for the 3D reference renders plus the image sizes used per render occasion.",
+                "fields": [
+                    "_grp_pose_refs",
+                    "_pose_layer_note",
+                    "tpose_prompt",
+                    "animal_pose_prompt",
+                    "default_pose_prompt",
+                    "tpose_image_width",
+                    "tpose_image_height",
+                    "model_ref_renders_enabled",
+                    "model_ref_debounce_seconds",
+                    "outfit_image_width",
+                    "outfit_image_height",
+                    "location_image_width",
+                    "location_image_height",
+                    "u2net_home",
+                ],
+            },
+            {
+                "id": "blender",
+                "label": "Blender refinement (3D)",
+                "icon": "🧱",
+                "description": "Local Blender post-processing of generated meshes: textures, normalization and distance meshes.",
+                "fields": [
+                    "_grp_blender",
+                    "blender_enabled",
+                    "blender_executable",
+                    "blender_timeout_s",
+                    "blender_keep_original",
+                    "blender_auto_retexture",
+                    "blender_jpeg_quality",
+                    "blender_max_texture_size",
+                    "blender_auto_lod",
+                    "blender_auto_normalize",
+                    "blender_auto_bake_vc",
+                    "blender_bake_vc_target_tris",
+                    "blender_lod_ratio_character",
+                    "blender_lod_ratio_prop",
+                    "blender_lod_ratio_room",
+                    "blender_lod_ratio_building",
+                ],
+            },
+            {
+                "id": "analysis",
+                "label": "Analysis & rebuild prompts",
+                "icon": "🔍",
+                "description": "Prompts for post-generation image analysis and for rebuilding a prompt from an existing image.",
+                "fields": [
+                    "image_analysis_prompt",
+                    "rebuild_llm_system_template",
+                ],
+            },
+        ],
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
 

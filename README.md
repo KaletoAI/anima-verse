@@ -57,7 +57,11 @@ run in parallel on the same backend.
     items, rules, events, per-character "Mind" debugging.
 - **Server-rendered admin pages** (Python) — `/admin/settings`, `/admin/users`, `/admin/models`,
   `/admin/agent-loop`, `/admin/templates`, `/admin/llm-stats`, `/logs/*`, `/dashboard`. These are
-  the configuration surface; there is no React replacement for them.
+  the configuration surface; there is no React replacement for them. A large settings section can
+  split itself into navigation sub-pages (schema key `pages`) — **Media Generation** does, with
+  *General & defaults · Backends · Use-cases (styles) · LoRA library · Scene rendering · Reference
+  renders & sizes · Blender refinement (3D) · Analysis & rebuild prompts*. Saving stays
+  section-wide, the URL hash (`#image_generation/blender`) survives a reload.
 - **3D world map** (`client3d/`, Three.js, no React) — a zoomable Age-of-Empires-style view of the
   world that resolves buildings into walkable floor plans as you zoom in. It runs as its own process
   (`./start.sh --with-3d`, port 5183) and talks to the backend over the HTTP API only, so it can

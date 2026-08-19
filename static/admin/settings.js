@@ -8,6 +8,10 @@ let PROVIDERS_VISION = {};  // provName -> Set(vision model names)
 // cooldown_reason, ...}) — merged into the backends table's Status column.
 let MEDIA_STATUS = {};
 let ACTIVE_SECTION = null;
+// Page id inside a paged section (schema key `pages`), null for sections
+// without paging. Kept across renderSection() rerenders so an edit on the
+// "Blender" page does not throw the user back to "General".
+let ACTIVE_PAGE = null;
 // When the user expands an array item we keep its path here, so the state
 // survives renderSection() rerenders (e.g. after an api_type change via
 // triggers_rerender).
@@ -40,9 +44,13 @@ async function init() {
         } catch (e) { /* defaults stay empty */ }
         await loadMediaStatus();
         buildNav();
-        // Activate first section
-        const first = Object.keys(SCHEMA)[0];
-        if (first) activateSection(first);
+        // Restore the section/page from the URL hash, else the first section.
+        const fromHash = parseHash();
+        if (fromHash) activateSection(fromHash.section, fromHash.page);
+        else {
+            const first = Object.keys(SCHEMA)[0];
+            if (first) activateSection(first);
+        }
         // Restart-Banner: nach Init pruefen, ob etwas pending ist (z.B. wenn
         // ein anderer Tab kuerzlich gespeichert hat).
         loadRestartPending();
@@ -57,6 +65,60 @@ function authHeaders() {
 }
 
 // ── Navigation ──
+// Nav/hash key of one entry: "<section>" or "<section>/<page>" for a paged
+// section (schema key `pages`).
+function navKey(key, pageId) {
+    return pageId ? key + '/' + pageId : key;
+}
+
+// Reads "#section" / "#section/page" / "#section::subarray" from the URL and
+// returns it only when the section actually exists in the schema.
+function parseHash() {
+    const raw = decodeURIComponent((window.location.hash || '').replace(/^#/, ''));
+    if (!raw) return null;
+    const slash = raw.indexOf('/');
+    const section = slash === -1 ? raw : raw.slice(0, slash);
+    const page = slash === -1 ? null : raw.slice(slash + 1);
+    const base = section.indexOf('::') !== -1 ? section.slice(0, section.indexOf('::')) : section;
+    if (!SCHEMA[base] && section !== 'llm_simple') return null;
+    return { section: section, page: page || null };
+}
+
+// Keeps the URL in sync WITHOUT adding a history entry (and without firing a
+// hashchange), so a reload lands on the same section/page.
+function syncHash(key, pageId) {
+    const want = '#' + navKey(key, pageId);
+    if (window.location.hash === want) return;
+    try { history.replaceState(null, '', want); }
+    catch (e) { window.location.hash = want; }
+}
+
+// Pages of a paged section, with every field/sub_array the pages forgot
+// appended to the FIRST page — a newly added schema field is never invisible.
+function resolvePages(sec) {
+    const pages = (sec.pages || []).map(p => ({
+        id: p.id,
+        label: p.label || p.id,
+        icon: p.icon || '',
+        description: p.description || '',
+        fields: (p.fields || []).slice(),
+        sub_arrays: (p.sub_arrays || []).slice()
+    }));
+    if (!pages.length) return pages;
+    const usedF = new Set(), usedA = new Set();
+    for (const p of pages) {
+        p.fields.forEach(f => usedF.add(f));
+        p.sub_arrays.forEach(a => usedA.add(a));
+    }
+    for (const k of Object.keys(sec.fields || {})) if (!usedF.has(k)) pages[0].fields.push(k);
+    for (const k of Object.keys(sec.sub_arrays || {})) if (!usedA.has(k)) pages[0].sub_arrays.push(k);
+    return pages;
+}
+
+function isPaged(sec) {
+    return !!(sec && Array.isArray(sec.pages) && sec.pages.length);
+}
+
 function buildNav() {
     const nav = document.getElementById('nav-links');
     nav.innerHTML = '';
@@ -74,6 +136,21 @@ function buildNav() {
         a.dataset.section = key;
         a.onclick = (e) => { e.preventDefault(); activateSection(key); };
         nav.appendChild(a);
+        // Paged section: one indented entry per page (same look as nav_sub).
+        // The parent entry opens the first page; the pages own the section's
+        // sub_arrays too, so the generic sub-array entries below are skipped.
+        if (isPaged(sec)) {
+            for (const page of resolvePages(sec)) {
+                const pa = document.createElement('a');
+                pa.className = 'nav-sub';
+                pa.href = '#' + navKey(key, page.id);
+                pa.innerHTML = '<span class="nav-icon">›</span> ' + page.label;
+                pa.dataset.section = navKey(key, page.id);
+                pa.onclick = (e) => { e.preventDefault(); activateSection(key, page.id); };
+                nav.appendChild(pa);
+            }
+            continue;
+        }
         // Sub-arrays (e.g. backends) as indented sub-items — each gets its
         // own page (key "<sec>::<arr>").
         if (sec.sub_arrays) {
@@ -91,22 +168,34 @@ function buildNav() {
     }
 }
 
-function activateSection(key) {
+function activateSection(key, pageId) {
     ACTIVE_SECTION = key;
-    // Update nav
+    const sec = SCHEMA[key];
+    // Paged section: fall back to the first page (parent nav entry, or a hash
+    // naming a page that no longer exists).
+    if (isPaged(sec)) {
+        const pages = resolvePages(sec);
+        const hit = pages.find(p => p.id === pageId);
+        ACTIVE_PAGE = hit ? hit.id : pages[0].id;
+    } else {
+        ACTIVE_PAGE = null;
+    }
+    // Update nav — for a paged section the PAGE entry is the active one.
     document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'));
-    const link = document.querySelector('.sidebar a[data-section="' + key + '"]');
+    const link = document.querySelector('.sidebar a[data-section="' + navKey(key, ACTIVE_PAGE) + '"]');
     if (link) link.classList.add('active');
+    syncHash(key, ACTIVE_PAGE);
     // Show settings toolbar, restore content mode
     document.getElementById('settings-toolbar').style.display = 'flex';
     const content = document.getElementById('content');
     content.classList.remove('iframe-mode');
     // Render section
-    renderSection(key);
+    renderSection(key, ACTIVE_PAGE);
 }
 
 function activateIframe(key, url, title) {
     ACTIVE_SECTION = key;
+    ACTIVE_PAGE = null;
     // Update nav
     document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'));
     const link = document.querySelector('.sidebar a[data-section="' + key + '"]');
@@ -415,12 +504,21 @@ async function syncLoraLibrary() {
     }
 }
 
-function renderSection(key) {
+function renderSection(key, pageId) {
     // Compound-Key "<section>::<subArray>" -> eigene Sub-Array-Seite.
     if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
     // Einfache, kategorie-basierte LLM-Seite (befuellt CONFIG.llm_routing).
     if (key === 'llm_simple') { renderLlmSimpleEditor(); return; }
     const sec = SCHEMA[key];
+    // Paged section: the many renderSection(ACTIVE_SECTION) rerenders (field
+    // edits, array add/remove) pass no page — stay on the current one.
+    if (isPaged(sec)) {
+        const want = (pageId === undefined || pageId === null)
+            ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null)
+            : pageId;
+        renderPagedSection(key, want);
+        return;
+    }
     // null und undefined beide auf Default fallen lassen — sonst wirft
     // renderFields(null, ...) bei data[fKey] einen TypeError.
     const cfgVal = CONFIG[key];
@@ -496,24 +594,67 @@ function renderSubArrayPage(key) {
     const content = document.getElementById('content');
     if (!sec || !arrDef) { content.innerHTML = '<div class="section active"></div>'; return; }
     const parentData = (CONFIG[parentKey] && typeof CONFIG[parentKey] === 'object') ? CONFIG[parentKey] : {};
-    const path = parentKey + '.' + arrKey;
-    const items = parentData[arrKey] || (arrDef.is_dict ? {} : []);
 
     let html = '<div class="section active">';
     html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label + ' — ' + arrDef.label + '</h1>';
-    if (arrDef.use_cases_editor) {
-        html += renderUseCasesMasterDetail(path);
-    } else if (arrDef.lora_triggers_editor) {
-        html += renderLoraTriggersEditor(path);
-    } else if (arrDef.master_detail) {
-        html += renderMasterDetail(arrDef, items, path);
-    } else {
-        html += '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\'' + path + '\', \'' + (arrDef.is_dict ? 'dict' : 'array') + '\')">+ Add</button></div>';
-        if (arrDef.is_dict) html += renderDictItems(arrDef, items, path);
-        else html += renderArrayItems(arrDef, items, path);
-    }
+    html += renderSubArrayBody(arrDef, parentData, parentKey, arrKey);
     html += '</div>';
     content.innerHTML = html;
+    populateImagePreviewMetas();
+}
+
+// Body of ONE sub-array (the editor dispatch), without any page chrome —
+// shared by the standalone sub-array page and the paged sections.
+function renderSubArrayBody(arrDef, parentData, parentKey, arrKey) {
+    const path = parentKey + '.' + arrKey;
+    const items = (parentData && parentData[arrKey]) || (arrDef.is_dict ? {} : []);
+    if (arrDef.use_cases_editor) return renderUseCasesMasterDetail(path);
+    if (arrDef.lora_triggers_editor) return renderLoraTriggersEditor(path);
+    if (arrDef.master_detail) return renderMasterDetail(arrDef, items, path);
+    let html = '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\'' + path + '\', \'' + (arrDef.is_dict ? 'dict' : 'array') + '\')">+ Add</button></div>';
+    if (arrDef.is_dict) html += renderDictItems(arrDef, items, path);
+    else html += renderArrayItems(arrDef, items, path);
+    return html;
+}
+
+// One page of a paged section: only the fields and sub-arrays the page lists,
+// in the listed order. The section itself is still saved as a whole.
+function renderPagedSection(key, pageId) {
+    const sec = SCHEMA[key];
+    const pages = resolvePages(sec);
+    const page = pages.find(p => p.id === pageId) || pages[0];
+    ACTIVE_PAGE = page.id;
+    const cfgVal = CONFIG[key];
+    const data = (cfgVal !== undefined && cfgVal !== null && typeof cfgVal === 'object') ? cfgVal : {};
+
+    let html = '<div class="section active">';
+    html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label
+          + ' <span style="color:#8b949e;">›</span> '
+          + (page.icon ? page.icon + ' ' : '') + page.label + '</h1>';
+    if (page.description) {
+        html += '<div class="desc" style="margin-bottom:14px; white-space:pre-line;">' + page.description + '</div>';
+    }
+
+    const subset = {};
+    for (const fKey of page.fields) {
+        if (sec.fields && sec.fields[fKey]) subset[fKey] = sec.fields[fKey];
+    }
+    const hasFields = Object.keys(subset).length > 0;
+    if (hasFields) html += renderFields(subset, data, key);
+
+    for (const arrKey of page.sub_arrays) {
+        const arrDef = (sec.sub_arrays || {})[arrKey];
+        if (!arrDef) continue;
+        // Only label the block when it shares the page with something else —
+        // a page holding just one sub-array already says so in its title.
+        if (hasFields || page.sub_arrays.length > 1) {
+            html += '<div class="subsection-title" style="margin-top:18px;">' + (arrDef.label || arrKey) + '</div>';
+        }
+        html += renderSubArrayBody(arrDef, data, key, arrKey);
+    }
+
+    html += '</div>';
+    document.getElementById('content').innerHTML = html;
     populateImagePreviewMetas();
 }
 
