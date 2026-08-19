@@ -10,6 +10,10 @@ import {
   MapDraftPreview,
   type MapDraftCounts, type MapDraftWarning, type MapPreviewResponse,
 } from './MapDraftPreview'
+import {
+  LayoutDraftPreview,
+  type LayoutDraftCounts, type LayoutDraftWarning, type LayoutPreviewResponse,
+} from './LayoutDraftPreview'
 
 interface ModelEntry {
   name: string
@@ -70,6 +74,44 @@ interface TemplateInfo {
  */
 const MAP_SCHEMA = 'map'
 
+/**
+ * The layout schema is the map's sibling one level down: a whole FLOOR PLAN
+ * for ONE location, so it gets the same preview → apply → restore triple
+ * instead of a generic Apply button, and its own inline picture
+ * (`LayoutDraftPreview`).
+ *
+ * It differs from the map in exactly one thing: a plan always belongs to a
+ * location, so the target select is shown in BOTH modes — there is no such
+ * thing as "a floor plan of nothing". `mode` still means what it means
+ * everywhere (`new` = plan the place from scratch, `edit` = keep what is
+ * drawn), and the server injects the current plan either way, because a plan
+ * is always written as a whole.
+ */
+const LAYOUT_SCHEMA = 'layout'
+
+interface ApplyLayoutResponse {
+  status?: string
+  applied?: {
+    location_id?: string
+    updated?: string[]
+    created?: string[]
+    entry_room?: string
+    boundary_openings?: number
+  }
+  warnings?: LayoutDraftWarning[]
+  snapshot_id?: string
+}
+
+/** One entry of `GET /world-dev/layout-snapshots` — the undo the floor-plan
+ *  editor itself does not have. */
+interface LayoutSnapshot {
+  id: string
+  created_at?: string
+  location_id?: string
+  location_name?: string
+  rooms?: number
+}
+
 /** How a map draft is written into the world. `merge` adds its areas next to
  *  what is there; `replace_terrain` clears the painted ground AND the relief
  *  first (placements are never cleared — only the listed ones move). */
@@ -91,9 +133,13 @@ interface MapSnapshot {
 }
 
 /** What a confirmation modal is about. `null` = no modal. */
-type PendingAction =
+type MapAction =
   | { kind: 'apply'; mode: ApplyMode }
   | { kind: 'restore'; snapshotId: string }
+type LayoutAction =
+  | { kind: 'apply-layout' }
+  | { kind: 'restore-layout'; snapshotId: string }
+type PendingAction = MapAction | LayoutAction
 
 export function WorldDevTab() {
   const { t } = useI18n()
@@ -161,6 +207,17 @@ export function WorldDevTab() {
   const [applying, setApplying] = useState(false)
   const [applied, setApplied] = useState(false)
 
+  // The layout draft lives next to `extracted` for the same reason the map
+  // draft does: it is applied through its own route, with its own
+  // confirmation and its own undo.
+  const [layoutDraft, setLayoutDraft] = usePersistentState<Record<string, unknown> | null>(
+    'worlddev.layoutDraft', null)
+  const [layoutPreview, setLayoutPreview] = useState<LayoutPreviewResponse | null>(null)
+  const [layoutPreviewing, setLayoutPreviewing] = useState(false)
+  const [layoutPreviewError, setLayoutPreviewError] = useState('')
+  const [layoutSnapshots, setLayoutSnapshots] = useState<LayoutSnapshot[]>([])
+  const [layoutSnapshotId, setLayoutSnapshotId] = useState('')
+
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -211,6 +268,9 @@ export function WorldDevTab() {
     setMapDraft(null)
     setPreview(null)
     setPreviewError('')
+    setLayoutDraft(null)
+    setLayoutPreview(null)
+    setLayoutPreviewError('')
     setApplied(false)
   }, [])
 
@@ -246,7 +306,11 @@ export function WorldDevTab() {
           // ("new" = draw from scratch, "edit" = the server injects the
           // existing map) and never an edit target.
           mode: schema === MAP_SCHEMA ? mode : undefined,
-          edit_location_id: mode === 'edit' && schema !== MAP_SCHEMA ? editTarget : '',
+          // A floor plan always belongs to a location, so the layout schema
+          // carries its target in BOTH modes.
+          edit_location_id: schema === LAYOUT_SCHEMA
+            ? editTarget
+            : (mode === 'edit' && schema !== MAP_SCHEMA ? editTarget : ''),
           context_location_ids: Array.from(contextLocations),
           context_character_names: Array.from(contextCharacters),
         }),
@@ -264,6 +328,7 @@ export function WorldDevTab() {
       let acc = ''
       const localExtracted: ExtractedData = {}
       let localMap: Record<string, unknown> | null = null
+      let localLayout: Record<string, unknown> | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -312,6 +377,10 @@ export function WorldDevTab() {
             if (evt.map_data && typeof evt.map_data === 'object') {
               localMap = evt.map_data as Record<string, unknown>
             }
+            // Same treatment for the floor plan (see LAYOUT_SCHEMA).
+            if (evt.layout_data && typeof evt.layout_data === 'object') {
+              localLayout = evt.layout_data as Record<string, unknown>
+            }
           } catch {
             /* drop malformed chunks */
           }
@@ -325,6 +394,10 @@ export function WorldDevTab() {
         // A new draft supersedes the previous one — and the "applied" state
         // with it, so the map-editor link never points at an older result.
         setMapDraft(localMap)
+        setApplied(false)
+      }
+      if (localLayout) {
+        setLayoutDraft(localLayout)
         setApplied(false)
       }
     } catch (e) {
@@ -525,13 +598,106 @@ export function WorldDevTab() {
     window.location.hash = '#/map'
   }, [])
 
+  /* ---------------------------------------------------------- layout draft */
+
+  const isLayout = schema === LAYOUT_SCHEMA
+
+  // Same rule as the map: the SERVER normalises before anything is drawn, so
+  // the picture shows what an apply would write and never the raw model JSON.
+  useEffect(() => {
+    if (!layoutDraft || !editTarget) {
+      setLayoutPreview(null); setLayoutPreviewError(''); return
+    }
+    let cancelled = false
+    setLayoutPreviewing(true)
+    setLayoutPreviewError('')
+    apiPost<LayoutPreviewResponse>('/world-dev/preview-layout', {
+      layout_data: layoutDraft, location_id: editTarget,
+    })
+      .then((res) => { if (!cancelled) setLayoutPreview(res) })
+      .catch((e: Error) => {
+        if (cancelled) return
+        setLayoutPreview(null)
+        setLayoutPreviewError(e.message)
+      })
+      .finally(() => { if (!cancelled) setLayoutPreviewing(false) })
+    return () => { cancelled = true }
+  }, [layoutDraft, editTarget])
+
+  const loadLayoutSnapshots = useCallback(async (locId: string) => {
+    if (!locId) { setLayoutSnapshots([]); return }
+    try {
+      const list = await apiGet<LayoutSnapshot[]>(
+        `/world-dev/layout-snapshots?location_id=${encodeURIComponent(locId)}`)
+      setLayoutSnapshots(Array.isArray(list) ? list : [])
+    } catch {
+      // A location that never had a plan applied has no snapshot store yet —
+      // an empty list is the honest answer, not an error to act on.
+      setLayoutSnapshots([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isLayout) void loadLayoutSnapshots(editTarget)
+  }, [isLayout, editTarget, loadLayoutSnapshots])
+
+  const runApplyLayout = useCallback(async () => {
+    if (!layoutDraft || !editTarget) return
+    setApplying(true)
+    try {
+      const res = await apiPost<ApplyLayoutResponse>('/world-dev/apply-layout', {
+        layout_data: layoutDraft,
+        location_id: editTarget,
+        snapshot: true,
+      })
+      const a = res.applied
+      toast(a
+        ? t('Applied: {u} rooms updated, {c} created')
+          .replace('{u}', String(a.updated?.length ?? 0))
+          .replace('{c}', String(a.created?.length ?? 0))
+        : t('Applied'), 'success')
+      setApplied(true)
+      await loadLayoutSnapshots(editTarget)
+      if (res.snapshot_id) setLayoutSnapshotId(res.snapshot_id)
+    } catch (e) {
+      toast(t('Apply failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setApplying(false)
+    }
+  }, [editTarget, layoutDraft, loadLayoutSnapshots, t, toast])
+
+  const runRestoreLayout = useCallback(async (id: string) => {
+    if (!id) return
+    setApplying(true)
+    try {
+      const res = await apiPost<{ restored?: { rooms?: number } }>(
+        '/world-dev/layout-restore', { snapshot_id: id })
+      toast(res.restored
+        ? t('Snapshot restored ({n} rooms)')
+          .replace('{n}', String(res.restored.rooms ?? 0))
+        : t('Snapshot restored'), 'success')
+      setApplied(true)
+    } catch (e) {
+      toast(t('Restore failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setApplying(false)
+    }
+  }, [t, toast])
+
+  /** The floor-plan editor lives in the World tab of this very SPA. */
+  const openWorldEditor = useCallback(() => {
+    window.location.hash = '#/world'
+  }, [])
+
   const confirmPending = useCallback(() => {
     const action = pendingAction
     setPendingAction(null)
     if (!action) return
     if (action.kind === 'apply') void runApply(action.mode)
-    else void runRestore(action.snapshotId)
-  }, [pendingAction, runApply, runRestore])
+    else if (action.kind === 'restore') void runRestore(action.snapshotId)
+    else if (action.kind === 'apply-layout') void runApplyLayout()
+    else void runRestoreLayout(action.snapshotId)
+  }, [pendingAction, runApply, runApplyLayout, runRestore, runRestoreLayout])
 
   const targetOptions = useMemo(() => {
     if (schema === 'character') return characters.map((c) => ({ id: c.name, label: c.display_name || c.name }))
@@ -651,15 +817,19 @@ export function WorldDevTab() {
               ))}
             </select>
           ) : null}
-          {/* A map has exactly one instance — there is nothing to pick. */}
-          {mode === 'edit' && !isMap ? (
+          {/* A map has exactly one instance — there is nothing to pick. A
+              floor plan always belongs to a location, so it picks in both
+              modes; everything else only when editing. */}
+          {(isLayout || (mode === 'edit' && !isMap)) ? (
             <select
               className="ga-input ga-wd-target-select"
               value={editTarget}
               onChange={(e) => setEditTarget(e.target.value)}
-              title={t('Target to edit')}
+              title={isLayout ? t('Location to lay out') : t('Target to edit')}
             >
-              <option value="">— {t('select target')} —</option>
+              <option value="">
+                — {isLayout ? t('select location') : t('select target')} —
+              </option>
               {targetOptions.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.label}
@@ -838,6 +1008,79 @@ export function WorldDevTab() {
         </div>
       ) : null}
 
+      {isLayout ? (
+        <div className="ga-wd-extracted">
+          <div className="ga-form-section-label">{t('Floor plan draft')}</div>
+          {!editTarget ? (
+            <div className="ga-form-hint">
+              {t('Pick the location this plan is for — a floor plan always belongs to one place.')}
+            </div>
+          ) : null}
+          {layoutPreviewing ? (
+            <div className="ga-form-hint">{t('Checking the draft…')}</div>
+          ) : null}
+          {layoutPreviewError ? (
+            <div className="ga-form-hint" style={{ color: '#f85149' }}>
+              {t('Preview failed')}: {layoutPreviewError}
+            </div>
+          ) : null}
+          {editTarget && !layoutDraft && !layoutPreviewing ? (
+            <div className="ga-form-hint">
+              {t('Describe the rooms in the chat — the draft appears here as a floor plan.')}
+            </div>
+          ) : null}
+          {layoutPreview ? (
+            <LayoutDraftPreview
+              normalized={layoutPreview.normalized}
+              warnings={layoutPreview.warnings || []}
+              counts={layoutPreview.counts}
+            />
+          ) : null}
+          <div className="ga-form-row" style={{ marginTop: 6 }}>
+            <button
+              className="ga-btn ga-btn-primary ga-btn-sm"
+              disabled={!layoutPreview || applying}
+              onClick={() => setPendingAction({ kind: 'apply-layout' })}
+              title={t('Write the plan through the floor-plan editor’s own save path')}
+            >
+              {t('Apply floor plan')}
+            </button>
+            {applied ? (
+              <button className="ga-btn ga-btn-sm" onClick={openWorldEditor}>
+                {t('Open in floor-plan editor')}
+              </button>
+            ) : null}
+          </div>
+          <div className="ga-form-row" style={{ marginTop: 4 }}>
+            <span className="ga-wd-context-label" style={{ flex: '0 0 auto' }}>
+              {t('Snapshots')}
+            </span>
+            <select
+              className="ga-input ga-wd-target-select"
+              value={layoutSnapshotId}
+              onChange={(e) => setLayoutSnapshotId(e.target.value)}
+              title={t('A snapshot of this location’s whole plan is taken before every apply')}
+            >
+              <option value="">— {t('select snapshot')} —</option>
+              {layoutSnapshots.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {(s.created_at || s.id)
+                    + (s.rooms !== undefined ? ` · ${s.rooms}` : '')}
+                </option>
+              ))}
+            </select>
+            <button
+              className="ga-btn ga-btn-sm"
+              disabled={!layoutSnapshotId || applying}
+              onClick={() => setPendingAction({
+                kind: 'restore-layout', snapshotId: layoutSnapshotId })}
+            >
+              {t('Restore snapshot')}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {Object.keys(extracted).length > 0 ? (
         <div className="ga-wd-extracted">
           <div className="ga-form-section-label">{t('Extracted JSON')}</div>
@@ -896,16 +1139,29 @@ export function WorldDevTab() {
         </button>
       </div>
 
-      {pendingAction ? (
-        <ConfirmMapAction
-          action={pendingAction}
-          counts={preview?.counts}
-          warningCount={preview?.warnings?.length || 0}
-          snapshots={snapshots}
-          onCancel={() => setPendingAction(null)}
-          onConfirm={confirmPending}
-        />
-      ) : null}
+      {pendingAction
+        && (pendingAction.kind === 'apply' || pendingAction.kind === 'restore') ? (
+          <ConfirmMapAction
+            action={pendingAction}
+            counts={preview?.counts}
+            warningCount={preview?.warnings?.length || 0}
+            snapshots={snapshots}
+            onCancel={() => setPendingAction(null)}
+            onConfirm={confirmPending}
+          />
+        ) : null}
+      {pendingAction
+        && (pendingAction.kind === 'apply-layout'
+          || pendingAction.kind === 'restore-layout') ? (
+          <ConfirmLayoutAction
+            action={pendingAction}
+            counts={layoutPreview?.counts}
+            warningCount={layoutPreview?.warnings?.length || 0}
+            snapshots={layoutSnapshots}
+            onCancel={() => setPendingAction(null)}
+            onConfirm={confirmPending}
+          />
+        ) : null}
     </div>
   )
 }
@@ -921,7 +1177,7 @@ export function WorldDevTab() {
 function ConfirmMapAction({
   action, counts, warningCount, snapshots, onCancel, onConfirm,
 }: {
-  action: PendingAction
+  action: MapAction
   counts?: MapDraftCounts
   warningCount: number
   snapshots: MapSnapshot[]
@@ -988,6 +1244,99 @@ function ConfirmMapAction({
               ) : null}
               <div className="ga-form-hint">
                 {t('A snapshot of the current map is taken first, so you can restore it from the list below.')}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="ga-modal-footer"
+          style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onCancel}>
+            {t('Cancel')}
+          </button>
+          <button type="button" className="ga-btn ga-btn-primary ga-btn-sm" onClick={onConfirm}>
+            {isRestore ? t('Restore') : t('Apply')}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+/**
+ * The one confirmation of the floor-plan flow — the map dialog's sibling, and
+ * a real dialog portalled to `document.body` for the same reason: the app
+ * builds its own confirmations, and a native box could not carry the numbers.
+ *
+ * It states WHAT will be written and that a snapshot is taken first, because
+ * the floor-plan editor itself has no undo either — the snapshot is the only
+ * way back from a plan that replaced every room rectangle at once.
+ */
+function ConfirmLayoutAction({
+  action, counts, warningCount, snapshots, onCancel, onConfirm,
+}: {
+  action: LayoutAction
+  counts?: LayoutDraftCounts
+  warningCount: number
+  snapshots: LayoutSnapshot[]
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const { t } = useI18n()
+  const isRestore = action.kind === 'restore-layout'
+  const snap = isRestore
+    ? snapshots.find((s) => s.id === action.snapshotId) : undefined
+  const title = isRestore
+    ? t('Restore this floor plan?')
+    : t('Write this floor plan?')
+
+  return createPortal(
+    <div className="ga-modal-backdrop" onClick={onCancel}>
+      <div
+        className="ga-modal"
+        role="dialog"
+        aria-label={title}
+        style={{ maxWidth: 520, width: 'min(520px, 92vw)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ga-modal-header">
+          <span>{title}</span>
+          <button type="button" className="ga-modal-close" onClick={onCancel}>×</button>
+        </div>
+        <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {isRestore ? (
+            <>
+              <div>
+                {t('The location goes back to the room list of the snapshot: every room plan, the plot entrances and the entry room. Rooms created after it are removed.')}
+              </div>
+              <div className="ga-form-hint">
+                {snap?.created_at || action.snapshotId}
+                {snap?.location_name ? ` · ${snap.location_name}` : ''}
+                {snap?.rooms !== undefined
+                  ? ` · ${t('{n} rooms').replace('{n}', String(snap.rooms))}`
+                  : ''}
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                {t('This writes {r} room plans ({n} of them new rooms), {o} openings and {b} plot entrances into the location.')
+                  .replace('{r}', String(counts?.rooms ?? 0))
+                  .replace('{n}', String(counts?.new_rooms ?? 0))
+                  .replace('{o}', String(counts?.openings ?? 0))
+                  .replace('{b}', String(counts?.boundary_openings ?? 0))}
+              </div>
+              <div className="ga-form-hint">
+                {t('Rooms the plan does not mention keep the plan they have.')}
+              </div>
+              {warningCount > 0 ? (
+                <div className="ga-form-hint">
+                  {t('{n} warnings are still open — they do not block the apply.')
+                    .replace('{n}', String(warningCount))}
+                </div>
+              ) : null}
+              <div className="ga-form-hint">
+                {t('A snapshot of the current plan is taken first, so you can restore it from the list below.')}
               </div>
             </>
           )}

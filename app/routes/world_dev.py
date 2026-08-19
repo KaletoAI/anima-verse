@@ -402,6 +402,125 @@ def _format_existing_map() -> str:
     return "\n\n".join(blocks)
 
 
+# ---------------------------------------------------------------------------
+# Layout schema context — the three placeholders `layout.md` carries.
+# A floor plan is drawn INSIDE one location, so everything here is about that
+# one place: how big its plot is and what shape, which rooms exist and where
+# they stand today, and which surface kinds the world's texture library holds.
+# ---------------------------------------------------------------------------
+
+def _layout_target(location_id: str) -> Optional[Dict[str, Any]]:
+    """The location a layout draft is about, or None when none was picked."""
+    loc_id = (location_id or "").strip()
+    if not loc_id:
+        return None
+    return get_location_by_id(loc_id)
+
+
+def _format_layout_location(loc: Optional[Dict[str, Any]]) -> str:
+    """`{layout_location}` — the plot: its outline in local metres, its size,
+    its storey height, indoor/outdoor, and where one may already walk in.
+
+    The outline is quoted POINT FOR POINT, not simplified: unlike a map draft
+    (where a wood is a shape, not a tracing) a floor plan is measured against
+    these very edges, and the model has to be able to snap a room flush to one.
+    """
+    from app.core.scene_recipe import DEFAULT_STOREY_REAL_M
+
+    if not loc:
+        return ("No location selected. Ask the user which place the plan is "
+                "for — a floor plan always belongs to one location.")
+    map3d = loc.get("map3d") if isinstance(loc.get("map3d"), dict) else {}
+    boundary = map3d.get("boundary") or []
+    lines: List[str] = [
+        f"**{loc.get('name') or loc.get('id')}** (`{loc.get('id')}`)",
+    ]
+    desc = " ".join(str(loc.get("description") or "").split())
+    if desc:
+        lines.append(desc)
+    indoor = str(loc.get("indoor") or "").strip() or "unspecified"
+    storey = map3d.get("storey_height_m") or DEFAULT_STOREY_REAL_M
+    lines.append(f"- indoor/outdoor: {indoor}")
+    lines.append(f"- storey height: {float(storey):g} m "
+                 f"(one `level` step is this tall)")
+    if boundary:
+        width = map3d.get("plan_width_m")
+        xs = [float(p[0]) for p in boundary]
+        zs = [float(p[1]) for p in boundary]
+        lines.append(
+            f"- plot outline ({len(boundary)} points, local metres, edge i "
+            f"runs from point i to point i+1): "
+            + json.dumps([[round(float(p[0]), 2), round(float(p[1]), 2)]
+                          for p in boundary]))
+        lines.append(f"- the plot spans x {min(xs):g} … {max(xs):g} and "
+                     f"y {min(zs):g} … {max(zs):g} metres"
+                     + (f" (widest side {float(width):g} m)" if width else ""))
+    else:
+        lines.append("- **This location has no drawn plot outline.** Nothing "
+                     "can be checked against it and `boundary_openings` have "
+                     "no edge to sit on — say so, and keep the plan modest "
+                     "(a few tens of metres around the origin).")
+    entry_room = str(loc.get("entry_room") or "").strip()
+    if entry_room:
+        lines.append(f"- current entry room: `{entry_room}`")
+    bo = map3d.get("boundary_openings") or []
+    if bo:
+        lines.append(f"- {len(bo)} boundary opening(s) already exist: "
+                     + json.dumps(bo))
+    return "\n".join(lines)
+
+
+def _format_layout_rooms(loc: Optional[Dict[str, Any]]) -> str:
+    """`{layout_rooms}` — every room of the location with its CURRENT plan.
+
+    A room already carrying a layout is quoted with its exact numbers, so
+    "leave the kitchen where it is" is something the model can actually obey by
+    copying them back out.
+    """
+    from app.models.world import GROUND_ROOM_ID
+    if not loc:
+        return "— (no location selected)"
+    lines: List[str] = []
+    for room in loc.get("rooms") or []:
+        if not isinstance(room, dict):
+            continue
+        room_id = str(room.get("id") or "")
+        if room_id == GROUND_ROOM_ID:
+            continue
+        head = f"- `{room_id}` — **{room.get('name') or room_id}**"
+        lay = room.get("layout") if isinstance(room.get("layout"), dict) else {}
+        if lay:
+            head += (f" · at x={lay.get('x')}, y={lay.get('y')}, "
+                     f"{lay.get('w')} × {lay.get('d')} m, level "
+                     f"{lay.get('level', 0)}")
+            if lay.get("no_walls"):
+                head += ", open sub-area"
+            if lay.get("outline"):
+                head += f", drawn outline ({len(lay['outline'])} points)"
+            if lay.get("openings"):
+                head += f", {len(lay['openings'])} opening(s)"
+        else:
+            head += " · **no plan yet**"
+        desc = " ".join(str(room.get("description") or "").split())
+        if len(desc) > 200:
+            desc = desc[:200].rstrip() + "…"
+        lines.append(head + (f"\n  {desc}" if desc else ""))
+    if not lines:
+        return ("This location has no rooms yet — every room in your plan is a "
+                "new one (give it a `name` and a `description`).")
+    return "\n".join(lines)
+
+
+def _format_surface_kinds() -> str:
+    """`{surface_kinds}` — the ids the shared surface-texture library holds."""
+    from app.core.surface_textures import library_kinds
+    kinds = sorted(library_kinds())
+    if not kinds:
+        return ("The surface library is empty — leave `surfaces` out of every "
+                "room.")
+    return ", ".join(f"`{k}`" for k in kinds)
+
+
 def _extract_json_block(text: str, block_type: str) -> Dict[str, Any] | None:
     """Extracts a JSON from ```json:<block_type> ... ``` code blocks."""
     import re
@@ -524,6 +643,14 @@ def _extract_map_json(text: str) -> Dict[str, Any] | None:
     Expects: {summary, bounds?, terrain_areas[], height_areas[], locations[]}
     """
     return _extract_json_block(text, "map")
+
+
+def _extract_layout_json(text: str) -> Dict[str, Any] | None:
+    """```json:layout ... ``` — one location's whole floor plan.
+
+    Expects: {summary, entry_room, rooms[], boundary_openings[]}
+    """
+    return _extract_json_block(text, "layout")
 
 
 # Sub-Block-Extraktoren fuer granulare Updates (LLM muss nicht das gesamte
@@ -680,6 +807,16 @@ async def world_dev_chat(request: Request):
             else:
                 terrain_kinds = placeable_locations = ""
                 world_bounds_text = existing_map = ""
+            # The layout schema's three placeholders — same rule as the map's:
+            # computed ONLY for `layout`, because each one costs DB/disk reads
+            # and no other schema carries the placeholder to fill.
+            if schema == "layout":
+                _target = _layout_target(edit_location_id)
+                layout_location = _format_layout_location(_target)
+                layout_rooms = _format_layout_rooms(_target)
+                surface_kinds = _format_surface_kinds()
+            else:
+                layout_location = layout_rooms = surface_kinds = ""
             system_prompt = _load_schema(
                 schema,
                 existing_locations=existing_locations,
@@ -691,6 +828,9 @@ async def world_dev_chat(request: Request):
                 placeable_locations=placeable_locations,
                 world_bounds=world_bounds_text,
                 existing_map=existing_map,
+                layout_location=layout_location,
+                layout_rooms=layout_rooms,
+                surface_kinds=surface_kinds,
                 world_setup_block=world_setup_block)
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
@@ -743,6 +883,12 @@ async def world_dev_chat(request: Request):
                         f"```json\n{json.dumps(edit_data, ensure_ascii=False, indent=2)}\n```"
                     )
                     system_prompt += edit_context
+            elif schema == "layout":
+                # The layout schema already got this location through its own
+                # placeholders, in the shape a floor plan needs (outline,
+                # metres, current room plans). Dumping the whole location JSON
+                # on top would repeat it and drown it in image prompts.
+                pass
             else:
                 loc = get_location_by_id(edit_location_id)
                 if loc:
@@ -881,6 +1027,14 @@ async def world_dev_chat(request: Request):
             if map_data:
                 yield f"data: {json.dumps({'map_data': map_data})}\n\n"
 
+            # One location's floor plan. Travels RAW for the same reason the
+            # map draft does — the frontend runs it through
+            # /world-dev/preview-layout, which is the ONE normalizer, so the
+            # drawn preview and the apply can never disagree.
+            layout_data = _extract2(_extract_layout_json)
+            if layout_data:
+                yield f"data: {json.dumps({'layout_data': layout_data})}\n\n"
+
             character_data = _extract2(_extract_character_json)
             if character_data:
                 # Validate fields — auto-request missing ones
@@ -932,7 +1086,7 @@ async def world_dev_chat(request: Request):
             _fence_types = _re.findall(r'```json:([\w-]+)', full_response)
             if _fence_types and not any([location_data, outfit_data, soul_data,
                                          profile_patch_data, character_data,
-                                         map_data]):
+                                         map_data, layout_data]):
                 _warn = (f"The json:{_fence_types[0]} block could not be parsed — "
                          f"the output appears to be cut off mid-JSON. Ask the "
                          f"model to output the COMPLETE JSON block again (or to "
@@ -1144,6 +1298,137 @@ async def restore_map_snapshot(request: Request):
         raise HTTPException(status_code=400, detail="snapshot_id required")
     try:
         restored = restore_snapshot(snapshot_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": "success", "restored": restored}
+
+
+# ---------------------------------------------------------------------------
+# Room layouts — preview, apply, snapshot, restore
+# ("Prop-Welt statt Dioramen", stage 3)
+# ---------------------------------------------------------------------------
+
+def _layout_world_context(location_id: str) -> Tuple[Dict[str, Any],
+                                                     List[str]]:
+    """(location dict, surface-library kinds) for one layout draft.
+
+    ``layout_apply.sanitize_layout`` is a pure function on purpose, so this is
+    the ONE place that reads its two world facts out of the world.
+    """
+    from app.core.surface_textures import library_kinds
+    loc = _layout_target(location_id)
+    if not loc:
+        raise HTTPException(status_code=404,
+                            detail=f"no such location: {location_id!r}")
+    return loc, sorted(library_kinds())
+
+
+def _normalize_layout_body(layout_data: Any, location_id: str
+                           ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+    """Run one raw draft through the sanitizer, turning its hard errors into a
+    400. Used by BOTH preview and apply, so the two can never disagree."""
+    from app.core.layout_apply import sanitize_layout
+    loc, kinds = _layout_world_context(location_id)
+    try:
+        return sanitize_layout(layout_data, location=loc, surface_kinds=kinds)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/preview-layout")
+async def preview_layout(request: Request):
+    """Normalize a floor-plan draft WITHOUT writing anything.
+
+    Body:     {"layout_data": {...the json:layout block...},
+               "location_id": "<id>"}
+    Returns:  {"status": "ok",
+               "normalized": {summary, location_id, location_name, boundary,
+                              entry_room, rooms[], boundary_openings},
+               "warnings": [{code, ref, message}, ...],
+               "counts": {rooms, new_rooms, openings, boundary_openings}}
+
+    The normalized plan is exactly what an apply would write, so the drawn
+    preview and the applied floor plan are the same geometry by construction.
+    """
+    from app.core.layout_apply import layout_counts
+    data = await request.json()
+    normalized, warnings = _normalize_layout_body(
+        data.get("layout_data"), str(data.get("location_id") or ""))
+    return {"status": "ok", "normalized": normalized, "warnings": warnings,
+            "counts": layout_counts(normalized)}
+
+
+@router.post("/apply-layout")
+async def apply_layout_route(request: Request):
+    """Write a floor-plan draft to its location.
+
+    Body:     {"layout_data": {...}, "location_id": "<id>", "snapshot": true}
+    Returns:  {"status": "success",
+               "applied": {location_id, updated[], created[], entry_room,
+                           boundary_openings},
+               "warnings": [{code, ref, message}, ...],
+               "snapshot_id": "<id>"|null}
+
+    ``snapshot`` (default true) freezes the location's whole plan first, so
+    ``/world-dev/layout-restore`` can undo the apply — the undo the floor-plan
+    editor itself does not have.
+
+    A warning never blocks the write: a room over the plot edge or two rooms
+    sharing floor are authoring states the ``problems[]`` system reports on the
+    finished world; only junk was dropped, in the sanitizer, before this point.
+    """
+    from app.core.layout_apply import apply_layout, layout_snapshot
+    data = await request.json()
+    location_id = str(data.get("location_id") or "").strip()
+    normalized, warnings = _normalize_layout_body(data.get("layout_data"),
+                                                  location_id)
+
+    snapshot_id = None
+    if data.get("snapshot", True):
+        try:
+            snapshot_id = layout_snapshot(normalized["location_id"])
+        except OSError as e:
+            # A cache directory we cannot write is not a reason to refuse the
+            # apply — but the user must know the undo is missing.
+            logger.warning("Layout snapshot failed: %s", e)
+            warnings = warnings + [{
+                "code": "snapshot_failed", "ref": "",
+                "message": f"Could not write the undo snapshot: {e}"}]
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+    try:
+        applied = apply_layout(normalized)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("WorldDev: layout applied %s", applied)
+    return {"status": "success", "applied": applied, "warnings": warnings,
+            "snapshot_id": snapshot_id}
+
+
+@router.get("/layout-snapshots")
+def get_layout_snapshots(location_id: str = ""):
+    """The stored floor-plan snapshots, newest first:
+    ``[{id, created_at, location_id, location_name, rooms}]``.
+    ``location_id`` filters to one location; empty lists all."""
+    from app.core.layout_apply import list_layout_snapshots
+    return list_layout_snapshots(location_id)
+
+
+@router.post("/layout-restore")
+async def restore_layout(request: Request):
+    """Put a floor-plan snapshot back — the undo for an apply.
+
+    Body:     {"snapshot_id": "<id>"}
+    Returns:  {"status": "success",
+               "restored": {location_id, rooms, entry_room}}
+    """
+    from app.core.layout_apply import restore_layout_snapshot
+    data = await request.json()
+    snapshot_id = (data.get("snapshot_id") or "").strip()
+    if not snapshot_id:
+        raise HTTPException(status_code=400, detail="snapshot_id required")
+    try:
+        restored = restore_layout_snapshot(snapshot_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "success", "restored": restored}
