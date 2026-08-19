@@ -167,6 +167,39 @@ check("drawn boundary wins",
 check("no width, no boundary -> None",
       effective_boundary({"pos_x": 0, "pos_z": 0, "map3d": {}}), None)
 
+print("world-space wrappers (pin (100,50), yaw 90 — local (lx,lz) at world "
+      "(100 + lz, 50 - lx))")
+from app.core.world_geometry import (  # noqa: E402
+    boundary_contains, boundary_distance_m, boundary_hits_aabb,
+    boundary_segment_hits, location_at_point)
+check("contains: world (101,47) = local (3,1)",
+      boundary_contains(loc, 101, 47), True)
+check("contains: world (103,47) = local (3,3) notch",
+      boundary_contains(loc, 103, 47), False)
+check("distance: world (100,44) = local (6,0) -> 2",
+      boundary_distance_m(loc, 100, 44), 2.0)
+check("distance: no area -> inf",
+      boundary_distance_m({"pos_x": 0, "pos_z": 0, "map3d": {}}, 0, 0),
+      math.inf)
+check("segment: endpoint inside",
+      boundary_segment_hits(loc, 99, 47, 101, 47), True)
+check("segment: far away",
+      boundary_segment_hits(loc, 90, 40, 92, 40), False)
+check("aabb: box over east arm (world pts (102,46)/(102,48))",
+      boundary_hits_aabb(loc, 101, 45, 103, 49), True)
+check("aabb: box beyond", boundary_hits_aabb(loc, 96, 42, 98, 44), False)
+
+print("location_at_point (smallest AREA wins, E1.2)")
+village = {"id": "village", "pos_x": 0, "pos_z": 0,
+           "map3d": {"plan_width_m": 20}}          # synthesized square, 400 m2
+hut = {"id": "hut", "pos_x": 0, "pos_z": 0, "yaw_deg": 0,
+       "map3d": {"boundary": L_SHAPE}}             # drawn L, 12 m2
+check("inside both -> hut (12 < 400)",
+      location_at_point(1, 1, [village, hut])["id"], "hut")
+check("in the hut's notch -> village",
+      location_at_point(3, 3, [village, hut])["id"], "village")
+check("outside both -> None", location_at_point(50, 50, [village, hut]), None)
+
 print()
 if FAILED:
     print(f"FAILED: {FAILED} check(s) diverge from the hand-derived values")

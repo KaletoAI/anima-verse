@@ -591,6 +591,78 @@ def effective_boundary(loc: Dict[str, Any]) -> Optional[Tuple[float, float, floa
                           (half, half), (-half, half)])
 
 
+def boundary_world_points(loc: Dict[str, Any]) -> Optional[List[Tuple[float, float]]]:
+    """The location's effective boundary in WORLD metres, or None."""
+    eff = effective_boundary(loc)
+    if eff is None:
+        return None
+    cx, cz, yaw, pts = eff
+    return [local_to_world(lx, lz, cx, cz, yaw) for lx, lz in pts]
+
+
+def boundary_contains(loc: Dict[str, Any], x: float, z: float) -> bool:
+    """Whether world point (x, z) lies inside the location's effective
+    boundary — the v6 successor of :func:`point_in_footprint`. The test runs
+    in the LOCAL frame (one inverse pin transform), where the polygon needs
+    no per-query rotation."""
+    eff = effective_boundary(loc)
+    if eff is None:
+        return False
+    cx, cz, yaw, pts = eff
+    lx, lz = world_to_local(x, z, cx, cz, yaw)
+    return point_in_polygon(lx, lz, pts)
+
+
+def boundary_distance_m(loc: Dict[str, Any], x: float, z: float) -> float:
+    """Distance from a world point to the effective boundary — 0 inside,
+    ``inf`` for a location without area (v6 successor of
+    :func:`footprint_distance`; rotation preserves distances, so the local
+    frame answers for the world)."""
+    eff = effective_boundary(loc)
+    if eff is None:
+        return math.inf
+    cx, cz, yaw, pts = eff
+    lx, lz = world_to_local(x, z, cx, cz, yaw)
+    return polygon_distance(lx, lz, pts)
+
+
+def boundary_segment_hits(loc: Dict[str, Any], x0: float, z0: float,
+                          x1: float, z1: float) -> bool:
+    """Whether a world segment touches the effective boundary (interior or
+    rim) — v6 successor of :func:`segment_hits_footprint`. Both endpoints
+    ride through the same inverse pin transform; straight lines stay
+    straight, so the local-frame test is exact."""
+    eff = effective_boundary(loc)
+    if eff is None:
+        return False
+    cx, cz, yaw, pts = eff
+    lx0, lz0 = world_to_local(x0, z0, cx, cz, yaw)
+    lx1, lz1 = world_to_local(x1, z1, cx, cz, yaw)
+    return segment_hits_polygon(lx0, lz0, lx1, lz1, pts)
+
+
+def boundary_hits_aabb(loc: Dict[str, Any], min_x: float, min_z: float,
+                       max_x: float, max_z: float) -> bool:
+    """Whether the effective boundary overlaps a world-axis-aligned box —
+    v6 successor of :func:`footprint_hits_aabb`. The box is axis-aligned in
+    WORLD space, so here the polygon comes to the box (local→world), not
+    the other way around."""
+    pts = boundary_world_points(loc)
+    if pts is None:
+        return False
+    return polygon_hits_aabb(pts, min_x, min_z, max_x, max_z)
+
+
+def boundary_area_m2(loc: Dict[str, Any]) -> float:
+    """Enclosed area of the effective boundary in m² (rotation-invariant),
+    0.0 for a location without area — the tie-breaker of
+    :func:`location_at_point`."""
+    eff = effective_boundary(loc)
+    if eff is None:
+        return 0.0
+    return polygon_area(eff[3])
+
+
 def placed_footprint(loc: Dict[str, Any]) -> Optional[Tuple[float, float,
                                                             float, float]]:
     """(cx, cz, width_m, yaw_deg) of a placed location, or None.
@@ -649,21 +721,20 @@ def is_area_location(loc: Dict[str, Any]) -> bool:
 
 def location_at_point(x: float, z: float,
                       locations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The location whose footprint contains (x, z) — smallest wins.
+    """The location whose effective boundary contains (x, z) — the smallest
+    AREA wins (contract v6, decision E1.2).
 
-    Overlaps are legal (a hut placed on a village square); the SMALLEST
-    matching footprint is the most specific answer, mirroring how the old
-    grid resolved "the cell you stand on".
+    Overlaps stay legal (a hut placed on a village square); the smallest
+    enclosed area is the most specific answer — the polygon successor of the
+    old smallest-width rule, and identical to it wherever both shapes are
+    squares (width orders exactly like width²).
     """
     best: Optional[Dict[str, Any]] = None
-    best_width = None
+    best_area = None
     for loc in locations or []:
-        fp = placed_footprint(loc)
-        if fp is None:
+        if not boundary_contains(loc, x, z):
             continue
-        cx, cz, width, yaw = fp
-        if not point_in_footprint(x, z, cx, cz, width, yaw):
-            continue
-        if best_width is None or width < best_width:
-            best, best_width = loc, width
+        area = boundary_area_m2(loc)
+        if best_area is None or area < best_area:
+            best, best_area = loc, area
     return best
