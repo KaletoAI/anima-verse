@@ -98,9 +98,9 @@ interface FloorPlanPreviewProps {
   scene: ScenePayload | null
   sceneError?: string
   /** Calibration figure (§ B2a): the FIXED 1.70 m reference standing IN a
-   *  room while its width_m / walk_y are dialed. ``at`` = fraction of the
-   *  room rectangle (click on the 2D plan); absent = the diorama anchor.
-   *  Pure UI state, never persisted. */
+   *  room while its width_m / walk_y are dialed. ``at`` = METRES from the
+   *  room's min corner (click on the 2D plan, contract v6 Nr. 2); absent =
+   *  the diorama anchor. Pure UI state, never persisted. */
   calibration?: { roomId: string; at?: [number, number] } | null
   height?: number
 }
@@ -116,8 +116,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   const [loading, setLoading] = useState(true)
   const [showModels, setShowModels] = useState(false)
   const [showBuilding, setShowBuilding] = useState(false)
-  // "Walls & floor" overlay — the client's render recipe (schnittstellen
-  // → "Render-Rezept Wände & Boden"): outline floor plates + outer walls
+  // "Walls & floor" overlay — the client's render recipe (docs/
+  // schnittstellen-3d.md, "walls & floor"): outline floor plates + outer walls
   // with door gaps at the ground-floor doors.
   // Plates and walls ARE the scene — having them off by default meant the
   // preview opened without the room floors, which is the reference you dial
@@ -229,7 +229,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // The plan width is the ONLY scale anchor since 2026-07-28 — there is no
   // second path to derive it from a model any more (that one existed to feed
   // the per-axis height scaling, which is gone). Missing = mandatory field.
-  const anchorMissing = !(map3d?.plan_width_m && map3d.plan_width_m > 0)
+  // No BOUNDARY = the location has no area (contract v6 Nr. 1). The plan
+  // width is derived from that boundary now, so its absence is the symptom,
+  // not the cause — and it is no longer a lock on anything.
+  const anchorMissing = !(map3d?.boundary && map3d.boundary.length >= 3)
 
   // Fetch a model (meta + GLB) into the cache; returns it when ready. A miss
   // is cached too — no retry storm per drag frame.
@@ -382,10 +385,25 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const sc = sceneRef.current
     const kFac = sc ? sc.k : 1
     const lhEff = sc ? sc.storey_m : lh
-    // The ONE number that turns a plan fraction into metres — from the
-    // payload, never a constant (that was the 8-vs-9.2 drift).
+    // Edge of the location's reference square in world metres. SINCE THE
+    // METRIC WAVE (v6 Nr. 2) it converts NOTHING any more — every layout
+    // number the preview reads is already metres. It survives as the size of
+    // the stage: ground plate, storey frame, ruler offset, camera framing.
     const PLATE_M = sc?.extent_m || DEFAULT_EXTENT_M
-    for (const o of squareRef.current || []) o.scale.set(PLATE_M, PLATE_M, 1)
+    // ...and the stage sits over the BOUNDARY's bounding box, not around the
+    // pin: a v6 plot may be drawn anywhere around its anchor, and a stage
+    // centred on the pin would leave half the rooms off the plate. Same box
+    // the server spans its relief lattice over (`scene_recipe.terrain_frame`).
+    const bnd = sc?.boundary || []
+    const stage = bnd.length >= 3
+      ? [(Math.min(...bnd.map((p) => p[0])) + Math.max(...bnd.map((p) => p[0]))) / 2,
+         (Math.min(...bnd.map((p) => p[1])) + Math.max(...bnd.map((p) => p[1]))) / 2]
+      : [0, 0]
+    for (const o of squareRef.current || []) {
+      o.scale.set(PLATE_M, PLATE_M, 1)
+      o.position.x = stage[0]
+      o.position.z = stage[1]
+    }
     // A ground location brings its own floor: the stage plate would cut the
     // model at y = 0 exactly like the 3D client's tile plate did (Mondscheinsee
     // spans −0.80 … +2.69). The edge loop stays — it is the frame, not a floor.
@@ -749,15 +767,17 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       if (!lay) return
       const palette = style?.room_palette || []
       const color = hex(palette[idx % (palette.length || 1)], 0x58a6ff)
-      const w = lay.w * PLATE_M
-      const d = lay.d * PLATE_M
+      // Metres, verbatim (contract v6 Nr. 2): the layout rect IS the payload
+      // frame — min corner in local metres around the pin, size in metres.
+      const w = lay.w
+      const d = lay.d
       const level = lay.level || 0
       const floorY = level * lhEff
       const cy = floorY + lhEff / 2
       // Editor overlay only: the room RECTANGLE as placed (the diorama has
       // its own anchor in the payload and is drawn above).
-      const cx = (lay.x + lay.w / 2 - 0.5) * PLATE_M
-      const cz = (lay.y + lay.d / 2 - 0.5) * PLATE_M
+      const cx = lay.x + lay.w / 2
+      const cz = lay.y + lay.d / 2
       const model = showModelsRef.current && room.id && roomsWithModel.has(room.id)
 
       // Label; the box only when no model stands in.
@@ -777,8 +797,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           // (shape y → -z, extrusion +z → +y), so points go in as (x, -z).
           const shape = new THREE.Shape()
           lay.outline.forEach(([u, v], i) => {
-            const px = (u - 0.5) * w
-            const pz = (v - 0.5) * d
+            // Room-local metres, re-centred on the group (which sits at the
+            // rectangle's centre).
+            const px = u - w / 2
+            const pz = v - d / 2
             if (i === 0) shape.moveTo(px, -pz)
             else shape.lineTo(px, -pz)
           })
@@ -853,13 +875,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const plate = sc.plates.find((p) => p.room_id === calib.roomId)
         const at = calib.at
         placeFigure({
-          x: at ? (lay.x + at[0] * lay.w - 0.5) * PLATE_M
-            : spec?.anchor[0] ?? (lay.x + lay.w / 2 - 0.5) * PLATE_M,
+          // `at` is METRES from the room's min corner (v6 Nr. 2), like every
+          // other room-local position the editor hands over.
+          x: at ? lay.x + at[0] : spec?.anchor[0] ?? lay.x + lay.w / 2,
           // Standing height: the room's declared walkable floor, else the
           // room plate, else the storey floor — all from the payload.
           y: spec?.walk_y_world ?? plate?.top_y ?? (lay.level || 0) * lhEff,
-          z: at ? (lay.y + at[1] * lay.d - 0.5) * PLATE_M
-            : spec?.anchor[1] ?? (lay.y + lay.d / 2 - 0.5) * PLATE_M,
+          z: at ? lay.y + at[1] : spec?.anchor[1] ?? lay.y + lay.d / 2,
           facing: 0,
         })
       }
@@ -896,8 +918,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       : Array.from(new Set(current.filter((r) => r.layout)
           .map((r) => r.layout!.level || 0)))
     if (m3?.outline?.length) {
-      const base = m3.outline.map(([x, y]) =>
-        [(x - 0.5) * PLATE_M, (y - 0.5) * PLATE_M] as [number, number])
+      // `map3d.outline` is LOCAL METRES since v6 Nr. 2 — the same frame as
+      // the boundary, so it goes into the scene unconverted.
+      const base = m3.outline.map(([x, z]) => [x, z] as [number, number])
       base.push(base[0])
       for (const lv of (usedLevels.length ? usedLevels : [0])) {
         const geo = new THREE.BufferGeometry().setFromPoints(
@@ -934,8 +957,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const upper = plate.opacity_role === 'upper'
         const info = plate.texture_kind ? ensureSurfaceTex(plate.texture_kind) : null
         let mat: Material
-        // Aussehen der ART aus dem geteilten Paket — derselbe See wie im
-        // 3D-Client, matt bleibt der Default.
+        // Look of the KIND from the shared package — the same lake as in the
+        // 3D client; matte stays the default.
         const kindMat = plate.texture_kind
           ? surfaceListRef.current.map.get(plate.texture_kind)?.material ?? null : null
         if (info?.tex) {
@@ -959,6 +982,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           // aid, not ground.
           mesh.updateMatrix()
           const flat = mesh.geometry
+          // `extent` is only the FALLBACK span for a payload without
+          // `terrain.origin`; where the field is present the shared sampler
+          // anchors on it (contract § B1 Nr. 14, v6 Nr. 2).
           mesh.geometry = drapeGeometry(THREE, flat, sc.terrain, PLATE_M,
                                         mesh.matrix)
           flat.dispose()
@@ -1059,8 +1085,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const topWorld = Math.max((hi + 1) * lhEff, buildingTopY, lhEff)
       const bottomY = Math.min(0, Math.floor((lo * lhEff) / unit))
       const topY = Math.ceil(topWorld / unit)
-      const rx = -PLATE_M / 2 - 0.7
-      const rz = PLATE_M / 2 + 0.7
+      const rx = stage[0] - PLATE_M / 2 - 0.7
+      const rz = stage[1] + PLATE_M / 2 + 0.7
       const rulerMat = new THREE.LineBasicMaterial({ color: 0xc9d1d9 })
       boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(rx, bottomY * unit, rz), new THREE.Vector3(rx, topY * unit, rz),
@@ -1100,13 +1126,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         color: 0x8b949e, transparent: true, opacity: 0.45,
       })
       const hp = PLATE_M / 2
+      const sx = stage[0]
+      const sz = stage[1]
       for (let lv = lo; lv <= hi + 1; lv++) {
         const y = lv * lhEff
         if (Math.abs(y) < 1e-6) continue
         boxes.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(-hp, y, -hp), new THREE.Vector3(hp, y, -hp),
-          new THREE.Vector3(hp, y, hp), new THREE.Vector3(-hp, y, hp),
-          new THREE.Vector3(-hp, y, -hp),
+          new THREE.Vector3(sx - hp, y, sz - hp), new THREE.Vector3(sx + hp, y, sz - hp),
+          new THREE.Vector3(sx + hp, y, sz + hp), new THREE.Vector3(sx - hp, y, sz + hp),
+          new THREE.Vector3(sx - hp, y, sz - hp),
         ]), storeyMat))
       }
 
@@ -1377,7 +1405,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const animate = () => {
           raf = requestAnimationFrame(animate)
           const delta = clockRef.current?.getDelta() || 0
-          updateSurfaceMaterials(delta)   // eine Zeit für alle Wasserflächen
+          updateSurfaceMaterials(delta)   // one clock for every water surface
           // Recipe camera culling: hide a wall piece whose OUTSIDE faces
           // the camera — the interior stays visible despite the walls.
           for (const w of wallCullRef.current) {
@@ -1535,8 +1563,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         {onPlanWidth ? (
           <label className="ga-check-row"
             title={anchorMissing
-              ? t('Plan width (m) is REQUIRED: it is the only scale anchor. Without it nothing has a real size — figures, props and storeys fall back to a meaningless legacy scale and floor-plan geometry cannot be saved.')
-              : t('Plan width (m): how wide this location is in REAL metres — the edge of its footprint on the world map AND the square the floor plan is drawn in. THE scale anchor: every other length (figures at 1.70 m, props, dioramas, storeys) is a real metre measured against it.')}>
+              ? t('No boundary drawn: this location has a pin but no area. Draw its footprint on the map tab — until then this width is the fallback square the plan and the loading radius work on.')
+              : t('Plan width (m): how wide this location is in REAL metres. DERIVED since contract v6 — the server overwrites it with the bounding-box width of the drawn boundary on every save. It scales nothing any more (rooms, props and markers carry their own metres); it sizes the loading radius, the viewport and the scene backdrop.')}>
             <span>{anchorMissing ? '⚠' : '📐'}</span>
             <input
               className="ga-input"

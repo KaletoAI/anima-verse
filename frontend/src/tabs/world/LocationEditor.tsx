@@ -601,11 +601,16 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
                 // the first moment instead of an implicit "somewhere".
                 on && floorSelRoom.id
                   ? { roomId: floorSelRoom.id,
+                      // METRES from the room's min corner (v6 Nr. 2) —
+                      // the diorama anchor, or the room's centre.
                       at: (floorSelRoom.layout?.model_at as [number, number])
-                        || [0.5, 0.5] }
+                        || [(floorSelRoom.layout?.w || 0) / 2,
+                            (floorSelRoom.layout?.d || 0) / 2] }
                   : null)}
               calibrationAt={calibration?.roomId === floorSelRoom.id
                 ? calibration.at : undefined}
+              roomSizeM={[floorSelRoom.layout?.w || 0,
+                          floorSelRoom.layout?.d || 0]}
               onCalibrationAt={(at) => setCalibration(
                 (cur) => (cur ? { ...cur, at } : cur))}
             />

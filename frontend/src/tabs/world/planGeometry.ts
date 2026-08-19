@@ -5,13 +5,27 @@
  * preview and anything else that reasons about a plan share ONE set of
  * helpers.
  *
- * Coordinate frame: everything is fractions of the plan's reference square
- * (x/y/w/d of a room layout), y pointing DOWN like the screen. Real metres
- * come from the plan width the caller passes in, so the thresholds below can
- * be stated in metres.
+ * COORDINATE FRAME — METRES (contract v6 Nr. 2, "the metric wave"). The
+ * `[0,1]²` fraction domain is deleted, here as on the server:
+ *
+ *   * a room's `x`/`y` is its MIN CORNER in LOCATION-LOCAL metres (origin =
+ *     the anchor pin, axes as § A1.1 — the frame `map3d.boundary` lives in),
+ *     so NEGATIVE VALUES ARE ORDINARY and nothing is clamped to a square;
+ *   * `w`/`d` are metres;
+ *   * a room's `outline` points, its curve control points, `markers[].at`,
+ *     `props[].at` and `model_at` are metres relative to that min corner,
+ *     i.e. they span 0…w / 0…d;
+ *   * only an OPENING's `at` stays a fraction of its edge — a ratio along an
+ *     edge is not a size in the world.
+ *
+ * y points DOWN like the screen (it is the local z of § A1.1), so a hull that
+ * winds clockwise on screen has a positive shoelace sum and its interior lies
+ * to the RIGHT of every directed edge.
  */
 
-export const MIN_FRAC = 0.05
+/** Smallest room a drawing may commit, in metres — below this a hull is a
+ *  slip of the hand, not a room. */
+export const MIN_ROOM_M = 0.2
 
 // ── Openings layer (B3) ──
 // Openings sit on a room's hull edges. The canonical edge vocabulary is the
@@ -25,7 +39,66 @@ export const OPENING_COLOR: Record<string, string> = {
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
+/** Rounding for a RATIO (an opening's `at`, a yaw fraction) — 4 decimals. */
 export const r4 = (v: number) => Math.round(v * 10000) / 10000
+/** Rounding for a LENGTH IN METRES: the centimetre, the same resolution the
+ *  server stores every plan coordinate at (`world_ops._metre`). Storing more
+ *  digits than the sanitizer keeps only makes the editor and the saved world
+ *  disagree in the last place. */
+export const rM = (v: number) => Math.round(v * 100) / 100
+/** ±500 m — the server's plan clamp (`world_ops._PLAN_MAX_M`). The editor
+ *  clamps to the SAME window, so nothing a user draws is silently dropped on
+ *  save; inside it, negative coordinates are perfectly normal. */
+export const PLAN_MAX_M = 500
+
+// ── The drawing viewport (v6 metric wave) ──
+// The plan canvas is SQUARE and shows a square window of the location's local
+// metre frame: `size` metres wide, min corner (`x0`, `z0`). It is derived from
+// the boundary's bounding box plus a margin — so the whole drawn plot is
+// always inside the canvas — and it is the ONLY place a metre becomes a
+// fraction of the canvas. Nothing is stored in this frame; it is view state.
+export interface PlanView { x0: number; z0: number; size: number }
+
+/** Canvas fraction (0…1 across the canvas) of a local-metre coordinate. */
+export const viewFx = (v: PlanView, x: number) => (x - v.x0) / v.size
+export const viewFz = (v: PlanView, z: number) => (z - v.z0) / v.size
+/** Local metres of a canvas fraction — the inverse, used by every handler. */
+export const viewMx = (v: PlanView, fx: number) => v.x0 + fx * v.size
+export const viewMz = (v: PlanView, fz: number) => v.z0 + fz * v.size
+
+/** The square viewport around a set of points: their bounding box, widened by
+ *  `margin` on every side and then squared on the LARGER axis so the canvas
+ *  (which is square) never distorts a metre. `fallback` is the edge used when
+ *  there is nothing to frame at all — it is NOT a minimum size, or a small
+ *  plot would be shown swimming in empty ground it does not own. */
+export function viewportFor(points: Pt[], margin: number,
+                            fallback: number): PlanView {
+  if (!points.length) {
+    return { x0: -fallback / 2, z0: -fallback / 2, size: fallback }
+  }
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const [x, z] of points) {
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (z < minZ) minZ = z
+    if (z > maxZ) maxZ = z
+  }
+  // A degenerate box (one point, or a line) would give a zero-size window and
+  // every fraction would divide by it — the margin is what saves it, so the
+  // floor here only guards a caller that passes none.
+  const edge = Math.max(maxX - minX, maxZ - minZ) + 2 * margin || 1
+  return { x0: (minX + maxX) / 2 - edge / 2, z0: (minZ + maxZ) / 2 - edge / 2,
+           size: edge }
+}
+
+/** Snap a length to the drawing raster (0 = off). Used for every drawn point
+ *  and every dragged rectangle, so a plan comes out on whole half-metres
+ *  unless the author says otherwise (Shift). */
+export const snapToGrid = (v: number, step: number) =>
+  (step > 0 ? Math.round(v / step) * step : v)
 
 // ── Reference sizes (scale bar, metre grid) ──
 /** Metre values a scale bar or a grid may use — no 3.7 m steps. */
@@ -53,20 +126,23 @@ export function fmtM(m: number): string {
 }
 
 // ── Polygon hulls (plan-room-props.md) ──
-// A room's hull is a polygon in ROOM-local fractions: the drawn `outline`
-// (bbox-local, spanning [0,1]², clockwise in screen coordinates — the server
-// sanitizer guarantees both), or the implicit unit square of a plain
-// rectangle. Edges are directed a→b and auto-close to the first point;
-// with clockwise winding the interior lies to the RIGHT of each edge.
+// A room's hull is a polygon in ROOM-local METRES: the drawn `outline`
+// (relative to the room's own min corner, spanning 0…w / 0…d, clockwise in
+// screen coordinates — the server sanitizer guarantees both), or the implicit
+// rectangle of a plain room. Edges are directed a→b and auto-close to the
+// first point; with clockwise winding the interior lies to the RIGHT of each
+// edge.
 
 export type Pt = [number, number]
 
-/** The implicit unit square — edge indices 0=N, 1=E, 2=S, 3=W. */
-export const rectToOutline = (): Pt[] => [[0, 0], [1, 0], [1, 1], [0, 1]]
+/** The implicit room rectangle in room-local metres — edge indices
+ *  0=N, 1=E, 2=S, 3=W. */
+export const rectToOutline = (w: number, d: number): Pt[] =>
+  [[0, 0], [w, 0], [w, d], [0, d]]
 
-/** A layout's hull polygon (room-local fractions). */
-export const outlineOf = (lay: { outline?: Pt[] }): Pt[] =>
-  (lay.outline && lay.outline.length >= 3 ? lay.outline : rectToOutline())
+/** A layout's hull polygon (room-local metres). */
+export const outlineOf = (lay: { w: number; d: number; outline?: Pt[] }): Pt[] =>
+  (lay.outline && lay.outline.length >= 3 ? lay.outline : rectToOutline(lay.w, lay.d))
 
 /** Directed edge i of an outline: a → b (auto-closing). */
 export const edgeSegment = (outline: Pt[], i: number): { a: Pt; b: Pt } => ({
@@ -101,7 +177,7 @@ export function nearestPolygonEdge(outline: Pt[], p: Pt): { edge: number; at: nu
 }
 
 /** ONE reading convention for both edge vocabularies: letters map onto the
- *  unit square's directed clockwise edges (0=N TL→TR, 1=E TR→BR, 2=S BR→BL,
+ *  rectangle's directed clockwise edges (0=N TL→TR, 1=E TR→BR, 2=S BR→BL,
  *  3=W BL→TL). Letter `at` runs left→right (N/S) / top→bottom (E/W), so S
  *  and W flip against their clockwise edge direction. */
 export const normalizeOpeningEdge = (
@@ -115,13 +191,15 @@ export const normalizeOpeningEdge = (
   }
 }
 
-/** Hull polygon mapped from room-local fractions to plan fractions. */
+/** Hull polygon lifted from room-local metres into LOCATION-local metres — a
+ *  pure translation now that both frames count the same unit (v6 Nr. 2). */
 export const absOutline = (
   lay: { x: number; y: number; w: number; d: number; outline?: Pt[] }): Pt[] =>
-  outlineOf(lay).map(([u, v]) => [lay.x + u * lay.w, lay.y + v * lay.d] as Pt)
+  outlineOf(lay).map(([u, v]) => [lay.x + u, lay.y + v] as Pt)
 
-/** Edge + position of an opening after rotating the room 90° clockwise
- *  ((x,y) -> (1-y,x)), so openings turn with the room like exit/markers. */
+/** Edge + position of an opening after rotating the room 90° clockwise, so
+ *  openings turn with the room like markers do. `at` stays a ratio of its
+ *  edge, which is why this rule is unchanged by the metric wave. */
 export const rotateOpeningCW = (edge: EdgeLetter, at: number): { edge: EdgeLetter; at: number } =>
   edge === 'N' ? { edge: 'E', at }
     : edge === 'E' ? { edge: 'S', at: r4(1 - at) }
@@ -129,10 +207,10 @@ export const rotateOpeningCW = (edge: EdgeLetter, at: number): { edge: EdgeLette
         : { edge: 'N', at: r4(1 - at) }
 
 // ── Adjacency geometry (B4) — pure functions over room hulls ──
-// All coordinates are fractions of the 8 m reference square; real metres come
-// from planW (the same plan_width_m the editor derives), so the thresholds are
-// stated in metres. Collinearity tolerance ~0.15 m, a shared segment counts
-// from 0.8 m, a window is suggested on exterior edges from 2.5 m.
+// Coordinates ARE metres since v6 Nr. 2, so the thresholds apply directly and
+// nothing has to be divided by a plan width any more: collinearity tolerance
+// 0.15 m, a shared segment counts from 0.8 m, a window is suggested on
+// exterior edges from 2.5 m.
 export const SHARE_TOL_M = 0.15
 export const MIN_SHARE_M = 0.8
 export const MIN_WINDOW_EDGE_M = 2.5
@@ -147,9 +225,9 @@ export interface SharedEdge { edge: number; at: number; neighborId: string }
  *  a wall face each other), within ~0.15 m sideways and overlapping ≥ 0.8 m.
  *  `edge` is A's edge index, `at` the centre of the overlap along that
  *  directed edge (fraction of the edge). */
-export function sharedEdges(a: PolyRoom, others: PolyRoom[], planW: number): SharedEdge[] {
-  const tol = planW > 0 ? SHARE_TOL_M / planW : 0.02
-  const minOv = planW > 0 ? MIN_SHARE_M / planW : 0.1
+export function sharedEdges(a: PolyRoom, others: PolyRoom[]): SharedEdge[] {
+  const tol = SHARE_TOL_M
+  const minOv = MIN_SHARE_M
   const oa = absOutline(a)
   const out: SharedEdge[] = []
   for (let i = 0; i < oa.length; i++) {
@@ -191,8 +269,8 @@ export function sharedEdges(a: PolyRoom, others: PolyRoom[], planW: number): Sha
 
 /** Edge indices of room A that share no segment with any neighbour
  *  (exterior walls). */
-export function exteriorEdges(a: PolyRoom, others: PolyRoom[], planW: number): number[] {
-  const shared = new Set(sharedEdges(a, others, planW).map((s) => s.edge))
+export function exteriorEdges(a: PolyRoom, others: PolyRoom[]): number[] {
+  const shared = new Set(sharedEdges(a, others).map((s) => s.edge))
   const n = outlineOf(a).length
   return Array.from({ length: n }, (_, i) => i).filter((i) => !shared.has(i))
 }
@@ -207,9 +285,15 @@ export function exteriorEdges(a: PolyRoom, others: PolyRoom[], planW: number): n
 // free-hand. Priorities: close the polygon on its first vertex > snap to an
 // existing vertex (closing small gaps beats everything) > the 45°-angle ray
 // intersected with a target edge (right angles that also land on a wall) >
-// plain edge projection > plain angle ray > free. All coordinates are plan
-// fractions; tolerances are passed in plan fractions too (the caller derives
-// them from pixels and metres).
+// plain edge projection > plain angle ray > free. All coordinates are
+// LOCATION-LOCAL METRES and so are the tolerances (the caller derives them
+// from its pixel-per-metre scale).
+//
+// NOTHING IS CLAMPED TO A SQUARE HERE. Until v6 the entry point clamped every
+// raw point into [0,1]², which since the drawn boundary left that square meant
+// a click outside it silently landed on the frame instead of under the cursor
+// — the reported "the room does not lock in". The only bound left is the
+// server's own ±500 m plan window.
 export const SNAP_TOL_PX = 10
 export const CLOSE_TOL_PX = 14
 
@@ -217,32 +301,28 @@ export interface SnapTargets { points: Pt[]; segments: Array<{ a: Pt; b: Pt }> }
 
 /** Snap targets for a drawing session: the hulls of the placed rooms on the
  *  level, optionally the building outline (NOT when it is the thing being
- *  redrawn), the reference-square FRAME (corners, edge midpoints and the
- *  edges themselves — "the road ends at the east edge" is a real snap, and
- *  the frame is the contract surface everywhere), plus loose extra points
- *  (the draft's own vertices). */
+ *  redrawn), the location BOUNDARY (its corners, edge midpoints and the edges
+ *  themselves — "the road ends at the east edge" is a real snap, and since v6
+ *  the boundary polygon is that contract surface, where the reference square
+ *  used to be), plus loose extra points (the draft's own vertices). */
 export function buildSnapTargets(hulls: PolyRoom[], opts?: {
-  buildingOutline?: Pt[]; extraPoints?: Pt[]; frame?: boolean }): SnapTargets {
+  buildingOutline?: Pt[]; extraPoints?: Pt[]; boundary?: Pt[] }): SnapTargets {
   const points: Pt[] = []
   const segments: Array<{ a: Pt; b: Pt }> = []
-  const addPoly = (pts: Pt[]) => {
+  const addPoly = (pts: Pt[], midpoints = false) => {
     for (let i = 0; i < pts.length; i++) {
-      points.push(pts[i])
-      segments.push({ a: pts[i], b: pts[(i + 1) % pts.length] })
+      const a = pts[i]
+      const b = pts[(i + 1) % pts.length]
+      points.push(a)
+      if (midpoints) points.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
+      segments.push({ a, b })
     }
   }
   for (const h of hulls) addPoly(absOutline(h))
   const bo = opts?.buildingOutline
   if (bo && bo.length >= 3) addPoly(bo)
-  if (opts?.frame) {
-    const c = rectToOutline()
-    for (let i = 0; i < 4; i++) {
-      const a = c[i]
-      const b = c[(i + 1) % 4]
-      points.push(a, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
-      segments.push({ a, b })
-    }
-  }
+  const bd = opts?.boundary
+  if (bd && bd.length >= 3) addPoly(bd, true)
   for (const p of opts?.extraPoints || []) points.push(p)
   return { points, segments }
 }
@@ -254,13 +334,14 @@ export interface SnapResult {
   guide?: { a: Pt; b: Pt }
   /** Target segment being snapped onto (edge kinds). */
   seg?: { a: Pt; b: Pt }
-  /** 'length' only: the matched segment length in plan fractions — the
-   *  editor labels it in metres ("= 4.0 m"). */
+  /** 'length' only: the matched segment length in METRES — the editor labels
+   *  it as it is ("= 4.0 m"). */
   matchLen?: number
 }
 
 const _dist2 = (a: Pt, b: Pt) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
-const _r4p = (p: Pt): Pt => [r4(p[0]), r4(p[1])]
+/** Every snapped point leaves here at the storage resolution — centimetres. */
+const _rMp = (p: Pt): Pt => [rM(p[0]), rM(p[1])]
 
 export function snapDrawPoint(raw: Pt, opts: {
   prev?: Pt; prevDir?: Pt; first?: Pt; draftLen?: number
@@ -269,9 +350,16 @@ export function snapDrawPoint(raw: Pt, opts: {
    *  third side snaps to the first side's length). */
   draft?: Pt[]
   targets: SnapTargets; tol: number; closeTol: number; alt?: boolean
+  /** Metre raster the FREE point falls onto (0 = off). Real geometry —
+   *  vertices, edges, the angle ray — always wins over the raster: a wall you
+   *  can see is a better anchor than an invisible line. */
+  grid?: number
 }): SnapResult {
-  const p: Pt = [clamp(raw[0], 0, 1), clamp(raw[1], 0, 1)]
-  if (opts.alt) return { p: _r4p(p), kind: 'free' }
+  // The ONLY bound: the server's plan window. A drawn point may sit anywhere
+  // around the pin, negative included — that is what a boundary polygon means.
+  const p: Pt = [clamp(raw[0], -PLAN_MAX_M, PLAN_MAX_M),
+                 clamp(raw[1], -PLAN_MAX_M, PLAN_MAX_M)]
+  if (opts.alt) return { p: _rMp(p), kind: 'free' }
   const { targets, tol, closeTol } = opts
 
   // 1) Close the polygon on its first vertex.
@@ -290,7 +378,7 @@ export function snapDrawPoint(raw: Pt, opts: {
       bestV = v
     }
   }
-  if (bestV) return { p: _r4p(bestV), kind: 'vertex' }
+  if (bestV) return { p: _rMp(bestV), kind: 'vertex' }
 
   // The angle constraint: 45° raster relative to the previous segment's
   // direction (first segment: the plan's X axis).
@@ -325,7 +413,7 @@ export function snapDrawPoint(raw: Pt, opts: {
       }
     }
     if (bestX)
-      return { p: _r4p(bestX.p), kind: 'angle+edge', seg: bestX.seg,
+      return { p: _rMp(bestX.p), kind: 'angle+edge', seg: bestX.seg,
         guide: { a: opts.prev, b: bestX.p } }
   }
 
@@ -350,7 +438,7 @@ export function snapDrawPoint(raw: Pt, opts: {
       }
     }
     if (bestL)
-      return { p: _r4p(bestL.p), kind: 'length', matchLen: bestL.len,
+      return { p: _rMp(bestL.p), kind: 'length', matchLen: bestL.len,
         guide: { a: opts.prev, b: bestL.p } }
   }
 
@@ -370,17 +458,23 @@ export function snapDrawPoint(raw: Pt, opts: {
       bestE = { p: x, seg: s }
     }
   }
-  if (bestE) return { p: _r4p(bestE.p), kind: 'edge', seg: bestE.seg }
+  if (bestE) return { p: _rMp(bestE.p), kind: 'edge', seg: bestE.seg }
 
-  // 5) Plain angle projection onto the constrained ray.
+  // 5) Plain angle projection onto the constrained ray — the run along the
+  // ray falls onto the metre raster, so a free-drawn wall comes out a whole
+  // number of grid steps long instead of 4.37 m.
   if (opts.prev && dir) {
-    const dot = (p[0] - opts.prev[0]) * dir[0] + (p[1] - opts.prev[1]) * dir[1]
-    const x: Pt = [clamp(opts.prev[0] + dot * dir[0], 0, 1),
-                   clamp(opts.prev[1] + dot * dir[1], 0, 1)]
-    return { p: _r4p(x), kind: 'angle', guide: { a: opts.prev, b: x } }
+    const dot = snapToGrid(
+      (p[0] - opts.prev[0]) * dir[0] + (p[1] - opts.prev[1]) * dir[1],
+      opts.grid || 0)
+    const x: Pt = [clamp(opts.prev[0] + dot * dir[0], -PLAN_MAX_M, PLAN_MAX_M),
+                   clamp(opts.prev[1] + dot * dir[1], -PLAN_MAX_M, PLAN_MAX_M)]
+    return { p: _rMp(x), kind: 'angle', guide: { a: opts.prev, b: x } }
   }
 
-  return { p: _r4p(p), kind: 'free' }
+  // 6) Nothing to hold on to — the metre raster catches the point.
+  const g = opts.grid || 0
+  return { p: _rMp([snapToGrid(p[0], g), snapToGrid(p[1], g)]), kind: 'free' }
 }
 
 /** Smart-guide offset for MOVING a hull (Shift = free-hand, handled by the

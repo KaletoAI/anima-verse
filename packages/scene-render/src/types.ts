@@ -333,6 +333,16 @@ export interface SceneTerrain {
   grid: number[][]
   /** Swing in world metres (already × k). */
   amplitude_m: number
+  /** MIN CORNER of the support lattice in payload metres (contract v6 Nr. 2,
+   *  § B1 Nr. 14 — `scene_recipe.terrain_frame`). Since v6 the lattice spans a
+   *  square of edge `extent_m` over the BOUNDARY's bounding box, not a square
+   *  around the pin, so a lattice coordinate is
+   *  `u = (x − origin[0]) / (step · n)` — never `x / extent_m + 0.5`.
+   *  Optional in the TYPE only because a payload composed before the metric
+   *  wave carries no such field; where it IS present it is mandatory in the
+   *  arithmetic (`sampleTerrain`). For a boundary drawn around its own pin
+   *  both formulas give the same number. */
+  origin?: [number, number]
 }
 
 export interface ScenePayload {

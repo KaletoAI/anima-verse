@@ -2,21 +2,24 @@
  * PlanMeasure — the reference sizes of the 2D floor plan.
  *
  * Same rule as measureKit.ts for the 3D surfaces (user directive 2026-07-28):
- * "Kein Maß ohne Maßstab." The plan draws in FRACTIONS of the reference
- * square, so a rectangle on it says nothing about real size until something
- * human stands next to it. Three aids, all fed by the one scale anchor
- * (`map3d.plan_width_m`) — without it they stay away, and their absence is
- * the honest answer:
+ * "Kein Maß ohne Maßstab." Since the metric wave (contract v6 Nr. 2) the plan
+ * draws in LOCAL METRES, but a rectangle on a screen still says nothing about
+ * real size until something human stands next to it. Three aids, all fed by
+ * the drawing VIEWPORT (`PlanView` — how many metres the canvas spans and
+ * where its min corner sits):
  *
  *   1. a scale bar that names the length it draws,
- *   2. a grid in whole metres, adapting its step to the zoom,
+ *   2. a grid in whole metres of the LOCATION frame, adapting its step to the
+ *      zoom and labelling its coordinates, so a line is not just spacing but a
+ *      readable position (the "Maße brauchen Bezug" readback),
  *   3. the 1.70 m figure — from above, at true scale, draggable to whatever
  *      you are judging right now.
  *
  * Pure view state: nothing here is persisted, nothing here is geometry.
  */
 import { useI18n } from '../../i18n/I18nProvider'
-import { fmtM, niceDown, niceUp } from './planGeometry'
+import { fmtM, niceDown, niceUp, viewFx, viewFz } from './planGeometry'
+import type { PlanView } from './planGeometry'
 import type { PointerEvent as ReactPointerEvent, RefObject } from 'react'
 
 /** How the figure is built (metres, seen from above). */
@@ -34,8 +37,8 @@ const AID_COLOR = '#f0f6fc'
 const GRID_COLOR = '#8b949e'
 
 interface ScaleProps {
-  /** Real width the plan square represents (0 = no anchor → no aids). */
-  planWidthM: number
+  /** The metre window the square canvas shows. */
+  view: PlanView
   /**
    * The canvas edge as it really is on screen, MEASURED — zoom included, and
    * the shrink a narrow pane forces on it too. An aid that computes pixels
@@ -49,9 +52,9 @@ interface ScaleProps {
  * Lives OUTSIDE the scrolling canvas so a zoomed-in plan cannot scroll its
  * own scale out of view.
  */
-export function PlanScaleBar({ planWidthM, canvasPx }: ScaleProps) {
-  if (!(planWidthM > 0)) return null
-  const pxPerM = canvasPx / planWidthM
+export function PlanScaleBar({ view, canvasPx }: ScaleProps) {
+  if (!(view.size > 0)) return null
+  const pxPerM = canvasPx / view.size
   // A bar wants about a third of the visible width; the nice step decides
   // the rest, so the number stays round while the zoom changes.
   const barM = niceDown(140 / pxPerM)
@@ -81,46 +84,84 @@ export function PlanScaleBar({ planWidthM, canvasPx }: ScaleProps) {
 }
 
 /**
- * Grid in whole metres over the plan square. The step follows the zoom (lines
- * never crowd closer than ~14 px), every fifth line is stronger.
+ * Grid in whole metres of the LOCATION-LOCAL frame. The step follows the zoom
+ * (lines never crowd closer than ~14 px), every fifth line is stronger and
+ * carries its coordinate — the pin is where x = 0 meets z = 0, and that pair
+ * of zero lines is drawn in the accent colour so the origin is never guessed.
  */
-export function PlanMetreGrid({ planWidthM, canvasPx }: ScaleProps) {
-  if (!(planWidthM > 0)) return null
-  const pxPerM = canvasPx / planWidthM
+export function PlanMetreGrid({ view, canvasPx }: ScaleProps) {
+  if (!(view.size > 0)) return null
+  const pxPerM = canvasPx / view.size
   const step = niceUp(14 / pxPerM)
-  // Multiples of the step, not an accumulating sum — 0.25 m steps would
-  // otherwise drift into 0.7500000000000001 after a few rounds.
-  const count = Math.max(0, Math.floor((planWidthM - 1e-6) / step))
-  const lines = Array.from({ length: count }, (_, i) => (i + 1) * step)
+  // Multiples of the step ANCHORED ON THE FRAME ORIGIN, not on the viewport
+  // corner: a grid line has to mean "x = 12 m from the pin", otherwise it is
+  // decoration. Computed as index × step (never an accumulating sum — 0.25 m
+  // steps would drift into 0.7500000000000001 after a few rounds).
+  const first = Math.ceil(view.x0 / step)
+  const last = Math.floor((view.x0 + view.size) / step)
+  const firstZ = Math.ceil(view.z0 / step)
+  const lastZ = Math.floor((view.z0 + view.size) / step)
+  const xs = Array.from({ length: Math.max(0, last - first + 1) },
+    (_, i) => (first + i) * step)
+  const zs = Array.from({ length: Math.max(0, lastZ - firstZ + 1) },
+    (_, i) => (firstZ + i) * step)
+  // A label on every fifth line only — a labelled line every 14 px is noise.
+  const labelled = (m: number) => Math.abs(Math.round(m / step) % 5) === 0
+  const line = (m: number) => (Math.abs(m) < 1e-9 ? 0.75 : labelled(m) ? 0.4 : 0.17)
+  const col = (m: number) => (Math.abs(m) < 1e-9 ? '#58a6ff' : GRID_COLOR)
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{
-      position: 'absolute', inset: 0, width: '100%', height: '100%',
-      pointerEvents: 'none',
-    }}>
-      {lines.map((m, i) => {
-        const p = (m / planWidthM) * 100
-        const o = (i + 1) % 5 === 0 ? 0.4 : 0.17
-        return (
-          <g key={m} stroke={GRID_COLOR} strokeWidth={1} opacity={o}
-            vectorEffect="non-scaling-stroke">
-            <line x1={p} y1={0} x2={p} y2={100} vectorEffect="non-scaling-stroke" />
-            <line x1={0} y1={p} x2={100} y2={p} vectorEffect="non-scaling-stroke" />
-          </g>
-        )
-      })}
-    </svg>
+    <>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{
+        position: 'absolute', inset: 0, width: '100%', height: '100%',
+        pointerEvents: 'none',
+      }}>
+        {xs.map((m) => (
+          <line key={`x${m}`} x1={viewFx(view, m) * 100} y1={0}
+            x2={viewFx(view, m) * 100} y2={100} stroke={col(m)} strokeWidth={1}
+            opacity={line(m)} vectorEffect="non-scaling-stroke" />
+        ))}
+        {zs.map((m) => (
+          <line key={`z${m}`} x1={0} y1={viewFz(view, m) * 100}
+            x2={100} y2={viewFz(view, m) * 100} stroke={col(m)} strokeWidth={1}
+            opacity={line(m)} vectorEffect="non-scaling-stroke" />
+        ))}
+      </svg>
+      {/* Readback: the coordinate of every fifth line, in metres from the pin
+          — top edge for x, left edge for z. Pixel-sized text, so it stays
+          legible at any zoom. */}
+      {xs.filter(labelled).map((m) => (
+        <span key={`lx${m}`} style={{
+          position: 'absolute', left: `${viewFx(view, m) * 100}%`, top: 1,
+          transform: 'translateX(2px)', fontSize: 9, lineHeight: '10px',
+          color: Math.abs(m) < 1e-9 ? '#58a6ff' : GRID_COLOR, opacity: 0.9,
+          pointerEvents: 'none', whiteSpace: 'nowrap',
+          textShadow: '0 0 3px #0d1117, 0 0 3px #0d1117',
+        }}>{fmtM(m)}</span>
+      ))}
+      {zs.filter(labelled).map((m) => (
+        <span key={`lz${m}`} style={{
+          position: 'absolute', top: `${viewFz(view, m) * 100}%`, left: 2,
+          transform: 'translateY(1px)', fontSize: 9, lineHeight: '10px',
+          color: Math.abs(m) < 1e-9 ? '#58a6ff' : GRID_COLOR, opacity: 0.9,
+          pointerEvents: 'none', whiteSpace: 'nowrap',
+          textShadow: '0 0 3px #0d1117, 0 0 3px #0d1117',
+        }}>{fmtM(m)}</span>
+      ))}
+    </>
   )
 }
 
 /**
  * The 1.70 m person from above, at the plan's true scale: the 0.60 m circle
  * of occupied space, shoulders and head. Drag it onto whatever is being
- * judged — a door width, a corridor, a bed.
+ * judged — a door width, a corridor, a bed. Its position is LOCAL METRES, and
+ * the label says where it stands, so the figure doubles as a coordinate probe.
  *
- * It never scales with anything but the plan width; that is the whole point.
+ * It never scales with anything but the viewport; that is the whole point.
  */
-export function PlanFigure({ planWidthM, pos, onPos, canvasRef, interactive }: {
-  planWidthM: number
+export function PlanFigure({ view, pos, onPos, canvasRef, interactive }: {
+  view: PlanView
+  /** Position in LOCATION-LOCAL metres. */
   pos: [number, number]
   onPos: (p: [number, number]) => void
   canvasRef: RefObject<HTMLDivElement | null>
@@ -128,8 +169,8 @@ export function PlanFigure({ planWidthM, pos, onPos, canvasRef, interactive }: {
   interactive: boolean
 }) {
   const { t } = useI18n()
-  if (!(planWidthM > 0)) return null
-  const frac = FIG.spaceM / planWidthM
+  if (!(view.size > 0)) return null
+  const frac = FIG.spaceM / view.size
 
   const startDrag = (e: ReactPointerEvent) => {
     if (!interactive) return
@@ -139,9 +180,8 @@ export function PlanFigure({ planWidthM, pos, onPos, canvasRef, interactive }: {
     if (!canvas) return
     const move = (ev: PointerEvent) => {
       const r = canvas.getBoundingClientRect()
-      const cl = (v: number) => Math.min(1, Math.max(0, v))
-      onPos([cl((ev.clientX - r.left) / r.width),
-             cl((ev.clientY - r.top) / r.height)])
+      onPos([view.x0 + ((ev.clientX - r.left) / r.width) * view.size,
+             view.z0 + ((ev.clientY - r.top) / r.height) * view.size])
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -155,7 +195,8 @@ export function PlanFigure({ planWidthM, pos, onPos, canvasRef, interactive }: {
     <div
       style={{
         position: 'absolute',
-        left: `${pos[0] * 100}%`, top: `${pos[1] * 100}%`,
+        left: `${viewFx(view, pos[0]) * 100}%`,
+        top: `${viewFz(view, pos[1]) * 100}%`,
         width: `${frac * 100}%`, height: `${frac * 100}%`,
         transform: 'translate(-50%, -50%)',
         pointerEvents: interactive ? 'auto' : 'none',
@@ -188,7 +229,7 @@ export function PlanFigure({ planWidthM, pos, onPos, canvasRef, interactive }: {
         color: AID_COLOR, textShadow: '0 0 3px #0d1117, 0 0 3px #0d1117',
         pointerEvents: 'none',
       }}>
-        1.70 m
+        1.70 m · {fmtM(pos[0])} / {fmtM(pos[1])} m
       </span>
     </div>
   )

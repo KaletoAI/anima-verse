@@ -32,16 +32,21 @@ interface ActiveModel {
 
 export function RoomModelAdjust({ locationId, roomId, roomName,
                                   calibration = false, onCalibration,
-                                  calibrationAt, onCalibrationAt }: {
+                                  calibrationAt, onCalibrationAt,
+                                  roomSizeM }: {
   locationId: string
   roomId: string
   roomName: string
   /** Calibration figure showing in the 3D preview for THIS room. */
   calibration?: boolean
   onCalibration?: (on: boolean) => void
-  /** Where it stands — fractions of the room rectangle. Pure UI state. */
+  /** Where it stands — METRES from the room's min corner (contract v6 Nr. 2).
+   *  Pure UI state, never persisted. */
   calibrationAt?: [number, number]
   onCalibrationAt?: (at: [number, number]) => void
+  /** Size of the room in metres — the dials' range, since the position is a
+   *  length now and not a ratio. */
+  roomSizeM?: [number, number]
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -248,43 +253,45 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           🧍
         </button>
       ) : null}
-      {/* Where the figure stands, as fractions of the room rectangle. The
-          click into the 2D plan stays, but it misses whenever a prop, a
-          marker or an opening sits under the cursor — these always work. */}
+      {/* Where the figure stands — METRES from the room's min corner (v6
+          Nr. 2). The click into the 2D plan stays, but it misses whenever a
+          prop, a marker or an opening sits under the cursor — these always
+          work. */}
       {calibration && onCalibrationAt ? (
-        ([['x', 0] as const, ['y', 1] as const]).map(([axis, idx]) => (
-          <label key={axis} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Position of the calibration figure in the room (0 = one edge, 1 = the other).')}>
-            {axis.toUpperCase()}
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.005}
-              value={calibrationAt?.[idx] ?? 0.5}
-              onChange={(e) => {
-                const v = Math.round(parseFloat(e.target.value) * 1000) / 1000
-                const cur = calibrationAt || [0.5, 0.5]
-                onCalibrationAt(idx === 0 ? [v, cur[1]] : [cur[0], v])
-              }}
-              style={{ width: 90 }}
-            />
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={1}
-              step={0.01}
-              style={{ width: 66 }}
-              value={calibrationAt?.[idx] ?? 0.5}
-              onChange={(e) => {
-                const v = Math.round((parseFloat(e.target.value) || 0) * 1000) / 1000
-                const cur = calibrationAt || [0.5, 0.5]
-                onCalibrationAt(idx === 0 ? [v, cur[1]] : [cur[0], v])
-              }}
-            />
-          </label>
-        ))
+        ([['x', 0] as const, ['y', 1] as const]).map(([axis, idx]) => {
+          const span = roomSizeM?.[idx] || 0
+          const mid = span / 2
+          const cur = calibrationAt || [mid, roomSizeM ? roomSizeM[1] / 2 : 0]
+          const set = (v: number) => onCalibrationAt(
+            idx === 0 ? [v, cur[1]] : [cur[0], v])
+          return (
+            <label key={axis} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('Position of the calibration figure in the room, in metres from its north-west corner.')}>
+              {axis.toUpperCase()}
+              <input
+                type="range"
+                min={0}
+                max={span || 10}
+                step={0.01}
+                value={cur[idx]}
+                onChange={(e) => set(Math.round(parseFloat(e.target.value) * 100) / 100)}
+                style={{ width: 90 }}
+              />
+              <input
+                className="ga-input"
+                type="number"
+                min={0}
+                max={span || 10}
+                step={0.01}
+                style={{ width: 66 }}
+                value={cur[idx]}
+                onChange={(e) => set(
+                  Math.round((parseFloat(e.target.value) || 0) * 100) / 100)}
+              />
+              <span style={{ opacity: 0.7 }}>m</span>
+            </label>
+          )
+        })
       ) : null}
       <span className="ga-hint">
         {t('Persisted on the active model — preview and 3D client pick it up.')}

@@ -50,9 +50,6 @@ interface PlanToolbarProps {
   hasElevator: boolean
   /** Show the building group at all (the editor got an onMap3d writer). */
   building: boolean
-  /** No scale anchor (plan width) — every tool that produces or consumes
-   *  real-world size is locked until one is set. */
-  noAnchor: boolean
   canSuggest: boolean
   /** The selected room has a 3D model with a declared real width — only then
    *  can the floor plan be fitted to it. */
@@ -75,17 +72,17 @@ interface PlanToolbarProps {
 
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasOutline,
-  outlineDraftLen, hasElevator, building, noAnchor, canSuggest,
+  outlineDraftLen, hasElevator, building, canSuggest,
   canFitToModel, canCurve, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
 }: PlanToolbarProps) {
   const { t } = useI18n()
+  // NO SCALE-ANCHOR LOCK since contract v6 Nr. 2: a room layout carries its
+  // own metres, so no tool here waits for a plan width any more.
   const drawing = mode === 'draw-room'
   const outlining = mode === 'outline'
-  // One tooltip for every tool the missing scale anchor locks.
-  const anchorTip = t('Set the plan width (m) first')
 
   return (
     <div className="ga-plan-toolbar">
@@ -107,10 +104,8 @@ export function PlanToolbar({
           ) : (
             <Tool
               icon="🏗"
-              disabled={noAnchor}
               onClick={() => onMode('outline')}
-              title={noAnchor ? anchorTip
-                : t('Draw the building outline as a polygon (fractions of the reference square) — the 3D client renders floor plates and walls from it.')}
+              title={t('Draw the building outline as a polygon in local metres — the 3D client renders floor plates and walls from it.')}
             />
           )}
           {hasOutline && !outlining ? (
@@ -156,10 +151,9 @@ export function PlanToolbar({
       ) : (
         <Tool
           icon="⬠"
-          disabled={!hasSelection || noAnchor}
+          disabled={!hasSelection}
           onClick={() => onMode('draw-room')}
-          title={noAnchor ? anchorTip
-            : t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, markers stay.')}
+          title={t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, markers stay.')}
         />
       )}
       <Tool
@@ -172,10 +166,9 @@ export function PlanToolbar({
       <Tool
         icon="◡"
         active={mode === 'curve'}
-        disabled={!canCurve || noAnchor}
+        disabled={!canCurve}
         onClick={() => onMode('curve')}
-        title={noAnchor ? anchorTip
-          : t('Curve — click a hull edge of the selected room to bend it (drag the control point; click the edge again to remove the curve). Needs a drawn hull. Openings cannot sit on curved edges.')}
+        title={t('Curve — click a hull edge of the selected room to bend it (drag the control point; click the edge again to remove the curve). Needs a drawn hull. Openings cannot sit on curved edges.')}
       />
       <Tool
         icon="⇲"
@@ -199,18 +192,15 @@ export function PlanToolbar({
       />
       <Tool
         icon="✨"
-        disabled={!canSuggest || noAnchor}
+        disabled={!canSuggest}
         onClick={onSuggest}
-        title={noAnchor ? anchorTip
-          : t('Doors on shared walls, an entrance for otherwise closed rooms, windows on exterior walls ≥ 2.5 m — never overwrites existing openings.')}
+        title={t('Doors on shared walls, an entrance for otherwise closed rooms, windows on exterior walls ≥ 2.5 m — never overwrites existing openings.')}
       />
       <Tool
         icon="🪑"
         active={propsOpen}
-        disabled={noAnchor}
         onClick={onProps}
-        title={noAnchor ? anchorTip
-          : t('Show the prop library in the panel next to the plan.')}
+        title={t('Show the prop library in the panel next to the plan.')}
       />
       <Tool
         icon="✕"

@@ -1,15 +1,31 @@
-// Floor-plan placement of a room inside its building (AV3D-2). x/y = top-left
-// corner, w/d = width/depth — all fractions of the building footprint; level
-// is the floor (0 = ground, negative = basement). Absent = client auto-grid.
+// Floor-plan placement of a room (AV3D-2). EVERYTHING IS METRES since
+// contract v6 Nr. 2 ("the metric wave") — the [0,1] fraction domain is deleted
+// on both sides, and there is no migration: an old fraction blob simply
+// describes a room a few centimetres across.
+//
+//   * `x`/`y` — the room's MIN CORNER in LOCATION-LOCAL metres: origin = the
+//     anchor pin (`pos_x`/`pos_z`), axes as § A1.1, i.e. the very frame
+//     `map3d.boundary` is drawn in. NEGATIVE VALUES ARE ORDINARY.
+//   * `w`/`d` — size in metres, both > 0.
+//   * `outline`, `outline_curves[].c`, `markers[].at`, `props[].at`,
+//     `model_at` — metres relative to the room's OWN min corner (0…w / 0…d;
+//     a curve control point may leave that box).
+//   * `openings[].at` — the ONE ratio left: a fraction of its edge.
+//
+// `level` is the floor (0 = ground, negative = basement). Absent layout =
+// client auto-grid. Stored resolution: centimetres, clamped to ±500 m.
 export interface RoomLayout {
   level?: number
+  /** Min corner, LOCATION-LOCAL metres around the anchor pin (may be < 0). */
   x: number
   y: number
+  /** Size in metres (> 0). */
   w: number
   d: number
   rotation?: number
-  /** Diorama-model anchor as fractions of the room rect (absent = centred)
-   *  — the room's 3D model is positioned in the PLAN like a prop. */
+  /** Diorama-model anchor in METRES from the room's min corner (absent =
+   *  centred, i.e. [w/2, d/2]) — the room's 3D model is positioned in the
+   *  PLAN like a prop. */
   model_at?: [number, number]
   /** Diorama-model height offset in metres (replaces the room sidecar
    *  offset; buildings keep theirs). */
@@ -38,7 +54,7 @@ export interface RoomLayout {
    *  at storey level. */
   floor_offset_y?: number
   /** Animation markers: spots a figure with a matching active animation
-   *  snaps to. at = fraction of the room rectangle; animation = a clip kind
+   *  snaps to. at = METRES from the room's min corner; animation = a clip kind
    *  from the open animation-clip vocabulary; rotation = facing in degrees
    *  (0 south / 90 east / 180 north / 270 west, absent = client default);
    *  offset_y = metres, additive to the sampled seat height; tilt/roll =
@@ -53,26 +69,29 @@ export interface RoomLayout {
   /** Wall openings — doors / windows / passages. Deterministic + admin-edited;
    *  the client splits the wall edge into segments around them (no CSG). */
   openings?: RoomOpening[]
-  /** Drawn room hull: polygon points as fractions of the room BBOX (x/y/w/d),
-   *  auto-closed, winding clockwise in screen coords, bbox spans [0,1]².
-   *  Absent = the rectangle itself (implicit unit square, edges 0=N 1=E 2=S
-   *  3=W). x/y/w/d ALWAYS carry the derived bbox — legacy clients keep
-   *  reading only those. */
+  /** Drawn room hull: polygon points in METRES relative to the room's min
+   *  corner, spanning 0…w / 0…d, auto-closed, winding clockwise in screen
+   *  coords. Absent = the rectangle itself (implicit box, edges 0=N 1=E 2=S
+   *  3=W). x/y/w/d ALWAYS carry the derived bbox — a rectangle-only reader
+   *  keeps working. The server folds a hull that does not start at the corner
+   *  by TRANSLATING it (metres do not renormalize). */
   outline?: Array<[number, number]>
   /** Furnishing: placements from the prop library. A placement NEVER scales
    *  the prop — the client sizes it from the prop's own dims × the plan's
    *  scale factor. A dangling prop_id renders as a placeholder. */
   props?: RoomPropPlacement[]
   /** Curved hull edges (plan-area-detail-scenes.md): at most ONE quadratic
-   *  bezier control point per edge, bbox-local like the outline points
-   *  (server clamp [-1, 2]). The SERVER tessellates at compose time — the
-   *  payload stays pure polygon. Openings on curved edges are rejected. */
+   *  bezier control point per edge, in the room's own METRES like the outline
+   *  points and free to sit OUTSIDE the hull (a road bend does) — the server
+   *  clamps it to the plain ±500 m plan window, not to the bbox. The SERVER
+   *  tessellates at compose time — the payload stays pure polygon. Openings on
+   *  curved edges are rejected. */
   outline_curves?: Array<{ edge: number; c: [number, number] }>
 }
 
 export interface RoomPropPlacement {
   prop_id: string
-  /** Room-local position: fractions of the room rectangle (0..1). */
+  /** Room-local position: METRES from the room's min corner (0…w / 0…d). */
   at: [number, number]
   /** Yaw in degrees, free values at 0.1° resolution. Absent = 0. */
   yaw?: number
@@ -136,19 +155,21 @@ export interface Map3D {
   /** Building yaw on the map tile in degrees (0..359). Absent = the 3D client
    *  falls back to map_rotation_2d (the model turns with the 2D icon). */
   rotation?: number
-  /** The MODEL's share of the location's reference square (]0, 1]; 1 = edge
-   *  to edge). Absent = 1. A model can no longer be bigger than its
-   *  location — for that, widen plan_width_m. */
+  /** ~~The MODEL's share of the location's reference square.~~ STRUCK with
+   *  contract v6 Nr. 3: every model scales through a declared real width in
+   *  metres (`width_m` on the sidecar). Nothing writes or reads it any more. */
   size?: number
   /** Storey height in REAL metres — stacks the floor-plan levels. Absent = 3.
    *  Replaced the old pair "model height ÷ model storeys" and level_height
    *  (which counted in world metres). */
   storey_height_m?: number
-  /** How wide the location is in REAL metres — THE scale anchor and the ONE
-   *  length everything derives from: the footprint on the world map, the
-   *  reference square of the scene (since E4 they are the same square, so
-   *  k = 1), room-rect sizes (from width_m), figure size (1.70 m) and the
-   *  storey height. Absent = no anchor; floor-plan geometry cannot be saved. */
+  /** How wide the location is in REAL metres. SINCE v6 Nr. 2 A DERIVED VALUE,
+   *  not a dial and not an anchor: the wider side of `boundary`'s bounding
+   *  box, which the server recomputes and overwrites on every save. Nothing
+   *  scales by it any more (rooms, props, markers and the figure all carry
+   *  their own metres) — it survives because consumer contracts do: loading
+   *  radius, viewport, backdrop, `scene.extent_m`. A submitted value is kept
+   *  only for a location with no boundary at all. */
   plan_width_m?: number
   /** Floor-texture KIND per storey ({"0": "parquet"}) — the client tiles the
    *  level plate with it; a room's surfaces.floor overrides its own area. */
@@ -168,8 +189,10 @@ export interface Map3D {
    *  rooms compose like a building interior — no cutouts, no overlay zones.
    *  Only meaningful together with area_model. */
   area_detail?: boolean
-  /** Terrain relief of the detail scene (v5.2 Nr. 14): a deterministic
-   *  height field over the reference square. `amplitude_m` is the swing in
+  /** Terrain relief of the detail scene (§ B1 Nr. 14): a deterministic
+   *  height field over the terrain frame — since v6 Nr. 2 a square of edge
+   *  `plan_width_m` over the BOUNDARY's bounding box, whose min corner the
+   *  scene payload names as `terrain.origin`. `amplitude_m` is the swing in
    *  REAL metres (0.05..5, × k at compose time), `seed` picks the field and
    *  is mandatory — the editor always writes one. `wave_m` is the second
    *  axis: how WIDE one swell is, in REAL metres (1..200); the server turns
@@ -194,20 +217,23 @@ export interface Map3D {
    *  still carries one. */
   boundary_openings?: Array<{ edge: number; at: number
     width_m: number; type?: 'passage'; room?: string }>
-  /** Drawn building outline (AV3D-12): polygon points as fractions of the
-   *  location's reference square (plan_width_m), auto-closed — the client
-   *  renders floor plates and walls per used level from it. Absent =
-   *  rectangle as before. */
+  /** Drawn building outline (AV3D-12): the house's floor plan INSIDE the
+   *  plot, as polygon points in LOCAL METRES around the anchor pin (v6 Nr. 2,
+   *  same frame as `boundary`), auto-closed — the client renders floor plates
+   *  and walls per used level from it. Absent = rectangle as before. */
   outline?: Array<[number, number]>
-  /** Elevator position (fractions of the reference square) — placed once,
-   *  valid for all levels (client builds the shaft). */
+  /** Elevator position in LOCAL METRES around the pin (v6 Nr. 2) — placed
+   *  once, valid for all levels (client builds the shaft). */
   elevator?: [number, number]
 }
 
-// ── Scene recipe (shared/schnittstellen-3d.md part B) ──
+// ── Scene recipe (docs/schnittstellen-3d.md part B) ──
 // The server composes the WHOLE scene of a location; renderers only display
-// it. Every number is already in WORLD metres around the tile centre — no
-// fractions, no scale factors, no geometry decisions on this side.
+// it. Every number is already in WORLD metres around the anchor pin — no
+// fractions, no scale factors, no geometry decisions on this side. The metric
+// wave (v6 Nr. 2) changed neither the shape nor the values of this payload;
+// its ONE addition is `terrain.origin`, the min corner of the relief lattice,
+// which `sampleTerrain` in @anima/scene-render now anchors on.
 // Source: GET /play/locations/{id}/scene, draft variant POST
 // /play/scene-preview (app/core/scene_recipe.py).
 //

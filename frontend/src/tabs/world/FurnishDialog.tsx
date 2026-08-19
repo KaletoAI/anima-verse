@@ -61,7 +61,10 @@ export interface FurnishJob {
   status: FurnishStatus | null
   busy: boolean
   /** Pending placements while the job waits for review — FE state only, the
-   *  ghost layer edits them and Accept sends them back. */
+   *  ghost layer edits them and Accept sends them back. Their `at` is METRES
+   *  from the room's min corner, exactly like a stored placement (contract v6
+   *  Nr. 2; the solver emits metres since the server wave), so a ghost and the
+   *  prop it becomes on Accept are drawn by the same arithmetic. */
   ghosts: RoomPropPlacement[]
   setGhosts: (next: RoomPropPlacement[]) => void
   refresh: () => Promise<void>

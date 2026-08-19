@@ -45,9 +45,6 @@ interface PlanSidePanelProps {
   furnishDisabled: boolean
   furnishHint: string
   onFurnish: () => void
-  /** No scale anchor — the marker tool is locked with the other tools that
-   *  need a real-world size (the plan width). */
-  noAnchor: boolean
   /** Prop palette open (🪑 tool) — independent of the room selection. */
   propsOpen: boolean
   onPickProp: (prop: PropFull) => void
@@ -69,7 +66,7 @@ export function PlanSidePanel({
   markerMode, onArmMarker, onAlwaysVisible, onReliefFlat, onFloorOffset,
   surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
-  noAnchor, propsOpen, onPickProp, armedPropId,
+  propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
@@ -200,11 +197,8 @@ export function PlanSidePanel({
             <button
               type="button"
               className={`ga-btn ga-btn-sm${markerMode ? ' ga-btn-primary' : ''}`}
-              disabled={noAnchor}
               onClick={onArmMarker}
-              title={noAnchor
-                ? t('Set the plan width (m) first')
-                : t('Place a marker — then click inside the room; figures with this animation snap to it.')}
+              title={t('Place a marker — then click inside the room; figures with this animation snap to it.')}
             >
               🎯
             </button>

@@ -1,9 +1,11 @@
 /**
- * Terrain relief of a detail scene (contract v5.2 § B1 Nr. 14) — the ONE
- * height sampler both renderers use.
+ * Terrain relief of a detail scene (contract § B1 Nr. 14) — the ONE height
+ * sampler both renderers use.
  *
- * The server ships a 17 × 17 grid of support points over the location's
- * reference square and has ALREADY lifted everything that stands in a
+ * The server ships an (n+1) × (n+1) grid of support points over the lattice
+ * whose min corner the payload names (`terrain.origin`, v6 Nr. 2 — a square of
+ * edge `extent_m` over the boundary's bounding box) and has ALREADY lifted
+ * everything that stands in a
  * non-flat room: prop `bottom_y`, diorama `bottom_y`, marker `y_world`,
  * doorway feet. A renderer must therefore never sample an object height
  * again — it would count the lift twice. What is left for the renderers is
@@ -34,12 +36,20 @@ export const TERRAIN_CELLS = 16
 
 /**
  * Height of the relief at a point in payload coordinates (world metres
- * around the tile centre), in world metres.
+ * around the anchor pin), in world metres.
  *
- * Plan fraction from world offset: `u = x / extent + 0.5`, `v = z / extent
- * + 0.5`, both clamped to [0, 1] — outside the reference square the border
- * value applies, and the border is pinned to 0 by the composer so that
- * neighbouring tiles meet seamlessly.
+ * Lattice coordinate from the world offset — SINCE CONTRACT v6 Nr. 2 anchored
+ * on the delivered `terrain.origin`, the min corner of the support lattice:
+ * `u = (x − origin[0]) / span`, `v = (z − origin[1]) / span` with
+ * `span = step · n`. The lattice is a square of edge `extent_m` over the
+ * BOUNDARY's bounding box, and a boundary may sit anywhere around its pin —
+ * the old `u = x / extent + 0.5` silently read the wrong cell for every
+ * off-centre plot. That formula survives only as the fallback for a payload
+ * that carries no `origin` (identical for a pin-centred boundary).
+ *
+ * Both are clamped to [0, 1]: outside the lattice the border value applies,
+ * and the border is pinned to 0 by the composer so neighbouring tiles meet
+ * seamlessly.
  *
  * Cell and fraction exactly as the contract states, with `n` taken from the
  * delivered grid (`grid.length − 1`, the default 16 only when the payload
@@ -50,11 +60,16 @@ export const TERRAIN_CELLS = 16
 export function sampleTerrain(terrain: SceneTerrain | null | undefined,
                               x: number, z: number, extent: number): number {
   const grid = terrain?.grid
-  if (!grid || grid.length < 2 || !extent) return 0
+  if (!grid || grid.length < 2) return 0
   const n = grid.length - 1
+  const origin = terrain?.origin
+  // The lattice edge is what the payload says it is: n cells of `step`. Only
+  // a payload without a usable step falls back on the reference extent.
+  const span = terrain && terrain.step > 0 ? terrain.step * n : extent
+  if (!span) return 0
   const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
-  const fx = clamp01(x / extent + 0.5) * n
-  const fz = clamp01(z / extent + 0.5) * n
+  const fx = clamp01(origin ? (x - origin[0]) / span : x / span + 0.5) * n
+  const fz = clamp01(origin ? (z - origin[1]) / span : z / span + 0.5) * n
   const i = Math.min(Math.floor(fx), n - 1)
   const j = Math.min(Math.floor(fz), n - 1)
   const tx = fx - i

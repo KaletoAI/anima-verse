@@ -142,8 +142,14 @@ export async function renderTopDownSnapshot(opts: {
   /** The scene payload's `models` specs — the SERVER's placement truth. */
   models: SceneModelSpec[]
   /** The payload's `extent_m`: the world size the image has to cover, so it
-   *  lines up pixel-for-pixel with the editor's plan square. */
+   *  lines up pixel-for-pixel with the square the caller draws it into. */
   extentM: number
+  /** Centre of that square in LOCAL METRES (contract v6 Nr. 2). A drawn
+   *  boundary may sit anywhere around its pin, so the square is centred on the
+   *  boundary's bounding box, not on the pin — the caller passes the same
+   *  centre it lays the image at. Default (0, 0) = the pin, which is what a
+   *  pin-centred plot gives anyway. */
+  centerM?: [number, number]
   level: number
   width?: number
   /** Render the room models (the "Models behind the plan" layer). */
@@ -163,7 +169,7 @@ export async function renderTopDownSnapshot(opts: {
   solidBuilding?: boolean
 }): Promise<string | null> {
   const { models, extentM, level, width = 840, includeRooms = true,
-    buildingId, solidBuilding = false } = opts
+    buildingId, solidBuilding = false, centerM = [0, 0] } = opts
   const roomSpecs = includeRooms
     ? models.filter((m) => m.role === 'room' && m.level === level)
     : []
@@ -219,9 +225,9 @@ export async function renderTopDownSnapshot(opts: {
   // pixel-aligned with the editor rectangles (both cover the same square).
   const half = (extentM > 0 ? extentM : 10) / 2
   const camera = new THREE.OrthographicCamera(-half, half, half, -half, 0.01, 200)
-  camera.position.set(0, 60, 0)
+  camera.position.set(centerM[0], 60, centerM[1])
   camera.up.set(0, 0, -1)
-  camera.lookAt(0, 0, 0)
+  camera.lookAt(centerM[0], 0, centerM[1])
 
   const renderer = new THREE.WebGLRenderer({
     antialias: true, alpha: true, preserveDrawingBuffer: true,
