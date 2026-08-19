@@ -557,7 +557,10 @@ def set_offset_y(location_id: str, offset_y: Any = None,
                  offset_x: Any = None, offset_z: Any = None,
                  walk_y: Any = None) -> Dict[str, Any]:
     """Persist a BUILDING model's placement offsets (metres, ±, clamped to
-    ±25) on ONE model's sidecar (default: the active model). A MODEL property
+    ±500 — these are REAL metres of the location: an area model is scaled
+    to its footprint edge, so a generated socle of 15 % on a 200 m location
+    is a 30 m walk height, which the old ±25 could not express) on ONE
+    model's sidecar (default: the active model). A MODEL property
     like the orientation fix — generated reliefs come with different socket
     thicknesses, and a negative value sinks e.g. a park into the terrain —
     and ``offset_x``/``offset_z`` shift the model on the TILE PLANE (world
@@ -586,7 +589,7 @@ def set_offset_y(location_id: str, offset_y: Any = None,
             v = float(raw)
         except (TypeError, ValueError):
             v = float(meta.get(key) or 0.0)
-        v = round(max(-25.0, min(25.0, v)), 3)
+        v = round(max(-500.0, min(500.0, v)), 3)
         # 0 is a VALUE for walk_y, not "unset": it says the walkable surface
         # is the model's lower edge. The old rule dropped it because 0 used
         # to mean "measure it yourself" — with the measurement gone that made
