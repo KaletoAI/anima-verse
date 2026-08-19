@@ -13,7 +13,8 @@ import { DetailToolbar } from '../../components/DetailToolbar'
  *   via the world_setup variable
  *
  * Temperature and weather used to live here as world-wide values; they are a
- * property of the SEASON now and are edited in Admin settings.
+ * property of the SEASON now (Admin settings → Game calendar — seasons) and
+ * this tab says nothing about them (user decision 2026-08-19).
  */
 export function SetupTab() {
   const { t } = useI18n()
@@ -91,17 +92,6 @@ export function SetupTab() {
         </Field>
         <div className="ga-form-hint">
           {t('Length: characters')} {description.length.toLocaleString()}
-        </div>
-      </div>
-
-      <div className="ga-form" style={{ maxWidth: 1100, marginTop: 32 }}>
-        <h3>{t('World atmosphere')}</h3>
-        <div className="ga-form-hint">
-          {t('Temperature and weather are configured per season in ')}
-          <a href="/admin/settings" target="_blank" rel="noreferrer">
-            /admin/settings → Game calendar — seasons
-          </a>
-          .
         </div>
       </div>
     </div>
