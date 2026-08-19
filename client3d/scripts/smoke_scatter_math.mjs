@@ -340,6 +340,94 @@
  * footprint's own subtraction: the same property from the other side.
  *
  * ============================================================================
+ * (K) THE CELL RASTER — the authored scatter is a WINDOW, not a shape
+ * ============================================================================
+ * The second defect of the 2026-08-19 report: "the SMALLER Deep-Forest area is
+ * far denser than the larger one, at the same settings". It was not a sampling
+ * bias — it was the ceiling. `scatterInstances` spends at most
+ * `SCATTER_MAX_PER_ENTRY` instances over a painted shape of ANY size, so a
+ * capped area is drawn at 2000/(A/100) props per 100 m2, i.e. proportional to
+ * 1/A. Two woods of one authoring, 16.3 times apart in size, came out 14 times
+ * apart in density.
+ *
+ * Since 2026-08-19 the authored scatter is sampled the way the automatic
+ * undergrowth has been since 2026-08-16: per 64 m CELL
+ * (`scatterCellInstances`), at the authored density, with the painted ring as
+ * the FILTER and not as the sampled box. The count of one cell is
+ *
+ *     round(4096 / 100 * density),  capped at SCATTER_MAX_PER_CELL = 4000
+ *
+ * (K1) THE PER-CELL COUNTS, by hand — 4096/100 = 40.96:
+ *        d = 3    -> round(122.88)  = 123
+ *        d = 20   -> round(819.2)   = 819
+ *        d = 10   -> round(409.6)   = 410
+ *        d = 1    -> round(40.96)   =  41
+ *        d = 0.1  -> round(4.096)   =   4
+ *        d = 200  -> round(8192)    = 8192 -> CAPPED to 4000
+ *      The cap is therefore reached at 4000/40.96 = 97.66 props per 100 m2 —
+ *      about one prop per square metre, and it bites at that SAME density in
+ *      every cell of every area. A ceiling can no longer make two woods differ.
+ *
+ * (K2) THE TWO FORESTS, the fixture of the report. Both cell-aligned squares
+ *      of one kind at d = 3:
+ *        BIG   (0,0)..(1280,1280)  = 1 638 400 m2 = 20 x 20 = 400 cells
+ *        SMALL (2048,0)..(2176,128)=    16 384 m2 =  2 x  2 =   4 cells
+ *      Every cell of both lies wholly inside its own area, so the ring filter
+ *      drops nothing and each cell carries its 123 props:
+ *        BIG   400 * 123 = 49 200 over 16 384 hundred-m2 -> 3.00293 per 100 m2
+ *        SMALL   4 * 123 =    492 over    163.84         -> 3.00293 per 100 m2
+ *      IDENTICAL to five decimals, from areas 100 times apart. (3.00293 and
+ *      not 3.0 because a cell rounds 122.88 up to 123 — the rounding of the
+ *      count rule, unchanged.)
+ *
+ * (K3) THE RED COUNTER-PROBE — the behaviour this replaces, on the same two
+ *      areas through the WHOLE-AREA sampler:
+ *        BIG   min(round(16384 * 3), 2000) = 2000 -> 2000/16384   = 0.12207
+ *        SMALL     round(163.84 * 3)       =  492 ->  492/163.84  = 3.00293
+ *      A factor of 24.6 between two areas nobody authored differently. The
+ *      cell rule must NOT reproduce those two numbers.
+ *
+ * (K4) THE SEED IS PER CELL. `scatterCellSeed('ta_1', 0, -2, 3)` is
+ *      `terrain:scatter:ta_1:0:-2,3`. Two cells of one entry draw different
+ *      streams (without that, every cell would map the same numbers onto its
+ *      own box and the wood would be one pattern stamped out every 64 m), and
+ *      the same cell always draws the same one — walking out of a wood and
+ *      back into it finds the identical trees.
+ *
+ * (K5) THE RING IS A FILTER, NOT A BOX. Cell (0,0) is 0..64 in both axes; the
+ *      area is its LEFT HALF, (0,0)..(32,64). At d = 0.1 the cell wants 4
+ *      candidates, and with the stream
+ *        0.10, 0.50, 0.00 -> (6.4, 32) yaw 0      inside  ->  kept
+ *        0.90, 0.50, 0.25 -> (57.6, 32)           x > 32  ->  dropped
+ *        0.25, 0.25, 0.50 -> (16, 16) yaw pi      inside  ->  kept
+ *        0.75, 0.75, 0.75 -> (48, 48)             x > 32  ->  dropped
+ *      exactly two props stand. The candidates are the CELL's either way: what
+ *      an area reaches into must not change the stream of the cell, or two
+ *      areas meeting in one cell would move each other's props.
+ *
+ * (K6) THE WINDOW. `scatterCellSpan(cullM) = ceil(cullM / 64)`, and the window
+ *      is the (2k+1)^2 square of cells around the anchor's OWN cell:
+ *        cull 120 -> k = 2 -> 25 cells; at (0,0) the first is (-2,-2)
+ *        cull  60 -> k = 1 ->  9 cells
+ *        cull 300 -> k = 5 -> 121 cells
+ *      COVERAGE, the property the square is for: from anywhere inside its own
+ *      cell the anchor is at least k*64 m from the far edge of the window, and
+ *      k*64 >= cullM by construction (128 >= 120, 64 >= 60, 320 >= 300). So
+ *      nothing within the cull distance is ever missing, and the set changes
+ *      only when the anchor crosses a cell border — never with every metre.
+ *      At (100, 30) the anchor cell is (1, 0), so the window runs (-1,-2) to
+ *      (3, 2).
+ *
+ * (K7) WHAT THE REPORTING WORLD COSTS, in instances. Its big wood carries
+ *      seven rows summing to 43.1 per 100 m2, i.e. per cell
+ *        41 + 4 + 410 + 410 + 41 + 41 + 819 = 1766
+ *      -> 1766/40.96 = 43.115 per 100 m2, the authored density, and
+ *      25 * 1766 = 44 150 instances held for the whole window (102 400 m2).
+ *      The small wood's six rows sum to 43.0 -> 1762 per cell -> 43.018.
+ *      Inside the player's own 120 m cull circle (45 238.9 m2) that is
+ *      19 505 against 19 461 props — the same wood twice. BEFORE: 46 and 645.
+ *
+ * ============================================================================
  * (E) THE CLIENT'S SCATTER CONSTANTS
  * ============================================================================
  * `client3d/src/scene/ground.ts` imports three.js and cannot be loaded here,
@@ -760,7 +848,9 @@ function stream(values) {
 async function main() {
   const {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
-    scatterWantedCount,
+    scatterWantedCount, scatterCellAt, scatterCellInstances, scatterCellRing,
+    scatterCellSeed, scatterCellSpan, scatterCellsInBox, wantedScatterCells,
+    SCATTER_CELL_M, SCATTER_MAX_PER_CELL,
   } = await loadTs(SRC);
 
   const TAU = Math.PI * 2;
@@ -1019,6 +1109,137 @@ async function main() {
   });
   check('C14 maxPoints 25 gives the first 25 of the very same 300',
     thinned, big.slice(0, 25));
+
+  console.log('\n(K) the CELL raster — the density of the GROUND, not of the shape');
+  // (K1) the per-cell counts, straight off 4096/100 = 40.96
+  const CELL_M2 = SCATTER_CELL_M * SCATTER_CELL_M;
+  check('K0 a cell is 64 m, i.e. 4 096 m2', [SCATTER_CELL_M, CELL_M2], [64, 4096]);
+  check('K1 d = 3 / 20 / 10 / 1 / 0.1 per cell -> 123 / 819 / 410 / 41 / 4',
+    [3, 20, 10, 1, 0.1].map((d) =>
+      scatterWantedCount(CELL_M2, d, SCATTER_MAX_PER_CELL)),
+    [123, 819, 410, 41, 4]);
+  check('K1 the guard is 4 000 per cell, i.e. 97.66 props per 100 m2',
+    [scatterWantedCount(CELL_M2, 200, SCATTER_MAX_PER_CELL),
+      Math.round((SCATTER_MAX_PER_CELL / (CELL_M2 / 100)) * 100) / 100],
+    [4000, 97.66]);
+  // (K2) the two forests — cell-aligned squares, 100 times apart in size
+  const F_BIG = [[0, 0], [1280, 0], [1280, 1280], [0, 1280]];
+  const F_SMALL = [[2048, 0], [2176, 0], [2176, 128], [2048, 128]];
+  const cellCount = (ring, id, cells) => cells.reduce((sum, [cx, cz]) => sum
+    + scatterCellInstances({
+      ring, cx, cz, densityPer100m2: 3, seed: scatterCellSeed(id, 0, cx, cz),
+    }).length, 0);
+  const bigCells = [];
+  for (let cz = 0; cz < 20; cz += 1) for (let cx = 0; cx < 20; cx += 1) bigCells.push([cx, cz]);
+  const smallCells = [[32, 0], [33, 0], [32, 1], [33, 1]];
+  const bigN = cellCount(F_BIG, 'ta_big', bigCells);
+  const smallN = cellCount(F_SMALL, 'ta_small', smallCells);
+  check('K2 one cell wholly inside either wood carries its 123 props',
+    [scatterCellInstances({
+      ring: F_BIG, cx: 5, cz: 7, densityPer100m2: 3,
+      seed: scatterCellSeed('ta_big', 0, 5, 7),
+    }).length,
+    scatterCellInstances({
+      ring: F_SMALL, cx: 32, cz: 1, densityPer100m2: 3,
+      seed: scatterCellSeed('ta_small', 0, 32, 1),
+    }).length],
+    [123, 123]);
+  check('K2 400 cells of the big wood and 4 of the small: 49 200 and 492 props',
+    [bigN, smallN], [49200, 492]);
+  const density = (n, m2) => Math.round((n / (m2 / 100)) * 100000) / 100000;
+  check('K2 …which is the SAME density per 100 m2 on both — 3.00293',
+    [density(bigN, 1638400), density(smallN, 16384)], [3.00293, 3.00293]);
+  // (K3) the red counter-probe: the whole-area sampler on the same two woods
+  const oldBig = scatterInstances({
+    ring: F_BIG, areaM2: 1638400, densityPer100m2: 3, seed: scatterSeed('ta_big', 0),
+  }).length;
+  const oldSmall = scatterInstances({
+    ring: F_SMALL, areaM2: 16384, densityPer100m2: 3, seed: scatterSeed('ta_small', 0),
+  }).length;
+  check('K3 the OLD whole-area path really did cap the big wood at 2 000',
+    [oldBig, oldSmall], [2000, 492]);
+  check('K3 …i.e. 0.12207 against 3.00293 per 100 m2 — a factor of 24.6',
+    [density(oldBig, 1638400), density(oldSmall, 16384),
+      Math.round((density(oldSmall, 16384) / density(oldBig, 1638400)) * 10) / 10],
+    [0.12207, 3.00293, 24.6]);
+  checkNot('K3 …and the cell rule does NOT reproduce that pair',
+    [density(bigN, 1638400), density(smallN, 16384)],
+    [density(oldBig, 1638400), density(oldSmall, 16384)]);
+  check('K3 …because the cell rule puts the two woods at ONE density, ratio 1',
+    density(bigN, 1638400) / density(smallN, 16384), 1);
+  // (K4) the seed
+  check('K4 the seed carries area, row AND cell',
+    scatterCellSeed('ta_1', 0, -2, 3), 'terrain:scatter:ta_1:0:-2,3');
+  const cellA = scatterCellInstances({
+    ring: F_BIG, cx: 3, cz: 4, densityPer100m2: 3,
+    seed: scatterCellSeed('ta_big', 0, 3, 4),
+  });
+  const cellB = scatterCellInstances({
+    ring: F_BIG, cx: 4, cz: 4, densityPer100m2: 3,
+    seed: scatterCellSeed('ta_big', 0, 4, 4),
+  });
+  check('K4 the same cell asked twice gives the identical props', cellA,
+    scatterCellInstances({
+      ring: F_BIG, cx: 3, cz: 4, densityPer100m2: 3,
+      seed: scatterCellSeed('ta_big', 0, 3, 4),
+    }));
+  check('K4 …and the neighbour cell is not that pattern shifted by 64 m',
+    cellA.map((p) => [p.x + SCATTER_CELL_M, p.z, p.yaw]).slice(0, 3)
+      .some((p, i) => Math.abs(p[0] - cellB[i].x) < 1e-9
+        && Math.abs(p[1] - cellB[i].z) < 1e-9), false);
+  // (K5) the ring filters, it does not shrink the box
+  check('K5 a cell half covered by the area keeps exactly its two inside props',
+    scatterCellInstances({
+      ring: [[0, 0], [32, 0], [32, 64], [0, 64]], cx: 0, cz: 0,
+      densityPer100m2: 0.1, seed: 'k5',
+      rng: stream([0.10, 0.50, 0.00, 0.90, 0.50, 0.25,
+        0.25, 0.25, 0.50, 0.75, 0.75, 0.75]),
+    }),
+    [{ x: 6.4, z: 32, yaw: 0 }, { x: 16, z: 16, yaw: Math.PI }]);
+  // (K6) the window
+  check('K6 cull 120 / 60 / 300 -> a span of 2 / 1 / 5 cells',
+    [scatterCellSpan(120), scatterCellSpan(60), scatterCellSpan(300)], [2, 1, 5]);
+  check('K6 …i.e. 25 / 9 / 121 cells in the window',
+    [wantedScatterCells(0, 0, 120).length, wantedScatterCells(0, 0, 60).length,
+      wantedScatterCells(0, 0, 300).length], [25, 9, 121]);
+  check('K6 …and every span reaches at least as far as its cull distance',
+    [120, 60, 300].map((c) => scatterCellSpan(c) * SCATTER_CELL_M >= c),
+    [true, true, true]);
+  check('K6 at the origin the window runs from (-2,-2)',
+    wantedScatterCells(0, 0, 120)[0], [-2, -2]);
+  check('K6 at (100, 30) the anchor cell is (1, 0), so it runs from (-1,-2)',
+    [scatterCellAt(100), scatterCellAt(30), wantedScatterCells(100, 30, 120)[0]],
+    [1, 0, [-1, -2]]);
+  check('K6 a step inside the same cell does not move the window',
+    wantedScatterCells(100, 30, 120), wantedScatterCells(120, 60, 120));
+  check('K6 …crossing the border does', wantedScatterCells(130, 30, 120)[0],
+    [0, -2]);
+  check('K6 a cell owns its lower edge',
+    [scatterCellAt(0), scatterCellAt(63.99), scatterCellAt(64),
+      scatterCellAt(-1)], [0, 0, 1, -1]);
+  check('K6 the cell ring is its own box',
+    scatterCellRing(0, 0), [[0, 0], [64, 0], [64, 64], [0, 64]]);
+  check('K6 a world box asks for every cell it meets, row-major',
+    scatterCellsInBox(0, 0, 70, 10), [[0, 0], [1, 0]]);
+  check('K6 …and a box bigger than the guard asks for none',
+    scatterCellsInBox(0, 0, 1e6, 1e6).length, 0);
+  // (K7) what the reporting world costs
+  const BIG_ROWS = [1, 0.1, 10, 10, 1, 1, 20];
+  const SMALL_ROWS = [1, 10, 1, 10, 20, 1];
+  const perCell = (rows) => rows.reduce((sum, d) =>
+    sum + scatterWantedCount(CELL_M2, d, SCATTER_MAX_PER_CELL), 0);
+  check('K7 the reporting world\'s two woods want 1 766 and 1 762 props per cell',
+    [perCell(BIG_ROWS), perCell(SMALL_ROWS)], [1766, 1762]);
+  check('K7 …i.e. 43.115 and 43.018 per 100 m2 — the authored 43.1 and 43.0',
+    [Math.round((perCell(BIG_ROWS) / 40.96) * 1000) / 1000,
+      Math.round((perCell(SMALL_ROWS) / 40.96) * 1000) / 1000],
+    [43.115, 43.018]);
+  check('K7 …44 150 and 44 050 instances held over a 25-cell window',
+    [25 * perCell(BIG_ROWS), 25 * perCell(SMALL_ROWS)], [44150, 44050]);
+  check('K7 …19 505 and 19 461 inside the 120 m cull circle (was 46 and 645)',
+    [Math.round(((Math.PI * 120 * 120) / 100) * (perCell(BIG_ROWS) / 40.96)),
+      Math.round(((Math.PI * 120 * 120) / 100) * (perCell(SMALL_ROWS) / 40.96))],
+    [19505, 19461]);
 
   console.log('\n(D) the RED counter-check — a mutant that fails these cases');
   const RED = {

@@ -246,12 +246,22 @@ export function TerrainLayer({
    * The scatter of every area, sampled ONCE per data change — in WORLD
    * metres, so panning and zooming only re-project it.
    *
-   * The points come from `scatterInstances` (@anima/scene-render), the very
-   * call `client3d/src/scene/ground.ts` makes with the very same seed
-   * (`scatterSeed(area.id, index)`), the same cleaned ring and the same
-   * footprints. Preview and world are therefore identical by construction and
-   * not by two files being kept in step — that is why the sampler is shared at
-   * all.
+   * WHAT THIS SHOWS, EXACTLY (and what it deliberately does not). The points
+   * come from `scatterInstances` (@anima/scene-render), the shared sampler,
+   * with the area's own seed, its cleaned ring and the same footprints. What
+   * it is NOT, since the world's scatter became a camera window of 64 m cells
+   * (2026-08-19, `client3d/src/scene/ground.ts → buildScatter`): the very
+   * points the 3D client plants. Those exist only around a camera, and a map
+   * of a whole world has no camera — sampling the client's cells over a
+   * viewport would be hundreds of thousands of candidates on every pan.
+   *
+   * So this draws the same sampler at a THINNED density over the whole shape,
+   * and the property that matters is preserved exactly: `wanted` is the area's
+   * TRUE prop count (A · d / 100, with no ceiling — the ceiling that made two
+   * equally authored woods differ is what this round removed), and the budget
+   * is split proportionally, so the DOT DENSITY of two areas is in the same
+   * ratio as the prop density the client plants. Two woods authored alike show
+   * alike; a meadow at twice the density shows twice the dots per hectare.
    *
    * The rings are cleaned ONCE up front, because an area also has to know the
    * rings of the areas ABOVE it: only the topmost area of a spot scatters
@@ -287,7 +297,12 @@ export function TerrainLayer({
         // Arithmetic, not a sample: what this entry PLANTS is known from the
         // area and the density alone, and the budget has to know it for every
         // entry before the first point is drawn.
-        const wanted = scatterWantedCount(areaM2, e.density_per_100m2)
+        //
+        // NO CEILING (`Infinity`): this is the count that says how thick the
+        // ground really is, and `SCATTER_MAX_PER_ENTRY` would flatten every
+        // large area to the same 2 000 — which is the very defect that made a
+        // 13.7 km2 wood and a 0.84 km2 wood look 14 times apart.
+        const wanted = scatterWantedCount(areaM2, e.density_per_100m2, Infinity)
         if (wanted < 1) return
         jobs.push({
           ring, areaM2, occluders, seed: scatterSeed(a.id, i),

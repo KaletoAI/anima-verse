@@ -1515,9 +1515,15 @@ async function main() {
   const fadeCalls = groundSrc.match(/applyOcclusionFade\(mat\);/g);
   check('H the authored tuft keeps its own patched material, and only it',
     fadeCalls ? fadeCalls.length : 0, 1);
-  const seedCalls = groundSrc.match(/scatterSeed\(/g);
-  check('H …and scatterSeed is still used exactly once, for the authored rows',
+  // The authored rows keep a seed namespace of their own — since 2026-08-19
+  // that is `scatterCellSeed` (they are sampled per 64 m cell too now, see
+  // `smoke_scatter_math.mjs` section K), and it is still ONE call: two seed
+  // families in one builder would be two answers to "what grows here".
+  const seedCalls = groundSrc.match(/scatterCellSeed\(/g);
+  check('H …and one cell-seed call, for the authored rows',
     seedCalls ? seedCalls.length : 0, 1);
+  check('H …which is NOT the undergrowth\'s namespace',
+    groundSrc.includes('undergrowthCellSeed('), false);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

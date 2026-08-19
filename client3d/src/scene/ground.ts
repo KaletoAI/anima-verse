@@ -55,8 +55,9 @@ import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry,
   gridPlate, gridStepFor, pickVariant, pointInRing,
   propGroundFit, sampleCompositeGroundHeight, sampleCompositeHeight,
-  scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
-  surfaceTimeUniform, tileKeyAt, worldHeightRange } from '@anima/scene-render';
+  scatterCellInstances, scatterCellSeed, SCATTER_CELL_M, subdivideOnGrid,
+  surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
+  worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
   WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
@@ -419,10 +420,23 @@ interface AreaMesh {
   /** one scatter entry per authored row — empty when nothing grows here
    *  (finding B17: the list hangs on the AREA, not on the terrain type) */
   scatter: ScatterProp[];
-  /** centre of the area's bounding box. NOT a LOD distance any more (that is
-   *  per instance since 2026-08-15) — it is what the download queue sorts by,
-   *  handed to `loadGlb` as the place the props of this area stand. */
-  centre: THREE.Vector3;
+  /**
+   * WHAT THE SCATTER IS SAMPLED FROM, kept so it can be sampled AGAIN without
+   * rebuilding the ground under it.
+   *
+   * Since the scatter became a camera WINDOW (2026-08-19, `buildScatter`) it
+   * has a second occasion the drapes do not have: the anchor crossing a cell
+   * border. Re-cutting the area geometry for that would be earcut plus a grid
+   * subdivision of the whole painted shape every 64 m walked — so `rebuildScatter`
+   * re-samples out of these three and touches nothing else.
+   */
+  area: TerrainArea;
+  ring: Point2[];
+  occluders: Point2[][];
+  /** the disposables of THIS area's scatter — its own bag, because the props
+   *  are thrown away and rebuilt on their own beat while the drape material in
+   *  `areaOwned` stands. */
+  scatterOwned: { dispose(): void }[];
 }
 
 /**
@@ -1013,6 +1027,19 @@ export function createGround(): Ground {
    *  ground before anything has read `localStorage`, and 35/45/120 is what a
    *  player who never opens the menu plays with anyway. */
   let lodCfg: ScatterLodCfg = SCATTER_LOD_DEFAULTS;
+  /**
+   * The cells the authored scatter is sampled in — the camera's window
+   * (`wantedScatterCells`), recomputed from the anchor and the cull distance.
+   *
+   * It is STATE and not an argument because two very different occasions read
+   * it: the full rebuild (a terrain refetch) and the anchor crossing a cell
+   * border, which is the one that happens while the player walks. `scatterSig`
+   * is the same set as a string — the anchor moves every tick and the set only
+   * every 64 m, and re-sampling a wood on a metre of walking is the cost this
+   * comparison exists to avoid.
+   */
+  let scatterCells: [number, number][] = [];
+  let scatterSig = '';
   /** Disposables this module created, split by LIFETIME: the base plane's go
    *  when the frame moves, the areas' when the terrain is refetched. One
    *  shared bag would keep every material of every edit alive until teardown —
@@ -1244,7 +1271,7 @@ export function createGround(): Ground {
    * any is one painted shape each, so the list moved to `meta.scatter` of the
    * area. No list, or an empty one, means nothing grows — there is no default.
    *
-   * WHERE the instances stand is not decided here: `scatterInstances`
+   * WHERE the instances stand is not decided here: `scatterCellInstances`
    * (@anima/scene-render) is the ONE sampler, and the map editor draws its
    * preview from the very same call. That is the whole point of the shared
    * module — preview and world agree by construction, not by two files being
@@ -1252,17 +1279,38 @@ export function createGround(): Ground {
    * grows inside a building (finding B18), and the rings of the areas stacked
    * ABOVE this one, so only the topmost area of a spot scatters there.
    *
+   * A CAMERA WINDOW OF 64 m CELLS, NOT THE WHOLE PAINTED SHAPE (2026-08-19).
+   * Sampling a shape meant spending a fixed ceiling of instances over ground of
+   * any size, i.e. an effective density proportional to 1/A: the reporting
+   * world's 13.71 km2 wood came out at 0.1021 props per 100 m2 and the 0.84 km2
+   * wood beside it, authored identically, at 1.4261 — 46 against 645 trees
+   * inside the player's own cull radius. Now every cell of the window is filled
+   * at the AUTHORED density from its own seed (`scatterCellSeed`) and the
+   * area's ring only decides which of those points are this area's, so:
+   *
+   *   · the density is the density of the GROUND, whatever shape it was
+   *     painted in — the two woods above are the same wood to look at;
+   *   · what it costs hangs on the WINDOW, not on the world: `(2k+1)^2` cells
+   *     of 4096 m2 with k = ceil(cullM / 64), i.e. 25 cells = 102 400 m2 at
+   *     the standing 120 m cull distance;
+   *   · the same cell always grows the same props, so walking out of a wood
+   *     and back into it finds it unchanged.
+   *
+   * `SCATTER_MAX_PER_CELL` is what a hand-edited density runs into now, and it
+   * bites at the same 97.66 props per 100 m2 in every cell of every area —
+   * a ceiling can no longer make two woods differ.
+   *
    * WHAT IS DRAWN OF IT is not decided here either: the finished entry is
    * handed straight to `binProp` with the camera of the last tick, so a
-   * rebuild (a terrain refetch, a new relief) comes into the world with the
-   * instances the camera deserves RIGHT NOW — and asks for the full-detail
-   * mesh of a far-away wood exactly as little as the tick would. Without a
-   * camera yet (the very first build) everything is drawn on the cheap mesh
-   * until the first tick, which is a second at most and never a bare ground.
+   * rebuild (a terrain refetch, a new relief, a crossed cell border) comes into
+   * the world with the instances the camera deserves RIGHT NOW — and asks for
+   * the full-detail mesh of a far-away wood exactly as little as the tick
+   * would. Without a camera yet (the very first build) everything is drawn on
+   * the cheap mesh until the first tick, which is a second at most and never a
+   * bare ground.
    */
-  function buildScatter(area: TerrainArea, ring: Point2[], areaM2: number,
-                        occluders: Point2[][], sink: { dispose(): void }[],
-                        centre: THREE.Vector3
+  function buildScatter(area: TerrainArea, ring: Point2[],
+                        occluders: Point2[][], sink: { dispose(): void }[]
   ): ScatterProp[] {
     const out: ScatterProp[] = [];
     // ONE wind question per area, not per entry: how hard it BLOWS hangs on
@@ -1270,15 +1318,31 @@ export function createGround(): Ground {
     // can never disagree about the weather. How much each of them takes part
     // in it is the entry's own `sway_factor` below.
     const sway = swayFor(area.kind);
+    // The window's cells, and the box of the ring — the cheap rejection that
+    // keeps an area from being asked about the 24 cells it does not reach
+    // into. `ringBounds` is the same box the drape was built from.
+    const [rMinX, rMinZ, rMaxX, rMaxZ] = ringBounds(ring);
+    const cells = scatterCells.filter(([cx, cz]) => {
+      const x0 = cx * SCATTER_CELL_M;
+      const z0 = cz * SCATTER_CELL_M;
+      return rMaxX >= x0 && rMinX <= x0 + SCATTER_CELL_M
+        && rMaxZ >= z0 && rMinZ <= z0 + SCATTER_CELL_M;
+    });
+    if (!cells.length) return out;
     readScatterList(area).forEach((entry, index) => {
-      const points = scatterInstances({
-        ring,
-        areaM2,
-        densityPer100m2: Number(entry.density_per_100m2 ?? 0),
-        seed: scatterSeed(area.id, index),
-        footprints,
-        occluders,
-      });
+      const density = Number(entry.density_per_100m2 ?? 0);
+      const points: { x: number; z: number; yaw: number }[] = [];
+      for (const [cx, cz] of cells) {
+        for (const p of scatterCellInstances({
+          ring,
+          cx,
+          cz,
+          densityPer100m2: density,
+          seed: scatterCellSeed(area.id, index, cx, cz),
+          footprints,
+          occluders,
+        })) points.push(p);
+      }
       if (!points.length) return;
 
       // An entry WITH a model gets its cone at the height the mesh will have —
@@ -1356,6 +1420,14 @@ export function createGround(): Ground {
       const model = typeof entry.model === 'string' ? entry.model : '';
       const loUrl = pickVariant(variants, 'low') || model;
       const hiUrl = pickVariant(variants, 'full') || model;
+      // The sphere over the instances themselves, padded by how tall the prop
+      // stands and how far the wind takes it — see `ScatterProp.sphere` for
+      // the two jobs it does. Its CENTRE is also what the download queue sorts
+      // by (`near`): since the scatter is a camera window, that centre is a
+      // stone's throw from the camera, while the painted shape's own centre
+      // can be kilometres away in a wood this big — and a queue sorted by
+      // that would fetch the far wood's mesh before the one underfoot.
+      const sphere = instanceSphere(pos, h + SWAY_MAX_M);
       const prop: ScatterProp = {
         low,
         high: null,
@@ -1374,11 +1446,9 @@ export function createGround(): Ground {
         // …and in NO buffer yet, so the first binning finds every instance
         // changed and uploads both buffers once.
         slots: new Uint8Array(points.length).fill(2),
-        // The sphere over the instances themselves, padded by how tall the
-        // prop stands and how far the wind takes it — see `ScatterProp.sphere`
-        // for the two jobs it does. Both meshes share it: they hold subsets of
-        // these very positions, and nothing writes into it after this line.
-        sphere: instanceSphere(pos, h + SWAY_MAX_M),
+        // Both meshes share it: they hold subsets of these very positions,
+        // and nothing writes into it after this line.
+        sphere,
         hidden: false,
         disposed: false,
         variants,
@@ -1392,7 +1462,7 @@ export function createGround(): Ground {
         // authored, the flat fallback is the last resort (§ A9).
         targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
         sway: entrySway,
-        near: centre,
+        near: sphere.center,
         wantLow: '',
         wantHigh: '',
         shownLow: '',
@@ -1843,48 +1913,108 @@ export function createGround(): Ground {
     if (prop.hasHigh && minD <= cfg.farM) mountUrl(prop, prop.hiUrl, true);
   }
 
+  /**
+   * Take the props of one area out of the scene and free everything they own.
+   *
+   * Split out of `clearAreas` (2026-08-19) because the scatter has a lifetime
+   * of its own now: it is re-sampled whenever the camera's cell window moves,
+   * while the drape it grows on stands. Everything below was `clearAreas`'
+   * inner loop, verbatim.
+   */
+  function disposeProps(props: ScatterProp[]): void {
+    for (const prop of props) {
+      // BOTH meshes, and the full one only exists where it was deserved.
+      group.remove(prop.low);
+      if (prop.high) group.remove(prop.high);
+      // The mark a pending `loadGlb` reads — see `mountUrl`.
+      prop.disposed = true;
+      // The grounded CLONES of the loaded tiers, however many arrived (see
+      // there). `InstancedMesh.dispose` frees the instance buffers, never
+      // the geometry, and these belong to nobody else — the MATERIALS do
+      // (they came with the shared GLB) and are left alone.
+      for (const geo of prop.owned.values()) geo.dispose();
+      prop.owned.clear();
+      // The tier MATERIALS are ALL ours (see `ScatterProp.mats`): every
+      // scattered prop draws through a clone of the cached one since the
+      // corridor fade, and a clone nobody frees is a leak per rebuild — an
+      // admin painting terrain rebuilds this every few seconds.
+      for (const m of prop.mats.values()) m.dispose();
+      prop.mats.clear();
+      prop.low.dispose();
+      prop.high?.dispose();
+      // …and the far half, where one was ever grown. Its MATERIAL is the
+      // entry's own and goes; the baked TEXTURE does not — it belongs to the
+      // bake cache of `scene/impostors.ts`, is shared by every entry
+      // scattering that prop and outlives this ground on purpose (an admin
+      // painting terrain rebuilds the areas every few seconds, and re-baking
+      // the same tree each time would be a GPU pass per edit).
+      if (prop.impostor) {
+        group.remove(prop.impostor.mesh);
+        disposeImpostorMesh(prop.impostor.mesh);
+        prop.impostor = null;
+        // …and the claim on the shared texture goes with the mesh that held
+        // it — one release per `acquireImpostor` in `binImpostors`.
+        releaseImpostor(prop.loUrl);
+      }
+    }
+    props.length = 0;
+  }
+
   function clearAreas(): void {
     for (const a of areaMeshes) {
       group.remove(a.mesh);
       a.mesh.geometry.dispose();
-      for (const prop of a.scatter) {
-        // BOTH meshes, and the full one only exists where it was deserved.
-        group.remove(prop.low);
-        if (prop.high) group.remove(prop.high);
-        // The mark a pending `loadGlb` reads — see `mountUrl`.
-        prop.disposed = true;
-        // The grounded CLONES of the loaded tiers, however many arrived (see
-        // there). `InstancedMesh.dispose` frees the instance buffers, never
-        // the geometry, and these belong to nobody else — the MATERIALS do
-        // (they came with the shared GLB) and are left alone.
-        for (const geo of prop.owned.values()) geo.dispose();
-        prop.owned.clear();
-        // The tier MATERIALS are ALL ours (see `ScatterProp.mats`): every
-        // scattered prop draws through a clone of the cached one since the
-        // corridor fade, and a clone nobody frees is a leak per rebuild — an
-        // admin painting terrain rebuilds this every few seconds.
-        for (const m of prop.mats.values()) m.dispose();
-        prop.mats.clear();
-        prop.low.dispose();
-        prop.high?.dispose();
-        // …and the far half, where one was ever grown. Its MATERIAL is the
-        // entry's own and goes; the baked TEXTURE does not — it belongs to the
-        // bake cache of `scene/impostors.ts`, is shared by every entry
-        // scattering that prop and outlives this ground on purpose (an admin
-        // painting terrain rebuilds the areas every few seconds, and re-baking
-        // the same tree each time would be a GPU pass per edit).
-        if (prop.impostor) {
-          group.remove(prop.impostor.mesh);
-          disposeImpostorMesh(prop.impostor.mesh);
-          prop.impostor = null;
-          // …and the claim on the shared texture goes with the mesh that held
-          // it — one release per `acquireImpostor` in `binImpostors`.
-          releaseImpostor(prop.loUrl);
-        }
-      }
+      disposeProps(a.scatter);
+      drain(a.scatterOwned);
     }
     areaMeshes.length = 0;
     drain(areaOwned);
+  }
+
+  /**
+   * Re-sample the authored scatter of every standing area — the cell window
+   * moved, the ground under it did not.
+   *
+   * THE OCCASION IS A CROSSED CELL BORDER (`setHeightAnchor`) or a changed cull
+   * distance (`setScatterLod`), both of which move the window of
+   * `wantedScatterCells` and nothing else. Re-cutting the drapes for that would
+   * be earcut plus a grid subdivision of every painted shape in the world every
+   * 64 m walked; this touches the props alone, which is why an `AreaMesh` keeps
+   * its ring, its occluders and a scatter bag of its own.
+   *
+   * The props are thrown away and rebuilt rather than diffed per cell: an entry
+   * is ONE InstancedMesh over all its cells (that is what keeps a wood at two
+   * draw calls instead of two per cell), so a window that gained a cell has a
+   * different instance buffer either way. What survives it is the WORLD: every
+   * cell's seed is its own, so the cells that stayed grow the very same props
+   * in the very same places.
+   */
+  function rebuildScatter(): void {
+    for (const a of areaMeshes) {
+      disposeProps(a.scatter);
+      drain(a.scatterOwned);
+      a.scatter = buildScatter(a.area, a.ring, a.occluders, a.scatterOwned);
+      for (const prop of a.scatter) {
+        group.add(prop.low);
+        if (prop.high) group.add(prop.high);
+      }
+    }
+  }
+
+  /**
+   * Point the scatter window at (x, z) and re-sample if it really moved.
+   *
+   * `true` when the set of cells changed — the caller decides what to do with
+   * that (the anchor re-samples, the first build merely takes note).
+   */
+  function moveScatterWindow(x: number, z: number): boolean {
+    const cells = wantedScatterCells(x, z, lodCfg.cullM);
+    const sig = `${lodCfg.cullM}|${cells.length ? cells[0].join(',') : ''}`
+      + `|${cells.length}`;
+    if (sig === scatterSig) return false;
+    scatterSig = sig;
+    scatterCells = cells;
+    return true;
   }
 
   /**
@@ -1970,6 +2100,11 @@ export function createGround(): Ground {
 
   async function rebuildAreas(): Promise<void> {
     const areas = payload?.areas ?? [];
+    // The scatter window, before anything is sampled in it. Normally the
+    // anchor has set it long ago; on the very first ground it is set here, so
+    // a build that happens before the first `setHeightAnchor` samples the
+    // cells around the origin instead of an empty window.
+    moveScatterWindow(anchorX, anchorZ);
     // Textures first, ALL of them: `surfaceFor` only hands out fully loaded
     // images (a clone of a loading texture stays blank), so the whole ground
     // is built once the library has what it needs. What is loaded are the
@@ -2039,17 +2174,14 @@ export function createGround(): Ground {
       const occluders = builtAreas.slice(index + 1)
         .filter((b): b is NonNullable<typeof b> => !!b)
         .map((b) => b.ring);
-      // The area's centre, and it is no longer a LOD distance: every scatter
-      // entry binds its own instances against their own distances (`binProp`,
-      // called from `buildScatter`). What the centre still answers is WHERE
-      // the props of this area stand, which is how the asset queue decides
-      // which wood to fetch first.
-      const centre = new THREE.Vector3((minX + maxX) / 2,
-                                       heightAt((minX + maxX) / 2, (minZ + maxZ) / 2),
-                                       (minZ + maxZ) / 2);
-      const scatter = buildScatter(area, built.ring, built.areaM2, occluders,
-                                   nextOwned, centre);
-      next.push({ mesh, scatter, centre });
+      // The scatter gets a bag of its own: it is thrown away and rebuilt every
+      // time the camera's cell window moves, while the drape material above
+      // lives in `nextOwned` and stands until the terrain itself changes.
+      const scatterOwned: { dispose(): void }[] = [];
+      const scatter = buildScatter(area, built.ring, occluders, scatterOwned);
+      next.push({
+        mesh, scatter, area, ring: built.ring, occluders, scatterOwned,
+      });
       // …and what grows here without anybody having said so (§ A9). The FIELD
       // grows it, per 64 m cell around the anchor (`scene/undergrowth.ts`), so
       // all this shape has to do is describe itself. NO occluder list: the
@@ -2453,6 +2585,11 @@ export function createGround(): Ground {
       // The layer derives its own want set from this and does nothing when it
       // has not moved — 25 candidate cells per tick.
       undergrowth.setAnchor(x, z);
+      // …and the AUTHORED scatter rides the same anchor on its own 64 m raster
+      // (`buildScatter`). The window is the square of cells around the
+      // anchor's OWN cell, so this answers "no" on every tick but the one that
+      // crosses a border — and only then is a wood re-sampled.
+      if (moveScatterWindow(x, z) && areaMeshes.length) rebuildScatter();
       // A BORDER CROSSING IS THE IMMEDIATE OCCASION, and not the only one: the
       // idle poll asks again from wherever the anchor stands then, every three
       // seconds (`sync`). That division is deliberate. The want set does move
@@ -2505,6 +2642,14 @@ export function createGround(): Ground {
     },
     setScatterLod(cfg) {
       lodCfg = cfg;
+      // A NEW CULL DISTANCE IS A NEW WINDOW (`scatterCellSpan`): a player who
+      // raises it from 120 to 300 m asks for cells that were never sampled, and
+      // no amount of re-binning can draw props that were never placed. Lowering
+      // it gives the cells back. Everything else about the setting — which of
+      // the placed instances is drawn as what — is the binning below.
+      if (moveScatterWindow(anchorX, anchorZ) && areaMeshes.length) {
+        rebuildScatter();
+      }
       // AT ONCE, not on the next beat: the player is looking at the very
       // meadow whose numbers they just typed. The camera of the last tick is
       // the one the world is being drawn from, so re-binning against it is

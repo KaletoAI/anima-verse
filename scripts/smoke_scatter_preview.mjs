@@ -15,49 +15,63 @@
  * ============================================================================
  * "The scatter preview shows up in only ONE of my two Deep-Forest areas."
  *
- * Nothing in the path is keyed by the terrain KIND — the seed of an entry is
- * `terrain:scatter:<AREA ID>:<index>`, so two areas of one kind draw two
- * different streams (section D pins that). What went wrong is the BUDGET: the
- * preview drew area after area until it had 4 000 SVG dots and then stopped,
- * so the areas at the end of the list were drawn with no scatter at all.
+ * Nothing in the path is keyed by the terrain KIND — an entry's seed carries
+ * the AREA ID, so two areas of one kind draw two different streams
+ * (`client3d/scripts/smoke_scatter_math.mjs`, sections C13 and K4 pin that).
+ * What went wrong is the BUDGET: the preview drew area after area until it had
+ * 4 000 SVG dots and then stopped, so the areas at the end of the list were
+ * drawn with no scatter at all.
  *
  * THE REPORTING WORLD, measured off `GET /world/terrain-areas` (areas
- * bottom-to-top, `polygonArea` of the cleaned ring, `SCATTER_MAX_PER_ENTRY`
- * = 2 000 per entry):
+ * bottom-to-top, `polygonArea` of the cleaned ring). `wanted` is what the
+ * ground really carries, A · d / 100 with NO ceiling — see (D):
  *
- *   area          kind          m2            entries   plants
- *   ta_57f3df57   deep_forest   13 713 589    7         7 · 2 000 = 14 000
- *   ta_b3ef0bbd   deep_forest      841 443    6         6 · 2 000 = 12 000
- *   ta_63926f52   forest            89 126    2         2 · 2 000 =  4 000
- *   ta_2a0854a6   grass                633    1         round(6.33 · 50) = 317
+ *   area          kind          m2            rows (d per 100 m2)   wanted
+ *   ta_57f3df57   deep_forest   13 713 589    1, .1, 10, 10, 1, 1, 20  5 910 558
+ *   ta_b3ef0bbd   deep_forest      841 443    1, 10, 1, 10, 20, 1        361 819
+ *   ta_63926f52   forest            89 126    5, 6                         9 804
+ *   ta_2a0854a6   grass                633    50                             317
  *
  * (the four rock areas and the second unplanted deep forest carry no
  * `meta.scatter` at all, so they never enter the budget)
  *
- * OLD RULE, first come first served: entry 0 of ta_57f3df57 takes 2 000 dots,
- * entry 1 takes the other 2 000 — the budget is gone inside the FIRST wood,
- * and ta_b3ef0bbd, the forest and the grass get 0 dots between them. That is
- * the report, to the dot.
+ * OLD RULE, first come first served over the OLD per-entry ceiling of 2 000:
+ * entry 0 of ta_57f3df57 takes 2 000 dots, entry 1 takes the other 2 000 — the
+ * budget is gone inside the FIRST wood, and ta_b3ef0bbd, the forest and the
+ * grass get 0 dots between them. That is the report, to the dot.
  *
  * ============================================================================
  * (A) THE SHARE FORMULA
  * ============================================================================
- * Σ wanted = 14 000 + 12 000 + 4 000 + 317 = 30 317, above the 4 000 budget,
- * so every entry keeps its share:
+ * Σ wanted = 5 910 558 + 361 819 + 9 804 + 317 = 6 282 498, far above the
+ * 4 000-dot budget, so every entry keeps its share:
  *
- *     share_i = max(1, floor(wanted_i · 4 000 / 30 317))
+ *     share_i = max(1, floor(wanted_i · 4 000 / 6 282 498))
  *
- *   a 2 000-entry: floor(2 000 · 4 000 / 30 317) = floor(263.878…) = 263
- *   the 317-entry: floor(  317 · 4 000 / 30 317) = floor( 41.824…) =  41
+ *   d = 20  on the big wood: 2 742 718 · 4 000 / 6 282 498 = 1 746.27 -> 1 746
+ *   d = 10  on the big wood: 1 371 359 · … =   873.13 ->   873   (twice)
+ *   d = 1   on the big wood:   137 136 · … =    87.31 ->    87   (three times)
+ *   d = 0.1 on the big wood:    13 714 · … =     8.73 ->     8
+ *   d = 20  on the small one:  168 289 · … =   107.16 ->   107
+ *   d = 10  on the small one:   84 144 · … =    53.58 ->    53   (twice)
+ *   d = 1   on the small one:    8 414 · … =     5.36 ->     5   (three times)
+ *   d = 6   on the forest:       5 348 · … =     3.41 ->     3
+ *   d = 5   on the forest:       4 456 · … =     2.84 ->     2
+ *   d = 50  on the grass:          317 · … =     0.20 ->     0 -> raised to 1
  *
- * (A1) so the drawn total is 15 · 263 + 41 = 3 945 + 41 = 3 986 ≤ 4 000, and
- *      EVERY one of the four areas is drawn: 7·263 = 1 841 dots in the big
- *      deep forest, 6·263 = 1 578 in the small one, 2·263 = 526 in the
- *      forest, 41 in the grass.
- * (A2) the ratio the preview exists to show survives: the two deep forests
- *      plant 14 000 : 12 000 and are drawn 1 841 : 1 578, both 1.1666… — a
- *      wood with more props still gets more dots.
- * (A3) RED COUNTER-PROBE of the old rule, spelled out as a running budget:
+ * (A1) per area that is 1 746 + 2·873 + 3·87 + 8 = 3 761 dots in the big deep
+ *      forest, 107 + 2·53 + 3·5 = 228 in the small one, 5 in the forest and 1
+ *      on the grass patch: 3 995 in total, inside the 4 000-dot budget, and
+ *      EVERY one of the four areas is drawn.
+ * (A2) THE PROPERTY THE PREVIEW EXISTS FOR — equal ground looks equal. Dots
+ *      per 100 m2 of painted area:
+ *        big   3 761 / 137 135.89 = 0.027425
+ *        small   228 /   8 414.43 = 0.027096
+ *      a ratio of 1.0121, against authored densities of 43.1 and 43.0 (1.0023)
+ *      — the rest is the flooring of ten small integers. BEFORE the fix those
+ *      two numbers were 0.029 and 0.
+ * (A3) RED COUNTER-PROBE of the old rule, spelled out as a running budget over
+ *      the counts the old preview could produce (min(wanted, 2 000)):
  *      first-come-first-served gives [2000, 2000, 0, 0, …] — the second deep
  *      forest at 0. The share rule must NOT agree with it.
  *
@@ -93,23 +107,25 @@
  * ============================================================================
  * (D) THE COUNT RULE ITSELF — `scatterWantedCount`
  * ============================================================================
- * wanted = min(round(areaM2/100 · density), 2 000).
+ * wanted = min(round(areaM2/100 · density), maxPoints).
  * (D1) 10 000 m2 at 3 per 100 m2 → round(100 · 3) = 300.
  * (D2)    900 m2 at 3 per 100 m2 → round(9 · 3)   =  27.
- * (D3) The reporting world's big wood, 13 713 589 m2 at 20 per 100 m2 →
- *      round(137 135.89 · 20) = 2 742 718, CAPPED to 2 000.
- * (D4) …and its small wood, 841 443 m2 at the same 20 → round(8 414.43 · 20)
- *      = 168 289, capped to 2 000 as well. TWO EQUAL COUNTS ON AREAS THAT
- *      DIFFER BY A FACTOR OF 16.3 — this is the second defect of the report
- *      (the 3D client shows the small wood far denser), and the case is here
- *      so the number is on the record: effective density 2 000/(A/100) is
- *      0.0146 vs 0.2377 per 100 m2, a factor 16.3, from settings that are
- *      identical. The count rule is right, the CEILING is what is not
- *      scale-free; fixing that is not this file's subject.
+ * (D3) THE PREVIEW ASKS WITHOUT A CEILING (`Infinity`), because the ceiling is
+ *      what made two equally authored woods look 14 times apart:
+ *        13 713 589 m2 at 20 → round(137 135.89 · 20) = 2 742 718
+ *           841 443 m2 at 20 → round(  8 414.43 · 20) =   168 289
+ *      a ratio of 16.30, which IS the ratio of the two areas. Under the old
+ *      default ceiling both were 2 000 — two areas 16.3 times apart reported
+ *      as equally thick, which is what the preview must never say.
+ * (D4) The standing default ceiling is still 2 000 and still applies to a
+ *      caller that does not ask otherwise (the whole-area sampler's guard).
  * (D5) Below one prop is none: 10 m2 at 3 per 100 m2 → round(0.3) = 0.
  * (D6) Junk (NaN density, negative area, zero density) is 0, never NaN.
  * (D7) An explicit `maxPoints` overrides the standing ceiling: 10 000 m2 at
- *      3 with maxPoints 100 → 100.
+ *      3 with maxPoints 100 → 100. That is how the preview thins an entry to
+ *      its share, and a lower ceiling yields the PREFIX of the same stream
+ *      (pinned in `smoke_scatter_math.mjs`, C14), so a previewed dot is always
+ *      a prop the sampler really places.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -163,11 +179,12 @@ function differs(label, a, b) {
   }
 }
 
-/** The rule that WAS there: sample in list order until the budget is gone. */
+/** The rule that WAS there: sample in list order, at most 2 000 per entry,
+ *  until the budget is gone. */
 function firstComeFirstServed(wanted, budget) {
   let left = budget;
   return wanted.map((n) => {
-    const take = Math.max(0, Math.min(n, left));
+    const take = Math.max(0, Math.min(Math.min(n, 2000), left));
     left -= take;
     return take;
   });
@@ -178,26 +195,43 @@ async function main() {
   const { scatterWantedCount, SCATTER_MAX_PER_ENTRY } =
     await loadBundled(SCATTER_SRC, 'scattercount-');
 
-  console.log('(A) the reporting world — 15 entries of 2 000 plus one of 317');
-  // 7 entries on the big deep forest, 6 on the small one, 2 on the forest,
-  // 1 on the grass patch — in the server's bottom-to-top order.
-  const world = [
-    ...Array(7).fill(2000), ...Array(6).fill(2000), ...Array(2).fill(2000), 317,
+  console.log('(A) the reporting world — four areas, sixteen rows');
+  /** area m2 + the authored densities, in the server's bottom-to-top order */
+  const WORLD = [
+    [13713589, [1.0, 0.1, 10, 10, 1, 1, 20]],
+    [841443, [1, 10, 1, 10, 20, 1]],
+    [89126, [5, 6]],
+    [633, [50]],
   ];
-  const shares = scatterPreviewShares(world, 4000);
-  check('A the 2 000-entries keep 263 dots each, the 317-entry 41',
-    shares, [...Array(15).fill(263), 41]);
-  check('A1 the drawn total is 3 986, inside the 4 000-dot budget',
-    shares.reduce((s, n) => s + n, 0), 3986);
-  check('A1 the SECOND deep forest is drawn — 6 · 263 = 1 578 dots',
-    shares.slice(7, 13).reduce((s, n) => s + n, 0), 1578);
-  check('A1 …the first one 7 · 263 = 1 841, the forest 526, the grass 41',
-    [shares.slice(0, 7).reduce((s, n) => s + n, 0),
-      shares.slice(13, 15).reduce((s, n) => s + n, 0), shares[15]],
-    [1841, 526, 41]);
-  check('A2 the 14 000 : 12 000 the world plants stays 1 841 : 1 578',
-    1841 / 1578, 14000 / 12000);
-  const old = firstComeFirstServed(world, 4000);
+  const wanted = WORLD.flatMap(([m2, rows]) =>
+    rows.map((d) => scatterWantedCount(m2, d, Infinity)));
+  check('A the four areas want 5 910 558 / 361 819 / 9 804 / 317 props',
+    [wanted.slice(0, 7).reduce((s, n) => s + n, 0),
+      wanted.slice(7, 13).reduce((s, n) => s + n, 0),
+      wanted.slice(13, 15).reduce((s, n) => s + n, 0), wanted[15]],
+    [5910558, 361819, 9804, 317]);
+  check('A Σ wanted is 6 282 498', wanted.reduce((s, n) => s + n, 0), 6282498);
+  const shares = scatterPreviewShares(wanted, 4000);
+  check('A the big wood\'s rows keep 87 / 8 / 873 / 873 / 87 / 87 / 1 746 dots',
+    shares.slice(0, 7), [87, 8, 873, 873, 87, 87, 1746]);
+  check('A …the small wood\'s 5 / 53 / 5 / 53 / 107 / 5',
+    shares.slice(7, 13), [5, 53, 5, 53, 107, 5]);
+  check('A …the forest 2 / 3, the grass patch its floor of 1',
+    shares.slice(13), [2, 3, 1]);
+  const perArea = [shares.slice(0, 7), shares.slice(7, 13), shares.slice(13, 15),
+    shares.slice(15)].map((g) => g.reduce((s, n) => s + n, 0));
+  check('A1 per area that is 3 761 / 228 / 5 / 1 dots — every area drawn',
+    perArea, [3761, 228, 5, 1]);
+  check('A1 …3 995 in total, inside the 4 000-dot budget',
+    shares.reduce((s, n) => s + n, 0), 3995);
+  const dotDensity = (dots, m2) => Math.round((dots / (m2 / 100)) * 1e6) / 1e6;
+  check('A2 the two deep forests are drawn at 0.027425 and 0.027096 dots/100 m2',
+    [dotDensity(perArea[0], 13713589), dotDensity(perArea[1], 841443)],
+    [0.027425, 0.027096]);
+  check('A2 …a ratio of 1.0121 for ground authored 43.1 against 43.0',
+    Math.round((dotDensity(perArea[0], 13713589)
+      / dotDensity(perArea[1], 841443)) * 1e4) / 1e4, 1.0121);
+  const old = firstComeFirstServed(wanted, 4000);
   check('A3 the OLD rule really did leave the second wood at 0',
     [old.slice(0, 7).reduce((s, n) => s + n, 0),
       old.slice(7, 13).reduce((s, n) => s + n, 0),
@@ -225,20 +259,19 @@ async function main() {
     [99, 10, 109]);
 
   console.log('\n(D) the count rule the budget is built on');
-  check('D0 the per-entry ceiling is 2 000', SCATTER_MAX_PER_ENTRY, 2000);
   check('D1 10 000 m2 at 3 per 100 m2 plants 300',
     scatterWantedCount(10000, 3), 300);
   check('D2 900 m2 at the same 3 plants 27',
     scatterWantedCount(900, 3), 27);
-  check('D3 13 713 589 m2 at 20 wants 2 742 718 and is capped to 2 000',
-    [Math.round((13713589 / 100) * 20), scatterWantedCount(13713589, 20)],
-    [2742718, 2000]);
-  check('D4 841 443 m2 at 20 wants 168 289 and is capped to the SAME 2 000',
-    [Math.round((841443 / 100) * 20), scatterWantedCount(841443, 20)],
-    [168289, 2000]);
-  check('D4 …so 16.3 times the ground gets 16.3 times thinner, in numbers',
-    [(2000 / (13713589 / 100)).toFixed(4), (2000 / (841443 / 100)).toFixed(4)],
-    ['0.0146', '0.2377']);
+  check('D3 without a ceiling the two woods differ by their AREA ratio, 16.30',
+    [scatterWantedCount(13713589, 20, Infinity),
+      scatterWantedCount(841443, 20, Infinity),
+      Math.round((13713589 / 841443) * 100) / 100],
+    [2742718, 168289, 16.3]);
+  check('D3 …while the old default ceiling reported both as equally thick',
+    [scatterWantedCount(13713589, 20), scatterWantedCount(841443, 20)],
+    [2000, 2000]);
+  check('D4 that standing ceiling is still 2 000', SCATTER_MAX_PER_ENTRY, 2000);
   check('D5 below one prop is none', scatterWantedCount(10, 3), 0);
   check('D6 junk is 0, never NaN',
     [scatterWantedCount(10000, NaN), scatterWantedCount(-5, 3),

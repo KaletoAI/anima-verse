@@ -71,9 +71,14 @@ export interface ScatterInstance {
   yaw: number
 }
 
-/** Instances one entry may place on one area, whatever the density says. A
- *  hand-typed `density_per_100m2` on a lake-sized meadow would otherwise build
- *  a hundred thousand instances in one frame. */
+/** Instances one entry may place on one WHOLE area, whatever the density says.
+ *
+ *  ONLY THE WHOLE-AREA SAMPLER STILL HAS THIS CEILING, and since 2026-08-19 no
+ *  authored scatter goes through it any more — see `scatterCellInstances` for
+ *  why a fixed count over a painted shape of any size is the one thing this
+ *  module must not do. It remains the default of `scatterInstances` for the
+ *  callers that sample a BOUNDED ring (a cell, a room), where the number is a
+ *  guard nothing can reach and not a budget anybody spends. */
 export const SCATTER_MAX_PER_ENTRY = 2000
 
 /** Rejection sampling gives up after this many misses per wanted instance — a
@@ -399,4 +404,222 @@ export function propGroundFit(minY: number, maxY: number,
     ? target / height
     : 1
   return { scale, offsetY: -lo * scale }
+}
+
+/* ==========================================================================
+ * THE CELL RASTER — the authored scatter, sampled per 64 m square
+ *
+ * WHY THIS EXISTS (reported 2026-08-19, the second defect). `scatterInstances`
+ * spends a FIXED ceiling of instances (`SCATTER_MAX_PER_ENTRY`) over a painted
+ * shape of ANY size, so the effective density of a capped area is
+ *
+ *     2000 / (areaM2 / 100)   instances per 100 m2,   i.e. proportional to 1/A
+ *
+ * Two woods of one kind and one authored density are therefore drawn at
+ * DIFFERENT densities the moment both are big enough to be capped. Measured on
+ * the reporting world: 13.71 km2 at 43.1 per 100 m2 came out at 0.1021, the
+ * 0.84 km2 wood beside it at 1.4261 — a factor of 13.97 from settings that are
+ * identical, and 46 against 645 trees inside the player's 120 m cull radius.
+ *
+ * THE RESCUE IS THE ONE THE AUTOMATIC UNDERGROWTH ALREADY GOT (2026-08-16,
+ * `client3d/src/scene/undergrowth.ts`): sample a CELL, not a shape. Each 64 m
+ * square is filled at the authored density from its own seed, and the area's
+ * ring is the FILTER behind it — so the density is the density of the ground,
+ * whatever the shape it was painted in, and the cost hangs on the WINDOW a
+ * camera holds rather than on the size of the world.
+ *
+ * The ring is its own bounding box, so nothing is ever re-rolled for missing
+ * it (`triesPerPoint: 1`): footprints and covering areas SUBTRACT their props
+ * instead of squeezing a whole cell's worth into what is left of it.
+ * ========================================================================== */
+
+/** Edge of one scatter cell, in world metres.
+ *
+ *  THE SAME 64 m THE UNDERGROWTH USES (`UNDERGROWTH_CELL_M`) — one raster in
+ *  the world, so a wood and the ferns under it are cut along the same lines
+ *  and a seam can only ever be the painted border. Big enough that a camera
+ *  window is a couple of dozen cells, small enough that the window hugs the
+ *  cull circle instead of carrying corners nobody can see. */
+export const SCATTER_CELL_M = 64
+
+/** Instances one entry may place in ONE cell — a guard, not a budget.
+ *
+ *  A cell is 4096 m2, so this ceiling is reached at
+ *  4000 / 40.96 = 97.66 instances per 100 m2, i.e. roughly ONE PROP PER SQUARE
+ *  METRE of ground. No authored density comes near it (the densest row of the
+ *  reporting world is 50 per 100 m2, a lawn of grass blades); a hand-edited
+ *  density that crosses the JSON boundary costs a thicker cell instead of a
+ *  million instances built in one frame.
+ *
+ *  UNLIKE THE OLD PER-AREA CEILING this one is scale-free: it bites at the
+ *  same density on every cell of every area, so two woods of one authoring can
+ *  never come out at two densities. That is the property, not the number. */
+export const SCATTER_MAX_PER_CELL = 4000
+
+/** How many cells `scatterCellsInBox` will ever hand back — the guard that
+ *  keeps a box the size of a world from becoming a list of a million cells
+ *  before anybody looks at its length. */
+export const SCATTER_CELLS_MAX = 4096
+
+/** The cell a world coordinate falls in — `Math.floor`, so a cell owns its
+ *  lower edge. THE one mapping from a place to a cell index. */
+export function scatterCellAt(v: number): number {
+  return Math.floor(v / SCATTER_CELL_M)
+}
+
+/**
+ * The seed of ONE entry in ONE cell — its own stream, per area, per row, per
+ * place.
+ *
+ * The area id and the row index keep two woods and two rows of one wood apart
+ * (as `scatterSeed` always did); the CELL keeps neighbouring cells apart. A
+ * seed without the cell would draw the identical sequence of numbers in every
+ * cell, and since each cell maps those numbers onto its OWN box the whole wood
+ * would be one pattern stamped out every 64 m — the grid artefact the
+ * undergrowth's own seed comment describes, visible the moment anyone looks
+ * along it.
+ *
+ * SAME WORLD, SAME CELL, SAME TREES — wherever the camera stands and whenever
+ * it comes back. That is what makes a windowed sampler a picture of a world
+ * rather than a picture of a walk.
+ */
+export function scatterCellSeed(areaId: string, index: number,
+                                cx: number, cz: number): string {
+  return `terrain:scatter:${areaId}:${index}:${cx},${cz}`
+}
+
+/** The ring of one cell — its own box, in world metres. */
+export function scatterCellRing(cx: number, cz: number): ScatterPoint2[] {
+  const x0 = cx * SCATTER_CELL_M
+  const z0 = cz * SCATTER_CELL_M
+  const x1 = x0 + SCATTER_CELL_M
+  const z1 = z0 + SCATTER_CELL_M
+  return [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
+}
+
+/**
+ * Every cell whose square meets the world box `minX..maxX` × `minZ..maxZ`,
+ * row-major (z outer, x inner) — a stable order a smoke can name.
+ *
+ * The box is inclusive on both ends: a rectangle that ends exactly on a cell
+ * border still meets the cell behind it, which is the harmless half of the
+ * choice (one row of cells too many is props nobody sees; one row too few is a
+ * bare strip at the edge of the picture).
+ */
+export function scatterCellsInBox(minX: number, minZ: number,
+                                  maxX: number, maxZ: number,
+                                  maxCells: number = SCATTER_CELLS_MAX
+): [number, number][] {
+  if (![minX, minZ, maxX, maxZ].every((v) => Number.isFinite(v))) return []
+  if (maxX < minX || maxZ < minZ) return []
+  const firstX = scatterCellAt(minX)
+  const lastX = scatterCellAt(maxX)
+  const firstZ = scatterCellAt(minZ)
+  const lastZ = scatterCellAt(maxZ)
+  const cols = lastX - firstX + 1
+  const rows = lastZ - firstZ + 1
+  if (!(cols > 0) || !(rows > 0) || cols * rows > maxCells) return []
+  const out: [number, number][] = []
+  for (let cz = firstZ; cz <= lastZ; cz += 1) {
+    for (let cx = firstX; cx <= lastX; cx += 1) out.push([cx, cz])
+  }
+  return out
+}
+
+/** Cells per side of a camera window, from the distance beyond which nothing
+ *  of the scatter is drawn: `k = ceil(cullM / 64)`, at least one.
+ *
+ *  The window is the SQUARE of cells `k` to each side of the anchor's OWN
+ *  cell, which is what makes it change only when the anchor crosses a cell
+ *  border — a set derived from a circle would gain and lose corner cells every
+ *  few metres and rebuild the world's props with them. From anywhere inside
+ *  its own cell the anchor is at least `k · 64` m from the far edge of that
+ *  square, so everything within `cullM` is covered whatever corner of the cell
+ *  it stands in. */
+export function scatterCellSpan(cullM: number): number {
+  const cull = Number(cullM)
+  if (!Number.isFinite(cull) || cull <= 0) return 1
+  return Math.max(1, Math.min(Math.ceil(cull / SCATTER_CELL_M),
+                              Math.floor(Math.sqrt(SCATTER_CELLS_MAX) / 2)))
+}
+
+/** The window of cells a camera at (x, z) needs, given its cull distance —
+ *  `(2k+1)^2` cells around the anchor's own cell, row-major like
+ *  `scatterCellsInBox`. */
+export function wantedScatterCells(x: number, z: number,
+                                   cullM: number): [number, number][] {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return []
+  const k = scatterCellSpan(cullM)
+  const cx = scatterCellAt(x)
+  const cz = scatterCellAt(z)
+  const out: [number, number][] = []
+  for (let dz = -k; dz <= k; dz += 1) {
+    for (let dx = -k; dx <= k; dx += 1) out.push([cx + dx, cz + dz])
+  }
+  return out
+}
+
+/** What `scatterCellInstances` needs to know. */
+export interface ScatterCellOptions {
+  /** the CLEANED world ring of the painted area — the FILTER, not the sampled
+   *  box: a point belongs to this area when it lies inside it. */
+  ring: readonly ScatterPoint2[]
+  /** the cell, as index pair */
+  cx: number
+  cz: number
+  /** instances per 100 m2 of ground — the authored number, unscaled */
+  densityPer100m2: number
+  /** `scatterCellSeed(area.id, index, cx, cz)` */
+  seed: string
+  /** kept clear, exactly as in `scatterInstances` (finding B18) */
+  footprints?: readonly ScatterFootprint[]
+  /** the cleaned rings of the areas painted ABOVE this one */
+  occluders?: readonly (readonly ScatterPoint2[])[]
+  /** the per-cell guard; defaults to `SCATTER_MAX_PER_CELL` */
+  maxPoints?: number
+  /** the random stream, for the smoke check only — see `ScatterSampleOptions` */
+  rng?: () => number
+}
+
+/**
+ * The instances of ONE entry in ONE cell — the authored scatter's placement
+ * since 2026-08-19.
+ *
+ *     wanted = min( round(4096 / 100 · density), SCATTER_MAX_PER_CELL )
+ *
+ * over the CELL's own box, one try per wanted instance, and then only the
+ * points that lie inside the painted area are kept. A cell that is half wood
+ * and half meadow therefore carries two entries' worth of props, each at its
+ * own full density over its own half, and the seam is the painted border and
+ * nothing else.
+ *
+ * The density no longer depends on how big the shape is — which is the whole
+ * defect this replaces — and the count of a camera window depends on the
+ * window alone: `(2k+1)^2 · 40.96 · density` for one entry.
+ */
+export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[] {
+  const ring = opts.ring ?? []
+  if (ring.length < 3) return []
+  const points = scatterInstances({
+    ring: scatterCellRing(opts.cx, opts.cz),
+    areaM2: SCATTER_CELL_M * SCATTER_CELL_M,
+    densityPer100m2: opts.densityPer100m2,
+    seed: opts.seed,
+    footprints: opts.footprints,
+    occluders: opts.occluders,
+    maxPoints: opts.maxPoints ?? SCATTER_MAX_PER_CELL,
+    // ONE TRY PER WANTED INSTANCE, and that is the difference between sampling
+    // a CELL and sampling a shape: the ring IS the box, so nothing is ever
+    // re-rolled for missing it, and the only rejections left are the ones that
+    // must SUBTRACT — a building's footprint, ground painted over this area.
+    // Re-rolling those would squeeze a whole cell's props into the part of it
+    // that is still visible, i.e. double the density against the wall of a
+    // house.
+    triesPerPoint: 1,
+    rng: opts.rng,
+  })
+  // …and the painted shape decides which of them are ITS props. The filter
+  // runs AFTER the sampling, never as a smaller box: the stream of a cell must
+  // not depend on which areas happen to reach into it.
+  return points.filter((p) => pointInRing(p.x, p.z, ring))
 }
