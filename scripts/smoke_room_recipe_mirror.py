@@ -6,12 +6,21 @@ Pure geometry, no world, no DB: hand-built room dicts go straight into
 two clockwise hulls traverse a shared wall in OPPOSITE directions, so the
 mirrored ``at`` must come out flipped.
 
-Layout used throughout (absolute plate fractions, y down):
+METRIC FIXTURE (contract v6 Nr. 2). This file used to describe the SAME two
+rooms as fractions of an 8 m reference plate; every fraction below is that
+fraction converted once by the retired mapping — ``x/y → (f − 0.5) × 8``,
+``w/d → f × 8`` — so the geometry is unchanged and every expected number
+(mirrored edge 3, ``at`` 0.7, one mirrored entry, the overlap cases) is the
+number the fraction fixture produced. Only the world POINT of the shared wall
+is written differently, because it is now stated in metres instead of plate
+fractions: x = 0.4 · 8 − 4 = −0.8, y = −4 + 0.3 · 4 = −2.8.
 
-    0.0        0.4        0.8
-0.0 ┌──────────┬──────────┐
-    │    A     │    B     │      shared wall at x = 0.4
-0.5 └──────────┴──────────┘
+Layout used throughout (local metres around the pin, y down):
+
+   -4.0       -0.8        2.4
+-4.0┌──────────┬──────────┐
+    │    A     │    B     │      shared wall at x = −0.8
+ 0.0└──────────┴──────────┘
 
 Usage:  ./.venv/bin/python scripts/smoke_room_recipe_mirror.py
 """
@@ -23,7 +32,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import room_recipe  # noqa: E402
 
 FAILURES = []
-PLAN_W = 8.0  # metres for the whole 8×8 reference plate
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -43,21 +51,21 @@ def room(rid: str, x: float, y: float, w: float, d: float, **lay) -> dict:
 # Rooms are plain rectangles → implicit unit square, clockwise:
 # edge 0 = N (left→right), 1 = E (top→bottom), 2 = S (right→left), 3 = W (bottom→top)
 def room_a(**lay) -> dict:
-    return room("a", 0.0, 0.0, 0.4, 0.5, **lay)
+    return room("a", -4.0, -4.0, 3.2, 4.0, **lay)
 
 
 def room_b(**lay) -> dict:
-    return room("b", 0.4, 0.0, 0.4, 0.5, **lay)
+    return room("b", -0.8, -4.0, 3.2, 4.0, **lay)
 
 
-def recipe(r: dict, siblings=(), plan_w: float = PLAN_W) -> dict:
-    return room_recipe.compose_recipe(r, siblings, plan_w)
+def recipe(r: dict, siblings=()) -> dict:
+    return room_recipe.compose_recipe(r, siblings)
 
 
 def test_mirror() -> None:
     print("\n[1] a door on the shared wall appears in both rooms")
     # A's E edge (index 1) runs top→bottom; the door sits at at=0.3 on it,
-    # i.e. 0.3 * 0.5 = 0.15 down from the top → world y = 0.15.
+    # i.e. 0.3 * 4.0 m = 1.2 m down from the top → world y = −2.8.
     a = room_a(openings=[{"edge": 1, "at": 0.3, "type": "door",
                           "width_m": 1.0, "height_m": 2.1, "to": "b"}])
     b = room_b()
@@ -87,8 +95,8 @@ def test_mirror() -> None:
     check("both descriptions denote the same wall point",
           near(pa[0], pb[0]) and near(pa[1], pb[1]),
           f"{[round(v, 4) for v in pa]} vs {[round(v, 4) for v in pb]}")
-    check("and that point is on the shared wall x=0.4 at y=0.15",
-          near(pa[0], 0.4) and near(pa[1], 0.15),
+    check("and that point is on the shared wall x=−0.8 at y=−2.8",
+          near(pa[0], -0.8) and near(pa[1], -2.8),
           str([round(v, 4) for v in pa]))
 
     print("\n[3] what must NOT be mirrored")
@@ -101,12 +109,12 @@ def test_mirror() -> None:
     check("the owner's outside window keeps its to",
           recipe(outside_win, [room_b()])["openings"][0]["to"] == "outside")
 
-    far = room("c", 0.9, 0.0, 0.4, 0.5)          # no touching wall
+    far = room("c", 3.2, -4.0, 3.2, 4.0)         # no touching wall
     rc = recipe(far, [a])
     check("a room that shares no wall gets nothing",
           not [op for op in rc["openings"] if op.get("mirrored")])
 
-    other_level = room("d", 0.4, 0.0, 0.4, 0.5, level=1)
+    other_level = room("d", -0.8, -4.0, 3.2, 4.0, level=1)
     rd = recipe(other_level, [a])
     check("a room on another level gets nothing",
           not [op for op in rd["openings"] if op.get("mirrored")])
@@ -121,7 +129,7 @@ def test_mirror() -> None:
     print("\n[5] an opening outside the shared stretch")
     # B only covers the upper half of A's E edge → a door low on that edge
     # pierces no shared wall.
-    b_half = room("b", 0.4, 0.0, 0.4, 0.2)
+    b_half = room("b", -0.8, -4.0, 3.2, 1.6)
     a_low = room_a(openings=[{"edge": 1, "at": 0.9, "type": "door",
                               "width_m": 1.0}])
     check("a door beyond the overlap is not mirrored",
@@ -149,14 +157,21 @@ def test_signature() -> None:
     check("moving that door moves it again", moved != with_door,
           f"{with_door[:8]} vs {moved[:8]}")
 
-    print("\n[11] plan width only scales the tolerances")
+    print("\n[11] the tolerances ARE metres now (no plan width anywhere)")
+    # SHARE_TOL_M = 0.15 m between the two wall faces, MIN_SHARE_M = 0.8 m of
+    # overlap. Before v6 both were divided by the plan width to become plate
+    # fractions; now they are read straight off the stored metres, so the two
+    # cases below are decidable by hand without knowing a plate size.
     a = room_a(openings=[{"edge": 1, "at": 0.3, "type": "door"}])
-    wide = recipe(room_b(), [a], 24.0)
-    check("a 24 m plate still mirrors the door",
-          len([op for op in wide["openings"] if op.get("mirrored")]) == 1)
-    noscale = recipe(room_b(), [a], 0.0)
-    check("no plan width falls back to the 8 m plate",
-          len([op for op in noscale["openings"] if op.get("mirrored")]) == 1)
+    check("faces 0.10 m apart are still ONE wall (< 0.15 m)",
+          len([op for op in recipe(room("b", -0.7, -4.0, 3.2, 4.0), [a])
+               ["openings"] if op.get("mirrored")]) == 1)
+    check("faces 0.30 m apart are two walls (> 0.15 m)",
+          not [op for op in recipe(room("b", -0.5, -4.0, 3.2, 4.0), [a])
+               ["openings"] if op.get("mirrored")])
+    check("an overlap of 0.60 m is below the 0.80 m minimum",
+          not [op for op in recipe(room("b", -0.8, -4.6, 3.2, 0.6), [a])
+               ["openings"] if op.get("mirrored")])
 
 
 def test_unchanged() -> None:

@@ -26,6 +26,68 @@
 >    **abgeleitete Rechengröße** (Breite der Bounding-Box des Boundary-
 >    Polygons) in den Payloads, damit Verbraucher-Verträge (Laderadius,
 >    Viewport, Backdrop) weiterleben; `k = 1` bleibt dokumentiert konstant.
+>
+>    > **Nr. 2 EINGELÖST (Server-Hälfte, 2026-08-19).** Ab hier gilt die
+>    > folgende Feld-Semantik wörtlich; wo irgendwo unten noch eine
+>    > `[0,1]`-Fraktion für eine dieser Größen steht, ist sie überschrieben.
+>    > **Kein Migrationscode** — eine Welt aus der Bruchteil-Ära liefert
+>    > schlicht winzige Räume; das ist die vereinbarte Neuaufbau-Semantik und
+>    > wird NICHT per Sonderfall repariert.
+>    >
+>    > * **Raum-Rechteck `layout.x/y/w/d`** — Meter. `x/y` ist die
+>    >   **Minimal-Ecke** des Raums im **LOCATION-LOKALEN Rahmen** (Ursprung =
+>    >   Anker-Pin, Achsen nach § A1.1 — derselbe Rahmen, in dem
+>    >   `map3d.boundary` liegt); negative Werte sind normal. `w/d` sind Meter
+>    >   > 0.
+>    > * **`layout.outline`** — Punkte in Metern **relativ zur eigenen
+>    >   Minimal-Ecke des Raums**, also im Bereich 0…`w` / 0…`d`. Die
+>    >   Kontrollpunkte von `layout.outline_curves` liegen im selben Rahmen
+>    >   (dürfen die Hülle verlassen; Klemmung ±500 m statt der alten
+>    >   `[-1, 2]`-Bbox-Regel). `x/y/w/d` tragen weiterhin IMMER die aus der
+>    >   tessellierten Hülle gefaltete Bounding-Box.
+>    > * **`layout.markers[].at`, `layout.props[].at`, `layout.model_at`** —
+>    >   Meter, ebenfalls relativ zur Minimal-Ecke des Raums. Fehlendes
+>    >   `model_at` heißt weiterhin „zentriert", also `[w/2, d/2]`.
+>    > * **`layout.level`, `rotation`, `floor_offset_y`, `model_offset_y`,
+>    >   `offset_y`, `always_visible`, `no_walls`, `relief_flat`,
+>    >   `clip_model`, `surfaces`** — unverändert.
+>    > * **Öffnungen an Raumkanten** (`layout.openings[]`): `at` bleibt eine
+>    >   **Fraktion der Kante** — ein kantenrelatives Verhältnis ist keine
+>    >   Weltgröße —, `width_m`/`height_m`/`sill_m` bleiben Meter. Genauso
+>    >   `map3d.boundary_openings[].at` (§ B1 Nr. 13).
+>    > * **`map3d.outline`** (gezeichnete Gebäude-Kontur) und
+>    >   **`map3d.elevator`** — lokale Meter wie `boundary`, keine `[0,1]²`-
+>    >   Domäne mehr. Andere `[0,1]²`-Felder gibt es in `map3d` nicht.
+>    > * **`_require_scale_anchor` ist GELÖSCHT** (Server). Ein Grundriss
+>    >   braucht keinen Anker mehr; `plan_width_m` ist nur noch die
+>    >   ABGELEITETE Bounding-Box-Breite der Boundary und wird beim Speichern
+>    >   aus ihr überschrieben. `location_model3d.has_scale_anchor` ist mit
+>    >   entfallen.
+>    > * **Speicherauflösung**: alle Meter-Felder auf **Zentimeter** gerundet
+>    >   (2 Nachkommastellen) und auf **±500 m** geklemmt — dieselbe Regel wie
+>    >   bei `boundary`/`plan_width_m`.
+>    > * **Der komponierte Payload ändert Form UND Werte NICHT.** Er war immer
+>    >   schon in Weltmetern; entfallen ist nur die Denormalisierung
+>    >   `(f − 0,5) · extent_m` auf dem Weg dorthin. `scene.extent_m` bleibt
+>    >   als Feld erhalten (Verbraucher-Verträge: Laderadius, Viewport,
+>    >   Backdrop) und trägt weiterhin die Bounding-Box-Breite.
+>    > * **EINE Ausnahme, und die ist neu:** das Relief-Stützgitter (Nr. 14)
+>    >   spannt nicht mehr über ein Quadrat um den PIN, sondern über die
+>    >   **Bounding-Box der Boundary** — ein Quadrat der Kante `extent_m`,
+>    >   zentriert auf diese Box (`scene_recipe.terrain_frame`). 17 × 17
+>    >   Stützpunkte und die Rand-0-Regel bleiben, ebenso die Polygon-
+>    >   Klemmung aus v6 Nr. 4. Für eine um ihren Pin gezeichnete Boundary ist
+>    >   das exakt der alte Rahmen; für eine außermittige verschiebt sich das
+>    >   Feld. Deshalb trägt der Payload jetzt
+>    >   **`scene.terrain.origin = [x0, z0]`** (Minimal-Ecke des Gitters in
+>    >   lokalen Metern) — ein Client MUSS künftig
+>    >   `u = (x − origin[0]) / (step · n)` rechnen statt
+>    >   `u = x / extent_m + 0,5`. Bis die Client-Welle das nachzieht, bleibt
+>    >   die alte Formel für pin-zentrierte Boundaries richtig.
+>    > * **Nicht Teil dieser Welle:** der Grundriss-Editor
+>    >   (`frontend/`) und der 3D-Client (`client3d/`) — der Szenen-Payload
+>    >   ist bis auf `terrain.origin` unverändert, sie laufen weiter.
+>
 > 3. **EIN Skalengesetz, jetzt wirklich überall: real_size.** `tile_fit`
 >    („größte Seite füllt die Kante") ist gelöscht; auch Gebäude- und
 >    Flächen-Modelle skalieren über eine **deklarierte reale Breite in
@@ -299,7 +361,9 @@
 >     REALE Meter, `seed` Pflicht) legt ein Höhenfeld über das Bezugsquadrat.
 >     **Gitter:** n × n Zellen → **(n+1) × (n+1) Stützpunkte**, `grid[j][i]`,
 >     Stützpunkt (i, j) auf Plan-Fraktion (i/n, j/n) — i West→Ost, j
->     Nord→Süd; `step` = `extent_m / n` Welt-Meter. **n ist keine Konstante:**
+>     Nord→Süd; `step` = `extent_m / n` Welt-Meter. (Seit v6 Nr. 2 ist (i/n,
+>     j/n) eine Koordinate des TERRAIN-RAHMENS, nicht mehr eine Plan-Fraktion
+>     der Location — siehe `origin` unten.) **n ist keine Konstante:**
 >     `wave_m` ist die Breite EINER Bodenwelle in REALEN Metern (1..200),
 >     daraus `n = int(plan_width_m / wave_m + 0,5)` (halb-auf, wie
 >     `Math.round`), geklemmt auf [2, 22] — die Obergrenze ist das, was
@@ -327,8 +391,14 @@
 >     Zelle mit tx = 1 und liest den Randstützpunkt. Dieselbe Formel in
 >     `scatter_curves.terrain_height` und in `@anima/scene-render`
 >     (`sampleTerrain`), § B5a-prüfbar von Hand.
->     **Payload:** `scene.terrain = {step, grid, amplitude_m}`, nur wenn
->     `relief` gesetzt ist; `amplitude_m` steht dort in Welt-Metern.
+>     **Payload:** `scene.terrain = {step, grid, origin, amplitude_m}`, nur
+>     wenn `relief` gesetzt ist; `amplitude_m` steht dort in Welt-Metern.
+>     `origin` ist seit v6 Nr. 2 die Minimal-Ecke des Gitters in lokalen
+>     Metern (`scene_recipe.terrain_frame`: Quadrat der Kante `extent_m` über
+>     der Bounding-Box der Boundary) — die Lattice-Koordinate eines Punktes
+>     ist `u = (x − origin[0]) / (step · n)`, `v = (z − origin[1]) / (step ·
+>     n)`. Für eine um ihren Pin gezeichnete Boundary ist das identisch mit
+>     dem früheren `u = x / extent_m + 0,5`.
 >     **Arbeitsteilung:** *der Server hebt alles, was in nicht-flachen Räumen
 >     steht* — Prop-`bottom_y` (manuell wie gestreut), Dioramen-`bottom_y`,
 >     Marker-`y_world`, jeweils um `terrain_height` am EIGENEN Plan-Anker der

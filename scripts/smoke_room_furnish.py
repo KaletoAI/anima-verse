@@ -82,7 +82,15 @@ def main() -> int:
     db.init_schema()
     print(f"World: {WORLD}")
 
-    # ── A room with a floor plan, a door and an explicit scale anchor ────
+    # ── A room with a floor plan and a door ──────────────────────────────
+    # METRIC FIXTURE (contract v6 Nr. 2). This used to be the fractions
+    # x/y 0, w/d 0.5 of an 8 m plate — the SAME 4 × 4 m room in the NW
+    # quadrant of the location, converted once by the retired mapping
+    # (x/y → (f − 0.5) × 8, w/d → f × 8). Every expected number below is
+    # therefore the one the fraction fixture produced; only the placement
+    # coordinates are now stated in the metres the solver already worked in
+    # (table [2.0, 0.45] instead of the fractions [0.5, 0.1125] — the very
+    # numbers the hand derivation below always spelled out).
     table = make_prop("Table", 1.2, 0.8, 0.75)
     chair = make_prop("Chair", 0.5, 0.5, 0.9)
     loc = add_location("Smoke House", "A test house", rooms=[
@@ -94,12 +102,12 @@ def main() -> int:
             continue
         entry["map3d"] = {"plan_width_m": 8.0}
         entry["rooms"][0]["layout"] = {
-            "x": 0.0, "y": 0.0, "w": 0.5, "d": 0.5, "level": 0,
+            "x": -4.0, "y": -4.0, "w": 4.0, "d": 4.0, "level": 0,
             "openings": [{"edge": "S", "at": 0.5, "width_m": 1.0,
                           "height_m": 2.1, "sill_m": 0, "type": "door"}],
         }
     _save_world_data(data)
-    print("  room 4.0 × 4.0 m, one south door, plan width 8 m")
+    print("  room 4.0 × 4.0 m (metres in the layout), one south door")
 
     answers = {
         "furnish_select": {"existing": [{"prop_id": table, "count": 1},
@@ -146,19 +154,20 @@ def main() -> int:
           all(set(p) <= {"prop_id", "at", "yaw", "offset_y"} and len(p["at"]) == 2
               for p in placed))
     check("door zone kept free",
-          all(p["at"][1] < 0.85 for p in placed),
+          all(p["at"][1] < 3.4 for p in placed),
           json.dumps([p["at"] for p in placed]))
     # Hand-derived from furnish_solver's wall strategy: the room is 4 × 4 m,
     # the table 1.2 × 0.8 m, anchor wall_n facing the room (yaw 0). The first
     # candidate is the CENTRE of the usable stretch — x = 1.2/2 + 0.5 ×
-    # (4 − 1.2) = 2.0 m → 0.5 of the width — pushed off the wall by half the
-    # depth plus WALL_GAP_M: y = 0.4 + 0.05 = 0.45 m → 0.1125 of the depth.
+    # (4 − 1.2) = 2.0 m — pushed off the wall by half the
+    # depth plus WALL_GAP_M: y = 0.4 + 0.05 = 0.45 m. Since v6 those metres
+    # ARE what is stored, so the placement reads [2.0, 0.45].
     # Nothing blocks it: the only zone is the south door's, at y ≥ 3.4 m.
     # The openings are the only keep-outs (plan-betreten-und-tueren.md
     # § 4.1) — nothing pushes the table off the centre of its wall.
     table_at = next(p["at"] for p in placed if p["prop_id"] == table)
     check("the table stands centred on its wall",
-          table_at == [0.5, 0.1125], json.dumps(table_at))
+          table_at == [2.0, 0.45], json.dumps(table_at))
     check("place prompt lists the door on wall S",
           "on wall S" in calls[-1][1], calls[-1][1][:200])
 

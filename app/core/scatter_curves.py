@@ -8,9 +8,9 @@ lines of integer arithmetic on purpose: § B5a verification re-implements it
 independently in the smoke script and diffs exact positions.
 
 Coordinate frames are the caller's business — both functions are
-frame-agnostic (the sanitizer feeds bbox-local fractions, the recipe feeds
-real metres). Only ``spacing`` and the footprints must share the frame of
-``outline``.
+frame-agnostic (since contract v6 Nr. 2 both callers feed metres: the
+sanitizer room-local ones, the recipe location-local ones). Only ``spacing``
+and the footprints must share the frame of ``outline``.
 """
 
 from typing import Any, Dict, List, Sequence, Tuple
@@ -25,7 +25,7 @@ TESS_N = 8
 ATTEMPTS_PER_PROP = 30
 
 # Terrain relief (contract v5.2 Nr. 14): the DEFAULT resolution of the height
-# field over the reference square — 16 × 16 cells, i.e. 17 × 17 support
+# field over the terrain frame — 16 × 16 cells, i.e. 17 × 17 support
 # points. This is what every location produced before the wave width existed,
 # so it stays the fallback for anything that does not set one. The actual
 # count travels WITH the grid (its row count) and with ``terrain.step``, so
@@ -41,7 +41,7 @@ TERRAIN_CELLS = 16
 # the binding limit — not taste. ``drapeGeometry``
 # (packages/scene-render/src/terrain.ts) subdivides a plate only while its
 # longest edge exceeds one cell, and it stops after ``MAX_SPLITS = 5``
-# halvings. A plate spanning the reference square starts at its diagonal,
+# halvings. A plate spanning the terrain frame starts at its diagonal,
 # e·√2, so the finest edge it ever reaches is e·√2 / 2⁵ = e / 22.63 — a
 # 22-cell field (cell e/22) is still resolved, a 23-cell one (cell e/23) is
 # not. Past that the payload would keep getting finer while the drawn ground
@@ -233,10 +233,9 @@ def relief_cells(wave_m: Any, extent_m: Any) -> int:
     spacing, so the count is simply the square divided by the wave, clamped.
 
     Both lengths must be in the SAME frame, and the caller owes REAL metres
-    on both: the wave width is authored in real metres, so the reference
-    square has to arrive as its real edge length — since E4 that is simply
-    the location's ``plan_width_m``, because the square IS the footprint
-    (``extent_m = plan_width_m``, k = 1).
+    on both: the wave width is authored in real metres, so the terrain frame
+    has to arrive as its real edge length — that is ``extent_m`` =
+    ``plan_width_m``, the width of the location's bounding box (k = 1).
 
     Anything unusable (zero, negative, no extent) falls back to
     ``TERRAIN_CELLS``, which over an 80 m square is a 5 m wave — exactly what
@@ -266,16 +265,17 @@ def terrain_grid(seed: int,
                  ) -> List[List[float]]:
     """The location's height field as ``grid[j][i]`` support points.
 
-    ``cells`` is the resolution: the grid spans the reference square as
-    ``n × n`` cells, i.e. ``n + 1`` support points per side, clamped to
+    ``cells`` is the resolution: the grid spans the terrain frame
+    (``scene_recipe.terrain_frame``: the square of edge ``extent_m`` over the
+    location boundary's bounding box) as ``n × n`` cells, i.e. ``n + 1`` support points per side, clamped to
     [``RELIEF_CELLS_MIN``, ``RELIEF_CELLS_MAX``]. It comes from the authored
     wave width via :func:`relief_cells` — fewer cells mean wider, gentler
     swells, more cells mean a choppier field at the same amplitude. The
     default reproduces the fixed 16 × 16 field every location had before the
     wave width existed.
 
-    ``i`` runs west→east, ``j`` north→south; point (i, j) sits at plan
-    fraction (i/n, j/n) of the reference square. Values are WORLD metres —
+    ``i`` runs west→east, ``j`` north→south; point (i, j) sits at lattice
+    coordinate (i/n, j/n) of the terrain frame. Values are WORLD metres —
     the caller has already multiplied the real-metre amplitude by k, because
     everything downstream (prop lift, plate drape) is world metres too.
 
@@ -288,7 +288,7 @@ def terrain_grid(seed: int,
     * **Flat hulls** — the tessellated outlines of rooms that must stay
       even (every indoor room, plus outdoor rooms flagged ``relief_flat``:
       a road, a paved square), DILATED by one grid cell: a point is pinned
-      when it lies inside a hull or within one cell (1/n plan fraction)
+      when it lies inside a hull or within one cell (1/n of the frame)
       of its boundary. Without the margin only the points INSIDE were
       zero, and the boundary cells interpolated the neighbours' heights
       back INTO the room — the draped ground pierced the flat road plate
@@ -302,9 +302,10 @@ def terrain_grid(seed: int,
     field can be re-derived by hand for § B5a verification. The draw is
     mapped from [0, 1) to [−1, 1) and scaled by the amplitude.
 
-    ``flat_hulls`` are polygons in ABSOLUTE plan fractions and must arrive
-    already tessellated (curved room edges) — this function does not know
-    about curves.
+    ``flat_hulls`` are polygons in the SAME [0,1]² lattice coordinates and
+    must arrive already tessellated (curved room edges) — this function does
+    not know about curves. The caller normalizes them out of local metres
+    (``scene_recipe.compose_terrain``).
     """
     n = max(RELIEF_CELLS_MIN, min(RELIEF_CELLS_MAX, int(cells)))
     amp = float(amplitude_world)
@@ -348,7 +349,7 @@ def terrain_grid(seed: int,
 
 def terrain_height(grid: Sequence[Sequence[float]], u: float,
                    v: float) -> float:
-    """Bilinear sample of the height field at plan fraction (u, v).
+    """Bilinear sample of the height field at lattice coordinate (u, v).
 
     The grid is a coarse lattice (17 × 17 points at the default resolution)
     but every object in the scene stands somewhere between its points, so the

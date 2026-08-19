@@ -108,7 +108,7 @@ def fixture(boundary=None):
         "map3d": map3d,
         "rooms": [
             {"id": "road", "name": "Road", "layout": {
-                "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0}},
+                "x": -4.0, "y": -4.0, "w": 4.0, "d": 3.0, "level": 0}},
         ],
     }
 

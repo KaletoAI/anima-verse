@@ -1181,15 +1181,13 @@ EXIT_DOOR_WIDTH_M = 1.0
 EXIT_DOOR_HEIGHT_M = 2.1
 
 
-def project_exit_to_opening(
-        layout: Any,
-        plan_width_m: float = 0.0) -> Optional[Dict[str, Any]]:
+def project_exit_to_opening(layout: Any) -> Optional[Dict[str, Any]]:
     """The door a stored ``layout.exit`` becomes — or None.
 
-    A pure function. ``exit`` is a point in fractions of the room RECTANGLE;
-    it is clamped into that rectangle, converted to ABSOLUTE plate fractions
-    (the frame of x/y/w/d, in which a distance is proportional to real metres
-    — the bbox-local frame is not, it stretches u by w and v by d) and
+    A pure function. ``exit`` is a point in fractions of the room RECTANGLE
+    (the one legacy field this one-time migration still reads); it is clamped
+    into that rectangle, converted to ABSOLUTE LOCAL METRES (the frame of
+    x/y/w/d since contract v6 Nr. 2) and
     projected onto the nearest edge of the room hull. The hull is the drawn
     ``outline`` or, absent that, the implicit unit square with the edge
     indices 0=N, 1=E, 2=S, 3=W; the result carries the edge INDEX, the way
@@ -1202,15 +1200,9 @@ def project_exit_to_opening(
     - the target edge is curved (openings on curved edges are rejected on
       save, and a neighbouring edge would be the wrong wall),
     - the target edge is shorter than the standard door.
-
-    ``plan_width_m`` is the location's scale anchor (``map3d.plan_width_m``);
-    without it the recipe's unanchored assumption applies. It decides how wide
-    the door is IN PLATE FRACTIONS, hence whether it fits and how far its
-    centre is pushed off a corner.
     """
     from app.core.room_recipe import (  # local: keeps world.py import-light
-        _UNANCHORED_PLAN_WIDTH_M, _WALKABLE_TYPES, _abs_outline,
-        _normalize_opening, _unit_edge)
+        _WALKABLE_TYPES, _abs_outline, _normalize_opening, _unit_edge)
 
     if not isinstance(layout, dict):
         return None
@@ -1252,8 +1244,8 @@ def project_exit_to_opening(
         if _normalize_opening(op).get("edge") == index:
             return None
 
-    planw = float(plan_width_m or 0) or _UNANCHORED_PLAN_WIDTH_M
-    door = EXIT_DOOR_WIDTH_M / planw
+    # Edge lengths are metres now, so the door's clear width IS the number.
+    door = EXIT_DOOR_WIDTH_M
     if span < door:
         return None
     half = (door / 2) / span
@@ -1290,13 +1282,6 @@ def migrate_room_exits_once() -> Dict[str, int]:
         data = _load_world_data()
         changed = False
         for loc in data.get("locations", []):
-            map3d = loc.get("map3d")
-            plan_width_m = 0.0
-            if isinstance(map3d, dict):
-                try:
-                    plan_width_m = float(map3d.get("plan_width_m") or 0)
-                except (TypeError, ValueError):
-                    plan_width_m = 0.0
             for room in loc.get("rooms") or []:
                 if not isinstance(room, dict):
                     continue
@@ -1304,7 +1289,7 @@ def migrate_room_exits_once() -> Dict[str, int]:
                 if not isinstance(layout, dict) or layout.get("exit") is None:
                     continue
                 counts["rooms"] += 1
-                opening = project_exit_to_opening(layout, plan_width_m)
+                opening = project_exit_to_opening(layout)
                 if opening:
                     layout.setdefault("openings", []).append(opening)
                     counts["openings"] += 1

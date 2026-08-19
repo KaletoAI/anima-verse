@@ -7,18 +7,29 @@ the contract (docs/schnittstellen-3d.md § A2/A3/A6) — that is the point of
 the file: it catches a wrong split, a lost constant and a scale that stopped
 being 1.
 
-Fixture (absolute plate fractions, y down). ONE frame, ONE scale
-(2026-08-09, E4): the reference square IS the location's footprint — its
-edge is ``map3d.plan_width_m`` and **k = 1**, so a metre in the plan is a
-metre in the scene and every ``_m`` field below is already a world metre.
-``map3d.extent_m`` is not read any more. The fixture declares 10 m of plan
-width, so the square runs from −5 to +5 on both axes, and a storey of 3 m:
+THE FIXTURE IS METRIC (contract v6 Nr. 2, the metric wave). Every stored
+plan coordinate is a LOCAL METRE around the anchor pin — room rects, room
+outlines, curve control points, markers, props, ``model_at``, the building
+contour and the elevator alike. Nothing is denormalized on the way into the
+payload any more, and ``k = 1`` as since E4: a metre in the plan is a metre in
+the scene.
 
-    contour = the whole 10 × 10 square        elevator at (0.8, 0.2)
-    room "a"     x 0.1 y 0.1 w 0.4 d 0.3      window N, door S
-    room "garden" x 0.1 y 0.6 w 0.3 d 0.2     always_visible (outdoor)
+THIS FILE IS THE OLD FIXTURE, CONVERTED ONCE. Every number below is the
+fraction this smoke used before, run through the retired mapping
+``x/y → (f − 0.5) × 10``, ``w/d → f × 10``, ``bbox-local point → f × (w, d)``
+— i.e. the SAME world geometry. All expected payload numbers are therefore
+unchanged and are still the hand-derived ones. The only blocks re-derived by
+hand are the two that tested the fraction mechanic itself ([1] "a wider anchor
+is a wider square" and [1b]): a wider ``plan_width_m`` cannot scale a room any
+more, which is exactly what the wave is for.
 
-    plan fraction f  →  world metre (f − 0.5) × 10
+The fixture is 10 m wide (``plan_width_m`` 10, so the location bbox runs −5…5
+on both axes) with a storey of 3 m:
+
+    contour = the whole 10 × 10 square        elevator at (3, −3)
+    room "a"     x −4 y −4 w 4 d 3            window N, door S
+    room "garden" x −4 y  1 w 3 d 2           always_visible (outdoor)
+
     room "a"   world x −4…0, z −4…−1        room "garden" x −4…−1, z 1…3
 
 Usage:  ./.venv/bin/python scripts/smoke_scene_recipe.py
@@ -55,13 +66,13 @@ def fixture(extra_rooms=()) -> dict:
         "map3d": {
             "plan_width_m": PLAN_W,
             "storey_height_m": STOREY_REAL,
-            "outline": [[0, 0], [1, 0], [1, 1], [0, 1]],
-            "elevator": [0.8, 0.2],
+            "outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
+            "elevator": [3.0, -3.0],
             "level_floors": {"0": "parquet"},
         },
         "rooms": [
             {"id": "a", "name": "A", "layout": {
-                "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0,
+                "x": -4.0, "y": -4.0, "w": 4.0, "d": 3.0, "level": 0,
                 "surfaces": {"floor": "wood", "wall": "plaster"},
                 "openings": [
                     {"edge": 0, "at": 0.5, "type": "window",
@@ -70,7 +81,7 @@ def fixture(extra_rooms=()) -> dict:
                      "width_m": 1.0, "height_m": 2.1, "to": "outside"},
                 ]}},
             {"id": "garden", "name": "Garden", "layout": {
-                "x": 0.1, "y": 0.6, "w": 0.3, "d": 0.2, "level": 0,
+                "x": -4.0, "y": 1.0, "w": 3.0, "d": 2.0, "level": 0,
                 "always_visible": True,
                 "surfaces": {"floor": "grass"}}},
             *extra_rooms,
@@ -96,17 +107,19 @@ def test_scalars() -> None:
           str(sc["storey_m"]))
     check("one used level with floor_y 0",
           sc["levels"] == [{"level": 0, "floor_y": 0.0}], str(sc["levels"]))
-    # A different anchor is a different square — that is the whole scale
-    # chain now. 25 m of plan width means a 25 m square, still at k = 1.
+    # ``extent_m`` is a REPORTED width now, not a scale: it is the location's
+    # bounding box, and since v6 Nr. 2 nothing is derived from it. A location
+    # declared 25 m wide therefore reports 25 — and its DRAWN contour stays
+    # exactly where it was drawn, at ±5.
     wide = scene_recipe.compose_scene(
         {**fixture(), "map3d": {**fixture()["map3d"], "plan_width_m": 25.0}},
         plan_width_m=25.0)
-    check("a wider anchor IS a wider square, k stays 1",
+    check("a wider anchor IS a wider extent_m, k stays 1",
           near(wide["extent_m"], 25.0) and near(wide["k"], 1.0),
           f"{wide['extent_m']}/{wide['k']}")
-    check("...and the contour grows with it (±12.5)",
+    check("...and the DRAWN contour does not move with it (still ±5)",
           [p for p in wide["plates"] if not p.get("room_id")][0]["outline"][2]
-          == [12.5, 12.5],
+          == [5.0, 5.0],
           str([p for p in wide["plates"] if not p.get("room_id")][0]["outline"]))
     # map3d.extent_m was the world-metre dial of the tile era. It is not read
     # any more — an old blob carrying it composes exactly like one without.
@@ -130,16 +143,16 @@ def test_scalars() -> None:
 
 
 def test_scale_is_one() -> None:
-    print("\n[1b] every _m field IS a world metre, whatever the anchor says")
-    # The SAME plan with twice the anchor: a 20 m location. Until E4 that
-    # halved every real length (k = extent 10 / plan 20 = 0.5) while the
-    # square stayed 10 m wide. Now the square IS the 20 m footprint and a
-    # declared metre stays a metre — the numbers below are the ones that
-    # differ between the two rules, and they are the reason this block exists.
+    print("\n[1b] the anchor scales NOTHING any more (v6 Nr. 2)")
+    # THE POINT OF THE METRIC WAVE, stated as a red check. The SAME plan with
+    # twice the declared width: before v6 the room rectangle was a fraction of
+    # that width and doubled with it (x −8…0 instead of −4…0). Now the plan is
+    # metres, so doubling ``plan_width_m`` moves the reported ``extent_m`` and
+    # NOTHING else — the room stands where it was drawn.
     loc = fixture()
     loc["map3d"]["plan_width_m"] = 20.0
     big = scene_recipe.compose_scene(loc, plan_width_m=20.0)
-    check("extent_m = 20 (the footprint), k = 1",
+    check("extent_m = 20 (the reported bbox width), k = 1",
           near(big["extent_m"], 20.0) and near(big["k"], 1.0),
           f'{big["extent_m"]}/{big["k"]}')
     check("storey 3 m — not 1.5", near(big["storey_m"], 3.0),
@@ -150,17 +163,22 @@ def test_scale_is_one() -> None:
     check("the 1.0 m door is 1.0 m wide — not 0.5",
           len(big["doorways"]) == 1 and near(big["doorways"][0]["width_m"], 1.0),
           str([d["width_m"] for d in big["doorways"]]))
-    # Room "a" (plan x 0.1…0.5, y 0.1…0.4) over a 20 m square: world
-    # (f − 0.5) × 20 → x −8…0, z −8…−2.
+    # Room "a" is stored as x −4 y −4 w 4 d 3, so it is x −4…0, z −4…−1 —
+    # under ANY declared plan width.
     xs = [p[0] for p in plate_of(big, "a")["outline"]]
     zs = [p[1] for p in plate_of(big, "a")["outline"]]
-    check("the room grew with the square: x −8…0, z −8…−2",
-          near(min(xs), -8.0) and near(max(xs), 0.0)
-          and near(min(zs), -8.0) and near(max(zs), -2.0),
+    check("the room does NOT grow with the anchor: still x −4…0, z −4…−1",
+          near(min(xs), -4.0) and near(max(xs), 0.0)
+          and near(min(zs), -4.0) and near(max(zs), -1.0),
           str(plate_of(big, "a")["outline"]))
-    check("the elevator keeps its contract size (1.8 m shaft)",
+    check("...and its plate is point-for-point the one of the 10 m location",
+          plate_of(big, "a")["outline"] == plate_of(scene(), "a")["outline"],
+          str(plate_of(big, "a")["outline"]))
+    check("the elevator keeps its contract size (1.8 m shaft) AND its place",
           len([e for e in big["extras"] if e["kind"] == "elevator_shaft"
-               and near(e["size"][0], 1.8)]) == 1,
+               and near(e["size"][0], 1.8)]) == 1
+          and near([e for e in big["extras"]
+                    if e["kind"] == "elevator_cabin"][0]["center"][0], 3.0),
           str(sorted({e["size"][0] for e in big["extras"]
                       if e["kind"] == "elevator_shaft"})))
 
@@ -288,14 +306,14 @@ def full_edges(sc: dict, level: int = 0) -> int:
 
 def contour_room_fixture() -> dict:
     """Contour = the whole square, ONE room whose south wall lies ON the south
-    contour line: plan x 0.2…0.6, y 0.7…1.0 → world x −3…1, z 2…5. Its south
+    contour line: world x −3…1, z 2…5. Its south
     wall carries a 1.0 m (real) door at 0.5."""
     return {
         "id": "loc",
         "map3d": {"plan_width_m": PLAN_W, "storey_height_m": STOREY_REAL,
-                  "outline": [[0, 0], [1, 0], [1, 1], [0, 1]]},
+                  "outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]]},
         "rooms": [{"id": "c", "name": "C", "layout": {
-            "x": 0.2, "y": 0.7, "w": 0.4, "d": 0.3, "level": 0,
+            "x": -3.0, "y": 2.0, "w": 4.0, "d": 3.0, "level": 0,
             "openings": [{"edge": 2, "at": 0.5, "type": "door",
                           "width_m": 1.0, "height_m": 2.1, "to": "outside"}]}}],
     }
@@ -372,8 +390,8 @@ def test_contour_walls() -> None:
     # A CONCAVE room: the outward side of a wall follows the hull's clockwise
     # winding (interior to the RIGHT of every edge), NOT the room's average
     # vertex. Room "L" occupies world x −4…2 / z −4…−3 plus x −4…−3 / z −4…2,
-    # i.e. the unit outline (0,0) (1,0) (1,⅙) (⅙,⅙) (⅙,1) (0,1) over the plan
-    # rectangle x 0.1…0.7, y 0.1…0.7 → each unit step is 6 world metres.
+    # i.e. the room-local outline (0,0) (6,0) (6,1) (1,1) (1,6) (0,6) metres
+    # over the rectangle x −4…2, y −4…2.
     # Its edge 2 runs (2, −3) → (−3, −3), u = (−1, 0), length 5 — the inner
     # wall facing the cut-out corner. Outward is (uz, −ux) = (0, 1), while the
     # vertex average (−1⅔, −1⅔) lies IN the cut-out, i.e. outside the room, and
@@ -384,11 +402,11 @@ def test_contour_walls() -> None:
     ell = scene_recipe.compose_scene({
         "id": "loc",
         "map3d": {"plan_width_m": PLAN_W, "storey_height_m": STOREY_REAL,
-                  "outline": [[0, 0], [1, 0], [1, 1], [0, 1]]},
+                  "outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]]},
         "rooms": [{"id": "L", "name": "L", "layout": {
-            "x": 0.1, "y": 0.1, "w": 0.6, "d": 0.6, "level": 0,
-            "outline": [[0, 0], [1, 0], [1, 1 / 6], [1 / 6, 1 / 6],
-                        [1 / 6, 1], [0, 1]],
+            "x": -4.0, "y": -4.0, "w": 6.0, "d": 6.0, "level": 0,
+            "outline": [[0, 0], [6, 0], [6, 1], [1, 1],
+                        [1, 6], [0, 6]],
             "openings": [{"edge": 2, "at": 0.5, "type": "door",
                           "width_m": 1.0, "to": "outside"}]}}],
     }, plan_width_m=PLAN_W)
@@ -407,7 +425,7 @@ def test_contour_walls() -> None:
     # → x −2.5 … −3.5. Level 0 keeps room "a"'s own gap at −1.5 … −2.5.
     upper = scene_recipe.compose_scene(fixture([
         {"id": "u", "name": "U", "layout": {
-            "x": 0.1, "y": 0.1, "w": 0.2, "d": 0.2, "level": 1,
+            "x": -4.0, "y": -4.0, "w": 2.0, "d": 2.0, "level": 1,
             "openings": [{"edge": 2, "at": 0.5, "type": "door",
                           "width_m": 1.0, "to": "outside"}]}}]),
         plan_width_m=PLAN_W)
@@ -423,7 +441,7 @@ def test_contour_walls() -> None:
     check("a storey without an outside door keeps its ring closed",
           full_edges(scene_recipe.compose_scene(
               {**fixture(), "rooms": [{"id": "u", "layout": {
-                  "x": 0.1, "y": 0.1, "w": 0.2, "d": 0.2, "level": 1}}]},
+                  "x": -4.0, "y": -4.0, "w": 2.0, "d": 2.0, "level": 1}}]},
               plan_width_m=PLAN_W), level=1) == 4)
 
 
@@ -451,7 +469,7 @@ def test_no_building_entrance() -> None:
     # a's east door names it, so the doorway has two rooms and outside=false.
     inner = scene_recipe.compose_scene(door_fixture(
         extra_rooms=[{"id": "b", "name": "B", "layout": {
-            "x": 0.5, "y": 0.1, "w": 0.2, "d": 0.3, "level": 0}}],
+            "x": 0.0, "y": -4.0, "w": 2.0, "d": 3.0, "level": 0}}],
         a_openings=[{"edge": 1, "at": 0.5, "type": "door", "width_m": 1.0,
                      "to": "b"}]), plan_width_m=PLAN_W)
     check("an inner door leaves the hull closed and the finding standing",
@@ -463,7 +481,7 @@ def test_no_building_entrance() -> None:
     # contour is not something one puts a door into, so nothing is reported.
     outdoor = scene_recipe.compose_scene(
         {**fixture(), "rooms": [{"id": "garden", "layout": {
-            "x": 0.1, "y": 0.6, "w": 0.3, "d": 0.2, "level": 0,
+            "x": -4.0, "y": 1.0, "w": 3.0, "d": 2.0, "level": 0,
             "always_visible": True}}]}, plan_width_m=PLAN_W)
     check("a contour with only outdoor rooms is no sealed building",
           outdoor["problems"] == [], str(outdoor["problems"]))
@@ -493,7 +511,7 @@ def test_rooms_without_layout() -> None:
     one = scene_recipe.compose_scene(
         {**fixture(), "rooms": [
             {"id": "a", "name": "A", "layout": {
-                "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0,
+                "x": -4.0, "y": -4.0, "w": 4.0, "d": 3.0, "level": 0,
                 "openings": [{"edge": 0, "at": 0.5, "type": "window",
                               "width_m": 2.0, "height_m": 1.2,
                               "sill_m": 0.9}]}},
@@ -575,7 +593,7 @@ def test_openings_without_walls() -> None:
     # area inside an area model) — the combination is the trap, not the flag.
     bare = scene_recipe.compose_scene(
         {**fixture(), "rooms": [{"id": "a", "name": "A", "layout": {
-            "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0,
+            "x": -4.0, "y": -4.0, "w": 4.0, "d": 3.0, "level": 0,
             "no_walls": True}}]}, plan_width_m=PLAN_W)
     check("a wall-less room without openings stays silent",
           bare["problems"] == [], str(bare["problems"]))
@@ -584,7 +602,7 @@ def test_openings_without_walls() -> None:
     # never spoke up in any of the cases above.
     outdoor = scene_recipe.compose_scene(
         {**fixture(), "rooms": [{"id": "garden", "name": "Garden", "layout": {
-            "x": 0.1, "y": 0.6, "w": 0.3, "d": 0.2, "level": 0,
+            "x": -4.0, "y": 1.0, "w": 3.0, "d": 2.0, "level": 0,
             "always_visible": True,
             "openings": [{"edge": 0, "at": 0.5, "type": "door",
                           "width_m": 1.0, "height_m": 2.1}]}}]},
@@ -633,22 +651,22 @@ def test_contour_wall_texture() -> None:
 
 
 # ── Area locations (plan-area-locations.md) ────────────────────────────
-# Contour covers the LEFT HALF of the reference square (world x −4…0), so
+# Contour covers the LEFT HALF of the location (world x −5…0), so
 # "outside the floor plan" is expressible at all. Four rooms, one per case.
 AREA_ROOMS = [
     # indoor inside  -> ordinary room, no cutout of its own
     {"id": "in", "name": "In", "layout": {
-        "x": 0.1, "y": 0.1, "w": 0.2, "d": 0.2, "level": 0}},
+        "x": -4.0, "y": -4.0, "w": 2.0, "d": 2.0, "level": 0}},
     # indoor OUTSIDE -> cuts its own hole (the hut off to the side)
     {"id": "out", "name": "Out", "layout": {
-        "x": 0.7, "y": 0.1, "w": 0.2, "d": 0.2, "level": 0}},
+        "x": 2.0, "y": -4.0, "w": 2.0, "d": 2.0, "level": 0}},
     # outdoor OUTSIDE -> zone ON the model: no plate, but an overlay
     {"id": "zone", "name": "Zone", "layout": {
-        "x": 0.7, "y": 0.6, "w": 0.2, "d": 0.2, "level": 0,
+        "x": 2.0, "y": 1.0, "w": 2.0, "d": 2.0, "level": 0,
         "always_visible": True}},
     # outdoor inside -> § A5 unchanged: thickness-0 plate, no overlay
     {"id": "yard", "name": "Yard", "layout": {
-        "x": 0.1, "y": 0.6, "w": 0.2, "d": 0.2, "level": 0,
+        "x": -4.0, "y": 1.0, "w": 2.0, "d": 2.0, "level": 0,
         "always_visible": True}},
 ]
 
@@ -659,7 +677,7 @@ def area_fixture(area: bool) -> dict:
         "map3d": {
             "plan_width_m": PLAN_W,
             "storey_height_m": STOREY_REAL,
-            "outline": [[0, 0], [0.5, 0], [0.5, 1], [0, 1]],
+            "outline": [[-5, -5], [0, -5], [0, 5], [-5, 5]],
         },
         "rooms": AREA_ROOMS,
     }
@@ -714,8 +732,8 @@ def test_area_locations() -> None:
 
     by_id = {r["room_id"]: r for r in withb["rooms"]}
     ov = by_id["zone"].get("overlay")
-    # Room "zone": plate fractions x 0.7…0.9, y 0.6…0.8 → world 2.0…4.0 and
-    # 1.0…3.0; centre (3.0, 2.0), extent 2.0 × 2.0.
+    # Room "zone": world x 2.0…4.0, z 1.0…3.0;
+    # centre (3.0, 2.0), extent 2.0 × 2.0.
     check("the overlay carries the centre in world metres",
           ov and near(ov["centre"][0], 3.0) and near(ov["centre"][1], 2.0),
           str(ov))
@@ -883,7 +901,7 @@ def test_doorways() -> None:
     #   half   = min(width_m / 2, edge_length / 2)
     #   centre = clamp(at, 0, 1) × edge_length
     #   span   = [max(0, centre − half), min(edge_length, centre + half)]
-    # Room "a" (x 0.1 y 0.1 w 0.4 d 0.3) is world x −4…0, z −4…−1. Its hull is
+    # Room "a" (x −4 y −4 w 4 d 3) is world x −4…0, z −4…−1. Its hull is
     # wound clockwise, so edge 2 runs (0, −1) → (−4, −1): u = (−1, 0),
     # length 4. The S door (at 0.5, width_m 1.0) gives half = 0.5,
     # centre = 2 → span [1.5, 2.5]: clear width 1.0, middle at t = 2 →
@@ -913,13 +931,13 @@ def test_doorways() -> None:
           and untold_out[0]["outside"] is True, str(untold_out))
 
     # ── shared wall ─────────────────────────────────────────────────────
-    # Room "b" (x 0.5 y 0.1 w 0.2 d 0.3) sits east of "a": a's edge 1 runs
+    # Room "b" (x 0 y −4 w 2 d 3) sits east of "a": a's edge 1 runs
     # (0, −4) → (0, −1) with u = (0, 1) and length 3, b's edge 3 runs back
     # along the same line, so the wall is shared and b gets the mirrored copy.
     # Door at 0.5, width_m 1.6 → half = min(0.8, 1.5) = 0.8, centre = 1.5 →
     # span [0.7, 2.3]: width 1.6, middle at world (0, −4 + 1.5) = (0, −2.5).
     b_room = {"id": "b", "name": "B", "layout": {
-        "x": 0.5, "y": 0.1, "w": 0.2, "d": 0.3, "level": 0}}
+        "x": 0.0, "y": -4.0, "w": 2.0, "d": 3.0, "level": 0}}
     shared = doors(door_fixture(extra_rooms=(b_room,), a_openings=[
         {"edge": 1, "at": 0.5, "type": "door", "width_m": 1.6, "to": "b"}]))
     check("ONE physical opening on a shared wall = ONE entry",
@@ -975,13 +993,13 @@ def test_doorways() -> None:
           len(twice) == 1 and near(twice[0]["width_m"], 1.0), str(twice))
 
     # ── corner clamp ────────────────────────────────────────────────────
-    # Room "c" (x 0.6 y 0.6 w 0.2 d 0.2) is world x 1…3, z 1…3; edge 0 runs
+    # Room "c" (x 1 y 1 w 2 d 2) is world x 1…3, z 1…3; edge 0 runs
     # (1, 1) → (3, 1), u = (1, 0), length 2. A door AT the corner (at 0.0)
     # with width_m 2.0 → half = min(1.0, 1.0) = 1.0, centre = 0 →
     # [max(0, −1.0), 1.0] = [0, 1.0]: the clear width is 1.0, NOT 2.0, and the
     # middle sits at t = 0.5 → world (1.5, 1).
     c_room = {"id": "c", "name": "C", "layout": {
-        "x": 0.6, "y": 0.6, "w": 0.2, "d": 0.2, "level": 0, "openings": [
+        "x": 1.0, "y": 1.0, "w": 2.0, "d": 2.0, "level": 0, "openings": [
             {"edge": 0, "at": 0.0, "type": "door", "width_m": 2.0,
              "to": "outside"}]}}
     corner = [x for x in doors(fixture((c_room,))) if "c" in x["rooms"]]
@@ -1020,12 +1038,12 @@ def test_doorways() -> None:
 
     # Two rooms that touch in that same corner (0, −1), each with its own
     # exterior door pushed into it — no shared wall, so no mirror; room "d"
-    # (x 0.5 y 0.4 w 0.2 d 0.2) is world x 0…2, z −1…1 and its N edge runs
+    # (x 0 y −1 w 2 d 2) is world x 0…2, z −1…1 and its N edge runs
     # (0, −1) → (2, −1): at 0.0, 1.0 m → [0, 0.5], middle (0.25, −1),
     # along (1, 0). Perpendicular to a's east door — two thresholds, and no
     # passage between two rooms that share nothing but a point.
     d_room = {"id": "d", "name": "D", "layout": {
-        "x": 0.5, "y": 0.4, "w": 0.2, "d": 0.2, "level": 0, "openings": [
+        "x": 0.0, "y": -1.0, "w": 2.0, "d": 2.0, "level": 0, "openings": [
             {"edge": 0, "at": 0.0, "type": "door", "width_m": 1.0,
              "to": "outside"}]}}
     touch = doors(door_fixture(extra_rooms=(d_room,), a_openings=[
@@ -1121,7 +1139,7 @@ def test_threshold_base_y() -> None:
           len(lifted) == 1 and near(lifted[0]["base_y"], 0.12), str(lifted))
     # Party wall a|b: a keeps the foot, b's diorama declares 0.177.
     b_room = {"id": "b", "name": "B", "layout": {
-        "x": 0.5, "y": 0.1, "w": 0.2, "d": 0.3, "level": 0}}
+        "x": 0.0, "y": -4.0, "w": 2.0, "d": 3.0, "level": 0}}
     party = door_fixture(extra_rooms=(b_room,), a_openings=[
         {"edge": 1, "at": 0.5, "type": "door", "width_m": 1.6, "to": "b"}])
     joined = with_metas({"b": {"width_m": 3.0, "walk_y": 0.057}}, party)
@@ -1278,8 +1296,10 @@ def model_fixture(*, room_width_m: float = 4.0, map_yaw=None,
                   map_rotation_2d: int = 90, clip_d: bool = False,
                   clip_garden: bool = False, d_outline=None) -> dict:
     d_layout = {
-        "x": 0.6, "y": 0.6, "w": 0.2, "d": 0.2, "level": 0,
-        "model_at": [0.25, 0.75], "model_offset_y": 0.1, "rotation": 45}
+        "x": 1.0, "y": 1.0, "w": 2.0, "d": 2.0, "level": 0,
+        # model_at is METRES from the room's min corner (v6 Nr. 2): the old
+        # fractions [0.25, 0.75] of a 2 × 2 m room ARE [0.5, 1.5] m.
+        "model_at": [0.5, 1.5], "model_offset_y": 0.1, "rotation": 45}
     if clip_d:
         d_layout["clip_model"] = True
     if d_outline:
@@ -1295,9 +1315,11 @@ def model_fixture(*, room_width_m: float = 4.0, map_yaw=None,
     # Room "a" gets the example prop AND a room marker.
     for room in loc["rooms"]:
         if room["id"] == "a":
-            room["layout"]["props"] = [{"prop_id": "table", "at": [0.5, 0.5],
+            # Room "a" is 4 × 3 m, so the old fractions [0.5, 0.5] and
+            # [0.25, 0.5] are [2.0, 1.5] and [1.0, 1.5] metres.
+            room["layout"]["props"] = [{"prop_id": "table", "at": [2.0, 1.5],
                                         "yaw": 90}]
-            room["layout"]["markers"] = [{"at": [0.25, 0.5], "animation": "idle",
+            room["layout"]["markers"] = [{"at": [1.0, 1.5], "animation": "idle",
                                           "rotation": 180, "offset_y": 0.05,
                                           "tilt": -12.0, "roll": 5.0}]
     return loc
@@ -1435,7 +1457,7 @@ def test_markers_figures() -> None:
     room_marker = [m for m in sc["markers"] if m["source"] == "room"]
     check("one room marker", len(room_marker) == 1, str(len(room_marker)))
     m = room_marker[0]
-    # Room a: x 0.1 w 0.4 → at 0.25 = 0.2 abs → world −3.0; y 0.1 d 0.3 → 0.25 abs.
+    # Room a starts at (−4, −4); marker at (1.0, 1.5) m → world (−3.0, −2.5).
     check("room marker in world metres", m["at_world"] == [-3.0, -2.5],
           str(m["at_world"]))
     check("offset_y is additive to the storey floor", near(m["y_world"], 0.05),
@@ -1498,7 +1520,7 @@ def test_clip_outline() -> None:
           str(spec_of(plain, "room", "d").keys()))
     clipped = model_scene(clip_d=True)
     d = spec_of(clipped, "room", "d")
-    # Room d: x 0.6 y 0.6 w 0.2 d 0.2 → abs 0.6…0.8 → world (f − 0.5) × 10.
+    # Room d: x 1 y 1 w 2 d 2 → world x 1…3, z 1…3.
     check("clip_outline = the room shell in world metres",
           d.get("clip_outline") == [[1.0, 1.0], [3.0, 1.0],
                                     [3.0, 3.0], [1.0, 3.0]],
@@ -1514,8 +1536,8 @@ def test_clip_outline() -> None:
           bool(outdoor) and "clip_outline" not in outdoor, str(outdoor))
 
     # Cap raised 32 → 64 for tessellated curved hulls (v5.2 Nr. 11).
-    ring = [[0.5 + 0.5 * math.cos(2 * math.pi * i / 65),
-             0.5 + 0.5 * math.sin(2 * math.pi * i / 65)] for i in range(65)]
+    ring = [[1.0 + 1.0 * math.cos(2 * math.pi * i / 65),
+             1.0 + 1.0 * math.sin(2 * math.pi * i / 65)] for i in range(65)]
     capped = model_scene(clip_d=True, d_outline=ring)
     check("65 points > the 64-point cap → flag ignored",
           "clip_outline" not in spec_of(capped, "room", "d"),
@@ -1573,29 +1595,30 @@ def xorshift32_ref(seed: int):
 
 def test_curved_outline() -> None:
     print("\n[12] curved room hull (v5.2 Nr. 11)")
-    # Room "a" (x 0.1, y 0.1, w 0.4, d 0.3), unit-square hull, edge 1
-    # ((1,0) → (1,1)) curved INWARD with C = (0.5, 0.5). Hand derivation:
-    #   B(t) = ((1−t)²·1 + 2t(1−t)·0.5 + t²·1, 2t(1−t)·0.5 + t²·1)
-    #        = (1 − t + t², t)
-    #   t = 0.25 → (0.8125, 0.25) → abs (0.1 + 0.8125·0.4, 0.1 + 0.25·0.3)
-    #            = (0.425, 0.175)
-    #   t = 0.5  → (0.75, 0.5)   → abs (0.4, 0.25) → world (−1.0, −2.5)
+    # Room "a" (x −4, y −4, w 4, d 3), rectangle hull in room metres
+    # [[0,0],[4,0],[4,3],[0,3]], edge 1 ((4,0) → (4,3)) curved INWARD with
+    # C = (2, 1.5) — the metric twin of the old bbox fractions (1,0)/(1,1)
+    # and C (0.5, 0.5). Hand derivation:
+    #   B(t) = ((1−t)²·4 + 2t(1−t)·2 + t²·4, 2t(1−t)·1.5 + t²·3)
+    #        = (4·(1 − t + t²), 3t)
+    #   t = 0.25 → (3.25, 0.75) → abs (−4 + 3.25, −4 + 0.75) = (−0.75, −3.25)
+    #   t = 0.5  → (3.0, 1.5)   → abs (−1.0, −2.5)
     # Vertex indices: v0=0, v1=1, inserted t=1/8…7/8 at 2…8, v2=9, v3=10 —
     # so the S door on control edge 2 shifts to tessellated edge 9.
     loc = fixture()
     for room in loc["rooms"]:
         if room["id"] == "a":
-            room["layout"]["outline"] = [[0, 0], [1, 0], [1, 1], [0, 1]]
-            room["layout"]["outline_curves"] = [{"edge": 1, "c": [0.5, 0.5]}]
+            room["layout"]["outline"] = [[0, 0], [4, 0], [4, 3], [0, 3]]
+            room["layout"]["outline_curves"] = [{"edge": 1, "c": [2.0, 1.5]}]
     sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
     block = next(r for r in sc["rooms"] if r["room_id"] == "a")
     ol = block["outline"]
     check("4 vertices + 7 inserted points", len(ol) == 11, str(len(ol)))
-    check("B(0.25) lands at plan (0.425, 0.175)",
-          near(ol[3][0], 0.425, 1e-4) and near(ol[3][1], 0.175, 1e-4),
+    check("B(0.25) lands at world (−0.75, −3.25)",
+          near(ol[3][0], -0.75, 1e-3) and near(ol[3][1], -3.25, 1e-3),
           str(ol[3]))
-    check("B(0.5) lands at plan (0.4, 0.25)",
-          near(ol[5][0], 0.4, 1e-4) and near(ol[5][1], 0.25, 1e-4), str(ol[5]))
+    check("B(0.5) lands at world (−1.0, −2.5)",
+          near(ol[5][0], -1.0, 1e-3) and near(ol[5][1], -2.5, 1e-3), str(ol[5]))
     edges = sorted(int(o["edge"]) for o in block["openings"])
     check("window keeps edge 0, S door shifts 2 → 9", edges == [0, 9],
           str(edges))
@@ -1612,20 +1635,21 @@ def test_curved_outline() -> None:
 
 def scatter_fixture(seed: int = 1, count: int = 2, road: bool = False,
                     spacing: float = 0.0) -> dict:
-    # Room "field": abs fractions 0.1…0.5 both axes → metres 1…5 (× PLAN_W).
-    # Scatter is a PLACEMENT property (v5.2 Nr. 12, Neufassung): the anchor
-    # table sits at the room centre and throws `count` copies.
-    anchor = {"prop_id": "table", "at": [0.5, 0.5],
+    # Room "field": world x −4…0, z −4…0 (the old fractions 0.1…0.5 on both
+    # axes). Scatter is a PLACEMENT property (v5.2 Nr. 12, Neufassung): the
+    # anchor table sits at the room centre — [2, 2] m of a 4 × 4 m room, the
+    # old fraction [0.5, 0.5] — and throws `count` copies.
+    anchor = {"prop_id": "table", "at": [2.0, 2.0],
               "scatter_count": count, "scatter_seed": seed}
     if spacing:
         anchor["scatter_spacing_m"] = spacing
     rooms = [{"id": "field", "name": "F", "layout": {
-        "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.4, "level": 0,
+        "x": -4.0, "y": -4.0, "w": 4.0, "d": 4.0, "level": 0,
         "always_visible": True, "props": [anchor]}}]
     if road:
-        # Band across the field: abs y 0.28…0.32 → metres 5.6…6.4.
+        # Band across the field: world z −2.2…−1.8.
         rooms.append({"id": "road", "name": "R", "layout": {
-            "x": 0.1, "y": 0.28, "w": 0.4, "d": 0.04, "level": 0,
+            "x": -4.0, "y": -2.2, "w": 4.0, "d": 0.4, "level": 0,
             "always_visible": True}})
     return {"id": "loc", "map3d": {"plan_width_m": PLAN_W,
                                    "storey_height_m": STOREY_REAL},
@@ -1640,27 +1664,28 @@ def test_scatter() -> None:
     check("anchor + two scattered copies in the payload", len(props) == 3,
           str(len(props)))
     # The anchor is the FIRST placement (manual entries precede copies) and
-    # stays where it was put: room centre = abs (0.3, 0.3) → world (−2, −2).
+    # stays where it was put: room min corner (−4, −4) + (2, 2) = (−2, −2).
     check("the anchor placement stays put",
           near(props[0]["anchor"][0], -2.0) and near(props[0]["anchor"][1], -2.0),
           str(props[0]["anchor"]))
     # Independent replay: per candidate EXACTLY three draws u/v/yaw over the
-    # bbox (metres 1…5), accept inside the hull — spacing 0 means NO
-    # distance rule, copies may overlap (v5.2 Nr. 12 Neufassung).
-    # Back to world metres: a metre point is the fraction p / PLAN_W, and the
-    # payload anchor is (fraction − 0.5) × extent.
+    # hull's bbox — which since v6 Nr. 2 is the WORLD box x/z −4…0, so the
+    # draw lands straight in payload coordinates (the old chain sampled
+    # 1…5 in "fraction × plan width" and subtracted 5 on the way out: the
+    # identical number). Spacing 0 means NO distance rule, copies may overlap
+    # (v5.2 Nr. 12 Neufassung).
     rng = xorshift32_ref(1)
     expect = []
     while len(expect) < 2:
         u = next(rng) / 2 ** 32
         v = next(rng) / 2 ** 32
         yw = next(rng) / 2 ** 32
-        px, py = 1 + u * 4, 1 + v * 4
+        px, py = -4 + u * 4, -4 + v * 4
         expect.append((px, py, round(yw * 360, 1)))
     for i, (px, py, pyaw) in enumerate(expect):
         spec = props[i + 1]
-        wx = (round(px / PLAN_W, 4) - 0.5) * EXTENT
-        wy = (round(py / PLAN_W, 4) - 0.5) * EXTENT
+        wx = round(px, 4)
+        wy = round(py, 4)
         check(f"copy {i + 1} at the independently derived position",
               near(spec["anchor"][0], wx, 1e-3)
               and near(spec["anchor"][1], wy, 1e-3)
@@ -1694,8 +1719,8 @@ def test_scatter() -> None:
                   and not (near(m["anchor"][0], -2.0) and near(m["anchor"][1], -2.0))]
     check("a dense scatter places (short placement allowed)",
           1 <= len(tree_specs) <= 20, str(len(tree_specs)))
-    # Road band world z: metres 5.6…6.4 → fractions 0.28…0.32 → world
-    # −2.2…−1.8. No scattered centre may fall into the sibling hull.
+    # Road band world z −2.2…−1.8. No scattered centre may fall into the
+    # sibling hull.
     check("the road stays tree-free (sibling keep-out)",
           all(not (-2.2 - 1e-6 <= m["anchor"][1] <= -1.8 + 1e-6)
               for m in tree_specs),
@@ -1792,8 +1817,8 @@ def test_boundary_openings() -> None:
 # Hand-derived (§ B5a):
 #   * area = 10·10 − 5·5 = 75 m², shoelace 150/2 — positive, so the stored
 #     winding is kept as drawn;
-#   * bounding box 10 × 10, so ``plan_width_m`` 10 and the reference square
-#     runs −5…5 on both axes — every grid fraction f is the metre
+#   * bounding box 10 × 10, so ``plan_width_m`` 10 and the terrain frame
+#     runs −5…5 on both axes — every lattice coordinate f is the metre
 #     (f − 0.5)·10;
 #   * the NOTCH is the quadrant x > 0, z > 0;
 #   * edge 2 runs P2 (5,0) → P3 (0,0), direction (−5, 0). At ``at`` 0.5 that
@@ -1837,7 +1862,7 @@ def test_boundary_polygon() -> None:
           near(level[0]["top_y"], 0.08) and near(level[0]["thickness"], 0.14))
     # A DRAWN building contour is the more specific shape and still wins.
     with_contour = l_fixture()
-    with_contour["map3d"]["outline"] = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    with_contour["map3d"]["outline"] = [[-5, -5], [5, -5], [5, 5], [-5, 5]]
     lvl2 = [p for p in scene_recipe.compose_scene(
         with_contour, plan_width_m=PLAN_W)["plates"] if not p.get("room_id")]
     check("a drawn building contour still wins over the boundary",
@@ -1849,7 +1874,9 @@ def test_boundary_polygon() -> None:
 
     # ── Nr. 4: the relief is clipped at the polygon ─────────────────────
     # The grid is the default 16 cells → 17 support points per side, point
-    # (i, j) at fraction (i/16, j/16), i.e. metre ((i/16)−0.5)·10.
+    # (i, j) at lattice (i/16, j/16) of the terrain frame — the square of
+    # edge 10 over the L's bounding box, which is centred on the pin, so the
+    # metre is ((i/16)−0.5)·10 exactly as before.
     #   i = j = 12  →  (2.5, 2.5): inside the NOTCH, so outside the L → 0.
     #   i = 4, j = 12 → (−2.5, 2.5): inside the L (and inside the outdoor
     #     "garden", which is a RELIEF room, so nothing else pins it) → the
@@ -1951,8 +1978,11 @@ def relief_fixture(seed: int = 1, amplitude: float = 2.0, *,
         if room["id"] == "road":
             if road_flat:
                 room["layout"]["relief_flat"] = True
-            # Abs (0.3, 0.3) is inside the road band (x 0.1…0.5, y 0.28…0.32).
-            room["layout"]["props"] = [{"prop_id": "table", "at": [0.3, 0.3]}]
+            # (1.2, 0.12) m from the road's min corner (−4, −2.2) is world
+            # (−2.8, −2.08), inside the band — the metric twin of the old
+            # rect fraction [0.3, 0.3].
+            room["layout"]["props"] = [{"prop_id": "table",
+                                        "at": [1.2, 0.12]}]
     return loc
 
 
@@ -1988,8 +2018,9 @@ def test_terrain() -> None:
     check("interior point (1,1) = hash draw × amplitude",
           near(grid[1][1], expect_11, 1e-9),
           f'{grid[1][1]} vs {expect_11}')
-    # Flat hull = 0: (i=3, j=5) sits at plan (0.1875, 0.3125), inside the
-    # road band (x 0.1…0.5, y 0.28…0.32) that carries relief_flat.
+    # Flat hull = 0: (i=3, j=5) sits at lattice (0.1875, 0.3125) = world
+    # (−3.125, −1.875), inside the road band (x −4…0, z −2.2…−1.8) that
+    # carries relief_flat.
     check("a point inside the relief_flat road hull is zero",
           grid[5][3] == 0.0, str(grid[5][3]))
     unflagged = scene_recipe.compose_scene(relief_fixture(road_flat=False),
@@ -2004,8 +2035,9 @@ def test_terrain() -> None:
     mean = (grid[1][1] + grid[1][2] + grid[2][1] + grid[2][2]) / 4
     check("bilinear midpoint of a 2×2 patch = the corner average",
           near(mid, mean, 1e-9), f'{mid} vs {mean}')
-    # The field's manual anchor is the room centre: layout at [0.5, 0.5] of a
-    # room at x/y 0.1 + w/d 0.4 → ABS plan (0.3, 0.3) → world (−2, −2).
+    # The field's manual anchor is the room centre: layout at [2, 2] m of a
+    # room at (−4, −4) → world (−2, −2), i.e. lattice coordinate
+    # (−2 + 5)/10 = 0.3 of the terrain frame.
     # 0.3 × 16 = 4.8, so the sample sits in cell (4, 4) at tx = ty = 0.8 and
     # the bilinear weights are 0.04 / 0.16 / 0.16 / 0.64. The two southern
     # corners (j = 5 → v = 0.3125) lie in the flat road band and are 0, so by

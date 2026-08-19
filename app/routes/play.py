@@ -1206,7 +1206,7 @@ def play_room_model(room_id: str, request: Request, tier: str = ""):
 @router.get("/play/rooms/{room_id}/recipe")
 def play_room_recipe(room_id: str):
     """The furnished room in ONE payload (plan-room-props.md): hull outline
-    in absolute plate fractions, openings on polygon edge indices — including
+    in absolute local metres, openings on polygon edge indices — including
     the neighbours' openings on shared walls — prop placements joined with
     their real dims (REAL-SIZE rule) and the object-local markers composed
     into placement-relative world transforms. 404 = the room has no layout
@@ -1217,20 +1217,13 @@ def play_room_recipe(room_id: str):
     loc = find_location_by_room(room_id)
     room = None
     siblings = []
-    plan_width_m = 0.0
     if loc:
         rooms = loc.get("rooms") or []
         room = next((r for r in rooms if r.get("id") == room_id), None)
         siblings = [r for r in rooms if r.get("id") != room_id]
-        # Only the EXPLICIT scale anchor — deriving it from the building model
-        # parses the whole GLB, far too much for a polled endpoint. Without it
-        # the composer falls back to the 8 m reference plate, exactly like the
-        # editor does when it has no plan width either.
-        try:
-            plan_width_m = float((loc.get("map3d") or {}).get("plan_width_m") or 0)
-        except (TypeError, ValueError, AttributeError):
-            plan_width_m = 0.0
-    recipe = compose_recipe(room, siblings, plan_width_m) if room else None
+    # No scale input any more (contract v6 Nr. 2): a layout carries its own
+    # metres, so the recipe needs nothing but the room and its siblings.
+    recipe = compose_recipe(room, siblings) if room else None
     if not recipe:
         raise HTTPException(status_code=404, detail="No layout")
     return recipe

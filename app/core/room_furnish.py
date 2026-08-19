@@ -62,7 +62,6 @@ MAX_DIM_M = 5.0
 MODEL_POLL_SECONDS = 5
 MODEL_TIMEOUT_SECONDS = 30 * 60
 
-_UNIT_SQUARE = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
 
 _lock = threading.Lock()
 # room_ids with a running orchestrator thread (double-start guard, pattern
@@ -207,24 +206,22 @@ def _poly_area(pts: List[List[float]]) -> float:
 
 def _geometry(loc: Dict[str, Any], room: Dict[str, Any]) -> Dict[str, Any]:
     """The room's floor plan in REAL METRES. Raises when the room has no
-    layout or the location has no scale anchor (the metre polygon is
-    undefined without one)."""
+    layout.
+
+    Since contract v6 Nr. 2 a layout IS metres — origin at the room's min
+    corner, which is exactly the frame ``furnish_solver`` works in — so this
+    only reads what is stored. The scale-anchor precondition is gone with the
+    fraction system: there is no plan width left to be missing.
+    """
     lay = room.get("layout")
     if not isinstance(lay, dict) or not all(k in lay for k in ("x", "y", "w", "d")):
         raise FurnishError(
             "This room has no floor plan yet — draw its layout first.", 409)
-    from app.core.location_model3d import derive_plan_width_m
-    plan_w = derive_plan_width_m(str(loc.get("id") or ""), loc.get("map3d"))
-    if plan_w <= 0:
-        raise FurnishError(
-            "This location has no scale anchor: set the plan width (m) or give "
-            "the building model a declared height.", 409)
-    w_m = round(float(lay["w"]) * plan_w, 3)
-    d_m = round(float(lay["d"]) * plan_w, 3)
-    pts = lay.get("outline") or _UNIT_SQUARE
-    outline_m = [[round(float(p[0]) * w_m, 3), round(float(p[1]) * d_m, 3)]
-                 for p in pts]
-    return {"layout": lay, "plan_width_m": plan_w, "w_m": w_m, "d_m": d_m,
+    w_m = round(float(lay["w"]), 3)
+    d_m = round(float(lay["d"]), 3)
+    pts = lay.get("outline") or [[0.0, 0.0], [w_m, 0.0], [w_m, d_m], [0.0, d_m]]
+    outline_m = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in pts]
+    return {"layout": lay, "w_m": w_m, "d_m": d_m,
             "outline_m": outline_m, "area_m2": round(_poly_area(outline_m), 2),
             "is_rect": not lay.get("outline")}
 
@@ -706,8 +703,8 @@ def _phase_place(room_id: str) -> None:
         {"prop_id": p.get("prop_id"),
          "name": (library.get(str(p.get("prop_id") or "")) or {}).get("name")
          or str(p.get("prop_id") or ""),
-         "x_m": round(float((p.get("at") or [0, 0])[0]) * geom["w_m"], 2),
-         "y_m": round(float((p.get("at") or [0, 0])[1]) * geom["d_m"], 2)}
+         "x_m": round(float((p.get("at") or [0, 0])[0]), 2),
+         "y_m": round(float((p.get("at") or [0, 0])[1]), 2)}
         for p in placed_props]
     template_openings = [
         {"type": op.get("type") or "door",
@@ -836,7 +833,7 @@ def start(room_id: str, exclude: Any = None) -> Dict[str, Any]:
     pre-filters the library the LLM gets to see (see _valid_exclude) — it is
     persisted with the job so retry/continue keep the same filter."""
     loc, room = _load_room(room_id)
-    _geometry(loc, room)  # layout + scale anchor are start conditions
+    _geometry(loc, room)  # a drawn layout is the start condition
     if _get_row(room_id):
         raise FurnishError("A furnishing job for this room is already open.", 409)
     _insert_row(room_id, str(loc.get("id") or ""))
@@ -853,7 +850,7 @@ def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
     with nothing to generate and falls straight through to placement —
     review/accept work exactly like the LLM path."""
     loc, room = _load_room(room_id)
-    _geometry(loc, room)  # layout + scale anchor are start conditions here too
+    _geometry(loc, room)  # a drawn layout is the start condition here too
     if _get_row(room_id):
         raise FurnishError("A furnishing job for this room is already open.", 409)
     raw = proposal.get("existing") if isinstance(proposal, dict) else None

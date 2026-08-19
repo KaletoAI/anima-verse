@@ -640,6 +640,28 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     }
 
 
+# Contract v6 Nr. 2 ("the metric wave"): every stored plan coordinate is a
+# LENGTH IN METRES in the location's local frame (origin = the anchor pin,
+# axes = § A1.1) or in a room's own frame (origin = the room's min corner).
+# ONE clamp and ONE rounding for all of them: a location half a kilometre
+# across in either direction is beyond anything the world map places, and the
+# centimetre is the resolution ``boundary``/``plan_width_m`` already use.
+_PLAN_MAX_M = 500.0
+
+
+def _metre(value: Any, limit: float = _PLAN_MAX_M) -> Optional[float]:
+    """One plan coordinate in metres — clamped to ±``limit``, rounded to the
+    centimetre. ``None`` for anything that is not a finite number, so the
+    caller can drop the whole point/entry instead of inventing a zero."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    return round(min(max(v, -limit), limit), 2)
+
+
 def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     """Whitelist + coerce the optional 3D-map metadata object (AV3D-1).
 
@@ -670,7 +692,7 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # Building placement on the map tile (docs/schnittstellen-3d.md):
     # rotation = yaw in degrees (explicit 0 is meaningful — absent falls back
     # to map_rotation_2d on the client), size = the model's share of the
-    # location's reference square (]0, 1]; 1 = edge to edge, absent = 1).
+    # location's bounding box (]0, 1]; 1 = edge to edge, absent = 1).
     # A model can no longer be LARGER than its location — a location that
     # needs more room is WIDER (plan_width_m), which keeps the promise
     # "plan edge == model edge".
@@ -692,16 +714,18 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # with v6 (Nr. 4): a location faces the way its anchor pin says (§ A1.1),
     # and there is no second rotation anywhere. Nothing reads the field and it
     # is not kept here either: a location saved once drops it.
-    # ``extent_m`` — the world-metre size of the reference square — is GONE
-    # with E4: the reference square IS the footprint, so its edge is
+    # ``extent_m`` — the world-metre size of the old reference square — is
+    # GONE with E4: the footprint decides, so the width is
     # ``plan_width_m`` and k = 1 (scene_recipe.derive_scalars). Nothing reads
     # the field any more, and it is not kept here either: a location saved
     # once drops it.
-    # The width of the location in metres — THE scale anchor and the ONE
-    # length everything derives from: the footprint on the world map
-    # (§ A1.1), the reference square of the scene, room rects, figures
-    # (1.70 m), props and the storey height. Absent = no anchor; floor-plan
-    # geometry cannot be saved (see _require_scale_anchor).
+    # The width of the location in metres. SINCE v6 (Nr. 2) A DERIVED
+    # QUANTITY, not a dial and not an anchor: the wider side of the boundary's
+    # bounding box (overwritten below wherever a boundary is drawn). Room
+    # rects, props, markers and figures carry their own metres now, so nothing
+    # scales by it any more — it survives because consumer contracts do
+    # (loading radius, viewport, backdrop, ``scene.extent_m``). A submitted
+    # value is only kept for a location that has no boundary at all.
     pw = raw.get("plan_width_m")
     if pw is not None and f"{pw}".strip() != "":
         try:
@@ -765,30 +789,31 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             pass
     # Building outline (AV3D-12): a drawn polygon replacing the rectangle —
-    # points as fractions of the 8×8 reference square (auto-closed), the
-    # client renders floor plates + walls per used level from it.
+    # the floor plan of the house INSIDE the plot, from which the client
+    # renders floor plates + walls per used level.
+    # SINCE v6 (Nr. 2) IN LOCAL METRES, like ``boundary``: points relative to
+    # the anchor pin, negative values legal, rounded to the centimetre. The
+    # fraction era is gone without a reader — an old blob's [0,1] points are
+    # simply a one-metre building, which is the agreed rebuild semantics.
     ol = raw.get("outline")
     if isinstance(ol, list):
         pts = []
         for pt in ol[:64]:
             if not isinstance(pt, (list, tuple)) or len(pt) != 2:
                 continue
-            try:
-                pts.append([round(min(max(float(pt[0]), 0.0), 1.0), 4),
-                            round(min(max(float(pt[1]), 0.0), 1.0), 4)])
-            except (TypeError, ValueError):
+            u, v = _metre(pt[0]), _metre(pt[1])
+            if u is None or v is None:
                 continue
+            pts.append([u, v])
         if len(pts) >= 3:
             out["outline"] = pts
     # Elevator position (AV3D-12): placed once, valid for ALL levels — the
-    # client builds a shaft with a platform per level.
+    # client builds a shaft with a platform per level. LOCAL METRES since v6.
     ev = raw.get("elevator")
     if isinstance(ev, (list, tuple)) and len(ev) == 2:
-        try:
-            out["elevator"] = [round(min(max(float(ev[0]), 0.0), 1.0), 4),
-                               round(min(max(float(ev[1]), 0.0), 1.0), 4)]
-        except (TypeError, ValueError):
-            pass
+        ex, ez = _metre(ev[0]), _metre(ev[1])
+        if ex is not None and ez is not None:
+            out["elevator"] = [ex, ez]
     # Floor texture per LEVEL: surface-texture kind for each storey's floor
     # plate ({"0": "parquet", "-1": "stone"}). A room's own surfaces.floor
     # overrides it for the room area only — this fills the REST of the plate
@@ -827,7 +852,7 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     if out.get("area_model") and bool(raw.get("area_detail")):
         out["area_detail"] = True
     # Terrain relief (plan-area-detail-scenes.md, contract v5.2 Nr. 14): a
-    # deterministic height field over the reference square, so a detail scene
+    # deterministic height field over the terrain frame, so a detail scene
     # is not a billiard table. Only meaningful ON TOP of a detail scene —
     # without ``area_detail`` there is no composed ground to lift and no
     # relief plates to drape, so it is dropped there (same gate style as
@@ -914,43 +939,53 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     """Whitelist + coerce a room's floor-plan placement (AV3D-2).
 
     Consumed by external 3D clients; the 2D UI stores/edits but never renders
-    it. A layout counts as set when x/y/w/d are all valid (fractions of the
-    building footprint, top-left corner + size); ``level`` defaults to 0 and
-    ``rotation`` (degrees yaw) is optional. Optional too: ``markers``
+    it. A layout counts as set when x/y/w/d are all valid; ``level`` defaults
+    to 0 and ``rotation`` (degrees yaw) is optional. Optional too: ``markers``
     (figure snap spots),
     ``surfaces`` ({floor?, wall?} surface-texture kinds), ``openings``
     (doors / windows / passages, see _sanitize_opening), ``outline``
     (drawn room hull) and ``props`` (prop-library placements). Empty result
     means "unset" → client auto-grid.
 
-    ``outline`` = polygon points as fractions of the room BBOX, auto-closed
-    (no repeated closing point), winding clockwise in screen coordinates
-    (y down), bbox spanning [0,1]². Absent = the rectangle itself, i.e. the
-    implicit unit square with edge indices 0=N, 1=E, 2=S, 3=W. x/y/w/d ALWAYS
-    carry the derived bbox, so a client that only knows rectangles keeps
+    EVERYTHING HERE IS METRES (contract v6 Nr. 2 — the fraction system is
+    deleted, there is no reader for it left):
+
+    * ``x``/``y`` = the room's MIN CORNER in the LOCATION-LOCAL frame (origin
+      = the anchor pin, axes as § A1.1 — the frame ``map3d.boundary`` uses),
+      so negative values are ordinary;
+    * ``w``/``d`` = the rectangle's size in metres, both > 0;
+    * ``outline`` points and their curve control points = metres relative to
+      the room's OWN min corner, i.e. spanning 0…w / 0…d;
+    * ``markers[].at``, ``props[].at`` and ``model_at`` = metres relative to
+      that same min corner.
+
+    Only the ``at`` of an OPENING stays a fraction: it runs along one edge,
+    and an edge-relative ratio is not a world size.
+
+    ``outline`` is auto-closed (no repeated closing point) and wound clockwise
+    in screen coordinates (y down). Absent = the rectangle itself, i.e. the
+    implicit box with edge indices 0=N, 1=E, 2=S, 3=W. x/y/w/d ALWAYS carry
+    the derived bounding box, so a client that only knows rectangles keeps
     working.
     """
     if not isinstance(raw, dict):
         return {}
     out: Dict[str, Any] = {}
-    try:
-        x = float(raw.get("x"))
-        y = float(raw.get("y"))
-        w = float(raw.get("w"))
-        d = float(raw.get("d"))
-    except (TypeError, ValueError):
+    x, y = _metre(raw.get("x")), _metre(raw.get("y"))
+    w, d = _metre(raw.get("w")), _metre(raw.get("d"))
+    if x is None or y is None or w is None or d is None:
         return {}
-    if not (0 < w <= 1 and 0 < d <= 1):
+    if not (w > 0 and d > 0):
         return {}
-    out["x"] = round(min(max(x, 0.0), 1.0), 4)
-    out["y"] = round(min(max(y, 0.0), 1.0), 4)
-    out["w"] = round(w, 4)
-    out["d"] = round(d, 4)
+    out["x"] = x
+    out["y"] = y
+    out["w"] = w
+    out["d"] = d
     # Drawn room hull (plan-room-props.md): a polygon that replaces the plain
-    # rectangle. The points are BBOX-local fractions and the bbox is x/y/w/d —
-    # a hand-posted payload whose points do not span [0,1]² is renormalized
-    # here and the difference folded into x/y/w/d, so those ALWAYS describe the
-    # real bounding box.
+    # rectangle. The points are METRES relative to the room's min corner and
+    # the bounding box is x/y/w/d — a hand-posted payload whose points do not
+    # span [0,w]×[0,d] is shifted/resized here and the difference folded into
+    # x/y/w/d, so those ALWAYS describe the real bounding box.
     ol = raw.get("outline")
     if isinstance(ol, list) and 3 <= len(ol) <= 32:
         pts: List[List[float]] = []
@@ -980,9 +1015,10 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                 # Curved edges (plan-area-detail-scenes.md): the outline stays
                 # the plain CONTROL polygon; curves are the parallel sparse
                 # list ``outline_curves`` (one quadratic-bezier control point
-                # per edge, bbox-local like the points). They only survive
-                # when no outline point was dropped above — a dropped point
-                # would silently shift every edge index under them.
+                # per edge, in the room's own metres like the points). They
+                # only survive when no outline point was dropped above — a
+                # dropped point would silently shift every edge index under
+                # them.
                 curves = curve_map(raw.get("outline_curves"), len(pts)) \
                     if len(pts) == len(ol) else {}
                 # The bbox invariant covers the DELIVERED geometry: fold over
@@ -997,23 +1033,26 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                 span_u = max_u - min_u
                 span_v = max_v - min_v
                 folded = True
-                if (abs(min_u) > 1e-6 or abs(max_u - 1) > 1e-6
-                        or abs(min_v) > 1e-6 or abs(max_v - 1) > 1e-6):
-                    new_w = round(out["w"] * span_u, 4)
-                    new_d = round(out["d"] * span_v, 4)
-                    # Folding must keep the layout invariant 0 < w/d <= 1 —
-                    # points far outside the bbox would inflate it past the
-                    # footprint, so such an outline is dropped, not clamped.
-                    if (span_u > 0 and span_v > 0
-                            and 0 < new_w <= 1 and 0 < new_d <= 1):
-                        out["x"] = round(min(max(out["x"] + min_u * out["w"], 0.0), 1.0), 4)
-                        out["y"] = round(min(max(out["y"] + min_v * out["d"], 0.0), 1.0), 4)
+                if (abs(min_u) > 1e-6 or abs(max_u - out["w"]) > 1e-6
+                        or abs(min_v) > 1e-6 or abs(max_v - out["d"]) > 1e-6):
+                    # In metres the fold is a pure TRANSLATION: the hull keeps
+                    # its size, only the origin of the room's own frame moves
+                    # onto the hull's min corner (the fraction era had to
+                    # rescale here, which is exactly the mechanic v6 deleted).
+                    new_w = round(span_u, 2)
+                    new_d = round(span_v, 2)
+                    new_x = _metre(out["x"] + min_u)
+                    new_y = _metre(out["y"] + min_v)
+                    # A hull with no extent is not a room; a hull larger than
+                    # the plan clamp is dropped, not silently cut.
+                    if (0 < new_w <= _PLAN_MAX_M and 0 < new_d <= _PLAN_MAX_M
+                            and new_x is not None and new_y is not None):
+                        out["x"] = new_x
+                        out["y"] = new_y
                         out["w"] = new_w
                         out["d"] = new_d
-                        pts = [[(p[0] - min_u) / span_u, (p[1] - min_v) / span_v]
-                               for p in pts]
-                        curves = {e: ((c[0] - min_u) / span_u,
-                                      (c[1] - min_v) / span_v)
+                        pts = [[p[0] - min_u, p[1] - min_v] for p in pts]
+                        curves = {e: (c[0] - min_u, c[1] - min_v)
                                   for e, c in curves.items()}
                     else:
                         folded = False
@@ -1027,18 +1066,18 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                         # position and stays.
                         n = len(pts)
                         curves = {(n - 2 - e) % n: c for e, c in curves.items()}
-                    out["outline"] = [[round(p[0], 4), round(p[1], 4)] for p in pts]
+                    out["outline"] = [[round(p[0], 2), round(p[1], 2)]
+                                      for p in pts]
                     if curves:
-                        # With endpoints and curve inside the folded [0,1]²
-                        # bbox a quadratic control point lies in [-1, 2]
-                        # (C = 2·B(½) − (P0+P1)/2) — clamp to that, not to
-                        # [0,1]: a road bend's control point legitimately
-                        # sits outside the hull.
+                        # A quadratic control point legitimately sits OUTSIDE
+                        # the hull (a road bend), so it gets the plain plan
+                        # clamp rather than the bbox — the same ±500 m every
+                        # other stored length lives in.
                         out["outline_curves"] = [
-                            {"edge": e,
-                             "c": [round(min(max(c[0], -1.0), 2.0), 4),
-                                   round(min(max(c[1], -1.0), 2.0), 4)]}
-                            for e, c in sorted(curves.items())]
+                            {"edge": e, "c": [_metre(c[0]), _metre(c[1])]}
+                            for e, c in sorted(curves.items())
+                            if _metre(c[0]) is not None
+                            and _metre(c[1]) is not None]
     try:
         out["level"] = int(raw.get("level") or 0)
     except (TypeError, ValueError):
@@ -1073,18 +1112,16 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     if raw.get("no_walls"):
         out["no_walls"] = True
     # Diorama-model placement IN THE PLAN (2026-07-24): the room's 3D model
-    # is positioned like a prop — ``model_at`` = anchor point as fractions of
-    # the room rectangle (absent = centred, today's behaviour) and
+    # is positioned like a prop — ``model_at`` = anchor point in METRES from
+    # the room's min corner (absent = centred, today's behaviour) and
     # ``model_offset_y`` = height in metres. This REPLACES the per-model
     # sidecar offset for rooms (values migrate by hand; buildings keep their
     # sidecar offsets).
     mat = raw.get("model_at")
     if isinstance(mat, (list, tuple)) and len(mat) == 2:
-        try:
-            out["model_at"] = [round(min(max(float(mat[0]), 0.0), 1.0), 4),
-                               round(min(max(float(mat[1]), 0.0), 1.0), 4)]
-        except (TypeError, ValueError):
-            pass
+        mx, my = _metre(mat[0]), _metre(mat[1])
+        if mx is not None and my is not None:
+            out["model_at"] = [mx, my]
     moy = raw.get("model_offset_y")
     if moy is not None and f"{moy}".strip() != "":
         try:
@@ -1107,8 +1144,8 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             pass
     # Animation markers (schnittstellen-3d.md): optional spots in the room a
-    # figure with a matching active animation snaps to. ``at`` = fraction of
-    # the ROOM rectangle, ``animation`` = a clip kind from the OPEN clip
+    # figure with a matching active animation snaps to. ``at`` = METRES from
+    # the room's min corner, ``animation`` = a clip kind from the OPEN clip
     # vocabulary (nothing hardcoded — the editor offers what exists).
     # Optional per marker: ``rotation`` = the figure's facing in degrees
     # (0 = south, 90 = east, 180 = north, 270 = west; absent = the client's
@@ -1127,14 +1164,10 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             anim = str(m.get("animation") or "").strip()
             if not anim or not isinstance(at, (list, tuple)) or len(at) != 2:
                 continue
-            try:
-                entry = {
-                    "at": [round(min(max(float(at[0]), 0.0), 1.0), 4),
-                           round(min(max(float(at[1]), 0.0), 1.0), 4)],
-                    "animation": anim,
-                }
-            except (TypeError, ValueError):
+            au, av = _metre(at[0]), _metre(at[1])
+            if au is None or av is None:
                 continue
+            entry: Dict[str, Any] = {"at": [au, av], "animation": anim}
             rot = m.get("rotation")
             if rot is not None and f"{rot}".strip() != "":
                 try:
@@ -1222,14 +1255,10 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             at = p.get("at")
             if not pid or not isinstance(at, (list, tuple)) or len(at) != 2:
                 continue
-            try:
-                entry: Dict[str, Any] = {
-                    "prop_id": pid,
-                    "at": [round(min(max(float(at[0]), 0.0), 1.0), 4),
-                           round(min(max(float(at[1]), 0.0), 1.0), 4)],
-                }
-            except (TypeError, ValueError):
+            au, av = _metre(at[0]), _metre(at[1])
+            if au is None or av is None:
                 continue
+            entry: Dict[str, Any] = {"prop_id": pid, "at": [au, av]}
             yaw = p.get("yaw")
             if yaw is not None and f"{yaw}".strip() != "":
                 try:
@@ -1276,7 +1305,9 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     None for an invalid entry so the caller can drop it individually.
 
     - ``edge``: 'N'|'S'|'E'|'W' (rectangle) OR an int >= 0 (polygon edge index),
-    - ``at``: 0..1 along the edge (centre of the opening),
+    - ``at``: 0..1 along the edge (centre of the opening) — the ONE ratio the
+      metric wave (v6 Nr. 2) deliberately left alone: it is relative to an
+      edge, not a size in the world,
     - ``width_m`` / ``height_m``: 0.4..10 m,
     - ``sill_m``: 0..3 m (door = 0, window ≈ 0.9), default 0,
     - ``type``: 'door' | 'window' | 'passage',
@@ -1358,58 +1389,10 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
     return rooms
 
 
-# The layout fields that carry REAL-WORLD SIZE. Openings, markers and
-# surfaces ride along on whatever scale already applies, so editing them is
-# not "geometry work" and never trips the scale-anchor requirement.
-_LAYOUT_GEOMETRY_KEYS = ("level", "x", "y", "w", "d", "rotation", "outline",
-                         "outline_curves", "props", "floor_offset_y")
-
-
-def _layout_geometry(layout: Any) -> Optional[Dict[str, Any]]:
-    """The geometry part of a room layout, or None when the room has none."""
-    if not isinstance(layout, dict):
-        return None
-    return {key: layout.get(key) for key in _LAYOUT_GEOMETRY_KEYS}
-
-
-def _require_scale_anchor(location_id: str, rooms: Any, map3d: Any,
-                          stored: Optional[Dict[str, Any]]) -> None:
-    """Reject a save that ADDS or CHANGES floor-plan geometry while the
-    location has no scale anchor (Abnahme round 4).
-
-    Without ``map3d.plan_width_m`` a layout has no real size and everything
-    derived from it (figure size, prop size, storey height) falls back to a
-    meaningless legacy scale. Since 2026-07-28 it is the ONLY anchor — the
-    derivation from a model's declared height went with the per-axis
-    scaling. Existing data stays saveable: only rooms whose geometry differs
-    from the stored one count.
-    ``map3d`` is the INCOMING object (the same request may set the anchor);
-    None means "unchanged", so the stored one decides.
-    """
-    if not isinstance(rooms, list):
-        return
-    before = {}
-    for room in (stored or {}).get("rooms") or []:
-        if isinstance(room, dict) and room.get("id"):
-            before[room["id"]] = _layout_geometry(room.get("layout"))
-    changed = False
-    for room in rooms:
-        if not isinstance(room, dict):
-            continue
-        geometry = _layout_geometry(room.get("layout"))
-        if geometry is not None and geometry != before.get(room.get("id")):
-            changed = True
-            break
-    if not changed:
-        return
-    effective = _sanitize_map3d(map3d) if map3d is not None \
-        else (stored or {}).get("map3d")
-    from app.core.location_model3d import has_scale_anchor
-    if has_scale_anchor(location_id, effective):
-        return
-    raise HTTPException(status_code=400, detail=(
-        "Room layouts need a scale anchor: set map3d.plan_width_m "
-        "(how many REAL metres the location is wide)"))
+# ``_require_scale_anchor`` is GONE with contract v6 Nr. 2: a room layout
+# carries its own metres, so there is nothing left for a plan width to anchor.
+# ``plan_width_m`` survives only as the DERIVED bounding-box width of the
+# location boundary (see ``_sanitize_map3d``), never as a precondition.
 
 
 def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1442,13 +1425,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(rooms, list):
         raise HTTPException(status_code=400, detail="rooms must be a list")
     _sanitize_rooms_layout(rooms)
-    # add_location updates an EXISTING location of the same name, so the
-    # anchor check has to look at that one (a genuinely new location has no
-    # building model — only an explicit plan width can anchor it).
-    _existing = next((l for l in list_locations()
-                      if (l.get("name") or "").lower() == location_name.lower()), None)
-    _require_scale_anchor(str((_existing or {}).get("id") or ""), rooms, map3d,
-                          _existing)
 
     location = add_location(location_name, description, rooms=rooms,
                             image_prompt_day=image_prompt_day,
@@ -1559,7 +1535,6 @@ def update_location_with_extras(location_id: str,
     # Update description, rooms and image prompts if provided
     if rooms is not None:
         _sanitize_rooms_layout(rooms)
-        _require_scale_anchor(location_id, rooms, map3d, loc)
     has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d, image_prompt_building])
     if has_updates:
         loc = get_location_by_id(location_id)

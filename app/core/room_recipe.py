@@ -4,8 +4,8 @@ The raw data already flows to the client through the location payload
 (``rooms[].layout`` with outline/surfaces/openings/props); the recipe adds
 the COMPOSED conveniences so the client renders without re-deriving them:
 
-- ``outline`` in ABSOLUTE plate fractions (the drawn hull or the implicit
-  rectangle — no bbox-local mechanics on the client side),
+- ``outline`` in ABSOLUTE LOCAL METRES (the drawn hull or the implicit
+  rectangle — no room-local mechanics on the client side),
 - ``openings`` normalized to polygon edge INDICES (legacy letters converted,
   S/W flip their ``at`` against the clockwise edge direction) — INCLUDING the
   neighbours' openings that sit on a shared wall: one physical door is edited
@@ -21,11 +21,11 @@ the COMPOSED conveniences so the client renders without re-deriving them:
   ``placement world position + offset_m × k`` — one multiply, no marker
   math.
 
-Coordinate frames: XZ positions are fractions of the location's reference
-square (like ``layout.x/y`` and ``map3d.outline``); every length that ends
-in ``_m`` is REAL metres — and since E4 that is already a world metre, because
-the reference square IS the location's footprint (``extent_m = plan_width_m``,
-k = 1).
+Coordinate frames (contract v6 Nr. 2 — the metric wave): XZ positions are
+LOCAL METRES around the location's anchor pin, the same frame ``layout.x/y``,
+``map3d.outline`` and ``map3d.boundary`` are stored in. There is no fraction
+anywhere in this module any more; a length ending in ``_m`` is the same metre,
+and since E4 that is already a world metre too (k = 1).
 Yaw/facing are degrees; the compass vocabulary of the room markers applies
 (0 = south, 90 = east, …), composed prop facing = ``facing − placement.yaw``
 (the plan yaw turns clockwise in the top view, the compass counts the other
@@ -44,7 +44,12 @@ from app.core.scatter_curves import variant_mix
 
 logger = get_logger(__name__)
 
-_UNIT_SQUARE = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+
+def _rect_outline(w: float, d: float) -> List[List[float]]:
+    """The implicit rectangle hull in the room's OWN metres, clockwise on
+    screen (y down) — edge 0 = N, 1 = E, 2 = S, 3 = W, exactly the indexing
+    the letter openings map onto."""
+    return [[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]]
 
 
 def _r(v: float, nd: int = 4) -> float:
@@ -96,13 +101,11 @@ def _normalize_opening(op: Dict[str, Any]) -> Dict[str, Any]:
 # ── Shared-wall geometry ────────────────────────────────────────────────
 # Mirror image of ``planGeometry.sharedEdges`` (frontend) — SAME tolerances,
 # SAME antiparallel test, so server and editor agree on what "one wall" is.
-# Change both or neither. All coordinates are absolute plate fractions; the
-# thresholds are metres, converted with the location's plan width. Without a
-# plan width (unanchored legacy data) there is no real size at all — assume
-# a location 8 real metres across so the tolerances stay sane.
+# Change both or neither. Every coordinate here is a LOCAL METRE (v6 Nr. 2),
+# so the two thresholds ARE the numbers below — the conversion through a plan
+# width, and with it the 8 m stand-in for unanchored data, is gone.
 SHARE_TOL_M = 0.15
 MIN_SHARE_M = 0.8
-_UNANCHORED_PLAN_WIDTH_M = 8.0
 # Scatter keep-outs (plan-area-detail-scenes.md): clearance in REAL metres in
 # front of an opening (beyond its half width) and around markers /
 # model-less manual props. Axis-aligned squares on purpose — § B5a wants the
@@ -125,17 +128,21 @@ def _layout_rect(lay: Any) -> Optional[tuple]:
 
 
 def _abs_outline(lay: Dict[str, Any]) -> List[List[float]]:
-    """A layout's hull in ABSOLUTE plate fractions (mirrors
-    ``planGeometry.absOutline``); [] when the layout has no usable rect."""
+    """A layout's hull in ABSOLUTE LOCAL METRES (mirrors
+    ``planGeometry.absOutline``); [] when the layout has no usable rect.
+
+    The stored points are metres from the room's own min corner, so placing
+    the hull is a translation by ``x``/``y`` — nothing is scaled here any
+    more."""
     rect = _layout_rect(lay)
     if not rect:
         return []
     x, y, w, d = rect
-    pts = lay.get("outline") or _UNIT_SQUARE
+    pts = lay.get("outline")
     if not isinstance(pts, list) or len(pts) < 3:
-        pts = _UNIT_SQUARE
+        pts = _rect_outline(w, d)
     try:
-        return [[x + float(u) * w, y + float(v) * d] for u, v in pts]
+        return [[x + float(u), y + float(v)] for u, v in pts]
     except (TypeError, ValueError):
         return []
 
@@ -143,17 +150,17 @@ def _abs_outline(lay: Dict[str, Any]) -> List[List[float]]:
 def _abs_shape(lay: Dict[str, Any]) -> List[List[float]]:
     """Like ``_abs_outline`` but with curved edges TESSELLATED — the shape a
     renderer actually sees. Beziers are affine-invariant, so tessellating in
-    the bbox-local frame and mapping to plate fractions afterwards is exact."""
+    the room-local frame and translating afterwards is exact."""
     rect = _layout_rect(lay)
     if not rect:
         return []
     x, y, w, d = rect
-    pts = lay.get("outline") or _UNIT_SQUARE
+    pts = lay.get("outline")
     if not isinstance(pts, list) or len(pts) < 3:
-        pts = _UNIT_SQUARE
+        pts = _rect_outline(w, d)
     tess, _ = tessellate(pts, lay.get("outline_curves"))
     try:
-        return [[x + float(u) * w, y + float(v) * d] for u, v in tess]
+        return [[x + float(u), y + float(v)] for u, v in tess]
     except (TypeError, ValueError):
         return []
 
@@ -177,8 +184,8 @@ def _point_on_edge(outline: List[List[float]], i: int,
     return [a[0] + (b[0] - a[0]) * at, a[1] + (b[1] - a[1]) * at]
 
 
-def _mirrored_openings(lay: Dict[str, Any], siblings: List[Dict[str, Any]],
-                       plan_width_m: float) -> List[Dict[str, Any]]:
+def _mirrored_openings(lay: Dict[str, Any],
+                       siblings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The neighbours' openings that physically pierce THIS room's wall.
 
     An opening is one hole in one wall. It is defined and edited in the room
@@ -198,9 +205,8 @@ def _mirrored_openings(lay: Dict[str, Any], siblings: List[Dict[str, Any]],
     outline = _abs_outline(lay)
     if len(outline) < 3:
         return []
-    planw = plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M
-    tol = SHARE_TOL_M / planw
-    min_overlap = MIN_SHARE_M / planw
+    tol = SHARE_TOL_M
+    min_overlap = MIN_SHARE_M
     level = int(lay.get("level") or 0)
 
     out: List[Dict[str, Any]] = []
@@ -328,16 +334,12 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
 
 def compose_recipe(room: Dict[str, Any],
                    siblings: Any = (),
-                   plan_width_m: float = 0.0,
                    variant_seed: int = 0) -> Optional[Dict[str, Any]]:
     """The full recipe of ONE room, or None when it has no layout.
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
     level contribute their openings on shared walls (see
     ``_mirrored_openings``).
-    ``plan_width_m`` is the location's scale anchor — only the tolerances of
-    the shared-wall test use it; 0 means "assume the 8 m reference plate",
-    the same fallback the editor uses.
     ``variant_seed`` is the one number a copy placed on the map owns; it is
     mixed into every stored scatter seed so two copies of one template stop
     looking identical. 0 means "not a copy" and leaves every seed untouched.
@@ -348,21 +350,23 @@ def compose_recipe(room: Dict[str, Any],
         return None
     x, y, w, d = rect
 
-    pts = lay.get("outline") or _UNIT_SQUARE
+    pts = lay.get("outline")
+    if not isinstance(pts, list) or len(pts) < 3:
+        pts = _rect_outline(w, d)
     # Curved edges (plan-area-detail-scenes.md) are tessellated HERE — the
     # payload outline is always a plain polygon, downstream (walls, plates,
     # clips, both renderers) never learns curves existed. ``edge_map`` shifts
     # opening edge indices past the inserted points; on a curve-free outline
     # it is the identity.
     tess_pts, edge_map = tessellate(pts, lay.get("outline_curves"))
-    outline = [[_r(x + float(u) * w), _r(y + float(v) * d)] for u, v in tess_pts]
+    outline = [[_r(x + float(u)), _r(y + float(v))] for u, v in tess_pts]
 
     own_id = str(room.get("id") or "")
     others = [s for s in (siblings or [])
               if isinstance(s, dict) and str(s.get("id") or "") != own_id]
     openings = [_normalize_opening(op) for op in (lay.get("openings") or [])
                 if isinstance(op, dict)]
-    openings.extend(_mirrored_openings(lay, others, plan_width_m))
+    openings.extend(_mirrored_openings(lay, others))
     if len(tess_pts) != len(pts):
         # Openings live on CONTROL-polygon edges (own ones and the mirrored
         # projections alike) — remap onto the tessellated indexing. Straight
@@ -383,12 +387,12 @@ def compose_recipe(room: Dict[str, Any],
         if not isinstance(placement, dict):
             continue
         pid = str(placement.get("prop_id") or "")
-        at = placement.get("at") or [0.5, 0.5]
+        at = placement.get("at") or [w / 2, d / 2]
         yaw = float(placement.get("yaw") or 0)
         off_y = float(placement.get("offset_y") or 0)
         entry: Dict[str, Any] = {
             "prop_id": pid,
-            "at": [_r(x + float(at[0]) * w), _r(y + float(at[1]) * d)],
+            "at": [_r(x + float(at[0])), _r(y + float(at[1]))],
             "yaw": _r(yaw, 1),
             "offset_y": _r(off_y, 3),
         }
@@ -434,8 +438,9 @@ def compose_recipe(room: Dict[str, Any],
     # as the manually positioned anchor. Positions are computed at COMPOSE
     # time and never stored, so every renderer derives the same forest and
     # the signature below moves with seed/count/spacing (the copies land in
-    # the hashed payload). Scatter runs in REAL metres; plate fractions ×
-    # plan width convert both ways. Copies are appended AFTER all manual
+    # the hashed payload). Scatter runs in REAL metres, which since v6 (Nr. 2)
+    # is simply the frame everything here already lives in — no conversion
+    # left. Copies are appended AFTER all manual
     # entries so ``prop_markers[].placement`` indices never move, and they
     # get NO prop markers (no sit spots on twenty pines). Keep-outs are the
     # GEOMETRIC zones only (sibling hulls, openings, markers) —
@@ -446,9 +451,8 @@ def compose_recipe(room: Dict[str, Any],
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
     if scatter_sources:
-        planw = plan_width_m if plan_width_m > 0 else _UNANCHORED_PLAN_WIDTH_M
         level = int(lay.get("level") or 0)
-        outline_m = [[p[0] * planw, p[1] * planw] for p in outline]
+        outline_m = outline
         keepouts: List[List[List[float]]] = []
         # Sibling hulls on the same level — the road stays tree-free. Curved
         # siblings contribute their TESSELLATED shape (the curved road is
@@ -460,7 +464,7 @@ def compose_recipe(room: Dict[str, Any],
                 continue
             shape = _abs_shape(slay)
             if len(shape) >= 3:
-                keepouts.append([[p[0] * planw, p[1] * planw] for p in shape])
+                keepouts.append(shape)
 
         def _square(cx: float, cy: float, half: float) -> List[List[float]]:
             return [[cx - half, cy - half], [cx + half, cy - half],
@@ -475,12 +479,11 @@ def compose_recipe(room: Dict[str, Any],
             except (TypeError, ValueError, ZeroDivisionError):
                 continue
             px, py = _point_on_edge(outline, e, at)
-            keepouts.append(_square(px * planw, py * planw, half))
+            keepouts.append(_square(px, py, half))
         for marker in (lay.get("markers") or []):
             mat = marker.get("at") if isinstance(marker, dict) else None
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
-                keepouts.append(_square((x + float(mat[0]) * w) * planw,
-                                        (y + float(mat[1]) * d) * planw,
+                keepouts.append(_square(x + float(mat[0]), y + float(mat[1]),
                                         SCATTER_POINT_CLEAR_M))
 
         for source in scatter_sources:
@@ -500,8 +503,7 @@ def compose_recipe(room: Dict[str, Any],
                                          spacing):
                 entry: Dict[str, Any] = {
                     "prop_id": pid,
-                    "at": [_r(placed["at"][0] / planw),
-                           _r(placed["at"][1] / planw)],
+                    "at": [_r(placed["at"][0]), _r(placed["at"][1])],
                     "yaw": _r(placed["yaw"], 1),
                     "offset_y": 0.0,
                     "scattered": True,

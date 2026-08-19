@@ -128,7 +128,7 @@ def main():
     # reserved id by hand. Report it, never overwrite it.
     occupied = {"id": "loc4", "name": "Cave",
                 "rooms": [{"id": GROUND_ROOM_ID, "name": "Back chamber",
-                           "layout": {"x": 0, "y": 0, "w": 1, "d": 1}}]}
+                           "layout": {"x": -5, "y": -5, "w": 10, "d": 10}}]}
     check("an author's room on the reserved id is a collision, not a target",
           ground_room_action(occupied) == "present",
           ground_room_action(occupied))
@@ -231,9 +231,9 @@ def main():
                       "outline": [[0, 0], [1, 0], [1, 1], [0, 1]]},
             "rooms": [
                 {"id": "a", "name": "A", "layout": {
-                    "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 0}},
+                    "x": -8.0, "y": -8.0, "w": 8.0, "d": 6.0, "level": 0}},
                 {"id": "b", "name": "B", "layout": {
-                    "x": 0.1, "y": 0.1, "w": 0.4, "d": 0.3, "level": 1}},
+                    "x": -8.0, "y": -8.0, "w": 8.0, "d": 6.0, "level": 1}},
             ],
         }
 
@@ -261,7 +261,7 @@ def main():
     print("Part 5 — the ground room carries no layout")
     # ONE valid layout, handed to both rooms: everything but the id is equal,
     # so only the id can explain the different outcome.
-    plan = {"x": 0.1, "y": 0.2, "w": 0.3, "d": 0.4, "level": 0}
+    plan = {"x": -8.0, "y": -6.0, "w": 6.0, "d": 8.0, "level": 0}
     rooms = _sanitize_rooms_layout([
         {"id": GROUND_ROOM_ID, "name": "Market square", "layout": dict(plan)},
         {"id": "hall", "name": "Hall", "layout": dict(plan)},
@@ -274,7 +274,7 @@ def main():
           str(rooms[0]))
     check("the very same layout on a normal room is kept",
           isinstance(rooms[1].get("layout"), dict)
-          and rooms[1]["layout"]["w"] == 0.3, str(rooms[1].get("layout")))
+          and rooms[1]["layout"]["w"] == 6.0, str(rooms[1].get("layout")))
     check("a ground room without a layout is untouched",
           rooms[2] == {"id": GROUND_ROOM_ID, "name": "Yard"}, str(rooms[2]))
 

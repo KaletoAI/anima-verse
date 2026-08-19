@@ -149,13 +149,15 @@ def slope_blocks(dh: float, dist: float, max_step: float,
 
 # ── The scene relief as a height over the world ─────────────────────────
 
-#: location id -> (fingerprint, rotated grid, extent). The grid is a pure
+#: location id -> (fingerprint, footprint width, grid, terrain frame). The
+#: grid is a pure
 #: function of the location's plan, and the gate samples it up to twice per
 #: report at ~4 reports a second per avatar — recomposing the room recipes
 #: each time would tessellate every curved room edge for a lookup. The
 #: fingerprint covers everything the field is built from, so an author's edit
 #: reaches the rule with the next report.
-_grid_cache: Dict[str, Tuple[str, List[List[float]], float]] = {}
+_grid_cache: Dict[str, Tuple[str, float, List[List[float]],
+                              Tuple[float, float, float]]] = {}
 
 
 def _fingerprint(map3d: Dict[str, Any], rooms: List[Dict[str, Any]],
@@ -176,11 +178,14 @@ def _fingerprint(map3d: Dict[str, Any], rooms: List[Dict[str, Any]],
 
 
 def _terrain_of(loc: Dict[str, Any], width_m: float
-                ) -> Optional[List[List[float]]]:
-    """The location's height field as the CLIENT gets it, or ``None`` when
-    the location has no relief."""
+                ) -> Optional[Tuple[List[List[float]],
+                                    Tuple[float, float, float]]]:
+    """The location's height field as the CLIENT gets it plus the frame it is
+    spanned over (``scene_recipe.terrain_frame``), or ``None`` when the
+    location has no relief."""
     from app.core.room_recipe import compose_recipe
-    from app.core.scene_recipe import compose_terrain, derive_scalars
+    from app.core.scene_recipe import (compose_terrain, derive_scalars,
+                                       terrain_frame)
     map3d = loc.get("map3d") or {}
     if not isinstance(map3d.get("relief"), dict) or not map3d.get("area_detail"):
         return None
@@ -189,14 +194,14 @@ def _terrain_of(loc: Dict[str, Any], width_m: float
     key = str(loc.get("id") or "")
     fp = _fingerprint(map3d, rooms, variant)
     cached = _grid_cache.get(key) if key else None
-    if cached and cached[0] == fp and cached[2] == width_m:
-        return cached[1]
-    # The reference square IS the footprint (k = 1 since E4), so the width the
-    # gate measured the point against is also the scale the field is built on.
+    if cached and cached[0] == fp and cached[1] == width_m:
+        return cached[2], cached[3]
+    # ``extent_m`` IS the footprint width (k = 1 since E4), so the width the
+    # gate measured the point against is also the edge of the terrain frame.
     extent, _k, _storey = derive_scalars(map3d, width_m)
     recipes = [rec for rec in
                (compose_recipe(room, [r for r in rooms if r is not room],
-                               width_m, variant_seed=variant)
+                               variant_seed=variant)
                 for room in rooms) if rec]
     terrain, _relief_rooms = compose_terrain(map3d, recipes, extent, variant)
     if not terrain:
@@ -205,9 +210,10 @@ def _terrain_of(loc: Dict[str, Any], width_m: float
     # the finished payload any anymore — a location faces the way its pin says
     # (§ A1.1), so the gate and the picture read the very same grid.
     grid = terrain["grid"]
+    frame = terrain_frame(map3d, extent)
     if key:
-        _grid_cache[key] = (fp, grid, width_m)
-    return grid
+        _grid_cache[key] = (fp, width_m, grid, frame)
+    return grid, frame
 
 
 def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
@@ -220,15 +226,17 @@ def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
     is ``world_geometry.ground_y``, and ``ground_lift_at`` adds the two.
 
     THE FRAME, the one thing that can silently be wrong here. The payload is
-    anchored around the TILE CENTRE in the location's own turned frame, and
-    the client samples it exactly that way (``scene/tiles.terrainLiftAt`` →
+    anchored in the location's own turned frame around its PIN, and the client
+    samples it exactly that way (``scene/tiles.terrainLiftAt`` →
     ``worldToLocalXZ`` → ``sampleTerrain``). So does this: turn the world point
-    into the footprint's local frame, then read the plan fraction off the
-    reference square (``u = lx / extent + 0.5``, ``v = lz / extent + 0.5``) and
-    sample the same bilinear field (``scatter_curves.terrain_height``). Both
-    turns are the SAME formula (``world_geometry.world_to_local`` and
-    ``scene-render`` ``worldToLocalXZ``), which is what keeps the rule and the
-    picture on one ground.
+    into the location's local frame, then read the lattice coordinate off the
+    TERRAIN FRAME (``scene_recipe.terrain_frame``: the square of edge
+    ``extent_m`` over the boundary's bounding box — since v6 Nr. 2 that box,
+    not the pin, is what the field is spanned over) and sample the same
+    bilinear field (``scatter_curves.terrain_height``). Both turns are the
+    SAME formula (``world_geometry.world_to_local`` and ``scene-render``
+    ``worldToLocalXZ``), which is what keeps the rule and the picture on one
+    ground.
     """
     if not loc:
         return 0.0
@@ -238,11 +246,12 @@ def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
     if fp is None:
         return 0.0
     cx, cz, width, yaw = fp
-    grid = _terrain_of(loc, width)
-    if not grid:
+    found = _terrain_of(loc, width)
+    if not found:
         return 0.0
+    grid, (tx0, tz0, tsize) = found
     lx, lz = world_to_local(x, z, cx, cz, yaw)
-    return terrain_height(grid, lx / width + 0.5, lz / width + 0.5)
+    return terrain_height(grid, (lx - tx0) / tsize, (lz - tz0) / tsize)
 
 
 def has_relief(loc: Optional[Dict[str, Any]]) -> bool:

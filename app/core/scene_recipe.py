@@ -13,13 +13,14 @@ exactly once: in this module**. The consumers own two generic routines only —
 "build a primitive" and "place a model" — and no geometry decision of their
 own.
 
-What the composer emits (world coordinates throughout, ORIGIN = the tile
-centre of the location, i.e. of its reference square — the consumer places
-the scene at the location's map point):
+What the composer emits (world coordinates throughout, ORIGIN = the
+location's ANCHOR PIN — the consumer places the scene at the location's map
+point; since v6 Nr. 2 that is also the frame every plan coordinate is STORED
+in, so nothing is denormalized here):
 
 - ``boundary`` — the location's footprint as a polygon in the scene frame
-                (contract v6: drawn outline, or the reference square as its
-                four corners),
+                (contract v6: the drawn outline, or the synthesized square of
+                edge ``extent_m`` as its four corners),
 - ``plates``  — one contour plate per used level plus one floor plate per room,
 - ``walls``   — the building contour with its door gaps and the room shell
                 walls already split around every opening (window = sill +
@@ -58,14 +59,14 @@ from app.core.scatter_curves import (relief_cells, terrain_grid,
 logger = get_logger(__name__)
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
-# The REFERENCE SQUARE is the frame every plan fraction lives in AND the box
-# the location model fills. ONE frame (2026-07-28): plan edge == model edge,
-# so the floor plan can always reach the model.
-# Since E4 (2026-08-09) it is the location's FOOTPRINT: its edge length IS
-# ``map3d.plan_width_m``, the same square the world map places (§ A1.1), and
-# one world metre IS one real metre everywhere (k = 1). ``map3d.extent_m``
-# was the world-metre dial of the tile era and is not read any more.
-# The fallback edge for a location without a scale anchor.
+# THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
+# every plan coordinate is stored in local metres, so nothing is denormalized
+# on the way into this payload. What survives of the square is ``extent_m`` —
+# the width of the location's bounding box (``map3d.plan_width_m``, derived
+# from the drawn boundary) — as the box the location model fills, the edge of
+# the terrain frame and the loading/viewport number the consumer contracts
+# quote. One world metre IS one real metre everywhere (k = 1).
+# The fallback edge for a location without a boundary of its own.
 DEFAULT_EXTENT_M = 10.0
 # Storey height in metres when the location does not declare one.
 DEFAULT_STOREY_REAL_M = 3.0
@@ -181,20 +182,14 @@ def _r(v: float, nd: int = 4) -> float:
     return out if out != 0 else 0.0  # never -0.0 in payloads
 
 
-def _w(frac: Any, extent: float) -> float:
-    """Reference-square fraction → world metre (origin = the square's
-    centre)."""
-    try:
-        return (float(frac) - 0.5) * extent
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _room_outline_world(recipe: Dict[str, Any],
-                        extent: float) -> List[List[float]]:
+def _room_outline_world(recipe: Dict[str, Any]) -> List[List[float]]:
     """The room shell in world metres — the ONE source for the room's floor
-    plate and for a diorama's ``clip_outline`` (§ B1); [] when degenerate."""
-    pts = [[_r(_w(p[0], extent)), _r(_w(p[1], extent))]
+    plate and for a diorama's ``clip_outline`` (§ B1); [] when degenerate.
+
+    Since v6 (Nr. 2) this is a PARSE, not a transform: ``compose_recipe``
+    already delivers absolute local metres, and the scene frame IS the
+    location's local frame."""
+    pts = [[_r(_num(p[0])), _r(_num(p[1]))]
            for p in recipe.get("outline") or []]
     return pts if len(pts) >= 3 else []
 
@@ -218,18 +213,18 @@ def _opacity_role(level: int, ground_level: int) -> str:
 
 def derive_scalars(map3d: Dict[str, Any],
                    plan_width_m: float) -> Tuple[float, float, float]:
-    """(extent_m, k, storey_m) — the three scalars everything derives from.
+    """(extent_m, k, storey_m) — the three scalars the payload quotes.
 
-    **k = 1 since E4** (2026-08-09). The reference square IS the location's
-    footprint, so its world edge ``extent_m`` is ``plan_width_m`` itself and
-    one world metre is one real metre — inside the scene exactly as on the
-    map (§ A1.1). ``map3d.extent_m``, the world-metre dial of the tile era,
-    is not read any more (the field may still sit in old blobs; nothing
+    **k = 1 since E4** (2026-08-09) and since v6 (Nr. 2) nothing is derived
+    from ``extent_m`` at all: it IS ``plan_width_m``, the width of the
+    location's bounding box, and it is carried rather than applied. One world
+    metre is one real metre — inside the scene exactly as on the map
+    (§ A1.1). ``map3d.extent_m``, the world-metre dial of the tile era, is not
+    read any more (the field may still sit in old blobs; nothing
     reads it, and the sanitizer drops it on the next save).
 
-    Without a scale anchor (no ``plan_width_m``) the location has no real
-    size to be; it falls back to ``DEFAULT_EXTENT_M`` so a plan without an
-    anchor still composes.
+    Without a boundary (no ``plan_width_m``) the location has no width of its
+    own; it falls back to ``DEFAULT_EXTENT_M`` so a plan still composes.
 
     ``storey_m`` = the declared storey height in metres — one dial in the
     same unit as everything else, replacing the old pair ``height_m /
@@ -254,8 +249,10 @@ def _used_levels(recipes: List[Dict[str, Any]]) -> List[int]:
     return levels or [0]
 
 
-def _outline_world(map3d: Dict[str, Any], extent: float) -> List[List[float]]:
-    """``map3d.outline`` in world metres, or [] when there is no polygon."""
+def _outline_world(map3d: Dict[str, Any]) -> List[List[float]]:
+    """``map3d.outline`` — the drawn BUILDING contour — in world metres, or []
+    when there is no polygon. Stored in local metres since v6 (Nr. 2), so
+    nothing is scaled here."""
     pts = (map3d or {}).get("outline")
     if not isinstance(pts, list) or len(pts) < 3:
         return []
@@ -263,7 +260,7 @@ def _outline_world(map3d: Dict[str, Any], extent: float) -> List[List[float]]:
     for pt in pts:
         if not isinstance(pt, (list, tuple)) or len(pt) != 2:
             return []
-        out.append([_r(_w(pt[0], extent)), _r(_w(pt[1], extent))])
+        out.append([_r(_num(pt[0])), _r(_num(pt[1]))])
     return out
 
 
@@ -348,7 +345,8 @@ def _room_floor_y(recipe: Dict[str, Any], storey: float) -> float:
 
 
 def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, float, float, float]:
-    """The room's placed rectangle (x, y, w, d) in plate fractions."""
+    """The room's placed rectangle (x, y, w, d) in LOCAL METRES — min corner
+    plus size, exactly as stored (contract v6 Nr. 2)."""
     lay = room.get("layout") or {}
     return (_num(lay.get("x")), _num(lay.get("y")),
             _num(lay.get("w"), 1.0), _num(lay.get("d"), 1.0))
@@ -357,24 +355,20 @@ def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, flo
 def room_size_m(location: Dict[str, Any],
                 room: Dict[str, Any]) -> Optional[Tuple[float, float]]:
     """A room's rectangle in REAL METRES ``(w_m, d_m)``, or None when it has
-    no layout or the location has no scale anchor.
+    no layout.
 
-    The scale rule lives HERE, in the one module that owns geometry (§ A1):
-    a layout side is a fraction of the reference square, so its real size is
-    that fraction times the plan width. Consumers outside the 3D path (the
-    image-prompt composer wants the footprint in metres) call this instead
-    of re-deriving the rule.
+    Since v6 (Nr. 2) a layout side IS its real size — there is no scale rule
+    left to apply and no anchor that could be missing. The function stays
+    because consumers outside the 3D path (the image-prompt composer wants
+    the footprint in metres) ask this module for geometry rather than
+    reading the layout themselves. ``location`` is unused and kept only so
+    the call sites read as "the room OF this location".
     """
     lay = (room or {}).get("layout") or {}
     w, d = _num(lay.get("w")), _num(lay.get("d"))
     if w <= 0 or d <= 0:
         return None
-    from app.core.location_model3d import derive_plan_width_m
-    plan_w = derive_plan_width_m(str((location or {}).get("id") or ""),
-                                 (location or {}).get("map3d"))
-    if plan_w <= 0:
-        return None
-    return (round(w * plan_w, 2), round(d * plan_w, 2))
+    return (round(w, 2), round(d, 2))
 
 
 # ── Plates ──────────────────────────────────────────────────────────────
@@ -405,7 +399,7 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
 
 
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
-            levels: List[int], storey: float, extent: float,
+            levels: List[int], storey: float,
             relief_rooms: Optional[Set[str]] = None,
             ground_kind: str = "") -> List[Dict[str, Any]]:
     """One contour plate per used level + one floor plate per room.
@@ -426,11 +420,11 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     where there is one: it is the more specific shape, the floor plan of the
     house inside the plot, and the walls are built along it. A location with
     neither gets no level plate at all, exactly as before — the synthesized
-    reference square is a transition crutch for the payload's ``boundary``
+    square is a transition crutch for the payload's ``boundary``
     field, never a floor somebody drew.
     """
     plates: List[Dict[str, Any]] = []
-    contour = _outline_world(map3d, extent) or _drawn_boundary(map3d)
+    contour = _outline_world(map3d) or _drawn_boundary(map3d)
     level_floors = (map3d or {}).get("level_floors") or {}
     ground = min(levels)
     if contour:
@@ -447,7 +441,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     for recipe in recipes:
         level = int(recipe.get("level") or 0)
         outdoor = bool(recipe.get("always_visible"))
-        outline = _room_outline_world(recipe, extent)
+        outline = _room_outline_world(recipe)
         if not outline:
             continue
         entry: Dict[str, Any] = {
@@ -470,7 +464,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
 
 def _overlay_plates(recipes: List[Dict[str, Any]],
                     overlay_rooms: Dict[str, Dict[str, Any]],
-                    ground: int, extent: float) -> List[Dict[str, Any]]:
+                    ground: int) -> List[Dict[str, Any]]:
     """Texture surfaces for outdoor zones that DECLARE a floor kind.
 
     An overlay zone lies on the model and normally gets no plate — a surface
@@ -490,7 +484,7 @@ def _overlay_plates(recipes: List[Dict[str, Any]],
         kind = str(((recipe.get("surfaces") or {}).get("floor")) or "").strip()
         if not kind:
             continue
-        outline = _room_outline_world(recipe, extent)
+        outline = _room_outline_world(recipe)
         if not outline:
             continue
         level = int(recipe.get("level") or 0)
@@ -629,7 +623,7 @@ def _door_outward(entry: Dict[str, Any]) -> List[float]:
 
 
 def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
-                   extent: float, doors: List[Dict[str, Any]],
+                   doors: List[Dict[str, Any]],
                    room_hulls: Optional[Dict[int, List[List[List[float]]]]] = None,
                    ) -> List[Dict[str, Any]]:
     """The building contour as walls, per used level (§ A6).
@@ -662,7 +656,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     ``surfaces.wall``. Without the field the contour stays untextured and the
     renderers fall back to ``style.wall_color``.
     """
-    pts = _outline_world(map3d, extent)
+    pts = _outline_world(map3d)
     if len(pts) < 3:
         return []
     # Winding decides which side is outside (shoelace in the XZ plane).
@@ -724,7 +718,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     return walls
 
 
-def _room_wall_edges(recipe: Dict[str, Any], extent: float
+def _room_wall_edges(recipe: Dict[str, Any]
                      ) -> Iterator[Tuple[int, List[float], float, float,
                                          float, List[Tuple[float, float,
                                                            Dict[str, Any]]]]]:
@@ -741,7 +735,7 @@ def _room_wall_edges(recipe: Dict[str, Any], extent: float
     """
     if recipe.get("always_visible") or recipe.get("no_walls"):
         return
-    outline = [[_w(p[0], extent), _w(p[1], extent)]
+    outline = [[_num(p[0]), _num(p[1])]
                for p in recipe.get("outline") or []]
     if len(outline) < 3:
         return
@@ -767,7 +761,7 @@ def _room_wall_edges(recipe: Dict[str, Any], extent: float
 
 
 def _room_walls(recipe: Dict[str, Any], storey: float,
-                extent: float, ground_level: int) -> List[Dict[str, Any]]:
+                ground_level: int) -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
 
     Doors and passages leave a full-height gap; a window keeps a sill segment
@@ -792,7 +786,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
     role = _opacity_role(level, ground_level)
     walls: List[Dict[str, Any]] = []
 
-    for _i, a, ux, uz, length, spans in _room_wall_edges(recipe, extent):
+    for _i, a, ux, uz, length, spans in _room_wall_edges(recipe):
         # Clockwise hull → the outward normal of (ux, uz) is (uz, −ux).
         normal = [_r(uz), _r(-ux)]
 
@@ -837,8 +831,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
 
 # ── Doorways ────────────────────────────────────────────────────────────
 
-def _doorways(recipes: List[Dict[str, Any]], storey: float,
-              extent: float) -> List[Dict[str, Any]]:
+def _doorways(recipes: List[Dict[str, Any]],
+              storey: float) -> List[Dict[str, Any]]:
     """Every walkable threshold of the location as a finished primitive
     (plan-betreten-und-tueren.md § 4.1).
 
@@ -857,7 +851,7 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     ONE gap in the wall = ONE entry. Two candidates are the same hole when all
     three of ``_same_gap`` hold: same wall DIRECTION, the two wall faces no
     further apart than the mirror's own ``SHARE_TOL_M`` (plus the rounding a
-    mirrored ``at`` carries — 4 decimals of a plate fraction), and clamped
+    mirrored ``at`` carries — 4 decimals of a world metre), and clamped
     spans that actually meet on that line. Three cases run through it:
 
     * the neighbour's mirrored copy (``room_recipe._mirrored_openings``) — it
@@ -886,7 +880,7 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
             out.append(to)
         return out
 
-    tol = SHARE_TOL_M + 1e-4 * extent
+    tol = SHARE_TOL_M + 1e-4
     # (entry, unclamped centre) of the openings on their OWN room's wall, and
     # the neighbours' mirrored copies. Own ones are deduped FIRST, so an entry
     # is based on a room that owns its wall stretch wherever one exists.
@@ -898,7 +892,7 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
         # The wall's own foot — the same number _room_walls stands its
         # full-height pieces on (room plate, storey and level included).
         base = _r(_room_floor_y(recipe, storey) + ROOM_PLATE_TOP)
-        for _i, a, ux, uz, length, spans in _room_wall_edges(recipe, extent):
+        for _i, a, ux, uz, length, spans in _room_wall_edges(recipe):
             for s0, s1, op in spans:
                 if str(op.get("type") or "door").lower() not in _WALKABLE_TYPES:
                     continue
@@ -1027,16 +1021,14 @@ def threshold_base_y(sides: List[Tuple[float, Optional[float]]]) -> float:
 _BOUNDARY_TOL_M = 0.01
 
 
-def rooms_outside_boundary(recipes: List[Dict[str, Any]], boundary: Any,
-                           extent: float) -> List[str]:
+def rooms_outside_boundary(recipes: List[Dict[str, Any]],
+                           boundary: Any) -> List[str]:
     """The ids of rooms whose floor plan sticks out of the location boundary.
 
-    Both sides are LOCAL METRES around the pin: the boundary is stored that
-    way, and a room's outline is reference-square fractions turned into
-    metres by the ONE mapping ``(frac − 0.5) × extent`` (``_w``) — the same
-    one the plates, walls and clips use, so "outside" means here what it
-    means in the composed scene. The room rectangle needs no special case:
-    ``compose_recipe`` already resolved it into the unit-square outline.
+    Both sides are LOCAL METRES around the pin and, since v6 (Nr. 2), stored
+    that way — there is no conversion left on either side, so "outside" means
+    here exactly what it means in the composed scene. The room rectangle needs
+    no special case: ``compose_recipe`` already resolved it into an outline.
 
     Measured with ``polygon_distance``, which is 0 anywhere INSIDE the
     polygon including its edges — a plan drawn flush against the boundary is
@@ -1051,7 +1043,7 @@ def rooms_outside_boundary(recipes: List[Dict[str, Any]], boundary: Any,
         return []
     out: List[str] = []
     for recipe in recipes:
-        outline = _room_outline_world(recipe, extent)
+        outline = _room_outline_world(recipe)
         if not outline:
             continue
         probes = list(outline)
@@ -1065,7 +1057,7 @@ def rooms_outside_boundary(recipes: List[Dict[str, Any]], boundary: Any,
     return out
 
 
-def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
+def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
               shell_levels: Set[int], doorways: List[Dict[str, Any]],
               recipes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Findings instead of silent repairs (plan-betreten-und-tueren.md § 4.3).
@@ -1115,7 +1107,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
     """
     out: List[Dict[str, Any]] = []
     from app.models.world import GROUND_ROOM_ID
-    has_contour = len(_outline_world(map3d, extent)) >= 3
+    has_contour = len(_outline_world(map3d)) >= 3
     # The GROUND room is out: it is the location's open surface and NEVER
     # carries a layout (the sanitizer strips one), so counting it would blame
     # the author for a room that cannot be drawn.
@@ -1171,7 +1163,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any], extent: float,
                        "inside and what is outside is ambiguous there. "
                        "Redraw the outline without crossing edges.",
         })
-    stray = rooms_outside_boundary(recipes, boundary, extent)
+    stray = rooms_outside_boundary(recipes, boundary)
     if stray:
         out.append({
             "kind": "room_outside_boundary",
@@ -1197,18 +1189,20 @@ def _box(kind: str, cx: float, cy: float, cz: float,
     return entry
 
 
-def _elevator(map3d: Dict[str, Any], levels: List[int], storey: float,
-              extent: float) -> List[Dict[str, Any]]:
+def _elevator(map3d: Dict[str, Any], levels: List[int],
+              storey: float) -> List[Dict[str, Any]]:
     """The elevator of a building: shaft columns + roof, glass on three sides
     (the side facing the building centre stays open), a pad per level and a
-    static cabin on the ground floor (§ A6). All sizes are metres — the
+    static cabin on the ground floor (§ A6). ``map3d.elevator`` is a POINT IN
+    LOCAL METRES since v6 (Nr. 2), like every other plan coordinate — the
+    [0,1]² domain is gone. All sizes are metres — the
     legacy figure scale the caller used to hand in as k (storey / 3, the
     preview's kEl) is gone with E4: one metre is one metre.
     """
     pos = (map3d or {}).get("elevator")
     if not isinstance(pos, (list, tuple)) or len(pos) != 2:
         return []
-    ex, ez = _w(pos[0], extent), _w(pos[1], extent)
+    ex, ez = _num(pos[0]), _num(pos[1])
     top_level = max([0] + list(levels))
     shaft_top = (top_level + 1) * storey + LEVEL_PLATE_TOP
     outer = ELEVATOR_SHAFT_M
@@ -1334,7 +1328,7 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     # A GROUND model fills its location — `size` is a building-on-a-plot dial
     # and would leave a rim of plan with no ground under it (user finding
     # 2026-07-28: size 0.92 put a 0.45 m gap between the model and the
-    # reference square's edge line, on a location whose model IS the place).
+    # location's own edge line, on a location whose model IS the place).
     size = 1.0 if ground else (_num((map3d or {}).get("size"), 1.0) or 1.0)
     max_m = extent * size
     offset_y = _num(meta.get("offset_y"))
@@ -1368,7 +1362,6 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
 
 def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
                    meta: Dict[str, Any], storey: float,
-                   extent: float,
                    lift: Optional[Callable[[float, float], float]] = None,
                    ) -> Optional[Dict[str, Any]]:
     """A room's diorama model as a placement spec (§ B2a).
@@ -1387,8 +1380,9 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     placements. A room without a diorama simply has no model.
 
     ``lift`` is the terrain sampler for a room that follows the relief
-    (v5.2 Nr. 14) — rare for a diorama, but the rule is one rule: everything
-    standing in a non-flat room is raised to the ground under its anchor.
+    (v5.2 Nr. 14), called with the anchor's WORLD metres — rare for a diorama,
+    but the rule is one rule: everything standing in a non-flat room is raised
+    to the ground under its anchor.
     ``walk_y_world`` derives from ``bottom_y`` and rides along by itself.
     """
     if not meta:
@@ -1403,9 +1397,9 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     # the admin drags the ⌂ handle or dials the height (M8-review hole).
     at = recipe.get("model_at")
     if not isinstance(at, (list, tuple)) or len(at) != 2:
-        at = [0.5, 0.5]
-    anchor_u = x + _num(at[0], 0.5) * w
-    anchor_v = y + _num(at[1], 0.5) * d
+        at = [w / 2, d / 2]          # absent = centred, in the room's metres
+    anchor_u = x + _num(at[0], w / 2)
+    anchor_v = y + _num(at[1], d / 2)
     spec: Dict[str, Any] = {
         "role": "room",
         "id": room_id,
@@ -1415,7 +1409,7 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "level": level,
         "fix_euler": _fix_euler(meta.get("rotation")),
         "yaw_deg": _r(_num(lay.get("rotation")), 1),
-        "anchor": [_r(_w(anchor_u, extent)), _r(_w(anchor_v, extent))],
+        "anchor": [_r(anchor_u), _r(anchor_v)],
         # Same floor the room's PROPS stand on: its plate indoors, the room
         # floor outdoors — plus the diorama clearance and the plan's dial.
         "bottom_y": _r(_room_floor_y(recipe, storey)
@@ -1431,7 +1425,7 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         # Not calibrated yet: the room rectangle's own world width is the
         # honest stand-in — same number the old rectangle fit produced, but
         # now as a real size the admin can dial at the reference figure.
-        max_m = max(w, d) * extent
+        max_m = max(w, d)
         spec["width_estimated"] = True
     spec["max_m"] = _r(max_m)
     # Modelled floors (a podium, a sunken lounge, a hole in the mesh) make the
@@ -1447,7 +1441,7 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     # The polygon is the room's floor plate, not a second derivation. An
     # outdoor room has no shell to clip against (§ A5).
     if recipe.get("clip_model") and not recipe.get("always_visible"):
-        clip = _room_outline_world(recipe, extent)
+        clip = _room_outline_world(recipe)
         if len(clip) > CLIP_OUTLINE_MAX_POINTS:
             logger.warning(
                 "Room %s: clip_model ignored — outline has %d points (max %d)",
@@ -1494,7 +1488,6 @@ def _cutouts(contour: List[List[float]],
 
 
 def _prop_models(recipe: Dict[str, Any], storey: float,
-                 extent: float,
                  lift: Optional[Callable[[float, float], float]] = None,
                  ) -> List[Dict[str, Any]]:
     """The room's prop placements as specs (REAL-SIZE rule, § A2).
@@ -1522,9 +1515,9 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         dims_raw = placement.get("dims") or {}
         dims = [_num(dims_raw.get("width_m"), 1.0), _num(dims_raw.get("depth_m"), 1.0),
                 _num(dims_raw.get("height_m"), 1.0)]
-        at = placement.get("at") or [0.5, 0.5]
-        anchor_u = _num(at[0], 0.5)
-        anchor_v = _num(at[1], 0.5)
+        at = placement.get("at") or [0.0, 0.0]
+        anchor_u = _num(at[0])
+        anchor_v = _num(at[1])
         has_model = bool(placement.get("has_model"))
         prop = prop_store.get_prop(pid) if pid else None
         spec: Dict[str, Any] = {
@@ -1539,7 +1532,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             "yaw_deg": _r(_num(placement.get("yaw")), 1),
             "max_m": _r(max(dims)),
             "measure": "xyz",
-            "anchor": [_r(_w(anchor_u, extent)), _r(_w(anchor_v, extent))],
+            "anchor": [_r(anchor_u), _r(anchor_v)],
             "bottom_y": _r(floor_y + _num(placement.get("offset_y"))
                            + (lift(anchor_u, anchor_v) if lift else 0.0)),
         }
@@ -1553,13 +1546,13 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
 # ── Markers, figures ────────────────────────────────────────────────────
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
-             extent: float,
              lift: Optional[Callable[[float, float], float]] = None,
              ) -> List[Dict[str, Any]]:
     """Every marker of one room, finished in world coordinates.
 
-    Room markers are fractions of the room rectangle with an offset additive
-    to the sampled floor; prop markers arrive from the recipe as
+    Room markers are METRES from the room's min corner (v6 Nr. 2) with an
+    offset additive to the sampled floor; prop markers arrive from the recipe
+    as
     placement-relative transforms (fix → real size → yaw already applied) and
     only need ``placement point + [dx, dz]`` — resolved here, so the consumer
     adds nothing.
@@ -1589,12 +1582,12 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
 
     out: List[Dict[str, Any]] = []
     for marker in recipe.get("markers") or []:
-        at = marker.get("at") or [0.5, 0.5]
-        anchor_u = x + _num(at[0], 0.5) * w
-        anchor_v = y + _num(at[1], 0.5) * d
+        at = marker.get("at") or [w / 2, d / 2]
+        anchor_u = x + _num(at[0], w / 2)
+        anchor_v = y + _num(at[1], d / 2)
         entry: Dict[str, Any] = {
             "room_id": room_id,
-            "at_world": [_r(_w(anchor_u, extent)), _r(_w(anchor_v, extent))],
+            "at_world": [_r(anchor_u), _r(anchor_v)],
             "y_world": _r(floor_y + _num(marker.get("offset_y"))
                           + (lift(anchor_u, anchor_v) if lift else 0.0)),
             "animation": marker.get("animation") or "",
@@ -1621,17 +1614,17 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             placement = placements[int(marker.get("placement"))]
         except (TypeError, ValueError, IndexError):
             continue
-        at = placement.get("at") or [0.5, 0.5]
+        at = placement.get("at") or [0.0, 0.0]
         offset = marker.get("offset_m") or [0.0, 0.0]
         # The marker belongs to its PLACEMENT: it is sampled at the prop's
         # anchor, not at its own offset point, so a bench and every seat on
         # it rise by exactly the same amount and the mesh stays level.
         entry = {
             "room_id": room_id,
-            "at_world": [_r(_w(at[0], extent) + _num(offset[0])),
-                         _r(_w(at[1], extent) + _num(offset[1]))],
+            "at_world": [_r(_num(at[0]) + _num(offset[0])),
+                         _r(_num(at[1]) + _num(offset[1]))],
             "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m"))
-                          + (lift(_num(at[0], 0.5), _num(at[1], 0.5))
+                          + (lift(_num(at[0]), _num(at[1]))
                              if lift else 0.0)),
             "animation": marker.get("animation") or "",
             "root_offset": _root_drop(marker.get("animation")),
@@ -1738,16 +1731,39 @@ def _boundary_openings(map3d: Dict[str, Any],
 
 
 
+def terrain_frame(map3d: Dict[str, Any],
+                  extent: float) -> Tuple[float, float, float]:
+    """``(x0, z0, size)`` of the relief support grid, in local metres.
+
+    THE GRID SPANS THE LOCATION'S BOUNDARY, not a square around the pin
+    (contract v6 Nr. 2 — before the metric wave the reference square WAS the
+    footprint, so the two coincided; a drawn polygon may sit anywhere around
+    its pin and half the ground would have been left unrelieved).
+
+    It stays a SQUARE of edge ``extent`` — which is the wider side of the
+    boundary's bounding box (``plan_width_m``), so the square covers the box —
+    centred on the bounding box. One edge length means one ``terrain.step``
+    and one bilinear rule for both renderers, exactly as before. Without a
+    drawn boundary ``_boundary_local`` synthesizes the pin-centred square and
+    this returns the very frame the fraction era used.
+    """
+    pts = _boundary_local(map3d, extent)
+    xs = [p[0] for p in pts]
+    zs = [p[1] for p in pts]
+    cx = (min(xs) + max(xs)) / 2.0
+    cz = (min(zs) + max(zs)) / 2.0
+    return (cx - extent / 2.0, cz - extent / 2.0, extent)
+
+
 def _clip_grid_to_boundary(grid: List[List[float]], map3d: Dict[str, Any],
-                           extent: float) -> None:
+                           frame: Tuple[float, float, float]) -> None:
     """Pin every relief support point OUTSIDE the drawn boundary to 0, in
     place (contract v6 Nr. 4).
 
-    Point (i, j) sits at plan fraction (i/n, j/n) of the reference square, so
-    its local metre position is ``(i/n − 0.5)·extent`` — the very mapping
-    ``_w`` applies to every other fraction here. The test is the ordinary
-    ray cast (``point_in_polygon``), which answers correctly for the concave
-    outlines v6 allows.
+    Point (i, j) sits at ``(x0 + i/n · size, z0 + j/n · size)`` of the terrain
+    frame (:func:`terrain_frame`). The test is the ordinary ray cast
+    (``point_in_polygon``), which answers correctly for the concave outlines
+    v6 allows.
 
     Nothing happens without a DRAWN boundary: the synthesized square is the
     grid's own frame, and its rim is pinned by ``terrain_grid`` already.
@@ -1759,11 +1775,12 @@ def _clip_grid_to_boundary(grid: List[List[float]], map3d: Dict[str, Any],
     n = len(grid) - 1
     if n <= 0:
         return
+    x0, z0, size = frame
     for j in range(n + 1):
         for i in range(n + 1):
             if grid[j][i] == 0.0:
                 continue
-            if not point_in_polygon(_w(i / n, extent), _w(j / n, extent),
+            if not point_in_polygon(x0 + size * i / n, z0 + size * j / n,
                                     boundary):
                 grid[j][i] = 0.0
 
@@ -1790,16 +1807,23 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     room that opted out via ``relief_flat`` (road, paved square). Their hulls
     are pinned to zero in the field, so nothing in them moves by a single
     digit. The recipe ``outline`` is already the tessellated hull in absolute
-    plan fractions — the same points the plates use, not a second derivation.
+    local metres — the same points the plates use, not a second derivation —
+    and only the normalization into the grid's own [0,1]² lattice coordinates
+    happens here.
 
-    CLIPPED AT THE BOUNDARY (contract v6 Nr. 4): the grid stays the regular
-    lattice over the reference square — that is the frame every plan fraction
-    in this payload lives in — but every support point OUTSIDE the drawn
+    THE FRAME IS THE BOUNDARY'S BOUNDING BOX (:func:`terrain_frame`, v6
+    Nr. 2): a square of edge ``extent_m`` centred on the box, which for a
+    boundary drawn around its pin is the very square the fraction era used.
+    It travels with the payload as ``terrain.origin``, so a consumer never
+    has to guess where the lattice starts.
+
+    CLIPPED AT THE BOUNDARY (contract v6 Nr. 4): the grid stays that regular
+    lattice, but every support point OUTSIDE the drawn
     boundary polygon is pinned to 0, exactly like the rim already was. The
     decision is made HERE, server-side and deterministically, so neither
     renderer has to know what "outside" means: they drape the field they are
     handed. Without a drawn boundary nothing is clipped — the effective
-    boundary is then the reference square itself, and the square's rim is
+    boundary is then the synthesized square itself, and its rim is
     already the pinned border.
 
     The relief only survives the sanitizer on an ``area_detail`` location; the
@@ -1812,26 +1836,32 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     amplitude_world = _num(relief.get("amplitude_m"))
     if amplitude_world <= 0:
         return None, set()
+    x0, z0, size = terrain_frame(map3d, extent)
     relief_rooms: Set[str] = set()
     flat_hulls: List[List[List[float]]] = []
     for recipe in recipes:
-        hull = [[_num(p[0]), _num(p[1])]
+        # The lattice addresses itself in [0,1]² (``terrain_grid`` /
+        # ``terrain_height``), so the hulls are handed over in the SAME
+        # coordinates — one normalization, here, and nowhere else.
+        hull = [[(_num(p[0]) - x0) / size, (_num(p[1]) - z0) / size]
                 for p in recipe.get("outline") or []]
         if recipe.get("always_visible") and not recipe.get("relief_flat"):
             relief_rooms.add(str(recipe.get("room_id") or ""))
         elif len(hull) >= 3:
             flat_hulls.append(hull)
     # The wave width is authored in metres and divided into the edge length of
-    # the reference square — the same frame since E4 (extent IS plan_width_m,
-    # k = 1).
-    cells = relief_cells(relief.get("wave_m"), extent)
+    # the terrain frame — one metre, one metre, k = 1.
+    cells = relief_cells(relief.get("wave_m"), size)
     grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))), variant),
                         amplitude_world, flat_hulls, cells)
-    _clip_grid_to_boundary(grid, map3d, extent)
+    _clip_grid_to_boundary(grid, map3d, (x0, z0, size))
     # ``step`` follows the grid that was actually built, never the default —
     # otherwise the renderers subdivide with a cell size that does not exist
-    # in the payload they were handed.
-    return ({"step": _r(extent / (len(grid) - 1)), "grid": grid,
+    # in the payload they were handed. ``origin`` is the lattice's min corner
+    # in local metres: with the frame no longer nailed to the pin, that is the
+    # one number a consumer cannot derive from ``extent_m`` alone.
+    return ({"step": _r(size / (len(grid) - 1)), "grid": grid,
+             "origin": [_r(x0), _r(z0)],
              "amplitude_m": _r(amplitude_world)}, relief_rooms)
 
 
@@ -1892,7 +1922,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     by_room: Dict[str, Dict[str, Any]] = {}
     for room in rooms:
         recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                                plan_width_m, variant_seed=variant)
+                                variant_seed=variant)
         if not recipe:
             continue
         recipes.append(recipe)
@@ -1902,7 +1932,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # Thresholds as finished primitives (plan-betreten-und-tueren.md § 4.1) —
     # composed BEFORE the shell, because the shell takes its holes from them
     # (§ 4.2). One derivation, two consumers: this block and the payload.
-    doorways = _doorways(recipes, storey, extent)
+    doorways = _doorways(recipes, storey)
 
     # Indoor room hulls per level, world metres — where they run on the
     # contour line, the contour wall yields (one wall, one owner).
@@ -1914,7 +1944,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # wall at all instead of one wall with one owner.
         if recipe.get("always_visible") or recipe.get("no_walls"):
             continue
-        hull = _room_outline_world(recipe, extent)
+        hull = _room_outline_world(recipe)
         if hull:
             level = int(recipe.get("level") or 0)
             room_hulls.setdefault(level, []).append(hull)
@@ -1927,7 +1957,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                       "width": d["width_m"], "normal": _door_outward(d)}
                      for d in doorways if d.get("outside")]
 
-    walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey, extent,
+    walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,
                                                  outside_doors, room_hulls)
     models: List[Dict[str, Any]] = []
     markers: List[Dict[str, Any]] = []
@@ -1946,13 +1976,13 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # rooms keep their texture-only plates) and this whole branch is skipped.
     area_model = bool(map3d.get("area_model")) \
         and not bool(map3d.get("area_detail"))
-    contour_world = _outline_world(map3d, extent)
+    contour_world = _outline_world(map3d)
     overlay_rooms: Dict[str, Dict[str, Any]] = {}
     if area_model:
         outside_indoor: List[Tuple[str, List[List[float]]]] = []
         outside_outdoor: List[Dict[str, Any]] = []
         for recipe in recipes:
-            outline = _room_outline_world(recipe, extent)
+            outline = _room_outline_world(recipe)
             if not outline or _bbox_inside(outline, contour_world):
                 continue
             if recipe.get("always_visible"):
@@ -1967,7 +1997,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # height is the model's walkable surface where it declares one,
         # otherwise its lower edge; without a model the storey floor.
         for recipe in outside_outdoor:
-            outline = _room_outline_world(recipe, extent)
+            outline = _room_outline_world(recipe)
             xs = [p[0] for p in outline]
             zs = [p[1] for p in outline]
             cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
@@ -1988,25 +2018,31 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                 "y": _r(y),
             }
     terrain, relief_rooms = compose_terrain(map3d, recipes, extent, variant)
+    tx0, tz0, tsize = terrain_frame(map3d, extent)
 
     def _lift_for(room_id: str) -> Optional[Callable[[float, float], float]]:
         """The terrain sampler of one room — ``None`` for a flat room, which
-        is what keeps every existing number bit-identical there."""
+        is what keeps every existing number bit-identical there.
+
+        Called with the anchor's LOCAL METRES; the [0,1]² lattice coordinate
+        of the terrain frame is derived here, so no caller carries a frame."""
         if terrain is None or room_id not in relief_rooms:
             return None
-        return lambda u, v: terrain_height(terrain["grid"], u, v)
+        return lambda px, pz: terrain_height(terrain["grid"],
+                                             (px - tx0) / tsize,
+                                             (pz - tz0) / tsize)
 
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
         lift = _lift_for(room_id)
-        walls.extend(_room_walls(recipe, storey, extent, min(levels)))
+        walls.extend(_room_walls(recipe, storey, min(levels)))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
-                                 storey, extent, lift)
+                                 storey, lift)
         if diorama:
             models.append(diorama)
-        models.extend(_prop_models(recipe, storey, extent, lift))
-        markers.extend(_markers(recipe, room, storey, extent, lift))
+        models.extend(_prop_models(recipe, storey, lift))
+        markers.extend(_markers(recipe, room, storey, lift))
 
     # A threshold lies at the STANDING height of the rooms it joins, and THIS
     # is where that is decided (finding 2026-08-16: the 3D client recomputed
@@ -2023,7 +2059,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             [(_num(door["base_y"]), stand_by_room.get(room_id))
              for room_id in door["rooms"]]))
 
-    # Per-room recipe vocabulary in PLAN FRACTIONS — the 2D editor's ghost
+    # Per-room recipe vocabulary in LOCAL METRES — the 2D editor's ghost
     # openings draw from here instead of re-deriving the mirroring locally
     # (v4: no geometry twice). Pure pass-through of the room recipe: the
     # openings are already normalized AND mirrored in.
@@ -2052,15 +2088,17 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,
-        # the reference square as its four corners otherwise. The scene frame
+        # the synthesized square as its four corners otherwise. The scene frame
         # IS the local frame around the anchor pin, so these are the very
         # points the world map draws — no consumer transforms them a second
         # time, and none of them synthesizes a square of its own any more.
         "boundary": _boundary_local(map3d, extent),
-        # extent_m = the size of the reference square: the ONE number that
-        # turns every fraction in this payload into metres. Consumers must
-        # read it instead of assuming a constant (they used to assume 8).
-        # Since E4 it IS the location's footprint edge (map3d.plan_width_m).
+        # extent_m = the width of the location's bounding box in metres.
+        # Since v6 (Nr. 2) it converts NOTHING any more — every coordinate in
+        # this payload is already a metre — but it stays, because consumer
+        # contracts are built on it (loading radius, viewport, backdrop) and
+        # because it is the edge of the terrain frame. Consumers must read it
+        # instead of assuming a constant (they used to assume 8).
         "extent_m": _r(extent),
         # k = world metres per real metre. CONSTANT 1 since E4 — the field
         # stays because consumers multiply by it (× 1 is right for them),
@@ -2075,11 +2113,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # that is how a drawn area becomes a lake (_overlay_plates).
         "plates": (_plates(map3d, [r for r in recipes
                                    if str(r.get("room_id") or "") not in overlay_rooms],
-                           levels, storey, extent, relief_rooms,
+                           levels, storey, relief_rooms,
                            ground_kind)
-                   + _overlay_plates(recipes, overlay_rooms, min(levels), extent)),
+                   + _overlay_plates(recipes, overlay_rooms, min(levels))),
         "walls": walls,
-        "extras": _elevator(map3d, levels, storey, extent),
+        "extras": _elevator(map3d, levels, storey),
         "models": models,
         "figures": _figures(),
         "markers": markers,
@@ -2092,7 +2130,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # What the composer found wrong and did NOT repair behind the
         # author's back (§ 4.3). Always present, empty when all is well;
         # editor and 3D client only display it.
-        "problems": _problems(location, map3d, extent, shell_levels, doorways,
+        "problems": _problems(location, map3d, shell_levels, doorways,
                               recipes),
     }
     if boundary:

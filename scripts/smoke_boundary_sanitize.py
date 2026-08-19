@@ -51,19 +51,23 @@ self-intersecting. Its shoelace sum is 0 + 0 + (4·0 − 4·4) + (4·4 − 0·0)
 so the sanitizer neither reverses nor drops it; the bounding box is 4 × 4 →
 width 4.0. The L-shape has no crossing pair.
 
-ROOM OUTSIDE THE BOUNDARY. Rooms are still stored as fractions of the
-reference square, which is centred ON THE PIN with edge ``plan_width_m``, so
-a fraction f is (f − 0.5) × 4 metres here. The fixture is therefore the L
-CENTRED on the pin: (−2,−2) (2,−2) (2,0) (0,0) (0,2) (−2,2) — the same
-polygon translated by (−2,−2), so bounding box, winding (+12) and derived
-width 4.0 are unchanged. Its interior is the 4 × 4 square MINUS the notch
-quadrant x ∈ [0,2], z ∈ [0,2].
+ROOM OUTSIDE THE BOUNDARY. Rooms are stored in LOCAL METRES since v6 Nr. 2,
+the same frame the boundary uses — so both sides of the test arrive without
+conversion and ``rooms_outside_boundary`` needs no ``extent`` any more. The
+fixture is the L CENTRED on the pin: (−2,−2) (2,−2) (2,0) (0,0) (0,2) (−2,2)
+— the same polygon translated by (−2,−2), so bounding box, winding (+12) and
+derived width 4.0 are unchanged. Its interior is the 4 × 4 square MINUS the
+notch quadrant x ∈ [0,2], z ∈ [0,2].
 
-  room "notch"  x .6 y .6 w .3 d .3 → metres 0.4 … 1.6 on both axes, i.e.
+The three rooms below are the METRIC equivalents of the fractions this file
+used before the metric wave (f → (f − 0.5) × 4 for x/y, f × 4 for w/d), i.e.
+exactly the same rectangles — the expected verdicts are unchanged:
+
+  room "notch"  x 0.4 y 0.4 w 1.2 d 1.2 → 0.4 … 1.6 on both axes, i.e.
                 entirely inside the notch → all four corners out → reported.
-  room "wide"   x .05 y .05 w .3 d .3 → metres −1.8 … −0.6 on both axes,
+  room "wide"   x −1.8 y −1.8 w 1.2 d 1.2 → −1.8 … −0.6 on both axes,
                 deep inside the wide arm → silent.
-  room "flush"  x 0 y 0 w .5 d .5 → metres −2 … 0 on both axes: two corners
+  room "flush"  x −2 y −2 w 2 d 2 → −2 … 0 on both axes: two corners
                 lie ON the boundary and one is the notch corner (0,0), also
                 ON it. Edge-inclusive → silent (a plan drawn flush against
                 the boundary is legal).
@@ -192,43 +196,43 @@ def test_self_intersection() -> None:
 
 def _recipe(room_id: str, x: float, y: float, w: float, d: float) -> dict:
     """A room recipe as ``compose_recipe`` leaves it: the rectangle already
-    resolved into an outline of reference-square fractions."""
+    resolved into an outline of absolute LOCAL METRES."""
     return {"room_id": room_id, "level": 0,
             "outline": [[x, y], [x + w, y], [x + w, y + d], [x, y + d]]}
 
 
 def test_room_outside_boundary() -> None:
     print("room_outside_boundary")
-    notch = _recipe("notch", 0.6, 0.6, 0.3, 0.3)
-    wide = _recipe("wide", 0.05, 0.05, 0.3, 0.3)
-    flush = _recipe("flush", 0.0, 0.0, 0.5, 0.5)
+    notch = _recipe("notch", 0.4, 0.4, 1.2, 1.2)
+    wide = _recipe("wide", -1.8, -1.8, 1.2, 1.2)
+    flush = _recipe("flush", -2.0, -2.0, 2.0, 2.0)
     check("the room in the notch is reported",
-          scene_recipe.rooms_outside_boundary([notch], L_CENTRED, 4.0)
+          scene_recipe.rooms_outside_boundary([notch], L_CENTRED)
           == ["notch"])
     check("the room in the wide arm is not",
-          scene_recipe.rooms_outside_boundary([wide], L_CENTRED, 4.0) == [])
+          scene_recipe.rooms_outside_boundary([wide], L_CENTRED) == [])
     check("a room flush against the boundary is not (edge-inclusive)",
-          scene_recipe.rooms_outside_boundary([flush], L_CENTRED, 4.0) == [])
+          scene_recipe.rooms_outside_boundary([flush], L_CENTRED) == [])
     check("ids come back in recipe order",
           scene_recipe.rooms_outside_boundary(
-              [wide, notch, flush], L_CENTRED, 4.0) == ["notch"])
+              [wide, notch, flush], L_CENTRED) == ["notch"])
     check("without a boundary nothing is checked",
-          scene_recipe.rooms_outside_boundary([notch], None, 4.0) == []
-          and scene_recipe.rooms_outside_boundary([notch], [[0, 0]], 4.0) == [])
+          scene_recipe.rooms_outside_boundary([notch], None) == []
+          and scene_recipe.rooms_outside_boundary([notch], [[0, 0]]) == [])
 
 
 def test_problems_wiring() -> None:
     print("_problems reports both findings")
     location = {"id": "loc"}
-    recipes = [_recipe("notch", 0.6, 0.6, 0.3, 0.3),
-               _recipe("wide", 0.05, 0.05, 0.3, 0.3)]
+    recipes = [_recipe("notch", 0.4, 0.4, 1.2, 1.2),
+               _recipe("wide", -1.8, -1.8, 1.2, 1.2)]
     ok = scene_recipe._problems(location, {"boundary": L_CENTRED,
                                            "plan_width_m": 4.0},
-                                4.0, set(), [], [recipes[1]])
+                                set(), [], [recipes[1]])
     check("a clean location has no problem", ok == [], str(ok))
     out = scene_recipe._problems(location, {"boundary": L_CENTRED,
                                             "plan_width_m": 4.0},
-                                 4.0, set(), [], recipes)
+                                 set(), [], recipes)
     kinds = [p["kind"] for p in out]
     check("the stray room is reported once", kinds == ["room_outside_boundary"],
           str(kinds))
@@ -242,7 +246,7 @@ def test_problems_wiring() -> None:
               and not any(c.isdigit() for c in entry["message"]),
               entry["message"])
     bow = scene_recipe._problems(location, {"boundary": BOW_TIE},
-                                 4.0, set(), [], [])
+                                 set(), [], [])
     check("the bow tie is reported as a self-intersection",
           [p["kind"] for p in bow] == ["boundary_self_intersection"], str(bow))
 

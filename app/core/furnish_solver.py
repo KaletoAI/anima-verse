@@ -5,7 +5,9 @@ concrete ``layout.props`` entries. Pure geometry, no I/O, no randomness —
 identical input yields identical output (the repair loop depends on that).
 
 Coordinate frame: metres, origin at the room bounding-box's north-west
-corner, x → east, y → south (plan view). Compass follows the room-marker
+corner, x → east, y → south (plan view) — since contract v6 Nr. 2 that IS the
+frame ``layout.props[].at`` is stored in, so the solver reads and writes
+placements without converting anything. Compass follows the room-marker
 vocabulary (0 = S, 90 = E, 180 = N, 270 = W — counter-clockwise on screen);
 placement ``yaw`` turns CLOCKWISE in the top view, a prop's front points
 south at yaw 0, so front compass = (−yaw) mod 360 (mirrors
@@ -227,9 +229,9 @@ class _Solver:
             dims = self._dims(str(e.get("prop_id") or ""))
             if not dims:
                 continue
-            at = e.get("at") or [0.5, 0.5]
+            at = e.get("at") or [self.W / 2, self.D / 2]
             yaw = float(e.get("yaw") or 0)
-            c = (float(at[0]) * self.W, float(at[1]) * self.D)
+            c = (float(at[0]), float(at[1]))
             fw, fd = _footprint(dims, yaw)
             self.occupied.append((_rect_corners(c[0], c[1], fw, fd, yaw),
                                   str(e.get("prop_id")), c, yaw))
@@ -267,7 +269,9 @@ class _Solver:
         self.occupied.append((corners, prop_id, (cx, cy), yaw))
         self.used_area += dims["width_m"] * dims["depth_m"]
         return {"prop_id": prop_id,
-                "at": [round(cx / self.W, 4), round(cy / self.D, 4)],
+                # Metres from the room's min corner — the layout's own frame
+                # (v6 Nr. 2), stored to the centimetre like everything else.
+                "at": [round(cx, 2), round(cy, 2)],
                 "yaw": round(yaw % 360, 1)}
 
     # ── anchor strategies ───────────────────────────────────────────────

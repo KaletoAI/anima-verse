@@ -13,13 +13,23 @@ The rule (plan-betreten-und-tueren.md § 6), in one line: the stored
 onto the NEAREST wall edge of the room hull and becomes a door opening there,
 unless that edge already carries a walkable one.
 
-Frames. ``layout.x/y/w/d`` are fractions of the location's reference SQUARE, so
-a distance in that frame is proportional to real metres — the nearest wall is
-therefore measured in ABSOLUTE plate fractions, never in the bbox-local frame
-(which stretches u by w and v by d). The hull is the drawn ``outline`` (bbox
-fractions, clockwise, y down) or, when absent, the implicit unit square with
+Frames (contract v6 Nr. 2, the metric wave). ``layout.x/y/w/d`` are METRES in
+the location-local frame, and the drawn ``outline`` is metres from the room's
+min corner — so the nearest wall is measured in plain local metres and the
+door's 1.0 m clear width IS the number compared against an edge length. Only
+``layout.exit`` stays what it always was: a fraction of the room RECTANGLE.
+That is the one legacy field this one-time migration reads, and a rect
+fraction never was a world size.
+The hull is the drawn ``outline`` or, when absent, the implicit rectangle with
 the edge indices 0=N, 1=E, 2=S, 3=W. The result carries the edge INDEX, like
 the editor writes it.
+
+THIS FIXTURE IS THE OLD ONE, CONVERTED. Every case below described the same
+geometry as fractions of an 8 m plate; each number is that fraction run once
+through the retired mapping (x/y -> (f - 0.5) x 8, w/d and outline points ->
+f x 8), so all expected results (edge indices and every ``at``) are the ones
+the fraction fixture produced. Only case (9) is re-derived by hand, because
+its subject — the plan width deciding what fits — does not exist any more.
 
 Standard door: OPENING_DEFAULT in frontend/src/tabs/world/planGeometry.ts —
 width_m 1.0, height_m 2.1, sill_m 0, type 'door'. ``to`` stays empty (the
@@ -27,13 +37,13 @@ migration does not know where the old exit led).
 
 The cases, each with its hand-derived arithmetic:
 
-  (1) Exit near an edge. Rect x=0 y=0 w=0.5 d=0.4, no outline, exit [0.5,0.05]
-      -> absolute (0.25, 0.02). Distances: N 0.02, W 0.25, E 0.25, S 0.38.
-      N wins = edge 0, running (0,0)->(0.5,0): at = 0.25/0.5 = 0.5.
+  (1) Exit near an edge. Rect x=-4 y=-4 w=4 d=3.2, no outline, exit [0.5,0.05]
+      -> absolute (-2, -3.84). Distances: N 0.16, W 2, E 2, S 3.04.
+      N wins = edge 0, running (-4,-4)->(0,-4): at = 2/4 = 0.5.
 
   (2) Exit mid-room, the nearest wall wins. Same rect, exit [0.8,0.6]
-      -> absolute (0.4, 0.24). Distances: E 0.10, S 0.16, N 0.24, W 0.40.
-      E wins = edge 1, running (0.5,0)->(0.5,0.4): at = 0.24/0.4 = 0.6.
+      -> absolute (-0.8, -2.08). Distances: E 0.80, S 1.28, N 1.92, W 3.20.
+      E wins = edge 1, running (0,-4)->(0,-0.8): at = 1.92/3.2 = 0.6.
 
   (3) That edge already has a walkable opening -> None. Case (1) plus a door
       on edge 0. A WINDOW is not walkable, and a door on ANOTHER edge is not
@@ -42,39 +52,40 @@ The cases, each with its hand-derived arithmetic:
   (4) No hull -> None. A layout without a usable rectangle (x/y/w/d) has no
       geometry at all; letting it through would invent a wall.
 
-  (5) Point outside the rectangle: clamp first, then project. Rect x=0.2 y=0.1
-      w=0.4 d=0.4, exit [1.6, 0.7] -> clamped [1.0, 0.7] -> absolute
-      (0.2+0.4, 0.1+0.28) = (0.6, 0.38), which lies ON the east wall.
-      Edge 1 runs (0.6,0.1)->(0.6,0.5): at = (0.38-0.10)/0.4 = 0.7.
+  (5) Point outside the rectangle: clamp first, then project. Rect x=-2.4
+      y=-3.2 w=3.2 d=3.2, exit [1.6, 0.7] -> clamped [1.0, 0.7] -> absolute
+      (-2.4+3.2, -3.2+2.24) = (0.8, -0.96), which lies ON the east wall.
+      Edge 1 runs (0.8,-3.2)->(0.8,0): at = (-0.96+3.2)/3.2 = 0.7.
 
   (6) A polygon hull, not the rectangle. L-shape (6 points, clockwise, y down)
-      on rect x=0 y=0 w=1 d=1, so bbox fractions ARE absolute ones:
-      [[0,0],[1,0],[1,.5],[.5,.5],[.5,1],[0,1]]. Exit [0.8,0.6] sits in the
-      NOTCH, outside the hull. Distances: edge 2 ((1,.5)->(.5,.5)) 0.10,
-      edge 1 ((1,0)->(1,.5)) sqrt(.2^2+.1^2)=0.2236, edge 3 ((.5,.5)->(.5,1))
-      0.30. Edge 2 wins, and it runs right-to-left: at = (1-0.8)/0.5 = 0.4.
+      on rect x=-4 y=-4 w=8 d=8: [[0,0],[8,0],[8,4],[4,4],[4,8],[0,8]], i.e.
+      absolute (-4,-4) (4,-4) (4,0) (0,0) (0,4) (-4,4). Exit [0.8,0.6] ->
+      absolute (2.4, 0.8), in the NOTCH, outside the hull. Distances: edge 2
+      ((4,0)->(0,0)) 0.80, edge 1 ((4,-4)->(4,0)) 1.60, edge 3 ((0,0)->(0,4))
+      2.40. Edge 2 wins, and it runs right-to-left: at = (4-2.4)/4 = 0.4.
 
   (7) An edge without space -> None. Chamfered corner
-      [[0,0],[.95,0],[1,.05],[1,1],[0,1]] on rect 0/0/1/1, exit [0.96,0.04]
-      -> absolute (0.96,0.04). Perpendicular distance to the chamfer
-      ((.95,0)->(1,.05), direction (1,1)/sqrt2): |0.01-0.04|/sqrt2 = 0.0212;
-      to edge 0 the nearest point is its end (0.95,0): sqrt(.01^2+.04^2) =
-      0.0412; to edge 2 the nearest point is its start (1,.05): 0.0412. The
-      chamfer wins — but it is sqrt(2)*0.05 = 0.0707 long, and a 1.0 m door in
-      a location 8 m across needs 1.0/8 = 0.125. It does not fit; nothing is
-      invented on a neighbouring wall.
+      [[0,0],[7.6,0],[8,0.4],[8,8],[0,8]] on rect -4/-4/8/8, exit [0.96,0.04]
+      -> absolute (3.68,-3.68). Perpendicular distance to the chamfer
+      ((3.6,-4)->(4,-3.6), direction (1,1)/sqrt2): |0.08-0.32|/sqrt2 = 0.1697;
+      to edge 0 the nearest point is its end (3.6,-4): sqrt(.08^2+.32^2) =
+      0.3298; to edge 2 the nearest point is its start (4,-3.6): 0.3298. The
+      chamfer wins — but it is sqrt(2)*0.4 = 0.5657 m long and the door needs
+      1.0 m. It does not fit; nothing is invented on a neighbouring wall.
 
   (8) The door stays inside its wall. Same rect as (1), exit [0.02,0.02]
-      -> absolute (0.01,0.008): N wins (0.008 < 0.01), at = 0.01/0.5 = 0.02,
-      but half a door is 0.125/2 = 0.0625 wide = 0.125 of the 0.5-long north
-      wall, so the centre is pushed to at = 0.125.
+      -> absolute (-3.92,-3.936): N wins (0.064 < 0.08), at = 0.08/4 = 0.02,
+      but half a door is 0.5 m = 0.125 of the 4 m north wall, so the centre is
+      pushed to at = 0.125.
 
-  (9) Anchored plan width. Case (7)'s chamfer DOES fit when the location is
-      only 4 m across: 1.0/4 = 0.25 > ... no — it needs to be SMALLER than the
-      edge: with plan_width_m = 20 the door is 1.0/20 = 0.05 < 0.0707 and the
-      chamfer holds it. at = 0.5 by hand: the foot of the perpendicular from
-      (0.96,0.04) onto the chamfer is ((0.01+0.04)/2 = 0.025 along a direction
-      of unit length in a 0.0707-long edge) -> 0.025*sqrt(2)/0.0707 = 0.5.
+  (9) A LONG ENOUGH edge holds the door — the metric successor of the old
+      "plan width decides what fits". Chamfer [[0,0],[7,0],[8,1],[8,8],[0,8]]
+      on rect -4/-4/8/8, i.e. the chamfer runs (3,-4)->(4,-3), length
+      sqrt(2) = 1.4142 m > 1.0 m. Exit [0.95,0.05] -> absolute (3.6,-3.6);
+      its perpendicular foot is t = (0.6+0.4)/sqrt2 = 0.7071 along the edge,
+      so at = 0.7071/1.4142 = 0.5, and half a door is 0.5/1.4142 = 0.3536,
+      which leaves 0.5 untouched. The two neighbouring edges are 0.7211 m
+      away against the chamfer's 0.1414 m, so the chamfer wins.
 """
 import sys
 from pathlib import Path
@@ -103,9 +114,11 @@ def door(op, edge, at):
             and not op.get("to"))
 
 
-RECT = {"x": 0.0, "y": 0.0, "w": 0.5, "d": 0.4}
-L_SHAPE = [[0, 0], [1, 0], [1, 0.5], [0.5, 0.5], [0.5, 1], [0, 1]]
-CHAMFER = [[0, 0], [0.95, 0], [1, 0.05], [1, 1], [0, 1]]
+RECT = {"x": -4.0, "y": -4.0, "w": 4.0, "d": 3.2}
+BIG = {"x": -4.0, "y": -4.0, "w": 8.0, "d": 8.0}
+L_SHAPE = [[0, 0], [8, 0], [8, 4], [4, 4], [4, 8], [0, 8]]
+CHAMFER = [[0, 0], [7.6, 0], [8, 0.4], [8, 8], [0, 8]]
+CHAMFER_LONG = [[0, 0], [7, 0], [8, 1], [8, 8], [0, 8]]
 
 
 def main():
@@ -118,13 +131,13 @@ def main():
     check("an exit mid-room takes the nearest wall: edge 1 at 0.6",
           door(op, 1, 0.6), str(op))
 
-    op = project_exit_to_opening({"x": 0.2, "y": 0.1, "w": 0.4, "d": 0.4,
+    op = project_exit_to_opening({"x": -2.4, "y": -3.2, "w": 3.2, "d": 3.2,
                                   "exit": [1.6, 0.7]})
     check("a point outside the rectangle is clamped, then projected: "
           "edge 1 at 0.7", door(op, 1, 0.7), str(op))
 
-    op = project_exit_to_opening({"x": 0, "y": 0, "w": 1, "d": 1,
-                                  "outline": L_SHAPE, "exit": [0.8, 0.6]})
+    op = project_exit_to_opening({**BIG, "outline": L_SHAPE,
+                                  "exit": [0.8, 0.6]})
     check("a polygon hull wins over the rectangle: edge 2 at 0.4",
           door(op, 2, 0.4), str(op))
 
@@ -173,15 +186,14 @@ def main():
     op = project_exit_to_opening({**RECT})
     check("a room without an exit yields nothing", op is None, str(op))
 
-    op = project_exit_to_opening({"x": 0, "y": 0, "w": 1, "d": 1,
-                                  "outline": CHAMFER, "exit": [0.96, 0.04]})
+    op = project_exit_to_opening({**BIG, "outline": CHAMFER,
+                                  "exit": [0.96, 0.04]})
     check("a wall too short for a door yields nothing", op is None, str(op))
 
-    print("Part 3 — the plan width decides what fits")
-    op = project_exit_to_opening({"x": 0, "y": 0, "w": 1, "d": 1,
-                                  "outline": CHAMFER, "exit": [0.96, 0.04]},
-                                 plan_width_m=20.0)
-    check("the same chamfer holds the door in a 20 m location: edge 1 at 0.5",
+    print("Part 3 — the edge LENGTH decides what fits (metres, no plan width)")
+    op = project_exit_to_opening({**BIG, "outline": CHAMFER_LONG,
+                                  "exit": [0.95, 0.05]})
+    check("a 1.414 m chamfer holds the 1.0 m door: edge 1 at 0.5",
           door(op, 1, 0.5), str(op))
 
     print()

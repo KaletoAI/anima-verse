@@ -211,14 +211,12 @@ def _explicit_plan_width(map3d: Any) -> float:
     return v if 0.5 <= v <= 500 else 0.0
 
 
-def has_scale_anchor(location_id: str, map3d: Any) -> bool:
-    """True when the location HAS a scale anchor (``map3d.plan_width_m``).
-    ``location_id`` is kept for the callers' signature — no model is read."""
-    return _explicit_plan_width(map3d) > 0
-
-
 def derive_plan_width_m(location_id: str, map3d: Any) -> float:
-    """The reference square's real width in METRES, 0.0 when unanchored."""
+    """The location's width in METRES — the bounding box of its boundary, as
+    ``world_ops._sanitize_map3d`` derived it; 0.0 when it has no area.
+
+    ``has_scale_anchor`` went with contract v6 Nr. 2: room geometry carries
+    its own metres, so there is no anchor left to require."""
     return _explicit_plan_width(map3d)
 
 
