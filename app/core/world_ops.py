@@ -196,7 +196,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
-    from app.core.world_geometry import placed_boundary, placed_footprint
+    from app.core.world_geometry import effective_boundary, placed_footprint
     from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import list_areas, terrain_sig
 
@@ -260,11 +260,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # every map client needs, and none of them should have to dig for it.
         # None whenever the geometry has no usable anchor.
         _width = _fp[2] if _fp is not None else None
-        # The drawn footprint travels with the row (contract v6 "Gebiete"):
-        # the same local-metre points the sanitizer stored, so a map client
-        # draws the polygon through the ONE § A1.1 pin transform instead of
-        # falling back to the square. None whenever the location has no area.
-        _bd = placed_boundary(loc)
+        # The footprint travels with the row as a POLYGON, always (contract
+        # v6 "Gebiete"): the drawn boundary where one exists, the legacy
+        # square synthesized as its four corners otherwise
+        # (world_geometry.effective_boundary). Clients therefore never grow
+        # a second, square-shaped code path. None = the location has no area.
+        _bd = effective_boundary(loc)
         entry = {
             "id": lid,
             "name": loc.get("name") or "",

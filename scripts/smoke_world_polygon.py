@@ -48,7 +48,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.core.world_geometry import (  # noqa: E402
+    effective_boundary,
     placed_boundary,
+    polygon_signed_area as _psa,
     point_in_polygon,
     polygon_area,
     polygon_bounds,
@@ -153,6 +155,17 @@ check("unplaced -> None",
 check("NaN pos -> None",
       placed_boundary({"pos_x": float("nan"), "pos_z": 5,
                        "map3d": {"boundary": L_SHAPE}}), None)
+
+print("effective boundary (square dial -> its four corners, CW)")
+eb = effective_boundary({"pos_x": 0, "pos_z": 0,
+                         "map3d": {"plan_width_m": 10}})
+check("square synthesized", eb is not None, True)
+check("corners", eb[3], [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)])
+check("winding CW (positive shoelace, hand: 100)", _psa(eb[3]), 100.0)
+check("drawn boundary wins",
+      effective_boundary(loc)[3], [tuple(p) for p in L_SHAPE])
+check("no width, no boundary -> None",
+      effective_boundary({"pos_x": 0, "pos_z": 0, "map3d": {}}), None)
 
 print()
 if FAILED:

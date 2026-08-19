@@ -562,6 +562,35 @@ def placed_boundary(loc: Dict[str, Any]) -> Optional[Tuple[float, float, float,
     return (px, pz, yaw, pts)
 
 
+def effective_boundary(loc: Dict[str, Any]) -> Optional[Tuple[float, float, float,
+                                                              List[Tuple[float, float]]]]:
+    """(cx, cz, yaw_deg, local points) of a placed location — polygon ALWAYS.
+
+    The v6 sentence "a square is just a special case of the polygon" made
+    executable, and the ONE place that says so: a location with a drawn
+    ``map3d.boundary`` returns it; one that still carries only the legacy
+    square dial (``plan_width_m`` > 0) returns that square as its four
+    corners, clockwise in map view. Consumers therefore reason about
+    polygons only — no dual code paths anywhere downstream.
+
+    TRANSITION (stage 1, plan-assets-im-szenenkontext.md): the square
+    synthesis exists so worlds stay playable until every location has a
+    drawn boundary; it dies together with the ``plan_width_m`` dial in the
+    metric wave. It is NOT a 10 m fallback — a location without a boundary
+    AND without a positive width has no area and returns None.
+    """
+    pb = placed_boundary(loc)
+    if pb is not None:
+        return pb
+    fp = placed_footprint(loc)
+    if fp is None:
+        return None
+    cx, cz, width, yaw = fp
+    half = width / 2.0
+    return (cx, cz, yaw, [(-half, -half), (half, -half),
+                          (half, half), (-half, half)])
+
+
 def placed_footprint(loc: Dict[str, Any]) -> Optional[Tuple[float, float,
                                                             float, float]]:
     """(cx, cz, width_m, yaw_deg) of a placed location, or None.
