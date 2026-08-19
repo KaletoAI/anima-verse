@@ -33,6 +33,9 @@ interface ImagegenOption {
   lora_options?: LoraOption[] // this backend's LoRAs from the LoRA library
   ref_slot_count?: number // number of reference-image slots (0 = none)
   category?: string // 'inpaint' = only for Map-Fit/Match-Edges, not for normal renders
+  // false = the backend has no negative input (distilled/guidance-free model);
+  // the server folds the negative into the prompt as negations.
+  supports_negative_prompt?: boolean
   // Use-case styles resolved per backend (family + model) — shown as an
   // editable prompt part when the caller sets `styleUseCase`.
   prompt_styles?: Record<string, string>
@@ -793,6 +796,11 @@ export function ImageGenDialog({
                     disabled={submitting}
                     onChange={(e) => setNegative(e.target.value)}
                   />
+                  {currentOption?.supports_negative_prompt === false ? (
+                    <div className="ga-form-hint">
+                      {t('This backend has no negative input — these will be folded into the prompt as negations.')}
+                    </div>
+                  ) : null}
                 </>
               ) : null}
 

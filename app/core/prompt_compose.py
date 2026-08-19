@@ -329,8 +329,9 @@ def compose(*, use_case: str, subject: str, backend: Any,
         listed = ", ".join(moved)
         msg = f"Moved negated items to the negative prompt: {listed}."
         if family == "natural":
-            msg += (" Flux-class models ignore negatives — describe the "
-                    "room positively instead.")
+            msg += (" Backends without a negative input fold these into the "
+                    "prompt as negations (backend setting 'Supports negative "
+                    "prompt').")
         warnings.append(msg)
     for sentence in inline:
         warnings.append(

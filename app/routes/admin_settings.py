@@ -1677,6 +1677,23 @@ def _apply_schema_defaults(data: dict) -> None:
             _fill_defaults(section_data, fields)
 
 
+def _visible_when_ok(item: dict, cond: dict) -> bool:
+    """Evaluates a schema `visible_when` condition against a config item.
+
+    Every entry must match: a plain value compares for equality, a LIST means
+    "one of these" (e.g. Category in [txt2img, img2img]). Mirrors the client
+    side in static/admin/settings.js.
+    """
+    for key, want in cond.items():
+        cur = item.get(key) or ""
+        if isinstance(want, (list, tuple, set)):
+            if cur not in want:
+                return False
+        elif cur != want:
+            return False
+    return True
+
+
 def _fill_item_defaults(item: dict, fields: dict) -> None:
     """Like _fill_defaults, but skips fields the item never renders:
     `applicable_for` mismatching the item's api_type, and `visible_when`
@@ -1695,8 +1712,7 @@ def _fill_item_defaults(item: dict, fields: dict) -> None:
         if not_applicable and (item.get("api_type") or "") in not_applicable:
             continue
         cond = field_def.get("visible_when")
-        if isinstance(cond, dict) and any(
-                (item.get(k) or "") != v for k, v in cond.items()):
+        if isinstance(cond, dict) and not _visible_when_ok(item, cond):
             continue
         default = field_def.get("default")
         if default is None:

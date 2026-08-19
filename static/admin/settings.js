@@ -1140,14 +1140,16 @@ function renderFields(fields, data, path) {
         // Sibling-value visibility: `visible_when: {field: value}` shows the
         // field only while every referenced sibling field holds the required
         // value (e.g. the inpaint-only mask fields behind Category=inpaint).
-        // The gating select needs `triggers_rerender` so toggling it re-runs
-        // this filter immediately.
+        // An ARRAY value means "one of these" (e.g. Category in
+        // [txt2img, img2img]). The gating select needs `triggers_rerender`
+        // so toggling it re-runs this filter immediately.
         if (f.visible_when && typeof f.visible_when === 'object') {
             let visible = true;
             for (const [depKey, depVal] of Object.entries(f.visible_when)) {
                 const cur = (data && data[depKey] !== undefined && data[depKey] !== null)
                     ? data[depKey] : '';
-                if (cur !== depVal) { visible = false; break; }
+                const ok = Array.isArray(depVal) ? depVal.includes(cur) : cur === depVal;
+                if (!ok) { visible = false; break; }
             }
             if (!visible) continue;
         }

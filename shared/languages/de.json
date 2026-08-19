@@ -1569,6 +1569,7 @@
     "Then click inside the room to place the walk-in/out point.": "Danach in den Raum klicken, um den Ein-/Ausgangspunkt zu setzen.",
     "Then click on the plan to move the elevator there.": "Dann auf den Plan klicken, um den Fahrstuhl dorthin zu verschieben.",
     "This backend has no reference-image slot — pick a reference-capable backend (e.g. Flux/Qwen) so the current image can be adjusted instead of recreated.": "Dieses Backend hat keinen Referenzbild-Slot — wähle ein referenzfähiges Backend (z.B. Flux/Qwen), damit das aktuelle Bild angepasst statt neu erzeugt wird.",
+    "This backend has no negative input — these will be folded into the prompt as negations.": "Dieses Backend hat keinen Negativ-Eingang — diese Begriffe werden als Verneinungen in den Prompt gefaltet.",
     "This character has no saved outfits.": "Dieser Charakter hat keine gespeicherten Outfits.",
     "This character is sleeping. A message will wake them up.": "Dieser Charakter schläft gerade. Eine Nachricht weckt ihn auf.",
     "This file is the model the clients get for this tier.": "Diese Datei ist das Modell, das die Clients für diese Stufe bekommen.",

@@ -47,6 +47,7 @@ def log_image_prompt(
     workflow_type: str = "",
     entry_point: str = "",
     compose: Optional[Dict[str, Any]] = None,
+    negative_folded: Optional[List[str]] = None,
     media: str = "",
     error: str = ""):
     """Loggt einen Bildgenerierungs-Prompt als JSONL-Zeile.
@@ -68,6 +69,9 @@ def log_image_prompt(
         compose: Kompositions-Metadaten von prompt_compose.compose
             (use_case, family, style_had_slot, hint_rendered,
             negations_moved) — Grundlage der numerischen Prompt-Verifikation
+        negative_folded: Begriffe, die dieser Lauf aus dem Negativ in den
+            Prompt gefaltet hat (Backend ohne Negativ-Eingang,
+            supports_negative_prompt=false). Leer/None = nicht gefaltet.
         media: "video" / "mesh" fuer Nicht-Bild-Backends (leer = Bild).
             Ohne diesen Parameter warf der zentrale Logger fuer jede
             Video-/Mesh-Generierung einen (verschluckten) TypeError — sie
@@ -121,6 +125,8 @@ def log_image_prompt(
     }
     if compose:
         entry["compose"] = compose
+    if negative_folded:
+        entry["negative_folded"] = list(negative_folded)
     if media:
         entry["media"] = media
     if error:

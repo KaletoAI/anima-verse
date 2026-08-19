@@ -117,6 +117,15 @@ class ImageBackend(ABC):
         # Style/negative belong to the use cases, not to the backend.
         self.image_family = os.environ.get(f"{env_prefix}IMAGE_FAMILY", "").strip()
 
+        # Does this backend have a negative input at all? CFG backends
+        # (SD/SDXL, A1111, Z-Image with CFG > 1) do; distilled/guidance-free
+        # models (Z-Image Turbo, Flux, Qwen-Image) and the chat-image gateways
+        # do not — for those, generate() folds the negative into the positive
+        # prompt as negations instead of letting it be dropped silently.
+        self.supports_negative_prompt = os.environ.get(
+            f"{env_prefix}SUPPORTS_NEGATIVE_PROMPT", "true"
+        ).strip().lower() not in ("false", "0", "no")
+
         # Purpose category (txt2img / img2img / inpaint / img2mesh) — set for
         # EVERY backend type, so an inpaint alias on any api_type is kept out
         # of normal matching and offered as an inpaint target. Backends that
@@ -327,6 +336,20 @@ class ImageBackend(ABC):
         # the prompt — applies to ALL backends/paths as soon as a LoRA is active.
         final_prompt = self._inject_lora_triggers(prompt, params)
 
+        # Backends without a negative input (supports_negative_prompt off):
+        # fold the negative into the prompt as negations instead of handing
+        # the engine a field it throws away.
+        negative_folded: List[str] = []
+        if negative_prompt and not self.supports_negative_prompt:
+            from app.imagegen.negation_fold import fold_negatives
+            final_prompt, negative_folded = fold_negatives(
+                final_prompt, negative_prompt, self._prompt_family())
+            negative_prompt = ""
+            if negative_folded:
+                logger.info("%s: no negative input — folded %d term(s) into "
+                            "the prompt: %s", self.name, len(negative_folded),
+                            ", ".join(negative_folded))
+
         _t0 = _time.time()
         with self._jobs_lock:
             self._active_jobs += 1
@@ -352,14 +375,37 @@ class ImageBackend(ABC):
         # Central logging only on real success (images produced).
         if log_meta is not None and isinstance(result, list) and result:
             self._log_generation(final_prompt, negative_prompt, params,
-                                 _time.time() - _t0, log_meta)
+                                 _time.time() - _t0, log_meta,
+                                 negative_folded=negative_folded)
         return result
+
+    def _prompt_family(self) -> str:
+        """Prompt family of this backend: ``"natural"`` or ``"keywords"``.
+
+        The configured ``image_family`` wins; when it is empty the family is
+        derived from the model name exactly like the prompt composition does
+        (z_image -> keywords, qwen/flux -> natural).
+        """
+        family = (self.image_family or "").strip().lower()
+        if family in ("natural", "keywords"):
+            return family
+        try:
+            from app.core.config import image_model_to_family
+            from app.core.prompt_adapters import get_target_model
+            return image_model_to_family(
+                get_target_model("", getattr(self, "model", "") or ""))
+        except Exception:
+            return "keywords"
 
     def _log_generation(self, final_prompt: str, negative_prompt: str,
                         params: Dict[str, Any], duration_s: float,
-                        log_meta: Dict[str, Any]) -> None:
+                        log_meta: Dict[str, Any],
+                        negative_folded: Optional[List[str]] = None) -> None:
         """Writes the image-prompt log line with the FINAL prompt + engine-/
-        prompt-side fields; ``log_meta`` contributes the caller context."""
+        prompt-side fields; ``log_meta`` contributes the caller context.
+        ``negative_folded`` lists the terms this run moved from the negative
+        into the prompt (backends without a negative input) — the log has to
+        show that the negative did not simply vanish."""
         try:
             from app.utils.image_prompt_logger import log_image_prompt
             _model = (params.get("model") or params.get("unet")
@@ -376,6 +422,8 @@ class ImageBackend(ABC):
                 reference_images=params.get("reference_images") or {},
                 duration_s=round(float(duration_s), 2),
             )
+            if negative_folded:
+                fields["negative_folded"] = list(negative_folded)
             if "seed" not in fields and params.get("seed") is not None:
                 fields["seed"] = int(params.get("seed") or 0)
             log_image_prompt(**fields)

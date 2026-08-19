@@ -100,6 +100,13 @@ function buildSections(e, st) {
     if (e.negative_prompt) {
         html += buildSection('Negative Prompt', fmtText(e.negative_prompt, st), false);
     }
+    // Backend without a negative input: the negative was folded into the
+    // prompt as negations ("no fog") — show WHAT was folded, otherwise the
+    // empty Negative Prompt section looks like the terms were dropped.
+    if ((e.negative_folded || []).length > 0) {
+        html += buildSection('Negative folded into the prompt (' + e.negative_folded.length + ')',
+            fmtText(e.negative_folded.join(', '), st), false);
+    }
     if (e.pose_prompt) {
         html += buildSection('Pose Prompt', fmtText(e.pose_prompt, st), false);
     }

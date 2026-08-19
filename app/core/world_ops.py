@@ -1696,6 +1696,10 @@ def build_imagegen_options() -> Dict[str, Any]:
             "image_family": getattr(b, "image_family", "") or "",
             "prompt": getattr(b, "default_prompt", "") or "",
             "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
+            # False = no negative input; the dialog says so and generate()
+            # folds the negative into the prompt as negations.
+            "supports_negative_prompt": bool(
+                getattr(b, "supports_negative_prompt", True)),
             "target_model": get_target_model(
                 getattr(b, "image_family", "") or "", getattr(b, "model", "") or ""),
         }

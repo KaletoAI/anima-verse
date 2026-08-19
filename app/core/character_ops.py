@@ -2853,6 +2853,10 @@ def build_imagegen_workflows(character_name: str) -> Dict[str, Any]:
             "available": True,
             "target_model": _target_style,
             "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
+            # False = no negative input; the dialog says so and generate()
+            # folds the negative into the prompt as negations.
+            "supports_negative_prompt": bool(
+                getattr(b, "supports_negative_prompt", True)),
         }
         # Backend with a model list (e.g. Together.ai) — offer as a selection.
         backend_models = getattr(b, 'available_models', [])
