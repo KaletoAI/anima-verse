@@ -73,9 +73,11 @@
  * (2) THE ONE SQUARE BOTH SIDES CHECK — the gatehouse of
  *     `scripts/smoke_worldmap_v2.py` [9]
  * ---------------------------------------------------------------------------
- * Pin (0, 0), no drawn boundary, `map3d.plan_width_m` 12, so the server's
- * `effective_boundary` synthesizes the square (−6,−6) (6,−6) (6,6) (−6,6),
- * clockwise in map view. One opening, edge 0 (= point 0 → point 1, the edge
+ * Pin (0, 0), boundary the DRAWN centred 12 m square (−6,−6) (6,−6) (6,6)
+ * (−6,6), clockwise in map view (since 2026-08-19 nothing is synthesized: a
+ * location without a drawn outline has no area, and the server answers
+ * `boundary: null` for it — which this client already draws as a bare pin).
+ * One opening, edge 0 (= point 0 → point 1, the edge
  * from (−6,−6) to (6,−6)) at 0.5:
  *
  *     point  = (−6 + 0.5·12, −6) = (0, −6)

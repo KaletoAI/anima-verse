@@ -1841,7 +1841,15 @@ def test_boundary_openings() -> None:
           len(lo) == 4 and lo[3]["at_world"] == [5.0, -5.0],
           str(lo[3] if len(lo) > 3 else None))
     from app.core.boundary_entry import opening_world_points
-    placed = {**loose, "pos_x": 0.0, "pos_z": 0.0, "yaw_deg": 0.0}
+    # PLACED needs a DRAWN outline: the entry gate reads
+    # ``world_geometry.effective_boundary``, and since 2026-08-19 that is the
+    # boundary or nothing (the composer keeps its own square fallback for
+    # UNPLACED drafts, § B3). The square drawn here is the one the composer
+    # derives from PLAN_W 10 — corners ±5 — so both sides measure the same
+    # edge and the check stays the comparison it was meant to be.
+    placed = {**loose, "pos_x": 0.0, "pos_z": 0.0, "yaw_deg": 0.0,
+              "map3d": {**loose["map3d"],
+                        "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]]}}
     entry_pts = [p for e, p in opening_world_points(placed) if e == 0]
     check("the entry gate derives the very same points (one `at` rule)",
           [list(p) for p in entry_pts]

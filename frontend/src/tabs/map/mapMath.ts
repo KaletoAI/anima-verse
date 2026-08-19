@@ -7,8 +7,8 @@
  * described by a `View`: which world point sits in the middle of the canvas
  * (`cx`, `cz`) and how many pixels one metre is worth (`pxPerM`).
  *
- * A location is a SQUARE of edge length `plan_width_m`, centred on
- * (`pos_x`, `pos_z`) and turned by `yaw_deg`. The rotation is the contract's,
+ * A location is a drawn POLYGON (`boundary`) in LOCAL metres around
+ * (`pos_x`, `pos_z`), turned by `yaw_deg`. The rotation is the contract's,
  * copied nowhere else and not re-interpreted here:
  *
  *     x = cx + lx·cos(yaw) + lz·sin(yaw)
@@ -25,8 +25,8 @@
  *     must still be (110, 50) -> cx becomes 105, cz stays 50.
  *   fitBounds({min_x: 0, min_z: 0, max_x: 100, max_z: 50}, 800, 600, 40):
  *     pxPerM = min(720/100, 520/50) = 7.2 -> view {cx: 50, cz: 25, pxPerM: 7.2}.
- *   footprintScreenCorners: loc (pos 10/20, width 10, yaw 90), view {cx:10, cz:20,
- *     pxPerM:1}, 200×200: local corner (+5,+5) -> world (10+5·cos90+5·sin90,
+ *   boundaryScreenPoints: loc (pos 10/20, yaw 90), view {cx:10, cz:20,
+ *     pxPerM:1}, 200×200: boundary point (+5,+5) -> world (10+5·cos90+5·sin90,
  *     20−5·sin90+5·cos90) = (15, 15) -> screen (105, 95).
  *
  * Two further cases this module decides on its own (§ A1.3 allows a degenerate
@@ -147,11 +147,15 @@ export function visibleWorldRect(view: View, w: number, h: number): MapBounds {
 }
 
 /** What a footprint needs: a placed centre and a positive scale anchor. */
-export interface FootprintSource {
+export interface BoundarySource {
   pos_x?: number | null
   pos_z?: number | null
   yaw_deg?: number | null
-  plan_width_m?: number | null
+  /** The location's outline in LOCAL metres around the pin (contract v6).
+   *  The worldmap row carries it hoisted, the editor's full dict carries it
+   *  in `map3d.boundary` — callers hand over whichever they hold, already
+   *  checked; this function only projects. */
+  boundary?: Array<[number, number]> | null
 }
 
 /** Location-local metres -> world metres (§ A1.1, sign convention included). */
@@ -174,22 +178,25 @@ export function worldToLocal(cx: number, cz: number, yawDeg: number,
 }
 
 /**
- * The four screen corners of a location's footprint square, in local order
- * NW → NE → SE → SW (local −x/−z first, then clockwise on the local axes).
- * `null` when the location is unplaced or has no positive scale anchor — it
- * then has no area at all (§ A1.1/§ A1.3), and drawing one would be a lie.
+ * The location's DRAWN outline in screen points, in stored order.
+ *
+ * `null` when the location is unplaced or carries no outline — it then has no
+ * area at all (contract v6; the transition square that used to stand in for a
+ * missing outline ended 2026-08-19), and drawing one would be a lie.
+ *
+ * Pinned to the § B5a case, hand-checked: location (pos 10/20, yaw 90), view
+ * {cx:10, cz:20, pxPerM:1} on 200×200, boundary point (+5,+5) → § A1.1 →
+ * world (15, 15) → screen (105, 95).
  */
-export function footprintScreenCorners(loc: FootprintSource, view: View,
+export function boundaryScreenPoints(loc: BoundarySource, view: View,
   w: number, h: number): ScreenPt[] | null {
-  const { pos_x: px, pos_z: pz, plan_width_m: pw } = loc
+  const { pos_x: px, pos_z: pz, boundary } = loc
   if (typeof px !== 'number' || !Number.isFinite(px)) return null
   if (typeof pz !== 'number' || !Number.isFinite(pz)) return null
-  if (typeof pw !== 'number' || !(pw > 0)) return null
+  if (!Array.isArray(boundary) || boundary.length < 3) return null
   const yaw = typeof loc.yaw_deg === 'number' && Number.isFinite(loc.yaw_deg)
     ? loc.yaw_deg : 0
-  const r = pw / 2
-  const local: Array<[number, number]> = [[-r, -r], [r, -r], [r, r], [-r, r]]
-  return local.map(([lx, lz]) => {
+  return boundary.map(([lx, lz]) => {
     const p = localToWorld(px, pz, yaw, lx, lz)
     return worldToScreen(p.x, p.z, view, w, h)
   })

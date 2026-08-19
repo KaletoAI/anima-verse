@@ -622,7 +622,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           storeyHeightM={draft.map3d?.storey_height_m}
           onStoreyHeight={(v) => updMap3d('storey_height_m', v)}
-          onPlanWidth={(v) => updMap3d('plan_width_m', v)}
           fallbackYawDeg={location.map_rotation_2d || 0}
           scene={scene}
           sceneError={sceneError}

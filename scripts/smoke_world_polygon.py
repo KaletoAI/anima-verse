@@ -39,6 +39,23 @@ NOT the polygon. First scan row is height/2 → z = 2, crossings x = [0, 2,
 
 Pin transform (§ A1.1, unchanged in v6): pin (100, 50), yaw 90 → local
 (4,0) lands at x = 100 + 4·cos90 = 100, z = 50 − 4·sin90 = 46.
+
+TWO SECTIONS INHERITED from the deleted square helpers (2026-08-19, when
+``point_in_footprint``/``footprint_corners`` went with the transition
+synthesis). Same numbers, re-derived onto the polygon path so the guarantees
+survive the deletion — see the note in ``scripts/smoke_world_geometry.py``:
+
+  * ROTATION DISCRIMINATOR. Centre (10, 20), a centred 10 m square boundary
+    (half = 5), point (16, 20):
+      yaw 0  → local (6, 0): |6| > 5, OUTSIDE.
+      yaw 45 → local (6·cos45, 6·sin45) = (4.2426, 4.2426), both ≤ 5, INSIDE.
+    An unrotated test answers "outside" for both, so the yaw-45 case is what
+    proves the pin transform runs. (14.9, 24.9) at yaw 0 is local (4.9, 4.9)
+    → inside, the plain positive case.
+  * SQUARE BOUNDARY CORNERS. Centre (0, 0), a centred 10 m square, yaw 0 →
+    the four world points {(-5,-5), (5,-5), (5,5), (-5,5)}; the stored order
+    (−h,−h) (h,−h) (h,h) (−h,h) has shoelace sum +100, i.e. clockwise in map
+    view, which is the winding the sanitizer stores.
 """
 
 import math
@@ -48,7 +65,13 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.core.world_geometry import (  # noqa: E402
+    boundary_area_m2,
+    boundary_contains,
+    boundary_distance_m,
+    boundary_hits_aabb,
+    boundary_segment_hits,
     effective_boundary,
+    location_at_point,
     placed_boundary,
     polygon_signed_area as _psa,
     point_in_polygon,
@@ -156,22 +179,40 @@ check("NaN pos -> None",
       placed_boundary({"pos_x": float("nan"), "pos_z": 5,
                        "map3d": {"boundary": L_SHAPE}}), None)
 
-print("effective boundary (square dial -> its four corners, CW)")
-eb = effective_boundary({"pos_x": 0, "pos_z": 0,
-                         "map3d": {"plan_width_m": 10}})
-check("square synthesized", eb is not None, True)
-check("corners", eb[3], [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)])
-check("winding CW (positive shoelace, hand: 100)", _psa(eb[3]), 100.0)
-check("drawn boundary wins",
+print("effective boundary = the DRAWN boundary, nothing else (2026-08-19)")
+check("drawn boundary",
       effective_boundary(loc)[3], [tuple(p) for p in L_SHAPE])
-check("no width, no boundary -> None",
+check("no boundary -> None",
       effective_boundary({"pos_x": 0, "pos_z": 0, "map3d": {}}), None)
+# THE CLOSING CHECK of this wave: the legacy dial is not a shape any more.
+# Before 2026-08-19 this very location answered with a synthesized 10 m
+# square; now it has no area at all, and everything downstream (contains,
+# distance, area, location_at_point) has to agree.
+DIAL_ONLY = {"id": "dial", "pos_x": 0, "pos_z": 0,
+             "map3d": {"plan_width_m": 10}}
+check("plan_width_m alone synthesizes NOTHING",
+      effective_boundary(DIAL_ONLY), None)
+
+print("rotation discriminator (inherited from the deleted square smoke)")
+SQ10 = [[-5, -5], [5, -5], [5, 5], [-5, 5]]
+sq_yaw0 = {"id": "sq", "pos_x": 10, "pos_z": 20, "yaw_deg": 0,
+           "map3d": {"boundary": SQ10}}
+sq_yaw45 = {**sq_yaw0, "yaw_deg": 45}
+check("yaw 0: (14.9, 24.9) = local (4.9, 4.9) inside",
+      boundary_contains(sq_yaw0, 14.9, 24.9), True)
+check("yaw 0: (16, 20) = local (6, 0) outside",
+      boundary_contains(sq_yaw0, 16.0, 20.0), False)
+check("yaw 45: the same point is local (4.2426, 4.2426) -> inside",
+      boundary_contains(sq_yaw45, 16.0, 20.0), True)
+
+print("square boundary corners (inherited from the deleted square smoke)")
+sq_world = polygon_local_to_world(SQ10, 0, 0, 0)
+check("axis-aligned corners", {(round(x), round(z)) for x, z in sq_world},
+      {(-5, -5), (5, -5), (5, 5), (-5, 5)})
+check("winding CW (positive shoelace, hand: 100)", _psa(SQ10), 100.0)
 
 print("world-space wrappers (pin (100,50), yaw 90 — local (lx,lz) at world "
       "(100 + lz, 50 - lx))")
-from app.core.world_geometry import (  # noqa: E402
-    boundary_contains, boundary_distance_m, boundary_hits_aabb,
-    boundary_segment_hits, location_at_point)
 check("contains: world (101,47) = local (3,1)",
       boundary_contains(loc, 101, 47), True)
 check("contains: world (103,47) = local (3,3) notch",
@@ -190,8 +231,9 @@ check("aabb: box over east arm (world pts (102,46)/(102,48))",
 check("aabb: box beyond", boundary_hits_aabb(loc, 96, 42, 98, 44), False)
 
 print("location_at_point (smallest AREA wins, E1.2)")
+# A centred 20 m square: ±10, area 400 m2 — hand-written, not synthesized.
 village = {"id": "village", "pos_x": 0, "pos_z": 0,
-           "map3d": {"plan_width_m": 20}}          # synthesized square, 400 m2
+           "map3d": {"boundary": [[-10, -10], [10, -10], [10, 10], [-10, 10]]}}
 hut = {"id": "hut", "pos_x": 0, "pos_z": 0, "yaw_deg": 0,
        "map3d": {"boundary": L_SHAPE}}             # drawn L, 12 m2
 check("inside both -> hut (12 < 400)",
@@ -199,6 +241,9 @@ check("inside both -> hut (12 < 400)",
 check("in the hut's notch -> village",
       location_at_point(3, 3, [village, hut])["id"], "village")
 check("outside both -> None", location_at_point(50, 50, [village, hut]), None)
+check("a dial-only location is never the answer",
+      location_at_point(1, 1, [DIAL_ONLY]), None)
+check("...and has no area", boundary_area_m2(DIAL_ONLY), 0.0)
 
 print()
 if FAILED:

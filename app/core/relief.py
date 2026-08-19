@@ -220,7 +220,8 @@ def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
                       z: float) -> float:
     """Height of a location's scene relief at the WORLD point (x, z), metres.
 
-    0.0 everywhere else — outside a placed footprint, on a location without an
+    0.0 everywhere else — on a location without a drawn boundary (it has no
+    area, so it has no scene ground either), on a location without an
     ``area_detail`` relief, and on the pinned border of the field itself. This
     is the SCENE half of the height alone: what the world ground does under it
     is ``world_geometry.ground_y``, and ``ground_lift_at`` adds the two.
@@ -241,11 +242,13 @@ def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
     if not loc:
         return 0.0
     from app.core.scatter_curves import terrain_height
-    from app.core.world_geometry import placed_footprint, world_to_local
-    fp = placed_footprint(loc)
-    if fp is None:
+    from app.core.world_geometry import (effective_boundary,
+                                         polygon_plan_width_m, world_to_local)
+    eff = effective_boundary(loc)
+    if eff is None:
         return 0.0
-    cx, cz, width, yaw = fp
+    cx, cz, yaw, pts = eff
+    width = polygon_plan_width_m(pts)
     found = _terrain_of(loc, width)
     if not found:
         return 0.0

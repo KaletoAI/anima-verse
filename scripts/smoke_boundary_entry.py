@@ -44,18 +44,20 @@ Part 4 — where an arrival lands (plan-grundflaeche.md § 6, ``entry_room``
     link beats both (it already says where one arrives).
 
 Part 5 — the width of a pass-through (world_ops._sanitize_map3d, user test
-    2026-08-04). An opening lies ON a boundary edge, and the location is
-    ``plan_width_m`` wide, so THAT is the
-    widest an opening can be. Without the anchor there is no known edge and
-    10 m stands in. An out-of-range width is CLAMPED, never dropped — the
-    author drags the bar wider, saves, and must not find the opening gone.
+    2026-08-04). An opening lies ON a boundary edge, and the location is as
+    wide as its boundary's bounding box (the DERIVED ``plan_width_m``), so
+    THAT is the widest an opening can be. A location without a drawn boundary
+    has no known edge — and since 2026-08-19 no area either — so 10 m stands
+    in. An out-of-range width is CLAMPED, never dropped — the author drags the
+    bar wider, saves, and must not find the opening gone. The fixture is the
+    centred square of the named edge, so its derived width IS that edge.
     Derived by hand:
-      plan_width_m 40, width 60   → 40.0   (cap = the edge)
-      plan_width_m 40, width 25   → 25.0   (inside the edge, kept as authored)
-      plan_width_m 40, width 0.2  → 0.5    (lower bound, still not dropped)
-      plan_width_m 0.5, width 3   → 0.5    (cap wins over the lower bound)
-      no plan_width_m, width 25   → 10.0   (no anchor → the 10 m fallback)
-      no plan_width_m, width 3    → 3.0    (untouched)
+      40 m square, width 60   → 40.0   (cap = the edge)
+      40 m square, width 25   → 25.0   (inside the edge, kept as authored)
+      40 m square, width 0.2  → 0.5    (lower bound, still not dropped)
+      0.5 m square, width 3   → 0.5    (cap wins over the lower bound)
+      no boundary, width 25   → 10.0   (no area → the 10 m fallback)
+      no boundary, width 3    → 3.0    (untouched)
       width "wide" (not a number) → entry dropped (a structural reject, as
                                     before: there is nothing to clamp)
 """
@@ -242,29 +244,35 @@ def main():
     print("Part 5 — the width cap is the location edge, and it clamps")
     from app.core.world_ops import _sanitize_map3d  # noqa: E402
 
-    def widths(plan_width_m, *raw_widths):
+    def square(edge_m):
+        """The centred square of that edge — its bounding box IS the edge, so
+        the sanitizer derives exactly ``edge_m`` as the cap."""
+        h = edge_m / 2.0
+        return [[-h, -h], [h, -h], [h, h], [-h, h]]
+
+    def widths(edge_m, *raw_widths):
         raw = {"boundary_openings": [
             {"edge": 0, "at": 0.5, "width_m": w} for w in raw_widths]}
-        if plan_width_m is not None:
-            raw["plan_width_m"] = plan_width_m
+        if edge_m is not None:
+            raw["boundary"] = square(edge_m)
         return [op["width_m"]
                 for op in _sanitize_map3d(raw).get("boundary_openings") or []]
 
-    check("plan_width_m 40: a 60 m opening clamps to 40",
+    check("40 m square: a 60 m opening clamps to 40",
           widths(40, 60) == [40.0], widths(40, 60))
-    check("plan_width_m 40: 25 m survives (the old 10 m cap dropped it)",
+    check("40 m square: 25 m survives (the old 10 m cap dropped it)",
           widths(40, 25) == [25.0], widths(40, 25))
-    check("plan_width_m 40: 0.2 m clamps up to 0.5, it is not dropped",
+    check("40 m square: 0.2 m clamps up to 0.5, it is not dropped",
           widths(40, 0.2) == [0.5], widths(40, 0.2))
-    check("plan_width_m 0.5: the cap wins over the lower bound",
+    check("0.5 m square: the cap wins over the lower bound",
           widths(0.5, 3) == [0.5], widths(0.5, 3))
-    check("no anchor: 25 m clamps to the 10 m fallback",
+    check("no boundary: 25 m clamps to the 10 m fallback",
           widths(None, 25) == [10.0], widths(None, 25))
-    check("no anchor: 3 m passes untouched",
+    check("no boundary: 3 m passes untouched",
           widths(None, 3) == [3.0], widths(None, 3))
     check("a non-numeric width is still dropped (nothing to clamp)",
           widths(40, "wide", 3) == [3.0], widths(40, "wide", 3))
-    over = _sanitize_map3d({"plan_width_m": 40, "boundary_openings": [
+    over = _sanitize_map3d({"boundary": square(40), "boundary_openings": [
         {"edge": 3, "at": 1.4, "width_m": 60, "room": "road"}]})
     check("clamping keeps the rest of the entry intact",
           over["boundary_openings"] == [{"edge": 3, "at": 1.0,
@@ -274,11 +282,11 @@ def main():
     # v6 Nr. 5: no alias reader for the deleted letters, and no index the
     # boundary does not have — both are DROPPED (with a log line), never
     # translated into something plausible.
-    lettered = _sanitize_map3d({"plan_width_m": 40, "boundary_openings": [
+    lettered = _sanitize_map3d({"boundary": square(40), "boundary_openings": [
         {"edge": "N", "at": 0.5, "width_m": 3}]})
     check("an edge LETTER is dropped by the sanitizer",
           "boundary_openings" not in lettered, str(lettered))
-    outside = _sanitize_map3d({"plan_width_m": 40, "boundary_openings": [
+    outside = _sanitize_map3d({"boundary": square(40), "boundary_openings": [
         {"edge": 4, "at": 0.5, "width_m": 3}]})
     check("...and so is index 4 on a four-edge square",
           "boundary_openings" not in outside, str(outside))

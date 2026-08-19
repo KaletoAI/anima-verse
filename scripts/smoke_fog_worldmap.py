@@ -34,7 +34,7 @@ Hand-derived expectations:
     npc_a.movement_target_name -> "" (C is unknown, so it stays nameless)
     events_by_location  -> only the key of A (B and C are unknown)
     world_bounds        -> over ALL placed footprints (centre ± half of
-                           plan_width_m 10 = ± 5): A stretches min_x/min_z to
+                           a drawn 10 m square = ± 5): A stretches min_x/min_z to
                            0-5 = -5, C stretches max_x to 50+5 = 55 and max_z
                            to 30+5 = 35
                            -> {"min_x": -5.0, "min_z": -5.0,
@@ -174,8 +174,13 @@ def place(name: str, pos) -> str:
         data = _load_world_data()
         for entry in data.get("locations", []):
             if entry.get("id") == loc_id:
+                # The DRAWN centred 10 m square (contract v6): since
+                # 2026-08-19 a width alone is no area, so the fixture says
+                # its outline. Corners ±5 — the numbers of the docstring.
                 entry["map3d"] = {**(entry.get("map3d") or {}),
-                                  "plan_width_m": 10.0}
+                                  "plan_width_m": 10.0,
+                                  "boundary": [[-5.0, -5.0], [5.0, -5.0],
+                                               [5.0, 5.0], [-5.0, 5.0]]}
         _save_world_data(data)
     return loc_id
 

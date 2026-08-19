@@ -77,12 +77,19 @@ def check(label, actual, expected):
 
 
 def set_plan_width(location_id: str, width: float) -> None:
-    """Scale anchor of a location (map3d.plan_width_m) — the footprint edge."""
+    """DRAW the location's boundary as the centred square of edge ``width``
+    (contract v6) and store the width the sanitizer derives from its bounding
+    box. Since 2026-08-19 the width alone is no shape: without a drawn outline
+    a location has no area anywhere. The square's corners are the ones the
+    deleted synthesis produced, so every hand-derived number stays put."""
+    half = round(float(width) / 2.0, 2)
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
             map3d = dict(loc.get("map3d") or {})
             map3d["plan_width_m"] = width
+            map3d["boundary"] = [[-half, -half], [half, -half],
+                                 [half, half], [-half, half]]
             loc["map3d"] = map3d
     _save_world_data(data)
 

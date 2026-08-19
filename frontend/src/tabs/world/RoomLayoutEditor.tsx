@@ -1609,36 +1609,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         ) : null}
       </div>
 
-      {/* NO BOUNDARY DRAWN. Since v6 the location's footprint IS the drawn
-          polygon, and `plan_width_m` is only its derived bounding-box width —
-          the server overwrites whatever is sent here as soon as a boundary
-          exists. So this is no longer a lock on the tools (rooms carry their
-          own metres and can be drawn right away); it says what is MISSING and
-          offers the fallback width the drawing window falls back to until the
-          plot is drawn on the map tab. */}
-      {!map3d?.boundary?.length && onMap3d ? (
+      {/* NO BOUNDARY DRAWN. The location's footprint IS the drawn polygon, and
+          `plan_width_m` is only its derived bounding-box width — not an input
+          any more, the server ignores a submitted one (closing wave
+          2026-08-19). So there is no width field here: without an outline the
+          place has no area anywhere, and the only fix is drawing one on the
+          map tab. It is not a lock on these tools either — rooms carry their
+          own metres and can be drawn right away; the plan window falls back to
+          a {FALLBACK_VIEW_M} m square around the pin until the plot exists. */}
+      {!map3d?.boundary?.length ? (
         <div className="ga-anchor-banner">
           <span style={{ flex: 1, minWidth: 200 }}>
-            ⚠ {t('No boundary drawn — this location has a pin but no area. Draw its footprint on the map tab; until then the plan works on a square around the pin.')}
+            ⚠ {t('No boundary drawn — this location has a pin but no area anywhere. Draw its footprint on the map tab (or use “Seed missing boundaries” there); until then the plan works on a {n} m square around the pin.')
+              .replace('{n}', String(FALLBACK_VIEW_M))}
           </span>
-          <label className="ga-check-row"
-            title={t('Fallback width of that square, in real metres. As soon as a boundary is drawn the server derives this value from its bounding box and this field stops mattering.')}>
-            <span>📐 {t('Fallback width (m)')}</span>
-            <input
-              className="ga-input"
-              type="number"
-              min={0.5}
-              max={500}
-              step={0.5}
-              style={{ width: 80 }}
-              value={map3d?.plan_width_m ?? ''}
-              placeholder={String(FALLBACK_VIEW_M)}
-              onChange={(e) => {
-                const n = parseFloat(e.target.value)
-                onMap3d('plan_width_m', Number.isFinite(n) && n > 0 ? n : undefined)
-              }}
-            />
-          </label>
         </div>
       ) : null}
 

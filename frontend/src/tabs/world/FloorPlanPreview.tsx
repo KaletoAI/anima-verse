@@ -25,11 +25,12 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   drapeGeometry,
-  applyClipOutline, disposeClipMaterials, pickVariant, placeModelSpec, plateTargets,
+  applyClipOutline, disposeClipMaterials, pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
+import { fmtM } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
@@ -82,9 +83,6 @@ interface FloorPlanPreviewProps {
   /** When set, the toolbar shows the storey-height field next to the metre
    *  scale (writes map3d.storey_height_m on the location draft). */
   onStoreyHeight?: (v: number | undefined) => void
-  /** When set, the toolbar shows the plan-width anchor field (writes
-   *  map3d.plan_width_m on the location draft). */
-  onPlanWidth?: (v: number | undefined) => void
   /** Which metre dial is being edited RIGHT NOW — decides which reference
    *  size the preview shows (measureKit). The preview owns the state for its
    *  own toolbar fields; a parent may override for fields it hosts itself. */
@@ -105,7 +103,7 @@ interface FloorPlanPreviewProps {
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, onPlanWidth, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   // Reference sizes: the toolbar's own fields drive them; a parent may push
   // one in for a field it hosts (the model tab does that).
@@ -508,10 +506,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       return outer
     }
 
-    // Prop meshes by id — the URL comes from the spec, everything else about
-    // the prop (fix, size, placeholder) is already in it.
-    const ensurePropModel = (propId: string, url: string): CachedModel | null => {
-      const key = `prop:${propId}`
+    // Prop meshes by URL — the URL comes from the spec, everything else about
+    // the prop (fix, size, placeholder) is already in it. Keyed by URL and not
+    // by prop id since the model variants (E2.3): two placements of the SAME
+    // prop may legitimately show two different meshes, and an id key would
+    // hand the first one's mesh to all of them.
+    const ensurePropModel = (url: string): CachedModel | null => {
+      const key = `prop:${url}`
       const cur = cacheRef.current.get(key)
       if (cur === 'loading' || cur === 'missing') return null
       if (cur) return cur
@@ -740,8 +741,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       // box (dims × k, already world metres) — a placement is never dropped.
       // Tier (§ B1 variants): stage 1 requests `full` everywhere — the
       // distance-based choice is stage 3 (plan-3d-lod-und-betreten.md).
-      const propUrl = pickVariant(spec.variants, 'full')
-      const entry = propUrl ? ensurePropModel(spec.id, propUrl) : null
+      // …and WHICH model variant of the prop (E2.3) is the spec's business,
+      // not the preview's: `pickModelVariant` reads the resolved `variant`
+      // index the server put on the placement.
+      const propUrl = pickModelVariant(spec, 'full')
+      const entry = propUrl ? ensurePropModel(propUrl) : null
       if (entry) {
         placeSpec(entry.obj, spec)
       } else if (spec.placeholder_dims) {
@@ -1560,31 +1564,22 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         >
           ✓
         </button>
-        {onPlanWidth ? (
-          <label className="ga-check-row"
-            title={anchorMissing
-              ? t('No boundary drawn: this location has a pin but no area. Draw its footprint on the map tab — until then this width is the fallback square the plan and the loading radius work on.')
-              : t('Plan width (m): how wide this location is in REAL metres. DERIVED since contract v6 — the server overwrites it with the bounding-box width of the drawn boundary on every save. It scales nothing any more (rooms, props and markers carry their own metres); it sizes the loading radius, the viewport and the scene backdrop.')}>
-            <span>{anchorMissing ? '⚠' : '📐'}</span>
-            <input
-              className="ga-input"
-              type="number"
-              min={0.5}
-              max={500}
-              step={0.5}
-              style={anchorMissing
-                ? { width: 70, borderColor: '#d29922' }
-                : { width: 70 }}
-              value={map3d?.plan_width_m ?? ''}
-              placeholder="—"
-              {...bindMeasure('plan_width')}
-              onChange={(e) => {
-                const n = parseFloat(e.target.value)
-                onPlanWidth(Number.isFinite(n) && n > 0 ? n : undefined)
-              }}
-            />
-          </label>
-        ) : null}
+        {/* The plan width is READ-ONLY (contract v6 Nr. 2, closing wave
+            2026-08-19): it is the bounding-box width of the DRAWN boundary,
+            derived by the server, and a submitted value is ignored. Without
+            an outline the location has no width and no area at all — the
+            place to fix that is the map tab, not a number field here. */}
+        <span className="ga-check-row"
+          title={anchorMissing
+            ? t('No boundary drawn: this location has a pin but no area anywhere — no ground, no walls, nothing to walk into. Draw its footprint on the map tab (or use "Seed missing boundaries" there).')
+            : t('Plan width (m): how wide this location is in REAL metres. DERIVED — the bounding-box width of the drawn boundary, written by the server. It scales nothing (rooms, props and markers carry their own metres); it sizes the loading radius, the viewport and the scene backdrop.')}>
+          <span>{anchorMissing ? '⚠' : '📐'}</span>
+          <span style={anchorMissing ? { color: '#d29922' } : undefined}>
+            {anchorMissing
+              ? t('no boundary')
+              : fmtM(map3d?.plan_width_m || 0) + ' m'}
+          </span>
+        </span>
         {onStoreyHeight ? (
           <label className="ga-check-row"
             title={t('Storey height (m): the height of one storey in REAL metres — a normal room is 2.5 to 3. It stacks the floor-plan levels; the world height follows from the plan width like every other length.')}>

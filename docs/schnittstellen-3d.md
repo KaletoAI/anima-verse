@@ -16,16 +16,37 @@
 >    Umrisse sind zugelassen** (E1.1). Unplatziert bleibt `pos_x/pos_z null`.
 >    Ohne `boundary` hat eine Location KEINE Fläche (nur einen Pin) — das
 >    frühere „ohne Anker 10-m-Quadrat" entfällt ersatzlos.
+>
+>    > **Übergangs-Synthese beendet 2026-08-19.** Bis dahin hat
+>    > `world_geometry.effective_boundary` einer Location, die nur noch den
+>    > alten `plan_width_m`-Regler trug, ein zentriertes Quadrat
+>    > untergeschoben, damit Altwelten spielbar blieben. Diese Synthese ist
+>    > gelöscht, zusammen mit allen Quadrat-Helfern des Moduls
+>    > (`point_in_footprint`, `footprint_distance`, `footprint_corners`,
+>    > `segment_hits_footprint`, `footprint_hits_aabb`, `placed_footprint`).
+>    > **Ohne gezeichnete Boundary keine Fläche** — nirgends: nicht im
+>    > Server (Nav-Grid, `location_at_point`, Plateau-Pass, Eintritts-Gate),
+>    > nicht im Payload (`boundary: null`, `plan_width_m: null`), nicht in
+>    > einem der beiden Renderer (bloßer Pin). **Alt-Welten repariert der
+>    > Seed-Knopf**: „Seed missing boundaries (N)" im Karten-Editor
+>    > (`POST /world/locations/seed-boundaries`) schreibt jeder platzierten
+>    > Location ohne Umriss genau dieses Quadrat als ECHTE, editierbare
+>    > Boundary. Eine ausdrückliche Nutzer-Aktion, kein Fallback-Leser.
 > 2. **Das Bruchteil-System ist gelöscht.** Raum-Rechtecke (`x/y/w/d`),
 >    Raum-`outline`, Kurven-Kontrollpunkte, Marker-`at`, Prop-`at`,
 >    `model_at`, Fahrstuhl — alles wird in **Metern im lokalen Rahmen**
 >    gespeichert und ausgeliefert (Szenengraph Welt → Location(Pin+Yaw) →
 >    Raum(Position+Drehung) → Inhalt). `[0,1]²`-Domäne,
 >    `plan_width_m`-Regler und der Anker-Zwang (`_require_scale_anchor`)
->    existieren nicht mehr. `plan_width_m`/`extent_m` bleiben als
->    **abgeleitete Rechengröße** (Breite der Bounding-Box des Boundary-
+>    existieren nicht mehr. `plan_width_m`/`extent_m` bleiben AUSSCHLIESSLICH
+>    als **abgeleitete Rechengröße** (Breite der Bounding-Box des Boundary-
 >    Polygons) in den Payloads, damit Verbraucher-Verträge (Laderadius,
 >    Viewport, Backdrop) weiterleben; `k = 1` bleibt dokumentiert konstant.
+>    **`plan_width_m` ist seit 2026-08-19 KEINE EINGABE mehr**: der Sanitizer
+>    (`world_ops._sanitize_map3d`) verwirft einen gesendeten Wert kommentarlos
+>    und schreibt das Feld nur dort, wo eine Boundary gezeichnet ist — ohne
+>    Umriss gibt es keine Breite, so wie es keine Fläche gibt. Es gibt daher
+>    auch kein Eingabefeld mehr dafür (Grundriss-Editor: reine Anzeige).
 >
 >    > **Nr. 2 EINGELÖST (Server-Hälfte, 2026-08-19).** Ab hier gilt die
 >    > folgende Feld-Semantik wörtlich; wo irgendwo unten noch eine
@@ -653,8 +674,8 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `pos_x` | `float \| null` | Welt-Meter; `null` = unplatziert |
 | `pos_z` | `float \| null` | Welt-Meter; `null` = unplatziert |
 | `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
-| `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. Der Wert stammt aus demselben Fußabdruck, den auch `world_bounds` benutzt — Eintrag und Fußabdruck-Regel können also nicht auseinanderlaufen. `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** (dann hat er keinen Fußabdruck, egal wie gut sein Anker ist) ODER seine Geometrie hat keinen brauchbaren Anker (`map3d.plan_width_m` fehlt, ist ≤ 0 oder unlesbar). Ein Client, der die Kantenlänge eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d`; E2 (Drag-Ghost) darf den rohen Anker unplatzierter Orte später zusätzlich als eigenes Feld liefern |
-| `boundary` | `[[x, z], …] \| null` | **v6:** DER Fußabdruck als gezeichnetes Polygon in LOKALEN Metern um den Pin, aus `map3d` hochgezogen (`world_geometry.effective_boundary`); ein Alt-Quadrat kommt als seine vier synthetisierten Ecken, der Client hat also keinen Quadrat-Pfad mehr. `null` = der Ort hat keine Fläche |
+| `plan_width_m` | `float \| null` | **ABGELEITET**, nie autoriert: die breitere Seite der Bounding-Box von `boundary` (`world_geometry.polygon_plan_width_m` — dieselbe Funktion, mit der der Sanitizer das Feld schreibt, und dieselbe Boundary, aus der `world_bounds` entsteht; Eintrag und Flächen-Regel können also nicht auseinanderlaufen). `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** ODER er hat keine gezeichnete Boundary — beides heißt „keine Fläche“. Ein Client, der die Breite eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d` |
+| `boundary` | `[[x, z], …] \| null` | **v6:** DER Fußabdruck als gezeichnetes Polygon in LOKALEN Metern um den Pin, aus `map3d` hochgezogen (`world_geometry.effective_boundary`) — der Client hat keinen Quadrat-Pfad mehr, weil es keine Quadrate mehr gibt. **Seit 2026-08-19 wird nichts mehr synthetisiert**: `null` = der Ort hat KEINE Fläche und wird als bloßer Pin gezeichnet (Alt-Welten repariert der Seed-Knopf, siehe v6 Nr. 1) |
 | `openings` | `[{edge, at_world, inward, room}, …]` | **v6:** die autorierten Grenz-Durchgänge, FERTIG GERECHNET (§ B1 Nr. 13): `edge` = Kanten-INDEX des Boundary-Polygons, `at_world` = `[x, z]` in WELT-Metern, `inward` = einwärtige Einheits-Normale in WELT-Achsen, `room` = verknüpfter Raum (`""` = keiner, dann entscheidet die Ankunftsregel). Immer vorhanden; **leere Liste = FREIE Grenze** (der Ort hat nie gesagt, wo sein Weg hinein ist, E4 Task 5). Gerechnet von `boundary_entry.opening_world_frames` — derselben Funktion, mit der das Eintritts-Gate von `POST /play/pos` misst, damit Angebot und Übertritt nicht auseinanderlaufen können. **Der Client rechnet an einer Öffnung nichts mehr selbst**: kein Buchstabe, keine Halbkanten-Formel, keine Kachel-Drehung |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
 | `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
@@ -3376,3 +3397,73 @@ mehr — die Raumwand besitzt die Strecke (sie trägt Textur und
 Öffnungen). Outdoor-Räume lassen die Kontur unberührt. Befund-Anlass:
 deckungsgleiche Wände z-fighteten, sobald eine Wand-Textur gesetzt war
 (Haus von Kai, 27 Paare / 16,47 m doppelt — jetzt 0/0).
+
+## Nachtrag 2026-08-19 (§ B2): Ein Prop, mehrere Modell-Varianten
+
+Ein Prop trägt seit E2.3 nicht mehr ein Mesh, sondern eine **geordnete Liste
+aktiver Modell-Varianten** — mehrere Meshes DESSELBEN Gegenstands. Ein
+gestreuter Wald ist damit vier Kiefernsorten statt zwanzig Mal derselben
+Kiefer. Obergrenze ist `image_generation.prop_variant_max` (Vorgabe 4).
+
+**Payload (`models[]`, Rolle `prop`).** Zwei neue Felder, und sie stehen NUR
+an einem Prop mit mehr als einer Variante:
+
+| Feld | Bedeutung |
+|---|---|
+| `model_variants` | Eine Stufen-Karte (`{tier → url}`) je AKTIVER Variante MIT Mesh, in der Reihenfolge des Props. Jede Karte ist gebaut wie `variants` seit je (§ B1), plus `?variant=<i>` an der URL. |
+| `variant` | Index in `model_variants` für DIESE Platzierung. Fehlt = 0. |
+
+Zwei Indizes, die man nicht verwechseln darf: `variant` ist die **Position in
+`model_variants`**, das `?variant=<i>` in der URL die **Ablage-Nummer der
+Variante im Prop**. Schaltet der Admin Variante 1 ab, stehen im Payload noch
+die Varianten 0 und 2 — Position 1 trägt dann `?variant=2`. Ein Renderer
+rechnet mit Positionen und schickt URLs unverändert weiter; er leitet nie eine
+URL aus einer Position ab.
+
+`variants` bleibt, was es war: die Stufen-Karte der **primären** Variante,
+also **`variants == model_variants[0]`**. Das ist kein Kompatibilitäts-Alias,
+sondern der definierte Primär-Varianten-Vertrag — ein Konsument, der von
+Varianten nichts weiß, rendert weiter genau das, was er vorher gerendert hat,
+und die primäre Variante behält ihre bisherige URL ohne Query (`…/model` bzw.
+`…/model?tier=low`), sodass kein Client-Cache durch das Feature entwertet
+wird. Die primäre Variante ist die **erste AKTIVE** der Liste — nicht
+zwangsläufig die zuerst erzeugte.
+
+**Wer die Variante wählt: der Server. Wer sie ausführt: der Renderer.**
+Der Index steht fertig in der Spec; kein Renderer würfelt und keiner rechnet
+ihn nach. Für Streu-Kopien einer Platzierung (`scatter_count`/`scatter_seed`,
+§ A4) lautet die EINE Formel
+
+```
+variant = (scatter_seed + Instanz-Index) mod Anzahl aktiver Varianten
+```
+
+(`app/core/props.py scatter_variant_index`, angewandt in
+`app/core/room_recipe.py`, aufgelöst in `app/core/scene_recipe.py
+_prop_models`). Beide Eingaben sind gespeicherte Zahlen, also steht derselbe
+Baum nach jedem Neuladen wieder an derselben Stelle mit demselben Mesh — und
+in Admin-Vorschau wie 3D-Client mit demselben. Eine einzeln gesetzte
+Platzierung trägt ihren Index selbst (Editor-Bedienung folgt; heute 0).
+
+Handrechnung zur Nachprüfung (§ B5a): 3 aktive Varianten, `scatter_seed = 7`,
+Instanzen 0…5 → `(7+0…5) mod 3` = **1, 2, 0, 1, 2, 0**.
+
+**Auflösung im Renderer.** Genau eine Routine, geteilt:
+`pickModelVariant(spec, tier)` aus `@anima/scene-render` — erst die Karte mit
+Index `variant` aus `model_variants`, dann die Stufe daraus mit dem
+unveränderten `pickVariant`. Ohne `model_variants` ist das Zeichen für
+Zeichen das alte `pickVariant(spec.variants, tier)`. Der Index wird MODULO
+gerechnet, nicht geklemmt: die Variantenzahl bewegt sich, wenn der Admin ein
+Mesh ergänzt oder löscht, und eine Platzierung darf davon nicht verschwinden.
+
+**Ausliefern.** `GET /assets/props/{id}/model?variant=<i>&tier=<t>`.
+Ohne `variant` die primäre Variante. Ein Index, für den das Prop keine
+Variante hat, ist 404 — nie stillschweigend ein anderes Mesh.
+
+**Noch nicht dabei:** der GEMALTE Gelände-Scatter (§ A9, `meta.scatter`)
+bleibt einvariant. Dort entstehen die Instanzen client-seitig in einem
+Kamera-Fenster, dessen Zellenmenge sich beim Laufen ändert; ein Index „i-te
+Instanz" ist also nicht stabil, und eine Variantenmischung bräuchte die
+Aufteilung der Punkte pro Zelle in eigene `InstancedMesh`-Einträge
+(`client3d/src/scene/ground.ts buildScatter`). Der Server liefert dort
+weiterhin nur `variants` der primären Variante.

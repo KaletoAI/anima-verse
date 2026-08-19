@@ -34,12 +34,12 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { MapCanvas, useMapView } from '../map/MapCanvas'
 import {
-  fitBounds, footprintScreenCorners, worldPolyToPath, worldToScreen,
+  boundaryScreenPoints, fitBounds, worldPolyToPath, worldToScreen,
   type MapBounds, type StrokeDeco, type View,
 } from '../map/mapMath'
 import { TerrainLayer } from '../map/TerrainLayer'
 import { HeightLayer } from '../map/HeightLayer'
-import { PlacementLayer, anchorWidthM, isPlaced } from '../map/PlacementLayer'
+import { PlacementLayer, boundaryLocal, isPlaced } from '../map/PlacementLayer'
 import { DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M } from '../map/heightMath'
 import type {
   EditorLocation, HeightArea, TerrainArea, TerrainMeta, TerrainStroke,
@@ -257,22 +257,22 @@ interface DraftOverlayProps {
  * recipe ran (dashed centre line — the polygon is the ribbon, the line is how
  * it was drawn) and which shape a clicked warning is about (amber ring).
  *
- * The footprint corners come from `footprintScreenCorners`, the same verified
- * corner math the placement layer's squares are pinned to — a ghost drawn from
- * its own arithmetic would be a second opinion about where a location stands.
+ * The outline comes from `boundaryScreenPoints`, the same verified § A1.1
+ * projection the placement layer draws with — a ghost drawn from its own
+ * arithmetic would be a second opinion about where a location stands.
  */
 function DraftOverlay({ areas, heights, locs, highlight }: DraftOverlayProps) {
   const { view, w, h } = useMapView()
   if (!w || !h) return null
 
   const ghostRing = (loc: EditorLocation, color: string, width: number) => {
-    const corners = footprintScreenCorners({
+    const corners = boundaryScreenPoints({
       pos_x: loc.pos_x, pos_z: loc.pos_z, yaw_deg: loc.yaw_deg,
-      plan_width_m: anchorWidthM(loc),
+      boundary: boundaryLocal(loc),
     }, view, w, h)
     if (!corners) {
-      // No scale anchor: the location has no area at all, so the ghost is a
-      // marker on its point instead of a square that claims a size.
+      // No drawn boundary: the location has no area at all (contract v6), so
+      // the ghost is a marker on its point instead of a shape claiming ground.
       const p = worldToScreen(loc.pos_x as number, loc.pos_z as number, view, w, h)
       return (
         <circle cx={p.x} cy={p.y} r={9} fill="none" stroke={color}

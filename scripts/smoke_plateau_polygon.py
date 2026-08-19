@@ -119,6 +119,11 @@ THE HAND-DERIVED NUMBERS
      x = 18.5  -> 1.133 + 0.25·(2.0 − 1.133) = 1.133 + 0.21675 = 1.34975
      x = 19.5  -> 1.133 + 0.75·(2.0 − 1.133) = 1.133 + 0.65025 = 1.78325
 
+7) A DRAWN SQUARE is a polygon like any other; a location that carries only
+   the legacy ``plan_width_m`` dial has NO area since 2026-08-19 and is no
+   input of the plateau pass at all (the map editor's "Seed missing
+   boundaries" is what turns such a dial into a real outline).
+
 6) (d) THE SIGNATURE hashes the polygon POINTS. ``placed_footprints`` rounds
    to the centimetre, so moving the boundary point (8,4) to (8.01,4) — one
    centimetre, the location itself standing perfectly still — must change
@@ -334,18 +339,31 @@ with_locations([as_location(L_LOCAL)])
 check("putting the outline back restores the signature exactly",
       store.height_sig(), _sig)
 
-print("\n[7] a legacy square location still gets its plateau")
-_legacy = {"id": "sq", "name": "Square", "pos_x": 40.0, "pos_z": 40.0,
+print("\n[7] a DRAWN square gets its plateau — a bare width gets none")
+# The square as an OUTLINE: the centred 8 m square, corners ±4. These are the
+# very four corners the transition synthesis used to hand out for
+# ``plan_width_m`` 8 — and since 2026-08-19 they only exist when somebody drew
+# them (the map editor's "Seed missing boundaries" writes exactly this).
+_square = {"id": "sq", "name": "Square", "pos_x": 40.0, "pos_z": 40.0,
            "yaw_deg": 0.0, "level_ground": True,
-           "map3d": {"plan_width_m": 8.0}}
-check("effective_boundary synthesizes the four corners",
-      effective_boundary(_legacy),
+           "map3d": {"plan_width_m": 8.0,
+                     "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]]}}
+check("effective_boundary hands out the drawn corners",
+      effective_boundary(_square),
       (40.0, 40.0, 0.0, [(-4.0, -4.0), (4.0, -4.0), (4.0, 4.0), (-4.0, 4.0)]))
-with_locations([_legacy])
+with_locations([_square])
 check("...and placed_footprints passes them on",
       store.placed_footprints(),
       [(40.0, 40.0, 0.0, [(-4.0, -4.0), (4.0, -4.0), (4.0, 4.0),
                           (-4.0, 4.0)])])
+# THE CLOSING CHECK: the same location WITHOUT the outline levels nothing —
+# it has no area, so the plateau pass never sees it, flag or no flag.
+_dial_only = {**_square, "map3d": {"plan_width_m": 8.0}}
+check("a width dial alone is no plateau input",
+      effective_boundary(_dial_only), None)
+with_locations([_dial_only])
+check("...and placed_footprints hands out nothing for it",
+      store.placed_footprints(), [])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

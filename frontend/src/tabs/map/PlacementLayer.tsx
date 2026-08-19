@@ -3,21 +3,24 @@
  * the `MapCanvas` SVG.
  *
  * SINCE CONTRACT v6 ("Gebiete") A LOCATION IS A DRAWN POLYGON: `map3d.boundary`
- * is a closed point sequence in LOCAL metres around the pin, and the square is
- * only its special case. The polygon is transformed point by point with the ONE
+ * is a closed point sequence in LOCAL metres around the pin, and since
+ * 2026-08-19 it is the ONLY shape a location has. The polygon is transformed
+ * point by point with the ONE
  * § A1.1 mapping (`mapMath.localToWorld`) and then drawn in world metres — no
  * SVG rotation is involved at all, which is why the sign question below does
- * NOT apply to it. The hand-checked case is the same one `footprintScreenCorners`
+ * NOT apply to it. The hand-checked case is the same one `boundaryScreenPoints`
  * is pinned to (§ B5a): location (pos 10/20, yaw 90), view {cx:10, cz:20,
  * pxPerM:1} on 200×200, boundary point (+5,+5) -> world (15, 15) -> screen
- * (105, 95) — identical to the square's corner, because a square boundary IS
- * that square.
+ * (105, 95).
  *
- * A location WITHOUT a boundary keeps the square rendering (transition state,
- * v6 says a location without a boundary has no area at all — the square dies in
- * a later wave, not here).
+ * A location WITHOUT a boundary is a BARE PIN (`FootPin`) — since 2026-08-19
+ * the server synthesizes no square for it, so it has no area anywhere and
+ * drawing one here would be a lie about ground it does not cover. The dashed
+ * ring says the outline is missing; "Seed missing boundaries" in the toolbar
+ * is what turns the legacy width into a real one.
  *
- * The square: edge `map3d.plan_width_m` centred on its metre
+ * The square survives for the ARMED GHOST alone — the preview of where the
+ * next click drops a pin. Its edge is `GhostSpec.widthM` centred on the cursor
  * position and turned by `yaw_deg` (contract § A1.1). The turn happens in SVG,
  * around exactly the point `worldToScreen` returns for the centre — but with
  * the OPPOSITE sign: `rotate(−yaw)`. SVG's `rotate(+deg)` turns clockwise on a
@@ -35,14 +38,14 @@
  *
  * `yaw_deg` itself is stored and written through unchanged — the sign lives in
  * the RENDERING only, never in the data (decision 2026-08-07). This layer does
- * not re-derive the corner arithmetic of `footprintScreenCorners`; both are
- * pinned to the same verified case, and a change to one is a lie about the
- * other until it is re-run.
+ * not re-derive the projection of `boundaryScreenPoints`; both are pinned to
+ * the same verified case, and a change to one is a lie about the other until
+ * it is re-run.
  *
- * Without a scale anchor a location has NO area (§ A1.3). It is still drawn —
- * as a dashed NO_ANCHOR_WIDTH_M placeholder — because an editor that hides a
- * half-configured location leaves the user nothing to click; every surface
- * showing one says so (dashes here, a warning on the selection chip).
+ * A location without an outline is still DRAWN, as that pin: an editor that
+ * hides a half-configured location leaves the user nothing to click. Every
+ * surface showing one says what is missing (the dashed ring here, a warning on
+ * the selection chip, the seed button in the toolbar).
  *
  * Moving is the canvas gesture, never HTML5 drag&drop: `pointerdown` on a
  * footprint stops propagation (so `MapCanvas` does not pan), the move runs on
@@ -59,8 +62,9 @@ import {
 import { PolygonHandles } from './PolygonHandles'
 import type { EditorLocation } from './mapTypes'
 
-/** Edge a footprint falls back to when the location carries no scale anchor.
- *  A placeholder, and marked as one wherever it is drawn. */
+/** Edge of the GHOST square a tray entry is armed with when its source has no
+ *  width yet, and the edge the "Draw boundary" seed starts from. A first shape
+ *  to drag vertices out of, never a claim about ground. */
 export const NO_ANCHOR_WIDTH_M = 10
 
 /** Below this travel the press is a click, not a move (MapCanvas' value). */
@@ -75,6 +79,11 @@ const MIN_DRAWN_PX = 6
  *  their size at every zoom. */
 const PIN_R = 3
 const ARROW_PX = 18
+/** The dashed ring of a location with NO drawn boundary, and the invisible
+ *  disc that keeps such a pin clickable — both in pixels, both a statement
+ *  about the missing outline, never about a size the place has. */
+const PIN_HINT_R = 9
+const PIN_HIT_PX = 12
 /** Metre coordinates are stored with 2 decimals (`world_ops._sanitize_map3d`
  *  rounds the boundary to the centimetre); rounding the local points here
  *  keeps what the editor draws identical to what it sent. */
@@ -85,10 +94,12 @@ const COL_SELECTED = '#58a6ff'
 const COL_GHOST = '#3fb950'
 const COL_WARN = '#d29922'
 
-/** The scale anchor of a location, or `null` when it has none. Reads
- *  `map3d.plan_width_m` — the ONE anchor field (`location_model3d.py`); the
- *  worldmap payload's hoisted `plan_width_m` is the same number, and unplaced
- *  locations only carry the nested one. */
+/** The location's width in metres, or `null` when it has none. Reads
+ *  `map3d.plan_width_m` — since v6 Nr. 2 a DERIVED field (the wider side of
+ *  the drawn boundary's bounding box, written by the server, never submitted);
+ *  the worldmap payload's hoisted `plan_width_m` is the same number, and
+ *  unplaced locations only carry the nested one. It sizes the PICTURE inside
+ *  a drawn outline — it is not a shape of its own. */
 export function anchorWidthM(loc: EditorLocation): number | null {
   const w = loc.map3d?.plan_width_m
   return typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : null
@@ -96,8 +107,8 @@ export function anchorWidthM(loc: EditorLocation): number | null {
 
 /**
  * The DRAWN footprint of a location (contract v6 Nr. 1), in LOCAL metres
- * around the pin — or `null` when the location has none and is therefore
- * still drawn as a square.
+ * around the pin — or `null` when the location has none and therefore has no
+ * area at all.
  *
  * Read through a check, never trusted: `map3d` is free-form JSON on the way
  * in, and a boundary of two points encloses nothing. This is the ONE reader
@@ -224,9 +235,8 @@ function FootImage({ p, size, iconHref, iconRot, roofHref }: {
 }
 
 /** One footprint square: fill, picture, outline — all inside the yaw
- *  rotation. The transition rendering for a location that carries no drawn
- *  boundary yet (v6: it then has no area at all; the square is what the editor
- *  still offers to click). */
+ *  rotation. Only the ARMED GHOST is drawn this way now: it is a preview of
+ *  where a click will drop the pin, not a claim about ground. */
 function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconRot,
   roofHref }: {
   p: ScreenPt
@@ -321,6 +331,42 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
       <line x1={pin.x} y1={pin.y} x2={ax} y2={ay} stroke={stroke}
         strokeWidth={strokeWidth + 1} opacity={0.9} />
       <circle cx={pin.x} cy={pin.y} r={PIN_R} fill="#0d1117" stroke={stroke}
+        strokeWidth={strokeWidth} />
+    </g>
+  )
+}
+
+/**
+ * A location that stands on the map WITHOUT a drawn boundary: a bare pin.
+ *
+ * Since the transition square died (2026-08-19) such a location has no area
+ * anywhere — the server synthesizes nothing, `boundary` is `null` in every
+ * payload, both renderers show a pin. Drawing a square here would be the one
+ * lie this editor must not tell: it would look like ground the place covers.
+ *
+ * So: the anchor dot, the yaw arrow (the same local −z direction a drawn
+ * boundary marks), and a DASHED RING as the hint that an outline is missing.
+ * The ring is a fixed pixel size, because it says "nothing is drawn here", not
+ * "this place is that big" — and the transparent disc under it keeps the pin
+ * clickable and draggable at any zoom.
+ */
+function FootPin({ p, yaw, stroke, strokeWidth }: {
+  p: ScreenPt
+  yaw: number
+  stroke: string
+  strokeWidth: number
+}) {
+  const rad = (yaw * Math.PI) / 180
+  const ax = p.x - ARROW_PX * Math.sin(rad)
+  const ay = p.y - ARROW_PX * Math.cos(rad)
+  return (
+    <g>
+      <circle cx={p.x} cy={p.y} r={PIN_HIT_PX} fill="transparent" stroke="none" />
+      <circle cx={p.x} cy={p.y} r={PIN_HINT_R} fill="none" stroke={stroke}
+        strokeWidth={strokeWidth} strokeDasharray="4 3" opacity={0.8} />
+      <line x1={p.x} y1={p.y} x2={ax} y2={ay} stroke={stroke}
+        strokeWidth={strokeWidth + 1} opacity={0.9} />
+      <circle cx={p.x} cy={p.y} r={PIN_R} fill="#0d1117" stroke={stroke}
         strokeWidth={strokeWidth} />
     </g>
   )
@@ -470,11 +516,15 @@ export function PlacementLayer({
     : null
 
   // Big first, small last: a hut inside a village square stays clickable.
-  // The selection is drawn on top of everything regardless of its size.
+  // The selection is drawn on top of everything regardless of its size. A
+  // location without a boundary covers nothing, so it sorts as 0 and its bare
+  // pin ends up on top of every area it stands in.
+  const drawnWidth = (l: EditorLocation): number =>
+    (boundaryLocal(l) ? anchorWidthM(l) ?? 0 : 0)
   const ordered = [...locations].sort((a, b) => {
     if (a.id === selectedId) return 1
     if (b.id === selectedId) return -1
-    return (anchorWidthM(b) ?? NO_ANCHOR_WIDTH_M) - (anchorWidthM(a) ?? NO_ANCHOR_WIDTH_M)
+    return drawnWidth(b) - drawnWidth(a)
   })
 
   return (
@@ -488,16 +538,18 @@ export function PlacementLayer({
         const size = Math.max(MIN_DRAWN_PX, (anchor ?? NO_ANCHOR_WIDTH_M) * view.pxPerM)
         const selected = loc.id === selectedId
         const yaw = yawOf(loc)
-        const stroke = selected ? COL_SELECTED : (anchor ? COL_PLACED : COL_WARN)
-        // The DRAWN footprint wins wherever there is one (v6 Nr. 1); the
-        // square is what is left for a location that has none yet.
+        // The DRAWN footprint is the ONLY footprint (v6 Nr. 1, closing wave
+        // 2026-08-19): a location without one has no area, so it is a bare
+        // pin — and the warn colour says the outline is still missing.
         const bd = boundaryLocal(loc)
+        const stroke = selected ? COL_SELECTED : (bd ? COL_PLACED : COL_WARN)
         const bdWorld = bd ? boundaryWorld(bd, cx, cz, yaw) : null
         // Where the name goes: under the lowest point of what was drawn, so a
-        // long polygon does not write its label across its own middle.
+        // long polygon does not write its label across its own middle. Under
+        // a bare pin it is the dashed hint ring.
         const bottom = bdWorld
           ? Math.max(...bdWorld.map(([bx, bz]) => worldToScreen(bx, bz, view, w, h).y))
-          : p.y + size / 2
+          : p.y + PIN_HINT_R
         return (
           <g key={loc.id} style={{ cursor: 'move' }}
             onPointerDown={(e) => startDrag(e, loc)}>
@@ -508,13 +560,12 @@ export function PlacementLayer({
                 iconRot={loc.map_rotation_2d || 0}
                 roofHref={roofUrl?.[loc.id]} />
             ) : (
-              <FootSquare p={p} size={size} yaw={yaw} stroke={stroke}
-                strokeWidth={selected ? 2 : 1} dashed={!anchor}
-                iconHref={mapIconUrl(loc.id, iconVer[loc.id] || 0)}
-                iconRot={loc.map_rotation_2d || 0}
-                roofHref={roofUrl?.[loc.id]} />
+              <FootPin p={p} yaw={yaw} stroke={stroke}
+                strokeWidth={selected ? 2 : 1} />
             )}
-            {size >= LABEL_MIN_PX || selected ? (
+            {/* A bare pin ALWAYS carries its name: without an outline there is
+                nothing else on the map that says which place this is. */}
+            {!bdWorld || size >= LABEL_MIN_PX || selected ? (
               <text x={p.x} y={bottom + 12} fontSize={11} textAnchor="middle"
                 fill={selected ? COL_SELECTED : '#c9d1d9'} pointerEvents="none"
                 style={{ paintOrder: 'stroke', stroke: '#0d1117', strokeWidth: 3 }}>

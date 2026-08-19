@@ -181,7 +181,19 @@ def approx(label, actual, expected, tol=1e-6):
 
 
 def set_map3d(location_id: str, **fields) -> None:
-    """Merge fields into a location's map3d blob (scale anchor, openings)."""
+    """Merge fields into a location's map3d blob (boundary, openings).
+
+    A ``plan_width_m`` handed in is DRAWN as the centred square of that edge
+    (clockwise in map view) and the width is kept alongside — exactly what
+    ``_sanitize_map3d`` stores for such an outline. Since 2026-08-19 the width
+    alone is no shape at all: a location without a drawn boundary has no area
+    anywhere, so every fixture that wants ground has to say so.
+    """
+    width = fields.get("plan_width_m")
+    if width:
+        _h = round(float(width) / 2.0, 2)
+        fields.setdefault("boundary", [[-_h, -_h], [_h, -_h],
+                                       [_h, _h], [-_h, _h]])
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
@@ -197,8 +209,15 @@ def state_at(waypoints, seconds):
 
 
 def loc_dict(cx, cz, width, yaw=0.0, openings=None):
-    """A minimal location dict — opening_world_point is a PURE function."""
-    map3d = {"plan_width_m": width}
+    """A minimal location dict — opening_world_point is a PURE function.
+
+    ``width`` is DRAWN as the centred square (contract v6): since 2026-08-19
+    the dial alone is no shape, so a fixture that wants edges has to have an
+    outline. The four corners are the very ones the old synthesis produced,
+    so every hand-derived number below is unchanged."""
+    _h = round(float(width) / 2.0, 2)
+    map3d = {"plan_width_m": width,
+             "boundary": [[-_h, -_h], [_h, -_h], [_h, _h], [-_h, _h]]}
     if openings is not None:
         map3d["boundary_openings"] = openings
     return {"id": "lit", "pos_x": cx, "pos_z": cz, "yaw_deg": yaw,

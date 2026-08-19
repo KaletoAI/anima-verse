@@ -39,9 +39,12 @@ The resulting triangle (0,0.01) (4.57,0) (4,3.21) has the shoelace terms
 4.57·3.21 − 4·0 = 14.6697 → Σ = 14.664 → +7.332, i.e. already clockwise.
 Its bounding box is 4.57 × 3.21, so the derived width is 4.57.
 
-DERIVED plan_width_m (v6 Nr. 2: computed, never a dial). The L-shape
+DERIVED plan_width_m (v6 Nr. 2: computed, never a dial — and since the
+closing wave of 2026-08-19 NEVER AN INPUT EITHER). The L-shape
 (0,0) (4,0) (4,2) (2,2) (2,4) (0,4) has the bounding box x 0…4, z 0…4 →
-max(4, 4) = 4.0, and a submitted 99 is overwritten by it.
+max(4, 4) = 4.0, and a submitted 99 is overwritten by it. WITHOUT a boundary
+the submitted 99 is not kept at all: the field is dropped, because a location
+without a drawn outline has no width and no area.
 
 SELF-INTERSECTION (warning, not a rejection). The bow tie (0,0) (4,4) (4,0)
 (0,4) has exactly two non-adjacent edge pairs: e0 (0,0)→(4,4) against e2
@@ -149,12 +152,12 @@ def test_malformed() -> None:
                          ("non-numeric points", [["a", "b"], [1, 1], [2, 2]]),
                          ("infinities", [[float("inf"), 0], [1, 1], [2, 2]])):
         out = sanitize(plan_width_m=12, boundary=value)
-        check(f"{label}: no boundary, submitted plan_width_m untouched",
-              "boundary" not in out and out.get("plan_width_m") == 12.0,
+        check(f"{label}: no boundary, and the submitted width goes with it",
+              "boundary" not in out and "plan_width_m" not in out,
               str(out))
     zero = sanitize(plan_width_m=12, boundary=[[3, 3], [3, 3], [3, 3]])
     check("a boundary without extent encloses nothing and is dropped",
-          "boundary" not in zero and zero.get("plan_width_m") == 12.0,
+          "boundary" not in zero and "plan_width_m" not in zero,
           str(zero))
 
 
@@ -170,8 +173,12 @@ def test_derived_width() -> None:
                               [2.0, 2.0], [2.0, 4.0], [0.0, 4.0]],
           str(out.get("boundary")))
     plain = sanitize(plan_width_m=99)
-    check("without a boundary the submitted width stands",
-          plain["plan_width_m"] == 99.0, str(plain.get("plan_width_m")))
+    check("without a boundary a submitted width is dropped entirely",
+          "plan_width_m" not in plain, str(plain))
+    # It is not an input even NEXT to an outline: the box decides, full stop.
+    both = sanitize(plan_width_m=0.7, boundary=L_SHAPE)
+    check("a submitted width never survives beside a boundary either",
+          both["plan_width_m"] == 4.0, str(both.get("plan_width_m")))
 
 
 # ── C: the two problems ────────────────────────────────────────────────────

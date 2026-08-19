@@ -3,12 +3,11 @@
 The world is a continuous plane measured in metres. Since contract v6
 ("Gebiete", 2026-08-19) a location is a drawn POLYGON: ``map3d.boundary``
 holds its outline in local metres around the anchor pin (``pos_x``,
-``pos_z``), rotated by ``yaw_deg`` around the vertical axis. The square
-footprint (edge ``map3d.plan_width_m``) is the legacy special case and its
-helpers remain only until every consumer has switched (stage 1 of
-``plan-assets-im-szenenkontext.md``). Everything here is pure math — no DB,
-no config — so the smoke checks derive every number by hand
-(``scripts/smoke_world_polygon.py`` for the polygon half).
+``pos_z``), rotated by ``yaw_deg`` around the vertical axis. THE SQUARE IS
+GONE (closing wave, 2026-08-19): there are no footprint helpers left, no
+``plan_width_m`` geometry, and a location without a drawn boundary simply
+has no area. Everything here is pure math — no DB, no config — so the smoke
+checks derive every number by hand (``scripts/smoke_world_polygon.py``).
 
 Axes follow the 3D client (three.js ground plane): x grows east, z grows
 south. ``yaw_deg`` rotates clockwise when looking down onto the map, so at
@@ -59,134 +58,6 @@ def world_to_local(x: float, z: float, cx: float, cz: float,
     dx, dz = x - cx, z - cz
     return (dx * cos_y - dz * sin_y,
             dx * sin_y + dz * cos_y)
-
-
-def point_in_footprint(x: float, z: float, cx: float, cz: float,
-                       width_m: float, yaw_deg: float) -> bool:
-    """Whether world point (x, z) lies inside the rotated footprint square."""
-    if not width_m or width_m <= 0:
-        return False
-    lx, lz = world_to_local(x, z, cx, cz, yaw_deg)
-    half = width_m / 2.0
-    return abs(lx) <= half and abs(lz) <= half
-
-
-def footprint_distance(x: float, z: float, cx: float, cz: float,
-                       width_m: float, yaw_deg: float) -> float:
-    """Shortest distance in metres from world point (x, z) to the rotated
-    footprint square — **0 anywhere inside it**, edge inclusive.
-
-    The exact companion of :func:`point_in_footprint`: same transform, same
-    inclusive edge, and ``distance == 0`` is precisely what that function
-    calls "inside". In the footprint's own frame the answer is the classic
-    box distance — overshoot per axis, clamped at zero, combined by Pythagoras
-    — which is why a point beside a face measures straight to that face while
-    a point past a corner measures diagonally to the corner.
-
-    Hand-derived, footprint at (50, 50) with edge 10 (so x, z ∈ [45, 55]):
-      (50, 50) → 0        the centre
-      (55, 50) → 0        ON the east edge
-      (60, 50) → 5        5 m past that edge
-      (58, 58) → hypot(3, 3) = 4.2426…   past the corner, both axes overshoot
-    Turned by 45°, the same square around (200, 50) has its corners at
-    (200 ± 5√2, 50) and (200, 50 ± 5√2):
-      (207.0711, 50) → 0        exactly the rotated east corner
-      (210, 50)      → 2.9289   = 10 − 5√2; via the transform (10, 0) becomes
-                                local (7.0711, 7.0711), both 2.0711 past the
-                                half-edge, hypot(2.0711, 2.0711) = 2.9289.
-
-    A footprint without a size claims no point (``point_in_footprint`` says
-    False, ``placed_footprint`` refuses it) — its distance is ``inf``, so no
-    range can ever reach it and no caller needs a second "is it placed" test.
-    """
-    if not width_m or width_m <= 0:
-        return math.inf
-    lx, lz = world_to_local(x, z, cx, cz, yaw_deg)
-    half = width_m / 2.0
-    return math.hypot(max(abs(lx) - half, 0.0), max(abs(lz) - half, 0.0))
-
-
-def footprint_corners(cx: float, cz: float, width_m: float,
-                      yaw_deg: float) -> List[Tuple[float, float]]:
-    """The four footprint corners in world metres (local-frame order
-    (-h,-h), (h,-h), (h,h), (-h,h))."""
-    half = (width_m or 0.0) / 2.0
-    return [local_to_world(lx, lz, cx, cz, yaw_deg)
-            for lx, lz in ((-half, -half), (half, -half),
-                           (half, half), (-half, half))]
-
-
-def segment_hits_footprint(x0: float, z0: float, x1: float, z1: float,
-                           cx: float, cz: float, width_m: float,
-                           yaw_deg: float) -> bool:
-    """Whether the straight segment (x0,z0)→(x1,z1) touches the footprint.
-
-    EXACT (Liang-Barsky slab clip in the footprint's local frame), not
-    sampled: point sampling along a segment misses sub-metre intrusions,
-    and "the path clips the corner of a building" is exactly that case.
-    A grazing touch counts as a hit — the conservative answer.
-
-    Hand-derived: footprint at (0, 0), width 2, yaw 0 (so x, z ∈ [-1, 1]).
-    The segment (-5, 0)→(5, 0) enters at t=0.4 and leaves at t=0.6 -> True.
-    The segment (-5, 2)→(5, 2) has local z = 2 for its whole length, outside
-    the [-1, 1] slab -> False.
-    """
-    if not width_m or width_m <= 0:
-        return False
-    lx0, lz0 = world_to_local(x0, z0, cx, cz, yaw_deg)
-    lx1, lz1 = world_to_local(x1, z1, cx, cz, yaw_deg)
-    half = width_m / 2.0
-    t_enter, t_exit = 0.0, 1.0
-    for p0, p1 in ((lx0, lx1), (lz0, lz1)):
-        delta = p1 - p0
-        if abs(delta) < 1e-12:
-            # Parallel to this slab: either inside it for the whole segment
-            # or the segment can never be inside the rectangle.
-            if p0 < -half or p0 > half:
-                return False
-            continue
-        t_a, t_b = (-half - p0) / delta, (half - p0) / delta
-        if t_a > t_b:
-            t_a, t_b = t_b, t_a
-        t_enter = max(t_enter, t_a)
-        t_exit = min(t_exit, t_b)
-        if t_enter > t_exit:
-            return False
-    return True
-
-
-def footprint_hits_aabb(cx: float, cz: float, width_m: float, yaw_deg: float,
-                        min_x: float, min_z: float, max_x: float,
-                        max_z: float) -> bool:
-    """Whether the rotated footprint overlaps an axis-aligned box.
-
-    Separating-axis test over the 4 axes two rectangles can be separated
-    on (both world axes + both footprint axes). Used to decide whether a
-    nav cell is blocked: testing only the cell CENTRE lets a route cut the
-    corner of a building between two "free" centres.
-    A shared edge counts as an overlap — the conservative answer, matching
-    the inclusive :func:`point_in_footprint`.
-
-    Hand-derived: footprint at (0, 0), width 2, yaw 45 — its corners sit at
-    (±√2, 0) and (0, ±√2). The cell [0,2]×[0,2] overlaps it (the corner
-    (√2, 0) ≈ (1.41, 0) is inside the box's x-range and the box reaches the
-    origin), while the cell [1,3]×[1,3] does not: projected on the
-    footprint's local axis (0.707, 0.707) the footprint spans [-1, 1] and
-    the box spans [1.41, 4.24] — a gap.
-    """
-    if not width_m or width_m <= 0:
-        return False
-    rad = math.radians(yaw_deg or 0.0)
-    cos_y, sin_y = math.cos(rad), math.sin(rad)
-    corners = footprint_corners(cx, cz, width_m, yaw_deg)
-    box = [(min_x, min_z), (max_x, min_z), (max_x, max_z), (min_x, max_z)]
-    axes = ((1.0, 0.0), (0.0, 1.0), (cos_y, -sin_y), (sin_y, cos_y))
-    for ax, az in axes:
-        a_vals = [x * ax + z * az for x, z in corners]
-        b_vals = [x * ax + z * az for x, z in box]
-        if max(a_vals) < min(b_vals) or max(b_vals) < min(a_vals):
-            return False
-    return True
 
 
 def point_in_polygon(x: float, z: float, points: Any) -> bool:
@@ -288,6 +159,24 @@ def polygon_bounds(points: Any) -> Optional[Tuple[float, float, float, float]]:
     return (min(xs), min(zs), max(xs), max(zs))
 
 
+def polygon_plan_width_m(points: Any) -> float:
+    """THE ``plan_width_m`` rule: the WIDER side of the outline's bounding
+    box, rounded to the centimetre; 0.0 for a degenerate outline.
+
+    Since v6 Nr. 2 the field is a DERIVED quantity and nothing else — never a
+    dial, never an input (``world_ops._sanitize_map3d`` drops whatever a
+    client submits). It lives here so the sanitizer that stores it and the
+    payload that reports it cannot answer differently.
+
+    Hand-derived on the L-shape (0,0) (4,0) (4,2) (2,2) (2,4) (0,4): the box
+    is 4 × 4, so the width is 4.0. On the centred 10 m square it is 10.0.
+    """
+    bounds = polygon_bounds(points)
+    if bounds is None:
+        return 0.0
+    return round(max(bounds[2] - bounds[0], bounds[3] - bounds[1]), 2)
+
+
 def _point_segment_distance(px: float, pz: float, ax: float, az: float,
                             bx: float, bz: float) -> float:
     """Distance from point to the closed segment a→b."""
@@ -304,8 +193,10 @@ def polygon_distance(x: float, z: float, points: Any) -> float:
     """Shortest distance to the polygon — **0 anywhere inside**, edges
     inclusive; ``inf`` for a degenerate outline (nothing can reach it).
 
-    The polygon companion of :func:`footprint_distance`, and the primitive
-    the plateau ramp ring (§ A16.1 v6) is built on. Hand-derived on the
+    The primitive the plateau ramp ring (§ A16.1 v6) is built on, and the
+    exact companion of :func:`point_in_polygon` — same edges, and
+    ``distance == 0`` is what that function calls "inside" (up to the rim
+    tolerance :func:`boundary_contains` applies). Hand-derived on the
     L-shape (0,0) (4,0) (4,2) (2,2) (2,4) (0,4):
       (1, 1)   → 0        inside the wide arm
       (5, 1)   → 1        1 m east of the x=4 edge
@@ -341,8 +232,8 @@ def _on_segment(ax: float, az: float, bx: float, bz: float,
 
 def _segments_intersect(p0x: float, p0z: float, p1x: float, p1z: float,
                         q0x: float, q0z: float, q1x: float, q1z: float) -> bool:
-    """Whether two closed segments touch — a grazing contact counts (the
-    conservative answer, matching :func:`segment_hits_footprint`)."""
+    """Whether two closed segments touch — a grazing contact counts, which is
+    the conservative answer everything built on this predicate inherits."""
     d1 = _orient(q0x, q0z, q1x, q1z, p0x, p0z)
     d2 = _orient(q0x, q0z, q1x, q1z, p1x, p1z)
     d3 = _orient(p0x, p0z, p1x, p1z, q0x, q0z)
@@ -365,8 +256,9 @@ def segment_hits_polygon(x0: float, z0: float, x1: float, z1: float,
                          points: Any) -> bool:
     """Whether the straight segment touches the polygon (interior or rim).
 
-    Edge-exact like :func:`segment_hits_footprint` — per-edge intersection
-    plus an endpoint-containment test, so no sampling gap. Works unchanged
+    Edge-exact — per-edge intersection plus an endpoint-containment test, so
+    no sampling gap (point sampling along a segment misses sub-metre
+    intrusions, and "the path clips the corner" is exactly that). Works
     for concave outlines (E1.1: no convex decomposition, tested edge-wise).
 
     Hand-derived on the L-shape above: (-1,3)→(5,3) crosses the thin arm
@@ -392,8 +284,9 @@ def polygon_hits_aabb(points: Any, min_x: float, min_z: float,
     """Whether the polygon overlaps an axis-aligned box (edge touch counts).
 
     Exact for concave polygons: a vertex inside the box, a box corner inside
-    the polygon, or any edge pair crossing. The nav-grid cell test (v6
-    successor of :func:`footprint_hits_aabb`).
+    the polygon, or any edge pair crossing. THE nav-grid cell test: testing
+    only the cell CENTRE lets a route cut the corner of a building between
+    two "free" centres.
     """
     pts = _poly_points(points)
     if pts is None:
@@ -651,29 +544,26 @@ def effective_boundary(loc: Dict[str, Any]) -> Optional[Tuple[float, float, floa
                                                               List[Tuple[float, float]]]]:
     """(cx, cz, yaw_deg, local points) of a placed location — polygon ALWAYS.
 
-    The v6 sentence "a square is just a special case of the polygon" made
-    executable, and the ONE place that says so: a location with a drawn
-    ``map3d.boundary`` returns it; one that still carries only the legacy
-    square dial (``plan_width_m`` > 0) returns that square as its four
-    corners, clockwise in map view. Consumers therefore reason about
-    polygons only — no dual code paths anywhere downstream.
+    THE ONE ENTRY POINT everything that asks about a location's area goes
+    through, and since 2026-08-19 it is nothing but :func:`placed_boundary`:
+    the DRAWN ``map3d.boundary`` or nothing at all.
 
-    TRANSITION (stage 1, plan-assets-im-szenenkontext.md): the square
-    synthesis exists so worlds stay playable until every location has a
-    drawn boundary; it dies together with the ``plan_width_m`` dial in the
-    metric wave. It is NOT a 10 m fallback — a location without a boundary
-    AND without a positive width has no area and returns None.
+    The transition ended on 2026-08-19. Between the v6 contract and that day
+    a location that carried only the legacy ``plan_width_m`` dial got a
+    synthesized square here so old worlds stayed playable; that synthesis is
+    deleted, together with every square helper this module used to hold. A
+    location without a drawn boundary now has NO area anywhere — server,
+    payloads, both renderers — and old worlds are repaired in one explicit
+    gesture: "Seed missing boundaries" in the map editor
+    (``POST /world/locations/seed-boundaries``), which WRITES the centred
+    square as a real, editable boundary. Nothing reads a width as a shape
+    any more; ``plan_width_m`` survives only as the DERIVED bounding-box
+    width of a drawn outline.
+
+    The function stays because the name is the contract: consumers ask for
+    the effective boundary, not for a storage field.
     """
-    pb = placed_boundary(loc)
-    if pb is not None:
-        return pb
-    fp = placed_footprint(loc)
-    if fp is None:
-        return None
-    cx, cz, width, yaw = fp
-    half = width / 2.0
-    return (cx, cz, yaw, [(-half, -half), (half, -half),
-                          (half, half), (-half, half)])
+    return placed_boundary(loc)
 
 
 def boundary_world_points(loc: Dict[str, Any]) -> Optional[List[Tuple[float, float]]]:
@@ -692,8 +582,7 @@ _RIM_EPS = 1e-9
 
 def boundary_contains(loc: Dict[str, Any], x: float, z: float) -> bool:
     """Whether world point (x, z) lies inside the location's effective
-    boundary, RIM INCLUSIVE on every edge — the v6 successor of
-    :func:`point_in_footprint`, which was edge-inclusive on all four sides.
+    boundary, RIM INCLUSIVE on every edge.
 
     The raw ray-cast (:func:`point_in_polygon`) is half-open (min edges in,
     max edges out) — good enough for raster cells, wrong for game state:
@@ -713,9 +602,8 @@ def boundary_contains(loc: Dict[str, Any], x: float, z: float) -> bool:
 
 def boundary_distance_m(loc: Dict[str, Any], x: float, z: float) -> float:
     """Distance from a world point to the effective boundary — 0 inside,
-    ``inf`` for a location without area (v6 successor of
-    :func:`footprint_distance`; rotation preserves distances, so the local
-    frame answers for the world)."""
+    ``inf`` for a location without area (rotation preserves distances, so
+    the local frame answers for the world)."""
     eff = effective_boundary(loc)
     if eff is None:
         return math.inf
@@ -727,9 +615,8 @@ def boundary_distance_m(loc: Dict[str, Any], x: float, z: float) -> float:
 def boundary_segment_hits(loc: Dict[str, Any], x0: float, z0: float,
                           x1: float, z1: float) -> bool:
     """Whether a world segment touches the effective boundary (interior or
-    rim) — v6 successor of :func:`segment_hits_footprint`. Both endpoints
-    ride through the same inverse pin transform; straight lines stay
-    straight, so the local-frame test is exact."""
+    rim). Both endpoints ride through the same inverse pin transform;
+    straight lines stay straight, so the local-frame test is exact."""
     eff = effective_boundary(loc)
     if eff is None:
         return False
@@ -741,10 +628,9 @@ def boundary_segment_hits(loc: Dict[str, Any], x0: float, z0: float,
 
 def boundary_hits_aabb(loc: Dict[str, Any], min_x: float, min_z: float,
                        max_x: float, max_z: float) -> bool:
-    """Whether the effective boundary overlaps a world-axis-aligned box —
-    v6 successor of :func:`footprint_hits_aabb`. The box is axis-aligned in
-    WORLD space, so here the polygon comes to the box (local→world), not
-    the other way around."""
+    """Whether the effective boundary overlaps a world-axis-aligned box.
+    The box is axis-aligned in WORLD space, so here the polygon comes to the
+    box (local→world), not the other way around."""
     pts = boundary_world_points(loc)
     if pts is None:
         return False
@@ -759,34 +645,6 @@ def boundary_area_m2(loc: Dict[str, Any]) -> float:
     if eff is None:
         return 0.0
     return polygon_area(eff[3])
-
-
-def placed_footprint(loc: Dict[str, Any]) -> Optional[Tuple[float, float,
-                                                            float, float]]:
-    """(cx, cz, width_m, yaw_deg) of a placed location, or None.
-
-    Placed means: numeric ``pos_x``/``pos_z`` AND a scale anchor
-    (``map3d.plan_width_m``). Without the anchor the footprint has no size,
-    so the location cannot claim any point.
-    """
-    px, pz = loc.get("pos_x"), loc.get("pos_z")
-    if px is None or pz is None:
-        return None
-    try:
-        px, pz = float(px), float(pz)
-        width = float((loc.get("map3d") or {}).get("plan_width_m"))
-        yaw = float(loc.get("yaw_deg") or 0.0)
-    except (TypeError, ValueError):
-        return None
-    # isfinite first: every NaN comparison is False, so the width check
-    # below would wave a NaN through and every consumer downstream (bounds,
-    # nav grid, JSON encoding with allow_nan=False) inherits the poison.
-    if not (math.isfinite(px) and math.isfinite(pz)
-            and math.isfinite(width) and math.isfinite(yaw)):
-        return None
-    if width <= 0:
-        return None
-    return (px, pz, width, yaw)
 
 
 def is_area_location(loc: Dict[str, Any]) -> bool:
@@ -825,7 +683,8 @@ def location_at_point(x: float, z: float,
     Overlaps stay legal (a hut placed on a village square); the smallest
     enclosed area is the most specific answer — the polygon successor of the
     old smallest-width rule, and identical to it wherever both shapes are
-    squares (width orders exactly like width²).
+    squares (width orders exactly like width²). A location without a drawn
+    boundary has no area and is never the answer.
     """
     best: Optional[Dict[str, Any]] = None
     best_area = None

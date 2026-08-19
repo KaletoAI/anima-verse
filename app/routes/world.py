@@ -65,6 +65,28 @@ async def create_location_route(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/locations/seed-boundaries")
+def seed_boundaries_route() -> Dict[str, Any]:
+    """Draw the missing location boundaries — one explicit repair gesture.
+
+    Every PLACED location without a drawn ``map3d.boundary`` but with a
+    legacy ``plan_width_m`` gets that centred square written as its real,
+    editable outline (contract v6; the transition synthesis that used to hand
+    such a location a square on the fly ended 2026-08-19, so without this it
+    has no area at all). Locations that already carry an outline are never
+    touched, and one without a width has nothing to seed FROM — it is
+    reported in ``skipped`` instead.
+
+    Answers ``{"seeded": [id, …], "skipped": [id, …]}``.
+    """
+    try:
+        return world_ops.seed_missing_boundaries()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put("/locations/{location_id}")
 async def update_location_route(location_id: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert einen Ort (Umbenennung per ID)."""

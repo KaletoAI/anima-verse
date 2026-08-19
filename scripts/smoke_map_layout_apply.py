@@ -282,14 +282,21 @@ CATALOG = {
     "deep_water": {"name": "Deep water", "passable": False, "speed_factor": 0.4},
 }
 L_SHAPE = [[0, 0], [8, 0], [8, 4], [4, 4], [4, 8], [0, 8]]
+# Every outline is DRAWN (contract v6, closing wave 2026-08-19): a width
+# alone is no shape and its place would simply have no area. The two square
+# ones are the centred 40 m / 10 m squares, i.e. the very spans the overlap
+# cases below are derived from (±20 and ±5).
+SQ_40 = [[-20, -20], [20, -20], [20, 20], [-20, 20]]
+SQ_10 = [[-5, -5], [5, -5], [5, 5], [-5, 5]]
 LOCS = {
-    "loc_a": {"name": "Tavern", "plan_width_m": 40.0},
-    "loc_b": {"name": "Smithy", "plan_width_m": 40.0},
-    "loc_c": {"name": "Shrine", "plan_width_m": 10.0},
-    # The concave pair: a DRAWN outline and no width dial at all, so only the
-    # polygon can answer whether they share ground.
-    "loc_l1": {"name": "L Yard", "boundary": L_SHAPE, "plan_width_m": 0.0},
-    "loc_l2": {"name": "L Barn", "boundary": L_SHAPE, "plan_width_m": 0.0},
+    "loc_a": {"name": "Tavern", "boundary": SQ_40, "plan_width_m": 40.0},
+    "loc_b": {"name": "Smithy", "boundary": SQ_40, "plan_width_m": 40.0},
+    "loc_c": {"name": "Shrine", "boundary": SQ_10, "plan_width_m": 10.0},
+    # The concave pair: only the polygon can answer whether they share ground.
+    "loc_l1": {"name": "L Yard", "boundary": L_SHAPE, "plan_width_m": 8.0},
+    "loc_l2": {"name": "L Barn", "boundary": L_SHAPE, "plan_width_m": 8.0},
+    # A location that was never drawn: no area, so it overlaps nothing.
+    "loc_bare": {"name": "Bare Pin", "boundary": None, "plan_width_m": 0.0},
 }
 BOX = {"min_x": -500, "min_z": -500, "max_x": 500, "max_z": 500}
 
@@ -309,6 +316,14 @@ norm, warns = sane({"locations": [
     {"id": "loc_a", "pos_x": 0, "pos_z": 0},
     {"id": "loc_b", "pos_x": 50, "pos_z": 0}]})
 check("40 m footprints 50 m apart do not", codes(warns), [])
+
+# A location that was NEVER DRAWN has no area (2026-08-19), so it cannot
+# overlap anything — not even a 40 m square placed on the very same point.
+norm, warns = sane({"locations": [
+    {"id": "loc_a", "pos_x": 0, "pos_z": 0},
+    {"id": "loc_bare", "pos_x": 0, "pos_z": 0}]})
+check("a boundary-less location overlaps nothing", codes(warns), [])
+check("...and is still placed", len(norm["locations"]), 2)
 
 # The concave pair — two Ls, arm through notch.
 norm, warns = sane({"locations": [
@@ -431,7 +446,7 @@ LOC_B = world.add_location("Smithy", "A smithy.", rooms=[{"name": "Forge"}])
 ID_A, ID_B = LOC_A["id"], LOC_B["id"]
 _data = world._load_world_data()
 for _loc in _data["locations"]:
-    _loc["map3d"] = {"plan_width_m": 40.0}
+    _loc["map3d"] = {"plan_width_m": 40.0, "boundary": SQ_40}
 world._save_world_data(_data)
 world.update_location_position(ID_A, 5.0, 5.0, 0.0)
 
@@ -451,8 +466,8 @@ check_true("snapshot has a created_at", _listed[0]["created_at"])
 WORLD_CATALOG = {}
 from app.core.terrain_types import effective_catalog  # noqa: E402
 WORLD_CATALOG = effective_catalog()
-WORLD_LOCS = {ID_A: {"name": "Tavern", "plan_width_m": 40.0},
-              ID_B: {"name": "Smithy", "plan_width_m": 40.0}}
+WORLD_LOCS = {ID_A: {"name": "Tavern", "boundary": SQ_40, "plan_width_m": 40.0},
+              ID_B: {"name": "Smithy", "boundary": SQ_40, "plan_width_m": 40.0}}
 
 DRAFT = {
     "summary": "forest and a road",

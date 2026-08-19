@@ -91,9 +91,10 @@ def opening_world_frames(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every authored opening as ``{edge, at_world, inward, room}`` in WORLD
     metres — the finished pass-through, ready to be delivered.
 
-    Empty for a location without an effective boundary (unplaced, and without
-    a drawn outline or a legacy square width) — such a location has no area,
-    so its openings have no point either.
+    Empty for a location without an effective boundary (unplaced, or without
+    a DRAWN outline — since 2026-08-19 a legacy ``plan_width_m`` is no shape
+    any more): such a location has no area, so its openings have no point
+    either.
 
     ONE geometry source: ``polygon_edge_frame`` puts the point AND the
     measured unit inward normal on the local boundary edge, ``local_to_world``
@@ -104,10 +105,10 @@ def opening_world_frames(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     there is none — existence of that room is the entry gate's question
     (:func:`opening_entry_room`), not the geometry's.
 
-    Hand-derived: a location at (50, 50) with the legacy square
-    ``plan_width_m`` 10 synthesizes the boundary (−5,−5) (5,−5) (5,5) (−5,5);
-    edge 0 at 0.5 is local (0, −5) with inward (0, 1) → world (50, 45) /
-    (0, 1), and the same location at yaw 90 → (45, 50) / (1, 0).
+    Hand-derived: a location at (50, 50) whose drawn boundary is the centred
+    10 m square (−5,−5) (5,−5) (5,5) (−5,5) — edge 0 at 0.5 is local (0, −5)
+    with inward (0, 1) → world (50, 45) / (0, 1), and the same location at
+    yaw 90 → (45, 50) / (1, 0).
     """
     from app.core.world_geometry import (effective_boundary, local_to_world,
                                          polygon_edge_frame)

@@ -211,11 +211,13 @@ def placed_footprints() -> List[Tuple[float, float, float,
     The second input of the raster since E8 task 4: the ground under such a
     footprint is levelled to a plateau, so where those places stand is part of
     what the world's relief IS. The outline comes from
-    ``world_geometry.effective_boundary``, the ONE place that says "a square is
-    just a special case of the polygon": a drawn ``map3d.boundary`` wins, a
-    location still carrying only the legacy ``plan_width_m`` dial contributes
-    its four corners instead. So every location that levelled before keeps its
-    plateau, and a redrawn outline reshapes it.
+    ``world_geometry.effective_boundary``, the ONE place that answers "what
+    ground does this location own": the DRAWN ``map3d.boundary`` and nothing
+    else. Since 2026-08-19 a location that only carries the legacy
+    ``plan_width_m`` dial is no input here at all — it has no area, so it
+    levels nothing until somebody draws its outline (the map editor's "Seed
+    missing boundaries" writes exactly the square it used to get for free).
+    A redrawn outline reshapes the plateau.
 
     The points are LOCAL metres around the pin — the frame the plateau pass
     tests in (one inverse pin transform per raster point, no per-query polygon

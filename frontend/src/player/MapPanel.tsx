@@ -31,7 +31,7 @@
  *                        places, routes and figures are not ground and must
  *                        keep their colours exactly.
  *   3. `Footprints`    — the location squares in REAL size via
- *                        `footprintScreenCorners`, name label by label mode,
+ *                        `boundaryScreenPoints`, name label by label mode,
  *                        📍 on the avatar's location, 🔥/❗ event pin.
  *   4. `TravelLines`   — the REST of a journey, dashed (avatar only under fog:
  *                        `waypoints` is null for everyone else, § A12).
@@ -88,7 +88,7 @@ import { usePoll } from './usePolling'
 import { MapCanvas, useMapView } from '../tabs/map/MapCanvas'
 import { typeColor } from '../tabs/map/TerrainLayer'
 import {
-  FIT_FALLBACK_PX_PER_M, fitBounds, footprintScreenCorners, nearestOnPolyline,
+  FIT_FALLBACK_PX_PER_M, boundaryScreenPoints, fitBounds, nearestOnPolyline,
   worldPolyToPath, worldToScreen, type MapBounds, type View,
 } from '../tabs/map/mapMath'
 import type {
@@ -263,9 +263,13 @@ function hillshadeUrl(field: WorldHeightField | null): Relief | null {
   }
 }
 
-/** Layer 3 — the location squares in real size, plus label, position pin and
- *  event pin. A location without a metre position or without a scale anchor
- *  has NO area (§ A1.1) and is not drawn. */
+/** Layer 3 — the location OUTLINES in real size, plus label, position pin and
+ *  event pin.
+ *
+ *  The shape is the payload's `boundary` (contract v6): local metres around
+ *  the pin, taken through the ONE § A1.1 transform. A row whose `boundary` is
+ *  `null` has NO area — since 2026-08-19 the server synthesizes no square for
+ *  a location that was never drawn — and is not drawn here either. */
 function Footprints({ locations, currentId, events, labelMode }: {
   locations: WorldmapLocationRow[]
   currentId: string
@@ -276,7 +280,7 @@ function Footprints({ locations, currentId, events, labelMode }: {
   return (
     <g>
       {locations.map((loc) => {
-        const corners = footprintScreenCorners(loc, view, w, h)
+        const corners = boundaryScreenPoints(loc, view, w, h)
         if (!corners) return null
         const here = loc.id === currentId
         const evs = events[loc.id] || []

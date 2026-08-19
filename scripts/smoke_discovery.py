@@ -200,7 +200,19 @@ class _FakeRequest:
 
 
 def set_map3d(location_id: str, **fields) -> None:
-    """Merge fields into a location's map3d blob (the scale anchor)."""
+    """Merge fields into a location's map3d blob (boundary, openings).
+
+    A ``plan_width_m`` handed in is DRAWN as the centred square of that edge
+    (clockwise in map view) and the width is kept alongside — exactly what
+    ``_sanitize_map3d`` stores for such an outline. Since 2026-08-19 the width
+    alone is no shape at all: a location without a drawn boundary has no area
+    anywhere, so every fixture that wants ground has to say so.
+    """
+    width = fields.get("plan_width_m")
+    if width:
+        _h = round(float(width) / 2.0, 2)
+        fields.setdefault("boundary", [[-_h, -_h], [_h, -_h],
+                                       [_h, _h], [-_h, _h]])
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
@@ -349,10 +361,14 @@ add_rule({"id": SHARED_AWARENESS_ID, "name": "Awareness (off for the smoke)",
 
 
 def square_loc(cx, cz, width, yaw=0.0):
-    """A location record carrying only the legacy width dial — which
-    ``effective_boundary`` hands out as the square's four corners."""
+    """A location whose DRAWN boundary is the centred square of that edge —
+    the very four corners the deleted transition synthesis produced, so every
+    hand-derived number below is unchanged. Since 2026-08-19 the width dial
+    alone is no shape at all (``effective_boundary`` answers None for it)."""
+    h = round(float(width) / 2.0, 2)
     return {"pos_x": cx, "pos_z": cz, "yaw_deg": yaw,
-            "map3d": {"plan_width_m": width}}
+            "map3d": {"plan_width_m": width,
+                      "boundary": [[-h, -h], [h, -h], [h, h], [-h, h]]}}
 
 
 def main() -> int:

@@ -1083,11 +1083,22 @@ def unfiltered_footprints():
     return out
 
 
+
+def _square_map3d(width):
+    """The DRAWN centred square of that edge, plus the width the sanitizer
+    derives from its bounding box. Since 2026-08-19 a width alone is no shape
+    at all — a location without an outline has no area, so nothing to level —
+    and these are the very corners the deleted synthesis produced, so every
+    hand-derived number in this file stays put."""
+    h = round(float(width) / 2.0, 2)
+    return {"plan_width_m": width,
+            "boundary": [[-h, -h], [h, -h], [h, h], [-h, h]]}
+
 HUT = add_location("Hut", "a place on the flank")["id"]
 _world = _load_world_data()
 for _loc in _world["locations"]:
     if _loc.get("id") == HUT:
-        _loc["map3d"] = {"plan_width_m": 8}
+        _loc["map3d"] = _square_map3d(8)
 _save_world_data(_world)
 update_location_position(HUT, 2.0, 2.0, 0.0)
 
@@ -1193,7 +1204,7 @@ def place_square(name, x, z, width):
     data = _load_world_data()
     for loc in data["locations"]:
         if loc.get("id") == loc_id:
-            loc["map3d"] = {"plan_width_m": width}
+            loc["map3d"] = _square_map3d(width)
             loc["level_ground"] = True
     _save_world_data(data)
     update_location_position(loc_id, x, z)
@@ -1348,7 +1359,7 @@ PLACE = add_location("Bump", "a levelled place on bumpy ground")["id"]
 _w = _load_world_data()
 for _loc in _w["locations"]:
     if _loc.get("id") == PLACE:
-        _loc["map3d"] = {"plan_width_m": 16}
+        _loc["map3d"] = _square_map3d(16)
         _loc["level_ground"] = True
 _save_world_data(_w)
 update_location_position(PLACE, 20.0, 20.0, 0.0)

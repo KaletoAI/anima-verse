@@ -507,12 +507,19 @@ def raises_value_error(label, fn):
 
 
 def set_plan_width(location_id: str, width: float) -> None:
-    """Scale anchor of a location (map3d.plan_width_m) — the footprint edge."""
+    """DRAW the location's boundary as the centred square of edge ``width``
+    (contract v6) and store the width the sanitizer derives from its bounding
+    box. Since 2026-08-19 the width alone is no shape: without a drawn outline
+    a location has no area anywhere. The square's corners are the ones the
+    deleted synthesis produced, so every hand-derived number stays put."""
+    half = round(float(width) / 2.0, 2)
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
             map3d = dict(loc.get("map3d") or {})
             map3d["plan_width_m"] = width
+            map3d["boundary"] = [[-half, -half], [half, -half],
+                                 [half, half], [-half, half]]
             loc["map3d"] = map3d
     _save_world_data(data)
 
@@ -762,11 +769,15 @@ check("cell [1,3]x[1,3] does not",
 check("a non-finite position has no boundary",
       effective_boundary({"pos_x": float("nan"), "pos_z": 0.0,
                           "map3d": {"plan_width_m": 10}}), None)
-check("a sane position with the legacy dial is a SQUARE POLYGON",
+check("the legacy dial alone is NO polygon any more (2026-08-19)",
       effective_boundary({"pos_x": 5.0, "pos_z": 6.0,
-                          "map3d": {"plan_width_m": 10}}),
+                          "map3d": {"plan_width_m": 10}}), None)
+check("a DRAWN square is one, in local metres around the pin",
+      effective_boundary({"pos_x": 5.0, "pos_z": 6.0,
+                          "map3d": {"boundary": [[-5, -5], [5, -5],
+                                                 [5, 5], [-5, 5]]}}),
       (5.0, 6.0, 0.0, [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]))
-check("...and a DRAWN outline wins over the dial",
+check("...and the DRAWN outline is all that counts",
       boundary_world_points({"pos_x": 100.0, "pos_z": 200.0, "yaw_deg": 0.0,
                              "map3d": {"plan_width_m": 10,
                                        "boundary": [[0, 0], [2, 0], [0, 2]]}}),

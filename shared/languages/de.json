@@ -27,6 +27,10 @@
     }
   },
   "translations": {
+    "No boundary — this location covers no ground yet": "Keine Boundary — dieser Ort bedeckt noch keinen Grund",
+    "no boundary": "keine Boundary",
+    "Seed missing boundaries ({n})": "Fehlende Boundaries anlegen ({n})",
+    "{n} boundary(s) drawn": "{n} Boundary(s) gezeichnet",
     "[CURRENT]": "[AKTUELL]",
     "[RECENT]": "[KÜRZLICH]",
     "today {time}": "heute {time}",
@@ -1020,7 +1024,6 @@
     "No rooms on this level yet — click a room below to place it.": "Noch keine Räume auf dieser Etage — unten einen Raum anklicken, um ihn zu platzieren.",
     "No rules": "Keine Regeln",
     "No rules yet": "Noch keine Regeln",
-    "No scale anchor — drawn as a {n} m placeholder": "Kein Größenanker — als {n}-m-Platzhalter gezeichnet",
     "no scale anchor, {n} m placeholder": "kein Größenanker, {n}-m-Platzhalter",
     "no surface": "keine Oberfläche",
     "No self-image snapshots": "Keine Selbstbild-Snapshots",

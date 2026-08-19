@@ -276,10 +276,10 @@ def _format_placeable_locations(location_ids: Optional[List[str]] = None) -> str
     schema's job, so the map task never invents one. ``location_ids`` narrows
     the list to what the user ticked in the UI; None offers all of them.
 
-    The footprint edge comes from ``location_model3d.derive_plan_width_m`` —
-    the ONE scale-anchor function ``world_geometry.placed_footprint`` and the
-    overlap warning use too, so the number the model is told to keep apart is
-    the number it is later measured against.
+    The width comes from ``location_model3d.derive_plan_width_m``, i.e. the
+    bounding box of the drawn boundary — the same number the overlap warning
+    measures with, so what the model is told to keep apart is what it is
+    later measured against. A location without a boundary has none (0).
     """
     from app.core.location_model3d import derive_plan_width_m
     from app.models.world import list_locations
@@ -1022,9 +1022,11 @@ def _map_world_context() -> Tuple[Dict[str, Any], Dict[str, Any], Any, str]:
         map3d = loc.get("map3d") or {}
         locations_by_id[loc_id] = {
             "name": loc.get("name") or loc_id,
-            # The DRAWN outline (contract v6) and the legacy square dial that
-            # stands in until a place has one — the sanitizer's overlap test
-            # prefers the first and falls back to the second.
+            # The DRAWN outline (contract v6) — the ONLY shape a location
+            # has since 2026-08-19; a place without one has no area and the
+            # overlap test simply skips it. ``plan_width_m`` rides along as
+            # the derived bounding-box width the prompt quotes, never as a
+            # shape of its own.
             "boundary": map3d.get("boundary"),
             "plan_width_m": derive_plan_width_m(loc_id, map3d),
         }

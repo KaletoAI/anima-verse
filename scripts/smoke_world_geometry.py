@@ -22,26 +22,31 @@ Hand-derived expectations (all numbers worked out by hand, § B5a style):
         local (3, 0)  -> world (10 + 3*cos90, 20 - 3*sin90) = (10, 17)
       world_to_local must invert local_to_world exactly (within 1e-9).
 
-  [3] Footprint membership. Centre (10, 20), width 10 (half = 5):
-        yaw 0:  (14.9, 24.9) inside;  (16.0, 20.0) OUTSIDE (|dx| = 6 > 5)
-        yaw 45: (16.0, 20.0) INSIDE — local coords are
-                (6*cos45, 6*sin45) = (4.2426, 4.2426), both <= 5.
-      The yaw-45 case is the discriminator: an unrotated check would say no.
-
-  [4] Corners. Centre (0, 0), width 10, yaw 0 ->
-      {(-5,-5), (5,-5), (5,5), (-5,5)} in some order.
+  [3]/[4] THE SQUARE SECTIONS ARE GONE (2026-08-19). ``point_in_footprint``
+      and ``footprint_corners`` were deleted with the transition square: a
+      location is a drawn polygon, and there is no width-shaped geometry left
+      to check. Both guarantees were RE-DERIVED onto the polygon path, with
+      the very same numbers, in ``scripts/smoke_world_polygon.py``:
+        * the rotation discriminator (centre (10, 20), edge 10, yaw 45, point
+          (16, 20) inside — an unrotated test says outside) is the
+          "rotation discriminator" section there;
+        * the corner set of the axis-aligned square (centre (0,0), edge 10,
+          yaw 0 -> {(-5,-5), (5,-5), (5,5), (-5,5)}) is the
+          "square boundary corners" section there.
 
   [5] Polygon. Triangle [(0,0), (10,0), (0,10)]:
         (2, 2) inside, (8, 8) outside, (20, 0) outside.
       Degenerate polygon (< 3 points) -> always False.
 
-  [6] location_at_point, smallest footprint wins. Village centre (0, 0),
-      plan_width_m 50; hut centre (10, 10), plan_width_m 6.
-        (10, 10)  -> hut  (both contain it — 6 < 50, hut wins)
-        (-20, 0)  -> village
+  [6] location_at_point, the smallest AREA wins. Village centre (0, 0) with a
+      centred 50 m square boundary (±25, area 2500 m²); hut centre (10, 10)
+      with a centred 6 m one (±3, area 36 m²).
+        (10, 10)  -> hut  (both contain it — 36 < 2500, hut wins)
+        (-20, 0)  -> village   (|dx| = 20 <= 25; the hut ends at x = 13)
         (100, 100)-> None
-        unplaced location (pos_x None) and location without plan_width_m
-        never match.
+        An unplaced location (pos_x None) and one WITHOUT A BOUNDARY never
+        match — since 2026-08-19 the latter has no area at all, and its
+        legacy ``plan_width_m`` buys it nothing.
 
 Usage:  ./.venv/bin/python scripts/smoke_world_geometry.py
 """
@@ -71,8 +76,8 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core.world_geometry import (  # noqa: E402
-    footprint_corners, ground_y, local_to_world, location_at_point,
-    point_in_footprint, point_in_polygon, world_to_local)
+    ground_y, local_to_world, location_at_point, point_in_polygon,
+    world_to_local)
 
 FAILURES = []
 CHECKED = 0
@@ -104,15 +109,8 @@ lx, lz = world_to_local(wx, wz, 10.0, 20.0, 90.0)
 close("round-trip x", lx, 3.0)
 close("round-trip z", lz, 0.0)
 
-print("[3] footprint membership")
-check("yaw0 inside", point_in_footprint(14.9, 24.9, 10, 20, 10, 0), True)
-check("yaw0 outside", point_in_footprint(16.0, 20.0, 10, 20, 10, 0), False)
-check("yaw45 inside", point_in_footprint(16.0, 20.0, 10, 20, 10, 45), True)
-
-print("[4] corners")
-corners = {(round(x), round(z)) for x, z in footprint_corners(0, 0, 10, 0)}
-check("axis-aligned corners", corners,
-      {(-5, -5), (5, -5), (5, 5), (-5, 5)})
+# [3] + [4] deleted with the square helpers — see the docstring; both
+# guarantees live on in scripts/smoke_world_polygon.py.
 
 print("[5] polygon")
 tri = [[0, 0], [10, 0], [0, 10]]
@@ -122,13 +120,18 @@ check("outside far", point_in_polygon(20, 0, tri), False)
 check("degenerate", point_in_polygon(0, 0, [[0, 0], [1, 1]]), False)
 
 print("[6] location_at_point")
+SQ50 = [[-25.0, -25.0], [25.0, -25.0], [25.0, 25.0], [-25.0, 25.0]]
+SQ6 = [[-3.0, -3.0], [3.0, -3.0], [3.0, 3.0], [-3.0, 3.0]]
 village = {"id": "village", "pos_x": 0.0, "pos_z": 0.0, "yaw_deg": 0.0,
-           "map3d": {"plan_width_m": 50.0}}
+           "map3d": {"boundary": SQ50, "plan_width_m": 50.0}}
 hut = {"id": "hut", "pos_x": 10.0, "pos_z": 10.0, "yaw_deg": 0.0,
-       "map3d": {"plan_width_m": 6.0}}
+       "map3d": {"boundary": SQ6, "plan_width_m": 6.0}}
 unplaced = {"id": "ghost", "pos_x": None, "pos_z": None,
-            "map3d": {"plan_width_m": 6.0}}
-unsized = {"id": "unsized", "pos_x": 10.0, "pos_z": 10.0, "map3d": {}}
+            "map3d": {"boundary": SQ6, "plan_width_m": 6.0}}
+# The legacy dial WITHOUT an outline: no area since 2026-08-19, so it can
+# never be the answer even though it sits right under the query point.
+unsized = {"id": "unsized", "pos_x": 10.0, "pos_z": 10.0,
+           "map3d": {"plan_width_m": 6.0}}
 locs = [village, hut, unplaced, unsized]
 check("hut wins", (location_at_point(10, 10, locs) or {}).get("id"), "hut")
 check("village", (location_at_point(-20, 0, locs) or {}).get("id"), "village")

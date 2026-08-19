@@ -5,17 +5,20 @@
 Runs against a THROWAWAY storage directory — never touches a real world.
 
 The grid is gone: locations carry metre positions (``pos_x``/``pos_z``),
-a rotation (``yaw_deg``) and a footprint edge (``map3d.plan_width_m``).
-The payload therefore reports ``world_bounds`` in metres instead of
-``grid_bounds`` in cells, hoists ``plan_width_m`` to the top of each entry
-and hands every character its free metre position.
+a rotation (``yaw_deg``) and a DRAWN BOUNDARY (``map3d.boundary``, contract
+v6). The payload therefore reports ``world_bounds`` in metres instead of
+``grid_bounds`` in cells, hoists the boundary and its derived bounding-box
+width (``plan_width_m``) to the top of each entry and hands every character
+its free metre position. Since 2026-08-19 a location WITHOUT a boundary has
+no area at all — no square is synthesized for it any more — which is exactly
+what the "post" of the seed below is here to prove.
 
 Seed (hand-built, so every expectation below is derived from it and not
 recorded from an implementation run):
 
-    inn    at (50, 50),  plan_width_m 10, yaw 90   -> half 5
-    farm   at (-30, 20), plan_width_m 40           -> half 20
-    post   at (70, -10), NO plan_width_m           -> no footprint
+    inn    at (50, 50),  centred 10 m square boundary, yaw 90  -> half 5
+    farm   at (-30, 20), centred 40 m square boundary          -> half 20
+    post   at (70, -10), NO boundary                           -> no area
     ghost  unplaced
     water area [[0,0],[20,0],[20,20],[0,20]], type override "grass" renamed
     demo_avatar at inn (via save_character_current_location -> pos (50, 50))
@@ -25,13 +28,15 @@ Hand-derived expectations:
 
   [1] show_all=True: locations = inn + farm + post + ghost (unplaced
       passes); inn entry has pos_x 50.0, yaw_deg 90.0, plan_width_m 10.0
-      and NO grid_x/surface_kind/map_rotation_2d keys. ``passable``
+      (DERIVED from its boundary's 10 × 10 bounding box) and NO
+      grid_x/surface_kind/map_rotation_2d keys. ``passable``
       came BACK with the avatar journey (E3, Task 5): a destination list
       drops transit tiles by it, so the inn carries it as False. post is
-      placed but anchor-less: pos_x 70.0, plan_width_m null. The inn also
+      placed but BOUNDARY-LESS: pos_x 70.0, boundary null AND
+      plan_width_m null — it has no area anywhere. The inn also
       carries a ``layout_sig`` although it has no room at all — the
       signature covers ``map3d`` since E5 B11, and the inn has one
-      (plan_width_m 10). post, without map3d and without rooms, has none.
+      (the boundary). post, without map3d and without rooms, has none.
   [2] world_bounds: min_x = -50 (farm -30-20), max_x = 70 (post's bare
       centre, further out than inn's 50+5), min_z = -10 (post's bare
       centre), max_z = 55 (inn 50+5) -> {"min_x": -50.0, "min_z": -10.0,
@@ -86,7 +91,8 @@ Hand-derived expectations:
   [8] ``layout_sig`` covers the scene-shaping map3d, not only the room
       layouts (E5 finding B11). Seed for this section (the world is empty
       after [7d], so it stands on its own): a "Gatehouse" placed at
-      (0, 0) with map3d {"plan_width_m": 12}. Hand-derived:
+      (0, 0) with a centred 12 m square boundary
+      (−6,−6) (6,−6) (6,6) (−6,6). Hand-derived:
       (a) the entry HAS a layout_sig (10 hex chars) although the location
           has no room — map3d alone is enough now;
       (b) drawing a boundary opening
@@ -102,9 +108,9 @@ Hand-derived expectations:
   [9] ``openings`` — the authored boundary pass-throughs, FINISHED
       (contract v6, § A1.3 / § B1 Nr. 13). The server computes, the client
       renders: edge INDEX, world point, world inward normal, room link.
-      The Gatehouse of [8] is the fixture — pin (0, 0), no drawn boundary,
-      ``map3d.plan_width_m`` 12, so ``effective_boundary`` synthesizes the
-      square (−6,−6) (6,−6) (6,6) (−6,6) (clockwise in map view).
+      The Gatehouse of [8] is the fixture — pin (0, 0), boundary the
+      centred 12 m square (−6,−6) (6,−6) (6,6) (−6,6), clockwise in map
+      view (positive shoelace: 4·6² = 144 > 0).
       Hand-derived, edge 0 = point 0 → point 1, i.e. (−6,−6) → (6,−6):
         at 0.5 -> local (−6 + 0.5·12, −6) = (0, −6)
         inward: d = (12, 0), |d| = 12, (−dz, dx)/|d| = (0, 1); the probe a
@@ -167,17 +173,23 @@ def check(label, actual, expected):
         FAILURES.append(label)
 
 
-def set_plan_width(location_id: str, width) -> None:
-    """Scale anchor of a location (map3d.plan_width_m) — the footprint edge.
-    ``None`` removes the anchor again."""
+def set_square_boundary(location_id: str, width) -> None:
+    """Draw the location's boundary as the centred square of edge ``width``
+    (LOCAL metres, clockwise in map view) and store the derived bounding-box
+    width alongside — exactly what the sanitizer writes on a real save.
+    ``None`` removes both again, leaving a location with no area."""
     data = _load_world_data()
+    half = None if width is None else round(float(width) / 2.0, 2)
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
             map3d = dict(loc.get("map3d") or {})
             if width is None:
+                map3d.pop("boundary", None)
                 map3d.pop("plan_width_m", None)
             else:
-                map3d["plan_width_m"] = width
+                map3d["boundary"] = [[-half, -half], [half, -half],
+                                     [half, half], [-half, half]]
+                map3d["plan_width_m"] = float(width)
             loc["map3d"] = map3d
     _save_world_data(data)
 
@@ -207,15 +219,16 @@ def names(payload) -> list:
 # ── Seed ────────────────────────────────────────────────────────────────
 INN = add_location(name="Smoke Inn", description="worldmap v2 smoke")["id"]
 update_location_position(INN, 50.0, 50.0, 90.0)
-set_plan_width(INN, 10.0)
+set_square_boundary(INN, 10.0)
 
 FARM = add_location(name="Wide Farm", description="worldmap v2 smoke")["id"]
 update_location_position(FARM, -30.0, 20.0)
-set_plan_width(FARM, 40.0)
+set_square_boundary(FARM, 40.0)
 
-# Placed, but nobody ever set a scale anchor — update_location_position does
-# not write plan_width_m, so this is an ordinary authoring state.
-POST = add_location(name="Anchorless Post", description="placed, no anchor")["id"]
+# Placed, but nobody ever drew its outline — update_location_position writes
+# no boundary, so this is an ordinary authoring state (and the state the
+# "Seed missing boundaries" button exists for).
+POST = add_location(name="Outline-less Post", description="placed, no area")["id"]
 update_location_position(POST, 70.0, -10.0)
 
 GHOST = add_location(name="Unplaced Hut", description="never placed")["id"]
@@ -249,10 +262,9 @@ def main() -> int:
     check("inn keys", sorted(inn),
           sorted(["id", "name", "pos_x", "pos_z", "yaw_deg", "plan_width_m",
                   "passable", "map3d", "layout_sig", "boundary", "openings"]))
-    # v6 "Gebiete": every placed location with size travels as a polygon —
-    # the inn never drew one, so its square dial arrives as its four corners
-    # in LOCAL metres (effective_boundary; edge 10 -> half 5), clockwise.
-    check("inn.boundary (synthesized square, CW)", inn.get("boundary"),
+    # v6 "Gebiete": a location travels as a polygon and as nothing else —
+    # the inn's drawn square in LOCAL metres (edge 10 -> half 5), clockwise.
+    check("inn.boundary (the drawn square, CW)", inn.get("boundary"),
           [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]])
     # The inn has NO room — its signature comes from map3d alone (E5 B11).
     check("inn.layout_sig without any room", len(inn.get("layout_sig") or ""),
@@ -265,23 +277,37 @@ def main() -> int:
         check(f"inn has no {gone}", gone in inn, False)
     ghost = entry(allv, GHOST)
     check("ghost.pos_x (unplaced)", ghost.get("pos_x"), None)
-    check("ghost.plan_width_m (no anchor)", ghost.get("plan_width_m"), None)
+    check("ghost.plan_width_m (no area)", ghost.get("plan_width_m"), None)
     post = entry(allv, POST)
     check("post.pos_x (placed)", post.get("pos_x"), 70.0)
     check("post.pos_z (placed)", post.get("pos_z"), -10.0)
-    check("post.plan_width_m (anchor-less)", post.get("plan_width_m"), None)
+    # PLACED BUT BOUNDARY-LESS — the closing state of the square wave: no
+    # outline means no area, so the row is a bare pin and says so twice.
+    check("post.boundary (never drawn -> no area)", post.get("boundary"), None)
+    check("post.plan_width_m (nothing to derive it from)",
+          post.get("plan_width_m"), None)
     check("post has no layout_sig (no map3d, no room)",
           "layout_sig" in post, False)
-    # A width <= 0 is no anchor either — the entry must say the same thing the
-    # geometry says (placed_footprint rejects it), or a client would draw a
-    # zero-size square where the server sees an unanchored point.
-    set_plan_width(POST, 0.0)
+    # A LEGACY DIAL IS NOT A SHAPE (2026-08-19): a location that still carries
+    # plan_width_m but never drew an outline must read exactly like the post
+    # above — no synthesized square anywhere in the payload.
+    _data = _load_world_data()
+    for _l in _data.get("locations", []):
+        if _l.get("id") == POST:
+            _l["map3d"] = {"plan_width_m": 24.0}
+    _save_world_data(_data)
     try:
         _z = entry(build_worldmap_payload("demo_avatar", show_all=True), POST)
-        check("plan_width_m 0 reported as no anchor", _z.get("plan_width_m"),
-              None)
+        check("legacy plan_width_m alone -> boundary null",
+              _z.get("boundary"), None)
+        check("legacy plan_width_m alone -> plan_width_m null",
+              _z.get("plan_width_m"), None)
     finally:
-        set_plan_width(POST, None)
+        _data = _load_world_data()
+        for _l in _data.get("locations", []):
+            if _l.get("id") == POST:
+                _l.pop("map3d", None)
+        _save_world_data(_data)
 
     print("\n[2] world_bounds in metres over all placed locations")
     check("world_bounds", allv.get("world_bounds"), BOUNDS)
@@ -398,7 +424,7 @@ def main() -> int:
     # its own location, so it reads on its own.
     GATE = add_location(name="Gatehouse", description="B11 smoke")["id"]
     update_location_position(GATE, 0.0, 0.0)
-    set_plan_width(GATE, 12.0)
+    set_square_boundary(GATE, 12.0)
 
     def gate_sig() -> str:
         return entry(build_worldmap_payload("demo_avatar", show_all=True),
@@ -437,15 +463,15 @@ def main() -> int:
     _save_world_data(_data)
     check("renaming the location does NOT change the sig", gate_sig(), drawn)
     # (e) nothing scene-shaping left -> the key is optional again.
-    set_map3d(boundary_openings=None, plan_width_m=None)
+    set_map3d(boundary_openings=None, boundary=None, plan_width_m=None)
     check("no map3d and no rooms -> no layout_sig",
           "layout_sig" in entry(build_worldmap_payload("demo_avatar",
                                                        show_all=True), GATE),
           False)
 
     print("\n[9] openings — the pass-throughs arrive COMPUTED (v6, § A1.3)")
-    # The Gatehouse gets its anchor back: a 12 m square around (0, 0).
-    set_plan_width(GATE, 12.0)
+    # The Gatehouse gets its area back: the drawn 12 m square around (0, 0).
+    set_square_boundary(GATE, 12.0)
 
     def gate_openings():
         return entry(build_worldmap_payload("demo_avatar", show_all=True),
@@ -475,7 +501,7 @@ def main() -> int:
     check("an edge index the polygon does not have is dropped",
           gate_openings(), [])
     # Without an area there is no edge to sit on either.
-    set_map3d(plan_width_m=None,
+    set_map3d(boundary=None, plan_width_m=None,
               boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2}])
     check("no boundary, no opening points", gate_openings(), [])
 

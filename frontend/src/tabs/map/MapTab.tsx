@@ -42,10 +42,10 @@ import type {
 /**
  * Map tab — the editor of the free metre world.
  *
- * The grid is gone (Seamless World, E1/E2): a location is a square of edge
- * `map3d.plan_width_m` standing on a continuous plane at (`pos_x`, `pos_z`),
- * turned by `yaw_deg`. Placing means naming a point in METRES, not choosing a
- * cell, so nothing here counts columns and nothing drops onto a tile.
+ * The grid is gone (Seamless World, E1/E2): a location is a drawn POLYGON
+ * standing on a continuous plane at (`pos_x`, `pos_z`), turned by `yaw_deg`.
+ * Placing means naming a point in METRES, not choosing a cell, so nothing here
+ * counts columns and nothing drops onto a tile.
  *
  * Two reads, both one-shot (an editor that polls fights the hand that edits):
  *   - `GET /world/locations` — the full dicts. The tray lives off them: an
@@ -75,10 +75,17 @@ import type {
  * with a centred square, and an old one gets the same square from "Draw
  * boundary"; from there the vertices are dragged. The write is a fifth route,
  * `PUT /world/locations/{id}` with the whole `map3d` (the field is replaced,
- * not merged) — WITHOUT `plan_width_m`, which the server derives from the
- * outline's bounding box (v6 Nr. 2) and overwrites anyway. A location that has
- * no boundary yet keeps its square, and that square is a transition state, not
- * a shape it owns.
+ * not merged) — WITHOUT `plan_width_m`, which is not an input at all any more:
+ * the server derives it from the outline's bounding box (v6 Nr. 2) and ignores
+ * whatever a client submits.
+ *
+ * SINCE 2026-08-19 A LOCATION WITHOUT A BOUNDARY HAS NO AREA — the server
+ * synthesizes no square for it any longer, so it is a bare pin here, in the
+ * payloads and in both renderers. An old world is repaired in one explicit
+ * gesture: "Seed missing boundaries (N)" in the toolbar
+ * (`POST /world/locations/seed-boundaries`) writes each of them the centred
+ * square of its legacy width as a REAL outline. The button only exists while
+ * N > 0, and nothing seeds itself behind the author's back.
  *
  * The ground is edited on the same canvas, in three exclusive MODES: `select`
  * is everything above, `paint` collects vertices into a new terrain area and
@@ -1073,6 +1080,38 @@ export function MapTab() {
     if (boundaryLocal(loc)) return
     await putBoundary(loc, seedSquare(anchorWidthM(loc) ?? BOUNDARY_SEED_M))
   }, [putBoundary])
+
+  /**
+   * Placed locations that stand on NOTHING: no drawn outline, but a legacy
+   * `plan_width_m` the server can turn into one. Since the transition square
+   * died (2026-08-19) such a location has no area anywhere — no nav grid, no
+   * plateau, no polygon in any renderer — and is drawn here as a bare pin.
+   *
+   * The same three conditions the server seeds by
+   * (`world_ops.seed_missing_boundaries`), so the count on the button is the
+   * number of locations the click will actually repair.
+   */
+  const seedable = useMemo(
+    () => placed.filter((l) => !boundaryLocal(l) && anchorWidthM(l) !== null),
+    [placed])
+
+  /**
+   * The bulk repair for an old world: every one of those gets the centred
+   * square of its own width written as a real, editable outline. ONE explicit
+   * gesture — the server never invents an area behind the author's back, and
+   * after this the vertices are dragged like any other boundary.
+   */
+  const seedAllBoundaries = useCallback(async () => {
+    try {
+      const r = await apiPost<{ seeded?: string[]; skipped?: string[] }>(
+        '/world/locations/seed-boundaries', {})
+      const n = (r?.seeded || []).length
+      toast(t('{n} boundary(s) drawn').replace('{n}', String(n)))
+      await reload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [reload, t, toast])
 
   const unplace = useCallback(async (loc: EditorLocation) => {
     try {
@@ -2217,6 +2256,17 @@ export function MapTab() {
           <span className="ga-map-toolbar-info">
             {t('{n} placed').replace('{n}', String(placed.length))}
           </span>
+          {/* The repair button for a world authored before contract v6. It
+              only exists while there is something to repair, and it says how
+              much — a button that is always there teaches nothing. */}
+          {mode === 'select' && seedable.length > 0 ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              title={t('These locations stand on the map without a drawn outline, so they have no area at all — no ground, no walls, nothing to walk into. This writes each of them the centred square of its old width as a real boundary you can then reshape.')}
+              onClick={() => { void seedAllBoundaries() }}>
+              ✎ {t('Seed missing boundaries ({n})')
+                .replace('{n}', String(seedable.length))}
+            </button>
+          ) : null}
           {ghost ? (
             <span className={'ga-map-arm' + (ghost.anchored ? '' : ' warn')}>
               {(ghost.kind === 'clone'
@@ -2358,11 +2408,12 @@ export function MapTab() {
                   title={t('Clear selection')} onClick={() => setSelId('')}>×</button>
               </div>
               <div className="ga-map-chip-row">
-                {/* What the location COVERS: the drawn outline since v6, the
-                    square only while none has been drawn yet. The width next
-                    to the point count is derived from the outline's bounding
-                    box by the server — it is not a dial any more. */}
-                <span className={selBoundary || selAnchor ? '' : 'ga-map-chip-warn'}>
+                {/* What the location COVERS: the drawn outline, and nothing
+                    else since 2026-08-19 — without one it has NO area, not a
+                    square. The width next to the point count is derived from
+                    the outline's bounding box by the server; it is neither a
+                    dial nor a shape of its own. */}
+                <span className={selBoundary ? '' : 'ga-map-chip-warn'}>
                   {selBoundary
                     ? (selAnchor
                       ? t('Boundary · {n} points · {w} m wide')
@@ -2370,10 +2421,7 @@ export function MapTab() {
                         .replace('{w}', fmtM(selAnchor))
                       : t('Boundary · {n} points')
                         .replace('{n}', String(selBoundary.length)))
-                    : selAnchor
-                      ? fmtM(selAnchor) + ' × ' + fmtM(selAnchor) + ' m'
-                      : t('No scale anchor — drawn as a {n} m placeholder')
-                        .replace('{n}', String(NO_ANCHOR_WIDTH_M))}
+                    : t('No boundary — this location covers no ground yet')}
                 </span>
                 <span className="ga-map-chip-pos">
                   x {fmtPos(selected.pos_x || 0)} · z {fmtPos(selected.pos_z || 0)}

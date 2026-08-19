@@ -461,18 +461,19 @@ def _entry_world_boundary(entry: Dict[str, Any]) -> Optional[List[Any]]:
     """World-metre outline of one placement entry, or None without area.
 
     A draft entry is not a location record — it carries the proposed pin
-    (``pos_x``/``pos_z``/``yaw_deg``) next to the world's own outline
-    (``boundary``, ``plan_width_m``), which is exactly what
+    (``pos_x``/``pos_z``/``yaw_deg``) next to the world's own DRAWN outline
+    (``boundary``), which is exactly what
     ``world_geometry.effective_boundary`` reads out of a location dict. So the
     two halves are handed to it in the shape it expects rather than the
-    transform being written a second time here.
+    transform being written a second time here. ``plan_width_m`` is NOT part
+    of it: since 2026-08-19 a width is no shape, and a location without an
+    outline has no area to overlap with.
     """
     from app.core.world_geometry import boundary_world_points
     return boundary_world_points({
         "pos_x": entry.get("pos_x"), "pos_z": entry.get("pos_z"),
         "yaw_deg": entry.get("yaw_deg"),
-        "map3d": {"boundary": entry.get("boundary"),
-                  "plan_width_m": entry.get("plan_width_m")},
+        "map3d": {"boundary": entry.get("boundary")},
     })
 
 
@@ -489,9 +490,8 @@ def boundaries_overlap(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     overlap — the conservative answer, matching
     ``world_geometry.boundary_contains``.
 
-    Both dicts need ``pos_x``, ``pos_z``, ``yaw_deg`` and an outline — either a
-    drawn ``boundary`` in local metres or the legacy ``plan_width_m`` dial; a
-    place with neither has no area and can overlap nothing.
+    Both dicts need ``pos_x``, ``pos_z``, ``yaw_deg`` and a DRAWN ``boundary``
+    in local metres; a place without one has no area and can overlap nothing.
 
     Hand-derived: two 40 m squares at yaw 0, centres 30 m apart on x, span
     [-20, 20] and [10, 50] -> they share [10, 20] -> True. At 50 m apart the
@@ -518,10 +518,9 @@ def sanitize_map_layout(data: Any, *,
     location id to at least
     ``{"name": str, "boundary": list | None, "plan_width_m": float}`` — the
     location's own OUTLINE in local metres (``map3d.boundary``, contract v6)
-    and the legacy square dial (``map3d.plan_width_m`` via
-    ``location_model3d.derive_plan_width_m``) that stands in for a place which
-    has not been drawn yet. Neither of the two means "no area", which simply
-    skips the overlap test for that place.
+    plus its derived bounding-box width, which the preview quotes but no rule
+    reads as a shape. No boundary means "no area", which simply skips the
+    overlap test for that place.
 
     ``bounds`` is the world's CURRENT extent; the draft may propose its own,
     and a coordinate is out of bounds only when it leaves BOTH — a new map is

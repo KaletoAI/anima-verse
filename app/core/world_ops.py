@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
 from app.core.scatter_curves import curve_map, tessellate
-from app.core.world_geometry import polygon_bounds, polygon_signed_area
+from app.core.world_geometry import polygon_plan_width_m, polygon_signed_area
 from app.imagegen.base import BackendBusyError
 
 if TYPE_CHECKING:  # type-only — the composer is imported where it is used
@@ -168,9 +168,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     instead of N fetches — read-only, for the player map panel and external
     map clients.
 
-    Payload v2 (Seamless World, E1): the grid is gone. A location is a square
-    of edge ``plan_width_m`` centred on (``pos_x``, ``pos_z``) and rotated by
-    ``yaw_deg``; every character carries its free metre point in ``pos``.
+    Payload v2 (Seamless World, E1): the grid is gone. A location is the
+    POLYGON ``map3d.boundary``, drawn in local metres around (``pos_x``,
+    ``pos_z``) and rotated by ``yaw_deg`` (contract v6); every character
+    carries its free metre point in ``pos``.
     Painted terrain is deliberately NOT in here — clients fetch
     ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
     The world RELIEF travels the same way: ``height_sig`` is the trigger,
@@ -189,11 +190,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     ``location_visible_to_character``, characters and events follow their
     location. ``show_all=True`` is the unfiltered admin view. ``world_bounds``
     is always computed BEFORE that filter, so the map keeps its extent no
-    matter how much of it is still dark — and it is not footprints alone: a
-    placed location contributes its footprint box when it HAS a scale anchor
-    (centre ± half ``plan_width_m``, axis-aligned, the rotation deliberately
-    ignored) and its bare CENTRE POINT when it has none, and every painted
-    terrain area contributes the box of its polygon (E4 finding B7).
+    matter how much of it is still dark — and it is not boundaries alone: a
+    placed location contributes the world-space box of its DRAWN boundary
+    when it has one and its bare CENTRE POINT when it has none, and every
+    painted terrain area contributes the box of its polygon (E4 finding B7).
     """
     from app.models.events import list_events
     from app.models.character import (
@@ -209,7 +209,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
-    from app.core.world_geometry import effective_boundary, placed_footprint
+    from app.core.world_geometry import (effective_boundary, local_to_world,
+                                         polygon_plan_width_m)
     from app.core.boundary_entry import opening_world_frames
     from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import list_areas, terrain_sig
@@ -238,12 +239,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     visible_ids = set()
     # Map extent in metres over ALL placed locations AND all painted terrain
     # areas — computed BEFORE the fog filter, so the map keeps its extent no
-    # matter how much of it is still dark. With a scale anchor a location
-    # contributes its whole footprint (centre ± half the edge), deliberately
-    # the axis-aligned box of the UNROTATED square: the extent is a viewport
+    # matter how much of it is still dark. A location with a drawn boundary
+    # contributes the axis-aligned box of that outline IN WORLD SPACE (the
+    # § A1.1 pin transform, rotation included): the extent is a viewport
     # hint, not a collision volume.
-    # A placed location WITHOUT a scale anchor stretches the bounds by its
-    # centre point, so the map extent never misses a location it shows.
+    # A placed location WITHOUT a boundary has no area, so it stretches the
+    # bounds by its centre point alone — the map extent never misses a
+    # location it shows.
     _min_x = _min_z = _max_x = _max_z = None
 
     def _stretch(x0: float, x1: float, z0: float, z1: float) -> None:
@@ -256,30 +258,32 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     for loc in list_locations():
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
-        # ONE geometry source: the footprint decides both the extent and the
-        # scale anchor reported in the entry — never a second hand-parse of
-        # map3d.plan_width_m (which would disagree on a width <= 0).
-        _fp = placed_footprint(loc)
-        if _fp is not None:
-            _cx, _cz, _w, _ = _fp
-            _half = _w / 2.0
-            _stretch(_cx - _half, _cx + _half, _cz - _half, _cz + _half)
+        # ONE geometry source: the DRAWN boundary decides both the extent and
+        # the width reported in the entry — never a second hand-parse of
+        # map3d.plan_width_m (which would still answer for a location whose
+        # outline was never drawn, i.e. one that has no area at all).
+        _bd = effective_boundary(loc)
+        if _bd is not None:
+            _pts_w = [local_to_world(_lx, _lz, _bd[0], _bd[1], _bd[2])
+                      for _lx, _lz in _bd[3]]
+            _stretch(min(p[0] for p in _pts_w), max(p[0] for p in _pts_w),
+                     min(p[1] for p in _pts_w), max(p[1] for p in _pts_w))
         elif loc.get("pos_x") is not None and loc.get("pos_z") is not None:
             _cx, _cz = float(loc["pos_x"]), float(loc["pos_z"])
             _stretch(_cx, _cx, _cz, _cz)
         if not _visible(loc):
             continue
         visible_ids.add(lid)
-        # The footprint edge is hoisted out of map3d: it is the scale anchor
-        # every map client needs, and none of them should have to dig for it.
-        # None whenever the geometry has no usable anchor.
-        _width = _fp[2] if _fp is not None else None
+        # The boundary's bounding-box width is hoisted out of map3d: it is
+        # the scale number every map client reads (loading radius, viewport,
+        # backdrop), and none of them should have to dig for it. Derived
+        # through the ONE rule the sanitizer stores it by, so the payload and
+        # the stored field cannot disagree; None whenever there is no area.
         # The footprint travels with the row as a POLYGON, always (contract
-        # v6 "Gebiete"): the drawn boundary where one exists, the legacy
-        # square synthesized as its four corners otherwise
-        # (world_geometry.effective_boundary). Clients therefore never grow
-        # a second, square-shaped code path. None = the location has no area.
-        _bd = effective_boundary(loc)
+        # v6 "Gebiete") — the DRAWN boundary or nothing. Since 2026-08-19 no
+        # square is synthesized for a location that has none: it is then a
+        # bare pin, and `boundary: null` is exactly that statement.
+        _width = polygon_plan_width_m(_bd[3]) if _bd is not None else None
         entry = {
             "id": lid,
             "name": loc.get("name") or "",
@@ -712,21 +716,15 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # ``plan_width_m`` and k = 1 (scene_recipe.derive_scalars). Nothing reads
     # the field any more, and it is not kept here either: a location saved
     # once drops it.
-    # The width of the location in metres. SINCE v6 (Nr. 2) A DERIVED
-    # QUANTITY, not a dial and not an anchor: the wider side of the boundary's
-    # bounding box (overwritten below wherever a boundary is drawn). Room
-    # rects, props, markers and figures carry their own metres now, so nothing
-    # scales by it any more — it survives because consumer contracts do
-    # (loading radius, viewport, backdrop, ``scene.extent_m``). A submitted
-    # value is only kept for a location that has no boundary at all.
-    pw = raw.get("plan_width_m")
-    if pw is not None and f"{pw}".strip() != "":
-        try:
-            v = float(pw)
-            if 0.5 <= v <= 500:
-                out["plan_width_m"] = round(v, 2)
-        except (TypeError, ValueError):
-            pass
+    # ``plan_width_m`` IS NOT AN INPUT (closing wave, 2026-08-19). Since v6
+    # (Nr. 2) it is a DERIVED quantity — the wider side of the drawn
+    # boundary's bounding box — and since the transition square died it is
+    # nothing else: a submitted value is ignored here, whatever it says, and
+    # a location without a boundary has no width at all (as it has no area).
+    # Room rects, props, markers and figures carry their own metres, so
+    # nothing scales by it any more; it survives only because consumer
+    # contracts do (loading radius, viewport, backdrop, ``scene.extent_m``).
+    # It is written below, in the boundary block, and nowhere else.
     # Location boundary (contract v6 "Gebiete"): the DRAWN footprint as a
     # closed point sequence in LOCAL METRES around the pin — the square is
     # only its special case, and a location without a boundary has no area at
@@ -757,17 +755,15 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             # instead of measuring it.
             if polygon_signed_area(bpts) < 0:
                 bpts.reverse()
-            bounds = polygon_bounds(bpts)
-            width = max(bounds[2] - bounds[0], bounds[3] - bounds[1]) \
-                if bounds else 0.0
-            # A boundary with no extent encloses nothing — it is not an area,
-            # so it is not kept (and the submitted plan_width_m stands).
+            # v6 Nr. 2: ``plan_width_m`` is a COMPUTED quantity — the wider
+            # side of the boundary's bounding box, by the ONE rule in
+            # ``world_geometry.polygon_plan_width_m`` (the worldmap payload
+            # reports the same answer). A boundary with no extent encloses
+            # nothing — it is not an area, so neither it nor a width is kept.
+            width = polygon_plan_width_m(bpts)
             if width > 0:
                 out["boundary"] = bpts
-                # v6 Nr. 2: ``plan_width_m`` is a COMPUTED quantity, not a
-                # dial — the wider side of the boundary's bounding box.
-                # Whatever the client submitted is overwritten here.
-                out["plan_width_m"] = round(width, 2)
+                out["plan_width_m"] = width
     # Storey height in REAL metres — stacks the room-layout levels. One dial
     # in the same unit as every other length (× k at render time); it
     # replaced the pair "model height ÷ model storeys" (real) and
@@ -887,11 +883,15 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # (same rule as prop ids).
     # The WIDTH lies on that edge, so the location's own width is its
     # maximum (a café in the middle of a city cell is entered along its whole
-    # edge, not through a 10 m slot). Without an anchor 10 m stands in. Out of
-    # range is CLAMPED, never dropped.
+    # edge, not through a 10 m slot). That width is the DERIVED one above, so
+    # a location without a drawn boundary has no known edge and 10 m stands
+    # in. Out of range is CLAMPED, never dropped.
     max_width_m = float(out.get("plan_width_m") or 10.0)
-    # How many edges there are to pick from: the drawn boundary, or the four
-    # of the square it degrades to (world_geometry.effective_boundary).
+    # How many edges there are to pick from. Without a boundary there is no
+    # geometry to name — an opening authored on such a location is stored but
+    # stays inert (``opening_world_frames`` finds no edge to sit on), which is
+    # the same thing "no area" means everywhere else. The 4 keeps an outline
+    # the author is halfway through drawing from losing its openings.
     edge_count = len(out.get("boundary") or []) or 4
     bo = raw.get("boundary_openings")
     if isinstance(bo, list):
@@ -1605,6 +1605,71 @@ def update_location_with_extras(location_id: str,
 
     updated = get_location_by_id(location_id)
     return {"status": "success", "location": updated}
+
+
+def seed_missing_boundaries() -> Dict[str, Any]:
+    """Give every placed location that has no DRAWN boundary the centred
+    square its legacy ``plan_width_m`` described — the repair gesture for
+    worlds authored before contract v6.
+
+    THE TRANSITION SQUARE IS GONE (2026-08-19): ``effective_boundary``
+    synthesizes nothing any more, so a location that was never drawn has no
+    area at all — it vanishes from the nav grid, from ``location_at_point``,
+    from the plateau pass and from every renderer, and stands on the map as a
+    bare pin. This turns that same square into a REAL, editable boundary, and
+    it is an EXPLICIT user action ("Seed missing boundaries" in the map
+    editor), never a fallback reader: after the run the shape is stored, the
+    author can drag its vertices, and nothing is derived behind their back.
+
+    Seeded is a location that is PLACED (finite ``pos_x``/``pos_z``), has no
+    valid boundary, and carries a positive ``plan_width_m``. The square is
+    the one the synthesis produced — corners (±w/2, ±w/2) in LOCAL metres,
+    clockwise in map view — and it is written through the ordinary save path
+    (``update_location_with_extras`` → ``_sanitize_map3d``), so the winding,
+    the centimetre rounding and the derived width are the sanitizer's, not a
+    second implementation's.
+
+    A location without a width has nothing to seed FROM: an invented edge
+    would be a shape the author never chose. It is reported separately so the
+    editor can say why it was left alone.
+    """
+    from app.core.world_geometry import placed_boundary, polygon_points
+
+    seeded: List[str] = []
+    skipped: List[str] = []
+    for loc in list_locations():
+        loc_id = loc.get("id") or ""
+        if not loc_id:
+            continue
+        px, pz = loc.get("pos_x"), loc.get("pos_z")
+        if px is None or pz is None:
+            continue                        # unplaced: not on the map at all
+        try:
+            if not (math.isfinite(float(px)) and math.isfinite(float(pz))):
+                continue
+        except (TypeError, ValueError):
+            continue
+        map3d = loc.get("map3d") if isinstance(loc.get("map3d"), dict) else {}
+        if polygon_points(map3d.get("boundary")) is not None:
+            continue                        # already drawn — never touched
+        try:
+            width = float(map3d.get("plan_width_m") or 0)
+        except (TypeError, ValueError):
+            width = 0.0
+        if not (math.isfinite(width) and width > 0):
+            skipped.append(loc_id)
+            continue
+        half = round(width / 2.0, 2)
+        square = [[-half, -half], [half, -half], [half, half], [-half, half]]
+        update_location_with_extras(loc_id, {"map3d": {**map3d,
+                                                       "boundary": square}})
+        # Measured at the consumer, not at the writer: the location counts as
+        # seeded only when the stored world answers with a real area.
+        if placed_boundary(get_location_by_id(loc_id) or {}) is not None:
+            seeded.append(loc_id)
+        else:
+            skipped.append(loc_id)
+    return {"status": "success", "seeded": seeded, "skipped": skipped}
 
 
 # --- World-level settings ---------------------------------------------------
