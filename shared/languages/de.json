@@ -1894,6 +1894,18 @@
     "hot": "heiß",
     "dry": "trocken",
     "rain": "Regen",
-    "snow": "Schnee"
+    "snow": "Schnee",
+    "Place single props on the world plane: a landmark rock, a signpost, a bench": "Einzelne Props auf der Weltebene setzen: ein Findling, ein Wegweiser, eine Bank",
+    "{n} of {max} props": "{n} von {max} Props",
+    "Every world prop is its own draw call — from here on the map gets heavier with each one.": "Jedes Welt-Prop ist ein eigener Zeichenaufruf — ab hier wird die Karte mit jedem weiteren schwerer.",
+    "Failed to load world props": "Welt-Props konnten nicht geladen werden",
+    "Click a prop, then click the map — it stays armed for the next one. Escape cancels. Props are decoration: they block nothing and show only in the 3D client.": "Prop anklicken, dann auf die Karte klicken — es bleibt für das nächste scharf. Escape bricht ab. Props sind Deko: sie blockieren nichts und erscheinen nur im 3D-Client.",
+    "Placing “{name}” — click the map, again for the next one": "„{name}“ wird gesetzt — auf die Karte klicken, erneut für das nächste",
+    "prop deleted": "Prop gelöscht",
+    "The prop behind this placement is gone — it renders nothing and can only be removed.": "Das Prop hinter dieser Platzierung existiert nicht mehr — sie zeigt nichts und kann nur entfernt werden.",
+    "Lift": "Anhebung",
+    "Variant": "Variante",
+    "Auto lets the placement id pick a mesh, so a row of the same prop is not the same mesh twice.": "Auto lässt die Platzierungs-ID das Mesh wählen, damit eine Reihe desselben Props nicht zweimal dasselbe Mesh zeigt.",
+    "Remove this placement": "Diese Platzierung entfernen"
   }
 }

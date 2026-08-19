@@ -697,6 +697,24 @@ SCHEMA_STATEMENTS = [
         updated_at TEXT NOT NULL
     )""",
 
+    # One AUTHORED prop on the world plane — a landmark rock, a signpost, a
+    # bench in the wilderness. The painted areas above say how DENSELY a
+    # ground grows things; this table says "this prop, at this point, turned
+    # this way". Point + yaw in world metres, `variant` NULL = the placement
+    # id decides which mesh (world_props.variant_index). Deco only: nothing
+    # here blocks a step. See app/models/world_props.py.
+    """CREATE TABLE IF NOT EXISTS world_props (
+        id         TEXT PRIMARY KEY,
+        prop_id    TEXT NOT NULL,
+        x          REAL NOT NULL,
+        z          REAL NOT NULL,
+        yaw_deg    REAL NOT NULL DEFAULT 0,
+        offset_y   REAL NOT NULL DEFAULT 0,
+        variant    INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+
     # ── World relief (E8 task 2) ─────────────────────────────────────────
     # One authored HEIGHT AREA: an outline in world metres (JSON [[x, z], ...])
     # that lifts (or sinks) the ground inside it to `height_m`, ramping there

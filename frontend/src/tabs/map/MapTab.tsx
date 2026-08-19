@@ -28,6 +28,9 @@ import {
   type TerrainMode,
 } from './TerrainTools'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
+import { WorldPropLayer } from './WorldPropLayer'
+import { PropsPalette } from '../world/PropsPalette'
+import type { PropFull } from '../props/propTypes'
 import { readScatter } from './mapTypes'
 import {
   DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M, plateauRimM,
@@ -36,7 +39,7 @@ import type {
   EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
   TerrainArea, TerrainMeta,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
-  TerrainTypesResp, WorldmapPayload,
+  TerrainTypesResp, WorldProp, WorldPropsResp, WorldmapPayload,
 } from './mapTypes'
 
 /**
@@ -430,6 +433,18 @@ export function MapTab() {
    *  picker with the tuft alone; it must never block painting ground. */
   const [propList, setPropList] = useState<PropRef[]>([])
 
+  // ── World props (§ A9a): single props placed on the world plane ─────────
+  // The placements, the selected one, the prop the palette has ARMED for the
+  // next click, and the two cap numbers as the SERVER states them (the editor
+  // invents no ceiling of its own — it only shows how close the world is).
+  const [worldProps, setWorldProps] = useState<WorldProp[]>([])
+  const [selWp, setSelWp] = useState('')
+  const [armedProp, setArmedProp] = useState<PropFull | null>(null)
+  const [wpCap, setWpCap] = useState({ max: 0, warnAt: 0 })
+  const [wpYawDraft, setWpYawDraft] = useState('')
+  const [wpOffsetDraft, setWpOffsetDraft] = useState('')
+  const [wpDelArmed, setWpDelArmed] = useState('')
+
   // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
 
@@ -595,9 +610,26 @@ export function MapTab() {
     return true
   }, [noteHeightStep, t, toast])
 
+  /** The authored world props (§ A9a). Same discipline as the terrain: on
+   *  mount, on the reload button, after every write — never on a timer. The
+   *  two cap numbers come with the answer, so the badge and the refusal are
+   *  always the SERVER's limits. */
+  const reloadWorldProps = useCallback(async () => {
+    try {
+      const r = await apiGet<WorldPropsResp>('/world/world-props')
+      setWorldProps(r.world_props || [])
+      setWpCap({ max: Number(r.max) || 0, warnAt: Number(r.warn_at) || 0 })
+    } catch (e) {
+      toast(t('Failed to load world props') + ': ' + (e as Error).message, 'error')
+      return false
+    }
+    return true
+  }, [t, toast])
+
   useEffect(() => { void reload() }, [reload])
   useEffect(() => { void reloadTerrain() }, [reloadTerrain])
   useEffect(() => { void reloadHeights() }, [reloadHeights])
+  useEffect(() => { void reloadWorldProps() }, [reloadWorldProps])
 
   /** The catalog. Read on mount and on Reload — never on a timer: it changes
    *  only when someone edits the types in the Terrain tab, and the palette
@@ -625,9 +657,10 @@ export function MapTab() {
    *  appears when nothing did. */
   const reloadAll = useCallback(async () => {
     const ok = await Promise.all([reload(), reloadTerrain(), reloadTypes(),
-      reloadHeights()])
+      reloadHeights(), reloadWorldProps()])
     if (ok.every(Boolean)) toast(t('Map reloaded'), 'success')
-  }, [reload, reloadHeights, reloadTerrain, reloadTypes, t, toast])
+  }, [reload, reloadHeights, reloadTerrain, reloadTypes, reloadWorldProps,
+    t, toast])
 
   /** Why a write has no usable kind. A catalog that never arrived is not the
    *  user picking the wrong thing, and "pick a type first" is unactionable
@@ -679,6 +712,8 @@ export function MapTab() {
   heightAreasRef.current = heightAreas
   const heightToolRef = useRef<HeightTool>(heightTool)
   heightToolRef.current = heightTool
+  const armedPropRef = useRef<PropFull | null>(null)
+  armedPropRef.current = armedProp
   // Is a modal covering the canvas? The handler is bound once, so this cannot
   // be read from the state directly.
   const modalRef = useRef(false)
@@ -690,10 +725,15 @@ export function MapTab() {
       // on the canvas here would silently throw away a half-drawn polygon
       // behind a window that stays open regardless. Not this handler's key.
       if (modalRef.current) return
-      if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (draftRef.current.length) {
+      if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (armedPropRef.current) {
+        // The prop palette arms the same way the location tray does, so
+        // Escape disarms it the same way — before anything else is dropped.
+        setArmedProp(null)
+        setGhostPt(null)
+      } else if (draftRef.current.length) {
         setDraft([])
         setDraftCursor(null)
-      } else { setSelId(''); setSelArea(''); setSelHeight('') }
+      } else { setSelId(''); setSelArea(''); setSelHeight(''); setSelWp('') }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -719,6 +759,7 @@ export function MapTab() {
     if (m !== 'select') setSelId('')
     if (m !== 'edit-area') setSelArea('')
     if (m !== 'heights') setSelHeight('')
+    if (m !== 'props') { setSelWp(''); setArmedProp(null) }
   }, [])
 
   /** Switching the height sub-tool drops both the running draft and the
@@ -739,6 +780,7 @@ export function MapTab() {
   const switchPrimary = useCallback((p: MapPrimary) => {
     if (p === 'location') switchMode('select')
     else if (p === 'heights') switchMode('heights')
+    else if (p === 'props') switchMode('props')
     else switchMode(lastTerrainModeRef.current)
   }, [switchMode])
 
@@ -768,6 +810,11 @@ export function MapTab() {
   // worse than none (with the 10 m grid it can be off by up to 7.07 m).
   const onWorldMove = useCallback((x: number, z: number) => {
     if (ghostRef.current) setGhostPt({ x: snapV(x), z: snapV(z) })
+    // An armed PROP follows the cursor unsnapped: a bench in the wilderness
+    // is placed where the eye wants it, not on the 10 m location grid.
+    else if (armedPropRef.current) {
+      setGhostPt({ x: Math.round(x * 100) / 100, z: Math.round(z * 100) / 100 })
+    }
     // Only a running draft needs the rubber band; without one this must not
     // re-render the tab on every mouse move.
     else if (draftRef.current.length) setDraftCursor({ x, z })
@@ -1179,6 +1226,93 @@ export function MapTab() {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [reload, seedBoundary, snapV, t, toast])
+
+  // ── World-prop writes (§ A9a) ────────────────────────────────────────────
+
+  /** The armed palette card lands here: ONE prop at the clicked point.
+   *
+   *  The point is NOT snapped to the location grid — a landmark rock is aimed
+   *  by eye, and a 10 m raster would put it anywhere but where it was
+   *  clicked. The palette STAYS armed, so a row of fence posts is a row of
+   *  clicks; Escape or the Cancel pill disarms.
+   *
+   *  Yaw and lift start at 0 and the variant starts unset (the placement id
+   *  decides, § A9a) — everything the chip can change afterwards. */
+  const placeWorldProp = useCallback(async (wx: number, wz: number) => {
+    const p = armedPropRef.current
+    if (!p) return
+    try {
+      const r = await apiPost<{ world_prop?: WorldProp }>('/world/world-props', {
+        prop_id: p.id,
+        x: Math.round(wx * 100) / 100,
+        z: Math.round(wz * 100) / 100,
+        yaw_deg: 0, offset_y: 0,
+      })
+      await reloadWorldProps()
+      if (r?.world_prop?.id) setSelWp(r.world_prop.id)
+    } catch (e) {
+      // The 500-cap answers 400 with its own sentence — showing it verbatim
+      // is the only place the number appears twice, and the badge next to it
+      // has been amber since 200.
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setArmedProp(null)
+      setGhostPt(null)
+    }
+  }, [reloadWorldProps, t, toast])
+
+  /** Patch one placement — the ONE write path behind the drag, the yaw chip,
+   *  the lift field and the variant picker.
+   *
+   *  Optimistic locally, then PUT: dragging a prop must not wait for a round
+   *  trip, and the refetch on failure is what puts the truth back. The route
+   *  is a full replace, so the current row is spread under the patch. */
+  const commitWorldProp = useCallback(async (id: string,
+                                             patch: Partial<WorldProp>) => {
+    const cur = worldProps.find((p) => p.id === id)
+    if (!cur) return
+    const next = { ...cur, ...patch }
+    setWorldProps((list) => list.map((p) => (p.id === id ? next : p)))
+    try {
+      await apiPut(`/world/world-props/${encodeURIComponent(id)}`, {
+        prop_id: next.prop_id, x: next.x, z: next.z,
+        yaw_deg: next.yaw_deg, offset_y: next.offset_y,
+        variant: next.variant,
+      })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      await reloadWorldProps()
+    }
+  }, [reloadWorldProps, t, toast, worldProps])
+
+  const removeWorldProp = useCallback(async (id: string) => {
+    try {
+      await apiDelete(`/world/world-props/${encodeURIComponent(id)}`)
+      setSelWp('')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+    await reloadWorldProps()
+  }, [reloadWorldProps, t, toast])
+
+  /** Arming a palette card is a PROP gesture — it takes the canvas into the
+   *  props mode, so the next click cannot land as something else. */
+  const armProp = useCallback((p: PropFull) => {
+    switchMode('props')
+    setArmedProp(p)
+    setGhostPt(null)
+  }, [switchMode])
+
+  const selectedWp = useMemo(
+    () => worldProps.find((p) => p.id === selWp) || null,
+    [selWp, worldProps])
+
+  // The chip's two text drafts follow the selection, never the other way
+  // round (the placement layer's pattern for `yawDraft`).
+  useEffect(() => {
+    setWpYawDraft(selectedWp ? String(normYaw(selectedWp.yaw_deg || 0)) : '')
+    setWpOffsetDraft(selectedWp ? String(selectedWp.offset_y || 0) : '')
+    setWpDelArmed('')
+  }, [selectedWp])
 
   // ── Terrain writes ───────────────────────────────────────────────────────
 
@@ -1830,8 +1964,12 @@ export function MapTab() {
 
   const onBackgroundClick = useCallback((wx: number, wz: number) => {
     if (ghostRef.current) { void placeGhost(wx, wz); return }
+    if (armedPropRef.current) { void placeWorldProp(wx, wz); return }
     const m = modeRef.current
     if (m === 'paint') { addDraftPoint(wx, wz); return }
+    // A prop is a POINT, so there is nothing to hit-test here: the markers
+    // carry their own handlers, and a click on the ground means "nothing".
+    if (m === 'props') { setSelWp(''); return }
     if (m === 'heights') {
       if (heightToolRef.current === 'draw') { addDraftPoint(wx, wz); return }
       // Picking: the LAST area containing the point wins, the same
@@ -1856,7 +1994,7 @@ export function MapTab() {
       return
     }
     setSelId('')
-  }, [addDraftPoint, placeGhost])
+  }, [addDraftPoint, placeGhost, placeWorldProp])
 
   /** Picking an area from the tray list. From the paint mode it also switches
    *  to `edit-area`: that is the mode the chip and the handles belong to, and
@@ -2172,6 +2310,15 @@ export function MapTab() {
             </div>
           </>
         ) : null}
+        {/* The prop library IS the tray of the props subject (§ A9a): pick a
+            card, then click the map. The same palette the floor-plan editor
+            uses — one picker, one arm contract, no second list to keep in
+            step with the library. */}
+        {primary === 'props' ? (
+          <div className="ga-map-tray-section">
+            <PropsPalette onPick={armProp} armedPropId={armedProp?.id || ''} />
+          </div>
+        ) : null}
         {/* What the map DRAWS — the switches that belong to no subject, so
             they stay reachable in every one of them. */}
         <MapDisplayPanel
@@ -2189,6 +2336,11 @@ export function MapTab() {
         {primary === 'location' ? (
           <div className="ga-map-tray-hint">
             {t('Click an entry, then click the map to place it. Escape cancels.')}
+          </div>
+        ) : null}
+        {primary === 'props' ? (
+          <div className="ga-map-tray-hint">
+            {t('Click a prop, then click the map — it stays armed for the next one. Escape cancels. Props are decoration: they block nothing and show only in the 3D client.')}
           </div>
         ) : null}
       </aside>
@@ -2239,6 +2391,9 @@ export function MapTab() {
             maxStepM={maxStepM}
             gridStepM={heightStepM}
             gridStepDefaultM={heightStepDefaultM}
+            propCount={worldProps.length}
+            propMax={wpCap.max}
+            propWarnAt={wpCap.warnAt}
           />
           {/* Scatter preview, Locations and Building roofs are VIEWS — they
               belong to no subject and changed nothing about the world, so they
@@ -2278,6 +2433,17 @@ export function MapTab() {
                   .replace('{n}', String(NO_ANCHOR_WIDTH_M))}
               <button type="button" className="ga-btn ga-btn-sm"
                 onClick={() => { setGhost(null); setGhostPt(null) }}>
+                {t('Cancel')}
+              </button>
+            </span>
+          ) : null}
+          {armedProp ? (
+            <span className={'ga-map-arm'
+              + (wpCap.warnAt > 0 && worldProps.length >= wpCap.warnAt ? ' warn' : '')}>
+              {t('Placing “{name}” — click the map, again for the next one')
+                .replace('{name}', armedProp.name)}
+              <button type="button" className="ga-btn ga-btn-sm"
+                onClick={() => { setArmedProp(null); setGhostPt(null) }}>
                 {t('Cancel')}
               </button>
             </span>
@@ -2363,6 +2529,22 @@ export function MapTab() {
             {groundMode ? (
               <TerrainLayer {...terrainProps} part="paint" />
             ) : null}
+            {/* The world props LAST, so a marker stays clickable over a
+                footprint and over painted ground. Outside their own mode they
+                are inert but visible — a bench is a landmark while a location
+                is being placed next to it (§ A9a). */}
+            <g pointerEvents={mode === 'props' ? undefined : 'none'}>
+              <WorldPropLayer
+                worldProps={worldProps}
+                selectedId={selWp}
+                onSelect={setSelWp}
+                onMove={(id, x, z) => { void commitWorldProp(id, { x, z }) }}
+                // No snap: a landmark is aimed by eye, and the 10 m location
+                // grid would put every prop anywhere but where it was clicked.
+                snapM={0}
+                ghostPt={armedProp ? ghostPt : null}
+              />
+            </g>
           </MapCanvas>
 
           {selectedArea ? (
@@ -2397,6 +2579,118 @@ export function MapTab() {
               onDelete={() => { void deleteHeightArea() }}
               onClose={() => setSelHeight('')}
             />
+          ) : null}
+
+          {/* The world prop chip (§ A9a): point, yaw, lift, variant, delete.
+              Everything a placement HAS is editable here — the prop itself is
+              not, because swapping it is placing a different prop. */}
+          {selectedWp ? (
+            <div className="ga-map-chip">
+              <div className="ga-map-chip-head">
+                <strong>{selectedWp.name || selectedWp.prop_id}</strong>
+                {selectedWp.missing ? (
+                  <span className="ga-map-chip-tag">{t('prop deleted')}</span>
+                ) : null}
+                <button type="button" className="ga-modal-close"
+                  title={t('Clear selection')} onClick={() => setSelWp('')}>×</button>
+              </div>
+              {selectedWp.missing ? (
+                <div className="ga-map-chip-row ga-map-chip-warn">
+                  {t('The prop behind this placement is gone — it renders nothing and can only be removed.')}
+                </div>
+              ) : null}
+              <div className="ga-map-chip-row">
+                <span className="ga-map-chip-pos">
+                  x {fmtPos(selectedWp.x)} · z {fmtPos(selectedWp.z)}
+                </span>
+              </div>
+              <div className="ga-map-chip-row">
+                <span className="ga-map-chip-label">{t('Rotation')}</span>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Turn left {n}°').replace('{n}', String(YAW_FINE))}
+                  onClick={() => { void commitWorldProp(selectedWp.id,
+                    { yaw_deg: normYaw((selectedWp.yaw_deg || 0) - YAW_FINE) }) }}>
+                  ⟲{YAW_FINE}°
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Turn right {n}°').replace('{n}', String(YAW_FINE))}
+                  onClick={() => { void commitWorldProp(selectedWp.id,
+                    { yaw_deg: normYaw((selectedWp.yaw_deg || 0) + YAW_FINE) }) }}>
+                  ⟳{YAW_FINE}°
+                </button>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => { void commitWorldProp(selectedWp.id,
+                    { yaw_deg: normYaw((selectedWp.yaw_deg || 0) + YAW_QUARTER) }) }}>
+                  +{YAW_QUARTER}°
+                </button>
+                <input className="ga-input ga-map-chip-yaw" type="number" step={1}
+                  value={wpYawDraft}
+                  onChange={(e) => setWpYawDraft(e.target.value)}
+                  onBlur={() => {
+                    const v = parseFloat(wpYawDraft)
+                    if (Number.isFinite(v)) {
+                      void commitWorldProp(selectedWp.id, { yaw_deg: normYaw(v) })
+                    } else setWpYawDraft(String(normYaw(selectedWp.yaw_deg || 0)))
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                />
+                <span className="ga-map-chip-label">°</span>
+              </div>
+              <div className="ga-map-chip-row">
+                {/* The lift is a knob for a rock that should sit half buried —
+                    the GROUND under the point is sampled by the renderer, it
+                    is never authored here (§ A9a). */}
+                <span className="ga-map-chip-label">{t('Lift')}</span>
+                <input className="ga-input ga-map-chip-yaw" type="number" step={0.1}
+                  value={wpOffsetDraft}
+                  onChange={(e) => setWpOffsetDraft(e.target.value)}
+                  onBlur={() => {
+                    const v = parseFloat(wpOffsetDraft)
+                    if (Number.isFinite(v)) {
+                      void commitWorldProp(selectedWp.id, { offset_y: v })
+                    } else setWpOffsetDraft(String(selectedWp.offset_y || 0))
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                />
+                <span className="ga-map-chip-label">m</span>
+              </div>
+              {/* Which MESH of a multi-variant prop this one shows. "Auto"
+                  is the formula of § A9a (the placement id decides), a number
+                  pins it. Out-of-range wraps server-side, so a variant the
+                  admin later deletes never hides the prop. A prop with ONE
+                  mesh has nothing to choose from and shows no row. */}
+              {(selectedWp.variant_count || 0) > 1 ? (
+              <div className="ga-map-chip-row">
+                <span className="ga-map-chip-label">{t('Variant')}</span>
+                <select className="ga-input"
+                  title={t('Auto lets the placement id pick a mesh, so a row of the same prop is not the same mesh twice.')}
+                  value={selectedWp.variant == null ? '' : String(selectedWp.variant)}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    void commitWorldProp(selectedWp.id,
+                      { variant: raw === '' ? null : Number(raw) })
+                  }}>
+                  <option value="">{t('Auto')}</option>
+                  {Array.from({ length: selectedWp.variant_count || 1 },
+                    (_, i) => (<option key={i} value={i}>{`#${i}`}</option>))}
+                </select>
+              </div>
+              ) : null}
+              <div className="ga-map-chip-actions">
+                {wpDelArmed === selectedWp.id ? (
+                  <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                    onClick={() => { void removeWorldProp(selectedWp.id) }}>
+                    {t('Really delete')}
+                  </button>
+                ) : (
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    title={t('Remove this placement')}
+                    onClick={() => setWpDelArmed(selectedWp.id)}>
+                    {t('Delete')}
+                  </button>
+                )}
+              </div>
+            </div>
           ) : null}
 
           {selected ? (

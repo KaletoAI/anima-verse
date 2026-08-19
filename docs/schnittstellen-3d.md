@@ -1624,6 +1624,133 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
                                            "undergrowth": 0.6}} ]
   ```
 
+## A9a. Welt-Props — einzeln gesetzte Props auf der Weltebene (E2.2)
+
+Beschlossen 2026-08-19, Programm „Prop-Welt statt Dioramen", Etappe 2 Nr. 2.
+Die gemalte Fläche (§ A9, `meta.scatter`) sagt, wie DICHT ein Boden etwas
+wachsen lässt — eine Statistik. Eine Statistik kann nicht sagen „DIESER
+Findling, HIER, so gedreht". Genau das ist ein **Welt-Prop**: ein Prop aus
+der Bibliothek, von Hand an EINEN Punkt in Weltmetern gesetzt, außerhalb
+jeder Location.
+
+**Speicher:** eigene Tabelle `world_props` in `world.db`
+(`app/models/world_props.py`), CRUD unter `/world/world-props`
+(GET/POST/PUT/DELETE, die Formgleiche der Terrain-Flächen nebenan).
+Autoriert werden genau sechs Größen: `prop_id`, `x`, `z` (Weltmeter),
+`yaw_deg`, `offset_y` und ein optionaler `variant`-Index.
+
+**Deko, sonst nichts (v1, Beschluss E2.1).** Ein Welt-Prop blockiert
+NICHTS: er steht in keinem Nav-Grid, er schiebt keine Figur beiseite, er
+gehört zu keiner Location. Was umlaufen werden muss, ist ein
+Location-Fußabdruck oder eine gemalte Fläche — kein Prop.
+
+**Nie gefoggt.** Der Block wird ungefiltert ausgeliefert, und das ist die
+Entscheidung, nicht ein Versehen: reine Deko verrät keine Ortskenntnis,
+und ein Schleier, der Möbel wegnimmt, ließe die Wildnis beim Entdecken ihr
+Mobiliar wechseln.
+
+**Weiche Obergrenze 500 je Welt.** Ein CREATE darüber wird mit 400
+abgelehnt (`at most 500 world props per world`); ein UPDATE nie — eine
+volle Welt muss ihre Props noch verschieben dürfen. Ab **200** warnt der
+Karten-Editor im Zähler-Chip. Die Grenze ist ein Zeichenbudget, kein
+Speicherproblem: heute ist jede Platzierung ein eigener Draw-Call in beiden
+Renderern (Instancing des Rests ist vertagt).
+
+### Payload — Wurzelfeld `world_props` in `GET /play/worldmap` (§ A1.3)
+
+Zwei neue Wurzelfelder, immer vorhanden:
+
+| Wurzelfeld | Typ | Bedeutung |
+|---|---|---|
+| `world_props` | `[{…}, …]` | Die gesetzten Props, in Autorenreihenfolge. **Leere Liste = keine.** Nie gefoggt |
+| `world_props_sig` | `str` (10) | Signatur über den FERTIGEN Block — dieselbe Aufgabe wie `terrain_sig`: bewegt sie sich, baut der Client seine Meshes neu, sonst nie. Gehasht über die ausgelieferten Zeilen, nicht über die Tabelle, denn die Zeilen tragen die abgeleitete Hälfte mit (ein im Hintergrund erzeugtes `low`-Mesh ändert keine DB-Zeile und muss trotzdem ankommen) |
+
+Eine Zeile:
+
+```
+{ id: "wp_1a2b3c4d",           # Platzierungs-ID, stabil; SEED der Varianten-Formel
+  prop_id: "bench-ab12cd",     # Bibliotheks-Prop
+  name: "Park bench",          # Anzeigetext aus der Bibliothek (Editor/Debug)
+  x: 12.5, z: -40.0,           # WELTMETER
+  yaw_deg: 45.0,               # Grad, Drehsinn dieses Vertrags (§ A1.1/§ B2)
+  offset_y: 0.0,               # Anhebung ÜBER dem Boden, Meter (±50)
+  max_m: 1.8,                  # größte ECHTE Kante des Objekts, Meter
+  measure: "xyz",              # das EINE Maßstabsgesetz von place() (§ B2)
+  fix_euler: {x:0, y:90, z:0}, # Orientierungs-Fix des Props, Grad
+  variants: {full: "…", low: "…"},   # Stufen-Karte der PRIMÄREN Variante
+  model_variants: [ {…}, {…} ],      # NUR wenn das Prop mehr als eine hat
+  variant: 1 }                       # dito — der aufgelöste Index
+```
+
+- **Maßstab ist `max_m` + `measure: "xyz"`, nicht `height_m`.** Ein
+  Welt-Prop läuft durch dieselbe `place()`-Routine wie ein Szenen-Prop
+  (§ B2), also gilt dasselbe Gesetz: größte reale Kante geteilt durch
+  größte gemessene Kante, EIN Faktor auf alle drei Achsen. Eine Bank vor
+  dem Haus ist damit so groß wie dieselbe Bank im Haus. Die Autorengröße
+  der GLB gilt nie — die Normalisierung hat den Maßstab zerstört. (Die
+  Streu nebenan skaliert auf eine ZIELHÖHE, weil dort niemand ein einzelnes
+  Objekt meint, sondern „kniehoch" oder „baumhoch".)
+- **`max_m` und `fix_euler` sind ABGELEITET, nie gespeichert** — genau wie
+  die Zusatzfelder der Streu-Einträge (§ A9): eine im Props-Tab korrigierte
+  Größe oder ein nachgezogener Fix wirkt beim nächsten Poll.
+- **Der Boden kommt vom Client.** Der Server schickt `offset_y`, der
+  Renderer setzt `bottom_y = Bodenhöhe(x, z) + offset_y` mit **seinem**
+  Höhen-Sampler (`heightAt`, § A16.3) — derselbe, mit dem die Streu steht.
+  Nur so bleibt ein Prop auf dem Relief kleben, das der Client wirklich
+  zeichnet, statt auf einem, das der Server einmal gerastert hat.
+- **Zeilen ohne Mesh fallen weg.** Ein Prop, das gelöscht wurde oder keine
+  aktive Variante mit Mesh hat, erzeugt keine Payload-Zeile — eine Zeile
+  ohne Modell wäre ein Loch in jeder Renderer-Schleife. Sichtbar wird so
+  eine Platzierung im Karten-Editor (`GET /world/world-props` liefert
+  `missing: true`); und das Löschen eines Props räumt seine Platzierungen
+  gleich mit weg (`DELETE /world/props/{id}` → `world_props_removed`).
+
+### Welche Variante ein Welt-Prop zeigt
+
+Dieselbe Arbeitsteilung wie überall (§ B2-Nachtrag): **der Server wählt,
+der Renderer führt aus.** Zwei Fälle, eine Formel:
+
+```
+variant = autorierter Index                              (wenn gesetzt)
+        = int(md5(placement_id).hexdigest()[:8], 16) mod n   (sonst)
+```
+
+`n` = Anzahl der AKTIVEN Varianten MIT Mesh, also `len(model_variants)`.
+Implementierung: `app/models/world_props.variant_index`. Der Index wird
+**modulo** gerechnet, nie geklemmt — die Variantenzahl bewegt sich, wenn
+ein Admin ein Mesh ergänzt oder löscht, und eine Platzierung darf davon
+nicht verschwinden.
+
+Warum die Platzierungs-ID der Seed ist: sie ist die einzige stabile Zahl,
+die eine EINZELNE Platzierung hat (eine Streu-Kopie hat Flächen-Seed plus
+Instanz-Nummer, eine handgesetzte hat weder noch). Gezogen wird aus dem
+MD5 der ID und nicht aus Pythons `hash()`, das pro Prozess gesalzen ist —
+sonst zeigte derselbe Findling nach jedem Neustart ein anderes Mesh.
+
+**Handrechnung zur Nachprüfung (§ B5a), 3 aktive Varianten:**
+
+| `placement_id` | `md5[:8]` | als Zahl | `mod 3` |
+|---|---|---|---|
+| `wp_00000001` | `9b65e854` | 2607147092 | **2** |
+| `wp_1a2b3c4d` | `e3f1ba37` | 3824269879 | **1** |
+| `wp_deadbeef` | `f33a24d6` | 4080674006 | **2** |
+| `wp_c0ffee01` | `ee5538df` | 3998562527 | **2** |
+
+Bei 2 Varianten: 0, 1, 0, 1. Bei 4: 0, 3, 2, 3.
+
+**Auflösung im Renderer:** unverändert `pickModelVariant(spec, tier)` aus
+`@anima/scene-render` — die Zeile trägt genau die Felder, die diese
+Routine liest.
+
+### Wo Welt-Props NICHT auftauchen
+
+- **Spieler-Karte und Minimap: gar nicht.** Deko ist v1 rein 3D. Eine
+  2D-Karte, die jede Bank einzeichnet, ist keine Karte mehr; ob und wie
+  ein Landmarken-Prop dort ein Symbol bekommt, ist eine eigene
+  Entscheidung.
+- **Nav-Grid, Perzeption, Prompts: gar nicht.** Ein Welt-Prop ist für die
+  Simulation nicht vorhanden.
+
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 
 FOV 45°, near 0,5, far 800; Orbit um Bodenpunkt, dist 2,5..150,
@@ -2037,6 +2164,66 @@ der Autor legt ihn nie an und kann ihn nicht löschen, nur benennen.
   steht auf der Grundfläche, nicht „nirgends". Die Raum-Heuristik hat damit
   ein gültiges Ziel statt eines Lochs (client3d, `groundRoomId` aus dem
   Payload) — vorher behielt sie den Raum der VORIGEN Location.
+
+### A13a. Die Grundfläche trägt einen REDUZIERTEN Grundriss — neu 2026-08-20
+
+Programm „Prop-Welt statt Dioramen", Etappe 2 Nr. 1. **Die Grundfläche bleibt
+ohne Geometrie — aber nicht mehr ohne Inhalt.** Der Hof einer Location war
+prop-frei, weil „kein Layout" bisher auch „keine Platzierungen" hieß; die
+beiden Sätze sind ab hier getrennt. Der Raum `__ground__` DARF ein Layout
+tragen, das AUSSCHLIESSLICH aus `props[]` und `markers[]` besteht (samt der
+Streufelder einer Platzierung). Der Satz aus § A13 „die Grundfläche trägt kein
+`layout`" ist genau in diesem Umfang überschrieben; alles andere dort bleibt
+wörtlich gültig.
+
+- **Der Rahmen ist die Location, nicht der Raum.** Die Grundfläche hat kein
+  Rechteck und damit keine Minimal-Ecke, an der etwas hängen könnte:
+  `props[].at` und `markers[].at` sind **lokale Meter der Location** —
+  derselbe Rahmen, in dem `map3d.boundary` liegt (§ A1.1, Präambel v6 Nr. 2).
+  Kein `x/y/w/d`, kein `outline`/`outline_curves`, keine `openings`, keine
+  `surfaces`, kein `level`, kein `model_at`/`rotation`/`floor_offset_y` und
+  keine Raum-Flags (`always_visible`, `no_walls`, `relief_flat`,
+  `clip_model`).
+- **Der Sanitizer wirft den Rest weg, nicht das Ganze**
+  (`world_ops._sanitize_ground_layout`): ein für die Grundfläche gesendetes
+  Geometriefeld wird verworfen und **protokolliert** (eine Zeile, die die
+  Felder nennt) — die Platzierungen bleiben stehen. Sonst gelten dieselben
+  Regeln wie für jeden Raum: Zentimeter-Rundung, ±500-m-Klemmung, ≤ 100
+  manuelle Platzierungen, Σ `scatter_count` ≤ 120, ≤ 50 Marker. Ein Layout
+  ohne Props UND ohne Marker ist kein Layout und wird entfernt.
+- **Im Rezept bleibt sie geometrielos.** Die Grundfläche liefert weiterhin
+  KEINE Platte, KEINE Wand, KEINEN `rooms[]`-Block (§ B1), keine Türschwelle
+  und keinen Beitrag zu `outdoor_rooms`; ihr Rezept trägt `is_ground: true`
+  und eine leere `outline`. Was sie liefert, sind Einträge in `models[]`
+  (role `prop`) und in `markers[]` — wie bei jedem Raum, nur mit `at` =
+  lokaler Meter **verbatim** (Ankerrahmen = Location, keine Minimal-Ecke
+  addiert) und ohne Plattenaufschlag: `bottom_y` rechnet wie bei einem
+  Außenraum ohne `ROOM_PLATE_TOP`.
+- **Sie steht auf dem Gelände.** Wo eine Location ein Relief trägt, IST die
+  Grundfläche das Gelände: sie zählt zu den `relief_rooms`, ihre Props und
+  Marker werden am eigenen Anker angehoben (derselbe `lift`-Sampler wie bei
+  einem Außenraum), und sie flacht das Höhenfeld nirgends ab — sie steuert
+  keinen flachen Hull bei.
+- **Streuung hält die Boundary ein.** Keep-in ist das Boundary-Polygon der
+  Location (konkav zugelassen; ohne gezeichnete Boundary keine Fläche und
+  damit keine Streuung), Keep-out sind die Hüllen der Räume auf Ebene 0, die
+  Eintrittszonen der `boundary_openings` und die eigenen Marker — dieselbe
+  Mechanik wie im Raum, nur ein anderer Rahmen.
+- **Spielmechanik unverändert.** Anstand, Regeln, Hörweite, Ankommen und
+  Benennung der Grundfläche berührt das alles nicht: sie bleibt der Raum aus
+  § A13.
+- **Editor:** der Grundriss-Editor bietet die Grundfläche als eigenes Planziel
+  an („Yard"); sichtbar ist die Boundary als ihre Fläche, bedienbar sind
+  Prop-, Marker- und Streuwerkzeuge — Raumgeometrie (verschieben, skalieren,
+  drehen, Umriss, Öffnungen, Oberflächen, Raummodell) ist dort abgeschaltet.
+- **Möblieren:** ein Furnish-Auftrag darf die Grundfläche als Ziel haben; der
+  Solver rechnet dort in lokalen Metern der Location über dem
+  Boundary-Polygon, mit den Eintrittszonen der Boundary-Öffnungen als
+  Sperrzonen. **Adressiert wird so ein Auftrag über eine zusammengesetzte
+  Id** — `__ground__@<location_id>` —, denn die reservierte Raum-Id ist die
+  einzige, die nicht welteindeutig ist; aus demselben Grund weist
+  `GET /play/rooms/__ground__/recipe` mit 400 ab: den Hof liefert
+  `GET /play/locations/{id}/scene`.
 
 ---
 
@@ -3212,7 +3399,9 @@ Satz als Ganzes übersetzt wird). Heute gibt es drei:
   fehlt oder ist entartet). Ohne Recipe gibt es auch keine Hülle, also bleibt
   `shell_levels` leer und `no_building_entrance` schweigt: die gezeichnete
   Kontur stünde still über gar nichts. `room_count` nennt die Zahl der Räume;
-  der GROUND-Raum zählt nie mit, er trägt vertraglich kein Layout.
+  der GROUND-Raum zählt nie mit — weder als Raum noch mit seinem Rezept: ein
+  möblierter Hof (§ A13a) ist kein betretbarer Raum und darf den Befund nicht
+  verstummen lassen.
 - **`openings_without_walls`** (Diagnose 2026-08-15) — mindestens ein Raum hat
   Öffnungen im Layout, bekommt aber wegen `no_walls` (bzw. Outdoor
   `always_visible`) gar keine Wände: Tür, Fenster, Glas und Schwelle

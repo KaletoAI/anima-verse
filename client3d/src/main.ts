@@ -53,6 +53,7 @@ import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPe
 import type { ModelTier, ScenePayload } from './api';
 import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
+import { createWorldProps } from './scene/worldProps';
 import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
@@ -630,9 +631,29 @@ async function startApp(username: string, role: string) {
   // menu change. Every later change comes through `applyScatterPrefs` below.
   terrainGround.setScatterLod(scatterLodCfgOf(
     loadScatterPrefs(localStorage.getItem(SCATTER_PREFS_KEY))));
+  // --- The AUTHORED props of the world plane (§ A9a) -----------------------
+  //
+  // Single objects outside any location — a landmark rock, a signpost, a bench
+  // in the wilderness. They ride IN the worldmap poll (a hand-set list of at
+  // most 500 rows is not a raster), they are never fogged, and they block
+  // nothing. The ground under each one is sampled with the SAME height sampler
+  // the scatter stands on, which is why the layer is handed `heightAt` rather
+  // than a `y` from the payload.
+  const worldPropsLayer = createWorldProps(
+    (x, z) => terrainGround.heightAt(x, z));
+  engine.scene.add(worldPropsLayer.group);
   gameActions.applyScatterPrefs = (p) => {
-    terrainGround.setScatterLod(scatterLodCfgOf(p));
+    const cfg = scatterLodCfgOf(p);
+    terrainGround.setScatterLod(cfg);
+    // The player's view-distance setting governs both layers; the world props
+    // scale it up by their own factor (see `scene/worldProps.WORLD_PROP_LOD_SCALE`).
+    worldPropsLayer.setLod(cfg);
   };
+  worldPropsLayer.setLod(scatterLodCfgOf(
+    loadScatterPrefs(localStorage.getItem(SCATTER_PREFS_KEY))));
+  /** The relief revision the world props were last draped on. -1 = never, so
+   *  the first LOD tick after a height field lands re-drapes them. */
+  let worldPropsHeightRev = -1;
 
   // --- The far backdrop (§ A17) ---------------------------------------------
   //
@@ -683,6 +704,9 @@ async function startApp(username: string, role: string) {
       .catch((e) => { console.warn('[ground] first sync failed', e); return false; }),
     sleep(GROUND_BOOT_WAIT_MS),
   ]);
+  // The authored world props (§ A9a) ride in the same payload; they need the
+  // ground only for their height, so they are taken straight after it.
+  worldPropsLayer.sync(firstMap.world_props, firstMap.world_props_sig ?? '');
   /** Where the map camera looks at boot — see the frame note above. */
   const center = worldCentre(firstMap.world_bounds,
                              (x, z) => terrainGround.heightAt(x, z));
@@ -801,6 +825,17 @@ async function startApp(username: string, role: string) {
     // budget are TESTED in — a threshold that decides a swap belongs next to
     // the function that swaps on it. This tick stays the driver.
     terrainGround.tickScatterLod(engine.camera.position);
+    // …and on the same beat the AUTHORED world props (§ A9a): the same three
+    // distance classes with the same hysteresis, only scaled up — a landmark
+    // that vanishes at the tuft's cull line is not a landmark. The relief is
+    // re-asked here too, because a height field that lands after a prop was
+    // placed would otherwise leave it floating until its next edit.
+    worldPropsLayer.tick(engine.camera.position);
+    const wpHeightRev = terrainGround.heightRevision();
+    if (wpHeightRev !== worldPropsHeightRev) {
+      worldPropsHeightRev = wpHeightRev;
+      worldPropsLayer.redrape();
+    }
     // …and fifth, on the same beat: WHERE the fine height tiles are needed
     // (§ A16.3). Embodied that is the ground the avatar stands on, in the
     // overview the point the camera looks at — the same pair `tickSoundtrack`
@@ -1647,6 +1682,9 @@ async function startApp(username: string, role: string) {
     // of its own — `terrain_sig` does not move when a location does.
     void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
                             map.height_sig ?? '');
+    // The world props (§ A9a) ride IN this payload rather than behind their
+    // signature — `world_props_sig` only decides whether anything is rebuilt.
+    worldPropsLayer.sync(map.world_props, map.world_props_sig ?? '');
     takeWalkLimits(map);
     takeBackdrop(map);
     rebuildMovedTiles(map);
@@ -2643,6 +2681,7 @@ async function startApp(username: string, role: string) {
       // areas stood in the frame of the view one had just left.
       void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
                               map.height_sig ?? '');
+      worldPropsLayer.sync(map.world_props, map.world_props_sig ?? '');
       takeWalkLimits(map);
       takeBackdrop(map);
       dropVanished(map);

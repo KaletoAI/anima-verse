@@ -422,6 +422,94 @@ def delete_terrain_area_route(area_id: str) -> Dict[str, Any]:
     return {"status": "success"}
 
 
+# === World props (single authored props on the world plane) ===
+#
+# The CRUD shape of the terrain areas next door, and deliberately a SECOND set
+# of routes rather than a flag on those: a painted area says how DENSELY a
+# ground grows things, a world prop says "this prop, at this point, turned this
+# way". Deco only — nothing here blocks a step (§ A9a).
+
+@router.get("/world-props")
+def get_world_props_route() -> Dict[str, Any]:
+    """Every placement for the map editor, plus the two cap numbers.
+
+    Each row carries the library ``name`` of its prop and ``missing``: a
+    placement whose prop was deleted renders nothing and cannot be repaired —
+    the editor is where it becomes visible instead of silently occupying a
+    slot of the cap."""
+    from app.core import props as prop_store
+    from app.models import world_props
+    facts: Dict[str, Dict[str, Any]] = {}
+    rows = world_props.list_world_props()
+    for row in rows:
+        pid = row["prop_id"]
+        if pid not in facts:
+            meta = prop_store.read_sidecar(pid)
+            facts[pid] = {
+                "name": str(meta.get("name") or "") if meta else "",
+                # How many meshes there are to CHOOSE from — the editor offers
+                # exactly that many indices instead of holding a ceiling of
+                # its own (`prop_variant_max` is configurable).
+                "variants": (len(prop_store.active_variant_tiers(pid))
+                             if meta else 0),
+            }
+        row["name"] = facts[pid]["name"]
+        row["variant_count"] = facts[pid]["variants"]
+        row["missing"] = not facts[pid]["name"]
+    return {"world_props": rows, "count": len(rows),
+            "max": world_props.MAX_WORLD_PROPS,
+            "warn_at": world_props.WARN_WORLD_PROPS,
+            "sig": world_props.world_props_sig()}
+
+
+@router.post("/world-props")
+async def post_world_prop_route(request: Request) -> Dict[str, Any]:
+    """Place a new prop; the id is assigned by the server. 400 at the cap."""
+    from app.models import world_props
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    data.pop("id", None)
+    try:
+        return {"status": "success",
+                "world_prop": world_props.save_world_prop(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/world-props/{placement_id}")
+async def put_world_prop_route(placement_id: str,
+                               request: Request) -> Dict[str, Any]:
+    """Replace one EXISTING placement (prop, point, yaw, lift, variant); 404
+    otherwise.
+
+    The store is an upsert, so without this check a PUT on an unknown id would
+    silently create the placement — and a client repeating a stale PUT would
+    bring a just-deleted one back. Creating is POST's job (which assigns the
+    id and is the only path that meets the cap)."""
+    from app.models import world_props
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    if not world_props.world_prop_exists(placement_id):
+        raise HTTPException(status_code=404, detail="world prop not found")
+    data["id"] = placement_id
+    try:
+        return {"status": "success",
+                "world_prop": world_props.save_world_prop(data)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/world-props/{placement_id}")
+def delete_world_prop_route(placement_id: str) -> Dict[str, Any]:
+    """Remove one placement."""
+    from app.models import world_props
+    if not world_props.delete_world_prop(placement_id):
+        raise HTTPException(status_code=404, detail="world prop not found")
+    return {"status": "success"}
+
+
 # === Height areas (world relief, E8) ===
 #
 # The same CRUD shape as the terrain areas next door — and deliberately a
@@ -1556,17 +1644,27 @@ def prop_model_file(prop_id: str, filename: str, request: Request):
 
 @router.delete("/props/{prop_id}")
 def prop_delete(prop_id: str) -> Dict[str, Any]:
-    """Delete a prop (model + source + sidecar)."""
+    """Delete a prop (model + source + sidecar) and every WORLD PLACEMENT of
+    it (§ A9a).
+
+    The placements go with it because they can never be repaired: a placement
+    without a prop renders nothing, and leaving it would only keep a slot of
+    the 500-cap busy for a mesh that no longer exists."""
     from app.core.props import delete_prop
+    from app.models.world_props import delete_world_props_of
     if not delete_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "deleted"}
+    return {"status": "deleted",
+            "world_props_removed": delete_world_props_of(prop_id)}
 
 
 # ── Room furnishing job ("✨ Furnish", plan-room-furnish.md) ──
 # Thin adapters over app/core/room_furnish.py — the whole workflow is ONE
 # persisted job per room, so every route either reads its status or pushes it
 # through a transition. Job errors carry their own HTTP status.
+# ``room_id`` is a plain room id — or, for a location's YARD (§ A13a), the
+# composite ``__ground__@<location_id>``: the reserved ground id is the only
+# one that is not unique across locations.
 
 
 def _furnish_call(fn, *args) -> Dict[str, Any]:
@@ -1605,7 +1703,8 @@ async def furnish_start(room_id: str, request: Request,
     """Open a job and run stage 1 (furnish_select + furnish_new) in the
     background — body (optional): {exclude: {prop_ids, categories, keywords}}
     pre-filters what the LLM gets offered as available. 409 when the room has
-    no layout, the location no scale anchor or a job is already open."""
+    no layout (the yard: the location no drawn boundary) or a job is already
+    open."""
     body = await _furnish_body(request)
     from app.core.room_furnish import start
     return _furnish_call(start, room_id, body.get("exclude"))

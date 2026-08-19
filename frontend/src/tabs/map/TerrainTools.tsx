@@ -42,10 +42,10 @@ import type {
  * halves of the Terrain subject, and `heights` splits along `HeightTool`
  * instead. Nothing about a click changed when the buttons were regrouped.
  */
-export type TerrainMode = 'select' | 'paint' | 'edit-area' | 'heights'
+export type TerrainMode = 'select' | 'paint' | 'edit-area' | 'heights' | 'props'
 
 /** WHAT the toolbar is editing — the primary switch. */
-export type MapPrimary = 'location' | 'terrain' | 'heights'
+export type MapPrimary = 'location' | 'terrain' | 'heights' | 'props'
 
 /** WHETHER a click draws a new shape or picks an existing one. The dependent
  *  switch of Terrain and Heights, worded identically in both. */
@@ -55,6 +55,7 @@ export type MapSub = 'new' | 'select'
  *  layer order all ask this question, so it is answered in one place. */
 export function primaryOf(mode: TerrainMode): MapPrimary {
   if (mode === 'heights') return 'heights'
+  if (mode === 'props') return 'props'
   if (mode === 'select') return 'location'
   return 'terrain'
 }
@@ -512,6 +513,12 @@ export interface TerrainToolbarProps {
    *  is coarser than the finest one — see `heightMath.reliefStepNotice`. */
   gridStepM: number
   gridStepDefaultM: number
+  /** World props (§ A9a): how many are placed, the server's hard ceiling and
+   *  the count from which the badge warns. All three from the server — the
+   *  editor never invents a limit of its own. */
+  propCount: number
+  propMax: number
+  propWarnAt: number
   /** The catalog fetch FAILED — an empty palette then means "not loaded",
    *  not "nothing defined", and the way out is Reload, not another click. */
   typesError?: boolean
@@ -525,6 +532,7 @@ export function TerrainToolbar({
   typesError,
   heightM, onHeightM, falloffM, onFalloffM, heightCount, maxSlopeDeg,
   maxStepM, gridStepM, gridStepDefaultM,
+  propCount, propMax, propWarnAt,
 }: TerrainToolbarProps) {
   const { t } = useI18n()
   const isLine = shape === 'line'
@@ -600,11 +608,16 @@ export function TerrainToolbar({
           t('Paint the ground: draw new areas, or select one and reshape it'))}
         {btn('heights', '⛰', t('Heights'),
           t('Shape the ground: areas that stand higher or lower than the flat world'))}
+        {/* The fourth subject (§ A9a): SINGLE props outside any location. The
+            painted ground next door says how densely something grows — only
+            this one can say "that rock, there". */}
+        {btn('props', '🪵', t('Props'),
+          t('Place single props on the world plane: a landmark rock, a signpost, a bench'))}
       </span>
       {/* …and WHETHER a click draws or picks. The same two words under both
           subjects: it is the same question, and two vocabularies for it were
           the reason the heights sub-tools read as something else entirely. */}
-      {primary === 'location' ? null : (
+      {primary === 'location' || primary === 'props' ? null : (
         <span className="ga-terrain-modes">
           {/* Not the pentagon of the shape buttons next to it: "New" is the
               gesture, "Area/Line" is HOW it draws, and one icon for two
@@ -617,11 +630,26 @@ export function TerrainToolbar({
             : t('Click an area to select it, then drag its points'))}
         </span>
       )}
-      <span className="ga-map-toolbar-info">
-        {mode === 'heights'
-          ? t('{n} height areas').replace('{n}', String(heightCount))
-          : t('{n} areas').replace('{n}', String(areaCount))}
-      </span>
+      {mode === 'props' ? (
+        // The cap badge (§ A9a). Both numbers come from the server, so the
+        // editor holds no ceiling of its own: it refuses nothing, it only
+        // says how close the world is to the one the server will refuse at.
+        <span className={'ga-map-toolbar-info'
+          + (propWarnAt > 0 && propCount >= propWarnAt ? ' ga-map-chip-warn' : '')}
+          title={propWarnAt > 0 && propCount >= propWarnAt
+            ? t('Every world prop is its own draw call — from here on the map gets heavier with each one.')
+            : undefined}
+        >
+          {t('{n} of {max} props').replace('{n}', String(propCount))
+            .replace('{max}', String(propMax))}
+        </span>
+      ) : (
+        <span className="ga-map-toolbar-info">
+          {mode === 'heights'
+            ? t('{n} height areas').replace('{n}', String(heightCount))
+            : t('{n} areas').replace('{n}', String(areaCount))}
+        </span>
+      )}
 
       {mode === 'paint' ? (
         <>

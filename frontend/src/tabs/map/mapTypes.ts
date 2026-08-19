@@ -373,6 +373,42 @@ export interface HeightAreaWriteResp {
   step_m?: number
 }
 
+/** ONE authored prop on the world plane (§ A9a) as the EDITOR reads it —
+ *  `GET /world/world-props`, not the worldmap block.
+ *
+ *  `x`/`z`/`offset_y` are world metres, `yaw_deg` the § A1.1 rotation written
+ *  through unchanged. `variant` is `null` for "the placement id decides"
+ *  (`world_props.variant_index`) and a number for "this mesh, always".
+ *  `missing` marks a placement whose prop was deleted: it renders nothing and
+ *  can only be removed. */
+export interface WorldProp {
+  id: string
+  prop_id: string
+  x: number
+  z: number
+  yaw_deg: number
+  offset_y: number
+  variant: number | null
+  /** Library display name; '' together with `missing` when the prop is gone. */
+  name?: string
+  /** How many ACTIVE variants WITH a mesh the prop has — the editor offers
+   *  exactly that many indices instead of holding a ceiling of its own
+   *  (`image_generation.prop_variant_max` is configurable). */
+  variant_count?: number
+  missing?: boolean
+}
+
+/** `GET /world/world-props` — the placements plus the two cap numbers, so the
+ *  editor holds no ceiling of its own (§ A9a: refuse at `max`, warn from
+ *  `warn_at`). */
+export interface WorldPropsResp {
+  world_props: WorldProp[]
+  count: number
+  max: number
+  warn_at: number
+  sig: string
+}
+
 /** `GET /world/terrain-types` — the admin view: the catalog plus where each
  *  entry comes from. */
 export interface TerrainTypesResp {

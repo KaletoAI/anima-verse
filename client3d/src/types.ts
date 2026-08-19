@@ -338,6 +338,53 @@ export interface WorldMap {
    *  horizon, pure scenery. MISSING MEANS OFF, and that is also what an older
    *  server sends: there is no default ring. */
   backdrop?: BackdropSpec;
+  /** The AUTHORED props of the world plane (§ A9a) — single objects outside
+   *  any location, capped at 500 per world. NEVER FOGGED: pure decoration
+   *  belongs to no place and leaks no knowledge. Missing (an older server) is
+   *  the same state as an empty list. */
+  world_props?: WorldPropSpec[];
+  /** Signature over the FINISHED `world_props` block — the same trigger shape
+   *  as `terrain_sig`: when it moves the props are rebuilt, and never
+   *  otherwise. */
+  world_props_sig?: string;
+}
+
+/**
+ * ONE authored prop on the world plane (§ A9a).
+ *
+ * A placement spec, not a library record: everything about the PROP
+ * (`max_m`, `fix_euler`, the tier maps) is derived by the server on every
+ * poll, so a size corrected in the Props tab arrives without a rewrite.
+ *
+ * `bottom_y` is deliberately NOT in here — the client samples the ground under
+ * `(x, z)` with its own height sampler and adds `offset_y`, so a prop sticks
+ * to the relief that is really drawn.
+ */
+export interface WorldPropSpec {
+  /** Placement id — stable, and the SEED of the variant formula (§ A9a). */
+  id: string;
+  prop_id: string;
+  /** Library display name (debug/labels); the renderer draws no text from it. */
+  name?: string;
+  /** World metres. */
+  x: number;
+  z: number;
+  /** Degrees, this contract's turning sense (§ A1.1). */
+  yaw_deg: number;
+  /** Metres ABOVE the sampled ground — a knob for a half-buried rock. */
+  offset_y: number;
+  /** Largest REAL edge of the object in metres; scaled with `measure: 'xyz'`,
+   *  the one scale law of `place()` (§ B2). */
+  max_m: number;
+  /** Always `'xyz'` — stated so the row is a complete placement spec. */
+  measure?: string;
+  fix_euler: { x: number; y: number; z: number };
+  /** Tier map of the PRIMARY variant (`variants === model_variants[0]`). */
+  variants: Record<string, string>;
+  /** Only present when the prop really HAS more than one active variant. */
+  model_variants?: Record<string, string>[];
+  /** Resolved index into `model_variants` — the SERVER chooses it (§ A9a). */
+  variant?: number;
 }
 
 /**
