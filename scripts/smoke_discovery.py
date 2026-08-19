@@ -14,10 +14,12 @@ everything whose footprint lies within ``game.discovery_range_m`` metres of
 where a character stands is discovered, deterministically, by the travel
 ticker and by the avatar's own position report.
 
-THE GEOMETRY, hand-derived (``footprint_distance``). A footprint is the square
-of edge ``map3d.plan_width_m`` around (``pos_x``, ``pos_z``), turned by
-``yaw_deg`` (§ A1.1). The distance is measured to the SQUARE, not to its
-centre — 0 anywhere inside it, edge inclusive like ``point_in_footprint``:
+THE GEOMETRY, hand-derived (``boundary_distance_m``). Since contract v6
+("Gebiete") a location's footprint is its DRAWN OUTLINE ``map3d.boundary``;
+a place that still carries only the ``map3d.plan_width_m`` dial is that dial's
+square, i.e. its four corners around (``pos_x``, ``pos_z``) turned by
+``yaw_deg`` (§ A1.1). The distance is measured to the OUTLINE, not to the
+centre — 0 anywhere inside it, and 0 ON the rim from either side:
 
     ALPHA at (50, 50), edge 10, yaw 0  →  x, z ∈ [45, 55]
       (50, 50) → 0        the centre, inside
@@ -37,9 +39,17 @@ centre — 0 anywhere inside it, edge inclusive like ``point_in_footprint``:
                       plain corner distance 10 − 7.0711 gives.
       (200, 60)      → 2.9289 by the square's own symmetry.
 
-    A footprint with no size claims no point (``placed_footprint`` refuses it,
-    ``point_in_footprint`` says False): its distance is +inf, so no range ever
-    reaches it.
+    A location with neither a drawn outline nor a positive width dial has no
+    area at all: its distance is +inf, so no range ever reaches it.
+
+    THE RIM IS HALF-OPEN for CONTAINMENT, never for DISTANCE (a property of
+    ``world_geometry.point_in_polygon``, which discovery does not care about
+    but the table below has to state honestly): a point exactly on the max-x
+    or max-z side of the square measures distance 0 while
+    ``boundary_contains`` already says False, whereas the min-x / min-z sides
+    count as inside. Discovery reads the DISTANCE only, so both rims are
+    "in range" at range 0 — the two sides of the square agree for this
+    module.
 
 THE RANGE. ``game.discovery_range_m``, default 50 m, clamped to [0, 1000].
 Zero is MEANT here (unlike the hearing radius, whose 0 is an emptied field):
@@ -62,8 +72,8 @@ idempotent, ``known_locations`` stays strict — a missing list is NOT
 "knows everything").
 
 Cases:
-  [1] ``footprint_distance`` — the hand table above, incl. rotation, and
-      "distance 0 ⟺ inside" against ``point_in_footprint``.
+  [1] ``boundary_distance_m`` — the hand table above, incl. rotation, and
+      the rim table against ``boundary_contains``.
   [2] ``get_discovery_range_m`` (schema field, default, garbage table) and
       ``discover_in_range`` at the boundary: the walker at (40, 50) is 5 m
       from ALPHA → range 4 does not reach it, range 5 does (inclusive),
@@ -119,7 +129,7 @@ from app.core.discovery import (  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
-    footprint_distance, point_in_footprint)
+    boundary_contains, boundary_distance_m)
 from app.models import terrain  # noqa: E402
 from app.models.account import set_active_character  # noqa: E402
 from app.models.inventory import (  # noqa: E402
@@ -338,39 +348,70 @@ add_rule({"id": SHARED_AWARENESS_ID, "name": "Awareness (off for the smoke)",
           "type": "discover", "probability": 0.0})
 
 
+def square_loc(cx, cz, width, yaw=0.0):
+    """A location record carrying only the legacy width dial — which
+    ``effective_boundary`` hands out as the square's four corners."""
+    return {"pos_x": cx, "pos_z": cz, "yaw_deg": yaw,
+            "map3d": {"plan_width_m": width}}
+
+
 def main() -> int:
-    print("\n[1] footprint_distance — the hand table")
-    check_close("centre (50,50)", footprint_distance(50, 50, 50, 50, 10, 0), 0.0)
+    print("\n[1] boundary_distance_m — the hand table")
+    alpha_sq = square_loc(50, 50, 10)
+    turned_sq = square_loc(200, 50, 10, 45)
+    check_close("centre (50,50)", boundary_distance_m(alpha_sq, 50, 50), 0.0)
     check_close("on the east edge (55,50)",
-                footprint_distance(55, 50, 50, 50, 10, 0), 0.0)
+                boundary_distance_m(alpha_sq, 55, 50), 0.0)
     check_close("5 m past the edge (60,50)",
-                footprint_distance(60, 50, 50, 50, 10, 0), 5.0)
+                boundary_distance_m(alpha_sq, 60, 50), 5.0)
     check_close("the corner region (58,58)",
-                footprint_distance(58, 58, 50, 50, 10, 0), math.hypot(3, 3))
-    check_close("west side (40,50)",
-                footprint_distance(40, 50, 50, 50, 10, 0), 5.0)
-    check_close("north side (50,40)",
-                footprint_distance(50, 40, 50, 50, 10, 0), 5.0)
+                boundary_distance_m(alpha_sq, 58, 58), math.hypot(3, 3))
+    check_close("west side (40,50)", boundary_distance_m(alpha_sq, 40, 50),
+                5.0)
+    check_close("north side (50,40)", boundary_distance_m(alpha_sq, 50, 40),
+                5.0)
     check_close("turned 45°: on the rotated east corner",
-                footprint_distance(200 + 5 * math.sqrt(2), 50,
-                                   200, 50, 10, 45), 0.0)
+                boundary_distance_m(turned_sq, 200 + 5 * math.sqrt(2), 50),
+                0.0)
     check_close("turned 45°: (210,50) = 10 − 5√2",
-                footprint_distance(210, 50, 200, 50, 10, 45),
+                boundary_distance_m(turned_sq, 210, 50),
                 10 - 5 * math.sqrt(2))
     check_close("turned 45°: (200,60) by symmetry",
-                footprint_distance(200, 60, 200, 50, 10, 45),
+                boundary_distance_m(turned_sq, 200, 60),
                 10 - 5 * math.sqrt(2))
     check_close("yaw 90 is the same square (60,50)",
-                footprint_distance(60, 50, 50, 50, 10, 90), 5.0)
-    check("no size claims no point", footprint_distance(50, 50, 50, 50, 0, 0),
-          math.inf)
-    # 0 ⟺ inside, on the very samples point_in_footprint judges.
-    for px, pz in ((50, 50), (55, 50), (45, 45), (55.001, 50), (60, 50),
-                   (58, 58)):
-        inside = point_in_footprint(px, pz, 50, 50, 10, 0)
-        dist = footprint_distance(px, pz, 50, 50, 10, 0)
-        check(f"({px},{pz}) inside ⟺ distance 0", (inside, dist == 0.0),
-              (inside, inside))
+                boundary_distance_m(square_loc(50, 50, 10, 90), 60, 50), 5.0)
+    check("no area claims no point",
+          boundary_distance_m(square_loc(50, 50, 0), 50, 50), math.inf)
+    # A DRAWN outline answers exactly the same way — the L of the polygon
+    # smoke, pinned at (0,0): (1,1) sits in the wide arm -> 0, (5,1) is 1 m
+    # east of the x = 4 edge, (3,3) sits in the notch with both notch edges
+    # 1 m away, (-3,-4) is past the (0,0) corner -> hypot(3,4) = 5.
+    ell = {"pos_x": 0.0, "pos_z": 0.0, "yaw_deg": 0.0,
+           "map3d": {"boundary": [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4],
+                                  [0, 4]]}}
+    check_close("the L's wide arm (1,1)", boundary_distance_m(ell, 1, 1), 0.0)
+    check_close("1 m east of the L (5,1)", boundary_distance_m(ell, 5, 1), 1.0)
+    check_close("the L's NOTCH (3,3) is OUTSIDE it",
+                boundary_distance_m(ell, 3, 3), 1.0)
+    check_close("past the L's (0,0) corner", boundary_distance_m(ell, -3, -4),
+                5.0)
+    # THE RIM, both sides: containment is RIM-INCLUSIVE on every edge —
+    # travel arrives exactly on the rim (_arrival_point), and the character
+    # standing there is IN the place (world_geometry.boundary_contains,
+    # matching the old point_in_footprint's inclusive edges).
+    for px, pz, inside, dist in ((50, 50, True, 0.0),
+                                 (45, 45, True, 0.0),      # min corner: in
+                                 (45, 50, True, 0.0),      # min-x rim: in
+                                 (55, 50, True, 0.0),      # max-x rim: in
+                                 (50, 55, True, 0.0),      # max-z rim: in
+                                 (55.001, 50, False, 0.001),
+                                 (60, 50, False, 5.0),
+                                 (58, 58, False, math.hypot(3, 3))):
+        check(f"({px},{pz}) contains/distance",
+              (boundary_contains(alpha_sq, px, pz),
+               round(boundary_distance_m(alpha_sq, px, pz), 6)),
+              (inside, round(dist, 6)))
 
     print("\n[2] the range setting and the boundary")
     check("the schema carries the field",

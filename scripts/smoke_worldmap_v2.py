@@ -225,7 +225,12 @@ def main() -> int:
     check("inn.plan_width_m", inn.get("plan_width_m"), 10.0)
     check("inn keys", sorted(inn),
           sorted(["id", "name", "pos_x", "pos_z", "yaw_deg", "plan_width_m",
-                  "passable", "map3d", "layout_sig"]))
+                  "passable", "map3d", "layout_sig", "boundary"]))
+    # v6 "Gebiete": every placed location with size travels as a polygon —
+    # the inn never drew one, so its square dial arrives as its four corners
+    # in LOCAL metres (effective_boundary; edge 10 -> half 5), clockwise.
+    check("inn.boundary (synthesized square, CW)", inn.get("boundary"),
+          [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]])
     # The inn has NO room — its signature comes from map3d alone (E5 B11).
     check("inn.layout_sig without any room", len(inn.get("layout_sig") or ""),
           10)

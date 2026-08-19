@@ -600,17 +600,30 @@ def boundary_world_points(loc: Dict[str, Any]) -> Optional[List[Tuple[float, flo
     return [local_to_world(lx, lz, cx, cz, yaw) for lx, lz in pts]
 
 
+# Rim inclusion tolerance: a point ON a polygon edge measures distance 0.0
+# exactly on axis-aligned edges and within float noise on rotated ones.
+_RIM_EPS = 1e-9
+
+
 def boundary_contains(loc: Dict[str, Any], x: float, z: float) -> bool:
     """Whether world point (x, z) lies inside the location's effective
-    boundary — the v6 successor of :func:`point_in_footprint`. The test runs
-    in the LOCAL frame (one inverse pin transform), where the polygon needs
-    no per-query rotation."""
+    boundary, RIM INCLUSIVE on every edge — the v6 successor of
+    :func:`point_in_footprint`, which was edge-inclusive on all four sides.
+
+    The raw ray-cast (:func:`point_in_polygon`) is half-open (min edges in,
+    max edges out) — good enough for raster cells, wrong for game state:
+    travel ARRIVES exactly on the rim (``_arrival_point``), and a character
+    standing on that point must be in the place they just reached. So the
+    test is ``polygon_distance <= eps``: 0 inside by definition, 0 on the rim
+    by geometry. Runs in the LOCAL frame (one inverse pin transform), where
+    the polygon needs no per-query rotation.
+    """
     eff = effective_boundary(loc)
     if eff is None:
         return False
     cx, cz, yaw, pts = eff
     lx, lz = world_to_local(x, z, cx, cz, yaw)
-    return point_in_polygon(lx, lz, pts)
+    return polygon_distance(lx, lz, pts) <= _RIM_EPS
 
 
 def boundary_distance_m(loc: Dict[str, Any], x: float, z: float) -> float:
