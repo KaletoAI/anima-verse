@@ -155,10 +155,11 @@ export interface Map3D {
   /** Building yaw on the map tile in degrees (0..359). Absent = the 3D client
    *  falls back to map_rotation_2d (the model turns with the 2D icon). */
   rotation?: number
-  /** ~~The MODEL's share of the location's reference square.~~ STRUCK with
-   *  contract v6 Nr. 3: every model scales through a declared real width in
-   *  metres (`width_m` on the sidecar). Nothing writes or reads it any more. */
-  size?: number
+  // `size` — the MODEL's share of the location's reference square — is GONE
+  // with contract v6 Nr. 3: every model scales through a declared real width
+  // in metres (`width_m` on the sidecar), and an undeclared building fills
+  // the boundary's bounding box, which is what size = 1 produced. The server
+  // sanitizer drops a submitted value.
   /** Storey height in REAL metres — stacks the floor-plan levels. Absent = 3.
    *  Replaced the old pair "model height ÷ model storeys" and level_height
    *  (which counted in world metres). */

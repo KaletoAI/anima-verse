@@ -1285,10 +1285,20 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     """The location model as a placement spec (§ A2/B2).
 
     ONE scale factor on all three axes (user decision 2026-07-28 — nothing is
-    squashed in a single dimension any more): the model's largest YAWED XZ
-    side becomes ``size × extent_m``, and the height follows its own
-    proportions. A mesh with wrong proportions is not repaired here; that is
-    a modelling problem the metre ruler makes visible.
+    squashed in a single dimension any more), and since contract v6 Nr. 3 ONE
+    scale LAW for every model in this file: the model's largest YAWED XZ side
+    becomes its DECLARED REAL WIDTH in metres (sidecar ``width_m``, the same
+    dial the diorama uses, § B2a). The height follows its own proportions. A
+    mesh with wrong proportions is not repaired here; that is a modelling
+    problem the metre ruler makes visible.
+
+    Undeclared width = the effective boundary's bounding-box width
+    (``extent_m``), flagged as ``width_estimated`` so the UI can ask for a
+    calibration. That is exactly the number the retired ``map3d.size``
+    produced at its default 1 (``extent_m × 1``), so a world that never
+    declared a width renders identically to before the law changed.
+    ``measure`` stays ``yawed_xz``: a building has to fit its plot AFTER the
+    yaw, and the fix goes into that measurement rounded to 90° (v5.1 Nr. 4).
 
     TWO anchor rules, because there are two kinds of model:
 
@@ -1325,12 +1335,11 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     # Only the display word changes; every number in the spec stays put, so
     # toggling the flag never moves the model.
     detail = ground and bool((map3d or {}).get("area_detail"))
-    # A GROUND model fills its location — `size` is a building-on-a-plot dial
-    # and would leave a rim of plan with no ground under it (user finding
-    # 2026-07-28: size 0.92 put a 0.45 m gap between the model and the
-    # location's own edge line, on a location whose model IS the place).
-    size = 1.0 if ground else (_num((map3d or {}).get("size"), 1.0) or 1.0)
-    max_m = extent * size
+    # The declared real width wins for BOTH kinds — a plot-share fraction
+    # (`map3d.size`) is gone with v6 Nr. 3. Undeclared falls back to the
+    # boundary's bounding-box width, which is what the old default produced.
+    width_m = _num(meta.get("width_m"))
+    max_m = width_m if width_m > 0 else extent
     offset_y = _num(meta.get("offset_y"))
     walk = _num(meta.get("walk_y"))
 
@@ -1341,7 +1350,7 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     else:
         bottom = BUILDING_BOTTOM_Y + offset_y
         walk_world = bottom + walk
-    return {
+    spec: Dict[str, Any] = {
         "role": "building",
         "display": "shell_area" if detail else ("ground" if ground else "shell"),
         "id": loc_id,
@@ -1350,14 +1359,19 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         "level": 0,
         "fix_euler": _fix_euler(meta.get("rotation")),
         "yaw_deg": _r(_building_yaw(location, map3d), 1),
-        # The frame is filled AFTER the yaw — a model turned 325° must still
-        # fit its location, so the rotated footprint is what gets measured.
+        # The width is met AFTER the yaw — a model turned 325° must still fit
+        # its location, so the rotated footprint is what gets measured.
         "max_m": _r(max_m),
         "measure": "yawed_xz",
         "anchor": [_r(_num(meta.get("offset_x"))), _r(_num(meta.get("offset_z")))],
         "bottom_y": _r(bottom),
         "walk_y_world": _r(walk_world),
     }
+    if width_m <= 0:
+        # Not calibrated yet: the location's own width stands in, and the spec
+        # says so — same signal the diorama gives (§ B2a).
+        spec["width_estimated"] = True
+    return spec
 
 
 def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],

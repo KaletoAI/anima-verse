@@ -805,12 +805,33 @@ async def location_model3d_offset(location_id: str, request: Request) -> Dict[st
     return {"meta": meta}
 
 
+@router.post("/locations/{location_id}/model3d/width")
+async def location_model3d_width(location_id: str, request: Request) -> Dict[str, Any]:
+    """Persist a building model's real-world width in metres (body:
+    {width_m}, 0/empty = undeclared; optional {file}). THE scale dial since
+    contract v6 Nr. 3: the model's largest side — measured after the yaw —
+    becomes this many metres. Undeclared, the location's own width
+    (map3d.plan_width_m) stands in, which is exactly what the retired
+    map3d.size produced at its default 1."""
+    from app.core.location_model3d import set_width_m
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    try:
+        meta = set_width_m(location_id, data.get("width_m"),
+                           filename=str(data.get("file") or "").strip())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="No model")
+    return {"meta": meta}
+
+
 # The former /model3d/floors and /model3d/height endpoints are gone
 # (2026-07-28): both existed to squash a building model in Y. A model is
-# scaled by ONE factor on all three axes now (map3d.size × the footprint
-# edge map3d.plan_width_m),
-# and the storey height is a location dial in real metres
-# (map3d.storey_height_m).
+# scaled by ONE factor on all three axes now, and since v6 Nr. 3 that factor
+# comes from its DECLARED REAL WIDTH (/model3d/width above); the storey
+# height is a location dial in real metres (map3d.storey_height_m).
 
 
 # --- Room models (AV3D-2) — same store/contract as the building model, one

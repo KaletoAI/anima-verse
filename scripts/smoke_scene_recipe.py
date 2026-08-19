@@ -759,6 +759,19 @@ def test_area_locations() -> None:
     check("without a building model it falls back to the storey floor",
           near((next(r for r in sc["rooms"] if r["room_id"] == "zone")
                 ["overlay"]["y"]), 0.0))
+    # v6 Nr. 3: a GROUND model follows the same width law as a shell. Without
+    # a declared width it fills its boundary (10 m, what the forced size 1
+    # produced); with one it is that wide — the anchor law is untouched.
+    check("a ground model without a width fills its boundary (old size 1)",
+          near(building["max_m"], EXTENT)
+          and building.get("width_estimated") is True,
+          str(building.get("max_m")))
+    ground_wide = spec_of(area_scene(meta={**GROUND_META, "width_m": 25.0}),
+                          "building")
+    check("...and a declared 25 m wins there too, anchor unchanged",
+          near(ground_wide["max_m"], 25.0)
+          and near(ground_wide["bottom_y"], -4.0),
+          f"{ground_wide.get('max_m')}/{ground_wide.get('bottom_y')}")
     check("only the zone gets an overlay",
           [r for r in withb["rooms"] if r.get("overlay")][0]["room_id"] == "zone"
           and len([r for r in withb["rooms"] if r.get("overlay")]) == 1)
@@ -1348,9 +1361,41 @@ def test_building_spec() -> None:
     stub_props()
     sc = model_scene()
     b = spec_of(sc, "building")
-    check("ONE factor on all axes: max_m = extent × size, measured yawed",
+    # v6 Nr. 3: the building scales by a DECLARED real width, like the
+    # diorama. BUILDING_META declares none, so the location's own width
+    # stands in — the boundary bbox is the 10 m square, hence max_m 10.0.
+    # That is bit for bit what the retired `size` produced at its default 1
+    # (extent_m × 1 = 10.0): this check IS the regression proof.
+    check("undeclared width falls back to the boundary width (= old size 1)",
           near(b["max_m"], EXTENT) and b.get("measure") == "yawed_xz",
           f"{b.get('max_m')}/{b.get('measure')}")
+    check("...and the spec says the width is only estimated",
+          b.get("width_estimated") is True, str(b.get("width_estimated")))
+    # A declared 15 m on the same 10 m location: 15 m, not 10, not 15/10 of
+    # anything — the declaration wins over the plot, and it may exceed it.
+    wide = spec_of(scene_recipe.compose_scene(
+        model_fixture(), plan_width_m=PLAN_W, room_metas=room_metas(),
+        building_meta={**BUILDING_META, "width_m": 15.0}), "building")
+    check("a declared width_m 15 on a 10 m location: max_m = 15",
+          near(wide["max_m"], 15.0), str(wide.get("max_m")))
+    check("...and then nothing is estimated any more",
+          "width_estimated" not in wide, str(sorted(wide)))
+    check("the measurement stays the YAWED hull (a house must fit turned)",
+          wide.get("measure") == "yawed_xz", str(wide.get("measure")))
+    # The plot-share dial is gone: a location that still carries `size` in
+    # its map3d must not scale by it (the sanitizer drops the field, and the
+    # composer never looks at it — belt and braces, both are checked).
+    sized = model_fixture()
+    sized["map3d"]["size"] = 0.5
+    ignored = spec_of(scene_recipe.compose_scene(
+        sized, plan_width_m=PLAN_W, room_metas=room_metas(),
+        building_meta=BUILDING_META), "building")
+    check("a stray map3d.size scales NOTHING (v6 Nr. 3: the dial is gone)",
+          near(ignored["max_m"], EXTENT), str(ignored.get("max_m")))
+    from app.core.world_ops import _sanitize_map3d
+    kept = _sanitize_map3d({"plan_width_m": 10, "rotation": 90, "size": 0.5})
+    check("...and a submitted size does not even survive the save",
+          "size" not in kept and kept.get("rotation") == 90, str(kept))
     check("no per-axis fields survive",
           not {"box", "scale_mode", "scale_axes"} & set(b), str(sorted(b)))
     check("a shell STANDS on the ground: bottom_y = 0.06 + offset_y",

@@ -22,8 +22,8 @@ CONTRACT_KEYS = {
     "plates", "walls", "extras", "models",
     "figures", "markers", "exits", "outdoor_rooms",
 }
-SPEC_KEYS = {"role", "id", "url", "level", "fix_euler", "yaw_deg",
-             "scale_mode", "anchor", "bottom_y"}
+SPEC_KEYS = {"role", "id", "variants", "level", "fix_euler", "yaw_deg",
+             "max_m", "measure", "anchor", "bottom_y"}
 
 FAILURES = []
 
@@ -104,12 +104,15 @@ def main() -> int:
           all(SPEC_KEYS <= set(m) for m in sc["models"]),
           str([sorted(SPEC_KEYS - set(m)) for m in sc["models"]
                if not SPEC_KEYS <= set(m)][:3]))
-    check("scale modes are the three contract ones",
-          {m["scale_mode"] for m in sc["models"]}
-          <= {"fit_box", "real_size", "tile_fit"},
-          str({m["scale_mode"] for m in sc["models"]}))
-    check("real_size specs carry max_m, fit_box/tile_fit carry box",
-          all(("max_m" in m) if m["scale_mode"] == "real_size" else ("box" in m)
+    # ONE scale law since v6 Nr. 3: every spec is a real width plus the axes
+    # it is measured on. `scale_mode`/`box`/`tile_fit` do not exist any more.
+    check("measures are the three contract ones",
+          {m["measure"] for m in sc["models"]}
+          <= {"yawed_xz", "xz", "xyz"},
+          str({m["measure"] for m in sc["models"]}))
+    check("every spec carries a positive real width, no per-axis leftovers",
+          all(float(m.get("max_m") or 0) > 0
+              and not {"box", "scale_mode", "scale_axes"} & set(m)
               for m in sc["models"]))
     check("a room is never diorama AND furnished at once",
           not ({m["room_id"] for m in sc["models"] if m["role"] == "room"}

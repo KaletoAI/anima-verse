@@ -257,11 +257,10 @@ def migrate_scale_frame_once() -> Dict[str, int]:
 
     What changed and therefore has to be converted once:
 
-    - the reference square is no longer a fixed 8 m, and the model fills
-      ``size × the square`` instead of ``10 × 0.92 × size``. A ``size`` above
-      1 used to mean "overflow the tile"; since E4 the square IS the
-      location's footprint (edge = ``plan_width_m``), so there is nothing to
-      overflow into and ``size`` is clamped to 1.
+    - the reference square is no longer a fixed 8 m. (The plot-share dial
+      ``map3d.size`` that scaled the model against it is gone altogether with
+      v6 Nr. 3 — a model scales through its declared ``width_m`` now, and an
+      undeclared one fills the footprint, which is what the old default did.)
     - ``plan_width_m`` is the ONLY scale anchor. Where it was derived from a
       model's ``height_m`` it is written out explicitly BEFORE that field
       disappears — otherwise the location would silently lose its scale.
@@ -278,8 +277,7 @@ def migrate_scale_frame_once() -> Dict[str, int]:
                                   get_world_setting, set_world_setting)
     if get_world_setting(_SCALE_FRAME_FLAG):
         return {}
-    stats = {"locations": 0, "plan_width": 0, "storey": 0, "size_clamped": 0,
-             "sidecars": 0}
+    stats = {"locations": 0, "plan_width": 0, "storey": 0, "sidecars": 0}
     wdata = _load_world_data()
     changed = False
     for loc in wdata.get("locations") or []:
@@ -319,19 +317,6 @@ def migrate_scale_frame_once() -> Dict[str, int]:
                     stats["storey"] += 1
                     changed = True
             if map3d.pop("level_height", None) is not None:
-                changed = True
-            try:
-                size = float(map3d.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0.0
-            if size > 1:
-                # A legacy "bigger than the tile" model. The reference square
-                # is no dial any more (E4: it IS the footprint, edge =
-                # plan_width_m), so the overflow has nowhere to go and the
-                # share is clamped into its contract range — the same clamp
-                # the sanitizer applies on every save.
-                map3d["size"] = 1.0
-                stats["size_clamped"] += 1
                 changed = True
             stats["locations"] += 1
 
@@ -428,10 +413,9 @@ def get_client_meta(location_id: str, room_id: str = "",
     tiers, signature}``) of the ACTIVE model, or None when there is none — no
     backend/model enumeration (that is the admin status's job). ``rotation``
     is the admin's persisted 90°-step orientation fix; the client applies it
-    to the model root on load. Map placement (yaw + tile size) is NOT here —
-    that is ``map3d.rotation``/``map3d.size`` on the location (rooms:
-    ``room.layout``), delivered via the worldmap/locations (see
-    schnittstellen-3d.md).
+    to the model root on load. Map placement (the yaw) is NOT here — that is
+    ``map3d.rotation`` on the location (rooms: ``room.layout``), delivered via
+    the worldmap/locations (see schnittstellen-3d.md).
 
     The placement dials come from the DEFAULT tier's sidecar: a low variant is
     the same object at a coarser resolution, so it inherits the orientation
@@ -458,12 +442,11 @@ def get_client_meta(location_id: str, room_id: str = "",
     out = {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
            "rig": meta.get("rig", "none"),
            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
-           # Real-size anchor of a ROOM model (0 = undeclared): the real
-           # width of the model's largest side — the diorama scales from it
-           # like a prop. Buildings have none: their size follows the
-           # location's own footprint (map3d.plan_width_m × map3d.size), and their
-           # former height/floors dials went with the per-axis scaling
-           # (2026-07-28).
+           # Real-size anchor of the model (0 = undeclared): the real width of
+           # its largest side. THE scale law for rooms AND buildings since v6
+           # Nr. 3 — undeclared, a building falls back to the location's own
+           # width (map3d.plan_width_m); the former plot-share dial
+           # (map3d.size) and the height/floors dials are gone.
            "width_m": float(meta.get("width_m") or 0.0),
            # The resolution tiers this subject HAS, each with its own change
            # key — the client asks for one with ?tier= and re-downloads that
@@ -627,13 +610,17 @@ def _set_sidecar_number(location_id: str, field: str, value: Any, *,
 
 def set_width_m(location_id: str, width_m: Any,
                 room_id: str = "", filename: str = "") -> Dict[str, Any]:
-    """Persist a ROOM model's real-world width in metres (sidecar — the
-    admin estimates the largest side of the room from the source image,
-    e.g. "this living room is about 6 m wide"). Placement is unchanged
-    (the model keeps filling its floor-plan rectangle); the value makes
-    the room's CONTENT scale explicit — rect world extent / width_m — and
-    figures in the room derive from it automatically (1.7 m × scale).
-    0/empty = undeclared (figures fall back to storey_height / 3)."""
+    """Persist a model's real-world width in metres — ROOM and BUILDING alike
+    (sidecar; ``room_id`` picks the room model, empty the building one).
+
+    THE scale dial since contract v6 Nr. 3: the model's largest side becomes
+    this many metres, so a 15 m barn on a 40 m plot is a 15 m barn. The admin
+    dials it against the reference figure instead of estimating a fraction of
+    the plot. 0/empty = undeclared, and then the location's own width
+    (``plan_width_m``, the boundary's bounding box) stands in — the number the
+    retired ``map3d.size`` produced at its default 1, so nothing moves until
+    someone declares a width. For a room the value additionally makes the
+    CONTENT scale explicit (figures derive from it: 1.7 m × scale)."""
     return _set_sidecar_number(location_id, "width_m", width_m,
                                room_id=room_id, filename=filename)
 

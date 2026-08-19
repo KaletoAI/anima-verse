@@ -691,25 +691,18 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             out[key] = val.strip()
     # Building placement on the map tile (docs/schnittstellen-3d.md):
     # rotation = yaw in degrees (explicit 0 is meaningful — absent falls back
-    # to map_rotation_2d on the client), size = the model's share of the
-    # location's bounding box (]0, 1]; 1 = edge to edge, absent = 1).
-    # A model can no longer be LARGER than its location — a location that
-    # needs more room is WIDER (plan_width_m), which keeps the promise
-    # "plan edge == model edge".
+    # to map_rotation_2d on the client).
     rot = raw.get("rotation")
     if rot is not None and f"{rot}".strip() != "":
         try:
             out["rotation"] = int(round(float(rot))) % 360
         except (TypeError, ValueError):
             pass
-    size = raw.get("size")
-    if size is not None and f"{size}".strip() != "":
-        try:
-            s = float(size)
-            if 0 < s <= 1:
-                out["size"] = round(s, 3)
-        except (TypeError, ValueError):
-            pass
+    # ``size`` — the model's ]0, 1] share of the location's bounding box — is
+    # GONE with v6 (Nr. 3): a model scales through its DECLARED REAL WIDTH in
+    # metres (sidecar ``width_m``), like every other model in the contract.
+    # Nothing reads the field and it is not kept here either: a location saved
+    # once drops it.
     # ``tile_rotation`` — the 90° turn of the FINISHED scene payload — is GONE
     # with v6 (Nr. 4): a location faces the way its anchor pin says (§ A1.1),
     # and there is no second rotation anywhere. Nothing reads the field and it

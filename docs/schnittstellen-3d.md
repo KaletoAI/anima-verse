@@ -94,6 +94,33 @@
 >    Metern** (Sidecar `width_m`, wie Dioramen § B2a). `map3d.size` (der
 >    ]0,1]-Füllfaktor) entfällt. § B6 #8 ist damit auf Location-Ebene
 >    gegenstandslos.
+>
+>    > **Nr. 3 EINGELÖST (2026-08-19).** Ab hier gilt wörtlich:
+>    >
+>    > * **Das Gebäude-/Flächen-Modell trägt `max_m` = seine DEKLARIERTE
+>    >   reale Breite in Metern** (Sidecar `width_m`, gesetzt über
+>    >   `POST /world/locations/{id}/model3d/width` — derselbe Setter, den
+>    >   Raum-Dioramen benutzen). Ein 15-m-Stall auf einem 40-m-Grundstück
+>    >   ist ein 15-m-Stall; ein Anteil am Grundstück ist keine Größe.
+>    > * **`measure` bleibt `"yawed_xz"`.** „Nach der Drehung ins Grundstück
+>    >   passen" ist bei einer Gebäude-Hülle weiter die sinnvolle Messung;
+>    >   der Orientierungs-Fix steckt darin auf 90° GERUNDET (v5.1 Nr. 4,
+>    >   unverändert) — ein fein eingestellter Fix schrumpft nichts.
+>    > * **Ohne deklarierte Breite** ist `max_m` die Bounding-Box-Breite der
+>    >   effektiven Boundary (`extent_m` = `plan_width_m`), und die Spec sagt
+>    >   es über `width_estimated: true` (wie beim Diorama), damit die UI zur
+>    >   Eichung auffordern kann. Das ist **exakt die Zahl, die `tile_fit`
+>    >   mit `size = 1` lieferte** (`extent_m × 1`) — Bestandswelten rendern
+>    >   also identisch weiter, bis jemand eine Breite deklariert.
+>    > * **`map3d.size` IST WEG**: Sanitizer (`_sanitize_map3d`) verwirft ein
+>    >   übergebenes Feld, der `Map3D`-Typ kennt es nicht mehr, der
+>    >   Anteil-Regler im Gebäude-Panel ist durch den Meter-Regler ersetzt.
+>    >   Kein Migrationscode, kein Alias — eine einmal gespeicherte Location
+>    >   verliert das Feld.
+>    > * **Für `display: "ground"` gilt dasselbe Gesetz.** Vorher war `size`
+>    >   dort zwangsweise 1; jetzt füllt eine Flächen-Location ohne erklärte
+>    >   Breite ihre Boundary (dieselbe Zahl) und folgt mit erklärter Breite
+>    >   der Deklaration. Der ANKER ändert sich nicht (Gehfläche auf Etage 0).
 > 4. **Die Level-Platte ist das triangulierte Boundary-Polygon**, nicht mehr
 >    ein Quadrat; das Relief-Raster spannt über der Bounding-Box und wird am
 >    Polygon geclippt (Rand-Pinning auf 0 bleibt). `_rotate_scene`
@@ -252,7 +279,8 @@
 >     `area_model`) macht aus dem `ground`-Modell eine AUSBLENDENDE Hülle:
 >     `models[].display: "shell_area"` fadet beim Reinzoomen wie `shell`,
 >     behält aber das `ground`-ANKER-Gesetz (begehbare Fläche auf Etage 0,
->     `size` fix 1, `offset_y` gilt nicht — Nr. 7). Die Rezept-Innenwelt
+>     `offset_y` gilt nicht — Nr. 7; die Größe kommt seit v6 Nr. 3 aus
+>     `width_m` bzw. der Boundary-Breite). Die Rezept-Innenwelt
 >     komponiert wie ein Gebäude-Interieur: keine `cutouts`, keine
 >     Overlay-Zonen; Outdoor-Räume behalten ihre Textur-Platten (§ A5).
 >     Der Kachelboden des Renderers folgt dort dem Fade (fern unsichtbar
@@ -629,7 +657,7 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `boundary` | `[[x, z], …] \| null` | **v6:** DER Fußabdruck als gezeichnetes Polygon in LOKALEN Metern um den Pin, aus `map3d` hochgezogen (`world_geometry.effective_boundary`); ein Alt-Quadrat kommt als seine vier synthetisierten Ecken, der Client hat also keinen Quadrat-Pfad mehr. `null` = der Ort hat keine Fläche |
 | `openings` | `[{edge, at_world, inward, room}, …]` | **v6:** die autorierten Grenz-Durchgänge, FERTIG GERECHNET (§ B1 Nr. 13): `edge` = Kanten-INDEX des Boundary-Polygons, `at_world` = `[x, z]` in WELT-Metern, `inward` = einwärtige Einheits-Normale in WELT-Achsen, `room` = verknüpfter Raum (`""` = keiner, dann entscheidet die Ankunftsregel). Immer vorhanden; **leere Liste = FREIE Grenze** (der Ort hat nie gesagt, wo sein Weg hinein ist, E4 Task 5). Gerechnet von `boundary_entry.opening_world_frames` — derselben Funktion, mit der das Eintritts-Gate von `POST /play/pos` misst, damit Angebot und Übertritt nicht auseinanderlaufen können. **Der Client rechnet an einer Öffnung nichts mehr selbst**: kein Buchstabe, keine Halbkanten-Formel, keine Kachel-Drehung |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
-| `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `size`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
+| `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
 Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 `locations` · `characters` · `events_by_location` · `world_bounds` ·
@@ -3019,18 +3047,23 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                room_id?, level,
                fix_euler: {x,y,z},         # 'YXZ', Grad — vor Messung
                yaw_deg,                    # Eltern-Rotation, +rad im Client
-               scale_mode: "fit_box" | "real_size" | "tile_fit",
-               box: {w,d,h} | max_m | {xz, y?},
-                                           # fit_box: Zielbox (Welt) & 0,96
-                                           # real_size: max_m (Welt)
-                                           # tile_fit (Gebäude): XZ-Ziel &
-                                           #   optionales Y-Ziel (Welt)
-               measure_axes?: "xyz"|"xz",  # real_size: BBox-Achsen für
-                                           # maxExtent (Default xyz; Dioramen
-                                           # messen nur XZ — § B2a)
-               scale_axes?: {xz, y},       # Gebäude: achsengetrennt fertig
-                                           #   vorgerechnet, wenn Server die
-                                           #   Mesh-BBox kennt (§ B4)
+               max_m,                      # Ziel-Ausdehnung in WELT-Metern,
+                                           # EIN Faktor auf alle drei Achsen
+                                           # (v5 Nr. 2). Seit v6 Nr. 3 IMMER
+                                           # eine deklarierte reale Breite —
+                                           # Gebäude/Fläche: Sidecar width_m,
+                                           # sonst die Boundary-Breite
+                                           # (extent_m) plus width_estimated
+               measure: "yawed_xz"|"xz"|"xyz",
+                                           # woran gemessen wird: yawed_xz =
+                                           # GEDREHTE Hülle (Gebäude), xz =
+                                           # gefixte XZ-Seite (Dioramen),
+                                           # xyz = größte Kante (Props).
+                                           # Der Fix steckt gerundet drin
+                                           # (v5.1 Nr. 4)
+               width_estimated?,           # true = max_m ist nur der
+                                           # Notbehelf (Boundary-/Rechteck-
+                                           # Breite), die UI soll eichen
                anchor: [x,z], bottom_y,    # Welt; BBox-Unterkante & Zentrum
                clip_outline?,              # [[x,z],…] Welt — Renderer verwirft
                                            # Fragmente AUSSERHALB des Polygons
@@ -3186,20 +3219,16 @@ Labels, Pathfinding, Tag/Nacht, Terrain-Blends, Animations-Retargeting.
 
 ```
 place(mesh, spec):
-  1. fix_euler anwenden ('YXZ'), BBox messen
-  2. scale_mode "real_size": s = max_m / maxExtent (uniform)
-     scale_mode "fit_box":   s = min(box.w/fp_x, box.d/fp_z) × 0,96 —
-                             fp = Footprint der GEFIXTEN, noch
-                             un-geyawten Box aus Schritt 1. (Präzisierung
-                             2026-07-25: die Teil-A-Altkette maß VOR dem
-                             Fix und driftete, sobald ein x/z- oder
-                             90°-Fix die Achsen tauschte; § A2 beschreibt
-                             nur noch das Legacy-Verhalten.)
-     scale_mode "tile_fit":  erst Schritt 3, dann an der ROTIERTEN BBox
-                             k_xz = box.xz / max(B_x, B_z);
-                             k_y = box.y / B_y (ohne box.y: k_xz);
-                             scale.set(k_xz, k_y, k_xz) auf Welt-Achsen
-     scale_axes gesetzt:     scale.set(xz, y, xz) direkt (Welt-Achsen)
+  1. fix_euler auf 90° GERUNDET anwenden ('YXZ'), BBox messen (v5.1 Nr. 4:
+     gemessen wird gerundet, gezeichnet mit dem echten Fix)
+  2. EIN Faktor auf alle drei Achsen: s = max_m / gemessene Ausdehnung
+     measure "xyz":       max(B_x, B_y, B_z) der gefixten Box (Props)
+     measure "xz":        max(B_x, B_z) der gefixten Box (Dioramen)
+     measure "yawed_xz":  max(B_x, B_z) der GEYAWTEN Box (Gebäude/Fläche —
+                          erst Schritt 3, dann messen: ein schräg
+                          gestelltes Haus soll auf sein Grundstück passen)
+     `fit_box`, `tile_fit`, `scale_axes` und jede achsengetrennte
+     Skalierung sind ersatzlos weg (v5 Nr. 2 / v6 Nr. 3).
   3. rotation.y = +rad(yaw_deg) als Eltern-Rotation
      ✔ Seit **E4** (2026-08-09, Task 3): verbindlicher Drehsinn ist die
      Weltkarten-Konvention (§ A1.1), das frühere Minus ist in allen
@@ -3212,8 +3241,9 @@ place(mesh, spec):
 Ersetzt die früheren drei Spezialketten vollständig (§ A2 führt nur noch
 Diorama und Props als Legacy) — Gebäude, Diorama
 und Props unterscheiden sich nur noch in den vom SERVER gelieferten
-Spec-Werten, nicht im Code. `measure_axes: "xz"` beschränkt die
-maxExtent-Messung in Schritt 2 auf die XZ-Achsen.
+Spec-Werten, nicht im Code: `measure` sagt, WORAUF gemessen wird, `max_m`,
+worauf skaliert wird. Beides ist seit v6 Nr. 3 für alle drei dasselbe
+Gesetz — eine deklarierte reale Breite.
 
 ## B2a. Größenabgleich Diorama ↔ Props ↔ Figuren — EIN Maßstabsgesetz
 
@@ -3226,8 +3256,8 @@ auf (Diorama-Sofa ≠ Prop-Stuhl ≠ Figur).
 
 **Neue Regel (v4): Das Diorama skaliert wie ein Prop.**
 
-- `width_m` deklariert → `scale_mode "real_size"`, `max_m = width_m`,
-  `measure_axes: "xz"` (width_m ist die größte XZ-Seite; die Höhe folgt
+- `width_m` deklariert → `max_m = width_m`,
+  `measure: "xz"` (width_m ist die größte XZ-Seite; die Höhe folgt
   uniform). Das Raum-RECHTECK hat damit KEINEN Einfluss mehr auf den
   Diorama-Maßstab — es bleibt Grundriss-Fläche für Platte/Wände/
   Begehbarkeit. Anker/Erdung unverändert (`model_at`,
@@ -3244,8 +3274,10 @@ auf (Diorama-Sofa ≠ Prop-Stuhl ≠ Figur).
 - Damit gilt raumübergreifend EIN Gesetz: **alles in echten Metern** (seit
   E4 ohne jeden Faktor) — Dioramen (`width_m`), Props (`dims`), Figuren
   (1,70 m + `height_cm`), Öffnungen (`width_m`/`sill_m`/`height_m`),
-  Fahrstuhl. Die Gebäude-Hülle füllt weiterhin das Bezugsquadrat
-  (`extent_m × size`) statt eine eigene Realgröße zu tragen.
+  Fahrstuhl. **Seit v6 Nr. 3 gilt es auch für die Gebäude-/Flächen-Hülle**:
+  auch sie trägt eine eigene Realgröße (`width_m`, gemessen `yawed_xz`) und
+  füllt nur noch dann das Bezugsquadrat, wenn keine erklärt ist — die
+  frühere Ausnahme „`extent_m × size`" ist gestrichen.
 - **Kalibrierung im Game-Admin:** eine Vergleichsfigur (fix 1,70 m,
   skaliert NIE mit) wird IN das Diorama gestellt; der Admin stellt
   `width_m` ein, bis die Möbel zur Figur passen, und `walk_y`, bis sie
@@ -3334,7 +3366,7 @@ acht sind zu; offen bleibt allein #3.
 | 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md:80` sagt heute selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
 | 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |
 | 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar | **Erledigt:** `walk_y` (Meter über Modell-Unterkante) ist Sidecar-Anker mit Admin-Regler; das Rezept rechnet ihn zu `walk_y_world` aus (`app/core/scene_recipe.py`) |
-| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | **Historisch, erledigt (E4):** § B2a — Diorama skaliert real-size über `width_m` (measure xz), Rechteck-Breite nur noch Fallback; bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe |
+| 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | **Historisch, erledigt (E4):** § B2a — Diorama skaliert real-size über `width_m` (measure xz), Rechteck-Breite nur noch Fallback; bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe. **Seit v6 Nr. 3 auf Location-Ebene gegenstandslos**: das Gebäude-/Flächen-Modell skaliert nach demselben Gesetz (`width_m`, measure `yawed_xz`), es gibt keinen Füllfaktor mehr |
 
 ## Nachtrag 2026-07-27: Eine Wand, ein Besitzer (Kontur vs. Raumhülle)
 

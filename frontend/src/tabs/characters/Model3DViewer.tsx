@@ -92,7 +92,8 @@ const loadClip = (kind: string) => {
 }
 
 /** Placement of a building model on its map tile — mirrors the worldmap
- *  contract (map3d.rotation / map3d.size in schnittstellen-3d.md). */
+ *  contract (map3d.rotation in schnittstellen-3d.md; the model's SIZE comes
+ *  from the scene spec's `max_m`, the declared real width of v6 Nr. 3). */
 export interface TilePlacement {
   /** Edge length of the stage in WORLD metres (the payload's `extent_m` =
    *  the footprint edge `plan_width_m`) — the SAME
@@ -106,7 +107,9 @@ export interface TilePlacement {
    *  Absent (room models, payload still pending) = the neutral fallback
    *  below. */
   spec?: SceneModelSpec | null
-  /** Neutral fallback only: yaw + share of the stage. */
+  /** Neutral fallback only (room models, payload still pending): yaw + the
+   *  share of the stage the model fills. NOT a contract field — the scene
+   *  spec's `max_m` decides wherever there is one. */
   yawDeg?: number
   size?: number
   /** Reference sizes (measureKit): which dial is being edited, plus the

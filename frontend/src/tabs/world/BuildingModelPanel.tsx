@@ -6,8 +6,8 @@
  * stored — the list below the viewer previews any of them, "Select" makes one
  * the ACTIVE model the 3D clients get; generation/upload auto-select their
  * new model. For buildings the viewer shows the world tile (2D map icon as
- * ground texture) with map3d.rotation / map3d.size placement (the fields the
- * 3D client reads from the worldmap, schnittstellen-3d.md).
+ * ground texture) with the map3d.rotation yaw and the model's declared real
+ * width (contract v6 Nr. 3 — the plot-share dial map3d.size is gone).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -34,9 +34,9 @@ export interface ModelEntry extends GalleryModel {
   /** Walkable surface above the model bottom (m) — stand height of overlay
    *  zones on an area location. */
   walk_y?: number
-  /** Real-size anchor of a ROOM model (0 = undeclared): the real width of
-   *  its largest side — the diorama scales from it like a prop. Buildings
-   *  have none; their size is the location's extent × size. */
+  /** Real-size anchor of the model (0 = undeclared): the real width of its
+   *  largest side. THE scale law for rooms AND buildings (v6 Nr. 3); an
+   *  undeclared building falls back to the location's own width. */
   width_m?: number
 }
 
@@ -58,13 +58,10 @@ export interface BuildingModelStatus {
   blender?: BlenderStatus
 }
 
-/** Client default when map3d.size is unset (schnittstellen-3d.md). */
-// The model's share of the location's extent. 1 = edge to edge; the old
-// 0.92 was a tile MARGIN and is gone with the one-frame rule (2026-07-28).
-const DEFAULT_TILE_SIZE = 1
-/** Upper bound (server sanitizer + contract): a model never exceeds its
- *  location — overhang is what the location's extent is for. */
-const MAX_TILE_SIZE = 1
+// The plot-share dial (map3d.size, ]0, 1] of the extent) is GONE with
+// contract v6 Nr. 3: a model scales through its declared real width in
+// metres, and an undeclared one fills the location's own width — which is
+// exactly what size = 1 used to produce.
 
 interface BuildingModelPanelProps {
   locationId: string
@@ -74,12 +71,12 @@ interface BuildingModelPanelProps {
   roomId?: string
   /** Ground texture for the tile — the location's current 2D map icon, if any. */
   mapIconUrl?: string
-  /** Draft map3d — rotation/size are read from and written into it (building only). */
+  /** Draft map3d — the rotation is read from and written into it (building only). */
   map3d?: Map3D
   /** The 2D icon rotation: the client's yaw fallback when map3d.rotation is unset. */
   fallbackYawDeg?: number
   /** Write a placement field into the draft (undefined removes = back to default). */
-  onMap3dField?: (key: 'rotation' | 'size', value: number | undefined) => void
+  onMap3dField?: (key: 'rotation', value: number | undefined) => void
   /** The server-composed scene of the current draft — the panel renders the
    *  building's placement spec out of it instead of computing its own. That
    *  is what makes the walk-height dial visible here: it moves `bottom_y`. */
@@ -332,16 +329,16 @@ export function BuildingModelPanel({
 
   // The former "Model height (m)" and "Model storeys" dials are gone
   // (2026-07-28): both fed a Y-only scaling that no longer exists. A model is
-  // scaled by ONE factor on all three axes (map3d.size × the footprint edge
-  // map3d.plan_width_m), and
-  // the storey height is a location dial in real metres.
+  // scaled by ONE factor on all three axes, and since v6 Nr. 3 that factor
+  // comes from the declared real width below — for buildings exactly as for
+  // room dioramas. The storey height stays a location dial in real metres.
 
   const [widthDraft, setWidthDraft] = useState('')
   useEffect(() => {
     setWidthDraft(current?.width_m ? String(current.width_m) : '')
   }, [current?.filename, current?.width_m])
   const commitWidth = useCallback(async () => {
-    if (!current || !roomId) return
+    if (!current) return
     const n = parseFloat(widthDraft)
     const widthM = Number.isFinite(n) && n > 0 ? n : 0
     if (widthM === (current.width_m || 0)) {
@@ -418,9 +415,10 @@ export function BuildingModelPanel({
   }, [enc, load, locationId, roomId, uploadTier, t, toast])
 
   const yaw = map3d?.rotation
-  const size = map3d?.size
   const effectiveYaw = yaw ?? fallbackYawDeg
-  const effectiveSize = size ?? DEFAULT_TILE_SIZE
+  // What an UNDECLARED building width falls back to: the location's own
+  // width — the boundary's bounding box (scene.extent_m = plan_width_m).
+  const boundaryWidthM = scene?.extent_m || map3d?.plan_width_m || 0
 
   const uploadButton = (
     <>
@@ -521,7 +519,7 @@ export function BuildingModelPanel({
           // the floor-plan preview, and the walk-height dial visibly moves
           // the model against the square (which is level 0).
           : { extentM: scene?.extent_m || map3d?.plan_width_m || 10,
-            spec: buildingSpec, yawDeg: effectiveYaw, size: effectiveSize,
+            spec: buildingSpec, yawDeg: effectiveYaw,
             measure, k: scene?.k, planWidthM: map3d?.plan_width_m,
             storeyWorld: scene?.storey_m,
             storeyRealM: map3d?.storey_height_m || 3,
@@ -596,31 +594,47 @@ export function BuildingModelPanel({
             />
           </label>
         ))}
-        {roomId ? (
-          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.')}>
-            {t('Room width (m)')}
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={500}
-              step={0.5}
-              style={{ width: 72 }}
-              value={widthDraft}
-              placeholder="—"
-              onChange={(e) => setWidthDraft(e.target.value)}
-              onBlur={() => { void commitWidth() }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            />
-          </label>
-        ) : null}
+        {/* THE scale dial (contract v6 Nr. 3), for rooms AND buildings: the
+            model's largest side in real metres, dialled against the 1.70 m
+            reference figure in the viewer — never a fraction of anything.
+            Undeclared, a building falls back to the location's own width. */}
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+          title={roomId
+            ? t('Estimated real-world width of the room (largest side, from the source image, e.g. 6). Placement is unchanged — the value sets the room’s content scale, and figures in the room size themselves from it automatically.')
+            : t('Real-world width of the building in metres (its largest side, measured after the yaw). Dial it against the 1.70 m reference figure. Empty = the location’s own width stands in.')}>
+          {roomId ? t('Room width (m)') : t('Model width (m)')}
+          <input
+            className="ga-input"
+            type="number"
+            min={0}
+            max={500}
+            step={0.5}
+            style={{ width: 72 }}
+            value={widthDraft}
+            placeholder={roomId || !(boundaryWidthM > 0)
+              ? '—' : boundaryWidthM.toFixed(1)}
+            {...(roomId ? {} : bindMeasure('model_width'))}
+            onChange={(e) => setWidthDraft(e.target.value)}
+            onBlur={(e) => {
+              if (!roomId) bindMeasure('model_width').onBlur()
+              void commitWidth()
+              void e
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+          />
+          {!roomId && !(current.width_m) && boundaryWidthM > 0 ? (
+            <span className="ga-hint">
+              {t('undeclared — boundary width {n} m')
+                .replace('{n}', boundaryWidthM.toFixed(1))}
+            </span>
+          ) : null}
+        </label>
         <span className="ga-hint">
           {t('Orientation fix + height offset of the shown model — persisted; negative sinks it into the terrain, the 3D client applies both.')}
         </span>
       </div>
 
-      {/* Map placement (map3d.rotation / map3d.size) — building only: a room
+      {/* Map placement (map3d.rotation) — building only: a room
           gets its position from the floor-plan layout instead. Edits the
           LOCATION draft, so it is applied live in the viewer above but
           persisted via the location's Save button, like every other map3d
@@ -664,54 +678,15 @@ export function BuildingModelPanel({
             ) : null}
           </span>
         </label>
-        {/* An AREA location has no size dial: its model IS the place and
-            fills the reference square edge to edge. Offering the fraction
-            only produced a gap between the model and the square's edge. */}
+        {/* The former "Size (fraction of the extent)" dial is gone (v6 Nr. 3):
+            a model states its real width in metres up in the model row, like
+            every other model in the contract. An AREA location said so
+            already — its model IS the place and fills the whole extent. */}
         {map3d?.area_model ? (
           <span className="ga-hint" style={{ fontSize: '0.82em' }}>
-            {t('Area location: the model fills the whole extent — size and height offset do not apply. Set the extent on the floor plan and the walk height here.')}
+            {t('Area location: the model IS the ground — the height offset does not apply. Set the extent on the floor plan, the model width and the walk height above.')}
           </span>
-        ) : (
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.82em' }}>
-          {t('Size (fraction of the extent)')}
-          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="range"
-              min={0.05}
-              max={MAX_TILE_SIZE}
-              step={0.01}
-              value={effectiveSize}
-              onChange={(e) => onMap3dField('size', parseFloat(e.target.value) || DEFAULT_TILE_SIZE)}
-              style={{ width: 140 }}
-            />
-            <input
-              className="ga-input"
-              type="number"
-              min={0.05}
-              max={MAX_TILE_SIZE}
-              step={0.01}
-              style={{ width: 70 }}
-              value={size ?? ''}
-              placeholder={String(DEFAULT_TILE_SIZE)}
-              {...bindMeasure('size')}
-              onChange={(e) => {
-                const n = parseFloat(e.target.value)
-                onMap3dField('size', Number.isFinite(n) && n > 0 && n <= MAX_TILE_SIZE ? n : undefined)
-              }}
-            />
-            {size !== undefined ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                onClick={() => onMap3dField('size', undefined)}
-                title={t('Back to default ({n}).').replace('{n}', String(DEFAULT_TILE_SIZE))}
-              >
-                ↺
-              </button>
-            ) : null}
-          </span>
-        </label>
-        )}
+        ) : null}
         <span className="ga-hint" style={{ paddingBottom: 4 }}>
           {t('Placement on the world tile — saved with the location.')}
         </span>

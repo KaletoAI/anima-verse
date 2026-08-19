@@ -116,10 +116,12 @@ export interface SceneModelSpec {
   yaw_deg: number
   /** Ziel-Ausdehnung in WELT-Metern. EIN Faktor auf alle drei Achsen
    *  (2026-07-28): `s = max_m / gemessene Ausdehnung`. Es gibt keinen
-   *  Modus mehr, in dem Y anders skaliert als XZ. */
+   *  Modus mehr, in dem Y anders skaliert als XZ. Seit v6 Nr. 3 ist der Wert
+   *  ÜBERALL eine deklarierte reale Breite (`width_m`) — beim Gebäude/der
+   *  Fläche ersatzweise die Boundary-Breite, siehe `width_estimated`. */
   max_m: number
   /** Woran gemessen wird: `yawed_xz` = größte XZ-Seite der GEDREHTEN Box
-   *  (Location-Modelle füllen ihren Rahmen auch schräg gedreht),
+   *  (Location-Modelle passen auch schräg gedreht auf ihr Grundstück),
    *  `xz` = größte XZ-Seite der gefixten Box (Dioramen: width_m ist eine
    *  Grundriss-Breite), `xyz` = größte Kante überhaupt (Props). */
   measure: 'yawed_xz' | 'xz' | 'xyz'
@@ -137,8 +139,10 @@ export interface SceneModelSpec {
    *  das zugleich der Anker: das Modell hängt so weit unter dieser Höhe, wie
    *  seine Gehfläche über seiner Unterkante liegt. */
   walk_y_world?: number
-  /** Dioramen ohne geeichtes `width_m`: `max_m` ist die Breite des
-   *  Raum-Rechtecks als Notbehelf — die UI soll zur Eichung auffordern. */
+  /** Modelle ohne geeichtes `width_m`: `max_m` ist nur ein Notbehelf — beim
+   *  Diorama die Breite des Raum-Rechtecks, beim Gebäude/der Fläche die
+   *  Boundary-Breite (`extent_m`, seit v6 Nr. 3). Die UI soll zur Eichung
+   *  auffordern. */
   width_estimated?: boolean
   // `walk_y_auto` gab es bis 2026-07-28: die aus dem Mesh GEMESSENE Gehhöhe,
   // die einen leeren Regler still ausfüllte. Eine Automatik, die Modelle

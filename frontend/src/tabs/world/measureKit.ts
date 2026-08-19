@@ -25,7 +25,7 @@ import type { Group, Object3D } from 'three'
 
 /** Which dial is being edited — decides WHICH ruler shows. */
 export type MeasureKey =
-  | 'plan_width' | 'storey' | 'size'
+  | 'plan_width' | 'storey' | 'model_width'
   | 'offset_y' | 'walk_y' | null
 
 /** Colours of the aids. Deliberately not the scene style: these are editor
@@ -227,7 +227,10 @@ export function buildMeasureAids(T: THREE, ctx: MeasureContext): Group {
       figLabel.position.set(fig.position.x, ctx.figureHeightWorld * 1.15, fig.position.z)
       break
     }
-    case 'size': {
+    case 'model_width': {
+      // The DECLARED real width of the model (v6 Nr. 3) against the
+      // location's own width — a square of that many metres inside the
+      // boundary frame, so "15 m on a 40 m plot" is one glance.
       if (ctx.modelWidthM) {
         g.add(square(T, ctx.modelWidthM, 0.03, AID.active))
         labelAt(`${ctx.modelWidthM.toFixed(2).replace('.', ',')} m ${w.of || 'von'} `
