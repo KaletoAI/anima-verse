@@ -368,6 +368,26 @@ SECTIONS = {
                 ],
             },
             {
+                "id": "context_render",
+                "label": "Scene context render (3D)",
+                "icon": "🎬",
+                "description": "The Blender plate of a placement spot — the picture an asset is generated INTO (docs/scene-context-render.md).",
+                "fields": [
+                    "_grp_context_render",
+                    "context_render_width",
+                    "context_render_height",
+                    "context_render_samples",
+                    "context_render_lens_mm",
+                    "context_render_elevation_deg",
+                    "context_render_azimuth_offset_deg",
+                    "context_render_fill",
+                    "context_render_grid",
+                    "context_render_figure",
+                    "context_render_mask_dilate_px",
+                    "context_render_timeout_s",
+                ],
+            },
+            {
                 "id": "analysis",
                 "label": "Analysis & rebuild prompts",
                 "icon": "🔍",
@@ -420,6 +440,22 @@ SECTIONS = {
             "blender_lod_ratio_character": {"type": "float", "label": "Distance mesh detail — characters", "default": 0.4, "min": 0.02, "max": 0.9, "description": "Target fraction of the triangle count for a character's distance mesh. Characters are looked at closely and in motion, so they take reduction worse than a static object — a silhouette that flickers while walking is noticed even at range. Only affects meshes built from now on; use Rebuild to redo an existing one."},
             "blender_lod_ratio_prop": {"type": "float", "label": "Distance mesh detail — props", "default": 0.25, "min": 0.02, "max": 0.9, "description": "Target fraction for a prop's distance mesh. Props carry their triangles evenly over a compact shape, which is the easiest case for reduction — a quarter held up in review even on a tree with fine branches."},
             "blender_lod_ratio_room": {"type": "float", "label": "Distance mesh detail — room dioramas", "default": 0.5, "min": 0.02, "max": 0.9, "description": "Target fraction for a room diorama. Rooms need more than props: their detail sits in a few small areas next to large flat walls, and the collapse algorithm spends its budget by surface area rather than by importance, so it takes the details away first."},
+            # --- Scene context render (docs/scene-context-render.md) ---
+            # Defaults are mirrored in app/core/scene_context.py so the module
+            # also runs with no world loaded (smoke checks, CLI).
+            "_grp_context_render": {"type": "group_header", "label": "Scene Context Render (local Blender)"},
+            "context_render_width": {"type": "int", "label": "Context plate width (px)", "default": 1024, "min": 256, "max": 2048, "description": "Width of the context plate — the render of a placement spot an asset is later inpainted into. The camera is solved from the FIELD OF VIEW, not from the pixel count, so changing this crops nothing and reframes nothing; it only decides how much detail the edit model gets to see."},
+            "context_render_height": {"type": "int", "label": "Context plate height (px)", "default": 1024, "min": 256, "max": 2048, "description": "Height of the context plate. Square by default: an inpaint mask and the crop that feeds image-to-3D both behave better without an aspect ratio to keep track of."},
+            "context_render_samples": {"type": "int", "label": "Context plate samples", "default": 48, "min": 4, "max": 512, "description": "Cycles samples for the context plate. This is a lighting and scale reference for an image model, not a beauty render — noise below the edit model's own noise floor costs seconds and buys nothing. Raise it only if the plate is also shown to a person."},
+            "context_render_lens_mm": {"type": "float", "label": "Context lens (mm)", "default": 50.0, "min": 18.0, "max": 200.0, "description": "Focal length on a 36 mm sensor. 50 mm is the 'normal' lens: wide enough to show the surroundings a new object has to match, long enough that its perspective does not warp the object the edit model draws. The value is recorded in the sidecar, so every stage after it stays metric."},
+            "context_render_elevation_deg": {"type": "float", "label": "Context camera elevation (°)", "default": 35.0, "min": 5.0, "max": 85.0, "description": "How far above the horizontal the camera looks down at the spot. Low values show a silhouette against the background, high values show the footprint as a surface; 35° is the three-quarter view that shows both."},
+            "context_render_azimuth_offset_deg": {"type": "float", "label": "Context camera azimuth offset (°)", "default": 45.0, "min": 0.0, "max": 180.0, "description": "The camera's angle relative to the TARGET's own yaw. 45° is the three-quarter angle where two sides of an oriented object are visible at once. Because it is relative, the same kind of object is always seen from the same side of itself."},
+            "context_render_fill": {"type": "float", "label": "Context target fill", "default": 0.4, "min": 0.1, "max": 0.9, "description": "How much of the image HEIGHT the target spot fills. The distance follows from it (d = lens × size / (sensor × fill)), so a smaller value backs the camera off and shows more context, a larger one moves in on the spot."},
+            "context_render_grid": {"type": "bool", "label": "Show the 1 m scale grid", "default": True, "description": "Draw a one-metre grid over the ground of the plate. It is the scale reference that lets a person — and the edit model — judge how big the object at this spot should be. Turn it off for a plate that goes to a backend which copies ground patterns into the object."},
+            "context_render_figure": {"type": "bool", "label": "Show the 1.70 m reference figure", "default": True, "description": "Place a 1.70 m figure beside the spot (the contract's own figure height, § A3). It stands at right angles to the camera direction, never on the spot itself. The second half of 'measurements need a reference' — a grid gives the unit, a figure gives the feeling."},
+            "context_render_mask_dilate_px": {"type": "float", "label": "Inpaint mask dilation (px)", "default": 0.0, "min": 0.0, "max": 128.0, "description": "How far the target's projected footprint mask is grown before it is written to the sidecar. A little slack lets the object's contact shadow and its contact with the ground land inside the inpainted region; too much lets the edit model rebuild the surroundings."},
+            "context_render_timeout_s": {"type": "int", "label": "Context render timeout (s)", "default": 600, "min": 30, "max": 3600, "description": "Hard limit for one context render. This is a real Cycles render with imported meshes, so the mesh-refinement timeout (which measures and normalises in under a second) is the wrong order of magnitude for it."},
+
             "blender_lod_ratio_building": {"type": "float", "label": "Distance mesh detail — buildings", "default": 0.5, "min": 0.02, "max": 0.9, "description": "Target fraction for a building's distance mesh. Buildings are the far-view models of a location and are rarely seen up close, but they share the rooms' problem of flat surfaces beside fine detail — hence the same starting point."},
 
             # --- 3D reference renders (T-pose / default pose) ---
