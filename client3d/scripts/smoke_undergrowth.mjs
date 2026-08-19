@@ -587,26 +587,27 @@
  *      way tops itself back up to the full 1966.
  *
  * (G8) A FOOTPRINT ON THE OTHER SIDE OF THE WORLD COSTS NOTHING. Every
- *      candidate of every cell used to be turned into the frame of EVERY
- *      placed location (`pointInFootprint`: two multiplications and a sine
- *      each), so a world with two hundred places paid two hundred of those on
+ *      candidate of every cell used to be tested against EVERY placed location
+ *      (`pointInFootprint`, a ray cast over the whole outline since contract
+ *      v6), so a world with two hundred places paid two hundred of those on
  *      each of ~1966 candidates per cell — while the player walks. The cell now
- *      keeps only the footprints whose CIRCUMSCRIBED box (`half · √2`, so the
- *      turn never has to be read and nothing that could block is dropped)
- *      meets it.
+ *      keeps only the footprints whose own BOUNDING BOX meets it, and that box
+ *      is cut ONCE per handover (`footprintBox` in `setAreas`), not once per
+ *      cell — a polygon cannot leave it, so nothing that could block is ever
+ *      dropped.
  *
  *      MEASURED, not asserted about the source alone: the footprint handed in
- *      is an object whose `pos_x` is a getter that counts its reads. Both the
- *      pre-filter and `pointInFootprint` read that field exactly once into a
- *      local before doing anything else, so the count is "how often was this
- *      place looked at at all".
- *        a 10 m place at (5000, 5000), anchor (32, 32): 21 reads — ONE box
- *          test per built cell (A1) and not one per candidate.
- *        a 20 m place at (32, 32): its circumscribed box runs 17.86 … 46.14 on
- *          both axes, so it lies wholly inside the anchor's own cell 0 … 64
- *          and inside no other -> 21 + 1966, the 21 box tests plus one
- *          evaluation for each candidate of that single cell. That second row
- *          is what proves the counter would have noticed a miss.
+ *      is an object whose `points` is a getter that counts its reads. Both
+ *      `footprintBox` and `pointInFootprint` read that field exactly once into
+ *      a local before doing anything else, so the count is "how often was this
+ *      outline walked at all".
+ *        a 10 m place at (5000, 5000), anchor (32, 32): 1 read — the box is
+ *          cut at the handover and no cell ever asks again.
+ *        a 20 m place around (32, 32) — the square 22 … 42 on both axes — lies
+ *          wholly inside the anchor's own cell 0 … 64 and inside no other
+ *          -> 1 + 1966: the one box cut plus one ray cast for each candidate
+ *          of that single cell. That second row is what proves the counter
+ *          would have noticed a miss.
  *      And the far place changes no tuft: the cell's instance count is the
  *      same 1966 with it and without it.
  */
@@ -1435,33 +1436,36 @@ async function main() {
   halved.dispose();
 
   // (G8) the footprint pre-filter, measured on a counting footprint
-  const counting = (x, z, w) => {
-    const fp = { pos_z: z, plan_width_m: w, yaw_deg: 0, reads: 0 };
-    // BOTH the cell's pre-filter and `pointInFootprint` read the centre's x
-    // EXACTLY once into a local before doing anything else, so this counter is
-    // "how often was this place looked at at all".
-    Object.defineProperty(fp, 'pos_x', {
-      get() { fp.reads += 1; return x; },
+  const counting = (pts) => {
+    const fp = { reads: 0 };
+    // `footprintBox` (once per `setAreas`) and `pointInFootprint` (per
+    // candidate) each read `points` EXACTLY once into a local before doing
+    // anything else, so this counter is "how often was this outline walked".
+    Object.defineProperty(fp, 'points', {
+      get() { fp.reads += 1; return pts; },
       enumerable: true,
     });
     return fp;
   };
-  const far = counting(5000, 5000, 10);
+  const far = counting([[4995, 4995], [5005, 4995], [5005, 5005], [4995, 5005]]);
   const withFar = createUndergrowthField({ heightAt: () => 0, applySway });
   withFar.setAreas([area], [far]);
   withFar.setAnchor(32, 32);
-  check('G8 a place on the other side of the world costs one box test per '
-    + 'built cell and not one per candidate', far.reads, midCell.length);
+  check('G8 a place on the other side of the world is walked ONCE, when it is '
+    + 'handed over — never again per cell and never per candidate',
+    far.reads, 1);
   check('G8 …and it changes no tuft: the anchor cell still carries its 1966',
     withFar.group.children[0].instanceMatrix.count, 1966);
   withFar.dispose();
-  const near = counting(32, 32, 20);
+  // 22 … 42 on both axes: inside the anchor's own cell 0 … 64 and inside no
+  // other, so exactly one cell asks it per candidate.
+  const near = counting([[22, 22], [42, 22], [42, 42], [22, 42]]);
   const withNear = createUndergrowthField({ heightAt: () => 0, applySway });
   withNear.setAreas([area], [near]);
   withNear.setAnchor(32, 32);
   check('G8 …while a place INSIDE the anchor cell — and inside no other — is '
     + 'asked once per candidate on top of that',
-    near.reads, midCell.length + 1966);
+    near.reads, 1 + 1966);
   withNear.dispose();
 
   console.log('\n(H) the wiring, pinned by reading the source');
@@ -1473,8 +1477,11 @@ async function main() {
     ugSrc.includes('maxPoints: UNDERGROWTH_MAX_PER_CELL,'), true);
   check('H the cell subtracts its rejections instead of re-rolling them',
     ugSrc.includes('triesPerPoint: 1,'), true);
-  check('H the footprints are cut to the cell by their circumscribed box',
-    /const reach = \(w \/ 2\) \* Math\.SQRT2;\s*return meetsCell\(/.test(ugSrc),
+  check('H the footprints are cut to the cell by their OWN bounding box',
+    /\.filter\(\(f\) => meetsCell\(f\.bounds\)\)\.map\(\(f\) => f\.fp\)/.test(ugSrc),
+    true);
+  check('H …and that box is cut once per handover, not once per cell',
+    ugSrc.includes('footprints = fps.map((fp) => ({ fp, bounds: footprintBox(fp) }));'),
     true);
   check('H …and it is the cut list the sampler gets',
     ugSrc.includes('footprints: nearFootprints,'), true);

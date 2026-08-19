@@ -196,9 +196,12 @@ export interface TerrainLayerProps {
   onEdgeInsert: (index: number, x: number, z: number) => void
   /** Draw what the areas GROW, as top-down dots (finding B17). */
   scatterPreview: boolean
-  /** The placed locations. Their footprints are kept CLEAR of scatter
-   *  (finding B18) — the rows go in as they are, the shared sampler reads
-   *  `pos_x`/`pos_z`/`yaw_deg`/`plan_width_m` off them itself. */
+  /** The placed locations, as the DRAWN outlines they cover in WORLD metres
+   *  (contract v6 "Gebiete"). Their footprints are kept CLEAR of scatter
+   *  (finding B18). The caller turns `map3d.boundary` out of the location's
+   *  local frame once per location (§ A1.1) — the shared sampler knows nothing
+   *  about pins, and a location without a boundary has no area and simply does
+   *  not appear in this list. */
   footprints: readonly ScatterFootprint[]
 }
 

@@ -61,7 +61,9 @@ import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
   WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
 import type { HeightTileBatch } from '../api';
+import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
+import { sanitizePolygon } from '../game/polygon';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, TerrainType,
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
@@ -657,9 +659,10 @@ export interface Ground {
   // `maxHeightIn` and `heightRangeIn` — the highest ground inside a world
   // rectangle and how much it moves there — went with the veil (contract v6
   // Nr. 8): they existed to hang the fog quads and to decide which of them was
-  // worth tiling, and nothing else ever asked. The primitives themselves stay
-  // in `@anima/scene-render` (`maxCompositeHeightIn`/`compositeHeightRangeIn`,
-  // hand-checked in `smoke_world_height.mjs`) for whoever needs them next.
+  // worth tiling, and nothing else ever asked. The primitives behind them went
+  // with them (`maxCompositeHeightIn`/`compositeHeightRangeIn` in
+  // `@anima/scene-render`) rather than staying as dormant code; a future fog
+  // round writes them against the field it actually needs.
   /**
    * Where a pointer ray meets the DRAWN ground, or `null` when it misses.
    *
@@ -985,9 +988,10 @@ export function createGround(): Ground {
     };
   }
 
-  /** The footprints the scatter keeps clear (finding B18), and the signature
-   *  the areas standing in the scene were sampled against. `null` means "never
-   *  built", which is not the same as "built against no locations at all". */
+  /** The footprints the scatter keeps clear (finding B18) — drawn outlines in
+   *  WORLD metres (`worldFootprints`) — and the signature the areas standing
+   *  in the scene were sampled against. `null` means "never built", which is
+   *  not the same as "built against no locations at all". */
   let footprints: readonly ScatterFootprint[] = [];
   let builtFpSig: string | null = null;
 
@@ -2098,6 +2102,47 @@ export function createGround(): Ground {
   }
 
   /**
+   * The worldmap rows as scatter footprints — their DRAWN outlines, turned
+   * into WORLD metres (contract v6 "Gebiete", § A1.1).
+   *
+   * THE TURN HAPPENS HERE, ONCE PER LOCATION, and that is the whole reason the
+   * shared sampler takes world points: it would otherwise be paid per
+   * CANDIDATE, on every sample of every painted area, and the package would
+   * have to know what a pin is.
+   *
+   * A row without a usable boundary is DROPPED rather than passed on with an
+   * empty outline: since v6 Nr. 1 such a location has no area at all — it is a
+   * pin — and a place with no area covers no ground and clears no props. That
+   * is the server's own answer (`world_geometry.effective_boundary` returns
+   * nothing for it), so the ground the client keeps bare is the ground the
+   * server calls occupied and no other.
+   *
+   * The square is gone with it: a bay bitten out of a lake used to be excluded
+   * from scatter because the SQUARE covered it, while the corners of the drawn
+   * shape that reached past that square grew props on ground the place owns.
+   */
+  function worldFootprints(locations: readonly MapLocation[]): ScatterFootprint[] {
+    const out: ScatterFootprint[] = [];
+    for (const loc of locations) {
+      const local = sanitizePolygon(loc.boundary ?? loc.map3d?.boundary);
+      if (!local) continue;
+      const cx = loc.pos_x;
+      const cz = loc.pos_z;
+      if (typeof cx !== 'number' || !Number.isFinite(cx)) continue;
+      if (typeof cz !== 'number' || !Number.isFinite(cz)) continue;
+      const yawDeg = Number.isFinite(loc.yaw_deg) ? loc.yaw_deg : 0;
+      const yaw = (yawDeg * Math.PI) / 180;
+      out.push({
+        points: local.map(([lx, lz]): Point2 => {
+          const p = localToWorld(lx, lz, cx, cz, yaw);
+          return [p.x, p.z];
+        }),
+      });
+    }
+    return out;
+  }
+
+  /**
    * Take over the world relief (§ A16).
    *
    * Failure keeps the field that stands and does NOT advance the signature, so
@@ -2357,7 +2402,7 @@ export function createGround(): Ground {
       if (tilesBusy) return Promise.resolve(false);
       const fpSig = footprintSig(locations);
       const fpMoved = builtFpSig !== null && builtFpSig !== fpSig;
-      footprints = locations;
+      footprints = worldFootprints(locations);
       // The relief has its own signature and its own fetch (§ A16). `null`
       // is "never fetched", so the first sync always asks — a world whose
       // `height_sig` is the empty string of an older server asks once and is

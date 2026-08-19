@@ -227,41 +227,6 @@
  *      h[3][63] = 252/128 = 1.96875 and the corrupted 9, at tx = 0.99975), so
  *      the walk across the seam drops 6.9982421875 m. The continuity check
  *      bites.
- * (29) THE RECTANGLE HELPERS walk the FINE lattice — a loaded tile's step, 4 m,
- *      anchored on its origin — and ask the ladder per grid point. The
- *      rectangle x in [0, 8], z in [248, 264] is half tile, half overview:
- *        x lines: 0, 4, 8                (the two ends plus the line between)
- *        z lines: 248, 252, 256, 260, 264
- *        z = 248, 252 -> tile "0,0" -> x/128 -> 0, 0.03125, 0.0625
- *        z = 256, 260, 264 -> tile "0,1", not loaded -> the overview, whose
- *            largest reading here is ov(8, 264) = 0.03125 + 3.09375 = 3.125
- *            and whose smallest is ov(0, 256) = 3
- *        max = 3.125 (overview half), min = 0 (tile half, at x = 0)
- *        -> maxCompositeHeightIn = 3.125, compositeHeightRangeIn = 3.125.
- *      Both halves are visited, and each supplies one end of the answer.
- * (30) WHAT THE FINE HALF IS WORTH: over x in [120, 136], z in [0, 8] —
- *      entirely inside the loaded tile (0,0) — the lattice lines are 120, 124,
- *      128, 132, 136 and 0, 4, 8, so max = 136/128 = 1.0625, min = 120/128 =
- *      0.9375, range 0.125.
- *      RED COUNTER-PROBE: the same rectangle with NO tile loaded is walked on
- *      the overview's own 256 m lattice — lines 120, 136 and 0, 8 — and answers
- *      max = ov(136, 8) = 0.53125 + 0.09375 = 0.625, min = ov(120, 0) =
- *      0.46875, range 0.15625. A veil hung on that maximum floats 0.4375 m
- *      below the hill the tiles know about, i.e. inside it.
- * (31) AND WHICH LATTICE IS WALKED IS THE POINT, not a detail — a ramp cannot
- *      show it, because a plane has its extremes on the rectangle's corners no
- *      matter how densely you sample it. So: a tile (0,0) of 65 x 65 zeroes
- *      with a single 5 m spike on its support point i = j = 32, i.e. at
- *      (128, 128). Over x, z in [120, 136] the FINE lattice asks 120, 124, 128,
- *      132, 136 on both axes, hits the spike and answers max 5, range 5. The
- *      overview's own 256 m lattice would ask nothing but the four corners of
- *      the rectangle — all of them zeroes OF THE SAME TILE — and hang the veil
- *      at 0, straight through a spike it never sampled.
- * (32) WITHOUT ANY TILE the overview's grid IS the finest there is, and it is
- *      walked: an overview of 3 x 3 points at step 4 with a 5 m peak on (4, 4)
- *      answers max 5 over x, z in [0, 8] — the lines 0, 4, 8 hit the peak. A
- *      composite that found no lattice at all would answer 0 here.
- *
  * ============================================================================
  * [8e] THE DRAWN GROUND OF THE COMPOSITE — `sampleCompositeGroundHeight`
  * ============================================================================
@@ -292,28 +257,19 @@
  *      (136,136) = 8; tx = tz = 6/8 = 0.75, tz <= tx -> 0 + 0.75·0 + 0.75·8 = 6.
  *      SO THE COARSER PLATE STANDS HIGHER STILL: 6 against the 4 of the 4 m
  *      cells and the 2 of the field. That is the finding in one number.
- * (36) THE RECTANGLE HELPERS ON THAT PLATE, x, z in [130, 134] — a rectangle
- *      wholly inside ONE 8 m cell:
- *        cellM = 8: the lines are the two ends alone (no multiple of 8 lies
- *          strictly between 130 and 134), so four samples:
- *          (130,130): tx = tz = 0.25 -> 0.25·8 = 2
- *          (134,130): tx = 0.75, tz = 0.25 -> tz <= tx -> 0.25·8 = 2
- *          (130,134): tx = 0.25, tz = 0.75 -> tz > tx -> 0.25·8 = 2
- *          (134,134): 6 (case 35)
- *          -> max 6, min 2, range 4.
- *        WITHOUT cellM the fine lattice is walked — lines 130, 132, 134 per
- *          axis — and the highest of those nine samples is the 4 of case (34),
- *          the lowest 0: max 4, range 4.
- *      RED COUNTER-PROBE: the bilinear reading of the highest sample is 2
- *      (case 34), so a veil hung the way task 3 shipped it would sit 6 − 2 =
- *      4 m below the ground that is drawn — inside the hill.
- * (37) AND IT CUTS BOTH WAYS: what the plate does NOT have, the veil must not
- *      clear either. A tile with its 5 m on the support point i = j = 33, i.e.
- *      at (132, 132), sits BETWEEN the corners of an 8 m grid. Over
- *      x, z in [128, 136] the fine lattice asks 128, 132, 136 and finds 5,
- *      while the 8 m plate asks 128 and 136 only — all four corners are 0, and
- *      0 is exactly how high that ground is drawn at 8 m cells. The helper
- *      answers for the surface on screen, not for the field under it.
+ * (36) AND IT CUTS BOTH WAYS: what the plate does NOT have is not drawn. A
+ *      tile with its 5 m on the support point i = j = 33, i.e. at (132, 132),
+ *      sits BETWEEN the corners of an 8 m grid. The field reads 5 there and the
+ *      4 m plate has that point as a cell CORNER, so it reads 5 as well — but
+ *      the 8 m cell [128, 136]^2 has four zero corners, and the ground drawn at
+ *      (132, 132) is therefore 0. Whoever asks the field instead of the plate
+ *      clears a hill nobody drew.
+ *
+ * WHAT IS NOT HERE ANY MORE: the rectangle helpers `maxCompositeHeightIn` /
+ * `compositeHeightRangeIn`. They existed to hang the fog quads of § A12 and to
+ * decide which of them was worth tiling; contract v6 Nr. 8 switched the veil
+ * off, and they went with it rather than staying as dormant code. Their cases
+ * (29)-(32) and (36)-(37) of the earlier revision went with them.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -355,7 +311,7 @@ function check(label, actual, expected, eps = 1e-9) {
 
 const {
   sampleWorldHeight, tileKeyAt, sampleCompositeHeight,
-  sampleCompositeGroundHeight, maxCompositeHeightIn, compositeHeightRangeIn,
+  sampleCompositeGroundHeight,
 } = await loadModule(SRC, 'worldHeight');
 const { groundLift, plateLift, standY } = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground');
@@ -627,53 +583,6 @@ check('...and the composite drops seven metres across the seam',
   sampleCompositeHeight(CORRUPT, 255.999, 12)
     - sampleCompositeHeight(CORRUPT, 256, 12), 6.9982421875);
 
-console.log('[8d] the rectangle helpers walk the fine lattice');
-check('half tile, half overview: the highest ground',
-  maxCompositeHeightIn(COMPOSITE, 0, 248, 8, 264), 3.125);
-check('...and the rise from the tile floor to the overview',
-  compositeHeightRangeIn(COMPOSITE, 0, 248, 8, 264), 3.125);
-check('inside the loaded tile: the highest ground',
-  maxCompositeHeightIn(COMPOSITE, 120, 0, 136, 8), 1.0625);
-check('...and how much it moves', compositeHeightRangeIn(COMPOSITE, 120, 0, 136, 8),
-  0.125);
-const OVERVIEW_ONLY = { tileM: TILE_M, overview: OVERVIEW, tiles: new Map() };
-check('RED COUNTER-PROBE: without the tile the veil hangs on the coarse plane',
-  maxCompositeHeightIn(OVERVIEW_ONLY, 120, 0, 136, 8), 0.625);
-check('...which is 0.4375 m below the hill — inside it',
-  maxCompositeHeightIn(COMPOSITE, 120, 0, 136, 8)
-    - maxCompositeHeightIn(OVERVIEW_ONLY, 120, 0, 136, 8), 0.4375);
-check('...and a different rise as well',
-  compositeHeightRangeIn(OVERVIEW_ONLY, 120, 0, 136, 8), 0.15625);
-// A spike between two coarse lines — the case that says WHICH lattice is
-// walked. Everything is zero but the support point (128, 128) of tile (0,0).
-const SPIKE_00 = rampTile(0, 0);
-SPIKE_00.heights = SPIKE_00.heights.map((row, j) =>
-  row.map((_, i) => (i === 32 && j === 32 ? 5 : 0)));
-const SPIKE = {
-  tileM: TILE_M, overview: OVERVIEW, tiles: new Map([['0,0', SPIKE_00]]),
-};
-check('the spike sits where the derivation puts it',
-  sampleCompositeHeight(SPIKE, 128, 128), 5);
-check('the fine lattice finds a spike between the coarse lines',
-  maxCompositeHeightIn(SPIKE, 120, 120, 136, 136), 5);
-check('...and calls the ground anything but level',
-  compositeHeightRangeIn(SPIKE, 120, 120, 136, 136), 5);
-check('RED COUNTER-PROBE: the corners of that rectangle are all zero',
-  Math.max(...[[120, 120], [136, 120], [120, 136], [136, 136]].map(
-    ([x, z]) => sampleCompositeHeight(SPIKE, x, z))), 0);
-check('without a tile the overview grid is walked, and it is the finest there is',
-  maxCompositeHeightIn({
-    tileM: TILE_M,
-    overview: { origin_x: 0, origin_z: 0, step_m: 4, rows: 3, cols: 3,
-      heights: [[0, 0, 0], [0, 5, 0], [0, 0, 0]] },
-    tiles: new Map(),
-  }, 0, 0, 8, 8), 5);
-
-check('no composite: a flat world has no maximum',
-  maxCompositeHeightIn(null, 0, 0, 100, 100), 0);
-check('...and no range either', compositeHeightRangeIn(
-  { tileM: TILE_M, overview: null, tiles: new Map() }, 0, 0, 100, 100), 0);
-
 console.log('[8e] the DRAWN ground of the composite — cells, not the field');
 // A flat overview: the drawn lattice is anchored on its origin (0, 0) and the
 // overview itself adds nothing, so every number below comes from the tile.
@@ -714,25 +623,17 @@ check('...the gap being a quarter of the cell twist 8',
   2);
 check('(35) the same point on an 8 m plate stands higher still',
   sampleCompositeGroundHeight(TWIST, 134, 134, 8), 6);
-check('(36) the rectangle helper on the 8 m plate',
-  maxCompositeHeightIn(TWIST, 130, 130, 134, 134, 8), 6);
-check('...and its rise (the low samples are 2)',
-  compositeHeightRangeIn(TWIST, 130, 130, 134, 134, 8), 4);
-check('...while the fine lattice alone answers',
-  maxCompositeHeightIn(TWIST, 130, 130, 134, 134), 4);
-check('RED COUNTER-PROBE: hung on the bilinear reading the veil sits 4 m low',
-  maxCompositeHeightIn(TWIST, 130, 130, 134, 134, 8)
-    - sampleCompositeHeight(TWIST, 134, 134), 4);
-// (37) The other direction: a spike BETWEEN the corners of the 8 m grid is not
-// on that plate at all, and the veil must not clear a hill nobody drew.
+// (36) The other direction: a spike BETWEEN the corners of the 8 m grid is not
+// on that plate at all, and nothing may clear a hill nobody drew.
 const BETWEEN = {
   tileM: TILE_M, overview: OV_FLAT, tiles: new Map([['0,0', spikeTile(33, 33, 5)]]),
 };
-check('the spike sits at (132, 132), between the 8 m corners',
+check('(36) the spike sits at (132, 132), between the 8 m corners',
   sampleCompositeHeight(BETWEEN, 132, 132), 5);
-check('the fine lattice finds it', maxCompositeHeightIn(BETWEEN, 128, 128, 136, 136), 5);
-check('...and the 8 m plate does not have it, so neither does the veil',
-  maxCompositeHeightIn(BETWEEN, 128, 128, 136, 136, 8), 0);
+check('...the 4 m plate has it as a cell CORNER and draws it',
+  sampleCompositeGroundHeight(BETWEEN, 132, 132, 4), 5);
+check('...while the 8 m cell has four zero corners, so the ground drawn is 0',
+  sampleCompositeGroundHeight(BETWEEN, 132, 132, 8), 0);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

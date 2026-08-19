@@ -166,8 +166,8 @@ export function localToWorld(cx: number, cz: number, yawDeg: number,
 /** World metres -> location-local metres (rotation by −yaw).
  *
  *  The arithmetic lives in `@anima/scene-render` (`worldToLocalXZ`, which takes
- *  RADIANS): the 3D client turns tiles with it and the shared scatter tests
- *  footprints with it (finding B18). One mapping, one home. */
+ *  RADIANS): the 3D client turns tiles with it and the editor turns pointer
+ *  positions with it. One mapping, one home. */
 export function worldToLocal(cx: number, cz: number, yawDeg: number,
   x: number, z: number): WorldPt {
   return worldToLocalXZ(cx, cz, (yawDeg * Math.PI) / 180, x, z)

@@ -9,7 +9,7 @@ import type { Map3D, ScenePayload, SceneProblem } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
 import {
   FIT_FALLBACK_PX_PER_M, areaInRect, decorateStroke, fitBounds, isStrokeStyle,
-  pointInPolygon, strokeToPolygon, visibleWorldRect,
+  localToWorld, pointInPolygon, strokeToPolygon, visibleWorldRect,
   type MapBounds, type StrokeDeco, type StrokeStyle, type View,
 } from './mapMath'
 import {
@@ -1203,12 +1203,19 @@ export function MapTab() {
    * Memoised: `placed` changes with the location list, and re-deriving this on
    * every pan would re-sample every area behind it.
    */
-  const scatterFootprints = useMemo(() => placed.map((l) => ({
-    pos_x: l.pos_x ?? null,
-    pos_z: l.pos_z ?? null,
-    yaw_deg: l.yaw_deg ?? null,
-    plan_width_m: anchorWidthM(l),
-  })), [placed])
+  // Scatter exclusions are POLYGONS in world metres since v6 (the shared
+  // sampler ray-casts them; `@anima/scene-render` scatter.ts): the drawn
+  // boundary through the ONE § A1.1 pin transform. A location without a
+  // boundary has no area and excludes nothing — same rule as the server.
+  const scatterFootprints = useMemo(() => placed.flatMap((l) => {
+    const local = boundaryLocal(l)
+    if (!local || l.pos_x == null || l.pos_z == null) return []
+    const yaw = l.yaw_deg ?? 0
+    return [{ points: local.map(([lx, lz]) => {
+      const p = localToWorld(l.pos_x as number, l.pos_z as number, yaw, lx, lz)
+      return [p.x, p.z] as [number, number]
+    }) }]
+  }), [placed])
 
   /** What the selected area GROWS, checked (finding B17). */
   const selScatter = useMemo(

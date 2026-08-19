@@ -20,35 +20,32 @@
 export type ScatterPoint2 = [number, number]
 
 /**
- * A placed location, as much of it as the scatter needs: the centre of its
- * footprint square, its turn and its edge length.
+ * The ground a placed location covers: its OUTLINE, in WORLD metres.
  *
- * The field names are the WORLDMAP payload's (`/play/worldmap → locations`,
- * § A1.3), where all four are hoisted to the top level — the 3D client hands
- * its rows straight in.
+ * Contract v6 "Gebiete": a location is a drawn POLYGON (`map3d.boundary`),
+ * never a square, and concave outlines are explicitly allowed. The square this
+ * interface used to carry (centre + yaw + edge) got both halves of a concave
+ * place wrong at once — a lake with a bay excluded scatter from the bay, which
+ * is water nobody painted a building on, and let scatter through the parts of
+ * the drawn shape that reach past the bounding square's corner. A square is
+ * now simply the special case of a polygon with four points.
  *
- * EVERY FIELD IS REQUIRED, `null` included, and that is deliberate. The
- * editor's rows (`/world/locations`) carry the scale anchor NESTED in
- * `map3d.plan_width_m` and nothing at the top level, so handing them in raw
- * made every square "no area" and the preview excluded nothing at all while
- * the client excluded correctly — a silent disagreement between the two
- * renderers, which is the one thing this shared module exists to prevent. An
- * optional field would have accepted that call; a required one makes it a
- * compile error, and the caller has to say what the edge is
- * (`MapTab` → `anchorWidthM`).
+ * WORLD METRES, and that is the whole contract with the caller. The package
+ * knows nothing about pins: `boundary` arrives in metres LOCAL to the anchor
+ * (`pos_x`/`pos_z`, turned by `yaw_deg`, § A1.1), and whoever holds the row
+ * turns it ONCE per location — not once per candidate point, which is what a
+ * pin-aware footprint would have cost on every sample of every area.
  *
- * `null` is still a real answer at RUNTIME: unplaced, or no usable anchor.
- * Such a location has no area at all (§ A1.1/§ A1.3) and never blocks a point.
+ * A location without a usable boundary contributes NO footprint at all. It has
+ * no area (§ A1.1, v6 Nr. 1 — the old "no anchor, 10 m square" is gone) and
+ * therefore blocks nothing; the caller drops it rather than handing in an
+ * empty outline.
  */
 export interface ScatterFootprint {
-  /** centre in world metres; `null` = unplaced */
-  pos_x: number | null
-  pos_z: number | null
-  /** turn of the square in degrees (§ A1.1); `null` reads as 0 */
-  yaw_deg: number | null
-  /** edge of the footprint square in world metres, HOISTED — never the nested
-   *  `map3d.plan_width_m`. `null` = no usable anchor, hence no area. */
-  plan_width_m: number | null
+  /** the outline in WORLD metres, `[x, z]` per point. Fewer than three points
+   *  enclose nothing and block nothing; a repeated closing point is harmless
+   *  (its edge is degenerate and never crosses a ray). */
+  points: readonly ScatterPoint2[]
 }
 
 /** One authored scatter of an area — `terrain_areas.meta.scatter[]`, exactly
@@ -144,9 +141,8 @@ export function pointInRing(x: number, z: number,
 }
 
 /**
- * World metres → the local frame of a footprint turned by `yawRad`, i.e. a
- * rotation by −yaw about the centre. The inverse of the contract's § A1.1
- * mapping
+ * World metres → the local frame of a pin turned by `yawRad`, i.e. a rotation
+ * by −yaw about the anchor. The inverse of the contract's § A1.1 mapping
  *
  *     x = cx + lx·cos(yaw) + lz·sin(yaw)
  *     z = cz − lx·sin(yaw) + lz·cos(yaw)
@@ -165,26 +161,48 @@ export function worldToLocalXZ(cx: number, cz: number, yawRad: number,
 }
 
 /**
- * Does the point lie on a placed location's footprint square (finding B18)?
+ * Does the point lie on a placed location's footprint (finding B18, contract
+ * v6)?
  *
- * The square is turned, so the point is turned into the square's own frame
- * first and compared against half the edge on both axes — the very test
- * `main.ts → tileAt` runs for walking. An unplaced location, one without a
- * positive edge, or a junk number is not a square and never blocks.
+ * The very ray cast of `pointInRing`, spelled out again with a finiteness
+ * guard, so the answer is the SERVER's
+ * (`app/core/world_geometry.point_in_polygon`) and the walking client's
+ * (`client3d/src/game/polygon.pointInPolygon`) down to the half-open
+ * comparison: `(zi > z) !== (zj > z)` and a strict `x < crossX`. A point
+ * exactly on an edge may fall either way, and on all three sides it falls the
+ * SAME way — which is what keeps a prop from standing inside a wall the server
+ * refuses to let anyone walk through.
+ *
+ * A junk coordinate anywhere in the outline makes the whole outline useless
+ * (the same all-or-nothing `polygon.sanitizePolygon` applies), so it blocks
+ * nothing rather than blocking a shape nobody can name. Fewer than three
+ * points, likewise: a line encloses no ground.
+ *
+ * The guard is folded into the cast rather than run as a separate pass — this
+ * is the innermost loop of the sampler (candidates × footprints), and a second
+ * walk over the outline would be paid on every one of them.
  */
 export function pointInFootprint(fp: ScatterFootprint,
                                  x: number, z: number): boolean {
-  const cx = fp?.pos_x
-  const cz = fp?.pos_z
-  const w = fp?.plan_width_m
-  if (typeof cx !== 'number' || !Number.isFinite(cx)) return false
-  if (typeof cz !== 'number' || !Number.isFinite(cz)) return false
-  if (typeof w !== 'number' || !(w > 0)) return false
-  const yawDeg = typeof fp.yaw_deg === 'number' && Number.isFinite(fp.yaw_deg)
-    ? fp.yaw_deg : 0
-  const p = worldToLocalXZ(cx, cz, (yawDeg * Math.PI) / 180, x, z)
-  const half = w / 2
-  return Math.abs(p.x) <= half && Math.abs(p.z) <= half
+  const pts = fp?.points
+  const n = pts?.length ?? 0
+  if (n < 3) return false
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return false
+  let inside = false
+  for (let i = 0, j = n - 1; i < n; j = i, i += 1) {
+    const a = pts[i]
+    const b = pts[j]
+    if (!a || !b || a.length < 2 || b.length < 2) return false
+    const xi = a[0]
+    const zi = a[1]
+    const xj = b[0]
+    const zj = b[1]
+    if (!Number.isFinite(xi) || !Number.isFinite(zi)
+      || !Number.isFinite(xj) || !Number.isFinite(zj)) return false
+    if ((zi > z) !== (zj > z)
+      && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside
+  }
+  return inside
 }
 
 /** What `scatterInstances` needs to know. */
@@ -199,7 +217,9 @@ export interface ScatterSampleOptions {
   densityPer100m2: number
   /** `scatterSeed(area.id, index)` — see there. */
   seed: string
-  /** Placed locations whose footprints are kept CLEAR (finding B18). */
+  /** Placed locations whose footprints are kept CLEAR (finding B18) — their
+   *  drawn outlines in WORLD metres, see `ScatterFootprint`. A location with
+   *  no boundary has no area and simply does not appear in this list. */
   footprints?: readonly ScatterFootprint[]
   /**
    * The CLEANED rings of every area that lies ABOVE this one in the stack —

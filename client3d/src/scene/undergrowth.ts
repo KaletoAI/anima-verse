@@ -846,6 +846,40 @@ export interface UndergrowthArea {
   swayM: number;
 }
 
+/** A footprint the scatter keeps clear, with the bounding box of its outline —
+ *  the cheap per-cell rejection of `buildCell`. */
+interface CellFootprint {
+  fp: ScatterFootprint;
+  /** `[minX, minZ, maxX, maxZ]` in world metres, same shape as
+   *  `UndergrowthArea.bounds`. */
+  bounds: readonly [number, number, number, number];
+}
+
+/**
+ * The bounding box of a footprint's outline, in world metres.
+ *
+ * An outline that encloses nothing (fewer than three points, a junk
+ * coordinate) gets an EMPTY box — one that meets no cell — because
+ * `pointInFootprint` refuses it too: the pre-filter must never keep a
+ * footprint the test would reject, nor drop one it would accept.
+ */
+function footprintBox(fp: ScatterFootprint
+): readonly [number, number, number, number] {
+  const EMPTY = [Infinity, Infinity, -Infinity, -Infinity] as const;
+  const pts = fp?.points;
+  if (!pts || pts.length < 3) return EMPTY;
+  let minX = Infinity; let minZ = Infinity;
+  let maxX = -Infinity; let maxZ = -Infinity;
+  for (const [x, z] of pts) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return EMPTY;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  return [minX, minZ, maxX, maxZ];
+}
+
 /** One instanced layer: the tufts of ONE area inside ONE cell. */
 interface CellLayer {
   mesh: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>;
@@ -917,7 +951,7 @@ export function createUndergrowthField(opts: {
   group.name = 'terrain-undergrowth';
 
   let areas: readonly UndergrowthArea[] = [];
-  let footprints: readonly ScatterFootprint[] = [];
+  let footprints: readonly CellFootprint[] = [];
   /** every built cell, by key — each one holds one layer per area that shows
    *  ground in it */
   const cells = new Map<string, CellLayer[]>();
@@ -1021,28 +1055,21 @@ export function createUndergrowthField(opts: {
      * The placed locations whose footprint can reach into this cell — the same
      * rejection once more, and the one that matters most.
      *
-     * `pointInFootprint` turns the point into the square's own frame, i.e. two
-     * multiplications and a sine per candidate PER LOCATION; a world with two
-     * hundred places would spend that two hundred times on each of ~2000
-     * candidates of every cell, and building a cell is the one thing that
-     * happens while the player walks.
+     * `pointInFootprint` is a ray cast over the whole outline, i.e. up to 64
+     * edge tests per candidate PER LOCATION; a world with two hundred places
+     * would spend that two hundred times on each of ~2000 candidates of every
+     * cell, and building a cell is the one thing that happens while the player
+     * walks.
      *
-     * THE BOX IS THE TURNED SQUARE'S CIRCUMSCRIBED ONE (`half · √2` on both
-     * axes), so the yaw never has to be read here and no footprint can be
-     * dropped that would have blocked something: whatever the turn, the square
-     * stays inside the circle of that radius. Anything that is not a square at
-     * all (unplaced, no edge, junk) blocks nothing anywhere and goes now.
+     * THE BOX IS THE OUTLINE'S OWN BOUNDING BOX in world metres, computed once
+     * per `setAreas` (`footprintBox`) rather than once per cell — a polygon
+     * cannot leave it, so no footprint can be dropped here that would have
+     * blocked something. Since contract v6 that box is TIGHT: the square this
+     * used to circumscribe (`half · √2`) reached a whole 41 % past a place
+     * that never covered its own corners.
      */
-    const nearFootprints = footprints.filter((fp) => {
-      const cxp = fp?.pos_x;
-      const czp = fp?.pos_z;
-      const w = fp?.plan_width_m;
-      if (typeof cxp !== 'number' || !Number.isFinite(cxp)) return false;
-      if (typeof czp !== 'number' || !Number.isFinite(czp)) return false;
-      if (typeof w !== 'number' || !(w > 0)) return false;
-      const reach = (w / 2) * Math.SQRT2;
-      return meetsCell([cxp - reach, czp - reach, cxp + reach, czp + reach]);
-    });
+    const nearFootprints = footprints
+      .filter((f) => meetsCell(f.bounds)).map((f) => f.fp);
     const out: CellLayer[] = [];
     areas.forEach((area, index) => {
       // A shape whose kind grows nothing, or whose value is so small that a
@@ -1243,7 +1270,10 @@ export function createUndergrowthField(opts: {
     group,
     setAreas(next, fps) {
       areas = next;
-      footprints = fps;
+      // The bounding boxes are cut ONCE here, not once per cell: the cells are
+      // rebuilt from scratch below and every one of them asks the same
+      // question of the same outlines.
+      footprints = fps.map((fp) => ({ fp, bounds: footprintBox(fp) }));
       for (const key of [...cells.keys()]) dropCell(key);
       // The kinds may have new colours and new wind, and the amplitude is
       // baked into the shader — so the materials go with the cells they were

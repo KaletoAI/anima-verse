@@ -94,54 +94,74 @@
  *      loaded from `scatterLod.ts` with everything else there.
  *
  * ============================================================================
- * (B) pointInFootprint — the exclusion of finding B18
+ * (B) pointInFootprint — the exclusion of finding B18, on a POLYGON
  * ============================================================================
- * A footprint is a SQUARE of edge `plan_width_m` centred on `pos_x/pos_z` and
- * turned by `yaw_deg` (§ A1.1). The test turns the point into the square's own
- * frame (a rotation by -yaw) and compares against half the edge.
+ * Contract v6 "Gebiete": a footprint is the location's DRAWN OUTLINE, and the
+ * exclusion is a ray cast over it in WORLD metres — half-open, the very rule
+ * of `app/core/world_geometry.point_in_polygon` and
+ * `client3d/src/game/polygon.pointInPolygon`. The package knows nothing about
+ * pins: whoever holds the row turns `map3d.boundary` out of the local frame
+ * once per location (§ A1.1) before handing it in.
  *
- * (B1) AXIS-ALIGNED, centre (10, 10), edge 4 -> the square runs 8..12 on both
- *      axes.
- *        (10, 10)   centre                      -> inside
- *        (11.9, 8.1) just inside the corner      -> inside
- *        (12.1, 10) 0.1 m past the east edge     -> outside
- *        (10, 7.9)  0.1 m short of the north edge-> outside
- *        (12, 12)   exactly the corner           -> inside (<= half)
+ * THE FIXTURE IS THE SERVER'S OWN, the concave L-shape of
+ * `scripts/smoke_world_polygon.py` (map view, x east / z south), in LOCAL
+ * metres:
  *
- * (B2) TURNED BY 45 deg, centre (0, 0), edge 2 (half 1). The square's corners
- *      now point along the axes at distance sqrt(2) = 1.41421356..., and the
- *      EDGE midpoints sit at distance 1 along the diagonals.
- *        (1.3, 0)      -> inside  (a corner direction; 1.3 < 1.414)
- *        (1.5, 0)      -> outside (past the corner)
- *        (0.8, 0.8)    -> local (via -45 deg): x = 0.8*cos45 + 0.8*sin45
- *                        ... careful, the mapping is
- *                        lx = dx*cos - dz*sin, lz = dx*sin + dz*cos
- *                        with cos = sin = 0.70710678 for yaw 45:
- *                        lx = 0.8*0.7071 - 0.8*0.7071 = 0
- *                        lz = 0.8*0.7071 + 0.8*0.7071 = 1.13137
- *                        |lz| = 1.131 > 1 -> OUTSIDE. The point lies past the
- *                        edge midpoint on the diagonal, which is exactly what
- *                        a turned square does that an axis-aligned box test
- *                        would get wrong.
- *        (0.7, 0.7)    -> lz = 0.98995 <= 1 -> inside.
+ *         (0,0) ──── (4,0)
+ *           │  wide     │
+ *           │  arm    (4,2)
+ *           │    (2,2)──┘
+ *           │      │  notch at (3,3)
+ *         (0,4)─(2,4)
  *
- * (B3) NOT A SQUARE AT ALL — never blocks anything:
- *        unplaced (pos_x null), edge 0, edge negative, edge missing, NaN
- *        centre. All false, for the centre point itself.
+ * PINNED AT (100, 50) WITH YAW 90 — the pin case of
+ * `smoke_polygon_containment.mjs`. § A1.1 says
  *
- * (B4) THE ANCHOR IS THE HOISTED FIELD, NOT THE NESTED ONE. The worldmap
- *      payload hoists `plan_width_m` to the top level; the map editor's rows
- *      (`/world/locations`) carry it only inside `map3d`. A row of the second
- *      kind handed in RAW therefore has no edge at all — the review's
- *      critical finding: the editor preview excluded nothing while the client
- *      excluded correctly.
- *        raw editor row {pos 10/10, yaw 0, map3d:{plan_width_m: 4}} at (10,10)
- *          -> FALSE: nothing at the top level, so no square
- *        the ADAPTER shape {pos 10/10, yaw 0, plan_width_m: 4} at (10,10)
- *          -> TRUE, and it is the very square of (B1)
- *      The type makes the first call impossible to write since the review
- *      (every field required); this pins the RUNTIME half of the same rule,
- *      which no type can reach in plain JS.
+ *     x = cx + lx·cos(yaw) + lz·sin(yaw)
+ *     z = cz − lx·sin(yaw) + lz·cos(yaw)
+ *
+ * and at yaw 90 (cos 0, sin 1) that is x = 100 + lz, z = 50 − lx. Every corner
+ * by hand:
+ *
+ *     local (0,0) -> (100 + 0, 50 − 0) = (100, 50)
+ *     local (4,0) -> (100 + 0, 50 − 4) = (100, 46)
+ *     local (4,2) -> (100 + 2, 50 − 4) = (102, 46)
+ *     local (2,2) -> (100 + 2, 50 − 2) = (102, 48)
+ *     local (2,4) -> (100 + 4, 50 − 2) = (104, 48)
+ *     local (0,4) -> (100 + 4, 50 − 0) = (104, 50)
+ *
+ * (B1) THE NOTCH IS NOT EXCLUDED — the bug this replaces. The old square test
+ *      took `plan_width_m` (the bounding box, 4) and cleared the WHOLE 4×4
+ *      block, so the bay bitten out of a lake grew nothing.
+ *        local (3,3) -> world (100 + 3, 50 − 3) = (103, 47)
+ *        the ray from (103, 47) to +x crosses: the edge (100,50)→(100,46) at
+ *        x = 100 (not to the right), the edge (102,46)→(102,48) at x = 102
+ *        (not to the right either — 103 > 102); the three edges at z = 48/50
+ *        do not straddle z = 47 at all. ZERO crossings -> OUTSIDE.
+ *      -> `pointInFootprint` false: a prop MAY stand in the notch.
+ *
+ * (B2) THE WIDE ARM IS EXCLUDED.
+ *        local (1,1) -> world (100 + 1, 50 − 1) = (101, 49)
+ *        crossings to the right of (101, 49): the edge (104,48)→(104,50)
+ *        straddles z = 49 and sits at x = 104 > 101 -> ONE crossing;
+ *        (100,50)→(100,46) straddles it too but at x = 100 < 101.
+ *        ONE crossing -> INSIDE.
+ *      And the right arm, local (3,1) -> world (101, 47): the only crossing to
+ *      the right is (102,46)→(102,48) at x = 102 -> INSIDE.
+ *
+ * (B3) OUTSIDE THE BOUNDING BOX. local (5,5) -> world (105, 45) — outside on
+ *      both axes -> false, the case a bounding-box test would also get right
+ *      and the one that pins that nothing was inverted.
+ *
+ * (B4) NO OUTLINE, NO EXCLUSION. Fewer than three points (a line, a single
+ *      point, an empty list), a missing `points` and a junk coordinate all
+ *      block nothing: since v6 Nr. 1 a location without a boundary has no area
+ *      at all, and a poisoned outline is not a shape anyone can name (the same
+ *      all-or-nothing `polygon.sanitizePolygon` applies). A non-finite QUERY
+ *      point is refused for the same reason.
+ *
+ * (B5) A CLOSED RING IS TOLERATED: the repeated first point makes a degenerate
+ *      edge, which can never straddle a ray. Same answers as (B1)/(B2).
  *
  * ============================================================================
  * (C) scatterInstances — the sampler, with a HAND-FED random stream
@@ -174,10 +194,11 @@
  *        0.75, 0.25, 0.00   -> x = 15, z = 5, yaw = 0, inside
  *      -> [ {2, 4, pi}, {15, 5, 0} ]. Six numbers for two points.
  *
- * (C2) THE SAME STREAM with a footprint over the FIRST point: a location at
- *      (2, 4), yaw 0, edge 2 covers 1..3 by 3..5. The first candidate is
- *      inside it and is dropped — but it still cost its three numbers, so the
- *      second candidate is the very same 0.75/0.25/0.00 it was in (C1).
+ * (C2) THE SAME STREAM with a footprint over the FIRST point: the outline
+ *      (1,3) (3,3) (3,5) (1,5) in WORLD metres — 1..3 by 3..5. The first
+ *      candidate (2, 4) is its centre and is dropped — but it still cost its
+ *      three numbers, so the second candidate is the very same 0.75/0.25/0.00
+ *      it was in (C1).
  *      Result: [ {15, 5, 0} ] — (C1) MINUS the covered point, nothing else
  *      moved (same `triesPerPoint` 1, so the two runs are the same two
  *      candidates). That is the whole promise of finding B18: a building clears the
@@ -252,6 +273,21 @@
  *       [FAR, OCC_RIGHT] on the (C1) stream, (2,4) survives (in neither) and
  *       (15,5) falls to the second ring -> [ {2, 4, pi} ]. The mirror image of
  *       (C8), so a wrong "only the first ring counts" cannot pass both.
+ *
+ * (C12) THE CONCAVE FOOTPRINT, END TO END — the lake with a bay, the whole
+ *       reason the square went. The L-shaped place of section (B) stands in a
+ *       meadow painted around it: the 8 x 8 m square 100..108 by 44..52.
+ *         wanted = round(64 / 100 * 3.125) = 2, `triesPerPoint` 1 -> exactly
+ *         two candidates; x = 100 + r*8, z = 44 + r*8:
+ *           0.375, 0.375, 0.50 -> (103, 47) yaw pi  — the NOTCH
+ *           0.125, 0.625, 0.00 -> (101, 49) yaw 0   — the wide ARM
+ *       Without the place both stand. WITH it the arm is subtracted and the
+ *       notch keeps growing: [ {103, 47, pi} ] — ground the place does not
+ *       cover, and the bay of a lake is exactly that ground.
+ *       THE RED PROBE of the replaced rule: the bounding SQUARE of the same
+ *       outline — (100,46) (104,46) (104,50) (100,50), the 4 m `plan_width_m`
+ *       block — contains BOTH points, so the old exclusion returns [] and
+ *       cannot pass this case.
  *
  * ============================================================================
  * (D) THE RED COUNTER-CHECK — a mutant that provably fails
@@ -714,6 +750,42 @@ async function main() {
   const OCC_RIGHT = [[12, 0], [20, 0], [20, 10], [12, 10]];
   const OCC_FAR = [[30, 30], [40, 30], [40, 40], [30, 40]];
   const BOWTIE = [[0, 0], [10, 10], [10, 0], [0, 10]];
+  /** The server's concave L-shape in LOCAL metres — the fixture of
+   *  `scripts/smoke_world_polygon.py` and `smoke_polygon_containment.mjs`. */
+  const L_LOCAL = [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]];
+  /** Local -> world (§ A1.1) — the turn the CALLER does before the sampler
+   *  ever sees a footprint (`ground.ts → worldFootprints`). Spelled out here,
+   *  never imported: the world literals of section (B) are hand-derived from
+   *  this formula, and a shared helper would be checking itself. */
+  const localToWorld = (lx, lz, cx, cz, yawDeg) => {
+    const r = (yawDeg * Math.PI) / 180;
+    const c = Math.cos(r);
+    const s = Math.sin(r);
+    // rounded to nanometres: cos(90 deg) is 6.1e-17 in binary floats, not 0,
+    // and a corner at 100.0000000000000002 reads worse than it is.
+    return [Math.round((cx + lx * c + lz * s) * 1e9) / 1e9,
+      Math.round((cz - lx * s + lz * c) * 1e9) / 1e9];
+  };
+  const L_WORLD = L_LOCAL.map(([lx, lz]) => localToWorld(lx, lz, 100, 50, 90));
+  /** (C2)/(D): the outline that covers the first candidate of the (C1) stream
+   *  — 1..3 by 3..5 in world metres, and (2, 4) is its centre. */
+  const FP_OVER_FIRST = { points: [[1, 3], [3, 3], [3, 5], [1, 5]] };
+  /**
+   * (C12): a meadow painted AROUND the L-shaped place of section (B) — the
+   * 8 × 8 m square 100..108 by 44..52, which holds the whole outline.
+   *
+   *   wanted = round(64 / 100 * 3.125) = round(2) = 2, and `triesPerPoint` 1
+   *   bounds the run at exactly those two candidates.
+   *   x = 100 + r*8, z = 44 + r*8:
+   *     0.375, 0.375, 0.50 -> (103, 47), yaw pi   — the NOTCH  (B1)
+   *     0.125, 0.625, 0.00 -> (101, 49), yaw 0    — the wide ARM (B2)
+   */
+  const L_MEADOW = {
+    ring: [[100, 44], [108, 44], [108, 52], [100, 52]],
+    areaM2: 64, densityPer100m2: 3.125, seed: 's', triesPerPoint: 1,
+  };
+  const L_STREAM = [0.375, 0.375, 0.50, 0.125, 0.625, 0.00];
+  const L_BOTH = [{ x: 103, z: 47, yaw: Math.PI }, { x: 101, z: 49, yaw: 0 }];
   // The (C1) stream and the two points it makes — reused by every existence
   // check below, so "nothing moved" is one literal and not four.
   const C1_STREAM = [0.10, 0.20, 0.50, 0.75, 0.25, 0.00];
@@ -748,48 +820,37 @@ async function main() {
   check('A8 …and SHRINKS an oversized one to the same 2 m',
     propGroundFit(-2, 2, DEFAULT_TARGET_H), { scale: 0.5, offsetY: 1 });
 
-  console.log('\n(B) pointInFootprint — footprints stay clear (B18)');
-  const fp = { pos_x: 10, pos_z: 10, yaw_deg: 0, plan_width_m: 4 };
-  check('B1 the centre is inside', pointInFootprint(fp, 10, 10), true);
-  check('B1 just inside the corner', pointInFootprint(fp, 11.9, 8.1), true);
-  check('B1 0.1 m past the east edge', pointInFootprint(fp, 12.1, 10), false);
-  check('B1 0.1 m short of the north edge', pointInFootprint(fp, 10, 7.9), false);
-  check('B1 exactly the corner counts as inside',
-    pointInFootprint(fp, 12, 12), true);
-  const turned = { pos_x: 0, pos_z: 0, yaw_deg: 45, plan_width_m: 2 };
-  check('B2 1.3 m along a corner direction is inside a 45 deg square',
-    pointInFootprint(turned, 1.3, 0), true);
-  check('B2 1.5 m is past that corner', pointInFootprint(turned, 1.5, 0), false);
-  check('B2 (0.8, 0.8) is past the edge midpoint on the diagonal',
-    pointInFootprint(turned, 0.8, 0.8), false);
-  check('B2 (0.7, 0.7) is still inside', pointInFootprint(turned, 0.7, 0.7), true);
-  check('B3 an unplaced location blocks nothing',
-    pointInFootprint({ pos_x: null, pos_z: null, yaw_deg: 0, plan_width_m: 4 }, 0, 0), false);
-  check('B3 a zero edge blocks nothing',
-    pointInFootprint({ pos_x: 0, pos_z: 0, yaw_deg: 0, plan_width_m: 0 }, 0, 0), false);
-  check('B3 a negative edge blocks nothing',
-    pointInFootprint({ pos_x: 0, pos_z: 0, yaw_deg: 0, plan_width_m: -5 }, 0, 0), false);
-  check('B3 a missing edge blocks nothing',
-    pointInFootprint({ pos_x: 0, pos_z: 0 }, 0, 0), false);
-  check('B3 a NaN centre blocks nothing',
-    pointInFootprint({ pos_x: NaN, pos_z: 0, yaw_deg: 0, plan_width_m: 4 }, 0, 0), false);
-  // (B4) — the anchor is the HOISTED field. An editor row handed in raw has
-  // its edge only inside `map3d` and is therefore no square at all.
-  const rawEditorRow = { pos_x: 10, pos_z: 10, yaw_deg: 0, map3d: { plan_width_m: 4 } };
-  check('B4 a nested map3d.plan_width_m is NOT read',
-    pointInFootprint(rawEditorRow, 10, 10), false);
-  check('B4 …and the adapted row is the very square of (B1)',
-    pointInFootprint({
-      pos_x: rawEditorRow.pos_x, pos_z: rawEditorRow.pos_z,
-      yaw_deg: rawEditorRow.yaw_deg,
-      plan_width_m: rawEditorRow.map3d.plan_width_m,
-    }, 10, 10), true);
-  check('B4 …the same adapted row rejects a point past its edge',
-    pointInFootprint({
-      pos_x: rawEditorRow.pos_x, pos_z: rawEditorRow.pos_z,
-      yaw_deg: rawEditorRow.yaw_deg,
-      plan_width_m: rawEditorRow.map3d.plan_width_m,
-    }, 12.1, 10), false);
+  console.log('\n(B) pointInFootprint — the DRAWN outline stays clear (B18, v6)');
+  // The caller's job, done here by hand so the expectations below are literals
+  // and not the output of a helper: local -> world at pin (100, 50), yaw 90.
+  check('B the pin transform puts local (4,0) at world (100,46)',
+    L_WORLD[1], [100, 46]);
+  check('B …and the whole outline is the hand-derived one', L_WORLD, [
+    [100, 50], [100, 46], [102, 46], [102, 48], [104, 48], [104, 50],
+  ]);
+  const HUT = { points: L_WORLD };
+  check('B1 the NOTCH — local (3,3) = world (103,47) — is NOT excluded',
+    pointInFootprint(HUT, 103, 47), false);
+  check('B2 the wide arm — local (1,1) = world (101,49) — IS excluded',
+    pointInFootprint(HUT, 101, 49), true);
+  check('B2 …and the right arm — local (3,1) = world (101,47) — too',
+    pointInFootprint(HUT, 101, 47), true);
+  check('B3 local (5,5) = world (105,45) is past the outline entirely',
+    pointInFootprint(HUT, 105, 45), false);
+  check('B4 a two-point outline blocks nothing',
+    pointInFootprint({ points: [[100, 50], [100, 46]] }, 100, 48), false);
+  check('B4 an empty outline blocks nothing',
+    pointInFootprint({ points: [] }, 101, 49), false);
+  check('B4 a missing outline blocks nothing',
+    pointInFootprint({}, 101, 49), false);
+  check('B4 a junk coordinate poisons the whole outline',
+    pointInFootprint({ points: [[100, 50], [100, NaN], [102, 46], [102, 48]] },
+      101, 47), false);
+  check('B4 a NaN query point is refused', pointInFootprint(HUT, NaN, 49), false);
+  check('B5 a closed ring answers exactly as the open one does (inside)',
+    pointInFootprint({ points: [...L_WORLD, [100, 50]] }, 101, 49), true);
+  check('B5 …and in the notch (outside)',
+    pointInFootprint({ points: [...L_WORLD, [100, 50]] }, 103, 47), false);
 
   console.log('\n  pointInRing — the even-odd rule both sides share');
   check('the centre of the square is inside', pointInRing(10, 10, SQUARE), true);
@@ -809,7 +870,7 @@ async function main() {
   check('C2 a footprint SUBTRACTS the covered point — the rest is (C1) verbatim',
     scatterInstances({
       ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      footprints: [{ pos_x: 2, pos_z: 4, yaw_deg: 0, plan_width_m: 2 }],
+      footprints: [FP_OVER_FIRST],
       triesPerPoint: 1,
       rng: stream(C1_STREAM),
     }),
@@ -878,6 +939,19 @@ async function main() {
     }),
     [{ x: 2, z: 4, yaw: Math.PI }]);
 
+  console.log('\n  C12 the CONCAVE footprint, end to end (the lake with a bay)');
+  check('C12 without the hut both candidates stand',
+    scatterInstances({ ...L_MEADOW, rng: stream(L_STREAM) }), L_BOTH);
+  check('C12 the hut subtracts the ARM and leaves the NOTCH growing',
+    scatterInstances({ ...L_MEADOW, footprints: [HUT], rng: stream(L_STREAM) }),
+    [L_BOTH[0]]);
+  // The RED counter-probe of the bug this replaces: the old exclusion was the
+  // bounding SQUARE of the outline, and it swallows the notch as well.
+  const L_SQUARE_FP = { points: [[100, 46], [104, 46], [104, 50], [100, 50]] };
+  check('C12 the bounding SQUARE would have cleared the notch too — the bug',
+    scatterInstances({ ...L_MEADOW, footprints: [L_SQUARE_FP],
+      rng: stream(L_STREAM) }), []);
+
   console.log('\n  C7 determinism of the seeded path (a property, not a record)');
   const opts = { ring: SQUARE, areaM2: 400, densityPer100m2: 2 };
   const a1 = scatterInstances({ ...opts, seed: scatterSeed('ta_1', 0) });
@@ -908,7 +982,7 @@ async function main() {
   checkNot('D …and it breaks the footprint subtraction (C2) too',
     mutant.scatterInstances({
       ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      footprints: [{ pos_x: 2, pos_z: 4, yaw_deg: 0, plan_width_m: 2 }],
+      footprints: [FP_OVER_FIRST],
       triesPerPoint: 1, rng: stream(C1_STREAM),
     }),
     [{ x: 15, z: 5, yaw: 0 }]);
