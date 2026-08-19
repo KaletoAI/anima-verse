@@ -117,14 +117,13 @@ class ImageBackend(ABC):
         # Style/negative belong to the use cases, not to the backend.
         self.image_family = os.environ.get(f"{env_prefix}IMAGE_FAMILY", "").strip()
 
-        # Does this backend have a negative input at all? CFG backends
-        # (SD/SDXL, A1111, Z-Image with CFG > 1) do; distilled/guidance-free
-        # models (Z-Image Turbo, Flux, Qwen-Image) and the chat-image gateways
-        # do not — for those, generate() folds the negative into the positive
-        # prompt as negations instead of letting it be dropped silently.
-        self.supports_negative_prompt = os.environ.get(
-            f"{env_prefix}SUPPORTS_NEGATIVE_PROMPT", "true"
-        ).strip().lower() not in ("false", "0", "no")
+        # Does this backend have a negative input at all? Tri-state config
+        # field: "auto" (the prompt family decides — natural-family models
+        # like Flux/Qwen-Image are guidance-free and have none) / "yes" / "no".
+        # The RAW setting is kept; the resolved bool is the property below,
+        # so config, handoff and the option payloads share one rule.
+        self.negative_prompt_setting = os.environ.get(
+            f"{env_prefix}SUPPORTS_NEGATIVE_PROMPT", "").strip()
 
         # Purpose category (txt2img / img2img / inpaint / img2mesh) — set for
         # EVERY backend type, so an inpaint alias on any api_type is kept out
@@ -379,23 +378,25 @@ class ImageBackend(ABC):
                                  negative_folded=negative_folded)
         return result
 
-    def _prompt_family(self) -> str:
-        """Prompt family of this backend: ``"natural"`` or ``"keywords"``.
+    @property
+    def supports_negative_prompt(self) -> bool:
+        """True when a separate negative prompt reaches this engine.
 
-        The configured ``image_family`` wins; when it is empty the family is
-        derived from the model name exactly like the prompt composition does
-        (z_image -> keywords, qwen/flux -> natural).
+        Resolves the tri-state ``negative_prompt_setting`` through the ONE
+        rule in :func:`app.imagegen.negation_fold.backend_supports_negative`.
+        Read lazily (not cached in ``__init__``) because subclasses set
+        ``model`` after the base constructor, and ``auto`` depends on it.
         """
-        family = (self.image_family or "").strip().lower()
-        if family in ("natural", "keywords"):
-            return family
-        try:
-            from app.core.config import image_model_to_family
-            from app.core.prompt_adapters import get_target_model
-            return image_model_to_family(
-                get_target_model("", getattr(self, "model", "") or ""))
-        except Exception:
-            return "keywords"
+        from app.imagegen.negation_fold import backend_supports_negative
+        return backend_supports_negative(
+            self.negative_prompt_setting, self.image_family,
+            getattr(self, "model", "") or "")
+
+    def _prompt_family(self) -> str:
+        """Prompt family of this backend: ``"natural"`` or ``"keywords"``."""
+        from app.imagegen.negation_fold import resolve_family
+        return resolve_family(self.image_family,
+                              getattr(self, "model", "") or "")
 
     def _log_generation(self, final_prompt: str, negative_prompt: str,
                         params: Dict[str, Any], duration_s: float,

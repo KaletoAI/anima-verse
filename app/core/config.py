@@ -794,6 +794,16 @@ def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> boo
             for k in ("prompt_prefix", "negative_prompt"):
                 if k in be:
                     del be[k]; changed = True
+            # ``supports_negative_prompt`` lived as a bool for one day
+            # (2026-08-18) before it became the auto/yes/no select: a stored
+            # True was the materialised default of that day, not a decision,
+            # and is wrong for every natural-family model -> "auto"; a stored
+            # False was an explicit untick -> "no". One-time normalisation.
+            v = be.get("supports_negative_prompt")
+            if v is True or v is None and "supports_negative_prompt" in be:
+                be["supports_negative_prompt"] = "auto"; changed = True
+            elif v is False:
+                be["supports_negative_prompt"] = "no"; changed = True
     # Scattered prefix/suffix fields -> now part of the use cases.
     for k in ("profile_image_prompt_prefix", "outfit_image_prompt_prefix",
               "map_2d_image_prompt_suffix"):

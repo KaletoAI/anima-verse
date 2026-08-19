@@ -33,8 +33,9 @@ interface ImagegenOption {
   lora_options?: LoraOption[] // this backend's LoRAs from the LoRA library
   ref_slot_count?: number // number of reference-image slots (0 = none)
   category?: string // 'inpaint' = only for Map-Fit/Match-Edges, not for normal renders
-  // false = the backend has no negative input (distilled/guidance-free model);
-  // the server folds the negative into the prompt as negations.
+  // false = the backend has no negative input (distilled/guidance-free
+  // model); the server folds the negations into the prompt and the dialog
+  // hides the negative field. Resolved server-side from auto/yes/no.
   supports_negative_prompt?: boolean
   // Use-case styles resolved per backend (family + model) — shown as an
   // editable prompt part when the caller sets `styleUseCase`.
@@ -54,6 +55,11 @@ interface ComposePreview {
   use_case?: string
   llm_composed?: boolean
   cache_hit?: boolean
+  // false = the chosen backend has no negative input: `prompt` already
+  // carries the negations, `negative` is empty and `negative_folded` lists
+  // the terms that moved.
+  supports_negative_prompt?: boolean
+  negative_folded?: string[]
 }
 
 export interface ImageGenSubmit {
@@ -322,6 +328,12 @@ export function ImageGenDialog({
   const currentOption = useMemo<ImagegenOption | null>(
     () => entries.find((e) => e.name === optionKey) || null, [entries, optionKey])
 
+  // Backend without a negative input (resolved server-side from the
+  // auto/yes/no setting): there is nothing to type into, because the
+  // composer already folded every negation into the prompt above. The field
+  // is hidden instead of shown-but-ignored.
+  const noNegative = currentOption?.supports_negative_prompt === false
+
   // Use-case style of the CURRENT backend as an editable prompt part — the
   // final prompt is fully visible in the dialog; a backend swap re-fills the
   // text (families phrase their styles differently).
@@ -365,13 +377,16 @@ export function ImageGenDialog({
   // "Compose with AI": the same endpoint with llm=true — the LLM stage runs on
   // the mechanical result and its output lands in the (editable) prompt field.
   // The negative stays as composed; submit stays literal, no second call.
-  const composeWithLlm = useCallback(async () => {
+  // `recompose` skips the server's compose cache for this one call (the
+  // answer is cached again afterwards) — the way to get a fresh rewrite when
+  // nothing in the inputs changed but the last one was not good.
+  const composeWithLlm = useCallback(async (recompose = false) => {
     if (!composeKey || !optionKey || composing) return
     setComposing(true)
     try {
       const r = await apiPost<ComposePreview>('/world/compose-preview', {
         ...(JSON.parse(composeKey) as Record<string, unknown>),
-        backend: optionKey, llm: true,
+        backend: optionKey, llm: true, ...(recompose ? { recompose: true } : {}),
       })
       setPrompt(r.prompt || '')
       setComposeWarnings(r.warnings || [])
@@ -437,7 +452,11 @@ export function ImageGenDialog({
     }
     if (isRegen || showCreateNew) payload.create_new = createNew
     if (isRegen && improvement.trim()) payload.improvement_request = improvement.trim()
-    if (!hideNegative && negative.trim()) payload.negative_prompt = negative.trim()
+    // A backend without a negative input gets none: its negations already
+    // stand in the prompt, and the handoff folds whatever the use case adds.
+    if (!hideNegative && !noNegative && negative.trim()) {
+      payload.negative_prompt = negative.trim()
+    }
     if (characterOptions) payload.character_names = selectedChars
     if (showRoomReference) payload.use_room = useRoom
     if (sourceImageUrl) payload.use_source_as_reference = useSource
@@ -458,7 +477,7 @@ export function ImageGenDialog({
       settingsSuffix, styleText, styleUseCase, composeRequest, composeLlm,
       loraSlots, onSubmit, onClose,
       isRegen, showCreateNew, createNew,
-      improvement, hideNegative, negative, characterOptions, selectedChars,
+      improvement, hideNegative, noNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource,
       showResolution, widthText, heightText])
 
@@ -668,6 +687,17 @@ export function ImageGenDialog({
                     >
                       {composing ? '…' : `✨ ${t('Compose with AI')}`}
                     </button>
+                    {composeLlm.llm && composeLlm.cached ? (
+                      <button
+                        type="button"
+                        className="ga-btn ga-btn-sm"
+                        disabled={submitting || composing}
+                        onClick={() => { void composeWithLlm(true) }}
+                        title={t('Ignore the cached rewrite and let the LLM compose this prompt again.')}
+                      >
+                        ↻ {t('Recompose')}
+                      </button>
+                    ) : null}
                     {composeLlm.llm ? (
                       <span className="ga-hint" style={{ fontSize: '0.78em' }}>
                         {composeLlm.cached
@@ -785,7 +815,12 @@ export function ImageGenDialog({
                 </>
               ) : null}
 
-              {!hideNegative ? (
+              {!hideNegative && noNegative ? (
+                <div className="ga-form-hint">
+                  {t('This backend has no negative input — negations are part of the prompt above.')}
+                </div>
+              ) : null}
+              {!hideNegative && !noNegative ? (
                 <>
                   <label className="ga-imagegen-label">{t('Negative prompt')}</label>
                   <textarea
@@ -796,11 +831,6 @@ export function ImageGenDialog({
                     disabled={submitting}
                     onChange={(e) => setNegative(e.target.value)}
                   />
-                  {currentOption?.supports_negative_prompt === false ? (
-                    <div className="ga-form-hint">
-                      {t('This backend has no negative input — these will be folded into the prompt as negations.')}
-                    </div>
-                  ) : null}
                 </>
               ) : null}
 

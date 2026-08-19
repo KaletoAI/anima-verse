@@ -1696,8 +1696,10 @@ def build_imagegen_options() -> Dict[str, Any]:
             "image_family": getattr(b, "image_family", "") or "",
             "prompt": getattr(b, "default_prompt", "") or "",
             "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
-            # False = no negative input; the dialog says so and generate()
-            # folds the negative into the prompt as negations.
+            # RESOLVED tri-state (auto/yes/no -> bool, one rule in
+            # negation_fold.backend_supports_negative, read off the backend
+            # instance). False = no negative input: the dialog hides the
+            # field and the composer folds the negative into the prompt.
             "supports_negative_prompt": bool(
                 getattr(b, "supports_negative_prompt", True)),
             "target_model": get_target_model(
@@ -2266,7 +2268,8 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
     if data.get("subject_only"):
         return {"prompt": subject, "negative": "", "warnings": [],
                 "use_case": use_case, "llm_composed": False,
-                "cache_hit": False}
+                "cache_hit": False, "supports_negative_prompt": True,
+                "negative_folded": []}
 
     # The backend only supplies the family (image_family/model) — availability
     # does not matter for a text preview, so take the configured instance by
@@ -2299,12 +2302,32 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
             else _cfg.use_case_llm_compose(use_case)):
         from app.core.prompt_compose_llm import llm_compose
         composed = llm_compose(composed, use_case=use_case, subject=subject,
-                               family=composed.meta.get("family", "keywords"))
+                               family=composed.meta.get("family", "keywords"),
+                               force=bool(data.get("recompose")))
 
-    return {"prompt": composed.prompt, "negative": composed.negative,
+    # Backends without a negative input: the preview must show what the
+    # engine will really see (final-prompt rule) — fold here, exactly like
+    # the handoff does. The dialog then hides the negative field. Folding
+    # twice is a no-op: the handoff skips every item the prompt already
+    # negates, so the same terms are never appended a second time.
+    prompt_out, negative_out = composed.prompt, composed.negative
+    folded: List[str] = []
+    supports_negative = True
+    if backend is not None:
+        supports_negative = bool(
+            getattr(backend, "supports_negative_prompt", True))
+    if negative_out and not supports_negative:
+        from app.imagegen.negation_fold import fold_negatives
+        prompt_out, folded = fold_negatives(
+            prompt_out, negative_out, composed.meta.get("family", "keywords"))
+        negative_out = ""
+
+    return {"prompt": prompt_out, "negative": negative_out,
             "warnings": composed.warnings, "use_case": use_case,
             "llm_composed": bool(composed.meta.get("llm_composed")),
-            "cache_hit": bool(composed.meta.get("cache_hit"))}
+            "cache_hit": bool(composed.meta.get("cache_hit")),
+            "supports_negative_prompt": supports_negative,
+            "negative_folded": folded}
 
 
 async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) -> Dict[str, Any]:

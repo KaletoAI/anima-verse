@@ -15,9 +15,15 @@ Two halves, both without a world, a config or a network:
        "without fog") is skipped. An empty negative changes nothing.
 
 2. The handoff in ``ImageBackend.generate`` with a fake backend that records
-   what ``_generate`` received: with ``supports_negative_prompt=False`` the
-   engine must see the folded prompt and an EMPTY negative; with the flag on,
-   prompt and negative pass through byte-identically.
+   what ``_generate`` received: with the backend resolved to "no negative
+   input" the engine must see the folded prompt and an EMPTY negative; with a
+   negative input, prompt and negative pass through byte-identically.
+
+3. ``backend_supports_negative`` — the tri-state resolution the config field
+   (auto/yes/no), the handoff and the option payloads all share. Expected
+   values derived by hand from the rule: yes/true/1/on -> True,
+   no/false/0/off -> False, everything else (auto, "", None) -> the prompt
+   family decides, natural -> False, keywords -> True.
 
 Usage:  ./.venv/bin/python scripts/smoke_negation_fold.py
 """
@@ -29,7 +35,8 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.imagegen.base import ImageBackend            # noqa: E402
-from app.imagegen.negation_fold import fold_negatives  # noqa: E402
+from app.imagegen.negation_fold import (               # noqa: E402
+    backend_supports_negative, fold_negatives)
 
 FAILURES = []
 
@@ -91,6 +98,19 @@ expect("every item already negated",
        fold_negatives("A shore without fog.", "fog", "natural"),
        ("A shore without fog.", []))
 
+print("\nfold_negatives — folding twice changes nothing (preview + handoff)")
+# The dialog preview folds, the handoff folds again on the same negative
+# (the use-case default it falls back to). The second pass must be a no-op —
+# every item is already negated in the prompt.
+for _fam, _p, _n in (
+        ("natural", "A mysterious beach on a secluded lake.", "trees, fog"),
+        ("keywords", "beach, lake, photo", "trees, fog, blurry"),
+        ("natural", "A quiet shore", "no fog, without trees")):
+    once, _ = fold_negatives(_p, _n, _fam)
+    twice, again = fold_negatives(once, _n, _fam)
+    expect(f"idempotent ({_fam}, {_n!r})", twice, once)
+    expect(f"second pass folds nothing ({_fam})", again, [])
+
 
 # ── Handoff: ImageBackend.generate ────────────────────────────────────────
 class _FakeBackend(ImageBackend):
@@ -116,33 +136,90 @@ class _FakeBackend(ImageBackend):
 print("\nHandoff ImageBackend.generate")
 be = _FakeBackend()
 be.image_family = "natural"
-be.supports_negative_prompt = False
+be.negative_prompt_setting = "no"
 be.generate("A mysterious beach on a secluded lake.", "trees, fog", {})
-expect("flag off -> prompt folded", be.seen_prompt,
+expect("no negative input -> prompt folded", be.seen_prompt,
        "A mysterious beach on a secluded lake. No trees, no fog.")
-expect("flag off -> negative emptied", be.seen_negative, "")
+expect("no negative input -> negative emptied", be.seen_negative, "")
 
 be = _FakeBackend()
 be.image_family = "keywords"
-be.supports_negative_prompt = True
+be.negative_prompt_setting = "yes"
 be.generate("beach, lake", "trees, fog", {})
-expect("flag on -> prompt untouched", be.seen_prompt, "beach, lake")
-expect("flag on -> negative untouched", be.seen_negative, "trees, fog")
+expect("negative input -> prompt untouched", be.seen_prompt, "beach, lake")
+expect("negative input -> negative untouched", be.seen_negative, "trees, fog")
 
 be = _FakeBackend()
 be.image_family = "keywords"
-be.supports_negative_prompt = False
+be.negative_prompt_setting = "no"
 be.generate("beach, lake", "", {})
 expect("empty negative -> prompt untouched", be.seen_prompt, "beach, lake")
 
-print("\nBackend flag from the config bridge (env)")
+# The preview folds and the handoff folds again (the generate path falls back
+# to the use-case negative when the dialog sends none) — nothing doubles.
+be = _FakeBackend()
+be.image_family = "natural"
+be.negative_prompt_setting = "no"
+pre_folded, _ = fold_negatives(
+    "A mysterious beach on a secluded lake.", "trees, fog", "natural")
+be.generate(pre_folded, "trees, fog", {})
+expect("preview-folded prompt + same negative -> no doubling",
+       be.seen_prompt,
+       "A mysterious beach on a secluded lake. No trees, no fog.")
+
+print("\nbackend_supports_negative — the tri-state rule")
+expect("auto + natural family -> no negative input",
+       backend_supports_negative("auto", "natural", ""), False)
+expect("auto + keywords family -> negative input",
+       backend_supports_negative("auto", "keywords", ""), True)
+expect("auto + Flux model name -> no negative input",
+       backend_supports_negative("auto", "", "Flux2-9B"), False)
+expect("auto + Qwen-Image model name -> no negative input",
+       backend_supports_negative("auto", "", "Qwen/Qwen-Image-2.0"), False)
+# Documented blind spot: Z-Image models are KEYWORD family, so auto grants
+# them a negative input — right for Z-Image with CFG > 1, WRONG for Z-Image
+# Turbo (distilled, guidance-free). Only the explicit "no" fixes that one;
+# the model name carries no "turbo" marker to key on reliably.
+expect("auto + Z-Image model name -> negative input (Turbo needs 'no')",
+       backend_supports_negative("auto", "", "Z-Image-Turbo"), True)
+expect("explicit 'no' overrides the family",
+       backend_supports_negative("no", "keywords", "Z-Image-Turbo"), False)
+expect("explicit 'yes' overrides the family",
+       backend_supports_negative("yes", "natural", "Flux2-9B"), True)
+
+print("\nbackend_supports_negative — tolerant values")
+for value, want in (("true", True), ("false", False), ("1", True),
+                    ("0", False), ("on", True), ("off", False),
+                    (True, True), (False, False),
+                    ("YES", True), (" no ", False)):
+    expect(f"{value!r} (natural family)",
+           backend_supports_negative(value, "natural", ""), want)
+expect("None -> auto (natural family)",
+       backend_supports_negative(None, "natural", ""), False)
+expect("'' -> auto (keywords family)",
+       backend_supports_negative("", "keywords", ""), True)
+expect("unknown word -> auto (natural family)",
+       backend_supports_negative("maybe", "natural", ""), False)
+
+print("\nBackend setting from the config bridge (env)")
 os.environ.pop("SMOKE_FOLD_SUPPORTS_NEGATIVE_PROMPT", None)
-expect("missing key -> default True",
-       _FakeBackend().supports_negative_prompt, True)
-os.environ["SMOKE_FOLD_SUPPORTS_NEGATIVE_PROMPT"] = "false"
-expect("'false' -> False", _FakeBackend().supports_negative_prompt, False)
-os.environ["SMOKE_FOLD_SUPPORTS_NEGATIVE_PROMPT"] = "true"
-expect("'true' -> True", _FakeBackend().supports_negative_prompt, True)
+_be = _FakeBackend()
+_be.image_family = "natural"
+expect("missing key -> auto -> natural family has none",
+       _be.supports_negative_prompt, False)
+_be = _FakeBackend()
+_be.image_family = "keywords"
+expect("missing key -> auto -> keyword family has one",
+       _be.supports_negative_prompt, True)
+for env_value, family, want in (("no", "keywords", False),
+                                ("yes", "natural", True),
+                                ("false", "keywords", False),
+                                ("true", "natural", True),
+                                ("auto", "natural", False)):
+    os.environ["SMOKE_FOLD_SUPPORTS_NEGATIVE_PROMPT"] = env_value
+    _be = _FakeBackend()
+    _be.image_family = family
+    expect(f"env {env_value!r} + {family}", _be.supports_negative_prompt, want)
 os.environ.pop("SMOKE_FOLD_SUPPORTS_NEGATIVE_PROMPT", None)
 
 print()

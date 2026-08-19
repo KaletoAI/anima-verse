@@ -2853,8 +2853,10 @@ def build_imagegen_workflows(character_name: str) -> Dict[str, Any]:
             "available": True,
             "target_model": _target_style,
             "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
-            # False = no negative input; the dialog says so and generate()
-            # folds the negative into the prompt as negations.
+            # RESOLVED tri-state (auto/yes/no -> bool, one rule in
+            # negation_fold.backend_supports_negative, read off the backend
+            # instance). False = no negative input: the dialog hides the
+            # field and the composer folds the negative into the prompt.
             "supports_negative_prompt": bool(
                 getattr(b, "supports_negative_prompt", True)),
         }

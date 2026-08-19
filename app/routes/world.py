@@ -1039,9 +1039,14 @@ def surface_textures_admin() -> Dict[str, Any]:
     try:
         for b in svc.list_available_backends(media="image"):
             style = compose_prompt("", b)
+            # False = no negative input (auto/yes/no resolved in
+            # negation_fold): the form hides the field, and the handoff folds
+            # whatever negative is submitted into the prompt as negations.
             backends.append({"name": b.name,
                              "prompt_style": style["style"],
-                             "prompt_negative": style["negative"]})
+                             "prompt_negative": style["negative"],
+                             "supports_negative_prompt": bool(
+                                 getattr(b, "supports_negative_prompt", True))})
     except Exception:
         pass
     from app.core.surface_textures import get_blends
@@ -1197,9 +1202,15 @@ def props_admin() -> Dict[str, Any]:
     try:
         for b in svc.list_available_backends(media="image"):
             style = compose_prompt("", b)
+            # False = no negative input (auto/yes/no resolved in
+            # negation_fold): the form hides the field, and the handoff folds
+            # whatever negative is submitted into the prompt as negations.
             image_backends.append({"name": b.name,
                                    "prompt_style": style["style"],
-                                   "prompt_negative": style["negative"]})
+                                   "prompt_negative": style["negative"],
+                                   "supports_negative_prompt": bool(
+                                       getattr(b, "supports_negative_prompt",
+                                               True))})
     except Exception:
         pass
     return {"props": list_props(full=True), "pending": is_pending(),
@@ -1886,6 +1897,21 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     from app.skills.image_regenerate import enhance_prompt
     enhanced = await asyncio.to_thread(enhance_prompt, prompt, improvement_request, None)
     return {"prompt": enhanced}
+
+
+@router.get("/compose-cache")
+async def compose_cache_status(_u=Depends(require_admin)) -> Dict[str, Any]:
+    """Size of the LLM prompt-compose cache (admin use-case editor)."""
+    from app.core.prompt_compose_llm import cache_size
+    return {"entries": cache_size()}
+
+
+@router.post("/compose-cache/clear")
+async def compose_cache_clear(_u=Depends(require_admin)) -> Dict[str, Any]:
+    """Drop every cached LLM-composed prompt — the only way to make "Compose
+    with AI" start over for prompts whose inputs did not change."""
+    from app.core.prompt_compose_llm import clear_cache
+    return {"status": "success", "cleared": clear_cache()}
 
 
 @router.post("/compose-preview")

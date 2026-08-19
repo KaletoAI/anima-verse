@@ -82,15 +82,21 @@ export function SurfaceGenerateForm({
           onChange={(e) => onPrompt(e.target.value)}
         />
       </Field>
-      <Field label={t('Negative prompt')} help="surface_prompt"
-        promptContext={SURFACE_PROMPT_CONTEXT}>
-        <textarea
-          className="ga-textarea"
-          rows={2}
-          value={negative}
-          onChange={(e) => onNegative(e.target.value)}
-        />
-      </Field>
+      {backends.find((b) => b.name === backendName)?.supports_negative_prompt === false ? (
+        <div className="ga-form-hint">
+          {t('This backend has no negative input — negations are part of the prompt above.')}
+        </div>
+      ) : (
+        <Field label={t('Negative prompt')} help="surface_prompt"
+          promptContext={SURFACE_PROMPT_CONTEXT}>
+          <textarea
+            className="ga-textarea"
+            rows={2}
+            value={negative}
+            onChange={(e) => onNegative(e.target.value)}
+          />
+        </Field>
+      )}
     </>
   )
 }

@@ -165,7 +165,11 @@ function renderUseCaseDetail(uc) {
           + 'onchange="setVal(\'' + llmPath + '\', this.checked)"> Compose via LLM (opt-in)</label>'
           + '<div class="hint" style="opacity:.7;font-size:.78em;margin-top:2px">'
           + 'When enabled, an LLM rewrites the composed prompt into one coherent, '
-          + 'positively-exhaustive English prompt. Shown editable in the render dialog.</div></div>';
+          + 'positively-exhaustive English prompt. Shown editable in the render dialog.</div>'
+          + '<div style="margin-top:6px;display:flex;align-items:center;gap:8px">'
+          + '<button type="button" class="btn btn-sm" onclick="clearComposeCache(this)">Clear LLM compose cache</button>'
+          + '<span class="hint" style="opacity:.7;font-size:.78em" id="compose-cache-size"></span></div></div>';
+    loadComposeCacheSize();
     for (const fam of (D.families || [])) {
         html += '<div style="margin:4px 0 16px 0;padding-left:8px;border-left:2px solid var(--border,#30363d)">';
         html += '<div style="opacity:.6;font-size:.8em;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">' + esc(fam) + '</div>';
@@ -204,6 +208,33 @@ function renderUseCaseDetail(uc) {
 
 // „Copy default": schreibt den eingebauten Use-Case-Default in das Feld, damit
 // man ihn bearbeiten kann. uc/fam/fld bestimmen den Default, p ist der Setz-Pfad.
+async function loadComposeCacheSize() {
+    const el = document.getElementById('compose-cache-size');
+    if (!el) return;
+    try {
+        const r = await fetch('/world/compose-cache', { credentials: 'same-origin', cache: 'no-store' });
+        const d = await r.json();
+        el.textContent = (d.entries || 0) + ' cached prompts';
+    } catch (e) { el.textContent = ''; }
+}
+
+async function clearComposeCache(btn) {
+    // The cache keys on every input, so it never expires on its own — this
+    // button is the only way to make "Compose with AI" start from scratch
+    // for unchanged inputs (e.g. after a model swap).
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch('/world/compose-cache/clear', { method: 'POST', credentials: 'same-origin' });
+        const d = await r.json();
+        toast('LLM compose cache cleared (' + (d.cleared || 0) + ' entries)');
+    } catch (e) {
+        toast('Could not clear the compose cache', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+        loadComposeCacheSize();
+    }
+}
+
 function copyUseCaseDefault(p, uc, fam, fld) {
     const D = USE_CASE_DEFAULTS || { defaults: {} };
     const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';

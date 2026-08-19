@@ -190,10 +190,16 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
           <textarea className="ga-textarea" rows={2} value={style}
             onChange={(e) => { setStyle(e.target.value); setStyleTouched(true) }} />
         </Field>
-        <Field label={t('Negative prompt')}>
-          <textarea className="ga-textarea" rows={2} value={negative}
-            onChange={(e) => { setNegative(e.target.value); setStyleTouched(true) }} />
-        </Field>
+        {imageBackendInfo?.supports_negative_prompt === false ? (
+          <div className="ga-form-hint">
+            {t('This backend has no negative input — negations are part of the prompt above.')}
+          </div>
+        ) : (
+          <Field label={t('Negative prompt')}>
+            <textarea className="ga-textarea" rows={2} value={negative}
+              onChange={(e) => { setNegative(e.target.value); setStyleTouched(true) }} />
+          </Field>
+        )}
         <Field label={t('Final prompt (sent to the render)')}>
           <textarea className="ga-textarea" rows={2} value={finalPrompt} readOnly
             style={{ opacity: 0.85 }} />

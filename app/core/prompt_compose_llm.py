@@ -99,6 +99,36 @@ def _cache_put(key: str, prompt: str) -> None:
         logger.debug("prompt compose cache write failed: %s", e)
 
 
+def cache_size() -> int:
+    """Number of cached LLM-composed prompts (admin display)."""
+    try:
+        from app.core.db import get_connection
+        row = get_connection().execute(
+            "SELECT COUNT(*) FROM prompt_compose_cache").fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:  # noqa: BLE001
+        logger.debug("prompt compose cache count failed: %s", e)
+        return 0
+
+
+def clear_cache() -> int:
+    """Drop every cached LLM-composed prompt. Returns the number removed.
+
+    The cache keys on style/subject/hint/family/template stamp/conditions, so
+    it never goes stale by itself — but a model swap or a change of taste
+    needs a way to start over, and this is it (admin button + API)."""
+    try:
+        from app.core.db import get_connection, transaction
+        n = cache_size()
+        with transaction() as conn:
+            conn.execute("DELETE FROM prompt_compose_cache")
+        logger.info("LLM compose cache cleared (%d entries)", n)
+        return n
+    except Exception as e:  # noqa: BLE001
+        logger.warning("prompt compose cache clear failed: %s", e)
+        return 0
+
+
 def _clean(text: str) -> str:
     out = _FENCE_RE.sub("", (text or "").strip()).strip()
     out = _LABEL_RE.sub("", out).strip()
@@ -203,12 +233,14 @@ def quality_warnings(text: str, negative: str) -> list:
 
 
 def llm_compose(composed: Composed, *, use_case: str, subject: str,
-                family: str) -> Composed:
+                family: str, force: bool = False) -> Composed:
     """Run the LLM stage on a mechanically composed prompt.
 
     Returns a NEW :class:`Composed` with the rewritten prompt; the negative
     is untouched (the guard already moved the negated items there). On any
     failure the input is returned unchanged, with a warning appended.
+    ``force`` skips the cache READ (the fresh answer is still written), which
+    is what the dialog's "Recompose" button asks for.
     """
     from app.core import config as _cfg
 
@@ -229,7 +261,7 @@ def llm_compose(composed: Composed, *, use_case: str, subject: str,
             meta={**composed.meta, "llm_composed": False, "cache_hit": False})
 
     key = cache_key(style, clean_subject, hint, family, conditions)
-    cached = _cache_get(key)
+    cached = None if force else _cache_get(key)
     if cached:
         logger.info("LLM compose (%s): cache hit", use_case)
         # Repair runs on the cached text too — it is idempotent (a prompt

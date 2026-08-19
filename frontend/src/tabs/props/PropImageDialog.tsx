@@ -88,9 +88,17 @@ export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
               </label>
               <textarea className="ga-textarea" rows={4} value={prompt}
                 onChange={(e) => { setPrompt(e.target.value); setTouched(true) }} />
-              <label className="ga-hint">{t('Negative prompt')}</label>
-              <textarea className="ga-textarea" rows={2} value={negative}
-                onChange={(e) => setNegative(e.target.value)} />
+              {backends.find((b) => b.name === picked)?.supports_negative_prompt === false ? (
+                <span className="ga-hint">
+                  {t('This backend has no negative input — negations are part of the prompt above.')}
+                </span>
+              ) : (
+                <>
+                  <label className="ga-hint">{t('Negative prompt')}</label>
+                  <textarea className="ga-textarea" rows={2} value={negative}
+                    onChange={(e) => setNegative(e.target.value)} />
+                </>
+              )}
               <span className="ga-hint">
                 {t('The current 3D model stays — use “3D from this image” afterwards to re-mesh.')}
               </span>

@@ -93,6 +93,10 @@ export interface BackendInfo {
   name: string
   prompt_style: string
   prompt_negative: string
+  /** false = this backend has no negative input (distilled / guidance-free
+   *  model); the server folds the negations into the prompt, so the form
+   *  hides the negative field. Resolved server-side from auto/yes/no. */
+  supports_negative_prompt?: boolean
 }
 
 export interface BlendZone {
