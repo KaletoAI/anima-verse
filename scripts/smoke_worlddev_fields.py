@@ -7,6 +7,16 @@ fields (decency / indoor / swim_allowed / style_hint / activity_hint) and the
 (new location and update of an existing one), and the room-level overrides
 have to come back untouched.
 
+Hand-derived room count: an author submits ONE room, and the location comes
+back with TWO. That is the reserved GROUND ROOM (plan-grundflaeche.md § 3):
+``add_location`` runs ``ensure_ground_room`` on every write, so the server
+brings the ground and the author never creates or deletes it. It is appended
+LAST — position carries no meaning any more, ``entry_room`` is declared or it
+is not — so the authored room stays at index 0 and ``rooms[-1]`` is the
+ground, on the reserved id ``__ground__``. On the update branch the same call
+puts it back with the name the location already had for it (empty here,
+which keeps the translated default).
+
 Runs against a THROWAWAY storage directory — it never touches a real world.
 
 Usage:  ./.venv/bin/python scripts/smoke_worlddev_fields.py
@@ -28,7 +38,8 @@ from app.core import db  # noqa: E402
 
 db.init_schema()
 
-from app.models.world import add_location, list_locations  # noqa: E402
+from app.models.world import (GROUND_ROOM_ID, add_location,  # noqa: E402
+                              list_locations)
 
 FAILURES = []
 CHECKED = 0
@@ -119,12 +130,19 @@ def run(label: str, payload: dict) -> None:
     for field in LOC_FIELDS:
         check(f"location.{field}", loc.get(field), payload[field])
     rooms = loc.get("rooms") or []
-    check("room count", len(rooms), 1)
+    # 1 authored room + the server-owned ground room, appended last.
+    check("room count", len(rooms), 2)
+    check("the ground room is last", rooms[-1].get("id") if rooms else None,
+          GROUND_ROOM_ID)
+    check("the authored room keeps index 0",
+          rooms[0].get("name") if rooms else None, payload["rooms"][0]["name"])
     if rooms:
         want = payload["rooms"][0]
         for field in ROOM_FIELDS:
             check(f"room.{field}", rooms[0].get(field), want[field])
         check("room has an id", bool(rooms[0].get("id")), True)
+        check("the authored room is not the ground",
+              rooms[0].get("id") != GROUND_ROOM_ID, True)
 
 
 def main() -> int:
@@ -135,6 +153,16 @@ def main() -> int:
     loc = load(UPDATE["name"])
     check("image_prompt_map stays empty", loc.get("image_prompt_map", ""), "")
     check("exactly one location exists", len(list_locations()), 1)
+
+    print("\n[4] the ground room survives the update untouched")
+    ground = [r for r in (loc.get("rooms") or [])
+              if r.get("id") == GROUND_ROOM_ID]
+    check("exactly one ground room", len(ground), 1)
+    check("it is never duplicated by a second write",
+          [r.get("id") for r in (loc.get("rooms") or [])].count(GROUND_ROOM_ID),
+          1)
+    check("it keeps the name it had (empty = translated default)",
+          ground[0].get("name") if ground else None, "")
 
     print(f"\n{CHECKED} fields checked, {len(FAILURES)} deviation(s)")
     if FAILURES:

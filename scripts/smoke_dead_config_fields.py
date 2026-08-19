@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Smoke run for the dead-config-field strip (Config-Altlasten, part A).
 
-No world, no DB: a hand-built config dict goes into
-``config._strip_dead_config_fields`` against a temp file, and the admin
-schema prefill runs on an empty dict.
+No world, no DB, and a THROWAWAY storage root: a hand-built config dict goes
+into ``config._strip_dead_config_fields`` against a temp file, and the admin
+schema prefill runs on an empty dict. The strip is a WRITING function, so
+test 0 pins the storage root before anything else — see the guard below.
 
 The fixture is the table of the 13 fields from the finding — written out by
 hand here, so the constant in app/core/config.py cannot quietly grow or
@@ -49,13 +50,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Point the storage root at a throwaway directory BEFORE any app import.
-# paths.init() falls back to ./worlds/demo when STORAGE_DIR is unset (see
-# app/core/paths.py) and get_storage_dir() auto-initializes on first call —
-# so an import that touches config/paths at module level would write into the
-# tracked demo world. Same reflex as ANIMATION_CLIPS_DIR in the 3D smokes.
+# Point the storage root at a throwaway directory BEFORE any app import, the
+# same way smoke_worldmap_v2.py does. This matters because the thing under
+# test WRITES: config.load() runs _strip_dead_config_fields against the world
+# it loaded and rewrites that config.json in place. paths.init() falls back to
+# ./worlds/demo when STORAGE_DIR is unset (app/core/paths.py, resolved against
+# the CURRENT WORKING DIRECTORY), and get_storage_dir() auto-initializes on
+# first call — so a single stray config.load() from an import chain would edit
+# tracked world data. A check script must never do that.
+#
+# Two deliberate changes over the previous guard:
+#   * assignment, not setdefault — an inherited STORAGE_DIR (a shell that
+#     exported one, a parent process pointing at a real world) silently won
+#     against setdefault, which is the one case where the guard was needed;
+#   * an EXPLICIT paths.init(), so the storage root is pinned by argument and
+#     no longer depends on an env var being read at the right moment.
+# The assertion below is the check-at-the-consumer: it fails the run rather
+# than letting a regression show up as a dirty `git status worlds/`.
 _TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_dead_config_")
-os.environ.setdefault("STORAGE_DIR", _TMP_STORAGE.name)
+os.environ["STORAGE_DIR"] = _TMP_STORAGE.name
+
+from app.core import paths  # noqa: E402
+
+paths.init(_TMP_STORAGE.name)
+
+_root = paths.get_storage_dir().resolve()
+if _root != Path(_TMP_STORAGE.name).resolve():
+    raise SystemExit(f"storage root is {_root}, not the throwaway directory — "
+                     f"refusing to run against real world data")
 
 from app.core import config as cfgmod  # noqa: E402
 
@@ -127,6 +149,16 @@ def build_fixture() -> dict:
 
 
 def main():
+    print("0) the run is isolated from every real world")
+    tmp_root = Path(_TMP_STORAGE.name).resolve()
+    check(paths.get_storage_dir().resolve() == tmp_root,
+          f"storage root is the throwaway dir ({paths.get_storage_dir()})")
+    check(paths.get_config_path().resolve().parent == tmp_root,
+          f"config.json would be written into it ({paths.get_config_path()})")
+    repo_demo = (Path(__file__).resolve().parents[1] / "worlds").resolve()
+    check(repo_demo not in paths.get_config_path().resolve().parents,
+          "no path of this run points into the repo's worlds/")
+
     print("1) the constant matches the finding's table")
     actual = {s: set(k) for s, k in cfgmod.DEAD_CONFIG_FIELDS.items()}
     check(actual == EXPECTED_DEAD,
