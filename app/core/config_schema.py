@@ -111,7 +111,7 @@ SECTIONS = {
             },
             "api_base": {"type": "str", "label": "API Base URL", "required": True, "placeholder": "http://host:port/v1"},
             "api_key": {"type": "password", "label": "API Key", "sensitive": True, "default": "not-needed", "description": "API Key (bei lokalen Providern: 'not-needed')"},
-            "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "max": 3600, "description": "Request timeout in seconds — SYSTEM time (HTTP)."},
+            "timeout": {"type": "int", "label": "Timeout (s)", "default": 600, "min": 10, "max": 3600, "description": "Request timeout in seconds — SYSTEM time (HTTP). Be generous: a queued gateway call waits for the model AND for its own slot, and a thinking model spends minutes on hidden reasoning tokens before the first visible one."},
             "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Maximale gleichzeitige Anfragen"},
             "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
             "reserve_chat_slot": {"type": "bool", "label": "Reserve Chat Slot", "default": False, "description": "Keep one of the Max Concurrent slots free for chat-priority calls (NPC answers, storyteller): background tasks then use at most N-1 slots, so a chat call never waits behind a fully busy queue. Effective only with Max Concurrent >= 2. Enable on the provider that serves chat; leave off for background-only providers (it would idle one slot)."},
@@ -224,7 +224,7 @@ SECTIONS = {
         "icon": "💬",
         "fields": {
             "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it."},
-            "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 = do not send it, the provider default (usually 1.0 = no cut-off) applies. Around 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
+            "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0.95, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 = do not send it, the provider default (usually 1.0 = no cut-off) applies. The default 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
             "anti_rep_penalty_step": {"type": "float", "label": "Penalty bump per repetition", "default": 0.15, "min": 0, "max": 1, "step": 0.05, "description": "Reactive anti-loop: when the character repeats phrases across its recent replies, the token-repetition penalty is raised by this amount PER detected repetition. This is the targeted instrument — it acts on the tokens actually being repeated. 0 = disable the reactive penalty bump."},
             "anti_rep_penalty_max": {"type": "float", "label": "Penalty ceiling", "default": 1.0, "min": 0, "max": 2, "step": 0.05, "description": "Upper bound for the reactively-raised repetition penalty."},
             "anti_rep_step": {"type": "float", "label": "Temperature bump per repetition (legacy)", "default": 0, "min": 0, "max": 0.5, "step": 0.05, "description": "Reactive anti-loop via temperature, added on top of the LLM Routing base temperature per detected repetition. Off by default since 2026-08-03: at a raised temperature of 1.10, two of two replies of one model collapsed into multi-script token salad, against zero of 26 at its configured 0.80 in the same window. Prefer the penalty bump above. If you enable this anyway, set the nucleus cut-off as well and keep the ceiling low."},
@@ -329,33 +329,32 @@ SECTIONS = {
 
             # --- Prompt-Prefixes ---
 
-            # --- Outfit-Bild Groesse ---
+            # --- Outfit image size ---
             "outfit_image_width": {
                 "type": "int",
-                "label": "Outfit Breite (px)",
-                "default": 832,
+                "label": "Outfit width (px)",
+                "default": 640,
                 "min": 64,
                 "max": 4096,
                 "description": (
-                    "Hochformat (~2:3) fuer Ganzkoerper-Outfits. Render-Zeit skaliert grob "
-                    "linear mit der Pixelanzahl, deshalb sind nur Sprünge mit deutlichem "
-                    "Performance-Effekt sinnvoll:\n"
-                    "  - 640x960   (~0.6 MP — ca. 60% Zeit, fuer schnelle Iteration/Vorschau)\n"
-                    "  - 832x1216  (~1.0 MP — Default, SDXL-/Flux-Sweet-Spot)\n"
-                    "  - 1024x1536 (~1.6 MP — ca. 60% mehr Zeit/VRAM, mehr Detail)\n"
-                    "Darüber hinaus (z.B. 1280x1920) waechst die Zeit weiter linear, der "
-                    "Qualitaetsgewinn flacht aber ab und Repetitionsartefakte werden "
-                    "wahrscheinlicher — fuer scharfe grosse Bilder besser einen Upscale-Pass "
-                    "nachschalten."
+                    "Portrait format (~2:3) for full-body outfits. Render time scales roughly "
+                    "linearly with the pixel count, so only steps with a real performance "
+                    "effect are worth taking:\n"
+                    "  - 640x960   (~0.6 MP — the default, fast enough to iterate on)\n"
+                    "  - 832x1216  (~1.0 MP — SDXL/Flux sweet spot)\n"
+                    "  - 1024x1536 (~1.6 MP — ca. 60% more time/VRAM, more detail)\n"
+                    "Beyond that (e.g. 1280x1920) time keeps growing linearly while the "
+                    "quality gain flattens out and repetition artefacts get more likely — "
+                    "for sharp large images add an upscale pass instead."
                 ),
             },
             "outfit_image_height": {
                 "type": "int",
-                "label": "Outfit Hoehe (px)",
-                "default": 1216,
+                "label": "Outfit height (px)",
+                "default": 960,
                 "min": 64,
                 "max": 4096,
-                "description": "Siehe Outfit Breite fuer empfohlene Bucket-Kombinationen im selben Verhaeltnis.",
+                "description": "See Outfit width for the recommended bucket combinations at the same ratio.",
             },
 
             # --- Location-Background Groesse ---
@@ -652,7 +651,7 @@ SECTIONS = {
         "icon": "🧠",
         "fields": {
             "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
-            "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
+            "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 10, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
             "max_parallel_responds": {"type": "int", "label": "Max Parallel Responses",
                 "default": 2, "min": 1, "max": 10,
                 "description": "How many bumped chat responses the AgentLoop may run "
