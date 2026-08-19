@@ -457,42 +457,52 @@ def _outside(box: Dict[str, float], x: float, z: float) -> bool:
             or z < box["min_z"] or z > box["max_z"])
 
 
-def footprints_overlap(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-    """Do two placed footprint squares share ground? Separating-axis test over
-    the four axes two rotated rectangles can be separated on.
+def _entry_world_boundary(entry: Dict[str, Any]) -> Optional[List[Any]]:
+    """World-metre outline of one placement entry, or None without area.
+
+    A draft entry is not a location record — it carries the proposed pin
+    (``pos_x``/``pos_z``/``yaw_deg``) next to the world's own outline
+    (``boundary``, ``plan_width_m``), which is exactly what
+    ``world_geometry.effective_boundary`` reads out of a location dict. So the
+    two halves are handed to it in the shape it expects rather than the
+    transform being written a second time here.
+    """
+    from app.core.world_geometry import boundary_world_points
+    return boundary_world_points({
+        "pos_x": entry.get("pos_x"), "pos_z": entry.get("pos_z"),
+        "yaw_deg": entry.get("yaw_deg"),
+        "map3d": {"boundary": entry.get("boundary"),
+                  "plan_width_m": entry.get("plan_width_m")},
+    })
+
+
+def boundaries_overlap(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Do two placed locations share ground? Exact polygon overlap over their
+    effective boundaries (contract v6 "Gebiete").
 
     EXACT, not the axis-aligned approximation: a turned place beside a
     straight one would otherwise be reported as overlapping whenever its
-    bounding box reaches over, and a warning nobody can act on is noise. A
-    shared edge counts as an overlap — the conservative answer, matching
-    ``world_geometry.point_in_footprint``.
+    bounding box reaches over, and a warning nobody can act on is noise. It is
+    also exact for CONCAVE outlines, where a bounding box says almost nothing:
+    two Ls can interlock arm-in-notch with their boxes fully on top of each
+    other and still not share a single square metre. A shared edge counts as an
+    overlap — the conservative answer, matching
+    ``world_geometry.boundary_contains``.
 
-    Both dicts need ``pos_x``, ``pos_z``, ``plan_width_m`` and ``yaw_deg``; a
-    place without a positive width has no footprint and can overlap nothing.
+    Both dicts need ``pos_x``, ``pos_z``, ``yaw_deg`` and an outline — either a
+    drawn ``boundary`` in local metres or the legacy ``plan_width_m`` dial; a
+    place with neither has no area and can overlap nothing.
 
     Hand-derived: two 40 m squares at yaw 0, centres 30 m apart on x, span
     [-20, 20] and [10, 50] -> they share [10, 20] -> True. At 50 m apart the
     spans are [-20, 20] and [30, 70] -> a gap of 10 m -> False.
     """
-    from app.core.world_geometry import footprint_corners
-    wa = float(a.get("plan_width_m") or 0.0)
-    wb = float(b.get("plan_width_m") or 0.0)
-    if wa <= 0 or wb <= 0:
+    from app.core.world_geometry import polygons_overlap
+    pa = _entry_world_boundary(a)
+    pb = _entry_world_boundary(b)
+    if pa is None or pb is None:
         return False
-    ca = footprint_corners(float(a["pos_x"]), float(a["pos_z"]), wa,
-                           float(a.get("yaw_deg") or 0.0))
-    cb = footprint_corners(float(b["pos_x"]), float(b["pos_z"]), wb,
-                           float(b.get("yaw_deg") or 0.0))
-    for corners in (ca, cb):
-        for i in range(2):
-            ex = corners[i + 1][0] - corners[i][0]
-            ez = corners[i + 1][1] - corners[i][1]
-            axis = (-ez, ex)
-            a_vals = [x * axis[0] + z * axis[1] for x, z in ca]
-            b_vals = [x * axis[0] + z * axis[1] for x, z in cb]
-            if max(a_vals) < min(b_vals) or max(b_vals) < min(a_vals):
-                return False
-    return True
+    return polygons_overlap(pa, pb)
 
 
 def sanitize_map_layout(data: Any, *,
@@ -505,10 +515,13 @@ def sanitize_map_layout(data: Any, *,
 
     PURE: the terrain catalog and the world's locations are handed in, so the
     whole rule set runs without a world DB. ``locations_by_id`` maps a
-    location id to at least ``{"name": str, "plan_width_m": float}``; the
-    width is the footprint edge (``map3d.plan_width_m`` via
-    ``location_model3d.derive_plan_width_m``) and 0 means "no scale anchor",
-    which simply skips the overlap test for that place.
+    location id to at least
+    ``{"name": str, "boundary": list | None, "plan_width_m": float}`` — the
+    location's own OUTLINE in local metres (``map3d.boundary``, contract v6)
+    and the legacy square dial (``map3d.plan_width_m`` via
+    ``location_model3d.derive_plan_width_m``) that stands in for a place which
+    has not been drawn yet. Neither of the two means "no area", which simply
+    skips the overlap test for that place.
 
     ``bounds`` is the world's CURRENT extent; the draft may propose its own,
     and a coordinate is out of bounds only when it leaves BOTH — a new map is
@@ -693,8 +706,10 @@ def sanitize_map_layout(data: Any, *,
                  "pos_x": _round2(px), "pos_z": _round2(pz),
                  "yaw_deg": round(yaw, 1) % 360.0,
                  # Preview extras — apply reads none of them, but the draft
-                 # map has to be drawable without a second round trip.
+                 # map has to be drawable without a second round trip, and
+                 # since v6 what is drawn is the location's OUTLINE.
                  "name": str(known.get("name") or loc_id),
+                 "boundary": known.get("boundary"),
                  "plan_width_m": float(known.get("plan_width_m") or 0.0)}
         why = str(raw.get("why") or "").strip()
         if why:
@@ -713,17 +728,16 @@ def sanitize_map_layout(data: Any, *,
                   f"'{entry['name']}' stands on {ground!r}, which nobody can "
                   f"walk on — the place would be unreachable.")
 
-    # Footprint overlaps, once per PAIR. Both survive: overlapping places are
+    # Boundary overlaps, once per PAIR. Both survive: overlapping places are
     # legal (a hut on a village square), they are just rarely intended.
     for a_i in range(len(placed)):
         for b_i in range(a_i + 1, len(placed)):
             a, b = placed[a_i], placed[b_i]
-            if not footprints_overlap(a, b):
+            if not boundaries_overlap(a, b):
                 continue
             _warn(warnings, "footprint_overlap", f"locations[{b_i}]",
-                  f"'{a['name']}' and '{b['name']}' overlap — their "
-                  f"footprints ({a['plan_width_m']:g} m and "
-                  f"{b['plan_width_m']:g} m) share ground.")
+                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
+                  f"share ground.")
 
     # The ONE hard error besides a non-object: a draft that says nothing at
     # all. A draft whose entries were ALL dropped is not that — it carries a
@@ -752,25 +766,24 @@ def layout_counts(normalized: Dict[str, Any]) -> Dict[str, int]:
 # ── Writing ─────────────────────────────────────────────────────────────────
 
 def current_world_bounds() -> Optional[Dict[str, float]]:
-    """The world's current extent in metres — placed footprints AND painted
+    """The world's current extent in metres — placed BOUNDARIES AND painted
     ground, the same two inputs ``world_ops`` builds ``world_bounds`` from.
 
     None on an empty world: there is no box, and inventing one would tell the
     model its map has to fit inside nothing.
     """
-    from app.core.world_geometry import footprint_corners, placed_footprint
+    from app.core.world_geometry import boundary_world_points, polygon_bounds
     from app.models.terrain import list_areas
     from app.models.world import list_locations
 
     xs: List[float] = []
     zs: List[float] = []
     for loc in list_locations():
-        fp = placed_footprint(loc)
-        if fp is None:
+        box = polygon_bounds(boundary_world_points(loc))
+        if box is None:
             continue
-        for cx, cz in footprint_corners(*fp):
-            xs.append(cx)
-            zs.append(cz)
+        xs.extend((box[0], box[2]))
+        zs.extend((box[1], box[3]))
     for area in list_areas():
         for pt in (area.get("polygon") or []):
             x, z = _finite(pt[0] if len(pt) > 0 else None), \

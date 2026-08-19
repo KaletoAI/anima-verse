@@ -17,7 +17,7 @@ POLYLINE with baked times:
         "speed_m_s": 1.4,                    # world setting at journey start
         "entry_edge": "W",                   # WORLD edge of the target's
                                              # opening the route aims at
-                                             # ('' = footprint-edge fallback)
+                                             # ('' = boundary-rim fallback)
     }
 
 ``entry_edge`` is what lets the ARRIVAL route into the right room: a location
@@ -274,30 +274,48 @@ def get_journey(character_name: str,
     return j
 
 
-def _footprint_edge_point(loc: Dict[str, Any],
-                          toward: Point) -> Optional[Point]:
-    """Midpoint of the footprint edge FACING ``toward``, or None when the
-    location has no footprint.
+def _boundary_rim_point(loc: Dict[str, Any],
+                        toward: Point) -> Optional[Point]:
+    """The point on the location's BOUNDARY RIM nearest to ``toward``, or None
+    when the location has no area at all.
 
-    The fallback for a location without an authored opening: the journey
-    still has to end somewhere on the building, and the edge the traveller
-    approaches from is the honest guess. (Whether a location may be entered
-    at all is a gameplay question — ``boundary_entry.has_entrance`` and the
-    access rules answer it, not this geometry.)
+    The fallback for a location without an authored opening: the journey still
+    has to end somewhere on the place, and the closest rim point is where a
+    traveller coming from ``toward`` would touch it. Deterministic by
+    construction — ``toward`` is projected onto EVERY boundary edge (clamped to
+    the edge, so a corner answers for the wedge beyond it) and the shortest of
+    those projections wins; there is no candidate list to pick from and no
+    dependence on the winding start. On a square this is the old facing-edge
+    midpoint whenever the traveller stands straight in front of the edge, and a
+    strictly better goal when it does not (contract v6 "Gebiete": concave
+    outlines have no "facing edge" to speak of).
+
+    (Whether a location may be entered at all is a gameplay question —
+    ``boundary_entry.has_entrance`` and the access rules answer it, not this
+    geometry.)
     """
-    from app.core.world_geometry import local_to_world, placed_footprint
-    fp = placed_footprint(loc)
-    if fp is None:
+    from app.core.world_geometry import boundary_world_points
+    pts = boundary_world_points(loc)
+    if not pts:
         return None
-    cx, cz, width, yaw = fp
-    half = width / 2.0
+    tx, tz = float(toward[0]), float(toward[1])
     best: Optional[Point] = None
     best_d = 0.0
-    for lx, lz in ((0.0, -half), (0.0, half), (-half, 0.0), (half, 0.0)):
-        x, z = local_to_world(lx, lz, cx, cz, yaw)
-        d = math.dist((x, z), toward)
+    j = len(pts) - 1
+    for i, (xi, zi) in enumerate(pts):
+        xj, zj = pts[j]
+        j = i
+        dx, dz = xi - xj, zi - zj
+        length_sq = dx * dx + dz * dz
+        if length_sq < 1e-18:
+            px, pz = xj, zj                 # degenerate edge: its own vertex
+        else:
+            t = ((tx - xj) * dx + (tz - zj) * dz) / length_sq
+            t = max(0.0, min(1.0, t))
+            px, pz = xj + t * dx, zj + t * dz
+        d = math.dist((px, pz), (tx, tz))
         if best is None or d < best_d:
-            best, best_d = (round(x, 2), round(z, 2)), d
+            best, best_d = (round(px, 2), round(pz, 2)), d
     return best
 
 
@@ -320,12 +338,12 @@ def _opening_point(loc: Dict[str, Any],
 def _arrival_point(loc: Dict[str, Any],
                    toward: Point) -> Optional[Tuple[str, Point]]:
     """Where a journey ENDS on ``loc``, as ``(entry_edge, point)``: the
-    authored opening nearest to ``toward``, else the footprint edge midpoint
-    facing it — the latter with an EMPTY edge, because a made-up geometric
+    authored opening nearest to ``toward``, else the nearest point on the
+    boundary rim — the latter with an EMPTY edge, because a made-up geometric
     point is no authored entrance and makes no statement about the room.
 
     A location without an opening has a FREE boundary (E4 task 5) — it can be
-    entered, it just never said where. The geometric midpoint is then as good
+    entered, it just never said where. The nearest rim point is then as good
     a goal as any, and the EMPTY edge is what tells the arrival check that no
     authored opening was walked to (so the ordinary arrival room decides).
     The rule gates stay where they belong: at the arrival check, not here.
@@ -333,8 +351,8 @@ def _arrival_point(loc: Dict[str, Any],
     found = _opening_point(loc, toward)
     if found is not None:
         return found
-    edge_point = _footprint_edge_point(loc, toward)
-    return None if edge_point is None else ("", edge_point)
+    rim_point = _boundary_rim_point(loc, toward)
+    return None if rim_point is None else ("", rim_point)
 
 
 def start_journey(character_name: str,
@@ -359,7 +377,7 @@ def start_journey(character_name: str,
     the ticker, not here.
     """
     from app.core.nav_grid import build_nav_context, route, segment_costs
-    from app.core.world_geometry import placed_footprint
+    from app.core.world_geometry import effective_boundary
     from app.models.character import (get_character_current_location,
                                       get_character_pos, get_character_profile,
                                       get_known_locations,
@@ -374,7 +392,7 @@ def start_journey(character_name: str,
         return None, "unknown_target"
     if target_id not in (get_known_locations(character_name) or []):
         return None, "unknown_target"
-    if placed_footprint(target) is None:
+    if effective_boundary(target) is None:
         return None, "unplaced_target"
 
     current_id = (get_character_current_location(character_name) or "").strip()
@@ -388,9 +406,9 @@ def start_journey(character_name: str,
     current_loc = get_location_by_id(current_id) if current_id else None
     if pos is not None:
         start: Optional[Point] = (float(pos["x"]), float(pos["z"]))
-    elif current_loc is not None and placed_footprint(current_loc) is not None:
-        cx, cz, _w, _yaw = placed_footprint(current_loc)
-        start = (cx, cz)                    # never positioned: the centre
+    elif current_loc is not None and effective_boundary(current_loc) is not None:
+        cx, cz, _yaw, _pts = effective_boundary(current_loc)
+        start = (cx, cz)                    # never positioned: the anchor pin
     else:
         # No point and no placed location to derive one from: the character
         # is nowhere on the map, so no route can start. Not a knowledge or

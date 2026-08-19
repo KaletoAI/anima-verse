@@ -58,8 +58,8 @@ Hand-derived expectations:
   [5] Barn at (60,0), plan_width_m 10, yaw 0 -> footprint x [55,65],
       z [-5,5]:
       a) route((40,0), (80,0)): the barn is FOREIGN to both endpoints, so
-         the route rounds it — no waypoint inside the footprint, NO
-         SEGMENT intersecting it (exact segment-vs-rectangle test, not
+         the route rounds it — no waypoint inside the boundary, NO
+         SEGMENT intersecting it (exact segment-vs-polygon test, not
          sampling), length > the 40 m airline.
       b) route((40,0), (60,0)): the goal lies inside the barn, so that
          footprint is exempt -> straight [(40,0), (60,0)], cost [20.0].
@@ -86,14 +86,21 @@ Hand-derived expectations:
       line (shorter, but 5.6 s slower) — so: > 2 waypoints and a total
       cost below the 108.571 s of the straight line.
 
-  [8] The two geometry helpers, hand-derived (see their docstrings):
-      segment_hits_footprint over the unit-ish square at (0,0) w 2 yaw 0
-      -> (-5,0)->(5,0) True (enters at t=0.4), (-5,2)->(5,2) False.
-      footprint_hits_aabb for (0,0) w 2 yaw 45 (corners at ±sqrt(2) on the
-      axes) -> cell [0,2]x[0,2] True, cell [1,3]x[1,3] False.
-      placed_footprint refuses a non-finite position.
+  [8] The geometry helpers the router runs on, hand-derived (see their
+      docstrings). A square is written out as its four corners, because since
+      contract v6 that is all a square is:
+      segment_hits_polygon over the square [(-1,-1),(1,-1),(1,1),(-1,1)]
+      -> (-5,0)->(5,0) True (enters at t=0.4), (-5,2)->(5,2) False,
+      (-5,0)->(-2,0) False (it stops 1 m short).
+      polygon_hits_aabb for the yaw-45 diamond with corners at ±sqrt(2) on
+      the axes -> cell [0,2]x[0,2] True, cell [1,3]x[1,3] False.
+      effective_boundary refuses a non-finite position, hands out the legacy
+      width dial as the four local corners (±5 for a 10 m square), and lets a
+      DRAWN boundary win over that dial: the triangle [[0,0],[2,0],[0,2]] on
+      a pin at (100,200) yaw 0 is (100,200) (102,200) (100,202) in world
+      metres.
 
-  [9] Rotated footprint (the corner-cutting repro): mill at (500,0),
+  [9] Rotated boundary (the corner-cutting repro): mill at (500,0),
       plan_width_m 14, yaw 45 -> a diamond with corners at
       (500 ± 9.90, 0) and (500, ±9.90) (7*sqrt(2) = 9.90). The straight
       line (480,0)->(520,0) runs through its centre, so the route must
@@ -277,10 +284,10 @@ Hand-derived expectations:
            * the SAME footprint with the flag CLEARED -> steep again. The
              landscape runs through an unflagged place, and the router judges
              it exactly like the ground outside — the accepted consequence of
-             the decision, and the case a `in_footprint` instead of
-             `in_level_footprint` would silently wave through.
+             the decision, and the case a `in_region` instead of
+             `in_level_region` would silently wave through.
            * a route that neither starts nor ends there -> blocked either way
-             (foreign footprint, the pre-existing guard).
+             (foreign boundary, the pre-existing guard).
 
          AND THE TWO RULES MEET IN ONE BRANCH. The PASSABILITY exemption is
          NOT flag-conditional; the steepness one is — so the case where BOTH
@@ -294,7 +301,7 @@ Hand-derived expectations:
                                    (footprint wins, unchanged rule)
            with CLIFF_FIELD, UNFLAGGED: the branch still asks the steepness
                                    -> the same 75.07° -> BLOCKED
-           with CLIFF_FIELD, FLAGGED:   `in_level_footprint` -> free
+           with CLIFF_FIELD, FLAGGED:   `in_level_region` -> free
          RED COUNTER-PROBE (run by hand, 2026-08-13): with the
          `or self.too_steep(cell)` clause deleted from that branch the third
          line reads False and the check fails; the other three are unmoved by
@@ -381,6 +388,47 @@ Hand-derived expectations:
          entries only, would have kept 1.2 and let the heuristic overestimate
          a walk over that ground.
 
+ [17] A CONCAVE LOCATION — the notch is NOT the place (contract v6
+      "Gebiete", decision E1.1). An L is drawn at the pin (4000, 0), yaw 0,
+      with `map3d.boundary = [[0,0],[8,0],[8,4],[4,4],[4,8],[0,8]]` and NO
+      `plan_width_m` at all, so the outline is the only thing that can
+      answer. Local = world here (pin offset only, yaw 0), so the place is
+
+          the WIDE arm   x in [4000,4008], z in [0,4]
+          the UPRIGHT arm x in [4000,4004], z in [4,8]
+          the NOTCH      x in (4004,4008), z in (4,8)   <- NOT the place
+
+      and its bounding box is the full [4000,4008] x [0,8] — which is exactly
+      what makes the notch the discriminating case: every box-shaped test
+      claims it.
+
+      Cells are 2 m and anchored at the origin, so cell (i,j) covers
+      [2i, 2i+2] x [2j, 2j+2]:
+
+          (2003, 3) = [4006,4008] x [6,8]  entirely in the NOTCH  -> free
+          (2003, 1) = [4006,4008] x [2,4]  entirely in the WIDE arm -> blocked
+          (2001, 3) = [4002,4004] x [6,8]  entirely in the UPRIGHT arm
+                                                                  -> blocked
+
+      The notch cell touches nothing: the nearest outline edges are x = 4004
+      (2 m west of its west side) and z = 4 (2 m north of its north side).
+      RED COUNTER-PROBE: `polygon_bounds` of the same outline is
+      (4000, 0, 4008, 8) and contains that cell whole — a bounding-box test
+      would block it, which is the mutant this case kills.
+
+      Two routes, both for a search that neither starts nor ends inside the
+      L (so the whole outline blocks):
+        a) (4012,7) -> (4006,7) runs west along z = 7 and ENDS in the notch.
+           At z = 7 the place reaches only to x = 4004, so no segment touches
+           it -> the straight [(4012,7), (4006,7)], 2 waypoints.
+        b) (4012,2) -> (3996,2) runs west along z = 2, straight through the
+           wide arm -> the route must bend (> 2 waypoints) and no segment of
+           it may intersect the outline.
+
+      And the scope rule reads the same shape: (4006,2) lies in the wide arm
+      of a building -> "built", while (4006,6) in the notch is open
+      wilderness.
+
 Usage:  ./.venv/bin/python scripts/smoke_nav_grid.py
 """
 import math
@@ -401,8 +449,8 @@ db.init_schema()
 
 from app.core import config, nav_grid, terrain_query, terrain_types  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
-    footprint_hits_aabb, is_area_location, placed_footprint,
-    point_in_footprint, segment_hits_footprint)
+    boundary_world_points, effective_boundary, is_area_location,
+    point_in_polygon, polygon_bounds, polygon_hits_aabb, segment_hits_polygon)
 from app.models import terrain  # noqa: E402
 from app.models.world import (  # noqa: E402
     _load_world_data, _save_world_data, add_location,
@@ -528,11 +576,44 @@ def all_passable(pts):
     return True, None
 
 
-def segments_hitting(pts, cx, cz, width, yaw):
-    """Segments of the polyline that intersect a footprint — EXACT test."""
+def segments_hitting(pts, poly):
+    """Segments of the polyline that intersect a boundary — EXACT test."""
     return [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)
-            if segment_hits_footprint(pts[i][0], pts[i][1], pts[i + 1][0],
-                                      pts[i + 1][1], cx, cz, width, yaw)]
+            if segment_hits_polygon(pts[i][0], pts[i][1], pts[i + 1][0],
+                                    pts[i + 1][1], poly)]
+
+
+# Hand-written world outlines of the squares this smoke places. A square is
+# just its four corners since contract v6, so the verification side writes them
+# out rather than calling the geometry it is verifying.
+SQ_BARN = [(55.0, -5.0), (65.0, -5.0), (65.0, 5.0), (55.0, 5.0)]
+HALF_MILL = 7.0 * math.sqrt(2.0)            # 9.8995 — the yaw-45 diagonal
+SQ_MILL = [(500.0 - HALF_MILL, 0.0), (500.0, -HALF_MILL),
+           (500.0 + HALF_MILL, 0.0), (500.0, HALF_MILL)]
+SQ_HALL = [(690.0, -10.0), (710.0, -10.0), (710.0, 10.0), (690.0, 10.0)]
+
+# The L of [17], in LOCAL metres around its pin (contract v6 "Gebiete").
+L_SHAPE = [[0, 0], [8, 0], [8, 4], [4, 4], [4, 8], [0, 8]]
+
+
+def _loc_by_id(location_id: str):
+    """The stored location record — read back, never rebuilt."""
+    for loc in _load_world_data().get("locations", []):
+        if loc.get("id") == location_id:
+            return loc
+    return {}
+
+
+def set_boundary(location_id: str, points) -> None:
+    """Draw a location's OUTLINE (``map3d.boundary``, local metres) — the v6
+    successor of the ``plan_width_m`` dial."""
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") == location_id:
+            map3d = dict(loc.get("map3d") or {})
+            map3d["boundary"] = points
+            loc["map3d"] = map3d
+    _save_world_data(data)
 
 
 # ── [1] empty world ─────────────────────────────────────────────────────
@@ -607,10 +688,10 @@ set_plan_width(BARN_ID, 10.0)
 r = nav_grid.route((40, 0), (80, 0))
 check_true("route around the barn exists", r is not None, f"{r}")
 if r:
-    inside = [p for p in r if point_in_footprint(p[0], p[1], 60, 0, 10, 0)]
-    check("no waypoint inside the foreign footprint", inside, [])
-    check("no SEGMENT intersects the footprint (exact test)",
-          segments_hitting(r, 60, 0, 10, 0), [])
+    inside = [p for p in r if point_in_polygon(p[0], p[1], SQ_BARN)]
+    check("no waypoint inside the foreign boundary", inside, [])
+    check("no SEGMENT intersects the boundary (exact test)",
+          segments_hitting(r, SQ_BARN), [])
     length = polyline_length(r)
     check_true("longer than the 40 m airline", length > 40.0,
                f"{length:.2f} m")
@@ -665,22 +746,31 @@ if r:
 
 # ── [8] geometry helpers ────────────────────────────────────────────────
 print("[8] the exact geometry helpers, hand-derived")
-check("segment through the footprint",
-      segment_hits_footprint(-5, 0, 5, 0, 0, 0, 2, 0), True)
+UNIT_SQ = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+DIAMOND = [(-math.sqrt(2), 0.0), (0.0, -math.sqrt(2)),
+           (math.sqrt(2), 0.0), (0.0, math.sqrt(2))]
+check("segment through the boundary",
+      segment_hits_polygon(-5, 0, 5, 0, UNIT_SQ), True)
 check("segment passing 2 m beside it",
-      segment_hits_footprint(-5, 2, 5, 2, 0, 0, 2, 0), False)
+      segment_hits_polygon(-5, 2, 5, 2, UNIT_SQ), False)
 check("segment ending before it",
-      segment_hits_footprint(-5, 0, -2, 0, 0, 0, 2, 0), False)
+      segment_hits_polygon(-5, 0, -2, 0, UNIT_SQ), False)
 check("cell [0,2]x[0,2] overlaps the yaw-45 square",
-      footprint_hits_aabb(0, 0, 2, 45, 0, 0, 2, 2), True)
+      polygon_hits_aabb(DIAMOND, 0, 0, 2, 2), True)
 check("cell [1,3]x[1,3] does not",
-      footprint_hits_aabb(0, 0, 2, 45, 1, 1, 3, 3), False)
-check("a non-finite position has no footprint",
-      placed_footprint({"pos_x": float("nan"), "pos_z": 0.0,
-                        "map3d": {"plan_width_m": 10}}), None)
-check("a sane position still has one",
-      placed_footprint({"pos_x": 5.0, "pos_z": 6.0,
-                        "map3d": {"plan_width_m": 10}}), (5.0, 6.0, 10.0, 0.0))
+      polygon_hits_aabb(DIAMOND, 1, 1, 3, 3), False)
+check("a non-finite position has no boundary",
+      effective_boundary({"pos_x": float("nan"), "pos_z": 0.0,
+                          "map3d": {"plan_width_m": 10}}), None)
+check("a sane position with the legacy dial is a SQUARE POLYGON",
+      effective_boundary({"pos_x": 5.0, "pos_z": 6.0,
+                          "map3d": {"plan_width_m": 10}}),
+      (5.0, 6.0, 0.0, [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]))
+check("...and a DRAWN outline wins over the dial",
+      boundary_world_points({"pos_x": 100.0, "pos_z": 200.0, "yaw_deg": 0.0,
+                             "map3d": {"plan_width_m": 10,
+                                       "boundary": [[0, 0], [2, 0], [0, 2]]}}),
+      [(100.0, 200.0), (102.0, 200.0), (100.0, 202.0)])
 
 # ── [9] rotated footprint ───────────────────────────────────────────────
 print("[9] a rotated footprint is rounded, not clipped")
@@ -690,13 +780,13 @@ update_location_position(MILL_ID, 500.0, 0.0)
 set_plan_width(MILL_ID, 14.0)
 set_yaw(MILL_ID, 45.0)
 check_true("the airline really crosses the mill",
-           segment_hits_footprint(480, 0, 520, 0, 500, 0, 14, 45), "")
+           segment_hits_polygon(480, 0, 520, 0, SQ_MILL), "")
 r = nav_grid.route((480, 0), (520, 0))
 check_true("route around the mill exists", r is not None, f"{r}")
 if r:
-    check("no SEGMENT intersects the rotated footprint",
-          segments_hitting(r, 500, 0, 14, 45), [])
-    inside = [p for p in r if point_in_footprint(p[0], p[1], 500, 0, 14, 45)]
+    check("no SEGMENT intersects the rotated boundary",
+          segments_hitting(r, SQ_MILL), [])
+    inside = [p for p in r if point_in_polygon(p[0], p[1], SQ_MILL)]
     check("no waypoint inside it", inside, [])
     length = polyline_length(r)
     check_true("longer than the 40 m airline", length > 40.0,
@@ -759,8 +849,8 @@ check("the goal really stands on impassable ground",
       terrain_query.passability_at(700, 0)[0], False)
 check("...and the approach does not",
       terrain_query.passability_at(670, 0)[0], True)
-check_true("the goal lies inside the footprint",
-           point_in_footprint(700, 0, 700, 0, 20, 0), "")
+check_true("the goal lies inside the boundary",
+           point_in_polygon(700, 0, SQ_HALL), "")
 ctx = nav_grid.build_nav_context()
 check("the goal cell is (350, 0)", nav_grid.cell_of(700, 0), (350, 0))
 check("...centred on (701, 1)", nav_grid.cell_centre((350, 0)), (701.0, 1.0))
@@ -768,13 +858,13 @@ own = nav_grid._Search(ctx, (670.0, 0.0), (700.0, 0.0))
 check("its own route does not lose the goal cell to the rock under it",
       own.blocked((350, 0)), False)
 foreign = nav_grid._Search(ctx, (670.0, 0.0), (670.0, 60.0))
-check("a FOREIGN route still finds it blocked — by the footprint",
+check("a FOREIGN route still finds it blocked — by the boundary",
       foreign.blocked((350, 0)), True)
 r = nav_grid.route((670, 0), (700, 0))
 check("the straight line into the hall (old rule: None)", r,
       [(670.0, 0.0), (700.0, 0.0)])
-check_true("its end really lies in the footprint",
-           point_in_footprint(700, 0, 700, 0, 20, 0), "")
+check_true("its end really lies in the boundary",
+           point_in_polygon(700, 0, SQ_HALL), "")
 # The PACE side of the decision: 30 m, 15 samples of 2 m, midpoints at
 # x = 671, 673, … 699. The ten outside are grass (1.0), the five from 691 on
 # lie in the footprint of a BUILDING and are paid at the neutral 1.0 instead
@@ -944,11 +1034,20 @@ CLIFF_FIELD = {"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
                "heights": [[0.0, 0.0, 20.0, 20.0, 20.0] for _ in range(5)]}
 
 
+# The 8 m square around (7, 7) written out as its four corners — the same
+# place the tuple used to name by centre and edge.
+CLIFF_SQ = ((3.0, 3.0), (11.0, 3.0), (11.0, 11.0), (3.0, 11.0))
+
+
 def cliff_ctx(level_ground):
-    """The hand-built cliff with ONE footprint over it, flagged or not."""
+    """The hand-built cliff with ONE placed boundary over it, flagged or
+    not."""
     return nav_grid.NavContext(
         areas=[], catalog={},
-        footprints=[("fp", 7.0, 7.0, 8.0, 0.0, False, level_ground)],
+        regions=[nav_grid.Region(lid="fp", points=CLIFF_SQ,
+                                 bounds=(3.0, 3.0, 11.0, 11.0),
+                                 area_m2=64.0, is_area=False,
+                                 level_ground=level_ground)],
         data_bounds=(0.0, 0.0, 16.0, 16.0), sig=("hand", "hand"),
         height_field=CLIFF_FIELD, openings=(), max_step_m=0.4,
         max_slope_deg=40.0)
@@ -1020,7 +1119,7 @@ check("nothing over the point is the wilderness",
       terrain_query.ground_scope(None, None), "wilderness")
 check("an area location is open ground",
       terrain_query.ground_scope(True, None), "open")
-check("a building footprint is built",
+check("a building boundary is built",
       terrain_query.ground_scope(False, None), "built")
 check("an interior room beats the area location it stands in",
       terrain_query.ground_scope(True, False), "built")
@@ -1071,7 +1170,7 @@ check("...and the approach on grass", terrain_query.passability_at(870, 0),
       (True, 1.0))
 lake_ctx = nav_grid.build_nav_context()
 check("the village really counts as open ground",
-      nav_grid._footprint_scope(900.0, 0.0, lake_ctx.footprints), "open")
+      nav_grid._region_scope(900.0, 0.0, lake_ctx.regions), "open")
 # 15 samples of 2 m, midpoints x = 871 … 899: ten west of the 890.5 shore on
 # grass (10 * 2 / 1.0 = 20 s) and five in the lake inside the footprint
 # (5 * 2 / 0.4 = 25 s) -> 45 s. No midpoint sits on the polygon edge.
@@ -1091,7 +1190,7 @@ built_ctx = nav_grid.build_nav_context()
 check_true("flipping the flag really hands out a new context",
            built_ctx is not lake_ctx, "")
 check("the same point is BUILT now",
-      nav_grid._footprint_scope(900.0, 0.0, built_ctx.footprints), "built")
+      nav_grid._region_scope(900.0, 0.0, built_ctx.regions), "built")
 approx("RED COUNTER-PROBE: a HALL on the same lake is walked dry in 30 s",
        nav_grid._segment_cost(built_ctx, (870.0, 0.0), (900.0, 0.0)), 30.0)
 set_area_model(LAKE_ID, True)
@@ -1104,7 +1203,7 @@ _rule = nav_grid.effective_speed_factor
 nav_grid.effective_speed_factor = (
     lambda factor, scope: 1.0 if scope != "wilderness"
     else max(factor, terrain_query.MIN_SPEED_FACTOR))
-approx("RED COUNTER-PROBE: the old footprint-neutral rule walks it dry in 30 s",
+approx("RED COUNTER-PROBE: the old place-neutral rule walks it dry in 30 s",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 30.0)
 nav_grid.effective_speed_factor = _rule
 approx("...and the real rule is back",
@@ -1134,6 +1233,50 @@ approx("RED COUNTER-PROBE: passable-only would have kept 1.2 (inadmissible)",
 terrain_types.delete_world_type("rapids")
 approx("...and removing the type puts the divisor back",
        nav_grid.build_nav_context().best_factor, 1.2)
+
+print("\n[17] a CONCAVE location — the notch is not the place")
+ell = add_location(name="Smoke L Yard", description="nav-grid smoke")
+ELL_ID = ell["id"]
+update_location_position(ELL_ID, 4000.0, 0.0)
+set_boundary(ELL_ID, L_SHAPE)
+L_WORLD = [(4000.0, 0.0), (4008.0, 0.0), (4008.0, 4.0),
+           (4004.0, 4.0), (4004.0, 8.0), (4000.0, 8.0)]
+check("the drawn outline lands where the hand says",
+      boundary_world_points(_loc_by_id(ELL_ID)), L_WORLD)
+check("...with NO width dial behind it",
+      (_loc_by_id(ELL_ID).get("map3d") or {}).get("plan_width_m"), None)
+check("(4006, 2) lies in the wide arm", point_in_polygon(4006, 2, L_WORLD),
+      True)
+check("(4002, 6) lies in the upright arm", point_in_polygon(4002, 6, L_WORLD),
+      True)
+check("(4006, 6) lies in the NOTCH — outside the place",
+      point_in_polygon(4006, 6, L_WORLD), False)
+check("RED COUNTER-PROBE: the bounding box claims the notch anyway",
+      polygon_bounds(L_WORLD), (4000.0, 0.0, 4008.0, 8.0))
+
+ell_ctx = nav_grid.build_nav_context()
+ell_search = nav_grid._Search(ell_ctx, (4012.0, 2.0), (3996.0, 2.0))
+check("the notch cell is [4006,4008]x[6,8]", nav_grid.cell_box((2003, 3)),
+      (4006.0, 6.0, 4008.0, 8.0))
+check("...and it is NOT blocked", ell_search.blocked((2003, 3)), False)
+check("the wide-arm cell [4006,4008]x[2,4] is blocked",
+      ell_search.blocked((2003, 1)), True)
+check("the upright-arm cell [4002,4004]x[6,8] is blocked",
+      ell_search.blocked((2001, 3)), True)
+check("the scope in the wide arm is a building's",
+      nav_grid._region_scope(4006.0, 2.0, ell_ctx.regions), "built")
+check("...and in the notch it is plain wilderness",
+      nav_grid._region_scope(4006.0, 6.0, ell_ctx.regions), "wilderness")
+
+r = nav_grid.route((4012, 7), (4006, 7))
+check("a route INTO the notch is the straight line", r,
+      [(4012.0, 7.0), (4006.0, 7.0)])
+r = nav_grid.route((4012, 2), (3996, 2))
+check_true("a route through the wide arm has to bend",
+           r is not None and len(r) > 2, f"{r}")
+if r:
+    check("...and no segment of it touches the outline",
+          segments_hitting(r, L_WORLD), [])
 
 print()
 if FAILURES:

@@ -277,7 +277,7 @@ def ground_lift_at(x: float, z: float,
     every side (review finding F3, 2026-08-13).
 
     So the answer is the INNERMOST ENCLOSING location that HAS a relief:
-    smallest footprint wins among those that do, exactly the way
+    the smallest AREA wins among those that do (contract v6, E1.2), the way
     ``location_at_point`` resolves nesting, and a location without one is
     simply transparent to the question.
 
@@ -288,19 +288,16 @@ def ground_lift_at(x: float, z: float,
     the answer is the world ground alone, and in a world nobody has shaped it
     is 0.0 — the flat plate as before.
     """
-    from app.core.world_geometry import (ground_y, placed_footprint,
-                                         point_in_footprint)
+    from app.core.world_geometry import (boundary_area_m2, boundary_contains,
+                                         ground_y)
     best: Optional[Dict[str, Any]] = None
-    best_width: Optional[float] = None
+    best_area: Optional[float] = None
     for loc in locations or []:
         if not has_relief(loc):
             continue
-        fp = placed_footprint(loc)
-        if fp is None:
+        if not boundary_contains(loc, x, z):
             continue
-        cx, cz, width, yaw = fp
-        if not point_in_footprint(x, z, cx, cz, width, yaw):
-            continue
-        if best_width is None or width < best_width:
-            best, best_width = loc, width
+        area = boundary_area_m2(loc)
+        if best_area is None or area < best_area:
+            best, best_area = loc, area
     return ground_y(x, z) + scene_ground_lift(best, x, z)

@@ -1019,9 +1019,14 @@ def _map_world_context() -> Tuple[Dict[str, Any], Dict[str, Any], Any, str]:
         loc_id = loc.get("id") or ""
         if not loc_id:
             continue
+        map3d = loc.get("map3d") or {}
         locations_by_id[loc_id] = {
             "name": loc.get("name") or loc_id,
-            "plan_width_m": derive_plan_width_m(loc_id, loc.get("map3d")),
+            # The DRAWN outline (contract v6) and the legacy square dial that
+            # stands in until a place has one — the sanitizer's overlap test
+            # prefers the first and falls back to the second.
+            "boundary": map3d.get("boundary"),
+            "plan_width_m": derive_plan_width_m(loc_id, map3d),
         }
     default_kind = str(config.get("game.default_terrain_kind", "grass")
                        or "grass")

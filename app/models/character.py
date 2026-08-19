@@ -1535,7 +1535,7 @@ def _shift_location_occupants(location_id: str,
     and re-emitted from the new one (``local_to_world``). That one path
     covers moving, turning and both at once — occupants rotate WITH the
     location, so the scene really keeps its shape instead of being left
-    behind outside a footprint it was recorded in.
+    behind outside a location boundary it was recorded in.
 
     Two cases have no old frame to read and land the character on the new
     centre instead: it has no point at all, or the location was unplaced
@@ -1588,7 +1588,7 @@ def _cancel_journey_for_manual_write(character_name: str) -> None:
     very next tick — an editor re-place, a teleport spell or an admin move
     would visibly undo itself. ``save_character_current_location`` already
     cancels on a real location CHANGE; this covers the writes that change no
-    location at all (a shift inside the same footprint, a step in the open).
+    location at all (a shift inside the same boundary, a step in the open).
     """
     if not character_name:
         return
@@ -1608,7 +1608,7 @@ def _clear_location_and_room(character_name: str) -> None:
     """Put a character nowhere: current_location AND current_room empty.
 
     The wilderness counterpart of the location setter — outside every
-    footprint there is no place and no room to be in. A direct state write,
+    boundary there is no place and no room to be in. A direct state write,
     because the setter's machinery is keyed on a non-empty location.
     """
     if not character_name:
@@ -1629,7 +1629,7 @@ def set_character_pos(character_name: str, x: float, z: float,
     """Put a character at a free metre point; the location is DERIVED from it.
 
     The point is the truth — ``current_location`` follows from
-    ``location_at_point`` (inside a footprint: its id, outside: ""), which
+    ``location_at_point`` (inside a boundary: its id, outside: ""), which
     makes wilderness a legal state instead of an error. The location is only
     re-written when it actually differs, so stepping around WITHIN a location
     does not fire the location-change side effects (events, history,
@@ -1640,7 +1640,7 @@ def set_character_pos(character_name: str, x: float, z: float,
     location change would otherwise run the manual-teleport branch of
     ``save_character_current_location``, which pops ``movement_target`` and
     the stored journey with it — a journey would kill itself on the first
-    tick its interpolated point touches a footprint.
+    tick its interpolated point touches a boundary.
     False, the default, is the honest opposite: an editor re-place, a teleport
     spell or an admin move ENDS a running journey, because the ticker would
     pull the character back onto its baked polyline on the next tick.
@@ -1659,7 +1659,7 @@ def set_character_pos(character_name: str, x: float, z: float,
     if not preserve_movement_target:
         # Cancel BEFORE the location write: the setter only ends a journey on
         # a real location change, and this write may well change none at all
-        # (a shift inside the same footprint, a step in the open).
+        # (a shift inside the same boundary, a step in the open).
         _cancel_journey_for_manual_write(character_name)
     from app.core.world_geometry import location_at_point
     from app.models.world import list_locations
@@ -1673,7 +1673,7 @@ def set_character_pos(character_name: str, x: float, z: float,
                 character_name, location_id, sync_pos=False,
                 _preserve_movement_target=preserve_movement_target)
         else:
-            # Stepping OUT of every footprint. The normal setter cannot do
+            # Stepping OUT of every boundary. The normal setter cannot do
             # this: its location_changed is False for an empty location
             # (bool("") is False), so it would leave current_room pointing at
             # the room just left — and room-filtered perception/chat would

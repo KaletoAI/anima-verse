@@ -10,10 +10,11 @@ a journey.
 The model in one paragraph: the world is rastered into ``NAV_CELL_M``
 squares anchored at the origin (cell ``i`` covers ``[i*c, (i+1)*c)``, its
 centre is ``(i + 0.5) * c``). A cell is blocked when a placed location
-footprint that is FOREIGN to this route overlaps it — the footprints
+BOUNDARY that is FOREIGN to this route overlaps it (contract v6 "Gebiete":
+that outline is a polygon, a square only when nobody drew one) — the places
 containing the start or the goal are exempt, otherwise nobody could ever
 leave or enter a building — or when the terrain AT ITS CENTRE is impassable
-AND that centre lies out in the WILDERNESS (footprint wins, decision
+AND that centre lies out in the WILDERNESS (the place wins, decision
 2026-08-13: painted ground judges PASSABILITY between the places, never the
 inside of one — see :meth:`_Search.blocked`), or when the GROUND UNDER IT IS
 TOO STEEP to stand on (E8 task 4, the walking rule of § A15 no. 8 measured as
@@ -31,16 +32,18 @@ into an OPEN one (finding 3 of the E8 acceptance, 2026-08-13, reach decided
 factor, a route through a HALL on the same lake walks the hall's floor at the
 neutral 1.0. The rules are ``terrain_query.ground_scope`` and
 ``terrain_query.effective_speed_factor`` — this file only supplies the lookup
-(:func:`_footprint_scope`, :meth:`_Search.factor`, :func:`_segment_cost`).
+(:func:`_region_scope`, :meth:`_Search.factor`, :func:`_segment_cost`).
 A route never walks a room's interior, so the ROOM half of ``ground_scope``
 is always ``None`` here; it is the 3D client that has rooms under its feet.
 
 Performance discipline (E1 review lesson): the terrain areas, the type
-catalog and the placed footprints are read ONCE into a :class:`NavContext`
+catalog and the placed boundaries are read ONCE into a :class:`NavContext`
 and every cell sample runs against that prefetched data — never a DB or
-config round trip per cell. The context is cached on the terrain and
-relief signatures plus a placement hash, so it survives every route that
-does not change the world; :func:`invalidate_nav_cache` drops it. The HEIGHT
+config round trip per cell, and never a re-derivation of an outline the
+context already holds in world metres (:class:`Region`). The context is cached
+on the terrain and relief signatures plus a placement hash, so it survives
+every route that does not change the world; :func:`invalidate_nav_cache` drops
+it. The HEIGHT
 of a cell is the one thing not carried in the context since v2 (2026-08-14):
 it comes from ``heightfield.world_height``, i.e. the world's 2 m tiles, which
 keep their own per-generation cache of exactly the same shape — the inputs are
@@ -54,23 +57,50 @@ import itertools
 import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import (Any, Dict, List, NamedTuple, Optional, Sequence, Set,
+                    Tuple)
 
 from app.core.terrain_query import (MIN_SPEED_FACTOR, effective_speed_factor,
                                     ground_scope)
-from app.core.world_geometry import (footprint_corners, footprint_hits_aabb,
-                                     is_area_location, placed_footprint,
-                                     point_in_footprint,
-                                     segment_hits_footprint)
+from app.core.world_geometry import (boundary_world_points, is_area_location,
+                                     point_in_polygon, polygon_area,
+                                     polygon_bounds, polygon_hits_aabb,
+                                     segment_hits_polygon)
 
 Point = Tuple[float, float]
 Cell = Tuple[int, int]
-#: One placed footprint as the router keeps it: id, centre, edge, yaw, whether
-#: the location is OPEN GROUND (``world_geometry.is_area_location``) — that
-#: field decides how far the terrain pace reaches into it — and whether it
-#: LEVELS the ground under itself (``level_ground``, opt-in since 2026-08-13),
-#: which decides whether the steepness rule is measured inside it at all.
-Footprint = Tuple[str, float, float, float, float, bool, bool]
+
+
+class Region(NamedTuple):
+    """One placed location as the router keeps it (contract v6 "Gebiete").
+
+    The outline is a POLYGON, and it is kept in WORLD metres, DERIVED ONCE
+    when the context is built. That is the whole performance argument of this
+    file made concrete: ``world_geometry``'s ``boundary_*`` wrappers re-read
+    ``map3d``, re-parse the points and re-run the pin transform on every call,
+    and the router asks per 2 m cell over a search box that can be hundreds of
+    cells per axis. With the outline already in world space the per-cell tests
+    are the pure polygon primitives (``point_in_polygon``,
+    ``polygon_hits_aabb``, ``segment_hits_polygon``) on a prefetched tuple —
+    the same answers, no transform per sample.
+
+    ``bounds`` is the polygon's own axis-aligned box, kept for the cheap
+    reject in :meth:`_Search.blocked` (most cells miss most places).
+    ``area_m2`` is the nesting rule of contract v6 (E1.2, smallest AREA wins),
+    ``is_area`` whether the place is OPEN GROUND
+    (``world_geometry.is_area_location`` — it decides how far the terrain pace
+    reaches into it) and ``level_ground`` whether it LEVELS the ground under
+    itself (opt-in since 2026-08-13), which decides whether the steepness rule
+    is measured inside it at all.
+    """
+
+    lid: str
+    points: Tuple[Point, ...]
+    bounds: Tuple[float, float, float, float]
+    area_m2: float
+    is_area: bool
+    level_ground: bool
+
 
 # Raster resolution in metres. 2 m is a body width: fine enough to squeeze
 # between two buildings, coarse enough that a kilometre of world is a few
@@ -124,14 +154,14 @@ _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1),
 class NavContext:
     """One prefetched snapshot of everything routing needs.
 
-    ``footprints`` are :data:`Footprint` tuples of the PLACED locations,
-    ``data_bounds`` the bounding box over all footprint corners and area
+    ``regions`` are :class:`Region` records of the PLACED locations,
+    ``data_bounds`` the bounding box over all boundary points and area
     vertices (None for a world without either).
     """
 
     areas: List[Dict[str, Any]]
     catalog: Dict[str, Dict[str, Any]]
-    footprints: List[Footprint]
+    regions: List[Region]
     data_bounds: Optional[Tuple[float, float, float, float]]
     sig: Tuple[str, str]
     # The ground of every unpainted point, resolved ONCE — the hot loop must
@@ -162,7 +192,7 @@ class NavContext:
     max_step_m: float = 0.4
     max_slope_deg: float = 40.0
     # Cell centre -> (passable, speed_factor), filled lazily. Terrain only;
-    # footprints are per route (their exemption depends on the endpoints).
+    # placed boundaries are per route (their exemption depends on the ends).
     _terrain_cache: Dict[Cell, Tuple[bool, float]] = field(
         default_factory=dict, repr=False)
 
@@ -197,11 +227,11 @@ class NavContext:
         """Ground height at a world point, metres — the WORLD relief.
 
         Not ``relief.ground_lift_at``: a scene's own field is not asked here.
-        Under a footprint THAT ASKED FOR IT the world grid is LEVELLED FLAT
+        Under a place THAT ASKED FOR IT the world grid is LEVELLED FLAT
         (the plateau pass of E8 task 4, opt-in since 2026-08-13), so the ground
         a route crosses inside such a place is the plateau, and what a location
         builds on top of its own floor is its business — the same split
-        "footprint wins" draws for passability. Under an UNFLAGGED place the
+        "the place wins" draws for passability. Under an UNFLAGGED place the
         authored landscape simply runs on, and this reads it like any other
         ground.
 
@@ -239,14 +269,14 @@ def invalidate_nav_cache() -> None:
     _CACHE = None
 
 
-def _placement_sig(footprints: Sequence[Footprint],
+def _placement_sig(regions: Sequence[Region],
                    openings: Sequence[Point] = (),
                    max_step_m: float = 0.0,
                    max_slope_deg: float = 0.0) -> str:
     """Hash of everything the context prefetches that is NOT covered by the
     terrain and relief signatures.
 
-    The footprints were the whole story until E8 task 4; then the context also
+    The placements were the whole story until E8 task 4; then the context also
     started holding the authored OPENINGS and the two WALK LIMITS, and a
     cached input outside the cache key is a stale answer waiting to happen
     (review finding I1):
@@ -258,21 +288,29 @@ def _placement_sig(footprints: Sequence[Footprint],
       ``POST /play/pos`` reads live. With the router judging by the limits of
       an hour ago, "ONE predicate, two consumers" quietly becomes two.
 
-    The AREA FLAG of every footprint rides along in the tuple, so flipping a
-    location between "open ground" and "building" (``passable``,
-    ``map3d.area_model``) hands out a new context — it decides how far the
-    terrain pace reaches into that footprint and therefore what a route costs.
+    THE OUTLINE ITSELF is what is hashed since v6 — the world points of the
+    boundary, not a centre and an edge length. That covers strictly more than
+    the old tuple did: a re-DRAWN boundary changes no position, no yaw and no
+    width dial, and a router still routing around yesterday's shape is exactly
+    the stale answer this signature exists to prevent.
+
+    The AREA FLAG of every place rides along, so flipping a location between
+    "open ground" and "building" (``passable``, ``map3d.area_model``) hands out
+    a new context — it decides how far the terrain pace reaches into that place
+    and therefore what a route costs.
 
     SO DOES ``level_ground`` (opt-in flattening, 2026-08-13). It is the input
     of a rule of THIS file — whether the steepness of the ground is measured
-    inside that footprint (:meth:`_Search.in_level_footprint`) — and the
-    context caches the answer per cell, so it belongs in the key that decides
-    how long the context lives. ``height_sig`` moves for the flag as well
+    inside that place (:meth:`_Search.in_level_region`) — and the context
+    caches the answer per cell, so it belongs in the key that decides how long
+    the context lives. ``height_sig`` moves for the flag as well
     (``placed_footprints`` only lists the flagged places), and that overlap is
     the same deliberate one the two halves already have for a MOVE: either
     would catch it, neither alone would catch everything.
     """
-    basis = json.dumps({"places": sorted(footprints),
+    places = sorted((r.lid, list(r.points), r.is_area, r.level_ground)
+                    for r in regions)
+    basis = json.dumps({"places": places,
                         "openings": sorted(openings),
                         "limits": [max_step_m, max_slope_deg]}, sort_keys=True)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
@@ -283,7 +321,8 @@ def build_nav_context() -> NavContext:
 
     The cache key is ``(terrain.terrain_sig() + height_sig(), placement
     hash)``: the first covers painted areas, world terrain types AND the
-    authored relief, the second every placed footprint (position, size, yaw).
+    authored relief, the second every placed BOUNDARY (its world points, so
+    position, yaw and the drawn shape in one).
     The relief belongs in the key because the ground a route crosses is part of
     what a cell is — a hill raised after the context was built must not be
     routed over as if it were still flat. Checking it costs one areas read and
@@ -293,7 +332,7 @@ def build_nav_context() -> NavContext:
     the ``terrain_types`` rows, and every catalog edit (a speed factor, a
     ``move_anim``) writes such a row — so a re-typed ground hands out a new
     context, which matters now that the pace of a type reaches inside the
-    footprints too. Since round 2 of the acceptance ``terrain_sig`` hashes the
+    places too. Since round 2 of the acceptance ``terrain_sig`` hashes the
     EFFECTIVE catalog (shared seed overlaid by the world rows), so a changed
     seed reaches a running client and a running router as well.
 
@@ -308,7 +347,7 @@ def build_nav_context() -> NavContext:
     steepness rule, so they decide routes and therefore decide cache validity
     (see :func:`_placement_sig`). The openings are read on every call, cache
     hit included — that is one ``map3d`` parse per placed location, on the
-    same list this function already walks for the footprints.
+    same list this function already walks for the boundaries.
     """
     global _CACHE
     from app.core.boundary_entry import opening_world_points
@@ -318,23 +357,27 @@ def build_nav_context() -> NavContext:
     from app.models.world import list_locations
 
     locations = list_locations()
-    footprints: List[Footprint] = []
+    regions: List[Region] = []
     openings: List[Point] = []
     for loc in locations:
         for _edge, point in opening_world_points(loc):
             openings.append((float(point[0]), float(point[1])))
-        fp = placed_footprint(loc)
-        if fp is None:
+        # ONE derivation of the outline per location per context — every cell
+        # test below runs on these world points (see :class:`Region`).
+        world_pts = boundary_world_points(loc)
+        box = polygon_bounds(world_pts)
+        if world_pts is None or box is None:
             continue
-        cx, cz, width, yaw = fp
-        footprints.append((str(loc.get("id") or ""), cx, cz, width, yaw,
-                           is_area_location(loc),
-                           bool(loc.get("level_ground"))))
+        regions.append(Region(lid=str(loc.get("id") or ""),
+                              points=tuple(world_pts), bounds=box,
+                              area_m2=polygon_area(world_pts),
+                              is_area=is_area_location(loc),
+                              level_ground=bool(loc.get("level_ground"))))
     max_step_m = get_max_step_height_m()
     max_slope_deg = get_max_slope_deg()
 
     key = (terrain_sig() + ":" + height_sig(),
-           _placement_sig(footprints, openings, max_step_m, max_slope_deg))
+           _placement_sig(regions, openings, max_step_m, max_slope_deg))
     cached = _CACHE
     if cached is not None and cached[0] == key:
         return cached[1]
@@ -346,15 +389,15 @@ def build_nav_context() -> NavContext:
     catalog = effective_catalog()
 
     # Over ALL entries, passable or not: since Befund 3 an impassable type's
-    # speed factor still applies — inside a location footprint, and in the
+    # speed factor still applies — inside a location boundary, and in the
     # wilderness rescue clamp — so an impassable "fast" type would otherwise
     # let the heuristic overestimate and stop being admissible.
     best = 1.0
     for entry in catalog.values():
         best = max(best, float(entry.get("speed_factor", 1.0) or 1.0))
 
-    ctx = NavContext(areas=areas, catalog=catalog, footprints=footprints,
-                     data_bounds=_data_bounds(areas, footprints), sig=key,
+    ctx = NavContext(areas=areas, catalog=catalog, regions=regions,
+                     data_bounds=_data_bounds(areas, regions), sig=key,
                      default_kind=default_kind(), best_factor=best,
                      height_field=get_field(), world_tiles=True,
                      openings=tuple(openings),
@@ -363,9 +406,9 @@ def build_nav_context() -> NavContext:
     return ctx
 
 
-def _data_bounds(areas: List[Dict[str, Any]], footprints: Sequence[Footprint]
+def _data_bounds(areas: List[Dict[str, Any]], regions: Sequence[Region]
                  ) -> Optional[Tuple[float, float, float, float]]:
-    """Bounding box over all area vertices and footprint corners."""
+    """Bounding box over all area vertices and boundary points."""
     xs: List[float] = []
     zs: List[float] = []
     for area in areas:
@@ -375,38 +418,37 @@ def _data_bounds(areas: List[Dict[str, Any]], footprints: Sequence[Footprint]
                 zs.append(float(pt[1]))
             except (TypeError, ValueError, IndexError):
                 continue
-    for _lid, cx, cz, width, yaw, _area, _level in footprints:
-        for x, z in footprint_corners(cx, cz, width, yaw):
-            xs.append(x)
-            zs.append(z)
+    for region in regions:
+        xs.extend((region.bounds[0], region.bounds[2]))
+        zs.extend((region.bounds[1], region.bounds[3]))
     if not xs:
         return None
     return (min(xs), min(zs), max(xs), max(zs))
 
 
-def _footprint_scope(x: float, z: float,
-                     footprints: Sequence[Footprint]) -> str:
-    """How far the terrain rule reaches at a point, judged by FOOTPRINTS only.
+def _region_scope(x: float, z: float, regions: Sequence[Region]) -> str:
+    """How far the terrain rule reaches at a point, judged by the placed
+    BOUNDARIES only.
 
     The routing half of ``terrain_query.ground_scope``: the SMALLEST
-    containing footprint answers (a hut on a village square is the more
-    specific place — the same rule ``world_geometry.location_at_point`` and
-    the client's ``tileAt`` follow), an area location leaves the ground its
-    say and a building replaces it. No footprint at all is the wilderness.
+    containing area answers (a hut on a village square is the more specific
+    place — the same rule ``world_geometry.location_at_point`` follows since
+    contract v6, decision E1.2), an area location leaves the ground its say
+    and a building replaces it. No boundary at all is the wilderness.
 
     The ROOM half is always ``None`` out here: a route runs between the
     places and never through an interior, so there is no room under the
     sample. That is a property of the router, not a shortcut — the one rule
     is asked either way.
     """
-    best_width: Optional[float] = None
-    best_area = False
-    for _lid, cx, cz, width, yaw, is_area, _level in footprints:
-        if not point_in_footprint(x, z, cx, cz, width, yaw):
+    best_area_m2: Optional[float] = None
+    best_open = False
+    for region in regions:
+        if not point_in_polygon(x, z, region.points):
             continue
-        if best_width is None or width < best_width:
-            best_width, best_area = width, is_area
-    return ground_scope(best_area if best_width is not None else None, None)
+        if best_area_m2 is None or region.area_m2 < best_area_m2:
+            best_area_m2, best_open = region.area_m2, region.is_area
+    return ground_scope(best_open if best_area_m2 is not None else None, None)
 
 
 # ── grid math ───────────────────────────────────────────────────────────
@@ -455,30 +497,27 @@ def _route_bounds(ctx: NavContext, start: Point,
 
 
 class _Search:
-    """Per-route view of the grid: bounds, exempt footprints, blocking."""
+    """Per-route view of the grid: bounds, exempt regions, blocking."""
 
     def __init__(self, ctx: NavContext, start: Point, goal: Point):
         self.ctx = ctx
-        # A footprint containing the start or the goal is exempt for THIS
+        # A boundary containing the start or the goal is exempt for THIS
         # route — a character standing in a house has to be able to walk
         # out of it, and arriving means walking in.
         self.exempt: Set[str] = set()
-        for lid, cx, cz, width, yaw, _area, _level in ctx.footprints:
-            if (point_in_footprint(start[0], start[1], cx, cz, width, yaw)
-                    or point_in_footprint(goal[0], goal[1], cx, cz, width,
-                                          yaw)):
-                self.exempt.add(lid)
-        self.blocking = [fp for fp in ctx.footprints
-                         if fp[0] not in self.exempt]
-        # …and the same split kept as geometry, for the "footprint wins"
-        # tests below (:meth:`in_footprint`).
-        self.exempt_fps = [fp for fp in ctx.footprints
-                           if fp[0] in self.exempt]
+        for region in ctx.regions:
+            if (point_in_polygon(start[0], start[1], region.points)
+                    or point_in_polygon(goal[0], goal[1], region.points)):
+                self.exempt.add(region.lid)
+        self.blocking = [r for r in ctx.regions if r.lid not in self.exempt]
+        # …and the same split kept as geometry, for the "the place wins"
+        # tests below (:meth:`in_region`).
+        self.exempt_regions = [r for r in ctx.regions if r.lid in self.exempt]
         # The LEVELLING half of them (``level_ground``, opt-in since
-        # 2026-08-13) — the only footprints the STEEPNESS rule steps back for
-        # (:meth:`in_level_footprint`). The passability exemption above is a
+        # 2026-08-13) — the only places the STEEPNESS rule steps back for
+        # (:meth:`in_level_region`). The passability exemption above is a
         # different rule and keeps the whole list.
-        self.level_fps = [fp for fp in self.exempt_fps if fp[6]]
+        self.level_regions = [r for r in self.exempt_regions if r.level_ground]
         min_x, min_z, max_x, max_z = _route_bounds(ctx, start, goal)
         self.min_i, self.min_j = cell_of(min_x, min_z)
         self.max_i, self.max_j = cell_of(max_x, max_z)
@@ -489,67 +528,67 @@ class _Search:
         return (self.min_i <= cell[0] <= self.max_i
                 and self.min_j <= cell[1] <= self.max_j)
 
-    def in_footprint(self, x: float, z: float) -> bool:
-        """Does that point lie inside one of this route's EXEMPT footprints?
+    def in_region(self, x: float, z: float) -> bool:
+        """Does that point lie inside one of this route's EXEMPT boundaries?
 
-        The routing half of "FOOTPRINT WINS" (decision 2026-08-13, the rule
+        The routing half of "THE PLACE WINS" (decision 2026-08-13, the rule
         ``POST /play/pos`` walks by): painted terrain judges the WILDERNESS,
         not the inside of a placed location — neither its passability nor
         its pace.
 
         The exempt list is the whole list here, by invariant: every caller
-        has ALREADY excluded the foreign footprints when it gets this far.
-        :meth:`blocked` asks only after the SAT test found no blocking
-        footprint over the cell — and a centre inside a rectangle means the
-        rectangle overlaps that cell — and :meth:`line_clear` asks only
+        has ALREADY excluded the foreign boundaries when it gets this far.
+        :meth:`blocked` asks only after the polygon/box test found no blocking
+        boundary over the cell — and a centre inside a polygon means the
+        polygon overlaps that cell — and :meth:`line_clear` asks only
         after the exact segment test, which a sample point inside a
-        blocking footprint could never survive. Testing all of them would
+        blocking boundary could never survive. Testing all of them would
         answer the same and cost the foreign ones per sample.
         """
-        return any(point_in_footprint(x, z, cx, cz, w, yaw)
-                   for _lid, cx, cz, w, yaw, _area, _lvl in self.exempt_fps)
+        return any(point_in_polygon(x, z, r.points)
+                   for r in self.exempt_regions)
 
-    def in_level_footprint(self, x: float, z: float) -> bool:
-        """Does that point lie inside an exempt footprint that LEVELS its
+    def in_level_region(self, x: float, z: float) -> bool:
+        """Does that point lie inside an exempt boundary that LEVELS its
         ground (``level_ground``)?
 
-        The steepness half of the footprint exemption, and it is a NARROWER
-        list than :meth:`in_footprint` on purpose (decision 2026-08-13):
-        stepping back from the slope rule was only ever justified by the world
-        grid being flat under the place, and since flattening is opt-in that is
-        true of the flagged places alone. Under an unflagged one the authored
-        landscape runs through, and a route judges it exactly like the ground
-        outside — which is also what the walking gate of ``POST /play/pos``
-        does, since it never knew about footprints at all.
+        The steepness half of the exemption, and it is a NARROWER list than
+        :meth:`in_region` on purpose (decision 2026-08-13): stepping back from
+        the slope rule was only ever justified by the world grid being flat
+        under the place, and since flattening is opt-in that is true of the
+        flagged places alone. Under an unflagged one the authored landscape
+        runs through, and a route judges it exactly like the ground outside —
+        which is also what the walking gate of ``POST /play/pos`` does, since
+        it never knew about placed locations at all.
 
-        The same invariant :meth:`in_footprint` documents applies: the foreign
-        footprints are already gone by the time anybody asks.
+        The same invariant :meth:`in_region` documents applies: the foreign
+        boundaries are already gone by the time anybody asks.
         """
-        return any(point_in_footprint(x, z, cx, cz, w, yaw)
-                   for _lid, cx, cz, w, yaw, _area, _lvl in self.level_fps)
+        return any(point_in_polygon(x, z, r.points)
+                   for r in self.level_regions)
 
     def scope_at(self, x: float, z: float) -> str:
         """How far the terrain rule reaches at that point — over this route's
-        EXEMPT footprints, for the same invariant :meth:`in_footprint`
+        EXEMPT boundaries, for the same invariant :meth:`in_region`
         documents (the foreign ones are already gone by the time anybody
-        asks). The rule is :func:`_footprint_scope`."""
-        return _footprint_scope(x, z, self.exempt_fps)
+        asks). The rule is :func:`_region_scope`."""
+        return _region_scope(x, z, self.exempt_regions)
 
     def blocked(self, cell: Cell) -> bool:
-        """A CELL is blocked by a foreign footprint OVERLAPPING it, or by
+        """A CELL is blocked by a foreign BOUNDARY overlapping it, or by
         impassable terrain at its centre OUT IN THE WILDERNESS — cells
         outside the search box count as blocked so A* cannot wander off.
 
-        Footprints are tested against the whole cell square, not against
+        Boundaries are tested against the whole cell square, not against
         its centre: a building may cover most of a cell without touching
         the centre, and a step between two such cells would walk through
         the wall.
 
-        FOOTPRINT WINS (decision 2026-08-13, the same rule the walking gate
-        of ``POST /play/pos`` applies). For a FOREIGN footprint the rule
+        THE PLACE WINS (decision 2026-08-13, the same rule the walking gate
+        of ``POST /play/pos`` applies). For a FOREIGN boundary the rule
         changes nothing — a cell whose centre lies inside it is hit by the
-        SAT test above anyway. It matters for the EXEMPT ones, the
-        footprints of this route's own start and goal: there the terrain
+        polygon/box test above anyway. It matters for the EXEMPT ones, the
+        boundaries of this route's own start and goal: there the terrain
         probe at the cell centre was the one thing that could still veto,
         and it vetoed exactly the case the walking rule now accepts — a
         location placed on painted rock or water (a hall on a plateau, a
@@ -569,24 +608,29 @@ class _Search:
                 hit = True
             else:
                 box = cell_box(cell)
-                if any(footprint_hits_aabb(fcx, fcz, w, yaw, *box)
-                       for _lid, fcx, fcz, w, yaw, _a, _l in self.blocking):
+                # The prefetched bounds reject first: most cells miss most
+                # places, and a box/box compare costs four comparisons where
+                # the exact polygon test walks every edge.
+                if any(not (r.bounds[0] > box[2] or r.bounds[2] < box[0]
+                            or r.bounds[1] > box[3] or r.bounds[3] < box[1])
+                       and polygon_hits_aabb(r.points, *box)
+                       for r in self.blocking):
                     hit = True
                 elif self.ctx.cell_terrain(cell)[0]:
                     hit = self.too_steep(cell)
                 else:
                     # Impassable ground — only a wilderness cell dies of it.
                     # The point test runs LAST on purpose: it costs one pass
-                    # over the footprints and is reached only by the few cells
-                    # the terrain would refuse. A cell that survives it lies
-                    # inside a footprint — and is STILL asked for its
+                    # over the exempt boundaries and is reached only by the few
+                    # cells the terrain would refuse. A cell that survives it
+                    # lies inside a place — and is STILL asked for its
                     # steepness, exactly like the passable-ground branch
                     # above: since flattening became opt-in (2026-08-13) the
                     # ground inside a place is only guaranteed flat when the
                     # place levelled it, and ``too_steep`` is the one place
-                    # that knows. For a levelling footprint the question
+                    # that knows. For a levelling place the question
                     # answers False and nothing changes.
-                    hit = (not self.in_footprint(*cell_centre(cell))
+                    hit = (not self.in_region(*cell_centre(cell))
                            or self.too_steep(cell))
             self._blocked[cell] = hit
         return hit
@@ -615,15 +659,15 @@ class _Search:
 
         TWO EXEMPTIONS, both of them rules this file already lives by:
 
-        * INSIDE A **LEVELLING** FOOTPRINT nothing is measured (footprint
+        * INSIDE A **LEVELLING** PLACE nothing is measured (the place
           wins). The world grid is levelled flat under such a place anyway, so
           this only matters at the rim, where the plateau's own ramp would
           otherwise wall its location in. Since flattening became opt-in
-          (``level_ground``, 2026-08-13) it is the FLAGGED footprints alone:
+          (``level_ground``, 2026-08-13) it is the FLAGGED places alone:
           under an unflagged place the authored landscape runs on, so there is
           real ground to judge and the rule judges it — the same ground the
           walking gate of ``POST /play/pos`` judges, which never knew about
-          footprints. A location built on a steep slope without the flag can
+          places. A location built on a steep slope without the flag can
           therefore be unroutable; that is the authoring consequence the
           decision accepted, and the cure is the flag.
         * AT AN OPENING nothing is measured either (``OPENING_EXEMPT_M``) —
@@ -643,7 +687,7 @@ class _Search:
         """:meth:`too_steep` without the memo — the arithmetic itself."""
         ctx = self.ctx
         cx, cz = cell_centre(cell)
-        if self.in_level_footprint(cx, cz) or ctx.near_opening(cx, cz):
+        if self.in_level_region(cx, cz) or ctx.near_opening(cx, cz):
             return False
         from app.core.relief import slope_blocks
         run = 2.0 * NAV_CELL_M
@@ -657,11 +701,11 @@ class _Search:
 
         THE PACE OF THE TOPMOST TERRAIN REACHES AS FAR AS THE SKY DOES
         (finding 3 of the E8 acceptance, 2026-08-13; reach decided in round
-        2). The PASSABILITY half of "footprint wins" stays exactly as it was
+        2). The PASSABILITY half of "the place wins" stays exactly as it was
         (:meth:`blocked`) — a place on rock has to stay reachable — but the
         pace is a property of the ground one crosses, and a village painted
         onto a lake is waded through whether the walker is a routed NPC or an
-        avatar. A BUILDING footprint is the other half of the decision: it
+        avatar. A BUILDING boundary is the other half of the decision: it
         brings its own floor and pays the neutral 1.0.
 
         The rules are ``terrain_query.ground_scope`` and
@@ -691,13 +735,13 @@ class _Search:
     def line_clear(self, a: Point, b: Point) -> bool:
         """Whether the straight segment a→b is walkable.
 
-        Foreign footprints are tested EXACTLY (segment vs. rotated
-        rectangle) — sampling misses the sub-metre corner clip that a
+        Foreign boundaries are tested EXACTLY (segment vs. polygon, edge by
+        edge) — sampling misses the sub-metre corner clip that a
         straightened segment produces. Terrain is sampled every
         ``LOS_STEP_M`` metres (both endpoints included), the same
         resolution the raster itself works at — and, like
         :meth:`blocked`, it only judges samples OUT IN THE WILDERNESS
-        (footprint wins, for ALL exempt footprints — the passability
+        (the place wins, for ALL exempt boundaries — the passability
         exemption does not ask ``level_ground``). Without that the
         straightening would still break on the ground inside the start/goal
         location and leave the polyline zig-zagging over cell centres A* had
@@ -710,12 +754,11 @@ class _Search:
         the very rule the route was planned with. So a shortcut across a cell
         the search itself would not enter is not walkable, full stop. That
         question goes through :meth:`too_steep`, so it steps back only inside
-        a LEVELLING footprint — a shortcut through an unflagged place crosses
+        a LEVELLING place — a shortcut through an unflagged place crosses
         the authored slope and is judged on it.
         """
-        for _lid, cx, cz, width, yaw, _area, _lvl in self.blocking:
-            if segment_hits_footprint(a[0], a[1], b[0], b[1], cx, cz, width,
-                                      yaw):
+        for region in self.blocking:
+            if segment_hits_polygon(a[0], a[1], b[0], b[1], region.points):
                 return False
         relief = self.ctx.has_relief
         length = math.dist(a, b)
@@ -724,7 +767,7 @@ class _Search:
             t = k / steps
             px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
             if not self.ctx.terrain_at(px, pz)[0] \
-                    and not self.in_footprint(px, pz):
+                    and not self.in_region(px, pz):
                 return False
             if relief and self.too_steep(cell_of(px, pz)):
                 return False
@@ -810,10 +853,10 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
     EVERY sample pays the TERRAIN's pace (finding 3, 2026-08-13,
     ``terrain_query.effective_speed_factor``), a sample inside an AREA
     location included — a journey through a village on a lake honestly wades.
-    A BUILDING footprint pays the neutral 1.0, and so does a factor-0 ground
+    A BUILDING boundary pays the neutral 1.0, and so does a factor-0 ground
     under an area location; that is what keeps a journey through a hall on
     rock from taking ten times as long as walking the same hall does. There
-    is no route context at cost time, so ALL footprints count; a baked
+    is no route context at cost time, so ALL placed boundaries count; a baked
     polyline never crosses a foreign one anyway (``blocked`` and
     ``line_clear`` saw to that), so the two readings answer the same.
 
@@ -836,8 +879,7 @@ def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
         t = (k + 0.5) / n
         px, pz = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
         total += part / effective_speed_factor(
-            ctx.terrain_at(px, pz)[1], _footprint_scope(px, pz,
-                                                        ctx.footprints))
+            ctx.terrain_at(px, pz)[1], _region_scope(px, pz, ctx.regions))
         if relief:
             t0, t1 = k / n, (k + 1) / n
             h0 = ctx.height_at(a[0] + (b[0] - a[0]) * t0,
@@ -904,7 +946,7 @@ def route(start_xz: Any, goal_xz: Any,
 
     Resolution caveat: TERRAIN is judged at cell centres (and at 1 m
     samples along a smoothed segment), so a painted obstacle thinner than
-    roughly a cell can slip between the samples — building footprints do
+    roughly a cell can slip between the samples — building outlines do
     not, they are tested exactly against the cell square and the segment.
     Sub-cell terrain detail is below what a 2 m raster can represent.
     """
@@ -944,7 +986,7 @@ def segment_costs(waypoints: Sequence[Point],
     is a coin flip). The cost is the sum of ``(L / n) / factor``, i.e. the
     length divided by the harmonic mean of the sampled factors. THE FACTOR IS
     THE TERRAIN'S out in the open and inside an AREA location (finding 3,
-    2026-08-13); a building footprint and a factor-0 ground under an area
+    2026-08-13); a building boundary and a factor-0 ground under an area
     location pay the neutral 1.0.
     """
     if ctx is None:

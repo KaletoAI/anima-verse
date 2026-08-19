@@ -56,6 +56,23 @@ port of (`frontend/src/tabs/map/mapMath.ts`), the rest from the geometry.
               [10,20])            -> footprint_overlap
         the same two 50 m apart (spans [-20,20] and [30,70], a 10 m gap)
                                   -> NO warning
+        TWO INTERLOCKING Ls (contract v6 "Gebiete", the concave case). Both
+              carry the outline [[0,0],[8,0],[8,4],[4,4],[4,8],[0,8]], both at
+              yaw 0, so a pin at (px, pz) fills
+                  wide arm    x in [px, px+8], z in [pz, pz+4]
+                  upright arm x in [px, px+4], z in [pz+4, pz+8]
+              and leaves the NOTCH x in (px+4, px+8), z in (pz+4, pz+8) empty.
+              A at (0,0), B at (5,5): B's wide arm ([5,13] x [5,9]) runs
+              straight THROUGH A's notch ((4,8) x (4,8)) and out the far side,
+              and nothing touches — A's wide arm stops at z = 4 < 5, A's
+              upright arm at x = 4 < 5, so the closest approach is a full
+              metre. -> NO warning, although the two BOUNDING BOXES
+              ([0,8]² and [5,13]²) share the whole square [5,8]²; that shared
+              square lies inside B and in A's notch, which is what makes it
+              the red probe of every box-shaped overlap test.
+              Slide B to (3,3) instead and its wide arm ([3,11] x [3,7])
+              overlaps A's wide arm ([0,8] x [0,4]) on [3,8] x [3,4], 5 m by
+              1 m — e.g. the point (5, 3.5) lies in both. -> footprint_overlap
         a place inside a deep_water polygon (impassable in the seed catalog;
               plain "water" is passable and must NOT warn)
                                   -> on_impassable
@@ -98,6 +115,8 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import map_layout_apply as mla  # noqa: E402
+from app.core.world_geometry import (  # noqa: E402
+    point_in_polygon, polygon_bounds)
 from app.models import heightfield, terrain, world  # noqa: E402
 
 FAILURES = []
@@ -262,10 +281,15 @@ CATALOG = {
     "water": {"name": "Water", "passable": True, "speed_factor": 0.4},
     "deep_water": {"name": "Deep water", "passable": False, "speed_factor": 0.4},
 }
+L_SHAPE = [[0, 0], [8, 0], [8, 4], [4, 4], [4, 8], [0, 8]]
 LOCS = {
     "loc_a": {"name": "Tavern", "plan_width_m": 40.0},
     "loc_b": {"name": "Smithy", "plan_width_m": 40.0},
     "loc_c": {"name": "Shrine", "plan_width_m": 10.0},
+    # The concave pair: a DRAWN outline and no width dial at all, so only the
+    # polygon can answer whether they share ground.
+    "loc_l1": {"name": "L Yard", "boundary": L_SHAPE, "plan_width_m": 0.0},
+    "loc_l2": {"name": "L Barn", "boundary": L_SHAPE, "plan_width_m": 0.0},
 }
 BOX = {"min_x": -500, "min_z": -500, "max_x": 500, "max_z": 500}
 
@@ -285,6 +309,29 @@ norm, warns = sane({"locations": [
     {"id": "loc_a", "pos_x": 0, "pos_z": 0},
     {"id": "loc_b", "pos_x": 50, "pos_z": 0}]})
 check("40 m footprints 50 m apart do not", codes(warns), [])
+
+# The concave pair — two Ls, arm through notch.
+norm, warns = sane({"locations": [
+    {"id": "loc_l1", "pos_x": 0, "pos_z": 0},
+    {"id": "loc_l2", "pos_x": 5, "pos_z": 5}]})
+check("two INTERLOCKING Ls do not overlap", codes(warns), [])
+check("...and both are placed", len(norm["locations"]), 2)
+check("RED COUNTER-PROBE: their bounding boxes DO share [5,8]²",
+      (polygon_bounds([[0, 0], [8, 0], [8, 4], [4, 4], [4, 8], [0, 8]]),
+       polygon_bounds([[5, 5], [13, 5], [13, 9], [9, 9], [9, 13],
+                           [5, 13]])),
+      ((0.0, 0.0, 8.0, 8.0), (5.0, 5.0, 13.0, 13.0)))
+norm, warns = sane({"locations": [
+    {"id": "loc_l1", "pos_x": 0, "pos_z": 0},
+    {"id": "loc_l2", "pos_x": 3, "pos_z": 3}]})
+check("...but 2 m further in their wide arms cross",
+      codes(warns), ["footprint_overlap"])
+check("the shared point (5, 3.5) is really in both",
+      (point_in_polygon(5, 3.5, [[0, 0], [8, 0], [8, 4], [4, 4], [4, 8],
+                                     [0, 8]]),
+       point_in_polygon(5, 3.5, [[3, 3], [11, 3], [11, 7], [7, 7],
+                                     [7, 11], [3, 11]])),
+      (True, True))
 
 DEEP = {"kind": "deep_water", "label": "The lake",
         "polygon": [[-50, -50], [50, -50], [50, 50], [-50, 50]]}

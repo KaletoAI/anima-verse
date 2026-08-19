@@ -25,9 +25,10 @@ actually changes:
 :func:`locations_within`, but keeps its own semantics: condition-gated, a
 probability roll, exactly ONE random place, and a player-visible message.
 
-The geometry itself is ``world_geometry.footprint_distance`` — measured to the
-turned SQUARE, not to its centre, so a wide plaza is "close" as soon as its
-edge is, and 0 inside.
+The geometry itself is ``world_geometry.boundary_distance_m`` — measured to the
+location's drawn OUTLINE (contract v6 "Gebiete"; a legacy square dial is just
+that outline's four corners), not to its centre, so a wide plaza is "close" as
+soon as its edge is, and 0 inside.
 """
 from __future__ import annotations
 
@@ -90,7 +91,7 @@ def _reject_range(raw: Any) -> float:
 def locations_within(x: float, z: float, range_m: float,
                      locations: Optional[List[Dict[str, Any]]] = None,
                      *, exclude: Iterable[str] = ()) -> List[str]:
-    """IDs of PLACED locations whose footprint is within ``range_m`` of the
+    """IDs of PLACED locations whose BOUNDARY is within ``range_m`` of the
     point — the ONE distance expression discovery has.
 
     ``locations`` is the prefetched ``list_locations()`` snapshot; ``None``
@@ -98,11 +99,11 @@ def locations_within(x: float, z: float, range_m: float,
     ``known_locations``), so the common "knows everything nearby already" case
     costs no distance checks at all.
 
-    An unplaced location (no point, or no ``plan_width_m`` scale anchor) has
-    no footprint and is therefore never in range — ``placed_footprint``
-    refuses it and ``footprint_distance`` would answer ``inf`` anyway.
+    A location without area (no point, and neither a drawn ``map3d.boundary``
+    nor a legacy width dial) is never in range — ``boundary_distance_m``
+    answers ``inf`` for it, so no separate "is it placed" test is needed.
     """
-    from app.core.world_geometry import footprint_distance, placed_footprint
+    from app.core.world_geometry import boundary_distance_m
     if range_m < 0 or not (math.isfinite(x) and math.isfinite(z)):
         return []
     if locations is None:
@@ -114,11 +115,7 @@ def locations_within(x: float, z: float, range_m: float,
         loc_id = (loc.get("id") or "").strip()
         if not loc_id or loc_id in skip:
             continue
-        fp = placed_footprint(loc)
-        if fp is None:
-            continue
-        cx, cz, width, yaw = fp
-        if footprint_distance(x, z, cx, cz, width, yaw) <= range_m:
+        if boundary_distance_m(loc, x, z) <= range_m:
             out.append(loc_id)
     return out
 
