@@ -1212,8 +1212,16 @@ def play_room_recipe(room_id: str):
     into placement-relative world transforms. 404 = the room has no layout
     (client auto-grid as before). Contract:
     shared/backend-note-room-recipe.md."""
-    from app.models.world import find_location_by_room
+    from app.models.world import GROUND_ROOM_ID, find_location_by_room
     from app.core.room_recipe import compose_recipe
+    # The ground id is the ONE room id every location carries, so a lookup by
+    # room id alone would answer for whichever location comes first. The yard
+    # is reachable through its location: GET /play/locations/{id}/scene.
+    if room_id == GROUND_ROOM_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="The ground is not addressable by room id — read it from "
+                   "GET /play/locations/{id}/scene")
     loc = find_location_by_room(room_id)
     room = None
     siblings = []
@@ -1222,8 +1230,11 @@ def play_room_recipe(room_id: str):
         room = next((r for r in rooms if r.get("id") == room_id), None)
         siblings = [r for r in rooms if r.get("id") != room_id]
     # No scale input any more (contract v6 Nr. 2): a layout carries its own
-    # metres, so the recipe needs nothing but the room and its siblings.
-    recipe = compose_recipe(room, siblings) if room else None
+    # metres, so the recipe needs nothing but the room and its siblings — plus
+    # the location's map data, which only the GROUND room reads (§ A13a: its
+    # frame and its scatter area are the drawn boundary).
+    recipe = compose_recipe(room, siblings,
+                            map3d=(loc or {}).get("map3d")) if room else None
     if not recipe:
         raise HTTPException(status_code=404, detail="No layout")
     return recipe

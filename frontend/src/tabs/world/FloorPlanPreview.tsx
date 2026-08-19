@@ -32,6 +32,7 @@ import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
 import { fmtM } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
+import { hasRect } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
 
@@ -768,7 +769,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
 
     current.forEach((room, idx) => {
       const lay = room.layout
-      if (!lay) return
+      // The YARD has no room shape to preview (§ A13a): its layout is
+      // placements only, and those arrive as ordinary prop specs in the scene
+      // payload above — drawn there like every other prop.
+      if (!hasRect(lay)) return
       const palette = style?.room_palette || []
       const color = hex(palette[idx % (palette.length || 1)], 0x58a6ff)
       // Metres, verbatim (contract v6 Nr. 2): the layout rect IS the payload
@@ -873,7 +877,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     if (sc && calib?.roomId) {
       const room = current.find((r) => r.id === calib.roomId)
       const lay = room?.layout
-      if (lay && visibleLevel(lay.level || 0)) {
+      // The calibration figure is dialled against a ROOM's diorama; the yard
+      // has neither rectangle nor model (§ A13a).
+      if (hasRect(lay) && visibleLevel(lay.level || 0)) {
         const spec = sc.models.find(
           (m) => m.role === 'room' && m.room_id === calib.roomId)
         const plate = sc.plates.find((p) => p.room_id === calib.roomId)

@@ -75,9 +75,15 @@ const POLL_OPEN_MS = 3000
 const POLL_IDLE_MS = 15000
 
 /**
- * The single source of truth for one room's furnishing job. `open` = the
+ * The single source of truth for one target's furnishing job. `open` = the
  * dialog is visible (fast poll); a closed dialog still polls slowly so the
  * ghost layer notices a job that finished in the background.
+ *
+ * `roomId` is the room's own id — EXCEPT for a location's yard (§ A13a),
+ * whose id `__ground__` is reserved and therefore repeats in every location:
+ * a yard job is addressed by the composite `__ground__@<locationId>`, which
+ * the server splits again. Callers build that string; everything here just
+ * passes it through.
  */
 export function useFurnishJob(roomId: string, open: boolean): FurnishJob {
   const [status, setStatus] = useState<FurnishStatus | null>(null)

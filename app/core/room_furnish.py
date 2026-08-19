@@ -27,6 +27,14 @@ Everything the job writes outside its own row is normal world data: new
 props are ordinary library entries (they survive a discarded proposal) and
 accepted placements are appended to ``layout.props`` via
 ``world.append_room_props``.
+
+THE YARD IS A TARGET LIKE A ROOM (§ A13a). A location's ground can be
+furnished too; it has no floor plan, so its surface is the drawn boundary and
+its placements are location-local metres. Two things follow: the job is
+addressed by the COMPOSITE id ``__ground__@<location_id>`` (see
+``ground_job_id`` — the reserved room id is the one that is not unique), and
+the solver's frame is shifted by the boundary's min corner and back
+(``_geometry``/``_phase_place``).
 """
 
 import json
@@ -186,13 +194,53 @@ def get_status(room_id: str) -> Optional[Dict[str, Any]]:
 
 # ── World lookups / geometry ────────────────────────────────────────────
 
-def _load_room(room_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    from app.models.world import find_location_by_room, get_room_by_id
-    loc = find_location_by_room(room_id)
+# THE YARD NEEDS A COMPOSITE JOB ID. Every room id in this world is unique —
+# except the reserved ground id, which every location carries (§ A13). The job
+# table is keyed by room id, and ``find_location_by_room`` answers with the
+# FIRST location that has one, so a bare "__ground__" would furnish somebody
+# else's yard and two yards could never be open at once. A ground job is
+# therefore addressed as ``__ground__@<location_id>`` — the id clients pass to
+# every furnish endpoint. Rooms keep their plain id.
+GROUND_JOB_SEP = "@"
+
+
+def ground_job_id(location_id: str) -> str:
+    """The furnish job id of ONE location's yard (§ A13a)."""
+    from app.models.world import GROUND_ROOM_ID
+    return f"{GROUND_ROOM_ID}{GROUND_JOB_SEP}{location_id}"
+
+
+def _target(job_id: str) -> Tuple[str, str]:
+    """``(room_id, location_id)`` a job id addresses; the location is '' for
+    an ordinary room, which is looked up by its own unique id."""
+    from app.models.world import GROUND_ROOM_ID
+    prefix = f"{GROUND_ROOM_ID}{GROUND_JOB_SEP}"
+    if (job_id or "").startswith(prefix):
+        return GROUND_ROOM_ID, job_id[len(prefix):]
+    return job_id or "", ""
+
+
+def _load_room(job_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    from app.models.world import (find_location_by_room, get_location_by_id,
+                                  get_room_by_id)
+    room_id, location_id = _target(job_id)
+    loc = get_location_by_id(location_id) if location_id \
+        else find_location_by_room(room_id)
     room = get_room_by_id(loc, room_id) if loc else None
     if not loc or not room:
         raise FurnishError("Room not found", 404)
     return loc, room
+
+
+def _room_label(room: Dict[str, Any]) -> str:
+    """What the prompts and the job log call this surface. An unnamed yard is
+    not "Room": the ground is the location's open surface (§ A13), and an
+    author who never named it still has to recognise the job."""
+    from app.models.world import GROUND_ROOM_ID
+    name = str(room.get("name") or "").strip()
+    if name:
+        return name
+    return "Yard" if str(room.get("id") or "") == GROUND_ROOM_ID else "Room"
 
 
 def _poly_area(pts: List[List[float]]) -> float:
@@ -205,25 +253,51 @@ def _poly_area(pts: List[List[float]]) -> float:
 
 
 def _geometry(loc: Dict[str, Any], room: Dict[str, Any]) -> Dict[str, Any]:
-    """The room's floor plan in REAL METRES. Raises when the room has no
-    layout.
+    """The furnishing surface in REAL METRES. Raises when there is none.
 
     Since contract v6 Nr. 2 a layout IS metres — origin at the room's min
     corner, which is exactly the frame ``furnish_solver`` works in — so this
     only reads what is stored. The scale-anchor precondition is gone with the
     fraction system: there is no plan width left to be missing.
+
+    THE GROUND IS A SURFACE WITHOUT A PLAN (§ A13a). Its shape is the drawn
+    location boundary and its placements are LOCATION-LOCAL metres, so the
+    solver — which works from a polygon's own min corner — needs that corner
+    named: ``origin`` is the offset between the two frames, ``[0, 0]`` for a
+    room and the boundary's min corner for the ground. Its openings are the
+    boundary pass-throughs, on the very edge indices the polygon has.
     """
-    lay = room.get("layout")
-    if not isinstance(lay, dict) or not all(k in lay for k in ("x", "y", "w", "d")):
+    from app.models.world import GROUND_ROOM_ID
+    lay = room.get("layout") if isinstance(room.get("layout"), dict) else {}
+    if str(room.get("id") or "") == GROUND_ROOM_ID:
+        from app.core.room_recipe import boundary_points
+        boundary = boundary_points(loc.get("map3d"))
+        if len(boundary) < 3:
+            raise FurnishError(
+                "This location has no boundary drawn yet — draw its outline "
+                "first, the yard is that area.", 409)
+        x0 = min(p[0] for p in boundary)
+        y0 = min(p[1] for p in boundary)
+        outline_m = [[round(p[0] - x0, 3), round(p[1] - y0, 3)]
+                     for p in boundary]
+        openings = [op for op in ((loc.get("map3d") or {}).get(
+            "boundary_openings") or []) if isinstance(op, dict)]
+        return {"layout": lay, "origin": [x0, y0],
+                "w_m": round(max(p[0] for p in outline_m), 3),
+                "d_m": round(max(p[1] for p in outline_m), 3),
+                "outline_m": outline_m,
+                "area_m2": round(_poly_area(outline_m), 2),
+                "is_rect": False, "openings": openings}
+    if not all(k in lay for k in ("x", "y", "w", "d")):
         raise FurnishError(
             "This room has no floor plan yet — draw its layout first.", 409)
     w_m = round(float(lay["w"]), 3)
     d_m = round(float(lay["d"]), 3)
     pts = lay.get("outline") or [[0.0, 0.0], [w_m, 0.0], [w_m, d_m], [0.0, d_m]]
     outline_m = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in pts]
-    return {"layout": lay, "w_m": w_m, "d_m": d_m,
+    return {"layout": lay, "origin": [0.0, 0.0], "w_m": w_m, "d_m": d_m,
             "outline_m": outline_m, "area_m2": round(_poly_area(outline_m), 2),
-            "is_rect": not lay.get("outline")}
+            "is_rect": not lay.get("outline"), "openings": _openings(lay)}
 
 
 def _library() -> Dict[str, Dict[str, Any]]:
@@ -494,12 +568,13 @@ def _phase_select(room_id: str) -> None:
     existing = _aggregate(placed, library)
     budget = max(0.0, geom["area_m2"] * BUDGET_FRACTION
                  - _used_area(placed, library))
-    room_name = str(room.get("name") or "Room")
+    room_name = _room_label(room)
     style_hint = str(room.get("style_hint") or loc.get("style_hint") or "")
     common = {
         "room_name": room_name,
         "room_description": str(room.get("description") or ""),
-        "activity_hint": get_room_activity_hint(str(loc.get("id") or ""), room_id),
+        "activity_hint": get_room_activity_hint(str(loc.get("id") or ""),
+                                                str(room.get("id") or "")),
         "style_hint": style_hint,
         "room_w_m": geom["w_m"],
         "room_d_m": geom["d_m"],
@@ -687,24 +762,33 @@ def _phase_place(room_id: str) -> None:
     library = _library()
     lay = geom["layout"]
     items = _place_items(row.get("proposal") or {}, library)
-    room_name = str(room.get("name") or "Room")
+    room_name = _room_label(room)
 
     if not items:
         _update_row(room_id, state=STATE_REVIEW_READY, error="",
                     placements={"placed": [], "unplaced": []})
         return
 
-    openings = _openings(lay)
+    openings = geom["openings"]
     placed_props = _placements(lay)
-    existing_solver = [{"prop_id": p.get("prop_id"), "at": p.get("at"),
+    # THE SOLVER WORKS FROM THE POLYGON'S MIN CORNER. For a room that IS the
+    # stored frame; on the ground the stored frame is the location's, so
+    # everything handed in is shifted by the origin and every result is
+    # shifted back (see `_geometry`). For a room both shifts are 0.
+    ox, oy = geom["origin"]
+    existing_solver = [{"prop_id": p.get("prop_id"),
+                        "at": [float((p.get("at") or [0, 0])[0]) - ox,
+                               float((p.get("at") or [0, 0])[1]) - oy],
                         "yaw": p.get("yaw") or 0} for p in placed_props]
     solver_props = _solver_props(items, library)
     template_existing = [
         {"prop_id": p.get("prop_id"),
          "name": (library.get(str(p.get("prop_id") or "")) or {}).get("name")
          or str(p.get("prop_id") or ""),
-         "x_m": round(float((p.get("at") or [0, 0])[0]), 2),
-         "y_m": round(float((p.get("at") or [0, 0])[1]), 2)}
+         # Told in the SOLVER's frame, so the model's "beside the table"
+         # refers to the same numbers the solver reasons about.
+         "x_m": round(float((p.get("at") or [0, 0])[0]) - ox, 2),
+         "y_m": round(float((p.get("at") or [0, 0])[1]) - oy, 2)}
         for p in placed_props]
     template_openings = [
         {"type": op.get("type") or "door",
@@ -726,10 +810,15 @@ def _phase_place(room_id: str) -> None:
         plan = _llm_json("furnish_place", sys_p, user_p,
                          f"Furnish place: {room_name}"
                          + (" (re-plan)" if errors else ""))
-        return furnish_solver.solve(
+        solved = furnish_solver.solve(
             outline_m=geom["outline_m"], openings=openings,
             existing=existing_solver, plan=_list_field(plan, "plan"),
             props=solver_props)
+        for entry in solved.get("placed") or []:
+            at = entry.get("at") or [0, 0]
+            entry["at"] = [round(float(at[0]) + ox, 2),
+                           round(float(at[1]) + oy, 2)]
+        return solved
 
     result = _run([])
     if result.get("unplaced"):
@@ -833,14 +922,14 @@ def start(room_id: str, exclude: Any = None) -> Dict[str, Any]:
     pre-filters the library the LLM gets to see (see _valid_exclude) — it is
     persisted with the job so retry/continue keep the same filter."""
     loc, room = _load_room(room_id)
-    _geometry(loc, room)  # a drawn layout is the start condition
+    _geometry(loc, room)  # a drawn plan (yard: a drawn boundary) is the start
     if _get_row(room_id):
         raise FurnishError("A furnishing job for this room is already open.", 409)
     _insert_row(room_id, str(loc.get("id") or ""))
     ex = _valid_exclude(exclude)
     if ex["prop_ids"] or ex["categories"] or ex["keywords"]:
         _update_row(room_id, proposal={"exclude": ex})
-    _spawn(room_id, "select", str(room.get("name") or room_id))
+    _spawn(room_id, "select", _room_label(room))
     return get_status(room_id) or {}
 
 
@@ -850,7 +939,7 @@ def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
     with nothing to generate and falls straight through to placement —
     review/accept work exactly like the LLM path."""
     loc, room = _load_room(room_id)
-    _geometry(loc, room)  # a drawn layout is the start condition here too
+    _geometry(loc, room)  # a drawn plan (yard: a drawn boundary) is the start here too
     if _get_row(room_id):
         raise FurnishError("A furnishing job for this room is already open.", 409)
     raw = proposal.get("existing") if isinstance(proposal, dict) else None
@@ -859,7 +948,7 @@ def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
         raise FurnishError("Pick at least one library prop.", 400)
     _insert_row(room_id, str(loc.get("id") or ""))
     _update_row(room_id, state=STATE_GENERATING, proposal=clean)
-    _spawn(room_id, "generate", str(room.get("name") or room_id))
+    _spawn(room_id, "generate", _room_label(room))
     return get_status(room_id) or {}
 
 
@@ -877,7 +966,7 @@ def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
     if not clean["existing"] and not clean["new"]:
         raise FurnishError("The confirmed list is empty.", 400)
     _update_row(room_id, state=STATE_GENERATING, error="", proposal=clean)
-    _spawn(room_id, "generate", str(room.get("name") or room_id))
+    _spawn(room_id, "generate", _room_label(room))
     return get_status(room_id) or {}
 
 
@@ -892,7 +981,10 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     entries = placements if isinstance(placements, list) \
         else (row.get("placements") or {}).get("placed") or []
     from app.models.world import append_room_props
-    if entries and not append_room_props(row["location_id"], room_id, entries):
+    # The job id may be the composite yard one — what gets written is the ROOM.
+    target_room, _loc_id = _target(room_id)
+    if entries and not append_room_props(row["location_id"], target_room,
+                                         entries):
         raise FurnishError("The room layout could not be updated.", 409)
     _delete_row(room_id)
     logger.info("room_furnish %s: %d placements accepted", room_id, len(entries))
@@ -949,6 +1041,6 @@ def _resume(row: Dict[str, Any]) -> Dict[str, Any]:
     state = {"select": STATE_SELECTING, "generate": STATE_GENERATING,
              "place": STATE_PLACING}[phase]
     _update_row(room_id, state=state, error="")
-    if not _spawn(room_id, phase, str(room.get("name") or room_id)):
+    if not _spawn(room_id, phase, _room_label(room)):
         raise FurnishError("This job is already running.", 409)
     return get_status(room_id) or {}

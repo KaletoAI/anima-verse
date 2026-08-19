@@ -178,6 +178,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     ``GET /play/heightfield`` the payload (§ A16), and so does the avatar's
     EXPLORATION MEMORY — ``explored_sig`` here, ``GET /play/explored`` there
     (§ A12).
+    The AUTHORED world props (§ A9a) DO ride along — a hand-set list capped
+    at 500 rows is not a raster, and it is never fogged: deco blocks nothing
+    and belongs to no location, so it leaks no knowledge.
     The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
     along: the client mirrors the height gate of ``POST /play/pos`` and needs
     the very numbers the server judges with. So do the location's authored
@@ -214,6 +217,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.boundary_entry import opening_world_frames
     from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import list_areas, terrain_sig
+    from app.models.world_props import payload_rows, world_props_sig
+
+    # Built ONCE per payload: the signature below hashes the very rows that
+    # are sent, so building them twice would also read the prop library twice.
+    _world_props = payload_rows()
 
     avatar = (avatar_name or "").strip()
     fogged = not show_all
@@ -619,6 +627,19 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # an unembodied session has nothing to spare (the admin's `show_all`
         # view draws no veil at all, so it needs none either).
         "explored_sig": explored_sig(avatar) if avatar else "",
+        # The AUTHORED props on the world plane (§ A9a) — a landmark rock, a
+        # signpost, a bench in the wilderness. They ride IN the payload rather
+        # than behind a signature like the painted ground: this is a hand-set
+        # list capped at 500 entries, not a raster.
+        # NEVER FOGGED, and that is the decision, not an oversight: a world
+        # prop is pure decoration, it blocks nothing and it belongs to no
+        # location, so there is no knowledge for it to leak. Hiding it would
+        # only make the wilderness change its furniture as the veil lifts.
+        "world_props": _world_props,
+        # Same job as `terrain_sig` one field up, over the FINISHED block: a
+        # client rebuilds its meshes when this moves and never otherwise —
+        # the list itself is on every poll, comparing 500 rows by hand is not.
+        "world_props_sig": world_props_sig(_world_props),
         "fogged": fogged,
         # The two WALK LIMITS (§ A12, E8 task 1). They are world settings the
         # server judges every reported point with (`POST /play/pos`, § A15),
@@ -1136,56 +1157,9 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
                 out["floor_offset_y"] = v
         except (TypeError, ValueError):
             pass
-    # Animation markers (schnittstellen-3d.md): optional spots in the room a
-    # figure with a matching active animation snaps to. ``at`` = METRES from
-    # the room's min corner, ``animation`` = a clip kind from the OPEN clip
-    # vocabulary (nothing hardcoded — the editor offers what exists).
-    # Optional per marker: ``rotation`` = the figure's facing in degrees
-    # (0 = south, 90 = east, 180 = north, 270 = west; absent = the client's
-    # face-the-neighbours default), ``offset_y`` (metres, ± — ADDITIVE to
-    # the client-sampled seat height under the marker) and the two TILT axes
-    # ``tilt``/``roll`` (degrees, ±90): a figure lying on a slope or leaning
-    # against something is not upright, and facing alone cannot say that
-    # (user finding 2026-07-28 — lying slightly angled on the sand).
-    mk = raw.get("markers")
-    if isinstance(mk, list):
-        markers = []
-        for m in mk:
-            if not isinstance(m, dict):
-                continue
-            at = m.get("at")
-            anim = str(m.get("animation") or "").strip()
-            if not anim or not isinstance(at, (list, tuple)) or len(at) != 2:
-                continue
-            au, av = _metre(at[0]), _metre(at[1])
-            if au is None or av is None:
-                continue
-            entry: Dict[str, Any] = {"at": [au, av], "animation": anim}
-            rot = m.get("rotation")
-            if rot is not None and f"{rot}".strip() != "":
-                try:
-                    entry["rotation"] = int(round(float(rot))) % 360
-                except (TypeError, ValueError):
-                    pass
-            off = m.get("offset_y")
-            if off is not None and f"{off}".strip() != "":
-                try:
-                    entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
-                except (TypeError, ValueError):
-                    pass
-            for axis in ("tilt", "roll"):
-                val = m.get(axis)
-                if val is None or f"{val}".strip() == "":
-                    continue
-                try:
-                    deg = round(max(-90.0, min(90.0, float(val))), 1)
-                except (TypeError, ValueError):
-                    continue
-                if deg:
-                    entry[axis] = deg
-            markers.append(entry)
-        if markers:
-            out["markers"] = markers[:50]
+    markers = _sanitize_markers(raw.get("markers"))
+    if markers:
+        out["markers"] = markers
     # Room shell (plan-room-props.md): per-room surface kinds + openings. Both
     # are deterministic + admin-edited (no LLM); the client derives walls from
     # the rectangle/polygon edges × storey height and splits them around the
@@ -1223,73 +1197,178 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             out["openings"] = kept
         else:
             out.pop("openings")
-    # Prop placements (plan-room-props.md): the room's furnishing as single
-    # objects from the prop library. REAL-SIZE RULE — a placement never
-    # scales the prop; the client sizes it from the PROP's own dims × the
-    # plan's scale factor, so only position/yaw/height live here.
-    # A placement may additionally SCATTER (plan-area-detail-scenes.md,
-    # 2026-08-02 redesign: scatter is a placement property, not a separate
-    # room list): ``scatter_count`` copies of the prop are thrown over the
-    # room area from ``scatter_seed`` at compose time; the placement itself
-    # stays as the manually positioned anchor. Σ scatter_count ≤ 120 per
-    # room, on top of the ≤ 100 manual placements.
-    pr = raw.get("props")
-    if isinstance(pr, list):
-        from app.core.props import safe_prop_id
-        placements = []
-        scatter_total = 0
-        for p in pr:
-            if not isinstance(p, dict):
-                continue
-            # Format check only, NEVER an existence check: the world lives in
-            # the DB, props are files — a dangling id renders as a placeholder
-            # on the client instead of silently losing the placement.
-            pid = safe_prop_id(str(p.get("prop_id") or ""))
-            at = p.get("at")
-            if not pid or not isinstance(at, (list, tuple)) or len(at) != 2:
-                continue
-            au, av = _metre(at[0]), _metre(at[1])
-            if au is None or av is None:
-                continue
-            entry: Dict[str, Any] = {"prop_id": pid, "at": [au, av]}
-            yaw = p.get("yaw")
-            if yaw is not None and f"{yaw}".strip() != "":
-                try:
-                    v = round(float(yaw) % 360, 1)
-                    entry["yaw"] = int(v) if float(v).is_integer() else v
-                except (TypeError, ValueError):
-                    pass
-            off = p.get("offset_y")
-            if off is not None and f"{off}".strip() != "":
-                try:
-                    entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
-                except (TypeError, ValueError):
-                    pass
-            # Scatter fields survive only complete (count + seed) and within
-            # the room budget — a truncated count keeps what still fits.
+    placements = _sanitize_props(raw.get("props"))
+    if placements:
+        out["props"] = placements
+    return out
+
+
+def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
+    """Animation markers (schnittstellen-3d.md): optional spots a figure with
+    a matching active animation snaps to. ``at`` = METRES in the frame of
+    whatever carries the layout — the room's min corner for a room, the
+    LOCATION's own frame for the ground (§ A13a) — and ``animation`` a clip
+    kind from the OPEN clip vocabulary (nothing hardcoded; the editor offers
+    what exists).
+
+    Optional per marker: ``rotation`` = the figure's facing in degrees
+    (0 = south, 90 = east, 180 = north, 270 = west; absent = the client's
+    face-the-neighbours default), ``offset_y`` (metres, ± — ADDITIVE to the
+    client-sampled seat height under the marker) and the two TILT axes
+    ``tilt``/``roll`` (degrees, ±90): a figure lying on a slope or leaning
+    against something is not upright, and facing alone cannot say that (user
+    finding 2026-07-28 — lying slightly angled on the sand). At most 50.
+    """
+    if not isinstance(raw, list):
+        return []
+    markers: List[Dict[str, Any]] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        at = m.get("at")
+        anim = str(m.get("animation") or "").strip()
+        if not anim or not isinstance(at, (list, tuple)) or len(at) != 2:
+            continue
+        au, av = _metre(at[0]), _metre(at[1])
+        if au is None or av is None:
+            continue
+        entry: Dict[str, Any] = {"at": [au, av], "animation": anim}
+        rot = m.get("rotation")
+        if rot is not None and f"{rot}".strip() != "":
             try:
-                sc_count = int(p.get("scatter_count"))
-                sc_seed = int(p.get("scatter_seed")) & 0xFFFFFFFF
+                entry["rotation"] = int(round(float(rot))) % 360
             except (TypeError, ValueError):
-                sc_count = 0
-                sc_seed = 0
+                pass
+        off = m.get("offset_y")
+        if off is not None and f"{off}".strip() != "":
+            try:
+                entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
+            except (TypeError, ValueError):
+                pass
+        for axis in ("tilt", "roll"):
+            val = m.get(axis)
+            if val is None or f"{val}".strip() == "":
+                continue
+            try:
+                deg = round(max(-90.0, min(90.0, float(val))), 1)
+            except (TypeError, ValueError):
+                continue
+            if deg:
+                entry[axis] = deg
+        markers.append(entry)
+    return markers[:50]
+
+
+def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
+    """Prop placements (plan-room-props.md): the furnishing as single objects
+    from the prop library. REAL-SIZE RULE — a placement never scales the prop;
+    the client sizes it from the PROP's own dims, so only position/yaw/height
+    live here. ``at`` is METRES in the carrier's frame (room min corner, or
+    the LOCATION frame on the ground — § A13a).
+
+    A placement may additionally SCATTER (plan-area-detail-scenes.md,
+    2026-08-02 redesign: scatter is a placement property, not a separate
+    room list): ``scatter_count`` copies of the prop are thrown over the
+    area from ``scatter_seed`` at compose time; the placement itself stays as
+    the manually positioned anchor. Σ scatter_count ≤ 120 per carrier, on top
+    of the ≤ 100 manual placements.
+    """
+    if not isinstance(raw, list):
+        return []
+    from app.core.props import safe_prop_id
+    placements: List[Dict[str, Any]] = []
+    scatter_total = 0
+    for p in raw:
+        if not isinstance(p, dict):
+            continue
+        # Format check only, NEVER an existence check: the world lives in
+        # the DB, props are files — a dangling id renders as a placeholder
+        # on the client instead of silently losing the placement.
+        pid = safe_prop_id(str(p.get("prop_id") or ""))
+        at = p.get("at")
+        if not pid or not isinstance(at, (list, tuple)) or len(at) != 2:
+            continue
+        au, av = _metre(at[0]), _metre(at[1])
+        if au is None or av is None:
+            continue
+        entry: Dict[str, Any] = {"prop_id": pid, "at": [au, av]}
+        yaw = p.get("yaw")
+        if yaw is not None and f"{yaw}".strip() != "":
+            try:
+                v = round(float(yaw) % 360, 1)
+                entry["yaw"] = int(v) if float(v).is_integer() else v
+            except (TypeError, ValueError):
+                pass
+        off = p.get("offset_y")
+        if off is not None and f"{off}".strip() != "":
+            try:
+                entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
+            except (TypeError, ValueError):
+                pass
+        # Scatter fields survive only complete (count + seed) and within
+        # the budget — a truncated count keeps what still fits.
+        try:
+            sc_count = int(p.get("scatter_count"))
+            sc_seed = int(p.get("scatter_seed")) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            sc_count = 0
+            sc_seed = 0
+        if sc_count >= 1:
+            sc_count = min(sc_count, 120 - scatter_total)
             if sc_count >= 1:
-                sc_count = min(sc_count, 120 - scatter_total)
-                if sc_count >= 1:
-                    entry["scatter_count"] = sc_count
-                    entry["scatter_seed"] = sc_seed
-                    scatter_total += sc_count
-                    sp = p.get("scatter_spacing_m")
-                    if sp is not None and f"{sp}".strip() != "":
-                        try:
-                            v = round(max(0.0, min(5.0, float(sp))), 2)
-                            if v:
-                                entry["scatter_spacing_m"] = v
-                        except (TypeError, ValueError):
-                            pass
-            placements.append(entry)
-        if placements:
-            out["props"] = placements[:100]
+                entry["scatter_count"] = sc_count
+                entry["scatter_seed"] = sc_seed
+                scatter_total += sc_count
+                sp = p.get("scatter_spacing_m")
+                if sp is not None and f"{sp}".strip() != "":
+                    try:
+                        v = round(max(0.0, min(5.0, float(sp))), 2)
+                        if v:
+                            entry["scatter_spacing_m"] = v
+                    except (TypeError, ValueError):
+                        pass
+        placements.append(entry)
+    return placements[:100]
+
+
+# Everything a ROOM layout may carry and the ground layout may not (§ A13a).
+# Named explicitly so the log line can say what was thrown away — a silently
+# vanishing outline costs the author their work.
+_GROUND_FORBIDDEN = (
+    "x", "y", "w", "d", "outline", "outline_curves", "openings", "surfaces",
+    "level", "rotation", "model_at", "model_offset_y", "floor_offset_y",
+    "always_visible", "no_walls", "relief_flat", "clip_model",
+)
+
+
+def sanitize_ground_layout(raw: Any) -> Dict[str, Any]:
+    """The REDUCED layout of the ground room (§ A13a) — props and markers,
+    nothing else.
+
+    The ground is the surface no room takes up: it has no rectangle, so it
+    has no min corner either, and ``props[].at`` / ``markers[].at`` are
+    LOCATION-LOCAL METRES directly (the frame ``map3d.boundary`` lives in).
+    Everything a room's geometry consists of is meaningless here and is
+    dropped WITH A LOG LINE — the placements survive; a hand-posted outline
+    does not turn the yard into a room.
+
+    Empty result means "no layout": a ground carrying neither a placement nor
+    a marker is exactly the ground of § A13 and stores nothing at all.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    stripped = [key for key in _GROUND_FORBIDDEN if key in raw]
+    if stripped:
+        logger.info("ground layout: dropped room-geometry field(s) %s — the "
+                    "ground has no rect, its frame IS the location (§ A13a)",
+                    ", ".join(stripped))
+    out: Dict[str, Any] = {}
+    placements = _sanitize_props(raw.get("props"))
+    if placements:
+        out["props"] = placements
+    markers = _sanitize_markers(raw.get("markers"))
+    if markers:
+        out["markers"] = markers
     return out
 
 
@@ -1359,12 +1438,13 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
     """Apply the layout sanitizer to every room dict in place (rooms pass
     through add_location verbatim otherwise). Invalid layouts are dropped.
 
-    THE GROUND ROOM NEVER CARRIES A LAYOUT. It is the location's open surface,
-    and its geometry comes from the scene recipe, not from a floor plan — a
-    layout on it would put ``GROUND_ROOM_ID`` into the recipe's rooms and give
-    it walls and doorways, which the contract says it has none of. The
-    floor-plan editor already refuses to draw one; this is the same refusal for
-    a hand-made API call.
+    THE GROUND ROOM CARRIES A REDUCED LAYOUT (§ A13a): props and markers only,
+    positioned in LOCATION-LOCAL metres. It still has no geometry of its own —
+    a rect, an outline or an opening on the ground would put walls, a plate
+    and doorways on the location's open surface, which the contract says it
+    has none of — so ``sanitize_ground_layout`` strips those fields and keeps
+    the placements. The floor-plan editor offers exactly that reduced set;
+    this is the same rule for a hand-made API call.
     """
     if not isinstance(rooms, list):
         return rooms
@@ -1372,7 +1452,11 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
         if not isinstance(room, dict) or "layout" not in room:
             continue
         if room.get("id") == GROUND_ROOM_ID:
-            room.pop("layout", None)
+            ground = sanitize_ground_layout(room.get("layout"))
+            if ground:
+                room["layout"] = ground
+            else:
+                room.pop("layout", None)
             continue
         lay = _sanitize_room_layout(room.get("layout"))
         if lay:

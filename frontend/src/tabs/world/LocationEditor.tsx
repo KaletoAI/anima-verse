@@ -573,7 +573,11 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     setCalibration((cur) => (cur && cur.roomId === floorRoomSel ? cur : null))
   }, [floorRoomSel])
 
-  const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel)
+  // The model-calibration strip belongs to a ROOM with a diorama. The yard is
+  // the location surface and has neither (§ A13a), so selecting it shows no
+  // strip at all.
+  const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel
+    && r.id !== GROUND_ROOM_ID)
   const tabFloor = (
     <div className="ga-form">
       <div className="ga-loc-twocol ga-loc-twocol--5050">

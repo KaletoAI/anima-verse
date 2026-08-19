@@ -665,13 +665,19 @@ def append_room_props(location_id: str, room_id: str,
     accept, plan-room-furnish.md stage 4).
 
     ADDITIVE only — existing placements are never touched. The merged layout
-    runs through the normal layout sanitizer, so accepted placements obey the
-    exact same whitelist/limits as hand-placed ones. False when the location,
-    the room or its layout does not exist.
+    runs through the layout sanitizer OF ITS CARRIER — the reduced ground one
+    for ``__ground__`` (§ A13a), the room one otherwise — so accepted
+    placements obey the exact same whitelist/limits as hand-placed ones.
+    False when the location or the room does not exist.
+
+    The GROUND may still be layout-less when the first furnishing lands on it:
+    its layout IS the placements, so an empty one is created here rather than
+    demanded up front.
     """
     if not placements:
         return False
-    from app.core.world_ops import _sanitize_room_layout
+    from app.core.world_ops import _sanitize_room_layout, sanitize_ground_layout
+    is_ground = room_id == GROUND_ROOM_ID
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") != location_id:
@@ -681,15 +687,18 @@ def append_room_props(location_id: str, room_id: str,
                 continue
             layout = room.get("layout")
             if not isinstance(layout, dict):
-                return False
+                if not is_ground:
+                    return False
+                layout = {}
             merged = dict(layout)
             merged["props"] = list(layout.get("props") or []) + list(placements)
-            clean = _sanitize_room_layout(merged)
+            clean = (sanitize_ground_layout(merged) if is_ground
+                     else _sanitize_room_layout(merged))
             if not clean:
                 return False
             room["layout"] = clean
             _save_world_data(data)
-            logger.info("Raum %s: %d Prop-Platzierungen uebernommen",
+            logger.info("Room %s: %d prop placements accepted",
                         room_id, len(placements))
             return True
     return False
@@ -1054,10 +1063,12 @@ def ensure_ground_room(rooms: List[Dict[str, Any]],
     The server brings the ground, the author never creates or deletes it
     (plan-grundflaeche.md § 3) — but the editor submits WHOLE room lists, so
     a delete arrives as a list that simply lacks it. This puts it back, with
-    the name the location had for it (``previous`` = the stored room list),
-    appended LAST so it never displaces an authored room in the editor's
-    order — position carries no meaning any more, ``entry_room`` is declared
-    or it is not (``get_entry_room_id``).
+    the name AND the yard the location had for it (``previous`` = the stored
+    room list; since § A13a the ground carries placements, and a client that
+    simply does not send the room must not wipe them), appended LAST so it
+    never displaces an authored room in the editor's order — position carries
+    no meaning any more, ``entry_room`` is declared or it is not
+    (``get_entry_room_id``).
 
     It is also what gives a location created AFTER the one-time migration its
     ground: the migration runs once, this runs on every write.
@@ -1070,12 +1081,17 @@ def ensure_ground_room(rooms: List[Dict[str, Any]],
            for r in rooms if isinstance(r, dict)):
         return
     name = ""
+    layout: Any = None
     for r in (previous or []):
         if isinstance(r, dict) and str(r.get("id") or "") == GROUND_ROOM_ID:
             name = str(r.get("name") or "")
+            layout = r.get("layout")
             break
-    rooms.append({"id": GROUND_ROOM_ID, "name": name,
-                  "description": "", "activities": []})
+    entry: Dict[str, Any] = {"id": GROUND_ROOM_ID, "name": name,
+                             "description": "", "activities": []}
+    if isinstance(layout, dict) and layout:
+        entry["layout"] = layout
+    rooms.append(entry)
 
 
 def migrate_ground_rooms_once() -> Dict[str, int]:

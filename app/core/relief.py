@@ -201,7 +201,7 @@ def _terrain_of(loc: Dict[str, Any], width_m: float
     extent, _k, _storey = derive_scalars(map3d, width_m)
     recipes = [rec for rec in
                (compose_recipe(room, [r for r in rooms if r is not room],
-                               variant_seed=variant)
+                               variant_seed=variant, map3d=map3d)
                 for room in rooms) if rec]
     terrain, _relief_rooms = compose_terrain(map3d, recipes, extent, variant)
     if not terrain:

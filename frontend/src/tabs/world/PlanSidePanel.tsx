@@ -1,10 +1,14 @@
 /**
  * PlanSidePanel — the context column right of the floor plan. Everything that
- * belongs to the SELECTED room and is not a click tool lives here: room info
+ * belongs to the SELECTED shape and is not a click tool lives here: room info
  * (name, rotation, always-visible), the animation-marker vocabulary + the
- * room's marker list, and the room shell's surface kinds. The 🪑 tool opens
+ * marker list, and the room shell's surface kinds. The 🪑 tool opens
  * the prop palette below them. Purely presentational — RoomLayoutEditor owns
  * the state and hands in the callbacks.
+ *
+ * The YARD (§ A13a) is a shape here too, and the difference is what it does
+ * NOT have: no shell block, no surfaces — it is the location surface, not a
+ * built room. Furnish, markers and the palette work on it like anywhere else.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { PropsPalette } from './PropsPalette'
@@ -18,8 +22,16 @@ const SURFACE_SLOTS: Array<{ key: 'floor' | 'wall'; label: string }> = [
 ]
 
 interface PlanSidePanelProps {
-  /** Selected room WITH a layout, or null. */
+  /** The selected shape, or null: a room with a layout, or the yard — which
+   *  may have none yet (§ A13a). */
   room: Room | null
+  /** The selected shape is the YARD (§ A13a): placements only. Everything
+   *  about a room SHELL — surfaces, outdoor flag, relief opt-out, height
+   *  offset — is absent there, because the yard is the location surface and
+   *  has no shell to describe. */
+  ground: boolean
+  /** Display name of the yard ("Yard", or the author's own name for it). */
+  groundName: string
   /** Open animation-clip vocabulary — the marker tool drops this kind. */
   clipKinds: string[]
   markerKind: string
@@ -62,7 +74,8 @@ const FURNISH_BADGE: Record<string, string> = {
 }
 
 export function PlanSidePanel({
-  room, clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
+  room, ground, groundName,
+  clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
   markerMode, onArmMarker, onAlwaysVisible, onReliefFlat, onFloorOffset,
   surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
@@ -74,17 +87,25 @@ export function PlanSidePanel({
 
   // Room-specific blocks — the palette below them is independent of the
   // selection (the 🪑 tool may be open with nothing selected).
-  const roomBlock = !room || !layout ? (
+  const roomBlock = !room || (!layout && !ground) ? (
     <span className="ga-hint">
       {t('Select a room on the plan — the tools work on it.')}
     </span>
   ) : (
     <>
-      <div className="ga-plan-panel-title">{room.name || room.id}</div>
+      <div className="ga-plan-panel-title">{ground ? groundName : (room.name || room.id)}</div>
       <span className="ga-hint">
-        {t('Rotation')}: {layout.rotation || 0}°
-        {layout.outline?.length ? ` · ⬠ ${layout.outline.length}` : ''}
+        {ground
+          ? t('The location surface: the area no room takes up. Props and markers stand on the terrain here; it has no walls, no floor plan and no size of its own.')
+          : `${t('Rotation')}: ${layout?.rotation || 0}°${
+            layout?.outline?.length ? ` · ⬠ ${layout.outline.length}` : ''}`}
       </span>
+      {/* THE SHELL BLOCK — a room's own description of its walls, its floor
+          and where it sits. The yard has none of it (§ A13a): it is not a
+          built thing, it is the ground the built things stand on, and its
+          surface comes from the location's terrain instead. */}
+      {!ground && layout ? (
+      <>
       <label className="ga-check-row" style={{ fontSize: '0.82em' }}
         title={t('Marks an OUTDOOR room (terrace, garden, pool): shown permanently in the 3D client independent of the interior view, and it gets NO shell walls — only its floor plate.')}>
         <input
@@ -130,6 +151,8 @@ export function PlanSidePanel({
           }}
         />
       </label>
+      </>
+      ) : null}
 
       <button
         type="button"
@@ -142,6 +165,8 @@ export function PlanSidePanel({
         {furnishState ? ` ${FURNISH_BADGE[furnishState] || ''}` : ''}
       </button>
 
+      {!ground && layout ? (
+      <>
       <div className="ga-plan-panel-title"
         title={t('Surface-texture kinds for this room shell — the client skins floor and walls with them. Default = the global kind / the client fallback.')}>
         {t('Surfaces')}
@@ -178,6 +203,8 @@ export function PlanSidePanel({
           {t('No surface textures yet — the Surface textures tab creates them.')}
         </span>
       )}
+      </>
+      ) : null}
 
       {clipKinds.length ? (
         <>

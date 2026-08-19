@@ -2169,6 +2169,219 @@ def test_terrain() -> None:
                                      plan_width_m=PLAN_W)["signature"] != base)
 
 
+# ── The yard: placements on the ground (§ A13a) ─────────────────────────
+# The ground room `__ground__` carries a REDUCED layout: props and markers
+# only, and their `at` is a LOCATION-LOCAL metre — there is no room rectangle
+# to add a min corner from. Everything else about the ground is unchanged: no
+# plate, no wall, no room block, no doorway.
+#
+# The fixture is the L boundary of block [15] (bounding box −5…5 on both axes,
+# the notch is the quadrant x > 0 ∧ z > 0), so the numbers below can be read
+# off the same picture.
+GROUND_ID = "__ground__"
+
+
+def ground_fixture(*, props=(), markers=(), relief: bool = False,
+                   solo: bool = True) -> dict:
+    """The L location plus a furnished yard. ``solo`` drops the two ordinary
+    rooms, so the scatter run below has NO sibling keep-outs to reason about;
+    without it the yard stands beside room "a" and "garden" as usual."""
+    loc = l_fixture(relief=relief)
+    if solo:
+        loc["rooms"] = []
+    layout = {}
+    if props:
+        layout["props"] = [dict(p) for p in props]
+    if markers:
+        layout["markers"] = [dict(m) for m in markers]
+    loc["rooms"] = list(loc["rooms"]) + [
+        {"id": GROUND_ID, "name": "", "layout": layout}]
+    return loc
+
+
+def test_ground_placements() -> None:
+    print("\n[18] placements on the ground (§ A13a)")
+    stub_props()
+    # ── A prop at local (3, −2): the anchor is that point, verbatim ──────
+    # Hand-derived: the ground has no rect, so nothing is added to `at`; it
+    # has no plate either, so the prop stands PROP_CLEARANCE (0.01 m) over
+    # the storey-0 floor — 0.10 m lower than the same prop in a built room
+    # (ROOM_PLATE_TOP), and exactly as an outdoor room's prop stands.
+    sc = scene_recipe.compose_scene(
+        ground_fixture(props=[{"prop_id": "table", "at": [3.0, -2.0]}],
+                       markers=[{"at": [-1.0, 2.0], "animation": "sit"}]),
+        plan_width_m=PLAN_W)
+    props = [m for m in sc["models"] if m["role"] == "prop"]
+    check("one prop spec, room_id = the ground",
+          len(props) == 1 and props[0]["room_id"] == GROUND_ID,
+          str([(p["room_id"], p["anchor"]) for p in props]))
+    check("its anchor IS the stored local metre (3, −2)",
+          props and props[0]["anchor"] == [3.0, -2.0], str(props[0]["anchor"]))
+    check("bottom_y = 0 + PROP_CLEARANCE (no plate on the ground) = 0.01",
+          near(props[0]["bottom_y"], 0.01), str(props[0]["bottom_y"]))
+    # The same prop inside room "a" (x −4, y −4) stands on a plate: the
+    # contrast is what proves the ground took the outdoor branch.
+    in_room = fixture()
+    for room in in_room["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"] = [{"prop_id": "table", "at": [1.0, 1.0]}]
+    room_prop = [m for m in scene_recipe.compose_scene(
+        in_room, plan_width_m=PLAN_W)["models"] if m["role"] == "prop"][0]
+    check("...while a room prop keeps its plate: 0.10 + 0.01 = 0.11",
+          near(room_prop["bottom_y"], 0.11), str(room_prop["bottom_y"]))
+    check("its anchor is the room's min corner + at = (−4+1, −4+1)",
+          room_prop["anchor"] == [-3.0, -3.0], str(room_prop["anchor"]))
+    # ── The marker: same frame, floor height, no plate ──────────────────
+    mk = [m for m in sc["markers"]
+          if m["room_id"] == GROUND_ID and m["source"] == "room"]
+    check("the ground marker sits at its stored metre (−1, 2), y = 0",
+          len(mk) == 1 and mk[0]["at_world"] == [-1.0, 2.0]
+          and near(mk[0]["y_world"], 0.0), str(mk))
+    # sit → the figure's root drops 0.314 × 1.70 m = 0.5338 below the surface.
+    check("...and carries the sit root drop 0.314 × 1.70 = 0.5338",
+          near(mk[0]["root_offset"], 0.5338), str(mk[0]["root_offset"]))
+    # The table brings its own seat marker: 0.01 (clearance, no plate) plus
+    # the marker's composed height over the placement — in a room the same
+    # seat sits ROOM_PLATE_TOP = 0.10 m higher.
+    seat = [m for m in sc["markers"] if m["source"] == "prop"]
+    room_seat = [m for m in scene_recipe.compose_scene(
+        in_room, plan_width_m=PLAN_W)["markers"] if m["source"] == "prop"]
+    check("the yard's prop marker rides 0.10 lower than the room's",
+          len(seat) == 1 and len(room_seat) == 1
+          and near(room_seat[0]["y_world"] - seat[0]["y_world"], 0.10),
+          f'{seat and seat[0]["y_world"]} vs '
+          f'{room_seat and room_seat[0]["y_world"]}')
+    # ── Still geometry-less: no plate, no wall, no room block ────────────
+    check("no plate for the ground",
+          not [p for p in sc["plates"] if p.get("room_id") == GROUND_ID],
+          str([p.get("room_id") for p in sc["plates"]]))
+    check("no room block for the ground",
+          not [r for r in sc["rooms"] if r["room_id"] == GROUND_ID],
+          str([r["room_id"] for r in sc["rooms"]]))
+    check("no wall and no doorway from it",
+          not [w for w in sc["walls"] if w.get("room_id") == GROUND_ID]
+          and not [d for d in sc["doorways"]
+                   if GROUND_ID in (d.get("rooms") or [])])
+    check("and it is no outdoor room either",
+          GROUND_ID not in sc["outdoor_rooms"], str(sc["outdoor_rooms"]))
+    # A yard full of props is not a room somebody can enter: the "no room has
+    # a floor plan" finding must still fire.
+    bare = fixture()
+    bare["rooms"] = [{"id": "a", "name": "A"},
+                     {"id": GROUND_ID, "name": "", "layout": {
+                         "props": [{"prop_id": "table", "at": [0.0, 0.0]}]}}]
+    kinds = [p["kind"] for p in scene_recipe.compose_scene(
+        bare, plan_width_m=PLAN_W)["problems"]]
+    check("a furnished yard does not silence `rooms_without_layout`",
+          "rooms_without_layout" in kinds, str(kinds))
+    # ── On the relief the yard IS the terrain ───────────────────────────
+    # Terrain frame = the boundary's bounding box, edge 10 centred on the pin,
+    # so x0 = z0 = −5 and the 16-cell lattice coordinate of (3, −2) is
+    # u = (3 + 5)/10 = 0.8, v = (−2 + 5)/10 = 0.3.
+    # u·16 = 12.8 → i = 12, tx = 0.8;  v·16 = 4.8 → j = 4, ty = 0.8.
+    rel = scene_recipe.compose_scene(
+        ground_fixture(props=[{"prop_id": "table", "at": [3.0, -2.0]}],
+                       relief=True), plan_width_m=PLAN_W)
+    grid = rel["terrain"]["grid"]
+    north = grid[4][12] * 0.2 + grid[4][13] * 0.8
+    south = grid[5][12] * 0.2 + grid[5][13] * 0.8
+    lift = north * 0.2 + south * 0.8
+    check("the hand-weighted lift is not flat (the fixture would prove "
+          "nothing at 0)", abs(lift) > 1e-6, str(lift))
+    rel_prop = [m for m in rel["models"] if m["role"] == "prop"][0]
+    check("the yard prop stands on the terrain: 0.01 + the bilinear sample",
+          near(rel_prop["bottom_y"], round(0.01 + lift, 4), 1e-3),
+          f'{rel_prop["bottom_y"]} vs {round(0.01 + lift, 4)}')
+    # The ground pins NOTHING flat: the notch is zero because it is outside
+    # the boundary, never because a yard hull flattened it. Compared against
+    # the very same location WITHOUT the yard — rooms and all, so the only
+    # difference is the furnished ground.
+    beside = scene_recipe.compose_scene(
+        ground_fixture(props=[{"prop_id": "table", "at": [3.0, -2.0]}],
+                       relief=True, solo=False),
+        plan_width_m=PLAN_W)["terrain"]["grid"]
+    plain = scene_recipe.compose_scene(l_fixture(relief=True),
+                                       plan_width_m=PLAN_W)["terrain"]["grid"]
+    check("the field is bit-identical with and without the furnished yard",
+          beside == plain)
+    # ── Scatter keeps INSIDE the boundary polygon ───────────────────────
+    # Independent replay (§ B5a): per candidate exactly three draws u/v/yaw
+    # over the hull's bounding box (−5…5 on both axes), accepted iff the point
+    # lies inside the L — i.e. NOT in the notch quadrant x > 0 ∧ z > 0. No
+    # siblings, no openings, no markers, so there is no other keep-out.
+    seed = 7
+    scattered = scene_recipe.compose_scene(
+        ground_fixture(props=[{"prop_id": "table", "at": [-4.0, -4.0],
+                               "scatter_count": 4, "scatter_seed": seed}]),
+        plan_width_m=PLAN_W)
+    copies = [m for m in scattered["models"]
+              if m["role"] == "prop" and m["anchor"] != [-4.0, -4.0]]
+    rng = xorshift32_ref(seed)
+    expect = []
+    rejected = 0
+    while len(expect) < 4:
+        u, v, yw = next(rng) / 2 ** 32, next(rng) / 2 ** 32, next(rng) / 2 ** 32
+        px, py = -5 + u * 10, -5 + v * 10
+        if px > 0 and py > 0:          # the notch — outside the L
+            rejected += 1
+            continue
+        expect.append((round(px, 4), round(py, 4), round(yw * 360, 1)))
+    check("the anchor placement itself stays put at (−4, −4)",
+          len([m for m in scattered["models"]
+               if m["role"] == "prop" and m["anchor"] == [-4.0, -4.0]]) == 1)
+    check(f"4 copies placed, {rejected} candidate(s) rejected into the notch",
+          len(copies) == 4, str(len(copies)))
+    for i, (px, py, pyaw) in enumerate(expect):
+        check(f"copy {i + 1} at the independently derived point",
+              i < len(copies) and near(copies[i]["anchor"][0], px, 1e-3)
+              and near(copies[i]["anchor"][1], py, 1e-3)
+              and near(copies[i]["yaw_deg"], pyaw, 0.11),
+              f'{copies[i]["anchor"]} vs [{px}, {py}]')
+    check("no copy landed in the notch (outside the boundary)",
+          all(not (m["anchor"][0] > 0 and m["anchor"][1] > 0) for m in copies),
+          str([m["anchor"] for m in copies]))
+    # Without a drawn boundary the yard has no area, so nothing is scattered —
+    # the manual anchor survives (contract v6 Nr. 1: no outline, no surface).
+    no_edge = ground_fixture(props=[{"prop_id": "table", "at": [0.0, 0.0],
+                                     "scatter_count": 4, "scatter_seed": seed}])
+    no_edge["map3d"].pop("boundary")
+    check("no boundary → no scatter, the anchor alone remains",
+          len([m for m in scene_recipe.compose_scene(
+              no_edge, plan_width_m=PLAN_W)["models"]
+              if m["role"] == "prop"]) == 1)
+    # ── The sanitizer: geometry submitted for the ground is stripped ────
+    from app.core.world_ops import _sanitize_rooms_layout, sanitize_ground_layout
+    clean = sanitize_ground_layout({
+        "x": 1.0, "y": 2.0, "w": 3.0, "d": 4.0,
+        "outline": [[0, 0], [3, 0], [3, 4]], "level": 2, "always_visible": True,
+        "openings": [{"edge": 0, "at": 0.5, "type": "door",
+                      "width_m": 1.0, "height_m": 2.0}],
+        "surfaces": {"floor": "wood"},
+        "props": [{"prop_id": "table", "at": [3.0, -2.0]}],
+        "markers": [{"at": [-1.0, 2.0], "animation": "sit"}]})
+    check("only props and markers survive",
+          sorted(clean) == ["markers", "props"], str(sorted(clean)))
+    check("...the placement itself is untouched",
+          clean["props"] == [{"prop_id": "table", "at": [3.0, -2.0]}],
+          str(clean["props"]))
+    check("an empty yard stores no layout at all",
+          sanitize_ground_layout({"outline": [[0, 0], [1, 0], [1, 1]]}) == {})
+    rooms = [{"id": GROUND_ID, "layout": {
+        "x": 1.0, "y": 1.0, "w": 2.0, "d": 2.0,
+        "outline": [[0, 0], [2, 0], [2, 2]],
+        "props": [{"prop_id": "table", "at": [3.0, -2.0]}]}}]
+    _sanitize_rooms_layout(rooms)
+    check("the room-list sanitizer routes the ground the same way",
+          rooms[0]["layout"] == {"props": [{"prop_id": "table",
+                                            "at": [3.0, -2.0]}]},
+          str(rooms[0].get("layout")))
+    empty = [{"id": GROUND_ID, "layout": {"x": 0.0, "y": 0.0, "w": 2.0,
+                                          "d": 2.0}}]
+    _sanitize_rooms_layout(empty)
+    check("...and drops a layout that was nothing but geometry",
+          "layout" not in empty[0], str(empty[0]))
+
+
 def main() -> int:
     test_scalars()
     test_scale_is_one()
@@ -2197,6 +2410,7 @@ def main() -> int:
     test_boundary_polygon()
     test_area_detail()
     test_terrain()
+    test_ground_placements()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

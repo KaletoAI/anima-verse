@@ -1067,7 +1067,8 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     That is the quiet version of the sealed hull: without a recipe there is no
     shell either, so ``shell_levels`` stays empty and ``no_building_entrance``
     below can never speak up. The contour then stands over nothing at all.
-    The GROUND room never counts — it has no layout by contract. The room
+    The GROUND room never counts — its layout is props and markers, not a
+    floor plan somebody can enter (§ A13a). The room
     COUNT rides along as its own field: ``message`` is looked up as a whole
     sentence by the i18n layer, so it must stay free of numbers.
 
@@ -1113,7 +1114,11 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     # the author for a room that cannot be drawn.
     rooms = [r for r in (location.get("rooms") or [])
              if isinstance(r, dict) and str(r.get("id") or "") != GROUND_ROOM_ID]
-    if has_contour and rooms and not recipes:
+    # …and its RECIPE is out of the count for the same reason: a yard full of
+    # props (§ A13a) composes a recipe, but it is not a room somebody can
+    # enter, so it must not silence this finding.
+    room_recipes = [r for r in recipes if not r.get("is_ground")]
+    if has_contour and rooms and not room_recipes:
         out.append({
             "kind": "rooms_without_layout",
             "location_id": str(location.get("id") or ""),
@@ -1501,6 +1506,18 @@ def _cutouts(contour: List[List[float]],
     return polys
 
 
+def _plate_top(recipe: Dict[str, Any]) -> float:
+    """How far a carrier's plate lifts what stands on it.
+
+    A built room has a floor plate and everything sits on its top; an OUTDOOR
+    room is a pure texture surface (§ A5) and so is the GROUND (§ A13a — it
+    has no plate at all, its surface is the terrain). Both therefore start at
+    the storey level itself.
+    """
+    return 0.0 if (recipe.get("always_visible")
+                   or recipe.get("is_ground")) else ROOM_PLATE_TOP
+
+
 def _prop_models(recipe: Dict[str, Any], storey: float,
                  lift: Optional[Callable[[float, float], float]] = None,
                  ) -> List[Dict[str, Any]]:
@@ -1510,7 +1527,8 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     dims. Dangling ids and props without a mesh keep their placement and
     carry ``placeholder_dims`` so the consumer can draw a box.
     Furniture stands ON the room plate (plate top + clearance); an outdoor
-    room has no plate, so the clearance sits on the storey level directly.
+    room and the ground have no plate, so the clearance sits on the storey
+    level directly.
 
     ``lift`` samples the terrain relief (v5.2 Nr. 14) under each placement —
     the height of a prop on a slope is NEVER set by hand (user rule): manual
@@ -1529,7 +1547,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     from app.core import props as prop_store
     level = int(recipe.get("level") or 0)
     room_id = recipe.get("room_id") or ""
-    plate_top = 0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP
+    plate_top = _plate_top(recipe)
     floor_y = _room_floor_y(recipe, storey) + plate_top + PROP_CLEARANCE
     out: List[Dict[str, Any]] = []
     for placement in recipe.get("placements") or []:
@@ -1637,11 +1655,13 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     """Every marker of one room, finished in world coordinates.
 
     Room markers are METRES from the room's min corner (v6 Nr. 2) with an
-    offset additive to the sampled floor; prop markers arrive from the recipe
-    as
-    placement-relative transforms (fix → real size → yaw already applied) and
-    only need ``placement point + [dx, dz]`` — resolved here, so the consumer
-    adds nothing.
+    offset additive to the sampled floor. On the GROUND that corner is the
+    location's own origin (§ A13a) — the layout's absent ``x``/``y`` already
+    read as 0/0, so the anchor is the stored metre verbatim.
+
+    Prop markers arrive from the recipe as placement-relative transforms
+    (fix → real size → yaw already applied) and only need ``placement point +
+    [dx, dz]`` — resolved here, so the consumer adds nothing.
 
     ``y_world`` is the SURFACE the marker names. How far below it a figure's
     root belongs travels with the marker as ``root_offset`` (world metres,
@@ -1693,8 +1713,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     # Prop markers are composed relative to the placement point on the floor;
     # the mesh itself stands plate top + clearance higher (§ A4) — the seat
     # heights ride along.
-    plate_top = 0.0 if recipe.get("always_visible") else ROOM_PLATE_TOP
-    prop_lift = plate_top + PROP_CLEARANCE
+    prop_lift = _plate_top(recipe) + PROP_CLEARANCE
     for marker in recipe.get("prop_markers") or []:
         try:
             placement = placements[int(marker.get("placement"))]
@@ -1931,7 +1950,11 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         # coordinates — one normalization, here, and nowhere else.
         hull = [[(_num(p[0]) - x0) / size, (_num(p[1]) - z0) / size]
                 for p in recipe.get("outline") or []]
-        if recipe.get("always_visible") and not recipe.get("relief_flat"):
+        # The GROUND *is* the terrain (§ A13a): it follows the field by
+        # definition, and having no hull it flattens nothing.
+        if recipe.get("is_ground"):
+            relief_rooms.add(str(recipe.get("room_id") or ""))
+        elif recipe.get("always_visible") and not recipe.get("relief_flat"):
             relief_rooms.add(str(recipe.get("room_id") or ""))
         elif len(hull) >= 3:
             flat_hulls.append(hull)
@@ -2008,7 +2031,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     by_room: Dict[str, Dict[str, Any]] = {}
     for room in rooms:
         recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                                variant_seed=variant)
+                                variant_seed=variant, map3d=map3d)
         if not recipe:
             continue
         recipes.append(recipe)
@@ -2151,6 +2174,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # openings are already normalized AND mirrored in.
     room_blocks = []
     for r in recipes:
+        # The GROUND never appears as a room block (§ A13/A13a): it has no
+        # hull, no openings and no plate — it contributes props and markers
+        # and nothing else.
+        if r.get("is_ground"):
+            continue
         block: Dict[str, Any] = {
             "room_id": r.get("room_id") or "",
             "level": int(r.get("level") or 0),

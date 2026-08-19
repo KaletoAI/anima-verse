@@ -16,12 +16,17 @@
 // client auto-grid. Stored resolution: centimetres, clamped to ±500 m.
 export interface RoomLayout {
   level?: number
-  /** Min corner, LOCATION-LOCAL metres around the anchor pin (may be < 0). */
-  x: number
-  y: number
-  /** Size in metres (> 0). */
-  w: number
-  d: number
+  /** Min corner, LOCATION-LOCAL metres around the anchor pin (may be < 0).
+   *  ABSENT ON THE YARD (§ A13a): the ground room has no rectangle — its
+   *  surface is the location boundary — so its layout carries `props`/
+   *  `markers` and nothing else. Use `hasRect` before doing geometry with a
+   *  layout; everything that draws a room shape needs the narrowed
+   *  `PlacedLayout`. */
+  x?: number
+  y?: number
+  /** Size in metres (> 0). Absent on the yard, like `x`/`y`. */
+  w?: number
+  d?: number
   rotation?: number
   /** Diorama-model anchor in METRES from the room's min corner (absent =
    *  centred, i.e. [w/2, d/2]) — the room's 3D model is positioned in the
@@ -91,7 +96,9 @@ export interface RoomLayout {
 
 export interface RoomPropPlacement {
   prop_id: string
-  /** Room-local position: METRES from the room's min corner (0…w / 0…d). */
+  /** Room-local position: METRES from the room's min corner (0…w / 0…d).
+   *  ON THE YARD (§ A13a) the same field is LOCATION-LOCAL metres — the
+   *  ground has no min corner, its frame IS the location frame. */
   at: [number, number]
   /** Yaw in degrees, free values at 0.1° resolution. Absent = 0. */
   yaw?: number
@@ -316,6 +323,22 @@ export interface Location {
  *  the editor only has to recognise it (an unnamed one is labelled, not left
  *  showing its raw id). */
 export const GROUND_ROOM_ID = '__ground__'
+
+/** A layout whose ROOM SHAPE is resolved: the rectangle is there, so every
+ *  geometry helper (`outlineOf`, `absOutline`, plates, walls, snapping) can
+ *  read it. */
+export type PlacedLayout = RoomLayout & {
+  x: number; y: number; w: number; d: number
+}
+
+/** Whether a layout carries a room RECTANGLE — the one question that
+ *  separates an ordinary room from the yard (§ A13a), whose layout is
+ *  placements only. Everything that draws or measures a room shape filters
+ *  on this instead of on the mere presence of a layout. */
+export function hasRect(lay: RoomLayout | undefined | null): lay is PlacedLayout {
+  return !!lay && typeof lay.x === 'number' && typeof lay.y === 'number'
+    && typeof lay.w === 'number' && typeof lay.d === 'number'
+}
 
 // Suggested values only — both fields accept free text (the consuming map
 // client decides what it can render; unknown values fall back to defaults).

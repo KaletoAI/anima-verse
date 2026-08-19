@@ -21,6 +21,11 @@ the COMPOSED conveniences so the client renders without re-deriving them:
   ``placement world position + offset_m × k`` — one multiply, no marker
   math.
 
+The GROUND room is the one carrier without geometry (§ A13a): it composes
+through :func:`compose_ground_recipe` into the same payload shape minus hull
+and openings — placements and markers whose ``at`` is a location-local metre
+already, scattered inside the drawn boundary instead of a room hull.
+
 Coordinate frames (contract v6 Nr. 2 — the metric wave): XZ positions are
 LOCAL METRES around the location's anchor pin, the same frame ``layout.x/y``,
 ``map3d.outline`` and ``map3d.boundary`` are stored in. There is no fraction
@@ -35,7 +40,7 @@ way around).
 import hashlib
 import json
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.scatter_curves import scatter as _scatter_props
@@ -332,9 +337,240 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
     return out
 
 
+def _square(cx: float, cy: float, half: float) -> List[List[float]]:
+    """Axis-aligned keep-out square around a point (§ B5a: hand-checkable)."""
+    return [[cx - half, cy - half], [cx + half, cy - half],
+            [cx + half, cy + half], [cx - half, cy + half]]
+
+
+def _join_placements(lay: Dict[str, Any], ox: float, oy: float,
+                     default_u: float, default_v: float,
+                     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """``(placements, prop_markers)`` of one layout, joined with the library.
+
+    ``ox``/``oy`` translate a stored ``at`` into the payload frame: a ROOM's
+    min corner for a room layout, ``0/0`` for the ground, whose ``at`` already
+    IS a location-local metre (§ A13a). ``default_u``/``default_v`` stand in
+    for a placement without ``at`` (a room's centre; the pin for the ground).
+
+    Dangling ids keep their placement and are flagged ``missing`` — world data
+    lives in the DB, props are files, so there is no referential integrity by
+    design and a placeholder beats a silently lost placement.
+    """
+    from app.core import props as prop_store
+    placements: List[Dict[str, Any]] = []
+    prop_markers: List[Dict[str, Any]] = []
+    for placement in (lay.get("props") or []):
+        if not isinstance(placement, dict):
+            continue
+        pid = str(placement.get("prop_id") or "")
+        at = placement.get("at") or [default_u, default_v]
+        yaw = float(placement.get("yaw") or 0)
+        off_y = float(placement.get("offset_y") or 0)
+        entry: Dict[str, Any] = {
+            "prop_id": pid,
+            "at": [_r(ox + float(at[0])), _r(oy + float(at[1]))],
+            "yaw": _r(yaw, 1),
+            "offset_y": _r(off_y, 3),
+        }
+        prop = prop_store.get_prop(pid)
+        if not prop:
+            entry["missing"] = True
+            placements.append(entry)
+            continue
+        entry["dims"] = {"width_m": prop["width_m"],
+                         "depth_m": prop["depth_m"],
+                         "height_m": prop["height_m"]}
+        entry["has_model"] = bool(prop.get("has_model"))
+        if prop.get("has_model"):
+            # Which resolution tiers the prop has, plus the change key of its
+            # mesh SELECTION: the scene payload turns the tiers into
+            # ``variants`` URLs, and the signature moves when a prop gets a
+            # new mesh (the URL alone never changes).
+            entry["model_tiers"] = prop.get("model_tiers") or []
+            # …and the same per ACTIVE model variant (E2.3), element 0 being
+            # the primary one. The scene spec turns this into `model_variants`
+            # and keeps `variants` pointing at element 0.
+            entry["variant_tiers"] = prop.get("variant_tiers") or []
+            entry["model_sig"] = prop.get("model_signature") or ""
+        idx = len(placements)
+        placements.append(entry)
+        bbox = prop.get("bbox")
+        if not bbox:
+            continue  # no measurable mesh — markers stay object data only
+        dims = [prop["width_m"], prop["depth_m"], prop["height_m"]]
+        for marker in (prop.get("markers") or []):
+            composed = compose_prop_marker(
+                bbox=bbox, rotation=prop.get("rotation"), dims=dims,
+                frac=[float(v) for v in marker.get("at") or [0.5, 0, 0.5]],
+                facing=marker.get("facing"), placement_yaw=yaw,
+                placement_offset_y=off_y)
+            composed["animation"] = marker.get("animation") or ""
+            composed["placement"] = idx
+            prop_markers.append(composed)
+    return placements, prop_markers
+
+
+def _scatter_into(placements: List[Dict[str, Any]],
+                  scatter_sources: List[Dict[str, Any]],
+                  keep_in: List[List[float]],
+                  keepouts: List[List[List[float]]],
+                  variant_seed: int) -> None:
+    """Append the scattered copies of every scattering placement, in place.
+
+    Prop scatter (plan-area-detail-scenes.md, 2026-08-02 redesign) is a
+    PLACEMENT property, not a list of its own: a placement with
+    ``scatter_count`` throws that many copies of its prop over ``keep_in``
+    from its own ``scatter_seed``, while the placement itself stays as the
+    manually positioned anchor. Positions are computed at COMPOSE time and
+    never stored, so every renderer derives the same forest and the recipe
+    signature moves with seed/count/spacing (the copies land in the hashed
+    payload).
+
+    ``keep_in`` is the area the copies may land in — a room's hull, or the
+    LOCATION BOUNDARY for the ground (§ A13a); ``keepouts`` are the geometric
+    exclusion zones (sibling hulls, openings, markers). ``scatter_spacing_m``
+    alone rules the density (0 = copies may overlap; the old footprint
+    minimum kept every tree a crown apart). Copies are appended AFTER all
+    manual entries so ``prop_markers[].placement`` indices never move, and
+    they get NO prop markers (no sit spots on twenty pines).
+    """
+    from app.core import props as prop_store
+    for source in scatter_sources:
+        pid = str(source.get("prop_id") or "")
+        try:
+            count = int(source.get("scatter_count") or 0)
+            seed = variant_mix(int(source.get("scatter_seed") or 0),
+                               variant_seed)
+        except (TypeError, ValueError):
+            continue
+        try:
+            spacing = float(source.get("scatter_spacing_m") or 0)
+        except (TypeError, ValueError):
+            spacing = 0.0
+        prop = prop_store.get_prop(pid)
+        # WHICH of the prop's model variants each copy shows (E2.3): the
+        # copies of one scatter source walk the active variants in the fixed
+        # order `(scatter_seed + instance) mod count`, so twenty pines are
+        # four kinds of pine in the same arrangement for every renderer — and
+        # the same arrangement again after a reload, since both inputs are
+        # stored numbers.
+        variant_count = len(prop.get("variant_tiers") or []) if prop else 0
+        for i, placed in enumerate(_scatter_props(seed, count, keep_in,
+                                                  keepouts, spacing)):
+            entry: Dict[str, Any] = {
+                "prop_id": pid,
+                "at": [_r(placed["at"][0]), _r(placed["at"][1])],
+                "yaw": _r(placed["yaw"], 1),
+                "offset_y": 0.0,
+                "scattered": True,
+            }
+            if not prop:
+                entry["missing"] = True
+            else:
+                entry["dims"] = {"width_m": prop["width_m"],
+                                 "depth_m": prop["depth_m"],
+                                 "height_m": prop["height_m"]}
+                entry["has_model"] = bool(prop.get("has_model"))
+                if prop.get("has_model"):
+                    entry["model_tiers"] = prop.get("model_tiers") or []
+                    entry["variant_tiers"] = prop.get("variant_tiers") or []
+                    entry["model_sig"] = prop.get("model_signature") or ""
+                    entry["variant"] = prop_store.scatter_variant_index(
+                        seed, i, variant_count)
+            placements.append(entry)
+
+
+def boundary_points(map3d: Any) -> List[List[float]]:
+    """The DRAWN location boundary in local metres, or [] — the ground's
+    frame and its scatter keep-in (§ A13a).
+
+    Deliberately no synthesized square: without a drawn boundary a location
+    has no area (contract v6 Nr. 1), and the yard is that area.
+    """
+    from app.core.world_geometry import polygon_points
+    pts = polygon_points((map3d or {}).get("boundary"))
+    return [] if pts is None else [[float(x), float(z)] for x, z in pts]
+
+
+def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
+                          map3d: Any = None, variant_seed: int = 0,
+                          ) -> Optional[Dict[str, Any]]:
+    """The REDUCED recipe of the ground room (§ A13a), or None when the yard
+    carries nothing.
+
+    The ground has no geometry: no rect, no hull, no openings, no plate, no
+    walls. What it has is placements and markers, and their ``at`` is a
+    LOCATION-LOCAL metre already — so the payload frame and the storage frame
+    are the same one and nothing is translated (``ox = oy = 0``).
+
+    ``outline`` stays empty ON PURPOSE: it is what keeps the ground out of
+    every plate, wall, room block and boundary check downstream, which all
+    read the hull. ``is_ground`` is the positive marker for the two places
+    that must treat it specially (the prop/marker plate offset and the relief
+    membership).
+
+    Scatter keeps INSIDE the drawn boundary and outside: the hulls of the
+    rooms standing on level 0, the entry zones of the boundary openings (the
+    yard's doorways) and the ground's own markers.
+    """
+    lay = room.get("layout")
+    if not isinstance(lay, dict) or not (lay.get("props") or lay.get("markers")):
+        return None
+    boundary = boundary_points(map3d)
+    placements, prop_markers = _join_placements(lay, 0.0, 0.0, 0.0, 0.0)
+
+    scatter_sources = [p for p in (lay.get("props") or [])
+                       if isinstance(p, dict) and p.get("scatter_count")]
+    if scatter_sources and len(boundary) >= 3:
+        keepouts: List[List[List[float]]] = []
+        for sibling in (siblings or []):
+            slay = sibling.get("layout") if isinstance(sibling, dict) else None
+            if not isinstance(slay, dict) or int(slay.get("level") or 0) != 0:
+                continue
+            shape = _abs_shape(slay)
+            if len(shape) >= 3:
+                keepouts.append(shape)
+        for op in ((map3d or {}).get("boundary_openings") or []):
+            if not isinstance(op, dict):
+                continue
+            try:
+                e = int(op.get("edge") or 0) % len(boundary)
+                at = float(op.get("at") or 0)
+                half = float(op.get("width_m") or 0) / 2.0 \
+                    + SCATTER_OPENING_CLEAR_M
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            px, py = _point_on_edge(boundary, e, at)
+            keepouts.append(_square(px, py, half))
+        for marker in (lay.get("markers") or []):
+            mat = marker.get("at") if isinstance(marker, dict) else None
+            if isinstance(mat, (list, tuple)) and len(mat) == 2:
+                keepouts.append(_square(float(mat[0]), float(mat[1]),
+                                        SCATTER_POINT_CLEAR_M))
+        _scatter_into(placements, scatter_sources, boundary, keepouts,
+                      variant_seed)
+
+    payload: Dict[str, Any] = {
+        "room_id": room.get("id") or "",
+        "level": 0,
+        "is_ground": True,
+        "outline": [],
+        "openings": [],
+        "placements": placements,
+        "prop_markers": prop_markers,
+    }
+    if lay.get("markers"):
+        payload["markers"] = lay["markers"]
+    payload["signature"] = hashlib.md5(
+        json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return payload
+
+
 def compose_recipe(room: Dict[str, Any],
                    siblings: Any = (),
-                   variant_seed: int = 0) -> Optional[Dict[str, Any]]:
+                   variant_seed: int = 0,
+                   map3d: Any = None) -> Optional[Dict[str, Any]]:
     """The full recipe of ONE room, or None when it has no layout.
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
@@ -343,7 +579,13 @@ def compose_recipe(room: Dict[str, Any],
     ``variant_seed`` is the one number a copy placed on the map owns; it is
     mixed into every stored scatter seed so two copies of one template stop
     looking identical. 0 means "not a copy" and leaves every seed untouched.
+    ``map3d`` is the location's map data; the GROUND room needs it, because
+    its frame and its scatter area are the drawn boundary (§ A13a). Every
+    other room ignores it.
     """
+    from app.models.world import GROUND_ROOM_ID
+    if str(room.get("id") or "") == GROUND_ROOM_ID:
+        return compose_ground_recipe(room, siblings, map3d, variant_seed)
     lay = room.get("layout")
     rect = _layout_rect(lay)
     if not rect:
@@ -380,83 +622,12 @@ def compose_recipe(room: Dict[str, Any],
             if 0 <= e < len(edge_map):
                 op["edge"] = edge_map[e]
 
-    from app.core import props as prop_store
-    placements: List[Dict[str, Any]] = []
-    prop_markers: List[Dict[str, Any]] = []
-    for placement in (lay.get("props") or []):
-        if not isinstance(placement, dict):
-            continue
-        pid = str(placement.get("prop_id") or "")
-        at = placement.get("at") or [w / 2, d / 2]
-        yaw = float(placement.get("yaw") or 0)
-        off_y = float(placement.get("offset_y") or 0)
-        entry: Dict[str, Any] = {
-            "prop_id": pid,
-            "at": [_r(x + float(at[0])), _r(y + float(at[1]))],
-            "yaw": _r(yaw, 1),
-            "offset_y": _r(off_y, 3),
-        }
-        prop = prop_store.get_prop(pid)
-        if not prop:
-            # Dangling id — the placement stays visible as a placeholder
-            # (world data is DB, props are files; no referential integrity
-            # by design).
-            entry["missing"] = True
-            placements.append(entry)
-            continue
-        entry["dims"] = {"width_m": prop["width_m"],
-                         "depth_m": prop["depth_m"],
-                         "height_m": prop["height_m"]}
-        entry["has_model"] = bool(prop.get("has_model"))
-        if prop.get("has_model"):
-            # Which resolution tiers the prop has, plus the change key of its
-            # mesh SELECTION: the scene payload turns the tiers into
-            # ``variants`` URLs, and the signature below moves when a prop
-            # gets a new mesh (the URL alone never changes).
-            entry["model_tiers"] = prop.get("model_tiers") or []
-            # …and the same per ACTIVE model variant (E2.3), element 0 being
-            # the primary one. The scene spec turns this into `model_variants`
-            # and keeps `variants` pointing at element 0.
-            entry["variant_tiers"] = prop.get("variant_tiers") or []
-            entry["model_sig"] = prop.get("model_signature") or ""
-        idx = len(placements)
-        placements.append(entry)
-        bbox = prop.get("bbox")
-        if not bbox:
-            continue  # no measurable mesh — markers stay object data only
-        dims = [prop["width_m"], prop["depth_m"], prop["height_m"]]
-        for marker in (prop.get("markers") or []):
-            composed = compose_prop_marker(
-                bbox=bbox, rotation=prop.get("rotation"), dims=dims,
-                frac=[float(v) for v in marker.get("at") or [0.5, 0, 0.5]],
-                facing=marker.get("facing"), placement_yaw=yaw,
-                placement_offset_y=off_y)
-            composed["animation"] = marker.get("animation") or ""
-            composed["placement"] = idx
-            prop_markers.append(composed)
+    placements, prop_markers = _join_placements(lay, x, y, w / 2, d / 2)
 
-    # Prop scatter (plan-area-detail-scenes.md, 2026-08-02 redesign): a
-    # PLACEMENT property, not a room list — a placement with
-    # ``scatter_count`` throws that many copies of its prop over the room
-    # area from its own ``scatter_seed``, while the placement itself stays
-    # as the manually positioned anchor. Positions are computed at COMPOSE
-    # time and never stored, so every renderer derives the same forest and
-    # the signature below moves with seed/count/spacing (the copies land in
-    # the hashed payload). Scatter runs in REAL metres, which since v6 (Nr. 2)
-    # is simply the frame everything here already lives in — no conversion
-    # left. Copies are appended AFTER all manual
-    # entries so ``prop_markers[].placement`` indices never move, and they
-    # get NO prop markers (no sit spots on twenty pines). Keep-outs are the
-    # GEOMETRIC zones only (sibling hulls, openings, markers) —
-    # ``scatter_spacing_m`` alone rules the density (0 = copies may
-    # overlap; the old footprint minimum kept every tree a crown apart).
-    # The openings ARE the doorways (plan-betreten-und-tueren.md § 4.1), so
-    # their keep-outs already free every threshold.
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
     if scatter_sources:
         level = int(lay.get("level") or 0)
-        outline_m = outline
         keepouts: List[List[List[float]]] = []
         # Sibling hulls on the same level — the road stays tree-free. Curved
         # siblings contribute their TESSELLATED shape (the curved road is
@@ -469,11 +640,6 @@ def compose_recipe(room: Dict[str, Any],
             shape = _abs_shape(slay)
             if len(shape) >= 3:
                 keepouts.append(shape)
-
-        def _square(cx: float, cy: float, half: float) -> List[List[float]]:
-            return [[cx - half, cy - half], [cx + half, cy - half],
-                    [cx + half, cy + half], [cx - half, cy + half]]
-
         for op in openings:
             try:
                 e = int(op.get("edge") or 0) % len(outline)
@@ -489,50 +655,8 @@ def compose_recipe(room: Dict[str, Any],
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 keepouts.append(_square(x + float(mat[0]), y + float(mat[1]),
                                         SCATTER_POINT_CLEAR_M))
-
-        for source in scatter_sources:
-            pid = str(source.get("prop_id") or "")
-            try:
-                count = int(source.get("scatter_count") or 0)
-                seed = variant_mix(int(source.get("scatter_seed") or 0),
-                                   variant_seed)
-            except (TypeError, ValueError):
-                continue
-            try:
-                spacing = float(source.get("scatter_spacing_m") or 0)
-            except (TypeError, ValueError):
-                spacing = 0.0
-            prop = prop_store.get_prop(pid)
-            # WHICH of the prop's model variants each copy shows (E2.3): the
-            # copies of one scatter source walk the active variants in the
-            # fixed order `(scatter_seed + instance) mod count`, so twenty
-            # pines are four kinds of pine in the same arrangement for every
-            # renderer — and the same arrangement again after a reload, since
-            # both inputs are stored numbers.
-            variant_count = len(prop.get("variant_tiers") or []) if prop else 0
-            for i, placed in enumerate(_scatter_props(seed, count, outline_m,
-                                                      keepouts, spacing)):
-                entry: Dict[str, Any] = {
-                    "prop_id": pid,
-                    "at": [_r(placed["at"][0]), _r(placed["at"][1])],
-                    "yaw": _r(placed["yaw"], 1),
-                    "offset_y": 0.0,
-                    "scattered": True,
-                }
-                if not prop:
-                    entry["missing"] = True
-                else:
-                    entry["dims"] = {"width_m": prop["width_m"],
-                                     "depth_m": prop["depth_m"],
-                                     "height_m": prop["height_m"]}
-                    entry["has_model"] = bool(prop.get("has_model"))
-                    if prop.get("has_model"):
-                        entry["model_tiers"] = prop.get("model_tiers") or []
-                        entry["variant_tiers"] = prop.get("variant_tiers") or []
-                        entry["model_sig"] = prop.get("model_signature") or ""
-                        entry["variant"] = prop_store.scatter_variant_index(
-                            seed, i, variant_count)
-                placements.append(entry)
+        _scatter_into(placements, scatter_sources, outline, keepouts,
+                      variant_seed)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",

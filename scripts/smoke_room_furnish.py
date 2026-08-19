@@ -69,13 +69,13 @@ def fake_llm(answers):
     return calls
 
 
-def wait_for(states, tries=80):
+def wait_for(states, tries=80, job="smokeroom"):
     for _ in range(tries):
-        status = room_furnish.get_status("smokeroom")
+        status = room_furnish.get_status(job)
         if status is None or status["state"] in states:
             return status
         time.sleep(0.1)
-    return room_furnish.get_status("smokeroom")
+    return room_furnish.get_status(job)
 
 
 def main() -> int:
@@ -200,6 +200,94 @@ def main() -> int:
           "2× " in calls[-1][1] or "1× Table" in calls[-1][1], calls[-1][1][:120])
     room_furnish.reset("smokeroom")
     check("reset drops the job", room_furnish.get_status("smokeroom") is None)
+
+    # ── The YARD as a furnish target (§ A13a) ───────────────────────────
+    # The ground has no floor plan: its surface is the drawn boundary and its
+    # placements are LOCATION-LOCAL metres. The solver works from a polygon's
+    # own min corner, so the whole run is shifted by that corner and back —
+    # which is only visible if the boundary does NOT sit on the pin.
+    #
+    # Boundary: (−6,−6) (4,−6) (4,4) (−6,4) — a 10 × 10 m square whose min
+    # corner is (−6, −6), so the solver frame is 0…10 on both axes.
+    # Hand-derived placement (furnish_solver wall strategy, same arithmetic as
+    # the room above): table 1.2 × 0.8 m, anchor wall_n facing the room →
+    # yaw 0, usable stretch 10 − 1.2 = 8.8 m, first candidate at its centre
+    # x = 0.6 + 0.5 × 8.8 = 5.0, pushed off the wall by 0.8/2 + 0.05 = 0.45.
+    # Solver frame [5.0, 0.45]  →  stored [5.0 − 6, 0.45 − 6] = [−1.0, −5.55].
+    print("\n  the yard (ground room) as a furnish target")
+    yard_loc = add_location("Smoke Yard", "A test plot", rooms=[])
+    data = _load_world_data()
+    for entry in data["locations"]:
+        if entry["id"] == yard_loc["id"]:
+            entry["map3d"] = {
+                "boundary": [[-6.0, -6.0], [4.0, -6.0], [4.0, 4.0], [-6.0, 4.0]],
+                "plan_width_m": 10.0,
+                # South pass-through — far from the north wall the table takes.
+                "boundary_openings": [{"edge": 2, "at": 0.5, "width_m": 2.0,
+                                       "type": "passage"}]}
+    _save_world_data(data)
+    yard_job = room_furnish.ground_job_id(yard_loc["id"])
+    check("the yard job id is the composite one",
+          yard_job == f"__ground__@{yard_loc['id']}", yard_job)
+    answers["furnish_select"] = {"existing": [{"prop_id": table, "count": 1}]}
+    answers["furnish_place"] = {"plan": [
+        {"prop": table, "count": 1, "anchor": "wall_n", "ref": None,
+         "facing": "room"}]}
+    room_furnish.start(yard_job)
+    status = wait_for(("proposal_ready", "error"), job=yard_job)
+    check("the yard reaches proposal_ready",
+          status and status["state"] == "proposal_ready",
+          (status or {}).get("error") or "")
+    check("its prompt states the boundary's 10 × 10 m",
+          "10.0 × 10.0 m" in calls[-2][1], calls[-2][1][:120])
+    check("an unnamed yard is called Yard, not Room",
+          "Yard" in calls[-2][1], calls[-2][1][:120])
+    room_furnish.confirm(yard_job, status["proposal"])
+    status = wait_for(("review_ready", "error"), job=yard_job)
+    check("the yard reaches review_ready",
+          status and status["state"] == "review_ready",
+          (status or {}).get("error") or "")
+    yard_placed = status["placements"]["placed"]
+    check("the placement is shifted back into LOCATION-local metres",
+          [p["at"] for p in yard_placed] == [[-1.0, -5.55]],
+          json.dumps([p["at"] for p in yard_placed]))
+    room_furnish.accept(yard_job)
+    yard_room = get_room_by_id(
+        next(entry for entry in _load_world_data()["locations"]
+             if entry["id"] == yard_loc["id"]), "__ground__")
+    check("it landed in the GROUND room's layout, props only",
+          sorted(yard_room.get("layout") or {}) == ["props"]
+          and (yard_room["layout"]["props"] or [{}])[0].get("at") == [-1.0, -5.55],
+          json.dumps(yard_room.get("layout")))
+    check("the yard job row is gone", room_furnish.get_status(yard_job) is None)
+    # A boundary pass-through IS the yard's doorway: with the opening moved
+    # onto the north edge the very same plan cannot use the wall's centre.
+    data = _load_world_data()
+    for entry in data["locations"]:
+        if entry["id"] == yard_loc["id"]:
+            entry["map3d"]["boundary_openings"] = [
+                {"edge": 0, "at": 0.5, "width_m": 2.0, "type": "passage"}]
+            entry["rooms"] = [r for r in entry["rooms"]
+                              if r.get("id") != "__ground__"] + [
+                {"id": "__ground__", "name": "", "description": "",
+                 "activities": []}]
+    _save_world_data(data)
+    room_furnish.start(yard_job)
+    status = wait_for(("proposal_ready", "error"), job=yard_job)
+    room_furnish.confirm(yard_job, status["proposal"])
+    status = wait_for(("review_ready", "error"), job=yard_job)
+    blocked = (status["placements"] or {}).get("placed") or []
+    # Zone: edge 0 runs (0,0) → (10,0) in the solver frame, so the passage
+    # centre is (5, 0) with the inward normal (0, 1); it blocks
+    # x 5 ± (2.0 + 0.4)/2 = 3.8…6.2 and y 0…0.6. The table's footprint at the
+    # wall centre would be x 4.4…5.6 / y 0.05…0.85 — an overlap, so the
+    # centre spot is out and the piece has to slide sideways (or fail).
+    check("the boundary opening keeps its own stretch of the yard free",
+          all(not (3.8 - 0.6 < p["at"][0] + 6 < 6.2 + 0.6) for p in blocked),
+          json.dumps([p["at"] for p in blocked]))
+    room_furnish.discard(yard_job)
+    check("discarding the yard job leaves the accepted placement alone",
+          room_furnish.get_status(yard_job) is None)
 
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0

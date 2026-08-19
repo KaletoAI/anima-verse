@@ -8,6 +8,14 @@
  * markers, props and `model_at` are metres from the room's own min corner.
  * Only an opening's `at` is still a fraction of its edge.
  *
+ * THE YARD IS THE ONE EXCEPTION (§ A13a): the ground room has no rectangle —
+ * its surface IS the location boundary — so its `props[].at` / `markers[].at`
+ * are LOCATION-LOCAL metres directly. The editor derives a VIEW-ONLY rect
+ * from the boundary's bounding box (`yardLay`) so the plan's room-local
+ * percentage math keeps working, and `atOrigin` is the one place the two
+ * frames meet. Nothing derived here is ever stored: the yard's layout leaves
+ * this editor carrying placements and nothing else.
+ *
  * The canvas shows a square metre WINDOW of that frame (`PlanView`): the
  * bounding box of the drawn boundary — or of the placed rooms when there is no
  * boundary — plus a margin, so the whole plot is always reachable and a room
@@ -45,8 +53,8 @@ import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
-import type { Map3D, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
-import { GROUND_ROOM_ID } from './worldTypes'
+import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
+import { GROUND_ROOM_ID, hasRect } from './worldTypes'
 
 const CANVAS_W = 420
 /** Edge of the drawing window when there is nothing at all to frame — no
@@ -144,6 +152,46 @@ type DragState =
 /** Real prop dims for true-size footprints — lean mirror of /world/props. */
 interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
+/** One shape the plan DRAWS: a room with its rectangle, or the yard with the
+ *  rect derived from the location boundary (§ A13a). */
+interface PlanShape { room: Room; lay: PlacedLayout; ground: boolean }
+
+/**
+ * The hulls of a room list as the geometry helpers (`buildSnapTargets`,
+ * `sharedEdges`, `exteriorEdges`) want them. Only rooms with a RECTANGLE get
+ * in, which is what keeps the yard out of every wall, snap and opening
+ * derivation — it has no rectangle at all (§ A13a).
+ */
+function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
+  const out: PolyRoom[] = []
+  for (const r of list) {
+    const lay = r.layout
+    if (!r.id || r.id === skipId || !hasRect(lay)) continue
+    if ((lay.level || 0) !== level) continue
+    out.push({ id: r.id, x: lay.x, y: lay.y, w: lay.w, d: lay.d,
+               outline: lay.outline })
+  }
+  return out
+}
+
+/**
+ * THE ONE PLACE THE TWO PLACEMENT FRAMES MEET (§ A13a).
+ *
+ * `props[].at` / `markers[].at` are stored ROOM-LOCAL in a room and
+ * LOCATION-LOCAL on the yard. This returns the min corner of the shape IN THE
+ * COORDINATES THOSE `at` VALUES ARE STORED IN — `[0, 0]` for a room, the
+ * derived bounding box's corner for the yard. Two consequences, and they are
+ * the whole conversion:
+ *
+ *   room-local metres (what `rx`/`rz` want) = stored `at` − atOrigin
+ *   stored `at` = plan metres − (lay.x − atOrigin), clamped to
+ *                 atOrigin … atOrigin + w/d
+ *
+ * For an ordinary room both collapse to what the editor always did.
+ */
+const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
+  (ground ? [lay.x, lay.y] : [0, 0])
+
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -176,7 +224,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // One hook for dialog AND ghost layer — a single poll, one ghost list.
   const [furnishOpen, setFurnishOpen] = useState(false)
   const [ghostSel, setGhostSel] = useState<number | null>(null)
-  const furnish = useFurnishJob(selected, furnishOpen)
+  // WHICH job the ✨ Furnish button drives. The yard's reserved id repeats in
+  // every location, so its job is keyed by the composite `__ground__@<loc>`
+  // (server contract, § A13a); an ordinary room is its own id.
+  const furnishTarget = selected === GROUND_ROOM_ID && locationId
+    ? `${GROUND_ROOM_ID}@${locationId}` : selected
+  const furnish = useFurnishJob(furnishTarget, furnishOpen)
   const furnishRef = useRef(furnish)
   furnishRef.current = furnish
   const reviewing = furnish.status?.state === 'review_ready'
@@ -328,10 +381,85 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     return () => ro.disconnect()
   }, [])
 
-  const placed = rooms.filter((r) => r.layout && (r.layout.level || 0) === level)
-  // The ground room carries NO layout by contract (plan-grundflaeche.md) —
-  // it is the area no room occupies. Offering it for drawing would invite
-  // exactly the layout it must never have.
+  // Width of the location in REAL metres. SINCE v6 A DERIVED VALUE: the
+  // server overwrites it with the boundary's bounding-box width on every save
+  // (world_ops._sanitize_map3d), and nothing here scales by it any more — the
+  // layouts carry their own metres. It survives as the fallback edge for a
+  // location that has no boundary at all.
+  const planW = map3d?.plan_width_m || 0
+  /**
+   * The location BOUNDARY in LOCAL METRES (contract v6 Nr. 1) — the very
+   * numbers `map3d.boundary` stores, no conversion.
+   *
+   * Boundary pass-throughs sit on its EDGES, so the plan reads the polygon
+   * straight. Without a drawn boundary the square around the pin stands in —
+   * the same degradation `world_geometry.effective_boundary` applies, so the
+   * edge indices mean the same on both sides (0 = north, 1 = east, 2 = south,
+   * 3 = west).
+   */
+  const boundaryM = useMemo<Pt[]>(() => {
+    const pts = map3d?.boundary
+    if (pts && pts.length >= 3) return pts.map(([x, z]) => [x, z] as Pt)
+    const h = (planW || FALLBACK_VIEW_M) / 2
+    return [[-h, -h], [h, -h], [h, h], [-h, h]]
+  }, [map3d?.boundary, planW])
+
+  /**
+   * THE YARD'S VIEW SHAPE (§ A13a) — null while no boundary is DRAWN.
+   *
+   * The ground room has no rectangle; its surface is the boundary polygon. To
+   * keep the plan's room-local percentage math working, the boundary's
+   * bounding box stands in as a rect and the polygon becomes its hull, in
+   * metres relative to that corner exactly like a drawn room hull. NONE of it
+   * is ever written back: the stored yard layout is placements only, and
+   * `atOrigin` translates between the frames.
+   *
+   * The pin-square fallback of `boundaryM` deliberately does NOT apply — no
+   * drawn boundary means no area anywhere (v6 preamble), so there is no yard
+   * to furnish either.
+   */
+  const yardLay = useMemo<PlacedLayout | null>(() => {
+    if (!(map3d?.boundary && map3d.boundary.length >= 3)) return null
+    const xs = boundaryM.map((p) => p[0])
+    const zs = boundaryM.map((p) => p[1])
+    const x = Math.min(...xs)
+    const y = Math.min(...zs)
+    const w = Math.max(...xs) - x
+    const d = Math.max(...zs) - y
+    if (!(w > 0 && d > 0)) return null
+    return { x, y, w, d, level: 0,
+             outline: boundaryM.map(([px, pz]) => [px - x, pz - y] as Pt) }
+  }, [map3d?.boundary, boundaryM])
+  /** The ground room itself — the server ships one with every location. */
+  const groundRoom = rooms.find((r) => r.id === GROUND_ROOM_ID)
+  /** Its label: the author's name for it, else the neutral word. */
+  const yardName = groundRoom?.name?.trim() || t('Yard')
+
+  /** Everything the plan DRAWS on this level: the rooms with a rectangle plus
+   *  — on level 0, once a boundary exists — the yard. */
+  const placed = useMemo<PlanShape[]>(() => {
+    const out: PlanShape[] = []
+    for (const room of rooms) {
+      if (hasRect(room.layout) && room.id !== GROUND_ROOM_ID
+          && (room.layout.level || 0) === level) {
+        out.push({ room, lay: room.layout, ground: false })
+      }
+    }
+    // FIRST in the list = first in the DOM = underneath: the rooms stand ON
+    // the yard, so it must not paint over them or swallow their clicks. The
+    // server appends the ground room LAST to the room list, which is exactly
+    // the wrong order here.
+    const yard = rooms.find((r) => r.id === GROUND_ROOM_ID)
+    if (yard && level === 0 && yardLay) {
+      out.unshift({ room: yard, lay: yardLay, ground: true })
+    }
+    return out
+  }, [rooms, level, yardLay])
+  /** Rooms only — the yard is never "placed" by an author, so it must not
+   *  answer the questions that ask whether anybody drew anything yet. */
+  const placedHere = placed.filter((p) => !p.ground)
+  // The yard is not a room to be drawn: it can never be "not on the plan",
+  // it simply is the location's surface (§ A13a).
   const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID)
 
   /** One server finding in the editor's language. The SERVER owns the wording
@@ -344,14 +472,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       ? (rooms.find((r) => r.id === p.room_id)?.name || p.room_id) : ''
     return room ? `${room}: ${t(p.message)}` : t(p.message)
   }
-  const placedRooms = rooms.filter((r) => r.layout && r.id)
+  const placedRooms = rooms.filter((r) => hasRect(r.layout) && r.id)
   const levels = Array.from(
-    new Set(rooms.filter((r) => r.layout).map((r) => r.layout!.level || 0)),
+    new Set(rooms.filter((r) => hasRect(r.layout)).map((r) => r.layout!.level || 0)),
   ).sort((a, b) => a - b)
 
   // Signature of the placed geometry — the auto-size correction below reruns
   // on it.
-  const geomKey = JSON.stringify(rooms.filter((r) => r.layout).map((r) => [
+  const geomKey = JSON.stringify(rooms.filter((r) => hasRect(r.layout)).map((r) => [
     r.id, r.layout!.level || 0, r.layout!.x, r.layout!.y, r.layout!.w,
     r.layout!.d, r.layout!.rotation || 0,
   ]))
@@ -375,28 +503,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     window.addEventListener('anima-model3d-changed', onChanged)
     return () => window.removeEventListener('anima-model3d-changed', onChanged)
   }, [locationId])
-  // Width of the location in REAL metres. SINCE v6 A DERIVED VALUE: the
-  // server overwrites it with the boundary's bounding-box width on every save
-  // (world_ops._sanitize_map3d), and nothing here scales by it any more — the
-  // layouts carry their own metres. It survives as the fallback edge for a
-  // location that has no boundary at all.
-  const planW = map3d?.plan_width_m || 0
-  /**
-   * The location BOUNDARY in LOCAL METRES (contract v6 Nr. 1) — the very
-   * numbers `map3d.boundary` stores, no conversion.
-   *
-   * Boundary pass-throughs sit on its EDGES, so the plan reads the polygon
-   * straight. Without a drawn boundary the square around the pin stands in —
-   * the same degradation `world_geometry.effective_boundary` applies, so the
-   * edge indices mean the same on both sides (0 = north, 1 = east, 2 = south,
-   * 3 = west).
-   */
-  const boundaryM = useMemo<Pt[]>(() => {
-    const pts = map3d?.boundary
-    if (pts && pts.length >= 3) return pts.map(([x, z]) => [x, z] as Pt)
-    const h = (planW || FALLBACK_VIEW_M) / 2
-    return [[-h, -h], [h, -h], [h, h], [-h, h]]
-  }, [map3d?.boundary, planW])
   /**
    * THE DRAWING VIEWPORT: the square metre window the canvas shows.
    *
@@ -412,7 +518,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const pts: Pt[] = [...boundaryM]
     for (const r of rooms) {
       const lay = r.layout
-      if (!lay) continue
+      // The yard has no rectangle to frame — it IS the boundary, which is
+      // already in the list (§ A13a).
+      if (!hasRect(lay)) continue
       pts.push([lay.x, lay.y], [lay.x + lay.w, lay.y + lay.d])
     }
     for (const p of map3d?.outline || []) pts.push([p[0], p[1]])
@@ -511,7 +619,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     (ownerId: string, point: { x: number; y: number }): number => {
       const owner = rooms.find((r) => r.id === ownerId)
       const ownerScene = sceneRooms.get(ownerId)
-      if (!owner?.layout || !ownerScene) return -1
+      if (!hasRect(owner?.layout) || !ownerScene) return -1
       const hull = absOutline(owner.layout)
       let best = -1
       let bestD = Infinity
@@ -531,6 +639,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   map3dRef.current = map3d
   const boundaryRef = useRef(boundaryM)
   boundaryRef.current = boundaryM
+  // The yard's derived shape for the window-level drag handler (same reason
+  // as `viewRef`: its closure would go stale on a boundary edit).
+  const yardLayRef = useRef(yardLay)
+  yardLayRef.current = yardLay
   const [modelDims, setModelDims] = useState<Record<string,
     { widthM: number; fpX: number; fpZ: number } | null>>({})
   useEffect(() => {
@@ -551,11 +663,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // vertices; tolerances blend a pixel radius with a 0.15 m floor.
   const snapTargets = useMemo(() => {
     if (clickMode !== 'outline' && clickMode !== 'draw-room') return null
-    const hulls: PolyRoom[] = rooms
-      .filter((r) => r.id && r.layout && (r.layout.level || 0) === level
-        && !(clickMode === 'draw-room' && r.id === drawTarget))
-      .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
-        w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
+    const hulls = hullsOf(rooms, level,
+      clickMode === 'draw-room' ? drawTarget : '')
     return buildSnapTargets(hulls, {
       // Rooms snap onto the building outline; while the OUTLINE itself is
       // being redrawn it is not a target.
@@ -666,7 +775,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // A drawn hull is authoritative — width_m-derived sizing only applies
       // to legacy diorama-model rooms without an outline (D4).
       const ds = r.id && !r.layout?.outline?.length ? derivedSize(r.id) : null
-      if (!lay || !ds) return r
+      if (!hasRect(lay) || !ds) return r
       const swap = ((lay.rotation || 0) % 180) === 90
       const wantW = rM(swap ? ds.d : ds.w)
       const wantD = rM(swap ? ds.w : ds.d)
@@ -688,7 +797,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const room = roomsRef.current.find((r) => r.id === selectedRef.current)
     const lay = room?.layout
     const dims = room?.id ? modelDimsRef.current[room.id] : null
-    if (!lay || !room?.id || !dims || dims.widthM <= 0) return
+    // The yard has no rectangle to fit and no model to fit it to (§ A13a).
+    if (!hasRect(lay) || !room?.id || !dims || dims.widthM <= 0) return
     // The model's footprint IN METRES: its declared real width is the long
     // side, the short one follows the mesh's own aspect (same rule as
     // derivedSize).
@@ -739,7 +849,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       }
       // Default for a room that gets a layout without being drawn: a 3 × 3 m
       // box at the pin. Metres, like everything else since v6 Nr. 2.
-      const base: RoomLayout = r.layout || { level, x: -1.5, y: -1.5, w: 3, d: 3 }
+      // THE YARD GETS NOTHING (§ A13a): its layout is placements only, so the
+      // first prop on it starts from an empty object — a rectangle written
+      // here would be geometry the ground room must never carry.
+      const base: RoomLayout = r.layout
+        || (roomId === GROUND_ROOM_ID ? {} : { level, x: -1.5, y: -1.5, w: 3, d: 3 })
       return { ...r, layout: { ...base, ...patch } }
     })
     onChange(next)
@@ -813,8 +927,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       if (!drag || !canvas) return
       e.preventDefault()
       const room = roomsRef.current.find((r) => r.id === drag.roomId)
-      const lay = room?.layout
-      if (!lay) return
+      // The yard's shape is DERIVED (§ A13a): only its placements drag, and
+      // they drag exactly like a room's — what differs is the frame their
+      // `at` is stored in, which `atOrigin` below settles.
+      const ground = drag.roomId === GROUND_ROOM_ID
+      const lay = ground ? yardLayRef.current : room?.layout
+      if (!room || !hasRect(lay)) return
       const mPerPx = drag.kind === 'move' || drag.kind === 'resize'
         ? drag.mPerPx
         : viewRef.current.size / (canvas.clientWidth || CANVAS_W)
@@ -840,11 +958,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // vertices — x and y independently, so gaps close one wall at a time.
         // Nothing in range: the metre raster catches the corner instead.
         if (!e.shiftKey) {
-          const hulls: PolyRoom[] = roomsRef.current
-            .filter((r) => r.id && r.id !== drag.roomId && r.layout
-              && (r.layout.level || 0) === (lay.level || 0))
-            .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
-              w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
+          const hulls = hullsOf(roomsRef.current, lay.level || 0, drag.roomId)
           const targets = buildSnapTargets(hulls, {
             buildingOutline: map3dRef.current?.outline,
             boundary: boundaryRef.current })
@@ -919,9 +1033,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // moves; the raster applies unless Shift asks for free hand.
         const [fx, fy] = pointerM(e.clientX, e.clientY)
         const raster = (v: number) => (e.shiftKey ? v : snapToGrid(v, step))
+        const o = atOrigin(lay, ground)
         const at: [number, number] = [
-          rM(clamp(raster(fx - lay.x), 0, lay.w)),
-          rM(clamp(raster(fy - lay.y), 0, lay.d)),
+          rM(clamp(raster(fx - (lay.x - o[0])), o[0], o[0] + lay.w)),
+          rM(clamp(raster(fy - (lay.y - o[1])), o[1], o[1] + lay.d)),
         ]
         if (drag.kind === 'model') {
           // The room's DIORAMA model is positioned like a prop: the anchor
@@ -952,10 +1067,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
   }, [updateLayout, pointerM])
 
+  // Move / resize the room RECTANGLE. Never the yard: it has no rectangle —
+  // moving or resizing the location's surface is a boundary edit on the map
+  // tab, not a floor-plan one (§ A13a).
   const startDrag = useCallback((e: React.PointerEvent, room: Room, kind: 'move' | 'resize') => {
-    if (clickMode) return
+    if (clickMode || room.id === GROUND_ROOM_ID) return
     const lay = room.layout
-    if (!lay || !room.id) return
+    if (!hasRect(lay) || !room.id) return
     e.preventDefault()
     e.stopPropagation()
     setSelected(room.id)
@@ -1018,10 +1136,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const job = furnishRef.current
     const room = roomsRef.current.find((r) => r.id === selected)
     const list = job.ghosts
-    if (!room?.layout || !list.length) return
+    // The yard may still have NO layout at all — accepting a furnishing is
+    // exactly what creates one there (§ A13a), so the room itself is enough.
+    if (!room || !list.length) return
     try {
       await job.act('accept', { placements: list })
-      updateLayout(room.id || '', { props: [...(room.layout.props || []), ...list] })
+      updateLayout(room.id || '', { props: [...(room.layout?.props || []), ...list] })
       setGhostSel(null)
       toast(t('{n} pieces added to the room').replace('{n}', String(list.length)))
     } catch (e) {
@@ -1029,19 +1149,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
   }, [selected, updateLayout, t, toast])
 
-  // All prop indices whose TRUE-size footprint covers a room-local point (in
-  // METRES from the room's min corner) — in render order (the last entry
-  // draws topmost). Clicking stacked props cycles the selection through this
-  // list.
-  const propsAtPoint = useCallback((lay: NonNullable<Room['layout']>,
+  // All prop indices whose TRUE-size footprint covers a point in the SHAPE's
+  // own metres (from its min corner) — in render order (the last entry draws
+  // topmost). Clicking stacked props cycles the selection through this list.
+  // `o` is the placements' stored origin (`atOrigin`), so the yard's
+  // location-local `at` is compared in the same frame as the probe.
+  const propsAtPoint = useCallback((lay: NonNullable<Room['layout']>, o: Pt,
       px: number, py: number): number[] => {
     const hits: number[] = []
     ;(lay.props || []).forEach((p, i) => {
       const dims = propDims[p.prop_id]
       // Metres from the placement's own anchor — the prop's dims are metres
       // too, so nothing converts.
-      const cx = px - p.at[0]
-      const cy = py - p.at[1]
+      const cx = px - (p.at[0] - o[0])
+      const cy = py - (p.at[1] - o[1])
       // The hit test undoes exactly the rotation the footprint is DRAWN with,
       // and that one is rotate(−yaw) on a y-down screen (see the prop layer
       // below / PlacementLayer.tsx:105). With +yaw here the test was the
@@ -1061,25 +1182,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Click-to-place: one click inside a room drops an animation marker or a
   // prop placement — both as METRES from the room's min corner (contract v6
   // Nr. 2). The raster applies unless Shift asks for free hand.
-  const onRoomClick = useCallback((e: React.MouseEvent, room: Room) => {
-    if ((!clickMode && !armedProp && !calibrationRoomId) || !room.id || !room.layout) return
+  const onRoomClick = useCallback((e: React.MouseEvent, shape: PlanShape) => {
+    const { room, lay, ground } = shape
+    if ((!clickMode && !armedProp && !calibrationRoomId) || !room.id) return
     e.stopPropagation()
-    const lay = room.layout
     const [mxRaw, myRaw] = pointerM(e.clientX, e.clientY)
     const raster = (v: number) => (e.shiftKey ? v : snapToGrid(v, gridStep))
-    const px = rM(clamp(raster(mxRaw - lay.x), 0, lay.w))
-    const py = rM(clamp(raster(myRaw - lay.y), 0, lay.d))
+    // In the frame the shape STORES its placements in: room-local for a room,
+    // location-local on the yard (§ A13a) — `atOrigin` is the only difference,
+    // and it is [0, 0] everywhere but there.
+    const o = atOrigin(lay, ground)
+    const px = rM(clamp(raster(mxRaw - (lay.x - o[0])), o[0], o[0] + lay.w))
+    const py = rM(clamp(raster(myRaw - (lay.y - o[1])), o[1], o[1] + lay.d))
     if (!clickMode && !armedProp) {
       // Calibration figure armed: a click inside ITS room moves the
       // reference person there (UI state only, never stored).
       if (room.id === calibrationRoomId) onCalibrationAt?.([px, py])
       return
     }
+    // The STORED layout — on the yard it may not exist yet (its first prop
+    // creates it), and it never carries the derived rect `lay` shows.
+    const stored = room.layout
     if (armedProp) {
       // Place the armed prop at the clicked spot. REAL-size rule: only
       // position + yaw are stored — the prop's own dims scale it. The tool
       // stays armed for multiple placements; Esc or re-picking ends it.
-      const placements = [...(room.layout.props || []),
+      const placements = [...(stored?.props || []),
         { prop_id: armedProp, at: [px, py] as [number, number],
           ...(ghostYaw ? { yaw: ghostYaw } : {}) }]
       updateLayout(room.id, { props: placements })
@@ -1091,21 +1219,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // Reposition the SELECTED marker — only inside its own room.
       if (room.id === selected && markerSel !== null) {
         updateLayout(room.id, {
-          markers: (room.layout.markers || []).map((m, idx) =>
+          markers: (stored?.markers || []).map((m, idx) =>
             idx === markerSel ? { ...m, at: [px, py] as [number, number] } : m),
         })
       }
     } else if (clickMode === 'marker' && markerKind) {
       updateLayout(room.id, {
-        markers: [...(room.layout.markers || []),
+        markers: [...(stored?.markers || []),
                   { at: [px, py] as [number, number], animation: markerKind }],
       })
-      setMarkerSel((room.layout.markers || []).length)
+      setMarkerSel((stored?.markers || []).length)
+    } else if (ground) {
+      // Everything below is ROOM GEOMETRY — hull curves, doors, windows. The
+      // yard has none of it (§ A13a); the toolbar disables these tools there,
+      // this is the same refusal for a click that got through anyway.
+      return
     } else if (clickMode === 'curve') {
       // Toggle a bezier control point on the nearest hull edge of the
       // SELECTED room (plan-area-detail-scenes.md). The mode stays armed —
       // a road bends more than once.
-      const lay0 = room.layout
+      const lay0 = lay
       if (room.id !== selected || !lay0.outline || lay0.outline.length < 3) return
       const { edge } = nearestPolygonEdge(outlineOf(lay0), [px, py])
       const cur = lay0.outline_curves || []
@@ -1132,23 +1265,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // position. `to` follows from where the edge leads: a shared wall
       // points at the neighbour, an exterior wall at "outside" — editable
       // in the panel.
-      const { edge, at } = nearestPolygonEdge(outlineOf(room.layout), [px, py])
-      if ((room.layout.outline_curves || []).some((c) => c.edge === edge)) {
+      const { edge, at } = nearestPolygonEdge(outlineOf(lay), [px, py])
+      if ((lay.outline_curves || []).some((c) => c.edge === edge)) {
         // The server rejects these (v1) — refuse up front instead of
         // silently losing the opening on save.
         toast(t('Openings cannot sit on a curved edge — remove the curve first.'), 'error')
         return
       }
-      const lay0 = room.layout
-      const others: PolyRoom[] = roomsRef.current
-        .filter((r) => r.id && r.id !== room.id && r.layout
-          && (r.layout.level || 0) === (lay0.level || 0))
-        .map((r) => ({ id: r.id!, x: r.layout!.x, y: r.layout!.y,
-          w: r.layout!.w, d: r.layout!.d, outline: r.layout!.outline }))
+      const lay0 = lay
+      const others = hullsOf(roomsRef.current, lay0.level || 0, room.id)
       const hull: PolyRoom = { id: room.id, x: lay0.x, y: lay0.y,
         w: lay0.w, d: lay0.d, outline: lay0.outline }
       const shared = sharedEdges(hull, others).find((sh) => sh.edge === edge)
-      const openings: RoomOpening[] = [...(room.layout.openings || []),
+      const openings: RoomOpening[] = [...(lay.openings || []),
         clickMode === 'window'
           ? { edge, at, type: 'window', width_m: 1.2, height_m: 1.2,
               sill_m: 0.9, to: shared ? shared.neighborId : 'outside' }
@@ -1164,13 +1293,27 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     setSelected, updateLayout, calibrationRoomId, onCalibrationAt, t, toast,
     pointerM, gridStep])
 
-  const selectedRoom = rooms.find((r) => r.id === selected && r.layout)
+  // The selected shape. A room qualifies once it has a RECTANGLE; the yard
+  // qualifies as soon as the location has a boundary — it needs no layout of
+  // its own to be worked on, its first prop is what creates one (§ A13a).
+  const selectedRoom = rooms.find((r) => r.id === selected
+    && (hasRect(r.layout) || (r.id === GROUND_ROOM_ID && !!yardLay)))
+  /** The yard is the selected shape — room geometry is off for all of it. */
+  const groundSel = !!selectedRoom && selectedRoom.id === GROUND_ROOM_ID
+  /** The selected shape's rectangle: its own, or the yard's derived one. */
+  const selLay: PlacedLayout | null = groundSel
+    ? yardLay
+    : (hasRect(selectedRoom?.layout) ? selectedRoom.layout : null)
+  /** Where the selected shape's placements are stored (§ A13a). */
+  const selOrigin: Pt = selLay ? atOrigin(selLay, groundSel) : [0, 0]
+  /** Why a room tool is off on the yard — one sentence, one owner. */
+  const yardNoGeometry = t('The yard has no room geometry — it is the location surface.')
 
   // Model presence for the SELECTED room — the plan-placement handle and
   // strip only show when a diorama model exists (anchored mode loads dims
   // for all rooms anyway; this covers the legacy mode too).
   useEffect(() => {
-    if (!selected || selected in modelDims) return
+    if (!selected || selected === GROUND_ROOM_ID || selected in modelDims) return
     getRoomModelDims(selected)
       .then((d) => setModelDims((prev) => ({ ...prev, [selected]: d })))
       .catch(() => setModelDims((prev) => ({ ...prev, [selected]: null })))
@@ -1190,6 +1333,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // was what made a boundary-less location undrawable at all, since the
     // server now DERIVES `plan_width_m` from the boundary and overwrites
     // whatever the field here sent.
+    // The yard has no hull, no walls and no rectangle: every mode that edits
+    // room geometry is refused there (§ A13a). Markers and props are not
+    // geometry — they are content, and they stay.
+    if (groundSel && (m === 'draw-room' || m === 'curve' || m === 'door'
+        || m === 'window')) return
     if (m === 'draw-room') {
       if (!selectedRoom?.id) return
       setDrawTarget(selectedRoom.id)
@@ -1199,14 +1347,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     setOutlineDraft([])
     setHoverSnap(null)
     setClickMode(m)
-  }, [clickMode, selectedRoom, cancelDraw])
+  }, [clickMode, selectedRoom, groundSel, cancelDraw])
 
   // Room shell: pick the surface-texture kind for floor or wall. Empty keys
   // are pruned, an all-empty map drops the field — the client then falls back
   // to the global kind / its own default.
   const setSurface = useCallback((key: 'floor' | 'wall', kind: string) => {
     const lay = roomsRef.current.find((r) => r.id === selected)?.layout
-    if (!lay) return
+    // The yard has no shell to skin — its ground kind is the location's
+    // `terrain`, set on the 3D-world tab (§ A13a).
+    if (!lay || selected === GROUND_ROOM_ID) return
     const merged = { ...(lay.surfaces || {}), [key]: kind.trim() }
     const surfaces: { floor?: string; wall?: string } = {}
     if (merged.floor) surfaces.floor = merged.floor
@@ -1224,7 +1374,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // `rotation` itself yaws the room MODEL inside the rectangle.
   const rotateSelected = () => {
     const lay = selectedRoom?.layout
-    if (!lay || !selectedRoom) return
+    // Turning the yard would mean turning the location boundary — a map-tab
+    // edit, not a floor-plan one (§ A13a).
+    if (!hasRect(lay) || !selectedRoom || groundSel) return
     const w = lay.d
     const d = lay.w
     const turn = ([u, v]: [number, number]): [number, number] =>
@@ -1278,11 +1430,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const suggestOpenings = () => {
     // Everything below is metres now (v6 Nr. 2) — no plan width converts a
     // tolerance or an edge length any more.
-    const onLevel = rooms.filter((r) => r.id && r.layout && (r.layout.level || 0) === level)
-    const hulls: PolyRoom[] = onLevel.map((r) => ({
-      id: r.id!, x: r.layout!.x, y: r.layout!.y, w: r.layout!.w, d: r.layout!.d,
-      outline: r.layout!.outline,
-    }))
+    // The yard is out (`hullsOf`): it has no hull, no walls and no openings
+    // (§ A13a).
+    const onLevel = rooms.filter((r) => r.id && hasRect(r.layout)
+      && (r.layout.level || 0) === level)
+    const hulls = hullsOf(onLevel, level)
     const additions = new Map<string, RoomOpening[]>()
     const layoutOf = (id: string) => onLevel.find((r) => r.id === id)!.layout!
     const edgeTaken = (id: string, edge: number) =>
@@ -1386,7 +1538,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 className={`ga-btn ga-btn-sm${lv === level ? ' ga-btn-primary' : ''}`}
                 onClick={() => { setLevel(lv); setSelected(''); setClickMode('') }}
                 title={t('Rooms on this level: {n}').replace('{n}',
-                  String(rooms.filter((r) => r.layout && (r.layout.level || 0) === lv).length))}
+                  String(rooms.filter((r) => hasRect(r.layout)
+                    && (r.layout.level || 0) === lv).length))}
               >
                 {lv}
               </button>
@@ -1661,10 +1814,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
         building={!!onMap3d}
-        canSuggest={placed.length > 0}
-        canFitToModel={!!(selectedRoom?.id
+        canSuggest={placedHere.length > 0}
+        canFitToModel={!groundSel && !!(selectedRoom?.id
           && (modelDims[selectedRoom.id]?.widthM || 0) > 0)}
-        canCurve={!!selectedRoom?.layout?.outline?.length}
+        canCurve={!groundSel && !!selectedRoom?.layout?.outline?.length}
+        ground={groundSel}
+        groundHint={yardNoGeometry}
         onFitToModel={fitToModel}
         propsOpen={propsOpen}
         onMode={armMode}
@@ -1938,32 +2093,42 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         {aids ? (
           <PlanMetreGrid view={view} canvasPx={canvasPx} />
         ) : null}
-        {placed.map((room) => {
-          const lay = room.layout!
+        {placed.map((shape) => {
+          const { room, lay, ground } = shape
           const isSel = room.id === selected
-          // ROOM-LOCAL metres -> percent of the room's own box. Everything
-          // inside the room div (hull points, curve handles, markers, props,
-          // openings) goes through these two; the room box itself is placed
+          // ROOM-LOCAL metres -> percent of the shape's own box. Everything
+          // inside the div (hull points, curve handles, markers, props,
+          // openings) goes through these two; the box itself is placed
           // with the window's `fx`/`fz`.
           const rx = (u: number) => (lay.w > 0 ? u / lay.w : 0) * 100
           const rz = (v: number) => (lay.d > 0 ? v / lay.d : 0) * 100
+          // Where this shape's placements are STORED (§ A13a): `[0, 0]` in a
+          // room, the yard's own min corner on the yard — `ax`/`az` are the
+          // `rx`/`rz` that take a stored `at`.
+          const o = atOrigin(lay, ground)
+          const ax = (u: number) => rx(u - o[0])
+          const az = (v: number) => rz(v - o[1])
+          // The STORED layout: the yard's derived `lay` carries the shape,
+          // never its content.
+          const content = room.layout
           // Holes owned by a NEIGHBOUR that pierce this room's wall too:
           // WHICH ones and WHERE is the server's answer (scene payload, in
           // room-local metres) — the editor only draws them and routes a
           // click to the owning room.
           const sceneRoom = sceneRooms.get(room.id || '')
-          const mirrored = (sceneRoom?.openings || []).filter((o) => o.mirrored)
+          const mirrored = (sceneRoom?.openings || []).filter((o2) => o2.mirrored)
           return (
             <div
               key={room.id}
               onPointerDown={(e) => startDrag(e, room, 'move')}
               onClick={(e) => {
                 e.stopPropagation()
-                if (clickMode || armedProp) onRoomClick(e, room)
-                else if (room.id && room.id === calibrationRoomId) onRoomClick(e, room)
+                if (clickMode || armedProp) onRoomClick(e, shape)
+                else if (room.id && room.id === calibrationRoomId) onRoomClick(e, shape)
                 else setSelected(room.id || '')
               }}
-              title={room.name || room.id}
+              title={ground ? `${yardName} — ${t('the location surface')}`
+                : (room.name || room.id)}
               style={{
                 position: 'absolute',
                 left: `${fx(lay.x) * 100}%`, top: `${fz(lay.y) * 100}%`,
@@ -1971,12 +2136,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 height: `${(lay.d / view.size) * 100}%`,
                 // A drawn hull renders as its polygon (SVG below) — the div
                 // stays the bbox for selection/drag but hides its rectangle.
+                // The yard IS a hull (the boundary), so it never draws a box.
                 border: lay.outline?.length ? 'none'
                   : `2px solid ${isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}`,
                 background: lay.outline?.length ? 'transparent'
                   : isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)',
                 borderRadius: 4, boxSizing: 'border-box',
-                cursor: clickMode ? 'crosshair' : 'move', userSelect: 'none',
+                // The yard cannot be moved — it is the plot, not a rectangle
+                // on it (§ A13a).
+                cursor: clickMode || armedProp ? 'crosshair'
+                  : ground ? 'default' : 'move',
+                userSelect: 'none',
               }}
             >
               {lay.outline?.length ? (
@@ -1998,10 +2168,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                         ? ` Q ${rx(c[0])},${rz(c[1])} ${rx(q[0])},${rz(q[1])}`
                         : ` L ${rx(q[0])},${rz(q[1])}`
                     }
+                    // The YARD is the ground itself, not a built shape:
+                    // green and dashed, and quiet enough that the rooms
+                    // standing on it stay the loudest thing on the plan.
                     return (
                       <path d={d + ' Z'}
-                        fill={isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)'}
-                        stroke={isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)'}
+                        fill={ground
+                          ? (isSel ? 'rgba(63,185,80,0.14)' : 'rgba(63,185,80,0.06)')
+                          : (isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)')}
+                        stroke={ground
+                          ? (isSel ? '#3fb950' : 'rgba(63,185,80,0.55)')
+                          : (isSel ? 'var(--accent, #58a6ff)' : 'rgba(139,148,158,0.7)')}
+                        strokeDasharray={ground ? '5 4' : undefined}
                         strokeWidth={2} vectorEffect="non-scaling-stroke"
                       />
                     )
@@ -2046,7 +2224,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 pointerEvents: 'none',
               }}>
-                {room.name || room.id}
+                {ground ? `⬚ ${yardName}` : (room.name || room.id)}
                 {lay.rotation ? ` ↻${lay.rotation}°` : ''}
               </span>
               {/* The value ON the stretch it means: what this rectangle is in
@@ -2055,9 +2233,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               {(lay.w / view.size) * canvasPx >= 52
                 && (lay.d / view.size) * canvasPx >= 26 ? (
                 <span
-                  title={lay.outline?.length
-                    ? t('Bounding box of the room hull in real metres.')
-                    : t('Room size in real metres.')}
+                  title={ground
+                    ? t('Bounding box of the location boundary in real metres — the yard is the boundary itself, not this rectangle.')
+                    : lay.outline?.length
+                      ? t('Bounding box of the room hull in real metres.')
+                      : t('Room size in real metres.')}
                   style={{
                     position: 'absolute', left: 3, bottom: 2, fontSize: 9,
                     lineHeight: '11px', cursor: 'inherit',
@@ -2071,7 +2251,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               {/* Diorama-model anchor: positioned in the PLAN like a prop
                   (layout.model_at, default = centre). Drag moves it; the
                   strip below fine-tunes X/Y/height. */}
-              {room.id === selected && modelDims[room.id] ? (() => {
+              {!ground && room.id === selected && modelDims[room.id] ? (() => {
                 // Absent = centred, and the centre is METRES now (w/2, d/2).
                 const mAt = lay.model_at || [lay.w / 2, lay.d / 2]
                 return (
@@ -2103,7 +2283,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   </span>
                 )
               })() : null}
-              {(lay.markers || []).map((m, i) => (
+              {(content?.markers || []).map((m, i) => (
                 <span
                   key={`${m.animation}-${i}`}
                   title={`${i + 1} · ${m.animation}`}
@@ -2119,8 +2299,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   }}
                   style={{
                     position: 'absolute',
-                    left: `calc(${rx(m.at[0])}% - 5px)`,
-                    top: `calc(${rz(m.at[1])}% - 5px)`,
+                    left: `calc(${ax(m.at[0])}% - 5px)`,
+                    top: `calc(${az(m.at[1])}% - 5px)`,
                     width: 10, height: 10, borderRadius: '50%',
                     background: '#3fb950',
                     border: `2px solid ${room.id === selected && markerSel === i ? '#fff' : '#0d1117'}`,
@@ -2138,7 +2318,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   reasoning and the same hand-checked case as
                   PlacementLayer.tsx:105 — yaw 90 must send the local (+5, +5)
                   corner to screen (+5, −5), which only rotate(−yaw) does. */}
-              {(lay.props || []).map((p, i) => {
+              {(content?.props || []).map((p, i) => {
                 const dims = propDims[p.prop_id]
                 // True size: the prop's own metres over the room's metres.
                 const fw = rx(dims?.width_m || 1)
@@ -2157,7 +2337,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                       // everything under the cursor (topmost first).
                       const host = e.currentTarget.parentElement as HTMLDivElement
                       const rect = host.getBoundingClientRect()
-                      const hits = propsAtPoint(lay,
+                      const hits = propsAtPoint(content || {}, o,
                         ((e.clientX - rect.left) / rect.width) * lay.w,
                         ((e.clientY - rect.top) / rect.height) * lay.d)
                       if (hits.length < 2) {
@@ -2172,7 +2352,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                     }}
                     style={{
                       position: 'absolute',
-                      left: `${rx(p.at[0])}%`, top: `${rz(p.at[1])}%`,
+                      left: `${ax(p.at[0])}%`, top: `${az(p.at[1])}%`,
                       width: `${fw}%`, height: `${fd}%`,
                       transform: `translate(-50%, -50%) rotate(${-(p.yaw || 0)}deg)`,
                       border: `1.5px ${dims ? 'solid' : 'dashed'} ${sel ? '#fff' : '#d29922'}`,
@@ -2208,7 +2388,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                       }}
                       style={{
                         position: 'absolute',
-                        left: `${rx(p.at[0])}%`, top: `${rz(p.at[1])}%`,
+                        left: `${ax(p.at[0])}%`, top: `${az(p.at[1])}%`,
                         width: `${fw}%`, height: `${fd}%`,
                         transform: `translate(-50%, -50%) rotate(${-(p.yaw || 0)}deg)`,
                         border: `1.5px dashed ${ghostSel === i ? '#fff' : '#d29922'}`,
@@ -2315,7 +2495,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   (there is nothing to resize then, only to position). Rooms
                   with a drawn hull always resize — the handle scales the
                   whole polygon (points are bbox-local). */}
-              {room.id && !lay.outline?.length && derivedSize(room.id) ? null : (
+              {ground
+                || (room.id && !lay.outline?.length && derivedSize(room.id)) ? null : (
                 <span
                   onPointerDown={(e) => startDrag(e, room, 'resize')}
                   style={{
@@ -2359,7 +2540,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             />
           )
         })() : null}
-        {placed.length === 0 ? (
+        {placedHere.length === 0 ? (
           <span className="ga-hint" style={{
             position: 'absolute', inset: 0, display: 'flex',
             alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
@@ -2487,6 +2668,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
 
       <PlanSidePanel
         room={selectedRoom || null}
+        ground={groundSel}
+        groundName={yardName}
         clipKinds={clipKinds}
         markerKind={markerKind}
         onMarkerKind={setMarkerKind}
@@ -2509,7 +2692,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         furnishDisabled={!selectedRoom}
         furnishHint={!selectedRoom
           ? t('Select a room with a floor plan first.')
-          : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
+          : groundSel
+            ? t('Let the LLM furnish the yard: it picks library props and a solver places them inside the location boundary, clear of the rooms and the entrances.')
+            : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
         onFurnish={() => setFurnishOpen(true)}
         propsOpen={propsOpen}
         armedPropId={armedProp}
@@ -2527,8 +2712,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
 
       {furnishOpen && selectedRoom ? (
         <FurnishDialog
-          roomId={selectedRoom.id || ''}
-          roomName={selectedRoom.name || selectedRoom.id || ''}
+          roomId={furnishTarget}
+          roomName={groundSel ? yardName : (selectedRoom.name || selectedRoom.id || '')}
           job={furnish}
           propInfo={propDims}
           placements={selectedRoom.layout?.props || []}
@@ -2556,14 +2741,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             <span className="ga-hint" style={{ fontWeight: 600 }}>
               🪑 {dims?.name || placement.prop_id}:
             </span>
-            {/* Position in METRES from the room's min corner (v6 Nr. 2), so
-                the slider runs 0…w / 0…d and the readback is a length one can
-                measure against the 1.70 m figure on the plan. */}
+            {/* Position in METRES from the shape's min corner (v6 Nr. 2), so
+                the slider runs over its own box and the readback is a length
+                one can measure against the 1.70 m figure on the plan. On the
+                YARD the very same field is location-local metres (§ A13a), so
+                the range starts at the boundary box's corner instead of 0. */}
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Fine-tune the position: metres from the room’s west edge.')}>
+              title={groundSel
+                ? t('Fine-tune the position: metres east of the anchor pin (negative = west).')
+                : t('Fine-tune the position: metres from the room’s west edge.')}>
               X
               <input
-                type="range" min={0} max={selectedRoom.layout!.w} step={0.01}
+                type="range" min={selOrigin[0]}
+                max={selOrigin[0] + (selLay?.w || 0)} step={0.01}
                 value={placement.at[0]}
                 onChange={(e) => patchProp({
                   at: [rM(parseFloat(e.target.value) || 0), placement.at[1]] as [number, number],
@@ -2573,10 +2763,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               <span style={{ minWidth: 52 }}>{fmtM(placement.at[0])} m</span>
             </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Fine-tune the position: metres from the room’s north edge.')}>
+              title={groundSel
+                ? t('Fine-tune the position: metres south of the anchor pin (negative = north).')
+                : t('Fine-tune the position: metres from the room’s north edge.')}>
               Y
               <input
-                type="range" min={0} max={selectedRoom.layout!.d} step={0.01}
+                type="range" min={selOrigin[1]}
+                max={selOrigin[1] + (selLay?.d || 0)} step={0.01}
                 value={placement.at[1]}
                 onChange={(e) => patchProp({
                   at: [placement.at[0], rM(parseFloat(e.target.value) || 0)] as [number, number],
@@ -2617,7 +2810,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 throws `scatter_count` copies over the room from its own
                 seed; spacing alone rules the density (0 = may overlap). */}
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Scatter: throw copies of THIS prop over the room area. The placement stays as the anchor; positions come from the seed — the road, openings and markers stay clear.')}>
+              title={groundSel
+                ? t('Scatter: throw copies of THIS prop over the yard. The placement stays as the anchor; positions come from the seed and stay inside the location boundary — the rooms, the entrances and the markers stay clear.')
+                : t('Scatter: throw copies of THIS prop over the room area. The placement stays as the anchor; positions come from the seed — the road, openings and markers stay clear.')}>
               <input
                 type="checkbox"
                 checked={!!placement.scatter_count}
@@ -2688,7 +2883,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
 
       {/* Model-placement strip: X/Y sliders + height for the selected
           room's diorama model — mirrors the prop strip; ↺ recentres. */}
-      {selectedRoom && selectedRoom.layout && modelDims[selectedRoom.id || ''] ? (() => {
+      {selectedRoom && !groundSel && hasRect(selectedRoom.layout)
+        && modelDims[selectedRoom.id || ''] ? (() => {
         const lay = selectedRoom.layout
         // Absent = centred, which in metres is (w/2, d/2).
         const mAt = lay.model_at || [lay.w / 2, lay.d / 2]
@@ -2798,12 +2994,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             {/* Fine X/Y correction after the coarse mouse placement — METRES
                 from the room's min corner (v6 Nr. 2). */}
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Fine-tune the marker position: metres from the room’s west edge.')}>
+              title={groundSel
+                ? t('Fine-tune the marker position: metres east of the anchor pin (negative = west).')
+                : t('Fine-tune the marker position: metres from the room’s west edge.')}>
               X
               <input
                 type="range"
-                min={0}
-                max={selectedRoom.layout!.w}
+                min={selOrigin[0]}
+                max={selOrigin[0] + (selLay?.w || 0)}
                 step={0.01}
                 value={marker.at[0]}
                 onChange={(e) => patchMarker({
@@ -2814,8 +3012,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               <input
                 className="ga-input"
                 type="number"
-                min={0}
-                max={selectedRoom.layout!.w}
+                min={selOrigin[0]}
+                max={selOrigin[0] + (selLay?.w || 0)}
                 step={0.01}
                 value={marker.at[0]}
                 onChange={(e) => patchMarker({
@@ -2826,12 +3024,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               <span style={{ opacity: 0.7 }}>m</span>
             </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Fine-tune the marker position: metres from the room’s north edge.')}>
+              title={groundSel
+                ? t('Fine-tune the marker position: metres south of the anchor pin (negative = north).')
+                : t('Fine-tune the marker position: metres from the room’s north edge.')}>
               Y
               <input
                 type="range"
-                min={0}
-                max={selectedRoom.layout!.d}
+                min={selOrigin[1]}
+                max={selOrigin[1] + (selLay?.d || 0)}
                 step={0.01}
                 value={marker.at[1]}
                 onChange={(e) => patchMarker({
@@ -2842,8 +3042,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               <input
                 className="ga-input"
                 type="number"
-                min={0}
-                max={selectedRoom.layout!.d}
+                min={selOrigin[1]}
+                max={selOrigin[1] + (selLay?.d || 0)}
                 step={0.01}
                 value={marker.at[1]}
                 onChange={(e) => patchMarker({
@@ -3097,10 +3297,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       ) : null}
 
       {/* Pick a room WITHOUT touching the plan — small, overlapping or
-          stacked rooms are hard to hit, and hitting them used to move them. */}
-      {placedRooms.length ? (
+          stacked rooms are hard to hit, and hitting them used to move them.
+          THE YARD IS ALWAYS FIRST (§ A13a): it is the one shape nobody draws,
+          it lies under everything else and it is the hardest thing on the plan
+          to hit on purpose. */}
+      {placedRooms.length || groundRoom ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="ga-hint">{t('On the plan:')}</span>
+          {groundRoom ? (
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${selected === GROUND_ROOM_ID ? ' ga-btn-primary' : ''}`}
+              disabled={!yardLay}
+              onClick={() => { setLevel(0); setSelected(GROUND_ROOM_ID) }}
+              title={yardLay
+                ? t('Select the yard — the location surface. Props, scattered props and markers stand on the terrain here; it has no room geometry.')
+                : t('No boundary drawn: this location has no area, so it has no yard to furnish either. Draw its footprint on the map tab first.')}
+            >
+              ⬚ {yardName}
+            </button>
+          ) : null}
           {placedRooms.map((room) => (
             <button
               key={room.id || room.name}

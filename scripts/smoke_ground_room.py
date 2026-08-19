@@ -72,15 +72,17 @@ Part 4 — the ground OUTSIDE takes its texture kind from `terrain` (§ 5).
       "floor" on both. The signature moves with the resolved kind, because
       the payload does.
 
-Part 5 — the ground room never carries a layout (`_sanitize_rooms_layout`).
-  The ground is the location's open surface; its geometry comes from the scene
-  recipe, so a floor plan on it would put GROUND_ROOM_ID into the recipe's
-  rooms and give it walls and doorways. The editor never draws one — the
-  sanitizer is the same refusal for a hand-made API call.
-    ground WITH a valid layout   -> layout gone, the room itself stays
+Part 5 — the ground room carries no GEOMETRY (`_sanitize_rooms_layout`,
+  § A13a). The ground is the location's open surface: a floor plan on it would
+  put GROUND_ROOM_ID into the recipe's rooms and give it walls and doorways.
+  Since § A13a it may carry a REDUCED layout — props and markers, positioned
+  in location-local metres — so the sanitizer strips the geometry and keeps
+  the placements, for the editor and a hand-made API call alike.
+    ground WITH a room layout    -> layout gone, the room itself stays
     a normal room, SAME layout   -> layout kept  (proves it is the ID, not the
                                                   layout, that is refused)
     ground without a layout      -> untouched
+    ground with geometry + props -> only the props survive
 """
 import sys
 from pathlib import Path
@@ -258,7 +260,7 @@ def main():
     check("no library, no terrain kind — the default stands",
           without.get(0) == "floor", str(without))
 
-    print("Part 5 — the ground room carries no layout")
+    print("Part 5 — the ground room carries no GEOMETRY (§ A13a)")
     # ONE valid layout, handed to both rooms: everything but the id is equal,
     # so only the id can explain the different outcome.
     plan = {"x": -8.0, "y": -6.0, "w": 6.0, "d": 8.0, "level": 0}
@@ -266,8 +268,10 @@ def main():
         {"id": GROUND_ROOM_ID, "name": "Market square", "layout": dict(plan)},
         {"id": "hall", "name": "Hall", "layout": dict(plan)},
         {"id": GROUND_ROOM_ID, "name": "Yard"},
+        {"id": GROUND_ROOM_ID, "name": "Court", "layout": dict(
+            plan, props=[{"prop_id": "bench", "at": [3.0, -2.0]}])},
     ])
-    check("a layout on the ground room is stripped",
+    check("a geometry-only layout on the ground is dropped whole",
           "layout" not in rooms[0], str(rooms[0]))
     check("the ground room itself survives",
           rooms[0].get("id") == GROUND_ROOM_ID and rooms[0].get("name"),
@@ -277,6 +281,12 @@ def main():
           and rooms[1]["layout"]["w"] == 6.0, str(rooms[1].get("layout")))
     check("a ground room without a layout is untouched",
           rooms[2] == {"id": GROUND_ROOM_ID, "name": "Yard"}, str(rooms[2]))
+    # The yard (§ A13a): the placements stay, the room geometry around them
+    # is stripped — `at` is a LOCATION-local metre and needs no min corner.
+    check("a yard keeps its placements and loses the rest",
+          rooms[3].get("layout") == {"props": [{"prop_id": "bench",
+                                                "at": [3.0, -2.0]}]},
+          str(rooms[3].get("layout")))
 
     print()
     if FAILURES:

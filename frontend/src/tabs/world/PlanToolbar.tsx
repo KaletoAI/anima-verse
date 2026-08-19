@@ -6,6 +6,10 @@
  * room tools and the underlay view toggles; the marker tool lives in the
  * side panel next to the marker list. Tooltips carry the explanations that
  * used to sit as hint texts and checkbox labels next to the plan.
+ *
+ * With the YARD selected (§ A13a) every ROOM tool is disabled and says why in
+ * its tooltip: the location surface has no rectangle, no hull and no walls to
+ * work on. The building tools and the prop palette are unaffected.
  */
 import { useI18n } from '../../i18n/I18nProvider'
 
@@ -40,7 +44,8 @@ function Tool({ icon, title, onClick, active = false, danger = false,
 
 interface PlanToolbarProps {
   mode: PlanMode
-  /** A room WITH a layout is selected — the room tools work on it. */
+  /** A shape is selected on the plan. Together with `ground` it decides the
+   *  room tools: they need a selection that is not the yard. */
   hasSelection: boolean
   selectionRotation: number
   /** The building outline exists in the map3d draft. */
@@ -56,6 +61,12 @@ interface PlanToolbarProps {
   canFitToModel: boolean
   /** The selected room has a DRAWN hull — curves bend hull edges only. */
   canCurve: boolean
+  /** The YARD is selected (§ A13a): it has no room geometry at all, so every
+   *  shape tool is off and says why. Props and markers stay — they are the
+   *  point of selecting it. */
+  ground: boolean
+  /** The one sentence that explains the refusal above. */
+  groundHint: string
   propsOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
@@ -73,7 +84,7 @@ interface PlanToolbarProps {
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasOutline,
   outlineDraftLen, hasElevator, building, canSuggest,
-  canFitToModel, canCurve, onFitToModel,
+  canFitToModel, canCurve, ground, groundHint, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
@@ -83,6 +94,11 @@ export function PlanToolbar({
   // own metres, so no tool here waits for a plan width any more.
   const drawing = mode === 'draw-room'
   const outlining = mode === 'outline'
+  // A room tool is available when a room is selected — never on the yard,
+  // which has no rectangle, no hull and no walls (§ A13a).
+  const shape = hasSelection && !ground
+  /** Tooltip of a shape tool: its own text, or the reason it is off. */
+  const shapeHint = (title: string) => (ground ? groundHint : title)
 
   return (
     <div className="ga-plan-toolbar">
@@ -151,44 +167,44 @@ export function PlanToolbar({
       ) : (
         <Tool
           icon="⬠"
-          disabled={!hasSelection}
+          disabled={!shape}
           onClick={() => onMode('draw-room')}
-          title={t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, markers stay.')}
+          title={shapeHint(t('Redraw the room hull as a polygon — replaces the shape; openings are cleared, markers stay.'))}
         />
       )}
       <Tool
         icon="↻"
-        disabled={!hasSelection}
+        disabled={!shape}
         onClick={onRotate}
-        title={t('Rotate the room 90° clockwise — hull, markers and 3D model turn together. Now: {deg}°')
-          .replace('{deg}', String(selectionRotation))}
+        title={shapeHint(t('Rotate the room 90° clockwise — hull, markers and 3D model turn together. Now: {deg}°')
+          .replace('{deg}', String(selectionRotation)))}
       />
       <Tool
         icon="◡"
         active={mode === 'curve'}
         disabled={!canCurve}
         onClick={() => onMode('curve')}
-        title={t('Curve — click a hull edge of the selected room to bend it (drag the control point; click the edge again to remove the curve). Needs a drawn hull. Openings cannot sit on curved edges.')}
+        title={shapeHint(t('Curve — click a hull edge of the selected room to bend it (drag the control point; click the edge again to remove the curve). Needs a drawn hull. Openings cannot sit on curved edges.'))}
       />
       <Tool
         icon="⇲"
         disabled={!canFitToModel}
         onClick={onFitToModel}
-        title={t('Fit the floor plan to the 3D model: the room takes the size the model’s declared real width gives it. A DRAWN hull keeps its shape and is scaled as a whole; a plain rectangle also takes the model’s proportions.')}
+        title={shapeHint(t('Fit the floor plan to the 3D model: the room takes the size the model’s declared real width gives it. A DRAWN hull keeps its shape and is scaled as a whole; a plain rectangle also takes the model’s proportions.'))}
       />
       <Tool
         icon="🚪"
         active={mode === 'door'}
-        disabled={!hasSelection}
+        disabled={!shape}
         onClick={() => onMode('door')}
-        title={t('Door — then click a room edge; on a shared wall it opens BOTH rooms. Drag it along the edge, edit it below.')}
+        title={shapeHint(t('Door — then click a room edge; on a shared wall it opens BOTH rooms. Drag it along the edge, edit it below.'))}
       />
       <Tool
         icon="🪟"
         active={mode === 'window'}
-        disabled={!hasSelection}
+        disabled={!shape}
         onClick={() => onMode('window')}
-        title={t('Window — then click a room edge (sill 0.9 m, edit below). Exterior walls open to the outside.')}
+        title={shapeHint(t('Window — then click a room edge (sill 0.9 m, edit below). Exterior walls open to the outside.'))}
       />
       <Tool
         icon="✨"
@@ -202,12 +218,15 @@ export function PlanToolbar({
         onClick={onProps}
         title={t('Show the prop library in the panel next to the plan.')}
       />
+      {/* The yard cannot be taken off the plan — it IS the plan's ground
+          (§ A13a). Clearing its placements is what the prop strip's ✕ and
+          the Furnish dialog's "empty the room" do. */}
       <Tool
         icon="✕"
         danger
-        disabled={!hasSelection}
+        disabled={!shape}
         onClick={onUnplace}
-        title={t('Remove from the floor plan — the 3D client auto-grids this room again.')}
+        title={shapeHint(t('Remove from the floor plan — the 3D client auto-grids this room again.'))}
       />
     </div>
   )
