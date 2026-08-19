@@ -289,6 +289,26 @@
  *       block — contains BOTH points, so the old exclusion returns [] and
  *       cannot pass this case.
  *
+ * (C13) TWO AREAS OF ONE KIND (reported 2026-08-19: "the second Deep Forest
+ *       grows nothing / grows differently"). The count hangs on the painted
+ *       AREA and the seed on the area's ID — never on the terrain kind, which
+ *       is the same string for both.
+ *         a 100 x 100 m wood at 3 per 100 m2: round(10 000/100 · 3) = 300
+ *         a  30 x  30 m wood at the same   3: round(   900/100 · 3) =  27
+ *       Both rings ARE their own bounding boxes, so no candidate is ever
+ *       rejected and the run reaches those counts exactly. Divided back out
+ *       that is 3.0 and 3.0 per 100 m2 — the settings, in both areas.
+ *       The seeds are `terrain:scatter:ta_big:0` and
+ *       `terrain:scatter:ta_small:0`: two different streams, so neither wood
+ *       is a copy of the other and neither can displace the other in a map
+ *       keyed by anything.
+ * (C14) A LOWER `maxPoints` IS A PREFIX. The candidate stream depends on the
+ *       seed alone, so the first 25 accepted candidates of the 300-prop wood
+ *       are the first 25 of that same list — which is what lets the map
+ *       editor thin its preview to a dot budget
+ *       (`mapMath.scatterPreviewShares`, `scripts/smoke_scatter_preview.mjs`)
+ *       and still draw props the world really plants.
+ *
  * ============================================================================
  * (D) THE RED COUNTER-CHECK — a mutant that provably fails
  * ============================================================================
@@ -740,6 +760,7 @@ function stream(values) {
 async function main() {
   const {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
+    scatterWantedCount,
   } = await loadTs(SRC);
 
   const TAU = Math.PI * 2;
@@ -963,6 +984,41 @@ async function main() {
     JSON.stringify(a1) !== JSON.stringify(b1), true);
   check('the seed is area- and index-stable',
     scatterSeed('ta_1', 2), 'terrain:scatter:ta_1:2');
+
+  console.log('\n  C13 TWO AREAS OF ONE KIND — the count is the AREA\'s, '
+    + 'never the kind\'s');
+  check('C13 a 10 000 m2 wood at 3 per 100 m2 wants 300',
+    scatterWantedCount(10000, 3), 300);
+  check('C13 …and a 900 m2 one of the same kind and density wants 27',
+    scatterWantedCount(900, 3), 27);
+  const BIG = [[0, 0], [100, 0], [100, 100], [0, 100]];      // 10 000 m2
+  const SMALL = [[200, 0], [230, 0], [230, 30], [200, 30]];  //    900 m2
+  const big = scatterInstances({
+    ring: BIG, areaM2: 10000, densityPer100m2: 3, seed: scatterSeed('ta_big', 0),
+  });
+  const small = scatterInstances({
+    ring: SMALL, areaM2: 900, densityPer100m2: 3, seed: scatterSeed('ta_small', 0),
+  });
+  check('C13 both areas are planted, 300 and 27 props',
+    [big.length, small.length], [300, 27]);
+  check('C13 …at the SAME density per 100 m2 — 3 and 3',
+    [big.length / (10000 / 100), small.length / (900 / 100)], [3, 3]);
+  check('C13 the seeds are per AREA INSTANCE, not per kind',
+    [scatterSeed('ta_big', 0), scatterSeed('ta_small', 0)],
+    ['terrain:scatter:ta_big:0', 'terrain:scatter:ta_small:0']);
+  check('C13 …so the second area is not a copy of the first',
+    JSON.stringify(scatterInstances({
+      ring: BIG, areaM2: 10000, densityPer100m2: 3,
+      seed: scatterSeed('ta_small', 0),
+    })) !== JSON.stringify(big), true);
+  // (C14) A LOWER CEILING IS A PREFIX, not a second sample — what lets the map
+  // editor thin its preview to a budget and still draw props the world plants.
+  const thinned = scatterInstances({
+    ring: BIG, areaM2: 10000, densityPer100m2: 3, seed: scatterSeed('ta_big', 0),
+    maxPoints: 25,
+  });
+  check('C14 maxPoints 25 gives the first 25 of the very same 300',
+    thinned, big.slice(0, 25));
 
   console.log('\n(D) the RED counter-check — a mutant that fails these cases');
   const RED = {

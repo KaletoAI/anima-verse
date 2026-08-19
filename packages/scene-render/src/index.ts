@@ -47,9 +47,9 @@ export {
 export type { AreaGeometry, Point2 } from './groundAreas'
 
 export {
-  propGroundFit, scatterInstances, scatterSeed, seededRandom, pointInRing,
-  pointInFootprint, worldToLocalXZ, SCATTER_MAX_PER_ENTRY,
-  SCATTER_TRIES_PER_POINT,
+  propGroundFit, scatterInstances, scatterSeed, scatterWantedCount,
+  seededRandom, pointInRing, pointInFootprint, worldToLocalXZ,
+  SCATTER_MAX_PER_ENTRY, SCATTER_TRIES_PER_POINT,
 } from './scatter'
 export type {
   PropGroundFit, ScatterEntry, ScatterFootprint, ScatterInstance,

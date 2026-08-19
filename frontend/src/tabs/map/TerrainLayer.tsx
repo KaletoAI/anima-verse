@@ -56,12 +56,14 @@
  * areas of the world relief are edited with.
  */
 import { useMemo } from 'react'
-import { cleanRing, polygonArea, scatterInstances, scatterSeed } from '@anima/scene-render'
-import type { ScatterFootprint } from '@anima/scene-render'
+import {
+  cleanRing, polygonArea, scatterInstances, scatterSeed, scatterWantedCount,
+} from '@anima/scene-render'
+import type { ScatterFootprint, Point2 } from '@anima/scene-render'
 import { useMapView } from './MapCanvas'
 import {
-  decorateStroke, strokeToPolygon, worldPolyToPath, worldToScreen,
-  type StrokeDeco,
+  decorateStroke, scatterPreviewShares, strokeToPolygon, worldPolyToPath,
+  worldToScreen, type StrokeDeco,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
 import { readScatter } from './mapTypes'
@@ -107,8 +109,13 @@ export function scatterColor(index: number): string {
  *  The POINTS are always the world's own — the shared sampler answers them
  *  whatever this says. This caps how many of them become SVG circles: a world
  *  of dense meadows samples tens of thousands, and a browser asked for that
- *  many nodes stops being an editor. What is drawn is the first n, so the
- *  preview stays a faithful sample of the real placement. */
+ *  many nodes stops being an editor.
+ *
+ *  HOW it is spent is `scatterPreviewShares` (`mapMath`): every entry of every
+ *  area keeps its proportional share, and no scattering area is left blank.
+ *  Spending it in list order — the state before 2026-08-19 — drew the first
+ *  wood in full and left every area behind it empty, which reads as ground
+ *  that grows nothing. */
 const SCATTER_PREVIEW_MAX = 4000
 
 /** Radius of a preview dot in pixels. */
@@ -255,8 +262,20 @@ export function TerrainLayer({
     // The ground part draws no dots, and sampling for it would mean paying the
     // whole scatter twice per render once the layer is split in two.
     if (!scatterPreview || part === 'ground') return []
-    const out: { x: number; z: number; color: string }[] = []
     const rings = areas.map((a) => cleanRing(a.polygon))
+    /** One entry of one area, with everything its sample needs — collected
+     *  BEFORE anything is placed, because the budget below is a question about
+     *  all of them together. */
+    type Job = {
+      ring: Point2[]
+      areaM2: number
+      occluders: Point2[][]
+      seed: string
+      color: string
+      density: number
+      wanted: number
+    }
+    const jobs: Job[] = []
     areas.forEach((a, ai) => {
       const entries = readScatter(a.meta)
       if (!entries.length) return
@@ -265,16 +284,34 @@ export function TerrainLayer({
       const areaM2 = polygonArea(ring)
       const occluders = rings.slice(ai + 1).filter((r) => r.length >= 3)
       entries.forEach((e, i) => {
-        if (out.length >= SCATTER_PREVIEW_MAX) return
-        const color = scatterColor(i)
-        for (const p of scatterInstances({
-          ring, areaM2, densityPer100m2: e.density_per_100m2,
-          seed: scatterSeed(a.id, i), footprints, occluders,
-        })) {
-          if (out.length >= SCATTER_PREVIEW_MAX) break
-          out.push({ x: p.x, z: p.z, color })
-        }
+        // Arithmetic, not a sample: what this entry PLANTS is known from the
+        // area and the density alone, and the budget has to know it for every
+        // entry before the first point is drawn.
+        const wanted = scatterWantedCount(areaM2, e.density_per_100m2)
+        if (wanted < 1) return
+        jobs.push({
+          ring, areaM2, occluders, seed: scatterSeed(a.id, i),
+          color: scatterColor(i), density: e.density_per_100m2, wanted,
+        })
       })
+    })
+    if (!jobs.length) return []
+    // …and now the budget, PROPORTIONALLY over every entry of every area —
+    // see `scatterPreviewShares`. Spending it in list order drew the first
+    // wood in full and the rest of the world not at all.
+    const shares = scatterPreviewShares(jobs.map((j) => j.wanted),
+                                        SCATTER_PREVIEW_MAX)
+    const out: { x: number; z: number; color: string }[] = []
+    jobs.forEach((job, i) => {
+      const share = shares[i]
+      if (share < 1) return
+      for (const p of scatterInstances({
+        ring: job.ring, areaM2: job.areaM2, densityPer100m2: job.density,
+        seed: job.seed, footprints, occluders: job.occluders,
+        // A lower ceiling gives the PREFIX of the same stream, so a thinned
+        // preview draws props the world really plants.
+        maxPoints: share,
+      })) out.push({ x: p.x, z: p.z, color: job.color })
     })
     return out
   }, [areas, footprints, part, scatterPreview])

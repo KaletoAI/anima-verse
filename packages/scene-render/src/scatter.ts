@@ -251,6 +251,33 @@ export interface ScatterSampleOptions {
 }
 
 /**
+ * HOW MANY instances one entry plants on one area — the count half of the
+ * sampler, on its own and without drawing a single random number.
+ *
+ *     wanted = min( round(areaM2 / 100 · density), maxPoints )
+ *
+ * It is spelled out here because the count is asked for in places that must
+ * NOT sample: the map editor's preview budgets its dots over every entry of
+ * every area before it places any of them (`mapMath.scatterPreviewShares`),
+ * and sampling first only to throw most of it away is exactly the cost that
+ * budget exists to avoid. `scatterInstances` calls this too — one formula, so
+ * a preview that says "this entry plants n" cannot disagree with the n the
+ * world plants.
+ *
+ * A count below one is 0: an entry that wants a third of a prop plants none.
+ */
+export function scatterWantedCount(areaM2: number, densityPer100m2: number,
+                                   maxPoints?: number): number {
+  const density = Number(densityPer100m2)
+  const area = Number(areaM2)
+  if (!Number.isFinite(density) || density <= 0) return 0
+  if (!Number.isFinite(area) || area <= 0) return 0
+  const max = maxPoints ?? SCATTER_MAX_PER_ENTRY
+  const wanted = Math.min(Math.round((area / 100) * density), max)
+  return wanted >= 1 ? wanted : 0
+}
+
+/**
  * The instances of ONE scatter entry on ONE area — deterministic, so the
  * editor preview and the planted world are the same points by construction.
  *
@@ -280,8 +307,15 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
   if (ring.length < 3) return []
   if (!Number.isFinite(density) || density <= 0) return []
   if (!Number.isFinite(areaM2) || areaM2 <= 0) return []
-  const max = opts.maxPoints ?? SCATTER_MAX_PER_ENTRY
-  const wanted = Math.min(Math.round((areaM2 / 100) * density), max)
+  // ONE count formula, and it lives in `scatterWantedCount` — the editor's
+  // preview budget has to know this number before it samples anything.
+  //
+  // A SMALLER `maxPoints` gives exactly the PREFIX of the fuller run: the
+  // candidate stream depends on the seed alone, so the first n accepted
+  // candidates are the same n points whatever the ceiling is. That is what
+  // lets the preview draw a thinned SUBSET of the very props the world plants
+  // instead of a second, unrelated sample.
+  const wanted = scatterWantedCount(areaM2, density, opts.maxPoints)
   if (wanted < 1) return []
 
   let minX = Infinity

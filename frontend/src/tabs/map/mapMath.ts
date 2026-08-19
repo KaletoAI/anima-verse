@@ -717,3 +717,54 @@ export function strokeToPolygon(points: Array<[number, number]>,
   if (poly.length > 1 && first[0] === tail[0] && first[1] === tail[1]) poly.pop()
   return poly.length >= 3 ? poly : null
 }
+
+/* ==========================================================================
+ * The scatter preview's DOT BUDGET
+ * ========================================================================== */
+
+/**
+ * How the preview's dot budget is split over the entries that want dots —
+ * PROPORTIONALLY, never first-come-first-served.
+ *
+ * THE BUG THIS REPLACES (reported 2026-08-19). The preview used to sample area
+ * after area and simply stop once it had drawn its ceiling of dots. On a world
+ * whose first painted wood is large enough, that ceiling is reached inside
+ * that ONE area and every area behind it is drawn with no scatter at all —
+ * which looks exactly like "the second forest grows nothing". Measured on the
+ * reporting world: a 13.71 km2 deep forest with 7 entries plants 14 000 props,
+ * so its first two entries (2 000 each, the sampler's per-entry ceiling)
+ * exhausted a 4 000-dot budget and the SECOND deep forest, the meadow and the
+ * grass patch behind it got 0 dots between them.
+ *
+ * THE SPLIT. `wanted[i]` is what entry i really plants
+ * (`scatterWantedCount`, the sampler's own count). While the sum fits in
+ * `budget`, everything is drawn as it stands. Above it every entry keeps its
+ * SHARE of the budget,
+ *
+ *     share_i = max(1, floor(wanted_i · budget / Σ wanted))
+ *
+ * so the dots stay proportional to what actually grows — a wood with ten times
+ * the props of the meadow next to it still draws ten times the dots — and the
+ * `max(1, …)` is the promise that no scattering area is left blank: an entry
+ * whose proportional share rounds below one dot still gets one, which is what
+ * makes "does this area scatter at all?" answerable by looking.
+ *
+ * The total may therefore exceed `budget` by at most one dot per such starved
+ * entry (8 entries per area is the server's ceiling), which is a handful of
+ * SVG nodes against a limit that exists to stop tens of thousands.
+ *
+ * The shares go into `scatterInstances` as `maxPoints`, where a lower ceiling
+ * yields the PREFIX of the same stream — so every previewed dot is a prop the
+ * world really plants, not a second sample that happens to look similar.
+ *
+ * Hand-derived cases live in `scripts/smoke_scatter_preview.mjs`.
+ */
+export function scatterPreviewShares(wanted: readonly number[],
+  budget: number): number[] {
+  const counts = wanted.map((n) => (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0))
+  const cap = Number.isFinite(budget) && budget > 0 ? Math.floor(budget) : 0
+  const total = counts.reduce((sum, n) => sum + n, 0)
+  if (cap <= 0) return counts.map(() => 0)
+  if (total <= cap) return counts
+  return counts.map((n) => (n > 0 ? Math.max(1, Math.floor((n * cap) / total)) : 0))
+}
