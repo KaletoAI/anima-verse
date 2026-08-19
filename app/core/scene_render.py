@@ -349,6 +349,11 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     room_obj = get_room_by_id(loc_obj, room) if (loc_obj and room) else None
     label = (room_obj or {}).get("name") or loc_obj.get("name") or loc
     setting = _setting_word(loc_obj, room_obj)
+    # Open-air scenes carry the world calendar's weather; interiors do not.
+    from app.models.world import resolve_indoor_flag as _indoor_flag
+    outdoor = _indoor_flag(loc_obj, room_obj) == "outdoor"
+    from app.core.prompt_compose import outdoor_conditions as _conditions
+    conditions = _conditions(outdoor)
 
     names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
                         if n != avatar]
@@ -389,8 +394,11 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     except Exception:
         pass
 
+    # The weather is part of the prompt, so it is part of the cache identity:
+    # without it the first summer render would keep being served through the
+    # winter. Indoor scenes contribute an empty string and never re-render.
     sig_src = json.dumps([
-        mode, loc, room, bg_path.name, event_text,
+        mode, loc, room, bg_path.name, event_text, conditions,
         [(c["name"],
           str(c["image"]) if c["image"] else "",
           int(c["image"].stat().st_mtime) if c["image"] else 0)
@@ -399,7 +407,8 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     sig = hashlib.sha1(sig_src.encode("utf-8")).hexdigest()[:16]
 
     return {"location": loc, "room": room, "label": label, "mode": mode,
-            "setting": setting, "bg_path": bg_path, "chars": chars,
+            "setting": setting, "conditions": conditions,
+            "bg_path": bg_path, "chars": chars,
             "event_text": event_text, "sig": sig}
 
 
@@ -550,7 +559,8 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     from app.core.prompt_compose import compose as _compose
     _subject = prompt
     _composed = _compose(use_case="scene", subject=prompt, backend=backend,
-                         negative_extra=_neg_base)
+                         negative_extra=_neg_base,
+                         conditions=state.get("conditions", ""))
     prompt = _composed.prompt
     negative = _composed.negative
     for _w in _composed.warnings:

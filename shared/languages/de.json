@@ -1879,6 +1879,14 @@
     "Every existing terrain area and height area is deleted first. Location positions are kept — only the listed places move.": "Jede vorhandene Geländefläche und Höhenfläche wird zuerst gelöscht. Ort-Positionen bleiben — nur die gelisteten Orte werden versetzt.",
     "{n} warnings are still open — they do not block the apply.": "{n} Warnungen sind offen — sie blockieren das Übernehmen nicht.",
     "A snapshot of the current map is taken first, so you can restore it from the list below.": "Vorher wird ein Snapshot der aktuellen Karte angelegt, den Du aus der Liste unten wiederherstellen kannst.",
-    "Restore": "Wiederherstellen"
+    "Restore": "Wiederherstellen",
+    "Temperature and weather are configured per season in ": "Temperatur und Wetter werden pro Season eingestellt, in ",
+    "freezing": "eisig",
+    "cold": "kalt",
+    "mild": "mild",
+    "hot": "heiß",
+    "dry": "trocken",
+    "rain": "Regen",
+    "snow": "Schnee"
   }
 }

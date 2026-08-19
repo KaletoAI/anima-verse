@@ -58,8 +58,16 @@ def _template_stamp() -> str:
     return "0"
 
 
-def cache_key(style: str, subject: str, hint: str, family: str) -> str:
-    parts = "\x1f".join([style, subject, hint, family, _template_stamp()])
+def cache_key(style: str, subject: str, hint: str, family: str,
+              conditions: str = "") -> str:
+    """Cache identity of one composed prompt.
+
+    ``conditions`` (the outdoor weather clause) is part of the key on
+    purpose: without it the first summer render of a place would be served
+    back in the middle of a blizzard.
+    """
+    parts = "\x1f".join([style, subject, hint, family, conditions,
+                         _template_stamp()])
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
 
 
@@ -205,6 +213,9 @@ def llm_compose(composed: Composed, *, use_case: str, subject: str,
     from app.core import config as _cfg
 
     hint = str(composed.meta.get("hint_rendered") or "")
+    # Open-air weather clause (empty indoors) — the mechanical stage already
+    # wove it in; the rewrite has to be told about it or it drops out.
+    conditions = str(composed.meta.get("conditions") or "")
     style = (_cfg.get_use_case_prompts(use_case, family).get("prompt_style")
              or "")
     # The guard's cleaned subject — same deterministic function the
@@ -217,7 +228,7 @@ def llm_compose(composed: Composed, *, use_case: str, subject: str,
             warnings=list(composed.warnings) + [msg],
             meta={**composed.meta, "llm_composed": False, "cache_hit": False})
 
-    key = cache_key(style, clean_subject, hint, family)
+    key = cache_key(style, clean_subject, hint, family, conditions)
     cached = _cache_get(key)
     if cached:
         logger.info("LLM compose (%s): cache hit", use_case)
@@ -235,7 +246,9 @@ def llm_compose(composed: Composed, *, use_case: str, subject: str,
         from app.core.llm_router import llm_call
         from app.core.prompt_templates import render_task
         system, user = render_task(TEMPLATE, hints=hint, style=style,
-                                   subject=clean_subject, family=family)
+                                   subject=clean_subject, family=family,
+                                   conditions=conditions,
+                                   is_outdoor=bool(conditions))
         response = llm_call(task="image_prompt", system_prompt=system,
                             user_prompt=user, max_tokens=MAX_TOKENS,
                             label=f"compose:{use_case}")

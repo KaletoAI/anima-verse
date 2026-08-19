@@ -283,9 +283,17 @@ def _do_generate(event_id: str,
         logger.warning("Event-Bild [%s]: kein Backend verfuegbar", event_id)
         return None
 
+    # Open-air locations get the world calendar's weather into the prompt;
+    # an interior does not (the event happens inside, the storm does not).
+    from app.models.world import get_location_by_id, resolve_indoor_flag
+    _outdoor = resolve_indoor_flag(get_location_by_id(location_id) or {},
+                                   None) == "outdoor"
+
     from app.core.prompt_compose import compose as _compose
+    from app.core.prompt_compose import outdoor_conditions as _conditions
     _composed = _compose(use_case="event", subject=image_prompt,
-                         backend=backend)
+                         backend=backend,
+                         conditions=_conditions(_outdoor))
     full_prompt = _composed.prompt
     negative = _composed.negative
     for _w in _composed.warnings:

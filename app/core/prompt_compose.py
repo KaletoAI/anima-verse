@@ -21,8 +21,13 @@ This module composes instead of concatenating:
   rewrite (that waits for the LLM stage), and never applied to the style:
   the curated styles negate on purpose ("no walls").
 
-Pure builder: no I/O, no DB. The only outside call is the existing
-use-case style resolution (in-memory config).
+- **Outdoor conditions** — an OPEN-AIR render carries the world calendar's
+  weather and time of day (:func:`outdoor_conditions`). Indoor renders never
+  do: there is no snow in the living room.
+
+Pure builder: no I/O, no DB. The two outside calls are the existing use-case
+style resolution and the game clock behind :func:`outdoor_conditions` — both
+read module-cached config, neither touches the DB.
 """
 from __future__ import annotations
 
@@ -258,6 +263,29 @@ def weave_subject(style: str, subject: str) -> tuple:
     return style or subject or "", warnings
 
 
+def outdoor_conditions(outdoor: bool, lang: str = "en") -> str:
+    """The open-air conditions clause for one render — ``""`` when indoors.
+
+    ``"outdoor conditions: morning, freezing, snow — often fog in the
+    morning"``: the world calendar's day bucket plus the season's atmosphere,
+    the same values every chat and thought prompt gets as ``game_weather``.
+    An INDOOR render gets nothing at all — a snowstorm belongs outside the
+    window, not in the living room, and the room's own lighting is already
+    part of its use-case style.
+
+    The one function here that reads the game clock. It lives with the
+    composer so all four image paths (location background, day/night variant,
+    scene render, event image) phrase the weather identically instead of
+    each inventing its own sentence.
+    """
+    if not outdoor:
+        return ""
+    from app.core.timeutils import game_time
+    now = game_time()
+    return (f"outdoor conditions: {now.day_bucket()}, "
+            f"{now.atmosphere(lang)['label']}")
+
+
 def prepend_hints(body: str, hint_block: str) -> str:
     """The hint block in front of the prompt (empty block = unchanged)."""
     if not hint_block:
@@ -270,12 +298,15 @@ def prepend_hints(body: str, hint_block: str) -> str:
 def compose(*, use_case: str, subject: str, backend: Any,
             hints: Optional[List[ShapeHint]] = None,
             negative_extra: str = "",
-            style_override: Optional[str] = None) -> Composed:
+            style_override: Optional[str] = None,
+            conditions: str = "") -> Composed:
     """Build the final prompt for one render occasion.
 
     ``backend`` supplies the family (``image_family``/``model``); ``None`` is
     allowed and resolves to the keywords family. ``style_override`` replaces
     the use case's style (the dialog hands back an edited one).
+    ``conditions`` is the open-air weather clause from
+    :func:`outdoor_conditions` — empty for every indoor render.
     """
     from app.core import config as _cfg
     from app.core.prompt_adapters import get_target_model
@@ -320,7 +351,15 @@ def compose(*, use_case: str, subject: str, backend: Any,
         if clause and clause.lower() not in body.lower():
             rendered.append(clause)
     hint_block = ", ".join(rendered)
-    prompt = prepend_hints(body, hint_block)
+    # The weather rides along with the hints — prepended, one clause, and only
+    # when the caller said this render is outdoors. It stays its OWN meta
+    # field: the LLM stage renders it as a separate template block and keys
+    # its cache on it, so a summer prompt is never reused in a blizzard.
+    conditions = (conditions or "").strip()
+    lead = ([hint_block] if hint_block else []) + (
+        [conditions] if conditions and conditions.lower() not in body.lower()
+        else [])
+    prompt = prepend_hints(body, ", ".join(lead))
 
     negative = merge_tags(ucp.get("prompt_negative", ""),
                           ", ".join(moved), negative_extra)
@@ -334,6 +373,7 @@ def compose(*, use_case: str, subject: str, backend: Any,
             "family": family,
             "style_had_slot": bool(slots),
             "hint_rendered": hint_block,
+            "conditions": conditions,
             "negations_moved": moved,
         },
     )

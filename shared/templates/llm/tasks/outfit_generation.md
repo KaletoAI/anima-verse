@@ -5,7 +5,8 @@ placeholders:
   character_name: Character name
   personality: Character personality (or "(not specified)")
   appearance: Character appearance (or "(not specified)")
-  context_block: Pre-formatted context (location, activity, mood, weather, etc.)
+  context_block: Pre-formatted context (location, activity, mood, style,
+    decency, season and weather — the world-calendar atmosphere lands here)
   hint_block: Optional pre-formatted "User hint: ..." line — empty if none
   existing_block: Pre-formatted existing wardrobe pieces with [EQUIPPED] markers
   type_hint: Pre-formatted style guidance (room style_hint + character decency_preference)

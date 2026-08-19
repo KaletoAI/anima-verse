@@ -104,6 +104,7 @@ THOUGHT_CTX = {
     "feeling": "Neutral",
     "time_of_day": "14:20",
     "game_date": "Summer, day 17 · Year 3",
+    "game_weather": "freezing, snow — often fog in the morning",
     "inbox_block": "",
     "events_block": "- A cart lost a wheel by the well.",
     "assignments_block": "",

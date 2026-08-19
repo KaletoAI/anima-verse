@@ -24,6 +24,9 @@ placeholders:
   style: The use case's style frame (may be prose or comma tags)
   subject: The subject text as stored, any language
   family: "natural" (prose) or "keywords" (comma-separated tags)
+  is_outdoor: True when this render is an OPEN-AIR scene
+  conditions: Outdoor weather + time of day from the world calendar
+    ("outdoor conditions: morning, freezing, snow"); empty when indoors
 ---
 ## system
 You compose image-generation prompts. From a STYLE FRAME, a SUBJECT (any language) and STRUCTURAL HINTS you write ONE coherent English prompt.
@@ -46,6 +49,9 @@ STRUCTURAL HINTS: {{ hints }}
 STYLE FRAME: {{ style }}
 
 SUBJECT: {{ subject }}
+{% if is_outdoor %}
+OUTDOOR CONDITIONS: {{ conditions }} — this scene is open-air, so let the weather and the time of day show in the light, the sky and the ground. Never contradict them and never place them indoors.
+{% endif %}
 
 {% if family == 'keywords' %}
 Write comma-separated tags, not prose.

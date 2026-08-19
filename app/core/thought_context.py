@@ -109,6 +109,11 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # In-world calendar date ("Summer, day 17 · Year 3") — the character
         # knows the season and the day, never a real-world date.
         "game_date": now_game.date_label(lang),
+        # What the world FEELS like right now — the season's atmosphere as
+        # one line ("freezing, snow — often fog in the morning"). Soft prompt
+        # info with no code effect: it colors what the character notices and
+        # what it decides to wear, nothing enforces it.
+        "game_weather": now_game.atmosphere(lang)["label"],
         # Defaults for optional blocks — keep them present so StrictUndefined
         # doesn't raise on missing keys.
         "inbox_block": _build_inbox_block(character_name),

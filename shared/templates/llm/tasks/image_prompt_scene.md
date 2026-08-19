@@ -8,6 +8,8 @@ placeholders:
   identity_context: Optional pronoun-mapping line(s) — empty if no agent/user
   scene_text: The narrative text (becomes user prompt body)
   setting_block: Optional setting context block — empty if none
+  outdoor_conditions: World-calendar weather + time of day for an OPEN-AIR
+    scene ("outdoor conditions: morning, freezing, snow"); empty indoors
   characters_present_block: Optional "Characters present: A, B" line — empty if none
 ---
 ## system
@@ -19,6 +21,9 @@ Scene:
 {{ scene_text }}
 {% if setting_block %}
 {{ setting_block }}
+{% endif %}
+{% if outdoor_conditions %}
+{{ outdoor_conditions }} — this scene is open-air, so let the weather and the time of day show in the lighting and atmosphere you describe.
 {% endif %}
 {% if characters_present_block %}
 {{ characters_present_block }}

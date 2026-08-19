@@ -521,6 +521,9 @@ def _generate_event(loc_id: str,
     # In-world calendar date — the season name is a localized data field, so
     # it follows the same language as the rest of this prompt.
     game_date = _now.date_label(_lang)
+    # The season's atmosphere as one line — an event that fits the weather
+    # ("the wind tears at the awning") beats a generic one.
+    game_weather = _now.atmosphere(_lang)["label"]
 
     # Indoor/outdoor setting of the location as a prompt hint (empty if unset).
     indoor_flag = (location.get("indoor") or "").strip().lower()
@@ -543,6 +546,7 @@ def _generate_event(loc_id: str,
         current_time=current_time,
         time_of_day=time_desc,
         game_date=game_date,
+        game_weather=game_weather,
         location_description=loc_desc,
         setting_block=setting_block,
         rooms_block=f"Rooms: {', '.join(rooms[:6])}" if rooms else "",

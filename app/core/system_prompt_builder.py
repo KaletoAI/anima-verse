@@ -94,6 +94,10 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     data["time_of_day"] = _now_game.time_hhmm()          # game clock, HH:MM
     # In-world calendar date ("Summer, day 17 · Year 3"), never a real date.
     data["game_date"] = _now_game.date_label(_lang)
+    # The season's atmosphere as one line ("freezing, snow — often fog in the
+    # morning"). Prompt info only: it colors perception and dressing choices,
+    # no rule reads it.
+    data["game_weather"] = _now_game.atmosphere(_lang)["label"]
 
     if PRESENCE in sections:
         presence_lines, elsewhere_lines, anyone_nearby = _load_presence(

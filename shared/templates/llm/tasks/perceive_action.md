@@ -13,7 +13,7 @@
 
    Required vars (build_thought_context):
      character_name, personality, location_name, activity, feeling,
-     time_of_day, game_date
+     time_of_day, game_date, game_weather
    Required vars (act_engine perception_vars):
      action_actor, action_narration, action_scope ("here" | "location")
 
@@ -42,6 +42,7 @@ Current situation:
 - Mood: {{ feeling }}
 - Time: {{ time_of_day }}
 - Date: {{ game_date }}
+- Weather: {{ game_weather }}
 {% if present_people_block %}
 - In this room with you: {{ present_people_block }}
 {% endif %}

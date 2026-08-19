@@ -483,7 +483,8 @@ class ThoughtRunner:
                 f"Character: {character_name}.\n"
                 f"Aufgabe: {_td.get('task', '')}\n"
                 f"Uhrzeit: {_td.get('time_of_day', '')} "
-                f"({_td.get('game_date', '')})."
+                f"({_td.get('game_date', '')}).\n"
+                f"Wetter: {_td.get('game_weather', '')}"
             )
             # Prio 2: Tool-Instruktionen (immer)
             _ctx_parts.append(tool_instr_block)

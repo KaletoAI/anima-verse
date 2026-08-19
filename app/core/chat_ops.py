@@ -325,6 +325,24 @@ async def visualize_core(request) -> Dict[str, Any]:
 
     setting_context = "Setting: " + ", ".join(scene_parts) if scene_parts else ""
 
+    # Open-air scene → the world calendar's weather and time of day reach the
+    # prompt. An interior gets nothing: the weather is outside the window.
+    outdoor_conditions = ""
+    try:
+        from app.core.prompt_compose import outdoor_conditions as _conditions
+        from app.models.character import get_character_current_room
+        from app.models.world import (get_location_by_id, get_room_by_id,
+                                      resolve_indoor_flag)
+        _loc_id = get_character_current_location(agent_name) or ""
+        if _loc_id:
+            _loc_obj = get_location_by_id(_loc_id) or {}
+            _room_id = get_character_current_room(agent_name) or ""
+            _room_obj = get_room_by_id(_loc_obj, _room_id) if _room_id else None
+            outdoor_conditions = _conditions(
+                resolve_indoor_flag(_loc_obj, _room_obj) == "outdoor")
+    except Exception as e:
+        logger.debug("Outdoor conditions lookup failed: %s", e)
+
     # 3. Determine backend-specific prompt instructions (image family from
     #    the backend the spec resolves to).
     workflow_instruction = ""
@@ -349,7 +367,7 @@ async def visualize_core(request) -> Dict[str, Any]:
     image_prompt = await asyncio.to_thread(
         _generate_image_prompt, text, llm_appearances,
         setting_context, agent_config, workflow_image_model, workflow_instruction,
-        is_photographer)
+        is_photographer, outdoor_conditions)
     if not image_prompt:
         logger.error("Image-Prompt leer")
         return {"error": "Failed to generate image prompt"}

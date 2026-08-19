@@ -268,6 +268,9 @@ async def _run_storyteller_agent(
     current_time = _now.time_hhmm()
     time_of_day = _now.day_bucket()
     game_date = _now.date_label(_lang)
+    # The season's atmosphere as one line — the storyteller narrates the same
+    # weather the characters feel.
+    game_weather = _now.atmosphere(_lang)["label"]
 
     # ── Render the template ────────────────────────────────────────────
     sys_prompt, user_prompt = render_task(
@@ -282,6 +285,7 @@ async def _run_storyteller_agent(
         current_time=current_time,
         time_of_day=time_of_day,
         game_date=game_date,
+        game_weather=game_weather,
         setting_block=setting_block,
         active_events_block=active_events_block,
         present_people_block=present_people_block,

@@ -209,8 +209,14 @@ def _generate_image_prompt(
     setting_context: str = "",
     agent_config: Dict[str, Any] = None, image_model: str = "",
     prompt_instruction: str = "",
-    photographer_mode: bool = False) -> str:
-    """Generiert einen Image-Prompt via Router (Task: image_prompt)."""
+    photographer_mode: bool = False,
+    outdoor_conditions: str = "") -> str:
+    """Generate an image prompt via the router (task: image_prompt).
+
+    ``outdoor_conditions`` is the world calendar's weather + time of day for
+    an OPEN-AIR scene (``prompt_compose.outdoor_conditions``); it stays empty
+    indoors and for story renders, which play in their own setting.
+    """
     # Character-Kontext fuer Pronomen-Aufloesung
     _agent_name = (agent_config or {}).get("name", "")
     _user_name = ""
@@ -266,6 +272,7 @@ def _generate_image_prompt(
             identity_context=identity_context,
             scene_text=text,
             setting_block=setting_context,
+            outdoor_conditions=outdoor_conditions,
             characters_present_block=characters_present_block)
 
         response = llm_call(
@@ -2306,7 +2313,8 @@ def _build_full_system_prompt(character_name: str,
     _now_game = game_time()
     _date_lang = _get_lang(character_name) or "de"
     time_line = (f"Current time: {_now_game.time_hhmm()} — "
-                 f"{_now_game.date_label(_date_lang)}")
+                 f"{_now_game.date_label(_date_lang)}\n"
+                 f"Weather: {_now_game.atmosphere(_date_lang)['label']}")
     situation_parts = [time_line]
 
     if _has("locations_enabled") and current_location:

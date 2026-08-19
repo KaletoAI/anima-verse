@@ -37,6 +37,47 @@ from app.models.world import get_location
 logger = get_logger("outfit_creation")
 
 
+def build_context_block(*, location_label: str = "", location_desc: str = "",
+                        activity: str = "", feeling: str = "",
+                        style_hint: str = "", decency: str = "",
+                        lang: str = "en") -> str:
+    """The ``context_block`` of ``tasks/outfit_generation.md``.
+
+    Everything the dressing LLM knows about the situation, one fact per line.
+    The last two come from the world calendar: the template has always told
+    the model to add outerwear "when context (weather/activity) fits" —
+    without ever saying what the weather IS. Season and atmosphere are pure
+    prompt info, nothing in the code checks the resulting outfit against
+    them. Localized like every other prompt line the character sees: season
+    names are localized data fields, the atmosphere levels go through
+    ``t(en, lang)``.
+
+    Pulled out of ``execute()`` so it can be rendered without a world
+    (``scripts/smoke_game_weather_prompts.py``).
+    """
+    from app.core.timeutils import game_time
+
+    lines: List[str] = []
+    if location_label:
+        lines.append(f"Location: {location_label}"
+                     + (f" ({location_desc})" if location_desc else ""))
+    if activity:
+        lines.append(f"Activity: {activity}")
+    if feeling:
+        lines.append(f"Mood: {feeling}")
+    if style_hint:
+        lines.append(f"Style: {style_hint}")
+    if decency:
+        lines.append(f"Decency: {decency}")
+
+    now = game_time()
+    season = now.season_name(lang)
+    if season:
+        lines.append(f"Season: {season}")
+    lines.append(f"Weather: {now.atmosphere(lang)['label']}")
+    return "\n".join(lines) or "(no specific context)"
+
+
 def _ensure_outfit_types(raw: Any, piece_name: str) -> List[str]:
     """The piece's tags, guaranteed non-empty.
 
@@ -469,22 +510,11 @@ class OutfitCreationSkill(BaseSkill):
                 loc = get_location(loc_id) or {}
                 location_label = loc.get("name") or loc_id
                 location_desc = loc.get("description", "")
-            activity_desc = ""
-
-            ctx_lines = []
-            if location_label:
-                ctx_lines.append(f"Location: {location_label}"
-                                 + (f" ({location_desc})" if location_desc else ""))
-            if activity:
-                ctx_lines.append(f"Activity: {activity}"
-                                 + (f" ({activity_desc})" if activity_desc else ""))
-            if feeling:
-                ctx_lines.append(f"Mood: {feeling}")
-            if style_hint:
-                ctx_lines.append(f"Style: {style_hint}")
-            if decency:
-                ctx_lines.append(f"Decency: {decency}")
-            context_block = "\n".join(ctx_lines) or "(no specific context)"
+            from app.models.character import get_character_language as _gcl
+            context_block = build_context_block(
+                location_label=location_label, location_desc=location_desc,
+                activity=activity, feeling=feeling, style_hint=style_hint,
+                decency=decency, lang=_gcl(character_name) or "en")
 
             # Wieviele Pieces darf der LLM heute noch erzeugen?
             max_pieces = min(remaining_today, 6)  # ein Outfit hat selten > 6 Teile
