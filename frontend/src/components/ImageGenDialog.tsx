@@ -687,7 +687,7 @@ export function ImageGenDialog({
                     >
                       {composing ? '…' : `✨ ${t('Compose with AI')}`}
                     </button>
-                    {composeLlm.llm && composeLlm.cached ? (
+                    {composeLlm.llm ? (
                       <button
                         type="button"
                         className="ga-btn ga-btn-sm"
