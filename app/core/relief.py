@@ -163,8 +163,8 @@ def _fingerprint(map3d: Dict[str, Any], rooms: List[Dict[str, Any]],
     """Everything the height field is built from, hashed.
 
     ``scene_recipe.layout_signature`` is the shared part — the ``map3d`` blob
-    (relief seed/amplitude/wave, ``area_detail``, ``tile_rotation``, the scale
-    anchor) plus every room layout (the flat hulls); it is the same signature
+    (relief seed/amplitude/wave, ``area_detail``, the drawn boundary, the
+    scale anchor) plus every room layout (the flat hulls); it is the same signature
     the worldmap payload ships as ``layout_sig``, so there is ONE answer to
     "what shapes this scene". The clone VARIANT is added on top and is exactly
     why the payload's own ``layout_sig`` cannot be reused as it stands: it does
@@ -177,12 +177,10 @@ def _fingerprint(map3d: Dict[str, Any], rooms: List[Dict[str, Any]],
 
 def _terrain_of(loc: Dict[str, Any], width_m: float
                 ) -> Optional[List[List[float]]]:
-    """The location's height field as the CLIENT gets it (tile rotation
-    applied), or ``None`` when the location has no relief."""
+    """The location's height field as the CLIENT gets it, or ``None`` when
+    the location has no relief."""
     from app.core.room_recipe import compose_recipe
-    from app.core.scene_recipe import (compose_terrain, derive_scalars,
-                                       rotate_terrain_grid,
-                                       tile_rotation_steps)
+    from app.core.scene_recipe import compose_terrain, derive_scalars
     map3d = loc.get("map3d") or {}
     if not isinstance(map3d.get("relief"), dict) or not map3d.get("area_detail"):
         return None
@@ -203,12 +201,10 @@ def _terrain_of(loc: Dict[str, Any], width_m: float
     terrain, _relief_rooms = compose_terrain(map3d, recipes, extent, variant)
     if not terrain:
         return None
-    # ``tile_rotation`` is applied to the FINISHED payload, so the grid the
-    # renderers hold is the rotated one — the gate has to judge that field,
-    # not the template's. WHICH rotations count is one decision and lives in
-    # one place (``tile_rotation_steps``), never a second copy of the
-    # ``in (90, 180, 270)`` question that could answer differently.
-    grid = rotate_terrain_grid(terrain["grid"], tile_rotation_steps(map3d))
+    # The field the renderers hold IS this one: since v6 (Nr. 4) nothing turns
+    # the finished payload any anymore — a location faces the way its pin says
+    # (§ A1.1), so the gate and the picture read the very same grid.
+    grid = terrain["grid"]
     if key:
         _grid_cache[key] = (fp, grid, width_m)
     return grid

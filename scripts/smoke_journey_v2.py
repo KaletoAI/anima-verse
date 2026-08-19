@@ -13,15 +13,14 @@ Rules every expectation below is derived from BY HAND:
     on read, and ``movement_target`` is cleared with it — no migration.
   * ``journey_state`` is a pure function of the game clock: the position is
     the linear interpolation inside the segment the elapsed time falls in.
-  * An opening's world point: the location square has edge
-    ``map3d.plan_width_m`` around (``pos_x``, ``pos_z``), turned by
-    ``yaw_deg``. In the LOCAL frame (x east, z south before the turn) the
-    N edge is z = −w/2, S is z = +w/2, W is x = −w/2, E is x = +w/2, and
-    ``at`` runs left→right on N/S and top→bottom on E/W, i.e. the free
-    coordinate is ``(at − 0.5)·w``. ``map3d.tile_rotation`` turns the
-    stored opening into the location frame first (N→E→S→W, with
-    ``at → 1 − at`` on the E/W steps), ``yaw_deg`` then maps local→world
-    per § A1.1: ``x = cx + lx·cos(yaw) + lz·sin(yaw)``,
+  * An opening's world point: the opening names a boundary EDGE INDEX and a
+    fraction along it (contract v6 Nr. 5). Without a drawn boundary the
+    effective one is the square of edge ``map3d.plan_width_m`` around
+    (``pos_x``, ``pos_z``): local corners (−w/2,−w/2) (w/2,−w/2) (w/2,w/2)
+    (−w/2,w/2), so edge 0 runs west→east along the north side, 1
+    north→south on the east, 2 east→west on the south and 3 south→north on
+    the west. ``yaw_deg`` then maps local→world per § A1.1:
+    ``x = cx + lx·cos(yaw) + lz·sin(yaw)``,
     ``z = cz − lx·sin(yaw) + lz·cos(yaw)``.
 
 Hand-derived expectations:
@@ -58,19 +57,21 @@ Hand-derived expectations:
       ``movement_target`` → ``get_journey`` is None, ``movement_target``
       is empty afterwards and the journey dict is gone from the profile.
 
-  [4] ``opening_world_point`` at a location (50, 50), plan_width_m 10:
-        yaw 0,  N at 0.5 → local (0, −5)     → (50.0, 45.0)
-        yaw 0,  N at 0.2 → local (−3, −5)    → (47.0, 45.0)
-        yaw 0,  E at 0.5 → local (5, 0)      → (55.0, 50.0)
-        yaw 0,  S at 0.5 → local (0, 5)      → (50.0, 55.0)
-        yaw 90, N at 0.5 → x = 50 + 0·cos90 + (−5)·sin90 = 45,
+  [4] ``opening_world_point`` at a location (50, 50), plan_width_m 10.
+      Without a drawn boundary the effective one is the reference square
+      (−5,−5) (5,−5) (5,5) (−5,5), so edge 0 is the north side (west→east),
+      1 the east (north→south), 2 the south (east→west), 3 the west
+      (south→north) — contract v6 Nr. 5:
+        yaw 0,  edge 0 at 0.5 → local (0, −5)  → (50.0, 45.0)
+        yaw 0,  edge 0 at 0.2 → local (−3, −5) → (47.0, 45.0)
+        yaw 0,  edge 1 at 0.5 → local (5, 0)   → (55.0, 50.0)
+        yaw 0,  edge 2 at 0.5 → local (0, 5)   → (50.0, 55.0)
+        yaw 90, edge 0 at 0.5 → x = 50 + 0·cos90 + (−5)·sin90 = 45,
                            z = 50 − 0·sin90 + (−5)·cos90 = 50 → (45.0, 50.0)
-        yaw 180, N at 0.5 → (50.0, 55.0)
-        tile_rotation 90 turns a stored N at 0.2 into E at 0.2
-        (no flip on the N step) → local (5, −3) → (55.0, 47.0), and the
-        location then has NO opening on N any more.
-        An edge without an opening → None; an unplaced location → None;
-        a location without a scale anchor → None.
+        yaw 180, edge 0 at 0.5 → (50.0, 55.0)
+        An edge without an opening → None; an index the boundary does not
+        have → None; an unplaced location → None; a location without a
+        scale anchor → None.
 
   [5] Gates of ``start_journey`` (character "demo_npc" at HOME):
         unknown id                        → (None, 'unknown_target')
@@ -82,8 +83,9 @@ Hand-derived expectations:
       IN the target would be answered by the same-target early return and
       would never reach the router at all.
 
-  [6] The journey itself. HOME at (0,0) w 10 (opening S at 0.5 → (0,5)),
-      MARKET at (100,0) w 10 (opening W at 0.5 → (95,0)), all grass,
+  [6] The journey itself. HOME at (0,0) w 10 (opening on edge 2 = south at
+      0.5 → (0,5)), MARKET at (100,0) w 10 (edge 3 = west at 0.5 → (95,0)),
+      all grass,
       speed 1.4 m/s:
         waypoints[0] = [0, 0, 0.0]        (the character's real position)
         waypoints[1] = [0, 5, …]          (leaves through its OWN opening)
@@ -94,8 +96,8 @@ Hand-derived expectations:
         the start point with progress_m 0.
       ``movement_target`` is the target, the entry-room pre-set is GONE
       (the character stays in the room it was in) and the stored dict has
-      exactly the five v2 keys — the fifth is ``entry_edge``, the WORLD edge
-      of the opening the route aims at ("W" here), which the ARRIVAL needs to
+      exactly the five v2 keys — the fifth is ``entry_edge``, the boundary
+      EDGE INDEX the route aims at (3 here), which the ARRIVAL needs to
       pick the room that opening links to (E3 Task 3).
       A character standing in the WILDERNESS (no location) starts at its
       own position — its first waypoint is that point, and no opening of
@@ -194,13 +196,11 @@ def state_at(waypoints, seconds):
         waypoints, START, START_GT + GameDuration.of(seconds=seconds))
 
 
-def loc_dict(cx, cz, width, yaw=0.0, openings=None, tile_rotation=0):
+def loc_dict(cx, cz, width, yaw=0.0, openings=None):
     """A minimal location dict — opening_world_point is a PURE function."""
     map3d = {"plan_width_m": width}
     if openings is not None:
         map3d["boundary_openings"] = openings
-    if tile_rotation:
-        map3d["tile_rotation"] = tile_rotation
     return {"id": "lit", "pos_x": cx, "pos_z": cz, "yaw_deg": yaw,
             "map3d": map3d}
 
@@ -291,49 +291,47 @@ check("journey dict removed from the profile",
 
 # ── [4] opening world points ────────────────────────────────────────────
 print("[4] opening_world_point — hand-derived")
-N_MID = [{"edge": "N", "at": 0.5, "width_m": 4.0}]
-check("yaw 0, N mid", opening_world_point(loc_dict(50, 50, 10, 0, N_MID), "N"),
+N_MID = [{"edge": 0, "at": 0.5, "width_m": 4.0}]
+check("yaw 0, edge 0 mid", opening_world_point(loc_dict(50, 50, 10, 0, N_MID), 0),
       (50.0, 45.0))
-check("yaw 0, N at 0.2",
+check("yaw 0, edge 0 at 0.2",
       opening_world_point(loc_dict(50, 50, 10, 0,
-                                   [{"edge": "N", "at": 0.2}]), "N"),
+                                   [{"edge": 0, "at": 0.2}]), 0),
       (47.0, 45.0))
-check("yaw 0, E mid",
+check("yaw 0, edge 1 mid",
       opening_world_point(loc_dict(50, 50, 10, 0,
-                                   [{"edge": "E", "at": 0.5}]), "E"),
+                                   [{"edge": 1, "at": 0.5}]), 1),
       (55.0, 50.0))
-check("yaw 0, S mid",
+check("yaw 0, edge 2 mid",
       opening_world_point(loc_dict(50, 50, 10, 0,
-                                   [{"edge": "S", "at": 0.5}]), "S"),
+                                   [{"edge": 2, "at": 0.5}]), 2),
       (50.0, 55.0))
-check("yaw 90, N mid", opening_world_point(loc_dict(50, 50, 10, 90, N_MID),
-                                           "N"), (45.0, 50.0))
-check("yaw 180, N mid", opening_world_point(loc_dict(50, 50, 10, 180, N_MID),
-                                            "N"), (50.0, 55.0))
-rot = loc_dict(50, 50, 10, 0, [{"edge": "N", "at": 0.2}], tile_rotation=90)
-check("tile_rotation 90: stored N at 0.2 becomes E at 0.2",
-      opening_world_point(rot, "E"), (55.0, 47.0))
-check("… and N carries no opening any more",
-      opening_world_point(rot, "N"), None)
+check("yaw 90, edge 0 mid", opening_world_point(loc_dict(50, 50, 10, 90, N_MID),
+                                                0), (45.0, 50.0))
+check("yaw 180, edge 0 mid", opening_world_point(loc_dict(50, 50, 10, 180, N_MID),
+                                                 0), (50.0, 55.0))
 check("an edge without an opening",
-      opening_world_point(loc_dict(50, 50, 10, 0, N_MID), "S"), None)
+      opening_world_point(loc_dict(50, 50, 10, 0, N_MID), 2), None)
+check("an index the square does not have",
+      opening_world_point(loc_dict(50, 50, 10, 0,
+                                   [{"edge": 7, "at": 0.5}]), 7), None)
 check("an unplaced location",
       opening_world_point({"map3d": {"plan_width_m": 10,
-                                     "boundary_openings": N_MID}}, "N"), None)
+                                     "boundary_openings": N_MID}}, 0), None)
 check("a location without a scale anchor",
       opening_world_point({"pos_x": 50, "pos_z": 50,
-                           "map3d": {"boundary_openings": N_MID}}, "N"), None)
+                           "map3d": {"boundary_openings": N_MID}}, 0), None)
 
 # ── seed for [5]/[6] ────────────────────────────────────────────────────
 HOME = add_location(name="Smoke Home", description="journey v2 smoke")["id"]
 update_location_position(HOME, 0.0, 0.0)
 set_map3d(HOME, plan_width_m=10.0,
-          boundary_openings=[{"edge": "S", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 2, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 MARKET = add_location(name="Smoke Market", description="journey v2 smoke")["id"]
 update_location_position(MARKET, 100.0, 0.0)
 set_map3d(MARKET, plan_width_m=10.0,
-          boundary_openings=[{"edge": "W", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 SECRET = add_location(name="Smoke Secret", description="unknown to the npc")["id"]
 update_location_position(SECRET, 0.0, 100.0)
@@ -366,8 +364,8 @@ if isinstance(journey, dict):
           sorted(["target", "waypoints", "started_at_game", "speed_m_s",
                   "entry_edge"]))
     check("target", journey["target"], MARKET)
-    check("entry_edge is the aimed-at opening (MARKET's W gate)",
-          journey["entry_edge"], "W")
+    check("entry_edge is the aimed-at opening (MARKET's west gate = 3)",
+          journey["entry_edge"], 3)
     approx("speed_m_s", journey["speed_m_s"], 1.4)
     wps = journey["waypoints"]
     check("first waypoint is the real position",

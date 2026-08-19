@@ -135,7 +135,7 @@ export function PlanToolbar({
             icon="⇥"
             active={mode === 'boundary-door'}
             onClick={() => onMode('boundary-door')}
-            title={t('Entry/exit at the location edge — click near the plan border; a road crossing the cell gets one on each side. Edit width and linked room below the plan.')}
+            title={t('Entry/exit at the location edge — click near a boundary edge; a road crossing the cell gets one on each side. Edit edge, width and linked room below the plan.')}
           />
         </>
       ) : null}

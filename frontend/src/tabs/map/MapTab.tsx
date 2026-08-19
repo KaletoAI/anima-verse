@@ -830,6 +830,27 @@ export function MapTab() {
     return () => { alive = false; clearTimeout(tid) }
   }, [selProblemKey])
 
+  /**
+   * The findings actually shown: the scene's, UNION the ones the listing
+   * already carries.
+   *
+   * A bare location — a pin with an outline, no room layout, no building
+   * model — composes no scene at all, so the request above answers 404 and
+   * the crossing outline somebody just drew would go unreported. The
+   * locations payload states the same kinds in `boundary_problems`, and this
+   * merges the two by kind, so neither source can produce a duplicate banner.
+   */
+  const shownProblems = useMemo<SceneProblem[]>(() => {
+    const out = [...selProblems]
+    const seen = new Set(out.map((p) => p.kind))
+    for (const kind of selected?.boundary_problems || []) {
+      if (!BOUNDARY_PROBLEM_KINDS.has(kind) || seen.has(kind)) continue
+      seen.add(kind)
+      out.push({ kind, message: kind })
+    }
+    return out
+  }, [selProblems, selected])
+
   /** A finding in the user's words. The two boundary kinds get their own
    *  sentence; anything else falls back to the server's English wording, the
    *  way the floor-plan editor does it. */
@@ -2411,7 +2432,7 @@ export function MapTab() {
                   Nr. 9). Warnings, never refusals: a crossing outline and a
                   room hanging over the edge are both things the author has to
                   see, and neither stops anything from being saved. */}
-              {selProblems.map((p, i) => (
+              {shownProblems.map((p, i) => (
                 <div key={`${p.kind}-${i}`} className="ga-anchor-banner">
                   <span>⚠ {problemText(p)}</span>
                 </div>

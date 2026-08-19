@@ -17,6 +17,9 @@ What the composer emits (world coordinates throughout, ORIGIN = the tile
 centre of the location, i.e. of its reference square — the consumer places
 the scene at the location's map point):
 
+- ``boundary`` — the location's footprint as a polygon in the scene frame
+                (contract v6: drawn outline, or the reference square as its
+                four corners),
 - ``plates``  — one contour plate per used level plus one floor plate per room,
 - ``walls``   — the building contour with its door gaps and the room shell
                 walls already split around every opening (window = sill +
@@ -264,6 +267,38 @@ def _outline_world(map3d: Dict[str, Any], extent: float) -> List[List[float]]:
     return out
 
 
+def _drawn_boundary(map3d: Dict[str, Any]) -> List[List[float]]:
+    """``map3d.boundary`` as local metres, or [] when none is DRAWN.
+
+    The scene frame IS the location's local frame (origin = the anchor pin),
+    which is the frame the boundary is authored in — so this is a parse, not
+    a transform. The winding and the point cap are the sanitizer's job
+    (``world_ops._sanitize_map3d``); here a malformed outline simply is not
+    one.
+    """
+    from app.core.world_geometry import polygon_points
+    pts = polygon_points((map3d or {}).get("boundary"))
+    return [] if pts is None else [[_r(x), _r(z)] for x, z in pts]
+
+
+def _boundary_local(map3d: Dict[str, Any], extent: float) -> List[List[float]]:
+    """The location's EFFECTIVE boundary in local metres — polygon always
+    (contract v6 Nr. 1: "a square is only the special case of the polygon").
+
+    The drawn ``map3d.boundary`` where there is one, otherwise the reference
+    square as its four corners, clockwise in map view. It mirrors
+    ``world_geometry.effective_boundary`` — deliberately WITHOUT its
+    placement requirement, because a scene composes for an unplaced template
+    too (draft preview, § B3): the square there has no pin to sit on and the
+    scene frame is the pin.
+    """
+    drawn = _drawn_boundary(map3d)
+    if drawn:
+        return drawn
+    half = _r(extent / 2.0)
+    return [[-half, -half], [half, -half], [half, half], [-half, half]]
+
+
 def _point_in_polygon(x: float, z: float, poly: List[List[float]]) -> bool:
     """Parity (ray-casting) test in the XZ plane — the same rule the renderers'
     clip shader applies per fragment, so "inside" means the same thing on both
@@ -384,9 +419,18 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     (v5.2 Nr. 14): their plate gets ``relief: true``, which is the renderers'
     ONLY instruction to subdivide it and raise its vertices. Level plates and
     every other room plate stay exactly as flat as before.
+
+    WHAT THE LEVEL PLATE IS SHAPED LIKE (contract v6 Nr. 4): the drawn
+    location boundary — the plate is the triangulated boundary polygon, not a
+    square any more. A drawn BUILDING contour (``map3d.outline``) still wins
+    where there is one: it is the more specific shape, the floor plan of the
+    house inside the plot, and the walls are built along it. A location with
+    neither gets no level plate at all, exactly as before — the synthesized
+    reference square is a transition crutch for the payload's ``boundary``
+    field, never a floor somebody drew.
     """
     plates: List[Dict[str, Any]] = []
-    contour = _outline_world(map3d, extent)
+    contour = _outline_world(map3d, extent) or _drawn_boundary(map3d)
     level_floors = (map3d or {}).get("level_floors") or {}
     ground = min(levels)
     if contour:
@@ -1640,61 +1684,50 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
 
 # ── Composer ────────────────────────────────────────────────────────────
 
-# The four boundary edges of the reference square: fraction point on the
-# edge for a given ``at`` (room-opening letter convention — left→right on
-# N/S, top→bottom on E/W) and the INWARD normal in world axes (x east,
-# z south).
-_BOUNDARY_EDGES: Dict[str, Any] = {
-    "N": (lambda at: (at, 0.0), [0, 1]),
-    "E": (lambda at: (1.0, at), [-1, 0]),
-    "S": (lambda at: (at, 1.0), [0, -1]),
-    "W": (lambda at: (0.0, at), [1, 0]),
-}
-
-
 def _boundary_openings(map3d: Dict[str, Any],
                        extent: float) -> List[Dict[str, Any]]:
     """Location-edge pass-throughs (plan-area-detail-scenes.md) in world
     metres — where a road enters and leaves the cell.
 
     Geometry plus the room link, and both are read: the 3D client offers
-    "enter" at an opening of the edge a step would cross and walks the figure
-    in through it (``main.ts``), while the server decides entry and departure
-    on the same data (``boundary_entry``). Still open is the journey
-    walk-through — an opening pair plus the linked room's hull is a path
-    across the cell.
+    "enter" at an opening and walks the figure in through it (``main.ts``),
+    while the server decides entry and departure on the same data
+    (``boundary_entry``). Still open is the journey walk-through — an opening
+    pair plus the linked room's hull is a path across the cell.
+
+    SINCE v6 (Nr. 5) an opening sits on a POLYGON EDGE: ``edge`` is the
+    0-based index of the boundary edge (edge i = point i → i+1) and ``at``
+    runs along that edge. The letters N/E/S/W are gone with the square, and
+    with them the only place a consumer could have re-derived a point: the
+    payload carries the finished ``at_world`` and the ``inward`` normal,
+    computed by ``world_geometry.polygon_edge_frame`` — the same function the
+    entry gate reads, so picture and rule cannot drift.
     """
+    from app.core.world_geometry import polygon_edge_frame
+    boundary = _boundary_local(map3d, extent)
     out: List[Dict[str, Any]] = []
     for op in (map3d or {}).get("boundary_openings") or []:
         if not isinstance(op, dict):
-            continue
-        spec = _BOUNDARY_EDGES.get(str(op.get("edge") or "").upper())
-        if not spec:
             continue
         try:
             width_m = float(op.get("width_m") or 0)
         except (TypeError, ValueError):
             continue
-        # ``at`` degrades to the edge MIDPOINT, exactly like
-        # ``boundary_entry._rotated_openings`` — the two used to disagree
-        # (0 here, 0.5 there), so an opening without a position sat in the
-        # corner for the renderers and in the middle for the entry gate
-        # (E3 ledger; boundary_entry wins).
-        try:
-            at = float(op.get("at"))
-        except (TypeError, ValueError):
-            at = 0.5
-        if not math.isfinite(at):
-            at = 0.5
-        at = min(max(at, 0.0), 1.0)
-        point, inward = spec
-        px, py = point(at)
+        # ``at`` degrades to the edge MIDPOINT inside ``polygon_edge_frame``
+        # — ONE degradation rule for both consumers (E3 ledger: they used to
+        # disagree, 0 here and 0.5 in the entry gate, so an opening without a
+        # position sat in the corner for the renderers and in the middle for
+        # the gate).
+        frame = polygon_edge_frame(boundary, op.get("edge"), op.get("at"))
+        if frame is None:
+            continue
+        (px, pz), (nx, nz) = frame
         entry: Dict[str, Any] = {
-            "edge": str(op["edge"]).upper(),
-            "at_world": [_r(_w(px, extent)), _r(_w(py, extent))],
+            "edge": int(op["edge"]),
+            "at_world": [_r(px), _r(pz)],
             "width_m": _r(width_m, 3),
             "type": str(op.get("type") or "passage"),
-            "inward": inward,
+            "inward": [_r(nx), _r(nz)],
         }
         room = op.get("room")
         if isinstance(room, str) and room.strip():
@@ -1703,206 +1736,36 @@ def _boundary_openings(map3d: Dict[str, Any],
     return out
 
 
-# ── Tile rotation (v5.2 Nr. 15) ─────────────────────────────────────────
-
-# One clockwise 90° step, seen in PLAN VIEW (x east, z south — screen
-# top-down with y down): the letters of the four boundary edges, the side
-# words of an extras box and the ``at`` flip that keeps an opening on the
-# same physical spot. The ``at`` rule is the editor's ``rotateOpeningCW``
-# verbatim (frontend/src/tabs/world/planGeometry.ts) and follows from the
-# fraction rule alone: E at 0.3 sits at (1, 0.3) → (1 − 0.3, 1) = (0.7, 1),
-# which is S at 0.7.
-_TILE_EDGE_CW = {"N": "E", "E": "S", "S": "W", "W": "N"}
-_TILE_EDGE_FLIP = {"N": False, "E": True, "S": False, "W": True}
-_TILE_SIDE_CW = {"north": "east", "east": "south",
-                 "south": "west", "west": "north"}
 
 
-def _rotate_scene(out: Dict[str, Any], quarters: int,
-                  extent: float) -> Dict[str, Any]:
-    """Turn the FINISHED scene payload ``quarters`` × 90° clockwise about the
-    square's centre (``map3d.tile_rotation``), in place, and return it.
+def _clip_grid_to_boundary(grid: List[List[float]], map3d: Dict[str, Any],
+                           extent: float) -> None:
+    """Pin every relief support point OUTSIDE the drawn boundary to 0, in
+    place (contract v6 Nr. 4).
 
-    Why the payload and not the plan: one template location — a road running
-    east–west, a corner piece, a river bend — is cloned onto several map
-    cells, and each clone only differs in which way it faces. The floor-plan
-    editor keeps editing the ONE template in its base orientation; the server
-    turns the composed result. Both renderers stay dumb, exactly as § B5
-    demands, and nothing in the stored plan moves.
+    Point (i, j) sits at plan fraction (i/n, j/n) of the reference square, so
+    its local metre position is ``(i/n − 0.5)·extent`` — the very mapping
+    ``_w`` applies to every other fraction here. The test is the ordinary
+    ray cast (``point_in_polygon``), which answers correctly for the concave
+    outlines v6 allows.
 
-    Conventions (plan view, x east / z south, i.e. screen top-down, y down —
-    so "clockwise on screen" is what the two rules below encode):
-
-    * **World point / vector**, one step: ``(x, z) → (−z, x)``. The origin is
-      the square's centre, so the same matrix serves points and directions
-      (``outward_normal``, ``inward``) with no translation anywhere.
-    * **Plan fraction**, one step: ``(u, v) → (1 − v, u)`` — the world rule
-      carried into the unit square, whose centre is 0.5 instead of 0.
-
-    Consequences the payload has to carry along:
-
-    * ``models[].yaw_deg`` is a MODEL yaw around +y, rendered as
-      ``rotation.y = +rad(yaw)`` since E4. One clockwise step is the matrix
-      ``(x, z) → (−z, x)``, i.e. ``R_y(−90)``, and it multiplies onto the
-      model's own turn: ``R_y(−90)·R_y(yaw) = R_y(yaw − 90)`` →
-      ``(yaw + 270 · quarters) % 360``. (It read ``+90`` until the final E4
-      review: that was the compensation for the OLD ``rotation.y = −rad(yaw)``
-      and became a double turn when the four render sites were flipped.)
-    * ``markers[].facing`` (and a room marker's ``rotation``) is a COMPASS in
-      the figure convention 0 = south, 90 = east — and since E4 it grows in
-      the SAME sense as the model yaw (§ A1.8), because both go through the
-      same ``rotation.y = +rad(…)``. A clockwise scene step therefore turns a
-      south-facing figure west by the very same amount:
-      ``compass_new = (compass + 270 · quarters) % 360``.
-    * A box in ``extras`` keeps its height and swaps its w/d extents on an odd
-      number of steps; its ``side`` word rotates N→E→S→W like an edge letter.
-    * ``terrain.grid`` is resampled instead of transformed —
-      :func:`rotate_terrain_grid` holds that rule, because the walking gate
-      has to reproduce it to sample the field the client actually got.
-      ``step`` and ``amplitude_m`` are rotation-invariant.
-
-    Untouched on purpose: ``signature`` (``map3d`` is hashed whole, so
-    ``tile_rotation`` moves it by itself), ``extent_m`` / ``k`` / ``storey_m``
-    / ``levels`` / ``style`` / ``figures`` / ``outdoor_rooms`` /
-    ``area_detail`` — all rotation-invariant — and every height (``y``,
-    ``base_y``, ``top_y``, ``bottom_y``, ``y_world``), because the axis of
-    rotation IS +y.
-
-    Every transformed coordinate goes back through ``_r`` (4 places, no
-    −0.0), and every list is REBUILT rather than mutated: the composer shares
-    point lists between entries (one contour list across all level plates, one
-    normal across an edge's wall pieces, the module-level ``inward`` vectors),
-    so in-place edits would rotate some of them repeatedly.
+    Nothing happens without a DRAWN boundary: the synthesized square is the
+    grid's own frame, and its rim is pinned by ``terrain_grid`` already.
     """
-    steps = int(quarters) % 4
-    if steps == 0:
-        return out
-
-    def rot_world(x: float, z: float) -> Tuple[float, float]:
-        for _ in range(steps):
-            x, z = -z, x
-        return x, z
-
-    def rot_frac(u: float, v: float) -> Tuple[float, float]:
-        for _ in range(steps):
-            u, v = 1.0 - v, u
-        return u, v
-
-    def pt_world(p: Any) -> List[float]:
-        x, z = rot_world(_num(p[0]), _num(p[1]))
-        return [_r(x), _r(z)]
-
-    def poly_world(points: Any) -> List[List[float]]:
-        return [pt_world(p) for p in points or []
-                if isinstance(p, (list, tuple)) and len(p) >= 2]
-
-    def poly_frac(points: Any) -> List[List[float]]:
-        out_pts: List[List[float]] = []
-        for p in points or []:
-            if not isinstance(p, (list, tuple)) or len(p) < 2:
+    from app.core.world_geometry import point_in_polygon
+    boundary = _drawn_boundary(map3d)
+    if len(boundary) < 3:
+        return
+    n = len(grid) - 1
+    if n <= 0:
+        return
+    for j in range(n + 1):
+        for i in range(n + 1):
+            if grid[j][i] == 0.0:
                 continue
-            u, v = rot_frac(_num(p[0]), _num(p[1]))
-            out_pts.append([_r(u), _r(v)])
-        return out_pts
-
-    for plate in out.get("plates") or []:
-        if plate.get("outline"):
-            plate["outline"] = poly_world(plate["outline"])
-
-    for wall in out.get("walls") or []:
-        for key in ("from", "to", "outward_normal"):
-            if wall.get(key):
-                wall[key] = pt_world(wall[key])
-
-    for extra in out.get("extras") or []:
-        centre = extra.get("center")
-        if isinstance(centre, (list, tuple)) and len(centre) == 3:
-            x, z = rot_world(_num(centre[0]), _num(centre[2]))
-            extra["center"] = [_r(x), _r(_num(centre[1])), _r(z)]
-        size = extra.get("size")
-        if isinstance(size, (list, tuple)) and len(size) == 3 and steps % 2:
-            extra["size"] = [_r(_num(size[2])), _r(_num(size[1])),
-                             _r(_num(size[0]))]
-        side = extra.get("side")
-        if isinstance(side, str) and side in _TILE_SIDE_CW:
-            for _ in range(steps):
-                side = _TILE_SIDE_CW[side]
-            extra["side"] = side
-
-    for spec in out.get("models") or []:
-        if spec.get("anchor"):
-            spec["anchor"] = pt_world(spec["anchor"])
-        if spec.get("yaw_deg") is not None:
-            spec["yaw_deg"] = _r((_num(spec["yaw_deg"]) + 270 * steps) % 360, 1)
-        if spec.get("clip_outline"):
-            spec["clip_outline"] = poly_world(spec["clip_outline"])
-        if spec.get("cutouts"):
-            spec["cutouts"] = [poly_world(poly) for poly in spec["cutouts"]]
-
-    for marker in out.get("markers") or []:
-        if marker.get("at_world"):
-            marker["at_world"] = pt_world(marker["at_world"])
-        for key in ("facing", "rotation"):
-            if marker.get(key) is not None:
-                marker[key] = _r((_num(marker[key]) + 270 * steps) % 360, 1)
-
-    for door in out.get("doorways") or []:
-        # The same matrix serves both: ``at_world`` is a point around the tile
-        # centre, ``along`` a direction — and the origin IS the centre, so
-        # there is no translation to leave out. Width, foot and rooms are
-        # rotation-invariant.
-        if door.get("at_world"):
-            door["at_world"] = pt_world(door["at_world"])
-        if door.get("along"):
-            door["along"] = pt_world(door["along"])
-
-    for block in out.get("rooms") or []:
-        if block.get("outline"):
-            block["outline"] = poly_frac(block["outline"])
-        overlay = block.get("overlay")
-        if isinstance(overlay, dict):
-            if overlay.get("centre"):
-                overlay["centre"] = pt_world(overlay["centre"])
-            rect = overlay.get("rect")
-            if isinstance(rect, dict):
-                rx, rz = rot_world(_num(rect.get("x")), _num(rect.get("z")))
-                rw, rd = _num(rect.get("w")), _num(rect.get("d"))
-                if steps % 2:
-                    rw, rd = rd, rw
-                overlay["rect"] = {"x": _r(rx), "z": _r(rz),
-                                   "w": _r(rw), "d": _r(rd)}
-
-    for opening in out.get("boundary_openings") or []:
-        letter = str(opening.get("edge") or "").upper()
-        at_world = opening.get("at_world")
-        if letter not in _TILE_EDGE_CW or not at_world:
-            continue
-        # Back to the edge frame: the FREE coordinate of an edge is u on N/S
-        # and v on E/W — the other one is pinned to 0 or 1 by the edge itself.
-        u = _num(at_world[0]) / extent + 0.5
-        v = _num(at_world[1]) / extent + 0.5
-        at = u if letter in ("N", "S") else v
-        for _ in range(steps):
-            if _TILE_EDGE_FLIP[letter]:
-                at = 1.0 - at
-            letter = _TILE_EDGE_CW[letter]
-        point, _inward = _BOUNDARY_EDGES[letter]
-        px, pv = point(round(at, 6))
-        opening["edge"] = letter
-        opening["at_world"] = [_r(_w(px, extent)), _r(_w(pv, extent))]
-        inward = opening.get("inward")
-        if inward:
-            # Rotating the stored vector and looking up the new edge's own
-            # inward normal are the same thing — the vector is kept as the
-            # integer pair the contract promises.
-            ix, iz = rot_world(_num(inward[0]), _num(inward[1]))
-            opening["inward"] = [int(round(ix)), int(round(iz))]
-
-    terrain = out.get("terrain")
-    grid = (terrain or {}).get("grid") if isinstance(terrain, dict) else None
-    if grid:
-        terrain["grid"] = rotate_terrain_grid(grid, steps)
-    return out
+            if not point_in_polygon(_w(i / n, extent), _w(j / n, extent),
+                                    boundary):
+                grid[j][i] = 0.0
 
 
 def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
@@ -1929,6 +1792,16 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     digit. The recipe ``outline`` is already the tessellated hull in absolute
     plan fractions — the same points the plates use, not a second derivation.
 
+    CLIPPED AT THE BOUNDARY (contract v6 Nr. 4): the grid stays the regular
+    lattice over the reference square — that is the frame every plan fraction
+    in this payload lives in — but every support point OUTSIDE the drawn
+    boundary polygon is pinned to 0, exactly like the rim already was. The
+    decision is made HERE, server-side and deterministically, so neither
+    renderer has to know what "outside" means: they drape the field they are
+    handed. Without a drawn boundary nothing is clipped — the effective
+    boundary is then the reference square itself, and the square's rim is
+    already the pinned border.
+
     The relief only survives the sanitizer on an ``area_detail`` location; the
     gate is repeated here because a hand-posted or legacy map3d must not put a
     height field under an ordinary building either.
@@ -1954,6 +1827,7 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     cells = relief_cells(relief.get("wave_m"), extent)
     grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))), variant),
                         amplitude_world, flat_hulls, cells)
+    _clip_grid_to_boundary(grid, map3d, extent)
     # ``step`` follows the grid that was actually built, never the default —
     # otherwise the renderers subdivide with a cell size that does not exist
     # in the payload they were handed.
@@ -1964,7 +1838,7 @@ def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
 def layout_signature(map3d: Dict[str, Any],
                      rooms: List[Dict[str, Any]]) -> str:
     """Hash over everything that SHAPES a location's scene: its ``map3d``
-    (boundary openings, rotation, size, ``tile_rotation``, ``plan_width_m``,
+    (the drawn boundary, boundary openings, rotation, size, ``plan_width_m``,
     ``storey_height_m``, ``floors``, the relief dials) plus every room that has
     a layout.
 
@@ -1981,39 +1855,6 @@ def layout_signature(map3d: Dict[str, Any],
             if isinstance(r, dict) and r.get("layout")]
     return hashlib.md5(json.dumps([rows, map3d or {}], sort_keys=True,
                                   default=str).encode()).hexdigest()
-
-
-def tile_rotation_steps(map3d: Dict[str, Any]) -> int:
-    """How many 90° steps the FINISHED payload is turned by (0–3).
-
-    ONE decision, two callers: :func:`compose_scene` turns the payload with it
-    and the walking gate reproduces the same turn on the height field. Anything
-    that is not a right angle — 0, 45, an empty field, a string — is no
-    rotation at all, and ``_num`` swallows the unreadable cases rather than
-    raising on a stored blob nobody sanitized.
-    """
-    quarters = int(_num((map3d or {}).get("tile_rotation")))
-    return (quarters // 90) % 4 if quarters in (90, 180, 270) else 0
-
-
-def rotate_terrain_grid(grid: List[List[float]],
-                        steps: int) -> List[List[float]]:
-    """Turn a height field ``steps`` × 90° clockwise about the square's centre.
-
-    The field is indexed ``grid[j][i]`` at plan fraction ``(i/n, j/n)``, so a
-    rotated field must answer ``h_new(u, v) = h_old(rot⁻¹(u, v))`` with the
-    INVERSE (counter-clockwise) step ``rot⁻¹(u, v) = (v, 1 − u)``.
-    Substituting ``(u, v) = (i/n, j/n)`` gives ``(j/n, 1 − i/n)``, i.e. old
-    indices ``i_old = j`` and ``j_old = n − i`` — hence
-    ``new[j][i] = old[n−i][j]``. It is RESAMPLED, never transformed.
-
-    One rule, two callers: the payload rotation (:func:`_rotate_scene`) and
-    the walking gate, which has to sample the field the client actually got.
-    """
-    n = len(grid) - 1
-    for _ in range(int(steps) % 4):
-        grid = [[grid[n - i][j] for i in range(n + 1)] for j in range(n + 1)]
-    return grid
 
 
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
@@ -2209,6 +2050,13 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas, ground_kind),
         "rooms": room_blocks,
+        # The location's FOOTPRINT as a polygon in the scene frame (contract
+        # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,
+        # the reference square as its four corners otherwise. The scene frame
+        # IS the local frame around the anchor pin, so these are the very
+        # points the world map draws — no consumer transforms them a second
+        # time, and none of them synthesizes a square of its own any more.
+        "boundary": _boundary_local(map3d, extent),
         # extent_m = the size of the reference square: the ONE number that
         # turns every fraction in this payload into metres. Consumers must
         # read it instead of assuming a constant (they used to assume 8).
@@ -2259,11 +2107,4 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # 2026-08-02: without a model the backstop buried the zone plates).
     if map3d.get("area_model") and map3d.get("area_detail"):
         out["area_detail"] = True
-    # Tile rotation (v5.2 Nr. 15) is the LAST word: the whole finished payload
-    # turns about the square's centre, so one template location can be cloned
-    # onto several places facing different ways. Everything above composed the
-    # template in its base orientation — that is what the editor edits.
-    steps = tile_rotation_steps(map3d)
-    if steps:
-        _rotate_scene(out, steps, extent)
     return out

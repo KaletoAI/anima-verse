@@ -131,10 +131,20 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
 
     from app.core.boundary_entry import has_entrance
     from app.core.surface_textures import library_kinds, resolve_terrain_kind
+    from app.core.world_geometry import polygon_self_intersects
     known_kinds = library_kinds()
     for loc in locations:
         loc_id = loc.get("id", "")
         loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
+        # Findings about the DRAWN boundary, for the surface that draws it
+        # (contract v6 Nr. 1). The scene payload states the same thing in its
+        # ``problems[]``, but a bare location — a pin with an outline and
+        # nothing else — composes no scene at all, so the map editor would
+        # never hear about a bow tie it just drew. Only set when non-empty:
+        # an absent field is "nothing to report", one less thing to render.
+        _m3 = loc.get("map3d")
+        if isinstance(_m3, dict) and polygon_self_intersects(_m3.get("boundary")):
+            loc["boundary_problems"] = ["boundary_self_intersection"]
         # A HINT for the editor, not a reachability verdict: openings channel
         # entry (with them, they are the only ways in — decision 2026-08-04),
         # and WITHOUT any the boundary is free (E4 task 5). The rule lives in
@@ -299,8 +309,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # SHAPES THE SCENE of this location changed, so it can re-fetch
         # specifically. Room layouts alone were not enough (E5 finding B11):
         # the scene payload is shaped by ``map3d`` just as much — boundary
-        # openings drawn in the floor-plan editor, rotation, size,
-        # tile_rotation, plan_width_m, storey_height_m, floors. A gate drawn
+        # openings drawn in the floor-plan editor, rotation, size, the drawn
+        # boundary, plan_width_m, storey_height_m, floors. A gate drawn
         # into the boundary changed nothing a running client could see.
         # ``entry["map3d"]`` is the sanitized object (sanitized on save) plus
         # the derived floors — deliberately the SAME object the entry ships,
@@ -666,21 +676,10 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 out["size"] = round(s, 3)
         except (TypeError, ValueError):
             pass
-    # Tile rotation (contract v5.2 Nr. 15): 90 / 180 / 270 degrees clockwise,
-    # anything else dropped (absent = unrotated). This does NOT rotate the
-    # stored plan — it rotates the COMPOSED scene payload around the tile
-    # centre, so ONE template location (a road running east–west) can be
-    # cloned onto several map cells with each clone facing a different way.
-    # The floor-plan editor keeps editing the template in its base
-    # orientation; both renderers stay dumb.
-    trot = raw.get("tile_rotation")
-    if trot is not None and f"{trot}".strip() != "":
-        try:
-            snapped = int(round(float(trot) / 90.0)) * 90 % 360
-        except (TypeError, ValueError):
-            snapped = 0
-        if snapped in (90, 180, 270):
-            out["tile_rotation"] = snapped
+    # ``tile_rotation`` — the 90° turn of the FINISHED scene payload — is GONE
+    # with v6 (Nr. 4): a location faces the way its anchor pin says (§ A1.1),
+    # and there is no second rotation anywhere. Nothing reads the field and it
+    # is not kept here either: a location saved once drops it.
     # ``extent_m`` — the world-metre size of the reference square — is GONE
     # with E4: the reference square IS the footprint, so its edge is
     # ``plan_width_m`` and k = 1 (scene_recipe.derive_scalars). Nothing reads
@@ -847,18 +846,23 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             out["relief"] = entry
     # Boundary openings (plan-area-detail-scenes.md): pass-throughs at the
     # LOCATION edge (a road crossing the cell east–west = two entries).
-    # Geometry + room link only — entry_room stays the gameplay gate. The
-    # reference square is a rectangle by definition, so edges are letters,
-    # never polygon indices; ``at`` follows the room-opening convention
-    # (left→right on N/S, top→bottom on E/W). ``room`` is a format check,
-    # never an existence check (same rule as prop ids).
-    # The WIDTH lies on that edge, so the edge is its maximum: the reference
-    # square is a square, hence ``plan_width_m`` metres per side (a café in
-    # the middle of a city cell is entered along its whole edge, not through
-    # a 10 m slot). Without the anchor no edge length is known and 10 m
-    # stands in. Out of range is CLAMPED, never dropped — a saved opening
-    # that silently disappears costs the author their work.
+    # Geometry + room link only — entry_room stays the gameplay gate.
+    # SINCE v6 (Nr. 5) AN EDGE IS AN INDEX: 0-based into the location
+    # boundary (edge i = point i → i+1), with ``at`` running along that edge.
+    # The letters N/S/E/W are deleted without an alias reader — worlds are
+    # rebuilt — so an entry that still carries one is DROPPED, and so is an
+    # index the outline does not have. Both cases are logged: an opening that
+    # silently disappears costs the author their work, and the log line is
+    # what says why. ``room`` is a format check, never an existence check
+    # (same rule as prop ids).
+    # The WIDTH lies on that edge, so the location's own width is its
+    # maximum (a café in the middle of a city cell is entered along its whole
+    # edge, not through a 10 m slot). Without an anchor 10 m stands in. Out of
+    # range is CLAMPED, never dropped.
     max_width_m = float(out.get("plan_width_m") or 10.0)
+    # How many edges there are to pick from: the drawn boundary, or the four
+    # of the square it degrades to (world_geometry.effective_boundary).
+    edge_count = len(out.get("boundary") or []) or 4
     bo = raw.get("boundary_openings")
     if isinstance(bo, list):
         entries = []
@@ -866,8 +870,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             if not isinstance(op, dict):
                 continue
             edge = op.get("edge")
-            if not (isinstance(edge, str)
-                    and edge.strip().upper() in ("N", "S", "E", "W")):
+            if isinstance(edge, bool) or not isinstance(edge, int):
+                logger.info("boundary opening dropped: edge %r is no edge "
+                            "index (v6 Nr. 5)", edge)
+                continue
+            if not 0 <= edge < edge_count:
+                logger.info("boundary opening dropped: edge index %d outside "
+                            "the boundary's %d edges", edge, edge_count)
                 continue
             try:
                 at = float(op.get("at"))
@@ -875,7 +884,7 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 continue
             entry: Dict[str, Any] = {
-                "edge": edge.strip().upper(),
+                "edge": edge,
                 "at": round(min(max(at, 0.0), 1.0), 4),
                 "width_m": round(min(max(width_m, 0.5), max_width_m), 3),
                 "type": "passage",

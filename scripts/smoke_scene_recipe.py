@@ -857,8 +857,8 @@ def test_no_walls() -> None:
           f"{sc['signature'][:8]} vs {base['signature'][:8]}")
 
 
-def door_fixture(*, extra_rooms=(), a_openings=None, no_walls=False,
-                 tile_rotation=None) -> dict:
+def door_fixture(*, extra_rooms=(), a_openings=None,
+                 no_walls=False) -> dict:
     """The base fixture with room "a"'s openings (and shell) swapped out."""
     loc = fixture(extra_rooms)
     for room in loc["rooms"]:
@@ -868,8 +868,6 @@ def door_fixture(*, extra_rooms=(), a_openings=None, no_walls=False,
             room["layout"]["openings"] = a_openings
         if no_walls:
             room["layout"]["no_walls"] = True
-    if tile_rotation is not None:
-        loc["map3d"]["tile_rotation"] = tile_rotation
     return loc
 
 
@@ -1063,22 +1061,6 @@ def test_doorways() -> None:
           str(doors(door_fixture(no_walls=True))))
     check("an outdoor room has none either (no shell, no openings)",
           not [x for x in ds if "garden" in x["rooms"]], str(ds))
-
-    # ── tile rotation ───────────────────────────────────────────────────
-    # One CW step is (x, z) → (−z, x) for a point AND for a direction:
-    # at_world (−2, −1) → (1, −2), along (−1, 0) → (0, −1). Width, foot and
-    # rooms are rotation-invariant.
-    turned = doors(door_fixture(tile_rotation=90))
-    check("tile_rotation turns at_world with the scene",
-          len(turned) == 1 and turned[0]["at_world"] == [1.0, -2.0],
-          str(turned))
-    check("...and along with it",
-          len(turned) == 1 and turned[0]["along"] == [0.0, -1.0],
-          str(turned[0]["along"] if turned else None))
-    check("...while width, foot and rooms stay put",
-          len(turned) == 1 and near(turned[0]["width_m"], 1.0)
-          and near(turned[0]["base_y"], 0.10)
-          and turned[0]["rooms"] == ["a"], str(turned))
 
     # ── signature ───────────────────────────────────────────────────────
     # The doorways are a pure function of the openings, and those ride in the
@@ -1721,29 +1703,49 @@ def test_scatter() -> None:
 
 
 def test_boundary_openings() -> None:
-    print("\n[14] boundary openings (v5.2 Nr. 13)")
+    print("\n[14] boundary openings (v6 Nr. 5 — edge INDEX)")
+    # The fixture draws no boundary, so the effective one is the reference
+    # square (−5,−5) (5,−5) (5,5) (−5,5) — clockwise in map view, hence
+    # edge 0 = north (west→east), 1 = east (north→south), 2 = south
+    # (east→west), 3 = west (south→north).
     loc = fixture()
     loc["map3d"]["boundary_openings"] = [
-        {"edge": "E", "at": 0.3, "width_m": 3.0, "room": "room-road",
+        {"edge": 1, "at": 0.3, "width_m": 3.0, "room": "room-road",
          "type": "passage"},
-        {"edge": "N", "at": 0.5, "width_m": 2.0},
+        {"edge": 0, "at": 0.5, "width_m": 2.0},
     ]
     sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
     bo = sc.get("boundary_openings") or []
     check("two entries", len(bo) == 2, str(len(bo)))
-    # E edge, at 0.3: point (1.0, 0.3) → world ((1−0.5)·10, (0.3−0.5)·10)
-    # = (5.0, −2.0); inward = −x.
-    check("E/at 0.3 → at_world [5, −2], inward [−1, 0]",
+    # Edge 1 runs (5,−5) → (5,5); at 0.3 is (5, −5 + 0.3·10) = (5, −2). Its
+    # direction is (0, 10), so the candidate normal (−dz, dx)/|d| is (−1, 0);
+    # the probe (5 − 0.001, 0) lies inside the square, so that is the inward
+    # one.
+    check("edge 1/at 0.3 → at_world [5, −2], inward [−1, 0]",
           bo and bo[0]["at_world"] == [5.0, -2.0]
-          and bo[0]["inward"] == [-1, 0]
+          and bo[0]["inward"] == [-1.0, 0.0]
           and bo[0].get("room_id") == "room-road", str(bo and bo[0]))
-    # N edge, at 0.5: point (0.5, 0.0) → world (0.0, −5.0); inward = +z.
-    check("N/at 0.5 → at_world [0, −5], inward [0, 1]",
+    # Edge 0 runs (−5,−5) → (5,−5); at 0.5 is (0, −5), direction (10, 0),
+    # normal (0, 1) — the probe (0, −5 + 0.001) is inside.
+    check("edge 0/at 0.5 → at_world [0, −5], inward [0, 1]",
           len(bo) == 2 and bo[1]["at_world"] == [0.0, -5.0]
-          and bo[1]["inward"] == [0, 1], str(len(bo) == 2 and bo[1]))
+          and bo[1]["inward"] == [0.0, 1.0], str(len(bo) == 2 and bo[1]))
     check("absent without the field", "boundary_openings" not in scene())
     check("the field moves the signature",
           sc["signature"] != scene()["signature"])
+    # A letter is no edge any more — v6 deleted them without an alias reader.
+    lettered = fixture()
+    lettered["map3d"]["boundary_openings"] = [{"edge": "N", "at": 0.5,
+                                               "width_m": 2.0}]
+    check("an edge LETTER is dropped (no alias reader)",
+          "boundary_openings" not in scene_recipe.compose_scene(
+              lettered, plan_width_m=PLAN_W))
+    over = fixture()
+    over["map3d"]["boundary_openings"] = [{"edge": 4, "at": 0.5,
+                                           "width_m": 2.0}]
+    check("...and so is an index the outline does not have",
+          "boundary_openings" not in scene_recipe.compose_scene(
+              over, plan_width_m=PLAN_W))
 
     # An opening WITHOUT `at` sits in the middle of its edge — the same
     # degradation ``boundary_entry`` has always applied (E3 ledger: the
@@ -1752,10 +1754,10 @@ def test_boundary_openings() -> None:
     # 0.0 stays the corner, and out-of-range values are clamped.
     loose = fixture()
     loose["map3d"]["boundary_openings"] = [
-        {"edge": "N", "width_m": 2.0},                       # no `at`
-        {"edge": "N", "at": None, "width_m": 2.0},           # unusable
-        {"edge": "N", "at": 0.0, "width_m": 2.0},            # explicit corner
-        {"edge": "N", "at": 1.7, "width_m": 2.0},            # out of range
+        {"edge": 0, "width_m": 2.0},                         # no `at`
+        {"edge": 0, "at": None, "width_m": 2.0},             # unusable
+        {"edge": 0, "at": 0.0, "width_m": 2.0},              # explicit corner
+        {"edge": 0, "at": 1.7, "width_m": 2.0},              # out of range
     ]
     lo = scene_recipe.compose_scene(loose, plan_width_m=PLAN_W)["boundary_openings"]
     check("a missing `at` is the edge MIDPOINT (0.5 → x 0), not the corner",
@@ -1770,15 +1772,138 @@ def test_boundary_openings() -> None:
           str(lo[3] if len(lo) > 3 else None))
     from app.core.boundary_entry import opening_world_points
     placed = {**loose, "pos_x": 0.0, "pos_z": 0.0, "yaw_deg": 0.0}
-    entry_pts = [p for e, p in opening_world_points(placed) if e == "N"]
+    entry_pts = [p for e, p in opening_world_points(placed) if e == 0]
     check("the entry gate derives the very same points (one `at` rule)",
           [list(p) for p in entry_pts]
           == [op["at_world"] for op in lo], f"{entry_pts} vs "
           f"{[op['at_world'] for op in lo]}")
 
 
+# ── The drawn boundary (contract v6 "Gebiete") ──────────────────────────
+# ONE fixture for the three v6 rules, an L-shape in LOCAL METRES, stored
+# clockwise in map view (positive shoelace with x east / z south):
+#
+#     P0 (−5,−5) ─ P1 (5,−5)
+#         │              │
+#         │        P3 (0,0) ─ P2 (5,0)
+#         │          │
+#     P5 (−5,5) ─ P4 (0,5)
+#
+# Hand-derived (§ B5a):
+#   * area = 10·10 − 5·5 = 75 m², shoelace 150/2 — positive, so the stored
+#     winding is kept as drawn;
+#   * bounding box 10 × 10, so ``plan_width_m`` 10 and the reference square
+#     runs −5…5 on both axes — every grid fraction f is the metre
+#     (f − 0.5)·10;
+#   * the NOTCH is the quadrant x > 0, z > 0;
+#   * edge 2 runs P2 (5,0) → P3 (0,0), direction (−5, 0). At ``at`` 0.5 that
+#     is (2.5, 0); the candidate normal (−dz, dx)/|d| = (0, −1) probed at
+#     (2.5, −0.001) lies inside the L, so INWARD is (0, −1) — pointing north,
+#     into the arm below the notch.
+L_BOUNDARY = [[-5.0, -5.0], [5.0, -5.0], [5.0, 0.0],
+              [0.0, 0.0], [0.0, 5.0], [-5.0, 5.0]]
+
+
+def l_fixture(*, relief: bool = False, openings=None) -> dict:
+    """The base fixture with the L drawn as its boundary and no building
+    contour — so the LEVEL plate has to come from the boundary."""
+    loc = fixture()
+    loc["map3d"].pop("outline")
+    loc["map3d"]["boundary"] = [list(p) for p in L_BOUNDARY]
+    if relief:
+        loc["map3d"]["area_detail"] = True
+        loc["map3d"]["relief"] = {"amplitude_m": 2.0, "seed": 1}
+    if openings is not None:
+        loc["map3d"]["boundary_openings"] = openings
+    return loc
+
+
+def test_boundary_polygon() -> None:
+    print("\n[15] the drawn boundary (v6 Nr. 1/4/5)")
+    sq = scene()
+    check("a square location still ships its four corners as `boundary`",
+          sq["boundary"] == [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0],
+                             [-5.0, 5.0]], str(sq["boundary"]))
+    sc = scene_recipe.compose_scene(l_fixture(), plan_width_m=PLAN_W)
+    check("the drawn L travels as `boundary`, point for point",
+          sc["boundary"] == L_BOUNDARY, str(sc["boundary"]))
+
+    # ── Nr. 4: the level plate IS the boundary polygon ──────────────────
+    level = [p for p in sc["plates"] if not p.get("room_id")]
+    check("one level plate, and its outline is the L",
+          len(level) == 1 and level[0]["outline"] == L_BOUNDARY,
+          str(level and level[0]["outline"]))
+    check("...its top and thickness are the ordinary level-plate ones",
+          near(level[0]["top_y"], 0.08) and near(level[0]["thickness"], 0.14))
+    # A DRAWN building contour is the more specific shape and still wins.
+    with_contour = l_fixture()
+    with_contour["map3d"]["outline"] = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    lvl2 = [p for p in scene_recipe.compose_scene(
+        with_contour, plan_width_m=PLAN_W)["plates"] if not p.get("room_id")]
+    check("a drawn building contour still wins over the boundary",
+          lvl2[0]["outline"] == [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0],
+                                 [-5.0, 5.0]], str(lvl2[0]["outline"]))
+    check("the room plates are untouched by all of it",
+          [p for p in sc["plates"] if p.get("room_id") == "a"]
+          == [p for p in sq["plates"] if p.get("room_id") == "a"])
+
+    # ── Nr. 4: the relief is clipped at the polygon ─────────────────────
+    # The grid is the default 16 cells → 17 support points per side, point
+    # (i, j) at fraction (i/16, j/16), i.e. metre ((i/16)−0.5)·10.
+    #   i = j = 12  →  (2.5, 2.5): inside the NOTCH, so outside the L → 0.
+    #   i = 4, j = 12 → (−2.5, 2.5): inside the L (and inside the outdoor
+    #     "garden", which is a RELIEF room, so nothing else pins it) → the
+    #     unclipped value survives unchanged.
+    clipped = scene_recipe.compose_scene(l_fixture(relief=True),
+                                         plan_width_m=PLAN_W)["terrain"]["grid"]
+    plain = scene_recipe.compose_scene(
+        {**l_fixture(relief=True),
+         "map3d": {k: v for k, v in l_fixture(relief=True)["map3d"].items()
+                   if k != "boundary"}},
+        plan_width_m=PLAN_W)["terrain"]["grid"]
+    check("the notch point (2.5, 2.5) would carry a height without the L",
+          plain[12][12] != 0.0, str(plain[12][12]))
+    check("...and is pinned to 0 by the boundary clip",
+          clipped[12][12] == 0.0, str(clipped[12][12]))
+    check("a point INSIDE the L keeps its unclipped height",
+          clipped[12][4] == plain[12][4] and plain[12][4] != 0.0,
+          f"{clipped[12][4]} vs {plain[12][4]}")
+    check("the rim stays pinned as before",
+          all(clipped[0][i] == 0.0 and clipped[16][i] == 0.0
+              for i in range(17)))
+
+    # ── Nr. 5: an opening on edge index 2 ───────────────────────────────
+    op_scene = scene_recipe.compose_scene(
+        l_fixture(openings=[{"edge": 2, "at": 0.5, "width_m": 3.0}]),
+        plan_width_m=PLAN_W)
+    bo = (op_scene.get("boundary_openings") or [None])[0]
+    check("edge 2 at 0.5 → at_world [2.5, 0]",
+          bo and bo["at_world"] == [2.5, 0.0], str(bo))
+    check("...with the inward normal [0, −1] (into the arm, not the notch)",
+          bo and bo["inward"] == [0.0, -1.0], str(bo and bo["inward"]))
+    from app.core.boundary_entry import opening_world_points
+    placed = {**l_fixture(openings=[{"edge": 2, "at": 0.5, "width_m": 3.0}]),
+              "pos_x": 100.0, "pos_z": 200.0, "yaw_deg": 0.0}
+    check("the entry gate lands on the same point, pin-shifted",
+          opening_world_points(placed) == [(2, (102.5, 200.0))],
+          str(opening_world_points(placed)))
+
+    # ── Nr. 1: a self-intersection is a WARNING, not a refusal ──────────
+    bow = l_fixture()
+    bow["map3d"]["boundary"] = [[-5, -5], [5, 5], [5, -5], [-5, 5]]
+    kinds = [p["kind"] for p in scene_recipe.compose_scene(
+        bow, plan_width_m=PLAN_W)["problems"]]
+    check("a bow tie reports boundary_self_intersection",
+          "boundary_self_intersection" in kinds, str(kinds))
+    check("the L itself reports nothing about its boundary",
+          not [p for p in sc["problems"]
+               if p["kind"] in ("boundary_self_intersection",
+                                "room_outside_boundary")],
+          str([p["kind"] for p in sc["problems"]]))
+
+
 def test_area_detail() -> None:
-    print("\n[15] area_detail → shell_area (v5.2 Nr. 10)")
+    print("\n[16] area_detail → shell_area (v5.2 Nr. 10)")
     loc = area_fixture(True)
     loc["map3d"]["area_detail"] = True
     sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W,
@@ -1832,7 +1957,7 @@ def relief_fixture(seed: int = 1, amplitude: float = 2.0, *,
 
 
 def test_terrain() -> None:
-    print("\n[16] terrain relief (v5.2 Nr. 14)")
+    print("\n[17] terrain relief (v5.2 Nr. 14)")
     stub_props()
     from app.core.scatter_curves import terrain_height
     sc = scene_recipe.compose_scene(relief_fixture(), plan_width_m=PLAN_W)
@@ -1959,210 +2084,6 @@ def test_terrain() -> None:
                                      plan_width_m=PLAN_W)["signature"] != base)
 
 
-def rotation_fixture(tile_rotation=None) -> dict:
-    """The base fixture plus everything a rotation has to carry along.
-
-    The sanitizer is bypassed on purpose (compose_scene is the unit under
-    test): a boundary opening on the E edge, a room marker facing 0 = south,
-    and a relief field so the terrain grid is there to check. ``relief``
-    needs ``area_detail`` in the composer's gate; ``area_model`` stays off,
-    so nothing else about the fixture changes — room "a" is indoor and
-    therefore a flat hull, "garden" is the one relief room.
-    """
-    loc = fixture()
-    loc["map3d"]["boundary_openings"] = [
-        {"edge": "E", "at": 0.3, "width_m": 3.0, "type": "passage"}]
-    loc["map3d"]["area_detail"] = True
-    loc["map3d"]["relief"] = {"amplitude_m": 2.0, "seed": 1}
-    for room in loc["rooms"]:
-        if room["id"] == "a":
-            room["layout"]["markers"] = [{"at": [0.5, 0.5], "animation": "idle",
-                                          "rotation": 0}]
-    if tile_rotation is not None:
-        loc["map3d"]["tile_rotation"] = tile_rotation
-    return loc
-
-
-def test_tile_rotation() -> None:
-    print("\n[17] tile rotation (v5.2 Nr. 15)")
-    # One CW step, by hand: world (x, z) → (−z, x), plan (u, v) → (1 − v, u).
-    # The fixture's reference square is the whole 10 m tile, so every number
-    # below is readable straight off the plan.
-    base = scene_recipe.compose_scene(rotation_fixture(), plan_width_m=PLAN_W)
-    sc = scene_recipe.compose_scene(rotation_fixture(90), plan_width_m=PLAN_W)
-
-    def cw(p):
-        return [-p[1], p[0]]
-
-    # ── plates ──────────────────────────────────────────────────────────
-    # The contour square [−5,−5], [5,−5], [5,5], [−5,5] turns onto
-    # [5,−5], [5,5], [−5,5], [−5,−5] — same points, one quarter turn on.
-    level = [p for p in sc["plates"] if not p.get("room_id")][0]
-    check("contour plate: every point at (−z, x)",
-          level["outline"] == [[5.0, -5.0], [5.0, 5.0], [-5.0, 5.0],
-                               [-5.0, -5.0]], str(level["outline"]))
-    # Room "a" spans world x −4…0, z −4…−1 → after the turn x 1…4, z −4…0.
-    plate_a = plate_of(sc, "a")
-    check("room a's plate lands at x 1…4 / z −4…0",
-          plate_a["outline"] == [[4.0, -4.0], [4.0, 0.0], [1.0, 0.0],
-                                 [1.0, -4.0]], str(plate_a["outline"]))
-    check("...and its height is untouched (the axis IS +y)",
-          near(plate_a["top_y"], plate_of(base, "a")["top_y"]),
-          f'{plate_a["top_y"]} vs {plate_of(base, "a")["top_y"]}')
-
-    # ── walls ───────────────────────────────────────────────────────────
-    # Room a's NORTH edge (z = −4, outward normal [0, −1]) becomes its EAST
-    # edge: x = 4, normal (0,−1) → (1, 0). The window splits it exactly as
-    # before — 2 solids + sill + head + glass = 5 pieces — and the two solid
-    # spans [0, 1] and [3, 4] map onto z −4…−3 and −1…0.
-    east = [w for w in walls_of(sc, "a")
-            if near(w["from"][0], 4.0) and near(w["to"][0], 4.0)]
-    check("the north wall set turns onto x = 4 and keeps its 5 pieces",
-          len(east) == 5, str(len(east)))
-    check("its outward normal turns [0, −1] → [1, 0]",
-          all(w["outward_normal"] == [1.0, 0.0] for w in east),
-          str([w["outward_normal"] for w in east]))
-    solid = sorted([w for w in east if near(w["height"], WALL_H)],
-                   key=lambda w: w["from"][1])
-    check("the window gap sits at z −3.0 … −1.0 (the rotated 1 … 3)",
-          len(solid) == 2 and near(solid[0]["to"][1], -3.0)
-          and near(solid[1]["from"][1], -1.0),
-          str([[w["from"], w["to"]] for w in solid]))
-    check("every wall point of the whole scene is the rotated original",
-          all(w["from"] == cw(b["from"]) and w["to"] == cw(b["to"])
-              and w["outward_normal"] == cw(b["outward_normal"])
-              for w, b in zip(sc["walls"], base["walls"])))
-
-    # ── extras (elevator) ───────────────────────────────────────────────
-    # Elevator at plan (0.8, 0.2) → world (3, −3) → rotated (3, 3).
-    cabin = [e for e in sc["extras"] if e["kind"] == "elevator_cabin"][0]
-    check("the elevator cabin moves (3, −3) → (3, 3)",
-          near(cabin["center"][0], 3.0) and near(cabin["center"][2], 3.0),
-          str(cabin["center"]))
-    check("...at an unchanged height", near(
-        cabin["center"][1],
-        [e for e in base["extras"] if e["kind"] == "elevator_cabin"][0]
-        ["center"][1]), str(cabin["center"][1]))
-    # The NORTH pane sat at (3, −3 − 1.8/2) = (3, −3.9), size [1.8, h, 0.03];
-    # rotated that is (3.9, 3) with w/d swapped, and it is now the EAST pane.
-    glass = {e["side"]: e for e in sc["extras"] if e["kind"] == "elevator_glass"}
-    check("the glass sides rotate N→E, S→W, E→S",
-          set(glass) == {"east", "west", "south"}, str(sorted(glass)))
-    check("the former north pane is at (3.9, 3) with w/d swapped",
-          near(glass["east"]["center"][0], 3.9)
-          and near(glass["east"]["center"][2], 3.0)
-          and near(glass["east"]["size"][0], 0.03)
-          and near(glass["east"]["size"][2], 1.8),
-          f'{glass["east"]["center"]}/{glass["east"]["size"]}')
-
-    # ── markers ─────────────────────────────────────────────────────────
-    # Marker at [0.5, 0.5] of room a (x 0.1 w 0.4 / y 0.1 d 0.3) → abs
-    # (0.3, 0.25) → world (−2, −2.5) → rotated (2.5, −2).
-    marker = [m for m in sc["markers"] if m["source"] == "room"][0]
-    check("the room marker moves (−2, −2.5) → (2.5, −2)",
-          marker["at_world"] == [2.5, -2.0], str(marker["at_world"]))
-    check("a facing of 0 (south) becomes 270 (west)",
-          near(marker["facing"], 270.0), str(marker.get("facing")))
-
-    # ── models: the yaw turns the SAME way as a facing ───────────────────
-    # Hand-derived from § A1.8 / § A2: a model renders as
-    # rotation.y = +rad(yaw_deg), and one clockwise step is (x, z) → (−z, x),
-    # i.e. R_y(−90). The two multiply: R_y(−90)·R_y(yaw) = R_y(yaw − 90), so
-    # yaw_new = (yaw − 90) % 360 = (yaw + 270) % 360 — the very same shift the
-    # marker compass takes (270 above), because both go through +rad(…).
-    #   building: yaw 90 (map_rotation_2d fallback) → (90 + 270) % 360 = 0
-    #   room d:   yaw 45 (layout rotation)          → (45 + 270) % 360 = 315
-    # The anchors ride the point rule: building (1, −1) → (1, 1),
-    # room d (1.5, 2.5) → (−2.5, 1.5).
-    stub_props()
-    turned_models = scene_recipe.compose_scene(
-        {**model_fixture(),
-         "map3d": {**model_fixture()["map3d"], "tile_rotation": 90}},
-        plan_width_m=PLAN_W, building_meta=BUILDING_META,
-        room_metas=room_metas())
-    tb = spec_of(turned_models, "building")
-    td = spec_of(turned_models, "room", "d")
-    check("the building's yaw 90 turns onto 0 (yaw + 270)",
-          near(tb["yaw_deg"], 0.0), str(tb.get("yaw_deg")))
-    check("room d's yaw 45 turns onto 315", near(td["yaw_deg"], 315.0),
-          str(td.get("yaw_deg")))
-    check("...and the anchors follow the point rule",
-          tb["anchor"] == cw([1.0, -1.0]) and td["anchor"] == cw([1.5, 2.5]),
-          f'{tb["anchor"]} / {td["anchor"]}')
-    check("the meta fix is NOT touched (it is object-local)",
-          near(tb["fix_euler"]["y"], 90.0) and near(td["fix_euler"]["y"], 180.0),
-          f'{tb["fix_euler"]} / {td["fix_euler"]}')
-
-    # ── rooms block: the FRACTION rule ──────────────────────────────────
-    # Room a's absolute hull (0.1,0.1) (0.5,0.1) (0.5,0.4) (0.1,0.4) turns by
-    # (u, v) → (1 − v, u) onto (0.9,0.1) (0.9,0.5) (0.6,0.5) (0.6,0.1).
-    block_a = [r for r in sc["rooms"] if r["room_id"] == "a"][0]
-    check("rooms[].outline follows the plan-fraction rule",
-          block_a["outline"] == [[0.9, 0.1], [0.9, 0.5], [0.6, 0.5],
-                                 [0.6, 0.1]], str(block_a["outline"]))
-
-    # ── boundary openings ───────────────────────────────────────────────
-    # E at 0.3 sits at plan (1, 0.3); rotated (1 − 0.3, 1) = (0.7, 1) = S at
-    # 0.7 → world ((0.7 − 0.5)·10, (1 − 0.5)·10) = (2, 5). Inward −x → −z.
-    bo = sc["boundary_openings"][0]
-    check("E/at 0.3 becomes S/at 0.7 at world (2, 5)",
-          bo["edge"] == "S" and bo["at_world"] == [2.0, 5.0],
-          f'{bo["edge"]} {bo["at_world"]}')
-    check("...and its inward normal turns [−1, 0] → [0, −1]",
-          bo["inward"] == [0, -1], str(bo["inward"]))
-
-    # ── terrain ─────────────────────────────────────────────────────────
-    # grid[j][i] at plan (i/16, j/16); h_new(u,v) = h_old(rot⁻¹(u,v)) with
-    # rot⁻¹ = CCW (u,v) → (v, 1−u), so new[j][i] = old[16−i][j].
-    old_grid = base["terrain"]["grid"]
-    new_grid = sc["terrain"]["grid"]
-    check("new[5][3] == old[13][5] (n − i = 16 − 3)",
-          new_grid[5][3] == old_grid[13][5] and old_grid[13][5] != 0.0,
-          f'{new_grid[5][3]} vs {old_grid[13][5]}')
-    check("the whole field follows the same index rule",
-          all(new_grid[j][i] == old_grid[16 - i][j]
-              for j in range(17) for i in range(17)))
-    check("step and amplitude are rotation-invariant",
-          near(sc["terrain"]["step"], base["terrain"]["step"])
-          and near(sc["terrain"]["amplitude_m"],
-                   base["terrain"]["amplitude_m"]))
-
-    # ── composition and invariants ──────────────────────────────────────
-    # 180 = the 90° rule applied twice: (−5, −5) → (5, −5) → (5, 5).
-    half = scene_recipe.compose_scene(rotation_fixture(180),
-                                      plan_width_m=PLAN_W)
-    check("180° = two 90° steps on the same point",
-          [p for p in half["plates"] if not p.get("room_id")][0]["outline"][0]
-          == cw(cw([-5.0, -5.0])), str(
-              [p for p in half["plates"] if not p.get("room_id")][0]
-              ["outline"][0]))
-    check("...and the elevator cabin lands at (−3, 3)",
-          near([e for e in half["extras"]
-                if e["kind"] == "elevator_cabin"][0]["center"][0], -3.0)
-          and near([e for e in half["extras"]
-                    if e["kind"] == "elevator_cabin"][0]["center"][2], 3.0))
-    check("180° keeps the w/d extents (even number of steps)",
-          [e for e in half["extras"] if e["kind"] == "elevator_glass"
-           and e["side"] == "south"][0]["size"][0] == 1.8)
-    check("the rotation moves the signature (map3d is hashed whole)",
-          sc["signature"] != base["signature"],
-          f'{sc["signature"][:8]} vs {base["signature"][:8]}')
-    check("scalars, style and figures stay put",
-          sc["extent_m"] == base["extent_m"] and sc["k"] == base["k"]
-          and sc["storey_m"] == base["storey_m"]
-          and sc["levels"] == base["levels"] and sc["style"] == base["style"]
-          and sc["figures"] == base["figures"]
-          and sc["outdoor_rooms"] == base["outdoor_rooms"])
-    check("an unrotated compose is unchanged by the feature",
-          scene()["plates"] == scene_recipe.compose_scene(
-              fixture(), plan_width_m=PLAN_W)["plates"])
-    # The shared point lists (one contour across all level plates, one normal
-    # per wall edge, the module's inward vectors) must not rotate twice.
-    twice = scene_recipe.compose_scene(rotation_fixture(90), plan_width_m=PLAN_W)
-    check("composing twice gives the same payload (no shared list rotated "
-          "repeatedly)", twice == sc)
-
-
 def main() -> int:
     test_scalars()
     test_scale_is_one()
@@ -2188,9 +2109,9 @@ def main() -> int:
     test_curved_outline()
     test_scatter()
     test_boundary_openings()
+    test_boundary_polygon()
     test_area_detail()
     test_terrain()
-    test_tile_rotation()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

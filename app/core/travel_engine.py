@@ -15,9 +15,10 @@ POLYLINE with baked times:
                                              # (waypoint 0 carries 0.0)
         "started_at_game": "Y0002-D109T14:00:00",   # canonical GAME stamp
         "speed_m_s": 1.4,                    # world setting at journey start
-        "entry_edge": "W",                   # WORLD edge of the target's
-                                             # opening the route aims at
-                                             # ('' = boundary-rim fallback)
+        "entry_edge": 2,                     # BOUNDARY EDGE INDEX of the
+                                             # target's opening the route
+                                             # aims at (None = boundary-rim
+                                             # fallback)
     }
 
 ``entry_edge`` is what lets the ARRIVAL route into the right room: a location
@@ -320,13 +321,13 @@ def _boundary_rim_point(loc: Dict[str, Any],
 
 
 def _opening_point(loc: Dict[str, Any],
-                   toward: Point) -> Optional[Tuple[str, Point]]:
-    """``(edge, point)`` of the authored opening of ``loc`` nearest to
+                   toward: Point) -> Optional[Tuple[int, Point]]:
+    """``(edge index, point)`` of the authored opening of ``loc`` nearest to
     ``toward``, or None when the location has none (or is unplaced).
 
     The EDGE travels with the point because the arrival needs it: an opening's
-    room link is what routes the arriving character, and only the edge
-    identifies which of several openings the route aimed at.
+    room link is what routes the arriving character, and only the boundary
+    edge it sits on identifies which of several openings the route aimed at.
     """
     from app.core.boundary_entry import opening_world_points
     points = opening_world_points(loc)
@@ -336,23 +337,23 @@ def _opening_point(loc: Dict[str, Any],
 
 
 def _arrival_point(loc: Dict[str, Any],
-                   toward: Point) -> Optional[Tuple[str, Point]]:
+                   toward: Point) -> Optional[Tuple[Optional[int], Point]]:
     """Where a journey ENDS on ``loc``, as ``(entry_edge, point)``: the
     authored opening nearest to ``toward``, else the nearest point on the
-    boundary rim — the latter with an EMPTY edge, because a made-up geometric
+    boundary rim — the latter with edge ``None``, because a made-up geometric
     point is no authored entrance and makes no statement about the room.
 
     A location without an opening has a FREE boundary (E4 task 5) — it can be
     entered, it just never said where. The nearest rim point is then as good
-    a goal as any, and the EMPTY edge is what tells the arrival check that no
-    authored opening was walked to (so the ordinary arrival room decides).
+    a goal as any, and the MISSING edge is what tells the arrival check that
+    no authored opening was walked to (so the ordinary arrival room decides).
     The rule gates stay where they belong: at the arrival check, not here.
     """
     found = _opening_point(loc, toward)
     if found is not None:
         return found
     rim_point = _boundary_rim_point(loc, toward)
-    return None if rim_point is None else ("", rim_point)
+    return None if rim_point is None else (None, rim_point)
 
 
 def start_journey(character_name: str,
@@ -853,10 +854,12 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
     # Everything else falls back to the one arrival rule (declared entry room,
     # otherwise the ground) — including a crossing that did NOT happen at that
     # opening, which has no claim on the room behind it.
-    entry_edge = str(journey.get("entry_edge") or "")
+    entry_edge = journey.get("entry_edge")
     at_goal = _at_goal(journey, st)
     entry_room = (opening_entry_room(target, entry_edge)
-                  if entry_edge and at_goal else "")
+                  if isinstance(entry_edge, int)
+                  and not isinstance(entry_edge, bool)
+                  and at_goal else "")
     if not entry_room:
         entry_room = get_arrival_room_id(target)
 

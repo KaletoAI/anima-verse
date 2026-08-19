@@ -244,6 +244,17 @@ def _poly_points(points: Any) -> Optional[List[Tuple[float, float]]]:
     return pts
 
 
+def polygon_points(points: Any) -> Optional[List[Tuple[float, float]]]:
+    """The public reader for a stored outline: ``[[x, z], …]`` parsed into
+    float tuples, an explicit closing point dropped, None when it is no
+    polygon (malformed, non-finite, fewer than 3 points).
+
+    Everything that has to ask "is there an outline here, and which points
+    are it" goes through this one parse — the scene composer as much as the
+    geometry below it."""
+    return _poly_points(points)
+
+
 def polygon_signed_area(points: Any) -> float:
     """Shoelace sum — POSITIVE means clockwise in map view (x east, z south).
 
@@ -526,6 +537,80 @@ def polygon_interior_point(points: Any) -> Optional[Tuple[float, float]]:
             if point_in_polygon(candidate[0], candidate[1], pts):
                 return candidate
     return None
+
+
+# How far off an edge the inside test is taken (metres). Small enough to stay
+# inside the thinnest sane notch, large enough to survive the float noise of a
+# rotated edge.
+_INWARD_PROBE_M = 1e-3
+
+
+def polygon_edge_count(points: Any) -> int:
+    """How many edges the outline has — edge i runs point i → point i+1, the
+    last one back to point 0. 0 for a degenerate outline."""
+    pts = _poly_points(points)
+    return 0 if pts is None else len(pts)
+
+
+def polygon_edge_frame(points: Any, edge: Any, at: Any = 0.5
+                       ) -> Optional[Tuple[Tuple[float, float],
+                                           Tuple[float, float]]]:
+    """``((x, z), (nx, nz))`` — a point on edge ``edge`` at fraction ``at``
+    plus the UNIT INWARD normal there; None for a bad index or outline.
+
+    The v6 successor of the four edge letters (contract v6 Nr. 5): a boundary
+    opening names an edge INDEX and a fraction along it, and this is the ONE
+    place that turns the pair into geometry. Both the scene payload
+    (``scene_recipe._boundary_openings``) and the entry gate
+    (``boundary_entry``) read it here, so the picture and the rule cannot
+    disagree about where a gate is.
+
+    ``at`` runs from point i to point i+1 and is clamped to [0, 1]; anything
+    unreadable degrades to the edge MIDPOINT 0.5, the same degradation both
+    consumers have always applied.
+
+    INSIDE is measured, not assumed: the midpoint is probed a millimetre off
+    the edge in both normal directions and the one that lands inside the
+    polygon wins (ray casting, so concave outlines answer correctly). Only
+    when neither or both probes land inside — a notch thinner than the probe,
+    a self-intersecting bow tie — does the winding decide: with the stored
+    clockwise winding (positive shoelace, x east / z south) the inward normal
+    of edge (dx, dz) is ``(−dz, dx)``. Hand-derived on the square
+    (−5,−5) (5,−5) (5,5) (−5,5): edge 0 runs east, ``(−dz, dx) = (0, +10)``
+    normalized (0, 1) — south, i.e. into the square.
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return None
+    try:
+        idx = int(edge)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(edge, bool) or idx < 0 or idx >= len(pts):
+        return None
+    try:
+        t = float(at)
+    except (TypeError, ValueError):
+        t = 0.5
+    if not math.isfinite(t):
+        t = 0.5
+    t = min(max(t, 0.0), 1.0)
+    ax, az = pts[idx]
+    bx, bz = pts[(idx + 1) % len(pts)]
+    dx, dz = bx - ax, bz - az
+    length = math.hypot(dx, dz)
+    if length < 1e-12:
+        return None                     # a degenerate edge has no direction
+    point = (ax + t * dx, az + t * dz)
+    nx, nz = -dz / length, dx / length
+    mid_x, mid_z = ax + dx / 2.0, az + dz / 2.0
+    plus = point_in_polygon(mid_x + nx * _INWARD_PROBE_M,
+                            mid_z + nz * _INWARD_PROBE_M, pts)
+    minus = point_in_polygon(mid_x - nx * _INWARD_PROBE_M,
+                             mid_z - nz * _INWARD_PROBE_M, pts)
+    if minus and not plus:
+        nx, nz = -nx, -nz
+    return (point, (nx, nz))
 
 
 def polygon_local_to_world(points: Any, cx: float, cz: float,

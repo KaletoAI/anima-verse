@@ -188,9 +188,11 @@ export interface Map3D {
   boundary?: Array<[number, number]>
   /** Pass-throughs at the LOCATION edge (a road crossing the cell east–west
    *  = two entries). Geometry + room link only — entry_room stays the
-   *  gameplay gate. `at` follows the room-opening letter convention
-   *  (left→right on N/S, top→bottom on E/W). */
-  boundary_openings?: Array<{ edge: 'N' | 'E' | 'S' | 'W'; at: number
+   *  gameplay gate. SINCE v6 (Nr. 5) `edge` is the 0-based INDEX of a
+   *  boundary edge (edge i = point i → i+1) and `at` runs along that edge;
+   *  the letters N/E/S/W are deleted, and the server drops an entry that
+   *  still carries one. */
+  boundary_openings?: Array<{ edge: number; at: number
     width_m: number; type?: 'passage'; room?: string }>
   /** Drawn building outline (AV3D-12): polygon points as fractions of the
    *  location's reference square (plan_width_m), auto-closed — the client
@@ -274,6 +276,12 @@ export interface Location {
    *  the edge, rule gates unchanged. The editor displays the flag, it does not
    *  judge. */
   has_entrance?: boolean
+  /** Server findings about the DRAWN boundary (contract v6 Nr. 1), e.g.
+   *  `boundary_self_intersection`. Absent = nothing to report. The scene
+   *  payload states the same thing in its `problems[]`, but a bare location
+   *  (a pin with an outline and no rooms) composes no scene at all — this is
+   *  how the map editor hears about it anyway. */
+  boundary_problems?: string[]
 }
 
 /** The reserved id of every location's GROUND room — the area no room takes

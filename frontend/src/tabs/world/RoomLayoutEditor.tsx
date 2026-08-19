@@ -370,6 +370,28 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // The ONLY scale anchor (2026-07-28): how many REAL metres the location is
   // wide. Nothing derives it from a model any more.
   const planW = map3d?.plan_width_m || 0
+  /**
+   * The location BOUNDARY in the plan's fraction frame (contract v6 Nr. 1).
+   *
+   * Boundary pass-throughs sit on its EDGES, so the plan needs the polygon in
+   * the same coordinates everything else here lives in: a local metre m is
+   * the fraction `m / plan_width_m + 0.5`, the inverse of the server's
+   * `_w()`. Without a drawn outline the boundary IS the reference square —
+   * the same degradation `world_geometry.effective_boundary` applies, so the
+   * edge indices mean the same on both sides (0 = north, 1 = east, 2 = south,
+   * 3 = west).
+   *
+   * A drawn boundary is not necessarily centred on the pin, so a vertex may
+   * sit outside the drawn frame; that is the server's frame too (the
+   * reference square is centred by definition) and not something this editor
+   * invents a rule for.
+   */
+  const boundaryFrac = useMemo<Array<[number, number]>>(() => {
+    const pts = map3d?.boundary
+    const w = planW || 8
+    if (!pts || pts.length < 3) return [[0, 0], [1, 0], [1, 1], [0, 1]]
+    return pts.map(([x, z]) => [x / w + 0.5, z / w + 0.5] as [number, number])
+  }, [map3d?.boundary, planW])
   // Relief wave width, said in something a person can picture: the server
   // turns the authored metres into a grid over the plan (cells = plan width /
   // wave, half-up, clamped to 2…22 — RELIEF_CELLS_MIN/MAX in
@@ -1560,9 +1582,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             }
           } else if (clickMode === 'boundary-door') {
             // Pass-through at the LOCATION edge (plan-area-detail-scenes.md):
-            // snap the click to the nearest frame edge; `at` follows the
-            // room-opening letter convention (left→right on N/S, top→bottom
-            // on E/W).
+            // the click snaps to the nearest BOUNDARY EDGE, and what is
+            // stored is that edge's index plus the fraction along it
+            // (contract v6 Nr. 5) — the same pair the server reads back with
+            // `polygon_edge_frame`. The letters N/E/S/W are gone with the
+            // square.
             const rect = (canvasRef.current as HTMLDivElement).getBoundingClientRect()
             const fx = clamp((e.clientX - rect.left) / rect.width, 0, 1)
             const fy = clamp((e.clientY - rect.top) / rect.height, 0, 1)
@@ -1570,14 +1594,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             if (cur.length >= 8) {
               toast(t('At most 8 boundary pass-throughs per location.'), 'error')
             } else {
-              const cand = [
-                { edge: 'N' as const, dist: fy, at: fx },
-                { edge: 'E' as const, dist: 1 - fx, at: fy },
-                { edge: 'S' as const, dist: 1 - fy, at: fx },
-                { edge: 'W' as const, dist: fx, at: fy },
-              ].sort((a, b) => a.dist - b.dist)[0]
+              const hit = nearestPolygonEdge(boundaryFrac, [fx, fy])
               onMap3d?.('boundary_openings', [...cur, {
-                edge: cand.edge, at: r4(cand.at), width_m: 3,
+                edge: hit.edge, at: r4(hit.at), width_m: 3,
                 type: 'passage' as const,
               }])
               setSelectedBoundary(cur.length)
@@ -1600,25 +1619,45 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           || (armedProp && propGhost)) ? (
           <svg viewBox="0 0 100 100" preserveAspectRatio="none"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-            {/* Boundary pass-throughs: gold bars ON the frame edge — the
-                only overlay children that take pointer events (select). */}
+            {/* The drawn location boundary (v6 Nr. 1) — the polygon whose
+                EDGES the pass-throughs sit on. Faint, non-interactive; it is
+                drawn on the map tab, shown here so the edges an opening names
+                are visible. Absent = the reference square, which the frame
+                already is. */}
+            {map3d?.boundary?.length ? (
+              <polygon
+                points={boundaryFrac.map(([x, y]) => `${x * 100},${y * 100}`).join(' ')}
+                fill="none" stroke="#8b949e" strokeWidth={0.45}
+                strokeDasharray="2 1.6" opacity={0.8}
+              />
+            ) : null}
+            {/* Boundary pass-throughs: gold bars ALONG their boundary edge —
+                the only overlay children that take pointer events (select).
+                Point and direction come from the edge itself, so a slanted or
+                concave outline carries them exactly as a square does. */}
             {(map3d?.boundary_openings || []).map((bo, i) => {
+              const n = boundaryFrac.length
+              if (!(bo.edge >= 0 && bo.edge < n)) return null
+              const { a, b } = edgeSegment(boundaryFrac, bo.edge)
+              const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+              const ux = (b[0] - a[0]) / len
+              const uy = (b[1] - a[1]) / len
+              const p = edgePointOnEdge(boundaryFrac, bo.edge, bo.at)
+              // Half the opening width in percent units: the frame is
+              // plan_width_m metres wide and 100 units tall, so one metre is
+              // 100 / plan_width_m units.
               const half = (bo.width_m / (planW || 8)) * 50
-              const horiz = bo.edge === 'N' || bo.edge === 'S'
-              const cx = horiz ? bo.at * 100 : (bo.edge === 'E' ? 100 : 0)
-              const cy = horiz ? (bo.edge === 'S' ? 100 : 0) : bo.at * 100
               return (
-                <rect key={`bo-${i}`}
-                  x={horiz ? cx - half : cx - 1.2}
-                  y={horiz ? cy - 1.2 : cy - half}
-                  width={horiz ? half * 2 : 2.4}
-                  height={horiz ? 2.4 : half * 2}
-                  fill="#e0a356" opacity={selectedBoundary === i ? 1 : 0.7}
+                <line key={`bo-${i}`}
+                  x1={p.x * 100 - ux * half} y1={p.y * 100 - uy * half}
+                  x2={p.x * 100 + ux * half} y2={p.y * 100 + uy * half}
+                  stroke="#e0a356" strokeWidth={2.4} strokeLinecap="butt"
+                  opacity={selectedBoundary === i ? 1 : 0.7}
                   style={{ pointerEvents: 'auto', cursor: 'pointer' }}
                   onClick={(ev) => { ev.stopPropagation(); setSelectedBoundary(i) }}
                 >
-                  <title>{`${bo.edge} · ${bo.width_m} m`}</title>
-                </rect>
+                  <title>{`${t('Edge')} ${bo.edge} · ${bo.width_m} m`}</title>
+                </line>
               )
             })}
             {map3d?.outline?.length ? (
@@ -2180,7 +2219,31 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   fontSize: '0.82em', padding: '2px 4px', borderRadius: 4,
                   background: selectedBoundary === i
                     ? 'rgba(224,163,86,0.15)' : undefined }}>
-                <span style={{ width: 16, textAlign: 'center' }}>{bo.edge}</span>
+                {/* WHICH boundary edge the pass-through sits on (v6 Nr. 5):
+                    an index, labelled with the two points it runs between so
+                    it can be picked without counting vertices on the plan.
+                    Clicking the gold bar selects the row; clicking the plan
+                    in "pass-through" mode picks the nearest edge outright. */}
+                <select className="ga-input" style={{ width: 168 }}
+                  value={bo.edge}
+                  title={t('Boundary edge the pass-through sits on')}
+                  onChange={(e) => write({ edge: Number(e.target.value) })}>
+                  {boundaryFrac.map((_p, ei) => {
+                    const { a, b } = edgeSegment(boundaryFrac, ei)
+                    const w = planW || 8
+                    const m = (v: number) => Math.round((v - 0.5) * w * 10) / 10
+                    return (
+                      <option key={ei} value={ei}>
+                        {`${t('Edge')} ${ei}: (${m(a[0])},${m(a[1])})→(${m(b[0])},${m(b[1])})`}
+                      </option>
+                    )
+                  })}
+                  {bo.edge >= boundaryFrac.length ? (
+                    <option value={bo.edge}>
+                      {`${t('Edge')} ${bo.edge} — ${t('outside the boundary')}`}
+                    </option>
+                  ) : null}
+                </select>
                 <input className="ga-input" type="number" min={0} max={1}
                   step={0.01} style={{ width: 64 }} value={bo.at}
                   title={t('Position along the edge (0..1)')}
@@ -2188,10 +2251,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                     const v = Number(e.target.value)
                     if (Number.isFinite(v)) write({ at: r4(clamp(v, 0, 1)) })
                   }} />
-                {/* The pass-through lies ON the location edge, so the edge is
-                    its maximum: plan_width_m metres (the reference square is
-                    a square). Without the anchor the server's 10 m fallback
-                    applies — the same rule on both sides. */}
+                {/* The pass-through lies ON a boundary edge, and the
+                    location's own width is its maximum (plan_width_m — the
+                    bounding box of the drawn outline). Without the anchor the
+                    server's 10 m fallback applies — the same rule on both
+                    sides. */}
                 <input className="ga-input" type="number" min={0.5}
                   max={planW || 10}
                   step={0.5} style={{ width: 64 }} value={bo.width_m}

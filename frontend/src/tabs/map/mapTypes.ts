@@ -111,6 +111,12 @@ export interface EditorLocation extends MapGeometry {
    *  turns the artwork inside the footprint and is NOT `yaw_deg`, which turns
    *  the location itself in the world. */
   map_rotation_2d?: number
+  /** Server findings about the DRAWN boundary (contract v6 Nr. 1), today only
+   *  `boundary_self_intersection`. Absent = nothing to report. The scene
+   *  payload reports the same kinds in its `problems[]`, but a bare location
+   *  (a pin with an outline and no rooms) composes no scene at all — this
+   *  field is how the map editor hears about it anyway. */
+  boundary_problems?: string[]
 }
 
 /** A character on the worldmap (§ A1.4). `pos` is the truth; `location_id` is

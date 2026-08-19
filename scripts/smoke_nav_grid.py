@@ -987,7 +987,8 @@ _house = _load_world_data()
 for _loc in _house["locations"]:
     if _loc.get("id") == HOUSE:
         _map3d = dict(_loc.get("map3d") or {})
-        _map3d["boundary_openings"] = [{"edge": "E", "at": 0.5,
+        # Edge 1 of the square boundary = the EAST side (v6 Nr. 5).
+        _map3d["boundary_openings"] = [{"edge": 1, "at": 0.5,
                                         "width_m": 2.0, "type": "passage",
                                         "room": ""}]
         _loc["map3d"] = _map3d
@@ -995,7 +996,8 @@ _save_world_data(_house)
 ctx = nav_grid.build_nav_context()
 check_true("[I1] authoring an opening hands out a NEW context",
            ctx is not ctx_before, f"{ctx_before.sig} -> {ctx.sig}")
-check("the opening sits on the E edge", ctx.openings, ((2204.0, 30.0),))
+check("the opening sits on the east edge (index 1)", ctx.openings,
+      ((2204.0, 30.0),))
 check("the grid grew for the house's plateau",
       (ctx.height_field["rows"], ctx.height_field["cols"]), (18, 20))
 approx("h(2205,29) — the pinned apron", ctx.height_at(2205, 29), 0.0)

@@ -77,18 +77,22 @@ THE WORLD used below (all grass unless painted):
                        behind a block rule (action "enter")
     OPEN    (350, 50)  w 10, opening N at 0.5 → (350, 45), NO entry_room
     SQUARE  (0, 200)   w 40, NO openings at all, no entry_room
-    HUT     (0, 200)   w 8, INSIDE the square, opening S at 0.5 → (0, 204),
+    HUT     (0, 200)   w 8, INSIDE the square, opening edge 2 (south) at
+                       0.5 → (0, 204),
                        rooms foyer + hall, entry_room "hall", link "foyer"
-    BLUFF   (600, 50)  w 10, opening N at 0.5 → (600, 45), ON PAINTED ROCK
+    BLUFF   (600, 50)  w 10, opening edge 0 (north) at 0.5 → (600, 45), ON
+                       PAINTED ROCK
                        (rock x ∈ [596, 604], z ∈ [46, 54] — strictly inside
                        the footprint, so the approach outside stays grass)
     a deep-water rectangle x ∈ [-10, 10], z ∈ [6, 26]
     a rock rectangle  x ∈ [640, 650], z ∈ [40, 50] (wilderness, case [20])
 
 HAND-DERIVED EXPECTATIONS (the opening points first, since every entry case
-rests on them — ``opening_world_points``: local N edge is z = −w/2, the free
-coordinate is (at − 0.5)·w, then yaw maps local → world; at yaw 0 that is the
-identity, so HALL's N opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
+rests on them — ``opening_world_points`` puts the point on the boundary EDGE
+the opening names (v6 Nr. 5) and maps local → world through the pin; without a
+drawn boundary the effective one is the square, whose edge 0 is the north side
+(z = −w/2) and edge 2 the south. At yaw 0 the map is the identity, so HALL's
+edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
 
   [1] wilderness → wilderness is free: (0, 0) → (0, 3) is accepted with
       ``location_id: ""`` and ``room_id: ""``.
@@ -326,9 +330,11 @@ def set_map3d(location_id: str, **fields) -> None:
 
 
 def place(name: str, x: float, z: float, *, room: str = "",
-          entry_room: str = "", width: float = 10.0, edge: str = "N",
+          entry_room: str = "", width: float = 10.0, edge: int = 0,
           openings: bool = True) -> str:
-    """A location at (x, z) with ONE authored opening (default: N edge).
+    """A location at (x, z) with ONE authored opening (default: edge 0, the
+    NORTH side of the square boundary — contract v6 Nr. 5 numbers the edges
+    clockwise from the north-west corner).
 
     ``openings=False`` draws none at all — the FREE-BOUNDARY case: a place
     that never said where its way in is (a painted square, a meadow).
@@ -382,7 +388,7 @@ OPEN = place("Smoke Clearing", 350.0, 50.0)
 # The nested pair: a 40 m square WITHOUT openings (x, z ∈ [-20, 20] + 200) and
 # an 8 m hut in its middle (z ∈ [196, 204]) whose S opening sits at (0, 204).
 SQUARE = place("Smoke Square", 0.0, 200.0, width=40.0, openings=False)
-HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge="S", room="foyer",
+HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge=2, room="foyer",
             entry_room="hall")
 BLUFF = place("Smoke Bluff", 600.0, 50.0, room="foyer", entry_room="hall")
 patch_location(LOCKED, accessible_when=["has_item:silver_key"])

@@ -798,7 +798,7 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             # LEAVING. The exit edge is not a step direction any more, so it is
             # read off the point: every opening the crossing happens AT is a
             # candidate, and ``may_leave`` answers for each. With none nearby
-            # the empty edge letter matches no opening, which is exactly right
+            # the missing edge index matches no opening, which is exactly right
             # — the entry-room rule and the "no entry room at all" rule are
             # what is left, and those are the other two ways out.
             current_loc = get_location_by_id(current_id) or {}
@@ -808,7 +808,7 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
                      in opening_world_points(current_loc)
                      if math.hypot(ox - x, oz - z) <= _POS_OPENING_TOLERANCE_M]
             if not any(may_leave(current_loc, current_room, entry_gate, edge)
-                       for edge in (edges or [""])):
+                       for edge in (edges or [None])):
                 logger.info("pos refused (leave): %s out of %s from room %r",
                             avatar, current_id, current_room)
                 refuse(403, "leave_blocked",
@@ -832,7 +832,7 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         if derived_id:
             # ENTERING. Through an authored opening, and past the gates the
             # travel route applies to the very same destination.
-            best_edge, best_dist = "", None
+            best_edge, best_dist = None, None
             for edge, (ox, oz) in opening_world_points(derived):
                 dist = math.hypot(ox - x, oz - z)
                 if best_dist is None or dist < best_dist:
@@ -849,7 +849,7 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
                 # them for every direction a walker may come from.
                 # The rule gates below are untouched: an openingless place is
                 # still subject to ``accessible_when`` and the access rules.
-                # ``opening_entry_room("")`` answers '' and the ordinary
+                # ``opening_entry_room(None)`` answers '' and the ordinary
                 # arrival rule decides the room.
                 pass
             elif best_dist > _POS_OPENING_TOLERANCE_M:

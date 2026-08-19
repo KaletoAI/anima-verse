@@ -251,11 +251,10 @@
 >     einen Eingang an, den das Eintritts-Gate ablehnte).
 >     **Konsum (Etappe 3, 2026-08-03, plan-3d-lod-und-betreten.md):**
 >     client3d liest die Openings für die Eintritts-Nähe des
->     „Betreten"-Angebots — Weltposition = Kachelzentrum + `at_world`, mehr
->     rechnet kein Renderer (der Server hat auch die
->     `tile_rotation` nach Nr. 15 bereits eingerechnet). Dabei zählen
+>     „Betreten"-Angebots — Weltposition = Pin + `at_world` (§ A1.1), mehr
+>     rechnet kein Renderer. Dabei zählen
 >     **nur die Öffnungen der Kante, die der Schritt kreuzt**: eine Öffnung
->     an der Nordkante ist kein Eingang für den, der von Westen her tritt,
+>     an einer anderen Kante ist kein Eingang für den, der von hier kommt,
 >     so nah er an der Ecke auch stehen mag (`entryOfferNear` filtert auf
 >     dieselbe Kante, die der Server prüft — sonst verspricht das Angebot
 >     einen Schritt, den `opening_on_edge` ablehnt). Und der SERVER
@@ -339,8 +338,14 @@
 >     einem Raum mit `relief_flat` ist jede Zahl bitgleich zu einer Szene ohne
 >     Relief. `relief` liegt im gehashten `map3d`, `relief_flat` im
 >     Raum-Rezept — Regler, Würfel und Checkbox bewegen also die Signatur.
-> 15. **`map3d.tile_rotation` — EINE Vorlage, mehrere Ausrichtungen.** Eine
->     Straße, die ost–west durch die Zelle läuft, wird EINMAL als Vorlage
+> 15. **~~`map3d.tile_rotation`~~ — MIT v6 (Nr. 4) ERSATZLOS GESTRICHEN.**
+>     Gedreht wird ausschließlich über den Anker-Pin (§ A1.1); es gibt keine
+>     Payload-Drehung mehr (`_rotate_scene`, `rotate_terrain_grid`,
+>     `tile_rotation_steps` und der Sanitizer-Zweig sind gelöscht, ohne
+>     Alias-Leser). Der Absatz bleibt nur als Historie stehen:
+>
+>     Eine
+>     Straße, die ost–west durch die Zelle läuft, wurde EINMAL als Vorlage
 >     gezeichnet und auf mehrere Kartenzellen geklont; jeder Klon setzt
 >     `tile_rotation` ∈ {90, 180, 270} (Grad im Uhrzeigersinn, andere Werte
 >     werden im Sanitizer verworfen, fehlend = ungedreht). Gedreht wird
@@ -547,7 +552,7 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
 | `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. Der Wert stammt aus demselben Fußabdruck, den auch `world_bounds` benutzt — Eintrag und Fußabdruck-Regel können also nicht auseinanderlaufen. `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** (dann hat er keinen Fußabdruck, egal wie gut sein Anker ist) ODER seine Geometrie hat keinen brauchbaren Anker (`map3d.plan_width_m` fehlt, ist ≤ 0 oder unlesbar). Ein Client, der die Kantenlänge eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d`; E2 (Drag-Ghost) darf den rohen Anker unplatzierter Orte später zusätzlich als eigenes Feld liefern |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
-| `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (Grenz-Durchgänge, `rotation`, `size`, `tile_rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
+| `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `size`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
 Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
 `locations` · `characters` · `events_by_location` · `world_bounds` ·
@@ -2106,7 +2111,8 @@ er nicht mehr hochkommt.
    `map3d.relief` wird genau das Feld gesampelt, das
    `GET /play/locations/{id}/scene` als `terrain.grid` ausliefert (§ B1 Nr. 14)
    — dieselbe eine Gitter-Konstruktion (`scene_recipe.compose_terrain`),
-   inklusive `tile_rotation`. Sein Rand ist auf 0 gepinnt, es ist also ein
+   inklusive der Klemmung am Boundary-Polygon (v6 Nr. 4). Sein Rand ist auf 0
+   gepinnt, es ist also ein
    Aufschlag, kein Ersatz: ein Ort auf einem Hügel fährt mit dem Hügel hoch.
 
 In einer Welt, in der niemand etwas modelliert hat, sind beide 0 und das Gate

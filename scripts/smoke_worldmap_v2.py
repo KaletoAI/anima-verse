@@ -90,7 +90,7 @@ Hand-derived expectations:
       (a) the entry HAS a layout_sig (10 hex chars) although the location
           has no room — map3d alone is enough now;
       (b) drawing a boundary opening
-          (map3d.boundary_openings = [{"edge": "N", "at": 0.5,
+          (map3d.boundary_openings = [{"edge": 0, "at": 0.5,
           "width_m": 2}]) CHANGES the sig — that is the whole point: a
           gate drawn in the floor-plan editor reaches a running client;
       (c) renaming the location does NOT change it — the signature is
@@ -401,7 +401,7 @@ def main() -> int:
     # (d) same data, second build -> identical signature.
     check("stable across two payload builds", gate_sig(), base)
     # (b) a drawn boundary opening MOVES the signature.
-    set_map3d(boundary_openings=[{"edge": "N", "at": 0.5, "width_m": 2}])
+    set_map3d(boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2}])
     drawn = gate_sig()
     check("boundary opening changes the sig", drawn != base, True)
     check("…and the new sig is a signature too", len(drawn or ""), 10)

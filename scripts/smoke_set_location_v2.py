@@ -259,27 +259,27 @@ set_game_time(START_GT)
 HOME = add_location(name="Smoke Home", description="set-location v2 smoke")["id"]
 update_location_position(HOME, 0.0, 0.0)
 set_map3d(HOME, plan_width_m=10.0,
-          boundary_openings=[{"edge": "S", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 2, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 MARKET = add_location(name="Smoke Market", description="set-location v2 smoke")["id"]
 update_location_position(MARKET, 100.0, 0.0)
 set_map3d(MARKET, plan_width_m=10.0,
-          boundary_openings=[{"edge": "W", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 SECRET = add_location(name="Smoke Secret", description="unknown to the npc")["id"]
 update_location_position(SECRET, 0.0, 60.0)
 set_map3d(SECRET, plan_width_m=10.0,
-          boundary_openings=[{"edge": "N", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 ISLE = add_location(name="Smoke Isle", description="drowned in water")["id"]
 update_location_position(ISLE, 0.0, 200.0)
 set_map3d(ISLE, plan_width_m=10.0,
-          boundary_openings=[{"edge": "N", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 VAULT = add_location(name="Smoke Vault", description="needs the key")["id"]
 update_location_position(VAULT, 0.0, -60.0)
 set_map3d(VAULT, plan_width_m=10.0,
-          boundary_openings=[{"edge": "S", "at": 0.5, "width_m": 4.0,
+          boundary_openings=[{"edge": 2, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])
 patch_location(VAULT, accessible_when=["has_item:silver_key"])
 add_item(name="Silver Key", description="opens the vault", item_id="silver_key")

@@ -128,14 +128,14 @@ A = place("Alder Camp", (2, 2),
                  {"id": "cellar", "name": "Cellar"},
                  {"id": GROUND_ROOM_ID, "name": ""}])
 B = place("Birch Hollow", (2, 1),
-          map3d={"boundary_openings": [{"edge": "S"}]})
+          map3d={"boundary_openings": [{"edge": 2}]})
 C = place("Cedar Ridge", (3, 2),
-          map3d={"boundary_openings": [{"edge": "N"}]})
+          map3d={"boundary_openings": [{"edge": 0}]})
 D = place("Dusk Hollow", (1, 2),
-          map3d={"boundary_openings": [{"edge": "E"}]},
+          map3d={"boundary_openings": [{"edge": 1}]},
           accessible_when=["has_item:silver_key"])
 E = place("Ember Gate", (2, 3),
-          map3d={"boundary_openings": [{"edge": "N"}]})
+          map3d={"boundary_openings": [{"edge": 0}]})
 
 save_character_profile("demo_avatar",
                        {"current_location": A, "current_room": "hall",

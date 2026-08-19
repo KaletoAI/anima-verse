@@ -40,9 +40,9 @@ THE WORLD used below:
 
     CLIFF   (1000, 1000)  plan_width_m 8, yaw 0, area_detail with a relief
                           (seed 1, amplitude 6 m, wave 0.5 m), ONE opening on
-                          the N edge at 0.5 -> world (1000, 996)
+                          boundary edge 0 (the north side of the square,
+                          v6 Nr. 5) at 0.5 -> world (1000, 996)
     TURNED  (1200, 1000)  the same location turned by yaw 90
-    SPUN    (1400, 1000)  the same location with map3d.tile_rotation 90
     PLAIN   (1600, 1000)  the same geometry WITHOUT a relief (the inert case)
     DOME    (2000, 1000)  plan_width_m 8 with a WIDE wave (4 m -> 2 cells, so
                           3 × 3 support points and exactly ONE free value in
@@ -111,9 +111,9 @@ weight is 0).
       ``compose_scene`` ships — checked cell by cell, because a second
       derivation of the field is the one way rule and picture can drift.
       TURNED (yaw 90) puts node (1, 1) at ``(cx + lz, cz − lx)`` =
-      (1196.5, 1003.5) and must answer the same +1.5555. SPUN
-      (tile_rotation 90) resamples the field as ``new[j][i] = old[16−i][j]``,
-      so its node (1, 1) answers the reference field's ``old[15][1]``.
+      (1196.5, 1003.5) and must answer the same +1.5555. (The payload
+      rotation of the tile era is gone with contract v6 Nr. 4 — a location
+      faces the way its pin says, so there is exactly ONE field.)
 
   [4] THE GATE, on the real route. The avatar stands INSIDE the location, so
       no transition gate is involved and nothing but the height can refuse:
@@ -371,7 +371,7 @@ def set_level_ground(location_id: str, flag: bool = True) -> None:
 
 
 def place(name: str, x: float, z: float, *, yaw: float = 0.0,
-          tile_rotation: int = 0, with_relief: bool = True,
+          with_relief: bool = True,
           width: float = WIDTH_M, wave: float = WAVE_M,
           amplitude: float = AMPLITUDE_M, openings: bool = True) -> str:
     """An area-detail location with ONE opening on its N edge (default 8 m
@@ -385,12 +385,10 @@ def place(name: str, x: float, z: float, *, yaw: float = 0.0,
         "outline": [[0, 0], [1, 0], [1, 1], [0, 1]],
         "area_model": True,
         "area_detail": True,
-        "boundary_openings": [{"edge": "N", "at": 0.5, "width_m": 2.0,
+        "boundary_openings": [{"edge": 0, "at": 0.5, "width_m": 2.0,
                                "type": "passage", "room": ""}]
         if openings else [],
     }
-    if tile_rotation:
-        fields["tile_rotation"] = tile_rotation
     if with_relief:
         fields["relief"] = {"amplitude_m": amplitude, "seed": SEED,
                             "wave_m": wave}
@@ -444,7 +442,9 @@ set_game_time(START_GT)
 
 CLIFF = place("Smoke Cliff", 1000.0, 1000.0)
 TURNED = place("Smoke Cliff Turned", 1200.0, 1000.0, yaw=90.0)
-SPUN = place("Smoke Cliff Spun", 1400.0, 1000.0, tile_rotation=90)
+# A second, IDENTICAL copy — since v6 there is no per-clone rotation any
+# more, so this one exists to show the field is a pure function of the plan.
+SPUN = place("Smoke Cliff Spun", 1400.0, 1000.0)
 PLAIN = place("Smoke Flat", 1600.0, 1000.0, with_relief=False)
 # The nesting pair of finding F3: a WIDE-wave dome (4 m wave over an 8 m
 # square = 2 cells, so exactly one free support point in the middle) with a
@@ -584,15 +584,16 @@ def main() -> int:
     wx, wz = node_world(1200.0, 1000.0, 1, 1, 90.0)
     near("...and answers the very same height",
          relief.scene_ground_lift(turned, wx, wz), REF[1][1], 1e-9)
-    # TILE ROTATION: the payload turns, so the gate must judge the turned
-    # field — new[j][i] = old[n−i][j].
+    # ONE FIELD (v6 Nr. 4): the payload rotation is deleted, so a second
+    # copy of the same geometry answers with the reference field itself —
+    # gate and payload cannot drift apart any more.
     spun = get_location_by_id(SPUN)
     spun_scene = scene_recipe.compose_scene(spun, plan_width_m=WIDTH_M)
-    check_true("the rotated payload follows new[j][i] = old[16−i][j]",
-               spun_scene["terrain"]["grid"][1][1] == REF[CELLS - 1][1])
+    check_true("an unrotated payload IS the reference field",
+               spun_scene["terrain"]["grid"][1][1] == REF[1][1])
     wx, wz = node_world(1400.0, 1000.0, 1, 1)
-    near("...and the gate samples that rotated field",
-         relief.scene_ground_lift(spun, wx, wz), REF[CELLS - 1][1], 1e-9)
+    near("...and the gate samples that very field",
+         relief.scene_ground_lift(spun, wx, wz), REF[1][1], 1e-9)
 
     print("\n[4a] the cliff refuses: 4.97 m of step over 0.5 m")
     a_x, a_z = node_world(1000.0, 1000.0, 1, 1)
@@ -764,15 +765,15 @@ def main() -> int:
                          description="slope-gate smoke")["id"]
     update_location_position(HOUSE, 3000.0, 3020.0)
     set_map3d(HOUSE, plan_width_m=8.0,
-              boundary_openings=[{"edge": "E", "at": 0.5, "width_m": 2.0,
+              boundary_openings=[{"edge": 1, "at": 0.5, "width_m": 2.0,
                                   "type": "passage", "room": ""}])
     # The levelling is OPT-IN (2026-08-13): without the flag this house would
     # stand on the untouched flank, which is case (a) all over again.
     set_level_ground(HOUSE)
     set_known_locations(AVATAR, [CLIFF, TURNED, SPUN, PLAIN, DOME, HUT, HOUSE])
-    check("the opening sits on the E edge",
+    check("the opening sits on the east edge (index 1)",
           opening_world_points(get_location_by_id(HOUSE)),
-          [("E", (3004.0, 3020.0))])
+          [(1, (3004.0, 3020.0))])
     near("the plateau is the ground at the house's centre",
          ground_y(3000, 3020), 0.0)
     near("...flat across the footprint, (3001,3020)", ground_y(3001, 3020), 0.0)
