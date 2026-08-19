@@ -5,9 +5,8 @@ import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } 
 import type { WorldLocation } from '../types';
 import { acceptsWalkHit, plateLift, standY, type GroundModelInfo } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
-import { applyOcclusionFade } from './occlusion';
 import {
-  asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
+  asphaltTexture, grassTexture, paversTexture, waterTexture,
 } from './textures';
 
 // --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------
@@ -403,7 +402,6 @@ export interface Tile {
   placedModels?: PlacedSceneModel[];
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
-  highlightRing: THREE.Mesh;
   fade: number;
   fadeTarget: number;
 }
@@ -568,13 +566,6 @@ export function surfaceFor(
 
 function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02, transparent: true, ...opts });
-}
-
-function box(w: number, h: number, d: number, mat: THREE.Material | THREE.Material[]): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
 }
 
 /** How fine the footprint plate is cut for the drape, and how many cells it may
@@ -781,137 +772,15 @@ function groundPlate(boundary: [number, number][], widthM: number,
 // Deko-Elemente für ALLE Geländearten gestrichen (User-Vorgabe) — das
 // Gelände sagt nur noch die Bodentextur, was drauf steht, sagt die Welt.
 
-interface BuildingSpec {
-  w: number; d: number; h: number;
-  build(tile: Tile, rnd: () => number): void;
-}
 
-function buildingSpec(style: TileStyle, loc: WorldLocation): BuildingSpec {
-  switch (style) {
-    case 'highrise': {
-      const floors = Math.min(14, Math.max(2, loc.map3d?.floors ?? Math.max(5, Math.min(10, 4 + loc.rooms.length * 2))));
-      return {
-        w: 6.4, d: 6.4, h: floors * 2,
-        build(tile, _rnd) {
-          const h = this.h;
-          const facade = facadeTexture(loc.map3d?.color || '#8fa3b0', 4, floors, loc.id);
-          const wallMat = std({ map: facade, emissiveMap: facadeEmissive(4, floors, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
-          const walls = box(this.w, h, this.d, wallMat);
-          walls.position.y = h / 2;
-          tile.group.add(walls);
-          tile.shellMats.push(wallMat);
-          const roofMat = std({ color: 0x62707a });
-          const roof = box(this.w + 0.3, 0.4, this.d + 0.3, roofMat);
-          roof.position.y = h + 0.2;
-          const acMat = std({ color: 0x9aa8b2 });
-          const ac = box(1.6, 0.9, 1.2, acMat);
-          ac.position.set(1.2, h + 0.85, -0.8);
-          tile.group.add(roof, ac);
-          tile.roofParts.push(roof, ac);
-          tile.roofMats.push(roofMat, acMat);
-        },
-      };
-    }
-    case 'cafe':
-      return {
-        w: 7, d: 5.2, h: 3.4,
-        build(tile, rnd) {
-          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#cdb694', 3, 1, loc.id), emissiveMap: facadeEmissive(3, 1, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
-          const walls = box(this.w, this.h, this.d, wallMat);
-          walls.position.set(0, this.h / 2, -1.2);
-          tile.group.add(walls);
-          tile.shellMats.push(wallMat);
-
-          const roofMat = std({ color: 0x8c6d4f });
-          const roof = box(this.w + 0.5, 0.35, this.d + 0.5, roofMat);
-          roof.position.set(0, this.h + 0.17, -1.2);
-          tile.group.add(roof);
-          tile.roofParts.push(roof);
-          tile.roofMats.push(roofMat);
-
-          const awnMat = std({ map: awningTexture('#b8443c', '#efe6d4'), side: THREE.DoubleSide });
-          const awning = new THREE.Mesh(new THREE.PlaneGeometry(this.w + 0.4, 1.6), awnMat);
-          awning.rotation.x = -Math.PI / 3.1;
-          awning.position.set(0, this.h - 0.5, 1.05);
-          awning.castShadow = true;
-          tile.group.add(awning);
-          tile.roofParts.push(awning);
-          tile.roofMats.push(awnMat);
-
-          // kleine Terrasse mit Sonnenschirmen
-          for (let i = 0; i < 2; i++) {
-            const px = -1.8 + i * 3.6;
-            const table = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.1, 10), std({ color: 0xd9d2c0 }));
-            table.position.set(px, 0.75, 2.9);
-            const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.75, 6), std({ color: 0x777 }));
-            leg.position.set(px, 0.37, 2.9);
-            const umb = new THREE.Mesh(new THREE.ConeGeometry(1.1, 0.5, 8), std({ color: i ? 0xb8443c : 0xe0a832 }));
-            umb.position.set(px, 2.0, 2.9);
-            umb.castShadow = true;
-            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.4, 6), std({ color: 0x8a8a8a }));
-            pole.position.set(px, 1.2, 2.9);
-            tile.group.add(table, leg, umb, pole);
-          }
-          void rnd;
-        },
-      };
-    case 'house':
-      return {
-        w: 6.6, d: 5.6, h: 3,
-        build(tile, _rnd) {
-          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#dbc9a9', 3, 1, loc.id), emissiveMap: facadeEmissive(3, 1, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
-          const walls = box(this.w, this.h, this.d, wallMat);
-          walls.position.y = this.h / 2;
-          tile.group.add(walls);
-          tile.shellMats.push(wallMat);
-
-          const roofMat = std({ color: 0x9e4f38 });
-          const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.hypot(this.w, this.d) / 2 + 0.3, 2.3, 4), roofMat);
-          roof.rotation.y = Math.PI / 4;
-          roof.scale.z = this.d / this.w;
-          roof.position.y = this.h + 1.15;
-          roof.castShadow = true;
-          const chimMat = std({ color: 0x7d6a5a });
-          const chim = box(0.6, 1.4, 0.6, chimMat);
-          chim.position.set(this.w / 4, this.h + 1.6, -this.d / 5);
-          tile.group.add(roof, chim);
-          tile.roofParts.push(roof, chim);
-          tile.roofMats.push(roofMat, chimMat);
-
-          const hedge = box(this.w + 2, 0.7, 0.7, std({ color: 0x4a7d3e }));
-          hedge.position.set(0, 0.35, this.d / 2 + 1.6);
-          tile.group.add(hedge);
-        },
-      };
-    default: {
-      const floors = Math.min(6, Math.max(1, loc.map3d?.floors ?? 2));
-      return {
-        w: 7, d: 6, h: floors * 3,
-        build(tile, _rnd) {
-          const wallMat = std({ map: facadeTexture(loc.map3d?.color || '#b3a48f', 3, floors + 1, loc.id), emissiveMap: facadeEmissive(3, floors + 1, loc.id), emissive: new THREE.Color(0xffd98a), emissiveIntensity: 0 });
-          const walls = box(this.w, this.h, this.d, wallMat);
-          walls.position.y = this.h / 2;
-          tile.group.add(walls);
-          tile.shellMats.push(wallMat);
-          const roofMat = std({ color: 0x776a58 });
-          const roof = box(this.w + 0.3, 0.35, this.d + 0.3, roofMat);
-          roof.position.y = this.h + 0.17;
-          tile.group.add(roof);
-          tile.roofParts.push(roof);
-          tile.roofMats.push(roofMat);
-        },
-      };
-    }
-  }
-}
-
-/** Die Kachel baut nur noch das ÄUSSERE: Boden, prozedurale Hülle, Deko,
- *  Label, Auswahlring. Die Innenansicht (Platten, Wände, Fahrstuhl, Räume,
- *  Modelle) kommt vollständig aus dem Szenen-Rezept und wird von
- *  `mountScene` (sceneRecipe.ts) in dieselben Tile-Felder gebaut. Eine
- *  Location ohne Rezept (404) hat per Server-Definition weder Raum-Layout
- *  noch Grundriss noch Gebäudemodell — es gibt dort schlicht nichts
- *  aufzuklappen. */
+/** The tile builds only the OUTSIDE: ground plate, socle, label. The
+ *  procedural building shell died with the Prop-Welt programme (user decision
+ *  2026-08-19) — a location without a server model shows its drawn ground and
+ *  nothing invented on top. The interior (plates, walls, elevator, rooms,
+ *  models) comes entirely from the scene recipe; `mountScene` (sceneRecipe.ts)
+ *  builds it into these same tile fields. A location without a recipe (404)
+ *  has, by server definition, neither a room layout nor an outline nor a
+ *  building model — there is simply nothing to unfold. */
 export function buildTile(loc: WorldLocation): Tile {
   grassTex = grassTex ?? grassTexture();
   asphaltTex = asphaltTex ?? asphaltTexture();
@@ -941,13 +810,6 @@ export function buildTile(loc: WorldLocation): Tile {
   group.rotation.y = yaw;
   group.userData.locationId = loc.id;
 
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xf2cd6e, transparent: true, opacity: 0.85 });
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(width * 0.42, width * 0.48, 40), ringMat);
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.09;
-  ring.visible = false;
-
   const tile: Tile = {
     loc, group, center, boundary, area: polygonArea(boundary),
     width, yaw, isBuilding, isArea, height: 0,
@@ -957,10 +819,9 @@ export function buildTile(loc: WorldLocation): Tile {
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, roomOutdoor: new Set(),
-    highlightRing: ring, fade: 0, fadeTarget: 0, occl: 0,
+    fade: 0, fadeTarget: 0, occl: 0,
   };
 
-  const rnd = seededRandom(loc.id);
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
   // Ground = the surface texture of the terrain kind (server library AV3D-13,
   // else procedural) — 2D map pictures are no fallback any more. The kind comes
@@ -1024,38 +885,13 @@ export function buildTile(loc: WorldLocation): Tile {
       tile.groundPlate = plinth;
     }
 
-    const spec = buildingSpec(style, loc);
-    // Wrap the shell in a group of its own so a server model can replace it
-    // later (AV3D-9) — `build()` adds straight into `tile.group`.
-    const before = new Set(group.children);
-    spec.build(tile, rnd);
-    const shell = new THREE.Group();
-    for (const child of [...group.children]) {
-      if (!before.has(child)) {
-        group.remove(child);
-        shell.add(child);
-      }
-    }
-    group.add(shell);
-    // The shell stands between the camera and an embodied avatar as readily as
-    // a tree does, so it takes part in the corridor fade (`scene/occlusion.ts`).
-    // Only the SHELL: the socle plate under it is ground and stays whole, and it
-    // was added to the group before the capture above. Every material in here is
-    // built per tile (`std()` makes a new one per call), so there is no shared
-    // cache to poison and nothing to clone.
-    shell.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-        applyOcclusionFade(m);
-      }
-    });
-    tile.shell = shell;
-    tile.height = spec.h;
+    // No procedural stand-in: until a server model arrives the place is its
+    // socle plate. The label height is a fixed reading distance, not a fake
+    // building height.
+    tile.height = 4;
     addLabel();
   }
 
-  group.add(ring);
   tile.facadeMats = tile.shellMats.filter((m) => !!m.emissiveMap);
   return tile;
 }
@@ -1505,8 +1341,6 @@ export function applyTileFade(tile: Tile, dt: number) {
     sm.visible = !(f > 0.03 && tile.levelFilter < 0);
   }
 
-  const ringMat = tile.highlightRing.material as THREE.MeshBasicMaterial;
-  ringMat.opacity = 0.7 * Math.max(0, 1 - f * 2);
   for (const m of tile.roofMats) m.opacity = Math.max(0, 1 - f * 1.4);
   for (const o of tile.roofParts) o.visible = f < 0.95;
   // Aufgedeckter Innenraum: Hülle wirft keinen Schatten mehr, sonst stehen

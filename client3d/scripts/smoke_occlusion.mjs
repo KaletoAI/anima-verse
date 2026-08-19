@@ -424,12 +424,13 @@ async function main() {
     /\n\s*for \(const m of prop\.mats\.values\(\)\) m\.dispose\(\);/.test(groundSrc), true);
   check('…without the old sway condition in front of it',
     /if \(prop\.sway > 0\) for \(const m of prop\.mats/.test(groundSrc), false);
-  check('the procedural building shell is patched per tile',
-    /shell\.traverse\(\(o\) => \{[\s\S]{0,400}?applyOcclusionFade\(m\);/.test(tilesSrc), true);
-  // Twice = the import and the ONE call: the socle plate under a building is
-  // ground and must keep its fragments (it is added before the shell capture).
-  check('…and nowhere else in that file (the socle plate stays whole)',
-    tilesSrc.split('applyOcclusionFade').length - 1, 2);
+  // The procedural building shell died with the Prop-Welt programme (user
+  // decision 2026-08-19): tiles.ts builds no invented geometry any more, so
+  // there is NOTHING left in it to fade — zero occurrences, import included.
+  // Occlusion patching now lives only where real content mounts (ground props
+  // above, the server model below).
+  check('tiles.ts patches nothing (the procedural shell is gone)',
+    tilesSrc.split('applyOcclusionFade').length - 1, 0);
   check('the server building model is patched on the clone, not on the cache',
     /const c = m\.clone\(\);[\s\S]{0,700}?applyOcclusionFade\(c\);/.test(recipeSrc), true);
   check('main.ts evaluates the corridor in a FRAME hook',

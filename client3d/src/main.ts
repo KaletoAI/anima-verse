@@ -1287,9 +1287,10 @@ async function startApp(username: string, role: string) {
   engine.onHover = (id) => {
     const tile = id ? tiles.get(id) ?? null : null;
     if (tile === hovered) return;
-    if (hovered) hovered.highlightRing.visible = false;
+    // The yellow highlight ring died with the drawn boundaries (user decision
+    // 2026-08-19) — the polygon plate itself shows what a place covers, and
+    // the cursor says it is clickable.
     hovered = tile;
-    if (hovered) hovered.highlightRing.visible = true;
     document.body.style.cursor = hovered ? 'pointer' : 'default';
   };
   engine.onPick = (id) => {
