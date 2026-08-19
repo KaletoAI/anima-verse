@@ -14,7 +14,7 @@ import { roomDoor } from '../game/doors';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import {
-  PLATE_Y_M, preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
+  applyPlateDepthBias, PLATE_Y_M, preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld,
   type PlacedSceneModel, type Tile,
 } from './tiles';
@@ -453,11 +453,22 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // 2026-08-03); zusätzlich drückt polygonOffset den Backstop im
     // Tiefenvergleich nach hinten, damit er auch bei drapierten,
     // parallelen Flächen NIE durch die Zonen-Platten sticht.
+    //
+    // The OTHER branch is the mirror image and is the plate's own bias
+    // (`applyPlateDepthBias`): outside detail mode the plate lies ON the world
+    // ground and must never be poked through by it, so it is pulled forward
+    // instead of pushed back. Restoring it here rather than zeroing it is the
+    // point — a mounted scene used to strip the bias off the very plate the
+    // tile was built with.
     tile.groundPlate.position.y = tile.modelIsShellArea ? -0.05 : PLATE_Y_M;
     const gm = tile.groundPlate.material as THREE.MeshStandardMaterial;
-    gm.polygonOffset = tile.modelIsShellArea;
-    gm.polygonOffsetFactor = tile.modelIsShellArea ? 1 : 0;
-    gm.polygonOffsetUnits = tile.modelIsShellArea ? 2 : 0;
+    if (tile.modelIsShellArea) {
+      gm.polygonOffset = true;
+      gm.polygonOffsetFactor = 1;
+      gm.polygonOffsetUnits = 2;
+    } else {
+      applyPlateDepthBias(gm);
+    }
     gm.needsUpdate = true;
   }
   if (scene.terrain && tile.groundPlate) {
@@ -1121,6 +1132,11 @@ export function unmountScene(tile: Tile): void {
   if (tile.groundPlate) {
     tile.groundPlate.visible = true;
     tile.groundPlate.position.y = PLATE_Y_M;
+    // Und die eigene Tiefen-Vorspannung der Platte zurueck: der Detail-Modus
+    // hat sie auf den Backstop-Wert (+1/+2) gedreht, und ohne diese Zeile
+    // bliebe die Kachel nach dem Aushaengen hinter ihrem eigenen Gelaende.
+    applyPlateDepthBias(tile.groundPlate.material as THREE.MeshStandardMaterial);
+    (tile.groundPlate.material as THREE.MeshStandardMaterial).needsUpdate = true;
   }
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();

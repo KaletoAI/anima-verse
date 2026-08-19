@@ -99,6 +99,53 @@
  * outline's LOCAL z, so liftAt(lx, lz) = max(0, 0.05 · lz) and the same five
  * numbers of [1] appear on the other axis. A plate that lifted around the
  * world axes instead of its own would fail here and nowhere else.
+ *
+ * --- [5] THE REBUILD PREDICATE: the pin is not the place ---------------------
+ * A built plate is frozen against the ground it was draped on, and the relief
+ * arrives as a 256 m window that follows the player (§ A16.3) — so the ground
+ * under a footprint sharpens WITHOUT the pin's own reading moving.
+ * `main.relevelTiles` asked the pin alone; the plate then kept a stale drape
+ * while the landscape under it rose, which is the "changes with movement" half
+ * of the report.
+ *
+ * The fixture is [1]'s, with a second terrain that adds a 0.5 m bump on the
+ * world box |x − 215| < 4, |z| < 4 — deliberately AWAY from the pin:
+ *
+ *   pin (200, 0):  |200 − 215| = 15, not < 4  ->  h = 10.0 in BOTH terrains,
+ *                  so the old pin-only predicate says "nothing to do".
+ *   lattice: lx, lz in {−20, −18, …, 20}, world point (200 + lx, lz)
+ *     bump in x: |200 + lx − 215| < 4  ->  11 < lx < 19  ->  lx in {12,14,16,18}
+ *     bump in z: |lz| < 4              ->  lz in {−2, 0, 2}
+ *   -> exactly 4 · 3 = 12 of the 441 samples move, each by exactly 0.50 m.
+ *
+ * So the lattice predicate must answer TRUE where the pin predicate answers
+ * FALSE. Its epsilon is 1 mm: a bump of 0.0005 m must NOT trigger a rebuild
+ * (0.0005 < 0.001), one of 0.0015 m must.
+ *
+ * --- [6] THE DEPTH BIAS -----------------------------------------------------
+ * The painted areas pull themselves towards the camera by
+ * `−min(index + 1, AREA_OFFSET_MAX)` depth units to stack coplanar ground
+ * (`scene/ground.ts`), while the footprint plate carried NO bias — so its 4 cm
+ * of air was competing against up to 32 depth units of the area under it.
+ *
+ * One depth unit at range z, for this camera (`engine.ts`: near 0.2, far 800)
+ * and a 24-bit buffer:
+ *   Δz = z² · (f − n) / (f · n · 2^24) = z² · 799.8 / (160 · 16777216)
+ *      = z² · 2.9795e−7  metres
+ * so the plate's 4 cm are worth 0.04 / 2.9795e−7 / z² = 134252 / z² units, and
+ * the plate lost to an area of bias b beyond z = sqrt(134252 / b):
+ *   b =  1 -> 366 m ;  b =  2 -> 259 m ;  b =  5 -> 164 m ;
+ *   b = 10 -> 116 m ;  b = 32 ->  65 m
+ * — "partly covered by the texture of the terrain under it, changes with view".
+ *
+ * The remedy is the file's own 2026-08-03 pattern with the sign mirrored (the
+ * detail-mode backstop is pushed BACK so it never pokes through what is above
+ * it; a footprint plate is pulled FORWARD so nothing below pokes through it),
+ * at one rung above the ladder's ceiling:
+ *   PLATE_POLYGON_OFFSET = −(AREA_OFFSET_MAX + 1) = −33
+ * That relation is the check — the two constants live in two files that cannot
+ * import each other (`scene/ground.ts` takes `setWorldGround` from
+ * `scene/tiles.ts`), so this is where they are held together.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -106,28 +153,30 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const TILES_SRC = join(ROOT, 'client3d/src/scene/tiles.ts');
+const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 
-/** The client's tile module, bundled for node. `external: ['three']` leaves
- *  node's own three the only one in play (same trick as `smoke_occlusion.mjs`),
- *  and the bundle is written next to the sources so node resolves `three`
- *  upwards from it. A fresh call gives a FRESH module — section [2] needs one
- *  whose `worldGroundAt` has never been set. */
-async function loadTiles() {
+/** A client module, bundled for node. `external: ['three']` leaves node's own
+ *  three the only one in play (same trick as `smoke_occlusion.mjs`), and the
+ *  bundle is written next to the sources so node resolves `three` upwards from
+ *  it. A fresh call gives a FRESH module — section [2] needs one whose
+ *  `worldGroundAt` has never been set. */
+async function loadModule(src) {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(ROOT, 'client3d/scripts/.smoke-'));
   try {
     const built = await esbuild.build({
-      entryPoints: [TILES_SRC], bundle: true, platform: 'node', format: 'esm',
-      write: false, outfile: join(dir, 'tiles.mjs'),
+      entryPoints: [src], bundle: true, platform: 'node', format: 'esm',
+      write: false, outfile: join(dir, 'mod.mjs'),
       external: ['three', 'three/*'],
     });
-    const file = join(dir, 'tiles.mjs');
+    const file = join(dir, 'mod.mjs');
     await writeFile(file, built.outputFiles[0].text, 'utf8');
     return await import(`file://${file}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
+const loadTiles = () => loadModule(TILES_SRC);
 
 let failed = 0;
 let passed = 0;
@@ -274,6 +323,68 @@ async function main() {
       check(`lz=${lz} plate − ground`, r.d, d);
     }
     check('nothing pokes through (min)', Math.min(...rows.map((r) => r.d)), 0.04);
+  }
+
+  // ---- [5] the rebuild predicate ------------------------------------------
+  console.log('\n[5] relevelTiles: the ground moved AWAY FROM THE PIN');
+  {
+    const bumped = (amount) => (x, z) => (
+      terrainAt(x) + (Math.abs(x - 215) < 4 && Math.abs(z) < 4 ? amount : 0));
+    const pin = { x: PIN.x, z: PIN.z, yaw: PIN.yaw };
+    const before = tiles.plateGroundSamples(square(20), pin);
+    check('lattice samples (21 x 21)', before.length, 441);
+
+    tiles.setWorldGround(bumped(0.5));
+    const after = tiles.plateGroundSamples(square(20), pin);
+    // The PIN reading, which is all `relevelTiles` used to look at.
+    check('pin height before', terrainAt(200), 10.0);
+    check('pin height after (unchanged -> old predicate says no)',
+          bumped(0.5)(200, 0), 10.0);
+
+    let moved = 0;
+    let worst = 0;
+    for (let i = 0; i < before.length; i++) {
+      const d = Math.abs(after[i] - before[i]);
+      if (d >= 1e-3) moved += 1;
+      if (d > worst) worst = d;
+    }
+    check('lattice samples that moved', moved, 12);
+    check('largest move', worst, 0.5);
+    check('predicate: rebuild', tiles.plateGroundMoved(before, after) ? 1 : 0, 1);
+    check('predicate: unchanged ground', tiles.plateGroundMoved(before, before) ? 1 : 0, 0);
+
+    // The 1 mm epsilon, from both sides.
+    tiles.setWorldGround(bumped(0.0005));
+    check('predicate: 0.5 mm is not a move',
+          tiles.plateGroundMoved(before, tiles.plateGroundSamples(square(20), pin)) ? 1 : 0, 0);
+    tiles.setWorldGround(bumped(0.0015));
+    check('predicate: 1.5 mm is',
+          tiles.plateGroundMoved(before, tiles.plateGroundSamples(square(20), pin)) ? 1 : 0, 1);
+
+    // A redrawn outline gives a lattice of another size — that is a move too.
+    check('predicate: outline redrawn (441 vs 2401)',
+          tiles.plateGroundMoved(before, tiles.plateGroundSamples(square(200), pin)) ? 1 : 0, 1);
+    // Nothing sampled yet (no field, no outline) has not moved.
+    check('predicate: nothing sampled', tiles.plateGroundMoved(null, after) ? 1 : 0, 0);
+    check('no outline -> no samples',
+          tiles.plateGroundSamples(null, pin) === null ? 1 : 0, 1);
+  }
+
+  // ---- [6] the depth bias --------------------------------------------------
+  console.log('\n[6] the plate stands one rung in front of the ground ladder');
+  {
+    const ground = await loadModule(GROUND_SRC);
+    check('AREA_OFFSET_MAX (scene/ground.ts)', ground.AREA_OFFSET_MAX, 32);
+    check('PLATE_POLYGON_OFFSET (scene/tiles.ts)', tiles.PLATE_POLYGON_OFFSET, -33);
+    check('one rung above the ladder ceiling',
+          tiles.PLATE_POLYGON_OFFSET, -(ground.AREA_OFFSET_MAX + 1));
+    check('and in FRONT of it (negative pulls towards the camera)',
+          tiles.PLATE_POLYGON_OFFSET < -ground.AREA_OFFSET_MAX ? 1 : 0, 1);
+    const mat = { polygonOffset: false, polygonOffsetFactor: 0, polygonOffsetUnits: 0 };
+    tiles.applyPlateDepthBias(mat);
+    check('applyPlateDepthBias: on', mat.polygonOffset ? 1 : 0, 1);
+    check('applyPlateDepthBias: factor', mat.polygonOffsetFactor, -33);
+    check('applyPlateDepthBias: units', mat.polygonOffsetUnits, -33);
   }
 
   console.log(`\n${passed} ok, ${failed} failed`);

@@ -107,8 +107,13 @@ const AREA_Y_STEP_M = 0.0004;
 const AREA_Y_MAX_M = 0.01;
 /** Ceiling of the stacking depth bias. The bias only has to separate the layer
  *  from the one below it, and a world with two hundred painted areas must not
- *  ask the driver for a two-hundred-fold offset. */
-const AREA_OFFSET_MAX = 32;
+ *  ask the driver for a two-hundred-fold offset.
+ *
+ *  Exported because the footprint plate has to stand ONE RUNG in front of this
+ *  whole ladder (`scene/tiles.PLATE_POLYGON_OFFSET`) — that file cannot import
+ *  this one (this one takes `setWorldGround` from it), so the relation between
+ *  the two numbers is pinned in `smoke_plate_drape.mjs` § 6 instead. */
+export const AREA_OFFSET_MAX = 32;
 /**
  * Where the painted areas sit in the TRANSPARENT pass: drawn far BEFORE
  * everything else in it, at `BASE + index + 1`.

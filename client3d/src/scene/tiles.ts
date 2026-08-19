@@ -381,6 +381,10 @@ export interface Tile {
   /** Boden-/Sockelplatte DIESER Kachel (immer opak, Höhe 0) — die Innenansicht
    *  eines Gebäudes mit Keller muss durch sie hindurchsehen. */
   groundPlate?: THREE.Mesh;
+  /** The world ground under the plate's drape lattice at the moment it was
+   *  built (`plateGroundSamples`) — the staleness reading of `relevelTiles`.
+   *  `undefined` for a tile that carries no plate at all. */
+  plateGround?: Float32Array | null;
   /** Szene dieser Kachel nutzt eine Etage < 0 (aus dem Payload abgeleitet,
    *  gesetzt von mountScene). Ohne Keller bleibt der Boden unangetastet. */
   hasBasement?: boolean;
@@ -591,6 +595,47 @@ export const PLATE_Y_M = 0.04;
 export const SOCLE_Y_M = 0.045;
 
 /**
+ * The DEPTH BIAS of a footprint plate — one rung in front of the world ground's
+ * own ladder (`scene/ground.AREA_OFFSET_MAX` = 32, so this is −33).
+ *
+ * The same `polygonOffset` crutch the file already uses for the detail-mode
+ * backstop (`sceneRecipe.mountScene`, 2026-08-03: "Z-Fighting-Wellen"), with
+ * the SIGN MIRRORED, because the case is mirrored: the backstop must never
+ * poke through the zone plates ABOVE it and is pushed back (+), a footprint
+ * plate must never be poked through by the terrain BELOW it and is pulled
+ * forward (−).
+ *
+ * WHY IT HAS TO CLEAR THE WHOLE LADDER, not just win by one unit. The painted
+ * areas already pull THEMSELVES forward by `−min(index+1, AREA_OFFSET_MAX)`
+ * (`scene/ground.ts`) to stack coplanar ground, while the plate carried no
+ * bias at all — so the plate's 4 cm of air was competing against up to 32
+ * depth units of the area under it. Worked out for this camera (near 0.2, far
+ * 800, 24-bit depth: one depth unit at range z is 2.979e−7 · z² metres, so
+ * 4 cm equals 134252 / z² units), the plate lost to an area of bias b beyond
+ * z = sqrt(134252 / b):
+ *
+ *      b =  1 -> 366 m      b =  5 -> 164 m      b = 32 -> 65 m
+ *      b =  2 -> 259 m      b = 10 -> 116 m
+ *
+ * which is exactly "the ground plate is partly covered by the texture of the
+ * terrain under it, and it changes with view and movement". At one rung above
+ * the ceiling the plate wins at every range, and it is no harsher on whatever
+ * stands ON it than the topmost painted area already is.
+ */
+export const PLATE_POLYGON_OFFSET = -33;
+
+/** Put a footprint plate one rung in front of the ground it lies on. Takes the
+ *  three fields structurally so the smoke can check the real setter rather than
+ *  a copy of it (`smoke_plate_drape.mjs` § 6). */
+export function applyPlateDepthBias(mat: {
+  polygonOffset: boolean; polygonOffsetFactor: number; polygonOffsetUnits: number;
+}): void {
+  mat.polygonOffset = true;
+  mat.polygonOffsetFactor = PLATE_POLYGON_OFFSET;
+  mat.polygonOffsetUnits = PLATE_POLYGON_OFFSET;
+}
+
+/**
  * UVs of a plate geometry, in METRES over the bounding box divided by
  * `widthM` — the square case's own mapping, generalised.
  *
@@ -611,6 +656,32 @@ function plateUVs(geo: THREE.BufferGeometry, minPX: number, minPY: number,
     uv[i * 2 + 1] = (pos.getY(i) - minPY) / span;
   }
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+}
+
+/**
+ * The drape LATTICE of a footprint polygon: the regular grid over its bounding
+ * box the plate's vertices sit on, `DRAPE_STEP_M` apart and capped at
+ * `DRAPE_MAX_SEGMENTS` per axis.
+ *
+ * One function, because two readers walk it and must not drift: the geometry
+ * (`platePolygonGeometry`) and the staleness probe that asks whether the ground
+ * under an ALREADY BUILT plate has moved (`plateGroundSamples`). `null` for an
+ * outline that has no bounds at all.
+ */
+function plateLattice(boundary: [number, number][]): {
+  minX: number; minZ: number; segX: number; segZ: number;
+  stepX: number; stepZ: number;
+} | null {
+  const b = polygonBounds(boundary);
+  if (!b) return null;
+  const spanX = b.maxX - b.minX;
+  const spanZ = b.maxZ - b.minZ;
+  const segX = Math.min(DRAPE_MAX_SEGMENTS,
+                        Math.max(1, Math.ceil(spanX / DRAPE_STEP_M)));
+  const segZ = Math.min(DRAPE_MAX_SEGMENTS,
+                        Math.max(1, Math.ceil(spanZ / DRAPE_STEP_M)));
+  return { minX: b.minX, minZ: b.minZ, segX, segZ,
+           stepX: spanX / segX, stepZ: spanZ / segZ };
 }
 
 /**
@@ -642,14 +713,7 @@ function platePolygonGeometry(boundary: [number, number][], widthM: number,
   // Plate coordinates: px = lx, py = −lz. The z bounds therefore swap sides.
   const minPX = b.minX;
   const minPY = -b.maxZ;
-  const spanX = b.maxX - b.minX;
-  const spanZ = b.maxZ - b.minZ;
-  const segX = Math.min(DRAPE_MAX_SEGMENTS,
-                        Math.max(1, Math.ceil(spanX / DRAPE_STEP_M)));
-  const segZ = Math.min(DRAPE_MAX_SEGMENTS,
-                        Math.max(1, Math.ceil(spanZ / DRAPE_STEP_M)));
-  const stepX = spanX / segX;
-  const stepZ = spanZ / segZ;
+  const { segX, segZ, stepX, stepZ } = plateLattice(boundary)!;
   // Does the ground move under this footprint at all? Probed on the DRAPE GRID
   // itself, so nothing between the samples can hide (finding I2), and only
   // INSIDE the polygon — a hill in the notch of an L is not under this plate.
@@ -746,6 +810,58 @@ export function plateGeometry(boundary: [number, number][], widthM: number,
   return platePolygonGeometry(boundary, widthM, plateLiftFn(at));
 }
 
+/**
+ * The WORLD GROUND under every point of a plate's drape lattice, in metres —
+ * the reading a built plate is frozen against.
+ *
+ * A plate is draped once, when its tile is built, and the field arrives in
+ * pieces: the 256 m height tiles are a WINDOW that follows the player
+ * (`scene/heightTiles.ts`), so the ground under a footprint sharpens as
+ * somebody walks towards it. `main.relevelTiles` used to ask ONE point whether
+ * that had happened — the pin — which is sound for a 10 m square and blind for
+ * a v6 outline hundreds of metres across, where the pin and the far rim are in
+ * different height tiles. Then the plate kept a stale drape while the ground
+ * under it moved, and the terrain grew through it AS THE PLAYER WALKED.
+ *
+ * `null` while no world ground has been taken over or the place has no outline
+ * — there is no plate to be stale then either. `at` needs no y: this is the
+ * ground itself, not the lift over the tile floor.
+ */
+export function plateGroundSamples(boundary: [number, number][] | null | undefined,
+                                   at: { x: number; z: number; yaw: number },
+): Float32Array | null {
+  const sample = worldGroundAt;
+  if (!sample || !boundary) return null;
+  const grid = plateLattice(boundary);
+  if (!grid) return null;
+  const cos = Math.cos(at.yaw);
+  const sin = Math.sin(at.yaw);
+  const out = new Float32Array((grid.segX + 1) * (grid.segZ + 1));
+  let n = 0;
+  for (let iz = 0; iz <= grid.segZ; iz++) {
+    const lz = grid.minZ + iz * grid.stepZ;
+    for (let ix = 0; ix <= grid.segX; ix++) {
+      const lx = grid.minX + ix * grid.stepX;
+      out[n++] = sample(at.x + lx * cos + lz * sin, at.z - lx * sin + lz * cos);
+    }
+  }
+  return out;
+}
+
+/** Has the ground under a built plate moved by at least `epsM` ANYWHERE on its
+ *  lattice? Two readings that were never taken (no field yet) have not moved;
+ *  a lattice of a different size has, because the outline itself was redrawn. */
+export function plateGroundMoved(before: Float32Array | null | undefined,
+                                 after: Float32Array | null | undefined,
+                                 epsM = 1e-3): boolean {
+  if (!before || !after) return false;
+  if (before.length !== after.length) return true;
+  for (let i = 0; i < before.length; i++) {
+    if (Math.abs(before[i] - after[i]) >= epsM) return true;
+  }
+  return false;
+}
+
 /** Ground plate of the FOOTPRINT — the surface texture of the location's
  *  terrain kind (server library, else procedural), over the whole drawn
  *  BOUNDARY POLYGON (contract v6 Nr. 4; a legacy square is that polygon's four
@@ -793,6 +909,7 @@ function groundPlate(boundary: [number, number][], widthM: number,
   // The tile surface goes through the same factory as the scene plates: a water
   // location should look on the map the way it looks in the room.
   const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
+  applyPlateDepthBias(mat);
   const plate = new THREE.Mesh(plateGeometry(boundary, widthM, at), mat);
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = PLATE_Y_M;
@@ -917,10 +1034,12 @@ export function buildTile(loc: WorldLocation): Tile {
     // `smoke_plate_drape.mjs`: on a 40 m outline over a 5 % slope the west rim
     // stood 1.045 m in the air and the east rim was buried 0.955 m deep.
     if (boundary) {
+      const plinthMat = std({ map: plinthTex });
+      applyPlateDepthBias(plinthMat);
       const plinth = new THREE.Mesh(
         plateGeometry(boundary, width,
                       { x: center.x, y: center.y, z: center.z, yaw }),
-        std({ map: plinthTex }));
+        plinthMat);
       plinth.rotation.x = -Math.PI / 2;
       plinth.position.y = SOCLE_Y_M;
       plinth.receiveShadow = true;
@@ -933,6 +1052,14 @@ export function buildTile(loc: WorldLocation): Tile {
     // building height.
     tile.height = 4;
     addLabel();
+  }
+
+  // The ground this plate was draped against — `main.relevelTiles` compares it
+  // with a fresh reading whenever the relief moves, so a plate whose landscape
+  // sharpened away from the pin is rebuilt instead of left standing stale.
+  if (tile.groundPlate) {
+    tile.plateGround = plateGroundSamples(boundary,
+                                          { x: center.x, z: center.z, yaw });
   }
 
   tile.facadeMats = tile.shellMats.filter((m) => !!m.emissiveMap);
