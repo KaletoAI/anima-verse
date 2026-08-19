@@ -37,7 +37,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, plateGroundMoved, plateGroundSamples, setSurfaceTextures, terrainLiftAt, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
@@ -4011,6 +4011,18 @@ async function startApp(username: string, role: string) {
    * Rebuilding is the path a MOVED location already takes
    * (`rebuildMovedTiles`) and costs the same; it happens on an authoring edit,
    * never per frame — the revision counter is compared, not the field.
+   *
+   * AND THE PIN IS NOT THE PLACE (2026-08-19). The tile stands on its pin, but
+   * the PLATE is draped over the whole outline, and the relief arrives as a
+   * window of 256 m tiles that follows the player (§ A16.3): walking towards a
+   * place sharpens the ground under its far rim while the pin's own reading
+   * never moves. Asking the pin alone therefore left the plate frozen on the
+   * coarse overview while the drawn landscape under it rose — the terrain grew
+   * through the plate, and it changed as the player walked. A v6 outline is
+   * hundreds of metres across, so pin and rim are routinely in different height
+   * tiles; the drape LATTICE is what the plate is made of, so that is what is
+   * asked (`plateGroundSamples`, at most 49² samples of arithmetic, and only
+   * for a tile that carries a plate, and only when the revision moved).
    */
   let builtHeightRev = -1;
   function relevelTiles(): void {
@@ -4019,7 +4031,13 @@ async function startApp(username: string, role: string) {
     builtHeightRev = rev;
     for (const tile of [...tiles.values()]) {
       const centre = footprintCentre(tile.loc);
-      if (!centre || Math.abs(centre.y - tile.center.y) < 1e-3) continue;
+      if (!centre) continue;
+      const moved = Math.abs(centre.y - tile.center.y) >= 1e-3
+        || (!!tile.plateGround
+            && plateGroundMoved(tile.plateGround,
+                                plateGroundSamples(tile.boundary,
+                                                   { x: centre.x, z: centre.z, yaw: tile.yaw })));
+      if (!moved) continue;
       wallCache.delete(tile.loc.id);
       rebuildTile(tile, tile.loc);
     }
