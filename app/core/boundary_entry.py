@@ -41,6 +41,12 @@ everywhere it travels — the journey remembers it as ``entry_edge``, the
 walking gate matches it, and none of them re-derives a point of their own:
 ``world_geometry.polygon_edge_frame`` computes it once, for the scene payload
 and for this module alike.
+
+The worldmap row is the third consumer and reads the same function:
+:func:`opening_world_frames` is what ``world_ops.build_worldmap_payload``
+hands out as ``locations[].openings`` (§ A1.3), so the 3D client renders the
+very pass-throughs the entry gate judges — it computes nothing about an
+opening itself.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -71,21 +77,37 @@ def _openings(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def opening_world_points(location: Dict[str, Any]
-                         ) -> List[Tuple[int, Tuple[float, float]]]:
-    """Every authored opening as ``(edge index, (x, z))`` in WORLD metres.
+def _r(value: float, digits: int = 2) -> float:
+    """Round for the payload — and never emit ``-0.0``.
+
+    ``+ 0.0`` is what normalizes it: IEEE-754 says ``-0.0 + 0.0 == +0.0``,
+    while ``round()`` alone keeps the sign a normal of a west-running edge
+    picks up.
+    """
+    return round(value, digits) + 0.0
+
+
+def opening_world_frames(location: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every authored opening as ``{edge, at_world, inward, room}`` in WORLD
+    metres — the finished pass-through, ready to be delivered.
 
     Empty for a location without an effective boundary (unplaced, and without
     a drawn outline or a legacy square width) — such a location has no area,
     so its openings have no point either.
 
-    ONE geometry source: ``polygon_edge_frame`` puts the point on the local
-    boundary edge, ``local_to_world`` maps the local frame into the world
-    (§ A1.1). An index the boundary does not have is skipped, exactly like an
-    unusable edge letter used to be. Hand-derived: a location at (50, 50)
-    with the legacy square ``plan_width_m`` 10 synthesizes the boundary
-    (−5,−5) (5,−5) (5,5) (−5,5); edge 0 at 0.5 is local (0, −5) → world
-    (50, 45), and the same location at yaw 90 → (45, 50).
+    ONE geometry source: ``polygon_edge_frame`` puts the point AND the
+    measured unit inward normal on the local boundary edge, ``local_to_world``
+    maps the local frame into the world (§ A1.1). The normal is a DIRECTION,
+    so it takes the same rotation about the ORIGIN instead of the full
+    mapping. An index the boundary does not have is skipped, exactly like an
+    unusable edge letter used to be. ``room`` is the authored link, '' when
+    there is none — existence of that room is the entry gate's question
+    (:func:`opening_entry_room`), not the geometry's.
+
+    Hand-derived: a location at (50, 50) with the legacy square
+    ``plan_width_m`` 10 synthesizes the boundary (−5,−5) (5,−5) (5,5) (−5,5);
+    edge 0 at 0.5 is local (0, −5) with inward (0, 1) → world (50, 45) /
+    (0, 1), and the same location at yaw 90 → (45, 50) / (1, 0).
     """
     from app.core.world_geometry import (effective_boundary, local_to_world,
                                          polygon_edge_frame)
@@ -95,15 +117,31 @@ def opening_world_points(location: Dict[str, Any]
     if eff is None:
         return []
     cx, cz, yaw, pts = eff
-    out: List[Tuple[int, Tuple[float, float]]] = []
+    out: List[Dict[str, Any]] = []
     for op in _openings(location):
         frame = polygon_edge_frame(pts, op["edge"], op["at"])
         if frame is None:
             continue
-        (lx, lz), _inward = frame
+        (lx, lz), (nx, nz) = frame
         x, z = local_to_world(lx, lz, cx, cz, yaw)
-        out.append((int(op["edge"]), (round(x, 2), round(z, 2))))
+        wnx, wnz = local_to_world(nx, nz, 0.0, 0.0, yaw)
+        out.append({"edge": int(op["edge"]),
+                    "at_world": [_r(x), _r(z)],
+                    "inward": [_r(wnx, 4), _r(wnz, 4)],
+                    "room": op["room"]})
     return out
+
+
+def opening_world_points(location: Dict[str, Any]
+                         ) -> List[Tuple[int, Tuple[float, float]]]:
+    """Every authored opening as ``(edge index, (x, z))`` in WORLD metres.
+
+    The point half of :func:`opening_world_frames`, for the callers that
+    measure a distance and care about nothing else (the entry/exit gate of
+    ``POST /play/pos``). Same numbers, one derivation.
+    """
+    return [(f["edge"], (f["at_world"][0], f["at_world"][1]))
+            for f in opening_world_frames(location)]
 
 
 def opening_world_point(location: Dict[str, Any],

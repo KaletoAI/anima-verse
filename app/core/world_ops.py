@@ -179,7 +179,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     (§ A12).
     The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
     along: the client mirrors the height gate of ``POST /play/pos`` and needs
-    the very numbers the server judges with.
+    the very numbers the server judges with. So do the location's authored
+    pass-throughs (``openings``, contract v6): finished world points plus
+    inward normals off ``boundary_entry.opening_world_frames``, so no client
+    anchors an opening of its own any more.
 
     Fog of war (§ A12): with ``show_all=False`` the payload only carries what
     the avatar knows — placed locations pass through
@@ -207,6 +210,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
     from app.core.world_geometry import effective_boundary, placed_footprint
+    from app.core.boundary_entry import opening_world_frames
     from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import list_areas, terrain_sig
 
@@ -284,6 +288,14 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "yaw_deg": float(loc.get("yaw_deg") or 0.0),
             "plan_width_m": _width,
             "boundary": [[x, z] for x, z in _bd[3]] if _bd is not None else None,
+            # The authored pass-throughs, COMPUTED (§ A1.3, § B1 Nr. 13): edge
+            # index, world point, world inward normal and the room link. The
+            # geometry is not re-derived here — ``opening_world_frames`` is the
+            # very function the entry gate of ``POST /play/pos`` measures with,
+            # so the offer a client renders and the crossing the server accepts
+            # cannot drift. Empty list = this location has no authored way in,
+            # which IS the free-boundary statement (E4 task 5).
+            "openings": opening_world_frames(loc),
             # A transit tile (a road cell) is walked THROUGH, never travelled
             # TO — the flag lets a client's destination list drop them, the
             # way the LLM's target list does (movement/blocks.py). Same field

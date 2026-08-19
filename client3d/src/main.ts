@@ -43,7 +43,7 @@ import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
-import { anchorRawOpenings, entryOfferNear, freeBoundaryOf, inwardOf, type EntryTile, type LocalOpening } from './game/enterLocation';
+import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, placementOf, type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
@@ -581,6 +581,11 @@ async function startApp(username: string, role: string) {
           // a location the map row states nothing about.
           boundary: l.boundary ?? detail?.map3d?.boundary ?? null,
           plan_width_m: l.plan_width_m ?? detail?.map3d?.plan_width_m ?? null,
+          // The authored pass-throughs, finished in world metres by the server
+          // (§ A1.3). Only the map row has them, and its EMPTY list is a
+          // statement ("free boundary") — so a missing field is the same
+          // statement, never a reason to go looking in `map3d`.
+          openings: l.openings ?? [],
         } as WorldLocation;
       });
   }
@@ -2207,12 +2212,12 @@ async function startApp(username: string, role: string) {
    *    walk-in it starts bypasses this check by owning the figure. A location
    *    that draws NO opening has a free boundary on both sides (`freeBoundary`
    *    — the server's own rule since the task-5 review) and is walked into
-   *    like open ground. Since task 6 a location with no SCENE at all (404:
-   *    no plan, no layout, no model) is judged by its AUTHORED openings
-   *    (`map3d.boundary_openings`, which is where the server reads them too):
-   *    without any it is that same open ground — a painted meadow used to be
-   *    a wall to the walker — and with one it stays closed, because an author
-   *    may draw a gate long before the place has a layout;
+   *    like open ground. The judgement needs no scene: since contract v6 the
+   *    openings ride on the WORLDMAP ROW, so a place with no scene at all
+   *    (404: no plan, no layout, no model) is judged by the same list — a
+   *    painted meadow is open ground, and a meadow with a gate drawn on it
+   *    stays closed, which is what an author drawing one long before any
+   *    layout means;
    *  - a point the server JUST refused (see above).
    *
    * `mine` is the footprint the avatar stands in, passed in because the
@@ -2295,9 +2300,9 @@ async function startApp(username: string, role: string) {
     for (const t of here && here !== there ? [there, here] : [there]) {
       if (!t) continue;
       for (const o of openingsOf(t)) {
-        const w = tileToWorld(t, o.at.x, o.at.z);
-        if (Math.hypot(w.x - x, w.z - z) <= OPENING_TOLERANCE_M
-            || Math.hypot(w.x - from.x, w.z - from.z) <= OPENING_TOLERANCE_M) {
+        const [ox, oz] = o.at_world;
+        if (Math.hypot(ox - x, oz - z) <= OPENING_TOLERANCE_M
+            || Math.hypot(ox - from.x, oz - from.z) <= OPENING_TOLERANCE_M) {
           return false;
         }
       }
@@ -2306,58 +2311,31 @@ async function startApp(username: string, role: string) {
   }
 
   /**
-   * Does that location let anyone in anywhere (the server's free-boundary
-   * rule)? The rule itself is `enterLocation.freeBoundaryOf`, hand-checked in
-   * `client3d/scripts/smoke_enter_math.mjs`; this is the lookup of its two
-   * inputs.
+   * The boundary openings of a location, in WORLD metres — ONE source since
+   * contract v6: the worldmap row (`locations[].openings`, § A1.3), which
+   * `placeableOf` merges onto the tile's location record.
    *
-   * The authored openings come off the TILE's own location record, not out of
-   * a second dictionary: `placeableOf` merges the `/world/locations` detail
-   * and the worldmap row into it, and both carry the sanitised `map3d`. It is
-   * therefore the same list the server judges the crossing with, for exactly
-   * the locations that have a tile — and the caller always holds one.
+   * The server computes them with `boundary_entry.opening_world_frames`, the
+   * very function the entry gate of `POST /play/pos` measures with, so the
+   * offer and the crossing cannot disagree. It answers for EVERY location —
+   * including one whose scene endpoint 404s (a painted meadow with a gate
+   * drawn on it before any layout exists), which is what the client's old
+   * second source, anchoring `map3d.boundary_openings` itself, existed to
+   * patch over. Nothing here anchors, rotates or normalizes anything.
    */
-  function freeBoundary(tile: Tile): boolean {
-    const authored = tile.loc.map3d?.boundary_openings ?? [];
-    return freeBoundaryOf(scenes.get(tile.loc.id), authored.length);
+  function openingsOf(tile: Tile): Opening[] {
+    return tile.loc.openings ?? [];
   }
 
   /**
-   * The boundary openings of a location, TILE-LOCAL and with their inward
-   * normal — from whichever of the client's TWO sources can answer.
-   *
-   * 1. THE SCENE PAYLOAD, whenever there is one: the server has already
-   *    applied `tile_rotation` and anchored every opening in metres around the
-   *    tile centre (`at_world`, `inward`, § B1 Nr. 13). A payload that lists
-   *    none is a location with a free boundary — nothing to offer, one simply
-   *    walks in.
-   * 2. THE RAW `map3d.boundary_openings`, when the scene endpoint answered 404
-   *    (no outline, no room layout, no building model — a painted place whose
-   *    author drew a gate before there was anything to draw it into). The
-   *    server reads exactly this list, so the client anchors it with the
-   *    server's own formula (`enterLocation.anchorRawOpenings`, hand-checked
-   *    against `boundary_entry.opening_world_points` in
-   *    `client3d/scripts/smoke_enter_math.mjs`). WITHOUT `plan_width_m` there
-   *    is no edge length and therefore no point — the place stays closed
-   *    rather than offering a metre nobody authored.
-   *
-   * A payload still IN FLIGHT answers nothing at all: the conservative side,
-   * the same one `freeBoundaryOf` takes.
+   * Does that location let anyone in anywhere (the server's free-boundary
+   * rule)? NO AUTHORED OPENING AT ALL is the whole rule: such a place never
+   * said where its way in is, so it is walked into like open ground (the rule
+   * gates still judge it). One WITH openings is entered at them and nowhere
+   * else, within the server's 1.5 m.
    */
-  function openingsOf(tile: Tile): (LocalOpening & { inward: { x: number; z: number } })[] {
-    const scene = scenes.get(tile.loc.id);
-    if (scene === undefined) return [];
-    if (scene !== null) {
-      return (scene.boundary_openings ?? []).map((o) => ({
-        edge: o.edge,
-        at: { x: o.at_world[0], z: o.at_world[1] },
-        inward: { x: o.inward[0], z: o.inward[1] },
-      }));
-    }
-    const m3 = tile.loc.map3d;
-    const width = tile.loc.plan_width_m ?? m3?.plan_width_m ?? 0;
-    return anchorRawOpenings(m3?.boundary_openings, width, m3?.tile_rotation ?? 0)
-      .map((o) => ({ ...o, inward: inwardOf(o.edge) }));
+  function freeBoundary(tile: Tile): boolean {
+    return openingsOf(tile).length === 0;
   }
 
   /** `blockedFor` from where the avatar stands right now. */
@@ -3811,9 +3789,9 @@ async function startApp(username: string, role: string) {
    *  for a real offer. */
   let enterOffer: {
     locId: string; point: { x: number; z: number }; locked: string;
-    /** the inward normal at `point` in WORLD metres, for a FREE boundary — an
-     *  offer at an authored opening looks its own normal up instead. */
-    inward?: { x: number; z: number };
+    /** the inward normal at `point` in WORLD metres — the authored opening's
+     *  own (server-computed) or, on a free boundary, the rim's. */
+    inward: { x: number; z: number };
   } | null = null;
 
   function updateEnterOffer() {
@@ -3832,9 +3810,10 @@ async function startApp(username: string, role: string) {
       // is — and since E5 so is one the walker CANNOT get into by walking:
       // a place with authored openings is not a free boundary, so its
       // footprint is a wall everywhere but at its gates, and without an offer
-      // there is no way in at all. That is the whole 404 case (`openingsOf`
-      // Nr. 2): no scene means no interior, so `openable` was false and the
-      // painted place with a gate on it could be neither opened nor entered.
+      // there is no way in at all. That covers the place with NO scene as
+      // well: no scene means no interior, so `openable` is false, and the
+      // painted place with a gate on it could otherwise be neither opened nor
+      // entered — its openings come off the worldmap row all the same.
       // Skipped is only what is BOTH: nothing to open and free to walk into —
       // there the offer would just duplicate ordinary walking.
       if (!openable(t) && freeBoundary(t)) continue;
@@ -3843,15 +3822,10 @@ async function startApp(username: string, role: string) {
         footprint: { x: t.center.x, z: t.center.z, yaw: t.yaw },
         // The DRAWN outline, tile-local (contract v6) — the FREE boundary's
         // way in, and handed over ONLY for a location the free-boundary rule
-        // actually says is free. `openingsOf` answers an empty list for a
-        // scene still IN FLIGHT as well, and reading that as "enter anywhere"
-        // would offer a walk-in the server then refuses — the very divergence
-        // `freeBoundaryOf` exists to close.
+        // actually says is free.
         boundary: freeBoundary(t) ? t.boundary : null,
-        // Openings come TILE-LOCAL (metres around the tile centre, § B1
-        // Nr. 13, `tile_rotation` already applied); `openingWorldPoints`
-        // turns them with the tile's own yaw, the § A1.1 mapping `tileToWorld`
-        // uses for every other payload point.
+        // Openings arrive FINISHED in world metres (§ A1.3) and are handed
+        // over verbatim — point and inward normal alike.
         openings: openingsOf(t),
         // The verdict of the neighbour poll, bound by ID at this moment — it
         // is per avatar and never travels in the cached payload above.
@@ -3885,10 +3859,10 @@ async function startApp(username: string, role: string) {
    *  server's gate decides then (a refusal snaps the figure back and says
    *  why, like any other refused report).
    *
-   *  The goal is the opening's world point plus one step INWARD (`inward` is
-   *  the payload's unit normal): far enough inside the footprint to be a real
-   *  entry, close enough to the opening to stay well within the server's
-   *  crossing tolerance of 1.5 m.
+   *  The goal is the offered point plus one step INWARD (`inward` is the
+   *  payload's own unit normal, or the rim's on a free boundary): far enough
+   *  inside the footprint to be a real entry, close enough to the opening to
+   *  stay well within the server's crossing tolerance of 1.5 m.
    *
    *  A locked place is answered instead of entered: the server's own sentence,
    *  passed through untranslated (it is localized already), so the key is never
@@ -3906,32 +3880,13 @@ async function startApp(username: string, role: string) {
     if (roomRequestInFlight || elevatorRide || walkIn) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    const target = tiles.get(offer.locId);
-    if (!target) return;
+    if (!tiles.get(offer.locId)) return;
     cancelRoute();
-    // The inward normal of the opening the OFFER names — the nearest one is
-    // what `entryOfferNear` already picked, so this looks up its normal
-    // instead of choosing a second time.
-    let goal = offer.inward
-      // A FREE boundary has no authored opening to look a normal up on: the
-      // offer brought the rim's own inward normal along (contract v6), and the
-      // step along it is the crossing.
-      ? { x: offer.point.x + offer.inward.x * OPENING_WALK_IN_M,
-          z: offer.point.z + offer.inward.z * OPENING_WALK_IN_M }
-      : { x: offer.point.x, z: offer.point.z };
-    let best = Infinity;
-    // The SAME list the offer was made from (`openingsOf`) — the raw-anchored
-    // one included, or a 404 place would be offered and then walked to its own
-    // opening point without the step inward that makes the crossing.
-    for (const o of openingsOf(target)) {
-      const at = tileToWorld(target, o.at.x, o.at.z);
-      const d = Math.hypot(at.x - offer.point.x, at.z - offer.point.z);
-      if (d >= best) continue;
-      best = d;
-      const inward = tileDirToWorld(target, o.inward.x, o.inward.z);
-      goal = { x: at.x + inward.x * OPENING_WALK_IN_M,
-               z: at.z + inward.z * OPENING_WALK_IN_M };
-    }
+    // ONE normal, the one `entryOfferNear` already picked: the authored
+    // opening's (server-computed, world metres) or the rim's on a free
+    // boundary. Nothing chooses a second time and nothing turns anything.
+    const goal = { x: offer.point.x + offer.inward.x * OPENING_WALK_IN_M,
+                   z: offer.point.z + offer.inward.z * OPENING_WALK_IN_M };
     const g = new THREE.Vector3(goal.x, groundY(goal.x, goal.z), goal.z);
     npcs.setPlayerTarget(avatarName, g);
     // From here the walk-in owns the figure: no steering, and the reports

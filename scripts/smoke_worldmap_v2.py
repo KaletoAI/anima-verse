@@ -99,6 +99,29 @@ Hand-derived expectations:
           sig (deterministic serialization, sort_keys);
       (e) with map3d removed and still no room layouts the key is absent
           again — it stays an OPTIONAL key.
+  [9] ``openings`` — the authored boundary pass-throughs, FINISHED
+      (contract v6, § A1.3 / § B1 Nr. 13). The server computes, the client
+      renders: edge INDEX, world point, world inward normal, room link.
+      The Gatehouse of [8] is the fixture — pin (0, 0), no drawn boundary,
+      ``map3d.plan_width_m`` 12, so ``effective_boundary`` synthesizes the
+      square (−6,−6) (6,−6) (6,6) (−6,6) (clockwise in map view).
+      Hand-derived, edge 0 = point 0 → point 1, i.e. (−6,−6) → (6,−6):
+        at 0.5 -> local (−6 + 0.5·12, −6) = (0, −6)
+        inward: d = (12, 0), |d| = 12, (−dz, dx)/|d| = (0, 1); the probe a
+          millimetre along it lands at (0, −5.999), inside the square, so
+          that direction stands. +z is indeed into the square.
+        yaw 0  -> world point (0.0, −6.0), inward (0.0, 1.0)
+        yaw 90 -> § A1.1: x = cx + lx·cos + lz·sin = 0 + 0 + (−6)·1 = −6
+                          z = cz − lx·sin + lz·cos = 0 − 0 + (−6)·0 = 0
+                  the NORMAL turns about the ORIGIN, not the pin:
+                          x = 0·0 + 1·1 = 1,  z = −0·1 + 1·0 = 0
+                  -> world point (−6.0, 0.0), inward (1.0, 0.0)
+      The very same numbers stand in client3d/scripts/smoke_enter_math.mjs
+      — the client consumes this row verbatim, so both sides check the one
+      square. Further cases: a room link travels along (``room``), an
+      opening on an index the boundary does not have is dropped, and a
+      location without any authored opening carries the EMPTY list, which
+      is the free-boundary statement.
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_v2.py
 """
@@ -225,7 +248,7 @@ def main() -> int:
     check("inn.plan_width_m", inn.get("plan_width_m"), 10.0)
     check("inn keys", sorted(inn),
           sorted(["id", "name", "pos_x", "pos_z", "yaw_deg", "plan_width_m",
-                  "passable", "map3d", "layout_sig", "boundary"]))
+                  "passable", "map3d", "layout_sig", "boundary", "openings"]))
     # v6 "Gebiete": every placed location with size travels as a polygon —
     # the inn never drew one, so its square dial arrives as its four corners
     # in LOCAL metres (effective_boundary; edge 10 -> half 5), clockwise.
@@ -419,6 +442,42 @@ def main() -> int:
           "layout_sig" in entry(build_worldmap_payload("demo_avatar",
                                                        show_all=True), GATE),
           False)
+
+    print("\n[9] openings — the pass-throughs arrive COMPUTED (v6, § A1.3)")
+    # The Gatehouse gets its anchor back: a 12 m square around (0, 0).
+    set_plan_width(GATE, 12.0)
+
+    def gate_openings():
+        return entry(build_worldmap_payload("demo_avatar", show_all=True),
+                     GATE).get("openings")
+
+    check("no authored opening -> the EMPTY list (a free boundary)",
+          gate_openings(), [])
+    # edge 0 at 0.5 -> local (0, -6), inward (0, 1) -> world the same at yaw 0.
+    set_map3d(boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2}])
+    check("edge 0 at 0.5 of the 12 m square, yaw 0", gate_openings(),
+          [{"edge": 0, "at_world": [0.0, -6.0], "inward": [0.0, 1.0],
+            "room": ""}])
+    # The room link travels along; existence of that room is the entry gate's
+    # question, not the geometry's.
+    set_map3d(boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2,
+                                  "room": "hall"}])
+    check("the room link rides along", gate_openings()[0].get("room"), "hall")
+    # yaw 90: the point turns about the PIN, the normal about the ORIGIN.
+    update_location_position(GATE, 0.0, 0.0, 90.0)
+    check("yaw 90 turns point and normal", gate_openings(),
+          [{"edge": 0, "at_world": [-6.0, 0.0], "inward": [1.0, 0.0],
+            "room": "hall"}])
+    update_location_position(GATE, 0.0, 0.0, 0.0)
+    # An index the boundary does not have names no edge and therefore no
+    # point — the square has exactly the edges 0..3.
+    set_map3d(boundary_openings=[{"edge": 4, "at": 0.5, "width_m": 2}])
+    check("an edge index the polygon does not have is dropped",
+          gate_openings(), [])
+    # Without an area there is no edge to sit on either.
+    set_map3d(plan_width_m=None,
+              boundary_openings=[{"edge": 0, "at": 0.5, "width_m": 2}])
+    check("no boundary, no opening points", gate_openings(), [])
 
     print()
     if FAILURES:

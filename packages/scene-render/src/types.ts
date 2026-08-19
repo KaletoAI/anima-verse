@@ -291,14 +291,20 @@ export interface SceneProblem {
 }
 
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and
- *  leaves the cell. Pure geometry + room link, WORLD metres around the tile
- *  centre like every other scene coordinate; `inward` is the inward normal in
- *  world axes (x east, z south). Tile rotation (Nr. 15) is already applied by
- *  the server — consumers only ever add the tile centre. client3d consumes
- *  them for the entry proximity of the "Betreten" offer (Etappe 3,
- *  plan-3d-lod-und-betreten.md); the admin preview does not render them. */
+ *  leaves the cell. Pure geometry + room link, metres in the scene frame
+ *  around the anchor pin like every other scene coordinate; `inward` is the
+ *  measured inward unit normal of that edge.
+ *
+ *  SINCE v6 `edge` is the 0-based INDEX of the boundary polygon's edge
+ *  (edge i = point i -> i+1) — the letters N/E/S/W are gone with the square,
+ *  and so is the tile rotation that used to turn them (v6 Nr. 15).
+ *
+ *  client3d renders the locked threshold marks of the detail scene from these;
+ *  the ENTRY offer reads the world-metre twin on the worldmap row
+ *  (`locations[].openings`, § A1.3). The admin preview renders neither. */
 export interface SceneBoundaryOpening {
-  edge: 'N' | 'E' | 'S' | 'W'
+  /** boundary EDGE INDEX (edge i = point i -> i+1) */
+  edge: number
   at_world: [number, number]
   width_m: number
   /** "passage" today — vocabulary open, like room openings */
@@ -332,6 +338,12 @@ export interface SceneTerrain {
 export interface ScenePayload {
   signature: string
   rooms: SceneRoom[]
+  /** THE FOOTPRINT of the location as a closed polygon in the scene frame
+   *  (metres around the anchor pin, contract v6 Nr. 1/Nr. 4) — the drawn
+   *  `map3d.boundary`, or the reference square as its four corners. Absent for
+   *  a location without an area. Same points the world map draws; nothing
+   *  transforms them a second time. */
+  boundary?: [number, number][]
   /** World size of the reference square: the ONE number that turns every
    *  fraction of this payload into metres. Since E4 it IS the footprint edge
    *  (`plan_width_m`, § A1.1) — no default, no tile. Never replace it with a

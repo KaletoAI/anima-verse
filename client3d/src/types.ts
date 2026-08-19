@@ -83,29 +83,39 @@ export interface Map3dMeta {
    *  valid entry survived, so a present, non-empty list IS the statement
    *  "this place has authored ways in".
    *
-   *  The scene payload delivers the same openings COMPOSED (world edge letter
-   *  after `tile_rotation`, plus a tile-local point) — but only for a
-   *  location that HAS a scene. This raw list is the one source that also
-   *  answers for a location the scene endpoint 404s on, which is why the free
-   *  boundary is judged from it (`enterLocation.freeBoundaryOf`). */
+   *  AUTHORING DATA, not render data: the finished pass-throughs come off the
+   *  worldmap row (`MapLocation.openings`, § A1.3) in world metres, and that
+   *  is the ONE list anything geometric reads. Nothing anchors an opening from
+   *  this raw form — the server does it, for every location, scene or no
+   *  scene. */
   boundary_openings?: BoundaryOpeningMeta[];
-  /** Rotation of the TEMPLATE content inside the footprint, in 90° steps
-   *  (contract v5.2 Nr. 15). The server turns the composed scene by it, so a
-   *  scene payload never carries it — but the RAW `boundary_openings` above
-   *  are stored unturned, and anything that anchors them itself has to apply
-   *  it exactly as `boundary_entry._rotated_openings` does. Distinct from
-   *  `WorldLocation.yaw_deg`, which turns the whole footprint in the world. */
-  tile_rotation?: number;
 }
 
-/** One authored boundary opening as `map3d` stores it — TEMPLATE orientation
- *  (`tile_rotation` is applied by the server when it composes the scene), `at`
- *  a fraction along that edge, `width_m` in world metres. */
+/** One authored boundary opening as `map3d` stores it: `edge` the 0-based
+ *  INDEX of the boundary edge it sits on (edge i = point i -> i+1, contract v6
+ *  Nr. 5), `at` a fraction along that edge, `width_m` in world metres. */
 export interface BoundaryOpeningMeta {
-  edge: 'N' | 'E' | 'S' | 'W';
+  edge: number;
   at: number;
   width_m: number;
   type?: string;
+  room?: string;
+}
+
+/** One authored boundary pass-through as the WORLDMAP row delivers it
+ *  (§ A1.3, contract v6): computed by the server with the very function the
+ *  entry gate of `POST /play/pos` measures with
+ *  (`boundary_entry.opening_world_frames`), so offer and crossing cannot
+ *  drift. Everything here is WORLD metres — the client adds no pin, applies no
+ *  rotation and derives no normal of its own. */
+export interface MapOpening {
+  /** boundary EDGE INDEX (edge i = point i -> i+1) */
+  edge: number;
+  /** the pass-through point, world metres */
+  at_world: [number, number];
+  /** inward unit normal at that point, world axes (x east, z south) */
+  inward: [number, number];
+  /** room this opening routes into; '' = none, then the arrival rule decides */
   room?: string;
 }
 
@@ -131,6 +141,11 @@ export interface WorldLocation {
    *  worldmap row. It scales the surface texture and the selection ring;
    *  containment and area come from `boundary` alone. */
   plan_width_m?: number | null;
+  /** The authored boundary pass-throughs in WORLD metres, hoisted onto this
+   *  record from the worldmap row (§ A1.3) — the only opening list the client
+   *  reads. Empty = FREE boundary, absent = the row said nothing (an
+   *  unplaced location, which has no way in to speak of). */
+  openings?: MapOpening[];
   rooms: Room[];
   passable?: boolean;
   entry_room?: string;
@@ -167,6 +182,10 @@ export interface MapLocation {
   /** Width of the footprint's bounding box in world metres, DERIVED from
    *  `boundary` by the server. `null` when the location has no area. */
   plan_width_m: number | null;
+  /** THE authored pass-throughs, computed in WORLD metres (§ A1.3, v6). Always
+   *  present; the EMPTY list is the free-boundary statement ("this place never
+   *  said where its way in is"), and a non-empty one names the only ways in. */
+  openings: MapOpening[];
   /** A transit place (a road) is walked THROUGH, never travelled TO. */
   passable?: boolean;
   map3d?: Map3dMeta;  // AV3D-1 (only emitted when set)

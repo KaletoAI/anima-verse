@@ -239,25 +239,30 @@
 >     sähe ihr sonst bis zum letzten Grashalm gleich. Die Handrechnung nach
 >     § B5a rechnet mit dem wirksamen Seed.
 > 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze
->     (Straße quert die Zelle): `[{edge: N|E|S|W, at_world: [x, z],
->     width_m, type: "passage", room_id?, inward: [±1|0, ±1|0]}]`, Punkt
->     über den Rahmen des Bezugsquadrats (`at` wie Raum-Openings:
->     links→rechts auf N/S, oben→unten auf E/W), `inward` = einwärtige
->     Normale in Weltachsen. **`at`-Degradierung (eine Regel für beide
+>     (Straße quert die Zelle): `[{edge: <Kanten-Index>, at_world: [x, z],
+>     width_m, type: "passage", room_id?, inward: [nx, nz]}]`, Punkt in
+>     LOKALEN Metern um den Pin. **Seit v6 (Nr. 5)** ist `edge` der 0-basierte
+>     INDEX der Boundary-Kante (Kante i = Punkt i → i+1) und `at ∈ [0,1]`
+>     läuft entlang dieser Kante; die Buchstaben N/E/S/W sind gestrichen.
+>     `inward` = GEMESSENE einwärtige Einheits-Normale (float, keine
+>     Achsenrichtung mehr — ein gezeichnetes Polygon hat schräge Kanten).
+>     **`at`-Degradierung (eine Regel für beide
 >     Verbraucher, seit E4):** fehlendes, nicht-numerisches oder nicht-endliches
 >     `at` ist die KANTENMITTE 0,5, Werte außerhalb werden auf [0, 1] geklemmt —
 >     `scene_recipe._boundary_openings` und `boundary_entry` liefern damit
 >     denselben Punkt (vorher stand hier 0, also die Ecke, und der Renderer bot
 >     einen Eingang an, den das Eintritts-Gate ablehnte).
->     **Konsum (Etappe 3, 2026-08-03, plan-3d-lod-und-betreten.md):**
->     client3d liest die Openings für die Eintritts-Nähe des
->     „Betreten"-Angebots — Weltposition = Pin + `at_world` (§ A1.1), mehr
->     rechnet kein Renderer. Dabei zählen
->     **nur die Öffnungen der Kante, die der Schritt kreuzt**: eine Öffnung
->     an einer anderen Kante ist kein Eingang für den, der von hier kommt,
->     so nah er an der Ecke auch stehen mag (`entryOfferNear` filtert auf
->     dieselbe Kante, die der Server prüft — sonst verspricht das Angebot
->     einen Schritt, den `opening_on_edge` ablehnt). Und der SERVER
+>     **Konsum — seit v6 über die WELTKARTE, nicht mehr über die Szene:**
+>     das „Betreten"-Angebot liest `worldmap.locations[].openings` (§ A1.3),
+>     wo dieselben Öffnungen fertig in WELT-Metern samt Welt-Normale stehen —
+>     eine Quelle für jeden Ort, auch für den, dessen Szene 404 antwortet
+>     (gemalte Wiese mit gezeichnetem Tor). Der Client rechnet an einer
+>     Öffnung damit **gar nichts** mehr: kein Anker, keine Halbkanten-Formel,
+>     keine Drehung. Die Kanten-Filterung ist mit dem Kachel-Schritt
+>     gestrichen — auf der freien Ebene kreuzt ein Weg keine Kante, es zählt
+>     nur der Abstand, und genau den misst auch der Server. Die
+>     `scene.boundary_openings` bleiben, was sie sind: die LOKALE Variante
+>     für die Detailszene (verriegelte Schwellen-Marken). Und der SERVER
 >     lässt niemanden anders hinein als über eine autorisierte Öffnung
 >     (`app/core/boundary_entry.py`, verdrahtet im ENTRY-Gate von
 >     `POST /play/pos`, § A15) — eine Location ohne jede Opening hat
@@ -551,6 +556,8 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `pos_z` | `float \| null` | Welt-Meter; `null` = unplatziert |
 | `yaw_deg` | `float` | IMMER vorhanden, `0.0` wenn ungesetzt |
 | `plan_width_m` | `float \| null` | Kantenlänge des Fußabdrucks, aus `map3d` hochgezogen. Der Wert stammt aus demselben Fußabdruck, den auch `world_bounds` benutzt — Eintrag und Fußabdruck-Regel können also nicht auseinanderlaufen. `null` bedeutet deshalb **zweierlei**: der Ort ist **unplatziert** (dann hat er keinen Fußabdruck, egal wie gut sein Anker ist) ODER seine Geometrie hat keinen brauchbaren Anker (`map3d.plan_width_m` fehlt, ist ≤ 0 oder unlesbar). Ein Client, der die Kantenlänge eines unplatzierten Ortes braucht, findet sie bis dahin nur in `map3d`; E2 (Drag-Ghost) darf den rohen Anker unplatzierter Orte später zusätzlich als eigenes Feld liefern |
+| `boundary` | `[[x, z], …] \| null` | **v6:** DER Fußabdruck als gezeichnetes Polygon in LOKALEN Metern um den Pin, aus `map3d` hochgezogen (`world_geometry.effective_boundary`); ein Alt-Quadrat kommt als seine vier synthetisierten Ecken, der Client hat also keinen Quadrat-Pfad mehr. `null` = der Ort hat keine Fläche |
+| `openings` | `[{edge, at_world, inward, room}, …]` | **v6:** die autorierten Grenz-Durchgänge, FERTIG GERECHNET (§ B1 Nr. 13): `edge` = Kanten-INDEX des Boundary-Polygons, `at_world` = `[x, z]` in WELT-Metern, `inward` = einwärtige Einheits-Normale in WELT-Achsen, `room` = verknüpfter Raum (`""` = keiner, dann entscheidet die Ankunftsregel). Immer vorhanden; **leere Liste = FREIE Grenze** (der Ort hat nie gesagt, wo sein Weg hinein ist, E4 Task 5). Gerechnet von `boundary_entry.opening_world_frames` — derselben Funktion, mit der das Eintritts-Gate von `POST /play/pos` misst, damit Angebot und Übertritt nicht auseinanderlaufen können. **Der Client rechnet an einer Öffnung nichts mehr selbst**: kein Buchstabe, keine Halbkanten-Formel, keine Kachel-Drehung |
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
 | `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `size`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
