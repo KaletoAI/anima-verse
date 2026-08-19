@@ -84,6 +84,9 @@ interface BuildingModelPanelProps {
    *  building's placement spec out of it instead of computing its own. That
    *  is what makes the walk-height dial visible here: it moves `bottom_y`. */
   scene?: ScenePayload | null
+  /** Tells the owner which stored model is previewed ('' = the active one)
+   *  so the scene recipe is computed for that file. */
+  onPreviewFileChange?: (filename: string) => void
   /** Source image picked via 🧊 in the gallery — opens the backend picker. */
   generateSource: string | null
   onGenerateSourceConsumed: () => void
@@ -97,6 +100,7 @@ export function BuildingModelPanel({
   fallbackYawDeg = 0,
   onMap3dField,
   scene,
+  onPreviewFileChange,
   generateSource,
   onGenerateSourceConsumed,
 }: BuildingModelPanelProps) {
@@ -225,6 +229,11 @@ export function BuildingModelPanel({
   const current = models.find((m) => m.filename === preview)
     || models.find((m) => m.active)
     || models[0]
+  // A previewed NON-active model needs its own scene spec (its sidecar is
+  // what the dials write to); previewing the active one = default.
+  const previewedNonActive = current && !current.active ? current.filename : ''
+  useEffect(() => { onPreviewFileChange?.(previewedNonActive) },
+            [previewedNonActive, onPreviewFileChange])
 
   // Persisted orientation fix of the PREVIEWED model: generated meshes
   // come out arbitrarily oriented AND often slightly tilted — ↻ adds a

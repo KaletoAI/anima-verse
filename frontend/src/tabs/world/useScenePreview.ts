@@ -23,7 +23,12 @@ const DEBOUNCE_MS = 300
 export function useScenePreview(locationId: string, rooms: Room[],
                                 map3d: Map3D | undefined,
                                 fallbackYawDeg: number,
-                                terrain: string) {
+                                terrain: string,
+                                // The building model the admin is LOOKING at
+                                // ('' = the active one): the spec must be
+                                // computed for that file, or its placement
+                                // dials steer a model nobody renders.
+                                buildingModelFile = '') {
   const [scene, setScene] = useState<ScenePayload | null>(null)
   const [error, setError] = useState('')
   const [modelVer, setModelVer] = useState(0)
@@ -47,6 +52,7 @@ export function useScenePreview(locationId: string, rooms: Room[],
         map3d: map3d || {},
         rooms: rooms.map((r) => ({ id: r.id || '', name: r.name || '',
                                    layout: r.layout })),
+        ...(buildingModelFile ? { building_model_file: buildingModelFile } : {}),
       })
         .then((payload) => {
           if (stale) return
@@ -62,7 +68,7 @@ export function useScenePreview(locationId: string, rooms: Room[],
         })
     }, DEBOUNCE_MS)
     return () => { stale = true; window.clearTimeout(timer) }
-  }, [locationId, rooms, map3d, fallbackYawDeg, terrain, modelVer])
+  }, [locationId, rooms, map3d, fallbackYawDeg, terrain, modelVer, buildingModelFile])
 
   return { scene, error }
 }

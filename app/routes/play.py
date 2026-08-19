@@ -1259,7 +1259,8 @@ def play_room_model_meta(room_id: str):
 # ⚠ Not to be confused with GET /play/scene above: that is the avatar's CHAT
 # perception and has nothing to do with 3D.
 
-def _scene_inputs(location: dict, location_id: str) -> tuple:
+def _scene_inputs(location: dict, location_id: str,
+                  building_model_file: str = "") -> tuple:
     """(plan_width_m, building_meta, room_metas) — everything the composer
     needs from disk. Clones need no special handling: the model store
     redirects them to their template (gallery owner) and room ids are
@@ -1281,7 +1282,8 @@ def _scene_inputs(location: dict, location_id: str) -> tuple:
         if meta:
             room_metas[rid] = meta
     return (derive_plan_width_m(location_id, map3d),
-            get_client_meta(location_id) or {}, room_metas)
+            get_client_meta(location_id, filename=building_model_file) or {},
+            room_metas)
 
 
 @router.get("/play/locations/{location_id}/scene")
@@ -1350,7 +1352,8 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
     }
     known = bool(draft["id"] and get_location_by_id(draft["id"]))
     plan_width_m, building_meta, room_metas = _scene_inputs(
-        draft, draft["id"] if known else "")
+        draft, draft["id"] if known else "",
+        building_model_file=str(data.get("building_model_file") or "").strip())
     return compose_scene(draft, plan_width_m=plan_width_m,
                          building_meta=building_meta, room_metas=room_metas,
                          surface_kinds=library_kinds())

@@ -424,7 +424,8 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
     return out
 
 
-def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, Any]]:
+def get_client_meta(location_id: str, room_id: str = "",
+                    filename: str = "") -> Optional[Dict[str, Any]]:
     """Lean meta for the 3D client (``{format, rig, rotation, offset_y,
     tiers, signature}``) of the ACTIVE model, or None when there is none — no
     backend/model enumeration (that is the admin status's job). ``rotation``
@@ -436,12 +437,18 @@ def get_client_meta(location_id: str, room_id: str = "") -> Optional[Dict[str, A
 
     The placement dials come from the DEFAULT tier's sidecar: a low variant is
     the same object at a coarser resolution, so it inherits the orientation
-    fix and the offsets rather than carrying dials of its own."""
+    fix and the offsets rather than carrying dials of its own.
+
+    ``filename`` picks ONE stored model instead of the active one — the admin
+    preview of a non-active model needs the scene spec computed for the file
+    it shows, or its placement dials write to a sidecar nobody renders
+    (user finding 2026-08-19: Shift X/Z and walk height looked dead)."""
     owner = _owner_id(location_id)
     if not owner:
         return None
     gallery = _gallery(owner, room_id)
-    p = gallery.find()
+    p = (model_file_path(location_id, filename, room_id) if filename
+         else gallery.find())
     if not p:
         return None
     meta = read_sidecar(p)

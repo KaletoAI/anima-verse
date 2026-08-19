@@ -391,9 +391,13 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   // primitives, the 2D editor its per-room block — and the 3D model panel its
   // building placement spec, so the model tab and the floor plan cannot show
   // the same model differently (user finding 2026-07-28).
+  // Which stored building model the 3D panel previews ('' = the active
+  // one) — the scene recipe is computed for THAT file, so the placement
+  // dials of a non-active model move the model they belong to.
+  const [previewModelFile, setPreviewModelFile] = useState('')
   const { scene, error: sceneError } = useScenePreview(
     location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0,
-    draft.terrain || '')
+    draft.terrain || '', previewModelFile)
 
   const tab3d = (
     <div className="ga-form">
@@ -551,6 +555,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           fallbackYawDeg={location.map_rotation_2d || 0}
           onMap3dField={(key, v) => updMap3d(key, v)}
           scene={scene}
+          onPreviewFileChange={setPreviewModelFile}
           generateSource={modelGenSrc}
           onGenerateSourceConsumed={() => setModelGenSrc(null)}
         />
