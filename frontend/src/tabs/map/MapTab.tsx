@@ -5,7 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
 import { renderTopDownSnapshot } from '../world/topDownSnapshot'
-import type { ScenePayload } from '../world/worldTypes'
+import type { Map3D, ScenePayload, SceneProblem } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
 import {
   FIT_FALLBACK_PX_PER_M, areaInRect, decorateStroke, fitBounds, isStrokeStyle,
@@ -13,7 +13,8 @@ import {
   type MapBounds, type StrokeDeco, type StrokeStyle, type View,
 } from './mapMath'
 import {
-  NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, isPlaced, type GhostSpec,
+  NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, boundaryLocal, isPlaced,
+  type GhostSpec,
 } from './PlacementLayer'
 import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import { HeightLayer } from './HeightLayer'
@@ -65,6 +66,19 @@ import type {
  * Placing is click-arm-click, never HTML5 drag&drop: a tray entry arms a
  * ghost footprint that follows the cursor, the next click on the map commits
  * it, Escape cancels. The gesture works at any zoom and needs no drop target.
+ *
+ * SINCE CONTRACT v6 ("Gebiete") A LOCATION IS A DRAWN POLYGON. `map3d.boundary`
+ * holds its outline in LOCAL metres around the pin; the editor draws it through
+ * the § A1.1 transform and edits it with the SAME `PolygonHandles` gesture the
+ * painted ground and the world relief use — the conversion world ↔ local sits
+ * in `PlacementLayer` and nowhere else. Every newly placed location is seeded
+ * with a centred square, and an old one gets the same square from "Draw
+ * boundary"; from there the vertices are dragged. The write is a fifth route,
+ * `PUT /world/locations/{id}` with the whole `map3d` (the field is replaced,
+ * not merged) — WITHOUT `plan_width_m`, which the server derives from the
+ * outline's bounding box (v6 Nr. 2) and overwrites anyway. A location that has
+ * no boundary yet keeps its square, and that square is a transition state, not
+ * a shape it owns.
  *
  * The ground is edited on the same canvas, in three exclusive MODES: `select`
  * is everything above, `paint` collects vertices into a new terrain area and
@@ -155,6 +169,37 @@ const YAW_QUARTER = 90
 
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
+
+/** How many points a location boundary may hold (`world_ops._sanitize_map3d`
+ *  caps at 64) and the fewest that still enclose an area. Mirrored so the
+ *  editor says why instead of losing a click to a silent truncation. */
+const BOUNDARY_MAX_POINTS = 64
+const BOUNDARY_MIN_POINTS = 3
+
+/** Edge of the square a boundary is SEEDED as when a location has no scale
+ *  anchor to derive one from. The same placeholder the anchor-less square is
+ *  drawn with — a first shape to drag vertices out of, not a statement. */
+const BOUNDARY_SEED_M = NO_ANCHOR_WIDTH_M
+
+/** The two findings the server reports about a DRAWN boundary (contract v6
+ *  Nr. 1 + Nr. 9). Everything else in `problems[]` belongs to the floor plan
+ *  and is shown where floor plans are edited, not here. */
+const BOUNDARY_PROBLEM_KINDS = new Set([
+  'boundary_self_intersection', 'room_outside_boundary',
+])
+
+/**
+ * A centred square as a boundary, in LOCAL metres: the seed every location
+ * starts from (contract v6 — a square is only the special case of the
+ * polygon). Clockwise in map view, which with x east and z south is the
+ * positive shoelace direction the server stores: (−h,−h) → (h,−h) → (h,h) →
+ * (−h,h) has the sum +4h² > 0, so the sanitizer keeps the order and the
+ * vertices stay where the user grabbed them.
+ */
+const seedSquare = (widthM: number): Array<[number, number]> => {
+  const h = Math.round((widthM / 2) * 100) / 100
+  return [[-h, -h], [h, -h], [h, h], [-h, h]]
+}
 
 /** Zoom floor for the roof views: under one pixel per metre even a big house
  *  is a smudge, and each picture costs a request plus a GL context. */
@@ -745,6 +790,60 @@ export function MapTab() {
     setDelArmed('')
   }, [selected])
 
+  /** The drawn footprint of the selection, read through the ONE checker. */
+  const selBoundary = useMemo(
+    () => (selected ? boundaryLocal(selected) : null), [selected])
+
+  /**
+   * What the SERVER finds about this location's boundary (v6 Nr. 1 + Nr. 9).
+   *
+   * The findings live in the SCENE payload (`problems[]`), not in the worldmap
+   * one — the composer states them, every surface only shows them. So the
+   * selected location is asked for its scene, and only the two boundary kinds
+   * are kept; the rest belongs to the floor-plan editor, which shows all of
+   * them at the room they name.
+   *
+   * The key carries the boundary itself, so a finished vertex gesture asks
+   * again while a pan or a rename does not. A 404 is the normal "nothing to
+   * compose here" answer (no room layout, no outline, no building model) and
+   * simply leaves the location without findings.
+   */
+  const [selProblems, setSelProblems] = useState<SceneProblem[]>([])
+  const selProblemKey = useMemo(
+    () => (selected ? JSON.stringify([selected.id, selBoundary]) : ''),
+    [selBoundary, selected])
+
+  useEffect(() => {
+    setSelProblems([])
+    if (!selProblemKey) return
+    const [id] = JSON.parse(selProblemKey) as [string]
+    let alive = true
+    const tid = setTimeout(() => {
+      apiGet<ScenePayload>(`/play/locations/${encodeURIComponent(id)}/scene`)
+        .then((s) => {
+          if (!alive) return
+          setSelProblems((s.problems || [])
+            .filter((p) => BOUNDARY_PROBLEM_KINDS.has(p.kind)))
+        })
+        .catch(() => { /* 404 = no scene composed, and so no findings */ })
+    }, 300)
+    return () => { alive = false; clearTimeout(tid) }
+  }, [selProblemKey])
+
+  /** A finding in the user's words. The two boundary kinds get their own
+   *  sentence; anything else falls back to the server's English wording, the
+   *  way the floor-plan editor does it. */
+  const problemText = useCallback((p: SceneProblem): string => {
+    if (p.kind === 'boundary_self_intersection') {
+      return t('The drawn boundary crosses itself — inside and outside are ambiguous here. Drag the crossing vertices apart.')
+    }
+    if (p.kind === 'room_outside_boundary') {
+      return t('{n} room(s) reach out of the boundary and would stand on ground this location does not own. Move them inside or widen the boundary.')
+        .replace('{n}', String(p.room_count ?? (p.room_ids || []).length))
+    }
+    return t(p.message)
+  }, [t])
+
   // ── Building roofs ───────────────────────────────────────────────────────
 
   /** Cache key: the location plus what the server says about its room layouts.
@@ -896,6 +995,64 @@ export function MapTab() {
     }
   }, [patchLocal, reload, t, toast])
 
+  /**
+   * The DRAWN footprint (contract v6 Nr. 1): the boundary in LOCAL metres
+   * around the pin, written through the ONE route that persists `map3d`.
+   *
+   * `map3d` is REPLACED by the write (`world_ops._sanitize_map3d`), never
+   * merged, so the whole object goes along — dropping it would take the
+   * building's rotation, its storey height and its pass-throughs with it.
+   * `plan_width_m` is deliberately NOT sent: since v6 Nr. 2 it is a computed
+   * quantity (the wider side of the boundary's bounding box) and the server
+   * overwrites whatever a client submits.
+   *
+   * The answer is taken back into the list, because the server has the last
+   * word on the stored shape: it rounds to the centimetre, drops a repeated
+   * closing point, turns the ring into ONE winding (clockwise in map view) and
+   * derives the width. Reading that back is what keeps the handles sitting on
+   * the points that are actually stored.
+   */
+  const putBoundary = useCallback(async (loc: EditorLocation,
+    points: Array<[number, number]>) => {
+    if (points.length < BOUNDARY_MIN_POINTS) {
+      toast(t('A boundary needs at least {n} points')
+        .replace('{n}', String(BOUNDARY_MIN_POINTS)), 'error')
+      return
+    }
+    if (points.length > BOUNDARY_MAX_POINTS) {
+      toast(t('A boundary holds at most {n} points')
+        .replace('{n}', String(BOUNDARY_MAX_POINTS)), 'error')
+      return
+    }
+    // The points are LOCAL metres around the pin, so this is a sanity bound on
+    // the distance from it — the same range the world itself is measured in.
+    if (!points.every(([x, z]) => inRange(x, z))) {
+      toast(t('A boundary point may not lie further than {n} m from the pin')
+        .replace('{n}', String(MAX_COORD)), 'error')
+      return
+    }
+    const map3d: Map3D = { ...(loc.map3d || {}), boundary: points }
+    patchLocal(loc.id, { map3d })
+    try {
+      const r = await apiPut<{ location?: EditorLocation }>(
+        `/world/locations/${encodeURIComponent(loc.id)}`, { map3d })
+      const stored = r?.location?.map3d
+      if (stored) patchLocal(loc.id, { map3d: stored })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      void reload()
+    }
+  }, [patchLocal, reload, t, toast])
+
+  /** The first shape: a centred square of the location's own width, which the
+   *  user then drags into the outline they mean. Every placed location gets
+   *  one, so nothing stands on the map without an area (v6 Nr. 1) — and a
+   *  location that already carries a boundary is left alone. */
+  const seedBoundary = useCallback(async (loc: EditorLocation) => {
+    if (boundaryLocal(loc)) return
+    await putBoundary(loc, seedSquare(anchorWidthM(loc) ?? BOUNDARY_SEED_M))
+  }, [putBoundary])
+
   const unplace = useCallback(async (loc: EditorLocation) => {
     try {
       await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/position`,
@@ -937,6 +1094,11 @@ export function MapTab() {
         const r = await apiPost<{ location?: EditorLocation }>(
           `/world/locations/${encodeURIComponent(g.id)}/clone`, { pos_x: x, pos_z: z })
         const newId = r?.location?.id || ''
+        // Straight from the answer, not from the list: the reload below has
+        // not run yet, and a copy of a template that carries a boundary
+        // already brings the drawn shape with it — only a copy without one
+        // gets the seed square (v6 Nr. 1).
+        if (r?.location) await seedBoundary(r.location)
         await reload()
         setSelId(newId)
         if (newId && knownBefore.has(newId)) {
@@ -945,13 +1107,18 @@ export function MapTab() {
       } else {
         await apiPatch(`/world/locations/${encodeURIComponent(g.id)}/position`,
           { pos_x: x, pos_z: z })
+        // Newly on the map = it needs an area. The record is the one the tray
+        // armed, and only its `map3d` matters here (the position is already
+        // written), so the pre-reload copy is the right one to read.
+        const src = locationsRef.current.find((l) => l.id === g.id)
+        if (src) await seedBoundary(src)
         await reload()
         setSelId(g.id)
       }
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [reload, snapV, t, toast])
+  }, [reload, seedBoundary, snapV, t, toast])
 
   // ── Terrain writes ───────────────────────────────────────────────────────
 
@@ -2100,6 +2267,14 @@ export function MapTab() {
                   roofUrl={roofUrl}
                   ghost={ghost}
                   ghostPt={ghostPt}
+                  // The handles set their own pointer events, so the wrapping
+                  // `none` above does not reach them — the mode has to be
+                  // asked directly.
+                  boundaryEdit={mode === 'select'}
+                  onBoundary={(id, points) => {
+                    const loc = locationsRef.current.find((l) => l.id === id)
+                    if (loc) void putBoundary(loc, points)
+                  }}
                 />
               </g>
             ) : null}
@@ -2155,11 +2330,22 @@ export function MapTab() {
                   title={t('Clear selection')} onClick={() => setSelId('')}>×</button>
               </div>
               <div className="ga-map-chip-row">
-                <span className={selAnchor ? '' : 'ga-map-chip-warn'}>
-                  {selAnchor
-                    ? fmtM(selAnchor) + ' × ' + fmtM(selAnchor) + ' m'
-                    : t('No scale anchor — drawn as a {n} m placeholder')
-                      .replace('{n}', String(NO_ANCHOR_WIDTH_M))}
+                {/* What the location COVERS: the drawn outline since v6, the
+                    square only while none has been drawn yet. The width next
+                    to the point count is derived from the outline's bounding
+                    box by the server — it is not a dial any more. */}
+                <span className={selBoundary || selAnchor ? '' : 'ga-map-chip-warn'}>
+                  {selBoundary
+                    ? (selAnchor
+                      ? t('Boundary · {n} points · {w} m wide')
+                        .replace('{n}', String(selBoundary.length))
+                        .replace('{w}', fmtM(selAnchor))
+                      : t('Boundary · {n} points')
+                        .replace('{n}', String(selBoundary.length)))
+                    : selAnchor
+                      ? fmtM(selAnchor) + ' × ' + fmtM(selAnchor) + ' m'
+                      : t('No scale anchor — drawn as a {n} m placeholder')
+                        .replace('{n}', String(NO_ANCHOR_WIDTH_M))}
                 </span>
                 <span className="ga-map-chip-pos">
                   x {fmtPos(selected.pos_x || 0)} · z {fmtPos(selected.pos_z || 0)}
@@ -2221,7 +2407,26 @@ export function MapTab() {
                     .replace('{rim}', String(plateauRim))}
                 </div>
               ) : null}
+              {/* What the SERVER says about the drawn outline (v6 Nr. 1 +
+                  Nr. 9). Warnings, never refusals: a crossing outline and a
+                  room hanging over the edge are both things the author has to
+                  see, and neither stops anything from being saved. */}
+              {selProblems.map((p, i) => (
+                <div key={`${p.kind}-${i}`} className="ga-anchor-banner">
+                  <span>⚠ {problemText(p)}</span>
+                </div>
+              ))}
               <div className="ga-map-chip-actions">
+                {/* The v6 conversion for everything that still stands on a
+                    square: one click seeds the same centred square as a real
+                    outline, and the vertices are dragged from there. */}
+                {!selBoundary ? (
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    title={t('Give this location a drawn outline: a centred square to start from, then drag, add (click an edge) and remove (double-click) its vertices.')}
+                    onClick={() => { void seedBoundary(selected) }}>
+                    ✎ {t('Draw boundary')}
+                  </button>
+                ) : null}
                 <button type="button" className="ga-btn ga-btn-sm"
                   title={t('Choose which image this location shows on the map')}
                   onClick={() => { void openPicker(selected) }}>

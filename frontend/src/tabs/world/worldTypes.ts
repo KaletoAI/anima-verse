@@ -177,6 +177,15 @@ export interface Map3D {
    *  applies. Only valid together with area_model + area_detail; the
    *  sanitizer drops it otherwise. Absent = the scene is dead flat. */
   relief?: { amplitude_m: number; seed: number; wave_m?: number }
+  /** The DRAWN footprint of the location (contract v6 Nr. 1 "Gebiete"): a
+   *  closed point sequence in LOCAL METRES around the pin (`pos_x`/`pos_z`)
+   *  and its `yaw_deg`, transformed with the ONE § A1.1 mapping. Stored open
+   *  (no repeated closing point), at most 64 points, clockwise in map view,
+   *  concave allowed — a self-intersection is a WARNING in `problems[]`, not
+   *  a refusal. `plan_width_m` is DERIVED from its bounding box by the
+   *  server, so nothing writes both. Absent = the location has only a pin
+   *  and is drawn as a square (transition state). */
+  boundary?: Array<[number, number]>
   /** Pass-throughs at the LOCATION edge (a road crossing the cell east–west
    *  = two entries). Geometry + room link only — entry_room stays the
    *  gameplay gate. `at` follows the room-opening letter convention

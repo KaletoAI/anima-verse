@@ -2,7 +2,22 @@
  * PlacementLayer — the placed locations of the free world map, drawn INSIDE
  * the `MapCanvas` SVG.
  *
- * A location is a square of edge `map3d.plan_width_m` centred on its metre
+ * SINCE CONTRACT v6 ("Gebiete") A LOCATION IS A DRAWN POLYGON: `map3d.boundary`
+ * is a closed point sequence in LOCAL metres around the pin, and the square is
+ * only its special case. The polygon is transformed point by point with the ONE
+ * § A1.1 mapping (`mapMath.localToWorld`) and then drawn in world metres — no
+ * SVG rotation is involved at all, which is why the sign question below does
+ * NOT apply to it. The hand-checked case is the same one `footprintScreenCorners`
+ * is pinned to (§ B5a): location (pos 10/20, yaw 90), view {cx:10, cz:20,
+ * pxPerM:1} on 200×200, boundary point (+5,+5) -> world (15, 15) -> screen
+ * (105, 95) — identical to the square's corner, because a square boundary IS
+ * that square.
+ *
+ * A location WITHOUT a boundary keeps the square rendering (transition state,
+ * v6 says a location without a boundary has no area at all — the square dies in
+ * a later wave, not here).
+ *
+ * The square: edge `map3d.plan_width_m` centred on its metre
  * position and turned by `yaw_deg` (contract § A1.1). The turn happens in SVG,
  * around exactly the point `worldToScreen` returns for the centre — but with
  * the OPPOSITE sign: `rotate(−yaw)`. SVG's `rotate(+deg)` turns clockwise on a
@@ -35,10 +50,13 @@
  * ONCE on `pointerup`. Below CLICK_SLOP_PX the press stays a selection click —
  * the same threshold the canvas uses to tell a pan from a click.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useMapView } from './MapCanvas'
-import { worldToScreen, type ScreenPt } from './mapMath'
+import {
+  localToWorld, worldPolyToPath, worldToLocal, worldToScreen, type ScreenPt,
+} from './mapMath'
+import { PolygonHandles } from './PolygonHandles'
 import type { EditorLocation } from './mapTypes'
 
 /** Edge a footprint falls back to when the location carries no scale anchor.
@@ -52,6 +70,15 @@ const LABEL_MIN_PX = 28
 /** A footprint never drops below this on screen — at world zoom a 3 m hut
  *  would otherwise become an unclickable half pixel. */
 const MIN_DRAWN_PX = 6
+/** The anchor dot and the direction arrow of a drawn boundary, in pixels.
+ *  Both say where the pin is and which way the place is turned, so they keep
+ *  their size at every zoom. */
+const PIN_R = 3
+const ARROW_PX = 18
+/** Metre coordinates are stored with 2 decimals (`world_ops._sanitize_map3d`
+ *  rounds the boundary to the centimetre); rounding the local points here
+ *  keeps what the editor draws identical to what it sent. */
+const r2 = (v: number): number => Math.round(v * 100) / 100
 
 const COL_PLACED = '#8b949e'
 const COL_SELECTED = '#58a6ff'
@@ -67,6 +94,47 @@ export function anchorWidthM(loc: EditorLocation): number | null {
   return typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : null
 }
 
+/**
+ * The DRAWN footprint of a location (contract v6 Nr. 1), in LOCAL metres
+ * around the pin — or `null` when the location has none and is therefore
+ * still drawn as a square.
+ *
+ * Read through a check, never trusted: `map3d` is free-form JSON on the way
+ * in, and a boundary of two points encloses nothing. This is the ONE reader
+ * of the field in the editor, so the drawing, the handles and the chip always
+ * see the same list.
+ */
+export function boundaryLocal(loc: EditorLocation): Array<[number, number]> | null {
+  const raw = loc.map3d?.boundary
+  if (!Array.isArray(raw) || raw.length < 3) return null
+  const pts: Array<[number, number]> = []
+  for (const p of raw) {
+    if (!Array.isArray(p) || p.length < 2) return null
+    const x = Number(p[0])
+    const z = Number(p[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null
+    pts.push([x, z])
+  }
+  return pts.length >= 3 ? pts : null
+}
+
+/** The § A1.1 rotation of a location, in degrees; junk is no rotation. */
+function yawOf(loc: EditorLocation): number {
+  return typeof loc.yaw_deg === 'number' && Number.isFinite(loc.yaw_deg)
+    ? loc.yaw_deg : 0
+}
+
+/** Local boundary metres -> WORLD metres, through the § A1.1 pin transform.
+ *  The pin is passed in rather than read off the location: while it is being
+ *  dragged the polygon has to follow the cursor. */
+function boundaryWorld(points: Array<[number, number]>, cx: number,
+  cz: number, yawDeg: number): Array<[number, number]> {
+  return points.map(([lx, lz]) => {
+    const p = localToWorld(cx, cz, yawDeg, lx, lz)
+    return [p.x, p.z] as [number, number]
+  })
+}
+
 /** Placed = a finite metre position. Anything else stands on no map at all. */
 export function isPlaced(loc: EditorLocation): boolean {
   return typeof loc.pos_x === 'number' && Number.isFinite(loc.pos_x)
@@ -80,8 +148,14 @@ export function mapIconUrl(locId: string, ver: number): string {
 }
 
 /**
- * One footprint square: fill, optional map icon OR roof view, outline — all
- * inside the yaw rotation. The icon carries its own 90°-step display rotation
+ * THE PICTURE inside a footprint: the roof view if there is one, the 2D map
+ * icon otherwise, both covering the reference square (edge `plan_width_m`,
+ * centred on the pin) of the location. It is drawn INSIDE the caller's yaw
+ * rotation — the square draws it directly, the polygon draws it clipped to the
+ * outline — so the derivation of the icon rotation below holds for both, and
+ * there is exactly one place that knows how a location's picture is oriented.
+ *
+ * The icon carries its own 90°-step display rotation
  * (`map_rotation_2d`), which turns the ARTWORK inside the square and is not
  * the location's rotation in the world — it keeps SVG's own sign, because it
  * always was a screen rotation (the legacy CSS `rotate()` on the tile image),
@@ -121,6 +195,38 @@ export function mapIconUrl(locId: string, ver: number): string {
  * yaw (`rotate(−θ)·rotate(+θ) = identity`) and hand back exactly the neutral
  * picture rejected above — not double it.
  */
+function FootImage({ p, size, iconHref, iconRot, roofHref }: {
+  p: ScreenPt
+  size: number
+  iconHref?: string
+  iconRot?: number
+  /** Top-down render of the location's building model, already covering
+   *  exactly this square (`extent_m` == the footprint edge since E4). It
+   *  REPLACES the 2D icon — two pictures of the same place in one square only
+   *  compete. */
+  roofHref?: string
+}) {
+  const half = size / 2
+  // FULLY opaque: the picture is rendered solid (`solidBuilding`), and the
+  // grey ground underneath has nothing to add — it is the placeholder for a
+  // location that shows no building. Outline and direction are drawn AFTER it
+  // by the caller and therefore stay on top.
+  if (roofHref) {
+    return <image href={roofHref} x={p.x - half} y={p.y - half}
+      width={size} height={size} />
+  }
+  if (iconHref) {
+    return <image href={iconHref} x={p.x - half} y={p.y - half}
+      width={size} height={size} preserveAspectRatio="xMidYMid slice"
+      transform={iconRot ? `rotate(${iconRot} ${p.x} ${p.y})` : undefined} />
+  }
+  return null
+}
+
+/** One footprint square: fill, picture, outline — all inside the yaw
+ *  rotation. The transition rendering for a location that carries no drawn
+ *  boundary yet (v6: it then has no area at all; the square is what the editor
+ *  still offers to click). */
 function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconRot,
   roofHref }: {
   p: ScreenPt
@@ -131,10 +237,6 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
   dashed?: boolean
   iconHref?: string
   iconRot?: number
-  /** Top-down render of the location's building model, already covering
-   *  exactly this square (`extent_m` == the footprint edge since E4). It
-   *  REPLACES the 2D icon — two pictures of the same place in one square only
-   *  compete. */
   roofHref?: string
 }) {
   const half = size / 2
@@ -145,17 +247,8 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
     <g transform={`rotate(${-yaw} ${p.x} ${p.y})`}>
       <rect x={p.x - half} y={p.y - half} width={size} height={size}
         fill="rgba(139,148,158,0.14)" stroke="none" />
-      {/* FULLY opaque: the picture is rendered solid (`solidBuilding`), and
-          the grey square underneath has nothing to add — it is the placeholder
-          for a location that shows no building. The outline and the north edge
-          are drawn AFTER it and therefore stay on top. */}
-      {roofHref ? (
-        <image href={roofHref} x={p.x - half} y={p.y - half} width={size} height={size} />
-      ) : iconHref ? (
-        <image href={iconHref} x={p.x - half} y={p.y - half} width={size} height={size}
-          preserveAspectRatio="xMidYMid slice"
-          transform={iconRot ? `rotate(${iconRot} ${p.x} ${p.y})` : undefined} />
-      ) : null}
+      <FootImage p={p} size={size} iconHref={iconHref} iconRot={iconRot}
+        roofHref={roofHref} />
       <rect x={p.x - half} y={p.y - half} width={size} height={size}
         fill="none" stroke={stroke} strokeWidth={strokeWidth}
         strokeDasharray={dashed ? '6 4' : undefined} />
@@ -163,6 +256,72 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
           gives no hint which way it was turned. */}
       <line x1={p.x - half} y1={p.y - half} x2={p.x + half} y2={p.y - half}
         stroke={stroke} strokeWidth={strokeWidth + 1} opacity={0.9} />
+    </g>
+  )
+}
+
+/**
+ * One DRAWN footprint (v6): the boundary polygon in world metres, the pin as
+ * an anchor dot and the yaw as a short arrow.
+ *
+ * The polygon points are already world metres — the § A1.1 transform ran in
+ * `boundaryWorld`, point by point — so nothing here rotates anything and the
+ * sign trap of the square does not exist. The PICTURE still lives in the
+ * location's own square frame (the reference square of edge `plan_width_m`
+ * around the pin, which is what a roof render and a map icon cover), so it
+ * keeps the square's `rotate(−yaw)` and is CLIPPED to the outline. The clip
+ * sits on an untransformed group above it, so it is evaluated in the very
+ * screen space the path was built in.
+ *
+ * THE ARROW POINTS ALONG LOCAL −z, the same direction the square marks with its
+ * "north" edge. In screen pixels that is (−sin yaw, −cos yaw): at yaw 0 it
+ * points up, at yaw 90 it points WEST — the docstring case above, where local
+ * +x turns towards world −z and the local north edge ends up west of the pin.
+ * A fixed pixel length, because it says which way the place is TURNED, not how
+ * big it is.
+ */
+function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
+  iconRot, roofHref }: {
+  /** The boundary in WORLD metres (already transformed). */
+  world: Array<[number, number]>
+  pin: ScreenPt
+  yaw: number
+  /** Edge of the location's reference square on screen — the picture's box. */
+  size: number
+  stroke: string
+  strokeWidth: number
+  iconHref?: string
+  iconRot?: number
+  roofHref?: string
+}) {
+  const { view, w, h } = useMapView()
+  // `useId` returns something like ":r7:", which is not a usable fragment in
+  // `url(#…)` — the colons go.
+  const clipId = 'fp' + useId().replace(/[^a-zA-Z0-9_-]/g, '')
+  const d = worldPolyToPath(world, view, w, h)
+  const rad = (yaw * Math.PI) / 180
+  const ax = pin.x - ARROW_PX * Math.sin(rad)
+  const ay = pin.y - ARROW_PX * Math.cos(rad)
+  return (
+    <g>
+      <defs>
+        <clipPath id={clipId}>
+          <path d={d} />
+        </clipPath>
+      </defs>
+      <path d={d} fill="rgba(139,148,158,0.14)" fillRule="evenodd" stroke="none" />
+      <g clipPath={`url(#${clipId})`}>
+        <g transform={`rotate(${-yaw} ${pin.x} ${pin.y})`}>
+          <FootImage p={pin} size={size} iconHref={iconHref} iconRot={iconRot}
+            roofHref={roofHref} />
+        </g>
+      </g>
+      <path d={d} fill="none" fillRule="evenodd" stroke={stroke}
+        strokeWidth={strokeWidth} strokeLinejoin="round" />
+      <line x1={pin.x} y1={pin.y} x2={ax} y2={ay} stroke={stroke}
+        strokeWidth={strokeWidth + 1} opacity={0.9} />
+      <circle cx={pin.x} cy={pin.y} r={PIN_R} fill="#0d1117" stroke={stroke}
+        strokeWidth={strokeWidth} />
     </g>
   )
 }
@@ -196,10 +355,20 @@ export interface PlacementLayerProps {
    *  ones stop taking pointer events, so a click can land on top of them. */
   ghost: GhostSpec | null
   ghostPt: { x: number; z: number } | null
+  /** Are the boundary handles live? The layer is made inert from outside by a
+   *  wrapping `pointer-events: none`, and `PolygonHandles` sets its own on the
+   *  edges — an explicit value on a descendant wins, so the handles would stay
+   *  clickable in a ground mode. This is the switch that answers that. */
+  boundaryEdit?: boolean
+  /** A finished boundary gesture, in LOCAL metres around the pin — already
+   *  through the § A1.1 transform, so the caller writes `map3d.boundary`
+   *  verbatim. */
+  onBoundary?: (id: string, points: Array<[number, number]>) => void
 }
 
 export function PlacementLayer({
   locations, selectedId, onSelect, onMove, snapM, iconVer, roofUrl, ghost, ghostPt,
+  boundaryEdit, onBoundary,
 }: PlacementLayerProps) {
   const { view, w, h } = useMapView()
   const [drag, setDrag] = useState<{ id: string; x: number; z: number } | null>(null)
@@ -266,6 +435,40 @@ export function PlacementLayer({
 
   if (!w || !h) return null
 
+  /**
+   * A finished boundary gesture: the handles work in WORLD metres (that is the
+   * space this canvas draws in), the field is LOCAL metres around the pin — so
+   * every point goes back through `worldToLocal`, the exact inverse of the
+   * § A1.1 mapping the drawing used. The pin taken here is the STORED one, not
+   * a drag position: a vertex gesture and a pin drag are two pointers, and only
+   * one of them can be running.
+   */
+  const commitBoundary = (loc: EditorLocation,
+    worldPts: Array<[number, number]>) => {
+    if (!onBoundary) return
+    const cx = loc.pos_x as number
+    const cz = loc.pos_z as number
+    const yaw = yawOf(loc)
+    onBoundary(loc.id, worldPts.map(([x, z]) => {
+      const l = worldToLocal(cx, cz, yaw, x, z)
+      return [r2(l.x), r2(l.z)] as [number, number]
+    }))
+  }
+
+  // The selection's boundary handles, mounted once outside the list: the
+  // gesture belongs to ONE location, and drawing it last keeps it above every
+  // footprint painted after it.
+  const selLoc = locations.find((l) => l.id === selectedId) || null
+  const selBoundary = selLoc ? boundaryLocal(selLoc) : null
+  const selHandlePts = selLoc && selBoundary
+    // Not while the pin itself is being dragged: the polygon follows the
+    // cursor then, and a handle whose commit reads the stored pin would move
+    // the vertex by the drag distance a second time.
+    && !(drag && drag.id === selLoc.id)
+    ? boundaryWorld(selBoundary, selLoc.pos_x as number, selLoc.pos_z as number,
+      yawOf(selLoc))
+    : null
+
   // Big first, small last: a hut inside a village square stays clickable.
   // The selection is drawn on top of everything regardless of its size.
   const ordered = [...locations].sort((a, b) => {
@@ -284,19 +487,35 @@ export function PlacementLayer({
         const p = worldToScreen(cx, cz, view, w, h)
         const size = Math.max(MIN_DRAWN_PX, (anchor ?? NO_ANCHOR_WIDTH_M) * view.pxPerM)
         const selected = loc.id === selectedId
-        const yaw = typeof loc.yaw_deg === 'number' && Number.isFinite(loc.yaw_deg)
-          ? loc.yaw_deg : 0
+        const yaw = yawOf(loc)
         const stroke = selected ? COL_SELECTED : (anchor ? COL_PLACED : COL_WARN)
+        // The DRAWN footprint wins wherever there is one (v6 Nr. 1); the
+        // square is what is left for a location that has none yet.
+        const bd = boundaryLocal(loc)
+        const bdWorld = bd ? boundaryWorld(bd, cx, cz, yaw) : null
+        // Where the name goes: under the lowest point of what was drawn, so a
+        // long polygon does not write its label across its own middle.
+        const bottom = bdWorld
+          ? Math.max(...bdWorld.map(([bx, bz]) => worldToScreen(bx, bz, view, w, h).y))
+          : p.y + size / 2
         return (
           <g key={loc.id} style={{ cursor: 'move' }}
             onPointerDown={(e) => startDrag(e, loc)}>
-            <FootSquare p={p} size={size} yaw={yaw} stroke={stroke}
-              strokeWidth={selected ? 2 : 1} dashed={!anchor}
-              iconHref={mapIconUrl(loc.id, iconVer[loc.id] || 0)}
-              iconRot={loc.map_rotation_2d || 0}
-              roofHref={roofUrl?.[loc.id]} />
+            {bdWorld ? (
+              <FootPoly world={bdWorld} pin={p} yaw={yaw} size={size}
+                stroke={stroke} strokeWidth={selected ? 2 : 1}
+                iconHref={mapIconUrl(loc.id, iconVer[loc.id] || 0)}
+                iconRot={loc.map_rotation_2d || 0}
+                roofHref={roofUrl?.[loc.id]} />
+            ) : (
+              <FootSquare p={p} size={size} yaw={yaw} stroke={stroke}
+                strokeWidth={selected ? 2 : 1} dashed={!anchor}
+                iconHref={mapIconUrl(loc.id, iconVer[loc.id] || 0)}
+                iconRot={loc.map_rotation_2d || 0}
+                roofHref={roofUrl?.[loc.id]} />
+            )}
             {size >= LABEL_MIN_PX || selected ? (
-              <text x={p.x} y={p.y + size / 2 + 12} fontSize={11} textAnchor="middle"
+              <text x={p.x} y={bottom + 12} fontSize={11} textAnchor="middle"
                 fill={selected ? COL_SELECTED : '#c9d1d9'} pointerEvents="none"
                 style={{ paintOrder: 'stroke', stroke: '#0d1117', strokeWidth: 3 }}>
                 {loc.name}
@@ -305,6 +524,29 @@ export function PlacementLayer({
           </g>
         )
       })}
+
+      {/* The ONE point-editing gesture of this canvas, on the location
+          boundary: the same component the painted terrain and the world relief
+          are reshaped with. It works in the host layer's space — world metres
+          here — and `commitBoundary` turns the result back into the local
+          metres the field is stored in. */}
+      {boundaryEdit && selLoc && selHandlePts && onBoundary ? (
+        <PolygonHandles
+          points={selHandlePts}
+          closed
+          color={COL_SELECTED}
+          minPoints={3}
+          onMove={(i, x, z) => commitBoundary(selLoc,
+            selHandlePts.map((pt, k) => (k === i ? [x, z] as [number, number] : pt)))}
+          onDelete={(i) => commitBoundary(selLoc,
+            selHandlePts.filter((_, k) => k !== i))}
+          onInsert={(i, x, z) => {
+            const pts = [...selHandlePts]
+            pts.splice(i, 0, [x, z])
+            commitBoundary(selLoc, pts)
+          }}
+        />
+      ) : null}
 
       {ghost && ghostPt ? (
         <g pointerEvents="none">

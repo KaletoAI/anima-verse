@@ -46,6 +46,11 @@ export interface MapGeometry {
  * when you need them.
  */
 export interface WorldmapLocationRow extends MapGeometry {
+  /** The DRAWN footprint (contract v6 Nr. 1), hoisted out of `map3d`: the
+   *  same LOCAL-metre points, `null` when the location has no area. A map
+   *  client draws it through the § A1.1 pin transform; the editor reads the
+   *  nested one, because it edits the record. */
+  boundary?: Array<[number, number]> | null
   /** Present only when at least one room carries a layout (AV3D-2⁺). */
   layout_sig?: string
   /** A transit place (a road, a district) is walked THROUGH, never travelled
