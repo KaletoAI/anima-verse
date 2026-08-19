@@ -270,11 +270,13 @@ def _format_terrain_kinds() -> str:
 
 
 def _format_placeable_locations(location_ids: Optional[List[str]] = None) -> str:
-    """`{placeable_locations}` — the places the model may position.
+    """`{placeable_locations}` — the EXISTING places the model may position.
 
-    Only EXISTING locations (decision D1): creating places is the `location`
-    schema's job, so the map task never invents one. ``location_ids`` narrows
-    the list to what the user ticked in the UI; None offers all of them.
+    The map schema also lets it propose NEW places as stubs (name +
+    description + pin), which is why this list is not the whole world any more:
+    it is the set of ids that may be positioned, and everything else the draft
+    names is created. ``location_ids`` narrows the list to what the user ticked
+    in the UI; None offers all of them.
 
     The width comes from ``location_model3d.derive_plan_width_m``, i.e. the
     bounding box of the drawn boundary — the same number the overlap warning
@@ -309,8 +311,8 @@ def _format_placeable_locations(location_ids: Optional[List[str]] = None) -> str
             line += f"\n  {desc}"
         lines.append(f"- {line}")
     if not lines:
-        return ("No locations available — create places with the `location` "
-                "schema first, then come back to lay out the map.")
+        return ("No locations exist yet — every place on this map has to be a "
+                "new stub (`name` instead of `id`).")
     return "\n".join(lines)
 
 
@@ -1234,13 +1236,14 @@ async def apply_map(request: Request):
     Body:     {"map_data": {...}, "mode": "merge"|"replace_terrain",
                "snapshot": true}
     Returns:  {"status": "success",
-               "applied": {areas, heights, positions},
+               "applied": {areas, heights, positions, created},
                "warnings": [{code, ref, message}, ...],
                "snapshot_id": "<id>"|null}
 
     ``mode`` ``merge`` paints on top of what is there; ``replace_terrain``
     deletes every painted area and height area first (placements are never
-    wiped — only the locations the layout names are moved).
+    wiped — only the locations the layout names are moved). ``created`` counts
+    the NEW places the draft proposed as stubs.
 
     ``snapshot`` (default true) freezes the whole painted world first, so
     ``/world-dev/map-restore`` can undo the apply. That is the undo the map
@@ -1267,7 +1270,10 @@ async def apply_map(request: Request):
                 "code": "snapshot_failed", "ref": "",
                 "message": f"Could not write the undo snapshot: {e}"}]
     try:
-        applied = apply_map_layout(normalized, mode=mode)
+        # The snapshot rides along so the apply can note the places it CREATES
+        # in it — that is the only way the restore below can take them back.
+        applied = apply_map_layout(normalized, mode=mode,
+                                   snapshot_id=snapshot_id or "")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     logger.info("WorldDev: map layout applied (%s) %s", mode, applied)
@@ -1289,7 +1295,10 @@ async def restore_map_snapshot(request: Request):
 
     Body:     {"snapshot_id": "<id>"}
     Returns:  {"status": "success",
-               "restored": {areas, heights, positions}}
+               "restored": {areas, heights, positions, removed}}
+
+    ``removed`` counts the places the apply after this snapshot CREATED and the
+    restore deleted again — a place made by hand afterwards is never touched.
     """
     from app.core.map_layout_apply import restore_snapshot
     data = await request.json()

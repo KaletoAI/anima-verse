@@ -32,7 +32,11 @@ The snapshot is the undo the map editor does not have. It is a full copy of
 the painted world (areas, height areas, every location's placement) under
 ``<storage>/.cache/map_snapshots/`` — gitignored, capped at
 :data:`MAX_SNAPSHOTS`, and restored WITH the original row ids, so a restore
-puts back the very areas that were there rather than look-alikes.
+puts back the very areas that were there rather than look-alikes. A state copy
+cannot express a CREATION, so the apply writes the ids of the places it created
+back into its own snapshot (:func:`record_created_locations`) and the restore
+deletes exactly those — never everything the roster happens to be missing,
+which would take a hand-made place with it.
 """
 
 import json
@@ -75,6 +79,13 @@ SIMPLIFY_MAX_POINTS = 12
 #: What ``meta.source`` every row this module writes carries, so the editor
 #: (and a later cleanup) can tell machine-drawn ground from hand-drawn.
 SOURCE = "world_dev"
+
+#: The outline a NEW STUB gets when the model proposed none: a square of this
+#: edge length, centred on the pin. A place without an area is invisible on the
+#: map and takes part in no overlap test — a stub the model did not bother to
+#: draw must still be a place one can see and move, so it gets the smallest
+#: outline that reads as a building.
+SEED_BOUNDARY_M = 10.0
 
 
 # ── Pure geometry ───────────────────────────────────────────────────────────
@@ -424,6 +435,9 @@ WARNING_CODES = (
     "out_of_bounds",      # a point outside the agreed box — kept
     "on_impassable",      # a place standing on impassable ground — kept
     "footprint_overlap",  # two placed footprints overlap — both kept
+    "nameless_location",  # a stub with neither an id nor a name — dropped
+    "duplicate_name",     # a stub named like a place that exists — CREATED
+    "seed_boundary",      # a stub without a usable outline — 10 m square
 )
 
 
@@ -505,6 +519,50 @@ def boundaries_overlap(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     return polygons_overlap(pa, pb)
 
 
+def seed_boundary() -> List[List[float]]:
+    """The fallback outline of a stub: a :data:`SEED_BOUNDARY_M` square centred
+    on the pin, in local metres and in storage winding.
+
+    Built through the ordinary boundary sanitizer rather than written out, so
+    the seed obeys the same winding and centimetre rule as a drawn outline.
+    """
+    from app.core.world_ops import _sanitize_map3d
+    half = SEED_BOUNDARY_M / 2.0
+    m3 = _sanitize_map3d({"boundary": [[-half, -half], [half, -half],
+                                       [half, half], [-half, half]]})
+    return m3["boundary"]
+
+
+def _stub_outline(raw: Any) -> Optional[Dict[str, Any]]:
+    """One proposed stub outline through the ONE boundary judge.
+
+    ``world_ops._sanitize_map3d`` is what ``PUT /world/locations/{id}`` writes
+    with, so the winding (clockwise), the centimetre rounding and the derived
+    ``plan_width_m`` are its answer here as well — a preview that computed its
+    own would draw a shape the apply does not store. Returns
+    ``{"boundary": [...], "plan_width_m": float}``, or None when the proposal
+    is not an area at all (fewer than 3 usable points, or no extent).
+    """
+    from app.core.world_ops import _sanitize_map3d
+    if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+        return None
+    m3 = _sanitize_map3d({"boundary": list(raw)})
+    if not m3.get("boundary"):
+        return None
+    return {"boundary": m3["boundary"],
+            "plan_width_m": float(m3.get("plan_width_m") or 0.0)}
+
+
+def _stub_danger(value: Any) -> Optional[int]:
+    """``danger_level`` as the 0–5 integer the world stores, or None."""
+    if value is None or f"{value}".strip() == "":
+        return None
+    try:
+        return max(0, min(5, int(float(value))))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def sanitize_map_layout(data: Any, *,
                         catalog: Dict[str, Dict[str, Any]],
                         locations_by_id: Dict[str, Dict[str, Any]],
@@ -525,6 +583,15 @@ def sanitize_map_layout(data: Any, *,
     ``bounds`` is the world's CURRENT extent; the draft may propose its own,
     and a coordinate is out of bounds only when it leaves BOTH — a new map is
     allowed to be bigger than the empty world it grows into.
+
+    A ``locations[]`` entry is one of TWO things, told apart by its ``id``: an
+    EXISTING place being positioned (unknown id → dropped, because a guessed id
+    would move the wrong place), or a NEW STUB the map proposes — ``name`` +
+    ``description`` + pin + an optional proposed ``boundary``. A stub keeps its
+    normalized ``is_new`` flag and is created by :func:`apply_map_layout`;
+    stubs with no outline get the :data:`SEED_BOUNDARY_M` square, so no place
+    on a map is area-less. NAMES ARE NOT KEYS: a stub named like an existing
+    place is a warning and is still created, never an update of that place.
 
     Returns ``(normalized, warnings)``. Raises ValueError only when the draft
     is not an object or carries nothing at all; everything else is a warning,
@@ -677,43 +744,89 @@ def sanitize_map_layout(data: Any, *,
         raw_locs = []
     if not isinstance(raw_locs, list):
         raise ValueError("locations must be a list")
+    taken_names = {str(v.get("name") or "").strip().lower()
+                   for v in locations_by_id.values()}
+    taken_names.discard("")
     for i, raw in enumerate(raw_locs):
         ref = f"locations[{i}]"
         if not isinstance(raw, dict):
             _warn(warnings, "invalid_geometry", ref, "Entry is not an object.")
             continue
         loc_id = str(raw.get("id") or "").strip()
-        known = locations_by_id.get(loc_id)
-        if not loc_id or known is None:
-            _warn(warnings, "unknown_location", ref,
-                  f"No location with id {loc_id!r} in this world — entry "
-                  f"dropped. Only existing locations can be placed.")
+        stub_name = " ".join(str(raw.get("name") or "").split())
+        known: Optional[Dict[str, Any]] = None
+        if loc_id:
+            # An id is a claim about an EXISTING place. A guessed one would
+            # move the wrong place, so it is dropped rather than read as a
+            # stub — the model is told to write a name when it means a new one.
+            known = locations_by_id.get(loc_id)
+            if known is None:
+                _warn(warnings, "unknown_location", ref,
+                      f"No location with id {loc_id!r} in this world — entry "
+                      f"dropped. Use a `name` to propose a new place.")
+                continue
+            if loc_id in seen_ids:
+                _warn(warnings, "invalid_geometry", ref,
+                      f"'{known.get('name') or loc_id}' is placed twice — the "
+                      f"later entry is dropped.")
+                continue
+        elif not stub_name:
+            _warn(warnings, "nameless_location", ref,
+                  "Neither an `id` of an existing place nor a `name` for a "
+                  "new one — entry dropped.")
             continue
-        if loc_id in seen_ids:
-            _warn(warnings, "invalid_geometry", ref,
-                  f"'{known.get('name') or loc_id}' is placed twice — the "
-                  f"later entry is dropped.")
-            continue
+        label = str(known.get("name") or loc_id) if known else stub_name
         px, pz = _finite(raw.get("pos_x")), _finite(raw.get("pos_z"))
         if px is None or pz is None:
             _warn(warnings, "invalid_geometry", ref,
-                  f"'{known.get('name') or loc_id}': pos_x/pos_z must be "
-                  f"numbers — entry dropped.")
+                  f"'{label}': pos_x/pos_z must be numbers — entry dropped.")
             continue
         yaw = _finite(raw.get("yaw_deg")) or 0.0
-        entry = {"id": loc_id,
-                 "pos_x": _round2(px), "pos_z": _round2(pz),
+        entry = {"pos_x": _round2(px), "pos_z": _round2(pz),
                  "yaw_deg": round(yaw, 1) % 360.0,
-                 # Preview extras — apply reads none of them, but the draft
-                 # map has to be drawable without a second round trip, and
-                 # since v6 what is drawn is the location's OUTLINE.
-                 "name": str(known.get("name") or loc_id),
-                 "boundary": known.get("boundary"),
-                 "plan_width_m": float(known.get("plan_width_m") or 0.0)}
+                 # Preview extras — for an existing place apply reads none of
+                 # them, but the draft map has to be drawable without a second
+                 # round trip, and since v6 what is drawn is the OUTLINE.
+                 "name": label}
+        if known is not None:
+            entry["id"] = loc_id
+            entry["boundary"] = known.get("boundary")
+            entry["plan_width_m"] = float(known.get("plan_width_m") or 0.0)
+            seen_ids[loc_id] = len(placed)
+        else:
+            # A STUB. Everything apply needs to create the place travels in
+            # the normalized entry, so the write is a straight read-out.
+            entry["is_new"] = True
+            entry["description"] = " ".join(
+                str(raw.get("description") or "").split())
+            indoor = str(raw.get("indoor") or "").strip().lower()
+            entry["indoor"] = indoor if indoor in ("indoor", "outdoor") else ""
+            danger = _stub_danger(raw.get("danger_level"))
+            if danger is not None:
+                entry["danger_level"] = danger
+            outline = _stub_outline(raw.get("boundary"))
+            if outline is None:
+                if raw.get("boundary") is not None:
+                    _warn(warnings, "seed_boundary", ref,
+                          f"'{label}': the proposed outline is not an area — "
+                          f"the place gets a {SEED_BOUNDARY_M:g} m square "
+                          f"instead.")
+                outline = {"boundary": seed_boundary(),
+                           "plan_width_m": SEED_BOUNDARY_M}
+            entry["boundary"] = outline["boundary"]
+            entry["plan_width_m"] = outline["plan_width_m"]
+            if polygon_self_intersects(entry["boundary"]):
+                _warn(warnings, "self_intersecting", ref,
+                      f"'{label}': the proposed outline crosses itself.")
+            key = label.lower()
+            if key in taken_names:
+                _warn(warnings, "duplicate_name", ref,
+                      f"A place called '{label}' already exists — this one is "
+                      f"created as a SECOND place, not merged into it.")
+            taken_names.add(key)
         why = str(raw.get("why") or "").strip()
         if why:
             entry["why"] = why
-        seen_ids[loc_id] = len(placed)
         placed.append(entry)
 
         if box and _outside(box, entry["pos_x"], entry["pos_z"]):
@@ -756,10 +869,18 @@ def sanitize_map_layout(data: Any, *,
 
 
 def layout_counts(normalized: Dict[str, Any]) -> Dict[str, int]:
-    """``{areas, heights, positions}`` of a normalized layout."""
+    """``{areas, heights, positions, created}`` of a normalized layout.
+
+    ``positions`` counts the EXISTING places the layout moves, ``created`` the
+    stubs it would bring into being — two different promises, and the
+    confirmation dialog has to be able to state them apart.
+    """
+    locs = normalized.get("locations") or []
+    created = [loc for loc in locs if loc.get("is_new")]
     return {"areas": len(normalized.get("terrain_areas") or []),
             "heights": len(normalized.get("height_areas") or []),
-            "positions": len(normalized.get("locations") or [])}
+            "positions": len(locs) - len(created),
+            "created": len(created)}
 
 
 # ── Writing ─────────────────────────────────────────────────────────────────
@@ -798,15 +919,28 @@ def current_world_bounds() -> Optional[Dict[str, float]]:
 
 
 def apply_map_layout(normalized: Dict[str, Any],
-                     mode: str = "merge") -> Dict[str, int]:
+                     mode: str = "merge",
+                     snapshot_id: str = "") -> Dict[str, int]:
     """Write a normalized layout to the world. Returns
-    ``{areas, heights, positions}``.
+    ``{areas, heights, positions, created}``.
 
     ``mode``:
       * ``merge`` — the new areas are painted ON TOP of what is there.
       * ``replace_terrain`` — every painted area and every height area is
         deleted first. Placements are never wiped: only the locations the
         layout names are moved, the rest stay where they are.
+
+    A ``locations[]`` entry marked ``is_new`` is a STUB: it is created through
+    the ordinary creation path (``world_ops.create_location_with_extras`` —
+    the writer behind ``POST /world/locations``, so the ground room, the
+    boundary whitelist and the derived ``plan_width_m`` are the editor's) and
+    then positioned like any other place. ``create_new`` is passed, so a stub
+    named like an existing place becomes a SECOND place: on a map a name is a
+    label, not a key.
+
+    ``snapshot_id`` — the snapshot this apply is undone with. Handing it in
+    lets the created stub ids be recorded IN that snapshot, which is the only
+    way a restore can take a creation back (:func:`record_created_locations`).
 
     ALL-OR-NOTHING as far as SQLite allows: every area, every height area and
     every location id is validated BEFORE the first write, so a draft with
@@ -831,15 +965,32 @@ def apply_map_layout(normalized: Dict[str, Any],
         for h in (normalized.get("height_areas") or [])]
     known = {loc.get("id") for loc in list_locations()}
     ready_positions: List[Dict[str, Any]] = []
+    ready_stubs: List[Dict[str, Any]] = []
     for entry in (normalized.get("locations") or []):
+        px, pz = _finite(entry.get("pos_x")), _finite(entry.get("pos_z"))
+        yaw = _finite(entry.get("yaw_deg")) or 0.0
+        if entry.get("is_new"):
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                raise ValueError("a new place carries no name")
+            if px is None or pz is None:
+                raise ValueError(f"new place {name!r} has no usable position")
+            ready_stubs.append({"name": name,
+                                "description": str(entry.get("description")
+                                                   or ""),
+                                "indoor": str(entry.get("indoor") or ""),
+                                "danger_level": entry.get("danger_level"),
+                                "boundary": entry.get("boundary")
+                                or seed_boundary(),
+                                "pos_x": px, "pos_z": pz, "yaw_deg": yaw})
+            continue
         loc_id = str(entry.get("id") or "").strip()
         if loc_id not in known:
             raise ValueError(f"unknown location id: {loc_id!r}")
-        px, pz = _finite(entry.get("pos_x")), _finite(entry.get("pos_z"))
         if px is None or pz is None:
             raise ValueError(f"location {loc_id!r} has no usable position")
         ready_positions.append({"id": loc_id, "pos_x": px, "pos_z": pz,
-                                "yaw_deg": _finite(entry.get("yaw_deg")) or 0.0})
+                                "yaw_deg": yaw})
 
     # 2. write.
     if mode == "replace_terrain":
@@ -856,10 +1007,50 @@ def apply_map_layout(normalized: Dict[str, Any],
         update_location_position(pos["id"], pos["pos_x"], pos["pos_z"],
                                  pos["yaw_deg"])
 
+    created_ids: List[str] = []
+    try:
+        _create_stubs(ready_stubs, created_ids)
+    finally:
+        # Whatever WAS created has to be in the snapshot even when the run
+        # broke half way — an undo that does not know about a place cannot
+        # take it back, and a half-applied map is exactly when one is needed.
+        if created_ids and snapshot_id:
+            record_created_locations(snapshot_id, created_ids)
+
     counts = {"areas": len(ready_areas), "heights": len(ready_heights),
-              "positions": len(ready_positions)}
+              "positions": len(ready_positions), "created": len(created_ids)}
     logger.info("map layout applied (%s): %s", mode, counts)
     return counts
+
+
+def _create_stubs(ready_stubs: Sequence[Dict[str, Any]],
+                  created_ids: List[str]) -> None:
+    """Create and position the NEW places of one apply, appending each id to
+    ``created_ids`` as it lands — the list is the caller's record of what has
+    to be taken back, so it is filled step by step and never at the end."""
+    from app.core.world_ops import create_location_with_extras
+    from app.models.world import update_location_position
+
+    for stub in ready_stubs:
+        body: Dict[str, Any] = {
+            "name": stub["name"],
+            "description": stub["description"],
+            "rooms": [],
+            "indoor": stub["indoor"],
+            "map3d": {"boundary": stub["boundary"]},
+            # A map is not a place editor: a stub is a NEW place every time,
+            # never a silent update of whatever carries the same name.
+            "create_new": True,
+        }
+        if stub["danger_level"] is not None:
+            body["danger_level"] = stub["danger_level"]
+        created = (create_location_with_extras(body) or {}).get("location") or {}
+        new_id = str(created.get("id") or "")
+        if not new_id:
+            raise ValueError(f"creating {stub['name']!r} returned no id")
+        update_location_position(new_id, stub["pos_x"], stub["pos_z"],
+                                 stub["yaw_deg"])
+        created_ids.append(new_id)
 
 
 # ── Snapshots ───────────────────────────────────────────────────────────────
@@ -907,6 +1098,10 @@ def map_snapshot() -> str:
         "terrain_areas": terrain.list_areas(),
         "height_areas": heightfield.list_height_areas(),
         "positions": positions,
+        # Filled in AFTER the apply by :func:`record_created_locations` — the
+        # places that did not exist when this was frozen. See there for why a
+        # roster diff is not used instead.
+        "created_locations": [],
     }
     snap_id = _snapshot_id()
     path = _snapshot_dir() / f"{snap_id}.json"
@@ -924,6 +1119,39 @@ def map_snapshot() -> str:
                 snap_id, len(payload["terrain_areas"]),
                 len(payload["height_areas"]), len(positions))
     return snap_id
+
+
+def record_created_locations(snapshot_id: str,
+                             location_ids: Sequence[str]) -> None:
+    """Note in a snapshot which places the apply after it CREATED.
+
+    A map snapshot is a copy of a state, and a state cannot express "this place
+    was not there yet" on its own: the roster is complete (every location, even
+    unplaced ones), so a restore COULD delete everything missing from it — but
+    that would also delete a place somebody created by hand between the apply
+    and the undo, which the snapshot has no business touching. So the apply
+    tells its own snapshot what it made, and the restore takes back exactly
+    that and nothing else.
+
+    A snapshot that cannot be written is a missing undo, never a failed apply —
+    the caller already warned about that; this only logs.
+    """
+    ids = [str(i) for i in (location_ids or []) if str(i or "").strip()]
+    if not ids:
+        return
+    try:
+        payload = _read_snapshot(snapshot_id)
+        known = [str(i) for i in (payload.get("created_locations") or [])]
+        payload["created_locations"] = known + [i for i in ids if i not in known]
+        path = _snapshot_dir() / f"{snapshot_id}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False),
+                        encoding="utf-8")
+    except (OSError, ValueError) as exc:  # noqa: BLE001
+        logger.warning("Could not record created places in snapshot %s: %s",
+                       snapshot_id, exc)
+        return
+    logger.info("map snapshot %s records %d created place(s)",
+                snapshot_id, len(ids))
 
 
 def _read_snapshot(snapshot_id: str) -> Dict[str, Any]:
@@ -963,6 +1191,9 @@ def list_snapshots() -> List[Dict[str, Any]]:
                 "areas": len(payload.get("terrain_areas") or []),
                 "heights": len(payload.get("height_areas") or []),
                 "positions": len(payload.get("positions") or []),
+                # Places the apply after this snapshot created — the ones a
+                # restore REMOVES again.
+                "created": len(payload.get("created_locations") or []),
             },
         })
     return out
@@ -971,13 +1202,18 @@ def list_snapshots() -> List[Dict[str, Any]]:
 def restore_snapshot(snapshot_id: str) -> Dict[str, int]:
     """Put a snapshot back: every painted area and height area is deleted and
     the stored ones are written again UNDER THEIR ORIGINAL IDS, then every
-    stored placement is set (or cleared).
+    stored placement is set (or cleared), and every place the apply CREATED is
+    deleted again (``created_locations``, see
+    :func:`record_created_locations`) — an undo that left the new places
+    standing would only half undo the map.
 
-    Returns ``{areas, heights, positions}``. Validated completely before the
-    first delete — a corrupt snapshot must not leave a world with no ground.
+    Returns ``{areas, heights, positions, removed}``. Validated completely
+    before the first delete — a corrupt snapshot must not leave a world with
+    no ground.
     """
     from app.models import heightfield, terrain
-    from app.models.world import list_locations, update_location_position
+    from app.models.world import (delete_location, list_locations,
+                                  update_location_position)
 
     payload = _read_snapshot(snapshot_id)
     ready_areas = [terrain.sanitize_area(a)
@@ -987,6 +1223,8 @@ def restore_snapshot(snapshot_id: str) -> Dict[str, int]:
     known = {loc.get("id") for loc in list_locations()}
     ready_positions = [p for p in (payload.get("positions") or [])
                        if isinstance(p, dict) and p.get("id") in known]
+    ready_removals = [str(i) for i in (payload.get("created_locations") or [])
+                      if str(i) in known]
 
     for area in terrain.list_areas():
         terrain.delete_area(area["id"])
@@ -1003,8 +1241,9 @@ def restore_snapshot(snapshot_id: str) -> Dict[str, int]:
                                  None if px is None or pz is None else px,
                                  None if px is None or pz is None else pz,
                                  yaw)
+    removed = sum(1 for loc_id in ready_removals if delete_location(loc_id))
 
     counts = {"areas": len(ready_areas), "heights": len(ready_heights),
-              "positions": len(ready_positions)}
+              "positions": len(ready_positions), "removed": removed}
     logger.info("map snapshot %s restored: %s", snapshot_id, counts)
     return counts

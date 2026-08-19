@@ -18,6 +18,11 @@
  * underneath, the draft's on top. The question a placement draft answers is
  * "what moves where", and that needs both ends of the move on screen.
  *
+ * A draft may also propose places that do not exist yet (`is_new` stubs). They
+ * have no world record and no icon endpoint, so the placement layer never sees
+ * them: the overlay draws them alone, in their own colour, with the word
+ * "new" — a proposal one can still refuse must not look like the world.
+ *
  * The scale aids come from `MapCanvas` itself (metre grid, scale bar, the
  * 1.70 m figure seen from above), so a draft is read against the same anchors
  * as the editor's map — "kein Maß ohne Maßstab" holds for a preview too.
@@ -76,13 +81,31 @@ export interface MapDraftHeightArea {
   meta?: { label?: string } & Record<string, unknown>
 }
 
-/** A position the draft proposes for an EXISTING location (v1 places no new
- *  places — the `location` schema does that). */
+/**
+ * One place of the draft — and it is one of TWO things.
+ *
+ * With an `id` it positions a location that already exists. With `is_new` it
+ * is a STUB the draft proposes: a name, a description and an outline the apply
+ * turns into a real location. A stub has no id yet (it gets one when it is
+ * written), which is why `id` is optional here and every list key falls back
+ * to the index.
+ */
 export interface MapDraftLocation {
-  id: string
+  id?: string
   pos_x: number
   pos_z: number
   yaw_deg?: number
+  /** A place this draft would CREATE. */
+  is_new?: boolean
+  name?: string
+  description?: string
+  /** The outline in LOCAL metres around the pin, already through the server's
+   *  boundary sanitizer (clockwise, centimetres). A stub always has one — the
+   *  server seeds a 10 m square when the model drew none. */
+  boundary?: Array<[number, number]> | null
+  plan_width_m?: number
+  indoor?: string
+  danger_level?: number
 }
 
 export interface MapDraftNormalized {
@@ -96,7 +119,10 @@ export interface MapDraftNormalized {
 export interface MapDraftCounts {
   areas: number
   heights: number
+  /** Existing places the draft MOVES. */
   positions: number
+  /** New places the draft CREATES (stubs). */
+  created?: number
 }
 
 /** `POST /world-dev/preview-map`. */
@@ -114,9 +140,11 @@ const NO_POINTS: Array<[number, number]> = []
 const NO_FOOTPRINTS: readonly [] = []
 const NOOP = () => { /* read-only preview */ }
 
-/** The draft's own colours: green for what would be ADDED, amber for the shape
- *  a clicked warning is about. The editor's palette, same meanings. */
+/** The draft's own colours: green for what would be ADDED, purple for a place
+ *  that does not exist yet, amber for the shape a clicked warning is about.
+ *  The editor's palette, same meanings. */
 const COL_DRAFT = '#3fb950'
+const COL_NEW = '#a371f7'
 const COL_HIGHLIGHT = '#d29922'
 
 /** Height of the map pane, unless the caller says otherwise. Tall enough for a
@@ -152,6 +180,7 @@ const REF_PATTERNS: Array<[RegExp, HighlightKind]> = [
  *  is where the geometric complaints live. */
 const LOCATION_CODES: ReadonlySet<string> = new Set([
   'footprint_overlap', 'on_impassable', 'unknown_location',
+  'nameless_location', 'duplicate_name', 'seed_boundary',
 ])
 
 /**
@@ -243,19 +272,26 @@ function draftBounds(draft: MapDraftNormalized,
 
 /* ----------------------------------------------------------------- overlay */
 
+/** A draft placement in the shape the editor's layers read, plus the one thing
+ *  they do not know: whether the place exists yet. */
+export type DraftPlacement = EditorLocation & { isNew?: boolean }
+
 interface DraftOverlayProps {
   areas: MapDraftArea[]
   heights: MapDraftHeightArea[]
   /** The draft footprints, already resolved against the world's records. */
-  locs: EditorLocation[]
+  locs: DraftPlacement[]
   highlight: DraftHighlight | null
 }
 
 /**
  * What the editor's layers cannot say about a DRAFT: which footprints are
- * proposed (green dashed ghosts over the ordinary squares), where a line
- * recipe ran (dashed centre line — the polygon is the ribbon, the line is how
- * it was drawn) and which shape a clicked warning is about (amber ring).
+ * proposed (green dashed ghosts over the ordinary squares), which places do
+ * not exist yet (purple dashed outline plus a "new" badge — the placement
+ * layer never sees them, since it draws icons for locations the world knows),
+ * where a line recipe ran (dashed centre line — the polygon is the ribbon, the
+ * line is how it was drawn) and which shape a clicked warning is about (amber
+ * ring).
  *
  * The outline comes from `boundaryScreenPoints`, the same verified § A1.1
  * projection the placement layer draws with — a ghost drawn from its own
@@ -263,6 +299,7 @@ interface DraftOverlayProps {
  */
 function DraftOverlay({ areas, heights, locs, highlight }: DraftOverlayProps) {
   const { view, w, h } = useMapView()
+  const { t } = useI18n()
   if (!w || !h) return null
 
   const ghostRing = (loc: EditorLocation, color: string, width: number) => {
@@ -302,10 +339,27 @@ function DraftOverlay({ areas, heights, locs, highlight }: DraftOverlayProps) {
         )
       })}
 
-      {/* Every proposed footprint, marked as proposed. */}
-      {locs.map((loc, i) => (
-        <g key={`g${loc.id}-${i}`}>{ghostRing(loc, COL_DRAFT, 2)}</g>
-      ))}
+      {/* Every proposed footprint, marked as proposed — and a place that does
+          not exist yet says so, in its own colour and in words. */}
+      {locs.map((loc, i) => {
+        if (!loc.isNew) {
+          return <g key={`g${loc.id}-${i}`}>{ghostRing(loc, COL_DRAFT, 2)}</g>
+        }
+        const p = worldToScreen(loc.pos_x as number, loc.pos_z as number,
+          view, w, h)
+        return (
+          <g key={`g${loc.id}-${i}`}>
+            {ghostRing(loc, COL_NEW, 2)}
+            <text
+              x={p.x} y={p.y - 8} textAnchor="middle" fontSize={11}
+              fontWeight={600} fill={COL_NEW} stroke="#0d1117"
+              strokeWidth={3} paintOrder="stroke"
+            >
+              {`${t('new')} · ${loc.name}`}
+            </text>
+          </g>
+        )
+      })}
 
       {/* The shape a clicked warning is about. */}
       {hiArea && hiArea.polygon.length >= 3 ? (
@@ -385,14 +439,32 @@ export function MapDraftPreview({
     return m
   }, [worldLocations])
 
-  /** The proposed placements as location records: the draft's position and
-   *  yaw on the world's own name, icon and scale anchor. */
-  const draftLocs: EditorLocation[] = useMemo(
-    () => (normalized.locations || []).map((l) => {
-      const src = byId[l.id]
+  /**
+   * The proposed placements as location records: the draft's position and yaw
+   * on the world's own name, icon and scale anchor.
+   *
+   * ONE list, stubs included and in the server's order — a warning points at
+   * `locations[i]`, so any split here would make every index mean something
+   * else. A stub has no world record to borrow from: its name and its outline
+   * come from the draft itself, and its key is the index.
+   */
+  const draftLocs: DraftPlacement[] = useMemo(
+    () => (normalized.locations || []).map((l, i) => {
+      if (l.is_new) {
+        return {
+          id: `new-${i}`,
+          name: l.name || '?',
+          pos_x: l.pos_x,
+          pos_z: l.pos_z,
+          yaw_deg: typeof l.yaw_deg === 'number' ? l.yaw_deg : 0,
+          map3d: l.boundary ? { boundary: l.boundary } : undefined,
+          isNew: true,
+        }
+      }
+      const src = l.id ? byId[l.id] : undefined
       return {
-        id: l.id,
-        name: src?.name || l.id,
+        id: l.id || `at-${i}`,
+        name: src?.name || l.name || l.id || '?',
         pos_x: l.pos_x,
         pos_z: l.pos_z,
         yaw_deg: typeof l.yaw_deg === 'number' ? l.yaw_deg : 0,
@@ -401,6 +473,13 @@ export function MapDraftPreview({
       }
     }),
     [byId, normalized],
+  )
+
+  /** What the PLACEMENT layer may draw: places the world knows. A stub has no
+   *  id, so it has no icon endpoint and no record — it is drawn by the overlay
+   *  alone. */
+  const placedDraftLocs = useMemo(
+    () => draftLocs.filter((l) => !l.isNew), [draftLocs],
   )
 
   /** Where those places stand TODAY — the other end of every move. */
@@ -477,7 +556,8 @@ export function MapDraftPreview({
   const shown: MapDraftCounts = counts || {
     areas: terrainAreas.length,
     heights: heightAreas.length,
-    positions: draftLocs.length,
+    positions: placedDraftLocs.length,
+    created: draftLocs.length - placedDraftLocs.length,
   }
 
   return (
@@ -550,7 +630,7 @@ export function MapDraftPreview({
                 />
               </g>
               <PlacementLayer
-                locations={draftLocs}
+                locations={placedDraftLocs}
                 selectedId=""
                 onSelect={NOOP}
                 onMove={NOOP}
@@ -572,6 +652,11 @@ export function MapDraftPreview({
               .replace('{h}', String(shown.heights))
               .replace('{p}', String(shown.positions))}
           </span>
+          {shown.created ? (
+            <span style={{ color: COL_NEW }}>
+              {t('{n} new places').replace('{n}', String(shown.created))}
+            </span>
+          ) : null}
           <button type="button" className="ga-btn ga-btn-sm" onClick={fitView}>
             {t('Fit view')}
           </button>

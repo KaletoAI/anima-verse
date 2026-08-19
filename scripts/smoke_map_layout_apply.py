@@ -86,6 +86,43 @@ port of (`frontend/src/tabs/map/mapMath.ts`), the rest from the geometry.
               ribbon (the [1] rectangle), meta.source "world_dev"
         {} / a list / no usable entry -> ValueError (the only hard errors)
 
+  [4b] NEW PLACE STUBS (`name` instead of `id`), the v2 half of the schema.
+        The outline goes through the ONE boundary judge
+        (`world_ops._sanitize_map3d`), so the hand numbers are the contract's:
+          the L (0,0) (4,0) (4,2) (2,2) (2,4) (0,4) has the shoelace sum
+              0 + 8 + 4 + 4 + 8 + 0 = +24, i.e. it is already CLOCKWISE in
+              storage winding (x east, z south -> positive sum), and its
+              bounding box is 4 × 4 -> plan_width_m 4.0
+              (`world_geometry.polygon_plan_width_m`, same hand case).
+              Handed in REVERSED (counter-clockwise, sum −24) it must come
+              back as that very sequence — that is the winding fix, measured.
+          centimetres: [[0,0],[3.456,0],[3.456,3.456]] -> 3.46 everywhere,
+              width 3.46.
+          NO boundary at all -> the seed square, edge SEED_BOUNDARY_M = 10,
+              i.e. [[-5,-5],[5,-5],[5,5],[-5,5]] (sum +200, clockwise) and
+              plan_width_m 10.0 — a place is never area-less.
+          a 2-point "outline" -> seed square + a `seed_boundary` warning.
+          a stub named like an existing place -> `duplicate_name`, KEPT.
+          neither id nor name -> `nameless_location`, dropped.
+          an UNKNOWN id stays `unknown_location` (dropped): a guessed id must
+              never turn into a new place.
+          the seed square of a stub at (0,0) and the 10 m square of `loc_c`
+              at (8,0) span [-5,5] and [3,13] -> they share [3,5]
+                                  -> footprint_overlap
+          layout_counts splits the two promises: one existing place moved and
+              one stub -> {"positions": 1, "created": 1}
+
+  [5b] Stub apply / restore:
+        apply -> the place EXISTS, with the ground room every location has,
+              its boundary stored clockwise, plan_width_m derived, indoor and
+              danger_level set, and positioned at the stub's pin
+        a stub named exactly like an existing place -> a SECOND place with its
+              own id (names are not keys), the first one untouched
+        restore -> the created places are DELETED again ("removed": 2) while
+              the moved existing one is put back where it was; a place created
+              BY HAND after the apply survives the restore, because the
+              snapshot only takes back what it recorded
+
   [5] Apply / snapshot / restore against a throwaway world:
         merge      -> counts, and the areas that were there survive
         replace_terrain -> the old areas are gone, only the new ones remain
@@ -437,7 +474,83 @@ check("layout_counts",
           "height_areas": [{"polygon": [[0, 0], [5, 0], [5, 5]],
                             "height_m": 3}],
           "locations": [{"id": "loc_c", "pos_x": 0, "pos_z": 200}]})[0]),
-      {"areas": 1, "heights": 1, "positions": 1})
+      {"areas": 1, "heights": 1, "positions": 1, "created": 0})
+
+# ── [4b] new place stubs ────────────────────────────────────────────────────
+print("[4b] sanitize_map_layout — NEW PLACE STUBS")
+# The contract's own L (world_geometry.polygon_plan_width_m): box 4 × 4.
+L4 = [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]]
+L4_CCW = list(reversed(L4))
+SEED = [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]]
+
+norm, warns = sane({"locations": [
+    {"name": "The Old Mill", "description": "A water mill.",
+     "pos_x": 100, "pos_z": 100, "yaw_deg": 90, "boundary": L4_CCW,
+     "indoor": "indoor", "danger_level": 2, "why": "at the bend"}]})
+check("a stub is clean", codes(warns), [])
+STUB = norm["locations"][0]
+check("the stub is marked new", STUB.get("is_new"), True)
+check("a stub carries no id", "id" in STUB, False)
+check("CCW L flipped to storage winding (clockwise)", STUB["boundary"],
+      [[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [2.0, 2.0], [2.0, 4.0], [0.0, 4.0]])
+check("derived width of the 4 × 4 box", STUB["plan_width_m"], 4.0)
+check("pin, yaw, name, description, indoor, danger",
+      (STUB["pos_x"], STUB["pos_z"], STUB["yaw_deg"], STUB["name"],
+       STUB["description"], STUB["indoor"], STUB["danger_level"]),
+      (100.0, 100.0, 90.0, "The Old Mill", "A water mill.", "indoor", 2))
+check("why survives", STUB["why"], "at the bend")
+
+norm, _ = sane({"locations": [
+    {"name": "Cm Hut", "pos_x": 0, "pos_z": 0,
+     "boundary": [[0, 0], [3.456, 0], [3.456, 3.456]]}]})
+check("centimetres, not micrometres", norm["locations"][0]["boundary"],
+      [[0.0, 0.0], [3.46, 0.0], [3.46, 3.46]])
+check("...and the width with them", norm["locations"][0]["plan_width_m"], 3.46)
+
+norm, warns = sane({"locations": [
+    {"name": "Bare Stub", "pos_x": 0, "pos_z": 0}]})
+check("no outline -> the 10 m seed square, silently",
+      (codes(warns), norm["locations"][0]["boundary"],
+       norm["locations"][0]["plan_width_m"]),
+      ([], SEED, 10.0))
+check("SEED_BOUNDARY_M is that square's edge", mla.SEED_BOUNDARY_M, 10.0)
+
+norm, warns = sane({"locations": [
+    {"name": "Broken Stub", "pos_x": 0, "pos_z": 0,
+     "boundary": [[0, 0], [4, 0]]}]})
+check("an unusable outline -> seed square + a warning",
+      (codes(warns), norm["locations"][0]["boundary"]),
+      (["seed_boundary"], SEED))
+
+norm, warns = sane({"locations": [
+    {"name": "tavern", "pos_x": 300, "pos_z": 300}]})
+check("a stub named like an existing place warns", codes(warns),
+      ["duplicate_name"])
+check("...and is created anyway", len(norm["locations"]), 1)
+
+norm, warns = sane({"locations": [
+    {"pos_x": 0, "pos_z": 0},
+    {"name": "Real Stub", "pos_x": 200, "pos_z": 200}]})
+check("neither id nor name -> dropped", codes(warns), ["nameless_location"])
+check("...the named one survives", len(norm["locations"]), 1)
+
+norm, warns = sane({"locations": [
+    {"id": "loc_nope", "name": "Guessed", "pos_x": 0, "pos_z": 0}]})
+check("an unknown id never becomes a stub", codes(warns),
+      ["unknown_location"])
+check("...and nothing is placed", norm["locations"], [])
+
+norm, warns = sane({"locations": [
+    {"name": "Seeded", "pos_x": 0, "pos_z": 0},
+    {"id": "loc_c", "pos_x": 8, "pos_z": 0}]})
+check("seed square [-5,5] and the 10 m square [3,13] share [3,5]",
+      codes(warns), ["footprint_overlap"])
+
+check("layout_counts splits moved from created",
+      mla.layout_counts(sane({"locations": [
+          {"id": "loc_c", "pos_x": 0, "pos_z": 0},
+          {"name": "Mill", "pos_x": 200, "pos_z": 200}]})[0]),
+      {"areas": 0, "heights": 0, "positions": 1, "created": 1})
 
 # ── [5] apply / snapshot / restore against a real (throwaway) world ─────────
 print("[5] apply_map_layout / map_snapshot / restore_snapshot")
@@ -460,7 +573,7 @@ check("snapshot id shape", len(SNAP.split("-")), 2)
 _listed = mla.list_snapshots()
 check("snapshot listed", [s["id"] for s in _listed], [SNAP])
 check("snapshot counts", _listed[0]["counts"],
-      {"areas": 1, "heights": 1, "positions": 2})
+      {"areas": 1, "heights": 1, "positions": 2, "created": 0})
 check_true("snapshot has a created_at", _listed[0]["created_at"])
 
 WORLD_CATALOG = {}
@@ -486,7 +599,7 @@ NORM, WARN = mla.sanitize_map_layout(DRAFT, catalog=WORLD_CATALOG,
                                      locations_by_id=WORLD_LOCS, bounds=None)
 check("draft is clean", codes(WARN), [])
 check("merge counts", mla.apply_map_layout(NORM, mode="merge"),
-      {"areas": 2, "heights": 1, "positions": 1})
+      {"areas": 2, "heights": 1, "positions": 1, "created": 0})
 check("merge kept the old area",
       sorted(a["kind"] for a in terrain.list_areas()),
       ["forest", "grass", "path"])
@@ -498,8 +611,9 @@ check("meta.source on every written area",
       sorted({(a["meta"].get("source") or "-") for a in terrain.list_areas()}),
       ["-", "world_dev"])
 
-check("replace_terrain counts", mla.apply_map_layout(NORM, mode="replace_terrain"),
-      {"areas": 2, "heights": 1, "positions": 1})
+check("replace_terrain counts",
+      mla.apply_map_layout(NORM, mode="replace_terrain"),
+      {"areas": 2, "heights": 1, "positions": 1, "created": 0})
 check("replace_terrain wiped the old ground",
       sorted(a["kind"] for a in terrain.list_areas()), ["forest", "path"])
 check("replace_terrain wiped the old heights",
@@ -514,7 +628,8 @@ raises_value_error("a broken polygon in the batch",
 check("nothing was written", [a["id"] for a in terrain.list_areas()], _before)
 
 RESTORED = mla.restore_snapshot(SNAP)
-check("restore counts", RESTORED, {"areas": 1, "heights": 1, "positions": 2})
+check("restore counts", RESTORED,
+      {"areas": 1, "heights": 1, "positions": 2, "removed": 0})
 check("restore put back the EXACT area id",
       [(a["id"], a["kind"], a["polygon"]) for a in terrain.list_areas()],
       [(OLD["id"], "grass", [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0],
@@ -531,6 +646,69 @@ check("restore unplaced the Smithy again",
 check("world bounds from the restored world",
       mla.current_world_bounds(),
       {"min_x": -15.0, "min_z": -15.0, "max_x": 25.0, "max_z": 25.0})
+
+# ── [5b] stubs against the real world ───────────────────────────────────────
+print("[5b] stubs — create through the ordinary path, then take them back")
+STUB_DRAFT = {
+    "locations": [
+        {"id": ID_A, "pos_x": 60, "pos_z": 60, "yaw_deg": 0},
+        {"name": "The Old Mill", "description": "A water mill.",
+         "pos_x": 200, "pos_z": 0, "yaw_deg": 90, "boundary": L4_CCW,
+         "indoor": "indoor", "danger_level": 2, "why": "at the bend"},
+        {"name": "Tavern", "description": "A second house, same name.",
+         "pos_x": 400, "pos_z": 0},
+    ],
+}
+SNORM, SWARN = mla.sanitize_map_layout(STUB_DRAFT, catalog=WORLD_CATALOG,
+                                       locations_by_id=WORLD_LOCS, bounds=None)
+check("only the repeated name is complained about", codes(SWARN),
+      ["duplicate_name"])
+SNAP2 = mla.map_snapshot()
+check("stub apply counts",
+      mla.apply_map_layout(SNORM, mode="merge", snapshot_id=SNAP2),
+      {"areas": 0, "heights": 0, "positions": 1, "created": 2})
+
+MILLS = [loc for loc in world.list_locations()
+         if loc.get("name") == "The Old Mill"]
+check("the mill was created, once", len(MILLS), 1)
+MILL = MILLS[0]
+check("the CCW outline is stored clockwise", MILL["map3d"]["boundary"],
+      [[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [2.0, 2.0], [2.0, 4.0], [0.0, 4.0]])
+check("plan_width_m derived from its 4 × 4 box",
+      MILL["map3d"]["plan_width_m"], 4.0)
+check("pin and yaw", (MILL["pos_x"], MILL["pos_z"], MILL["yaw_deg"]),
+      (200.0, 0.0, 90.0))
+check("description, indoor and danger_level",
+      (MILL["description"], MILL["indoor"], MILL["danger_level"]),
+      ("A water mill.", "indoor", 2))
+check("it has the ground room every location has",
+      [r.get("id") for r in MILL.get("rooms") or []], [world.GROUND_ROOM_ID])
+
+TAVERNS = [loc for loc in world.list_locations() if loc.get("name") == "Tavern"]
+check("a repeated name creates a SECOND place", len(TAVERNS), 2)
+check("...with two distinct ids", len({t["id"] for t in TAVERNS}), 2)
+_a = world.get_location_by_id(ID_A)
+check("...and the first one was NOT overwritten", _a["description"],
+      "A tavern.")
+check("the existing place moved", (_a["pos_x"], _a["pos_z"]), (60.0, 60.0))
+check("the snapshot knows what to take back",
+      [s["counts"]["created"] for s in mla.list_snapshots()
+       if s["id"] == SNAP2], [2])
+
+HAND = world.add_location("Hand Made", "Drawn by a person after the apply.")
+RESTORED2 = mla.restore_snapshot(SNAP2)
+check("restore removes exactly the created places", RESTORED2["removed"], 2)
+check("the mill is gone",
+      [loc for loc in world.list_locations()
+       if loc.get("name") == "The Old Mill"], [])
+check("one Tavern again",
+      len([loc for loc in world.list_locations()
+           if loc.get("name") == "Tavern"]), 1)
+check("the moved Tavern is back where it stood",
+      (world.get_location_by_id(ID_A)["pos_x"],
+       world.get_location_by_id(ID_A)["pos_z"]), (5.0, 5.0))
+check("a place made BY HAND after the apply survives the restore",
+      bool(world.get_location_by_id(HAND["id"])), True)
 
 raises_value_error("unknown snapshot id",
                    lambda: mla.restore_snapshot("nope"))

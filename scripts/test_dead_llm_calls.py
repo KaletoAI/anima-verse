@@ -118,7 +118,9 @@ _EXPECTED_OFFLOADS = (
     ("app/routes/characters.py", "update_character_current_activity", "set_pose_intent"),
     ("app/routes/group_chat.py", "generate", "_extract_activity"),
     ("app/routes/group_chat.py", "generate", "_extract_mood"),
-    ("app/routes/play.py", "play_cast_self", "execute_cast"),
+    # The offload moved into the ONE shared cast path behind /play/cast-self
+    # and /play/cast (docstring there); the route itself only awaits it.
+    ("app/routes/play.py", "_cast_from_inventory", "execute_cast"),
     ("app/routes/inventory.py", "cast_spell_on_self_route", "execute_cast"),
 )
 

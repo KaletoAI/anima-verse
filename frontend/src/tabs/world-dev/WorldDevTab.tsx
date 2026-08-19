@@ -124,8 +124,15 @@ interface ApplyMapResponse {
   snapshot_id?: string
 }
 
+/** `POST /world-dev/map-restore`. `removed` are the places the apply after
+ *  that snapshot CREATED and the restore deleted again. */
+interface MapRestoreCounts extends MapDraftCounts {
+  removed?: number
+}
+
 /** One entry of `GET /world-dev/map-snapshots` — the undo the map editor
- *  itself does not have. */
+ *  itself does not have. Its `created` count is what a restore would REMOVE:
+ *  the places the apply after it brought into being. */
 interface MapSnapshot {
   id: string
   created_at?: string
@@ -560,6 +567,9 @@ export function WorldDevTab() {
           .replace('{a}', String(a.areas ?? 0))
           .replace('{h}', String(a.heights ?? 0))
           .replace('{p}', String(a.positions ?? 0))
+          + (a.created
+            ? ', ' + t('{n} new places').replace('{n}', String(a.created))
+            : '')
         : t('Applied'), 'success')
       setApplied(true)
       await loadSnapshots()
@@ -575,7 +585,7 @@ export function WorldDevTab() {
     if (!id) return
     setApplying(true)
     try {
-      const res = await apiPost<{ restored?: MapDraftCounts }>(
+      const res = await apiPost<{ restored?: MapRestoreCounts }>(
         '/world-dev/map-restore', { snapshot_id: id })
       const r = res.restored
       toast(r
@@ -583,6 +593,10 @@ export function WorldDevTab() {
           .replace('{a}', String(r.areas ?? 0))
           .replace('{h}', String(r.heights ?? 0))
           .replace('{p}', String(r.positions ?? 0))
+          + (r.removed
+            ? ', ' + t('{n} new places removed').replace('{n}',
+              String(r.removed))
+            : '')
         : t('Snapshot restored'), 'success')
       setApplied(true)
     } catch (e) {
@@ -1213,6 +1227,12 @@ function ConfirmMapAction({
               <div>
                 {t('The whole map is set back to the snapshot: painted ground, relief and every position it recorded.')}
               </div>
+              {snap?.counts?.created ? (
+                <div style={{ color: '#d29922' }}>
+                  {t('The {n} places that apply created are deleted again. A place you made by hand afterwards is not touched.')
+                    .replace('{n}', String(snap.counts.created))}
+                </div>
+              ) : null}
               <div className="ga-form-hint">
                 {snap?.created_at || action.snapshotId}
                 {snap?.counts
@@ -1231,6 +1251,12 @@ function ConfirmMapAction({
                   .replace('{h}', String(counts?.heights ?? 0))
                   .replace('{p}', String(counts?.positions ?? 0))}
               </div>
+              {counts?.created ? (
+                <div style={{ color: '#a371f7' }}>
+                  {t('It also CREATES {n} new places. They are stubs: a name, a description and an outline — rooms and prompts come later, through the location schema.')
+                    .replace('{n}', String(counts.created))}
+                </div>
+              ) : null}
               {action.mode === 'replace_terrain' ? (
                 <div style={{ color: '#d29922' }}>
                   {t('Every existing terrain area and height area is deleted first. Location positions are kept — only the listed places move.')}

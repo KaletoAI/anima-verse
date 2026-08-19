@@ -1422,7 +1422,8 @@ def add_location(name: str, description: str,
                   swim_allowed: bool = None,
                   indoor: str = None,
                   activity_hint: str = None,
-                  location_id: str = None) -> Dict[str, Any]:
+                  location_id: str = None,
+                  create_new: bool = False) -> Dict[str, Any]:
     """Fuegt einen neuen Ort hinzu oder aktualisiert einen bestehenden.
 
     Args:
@@ -1440,6 +1441,11 @@ def add_location(name: str, description: str,
         location_id: Wenn gesetzt, wird der zu aktualisierende Ort per ID
             gefunden (eindeutig) statt per Name. NOETIG bei doppelten Namen —
             sonst trifft die Name-Suche den falschen Ort (z.B. einen Klon).
+        create_new: Always create, never update. Without it a name that already
+            exists is read as an EDIT of that place, which is right for an
+            author typing a name into a form and wrong for anything generating
+            places in bulk (a map draft): there a name is a label, not a key,
+            and two mills on the same river are two mills.
     """
     data = _load_world_data()
     locations = data.get("locations", [])
@@ -1454,7 +1460,7 @@ def add_location(name: str, description: str,
     def _is_target(loc: Dict[str, Any]) -> bool:
         return (loc.get("id") == location_id) if location_id else (loc.get("name") == name)
 
-    for location in locations:
+    for location in ([] if create_new else locations):
         if _is_target(location):
             location["description"] = description
             # Bei ID-basiertem Update den (ggf. neuen) Namen mitschreiben.

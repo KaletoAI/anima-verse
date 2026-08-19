@@ -1508,7 +1508,11 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                             image_prompt_night=image_prompt_night,
                             image_prompt_map=image_prompt_map,
                             image_prompt_map_2d=image_prompt_map_2d,
-                            image_prompt_building=image_prompt_building)
+                            image_prompt_building=image_prompt_building,
+                            # A caller that generates places in bulk (a map
+                            # draft's stubs) says so: a name it repeats is a
+                            # second place, not an edit of the first.
+                            create_new=bool(data.get("create_new")))
 
     # Set extra fields directly in the location
     _has_extra = (danger_level is not None or event_settings is not None
