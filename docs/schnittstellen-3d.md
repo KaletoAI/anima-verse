@@ -1,3 +1,73 @@
+# Schnittstellen 3D — Gesamtvertrag v6 „Gebiete" (2026-08-19)
+
+> **v6 — Die Location ist ein gezeichnetes Polygon, alle Inhalte sind Meter.**
+> Beschlossen 2026-08-19 (User-Freigabe Option 2, `development_instructions/`
+> `analyse-gebiete-und-unterbereiche.md` + `plan-assets-im-szenenkontext.md`,
+> Etappe 1). **Kein Migrationscode** — Welten werden neu aufgebaut; ein
+> Quadrat ist ab jetzt nur ein Spezialfall des Polygons. Diese Liste
+> überschreibt alles Folgende, wo es widerspricht:
+>
+> 1. **Der Fußabdruck ist ein Polygon, kein Quadrat.** Eine Location trägt
+>    `map3d.boundary`: eine geschlossene Punktfolge in **lokalen Metern
+>    relativ zum Anker-Pin** (`pos_x`, `pos_z`) und dessen Drehung
+>    (`yaw_deg`) — transformiert mit der EINEN Abbildung aus § A1.1
+>    (unverändert gültig). ≤ 64 Punkte, auto-geschlossen, im Uhrzeigersinn;
+>    Selbstschnitt ist eine Warnung in `problems[]`, kein Fehler. **Konkave
+>    Umrisse sind zugelassen** (E1.1). Unplatziert bleibt `pos_x/pos_z null`.
+>    Ohne `boundary` hat eine Location KEINE Fläche (nur einen Pin) — das
+>    frühere „ohne Anker 10-m-Quadrat" entfällt ersatzlos.
+> 2. **Das Bruchteil-System ist gelöscht.** Raum-Rechtecke (`x/y/w/d`),
+>    Raum-`outline`, Kurven-Kontrollpunkte, Marker-`at`, Prop-`at`,
+>    `model_at`, Fahrstuhl — alles wird in **Metern im lokalen Rahmen**
+>    gespeichert und ausgeliefert (Szenengraph Welt → Location(Pin+Yaw) →
+>    Raum(Position+Drehung) → Inhalt). `[0,1]²`-Domäne,
+>    `plan_width_m`-Regler und der Anker-Zwang (`_require_scale_anchor`)
+>    existieren nicht mehr. `plan_width_m`/`extent_m` bleiben als
+>    **abgeleitete Rechengröße** (Breite der Bounding-Box des Boundary-
+>    Polygons) in den Payloads, damit Verbraucher-Verträge (Laderadius,
+>    Viewport, Backdrop) weiterleben; `k = 1` bleibt dokumentiert konstant.
+> 3. **EIN Skalengesetz, jetzt wirklich überall: real_size.** `tile_fit`
+>    („größte Seite füllt die Kante") ist gelöscht; auch Gebäude- und
+>    Flächen-Modelle skalieren über eine **deklarierte reale Breite in
+>    Metern** (Sidecar `width_m`, wie Dioramen § B2a). `map3d.size` (der
+>    ]0,1]-Füllfaktor) entfällt. § B6 #8 ist damit auf Location-Ebene
+>    gegenstandslos.
+> 4. **Die Level-Platte ist das triangulierte Boundary-Polygon**, nicht mehr
+>    ein Quadrat; das Relief-Raster spannt über der Bounding-Box und wird am
+>    Polygon geclippt (Rand-Pinning auf 0 bleibt). `_rotate_scene`
+>    (90°-Kachel-Drehung des fertigen Payloads) entfällt — gedreht wird
+>    ausschließlich über den Pin (§ A1.1-Kette).
+> 5. **`boundary_openings` liegen auf Polygon-Kanten**: `edge` ist ein
+>    Kanten-INDEX (0-basiert, Kante i = Punkt i → i+1) statt der Buchstaben
+>    N/S/E/W, `at ∈ [0,1]` läuft entlang dieser Kante. Die ausgelieferten
+>    Felder `at_world` + `inward` (Normale zeigt nach innen) bleiben — der
+>    Client rechnet weiterhin nichts selbst.
+> 6. **Punkt-in-Location: die kleinste FLÄCHE gewinnt** (E1.2, Nachfolger
+>    der Kleinste-Breite-Regel in § A1.1). Überlappung bleibt legal; der
+>    Karten-Apply warnt, verbietet nicht.
+> 7. **Die Planierung (§ A16.1) wird ein Polygon-Distanzfeld**: innen = im
+>    Polygon, Rampenring = Kanten-Distanz ≤ Rampenbreite; die Plateau-Höhe
+>    wird an einem **garantiert inneren, deterministischen Punkt** gelesen
+>    (nicht am Zentroid — der liegt bei konkaven Formen ggf. außerhalb).
+>    `height_sig` hasht die Polygonpunkte.
+> 8. **Fog of War ist DEAKTIVIERT** (E1.3): der Client zeichnet keinen
+>    Schleier mehr, § A12/§ A1.6 ruhen bis zu einer eigenen Fog-Runde.
+>    **Die Wissens-Filterung bleibt**: was der Server wegen
+>    `known_locations` nicht ausliefert, existiert für den Client weiterhin
+>    nicht — nur die VISUALISIERUNG des Unbekannten entfällt.
+> 9. **`problems[]` neu: `room_outside_boundary`** — ein Raum, dessen
+>    Grundriss über den Location-Umriss ragt (Warnung, kein Fehler).
+>    Der Grundriss-Editor zeichnet im Viewport der Boundary-Bounding-Box
+>    (Meter-Raster, Snap an Boundary-Kanten und Nachbar-Wände,
+>    1,70-m-Referenzfigur); offene/geschlossene **Unterbereiche** sind die
+>    Bedien-Sprache für die bisherige Flag-Trias (`always_visible` +
+>    `no_walls` [+ `relief_flat`]) — die Felder selbst bleiben.
+>
+> Wo der Rest des Dokuments „Quadrat", „Kante `plan_width_m`", eine
+> `[0,1]`-Fraktion, `tile_fit`, `map3d.size` oder Kanten-Buchstaben
+> N/S/E/W nennt, gilt die Liste oben. Numerische Verifikation weiterhin
+> nach § B5a (Handwerte, nie Screenshots).
+
 # Schnittstellen 3D — Gesamtvertrag v5 (2026-07-28)
 
 > **v5 — EIN Rahmen, EIN Maßstabsfaktor, EIN Anker (2026-07-28).**

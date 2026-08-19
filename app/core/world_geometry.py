@@ -1,9 +1,14 @@
-"""Pure world-coordinate geometry (Seamless World, E1).
+"""Pure world-coordinate geometry (Seamless World E1; polygon regions v6).
 
-The world is a continuous plane measured in metres. Locations are squares
-of edge ``map3d.plan_width_m`` centred on (``pos_x``, ``pos_z``), rotated by
-``yaw_deg`` around the vertical axis. Everything here is pure math — no DB,
-no config — so the smoke checks derive every number by hand.
+The world is a continuous plane measured in metres. Since contract v6
+("Gebiete", 2026-08-19) a location is a drawn POLYGON: ``map3d.boundary``
+holds its outline in local metres around the anchor pin (``pos_x``,
+``pos_z``), rotated by ``yaw_deg`` around the vertical axis. The square
+footprint (edge ``map3d.plan_width_m``) is the legacy special case and its
+helpers remain only until every consumer has switched (stage 1 of
+``plan-assets-im-szenenkontext.md``). Everything here is pure math — no DB,
+no config — so the smoke checks derive every number by hand
+(``scripts/smoke_world_polygon.py`` for the polygon half).
 
 Axes follow the 3D client (three.js ground plane): x grows east, z grows
 south. ``yaw_deg`` rotates clockwise when looking down onto the map, so at
@@ -207,6 +212,323 @@ def point_in_polygon(x: float, z: float, points: Any) -> bool:
                 inside = not inside
         j = i
     return inside
+
+
+# --------------------------------------------------------------------------
+# Polygon regions (contract v6 "Gebiete", 2026-08-19)
+#
+# A boundary is ``[[x, z], …]`` in LOCAL metres around the pin, auto-closed
+# (no repeated last point stored). Winding: with x east and z south, a
+# positive shoelace sum is CLOCKWISE in map view — the stored convention.
+# Concave outlines are allowed (decision E1.1), so nothing below assumes
+# convexity; overlap stays legal and the smallest AREA wins (E1.2).
+# --------------------------------------------------------------------------
+
+
+def _poly_points(points: Any) -> Optional[List[Tuple[float, float]]]:
+    """Parse ``[[x, z], …]`` into float tuples; None on any malformed or
+    non-finite entry or fewer than 3 points (a line claims no area)."""
+    pts: List[Tuple[float, float]] = []
+    for pt in (points or []):
+        try:
+            x, z = float(pt[0]), float(pt[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not (math.isfinite(x) and math.isfinite(z)):
+            return None
+        pts.append((x, z))
+    if len(pts) >= 2 and pts[0] == pts[-1]:
+        pts = pts[:-1]          # tolerate an explicitly closed ring
+    if len(pts) < 3:
+        return None
+    return pts
+
+
+def polygon_signed_area(points: Any) -> float:
+    """Shoelace sum — POSITIVE means clockwise in map view (x east, z south).
+
+    Hand-derived on the triangle (0,0) (1,0) (0,1): east, then south-west,
+    then north — clockwise on the map — and the sum is +0.5.
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return 0.0
+    total = 0.0
+    j = len(pts) - 1
+    for i, (xi, zi) in enumerate(pts):
+        xj, zj = pts[j]
+        total += xj * zi - xi * zj
+        j = i
+    return total / 2.0
+
+
+def polygon_area(points: Any) -> float:
+    """Enclosed area in m² regardless of winding; 0.0 when degenerate."""
+    return abs(polygon_signed_area(points))
+
+
+def polygon_bounds(points: Any) -> Optional[Tuple[float, float, float, float]]:
+    """Axis-aligned bounds (min_x, min_z, max_x, max_z), or None."""
+    pts = _poly_points(points)
+    if pts is None:
+        return None
+    xs = [p[0] for p in pts]
+    zs = [p[1] for p in pts]
+    return (min(xs), min(zs), max(xs), max(zs))
+
+
+def _point_segment_distance(px: float, pz: float, ax: float, az: float,
+                            bx: float, bz: float) -> float:
+    """Distance from point to the closed segment a→b."""
+    dx, dz = bx - ax, bz - az
+    length_sq = dx * dx + dz * dz
+    if length_sq < 1e-18:
+        return math.hypot(px - ax, pz - az)
+    t = ((px - ax) * dx + (pz - az) * dz) / length_sq
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * dx), pz - (az + t * dz))
+
+
+def polygon_distance(x: float, z: float, points: Any) -> float:
+    """Shortest distance to the polygon — **0 anywhere inside**, edges
+    inclusive; ``inf`` for a degenerate outline (nothing can reach it).
+
+    The polygon companion of :func:`footprint_distance`, and the primitive
+    the plateau ramp ring (§ A16.1 v6) is built on. Hand-derived on the
+    L-shape (0,0) (4,0) (4,2) (2,2) (2,4) (0,4):
+      (1, 1)   → 0        inside the wide arm
+      (5, 1)   → 1        1 m east of the x=4 edge
+      (3, 3)   → 1        in the notch; both notch edges are 1 m away
+      (-3, -4) → 5        past the (0,0) corner, hypot(3, 4)
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return math.inf
+    if point_in_polygon(x, z, pts):
+        return 0.0
+    best = math.inf
+    j = len(pts) - 1
+    for i, (xi, zi) in enumerate(pts):
+        xj, zj = pts[j]
+        best = min(best, _point_segment_distance(x, z, xj, zj, xi, zi))
+        j = i
+    return best
+
+
+def _orient(ax: float, az: float, bx: float, bz: float,
+            cx: float, cz: float) -> float:
+    """Twice the signed area of triangle abc (orientation predicate)."""
+    return (bx - ax) * (cz - az) - (bz - az) * (cx - ax)
+
+
+def _on_segment(ax: float, az: float, bx: float, bz: float,
+                px: float, pz: float) -> bool:
+    """Whether collinear point p lies within the closed box of segment a→b."""
+    return (min(ax, bx) - 1e-12 <= px <= max(ax, bx) + 1e-12
+            and min(az, bz) - 1e-12 <= pz <= max(az, bz) + 1e-12)
+
+
+def _segments_intersect(p0x: float, p0z: float, p1x: float, p1z: float,
+                        q0x: float, q0z: float, q1x: float, q1z: float) -> bool:
+    """Whether two closed segments touch — a grazing contact counts (the
+    conservative answer, matching :func:`segment_hits_footprint`)."""
+    d1 = _orient(q0x, q0z, q1x, q1z, p0x, p0z)
+    d2 = _orient(q0x, q0z, q1x, q1z, p1x, p1z)
+    d3 = _orient(p0x, p0z, p1x, p1z, q0x, q0z)
+    d4 = _orient(p0x, p0z, p1x, p1z, q1x, q1z)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)) \
+            and d1 != 0 and d2 != 0 and d3 != 0 and d4 != 0:
+        return True
+    if d1 == 0 and _on_segment(q0x, q0z, q1x, q1z, p0x, p0z):
+        return True
+    if d2 == 0 and _on_segment(q0x, q0z, q1x, q1z, p1x, p1z):
+        return True
+    if d3 == 0 and _on_segment(p0x, p0z, p1x, p1z, q0x, q0z):
+        return True
+    if d4 == 0 and _on_segment(p0x, p0z, p1x, p1z, q1x, q1z):
+        return True
+    return False
+
+
+def segment_hits_polygon(x0: float, z0: float, x1: float, z1: float,
+                         points: Any) -> bool:
+    """Whether the straight segment touches the polygon (interior or rim).
+
+    Edge-exact like :func:`segment_hits_footprint` — per-edge intersection
+    plus an endpoint-containment test, so no sampling gap. Works unchanged
+    for concave outlines (E1.1: no convex decomposition, tested edge-wise).
+
+    Hand-derived on the L-shape above: (-1,3)→(5,3) crosses the thin arm
+    -> True; (3,3)→(5,3) starts in the notch and stays east of it, and the
+    right arm only reaches down to z=2 -> False.
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return False
+    if point_in_polygon(x0, z0, pts) or point_in_polygon(x1, z1, pts):
+        return True
+    j = len(pts) - 1
+    for i, (xi, zi) in enumerate(pts):
+        xj, zj = pts[j]
+        if _segments_intersect(x0, z0, x1, z1, xj, zj, xi, zi):
+            return True
+        j = i
+    return False
+
+
+def polygon_hits_aabb(points: Any, min_x: float, min_z: float,
+                      max_x: float, max_z: float) -> bool:
+    """Whether the polygon overlaps an axis-aligned box (edge touch counts).
+
+    Exact for concave polygons: a vertex inside the box, a box corner inside
+    the polygon, or any edge pair crossing. The nav-grid cell test (v6
+    successor of :func:`footprint_hits_aabb`).
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return False
+    bounds = polygon_bounds(pts)
+    if bounds is None or bounds[0] > max_x or bounds[2] < min_x \
+            or bounds[1] > max_z or bounds[3] < min_z:
+        return False
+    for x, z in pts:
+        if min_x <= x <= max_x and min_z <= z <= max_z:
+            return True
+    box = [(min_x, min_z), (max_x, min_z), (max_x, max_z), (min_x, max_z)]
+    for bx, bz in box:
+        if point_in_polygon(bx, bz, pts):
+            return True
+    for k in range(4):
+        b0x, b0z = box[k]
+        b1x, b1z = box[(k + 1) % 4]
+        if segment_hits_polygon(b0x, b0z, b1x, b1z, pts):
+            return True
+    return False
+
+
+def polygons_overlap(points_a: Any, points_b: Any) -> bool:
+    """Whether two polygons share any point (edge touch counts).
+
+    The map-apply overlap WARNING (never an error — overlap is legal, E1.2).
+    Covers containment both ways plus every edge crossing, so it is exact
+    for concave shapes too.
+    """
+    pts_a = _poly_points(points_a)
+    pts_b = _poly_points(points_b)
+    if pts_a is None or pts_b is None:
+        return False
+    if any(point_in_polygon(x, z, pts_b) for x, z in pts_a):
+        return True
+    if any(point_in_polygon(x, z, pts_a) for x, z in pts_b):
+        return True
+    j = len(pts_a) - 1
+    for i, (xi, zi) in enumerate(pts_a):
+        xj, zj = pts_a[j]
+        if segment_hits_polygon(xj, zj, xi, zi, pts_b):
+            return True
+        j = i
+    return False
+
+
+# Deterministic scan rows for the interior-point search: binary fractions,
+# widest spacing first, never 0 or 1 (those rows graze the outline).
+_INTERIOR_ROWS = (0.5, 0.25, 0.75, 0.375, 0.625, 0.125, 0.875,
+                  0.0625, 0.9375, 0.3125, 0.6875, 0.1875, 0.8125)
+
+
+def polygon_interior_point(points: Any) -> Optional[Tuple[float, float]]:
+    """A DETERMINISTIC point guaranteed inside the polygon, or None.
+
+    The plateau height (§ A16.1 v6) is read here instead of at the centroid:
+    a concave polygon's centroid may lie outside it (the L-shape's centroid
+    sits at (5/3, 5/3) — inside — but a U-shape's does not). Strategy: take
+    the centroid when it verifiably lies inside; otherwise scan horizontal
+    rows at fixed binary fractions of the height, collect the ray-casting
+    crossings, and return the midpoint of the widest span. Same input, same
+    answer — ``height_sig`` and both renderers can rely on it.
+    """
+    pts = _poly_points(points)
+    if pts is None:
+        return None
+    area2 = polygon_signed_area(pts) * 2.0
+    if abs(area2) > 1e-12:
+        cx = cz = 0.0
+        j = len(pts) - 1
+        for i, (xi, zi) in enumerate(pts):
+            xj, zj = pts[j]
+            cross = xj * zi - xi * zj
+            cx += (xj + xi) * cross
+            cz += (zj + zi) * cross
+            j = i
+        cx /= 3.0 * area2
+        cz /= 3.0 * area2
+        if point_in_polygon(cx, cz, pts):
+            return (cx, cz)
+    bounds = polygon_bounds(pts)
+    if bounds is None:
+        return None
+    min_x, min_z, max_x, max_z = bounds
+    height = max_z - min_z
+    if height <= 0:
+        return None
+    for frac in _INTERIOR_ROWS:
+        row_z = min_z + height * frac
+        crossings: List[float] = []
+        j = len(pts) - 1
+        for i, (xi, zi) in enumerate(pts):
+            xj, zj = pts[j]
+            j = i
+            if (zi > row_z) != (zj > row_z):
+                crossings.append((xj - xi) * (row_z - zi) / (zj - zi) + xi)
+        if len(crossings) < 2 or len(crossings) % 2:
+            continue        # row grazes a vertex — take the next row
+        crossings.sort()
+        best_mid: Optional[float] = None
+        best_span = 0.0
+        for k in range(0, len(crossings) - 1, 2):
+            span = crossings[k + 1] - crossings[k]
+            if span > best_span:
+                best_span = span
+                best_mid = (crossings[k] + crossings[k + 1]) / 2.0
+        if best_mid is not None and best_span > 1e-9:
+            candidate = (best_mid, row_z)
+            if point_in_polygon(candidate[0], candidate[1], pts):
+                return candidate
+    return None
+
+
+def polygon_local_to_world(points: Any, cx: float, cz: float,
+                           yaw_deg: float) -> Optional[List[Tuple[float, float]]]:
+    """A local-metre boundary mapped through the ONE § A1.1 transform."""
+    pts = _poly_points(points)
+    if pts is None:
+        return None
+    return [local_to_world(lx, lz, cx, cz, yaw_deg) for lx, lz in pts]
+
+
+def placed_boundary(loc: Dict[str, Any]) -> Optional[Tuple[float, float, float,
+                                                           List[Tuple[float, float]]]]:
+    """(cx, cz, yaw_deg, local boundary points) of a placed v6 location.
+
+    Placed means: numeric, finite ``pos_x``/``pos_z`` AND a valid
+    ``map3d.boundary`` (≥ 3 finite points). Without a boundary the location
+    has no area and claims no point — the v6 successor of the missing
+    scale anchor (there is NO 10 m fallback any more).
+    """
+    px, pz = loc.get("pos_x"), loc.get("pos_z")
+    if px is None or pz is None:
+        return None
+    try:
+        px, pz = float(px), float(pz)
+        yaw = float(loc.get("yaw_deg") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(px) and math.isfinite(pz) and math.isfinite(yaw)):
+        return None
+    pts = _poly_points((loc.get("map3d") or {}).get("boundary"))
+    if pts is None:
+        return None
+    return (px, pz, yaw, pts)
 
 
 def placed_footprint(loc: Dict[str, Any]) -> Optional[Tuple[float, float,
