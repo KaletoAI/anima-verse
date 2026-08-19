@@ -6,7 +6,7 @@
  * in the middle. Without a figure it falls back to the whole world frame. The
  * painted terrain is filled polygons, the world's RELIEF is a shading layer
  * over them, the known places are dots on top of that, and everything else
- * stays the dark backdrop — and the backdrop is the fog.
+ * stays the dark backdrop.
  *
  * Nothing is clipped by hand: what lies outside the window misses the canvas
  * and is thereby not drawn — places included, which is why none of them is
@@ -31,10 +31,12 @@ import { minimapView, worldToPx, yawToCompassDeg, MINIMAP_SIZE_PX } from '../gam
 import type { MinimapRelief } from '../game/minimap';
 import { getMinimap, subscribeMinimap } from './bus';
 
-/** Canvas backdrop — everything the avatar does not know about stays this.
- *  Dark and slightly transparent, so the map reads as a veil over the world
- *  rather than as a second window. */
-const FOG_FILL = 'rgba(10, 12, 16, 0.72)';
+/** Canvas backdrop — whatever nothing is painted over stays this. Dark and
+ *  slightly transparent, so the map reads as part of the HUD rather than as a
+ *  second window. It is NOT a veil (contract v6 Nr. 8 struck those): the
+ *  painted terrain covers the whole world, so what shows through here is the
+ *  margin outside it. */
+const BACKDROP_FILL = 'rgba(10, 12, 16, 0.72)';
 /** The avatar dot and its view wedge. The same warm yellow the selection ring
  *  in `scene/tiles.ts` uses (0xf2cd6e) — one accent for "this is you". */
 const AVATAR_FILL = '#f2cd6e';
@@ -102,7 +104,7 @@ export function Minimap() {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = FOG_FILL;
+    ctx.fillStyle = BACKDROP_FILL;
     ctx.fillRect(0, 0, size, size);
 
     // The framing is decided ONCE, here, and everything below strokes through

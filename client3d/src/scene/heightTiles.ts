@@ -14,9 +14,9 @@
  * the numbers below be derived by hand in `client3d/scripts/smoke_height_tiles.mjs`
  * instead of being observed from a running client.
  *
- * THE RADIUS IS THE FOG'S, plus a tile's worth of margin: the veil closes at
+ * THE RADIUS IS THE SCENE HAZE'S, plus a tile's worth of margin: it closes at
  * 520 m (`engine.ts`, `THREE.Fog`), so a ground draped from the overview
- * beyond 560 m is behind the veil when it appears. The seam between the two
+ * beyond 560 m is behind the haze when it appears. The seam between the two
  * rasters is real and stays deliberately uncovered (plan, § A16.3) — it just
  * never happens where anyone can see it.
  */

@@ -38,7 +38,7 @@
  * height, which is the one place where "the areas sit a hair above the plate"
  * is allowed to be true.
  *
- * REFETCH. Neither the terrain nor the relief is ever fogged, so both are
+ * REFETCH. Neither the terrain nor the relief is ever withheld, so both are
  * fetched ONCE and again only when the worldmap poll reports a different
  * signature — `terrain_sig` for the painted areas, `height_sig` for the field.
  * `sync()` takes both and does nothing while they are unchanged.
@@ -52,8 +52,8 @@
  * exactly as it is when the overview does.
  */
 import * as THREE from 'three';
-import { AREA_POLYGON_OFFSET, buildAreaGeometry, compositeHeightRangeIn,
-  gridPlate, gridStepFor, maxCompositeHeightIn, pickVariant, pointInRing,
+import { AREA_POLYGON_OFFSET, buildAreaGeometry,
+  gridPlate, gridStepFor, pickVariant, pointInRing,
   propGroundFit, sampleCompositeGroundHeight, sampleCompositeHeight,
   scatterInstances, scatterSeed, subdivideOnGrid, surfaceMaterial,
   surfaceTimeUniform, tileKeyAt, worldHeightRange } from '@anima/scene-render';
@@ -93,11 +93,9 @@ export const GROUND_Y = 0;
  *  end at the outermost footprint; a player walking out there must not fall off
  *  the visible world.
  *
- *  Exported because the FOG has to reach exactly as far (E4 task 6): the veil
- *  is the world frame grown by this very margin, minus the known footprints.
- *  A cover that stopped at the bounds would leave a ring of bare ground
- *  glowing around the map, and one that reached further would hang over
- *  nothing at all. ONE number, one home. */
+ *  Exported because it is where the DRAWN world ends: the backdrop ring closes
+ *  the view behind it, and anything else that has to stop exactly there reads
+ *  it here. ONE number, one home. */
 export const BASE_MARGIN_M = 60;
 /** Edge length of the base plane when nothing is placed at all (metres). */
 const BASE_FALLBACK_M = 200;
@@ -117,11 +115,11 @@ const AREA_OFFSET_MAX = 32;
  * `scene/naturalGround.ts`), and that moved them out of the opaque pass — where
  * they were drawn before every overlay in the world — into the pass three sorts
  * by `renderOrder`. At the natural ladder (1, 2, 3, …) they would land AFTER
- * every overlay that leaves its render order at the default 0: the fog clouds,
- * the selection ring under an NPC, a path line, the door and boundary marks.
- * Those overlays deliberately do not write depth, so the opaque CORE of a drape
- * drawn after them simply paints over them — a selection ring vanishes on a
- * painted meadow, and every painted area punches a hole in the fog.
+ * every overlay that leaves its render order at the default 0: the selection
+ * ring under an NPC, a path line, the door and boundary marks. Those overlays
+ * deliberately do not write depth, so the opaque CORE of a drape drawn after
+ * them simply paints over them — a selection ring vanishes on a painted
+ * meadow.
  *
  * A large negative base restores the old truth ("the ground is drawn first")
  * without touching anything else: the areas keep their order AMONG themselves,
@@ -601,13 +599,12 @@ export interface Ground {
    * `terrain_sig` — without that trigger the trees stood inside a freshly
    * placed building until the next reload.
    *
-   * THE FOG FILTER ON THAT LIST IS DELIBERATE (review ruling, rounds 3+4).
-   * Under the fog the payload carries only the places the avatar knows, so an
+   * THE KNOWLEDGE FILTER ON THAT LIST IS DELIBERATE (review ruling, rounds
+   * 3+4). The payload carries only the places the avatar knows, so an
    * undiscovered location is not in `locations` and its ground gets scattered
    * like any other. That is the RIGHT way round: a clearing in the wood
    * exactly the size of a building would announce a place the player has not
-   * found yet — the veil would hide the tile and the missing trees would give
-   * it away. The props correct themselves the moment the place is discovered
+   * found yet. The props correct themselves the moment the place is discovered
    * (the row arrives, the signature moves, the area re-samples), and a few
    * trees standing where a building then appears is the cheaper of the two
    * wrongs. Never "fix" this by fetching the unfiltered list.
@@ -657,20 +654,12 @@ export interface Ground {
    * player sees asks `heightAt`.
    */
   fieldHeightAt(x: number, z: number): number;
-  /**
-   * Highest ground inside an axis-aligned rectangle (world metres) — what the
-   * fog quads hang above (§ A12 + § A16). One flat quad over a hilly patch has
-   * to clear the highest thing under it, or the mountain stands in the cloud.
-   */
-  maxHeightIn(x0: number, z0: number, x1: number, z1: number): number;
-  /**
-   * How much the ground RISES AND FALLS inside that same rectangle, in metres.
-   *
-   * The fog's tiling question (E8 task 5): a veil rectangle is only cut into
-   * 64 m quads where the ground under it actually moves, so over level ground
-   * one rectangle stays one draw call. 0 in a world with no relief.
-   */
-  heightRangeIn(x0: number, z0: number, x1: number, z1: number): number;
+  // `maxHeightIn` and `heightRangeIn` — the highest ground inside a world
+  // rectangle and how much it moves there — went with the veil (contract v6
+  // Nr. 8): they existed to hang the fog quads and to decide which of them was
+  // worth tiling, and nothing else ever asked. The primitives themselves stay
+  // in `@anima/scene-render` (`maxCompositeHeightIn`/`compositeHeightRangeIn`,
+  // hand-checked in `smoke_world_height.mjs`) for whoever needs them next.
   /**
    * Where a pointer ray meets the DRAWN ground, or `null` when it misses.
    *
@@ -683,9 +672,10 @@ export interface Ground {
    * fine for a click, never for a frame.
    */
   groundPointAt(ray: THREE.Raycaster): THREE.Vector3 | null;
-  /** Counts how often the RELIEF was taken over. Part of the fog's rebuild key
-   *  (the veil's height comes from the field) — a signature of its own,
-   *  because the field arrives long after the first fog is built. */
+  /** Counts how often the RELIEF was taken over — a signature of its own,
+   *  because the field arrives long after the first picture is built, and
+   *  everything drawn off it (the minimap's shading, the travel line) has to
+   *  know that it moved. */
   heightRevision(): number;
   /** The OVERVIEW height field itself (§ A16), for readers that DRAW the
    *  relief instead of standing on it — the minimap shades it. `null` until
@@ -1160,7 +1150,7 @@ export function createGround(): Ground {
    * tiles sharpen every CORNER of that mesh (each vertex is lifted through the
    * composite ladder) and every reading the rules take — they do not make the
    * plate finer. The seam where the loaded tiles end sits at 560 m, behind the
-   * fog (`heightTiles.ts`).
+   * scene haze (`heightTiles.ts`).
    *
    * A field of nothing but zeroes is FLAT and says so: today's worlds have no
    * relief at all, and giving them forty thousand cells for a surface that is
@@ -2435,15 +2425,6 @@ export function createGround(): Ground {
       const hits = ray.intersectObject(baseMesh, false);
       return hits.length ? hits[0].point.clone() : null;
     },
-    // BOTH GET `cellM`, and that is the whole of task 3's finding 1: the tiles
-    // bring a 4 m lattice while the plate over a large world is cut at 8 m or
-    // more, and over such a cell the drawn ground stands up to a quarter of the
-    // cell's twist above every reading the fine grid takes. A veil hung on the
-    // fine grid alone would hang inside the hill it covers.
-    maxHeightIn: (x0, z0, x1, z1) => (
-      hasRelief() ? maxCompositeHeightIn(relief, x0, z0, x1, z1, cellM) : GROUND_Y),
-    heightRangeIn: (x0, z0, x1, z1) => (
-      hasRelief() ? compositeHeightRangeIn(relief, x0, z0, x1, z1, cellM) : 0),
     heightRevision: () => heightRev,
     // THE OVERVIEW FIELD ITSELF, for the readers that draw the relief instead
     // of standing on it (the minimap's hillshade). The overview and nothing

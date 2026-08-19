@@ -63,10 +63,16 @@ export interface Map3dMeta {
   elevator?: [number, number];
   /** Etagenhöhe in REALEN Metern. Default 3. */
   storey_height_m?: number;
-  /** DER Maßstabs-Anker: reale Breite der Location in Metern („der Ort ist
-   *  ≈ 12 m breit"). Seit E4 IST das Bezugsquadrat der Fußabdruck, also
-   *  `extent_m = plan_width_m` und k = 1 — ein Welt-Meter ist ein echter
-   *  Meter. Im Szenen-Payload als `extent_m`. */
+  /** THE FOOTPRINT (contract v6 "Gebiete"): the drawn outline as a closed
+   *  point sequence `[x, z]` in LOCAL METRES around the pin, clockwise in map
+   *  view, at most 64 points. Concave outlines are allowed. Absent = the
+   *  location has no area at all (only a pin) — there is no square fallback. */
+  boundary?: [number, number][];
+  /** Width of the boundary's bounding box in metres — a DERIVED quantity since
+   *  v6 Nr. 2, not a dial: the server recomputes it from `boundary` on every
+   *  save. It survives because the consumer contracts (load radius, viewport,
+   *  backdrop, texture repeat) are written in terms of it; in the scene payload
+   *  it is `extent_m`, and k = 1 — a world metre IS a real metre. */
   plan_width_m?: number;
   /** Bodentextur-Kind je Etage für die Grundriss-Platten (Raum-Rezept §7),
    *  Level-Schlüssel als String: {"0": "parquet", "-1": "stone"} */
@@ -115,10 +121,15 @@ export interface WorldLocation {
   /** Rotation of the location's footprint about the up axis, in degrees,
    *  world-map convention (§ A1.1). Always present, 0 when unrotated. */
   yaw_deg?: number;
-  /** Edge length of the footprint square in world metres — the ONE scale
-   *  anchor (§ A1.1), hoisted out of `map3d` by the server on the worldmap
-   *  row. `null`/absent = the geometry declares none, and the tile falls back
-   *  loudly (`footprintWidth`). */
+  /** THE FOOTPRINT of this location as a POLYGON in LOCAL METRES around the pin
+   *  (contract v6 "Gebiete"), hoisted out of `map3d` by the server on the
+   *  worldmap row. A legacy square arrives as its four synthesized corners, so
+   *  the client never needs a square code path; `null`/absent = no area. */
+  boundary?: [number, number][] | null;
+  /** Width of the footprint's bounding box in world metres — DERIVED from
+   *  `boundary` (v6 Nr. 2), hoisted out of `map3d` by the server on the
+   *  worldmap row. It scales the surface texture and the selection ring;
+   *  containment and area come from `boundary` alone. */
   plan_width_m?: number | null;
   rooms: Room[];
   passable?: boolean;
@@ -149,9 +160,12 @@ export interface MapLocation {
   pos_z: number | null;
   /** Footprint rotation in degrees (world-map convention, § A1.1). */
   yaw_deg: number;
-  /** Edge length of the footprint square in world metres — the ONE scale
-   *  anchor of the location, hoisted out of `map3d` by the server. `null`
-   *  when the geometry declares none. */
+  /** THE FOOTPRINT as a polygon in LOCAL METRES around the pin (v6 "Gebiete").
+   *  A legacy square arrives as its four synthesized corners; `null` = the
+   *  location has no area. */
+  boundary?: [number, number][] | null;
+  /** Width of the footprint's bounding box in world metres, DERIVED from
+   *  `boundary` by the server. `null` when the location has no area. */
   plan_width_m: number | null;
   /** A transit place (a road) is walked THROUGH, never travelled TO. */
   passable?: boolean;
@@ -267,7 +281,8 @@ export interface GameTimeInfo {
 export interface WorldMap {
   avatar: string;
   current_location_id: string;
-  /** Only what the avatar knows — unless `fogged` is false (§ A12). */
+  /** Only what the avatar knows — unless this is the admin's unfiltered view
+   *  (`?all=1`, § A12). */
   locations: MapLocation[];
   characters: MapCharacter[];
   events_by_location: Record<string, MapEvent[]>;
@@ -286,13 +301,12 @@ export interface WorldMap {
    *  when it changes, `/play/heightfield` is refetched and the ground is
    *  draped again. Missing (an older server) means a flat world. */
   height_sig?: string;
-  /** Signature of the AVATAR's exploration memory (§ A12, 2026-08-16), the
-   *  same trigger once more: when it changes, `/play/explored` is refetched and
-   *  the overview veil is cut again. `""` without an avatar, missing from an
-   *  older server — both mean "no memory", i.e. the veil as it was before. */
-  explored_sig?: string;
   /** `true` = this is the filtered view, so unknown places stay hidden.
-   *  `false` = the admin's unfiltered view (`?all=1`), no fog at all. */
+   *  `false` = the admin's unfiltered view (`?all=1`).
+   *
+   *  NOTHING DRAWS ON IT any more (contract v6 Nr. 8, decision E1.3): the veil
+   *  is gone, and what the server withholds simply has no row here. The field
+   *  stays because it is the payload's own shape. */
   fogged: boolean;
   /** The two WALK LIMITS the server judges every reported point with
    *  (`game.max_step_height_m` / `game.max_slope_deg`, § A12/§ A15). The
@@ -350,7 +364,7 @@ export interface PosReport {
 
 // --- Painted terrain (`GET /play/terrain`) -----------------------------------
 // The ground of the seamless world: areas drawn on the metre plane plus the
-// effective type catalog they reference. NEVER fogged — terrain is always
+// effective type catalog they reference. NEVER withheld — terrain is always
 // visible, only locations hide.
 
 /** One entry of the terrain-type catalog (`app/core/terrain_types.py`). No

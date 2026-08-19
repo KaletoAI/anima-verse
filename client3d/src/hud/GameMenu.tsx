@@ -54,7 +54,7 @@ export interface GameMenuProps {
    *  below exists only for one, and the server refuses the view for anybody
    *  else anyway */
   isAdmin: boolean;
-  /** the fog of war is currently switched off for this browser */
+  /** the knowledge filter is currently switched off for this browser */
   showAll: boolean;
   /** store the switch and apply it — `Hud.tsx` hands it to main.ts, which
    *  switches the view in the running world */
@@ -248,7 +248,7 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
         </button>
       </section>
 
-      {/* The one entry that is not a player setting: it lifts the fog of war
+      {/* The one entry that is not a player setting: it lifts the knowledge filter
           for an administrator, which is a different VIEW of the world and not
           a matter of taste. Hence its own section. It takes effect at once —
           main.ts adds and removes the places of the other view in the running

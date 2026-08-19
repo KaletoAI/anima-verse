@@ -14,16 +14,17 @@
  * The whole frame used to be the only framing, on the argument that a panning
  * map cannot say "how much of the world is still dark". On a metre world it
  * showed up to a kilometre and a half across 160 pixels, where a metre is a
- * tenth of a pixel and the relief is a smudge — it answered the fog question
- * and no other. The window answers the one a player standing in the world
- * asks, and it is the same ground the eye has: the veil closes at the radius,
- * so the map stops exactly where sight does.
+ * tenth of a pixel and the relief is a smudge — it answered "how much of the
+ * world is still unknown" and no other question. The window answers the one a
+ * player standing in the world asks, and it is the same ground the eye has:
+ * the scene haze closes at the radius, so the map stops exactly where sight
+ * does.
  *
  * It draws the painted TERRAIN AREAS coarsely (the polygons of `/play/terrain`,
  * in list order, in their catalog colours) with the known places as dots on
- * top. Terrain is never fogged — it is the ground, and only locations hide.
+ * top. Terrain is never withheld — it is the ground, and only locations hide.
  *
- * PURE like `walk.ts`, `soundtrack.ts` and `fog.ts`: no `three`, no DOM, no
+ * PURE like `walk.ts` and `soundtrack.ts`: no `three`, no DOM, no
  * module state, and only type-only imports. That is what lets
  * `client3d/scripts/smoke_walk_math.mjs` derive every number below by hand — the canvas
  * in `hud/Minimap.tsx` only strokes what these functions return, and `main.ts`
@@ -125,7 +126,7 @@ export const MINIMAP_MIN_SPAN_M = 10;
  * instead — see there.
  *
  * The number is the far end of the scene fog, `new THREE.Fog(…, 220, 520)` in
- * `scene/engine.ts` — past it the 3D view is a flat veil and a map dot would
+ * `scene/engine.ts` — past it the 3D view is a flat haze and a map dot would
  * promise sight that is not there. It is repeated here rather than imported
  * because `engine.ts` is `three`-bound and this module is pure (see the head of
  * the file); `scene/heightTiles.ts` derives its own 560 m from the same 520 and
@@ -335,26 +336,37 @@ export function locationsSignature(
  * tile that stands on it.
  *
  * The same lesson as above, for the other consumer (finding B13). A tile is
- * built from exactly four numbers (§ A1.1): the centre `pos_x`/`pos_z`, the
- * rotation `yaw_deg` and the footprint edge `plan_width_m`. None of them is in
- * `map3d` — they sit on the location ROW — so the layout signature that
- * watches `map3d` + the room layouts cannot see any of them, and a place moved
- * or turned in the world editor kept its tile standing at the old metre in
- * every running client. The server meanwhile judges walking, entering and
- * leaving against the new footprint, so the two sides disagreed about where
- * the walls of a place are.
+ * built from the centre `pos_x`/`pos_z`, the rotation `yaw_deg` and — since
+ * contract v6 — THE DRAWN OUTLINE `boundary` (with `plan_width_m`, its derived
+ * bounding-box width, along for the texture scale). None of them is in `map3d`
+ * on the worldmap row — they sit on the location ROW — so the layout signature
+ * that watches `map3d` + the room layouts cannot see any of them, and a place
+ * moved, turned or REDRAWN in the world editor kept its tile standing at the
+ * old metres in every running client. The server meanwhile judges walking,
+ * entering and leaving against the new footprint, so the two sides disagreed
+ * about where the walls of a place are.
+ *
+ * THE OUTLINE POINTS GO IN, not just its width: v6 lets an author reshape a
+ * place without changing the bounding box at all — pulling a notch into a
+ * square keeps `plan_width_m` exactly where it was, and a signature made of the
+ * old four numbers would never notice.
  *
  * The numbers go in verbatim rather than rounded: they arrive rounded from the
  * server (`build_worldmap_payload`), and a rounding of our own would be a
  * second opinion about when a place has moved. `null`/`undefined` stringify to
  * themselves and are thereby their own state — an unplaced location is not a
- * location at the origin.
+ * location at the origin, and a location with no area is not one with a
+ * boundary.
  */
 export function footprintSignature(loc: {
   pos_x: number | null; pos_z: number | null;
   yaw_deg?: number; plan_width_m?: number | null;
+  boundary?: [number, number][] | null;
 }): string {
-  return `${loc.pos_x},${loc.pos_z},${loc.yaw_deg},${loc.plan_width_m}`;
+  const outline = loc.boundary
+    ? loc.boundary.map(([x, z]) => `${x} ${z}`).join(' ')
+    : `${loc.boundary}`;
+  return `${loc.pos_x},${loc.pos_z},${loc.yaw_deg},${loc.plan_width_m},${outline}`;
 }
 
 /**

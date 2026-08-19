@@ -22,8 +22,8 @@
  *
  * WHAT IS PATCHED, and the list is deliberately short: the base plate and the
  * painted area drapes of `scene/ground.ts`, and nothing else. NOT the water
- * and ice areas (they carry their own shader — `isWaterClass`), not the fog
- * veil, not the building shells or the location tiles, and not the interiors
+ * and ice areas (they carry their own shader — `isWaterClass`), not the
+ * building shells or the location tiles, and not the interiors
  * of the detail scenes: those are floors of a room, and a room floor shaded by
  * the world's relief would darken because the house stands in a dip.
  *

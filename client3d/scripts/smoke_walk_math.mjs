@@ -698,8 +698,8 @@ const SRC_DIR = join(ROOT, 'client3d/src/game');
  *  `clickmove.ts` imports from `walk.ts` and nothing else — no `three`, no
  *  DOM. */
 const MODULES = ['walk', 'clickmove', 'proximity', 'roomwalk', 'elevator', 'collide',
-  'doors', 'prefs', 'boot', 'soundtrack', 'voiceover', 'enterLocation', 'perfstats',
-  'bubble', 'fog', 'minimap', 'locks', 'placement', 'ground'];
+  'doors', 'prefs', 'boot', 'soundtrack', 'voiceover', 'polygon', 'enterLocation',
+  'perfstats', 'bubble', 'minimap', 'locks', 'placement', 'ground'];
 
 /**
  * Both files are TypeScript and deliberately free of any runtime dependency
@@ -773,7 +773,7 @@ const SQRT_HALF = Math.SQRT1_2;   // 0.7071067811865476
 async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
-    bubble, fog, minimap, locks, placement, ground } = await loadGameModules();
+    bubble, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, groundScope, MIN_PACE,
     MOVE_EPS_M } = walk;
@@ -786,7 +786,7 @@ async function main() {
   const { wallSegments, clampAgainstWalls, bodyRadius, BODY_RADIUS_M,
     DOOR_EASE_M } = collide;
   const { doorMarkers, roomDoor, doorwayBetween } = doors;
-  const { loadPrefs, savePrefs, DEFAULT_PREFS, PREFS_KEY } = prefs;
+  const { loadPrefs, savePrefs, DEFAULT_PREFS, PREFS_KEY, SHOW_ALL_KEY } = prefs;
   const { bootProgress, BOOT_STAGES, reportBootStage, getBootState, setBootNote,
     subscribeBoot } = boot;
   const { readManifest, emptyManifest, nightForMusic, pickMusic, pickAmbient,
@@ -795,9 +795,6 @@ async function main() {
   const { sceneStampOf, newSceneLines, roomChanged, speakerOf, speakableLines,
     afterOwnLine, enqueueSpeech, createVoiceover, NARRATOR_SPEAKERS,
     MAX_PENDING } = voiceover;
-  const { fogRects, footprintBox, SHOW_ALL_KEY,
-    FOG_OVERHANG_M, FOG_FEATHER_M, FOG_RAGGED_M, FOG_TEX_METRES,
-    FOG_TILE_M, FOG_FLAT_EPS_M } = fog;
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
@@ -3016,351 +3013,14 @@ async function main() {
   //   'a b' is 3 characters -> 3500 + 165 = 3665
   check('duration uses the collapsed length', bubbleMs(' a \n b '), 3665);
 
-  /**
-   * --- Fog of war IN METRES (E4 task 6; `client3d/src/game/fog.ts`) ---------
-   *
-   * The grid fog went with the grid. `unknownCells`/`fogQuadRects` covered
-   * every 10 m CELL of `grid_bounds` that carried no location and folded the
-   * cells of one row into a run; a location is a footprint SQUARE anywhere on
-   * the free plane now (§ A1.1), so the veil is
-   *
-   *     (world_bounds grown by the ground margin) MINUS the axis-aligned
-   *     boxes of the footprints the payload delivered (= the known ones)
-   *
-   * cut into axis-aligned rectangles. Every number below is derived by hand
-   * from that one sentence.
-   *
-   * ---------------------------------------------------------------------------
-   * (1) footprintBox — the box of a footprint square of edge `w` turned by
-   *     `yaw` (RADIANS) about its centre. Half extent along either world axis:
-   *
-   *         (w / 2) · (|cos yaw| + |sin yaw|)
-   *
-   *     — the two corner offsets projected onto that axis, and the SAME value
-   *     on x and z because the shape is a square. Centre (0, 0), w = 10:
-   *       yaw 0    -> |cos| + |sin| = 1      -> x −5 … 5,  z −5 … 5
-   *       yaw 90°  -> 0 + 1 = 1              -> −5 … 5 again: a square turned
-   *                                             by a right angle IS itself
-   *       yaw 45°  -> √½ + √½ = √2           -> ±5·1.4142135623730951
-   *                                             = ±7.071067811865476
-   *     A turned footprint therefore clears a LITTLE more sky than it covers.
-   *     That is the module's stated decision, not a rounding: fog is
-   *     atmosphere, not geometry — the veil must never lie ON a known place,
-   *     and nobody can tell a cloud edge from a cloud edge two metres further
-   *     out. A location with no usable size (width ≤ 0, NaN) has no box at all
-   *     and subtracts nothing — it is a world-data defect, and covering it is
-   *     the honest picture.
-   *
-   * ---------------------------------------------------------------------------
-   * (2) fogRects(bounds, known, margin) — the subdivision.
-   *
-   *     The outer rectangle is the world frame grown by `margin` on all four
-   *     sides (main.ts passes the GROUND's own `BASE_MARGIN_M`, so the veil
-   *     covers exactly as much bare ground as the client draws). Every known
-   *     footprint box is clipped into it, then the frame is swept in Z:
-   *     the band boundaries are the outer edges plus every box edge, and
-   *     inside ONE band a box either spans it completely or not at all — so a
-   *     band is a 1-D problem, "the outer x interval minus the x intervals of
-   *     the boxes that live in this band". Each remaining run is one rectangle
-   *     ({x, z} = its minimum corner, {w, d} its extents).
-   *
-   *     Bands are NOT merged with each other afterwards, exactly as the grid
-   *     version did not merge rows: two stacked bands with the same runs are
-   *     rare on the shapes a discovered map makes, and every rectangle costs
-   *     the same one draw call either way.
-   *
-   *     TILED since E8 task 3: every run is cut into EQUAL pieces of at most
-   *     `FOG_TILE_M` (64 m) per axis — `n = ceil(extent / 64)` pieces of
-   *     `extent / n`. On a relief a quad hangs above the highest ground in its
-   *     own rectangle, and a world-wide band would be lifted by one hill fifty
-   *     metres into the air. The tiles are emitted x-major (all pieces of the
-   *     first column, then the next), which is the order the expectations below
-   *     are written in.
-   *
-   *     THE CASE. bounds x 0…100, z 0…60, margin 10 -> outer x −10…110 (120 m
-   *     wide), z −10…70 (80 m deep), area 9600 m². Two known footprints, both
-   *     unturned:
-   *       A: centre (20, 20), w 20  -> box x 10…30, z 10…30   (400 m²)
-   *       B: centre (70, 40), w 10  -> box x 65…75, z 35…45   (100 m²)
-   *     Z cuts: −10, 10, 30, 35, 45, 70 -> five bands, top to bottom:
-   *       z −10…10 (d 20): no box       -> x −10…110            (2400 m²)
-   *       z  10…30 (d 20): A spans it   -> x −10…10, x 30…110   ( 400 + 1600)
-   *       z  30…35 (d  5): no box       -> x −10…110            ( 600)
-   *       z  35…45 (d 10): B spans it   -> x −10…65, x 75…110   ( 750 +  350)
-   *       z  45…70 (d 25): no box       -> x −10…110            (3000)
-   *     Seven runs, and their areas sum to
-   *       2400 + 2000 + 600 + 1100 + 3000 = 9100 = 9600 − 400 − 100,
-   *     which is the whole claim of the algorithm written as one number.
-   *
-   *     THE TILING then splits five of those seven (nothing changes area):
-   *       120 m wide -> 2 × 60 m   (three runs: the bands without a box)
-   *        80 m wide -> 2 × 40 m   (the run right of A)
-   *        75 m wide -> 2 × 37.5 m (the run left of B)
-   *        20 / 35 m wide         -> unchanged, they are under 64 m
-   *     and no run is deeper than 25 m, so nothing is cut in z:
-   *     7 − 5 + 10 = 12 rectangles, still 9100 m².
-   *
-   *     ONLY WHERE THE GROUND MOVES (E8 task 5). The tiling exists because a
-   *     quad hangs above the HIGHEST ground in its own rectangle — so a
-   *     rectangle with level ground under it has nothing to gain from being
-   *     cut, and `fogRects` asks a height-RANGE query per run
-   *     (`FOG_FLAT_EPS_M` = 0.25 m of slack, the eye of a 70 m overview camera
-   *     against a 5 cm clearance). Two derivations on the SAME case:
-   *
-   *     (a) A LEVEL WORLD (range 0 everywhere) is the seven runs above, whole:
-   *           z −10…10  x −10…110            -> 120 × 20
-   *           z  10…30  x −10…10, x 30…110   ->  20 × 20,  80 × 20
-   *           z  30…35  x −10…110            -> 120 ×  5
-   *           z  35…45  x −10…65, x 75…110   ->  75 × 10,  35 × 10
-   *           z  45…70  x −10…110            -> 120 × 25
-   *         7 rectangles, and the areas 2400 + 400 + 1600 + 600 + 750 + 350 +
-   *         3000 = 9100 m² — the same veil as the twelve tiles, in seven draw
-   *         calls.
-   *
-   *     (b) ONE HILL, box x 60…80 / z 30…50 (the query answers 3 m for a run
-   *         that overlaps it, 0 for one that does not). Run by run:
-   *           z −10…10: no z overlap                       -> whole,  1
-   *           z  10…30: touches 30 but does not cross it    -> whole,  2
-   *           z  30…35: overlaps -> 120 m = 2 tiles, d 5    -> tiled,  2
-   *           z  35…45: x −10…65 overlaps (65 > 60) -> 75 m = 2 tiles
-   *                     x  75…110 overlaps (75 < 80) -> 35 m = 1 tile
-   *                                                        -> tiled,  3
-   *           z  45…70: overlaps z 45…50 -> 2 tiles, d 25   -> tiled,  2
-   *         1 + 2 + 2 + 3 + 2 = 10 rectangles, still 9100 m².
-   *     Without the query nothing changes at all (12 tiles) — that is the
-   *     picture the veil had before, and the safe direction for a caller that
-   *     has no field yet.
-   */
-  console.log('\nfog — the box of a footprint square');
-  //   the three turns derived above, on the same 10 m square at the origin
-  check('an unturned footprint is its own box',
-    footprintBox({ x: 0, z: 0, width: 10, yaw: 0 }),
-    { x0: -5, x1: 5, z0: -5, z1: 5 });
-  check('a right angle turns a square into itself',
-    footprintBox({ x: 0, z: 0, width: 10, yaw: Math.PI / 2 }),
-    { x0: -5, x1: 5, z0: -5, z1: 5 });
-  check('half a right angle stands the diagonal up (±5·√2)',
-    footprintBox({ x: 0, z: 0, width: 10, yaw: Math.PI / 4 }),
-    { x0: -7.071067811865476, x1: 7.071067811865476,
-      z0: -7.071067811865476, z1: 7.071067811865476 });
-  //   the centre travels with the box, nothing else changes
-  check('the box is centred on the footprint',
-    footprintBox({ x: 70, z: 40, width: 10, yaw: 0 }),
-    { x0: 65, x1: 75, z0: 35, z1: 45 });
-  //   no usable size = no box: such a location subtracts nothing
-  check('a footprint without a width has no box',
-    footprintBox({ x: 0, z: 0, width: 0, yaw: 0 }), null);
-  check('a NaN position has no box',
-    footprintBox({ x: NaN, z: 0, width: 10, yaw: 0 }), null);
-
-  console.log('fog — the frame minus what is known');
-  const FOG_FRAME = { min_x: 0, min_z: 0, max_x: 100, max_z: 60 };
-  const FOG_A = { x: 20, z: 20, width: 20, yaw: 0 };
-  const FOG_B = { x: 70, z: 40, width: 10, yaw: 0 };
-  const fogCase = fogRects(FOG_FRAME, [FOG_A, FOG_B], 10);
-  //   the seven rectangles of the derivation, bands top to bottom and runs
-  //   left to right inside each band
-  check('two footprints cut the frame into twelve tiles', fogCase, [
-    { x: -10, z: -10, w: 60, d: 20 },
-    { x: 50, z: -10, w: 60, d: 20 },
-    { x: -10, z: 10, w: 20, d: 20 },
-    { x: 30, z: 10, w: 40, d: 20 },
-    { x: 70, z: 10, w: 40, d: 20 },
-    { x: -10, z: 30, w: 60, d: 5 },
-    { x: 50, z: 30, w: 60, d: 5 },
-    { x: -10, z: 35, w: 37.5, d: 10 },
-    { x: 27.5, z: 35, w: 37.5, d: 10 },
-    { x: 75, z: 35, w: 35, d: 10 },
-    { x: -10, z: 45, w: 60, d: 25 },
-    { x: 50, z: 45, w: 60, d: 25 },
-  ]);
-  //   the invariant behind the picture: covered area = frame − footprints
-  const fogArea = fogCase.reduce((sum, r) => sum + r.w * r.d, 0);
-  check('the veil covers the frame minus both footprints', fogArea, 9100);
-  //   the order the caller hands the known places in cannot change the veil
-  check('the footprint order does not decide the picture',
-    fogRects(FOG_FRAME, [FOG_B, FOG_A], 10), fogCase);
-  //   nothing known yet: the whole grown frame, tiled 2 x 2 (120 -> 2 x 60,
-  //   80 -> 2 x 40), x-major
-  check('an undiscovered world is one run in four tiles',
-    fogRects(FOG_FRAME, [], 10), [
-      { x: -10, z: -10, w: 60, d: 40 },
-      { x: -10, z: 30, w: 60, d: 40 },
-      { x: 50, z: -10, w: 60, d: 40 },
-      { x: 50, z: 30, w: 60, d: 40 },
-    ]);
-  //   no margin, nothing known: exactly the frame — 100 m wide is two tiles,
-  //   60 m deep is one
-  check('without a margin the veil is the frame itself',
-    fogRects(FOG_FRAME, [], 0),
-    [{ x: 0, z: 0, w: 50, d: 60 }, { x: 50, z: 0, w: 50, d: 60 }]);
-  //   nothing placed at all -> no frame -> no map to cover
-  check('bounds null -> no fog', fogRects(null, [FOG_A], 10), []);
-  //   a footprint that covers the whole (unmargined) frame leaves nothing:
-  //   box x −5…25, z −5…25 over a frame 0…10 / 0…10
-  check('a footprint over the whole frame leaves no fog',
-    fogRects({ min_x: 0, min_z: 0, max_x: 10, max_z: 10 },
-      [{ x: 10, z: 10, width: 30, yaw: 0 }], 0), []);
-  //   a known place OUTSIDE the frame is clipped away and subtracts nothing
-  check('a footprint outside the frame changes nothing',
-    fogRects({ min_x: 0, min_z: 0, max_x: 10, max_z: 10 },
-      [{ x: 500, z: 500, width: 10, yaw: 0 }], 0),
-    [{ x: 0, z: 0, w: 10, d: 10 }]);
-  //   OVERLAPPING footprints are one hole, not two: the boxes x 2…6 and x 4…8
-  //   share the band z 3…7 and leave the runs x 0…2 and x 8…10 in it
-  check('overlapping footprints leave one hole', fogRects(
-    { min_x: 0, min_z: 0, max_x: 10, max_z: 10 },
-    [{ x: 4, z: 5, width: 4, yaw: 0 }, { x: 6, z: 5, width: 4, yaw: 0 }], 0), [
-    { x: 0, z: 0, w: 10, d: 3 },
-    { x: 0, z: 3, w: 2, d: 4 },
-    { x: 8, z: 3, w: 2, d: 4 },
-    { x: 0, z: 7, w: 10, d: 3 },
-  ]);
-  //   a footprint touching the frame edge opens no sliver on that side: box
-  //   x 0…4 over a frame 0…10 leaves ONE run x 4…10 in its band
-  check('a footprint on the edge leaves no sliver', fogRects(
-    { min_x: 0, min_z: 0, max_x: 10, max_z: 10 },
-    [{ x: 2, z: 5, width: 4, yaw: 0 }], 0), [
-    { x: 0, z: 0, w: 10, d: 3 },
-    { x: 4, z: 3, w: 6, d: 4 },
-    { x: 0, z: 7, w: 10, d: 3 },
-  ]);
-  //   pinned by hand like PREFS_KEY: the stored switch of an admin must keep
-  //   working across versions of this client
+  // The admin's "show all locations" switch lives beside the audio prefs since
+  // the veil was struck (contract v6 Nr. 8) — it was never about the veil, only
+  // about which places the worldmap answers with. Pinned by hand like
+  // PREFS_KEY: a stored switch must keep working across versions of this
+  // client.
+  console.log('prefs — the show-all switch key');
   check('the show-all pref key is the documented one',
     SHOW_ALL_KEY, 'av3d.showAllLocations');
-
-  console.log('fog — tiled only where the ground moves (E8 task 5)');
-  //   (a) a level world: the seven runs of the derivation, whole
-  const FOG_LEVEL = fogRects(FOG_FRAME, [FOG_A, FOG_B], 10, () => 0);
-  check('a level world keeps every run in one piece', FOG_LEVEL, [
-    { x: -10, z: -10, w: 120, d: 20 },
-    { x: -10, z: 10, w: 20, d: 20 },
-    { x: 30, z: 10, w: 80, d: 20 },
-    { x: -10, z: 30, w: 120, d: 5 },
-    { x: -10, z: 35, w: 75, d: 10 },
-    { x: 75, z: 35, w: 35, d: 10 },
-    { x: -10, z: 45, w: 120, d: 25 },
-  ]);
-  //   the veil still covers exactly frame minus footprints — fewer quads, not
-  //   less cloud
-  check('and it covers the very same 9100 m²',
-    FOG_LEVEL.reduce((sum, r) => sum + r.w * r.d, 0), 9100);
-  //   (b) one hill, box x 60…80 / z 30…50: 10 rectangles by the derivation
-  const hillRange = (x0, z0, x1, z1) => (
-    x1 > 60 && x0 < 80 && z1 > 30 && z0 < 50 ? 3 : 0);
-  const FOG_HILL = fogRects(FOG_FRAME, [FOG_A, FOG_B], 10, hillRange);
-  check('one hill tiles four runs and leaves three whole',
-    FOG_HILL.length, 10);
-  check('and that veil is 9100 m² too',
-    FOG_HILL.reduce((sum, r) => sum + r.w * r.d, 0), 9100);
-  //   the two runs that stay whole are the two the hill does not reach
-  check('the run north of the hill is one piece',
-    FOG_HILL[0], { x: -10, z: -10, w: 120, d: 20 });
-  check('the band that only touches z 30 stays whole too',
-    FOG_HILL.slice(1, 3),
-    [{ x: -10, z: 10, w: 20, d: 20 }, { x: 30, z: 10, w: 80, d: 20 }]);
-  //   the slack is a boundary, not a threshold that swallows real relief:
-  //   exactly at the epsilon a run is still level, a hair above it is not
-  check('a range of exactly the epsilon is still level',
-    fogRects(FOG_FRAME, [], 10, () => FOG_FLAT_EPS_M).length, 1);
-  check('a hair more relief tiles the same run',
-    fogRects(FOG_FRAME, [], 10, () => FOG_FLAT_EPS_M + 1e-6).length, 4);
-  //   no query at all = the old picture (the safe direction for a client whose
-  //   field has not arrived yet)
-  check('without a height query nothing changes', fogRects(FOG_FRAME,
-    [FOG_A, FOG_B], 10), fogCase);
-  //   a broken field (NaN) must not be read as "level": tile, do not float a
-  //   world-wide quad on a number nobody can compare
-  check('an unreadable range tiles like before',
-    fogRects(FOG_FRAME, [], 10, () => NaN).length, 4);
-  //   the tile size itself is pinned — the census below is quoted against it
-  check('the tile edge is the documented 64 m', FOG_TILE_M, 64);
-
-  /**
-   * THE CENSUS (E8 task 5 — the draw-call numbers of the module header).
-   *
-   * Not a check but a MEASUREMENT, printed so the number in `fog.ts` can be
-   * re-derived instead of believed. The world is the one task 3 measured on:
-   * 1000 × 1000 m, 60 m ground margin, `n` known places of 10-30 m turned at
-   * random, 20 runs per row, seeded so two runs of this file agree.
-   *
-   * Three columns, one call each:
-   *   flat   — the height query says "level" everywhere: one quad per RUN,
-   *            i.e. the pre-relief count E4 measured (~750 at n = 100).
-   *   tiled  — no query: every run cut into 64 m tiles, task 3's picture.
-   *   relief — three hills of radius 120 m: the lever's working case.
-   */
-  console.log('fog — the quad census (measurement, not a check)');
-  //   xorshift32, the same generator the server smokes use, so the worlds are
-  //   reproducible without a dependency
-  let seed = 0x2545f491;
-  const rnd = () => {
-    seed ^= seed << 13; seed >>>= 0;
-    seed ^= seed >>> 17;
-    seed ^= seed << 5; seed >>>= 0;
-    return seed / 0x100000000;
-  };
-  const CENSUS_FRAME = { min_x: 0, min_z: 0, max_x: 1000, max_z: 1000 };
-  const HILLS = [{ x: 250, z: 300 }, { x: 700, z: 250 }, { x: 550, z: 780 }];
-  const HILL_R = 120;
-  //   a rectangle has relief in it when it reaches into a hill's box
-  const censusRange = (x0, z0, x1, z1) => (
-    HILLS.some((h) => x1 > h.x - HILL_R && x0 < h.x + HILL_R
-                   && z1 > h.z - HILL_R && z0 < h.z + HILL_R) ? 8 : 0);
-  for (const n of [10, 50, 100]) {
-    let flat = 0;
-    let tiled = 0;
-    let relief = 0;
-    for (let run = 0; run < 20; run++) {
-      const known = [];
-      for (let i = 0; i < n; i++) {
-        known.push({ x: rnd() * 1000, z: rnd() * 1000,
-          width: 10 + rnd() * 20, yaw: rnd() * Math.PI * 2 });
-      }
-      flat += fogRects(CENSUS_FRAME, known, 60, () => 0).length;
-      tiled += fogRects(CENSUS_FRAME, known, 60).length;
-      relief += fogRects(CENSUS_FRAME, known, 60, censusRange).length;
-    }
-    console.log(`  n = ${String(n).padStart(3)}  flat ${Math.round(flat / 20)}`
-      + `   tiled ${Math.round(tiled / 20)}   relief ${Math.round(relief / 20)}`);
-    //   the lever can only ever sit between the two extremes — that is what
-    //   makes the printed numbers meaningful rather than decorative
-    check(`the lever stays between flat and fully tiled (n = ${n})`,
-      relief >= flat && relief <= tiled, true);
-  }
-
-  /**
-   * --- Fog OPTICS: the four constants (E4 task 6) ---------------------------
-   *
-   * `game/fogClouds.ts` draws the veil and cannot be loaded here (it needs
-   * `three` and a DOM canvas), so the numbers it is built from live in the
-   * pure half — which is also the only way this check can exist at all.
-   *
-   * They were `CELL · 0.32`, `CELL · 0.18` and `CELL · 4.6` while a location
-   * was a 10 m cell; the metre world has no cell, so they are the absolute
-   * metres those products were: 3.2, 1.8 and 46. The values do not change, the
-   * ANCHOR does.
-   *
-   * THE LOAD-BEARING ONE is `FEATHER + RAGGED === OVERHANG`. Each quad is
-   * drawn OVERHANG metres larger than its rectangle, and the alpha ramps up
-   * over FEATHER after the noise has bitten up to RAGGED out of that margin:
-   * only if the two together fill the whole overhang does alpha reach 1 AT the
-   * true rectangle border in the worst case of the bite — and only then are
-   * both quads fully opaque where two rectangles meet, so the overdraw cannot
-   * open a translucent seam into the interior. 1.8 + 1.4 = 3.2 — and the bite
-   * is DERIVED (`OVERHANG − FEATHER`) rather than written out, so editing one
-   * number can never break the identity behind the other's back. Binary
-   * floating point leaves a hair on the subtraction (1.4000000000000001); the
-   * checks carry the usual 1e-9 tolerance, which is a nanometre of cloud.
-   */
-  console.log('fog — the optics constants (absolute metres since E4 task 6)');
-  check('the overhang is 3.2 m', FOG_OVERHANG_M, 3.2);
-  check('the feather is 1.8 m', FOG_FEATHER_M, 1.8);
-  check('the bite is what the feather leaves', FOG_RAGGED_M, 1.4);
-  check('feather + ragged = overhang (the opacity identity)',
-    FOG_FEATHER_M + FOG_RAGGED_M, FOG_OVERHANG_M);
-  check('a texture tile is 46 m', FOG_TEX_METRES, 46);
 
   /**
    * --- Minimap (stage 5 task 3; on the METRE world since E4 task 2) ---------
@@ -3457,21 +3117,28 @@ async function main() {
    *     is drawn, and a place that gets a position has to bring one back
    *
    * `footprintSignature(loc)` — the same lesson for the TILE (finding B13).
-   * A tile is built from four numbers of the location ROW (§ A1.1): centre
-   * `pos_x`/`pos_z`, rotation `yaw_deg`, footprint edge `plan_width_m`. None
-   * of them is in `map3d`, so the layout signature that watches `map3d` and
-   * the room layouts is blind to all four, and a place moved or turned in the
-   * world editor kept its tile at the old metre in a running client while the
-   * server judged walking and entering against the new footprint. Joined as
-   * `x,z,yaw,width`:
+   * A tile is built from the location ROW (§ A1.1): centre `pos_x`/`pos_z`,
+   * rotation `yaw_deg`, the derived bounding-box width `plan_width_m` and —
+   * since contract v6 — THE DRAWN OUTLINE `boundary`. None of them is in
+   * `map3d` on that row, so the layout signature that watches `map3d` and the
+   * room layouts is blind to all of them, and a place moved, turned or
+   * RESHAPED in the world editor kept its tile at the old metres in a running
+   * client while the server judged walking and entering against the new
+   * footprint. Joined as `x,z,yaw,width,outline` with the outline written as
+   * `x z` pairs separated by spaces:
    *
-   *   {10, 20, yaw 0,  width 8}  -> "10,20,0,8"
-   *   the same place at x = 11   -> "11,20,0,8"    differs (a drag)
-   *   the same place at yaw 90   -> "10,20,90,8"   differs (a turn)
-   *   the same place at width 12 -> "10,20,0,12"   differs (a resize)
+   *   {10, 20, yaw 0, width 8, no outline} -> "10,20,0,8,undefined"
+   *   the same place at x = 11             -> "11,20,0,8,undefined"  (a drag)
+   *   the same place at yaw 90             -> "10,20,90,8,undefined" (a turn)
+   *   the same place at width 12           -> "10,20,0,12,undefined" (a resize)
+   *   with the square outline drawn        -> "10,20,0,8,-4 -4 4 -4 4 4 -4 4"
+   *   THE RESHAPE THE OLD SIGNATURE MISSED: pulling the corner (4, 4) in to
+   *     (2, 2) keeps the bounding box — and therefore `plan_width_m` — at
+   *     exactly 8, so the four numbers alone read as "nothing changed"; with
+   *     the points in it is "10,20,0,8,-4 -4 4 -4 2 2 -4 4" and differs
    *   nothing changed            -> the same string (no rebuild per poll)
-   *   an UNPLACED one            -> "null,null,undefined,null" — its own
-   *     state, and never a tile at the origin
+   *   an UNPLACED one            -> "null,null,undefined,null,undefined" — its
+   *     own state, and never a tile at the origin
    *   []                                  -> ""
    */
   console.log('\nminimap — the whole METRE frame, contain-fitted, north up');
@@ -3572,22 +3239,34 @@ async function main() {
 
   console.log('minimap — the tile\'s rebuild signature (finding B13)');
   const FP = { id: 'mill', pos_x: 10, pos_z: 20, yaw_deg: 0, plan_width_m: 8 };
-  check('centre, rotation and footprint edge, joined',
-    footprintSignature(FP), '10,20,0,8');
+  check('centre, rotation and footprint width, joined',
+    footprintSignature(FP), '10,20,0,8,undefined');
   check('an unchanged row is the same string (no rebuild per poll)',
-    footprintSignature({ ...FP }), '10,20,0,8');
-  check('a DRAG changes it', footprintSignature({ ...FP, pos_x: 11 }), '11,20,0,8');
+    footprintSignature({ ...FP }), '10,20,0,8,undefined');
+  check('a DRAG changes it',
+    footprintSignature({ ...FP, pos_x: 11 }), '11,20,0,8,undefined');
   check('...and so does a drag in z',
-    footprintSignature({ ...FP, pos_z: 21 }), '10,21,0,8');
-  check('a TURN changes it', footprintSignature({ ...FP, yaw_deg: 90 }), '10,20,90,8');
+    footprintSignature({ ...FP, pos_z: 21 }), '10,21,0,8,undefined');
+  check('a TURN changes it',
+    footprintSignature({ ...FP, yaw_deg: 90 }), '10,20,90,8,undefined');
   check('a RESIZE changes it',
-    footprintSignature({ ...FP, plan_width_m: 12 }), '10,20,0,12');
+    footprintSignature({ ...FP, plan_width_m: 12 }), '10,20,0,12,undefined');
+  // The OUTLINE is in it since contract v6 (v6 Nr. 1): a place can be redrawn
+  // without its bounding box moving at all, and the four numbers alone would
+  // never notice.
+  const SQUARE = [[-4, -4], [4, -4], [4, 4], [-4, 4]];
+  check('the drawn outline goes in as its points',
+    footprintSignature({ ...FP, boundary: SQUARE }),
+    '10,20,0,8,-4 -4 4 -4 4 4 -4 4');
+  check('a RESHAPE that keeps the bounding box still changes it',
+    footprintSignature({ ...FP, boundary: [[-4, -4], [4, -4], [2, 2], [-4, 4]] }),
+    '10,20,0,8,-4 -4 4 -4 2 2 -4 4');
   // The name is not geometry: renaming a place must not tear its tile down.
   check('a rename does NOT change it',
-    footprintSignature({ ...FP, name: 'Mill of the North' }), '10,20,0,8');
+    footprintSignature({ ...FP, name: 'Mill of the North' }), '10,20,0,8,undefined');
   check('an unplaced location is its own state',
     footprintSignature({ id: 'ghost', pos_x: null, pos_z: null, plan_width_m: null }),
-    'null,null,undefined,null');
+    'null,null,undefined,null,undefined');
 
   /**
    * --- WHAT A SEEDED SLICE WOULD DRAW (acceptance finding B6, "shows

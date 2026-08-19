@@ -21,11 +21,18 @@
  * report (`boundary_entry.may_leave` with the room the avatar stands in) and
  * answered with `leave_blocked` — the client no longer walks the avatar into
  * the entry room first, because there is no step to prepare any more.
+ *
+ * WHAT CHANGED WITH THE SQUARE (contract v6 "Gebiete"). A location with
+ * AUTHORED OPENINGS is untouched: the offer is the distance to an opening's
+ * world point, exactly as before. A FREE boundary — no authored opening, so
+ * the whole rim is the way in — is now measured against the DRAWN POLYGON
+ * (`polygon.nearestRimPoint`) instead of against the edges of a square that
+ * only ever existed as a special case of it.
  */
 
-/** A point on the world plane, in metres. Same shape as `walk.Point`; not
- *  imported, so this module keeps its "no imports at all" promise for the
- *  smoke loader. */
+import { nearestRimPoint, type Polygon } from './polygon';
+
+/** A point on the world plane, in metres. Same shape as `walk.Point`. */
 export interface Point { x: number; z: number }
 
 /** The four edges of a location's footprint, as the payload spells them. */
@@ -240,8 +247,13 @@ export interface EntryTile {
    *  `at_world`). NON-EMPTY = these are the only ways in (strictness decision
    *  2026-08-04, the server refuses a crossing anywhere else); EMPTY = a FREE
    *  boundary (E4 task 5) — the location never said where its way in is, so
-   *  the whole edge counts and `freeBoundaryOf` above is what reads that. */
+   *  the whole RIM counts and `freeBoundaryOf` above is what reads that. */
   openings: LocalOpening[];
+  /** the drawn footprint outline in TILE-LOCAL metres (contract v6). It is
+   *  what the FREE-boundary case is measured against; with authored openings it
+   *  is not read at all. Absent = the location has no area, and then a free
+   *  boundary offers nothing (there is no rim to stand at). */
+  boundary?: Polygon | null;
   /** the server refuses this location to THIS avatar (`lockedLocations`,
    *  task C1). It stays a candidate: the offer must not be silent about a
    *  locked place one is standing at — it only loses to every open one. */
@@ -250,11 +262,19 @@ export interface EntryTile {
 
 export interface EntryOffer {
   locId: string;
-  /** the opening the offer is about, in WORLD metres — the point the figure
-   *  is walked to when the offer is accepted */
+  /** the opening — or, on a free boundary, the point of the RIM — the offer is
+   *  about, in WORLD metres: the point the figure is walked to when the offer
+   *  is accepted */
   point: Point;
-  edge: Edge;
+  /** the footprint edge the point sits on, or `null` on a free boundary: v6
+   *  numbers polygon edges instead of naming them N/E/S/W, and a rim point is
+   *  not an authored opening to begin with. */
+  edge: Edge | null;
   dist: number;
+  /** the INWARD unit normal at `point`, in WORLD metres — only set for a free
+   *  boundary, where there is no authored opening to look the normal up on.
+   *  The caller walks the figure one step along it to make the crossing. */
+  inward?: Point;
 }
 
 /**
@@ -262,12 +282,17 @@ export interface EntryOffer {
  *
  * - The location the avatar is IN is never a candidate (`myLocId`): one does
  *   not enter where one stands.
- * - A location offers entry within `radius` of one of its opening WORLD
- *   points; a location without openings offers nothing, whatever the distance.
+ * - A location WITH authored openings offers entry within `radius` of one of
+ *   their world points, and nowhere else — the server refuses a crossing
+ *   anywhere else (strictness decision 2026-08-04).
+ * - A location with a FREE boundary offers entry within `radius` of its RIM
+ *   (contract v6: the drawn polygon, `polygon.nearestRimPoint`) — it never said
+ *   where its way in is, so anywhere along the outline is one. Without a
+ *   boundary such a location has no rim and offers nothing.
  * - An OPEN location always beats a locked one, however much farther away it
  *   is (task C2): standing between a locked gate and an open one, the offer
  *   the player can act on is the one worth showing. Among equals the nearest
- *   opening wins, so a lone locked place is still the answer — the caller
+ *   point wins, so a lone locked place is still the answer — the caller
  *   turns it into the server's refusal instead of a "press F" that leads
  *   nowhere.
  */
@@ -281,19 +306,42 @@ export function entryOfferNear(
   let bestLocked = true;
   for (const t of tiles) {
     if (t.locId === myLocId) continue;
-    let near: { edge: Edge; x: number; z: number; dist: number } | null = null;
-    for (const o of openingWorldPoints(t.footprint, t.openings)) {
-      const dist = Math.hypot(o.x - pos.x, o.z - pos.z);
-      if (dist > radius) continue;
-      if (!near || dist < near.dist) near = { ...o, dist };
+    let near: EntryOffer | null = null;
+    if (t.openings.length) {
+      for (const o of openingWorldPoints(t.footprint, t.openings)) {
+        const dist = Math.hypot(o.x - pos.x, o.z - pos.z);
+        if (dist > radius) continue;
+        if (!near || dist < near.dist) {
+          near = { locId: t.locId, point: { x: o.x, z: o.z },
+                   edge: o.edge, dist };
+        }
+      }
+    } else if (t.boundary) {
+      // The rim is measured in the TILE's own frame — the boundary is local
+      // metres — and the answer is turned back with the same § A1.1 mapping
+      // every other payload point goes through (`localToWorld`, and its
+      // rotation-only twin for the normal).
+      const fp = t.footprint;
+      const c = Math.cos(fp.yaw);
+      const s = Math.sin(fp.yaw);
+      const local = { x: (pos.x - fp.x) * c - (pos.z - fp.z) * s,
+                      z: (pos.x - fp.x) * s + (pos.z - fp.z) * c };
+      const rim = nearestRimPoint(local.x, local.z, t.boundary);
+      if (rim && rim.dist <= radius) {
+        const at = localToWorld(rim.x, rim.z, fp.x, fp.z, fp.yaw);
+        near = {
+          locId: t.locId, point: at, edge: null, dist: rim.dist,
+          inward: { x: rim.inward.x * c + rim.inward.z * s,
+                    z: -rim.inward.x * s + rim.inward.z * c },
+        };
+      }
     }
     if (!near) continue;
     const locked = t.locked === true;
     const better = !best || (bestLocked && !locked)
       || (bestLocked === locked && near.dist < best.dist);
     if (better) {
-      best = { locId: t.locId, point: { x: near.x, z: near.z },
-               edge: near.edge, dist: near.dist };
+      best = near;
       bestLocked = locked;
     }
   }

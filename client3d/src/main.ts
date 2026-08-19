@@ -26,9 +26,7 @@ import {
 } from './game/perfstats';
 import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
-import { fogRects, SHOW_ALL_KEY } from './game/fog';
-import type { ExploredCells } from './game/fog';
-import { createFogClouds } from './game/fogClouds';
+import { SHOW_ALL_KEY } from './game/prefs';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
 import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
 import {
@@ -39,7 +37,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileDirToWorld, tileGroundY, tileToWorld, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
@@ -53,7 +51,7 @@ import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
-import { BASE_MARGIN_M, createGround } from './scene/ground';
+import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
 import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
@@ -61,11 +59,10 @@ import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } fr
 // --- THE CELL WORLD IS GONE (E4, tasks 2–6) ---------------------------------
 //
 // Nothing in this file reads a grid key any more, and the `v1()` cast that
-// kept the last of them compiling is deleted with the fog (task 6): the tile
+// kept the last of them compiling went with task 6: the tile
 // loop and the camera frame went in task 3, the journey bridge in task 4
-// (travellers are interpolated along the metre polyline of § A11), the step
-// machine in task 5 (free walking over `POST /play/pos`) and the veil in task
-// 6 (`world_bounds` minus the known footprints, `game/fog.ts`). The payload
+// (travellers are interpolated along the metre polyline of § A11) and the step
+// machine in task 5 (free walking over `POST /play/pos`). The payload
 // types have carried metres only since task 2 — `pos_x`/`pos_z`/`yaw_deg`/
 // `world_bounds` — so a grid read would not even type-check today.
 const WORLDMAP_POLL_MS = 3000;
@@ -468,7 +465,7 @@ async function boot() {
 }
 
 async function startApp(username: string, role: string) {
-  // --- Fog of war (Etappe 5): the ONE switch that decides which view is
+  // --- Knowledge filter (Etappe 5): the ONE switch that decides which view is
   // fetched. Only an administrator may see the unfiltered map — a stored `1`
   // in anybody else's browser is ignored here (the server would answer 403,
   // and a client that asked would break its own boot for a setting it is not
@@ -558,7 +555,7 @@ async function startApp(username: string, role: string) {
   const detailById = new Map(allLocs.map((l) => [l.id, l]));
   /**
    * The placeable locations of a worldmap snapshot. ONE function, because
-   * since the fog of war (Etappe 5) locations arrive not only at boot: a place
+   * since the knowledge filter (Etappe 5) locations arrive not only at boot: a place
    * the avatar discovers appears in a later poll and has to become a tile the
    * very same way — same template filter, same merge of map entry and detail.
    */
@@ -578,14 +575,16 @@ async function startApp(username: string, role: string) {
           rooms: detail?.rooms ?? [],
           description: detail?.description ?? '',
           entry_room: detail?.entry_room,
-          // The footprint anchor comes from the worldmap row (the server
-          // hoists it out of `map3d`); the detail record's own `map3d` is the
-          // fallback for a location the map row states nothing about.
+          // The footprint comes from the worldmap row (the server hoists the
+          // EFFECTIVE boundary out of `map3d`, synthesizing a legacy square's
+          // four corners); the detail record's own `map3d` is the fallback for
+          // a location the map row states nothing about.
+          boundary: l.boundary ?? detail?.map3d?.boundary ?? null,
           plan_width_m: l.plan_width_m ?? detail?.map3d?.plan_width_m ?? null,
         } as WorldLocation;
       });
   }
-  /** Every location that HAS a tile. Grows while the fog lifts
+  /** Every location that HAS a tile. Grows as places become known
    *  (`revealLocations` below) — the derived structures are rebuilt from this
    *  one list. */
   const placeable: WorldLocation[] = placeableOf(firstMap, detailById);
@@ -609,8 +608,8 @@ async function startApp(username: string, role: string) {
   // --- The ground of the metre world (E4 task 2) -----------------------------
   //
   // One base plane over `world_bounds` in the default kind's look, plus the
-  // painted areas of `/play/terrain` on top of it. Terrain is never fogged, so
-  // it is fetched ONCE and again only when a poll reports a different
+  // painted areas of `/play/terrain` on top of it. Terrain is never withheld,
+  // so it is fetched ONCE and again only when a poll reports a different
   // `terrain_sig` — `sync` decides that itself.
   //
   // The grid world's global GRASS PLANE is gone with the tile loop (task 3):
@@ -642,8 +641,7 @@ async function startApp(username: string, role: string) {
   // Only its POSITION is written — never its rotation. The ridge is built in
   // world directions (§ A1.8), so a group that merely translates keeps north
   // in the north while the player walks, which is the whole point of a
-  // horizon. It is deliberately NOT fogged over (`fogGroup` covers the plate
-  // only): a silhouette on the horizon gives nothing away.
+  // horizon.
   const backdrop = createBackdrop();
   engine.scene.add(backdrop.group);
   engine.addFrameHook(() => {
@@ -760,8 +758,8 @@ async function startApp(username: string, role: string) {
     // have sizes now, and a camera standing on the edge of a 200 m forest is
     // 100 m from its centre — measured that way the one location filling the
     // whole picture would be the one drawn at the low tier. Subtracting the
-    // bounding sphere of the square (half its diagonal, `w · 0.7071`) is the
-    // same rule the ground scatter uses. The hysteresis is UNTOUCHED: the
+    // bounding sphere of the footprint's BOUNDING BOX (half its diagonal,
+    // `w · 0.7071`) is the same rule the ground scatter uses. The hysteresis is UNTOUCHED: the
     // 45/60 band of the landed LOD strand keeps deciding, it is only fed a
     // distance that means the same thing for every location.
     const d = engine.camera.position.distanceTo(tile.center)
@@ -1104,43 +1102,19 @@ async function startApp(username: string, role: string) {
   for (const loc of placeable) addTile(loc);
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
-  // --- The veil over what the avatar does not know (E4 task 6) -------------
+  // --- NO VEIL (contract v6 Nr. 8, decision E1.3) ---------------------------
   //
-  // The server decides WHAT is known (§ A12) and sends only that; here the
-  // rest of the world is covered. WHICH part of the plane that is, is pure
-  // maths in `game/fog.ts` (hand-checked in client3d/scripts/smoke_walk_math.mjs) —
-  // the world frame grown by the ground's own margin, minus the footprints of
-  // the tiles standing. This is only the mesh side: one quad per rectangle,
-  // all of them in ONE group that is thrown away and built again whenever the
-  // set of known locations moves. Rebuilding wholesale is what keeps it
-  // honest: there is no incremental state that could end up showing a veil
-  // over a place one already stands in.
+  // The client draws no fog of war any more: § A12/§ A1.6 rest until a round of
+  // their own. What went with it is only the PICTURE — the cloud quads
+  // (`game/fogClouds.ts`), the veil geometry (`game/fog.ts`) and the avatar's
+  // exploration memory that cut holes into it (`GET /play/explored`) are all
+  // deleted rather than switched off.
   //
-  // It is an OVERLAY like the door thresholds: unlit (a veil that took the
-  // sun would read as a surface), never written into the depth buffer, and
-  // unpickable — a click belongs to the world underneath.
-  //
-  // WHAT it looks like is `game/fogClouds.ts`: an overcast cloud layer, opaque
-  // inside and torn at the rim. The first version was a flat dark quad and
-  // read as an empty box (user finding); the material, the texture and the
-  // overhang that makes the soft border all live in that module, so this file
-  // keeps doing nothing but placing rectangles.
-  const clouds = createFogClouds();
-  /** A hand's breadth above the world's ground: an unknown place carries no
-   *  tile, so the painted ground is the only thing under the veil.
-   *
-   *  ABOVE THE HIGHEST GROUND IN ITS OWN RECTANGLE since E8 (§ A16): one quad
-   *  is flat and the ground under it is not, so a veil hung on the average
-   *  height stands in every hill it covers — the mountain comes through the
-   *  cloud and shows exactly the topography the fog is there to withhold. */
-  const FOG_CLEARANCE_M = 0.05;
-  const fogGroup = new THREE.Group();
-  engine.scene.add(fogGroup);
-  /** The switch of the CURRENT payload: `fogged: false` (the admin's
-   *  unfiltered view) means there is no veil at all. The FRAME is
-   *  `worldBounds` above — one field for the ground, the minimap and the fog,
-   *  because all three cover the same world. */
-  let fogged = firstMap.fogged;
+  // THE KNOWLEDGE FILTER STAYS, and it was always the load-bearing half: what
+  // the server withholds because of `known_locations` never reaches this file,
+  // so an undiscovered place has no row, no tile and no dot on the minimap. It
+  // simply is not drawn instead of being drawn under a cover.
+
   /**
    * The two WALK LIMITS of the world (§ A12): how high a step the figure
    * takes and how steep a slope it climbs. They are SERVER settings — the
@@ -1170,162 +1144,6 @@ async function startApp(username: string, role: string) {
     backdrop.sync(map.backdrop ?? null);
   }
   takeBackdrop(firstMap);
-  /** What the veil currently standing was built from. The poll runs every
-   *  three seconds and nearly always finds the same inputs — rebuilding
-   *  regardless would throw away and re-allocate a dozen geometries per poll
-   *  for a picture that does not change. `null` until the first build: every
-   *  string is a possible key, so the sentinel must not be one. */
-  let fogKey: string | null = null;
-  /** The avatar's EXPLORATION MEMORY (§ A12, 2026-08-16): the 64 m cells it has
-   *  already stood in, which the veil spares in addition to the footprints. The
-   *  server owns it (`app/core/exploration.py`); this is only what arrived
-   *  last. Empty until the first fetch answers, and empty forever without an
-   *  avatar — both are "the veil as it was before the memory existed". */
-  let exploredCells: ExploredCells = new Set<string>();
-  /** The signature the current `exploredCells` came with, PREFIXED WITH THE
-   *  AVATAR it belongs to. `null` until the first fetch, so that even a server
-   *  answering `""` (no avatar) is fetched exactly once instead of never.
-   *
-   *  The prefix is what makes a TAKEOVER safe: the memory is per character, and
-   *  two characters that happen to have walked the same number of cells would
-   *  otherwise share a signature and the client would go on showing the
-   *  previous one's map. */
-  let exploredSig: string | null = null;
-  /** Guards against a second fetch while one is in flight — the poll runs every
-   *  three seconds and the payload can be hundreds of kilobytes. */
-  let exploredPending = false;
-  /**
-   * Refetch the memory when its signature moved, and rebuild the veil once it
-   * is in. The `terrainGround.sync` bargain exactly: the sig rides on the poll,
-   * the payload has its own endpoint and is fetched a few times per session.
-   *
-   * A FAILURE IS SWALLOWED on purpose (a `debug` line, no toast, no offline
-   * flag): a veil that still covers ground one has walked is last week's
-   * picture and nothing worse, and the signature is deliberately NOT taken
-   * over, so the next poll simply tries again.
-   */
-  function syncExplored(map: WorldMap): void {
-    const who = map.avatar ?? '';
-    const sig = `${who}|${map.explored_sig ?? ''}`;
-    if (sig === exploredSig || exploredPending) return;
-    exploredPending = true;
-    void api.fetchExplored().then((payload) => {
-      // The payload's OWN signature, not the poll's: between the poll and this
-      // answer the avatar may have walked into another cell, and taking the
-      // poll's would leave the client one refetch short of the truth forever.
-      exploredSig = `${who}|${payload.sig}`;
-      exploredCells = new Set(payload.cells);
-      rebuildFog();
-    }).catch((e) => {
-      console.debug('explored memory fetch failed', e);
-    }).finally(() => {
-      exploredPending = false;
-    });
-  }
-  /** The known footprints, as the veil is cut around them: the tile's OWN
-   *  centre, edge and rotation — what is DRAWN, so the hole and the tile in it
-   *  can never disagree (a location with no `plan_width_m` is drawn at the
-   *  fallback edge and its hole is that size too). */
-  const fogFootprints = () => [...tiles.values()].map(
-    (t) => ({ x: t.center.x, z: t.center.z, width: t.width, yaw: t.yaw }));
-  function rebuildFog() {
-    const frame = worldBounds
-      ? `${worldBounds.min_x},${worldBounds.min_z},${worldBounds.max_x},${worldBounds.max_z}` : '';
-    // Read ONCE: the key and the geometry have to describe the same instant,
-    // and walking the tiles twice per poll for the same answer is work for
-    // nothing.
-    const holeList = fogFootprints();
-    // The key carries the FOOTPRINTS, not just the location ids: a place
-    // resized or turned in the admin keeps its id, and a veil keyed on ids
-    // alone would go on covering the metres the tile has just grown into
-    // until some other location appeared. Centimetres are enough — nothing
-    // finer is visible under a cloud edge that is metres wide.
-    const holes = holeList
-      .map((f) => `${f.x.toFixed(2)},${f.z.toFixed(2)},${f.width.toFixed(2)},${f.yaw.toFixed(3)}`)
-      .sort().join(' ');
-    // The RELIEF is part of the key: the veil's height comes from the field,
-    // and the field arrives well after the first fog was built (its own fetch
-    // on its own signature). Without this the clouds would keep the flat
-    // world's height until some location happened to move.
-    // The MEMORY is part of the key for the same reason the relief is: it
-    // arrives on its own fetch, well after the first veil was built. Its SIZE
-    // is enough of a key — the set only ever grows (the server never deletes a
-    // cell, § A12), so a different count is a different set, and hashing tens
-    // of thousands of keys on every poll to learn that would be the one
-    // expensive thing in this function.
-    const key = `${fogged}|${frame}|${holes}|${terrainGround.heightRevision()}`
-      + `|${exploredCells.size}`;
-    if (key === fogKey) return;
-    fogKey = key;
-    for (const child of fogGroup.children) {
-      (child as THREE.Mesh).geometry.dispose();
-    }
-    fogGroup.clear();
-    if (!fogged) return;
-    // The ground's own relief decides which rectangles are TILED (E8 task 5):
-    // a veil over level ground stays one quad however wide it is, and only
-    // where the field moves is it cut into `FOG_TILE_M` pieces. Handing the
-    // query in keeps `game/fog.ts` importless, exactly like the footprints.
-    for (const r of fogRects(worldBounds, holeList, BASE_MARGIN_M,
-                             (x0, z0, x1, z1) =>
-                               terrainGround.heightRangeIn(x0, z0, x1, z1),
-                             exploredCells)) {
-      // The geometry comes out LARGER than the rectangle — the cloud edge
-      // needs room to fade, and neighbouring rectangles overlap into each
-      // other so no seam opens between them (see `fogClouds.ts`). The centre
-      // is unaffected: the overhang is symmetric.
-      const quad = new THREE.Mesh(clouds.quadGeometry(r.w, r.d), clouds.material);
-      // `x`/`z` is the rectangle's MINIMUM corner, the quad hangs on its
-      // middle — half its extents further along, in plain metres. Its HEIGHT
-      // is the highest ground inside that very rectangle plus the clearance:
-      // per rectangle, because the veil is many quads over one landscape and a
-      // single world-wide height would float the whole cover over the plain.
-      const fogY = terrainGround.maxHeightIn(r.x, r.z, r.x + r.w, r.z + r.d)
-        + FOG_CLEARANCE_M;
-      quad.position.set(r.x + r.w / 2, fogY, r.z + r.d / 2);
-      quad.renderOrder = 1;   // under the thresholds (3) and the pins
-      quad.raycast = () => {};
-      fogGroup.add(quad);
-    }
-  }
-  rebuildFog();
-  // The memory the veil is cut around, on its first fetch — deliberately not
-  // awaited: the map must stand now, and the walked ground clears one fetch
-  // later (the same deal `terrainGround.sync` gets for the relief).
-  syncExplored(firstMap);
-  // THE VEIL IS AN OVERVIEW DEVICE (finding B14, the user's option 1).
-  //
-  // `fogRects` subtracts the footprints of the KNOWN places from the world
-  // frame and nothing else — there is no memory of ground one has walked. That
-  // is a map legend, and it is wrong under a figure's feet: between two places
-  // the world stays covered forever (a dark wood with no location in it never
-  // clears, however far one walks), and the cover lies as an opaque surface
-  // 5 cm above the ground, made for a camera 70 m up. In control, with 7 m of
-  // camera distance, one walks INTO it at a grazing angle.
-  //
-  // Leaving it out in control leaks nothing: an unknown place is not in the
-  // payload at all, there is no tile for it, so what shows underneath is the
-  // painted terrain the server always delivers — which § A12 keeps unfogged on
-  // purpose, "so the map stays a landscape in the fog instead of an empty
-  // plane". The overview keeps its veil, and switching back brings it straight
-  // back.
-  //
-  // Option 2 — a fog with a MEMORY, walked ground permanently free and
-  // persisted like `known_locations` — LANDED on 2026-08-16 and stands beside
-  // option 1 rather than replacing it: the overview keeps its veil, and that
-  // veil now spares the 64 m cells the avatar has already been in on top of the
-  // known footprints (`exploredCells` above, § A12). Close up there is still no
-  // veil at all, for the reasons in the paragraph before this one.
-  //
-  // The cover drifts and takes the time of day. Both are one uniform each, so
-  // this rides in the engine's frame loop rather than bringing a timer: with
-  // no fog standing there is nothing to advance at all.
-  engine.addFrameHook((dt) => {
-    fogGroup.visible = getGameState().mode !== 'embodied';
-    if (fogGroup.visible && fogGroup.children.length) {
-      clouds.advance(dt, engine.nightFactor);
-    }
-  });
   // Last stage: the map stands and can be clicked. The title screen fades on
   // this one — the scene models behind the tiles keep streaming in afterwards
   // (`mountWithDoors` is deliberately not awaited), and holding the screen
@@ -1588,7 +1406,7 @@ async function startApp(username: string, role: string) {
     // (free walking overrides travel, `POST /play/pos`).
     const at = me?.pos ?? (tile ? { x: tile.center.x, z: tile.center.z } : null);
     // Only now is there really nothing: no tile AND no point (an unplaced
-    // location, a fogged place the map has not built). Say so instead of
+    // location, a place the map has not built). Say so instead of
     // doing half of it.
     if (!at) {
       uiActions.toast?.('Your avatar is not on the map yet.', true);
@@ -1780,6 +1598,7 @@ async function startApp(username: string, role: string) {
         pos_x: row.pos_x,
         pos_z: row.pos_z,
         yaw_deg: row.yaw_deg,
+        boundary: row.boundary ?? null,
         plan_width_m: row.plan_width_m,
       });
     }
@@ -1814,7 +1633,7 @@ async function startApp(username: string, role: string) {
     // The metre side of the payload: the world frame, the places as the
     // minimap knows them, and the terrain signature that decides whether the
     // ground has to be refetched (E4 task 2). `sync` is a no-op on an
-    // unchanged signature — terrain is never fogged and never polled.
+    // unchanged signature — terrain is never withheld and never polled.
     worldBounds = map.world_bounds;
     takeMapLocations(map.locations);
     // The locations travel WITH it: their footprints are what the scatter
@@ -1825,18 +1644,11 @@ async function startApp(username: string, role: string) {
     takeWalkLimits(map);
     takeBackdrop(map);
     rebuildMovedTiles(map);
-    // The fog of war (Etappe 5) moves WHILE one plays: a place the avatar has
-    // just discovered is simply in the payload from one poll to the next. The
-    // switch travels with it, and the frame is the one just taken over — the
-    // bounds are computed unfiltered and do not move while one discovers, but
-    // a world can gain a location anywhere at any time.
-    fogged = map.fogged;
-    // The MEMORY grows while one walks — the server marks every accepted point
-    // (§ A12), so `explored_sig` moves and the cells are refetched. Before
-    // `rebuildFog`, so a poll that changes nothing else still costs only the
-    // signature comparison.
-    syncExplored(map);
-    rebuildFog();   // a no-op unless the frame, the switch or a footprint moved
+    // KNOWLEDGE MOVES WHILE ONE PLAYS: a place the avatar has just discovered
+    // is simply in the payload from one poll to the next, and the reveal below
+    // builds its tile. Nothing is un-covered — since v6 Nr. 8 there is no veil
+    // to cut a hole into, only a location that was not there before.
+    //
     // The trigger asks the SAME question the reveal answers — `placeableOf`,
     // not a hand-written filter next to it. A cheaper test that forgot the
     // template rule would fire on every single poll in a world whose template
@@ -1941,7 +1753,7 @@ async function startApp(username: string, role: string) {
    * first: the terrain speed factor sits in it, the nominal journey speed
    * knows nothing about the ground).
    *
-   * WITHOUT them — the fog nulls `waypoints` for every traveller but the
+   * WITHOUT them — the filter nulls `waypoints` for every traveller but the
    * avatar (§ A12) — there is no route at all: the figure stands at its `pos`,
    * no line is drawn and nothing is extrapolated. That is the point of the
    * rule: the route ends at the target's door and would be a metre-exact map
@@ -1951,8 +1763,9 @@ async function startApp(username: string, role: string) {
     const tr: MapTravel | null = c.travel ?? null;
     if (!tr) return null;
     const wp = tr.waypoints;
-    // The fog thins route AND distance out together (§ A12); a route without
-    // a `progress_m` is therefore a fogged row, not a walkable line.
+    // The knowledge filter thins route AND distance out together (§ A12); a
+    // route without a `progress_m` is therefore a withheld row, not a walkable
+    // line.
     if (wp && wp.length >= 2 && tr.progress_m !== null) {
       const points = wp.map((p) => [p[0], p[1]] as MetrePoint);
       const totalM = polylineLength(points);
@@ -1970,7 +1783,7 @@ async function startApp(username: string, role: string) {
                  rateMS: tr.pace_m_s_real ?? tr.speed_m_s_real, stamp },
       };
     }
-    // Fogged route, or a degenerate one-point line (a journey without a way):
+    // Withheld route, or a degenerate one-point line (a journey without a way):
     // the payload's own point is the whole answer.
     if (c.pos) {
       return { char: c,
@@ -2232,18 +2045,19 @@ async function startApp(username: string, role: string) {
    * `app/core/world_geometry.location_at_point`, and the successor of the
    * cell lookup that used to answer this.
    *
-   * The SMALLEST matching footprint wins: overlaps are legal (a hut on a
-   * village square) and the smallest one is the most specific answer, exactly
-   * as the server resolves it. `worldToTile` turns the point into the tile's
-   * own frame first, so a rotated footprint is tested as the square it is.
+   * The SMALLEST AREA wins (contract v6 Nr. 6, decision E1.2): overlaps are
+   * legal (a hut on a village square) and the smallest enclosed area is the
+   * most specific answer, exactly as the server resolves it — the polygon
+   * successor of the smallest-width rule, and identical to it wherever both
+   * shapes are squares (width orders exactly like width²). `tileContains`
+   * turns the point into the tile's own frame and ray-casts the drawn outline,
+   * so a rotated or concave footprint is tested as the shape it is.
    */
   function tileAt(x: number, z: number): Tile | null {
     let best: Tile | null = null;
     for (const tile of tiles.values()) {
-      const half = tile.width / 2;
-      const p = worldToTile(tile, x, z);
-      if (Math.abs(p.x) > half || Math.abs(p.z) > half) continue;
-      if (!best || tile.width < best.width) best = tile;
+      if (!tileContains(tile, x, z)) continue;
+      if (!best || tile.area < best.area) best = tile;
     }
     return best;
   }
@@ -2448,10 +2262,8 @@ async function startApp(username: string, role: string) {
     const patches: ScenePatch[] = [];
     for (const tile of tiles.values()) {
       if (!tile.terrain) continue;
-      const half = tile.width / 2;
-      const p = worldToTile(tile, x, z);
-      if (Math.abs(p.x) > half || Math.abs(p.z) > half) continue;
-      patches.push({ width: tile.width, lift: terrainLiftAt(tile, x, z) });
+      if (!tileContains(tile, x, z)) continue;
+      patches.push({ area: tile.area, lift: terrainLiftAt(tile, x, z) });
     }
     return groundLift(terrainGround.fieldHeightAt(x, z), patches);
   }
@@ -2653,21 +2465,19 @@ async function startApp(username: string, role: string) {
   /**
    * A place the avatar has just discovered joins the map (Etappe 5).
    *
-   * The fog lifts DURING play — the server starts delivering a location the
+   * KNOWLEDGE GROWS DURING PLAY — the server starts delivering a location the
    * moment it becomes known — so this walks a newcomer through everything the
    * boot path does for a location, in the same order and out of the same
-   * functions. On the metre world that is FOUR steps and no more: the scene
-   * recipe, the tile, the pickables, the veil (which now has one footprint
-   * cut out of it). What went away with the grid: the surface NEIGHBOURHOOD
-   * (a tile baked its coast blend from the four cells around it, so a newcomer
-   * forced its neighbours to be rebuilt — footprints have no neighbours,
-   * § A1.1), the pathfinding grid and the passability map (task 5: the server
-   * judges the reported point, the client walks freely) and the fog's own
-   * cell bookkeeping (task 6: the veil is recomputed from the footprints
-   * standing, so there is nothing to keep in step).
+   * functions. On the metre world that is THREE steps and no more: the scene
+   * recipe, the tile, the pickables. What went away with the grid: the surface
+   * NEIGHBOURHOOD (a tile baked its coast blend from the four cells around it,
+   * so a newcomer forced its neighbours to be rebuilt — footprints have no
+   * neighbours, § A1.1) and the pathfinding grid with the passability map
+   * (task 5: the server judges the reported point, the client walks freely).
+   * The veil went with contract v6 Nr. 8 and takes its bookkeeping along.
    *
    * The rooms come from a FRESH `/world/locations`: the boot snapshot was
-   * taken while this place was still fogged, and a location created after boot
+   * taken while this place was still unknown, and a location created after boot
    * would not be in it at all. That endpoint is unfiltered, one call covers
    * however many appeared at once, and a failed call simply leaves the work to
    * the next poll — `tiles` is what says "already built", so nothing is done
@@ -2729,7 +2539,6 @@ async function startApp(username: string, role: string) {
     // without it the next poll would read every fresh tile as "moved".
     noteGeometry(map.locations);
     engine.setPickables([...tiles.values()].map((t) => t.group));
-    rebuildFog();
   }
 
   /**
@@ -2812,7 +2621,6 @@ async function startApp(username: string, role: string) {
     // close it either way.
     panel.hide();
     engine.setPickables([...tiles.values()].map((t) => t.group));
-    rebuildFog();
     return true;
   }
 
@@ -2839,14 +2647,14 @@ async function startApp(username: string, role: string) {
       lastMap = map;
       mapStamp += 1;
       // The frame comes over with the switch: `world_bounds` is unfiltered and
-      // therefore the same in both views, but this payload is what the veil
-      // (and the ground, and the minimap) is rebuilt from below, and reading
-      // one field from the new view and another from the old one is how two
-      // pictures of the same world start to disagree. That the two views agree
-      // on the frame still holds since B7 gave `world_bounds` the painted
-      // areas as well (`c1447a9`) — the bounds are computed over everything
-      // placed, unfiltered by what this avatar knows, and the fog does not
-      // shrink a meadow.
+      // therefore the same in both views, but this payload is what the ground
+      // (and the minimap) is rebuilt from below, and reading one field from the
+      // new view and another from the old one is how two pictures of the same
+      // world start to disagree. That the two views agree on the frame still
+      // holds since B7 gave `world_bounds` the painted areas as well
+      // (`c1447a9`) — the bounds are computed over everything placed,
+      // unfiltered by what this avatar knows, and the filter does not shrink a
+      // meadow.
       worldBounds = map.world_bounds;
       takeMapLocations(map.locations);
       // …and the GROUND is synced right here instead of being left to the next
@@ -2858,7 +2666,6 @@ async function startApp(username: string, role: string) {
                               map.height_sig ?? '');
       takeWalkLimits(map);
       takeBackdrop(map);
-      fogged = map.fogged;
       dropVanished(map);
       takeRoomsFrom(map);
       updatePins(map);
@@ -3986,11 +3793,13 @@ async function startApp(username: string, role: string) {
   //
   // The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
   // numbers in client3d/scripts/smoke_enter_math.mjs): within ENTER_RADIUS of
-  // an authored boundary opening (§ B1 Nr. 13) of a location one is not in —
-  // a location without such an opening offers no entry (2026-08-04), exactly
-  // as the server refuses the crossing. The 4-adjacency and the edge filter
-  // are GONE with the cells: on a free plane there is no crossed edge, only
-  // the distance to the opening, which is what the server measures too.
+  // an authored boundary opening (§ B1 Nr. 13) of a location one is not in,
+  // exactly as the server refuses the crossing anywhere else (2026-08-04). A
+  // location with NO authored opening has a free boundary, and since contract
+  // v6 its whole DRAWN RIM is the offer — the polygon successor of "anywhere
+  // along the edge". The 4-adjacency and the edge filter are GONE with the
+  // cells: on a free plane there is no crossed edge, only the distance, which
+  // is what the server measures too.
   //
   // A LOCKED location makes no offer (task C2, § 3 decision 2: the hint does
   // not appear in the first place), but it is not forgotten either: the offer
@@ -4001,6 +3810,9 @@ async function startApp(username: string, role: string) {
    *  for a real offer. */
   let enterOffer: {
     locId: string; point: { x: number; z: number }; locked: string;
+    /** the inward normal at `point` in WORLD metres, for a FREE boundary — an
+     *  offer at an authored opening looks its own normal up instead. */
+    inward?: { x: number; z: number };
   } | null = null;
 
   function updateEnterOffer() {
@@ -4028,6 +3840,13 @@ async function startApp(username: string, role: string) {
       candidates.push({
         locId: t.loc.id,
         footprint: { x: t.center.x, z: t.center.z, yaw: t.yaw },
+        // The DRAWN outline, tile-local (contract v6) — the FREE boundary's
+        // way in, and handed over ONLY for a location the free-boundary rule
+        // actually says is free. `openingsOf` answers an empty list for a
+        // scene still IN FLIGHT as well, and reading that as "enter anywhere"
+        // would offer a walk-in the server then refuses — the very divergence
+        // `freeBoundaryOf` exists to close.
+        boundary: freeBoundary(t) ? t.boundary : null,
         // Openings come TILE-LOCAL (metres around the tile centre, § B1
         // Nr. 13, `tile_rotation` already applied); `openingWorldPoints`
         // turns them with the tile's own yaw, the § A1.1 mapping `tileToWorld`
@@ -4041,7 +3860,8 @@ async function startApp(username: string, role: string) {
     const offer = entryOfferNear({ x: pos.x, z: pos.z }, myLoc, candidates);
     if (!offer) return clear();
     const locked = lockReason(state.lockedLocations, offer.locId);
-    enterOffer = { locId: offer.locId, point: offer.point, locked };
+    enterOffer = { locId: offer.locId, point: offer.point, locked,
+                   inward: offer.inward };
     // Locked: no "Press F to enter" at all — the barred threshold is what the
     // player sees, and the key answers with the server's sentence.
     if (locked) {
@@ -4091,7 +3911,13 @@ async function startApp(username: string, role: string) {
     // The inward normal of the opening the OFFER names — the nearest one is
     // what `entryOfferNear` already picked, so this looks up its normal
     // instead of choosing a second time.
-    let goal = { x: offer.point.x, z: offer.point.z };
+    let goal = offer.inward
+      // A FREE boundary has no authored opening to look a normal up on: the
+      // offer brought the rim's own inward normal along (contract v6), and the
+      // step along it is the crossing.
+      ? { x: offer.point.x + offer.inward.x * OPENING_WALK_IN_M,
+          z: offer.point.z + offer.inward.z * OPENING_WALK_IN_M }
+      : { x: offer.point.x, z: offer.point.z };
     let best = Infinity;
     // The SAME list the offer was made from (`openingsOf`) — the raw-anchored
     // one included, or a 404 place would be offered and then walked to its own
@@ -4302,20 +4128,15 @@ async function startApp(username: string, role: string) {
         if (tile.loc.id === openLocationId && tile.fade > 0.4) open = tile;
       }
     }
-    if (!basementOpen) {
+    const basementBox = basementOpen ? tileWorldBounds(basementOpen) : null;
+    if (!basementOpen || !basementBox) {
       terrainGround.setHole(null);
     } else {
       // The hole is the FOOTPRINT of the open location, as an axis-aligned
-      // rectangle: a square of edge w turned by yaw spans
-      // `w/2 · (|cos yaw| + |sin yaw|)` on each axis, which is exactly w/2 at
-      // yaw 0 and grows to w·0.707 at 45°. The ground is cut, not the tile, so
+      // rectangle: every point of the drawn outline turned into world axes and
+      // stretched over (`tileWorldBounds`). The ground is cut, not the tile, so
       // the rectangle has to be stated in world axes.
-      const half = (basementOpen.width / 2)
-        * (Math.abs(Math.cos(basementOpen.yaw)) + Math.abs(Math.sin(basementOpen.yaw)));
-      let minX = basementOpen.center.x - half;
-      let minZ = basementOpen.center.z - half;
-      let maxX = basementOpen.center.x + half;
-      let maxZ = basementOpen.center.z + half;
+      let { minX, minZ, maxX, maxZ } = basementBox;
       // A tile-sized hole is enough to look straight down, but not to look
       // INTO the pit: from an angle its near rim stands between camera and
       // basement. So while a storey BELOW ground is actually displayed, the

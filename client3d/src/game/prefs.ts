@@ -20,6 +20,15 @@
  * one bad slider cannot reset the other six settings.
  */
 
+/** `localStorage` key of the admin's "show all locations" switch — the ONE
+ *  setting that decides which worldmap view is fetched (filtered by
+ *  `known_locations`, or everything). Only ever honoured for role `admin`: a
+ *  stale value in anybody else's browser is ignored, and the server would
+ *  answer 403 anyway. It lived in `game/fog.ts` until the veil was struck
+ *  (contract v6 Nr. 8) — it was never about the veil, only about which places
+ *  arrive. */
+export const SHOW_ALL_KEY = 'av3d.showAllLocations';
+
 /** Playback mode for spoken lines. `auto` = follow the server (play when TTS
  *  is enabled there), `on`/`off` = the user has decided. */
 export type TtsMode = 'auto' | 'on' | 'off';

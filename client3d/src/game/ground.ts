@@ -109,11 +109,11 @@ export function plateLift(worldY: number, tileY: number): number {
   return standY(tileY, worldY) - (Number.isFinite(tileY) ? tileY : 0);
 }
 
-/** One location's scene relief at the point being asked about: how WIDE its
- *  footprint is and how high its own field lifts the ground there. Only
+/** One location's scene relief at the point being asked about: how LARGE its
+ *  footprint is in m² and how high its own field lifts the ground there. Only
  *  locations that both CONTAIN the point and carry a field are handed in —
  *  the geometry is the caller's lookup, the rule is here. */
-export interface ScenePatch { width: number; lift: number }
+export interface ScenePatch { area: number; lift: number }
 
 /**
  * The ground at a world point, in metres — THE client's mirror of the server's
@@ -131,8 +131,9 @@ export interface ScenePatch { width: number; lift: number }
  *  - a SCENE relief adds on top of it, and only the INNERMOST enclosing one
  *    that actually has a field counts (finding F3): a place carrying no relief
  *    of its own does not flatten the ground it stands on, it stands ON it. So
- *    the narrowest footprint among the patches wins, which is `tileAt`'s
- *    smallest-wins rule restricted to those that answer at all.
+ *    the SMALLEST-AREA footprint among the patches wins (contract v6 Nr. 6),
+ *    which is `tileAt`'s smallest-wins rule restricted to those that answer at
+ *    all — the same order, now measured in m² rather than in edge length.
  *
  * Under a footprint that levels its ground (`level_ground`, § A16.1, opt-in)
  * the world term is FLAT by construction, so this adds the plateau height and
@@ -144,7 +145,7 @@ export function groundLift(worldHeight: number,
                            patches: readonly ScenePatch[]): number {
   let best: ScenePatch | null = null;
   for (const p of patches) {
-    if (!best || p.width < best.width) best = p;
+    if (!best || p.area < best.area) best = p;
   }
   return worldHeight + (best ? best.lift : 0);
 }

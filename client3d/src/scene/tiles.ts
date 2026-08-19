@@ -4,31 +4,24 @@ import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-ren
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { acceptsWalkHit, plateLift, standY, type GroundModelInfo } from '../game/ground';
+import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 import { applyOcclusionFade } from './occlusion';
 import {
   asphaltTexture, awningTexture, facadeEmissive, facadeTexture, grassTexture, paversTexture, seededRandom, waterTexture,
 } from './textures';
 
-// --- The FOOTPRINT of a location (E4 task 3, § A1.1) -------------------------
+// --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------
 //
 // CELL is gone, and with it `gridToWorld` and every neighbourhood built out of
-// integer arithmetic. A location is a SQUARE: edge length `plan_width_m`,
-// centre (`pos_x`, `pos_z`), turned by `yaw_deg` about the up axis. The tile's
-// group carries exactly that — position and rotation — so everything hanging in
-// it is placed in tile-local metres and lands where the server says it does.
+// integer arithmetic. And since v6 the SQUARE is gone too: a location is a
+// drawn POLYGON — `boundary`, a point sequence in local metres around the pin
+// (`pos_x`, `pos_z`), turned by `yaw_deg` about the up axis. A legacy square
+// arrives from the server as its four synthesized corners, so nothing here has
+// a square code path. The tile's group carries pin and rotation, so everything
+// hanging in it is placed in tile-local metres and lands where the server says.
 
-/** Edge length of a location whose geometry declares no scale anchor
- *  (`plan_width_m` missing or ≤ 0), in metres.
- *
- *  The old world's cell was 10 m and every location filled one, so 10 keeps
- *  such a location the size it has always been drawn at — and `footprintWidth`
- *  says out loud when it had to fall back, because an unanchored location is a
- *  world-data defect, not a supported state (§ A1.1: without a positive anchor
- *  a location has no area at all). */
-export const FOOTPRINT_FALLBACK_M = 10;
-
-/** Locations already warned about — the fallback is a per-location fact, and a
- *  tile is rebuilt on every layout change. */
+/** Locations already warned about — a missing boundary is a per-location fact,
+ *  and a tile is rebuilt on every layout change. */
 const widthWarned = new Set<string>();
 
 /** How high above the world the ground raycast of `tileGroundY` starts, in
@@ -81,16 +74,37 @@ export function setWorldGround(sampler: (x: number, z: number) => number): void 
   worldGroundAt = sampler;
 }
 
-/** Edge length of a location's footprint square in world metres. */
-export function footprintWidth(loc: WorldLocation): number {
-  const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
-  if (typeof w === 'number' && Number.isFinite(w) && w > 0) return w;
+/**
+ * THE footprint outline of a location, in TILE-LOCAL metres — the drawn
+ * polygon of contract v6, or `null` when the location has no area at all.
+ *
+ * Two sources and no third: the worldmap row (the server hoists the EFFECTIVE
+ * boundary out of `map3d`, synthesizing the four corners of a legacy square)
+ * and the detail record's own `map3d.boundary` for a location the map row says
+ * nothing about. `null` is a real state — v6 Nr. 1 struck the "without an
+ * anchor, a 10 m square" fallback without replacement, so such a place is a
+ * pin: it claims no point, gets no plate, and says so once.
+ */
+export function footprintBoundary(loc: WorldLocation): [number, number][] | null {
+  const pts = sanitizePolygon(loc.boundary ?? loc.map3d?.boundary);
+  if (pts) return pts;
   if (!widthWarned.has(loc.id)) {
     widthWarned.add(loc.id);
-    console.warn(`[tiles] ${loc.name || loc.id}: no plan_width_m — drawing the`
-      + ` footprint at the fallback ${FOOTPRINT_FALLBACK_M} m (§ A1.1)`);
+    console.warn(`[tiles] ${loc.name || loc.id}: no boundary — the location has`
+      + ' no area at all (contract v6 Nr. 1), so no plate is drawn');
   }
-  return FOOTPRINT_FALLBACK_M;
+  return null;
+}
+
+/** Width of the footprint's BOUNDING BOX in world metres — derived from the
+ *  boundary (v6 Nr. 2), with the server's own `plan_width_m` as the fallback
+ *  for a location that has a width but no outline. Everything that needs ONE
+ *  length reads it: the texture repeat, the selection ring, the load radius. */
+export function footprintWidth(loc: WorldLocation): number {
+  const b = polygonBounds(loc.boundary ?? loc.map3d?.boundary);
+  if (b) return Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+  const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
+  return typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : 0;
 }
 
 /**
@@ -165,6 +179,43 @@ export function worldToTile(tile: Tile, x: number, z: number
   return worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, x, z);
 }
 
+/**
+ * Does this tile's FOOTPRINT cover a world point (contract v6 Nr. 6)?
+ *
+ * The point is turned into the tile's own frame first (`worldToTile`, the
+ * inverse of § A1.1) and then ray-cast against the drawn polygon — the client's
+ * twin of `world_geometry.boundary_contains`, down to the half-open edge rule,
+ * so the two sides never disagree about which place a metre belongs to. A tile
+ * without a boundary has no area and covers nothing.
+ */
+export function tileContains(tile: Tile, x: number, z: number): boolean {
+  if (!tile.boundary) return false;
+  const p = worldToTile(tile, x, z);
+  return pointInPolygon(p.x, p.z, tile.boundary);
+}
+
+/**
+ * The axis-aligned WORLD box of a tile's footprint — every outline point turned
+ * by § A1.1 and stretched over. `null` without a boundary.
+ *
+ * The successor of "a square of edge w turned by yaw spans w/2·(|cos|+|sin|)":
+ * that identity holds for a square only, and a drawn outline is not one.
+ */
+export function tileWorldBounds(tile: Tile
+): { minX: number; minZ: number; maxX: number; maxZ: number } | null {
+  if (!tile.boundary) return null;
+  let minX = Infinity; let minZ = Infinity;
+  let maxX = -Infinity; let maxZ = -Infinity;
+  for (const [lx, lz] of tile.boundary) {
+    const p = tileToWorld(tile, lx, lz);
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+  }
+  return { minX, minZ, maxX, maxZ };
+}
+
 /** Turn a tile-local DIRECTION into a world direction (no translation). */
 export function tileDirToWorld(tile: Tile, lx: number, lz: number
 ): { x: number; z: number } {
@@ -223,10 +274,17 @@ export interface Tile {
   group: THREE.Group;
   /** Centre of the footprint in world metres — `group.position` (§ A1.1). */
   center: THREE.Vector3;
-  /** Edge length of the footprint square in world metres (`plan_width_m`, or
-   *  `FOOTPRINT_FALLBACK_M`). The ONE size this tile is drawn at: plate,
-   *  plinth, selection ring, the occlusion corridor and the basement hole all
-   *  come off it — there is no cell any more. */
+  /** THE footprint outline in TILE-LOCAL metres (contract v6) — what the plate
+   *  is cut to and what `tileAt` tests a point against. `null` = the location
+   *  has no area at all, and then this tile claims no point on the plane. */
+  boundary: [number, number][] | null;
+  /** Enclosed area of `boundary` in m². THE tie-breaker where footprints
+   *  overlap: the smallest area wins (v6 Nr. 6). 0 without a boundary. */
+  area: number;
+  /** Width of the footprint's BOUNDING BOX in world metres (derived from
+   *  `boundary`, v6 Nr. 2). The ONE length this tile is scaled by: texture
+   *  repeat, selection ring, the occlusion corridor and the basement hole all
+   *  come off it — containment and specificity come off `boundary`/`area`. */
   width: number;
   /** Footprint rotation in radians — `group.rotation.y`, § A1.1 sign. */
   yaw: number;
@@ -533,10 +591,131 @@ const DRAPE_MAX_SEGMENTS = 48;
  *  largest one IS the spread. */
 const DRAPE_FLAT_EPS_M = 0.05;
 
+/**
+ * UVs of a plate geometry, in METRES over the bounding box divided by
+ * `widthM` — the square case's own mapping, generalised.
+ *
+ * The texture carries the repeat (`surfaceTexture`: `widthM / sizeM` on both
+ * axes), so a uv that runs 0…1 across `widthM` metres puts one tile of the
+ * image on every `sizeM` metres, whatever the outline's shape. Both axes are
+ * divided by the SAME length, or a long thin place would stretch its grass.
+ * `ShapeGeometry` would otherwise write metres straight into the uv and repeat
+ * the image once per metre.
+ */
+function plateUVs(geo: THREE.BufferGeometry, minPX: number, minPY: number,
+                  widthM: number): void {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const span = widthM > 0 ? widthM : 1;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uv[i * 2] = (pos.getX(i) - minPX) / span;
+    uv[i * 2 + 1] = (pos.getY(i) - minPY) / span;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+}
+
+/**
+ * The plate geometry of ONE footprint polygon, in the plate's own frame.
+ *
+ * THE FRAME. The mesh is turned by −90° about X, so a vertex `(px, py, pz)`
+ * sits at tile-local `(px, pz, −py)`: the outline point `(lx, lz)` becomes
+ * `(lx, −lz)` and the HEIGHT is the local z. That is the frame the square
+ * plate always lived in — only its shape changes here.
+ *
+ * TWO SHAPES, one rule (contract v6 Nr. 4). Without relief under it the plate
+ * is the triangulated polygon itself (`THREE.Shape`, whose ear clipping handles
+ * the concave outlines E1.1 allows) — as few triangles as the outline has, and
+ * an exact rim. With relief it is the regular grid over the polygon's BOUNDING
+ * BOX, `DRAPE_STEP_M` apart, with every cell whose CENTRE lies outside the
+ * polygon left out. A cell straddling the rim survives whole: that is a
+ * VISUAL matter, not the truth about where the place is — `tileAt` tests the
+ * polygon itself, and a hand's breadth of grass past the rim is a hand's
+ * breadth of grass.
+ *
+ * `liftAt` is the world ground over the tile floor at a TILE-LOCAL point
+ * (`game/ground.plateLift`); `null` while nothing has been taken over, and then
+ * the plate is flat by construction.
+ */
+function platePolygonGeometry(boundary: [number, number][], widthM: number,
+                              liftAt: ((lx: number, lz: number) => number) | null
+): THREE.BufferGeometry {
+  const b = polygonBounds(boundary)!;
+  // Plate coordinates: px = lx, py = −lz. The z bounds therefore swap sides.
+  const minPX = b.minX;
+  const minPY = -b.maxZ;
+  const spanX = b.maxX - b.minX;
+  const spanZ = b.maxZ - b.minZ;
+  const segX = Math.min(DRAPE_MAX_SEGMENTS,
+                        Math.max(1, Math.ceil(spanX / DRAPE_STEP_M)));
+  const segZ = Math.min(DRAPE_MAX_SEGMENTS,
+                        Math.max(1, Math.ceil(spanZ / DRAPE_STEP_M)));
+  const stepX = spanX / segX;
+  const stepZ = spanZ / segZ;
+  // Does the ground move under this footprint at all? Probed on the DRAPE GRID
+  // itself, so nothing between the samples can hide (finding I2), and only
+  // INSIDE the polygon — a hill in the notch of an L is not under this plate.
+  let maxLift = 0;
+  if (liftAt) {
+    for (let iz = 0; iz <= segZ; iz++) {
+      for (let ix = 0; ix <= segX; ix++) {
+        const lx = b.minX + ix * stepX;
+        const lz = b.minZ + iz * stepZ;
+        if (!pointInPolygon(lx, lz, boundary)) continue;
+        const h = liftAt(lx, lz);
+        if (h > maxLift) maxLift = h;
+      }
+    }
+  }
+  if (maxLift <= DRAPE_FLAT_EPS_M) {
+    const shape = new THREE.Shape(
+      boundary.map(([lx, lz]) => new THREE.Vector2(lx, -lz)));
+    const geo = new THREE.ShapeGeometry(shape);
+    plateUVs(geo, minPX, minPY, widthM);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  // The draped grid: lattice vertices, emitted only where a cell needs them.
+  const positions: number[] = [];
+  const index: number[] = [];
+  const slot = new Map<number, number>();
+  const vertexAt = (ix: number, iz: number): number => {
+    const key = iz * (segX + 1) + ix;
+    const known = slot.get(key);
+    if (known !== undefined) return known;
+    const lx = b.minX + ix * stepX;
+    const lz = b.minZ + iz * stepZ;
+    const at = positions.length / 3;
+    positions.push(lx, -lz, liftAt ? liftAt(lx, lz) : 0);
+    slot.set(key, at);
+    return at;
+  };
+  for (let iz = 0; iz < segZ; iz++) {
+    for (let ix = 0; ix < segX; ix++) {
+      const cx = b.minX + (ix + 0.5) * stepX;
+      const cz = b.minZ + (iz + 0.5) * stepZ;
+      if (!pointInPolygon(cx, cz, boundary)) continue;
+      const a = vertexAt(ix, iz);
+      const c = vertexAt(ix + 1, iz);
+      const d = vertexAt(ix + 1, iz + 1);
+      const e = vertexAt(ix, iz + 1);
+      // py = −lz, so a growing iz means a FALLING py — the winding below is
+      // the one that leaves the face pointing at world +Y after the −90° turn.
+      index.push(a, e, d, a, d, c);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(index);
+  plateUVs(geo, minPX, minPY, widthM);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 /** Ground plate of the FOOTPRINT — the surface texture of the location's
- *  terrain kind (server library, else procedural), over the whole
- *  `plan_width_m` square. The 2D map illustrations are NOT used as ground
- *  (baked-in shadows and objects do not belong in a 3D scene).
+ *  terrain kind (server library, else procedural), over the whole drawn
+ *  BOUNDARY POLYGON (contract v6 Nr. 4; a legacy square is that polygon's four
+ *  corners). The 2D map illustrations are NOT used as ground (baked-in shadows
+ *  and objects do not belong in a 3D scene).
  *
  *  THE PLATE FOLLOWS THE LANDSCAPE (finding 4, 2026-08-13), by the same
  *  mechanism the world plate uses (`scene/ground.liftToField`): it is cut into
@@ -560,8 +739,8 @@ const DRAPE_FLAT_EPS_M = 0.05;
  *  finding I2): a hill at the quarter point of an 80 m footprint is 28 m from
  *  every corner, edge midpoint and the centre, so a 3 × 3 probe read a spread
  *  of 0 and left the plate flat for exactly the layout the drape is for. The
- *  probe now walks the same (`seg`+1)² lattice the vertices sit on — at most
- *  49² samples of plain arithmetic, once, when the tile is built.
+ *  probe walks the same lattice the vertices sit on — at most 49² samples of
+ *  plain arithmetic, once, when the tile is built (`platePolygonGeometry`).
  *
  *  THE MESH FRAME IS UNTOUCHED: the plate keeps its −90° rotation and its
  *  y = 0.04, because `sceneRecipe` writes that height (backstop mode) and
@@ -572,52 +751,24 @@ const DRAPE_FLAT_EPS_M = 0.05;
  *
  *  `at` is the footprint's placement: the centre in WORLD metres plus its yaw,
  *  because the vertices are TILE-LOCAL and the world sampler is not. */
-function groundPlate(widthM: number, tex: THREE.Texture,
+function groundPlate(boundary: [number, number][], widthM: number,
+                     tex: THREE.Texture,
                      material: SurfaceMaterialSpec | null | undefined,
                      at: { x: number; y: number; z: number; yaw: number }): THREE.Mesh {
-  // Die Kachel-Oberfläche geht durch dieselbe Fabrik wie die Szenen-Platten:
-  // eine Wasser-Location soll auf der Karte so aussehen wie im Raum.
+  // The tile surface goes through the same factory as the scene plates: a water
+  // location should look on the map the way it looks in the room.
   const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
   const cos = Math.cos(at.yaw);
   const sin = Math.sin(at.yaw);
   /** The lift of one TILE-LOCAL point over the tile floor. The world lookup is
    *  the caller's business, the RULE is `game/ground.plateLift` — the same one
    *  the figure stands by. The mapping is § A1.1, the one `tileToWorld` uses. */
-  const liftAt = (lx: number, lz: number): number => {
-    if (!worldGroundAt) return 0;
-    return plateLift(worldGroundAt(at.x + lx * cos + lz * sin,
-                                   at.z - lx * sin + lz * cos), at.y);
-  };
-  const seg = Math.min(DRAPE_MAX_SEGMENTS,
-                       Math.max(1, Math.ceil(widthM / DRAPE_STEP_M)));
-  const step = widthM / seg;
-  const half = widthM / 2;
-  // Does the ground move under this footprint at all? Probed on the DRAPE GRID
-  // itself, so nothing between the samples can hide (finding I2).
-  let maxLift = 0;
-  for (let iz = 0; iz <= seg; iz++) {
-    for (let ix = 0; ix <= seg; ix++) {
-      const h = liftAt(-half + ix * step, -half + iz * step);
-      if (h > maxLift) maxLift = h;
-    }
-  }
-  const draped = maxLift > DRAPE_FLAT_EPS_M;
-  const geo = new THREE.PlaneGeometry(widthM, widthM,
-                                      draped ? seg : 1, draped ? seg : 1);
-  if (draped) {
-    // The plate lies in the XY plane and the mesh turns it by −90° about X, so
-    // a vertex (px, py, pz) sits at tile-local (px, pz, −py): the sample point
-    // is (px, −py) and the height is the local z. Read off the vertex rather
-    // than off a grid index, so the geometry's own vertex order cannot drift
-    // away from the lattice probed above.
-    const pos = geo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      pos.setZ(i, liftAt(pos.getX(i), -pos.getY(i)));
-    }
-    pos.needsUpdate = true;
-    geo.computeVertexNormals();
-  }
-  const plate = new THREE.Mesh(geo, mat);
+  const liftAt = worldGroundAt
+    ? (lx: number, lz: number): number => plateLift(
+      worldGroundAt!(at.x + lx * cos + lz * sin, at.z - lx * sin + lz * cos), at.y)
+    : null;
+  const plate = new THREE.Mesh(
+    platePolygonGeometry(boundary, widthM, liftAt), mat);
   plate.rotation.x = -Math.PI / 2;
   plate.position.y = 0.04;
   plate.receiveShadow = true;
@@ -769,12 +920,14 @@ export function buildTile(loc: WorldLocation): Tile {
   const style = detectStyle(loc);
   const isBuilding = !(loc.passable || loc.template_location_id);
   const isArea = isAreaLocation(loc);
-  // THE footprint (§ A1.1): centre at (pos_x, pos_z), edge `plan_width_m`,
-  // turned by `yaw_deg`. Position AND rotation sit on the group, so every
-  // child is placed in tile-local metres — the same frame the scene payload
-  // speaks. The callers filter on `footprintCentre` (`placeableOf`, `addTile`),
-  // so an unplaced location never gets this far; if one ever does it says so
-  // rather than joining a silent heap on the origin.
+  // THE footprint (contract v6, § A1.1): the drawn polygon `boundary` in local
+  // metres, pinned at (pos_x, pos_z) and turned by `yaw_deg`. Position AND
+  // rotation sit on the group, so every child is placed in tile-local metres —
+  // the same frame the scene payload speaks. The callers filter on
+  // `footprintCentre` (`placeableOf`, `addTile`), so an unplaced location never
+  // gets this far; if one ever does it says so rather than joining a silent
+  // heap on the origin.
+  const boundary = footprintBoundary(loc);
   const width = footprintWidth(loc);
   const yaw = footprintYaw(loc);
   const placed = footprintCentre(loc);
@@ -796,7 +949,8 @@ export function buildTile(loc: WorldLocation): Tile {
   ring.visible = false;
 
   const tile: Tile = {
-    loc, group, center, width, yaw, isBuilding, isArea, height: 0,
+    loc, group, center, boundary, area: polygonArea(boundary),
+    width, yaw, isBuilding, isArea, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomDoors: new Map(),
     roomSlots: new Map(), roomSpots: new Map(),
@@ -808,13 +962,18 @@ export function buildTile(loc: WorldLocation): Tile {
 
   const rnd = seededRandom(loc.id);
   const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
-  // Boden = Oberflächen-Textur des Terrain-Typs (Server-Bibliothek AV3D-13,
-  // sonst prozedural) — 2D-Kartenbilder sind kein Fallback mehr. Die Art
-  // kommt vom Server (`surface_kind`), der Legacy-Stil wählt nur noch die
-  // prozedurale Ersatztextur.
-  const groundPlateFor = (): THREE.Mesh => {
+  // Ground = the surface texture of the terrain kind (server library AV3D-13,
+  // else procedural) — 2D map pictures are no fallback any more. The kind comes
+  // from the server (`surface_kind`); the legacy style only picks the
+  // procedural stand-in texture.
+  //
+  // NO BOUNDARY, NO PLATE (v6 Nr. 1): a location with no area is a pin, and a
+  // plate would be a square nobody drew.
+  const groundPlateFor = (): THREE.Mesh | null => {
+    if (!boundary) return null;
     const kind = loc.surface_kind || style;
-    return groundPlate(width, surfaceTexture(kind, fallbackFor(style), width),
+    return groundPlate(boundary, width,
+                       surfaceTexture(kind, fallbackFor(style), width),
                        surfaceMaterialSpec(kind),
                        { x: center.x, y: center.y, z: center.z, yaw });
   };
@@ -833,12 +992,12 @@ export function buildTile(loc: WorldLocation): Tile {
   };
 
   if (!isBuilding) {
-    tile.groundPlate = groundPlateFor();
-    group.add(tile.groundPlate);
+    tile.groundPlate = groundPlateFor() ?? undefined;
+    if (tile.groundPlate) group.add(tile.groundPlate);
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
-    tile.groundPlate = groundPlateFor();
-    group.add(tile.groundPlate);
+    tile.groundPlate = groundPlateFor() ?? undefined;
+    if (tile.groundPlate) group.add(tile.groundPlate);
     tile.height = style === 'forest' ? 3 : 0.6;
     addLabel();
   } else {
@@ -852,13 +1011,18 @@ export function buildTile(loc: WorldLocation): Tile {
     const plinthTex = tKind
       ? surfaceTexture(tKind, fallbackFor(tStyle || ''), width)
       : paversTexture();
-    const plinth = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, width), std({ map: plinthTex }));
-    plinth.rotation.x = -Math.PI / 2;
-    plinth.position.y = 0.045;
-    plinth.receiveShadow = true;
-    group.add(plinth);
-    tile.groundPlate = plinth;
+    // The socle follows the DRAWN OUTLINE like every other plate (v6 Nr. 4):
+    // one shape for the place, whether a house stands on it or not. It carries
+    // no drape of its own — the scene recipe drapes it when a relief arrives.
+    if (boundary) {
+      const plinth = new THREE.Mesh(
+        platePolygonGeometry(boundary, width, null), std({ map: plinthTex }));
+      plinth.rotation.x = -Math.PI / 2;
+      plinth.position.y = 0.045;
+      plinth.receiveShadow = true;
+      group.add(plinth);
+      tile.groundPlate = plinth;
+    }
 
     const spec = buildingSpec(style, loc);
     // Wrap the shell in a group of its own so a server model can replace it

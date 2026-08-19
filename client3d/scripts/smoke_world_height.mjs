@@ -79,10 +79,11 @@
  *      only — both heights are 0, dh = 0 and the client walks on while the
  *      server refuses. That is the rubber band of the acceptance list.
  * (13) THE INNERMOST SCENE RELIEF WINS. At (2, 2) the world says 1.25.
- *      With two enclosing locations — a square of width 80 lifting 0.2 m and
- *      a hut of width 20 lifting 1.0 m — the answer is 1.25 + 1.0 = 2.25:
- *      the narrower footprint is the more specific one (finding F3). With no
- *      patch at all it is the world alone, 1.25.
+ *      With two enclosing locations — a square of edge 80 (6400 m²) lifting
+ *      0.2 m and a hut of edge 20 (400 m²) lifting 1.0 m — the answer is
+ *      1.25 + 1.0 = 2.25: the SMALLER-AREA footprint is the more specific one
+ *      (finding F3, and contract v6 Nr. 6 which replaced the smallest-width
+ *      rule with it). With no patch at all it is the world alone, 1.25.
  * (14) THE PLATEAU IS FLAT, which is what makes a place walkable on a hill:
  *      the server levels the field under every footprint, so BOTH ends of a
  *      step inside it read the same height (5 on the levelled field below),
@@ -425,10 +426,13 @@ checkBool('atan(1.25/1) = 51.34 deg > 40 -> the step is refused',
 checkBool('RED COUNTER-PROBE: without the world term the mirror sees nothing',
   slopeBlocks(groundLift(0, []) - groundLift(0, []), 1, STEP, SLOPE), false);
 
-const PATCHES = [{ width: 80, lift: 0.2 }, { width: 20, lift: 1 }];
+// Two enclosing footprints as AREAS in m² (contract v6 Nr. 6): a square of
+// edge 80 is 6400 m², a hut of edge 20 is 400 m². The smallest area is the
+// most specific answer — the same order the old smallest-width rule gave.
+const PATCHES = [{ area: 6400, lift: 0.2 }, { area: 400, lift: 1 }];
 check('the innermost scene relief wins',
   groundLift(sampleWorldHeight(FIELD, 2, 2), PATCHES), 2.25);
-check('...and the widest alone would have said',
+check('...and the largest alone would have said',
   groundLift(sampleWorldHeight(FIELD, 2, 2), [PATCHES[0]]), 1.45);
 check('no scene relief: the world alone',
   groundLift(sampleWorldHeight(FIELD, 2, 2), []), 1.25);

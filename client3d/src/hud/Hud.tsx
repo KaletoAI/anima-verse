@@ -44,7 +44,7 @@ import { elevatorOptions } from '../game/elevator';
 import { getAudio } from '../game/audio';
 import { loadPrefs, loadScatterPrefs, savePrefs, saveScatterPrefs, PREFS_KEY,
   SCATTER_PREFS_KEY, type Prefs, type ScatterPrefs } from '../game/prefs';
-import { SHOW_ALL_KEY } from '../game/fog';
+import { SHOW_ALL_KEY } from '../game/prefs';
 import { MINIMAP_PREF_KEY } from '../game/minimap';
 import {
   afterOwnLine, createVoiceover, newSceneLines, roomChanged, sceneStampOf,
@@ -300,8 +300,8 @@ export function Hud({ avatar, username, role }: {
   }, []);
 
   /**
-   * "Show all locations" (Etappe 5) — the administrator's way past the fog of
-   * war. A LOCAL switch like the two above, but it decides which VIEW the
+   * "Show all locations" (Etappe 5) — the administrator's way past the
+   * knowledge filter. A LOCAL switch like the two above, but it decides which VIEW the
    * client fetches (`/play/worldmap?all=1`).
    *
    * It applies LIVE: `main.ts` fetches the other view and reconciles the world

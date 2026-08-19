@@ -79,9 +79,11 @@
  * ones that are GONE with the cells:
  *   - the location the avatar stands in is never a candidate (one does not
  *     enter where one is);
- *   - a location without openings offers nothing, however close one stands
- *     (decision 2026-08-04: only an authored opening is an entrance, and the
- *     server refuses the crossing anywhere else);
+ *   - a location WITH openings offers entry at them and nowhere else
+ *     (decision 2026-08-04: the server refuses the crossing anywhere else);
+ *   - a location with NO opening has a FREE boundary, and since contract v6
+ *     its whole DRAWN RIM is the offer (the polygon successor of "anywhere
+ *     along the edge"). Without an outline it has no rim and offers nothing;
  *   - 4-ADJACENCY and the crossed-EDGE filter are gone: on a free plane a
  *     crossing has no edge, only a distance — which is what the server
  *     measures too;
@@ -99,7 +101,8 @@
  *   avatar (50, 40)  -> HALL 5, BARN 5: both out of reach       -> null
  *   avatar (50, 44)  -> HALL 1 m, and HALL is where the avatar already IS
  *                       (myLocId) -> null
- *   avatar (63, 50)  -> SHED has no openings -> null, whatever the distance
+ *   avatar (63, 50)  -> SHED has neither openings nor an outline -> null,
+ *                       whatever the distance
  *   avatar (50, 43) with a LOCKED HALL and BARN 8 m away
  *                    -> HALL still, with `locked` in the caller's hands
  *   avatar exactly between two open ones: the nearer wins;
@@ -204,17 +207,24 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-const SRC = join(ROOT, 'client3d/src/game/enterLocation.ts');
+const SRC_DIR = join(ROOT, 'client3d/src/game');
+/** `enterLocation.ts` and the one module it imports — the polygon primitives
+ *  the free-boundary rule is measured with (contract v6). Both are pure TS with
+ *  no runtime dependency, so a plain transpile is enough; the only fix-up is
+ *  the extension Node's ESM loader wants. */
+const MODULES = ['polygon', 'enterLocation'];
 
 async function loadEnterLocation() {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'entermath-'));
   try {
-    const source = await readFile(SRC, 'utf8');
-    const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
-    const file = join(dir, 'enterLocation.mjs');
-    await writeFile(file, out.code, 'utf8');
-    return await import(`file://${file}`);
+    for (const name of MODULES) {
+      const source = await readFile(join(SRC_DIR, `${name}.ts`), 'utf8');
+      const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
+      await writeFile(join(dir, `${name}.mjs`),
+        out.code.replace(/(from\s*["'])(\.\/[\w-]+)(["'])/g, '$1$2.mjs$3'), 'utf8');
+    }
+    return await import(`file://${join(dir, 'enterLocation.mjs')}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -314,10 +324,68 @@ async function main() {
     entryOfferNear({ x: 50, z: 40 }, '', [HALL, BARN]), null);
   check('the location one is IN is never offered',
     entryOfferNear({ x: 50, z: 44 }, 'hall', [HALL, BARN]), null);
-  check('a location without openings offers nothing at any distance',
+  check('a location without openings AND without an outline offers nothing',
     entryOfferNear({ x: 63, z: 50 }, '', [SHED]), null);
-  check('...not even standing on its edge',
+  check('...not even standing where its rim would be',
     entryOfferNear({ x: 60, z: 50 }, '', [SHED]), null);
+
+  /**
+   * --- A FREE BOUNDARY IS ITS WHOLE RIM (contract v6 "Gebiete") ------------
+   *
+   * A location with NO authored opening never said where its way in is, so
+   * anywhere along the DRAWN OUTLINE counts — measured as the distance to the
+   * polygon rim, not to the edges of a square (the square is only that
+   * polygon's special case, and the client has no code path for it any more).
+   *
+   * THE MEADOW: pin (50, 50), yaw 0, outline the 10 m square
+   * (−5,−5) (5,−5) (5,5) (−5,5) — clockwise in map view, the stored winding.
+   *
+   *   avatar (57, 50) -> local (7, 0); the nearest rim point is local (5, 0),
+   *     2 m away, so world (55, 50) and dist 2. INWARD: that point sits on the
+   *     edge (5,−5)→(5,5), direction (0, 10); the interior lies to the left of
+   *     a clockwise edge, which is (−dz, dx)/|d| = (−1, 0) — and −x is indeed
+   *     where the middle of the square is.
+   *   avatar (59, 50) -> 4 m from the rim, past ENTER_RADIUS = 3 -> nothing.
+   *   avatar (52, 50) -> INSIDE, 3 m from the same rim point: the rim distance
+   *     does not care which side one is on, so the offer stands at exactly the
+   *     radius. (One normally stands IN the place then, and `myLocId` drops it
+   *     — this is the boundary case of the measurement, not of the UX.)
+   *
+   * THE TURNED MEADOW: the same square at yaw 90.
+   *   avatar (50, 43): world→local turns (0, −7) into (7, 0) — the same local
+   *     point as the first case — so the rim point is local (5, 0) again, at
+   *     2 m. Turned back it is world (50, 45), and the inward normal (−1, 0)
+   *     becomes world (0, 1): south, into the square through its north edge.
+   */
+  console.log('\nentryOfferNear — a free boundary is its whole rim (v6)');
+  const SQUARE = [[-5, -5], [5, -5], [5, 5], [-5, 5]];
+  const MEADOW = {
+    locId: 'meadow',
+    footprint: { x: 50, z: 50, yaw: 0 },
+    openings: [],
+    boundary: SQUARE,
+  };
+  check('2 m outside the rim: offered, at the rim point, with its inward normal',
+    entryOfferNear({ x: 57, z: 50 }, '', [MEADOW]),
+    { locId: 'meadow', point: { x: 55, z: 50 }, edge: null, dist: 2,
+      inward: { x: -1, z: 0 } }, EPS);
+  check('4 m outside: out of reach', entryOfferNear({ x: 59, z: 50 }, '', [MEADOW]), null);
+  check('3 m INSIDE the rim: the distance is a distance, so it stands',
+    entryOfferNear({ x: 52, z: 50 }, '', [MEADOW])?.dist, 3, EPS);
+  check('the place one is IN is dropped before any of that',
+    entryOfferNear({ x: 52, z: 50 }, 'meadow', [MEADOW]), null);
+  const TURNED = { ...MEADOW, locId: 'turned',
+                   footprint: { x: 50, z: 50, yaw: RAD(90) } };
+  check('yaw 90: the rim point and the normal turn with the footprint',
+    entryOfferNear({ x: 50, z: 43 }, '', [TURNED]),
+    { locId: 'turned', point: { x: 50, z: 45 }, edge: null, dist: 2,
+      inward: { x: 0, z: 1 } }, EPS);
+  // An authored opening still wins over the rim: a place that says where its
+  // way in is has no free boundary at all (`freeBoundaryOf`), and the offer is
+  // the opening's own point.
+  check('with an authored opening the rim is not consulted',
+    entryOfferNear({ x: 50, z: 43 }, '', [{ ...HALL, boundary: SQUARE }]),
+    { locId: 'hall', point: { x: 50, z: 45 }, edge: 'N', dist: 2 }, EPS);
 
   console.log('\nentryOfferNear — open beats locked, then nearest');
   const LOCKED_HALL = { ...HALL, locked: true };

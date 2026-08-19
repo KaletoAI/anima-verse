@@ -363,7 +363,7 @@ const QUAD = new THREE.PlaneGeometry(1, 1);
  *  - `MeshBasicMaterial`, because the light is already IN the texture — a lit
  *    material would light the picture of a lit tree twice.
  *  - `fog: true` (three's default, named here because it is the point): the
- *    stage lives in the fog band, and the veil is what makes its far edge
+ *    stage lives in the distance-haze band, and that haze is what makes its far edge
  *    invisible.
  *  - `side: FrontSide` — the quad turns to the camera, so its back is never
  *    seen. Doubling the faces would double the fill for nothing.

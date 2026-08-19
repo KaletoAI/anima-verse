@@ -340,7 +340,7 @@ export function instanceVisible(
 /** Beyond this nothing of the scatter is drawn at all, in metres — the end of
  *  the impostor window and the end of the wood.
  *
- *  400 m sits inside the fog band (the veil closes the view at 520 m,
+ *  400 m sits inside the distance-haze band (it closes the view at 520 m,
  *  `scene/engine.ts`), which is what makes the stage affordable to end: a
  *  billboard that vanishes at 400 m does so behind enough haze that nobody
  *  sees it go. A CONSTANT and not a preference: the object-LOD menu sets the

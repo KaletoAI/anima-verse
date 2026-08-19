@@ -20,7 +20,7 @@
  * shells of the world view (`scene/tiles.ts`, and the server model in
  * `scene/sceneRecipe.ts`). NOT the ground itself, not the figures, not the
  * interior geometry of the open detail view (the existing tile fade rules
- * there), not water and not the fog veil.
+ * there) and not water.
  *
  * THE UNIFORMS ARE SHARED, exactly like the surface clock `surfaceTimeUniform`
  * of @anima/scene-render: one object per value, written ONCE per frame by
