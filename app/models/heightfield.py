@@ -203,14 +203,26 @@ def _invalidate() -> None:
             "Could not re-raster the heightfield after a write: %s", exc)
 
 
-def placed_footprints() -> List[Tuple[float, float, float, float]]:
-    """``(cx, cz, width_m, yaw_deg)`` of every location that LEVELS the ground.
+def placed_footprints() -> List[Tuple[float, float, float,
+                                      List[Tuple[float, float]]]]:
+    """``(cx, cz, yaw_deg, boundary points)`` of every location that LEVELS
+    the ground — the POLYGON footprint (contract v6 no. 1 and no. 7).
 
     The second input of the raster since E8 task 4: the ground under such a
     footprint is levelled to a plateau, so where those places stand is part of
-    what the world's relief IS. Rounded to the centimetre and the tenth of a
+    what the world's relief IS. The outline comes from
+    ``world_geometry.effective_boundary``, the ONE place that says "a square is
+    just a special case of the polygon": a drawn ``map3d.boundary`` wins, a
+    location still carrying only the legacy ``plan_width_m`` dial contributes
+    its four corners instead. So every location that levelled before keeps its
+    plateau, and a redrawn outline reshapes it.
+
+    The points are LOCAL metres around the pin — the frame the plateau pass
+    tests in (one inverse pin transform per raster point, no per-query polygon
+    rotation). Everything is rounded to the centimetre and the tenth of a
     degree — the precision the placement itself is stored at — so the
-    signature over this list does not flap on float noise.
+    signature over this list does not flap on float noise, while a boundary
+    point moved by a centimetre does change it.
 
     **FLATTENING IS OPT-IN** (decision 2026-08-13): only a location whose
     ``level_ground`` flag is set appears here. The landscape is authored and a
@@ -225,17 +237,18 @@ def placed_footprints() -> List[Tuple[float, float, float, float]]:
     stale and is rebuilt — without a single extra field anywhere. An unflagged
     place needs no grid coverage either, because it writes nothing into it.
     """
-    from app.core.world_geometry import placed_footprint
+    from app.core.world_geometry import effective_boundary
     from app.models.world import list_locations
-    out: List[Tuple[float, float, float, float]] = []
+    out: List[Tuple[float, float, float, List[Tuple[float, float]]]] = []
     for loc in list_locations():
         if not loc.get("level_ground"):
             continue
-        fp = placed_footprint(loc)
-        if fp is None:
+        eff = effective_boundary(loc)
+        if eff is None:
             continue
-        cx, cz, width, yaw = fp
-        out.append((round(cx, 2), round(cz, 2), round(width, 2), round(yaw, 1)))
+        cx, cz, yaw, points = eff
+        out.append((round(cx, 2), round(cz, 2), round(yaw, 1),
+                    [(round(lx, 2), round(lz, 2)) for lx, lz in points]))
     return out
 
 
@@ -277,8 +290,9 @@ def height_sig() -> str:
     was built from, so "the areas changed" and "the grid is stale" are the same
     question asked once.
 
-    THE PLACEMENTS BELONG IN IT (E8 task 4). A moved, turned, resized, newly
-    placed or deleted location moves its PLATEAU with it, which changes the
+    THE PLACEMENTS BELONG IN IT (E8 task 4), and since v6 that means the
+    POLYGON POINTS as well as the pin: a moved, turned, REDRAWN, newly placed
+    or deleted location moves its PLATEAU with it, which changes the
     world's relief without a single height area being touched. A client
     holding the old grid would drape its ground around a hole where the place
     used to stand — and the server, which samples the same field, would agree

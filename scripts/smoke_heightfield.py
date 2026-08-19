@@ -733,6 +733,16 @@ def square(x0, z0, x1, z1):
     return [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
 
 
+def fp_square(cx, cz, width, yaw=0.0):
+    """A LEVELLING footprint in the v6 shape: pin, yaw, outline in LOCAL
+    metres. Exactly what ``effective_boundary`` synthesizes for a location
+    that still carries only the legacy ``plan_width_m`` dial, written out so
+    the square fixtures below stay the squares they always were."""
+    half = width / 2.0
+    return (float(cx), float(cz), float(yaw),
+            [(-half, -half), (half, -half), (half, half), (-half, half)])
+
+
 def at(field, i, j):
     """The stored support point (i, j) — the raster, not a sample."""
     return field["heights"][j][i]
@@ -1060,16 +1070,16 @@ def set_level_ground(loc_id, on):
 def unfiltered_footprints():
     """THE MUTANT of the red counter-probe below: ``placed_footprints`` as it
     was before the decision — every placed location levels, flag or no flag."""
-    from app.core.world_geometry import placed_footprint
+    from app.core.world_geometry import effective_boundary
     from app.models.world import list_locations
     out = []
     for loc in list_locations():
-        fp = placed_footprint(loc)
-        if fp is None:
+        eff = effective_boundary(loc)
+        if eff is None:
             continue
-        cx, cz, width, yaw = fp
-        out.append((round(cx, 2), round(cz, 2), round(width, 2),
-                    round(yaw, 1)))
+        cx, cz, yaw, points = eff
+        out.append((round(cx, 2), round(cz, 2), round(yaw, 1),
+                    [(round(lx, 2), round(lz, 2)) for lx, lz in points]))
     return out
 
 
@@ -1495,10 +1505,10 @@ T14_TERRAIN = [{"kind": "g", "polygon": square(264, 240, 396, 264),
 T14_CATALOG = {"g": {"passable": True, "speed_factor": 1.0,
                      "meta": {"relief_amplitude_m": 1.0,
                               "relief_wave_m": 16.0}}}
-T14_BIG = (340.0, 140.0, 40.0, 0.0)
-T14_SMALL = (356.0, 152.0, 8.0, 0.0)
-T14_WEST = (260.0, 220.0, 8.0, 0.0)
-T14_FAR = (2000.0, 2000.0, 20.0, 0.0)
+T14_BIG = fp_square(340.0, 140.0, 40.0)
+T14_SMALL = fp_square(356.0, 152.0, 8.0)
+T14_WEST = fp_square(260.0, 220.0, 8.0)
+T14_FAR = fp_square(2000.0, 2000.0, 20.0)
 T14_FPS = [T14_BIG, T14_SMALL, T14_WEST, T14_FAR]
 T14_RELIEF = hf.relief_inputs(T14_TERRAIN, T14_CATALOG)
 
@@ -1691,20 +1701,27 @@ check("...and the mutant matches it at none of them",
 
 def t14_tile_widest_last(tx, tz):
     """RED COUNTER-PROBE (b): the plateau pass with the sort key REVERSED —
-    narrowest first, so the widest writes last and wins where they overlap."""
-    from app.core.world_geometry import footprint_distance
+    smallest area first, so the largest writes last and wins where they
+    overlap."""
+    from app.core.world_geometry import (local_to_world, polygon_area,
+                                         polygon_distance,
+                                         polygon_interior_point,
+                                         world_to_local)
     ox, oz = tx * hf.TILE_M, tz * hf.TILE_M
     n = hf.TILE_POINTS
     s = T14_S
     boxes = hf.area_boxes(T14_AREAS)
     heights = hf._window_grid(ox, oz, s, n, n, boxes, T14_RELIEF)
-    for cx, cz, width, yaw in sorted(T14_FPS, key=lambda fp: float(fp[2])):
-        h0 = hf.plateau_height(cx, cz, s, boxes, T14_RELIEF)
+    for cx, cz, yaw, points in sorted(T14_FPS,
+                                      key=lambda fp: polygon_area(fp[3])):
+        inner = polygon_interior_point(points)
+        wx, wz = local_to_world(inner[0], inner[1], cx, cz, yaw)
+        h0 = hf.plateau_height(wx, wz, s, boxes, T14_RELIEF)
         for j in range(n):
             pz = oz + s * j
             for i in range(n):
-                if footprint_distance(ox + s * i, pz, cx, cz, width,
-                                      yaw) <= s + 1e-9:
+                lx, lz = world_to_local(ox + s * i, pz, cx, cz, yaw)
+                if polygon_distance(lx, lz, points) <= s + 1e-9:
                     heights[j][i] = h0
     return [[round(v, 3) for v in row] for row in heights]
 
@@ -1730,11 +1747,13 @@ store.save_height_area(T14_A2)
 terrain.save_area({"kind": "g", "polygon": square(264, 240, 396, 264)})
 for _name, _fp in [("T14 Big", T14_BIG), ("T14 Small", T14_SMALL),
                    ("T14 West", T14_WEST), ("T14 Far", T14_FAR)]:
-    place_square(_name, _fp[0], _fp[1], _fp[2])
+    # The outline's own edge, so the placed location and the literal above
+    # describe the same square: local x runs from -half to +half.
+    place_square(_name, _fp[0], _fp[1], _fp[3][1][0] - _fp[3][0][0])
 # ``list_locations`` hands them out by NAME, so the DB order is Big, Far,
 # Small, West rather than the fixture's. It changes nothing: the pass sorts by
-# width (40, 20, 8, 8) and the only pair of equal width — Small and West — does
-# not overlap, so no point is written by both. The tiles are compared below.
+# AREA (1600, 400, 64, 64 m²) and the only pair of equal area — Small and West
+# — does not overlap, so no point is written by both. Tiles compared below.
 check("the world hands the raster exactly the four footprints",
       store.placed_footprints(), [T14_BIG, T14_FAR, T14_SMALL, T14_WEST])
 check("tile_index() is the hand-derived set", sorted(hf.tile_index()),

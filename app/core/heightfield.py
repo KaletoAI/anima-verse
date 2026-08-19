@@ -27,8 +27,9 @@ one failure mode that cannot be seen in a screenshot and ruins every stored
 comparison (inventory finding 5).
 
 **THE PLATEAU PASS RUNS AFTER THE AREAS** (E8 task 4, :func:`level_plateaus`).
-The authored areas are rastered first, purely; then the footprint of every
-location THAT ASKED FOR IT is pinned flat to the ground under its own centre.
+The authored areas are rastered first, purely; then the footprint POLYGON of
+every location THAT ASKED FOR IT (contract v6 no. 7) is pinned flat to the
+ground read at a guaranteed interior point of that outline.
 That order is the whole trick — the plateau's height is read from the authored
 landscape BEFORE any of it is levelled, so a hill keeps carrying the place
 standing on it.
@@ -609,15 +610,49 @@ def _axis_points(low: float, high: float, step: float) -> int:
     return int(math.ceil((high + step - origin) / step)) + 1
 
 
-def _footprint_box(fp: Tuple[float, float, float, float]
-                   ) -> Tuple[float, float, float, float]:
-    """Axis-aligned box around a rotated footprint square (cx, cz, w, yaw)."""
-    from app.core.world_geometry import footprint_corners
-    cx, cz, width, yaw = fp
-    corners = footprint_corners(cx, cz, width, yaw)
-    xs = [p[0] for p in corners]
-    zs = [p[1] for p in corners]
-    return (min(xs), min(zs), max(xs), max(zs))
+#: A levelling footprint as the raster receives it (contract v6 no. 7):
+#: the anchor pin, its yaw, and the boundary polygon in LOCAL metres —
+#: exactly what ``models.heightfield.placed_footprints`` hands out.
+Footprint = Tuple[float, float, float, List[Tuple[float, float]]]
+
+
+def _footprint_box(fp: Footprint
+                   ) -> Optional[Tuple[float, float, float, float]]:
+    """Axis-aligned WORLD box around a polygon footprint, or None for junk.
+
+    The v6 successor of the half-diagonal box around a rotated square: the
+    outline goes through the ONE § A1.1 transform and the bounds are taken of
+    the world points. None means "this footprint describes no surface" — fewer
+    than three readable points — and every caller drops it, so a malformed
+    outline can neither grow a grid nor index a tile.
+    """
+    from app.core.world_geometry import polygon_bounds, polygon_local_to_world
+    try:
+        cx, cz, yaw, points = fp
+    except (TypeError, ValueError):
+        return None
+    world = polygon_local_to_world(points, float(cx), float(cz), float(yaw))
+    if world is None:
+        return None
+    return polygon_bounds(world)
+
+
+def _boxed_footprints(footprints: Sequence[Footprint]
+                      ) -> List[Tuple[Footprint,
+                                      Tuple[float, float, float, float]]]:
+    """The footprints that describe a surface, each with its world box.
+
+    ONE place decides what "usable" means, so the grid growth, the tile index
+    and the plateau pass cannot disagree about which places level.
+    """
+    out: List[Tuple[Footprint, Tuple[float, float, float, float]]] = []
+    for fp in (footprints or ()):
+        if not fp:
+            continue
+        box = _footprint_box(fp)
+        if box is not None:
+            out.append((fp, box))
+    return out
 
 
 def _union(boxes: Sequence[Tuple[float, float, float, float]]
@@ -797,14 +832,25 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     landscape runs through it, and keeping the place usable is an authoring
     matter.
 
-    THE HEIGHT OF THE PLATEAU is the authored ground at the footprint's CENTRE,
-    ``ground_y(pos_x, pos_z)`` — read BEFORE anything is levelled, which is why
-    every ``h0`` below is taken first and only then written. Reading as we go
-    would let the first plateau raise the ground the second one then reads, so
-    two neighbouring places would answer differently depending on the order the
-    DB returned them. Since v2 it is :func:`plateau_height` that answers, from
-    the areas themselves rather than from ``heights``: the number is the same
-    one on the overview, and it belongs to the world, not to the window.
+    SINCE v6 THE FOOTPRINT IS A POLYGON (contract v6 no. 1 and no. 7). What
+    changes is only the shape of the test: "inside" is ``polygon_distance == 0``
+    in the location's own local frame, "ramp ring" is a distance of at most one
+    cell to the outline. A square is that polygon's four corners, so a world
+    that never drew a boundary rasters to exactly the same numbers as before.
+
+    THE HEIGHT OF THE PLATEAU is the authored ground at a GUARANTEED INTERIOR
+    POINT of the outline (``polygon_interior_point``, mapped through the pin) —
+    read BEFORE anything is levelled, which is why every ``h0`` below is taken
+    first and only then written. Reading as we go would let the first plateau
+    raise the ground the second one then reads, so two neighbouring places
+    would answer differently depending on the order the DB returned them. Since
+    v2 it is :func:`plateau_height` that answers, from the areas themselves
+    rather than from ``heights``: the number is the same one on the overview,
+    and it belongs to the world, not to the window. The pin itself is NOT that
+    point any more: a concave outline (an L, a U) may leave its own centroid —
+    and its own anchor — outside the polygon, and the plateau would then be
+    pinned to a height nobody standing in the place ever touches. For a
+    centred square the interior point IS the centroid, i.e. the pin.
 
     THE PINNED REGION IS THE FOOTPRINT DILATED BY ONE CELL — the flat-hull
     pattern of the scene relief (``scatter_curves.terrain_grid``), for the same
@@ -813,7 +859,11 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     rise through the floor of the place at its own edge. With the ring, every
     cell that touches the footprint has four pinned corners, the plateau is
     exactly flat across the whole place, and THE RAMP is the one cell between
-    the ring and the untouched landscape.
+    the ring and the untouched landscape. Note what that means and what it does
+    not: the ring itself carries the FULL plateau height, and the ramp is the
+    bilinear span between the outermost pinned lattice point and the first
+    untouched one — the interpolation lives in the sampler, not in a per-point
+    blend here (§ A16.1).
 
     A ramp of one cell is what makes the plateau reachable at all — and ONE
     CELL IS THE STEP OF THE GRID THIS RUNS ON, so on a tile it is
@@ -830,46 +880,68 @@ def level_plateaus(origin_x: float, origin_z: float, step: float,
     OVERLAPS: THE SMALLEST FOOTPRINT WINS, the rule ``location_at_point`` and
     ``relief.ground_lift_at`` already resolve nesting by — the hut on the
     village square is the more specific answer about the square metre it
-    stands on. It is implemented by levelling the widest first, so the
-    narrowest writes last; equal widths keep the caller's (stable) order,
-    where the later one wins.
+    stands on. Since v6 no. 6 "smallest" is measured as AREA, not as width:
+    polygons have no single edge to compare. It is implemented by levelling
+    the largest area first, so the smallest writes last; equal areas keep the
+    caller's (stable) order, where the later one wins.
     """
     rows = len(heights)
     cols = len(heights[0]) if rows else 0
     if rows < 2 or cols < 2 or step <= 0 or not footprints:
         return
-    from app.core.world_geometry import footprint_distance
-    # Widest first — see the docstring: the last write wins, so the smallest
-    # footprint has the final say. ``sorted`` is stable, so equal widths keep
-    # the order they arrived in.
-    ordered = sorted(footprints, key=lambda fp: -float(fp[2]))
-    # EVERY plateau height first, from the untouched landscape.
-    levels = [plateau_height(fp[0], fp[1], step, boxes, relief)
-              for fp in ordered]
-    for (cx, cz, width, yaw), h0 in zip(ordered, levels):
-        # Index window: the whole rotated square (half-diagonal) plus the
-        # dilation ring, so no pinned point is missed and none of the world
-        # outside it is visited.
-        reach = width * 0.7071067811865476 + step
-        i0 = max(0, int(math.floor((cx - reach - origin_x) / step)))
-        i1 = min(cols - 1, int(math.ceil((cx + reach - origin_x) / step)))
-        j0 = max(0, int(math.floor((cz - reach - origin_z) / step)))
-        j1 = min(rows - 1, int(math.ceil((cz + reach - origin_z) / step)))
+    from app.core.world_geometry import (local_to_world, polygon_area,
+                                         polygon_distance,
+                                         polygon_interior_point,
+                                         world_to_local)
+    usable: List[Tuple[float, float, float, float,
+                       List[Tuple[float, float]],
+                       Tuple[float, float, float, float],
+                       Tuple[float, float]]] = []
+    for fp, box in _boxed_footprints(footprints):
+        cx, cz, yaw, points = float(fp[0]), float(fp[1]), float(fp[2]), fp[3]
+        inner = polygon_interior_point(points)
+        if inner is None:
+            # A degenerate outline (all points on one line) encloses nothing:
+            # there is no square metre to stand on, so there is nothing to
+            # level either.
+            continue
+        usable.append((polygon_area(points), cx, cz, yaw, points, box,
+                       local_to_world(inner[0], inner[1], cx, cz, yaw)))
+    if not usable:
+        return
+    # Largest area first — see the docstring: the last write wins, so the
+    # smallest footprint has the final say. ``sorted`` is stable, so equal
+    # areas keep the order they arrived in.
+    ordered = sorted(usable, key=lambda entry: -entry[0])
+    # EVERY plateau height first, from the untouched landscape, each read at
+    # its own footprint's guaranteed interior point.
+    levels = [plateau_height(entry[6][0], entry[6][1], step, boxes, relief)
+              for entry in ordered]
+    for (_area, cx, cz, yaw, points, box, _inner), h0 in zip(ordered, levels):
+        # Index window: the outline's own world bounds plus the ramp width, so
+        # no pinned point is missed and none of the world outside it is
+        # visited. (The v5 half-diagonal of a square was the same idea with
+        # the only measure a square offers.)
+        i0 = max(0, int(math.floor((box[0] - step - origin_x) / step)))
+        i1 = min(cols - 1, int(math.ceil((box[2] + step - origin_x) / step)))
+        j0 = max(0, int(math.floor((box[1] - step - origin_z) / step)))
+        j1 = min(rows - 1, int(math.ceil((box[3] + step - origin_z) / step)))
         for j in range(j0, j1 + 1):
             pz = origin_z + j * step
             row = heights[j]
             for i in range(i0, i1 + 1):
-                # ``footprint_distance`` is 0 anywhere INSIDE the square, so
-                # this one test is "inside or within one cell of it" — the
-                # exact distance to the rotated rectangle, not a bounding box.
-                if footprint_distance(origin_x + i * step, pz,
-                                      cx, cz, width, yaw) <= step + 1e-9:
+                # The test runs in the location's LOCAL frame — one inverse pin
+                # transform, then the exact polygon distance. It is 0 anywhere
+                # INSIDE the outline, so this single comparison means "inside
+                # or within one cell of it", concave notches included.
+                lx, lz = world_to_local(origin_x + i * step, pz, cx, cz, yaw)
+                if polygon_distance(lx, lz, points) <= step + 1e-9:
                     row[i] = h0
 
 
 def rasterize(areas: Sequence[Dict[str, Any]],
               step_m: float = 0.0,
-              footprints: Sequence[Tuple[float, float, float, float]] = (),
+              footprints: Sequence[Footprint] = (),
               terrain_areas: Sequence[Dict[str, Any]] = (),
               terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None
               ) -> Dict[str, Any]:
@@ -887,7 +959,8 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     A point no area covers is 0.0 — the unpainted world is flat, and there is
     no "default height" to configure.
 
-    ``footprints`` are the LEVELLING locations ``(cx, cz, width_m, yaw_deg)`` —
+    ``footprints`` are the LEVELLING locations, each a :data:`Footprint`
+    ``(cx, cz, yaw_deg, boundary points in local metres)`` —
     the ones whose ``level_ground`` flag is set, filtered by the caller
     (``models.heightfield.placed_footprints``); the PLATEAU PASS
     (:func:`level_plateaus`) runs over the finished area raster. An unflagged
@@ -931,8 +1004,8 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     # as a cliff.
     # Footprints that cannot touch any authored height are left out
     # (:func:`_relevant_footprints`).
-    fp_boxes = [_footprint_box(fp) for fp in (footprints or ())
-                if fp and float(fp[2]) > 0]
+    boxed = _boxed_footprints(footprints)
+    fp_boxes = [box for _fp, box in boxed]
     step = float(step_m) if step_m and step_m > 0 else _step_for(area_bounds)
     bounds = area_bounds
     # The ring margin depends on the step and the step on the bounds, so the
@@ -953,8 +1026,8 @@ def rasterize(areas: Sequence[Dict[str, Any]],
 
     heights = _window_grid(origin_x, origin_z, step, cols, rows, boxes, relief)
     # …and only now the places standing on that landscape (E8 task 4).
-    placed = [fp for fp in (footprints or ()) if fp and float(fp[2]) > 0]
-    level_plateaus(origin_x, origin_z, step, heights, placed, boxes, relief)
+    level_plateaus(origin_x, origin_z, step, heights,
+                   [fp for fp, _box in boxed], boxes, relief)
     return {"origin_x": round(origin_x, 3), "origin_z": round(origin_z, 3),
             "step_m": step, "rows": rows, "cols": cols,
             "heights": [[round(v, 3) for v in row] for row in heights]}
@@ -1034,8 +1107,7 @@ def tile_index_from(areas: Sequence[Dict[str, Any]],
         # a hundred plateaus at 0 on ground that is already 0.
         return frozenset()
     area_bounds = _union(boxes)
-    fp_boxes = [_footprint_box(fp) for fp in (footprints or ())
-                if fp and float(fp[2]) > 0]
+    fp_boxes = [box for _fp, box in _boxed_footprints(footprints)]
     # The step is the TILE step here, never the overview's and never a
     # coarsened one: tiles are the fine raster by definition, so the ramp ring
     # they must hold is 2 m wide.
@@ -1050,7 +1122,7 @@ def tile_index_from(areas: Sequence[Dict[str, Any]],
 def rasterize_tile(
         tx: int, tz: int,
         areas: Sequence[Dict[str, Any]],
-        footprints: Sequence[Tuple[float, float, float, float]] = (),
+        footprints: Sequence[Footprint] = (),
         terrain_areas: Sequence[Dict[str, Any]] = (),
         terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
@@ -1072,9 +1144,9 @@ def rasterize_tile(
     reach into the window — including the ones the tile index calls irrelevant.
     Those level 0 onto 0 and so cannot change a height (which is why they need
     no tile of their own), but they are kept in the list because ORDER decides
-    on overlap: the widest is levelled first and the narrowest has the final
-    say, and dropping a member of that chain would let a wide plateau show
-    through where a narrow one flattened it.
+    on overlap: the largest AREA is levelled first and the smallest has the
+    final say, and dropping a member of that chain would let a wide plateau
+    show through where a narrow one flattened it.
     """
     origin_x = tx * TILE_M
     origin_z = tz * TILE_M
@@ -1086,11 +1158,10 @@ def rasterize_tile(
     window = (origin_x, origin_z, origin_x + TILE_M, origin_z + TILE_M)
     # Only the footprints that can write into this window, in the order they
     # arrived (``sorted`` in the pass is stable, so filtering cannot reorder
-    # the ones that stay). A footprint levels its square plus one cell, i.e. at
-    # most its grown box — anything not overlapping the window is a no-op here.
-    near = [fp for fp in (footprints or ())
-            if fp and float(fp[2]) > 0
-            and _overlaps(_grown(_footprint_box(fp), step), window)]
+    # the ones that stay). A footprint levels its outline plus one cell, i.e.
+    # at most its grown box — anything not overlapping the window is a no-op.
+    near = [fp for fp, box in _boxed_footprints(footprints)
+            if _overlaps(_grown(box, step), window)]
     level_plateaus(origin_x, origin_z, step, heights, near, boxes, relief)
     return {"origin_x": origin_x, "origin_z": origin_z, "step_m": step,
             "rows": TILE_POINTS, "cols": TILE_POINTS,
