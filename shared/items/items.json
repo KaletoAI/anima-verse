@@ -422,15 +422,16 @@
       "image_prompt": "",
       "effects": null,
       "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
-          "sport"
+          "sport",
+          "beach"
         ],
-        "lora": {},
-        "slots": [
-          "outer"
-        ]
+        "lora": {}
       }
     },
     {
@@ -713,13 +714,11 @@
       },
       "outfit_piece": {
         "slots": [
-          "bottom",
           "underwear_bottom"
         ],
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
-          "pool",
           "beach"
         ],
         "lora": {}
@@ -1143,7 +1142,256 @@
         ],
         "lora": {}
       }
+    },
+    {
+      "id": "item_555a7a01",
+      "name": "Black Lederjacket",
+      "category": "outfit_piece",
+      "prompt_fragment": "black lether jacket, slim fit, zipper",
+      "created_at": "2026-04-15T12:12:12.235604",
+      "description": "",
+      "description_de": "",
+      "image": "1776801675.png",
+      "rarity": "rare",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "effects": null,
+      "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
+        "covers": [
+          "underwear_top"
+        ],
+        "partially_covers": [],
+        "outfit_types": [
+          "casual"
+        ],
+        "lora": {}
+      },
+      "image_prompt": ""
+    },
+    {
+      "id": "item_d377c5b3",
+      "name": "Black Sweatpants",
+      "category": "outfit_piece",
+      "prompt_fragment": "black sweatpants, elastic waistband, soft fleece material, loose fit, casual loungewear",
+      "created_at": "2026-04-25T01:28:03.893294",
+      "description": "",
+      "description_de": "",
+      "image": "1777073311.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "outfit_piece": {
+        "covers": [
+          "underwear_bottom"
+        ],
+        "partially_covers": [],
+        "outfit_types": [
+          "home"
+        ],
+        "lora": {},
+        "slots": [
+          "bottom"
+        ]
+      }
+    },
+    {
+      "id": "item_b79bd4a4",
+      "name": "Oversized Grey Hoodie",
+      "category": "outfit_piece",
+      "prompt_fragment": "oversized grey hoodie, soft cotton texture, drawstrings, relaxed fit, casual loungewear",
+      "created_at": "2026-04-25T01:28:03.854657",
+      "description": "",
+      "description_de": "",
+      "image": "1777073301.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "effects": null,
+      "image_prompt": "",
+      "outfit_piece": {
+        "slots": [
+          "top"
+        ],
+        "covers": [
+          "underwear_top"
+        ],
+        "partially_covers": [],
+        "outfit_types": [
+          "home",
+          "casual"
+        ],
+        "lora": {}
+      }
+    },
+    {
+      "id": "item_3115fac3",
+      "name": "Golden Hoop Earrings",
+      "category": "outfit_piece",
+      "prompt_fragment": "oversized golden hoop earrings dangling from pierced ears, catching dim light",
+      "created_at": "2026-04-23T00:42:32.332063",
+      "description": "",
+      "description_de": "",
+      "image": "1776897879.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "outfit_piece": {
+        "covers": [],
+        "partially_covers": [],
+        "outfit_types": [
+          "formal",
+          "clubwear"
+        ],
+        "lora": {},
+        "slots": [
+          "head"
+        ]
+      }
+    },
+    {
+      "id": "item_1ae56416",
+      "name": "choker",
+      "category": "outfit_piece",
+      "prompt_fragment": "choker",
+      "created_at": "2026-04-15T17:21:15.237733",
+      "description": "",
+      "description_de": "",
+      "image": "1776266486.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "outfit_piece": {
+        "covers": [],
+        "outfit_types": [
+          "clubwear",
+          "intimate"
+        ],
+        "slots": [
+          "neck"
+        ]
+      }
+    },
+    {
+      "id": "item_e4f34a8a",
+      "name": "Black Leather Moto Jacket",
+      "category": "outfit_piece",
+      "prompt_fragment": "black leather moto jacket with silver zippers, worn open to reveal cleavage",
+      "created_at": "2026-04-22T22:34:30.063587",
+      "description": "",
+      "description_de": "",
+      "image": "1776890114.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "effects": null,
+      "image_prompt": "",
+      "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
+        "covers": [
+          "underwear_top"
+        ],
+        "partially_covers": [],
+        "outfit_types": [
+          "casual",
+          "clubwear"
+        ],
+        "lora": {}
+      }
+    },
+    {
+      "id": "item_7d91cd7a",
+      "name": "Black Stilettos",
+      "category": "outfit_piece",
+      "prompt_fragment": "shiny black leather stiletto heels, high pointed toe, worn with bare feet",
+      "created_at": "2026-04-23T00:42:32.303174",
+      "description": "",
+      "description_de": "",
+      "image": "1776897853.png",
+      "rarity": "common",
+      "stackable": false,
+      "max_stack": 1,
+      "transferable": true,
+      "consumable": false,
+      "reveals_secret": null,
+      "properties": {
+        "enables_locations": [],
+        "enables_activities": [],
+        "stat_bonuses": {},
+        "uses": null
+      },
+      "outfit_piece": {
+        "covers": [],
+        "partially_covers": [],
+        "outfit_types": [
+          "formal",
+          "clubwear",
+          "intimate"
+        ],
+        "lora": {},
+        "slots": [
+          "feet"
+        ]
+      }
     }
   ],
-  "last_updated": "2026-07-15T21:29:46+00:00"
+  "last_updated": "2026-08-09T21:26:08+00:00"
 }

@@ -445,16 +445,6 @@
       ],
       "animation": "lie"
     },
-    "bending_to_fridge": {
-      "prompt": "standing upright with legs slightly apart, bending forward at the waist while extending both arms forward to handle the refrigerator door",
-      "synonyms": [
-        "opening the refrigerator",
-        "closing the refrigerator",
-        "kühlschrank öffnen",
-        "kühlschrank schließen"
-      ],
-      "animation": "idle"
-    },
     "washing_dishes": {
       "prompt": "standing at sink, legs slightly apart, arms extended forward with elbows bent, hands scrubbing under running water",
       "synonyms": [

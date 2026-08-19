@@ -80,5 +80,9 @@
       "sky_mix": 0.55,
       "roughness": 0.08
     }
+  },
+  "deep_forest": {
+    "name": "Deep forest",
+    "description": "A seamless tileable surface texture seen straight from above: flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border. A dark and wild forest floor dominated by vibrant green moss patches and lush forest growth, interspersed with dense brown leaf litter, decaying organic matter, and small twigs."
   }
 }

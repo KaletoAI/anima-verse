@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-08-15T22:05:20+00:00",
+  "source": "generated",
+  "backend": "Z-Image",
+  "prompt": "seamless tileable texture photographed straight from above, macro surface detail, rich natural color, the surface fills the entire frame edge to edge, soft even diffuse daylight, crisp sharp focus, photorealistic, high detail, A seamless tileable surface texture seen straight from above: flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border. A dark and wild forest floor dominated by vibrant green moss patches and lush forest growth, interspersed with dense brown leaf litter, decaying organic matter, and small twigs.",
+  "negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality"
+}
