@@ -582,6 +582,14 @@ const DRAPE_MAX_SEGMENTS = 48;
  *  largest one IS the spread. */
 const DRAPE_FLAT_EPS_M = 0.05;
 
+/** How high a plate rides over the tile floor, in metres — the ground plate of
+ *  the footprint and the socle under a building model. The socle is the hair
+ *  above the ground plate it always was. Exported so the smoke can measure the
+ *  world height of a vertex instead of carrying a copy of the number
+ *  (`client3d/scripts/smoke_plate_drape.mjs`). */
+export const PLATE_Y_M = 0.04;
+export const SOCLE_Y_M = 0.045;
+
 /**
  * UVs of a plate geometry, in METRES over the bounding box divided by
  * `widthM` — the square case's own mapping, generalised.
@@ -702,6 +710,42 @@ function platePolygonGeometry(boundary: [number, number][], widthM: number,
   return geo;
 }
 
+/**
+ * The lift of one TILE-LOCAL point over the tile floor, or `null` while no
+ * world ground has been taken over (`setWorldGround`) — then every plate is
+ * flat by construction, which is also what a world without relief answers.
+ *
+ * The world lookup is this closure's business, the RULE is
+ * `game/ground.plateLift` — the same one the figure stands by. The mapping is
+ * § A1.1, the one `tileToWorld` uses, so `at` is the footprint's placement:
+ * the centre in WORLD metres plus its yaw, because the vertices are TILE-LOCAL
+ * and the world sampler is not.
+ */
+function plateLiftFn(at: { x: number; y: number; z: number; yaw: number },
+): ((lx: number, lz: number) => number) | null {
+  const sample = worldGroundAt;
+  if (!sample) return null;
+  const cos = Math.cos(at.yaw);
+  const sin = Math.sin(at.yaw);
+  return (lx: number, lz: number): number => plateLift(
+    sample(at.x + lx * cos + lz * sin, at.z - lx * sin + lz * cos), at.y);
+}
+
+/**
+ * The DRAPED plate geometry of a footprint polygon — the ONE entry every plate
+ * of a tile is built from, so the ground plate of an open place and the socle
+ * under a building model cannot describe two different surfaces.
+ *
+ * Exported for `client3d/scripts/smoke_plate_drape.mjs`, which measures the
+ * world height of every vertex against the ground under it (§ B5a: numbers,
+ * never screenshots).
+ */
+export function plateGeometry(boundary: [number, number][], widthM: number,
+                              at: { x: number; y: number; z: number; yaw: number },
+): THREE.BufferGeometry {
+  return platePolygonGeometry(boundary, widthM, plateLiftFn(at));
+}
+
 /** Ground plate of the FOOTPRINT — the surface texture of the location's
  *  terrain kind (server library, else procedural), over the whole drawn
  *  BOUNDARY POLYGON (contract v6 Nr. 4; a legacy square is that polygon's four
@@ -749,19 +793,9 @@ function groundPlate(boundary: [number, number][], widthM: number,
   // The tile surface goes through the same factory as the scene plates: a water
   // location should look on the map the way it looks in the room.
   const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
-  const cos = Math.cos(at.yaw);
-  const sin = Math.sin(at.yaw);
-  /** The lift of one TILE-LOCAL point over the tile floor. The world lookup is
-   *  the caller's business, the RULE is `game/ground.plateLift` — the same one
-   *  the figure stands by. The mapping is § A1.1, the one `tileToWorld` uses. */
-  const liftAt = worldGroundAt
-    ? (lx: number, lz: number): number => plateLift(
-      worldGroundAt!(at.x + lx * cos + lz * sin, at.z - lx * sin + lz * cos), at.y)
-    : null;
-  const plate = new THREE.Mesh(
-    platePolygonGeometry(boundary, widthM, liftAt), mat);
+  const plate = new THREE.Mesh(plateGeometry(boundary, widthM, at), mat);
   plate.rotation.x = -Math.PI / 2;
-  plate.position.y = 0.04;
+  plate.position.y = PLATE_Y_M;
   plate.receiveShadow = true;
   return plate;
 }
@@ -873,13 +907,22 @@ export function buildTile(loc: WorldLocation): Tile {
       ? surfaceTexture(tKind, fallbackFor(tStyle || ''), width)
       : paversTexture();
     // The socle follows the DRAWN OUTLINE like every other plate (v6 Nr. 4):
-    // one shape for the place, whether a house stands on it or not. It carries
-    // no drape of its own — the scene recipe drapes it when a relief arrives.
+    // one shape for the place, whether a house stands on it or not — AND the
+    // same drape, through the very same `plateGeometry`. It used to be built
+    // flat (`liftAt = null`), which was harmless while the socle was the few
+    // metres of paving around a procedural hut; since the shell was struck
+    // (2026-08-19) the socle IS the drawn area of the place, and a dead-flat
+    // one at the pin's height floats over the valley half of its own outline
+    // and lets the hill half grow straight through it. Measured by hand in
+    // `smoke_plate_drape.mjs`: on a 40 m outline over a 5 % slope the west rim
+    // stood 1.045 m in the air and the east rim was buried 0.955 m deep.
     if (boundary) {
       const plinth = new THREE.Mesh(
-        platePolygonGeometry(boundary, width, null), std({ map: plinthTex }));
+        plateGeometry(boundary, width,
+                      { x: center.x, y: center.y, z: center.z, yaw }),
+        std({ map: plinthTex }));
       plinth.rotation.x = -Math.PI / 2;
-      plinth.position.y = 0.045;
+      plinth.position.y = SOCLE_Y_M;
       plinth.receiveShadow = true;
       group.add(plinth);
       tile.groundPlate = plinth;

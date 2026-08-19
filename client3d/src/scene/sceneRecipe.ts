@@ -14,7 +14,7 @@ import { roomDoor } from '../game/doors';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import {
-  preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
+  PLATE_Y_M, preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld,
   type PlacedSceneModel, type Tile,
 } from './tiles';
@@ -453,7 +453,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // 2026-08-03); zusätzlich drückt polygonOffset den Backstop im
     // Tiefenvergleich nach hinten, damit er auch bei drapierten,
     // parallelen Flächen NIE durch die Zonen-Platten sticht.
-    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.05 : 0.04;
+    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.05 : PLATE_Y_M;
     const gm = tile.groundPlate.material as THREE.MeshStandardMaterial;
     gm.polygonOffset = tile.modelIsShellArea;
     gm.polygonOffsetFactor = tile.modelIsShellArea ? 1 : 0;
@@ -1120,7 +1120,7 @@ export function unmountScene(tile: Tile): void {
   }
   if (tile.groundPlate) {
     tile.groundPlate.visible = true;
-    tile.groundPlate.position.y = 0.04;
+    tile.groundPlate.position.y = PLATE_Y_M;
   }
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
