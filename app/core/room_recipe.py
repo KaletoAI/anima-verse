@@ -70,8 +70,12 @@ def _r(v: float, nd: int = 4) -> float:
 
 
 def _rot_matrix(rotation: Any) -> List[List[float]]:
-    """Rx·Ry·Rz (three.js 'XYZ' Euler, degrees) — the SAME convention as
-    ``props.oriented_dims`` / the client viewers; keep them in lockstep."""
+    """Ry·Rx·Rz (three.js **'YXZ'** Euler, degrees) — the order the payload
+    declares the orientation fix in (``scene_recipe._fix_euler``, § A1) and the
+    one every renderer applies it in (``place()`` sets ``rotation.order =
+    'YXZ'``). With a single non-zero axis — what a 90°-step fix normally is —
+    'XYZ' and 'YXZ' are identical; with two, they are not, and this matrix has
+    to be the renderers'."""
     rot = rotation if isinstance(rotation, dict) else {}
     try:
         rx = math.radians(float(rot.get("x") or 0))
@@ -83,14 +87,48 @@ def _rot_matrix(rotation: Any) -> List[List[float]]:
     cy, sy = math.cos(ry), math.sin(ry)
     cz, sz = math.cos(rz), math.sin(rz)
     return [
-        [cy * cz, -cy * sz, sy],
-        [cx * sz + sx * sy * cz, cx * cz - sx * sy * sz, -sx * cy],
-        [sx * sz - cx * sy * cz, sx * cz + cx * sy * sz, cx * cy],
+        [cy * cz + sy * sx * sz, sy * sx * cz - cy * sz, sy * cx],
+        [cx * sz, cx * cz, -sx],
+        [cy * sx * sz - sy * cz, sy * sz + cy * sx * cz, cy * cx],
     ]
+
+
+def _snap90(rotation: Any) -> Dict[str, float]:
+    """The orientation fix rounded to whole 90° steps (§ B2 step 1, v5.1 Nr. 4).
+
+    How BIG an object is must not depend on how finely it is tilted: the
+    axis-aligned hull of a diagonally turned box is larger than the box, so a
+    fine fix angle would shrink the object. ``place()`` therefore MEASURES with
+    the rounded fix and DRAWS with the real one — and the marker composition
+    has to measure with the very same number, or the seat sits on a prop of a
+    different size than the mesh next to it."""
+    rot = rotation if isinstance(rotation, dict) else {}
+    out: Dict[str, float] = {}
+    for axis in ("x", "y", "z"):
+        try:
+            out[axis] = round(float(rot.get(axis) or 0) / 90.0) * 90.0
+        except (TypeError, ValueError):
+            out[axis] = 0.0
+    return out
 
 
 def _apply(m: List[List[float]], p: List[float]) -> List[float]:
     return [m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] for r in range(3)]
+
+
+def _oriented_box(m: List[List[float]], size: List[float],
+                  ) -> Tuple[List[float], List[float]]:
+    """AABB ``(lo, hi)`` of the raw box ``[0, size]`` turned by ``m``."""
+    lo = [math.inf] * 3
+    hi = [-math.inf] * 3
+    for i in (0, 1):
+        for j in (0, 1):
+            for k in (0, 1):
+                q = _apply(m, [i * size[0], j * size[1], k * size[2]])
+                for a in range(3):
+                    lo[a] = min(lo[a], q[a])
+                    hi[a] = max(hi[a], q[a])
+    return lo, hi
 
 
 _EDGE_INDEX = {"N": 0, "E": 1, "S": 2, "W": 3}
@@ -346,25 +384,40 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
 
     ``bbox`` = raw AABB edge lengths (mesh units, raw axes), ``dims`` =
     [width, depth, height] real metres (post-fix), ``frac`` = [u, v, w]
-    fractions of the raw box. The chain mirrors the mesh placement:
-    orientation fix (translation-invariant — the raw box is taken as
-    [0, size]) → uniform real-size scale = max(dims) / largest oriented
-    extent → anchor at the oriented box's bottom centre → placement yaw.
+    fractions of the raw box. The chain mirrors the mesh placement STEP FOR
+    STEP (§ B2), because the result is added to the very anchor the mesh is
+    seated on:
+
+    1. orientation fix, 'YXZ' (translation-invariant — the raw box is taken
+       as [0, size]),
+    2. uniform real-size scale = max(dims) / largest extent of the box turned
+       by the **90°-ROUNDED** fix (§ B2 step 2, v5.1 Nr. 4: measured rounded,
+       drawn exact) — measuring the exact fix here made the marker ride a
+       prop up to 21 % smaller than the mesh beside it,
+    3. anchor at the bottom centre of the box turned by the EXACT fix — the
+       object's own seating point, BEFORE the yaw (§ B2 step 4),
+    4. placement yaw, which turns that offset about the same point.
+
+    Step 3 is why § B2 measures its seating box before the yaw: the server has
+    only the prop's ``bbox``, so the yawed hull of the real mesh is not a datum
+    it can reproduce. Both ends now spin the object about its own centre and
+    land on the same point.
+
+    Residual, stated rather than hidden: for a fix that is NOT a 90° step the
+    box proxy is not the mesh (turning a box around a box overestimates), so
+    the seating centre of step 3 differs from the renderer's measured hull —
+    measured 5 cm on the one such prop in the field (a stool at fix x 350).
+    A 90°-step fix, which is what an orientation fix normally is, is exact.
     """
     m = _rot_matrix(rotation)
     size = [abs(float(bbox[i])) for i in range(3)]
-    # Oriented AABB of the fixed raw box (8 corners of [0, size]).
-    lo = [math.inf] * 3
-    hi = [-math.inf] * 3
-    for i in (0, 1):
-        for j in (0, 1):
-            for k in (0, 1):
-                q = _apply(m, [i * size[0], j * size[1], k * size[2]])
-                for a in range(3):
-                    lo[a] = min(lo[a], q[a])
-                    hi[a] = max(hi[a], q[a])
-    extents = [hi[a] - lo[a] for a in range(3)]
+    # Size: the 90°-rounded fix (§ B2 step 2) — the fine angle must not change
+    # how big the object is, and the renderer measures the same rounded box.
+    slo, shi = _oriented_box(_rot_matrix(_snap90(rotation)), size)
+    extents = [shi[a] - slo[a] for a in range(3)]
     s = (max(dims) or 1.0) / (max(extents) or 1.0)
+    # Seat: the box turned by the EXACT fix — that is where the mesh stands.
+    lo, hi = _oriented_box(m, size)
     p = _apply(m, [frac[0] * size[0], frac[1] * size[1], frac[2] * size[2]])
     # Anchor: oriented-box bottom centre = the placement point (exactly how
     # the mesh itself is seated).

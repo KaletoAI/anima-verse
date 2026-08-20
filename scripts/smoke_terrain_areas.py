@@ -773,7 +773,9 @@ def stored_factor(pid):
     return meta["sway_factor"] if "sway_factor" in meta else "absent"
 
 
-check("a fresh prop stores no factor at all", stored_factor(STONE), "absent")
+# Since 66b4b7d8 creation writes an EXPLICIT 0.0 (furniture is the normal
+# case; the absent-key 1.0 default is the vegetation-era LEGACY reading).
+check("a fresh prop stores the explicit 0.0", stored_factor(STONE), 0.0)
 props.update_prop(STONE, {"sway_factor": 0})
 check("0.0 is a legal, STORED value — the whole point of the field",
       stored_factor(STONE), 0.0)
@@ -806,7 +808,10 @@ check("a value that rounds to zero really becomes the stored 0.0",
 props.update_prop(STONE, {"sway_factor": 0.25})
 check("the effective read answers the stored value",
       props.prop_scatter_facts(STONE).get("sway_factor"), 0.25)
-check("…and the DEFAULT where nothing is stored",
+# A LEGACY sidecar has no key at all — modelled by writing the default,
+# which the sanitizer stores as absence (the one-representation rule).
+props.update_prop(TREE, {"sway_factor": 1})
+check("…and the legacy DEFAULT where nothing is stored",
       props.prop_scatter_facts(TREE).get("sway_factor"),
       props.SWAY_FACTOR_DEFAULT)
 check("a hand-edited NaN bends at the default, not at NaN",

@@ -552,6 +552,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             place.rotation.set(0, 0, 0)
             place.scale.setScalar(1)
             place.position.set(0, 0, 0)
+            // The seating shift of the previous run (below) — cleared before
+            // anything is measured, or every re-apply would stack another one.
+            orient.position.set(0, 0, 0)
             // `+rad` since E4 (§ A1.1): the THIRD renderer of `spec.yaw_deg`,
             // next to `placeModelSpec` (@anima/scene-render) and the 3D client.
             // This viewer has its own placement maths, so it needs the sign
@@ -577,16 +580,31 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             orient.rotation.set(_deg(_rr?.x), _deg(_rr?.y), _deg(_rr?.z))
             const target = spec?.max_m
               ?? extent * Math.max(0.02, Math.min(1, p.size ?? 1))
+            // Seating datum (§ B2 step 4, revised 2026-08-20): the object
+            // hangs on the centre it has BEFORE the yaw, and the yaw spins it
+            // about that point — measuring the FINISHED, turned hull made a
+            // model's position depend on its angle, which is a datum the
+            // server cannot reproduce from a bbox (its composed prop markers
+            // then land beside the prop). Same rule as place() in
+            // @anima/scene-render; this viewer has its own placement math and
+            // needs it separately. Measured BEFORE the scale (still 1) and
+            // with the yaw off, so the shift is a plain object-frame offset.
+            const yawKeep = place.rotation.y
+            place.rotation.y = 0
+            place.updateMatrixWorld(true)
+            const cFix = new THREE.Box3().setFromObject(place)
+              .getCenter(new THREE.Vector3())
+            orient.position.set(-cFix.x, -cFix.y, -cFix.z)
+            place.rotation.y = yawKeep
             place.scale.setScalar(target / measured)
             place.updateMatrixWorld(true)
             const b2 = new THREE.Box3().setFromObject(place)
-            const c2 = b2.getCenter(new THREE.Vector3())
             // With a spec the offsets are already baked into anchor/bottom_y;
             // without one they are the only thing that moves the model.
             const ax = spec ? spec.anchor[0] : (offsetXRef.current || 0)
             const az = spec ? spec.anchor[1] : (offsetZRef.current || 0)
             const bottom = spec ? spec.bottom_y : (offsetYRef.current || 0)
-            place.position.set(ax - c2.x, bottom - b2.min.y, az - c2.z)
+            place.position.set(ax, bottom - b2.min.y, az)
 
             // Reference sizes for the dials next to this viewer — the same
             // kit the floor-plan preview draws, so a metre means the same

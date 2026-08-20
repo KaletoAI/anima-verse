@@ -1348,6 +1348,17 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   `marker = platzierungspunkt + [dx,dz]`, Höhe = Etagenboden +
   `height_m`, `facing` = Welt-Kompass. Objektlokale Fraktionen dürfen
   −0,5..1,5 (Y: −1..1,5) — nur die Wertebereiche werden größer.
+  **Die Kette ist Schritt für Schritt die von § B2** (`compose_prop_marker`),
+  denn ihr Ergebnis wird auf genau den Anker addiert, auf dem das Mesh sitzt:
+  Fix in 'YXZ' · Maßstab am **90°-GERUNDETEN** Fix (§ B2 Schritt 2, v5.1
+  Nr. 4) · Sitzpunkt = Boden-Mitte der Box mit dem ECHTEN Fix, VOR dem Yaw
+  (§ B2 Schritt 3) · Yaw. Alle drei Punkte waren bis 2026-08-20 anders
+  gerechnet als im Renderer — Maßstab am exakten Fix (bis 21 % zu klein),
+  Euler-Ordnung 'XYZ' statt 'YXZ' und der Sitz an der ungedrehten Box gegen
+  die gedrehte Hülle des Renderers (bis 0,50 m). Rest-Ungenauigkeit, offen
+  benannt: bei einem Fix, der KEIN 90°-Schritt ist, ist die gedrehte Box nicht
+  das gedrehte Mesh (Kiste um Kiste überschätzt) — gemessen 5 cm am einzigen
+  solchen Prop im Feld (Hocker, Fix x 350). Ein 90°-Schritt ist exakt.
   **Facing-Default (2026-07-25):** `prop_markers` tragen IMMER ein
   `facing` — fehlt es am Objekt-Marker, gilt Prop-Front = Süd im
   Objektraum und der Sitzende erbt die Platzierungs-Drehung
@@ -3550,14 +3561,42 @@ place(mesh, spec):
                           gestelltes Haus soll auf sein Grundstück passen)
      `fit_box`, `tile_fit`, `scale_axes` und jede achsengetrennte
      Skalierung sind ersatzlos weg (v5 Nr. 2 / v6 Nr. 3).
-  3. rotation.y = +rad(yaw_deg) als Eltern-Rotation
+  3. Objekt auf seine EIGENE Mitte hängen: BBox mit dem ECHTEN Fix, aber
+     OHNE Yaw messen, Mittelpunkt in den Ursprung — dann
+     rotation.y = +rad(yaw_deg) als Eltern-Rotation, die das Objekt um
+     genau diesen Punkt dreht.
      ✔ Seit **E4** (2026-08-09, Task 3): verbindlicher Drehsinn ist die
      Weltkarten-Konvention (§ A1.1), das frühere Minus ist in allen
      Renderstellen gekippt (§ A1.8). Der Server liefert `yaw_deg`
      unverändert. `markers[].facing` bleibt unberührt (Kompass, § A1.8),
      ebenso der hergeleitete Wand-Yaw in `primitives.ts`.
-  4. Ergebnis-BBox messen → Unterkante = bottom_y, XZ-Zentrum = anchor
+  4. Aufhängepunkt = anchor; Unterkante der Ergebnis-BBox = bottom_y
+     (die Höhe ist yaw-unabhängig, also weiterhin am Ergebnis gemessen)
 ```
+
+**Revision 2026-08-20 zu Schritt 3/4: gemessen wird VOR dem Yaw.** Bis dahin
+lautete Schritt 4 „Ergebnis-BBox messen → XZ-Zentrum = anchor", also wurde die
+FERTIGE, gedrehte Hülle mittig auf den Anker gesetzt. Damit hing die Position
+eines Objekts an seinem Winkel: gemessen an den Meshes im Feld rutschte das
+Ecksofa bei Yaw 45° um **0,50 m**, die Kabelzug-Station um 0,33 m, das
+King-Size-Bett um 0,12 m — und bei Yaw 90° wieder auf null zurück, weil dort
+beide Boxen dieselbe sind. Ein Anker soll sagen, WO das Objekt steht; drehen
+soll es an Ort und Stelle drehen.
+
+Der zweite, schwerere Grund: das alte Datum ist eines, das der SERVER nicht
+nachrechnen kann. Er kennt vom Prop nur dessen `bbox` — nie die gedrehte Hülle
+des echten Meshes. Die **Prop-Marker** (§ A4) werden aber serverseitig fertig
+komponiert und auf genau diesen Anker addiert, also landete jeder Sitz- und
+Liegeplatz eines schräg gestellten Props um exakt diese Differenz neben seinem
+Prop (User-Befund: die Figur sitzt in der Grundriss-Vorschau woanders als der
+Marker im Props-Tab steht). Mit dem Yaw um die eigene Mitte rechnen beide
+Enden dieselbe Zahl: die Mitte einer Box IST rotations-kovariant.
+
+Unberührt bleibt das GRÖSSEN-Gesetz: `measure` sagt weiter, worauf gemessen
+wird, `yawed_xz` misst weiter die GEYAWTE Hülle (ein schräg gestelltes Haus
+soll auf sein Grundstück passen) — das ist die Skalierung, nicht der Sitz.
+`verify` (§ B5a) prüft `anchor` achsenparallel weiter an der Welt-BBox-Mitte
+und diagonal am Aufhängepunkt der platzierten Gruppe.
 
 Ersetzt die früheren drei Spezialketten vollständig (§ A2 führt nur noch
 Diorama und Props als Legacy) — Gebäude, Diorama
