@@ -907,6 +907,22 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     walls: scene.walls.length,
   })) buildFarShell(tile, builtPlates, builtWalls);
 
+  // ── DIE DEKLARIERTEN BÖDEN dieser Szene (§ B6 Nr. 7) ────────────────────
+  // Bis hier war `walk_y_world` eine reine Abtast-Vorgabe und endete in
+  // diesem Block; die laufende Figur (`tileWalkY`) hat sie NIE gesehen. Genau
+  // das war der Befund an der Mondhütte: der Regler bewegte die NPC-Spots und
+  // die Raummitte, die Figur stand weiter auf dem Kachelboden. Die Ansage
+  // gehört an die Kachel, nicht in diese Funktion.
+  //
+  // Die Hülle ist die des RAUMS aus dem Payload (§ B1), nicht die der Platte:
+  // eine Ansage gilt für den Raum, auch wenn er gar keine Platte zeichnet.
+  tile.declaredFloors = [];
+  for (const room of scene.rooms) {
+    const top = walkY.get(room.room_id);
+    if (top === undefined) continue;
+    tile.declaredFloors.push({ roomId: room.room_id, top, outline: room.outline });
+  }
+
   // ── Begehbarkeit abtasten (Sicht-/Spiel-Logik, bleibt Client) ───────────
   // Über ALLES im Raum: Platte, Wände, Diorama, Props.
   for (const [id, rg] of roomGroup) {
@@ -1177,6 +1193,14 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       // …and without a declaring diorama the ROOM PLATE is the floor, exactly
       // as in the mount above. The slot holder was placed on `plate.top_y` in
       // the same loop that built the plate, so this IS that number.
+      //
+      // `tile.declaredFloors` needs NO update here, and that is a property of
+      // the swap and not an omission: a tier exchanges the URL inside the SAME
+      // spec object (`rec.spec` is untouched above), and `walk_y` is a dial of
+      // the SUBJECT, read off the default tier's sidecar for every tier
+      // (`location_model3d.get_client_meta`). `declared` is therefore the same
+      // number the mount already wrote. What DOES change is the mesh, which is
+      // why the sampling below has to run again.
       sampleRoomWalkables(tile, id, rg,
                           declared ?? tile.roomSlots.get(id)?.holder.position.y);
     }
@@ -1301,6 +1325,7 @@ export function unmountScene(tile: Tile): void {
   // The floors of this scene leave with it: until the next mount the tile has
   // its plate and the world under it, exactly as a place without a recipe.
   tile.walkPlates = [];
+  tile.declaredFloors = [];
   tile.terrain = undefined;
   tile.terrainExtent = undefined;
   // Drapierte Kachelplatte zurückbauen: das ebene Original ist die Kachel,

@@ -3526,6 +3526,96 @@ async function main() {
       SOCLE_Y_M - (MESH_FLOOR + WALK_CLEARANCE_M)],
     [0.010, 0.100, 0.035], 1e-9);
 
+  // ── The DECLARED floor (§ B6 no. 7, user finding 2026-08-20) ────────────
+  //
+  // MONDHÜTTE, a room with a diorama inside the AREA location Mondscheinsee
+  // (worlds/Anima Divide, GET /play/locations/2e2f52e9/scene). Every number
+  // below is derived by hand from the payload the server composes:
+  //
+  //   level plate (the whole boundary, grass)   top_y 0.08
+  //   room plate  "Mondhütte" (sand)            top_y 0.09
+  //   diorama bottom_y = plate 0.09 + DIORAMA_CLEARANCE 0.02
+  //                    + layout.model_offset_y (−0.30)          = −0.19
+  //   walk_y_world = bottom_y + walk_y                          = −0.19 + w
+  //
+  // So a dialled walk_y of 0.35 is a declared 0.16, and the figure stands one
+  // WALK_CLEARANCE above it: 0.17. What it did instead: `shell_area` skipped
+  // the plate branch, the location has no mesh to ray, and the answer was the
+  // bare tile floor 0.00 — the dial looked dead in the client while the same
+  // number moved the NPC spots (`sampleRoomWalkables`).
+  console.log('\nground — a DECLARED walk height beats plate and mesh');
+  const { declaredFloorAt, plateCeiling } = ground;
+  const HUT = [[-27.56, 10.43], [-19.8, 10.23], [-18.64, 15.37],
+    [-24.15, 16.61], [-26.81, 13.67]];
+  const HUT_BOTTOM = 0.09 + 0.02 + (-0.30);
+  check('the diorama hangs at bottom_y −0.19', HUT_BOTTOM, -0.19, 1e-9);
+  const HUT_WALK = HUT_BOTTOM + 0.35;
+  check('a dialled walk_y 0.35 is walk_y_world 0.16', HUT_WALK, 0.16, 1e-9);
+  const LAKE_FLOORS = [{ roomId: 'd5535ee7', top: HUT_WALK, outline: HUT }];
+  // The hut's anchor point (payload `anchor` [−21.28, 13.12]) is inside it.
+  check('inside the hut the DECLARATION answers, not the plate',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12), 0.16, 1e-9);
+  check('...and the figure stands one clearance above it: 0.17',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M, 0.17, 1e-9);
+  check('...0.17 above the bare tile floor 0.00 the client used to give, and '
+    + '0.07 above the room plate it would otherwise take',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M
+      - (0.09 + WALK_CLEARANCE_M), 0.07, 1e-9);
+  // Out on the lake (the "Seemitte" water plate at 0.09) nothing is declared.
+  check('outside the hut nothing is declared', declaredFloorAt(LAKE_FLOORS, 0, 0), null);
+  check('no declarations at all', declaredFloorAt([], -21.28, 13.12), null);
+  check('...nor a tile that never got a list',
+    declaredFloorAt(undefined, -21.28, 13.12), null);
+  // A declaration of 0 is a VALUE ("the lower edge is the floor"), never
+  // "unset" — the same law the sidecar setter states.
+  check('a declared 0 is an answer, not an absence',
+    declaredFloorAt([{ roomId: 'a', top: 0, outline: HUT }], -21.28, 13.12), 0);
+  // MOST SPECIFIC FIRST: "Seeufer" is an always-visible outdoor zone that
+  // covers the shore the hut stands on. Were both to declare, the hut wins —
+  // its hull is the smaller one (the shore polygon is orders of magnitude
+  // larger). Derived on two squares so the areas are checkable by hand:
+  // 20 × 20 = 400 m² against 2 × 2 = 4 m².
+  const BIG = [[-10, -10], [10, -10], [10, 10], [-10, 10]];      // 400 m²
+  const SMALL = [[-1, -1], [1, -1], [1, 1], [-1, 1]];            //   4 m²
+  check('the SMALLER hull wins where two declarations overlap',
+    declaredFloorAt([{ roomId: 'zone', top: 0.09, outline: BIG },
+      { roomId: 'hut', top: 0.16, outline: SMALL }], 0, 0), 0.16);
+  check('...in either list order',
+    declaredFloorAt([{ roomId: 'hut', top: 0.16, outline: SMALL },
+      { roomId: 'zone', top: 0.09, outline: BIG }], 0, 0), 0.16);
+  check('...and outside the small one the big one still answers',
+    declaredFloorAt([{ roomId: 'zone', top: 0.09, outline: BIG },
+      { roomId: 'hut', top: 0.16, outline: SMALL }], 5, 5), 0.09);
+  // A degenerate hull encloses nothing and may never claim a point.
+  check('a two-point "hull" declares nothing',
+    declaredFloorAt([{ roomId: 'x', top: 5, outline: [[0, 0], [1, 1]] }], 0.5, 0.5),
+    null);
+
+  // ── The PLATE ceiling: the area exception is about mesh HITS only ───────
+  //
+  // Mondscheinsee has no location model, so `tileWalkY` falls back to the
+  // drawn plates — and those are storeys even in an area location. The mesh
+  // ceiling is Infinity there (finding B8: shore, slope, lake bed are all
+  // ground); the plate ceiling is not, or a ground-floor figure would be
+  // hoisted onto a level-1 plate at 2.90.
+  console.log('\nground — plate ceiling vs. mesh ceiling');
+  check('a building: the two ceilings are the same number',
+    plateCeiling({ display: 'shell', walkY: -0.22 }),
+    walkCeiling({ display: 'shell', walkY: -0.22 }), 1e-9);
+  check('an area location: the mesh ceiling is uncapped',
+    walkCeiling({ display: 'shell_area' }) === Infinity, true);
+  check('...but its PLATES are still judged at 1.2',
+    plateCeiling({ display: 'shell_area' }), 1.2, 1e-9);
+  const LAKE_PLATES = [
+    { top: 0.08, outline: BIG },       // the grass level plate
+    { top: 0.09, outline: SMALL },     // the hut's sand plate
+    { top: 2.90, outline: SMALL },     // a hypothetical storey above it
+  ];
+  check('an area location without a mesh: the sand plate 0.09 is the ground',
+    recipeFloorAt(LAKE_PLATES, 0, 0, plateCeiling({ display: 'shell_area' })), 0.09);
+  check('...and the storey above stays out of reach',
+    recipeFloorAt(LAKE_PLATES, 0, 0, walkCeiling({ display: 'shell_area' })), 2.90);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

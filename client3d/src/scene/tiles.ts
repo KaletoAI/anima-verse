@@ -3,8 +3,9 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { acceptsWalkHit, plateLift, recipeFloorAt, standY, walkCeiling,
-  WALK_CLEARANCE_M, type GroundModelInfo, type WalkPlate } from '../game/ground';
+import { acceptsWalkHit, declaredFloorAt, plateCeiling, plateLift, recipeFloorAt,
+  standY, WALK_CLEARANCE_M,
+  type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 import {
   asphaltTexture, grassTexture, paversTexture, waterTexture,
@@ -373,6 +374,14 @@ export interface Tile {
    *  the props and markers of that room on. Empty for a tile without a
    *  recipe interior (an area model, a bare pin). */
   walkPlates: WalkPlate[];
+  /** THE DECLARED FLOORS of this scene (§ B6 no. 7, user finding 2026-08-20):
+   *  one entry per room whose diorama spec carries a `walk_y_world` — that
+   *  height plus the room's hull in TILE-LOCAL metres. `tileWalkY` asks this
+   *  list FIRST and for every display mode: the admin's dial is a statement
+   *  about the room's modelled floor and outranks both the drawn plate and the
+   *  mesh ray. It is the same number `sampleRoomWalkables` stands the NPC
+   *  spots on, so figure and spot cannot end up on two floors. */
+  declaredFloors: DeclaredFloor[];
   /** Wand-Materialien je Etage (fürs Etagen-Umschalten). Liste, weil
    *  texturierte Wände je Stück ein eigenes Material mit eigener repeat
    *  brauchen (Szenen-Rezept) — der Legacy-Grundriss trägt genau eines ein. */
@@ -978,6 +987,7 @@ export function buildTile(loc: WorldLocation): Tile {
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), walkPlates: [],
+    declaredFloors: [],
     levelFilter: 0, roomOutdoor: new Set(),
     fade: 0, fadeTarget: 0, occl: 0,
   };
@@ -1323,7 +1333,26 @@ const WALK_RAY_DOWN = new THREE.Vector3(0, -1, 0);
  *  model (`ground` / `shell_area`, whose shore, slope and lake bed are the
  *  terrain of the place) and every point of a building tile that no plate
  *  covers — the yard around the house, a place whose payload draws no plates
- *  at all. */
+ *  at all.
+ *
+ *  AND A DECLARATION COMES BEFORE ALL OF IT (user finding 2026-08-20,
+ *  Mondhütte): a room whose diorama spec carries a `walk_y_world` states where
+ *  its own modelled floor is, and that dial used to reach only the NPC spots
+ *  (`sampleRoomWalkables`) while the figure walked on the plate — or, in an
+ *  area location, on nothing at all. Measured on Mondhütte inside the area
+ *  location Mondscheinsee: room plate 0.09, diorama `bottom_y` −0.19, so a
+ *  dialled `walk_y` 0.35 is `walk_y_world` 0.16 and the figure belongs at
+ *  0.17 — it stood at 0.00, the bare tile floor, because `shell_area` skips
+ *  the plate branch and the location has no mesh to ray.
+ *
+ *  THE PLATES ALSO ANSWER WHERE THERE IS NO MESH, whatever the display: an
+ *  area location whose model was never generated (Mondscheinsee) draws its
+ *  zone plates and nothing else, and those plates ARE its ground — the sand at
+ *  0.09 that the figure stood 9 cm below. Where a mesh exists the area rule is
+ *  untouched and the ray keeps answering (finding B8: shore, slope, lake bed).
+ *  The plate pick is judged by `plateCeiling`, not by `walkCeiling`: the area
+ *  exception is about mesh HITS, and an uncapped plate pick would hoist a
+ *  ground-floor figure onto a level-1 plate. */
 function tileWalkY(tile: Tile, at: THREE.Vector3): number {
   const lift = tile.center.y + terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
@@ -1332,10 +1361,20 @@ function tileWalkY(tile: Tile, at: THREE.Vector3): number {
       : tile.modelIsShellArea ? 'shell_area' : 'shell',
     walkY: tile.modelWalkY,
   };
-  if (info.display === 'shell' && tile.walkPlates.length) {
+  if (tile.declaredFloors.length) {
+    const local = worldToTile(tile, at.x, at.z);
+    const declared = declaredFloorAt(tile.declaredFloors, local.x, local.z);
+    // No terrain lift on top: the declared height is derived from the
+    // diorama's `bottom_y`, which the recipe already raised onto the relief at
+    // the model's anchor (`_diorama_model`, contract v5.2 no. 14). Adding it
+    // again would count the hill twice — and `sampleRoomWalkables` takes the
+    // same number bare, which is what keeps figure and NPC spot on ONE floor.
+    if (declared !== null) return tile.center.y + declared + WALK_CLEARANCE_M;
+  }
+  if (tile.walkPlates.length && (info.display === 'shell' || !target)) {
     const local = worldToTile(tile, at.x, at.z);
     const floor = recipeFloorAt(tile.walkPlates, local.x, local.z,
-                                walkCeiling(info));
+                                plateCeiling(info));
     if (floor !== null) {
       return tile.center.y + floor + WALK_CLEARANCE_M
         + terrainLiftAt(tile, at.x, at.z);

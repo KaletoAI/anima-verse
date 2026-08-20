@@ -1687,6 +1687,119 @@ def test_boundary_only_datum() -> None:
           f"{water[0]['top_y']} / {zone['y']} vs {level[0]['top_y']}")
 
 
+def test_area_room_walk_height() -> None:
+    """THE WALK HEIGHT of a dioramed room inside an AREA location — the user's
+    "Mondhütte" in "Mondscheinsee" (2026-08-20), hand-derived.
+
+    The dial is ``walk_y`` on the ROOM MODEL's sidecar (Game-Admin →
+    RoomModelAdjust, "Walkable floor (m)"): metres above the mesh's lower
+    edge, a pure statement, never measured. The composer turns it into the
+    absolute ``walk_y_world`` and nothing else touches it:
+
+        room plate of an outdoor room inside the boundary  = 0.08 + 0.01 = 0.09
+        diorama bottom_y = plate 0.09 + DIORAMA_CLEARANCE 0.02
+                           + layout.model_offset_y (−0.30)         = −0.19
+        walk_y_world     = bottom_y + walk_y                       = −0.19 + w
+                           w = 0.35                                =  0.16
+
+    That half was always right; the finding was that the number never reached
+    a walking figure. TWO holes, both in the client, both pinned below at the
+    source and by hand in ``client3d/scripts/smoke_walk_math.mjs``:
+
+      1. ``tileWalkY`` knew the drawn plates and the mesh ray and NOTHING
+         about a room's declaration — the dial moved the NPC spots
+         (``sampleRoomWalkables``) while the figure kept standing on the
+         plate. Two floors in one room, which the one-datum law forbids.
+      2. In an AREA location the plate branch was skipped entirely
+         (``display`` ``shell_area``), and Mondscheinsee has no model to ray:
+         the answer was the bare tile floor 0.00 — 0.17 below where the
+         declaration puts the figure, and 0.09 below the sand it walks on.
+
+    The SIGNATURE half is checked here too: the dial lives in ``room_metas``,
+    which ``_signature`` hashes, so a running client re-fetches on the next
+    sweep. (``layout_signature`` deliberately does NOT see it — it hashes
+    ``map3d`` + room layouts for the relief cache, and a walk height changes
+    no terrain.)
+    """
+    print("\n[4i] an area location's room declares its walk height")
+    stub_props()
+    hut = {"id": "hut", "name": "Hut", "layout": {
+        "x": 1.0, "y": 1.0, "w": 3.0, "d": 3.0, "level": 0,
+        "always_visible": True, "surfaces": {"floor": "sand"},
+        "model_at": [1.5, 1.5], "model_offset_y": -0.30}}
+    loc = {"id": "loc", "map3d": {
+        "plan_width_m": PLAN_W, "storey_height_m": STOREY_REAL,
+        "area_model": True,
+        "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]]},
+        "rooms": [hut]}
+
+    def scene_with(walk=None) -> dict:
+        meta = {"width_m": 4.0}
+        if walk is not None:
+            meta["walk_y"] = walk
+        return scene_recipe.compose_scene(loc, plan_width_m=PLAN_W,
+                                          room_metas={"hut": meta})
+
+    sc = scene_with(0.35)
+    plate = [p for p in sc["plates"] if p.get("room_id") == "hut"][0]
+    check("the room's own surface lies on the storey floor: 0.09",
+          near(plate["top_y"], 0.09), str(plate["top_y"]))
+    spec = spec_of(sc, "room", "hut")
+    check("the diorama hangs at plate + clearance + offset = −0.19",
+          near(spec["bottom_y"], -0.19), str(spec.get("bottom_y")))
+    check("a dialled walk_y 0.35 reaches the payload as walk_y_world 0.16",
+          near(spec["walk_y_world"], 0.16), str(spec.get("walk_y_world")))
+    check("...and it is 0.07 above the plate the figure would otherwise take",
+          near(spec["walk_y_world"] - plate["top_y"], 0.07),
+          f'{spec["walk_y_world"]} vs {plate["top_y"]}')
+    check("a walk_y of 0 is a VALUE (the mesh's lower edge), not an absence",
+          near(spec_of(scene_with(0.0), "room", "hut")["walk_y_world"], -0.19),
+          str(spec_of(scene_with(0.0), "room", "hut").get("walk_y_world")))
+    check("without the dial the room declares nothing at all",
+          "walk_y_world" not in spec_of(scene_with(), "room", "hut"),
+          str(spec_of(scene_with(), "room", "hut").get("walk_y_world")))
+    # And the location itself has NO model here — exactly Mondscheinsee: the
+    # area flag is set, nothing was ever generated, so the plates are the only
+    # ground the payload draws. That is the case the client fell through.
+    check("the area location carries no building spec of its own",
+          not [m for m in sc["models"] if m["role"] == "building"],
+          str([m["role"] for m in sc["models"]]))
+
+    # THE STALENESS HALF: three dial values, three signatures — a running
+    # client's sweep compares exactly this string.
+    sigs = [scene_with(w)["signature"] for w in (None, 0.0, 0.35)]
+    check("every walk_y value has its own scene signature",
+          len(set(sigs)) == 3, str([s[:8] for s in sigs]))
+    lay = scene_recipe.layout_signature(loc["map3d"], loc["rooms"])
+    check("...while layout_signature stays put — it is the relief's key, and "
+          "a walk height moves no terrain",
+          lay == scene_recipe.layout_signature(loc["map3d"], loc["rooms"]),
+          lay[:8])
+
+    # ── source pins: the CLIENT rules that consume it ───────────────────
+    # The walking height raycasts a THREE scene, so the pure halves are
+    # hand-derived in `client3d/scripts/smoke_walk_math.mjs`
+    # (`declaredFloorAt`, `plateCeiling`); what is pinned here is that
+    # `tileWalkY` actually ASKS them — the hole the finding was.
+    tiles_ts = (Path(__file__).resolve().parents[1]
+                / "client3d" / "src" / "scene" / "tiles.ts")
+    tsrc = tiles_ts.read_text(encoding="utf-8") if tiles_ts.exists() else ""
+    check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
+    check("the walking figure asks the DECLARED floors first",
+          "declaredFloorAt(tile.declaredFloors" in tsrc)
+    check("...and the plate branch no longer belongs to `shell` alone",
+          "info.display === 'shell' || !target" in tsrc)
+    check("...judged by the PLATE ceiling, not the mesh ceiling",
+          "plateCeiling(info)" in tsrc and "recipeFloorAt(tile.walkPlates" in tsrc)
+    recipe_ts = (Path(__file__).resolve().parents[1]
+                 / "client3d" / "src" / "scene" / "sceneRecipe.ts")
+    rsrc = recipe_ts.read_text(encoding="utf-8") if recipe_ts.exists() else ""
+    check("client3d/src/scene/sceneRecipe.ts is where it is", bool(rsrc))
+    check("the mount fills the declared floors from the payload's own room "
+          "hulls", "tile.declaredFloors.push({ roomId: room.room_id" in rsrc)
+    check("...and drops them with the scene", "tile.declaredFloors = [];" in rsrc)
+
+
 def test_room_and_prop_specs() -> None:
     print("\n[8] diorama and prop specs")
     stub_props()
@@ -2946,6 +3059,7 @@ def main() -> int:
     test_contour_wall_texture()
     test_area_locations()
     test_boundary_only_datum()
+    test_area_room_walk_height()
     test_elevator()
     test_style()
     test_building_spec()

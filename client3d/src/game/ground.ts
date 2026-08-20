@@ -22,9 +22,16 @@
  * from world zero — a building sitting on an offset still gets the same
  * clearance over its entrance skin. Only a building whose spec declares no
  * walk height falls back to the bare 1.2 m the client used before.
+ *
+ * AND ABOVE BOTH stands a ROOM's own declaration (`declaredFloorAt`, § B
+ * addendum part C, 2026-08-20): where a diorama spec carries a
+ * `walk_y_world`, that is the floor of that room — before the plate, before
+ * the mesh, in every display mode. It is the same number the walkability
+ * sampling takes as its floor target, which is what keeps a figure and the
+ * NPC spots of its room on ONE surface.
  */
 
-import { pointInPolygon, type Polygon } from './polygon';
+import { pointInPolygon, polygonArea, type Polygon } from './polygon';
 
 /** Clearance over a building's walkable surface that still counts as ground,
  *  in metres. Above it starts the roof / the next storey. */
@@ -81,6 +88,68 @@ export function recipeFloorAt(plates: readonly WalkPlate[] | null | undefined,
   return best;
 }
 
+/**
+ * A room's DECLARED walking floor: the `walk_y_world` of its diorama spec
+ * plus the hull it is declared inside, both in TILE-LOCAL metres.
+ *
+ * The same shape as a plate on purpose — it answers the same question — but
+ * it is a different KIND of answer and therefore a different list: a plate is
+ * DRAWN geometry the rule may outrank, a declaration is the admin's word and
+ * outranks everything (§ B6 no. 7, "walk_y is a statement, never a
+ * measurement").
+ */
+export interface DeclaredFloor extends WalkPlate {
+  /** The room that declared it — the key a tier swap replaces its entry by. */
+  roomId: string;
+}
+
+/**
+ * THE DECLARED floor under a tile-local point, or `null` when no room
+ * declares one there (user finding 2026-08-20: Mondhütte).
+ *
+ * A declared `walk_y` beats the height heuristic in `sampleRoomWalkables`
+ * since the dial exists — but the WALKING figure never asked it: `tileWalkY`
+ * knew the drawn plates and the mesh ray and nothing else, so the dial moved
+ * the NPC spots and the room centre while the figure kept standing on the
+ * plate (or, in an area location without a mesh, on the bare tile floor).
+ * Two floors in one room, which is exactly what the one-datum law of
+ * 2026-08-20 forbids. This is the missing half of that law: ONE lookup, asked
+ * FIRST, by every consumer of the walking height.
+ *
+ * It applies whatever the location's `display` is. A declaration is not a
+ * property of the surrounding mesh — it is a statement about the room's own
+ * modelled floor (a podium, a sunken lounge, a hut standing in a lake), and a
+ * hut does not stop having a floor because the place around it is an area.
+ *
+ * WHERE SEVERAL DECLARATIONS COVER THE POINT the smallest hull wins — the
+ * innermost answer, the same most-specific-first tie-break the footprints use
+ * (v6 no. 6, `polygonArea`) and `groundLift` repeats for scene reliefs. Rooms
+ * are not supposed to overlap, but an always-visible outdoor zone spanning
+ * half the location legally contains a hut standing in it.
+ */
+export function declaredFloorAt(floors: readonly WalkPlate[] | null | undefined,
+                                lx: number, lz: number): number | null {
+  let best: WalkPlate | null = null;
+  let bestArea = -1;                       // < 0 = not measured yet
+  for (const floor of floors ?? []) {
+    if (!Number.isFinite(floor.top)) continue;
+    // Containment FIRST, and the area only for the hulls that answer at all:
+    // this runs per figure per frame, overlapping declarations are the rare
+    // case, and the tie-break must not cost a shoelace pass over every room
+    // hull of the location on every one of them. A hull of fewer than three
+    // points contains nothing (`pointInPolygon`), so it never declares.
+    if (!pointInPolygon(lx, lz, floor.outline as Polygon)) continue;
+    if (!best) { best = floor; continue; }
+    if (bestArea < 0) bestArea = polygonArea(best.outline as Polygon);
+    const area = polygonArea(floor.outline as Polygon);
+    if (area > 0 && (bestArea <= 0 || area < bestArea)) {
+      best = floor;
+      bestArea = area;
+    }
+  }
+  return best ? best.top : null;
+}
+
 /** What the scene payload says about the location's own model. `display` is
  *  the spec word of § B6 no. 10, `walkY` its `walk_y_world`. */
 export interface GroundModelInfo {
@@ -95,6 +164,21 @@ export interface GroundModelInfo {
 export function walkCeiling(info: GroundModelInfo | null | undefined): number {
   const display = info?.display ?? 'shell';
   if (display === 'ground' || display === 'shell_area') return Infinity;
+  return plateCeiling(info);
+}
+
+/**
+ * The ceiling that judges DRAWN PLATES — the storey question, never the mesh.
+ *
+ * For a building it IS `walkCeiling`: one clearance over the model's declared
+ * standing height, so the storey above is out of reach. For an AREA location
+ * the two part ways, and that is the point: `walkCeiling` is `Infinity` there
+ * because a shore, a slope and a lake bed are all ground and no mesh HIT above
+ * them is roof (finding B8) — but an area location's plates are still storeys,
+ * and an uncapped plate pick would put a figure on a level-1 plate at 2.90 m
+ * from the ground floor. The mesh keeps its exception, the plates do not.
+ */
+export function plateCeiling(info: GroundModelInfo | null | undefined): number {
   const walk = info?.walkY;
   const base = typeof walk === 'number' && Number.isFinite(walk) ? walk : 0;
   return base + ROOF_CLEARANCE_M;
