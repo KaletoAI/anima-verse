@@ -687,6 +687,12 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         "height_m": dims["height_m"],
         "dims_estimated": True,
         "rotation": {"x": 0, "y": 0, "z": 0},
+        # NEW props do not sway (user order 2026-08-20): the 1.0 default is
+        # the VEGETATION-era reading of an ABSENT key, kept so existing
+        # scatter plants keep waving — but furniture is the normal case now,
+        # so creation writes an explicit, stored 0.0. Plants opt IN via the
+        # dial; legacy sidecars without the key stay at the old default.
+        "sway_factor": 0.0,
         "tags": _coerce_tags(tags),
         "markers": [],
         "created_at": utc_now_iso(),
