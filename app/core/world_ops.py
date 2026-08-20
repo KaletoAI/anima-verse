@@ -1305,6 +1305,17 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
                 entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
             except (TypeError, ValueError):
                 pass
+        # WHICH model variant this placement shows (E2.3): a POSITION in the
+        # prop's active variant list, resolved by ``scene_recipe._variant_index``
+        # (out of range wraps, so a deleted mesh never makes a placement
+        # disappear). Only a manual placement carries it — a scattered copy
+        # derives its variant from the seed at compose time.
+        var = p.get("variant")
+        if var is not None and f"{var}".strip() != "":
+            try:
+                entry["variant"] = max(0, int(var))
+            except (TypeError, ValueError):
+                pass
         # Scatter fields survive only complete (count + seed) and within
         # the budget — a truncated count keeps what still fits.
         try:
@@ -1329,6 +1340,45 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
                         pass
         placements.append(entry)
     return placements[:100]
+
+
+def update_prop_placement(location_id: str, room_id: str, index: int,
+                          patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Patch ONE prop placement in place — yaw, offset_y, variant.
+
+    The narrow writer the scene-context pipeline needs: it produces a mesh
+    variant, a yaw from the plate camera and possibly a sink, and all three
+    belong on the placement that asked for them. Everything goes through
+    :func:`_sanitize_props` again, so this path cannot store a value the normal
+    editor could not — the patch is merged into the raw entry and the whole
+    list is re-sanitised. Returns the sanitised placement, or None when the
+    location/room/index does not exist.
+    """
+    from app.models.world import _load_world_data, _save_world_data
+
+    wdata = _load_world_data()
+    for loc in wdata.get("locations", []):
+        if loc.get("id") != location_id:
+            continue
+        for room in (loc.get("rooms") or []):
+            if str(room.get("id") or "") != str(room_id):
+                continue
+            layout = room.get("layout") or {}
+            props = list(layout.get("props") or [])
+            if not 0 <= int(index) < len(props):
+                return None
+            merged = dict(props[int(index)])
+            merged.update({k: v for k, v in (patch or {}).items()
+                           if v is not None})
+            props[int(index)] = merged
+            clean = _sanitize_props(props)
+            if not 0 <= int(index) < len(clean):
+                return None
+            layout["props"] = clean
+            room["layout"] = layout
+            _save_world_data(wdata)
+            return clean[int(index)]
+    return None
 
 
 # Everything a ROOM layout may carry and the ground layout may not (§ A13a).

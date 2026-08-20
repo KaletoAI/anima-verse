@@ -275,6 +275,26 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the single object only, isolated on a plain light gray background. No people, no scene.",
         },
     },
+    # The object drawn INTO a context plate (docs/scene-asset-pipeline.md).
+    # The picture already exists: light, camera, ground and scale come from the
+    # plate, and the only thing this prompt may add is ONE object at the marked
+    # spot. Everything that would tempt a model to redraw the scene (a setting,
+    # a background, a mood) is deliberately absent, and the negative names the
+    # two defects the cutout stage cannot repair — a floating object and a
+    # second copy of it. The one-metre grid in the plate is mentioned on
+    # purpose: it is the only scale reference the model gets.
+    "scene_asset": {
+        "keywords": {
+            "prompt_style": "add {subject} at the marked spot, standing firmly on the ground with its base touching it, same light and shadow direction as the rest of the photo, same perspective and camera angle, size true to the one-metre ground grid, sharp focus, photorealistic, surroundings unchanged",
+            "prompt_negative": "floating, hovering above the ground, cropped, cut off, two objects, duplicate, copy, people, person, text, watermark, changed background, new scenery, different lighting, relit scene",
+            "prompt_instruction": "Write comma-separated keywords for the ONE object to be added at the marked spot — what it is, its material, its colour, its size. Only the object; the surroundings, the light and the camera already exist.",
+        },
+        "natural": {
+            "prompt_style": "a photograph of {subject} standing at the marked spot, its base resting on the ground, lit by exactly the same light as everything around it and casting its shadow the same way, seen from the same camera angle, as large as the one-metre grid on the ground demands, with the rest of the picture completely unchanged",
+            "prompt_negative": "floating, hovering above the ground, cropped, cut off, two objects, duplicate, people, text, watermark, changed background, new scenery, different lighting",
+            "prompt_instruction": "Describe the ONE object to be added at the marked spot — what it is, its material, its colour, its size. Only the object; the surroundings, the light and the camera already exist.",
+        },
+    },
     "character": {
         "keywords": {
             "prompt_style": "RAW photo, 35mm, natural light, skin texture, visible pores, detailed anatomy, 8k, high detail",

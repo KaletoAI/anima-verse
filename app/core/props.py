@@ -192,6 +192,13 @@ def _prop_dir(prop_id: str, *, create: bool = False) -> Optional[Path]:
     return d
 
 
+def prop_dir(prop_id: str, *, create: bool = False) -> Optional[Path]:
+    """The prop's directory, for the pipelines that store their own artefacts
+    beside its model (the scene-context runs under ``scene_asset/<ts>/``).
+    Same rule as the internal reader: nothing is created unless asked for."""
+    return _prop_dir(prop_id, create=create)
+
+
 def _slugify(name: str) -> str:
     slug = _SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")
     return slug[:40] or "prop"

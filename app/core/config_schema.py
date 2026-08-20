@@ -388,6 +388,27 @@ SECTIONS = {
                 ],
             },
             {
+                "id": "scene_asset",
+                "label": "Assets in the scene context",
+                "icon": "🪑",
+                "description": "The pipeline that draws an object into the context plate, cuts it out and rebuilds it in 3D (docs/scene-asset-pipeline.md).",
+                "fields": [
+                    "_grp_scene_asset",
+                    "scene_asset_mask_margin",
+                    "scene_asset_diff_threshold",
+                    "scene_asset_rembg",
+                    "scene_asset_crop_margin",
+                    "scene_asset_crop_px",
+                    "scene_asset_px_ratio_min",
+                    "scene_asset_px_ratio_max",
+                    "scene_asset_height_tolerance",
+                    "scene_asset_contact_tolerance_m",
+                    "scene_asset_contact_ratio",
+                    "scene_asset_level_slope_m",
+                    "scene_asset_retries",
+                ],
+            },
+            {
                 "id": "analysis",
                 "label": "Analysis & rebuild prompts",
                 "icon": "🔍",
@@ -454,6 +475,23 @@ SECTIONS = {
             "context_render_grid": {"type": "bool", "label": "Show the 1 m scale grid", "default": True, "description": "Draw a one-metre grid over the ground of the plate. It is the scale reference that lets a person — and the edit model — judge how big the object at this spot should be. Turn it off for a plate that goes to a backend which copies ground patterns into the object."},
             "context_render_figure": {"type": "bool", "label": "Show the 1.70 m reference figure", "default": True, "description": "Place a 1.70 m figure beside the spot (the contract's own figure height, § A3). It stands at right angles to the camera direction, never on the spot itself. The second half of 'measurements need a reference' — a grid gives the unit, a figure gives the feeling."},
             "context_render_mask_dilate_px": {"type": "float", "label": "Inpaint mask dilation (px)", "default": 0.0, "min": 0.0, "max": 128.0, "description": "How far the target's projected footprint mask is grown before it is written to the sidecar. A little slack lets the object's contact shadow and its contact with the ground land inside the inpainted region; too much lets the edit model rebuild the surroundings."},
+            # --- Assets in the scene context (docs/scene-asset-pipeline.md) ---
+            # Defaults are mirrored in app/core/scene_asset.py so the module
+            # also runs with no world loaded (smoke checks, CLI).
+            "_grp_scene_asset": {"type": "group_header", "label": "Assets in the Scene Context"},
+            "scene_asset_mask_margin": {"type": "float", "label": "Inpaint mask margin", "default": 0.12, "min": 0.0, "max": 0.5, "step": 0.01, "description": "How far the target's projected footprint grows before it becomes the inpaint mask, as a fraction of its longer side. The object needs room for its own shadow and for the ground it stands on; too much and the model starts rebuilding the surroundings it was supposed to leave alone."},
+            "scene_asset_diff_threshold": {"type": "int", "label": "Change threshold (0-255)", "default": 12, "min": 1, "max": 128, "description": "How far a pixel's strongest colour channel must move between the plate and the edited plate to count as 'the object'. Too low and the render's own noise joins the cutout; too high and a dark object against dark ground loses its edges."},
+            "scene_asset_rembg": {"type": "bool", "label": "Clean the cutout with rembg", "default": True, "description": "Intersect the difference mask with a background removal of the same crop. It trims the halo the difference leaves around soft edges. Never used alone: rembg finds 'the foreground', which on a plate full of scenery is not necessarily the object that was just added."},
+            "scene_asset_crop_margin": {"type": "float", "label": "Cutout crop margin", "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.05, "description": "Extra room around the cutout before it is enlarged for image-to-3D. A mesher wants the whole object with air around it; a patch cropped tight on the silhouette produces meshes that end at the picture edge."},
+            "scene_asset_crop_px": {"type": "int", "label": "Mesher input size (px)", "default": 1024, "min": 256, "max": 2048, "description": "Edge length the cutout patch is enlarged to before image-to-3D. Enlarging costs nothing but time and gives the mesher the resolution it expects, even when the object was small in the plate."},
+            "scene_asset_px_ratio_min": {"type": "float", "label": "Drawn size — minimum", "default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05, "description": "Lower bound for (drawn pixel height) / (the pixel height the object's own dimensions demand at this camera). Below it the model drew something far too small — a fresh seed, not a small object."},
+            "scene_asset_px_ratio_max": {"type": "float", "label": "Drawn size — maximum", "default": 2.5, "min": 1.0, "max": 6.0, "step": 0.1, "description": "Upper bound for the same ratio. The band is deliberately asymmetric: an oversized object usually means the model filled the whole mask, which is a far more common failure than a slightly small one."},
+            "scene_asset_height_tolerance": {"type": "float", "label": "Height tolerance", "default": 0.1, "min": 0.01, "max": 0.5, "step": 0.01, "description": "How far the finished mesh may miss the prop's declared height after normalisation, as a fraction. This is the metric gate: the scale comes from the prop's specification, never from the picture, and a mesh that will not scale to it is a failed attempt."},
+            "scene_asset_contact_tolerance_m": {"type": "float", "label": "Ground contact tolerance (m)", "default": 0.05, "min": 0.005, "max": 0.5, "step": 0.005, "description": "How close a footprint sample must be to the ground below it to count as touching. Five centimetres is under the noise of a sampled height field and still visible as a gap under a chair leg."},
+            "scene_asset_contact_ratio": {"type": "float", "label": "Required contact ratio", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05, "description": "Fraction of the nine footprint samples that must touch the ground after the placement has been allowed to sink. Below it the object sits on terrain too uneven for its base, and the result says so instead of pretending."},
+            "scene_asset_level_slope_m": {"type": "float", "label": "Levelling suggestion above (m)", "default": 0.1, "min": 0.01, "max": 2.0, "step": 0.01, "description": "Height difference across the footprint above which the result SUGGESTS levelling the ground locally. Only a suggestion — the terrain belongs to the author, and no object is worth reshaping the world behind their back."},
+            "scene_asset_retries": {"type": "int", "label": "Retries", "default": 2, "min": 0, "max": 5, "description": "Extra attempts with a fresh seed after a failed check. Each one costs an image and a mesh generation, so the budget is small on purpose; a defect that survives three seeds is not a seed problem."},
+
             "context_render_timeout_s": {"type": "int", "label": "Context render timeout (s)", "default": 600, "min": 30, "max": 3600, "description": "Hard limit for one context render. This is a real Cycles render with imported meshes, so the mesh-refinement timeout (which measures and normalises in under a second) is the wrong order of magnitude for it."},
 
             "blender_lod_ratio_building": {"type": "float", "label": "Distance mesh detail — buildings", "default": 0.5, "min": 0.02, "max": 0.9, "description": "Target fraction for a building's distance mesh. Buildings are the far-view models of a location and are rarely seen up close, but they share the rooms' problem of flat surfaces beside fine detail — hence the same starting point."},

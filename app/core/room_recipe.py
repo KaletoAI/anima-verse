@@ -373,6 +373,15 @@ def _join_placements(lay: Dict[str, Any], ox: float, oy: float,
             "yaw": _r(yaw, 1),
             "offset_y": _r(off_y, 3),
         }
+        # An authored variant choice rides along (E2.3): the scene spec reads
+        # it off the recipe placement (``scene_recipe._variant_index``), so
+        # dropping it here would silently show variant 0 for every manual
+        # placement no matter what the editor picked.
+        if placement.get("variant") is not None:
+            try:
+                entry["variant"] = max(0, int(placement.get("variant")))
+            except (TypeError, ValueError):
+                pass
         prop = prop_store.get_prop(pid)
         if not prop:
             entry["missing"] = True
