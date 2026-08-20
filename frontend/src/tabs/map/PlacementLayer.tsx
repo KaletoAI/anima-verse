@@ -654,6 +654,33 @@ export function PlacementLayer({
           closed
           color={COL_SELECTED}
           minPoints={3}
+          // Same snapping rule as the floor plan (user finding 2026-08-20),
+          // but the axes that make an edge STRAIGHT are the location's LOCAL
+          // axes — so the candidate rides through the inverse pin transform,
+          // aligns to the neighbour vertices' local axes and a 0.5 m grid,
+          // and comes back. Shift = free-hand, as everywhere.
+          snap={(x, z, i, shift) => {
+            if (shift || !selLoc || !selBoundary) return [x, z] as [number, number]
+            const cx = selLoc.pos_x as number
+            const cz = selLoc.pos_z as number
+            const yaw = yawOf(selLoc)
+            const l = worldToLocal(cx, cz, yaw, x, z)
+            let lx = l.x
+            let lz = l.z
+            const n = selBoundary.length
+            const TOL = 0.35
+            const GRID = 0.5
+            for (const k of [(i - 1 + n) % n, (i + 1) % n]) {
+              if (k === i) continue
+              const [ax, az] = selBoundary[k]
+              if (Math.abs(lx - ax) <= TOL) lx = ax
+              if (Math.abs(lz - az) <= TOL) lz = az
+            }
+            if (lx === l.x) lx = Math.round(lx / GRID) * GRID
+            if (lz === l.z) lz = Math.round(lz / GRID) * GRID
+            const wpt = localToWorld(cx, cz, yaw, lx, lz)
+            return [wpt.x, wpt.z] as [number, number]
+          }}
           onMove={(i, x, z) => commitBoundary(selLoc,
             selHandlePts.map((pt, k) => (k === i ? [x, z] as [number, number] : pt)))}
           onDelete={(i) => commitBoundary(selLoc,

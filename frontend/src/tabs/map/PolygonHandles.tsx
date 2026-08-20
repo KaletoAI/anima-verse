@@ -64,6 +64,12 @@ export interface PolygonHandlesProps {
   dashed?: boolean
   /** Fewer points than this and nothing is drawn at all. */
   minPoints: number
+  /** Snap hook for drags and edge inserts: receives the raw point, the
+   *  vertex index it applies to and whether Shift is held (the universal
+   *  free-hand escape), returns the point to use. The HOST owns the rule —
+   *  a floor plan aligns to neighbour axes and its metre grid, painted
+   *  terrain stays free-hand by simply not passing one. */
+  snap?: (x: number, z: number, index: number, shift: boolean) => [number, number]
   /** A finished drag, in world metres. */
   onMove: (index: number, x: number, z: number) => void
   onDelete: (index: number) => void
@@ -73,7 +79,7 @@ export interface PolygonHandlesProps {
 
 export function PolygonHandles({
   points, closed, color, outlineOf, dashed, minPoints,
-  onMove, onDelete, onInsert,
+  snap, onMove, onDelete, onInsert,
 }: PolygonHandlesProps) {
   const { view, w, h } = useMapView()
   const [drag, setDrag] = useState<{ i: number; x: number; z: number } | null>(null)
@@ -83,6 +89,8 @@ export function PolygonHandles({
   viewRef.current = view
   const moveRef = useRef(onMove)
   moveRef.current = onMove
+  const snapRef = useRef(snap)
+  snapRef.current = snap
   const dragRef = useRef<{
     i: number; sx: number; sy: number; ox: number; oz: number
     moved: boolean; x: number; z: number
@@ -99,8 +107,12 @@ export function PolygonHandles({
         d.moved = true
       }
       const px = viewRef.current.pxPerM
-      d.x = r2(d.ox + dx / px)
-      d.z = r2(d.oz + dy / px)
+      let nx = d.ox + dx / px
+      let nz = d.oz + dy / px
+      const sn = snapRef.current
+      if (sn) [nx, nz] = sn(nx, nz, d.i, e.shiftKey)
+      d.x = r2(nx)
+      d.z = r2(nz)
       setDrag({ i: d.i, x: d.x, z: d.z })
     }
     const up = () => {
@@ -182,7 +194,9 @@ export function PolygonHandles({
             onClick={(e) => {
               const p = worldAt(e)
               if (!p) return
-              const on = projectOnSegment(a, b, p.x, p.z)
+              let on = projectOnSegment(a, b, p.x, p.z)
+              const sn = snapRef.current
+              if (sn) on = sn(on[0], on[1], i + 1, e.shiftKey)
               onInsert(i + 1, r2(on[0]), r2(on[1]))
             }} />
         )

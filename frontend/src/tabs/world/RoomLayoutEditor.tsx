@@ -2913,6 +2913,33 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 closed
                 color="#3fb950"
                 minPoints={3}
+                // Snapping like every other tool (user finding 2026-08-20:
+                // raw handles cannot produce a straight edge): first align to
+                // the NEIGHBOUR vertices' axes — that is what squares a
+                // corner — then the metre grid; Shift is the universal
+                // free-hand escape. Tolerance is the same pixel-constant
+                // metre tolerance the room tools use.
+                snap={(x, z, i, shift) => {
+                  if (shift) return [x, z]
+                  let nx = x
+                  let nz = z
+                  const n = boundaryM.length
+                  if (n >= 2) {
+                    for (const k of [(i - 1 + n) % n, (i + 1) % n]) {
+                      if (k === i) continue
+                      const [ax, az] = boundaryM[k]
+                      if (Math.abs(nx - ax) <= snapTolM) nx = ax
+                      if (Math.abs(nz - az) <= snapTolM) nz = az
+                    }
+                  }
+                  if (gridStep > 0) {
+                    // The grid must not undo an axis alignment — it only
+                    // rasters the coordinate the neighbours left free.
+                    if (nx === x) nx = snapToGrid(nx, gridStep)
+                    if (nz === z) nz = snapToGrid(nz, gridStep)
+                  }
+                  return [nx, nz]
+                }}
                 onMove={(i, x, z) => { void writeBoundary(
                   boundaryM.map((pt, k) => (k === i ? [x, z] as Pt : pt))) }}
                 onDelete={(i) => { void writeBoundary(
