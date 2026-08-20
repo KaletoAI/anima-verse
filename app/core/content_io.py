@@ -509,6 +509,36 @@ def import_rule_from_zip(
 # Locations
 # ---------------------------------------------------------------------------
 
+def _referenced_prop_ids(loc: Dict[str, Any]) -> List[str]:
+    """Every prop id the location's rooms NAME, sorted.
+
+    Two places store one: a furnishing placement (``layout.props[].prop_id``)
+    and the optional frame/leaf prop of a wall opening
+    (``layout.openings[].prop_id``, world_ops._sanitize_opening). Both are
+    stored references, so both are a DEPENDENCY of the pack — a prop that does
+    not travel renders as "missing" forever on the far side.
+
+    The GROUND room is an ordinary member of ``rooms`` and its reduced layout
+    (§ A13a) carries ``props`` like any other, so it is covered by walking the
+    room list; there is no second place to look.
+    """
+    out: Set[str] = set()
+    for room in (loc.get("rooms") or []):
+        if not isinstance(room, dict):
+            continue
+        layout = room.get("layout")
+        if not isinstance(layout, dict):
+            continue
+        for key in ("props", "openings"):
+            for entry in (layout.get(key) or []):
+                if not isinstance(entry, dict):
+                    continue
+                pid = (entry.get("prop_id") or "").strip()
+                if pid:
+                    out.add(pid)
+    return sorted(out)
+
+
 def export_location_to_zip(location_id: str) -> bytes:
     """Export a location as a ZIP: DB row + rooms + gallery, plus everything
     the rooms reference — 3D models, placed props and room items."""
@@ -548,12 +578,7 @@ def export_location_to_zip(location_id: str) -> bytes:
         # Referenced props travel as a dependency — a placement without its prop
         # renders as "missing" forever (room_recipe.py:395).
         from app.core.props import _prop_dir
-        prop_ids = sorted({
-            (p.get("prop_id") or "").strip()
-            for room in (loc.get("rooms") or [])
-            for p in ((room.get("layout") or {}).get("props") or [])
-            if isinstance(p, dict) and (p.get("prop_id") or "").strip()
-        })
+        prop_ids = _referenced_prop_ids(loc)
         bundled_props: List[str] = []
         for pid in prop_ids:
             d = _prop_dir(pid)
@@ -629,6 +654,154 @@ def _remap_model3d_basename(name: str, room_id_map: Dict[str, str]) -> str:
     return name
 
 
+def _remap_room_refs(loc: Dict[str, Any], room_id_map: Dict[str, str]) -> None:
+    """Point every stored ROOM REFERENCE at the freshly minted id.
+
+    The import mints a new id for every room but the reserved ground, so a
+    reference that still names the SOURCE world's id is a dangling one — the
+    same class of bug the ``gallery_meta`` remap fixes for images. Three
+    fields carry a room id; ``entry_room`` is remapped by the caller, the two
+    here sit inside the geometry:
+
+    * ``map3d.boundary_openings[].room`` — which room a pass-through at the
+      LOCATION edge leads into (§ A13a),
+    * ``rooms[].layout.openings[].to`` — a wall opening's connectivity target.
+      The literal ``outside`` is not a room and is left alone; so is any other
+      id the map does not know, which then simply stays dangling instead of
+      being pointed at an unrelated room.
+    """
+    if not room_id_map:
+        return
+    map3d = loc.get("map3d")
+    if isinstance(map3d, dict):
+        for op in (map3d.get("boundary_openings") or []):
+            if isinstance(op, dict) and op.get("room") in room_id_map:
+                op["room"] = room_id_map[op["room"]]
+    for room in (loc.get("rooms") or []):
+        if not isinstance(room, dict):
+            continue
+        layout = room.get("layout")
+        if not isinstance(layout, dict):
+            continue
+        for op in (layout.get("openings") or []):
+            if isinstance(op, dict) and op.get("to") in room_id_map:
+                op["to"] = room_id_map[op["to"]]
+
+
+def _sanitize_imported_location(loc: Dict[str, Any]) -> List[str]:
+    """Run the location's geometry through the WORLD'S OWN sanitizers, in
+    place, and report in plain words what did not survive.
+
+    THE IMPORTER NEVER WRITES RAW JSON INTO THE WORLD. ``_save_world_data``
+    stores a location dict verbatim in the ``meta`` blob, so a ZIP is a direct
+    write path into the world — without this step an archive could put a shape
+    into the DB that no editor, no API call and no map-layout apply could ever
+    produce. These are the exact same functions the ordinary save path uses
+    (``world_ops.create_location_with_extras`` /
+    ``update_location_with_extras`` / ``layout_apply``), so a pack cannot
+    store what the admin UI could not.
+
+    NO MIGRATION, BY DOCTRINE. A pre-v6 archive is not translated: what the
+    sanitizer refuses is DROPPED, and every drop is named in the returned
+    warnings so the user sees what fell away instead of finding a silently
+    emptied room later. The two that bite hardest:
+
+    * ``map3d.plan_width_m`` is not an input at all any more — it is DERIVED
+      from the drawn boundary (v6 Nr. 2). A submitted value is ignored and the
+      width recomputed here, so an archive can never smuggle a width that
+      contradicts its own outline.
+    * a boundary opening's ``edge`` is a 0-based INDEX into that boundary
+      (v6 Nr. 5). The letters N/S/E/W have no reader left, so such an entry is
+      dropped, and so is an index the outline does not have.
+    """
+    from app.core.world_ops import (_GROUND_FORBIDDEN, _sanitize_map3d,
+                                    _sanitize_room_layout,
+                                    sanitize_ground_layout)
+    from app.models.world import GROUND_ROOM_ID
+
+    warnings: List[str] = []
+
+    if "map3d" in loc:
+        raw = loc.get("map3d")
+        if not isinstance(raw, dict):
+            loc.pop("map3d", None)
+            warnings.append("map3d dropped — it is not an object")
+        elif raw:
+            clean = _sanitize_map3d(raw)
+            raw_bo = raw.get("boundary_openings")
+            n_raw = len(raw_bo) if isinstance(raw_bo, list) else 0
+            n_clean = len(clean.get("boundary_openings") or [])
+            if n_clean < n_raw:
+                warnings.append(
+                    f"map3d: {n_raw - n_clean} of {n_raw} boundary opening(s) "
+                    "dropped — since contract v6 an edge is a 0-based INDEX "
+                    "into the drawn boundary; letter edges (N/S/E/W) and "
+                    "indices the boundary does not have have no reader left")
+            if raw.get("boundary") and not clean.get("boundary"):
+                warnings.append(
+                    "map3d: the boundary was dropped — fewer than 3 distinct "
+                    "points, or a shape with no extent, encloses no area")
+            raw_width = raw.get("plan_width_m")
+            new_width = clean.get("plan_width_m")
+            if raw_width is not None and new_width != raw_width:
+                warnings.append(
+                    f"map3d: the stored plan_width_m ({raw_width!r}) was "
+                    "ignored — it is DERIVED from the drawn boundary, never "
+                    f"imported (now: {new_width!r})")
+            gone = sorted(set(raw) - set(clean)
+                          - {"boundary", "boundary_openings", "plan_width_m"})
+            if gone:
+                warnings.append(
+                    "map3d: field(s) the v6 contract no longer knows were "
+                    "dropped: " + ", ".join(gone))
+            if clean:
+                loc["map3d"] = clean
+            else:
+                loc.pop("map3d", None)
+                warnings.append(
+                    "map3d: nothing survived — the location has no area and "
+                    "lands on the map as a bare pin")
+
+    for room in (loc.get("rooms") or []):
+        if not isinstance(room, dict) or "layout" not in room:
+            continue
+        raw = room.get("layout")
+        label = str(room.get("name") or room.get("id") or "?")
+        is_ground = room.get("id") == GROUND_ROOM_ID
+        if is_ground:
+            clean = sanitize_ground_layout(raw)
+            stripped = ([k for k in _GROUND_FORBIDDEN if k in raw]
+                        if isinstance(raw, dict) else [])
+            if stripped:
+                warnings.append(
+                    "ground layout: room-geometry field(s) dropped ("
+                    + ", ".join(stripped)
+                    + ") — the ground has no rect, its frame IS the location "
+                      "(§ A13a)")
+        else:
+            clean = _sanitize_room_layout(raw)
+            if raw and not clean:
+                warnings.append(
+                    f"room '{label}': the whole layout was dropped — x/y/w/d "
+                    "in METRES are what makes a layout (contract v6 Nr. 2)")
+        if clean and isinstance(raw, dict):
+            for key, what in (("props", "prop placement"),
+                              ("markers", "marker"),
+                              ("openings", "opening")):
+                n_raw = len(raw.get(key) or [])
+                n_clean = len(clean.get(key) or [])
+                if n_clean < n_raw:
+                    warnings.append(
+                        f"room '{label}': {n_raw - n_clean} of {n_raw} "
+                        f"{what}(s) dropped by the sanitizer")
+        if clean:
+            room["layout"] = clean
+        else:
+            room.pop("layout", None)
+
+    return warnings
+
+
 def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     """Import a location ZIP. Always creates a new location (new UUID).
 
@@ -638,6 +811,11 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     are installed unless the world already has them, and embedded room items
     are created unless they already exist. A placement whose prop is neither
     bundled nor present is reported in `props_missing` — never swallowed.
+
+    THE GEOMETRY GOES THROUGH THE WORLD'S OWN SANITIZERS
+    (:func:`_sanitize_imported_location`) before the first byte reaches the DB,
+    and what they refuse is reported in `warnings` rather than translated —
+    see that function for the no-migration doctrine this rests on.
 
     The location itself lands UNPLACED; the user positions it in the map
     editor. The known_locations status is NOT auto-granted to existing
@@ -688,6 +866,12 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             room["prompt_changed"] = True
     if loc.get("entry_room") and loc["entry_room"] in room_id_map:
         loc["entry_room"] = room_id_map[loc["entry_room"]]
+    # The remaining room references sit inside the geometry, and the geometry
+    # itself only reaches the DB through the world's own sanitizers — see
+    # _sanitize_imported_location for why a ZIP is a write path that must not
+    # bypass them.
+    _remap_room_refs(loc, room_id_map)
+    sanitize_warnings = _sanitize_imported_location(loc)
 
     loc["name"] = _free_location_name((loc.get("name") or "Imported location").strip())
     if loc.get("image_prompt_day") or loc.get("image_prompt_night"):
@@ -818,12 +1002,12 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             target.write_bytes(zf.read(member))
         props_imported.append(pid)
 
-    referenced = {
-        (p.get("prop_id") or "").strip()
-        for room in (loc.get("rooms") or [])
-        for p in ((room.get("layout") or {}).get("props") or [])
-        if isinstance(p, dict) and (p.get("prop_id") or "").strip()
-    }
+    # Read from the SANITIZED location: a placement the sanitizer already threw
+    # away (a prop id the store would refuse) is no longer a dependency, and
+    # reporting it as "missing" would send the user hunting for a prop that
+    # nothing references any more. That drop is reported on its own, in
+    # `warnings`.
+    referenced = set(_referenced_prop_ids(loc))
     props_missing = sorted(
         pid for pid in referenced - set(bundled)
         if not (_prop_dir(pid) and _prop_dir(pid).is_dir()))
@@ -844,6 +1028,8 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         loc["name"], new_loc_id, file_count, model3d_files,
         len(props_imported), len(items_imported),
     )
+    for line in sanitize_warnings:
+        logger.warning("Location import %s: %s", new_loc_id, line)
     return {
         "status": "success",
         "location_id": new_loc_id,
@@ -855,6 +1041,11 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         "props_existing": props_existing,
         "props_missing": props_missing,
         "items_imported": items_imported,
+        # What the sanitizers refused, in plain words. Empty for a pack from a
+        # current world; non-empty is the no-migration doctrine made visible —
+        # the UI shows these lines instead of letting the user find an emptied
+        # room weeks later.
+        "warnings": sanitize_warnings,
     }
 
 

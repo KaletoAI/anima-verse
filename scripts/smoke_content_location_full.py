@@ -23,8 +23,10 @@ Seed (all files are dummy bytes, nothing is generated):
     import must leave both the id and that filename alone.
   * One prop via create_prop(name="Chair"); create_prop writes sidecar.json,
     the smoke adds model_1.glb -> the prop dir holds exactly 2 files.
-    The prop is placed in room 1:
-        layout.props = [{"prop_id": <pid>, "at": [0.5, 0.5], "yaw": 0}]
+    The prop is placed in room 1, in a METRIC layout (v6 Nr. 2 — x/y/w/d in
+    metres are what makes a layout, and the import sanitizes):
+        layout = {"x": 0, "y": 0, "w": 4, "d": 3,
+                  "props": [{"prop_id": <pid>, "at": [0.5, 0.5], "yaw": 0}]}
   * One world item via _save_items([...]) plus a dummy bild.png in its item
     dir, placed in room 1 via add_item_to_room().
 
@@ -116,6 +118,62 @@ already owns the prop:
  [11] The RESPONSE SHAPE the UI reads. POST /api/content/import answers
       {status, result: <importer dict>} — props_missing sits under `result`,
       NOT at the top level. Asserted against the real route function.
+
+ [12] CONTRACT-v6 ROUND TRIP (2026-08-20). A second location carrying every
+      piece of state the "Gebiete" and prop-world waves added is exported,
+      the location AND its prop are deleted, and the ZIP is imported into the
+      emptied world. The fixture, seeded through the ordinary save path
+      (``update_location_with_extras``) so the stored shape is the
+      sanitizers' own:
+
+        map3d   an L-shaped boundary in local metres, drawn CLOCKWISE
+                ([-10,-10] [10,-10] [10,0] [0,0] [0,10] [-10,10]: the
+                signed-area sum is 200+200+100+0+0+100 = 600, i.e. +300, so
+                the sanitizer keeps the order as written), two boundary
+                openings on EDGE INDICES 2 and 5 (six points = six edges),
+                storey_height_m, level_floors, wall_kind, area_model,
+                area_detail and a relief. ``plan_width_m`` is submitted as
+                999.0 and must come back as 20.0 — the wider side of the
+                20 x 20 bounding box — because it is DERIVED, never imported.
+        rooms   "Clearing" metric and rotated 90° (markers, surfaces, a door
+                whose ``to`` names the other room, a prop placement with
+                ``variant`` 1, model_at/model_offset_y/floor_offset_y);
+                "Hut" with a drawn outline plus one quadratic curve on edge 1
+                whose control point (6,3) bulges INWARD, so the bbox fold is
+                a no-op and x/y/w/d stay 0/0/8/6; the GROUND with the reduced
+                § A13a layout (props + markers in LOCATION metres, no rect).
+        prop    "Oak" with TWO variants — meshes ``model_1.glb`` and
+                ``model-v2_1.glb``, source images ``source.png`` and
+                ``source-v2.png``, and a selection in which variant 0's
+                ``low`` tier is DECLINED via the ``__none__`` sentinel.
+        model   the building GLB is a generated ROOF: its sidecar carries
+                ``roof_only`` plus width_m/walk_y.
+
+      Asserted field for field after the import, hand-derived from the seed:
+      map3d.boundary point for point, the re-derived plan_width_m, both
+      boundary openings WITH the ``room`` reference following the freshly
+      minted room id, the rest of map3d unchanged, all three layouts
+      (including the door's ``to`` pointing at the new Hut id), the prop's
+      variant list, its selection.json with the sentinel, both meshes, both
+      source images, and the roof sidecar. ``warnings`` is empty — a pack from
+      a current world loses nothing.
+
+ [13] LEGACY ARCHIVE — the sanitizer decides, nothing is migrated. A hand-made
+      ZIP with pre-v6 state:
+        * ``map3d`` with plan_width_m, rotation, size, extent_m, tile_rotation
+          and two boundary openings on LETTER edges ("N"/"E"). None of them
+          has a reader: every field is dropped, and since a location without a
+          drawn boundary has no area, the whole map3d goes. Each drop is named
+          in ``warnings``.
+        * a fraction-era room rect (0.1/0.1/0.5/0.5) is NOT translated — those
+          are finite metres, so the room arrives 50 cm across. A factor would
+          be exactly the migration this repo refuses, and nothing distinguishes
+          it from a legitimately tiny room.
+        * a letter edge on a ROOM opening stays valid: only the LOCATION
+          boundary moved to indices (v6 Nr. 5). ``_sanitize_opening`` still
+          accepts N/S/E/W for rectangles.
+        * the ground keeps its placements and loses every room-geometry field
+          (§ A13a), which is reported too.
 
 Usage:  ./.venv/bin/python scripts/smoke_content_location_full.py
 """
@@ -222,9 +280,14 @@ for entry in data.get("locations", []):
     entry["yaw_deg"] = 42.0
     for room in entry.get("rooms", []):
         if room.get("id") == room1_id:
-            room.setdefault("layout", {})["props"] = [
-                {"prop_id": prop_id, "at": [0.5, 0.5], "yaw": 0},
-            ]
+            # A METRIC layout (contract v6 Nr. 2): x/y/w/d in metres are what
+            # makes a layout, and the import runs every one of them through
+            # the world's sanitizers — a placement list without a rectangle
+            # would be dropped there, which is section [13]'s subject.
+            room["layout"] = {
+                "x": 0, "y": 0, "w": 4, "d": 3,
+                "props": [{"prop_id": prop_id, "at": [0.5, 0.5], "yaw": 0}],
+            }
 _save_world_data(data)
 
 # World item + image + room placement
@@ -356,7 +419,12 @@ old_loc = {
     "pos_x": 5.0, "pos_z": 6.0, "yaw_deg": 90.0,
     "rooms": [{
         "id": "oldroom1", "name": "Taproom", "description": "",
-        "layout": {"props": [{"prop_id": prop_id, "at": [0.5, 0.5], "yaw": 0}]},
+        # A METRIC rect, so this section tests what it is about — a ZIP without
+        # the post-E9 directories. What the v6 sanitizers do to a pre-v6
+        # geometry is section [13]'s job, and a layout without x/y/w/d in
+        # metres is not a layout at all any more.
+        "layout": {"x": 0, "y": 0, "w": 4, "d": 3,
+                   "props": [{"prop_id": prop_id, "at": [0.5, 0.5], "yaw": 0}]},
     }],
 }
 old_buf = io.BytesIO()
@@ -393,7 +461,8 @@ bad_loc = {
     "id": "badloc01", "name": "Bad Inn", "description": "",
     "rooms": [{
         "id": "badroom1", "name": "Taproom", "description": "",
-        "layout": {"props": [{"prop_id": bad_pid, "at": [0.5, 0.5], "yaw": 0}]},
+        "layout": {"x": 0, "y": 0, "w": 4, "d": 3,
+                   "props": [{"prop_id": bad_pid, "at": [0.5, 0.5], "yaw": 0}]},
     }],
 }
 bad_buf = io.BytesIO()
@@ -409,7 +478,14 @@ with zipfile.ZipFile(bad_buf, "w", zipfile.ZIP_DEFLATED) as out:
 res5 = import_location_from_zip(bad_buf.getvalue())
 check("ungueltige id nicht installiert", res5["props_imported"], [])
 check("ungueltige id nicht als existierend gemeldet", res5["props_existing"], [])
-check("ungueltige id landet in props_missing", res5["props_missing"], [bad_pid])
+# The PLACEMENT goes first: `_sanitize_props` refuses an id the prop store
+# would refuse, exactly as it does in the editor — so after the sanitizer pass
+# nothing references it any more and there is nothing to miss. The drop itself
+# is reported instead of being swallowed.
+check("ungueltige id ist keine offene Abhaengigkeit mehr",
+      res5["props_missing"], [])
+check("verworfene Platzierung wird gemeldet",
+      any("prop placement(s) dropped" in w for w in res5["warnings"]), True)
 check("kein Verzeichnis unter dem rohen Namen angelegt",
       (STORAGE / "props" / bad_pid).exists(), False)
 
@@ -450,6 +526,291 @@ check("Antwort-Keys", sorted(resp.keys()), ["result", "status"])
 check("props_missing NICHT auf oberster Ebene", "props_missing" in resp, False)
 check("props_missing unter result (das liest die UI)",
       resp["result"]["props_missing"], [prop_id])
+
+print("\n[12] Contract-v6 round trip — export, wipe, import, compare")
+from app.core.model_store import SEL_NONE  # noqa: E402
+from app.core.props import (  # noqa: E402
+    add_variant, model_gallery, read_sidecar)
+from app.core.world_ops import update_location_with_extras  # noqa: E402
+from app.models.world import delete_location  # noqa: E402
+
+# --- the prop with TWO variants -------------------------------------------
+oak = create_prop(name="Oak", category="nature", width_m=2.0, depth_m=2.0,
+                  height_m=6.0)
+OAK = oak["id"]
+odir = _prop_dir(OAK, create=True)
+(odir / "model_1.glb").write_bytes(b"GLB-oak-full")
+(odir / "model_2.glb").write_bytes(b"GLB-oak-low")
+(odir / "source.png").write_bytes(b"PNG-oak-src")
+check("zweite Variante angelegt", add_variant(OAK), 1)
+(odir / "model-v2_1.glb").write_bytes(b"GLB-oak2-full")
+(odir / "source-v2.png").write_bytes(b"PNG-oak2-src")
+g0 = model_gallery(OAK, 0)
+g0.select("model_1.glb", "full")
+g0.select("", "low")            # the sentinel: this tier is DECLINED
+g1 = model_gallery(OAK, 1)
+g1.select("model-v2_1.glb", "full")
+OAK_SELECTION = {"model": {"full": "model_1.glb", "low": SEL_NONE},
+                 "model-v2": {"full": "model-v2_1.glb"}}
+OAK_VARIANTS = [{"stem": "model", "active": True},
+                {"stem": "model-v2", "active": True}]
+check("Selection wie erwartet",
+      read_json(odir / "selection.json"), OAK_SELECTION)
+check("Variantenliste wie erwartet",
+      read_sidecar(OAK).get("model_variants"), OAK_VARIANTS)
+
+# --- the location -----------------------------------------------------------
+grove = add_location("Grove", "v6 fixture", rooms=[
+    {"name": "Clearing", "description": ""},
+    {"name": "Hut", "description": ""},
+])
+GROVE = grove["id"]
+CLEARING, HUT = grove["rooms"][0]["id"], grove["rooms"][1]["id"]
+
+# An L, drawn CLOCKWISE in map view (x east, z south). Hand-derived:
+# world_geometry.polygon_signed_area sums x_(i-1)·z_i - x_i·z_(i-1) and this
+# order gives 200+200+100+0+0+100 = 600 -> +300, i.e. clockwise, so the
+# sanitizer keeps the order as written. Its bounding box is 20 x 20, so the
+# DERIVED plan_width_m is 20.0 — the 999.0 submitted below is ignored.
+L_BOUNDARY = [[-10.0, -10.0], [10.0, -10.0], [10.0, 0.0],
+              [0.0, 0.0], [0.0, 10.0], [-10.0, 10.0]]
+MAP3D_IN = {
+    "plan_width_m": 999.0,                     # NOT an input — must be redone
+    "boundary": L_BOUNDARY,
+    # 6 points = 6 edges, so indices 0..5 exist. Edge 2 is C->D, edge 5 F->A.
+    "boundary_openings": [
+        {"edge": 2, "at": 0.25, "width_m": 6.0, "room": HUT},
+        {"edge": 5, "at": 0.5, "width_m": 4.0},
+    ],
+    "storey_height_m": 3.5,
+    "level_floors": {"0": "parquet", "-1": "stone"},
+    "wall_kind": "brick",
+    "area_model": True, "area_detail": True,
+    "relief": {"amplitude_m": 0.8, "seed": 12345, "wave_m": 20},
+}
+CLEARING_IN = {
+    "x": -8, "y": -8, "w": 6, "d": 4, "level": 0, "rotation": 90,
+    "floor_offset_y": 0.5, "model_at": [3, 2], "model_offset_y": 0.25,
+    "surfaces": {"floor": "parquet", "wall": "stone"},
+    "openings": [{"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.0,
+                  "type": "door", "to": HUT}],
+    "markers": [{"at": [1, 1], "animation": "sitting", "rotation": 180,
+                 "offset_y": 0.1, "tilt": 5}],
+    "props": [{"prop_id": OAK, "at": [2, 3], "yaw": 45, "offset_y": 0.05,
+               "variant": 1}],
+}
+# The control point (6, 3) bulges INWARD on edge 1 ((8,0)->(8,6)), so the
+# tessellated hull still spans exactly 0..8 / 0..6 and the bbox fold is a no-op:
+# x/y/w/d stay as written and the curve keeps its edge index.
+HUT_IN = {"x": 0, "y": 0, "w": 8, "d": 6,
+          "outline": [[0, 0], [8, 0], [8, 6], [0, 6]],
+          "outline_curves": [{"edge": 1, "c": [6, 3]}],
+          "no_walls": True, "clip_model": True}
+GROUND_IN = {"props": [{"prop_id": OAK, "at": [5, -5], "yaw": 90}],
+             "markers": [{"at": [-3, 4], "animation": "lying", "tilt": 10}]}
+
+rooms_in = [dict(r) for r in get_location_by_id(GROVE)["rooms"]]
+for r in rooms_in:
+    if r["id"] == CLEARING:
+        r["layout"] = CLEARING_IN
+    elif r["id"] == HUT:
+        r["layout"] = HUT_IN
+    elif r["id"] == GROUND_ROOM_ID:
+        r["layout"] = GROUND_IN
+update_location_with_extras(GROVE, {"rooms": rooms_in, "map3d": MAP3D_IN})
+
+# The building model is a GENERATED ROOF: the flag is the whole display
+# contract, and it lives in the sidecar that travels with the GLB.
+gdir = _model_dir(_owner_id(GROVE), create=True)
+(gdir / "building_1.glb").write_bytes(b"GLB-roof")
+ROOF_META = {"roof_only": True, "width_m": 14.0, "walk_y": 1.2,
+             "source": "roof_build", "rig": "none"}
+(gdir / "building_1.json").write_text(json.dumps(ROOF_META), encoding="utf-8")
+(gdir / "selection.json").write_text(
+    json.dumps({"building": {"full": "building_1.glb"}}), encoding="utf-8")
+
+# --- hand-derived expectations ---------------------------------------------
+# Everything below is what the SANITIZERS make of the input above — the same
+# functions the ordinary save path runs, so this is also what the world holds
+# before the export.
+MAP3D_OUT = {
+    "boundary": L_BOUNDARY,
+    "plan_width_m": 20.0,                       # bounding box 20 x 20
+    "storey_height_m": 3.5,
+    "level_floors": {"0": "parquet", "-1": "stone"},
+    "wall_kind": "brick",
+    "area_model": True, "area_detail": True,
+    "relief": {"amplitude_m": 0.8, "seed": 12345, "wave_m": 20.0},
+    "boundary_openings": [
+        {"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage",
+         "room": HUT},
+        {"edge": 5, "at": 0.5, "width_m": 4.0, "type": "passage"},
+    ],
+}
+CLEARING_OUT = {
+    "x": -8.0, "y": -8.0, "w": 6.0, "d": 4.0, "level": 0, "rotation": 90,
+    "model_at": [3.0, 2.0], "model_offset_y": 0.25, "floor_offset_y": 0.5,
+    "markers": [{"at": [1.0, 1.0], "animation": "sitting", "rotation": 180,
+                 "offset_y": 0.1, "tilt": 5.0}],
+    "surfaces": {"floor": "parquet", "wall": "stone"},
+    "openings": [{"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.0,
+                  "sill_m": 0.0, "type": "door", "to": HUT}],
+    "props": [{"prop_id": OAK, "at": [2.0, 3.0], "yaw": 45, "offset_y": 0.05,
+               "variant": 1}],
+}
+HUT_OUT = {"x": 0.0, "y": 0.0, "w": 8.0, "d": 6.0, "level": 0,
+           "clip_model": True, "no_walls": True,
+           "outline": [[0.0, 0.0], [8.0, 0.0], [8.0, 6.0], [0.0, 6.0]],
+           "outline_curves": [{"edge": 1, "c": [6.0, 3.0]}]}
+GROUND_OUT = {"props": [{"prop_id": OAK, "at": [5.0, -5.0], "yaw": 90}],
+              "markers": [{"at": [-3.0, 4.0], "animation": "lying",
+                           "tilt": 10.0}]}
+
+
+def layouts_of(location_id):
+    """``{room name: layout}`` of a location — the ground under its constant."""
+    out = {}
+    for r in (get_location_by_id(location_id) or {}).get("rooms") or []:
+        key = GROUND_ROOM_ID if r.get("id") == GROUND_ROOM_ID else r.get("name")
+        out[key] = r.get("layout") or {}
+    return out
+
+
+seeded = layouts_of(GROVE)
+check("Seed: map3d ist Sanitizer-kanonisch",
+      get_location_by_id(GROVE).get("map3d"), MAP3D_OUT)
+check("Seed: Clearing-Layout", seeded["Clearing"], CLEARING_OUT)
+check("Seed: Hut-Layout", seeded["Hut"], HUT_OUT)
+check("Seed: Boden-Layout", seeded[GROUND_ROOM_ID], GROUND_OUT)
+
+v6_blob = export_location_to_zip(GROVE)
+v6_names = set(zipfile.ZipFile(io.BytesIO(v6_blob)).namelist())
+check("beide Varianten-Meshes im ZIP",
+      {f"props/{OAK}/model_1.glb", f"props/{OAK}/model-v2_1.glb"} <= v6_names,
+      True)
+check("beide Quellbilder im ZIP",
+      {f"props/{OAK}/source.png", f"props/{OAK}/source-v2.png"} <= v6_names,
+      True)
+check("Prop-Selection im ZIP", f"props/{OAK}/selection.json" in v6_names, True)
+check("Dach-Sidecar im ZIP", "files/model3d/building_1.json" in v6_names, True)
+
+# WIPE: the location and the prop are gone, so the import has to rebuild both.
+check("Location geloescht", delete_location(GROVE), True)
+check("Prop geloescht", delete_prop(OAK), True)
+
+v6 = import_location_from_zip(v6_blob)
+NEW = v6["location_id"]
+check("v6-Import ohne Verluste", v6["warnings"], [])
+check("Prop mitinstalliert", v6["props_imported"], [OAK])
+new_loc = get_location_by_id(NEW)
+new_rooms = {r.get("name"): r.get("id") for r in new_loc["rooms"]}
+HUT_NEW = new_rooms["Hut"]
+check("Hut hat eine neue id", HUT_NEW != HUT, True)
+
+# map3d — the boundary point-for-point, the DERIVED width, the edge-index
+# openings, and the room reference following the freshly minted room id.
+check("map3d.boundary", (new_loc.get("map3d") or {}).get("boundary"),
+      L_BOUNDARY)
+check("map3d.plan_width_m neu abgeleitet",
+      (new_loc.get("map3d") or {}).get("plan_width_m"), 20.0)
+check("map3d.boundary_openings mit Kantenindex + neuer Raum-id",
+      (new_loc.get("map3d") or {}).get("boundary_openings"),
+      [{"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage",
+        "room": HUT_NEW},
+       {"edge": 5, "at": 0.5, "width_m": 4.0, "type": "passage"}])
+check("map3d Rest unveraendert",
+      {k: v for k, v in (new_loc.get("map3d") or {}).items()
+       if k not in ("boundary", "boundary_openings", "plan_width_m")},
+      {k: v for k, v in MAP3D_OUT.items()
+       if k not in ("boundary", "boundary_openings", "plan_width_m")})
+
+imported = layouts_of(NEW)
+check("Clearing-Layout (metrisch, rotiert, Marker, Prop-Variante)",
+      imported["Clearing"], {**CLEARING_OUT, "openings": [
+          {**CLEARING_OUT["openings"][0], "to": HUT_NEW}]})
+check("Hut-Layout (Outline + Kurve)", imported["Hut"], HUT_OUT)
+check("Boden-Layout (§ A13a: nur Props + Marker)",
+      imported[GROUND_ROOM_ID], GROUND_OUT)
+
+odir = _prop_dir(OAK)
+check("Variantenliste wiederhergestellt",
+      read_sidecar(OAK).get("model_variants"), OAK_VARIANTS)
+check("Selection inkl. __none__-Sentinel wiederhergestellt",
+      read_json(odir / "selection.json"), OAK_SELECTION)
+check("Variante 0 Mesh", read_bytes(odir / "model_1.glb"), b"GLB-oak-full")
+check("Variante 1 Mesh", read_bytes(odir / "model-v2_1.glb"), b"GLB-oak2-full")
+check("Variante 0 Quellbild", read_bytes(odir / "source.png"), b"PNG-oak-src")
+check("Variante 1 Quellbild",
+      read_bytes(odir / "source-v2.png"), b"PNG-oak2-src")
+
+check("Dach-Modell-Meta wiederhergestellt",
+      read_json(_model_dir(_owner_id(NEW)) / "building_1.json"), ROOF_META)
+
+
+print("\n[13] Alt-Archiv: der Sanitizer entscheidet, es wird NICHT migriert")
+legacy_loc = {
+    "id": "legacy01", "name": "Legacy Yard", "description": "",
+    "map3d": {
+        # Pre-v6 dials, none of which has a reader left.
+        "plan_width_m": 12.0, "rotation": 90, "size": 0.8,
+        "extent_m": 40, "tile_rotation": 1,
+        "boundary_openings": [{"edge": "N", "at": 0.5, "width_m": 3.0},
+                              {"edge": "E", "at": 0.5, "width_m": 3.0}],
+    },
+    "rooms": [
+        {"id": "legroom1", "name": "Yard", "description": "",
+         "layout": {"x": 0.1, "y": 0.1, "w": 0.5, "d": 0.5,
+                    "openings": [{"edge": "N", "at": 0.5, "width_m": 1.0,
+                                  "height_m": 2.0, "type": "door"}]}},
+        {"id": GROUND_ROOM_ID, "name": "Ground", "description": "",
+         "layout": {"x": 0, "y": 0, "w": 10, "d": 10,
+                    "outline": [[0, 0], [10, 0], [10, 10]],
+                    "props": [{"prop_id": OAK, "at": [1, 1]}]}},
+    ],
+}
+legacy_buf = io.BytesIO()
+with zipfile.ZipFile(legacy_buf, "w", zipfile.ZIP_DEFLATED) as out:
+    out.writestr("db/location.json", json.dumps(legacy_loc, ensure_ascii=False))
+    out.writestr("manifest.json", json.dumps({
+        "version": 1, "type": "location", "location_id": "legacy01",
+        "location_name": "Legacy Yard", "room_count": 2, "image_count": 0,
+        "exported_at": "2026-01-01T00:00:00Z", "files": [],
+    }, ensure_ascii=False))
+res7 = import_location_from_zip(legacy_buf.getvalue())
+legacy_id = res7["location_id"]
+legacy_after = get_location_by_id(legacy_id)
+warn_text = "\n".join(res7["warnings"])
+
+# map3d: no boundary -> no area, so nothing at all survives.
+check("map3d komplett weg", "map3d" in legacy_after, False)
+check("beide Buchstaben-Oeffnungen verworfen",
+      "2 of 2 boundary opening(s) dropped" in warn_text, True)
+check("plan_width_m als Eingabe ignoriert",
+      "plan_width_m (12.0) was ignored" in warn_text, True)
+check("tote v6-Felder gemeldet",
+      "extent_m, rotation, size, tile_rotation" in warn_text, True)
+check("Location steht ohne Flaeche da",
+      "nothing survived" in warn_text, True)
+
+legacy_layouts = layouts_of(legacy_id)
+# NOT translated: a fraction-era rect is a finite number of metres, so it
+# arrives as a 50-cm room. There is no way to tell it from a legitimately tiny
+# one, and inventing a factor would be exactly the migration this repo refuses.
+check("Bruchteil-Rechteck bleibt als Zentimeter-Raum stehen",
+      {k: legacy_layouts["Yard"][k] for k in ("x", "y", "w", "d")},
+      {"x": 0.1, "y": 0.1, "w": 0.5, "d": 0.5})
+# A ROOM opening may still name a letter edge — _sanitize_opening keeps
+# 'N'|'S'|'E'|'W' for rectangles. Only the LOCATION boundary switched to
+# indices (v6 Nr. 5), and only there is a letter dropped.
+check("Buchstaben-Kante am RAUM bleibt gueltig",
+      legacy_layouts["Yard"]["openings"][0]["edge"], "N")
+# The ground keeps its placements and loses every piece of room geometry.
+check("Boden behaelt seine Platzierung",
+      legacy_layouts[GROUND_ROOM_ID],
+      {"props": [{"prop_id": OAK, "at": [1.0, 1.0]}]})
+check("verworfene Boden-Geometrie gemeldet",
+      "ground layout: room-geometry field(s) dropped" in warn_text, True)
+
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

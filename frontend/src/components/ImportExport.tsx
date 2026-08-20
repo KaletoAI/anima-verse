@@ -378,13 +378,18 @@ interface PreviewResult { type: string; multi: boolean; elements: PreviewElement
 interface ImportResultRow {
   name?: string; type?: string; status?: string; error?: string
   /** A sub-pack's own importer dict — a nested location reports its
-   *  `props_missing` in here, not on the collection's top level. */
-  result?: { props_missing?: unknown }
+   *  `props_missing` and `warnings` in here, not on the collection's top
+   *  level. */
+  result?: { props_missing?: unknown; warnings?: unknown }
 }
 interface ImportResult {
   status?: string
   results?: ImportResultRow[]
   props_missing?: unknown
+  /** What the world's sanitizers refused, in plain words (a location pack
+   *  from before contract v6 loses its letter edges and its fraction-era
+   *  layouts — no migration, so the import SAYS what fell away). */
+  warnings?: unknown
 }
 
 /**
@@ -550,6 +555,20 @@ export function ImportButton({
       if (missingIds.length > 0) {
         notes.push(t('Missing props (placements will render as missing):')
           + ' ' + missingIds.join(', '))
+      }
+      // The importer runs an archive through the world's own sanitizers and
+      // does NOT migrate what they refuse — a pre-v6 pack arrives without its
+      // letter edges and without layouts that carry no metric rectangle. Each
+      // drop is one line, and it stays on screen: a silently emptied room is
+      // found weeks later, this is found now.
+      const asLines = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
+      const dropped = [...new Set([
+        ...asLines(result.warnings),
+        ...rows.flatMap((r) => asLines(r.result?.warnings)),
+      ])]
+      if (dropped.length > 0) {
+        notes.push(t('Dropped on import (no migration — rebuild these):')
+          + '\n· ' + dropped.join('\n· '))
       }
       if (notes.length > 0) {
         setWarn(notes.join('\n'))
