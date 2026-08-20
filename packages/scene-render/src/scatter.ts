@@ -210,6 +210,113 @@ export function pointInFootprint(fp: ScatterFootprint,
   return inside
 }
 
+/**
+ * Distance from `(x, z)` to a placed location's outline — **0 anywhere
+ * inside**, edges inclusive, `Infinity` for an outline that encloses nothing.
+ *
+ * The same answer as the server's `world_geometry.polygon_distance` and the
+ * walking client's `game/polygon.polygonDistance`, and it shares BOTH halves
+ * with `pointInFootprint` above: the identical half-open ray cast decides
+ * inside/outside, and the identical all-or-nothing junk rule applies — a
+ * non-finite coordinate anywhere makes the whole outline useless, so it blocks
+ * nothing rather than blocking a shape nobody can name.
+ *
+ * ONE PASS over the edges, not two: the ray cast and the nearest-segment
+ * search walk the same list, and this runs in the innermost loop of the
+ * sampler (candidates × footprints). Walking the outline twice would be paid
+ * on every candidate of every cell.
+ */
+export function footprintDistance(fp: ScatterFootprint,
+                                  x: number, z: number): number {
+  const pts = fp?.points
+  const n = pts?.length ?? 0
+  if (n < 3) return Infinity
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return Infinity
+  let inside = false
+  let best = Infinity
+  for (let i = 0, j = n - 1; i < n; j = i, i += 1) {
+    const a = pts[i]
+    const b = pts[j]
+    if (!a || !b || a.length < 2 || b.length < 2) return Infinity
+    const xi = a[0]
+    const zi = a[1]
+    const xj = b[0]
+    const zj = b[1]
+    if (!Number.isFinite(xi) || !Number.isFinite(zi)
+      || !Number.isFinite(xj) || !Number.isFinite(zj)) return Infinity
+    if ((zi > z) !== (zj > z)
+      && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside
+    // …and the distance to that very edge, b -> a, clamped to the segment.
+    const dx = xi - xj
+    const dz = zi - zj
+    const len2 = dx * dx + dz * dz
+    let t = len2 < 1e-18 ? 0 : ((x - xj) * dx + (z - zj) * dz) / len2
+    t = t < 0 ? 0 : (t > 1 ? 1 : t)
+    const ex = x - (xj + t * dx)
+    const ez = z - (zj + t * dz)
+    const d = Math.sqrt(ex * ex + ez * ez)
+    if (d < best) best = d
+  }
+  return inside ? 0 : best
+}
+
+/**
+ * Does a placed location keep this instance out — the CLEARANCE test that
+ * replaced "is its centre inside?" (user finding 2026-08-20).
+ *
+ * A scattered prop is not a point: an 8 m tree whose trunk stands 40 cm
+ * OUTSIDE a boundary still hangs metres of canopy over the courtyard behind
+ * it, and the centre test let every one of them through. So the outline is
+ * kept clear by the instance's own horizontal half-extent (`clearM`,
+ * `scatterClearM`): the prop is excluded while its footprint circle reaches
+ * into the drawn shape.
+ *
+ *     excluded  <=>  footprintDistance(x, z) < clearM
+ *
+ * `clearM` 0 (or junk, or nothing) is the plain containment test of before,
+ * spelled out as such rather than as `distance < 0`: a point INSIDE has
+ * distance 0, and `0 < 0` would let every prop stand in the middle of the
+ * building. It is the answer for a layer whose props are too small for their
+ * own overhang to matter — the automatic undergrowth passes no clearance.
+ */
+export function footprintBlocks(fp: ScatterFootprint, x: number, z: number,
+                                clearM?: number): boolean {
+  const clear = Number(clearM)
+  if (!(clear > 0)) return pointInFootprint(fp, x, z)
+  return footprintDistance(fp, x, z) < clear
+}
+
+/** How wide a scattered prop is assumed to be when nobody has MEASURED it:
+ *  as wide as it is tall. Half of that is its clearance — see
+ *  `scatterClearM`. */
+export const SCATTER_CLEAR_HEIGHT_RATIO = 0.5
+
+/**
+ * The clearance ONE instance keeps from a location's outline, in metres:
+ * HALF its horizontal extent at the scale it is planted at.
+ *
+ *     clearM = extentM / 2          measured: max of the scaled bbox x/z
+ *     clearM = heightM · 0.5        estimated: nothing has been measured yet
+ *
+ * The measured branch is the 3D client's, which holds the loaded mesh and
+ * scales it uniformly to the target height, so `max(bboxX, bboxZ) · scale` is
+ * exactly the width the player sees. The estimated branch is for everyone who
+ * draws the scatter WITHOUT the meshes — the map editor's preview draws dots,
+ * and the client itself before the GLB of an entry has landed. Treating a prop
+ * as being as wide as it is tall is deliberately generous for a tree (a 8 m
+ * pine is nowhere near 8 m across) and honest for a bush; the cost of being
+ * wrong is a prop too few at a border, never a canopy hanging over a
+ * courtyard.
+ */
+export function scatterClearM(heightM: number,
+                              extentM?: number | null): number {
+  const extent = Number(extentM)
+  if (Number.isFinite(extent) && extent > 0) return extent / 2
+  const h = Number(heightM)
+  if (!Number.isFinite(h) || h <= 0) return 0
+  return h * SCATTER_CLEAR_HEIGHT_RATIO
+}
+
 /** What `scatterInstances` needs to know. */
 export interface ScatterSampleOptions {
   /** The CLEANED world ring the area is drawn from (`cleanRing`), `[x, z]` in
@@ -226,6 +333,11 @@ export interface ScatterSampleOptions {
    *  drawn outlines in WORLD metres, see `ScatterFootprint`. A location with
    *  no boundary has no area and simply does not appear in this list. */
   footprints?: readonly ScatterFootprint[]
+  /** The horizontal HALF-EXTENT of the instance this entry plants, in metres
+   *  (`scatterClearM`): a footprint is kept clear by this much instead of just
+   *  by its outline, so a prop centred just outside stops hanging over it.
+   *  Absent or 0 = the plain containment test — see `footprintBlocks`. */
+  clearM?: number
   /**
    * The CLEANED rings of every area that lies ABOVE this one in the stack —
    * only the ground an area actually SHOWS is scattered.
@@ -293,7 +405,8 @@ export function scatterWantedCount(areaM2: number, densityPer100m2: number,
  *   z   = minZ + r · (maxZ − minZ)
  *   yaw = r · 2π
  *   reject when the point is outside the ring, inside a covering area
- *     (`occluders`) or inside any footprint
+ *     (`occluders`) or within `clearM` of any footprint (`footprintBlocks` —
+ *     the plain "inside" test when no clearance is given)
  *
  * THREE NUMBERS PER CANDIDATE, ALWAYS — the yaw is drawn before the test even
  * though a rejected candidate never uses it. That one wasted number is what
@@ -337,6 +450,11 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
 
   const rnd = opts.rng ?? seededRandom(opts.seed)
   const footprints = opts.footprints ?? []
+  // The clearance is read ONCE, outside the loop: it is one number for the
+  // whole entry (every instance of a row is the same prop at the same scale),
+  // and it never touches the candidate stream — only the verdict on a
+  // candidate that has already drawn its three numbers.
+  const clearM = opts.clearM
   const occluders = opts.occluders ?? []
   const out: ScatterInstance[] = []
   let tries = wanted * (opts.triesPerPoint ?? SCATTER_TRIES_PER_POINT)
@@ -356,7 +474,7 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
     if (hidden) continue
     let covered = false
     for (const fp of footprints) {
-      if (pointInFootprint(fp, x, z)) { covered = true; break }
+      if (footprintBlocks(fp, x, z, clearM)) { covered = true; break }
     }
     if (covered) continue
     out.push({ x, z, yaw })
@@ -573,6 +691,9 @@ export interface ScatterCellOptions {
   seed: string
   /** kept clear, exactly as in `scatterInstances` (finding B18) */
   footprints?: readonly ScatterFootprint[]
+  /** the instance's horizontal half-extent, exactly as in
+   *  `scatterInstances` — see `scatterClearM` */
+  clearM?: number
   /** the cleaned rings of the areas painted ABOVE this one */
   occluders?: readonly (readonly ScatterPoint2[])[]
   /** the per-cell guard; defaults to `SCATTER_MAX_PER_CELL` */
@@ -606,6 +727,7 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     densityPer100m2: opts.densityPer100m2,
     seed: opts.seed,
     footprints: opts.footprints,
+    clearM: opts.clearM,
     occluders: opts.occluders,
     maxPoints: opts.maxPoints ?? SCATTER_MAX_PER_CELL,
     // ONE TRY PER WANTED INSTANCE, and that is the difference between sampling

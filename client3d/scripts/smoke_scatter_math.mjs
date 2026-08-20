@@ -164,6 +164,69 @@
  *      edge, which can never straddle a ray. Same answers as (B1)/(B2).
  *
  * ============================================================================
+ * (M) footprintDistance / footprintBlocks — the CLEARANCE (finding 2026-08-20)
+ * ============================================================================
+ * A scattered prop is not a point. The centre test of (B) let a tree whose
+ * TRUNK stands 40 cm outside a boundary hang metres of canopy over the place
+ * behind it — reported as "scatter overhangs into locations". The exclusion is
+ * therefore a distance:
+ *
+ *     excluded  <=>  footprintDistance(x, z) < clearM
+ *     clearM     =  extentM / 2        the measured half-width of THAT mesh
+ *     clearM     =  heightM * 0.5      while nothing has been measured
+ *
+ * `footprintDistance` is the twin of `world_geometry.polygon_distance` and of
+ * `game/polygon.polygonDistance`: 0 anywhere INSIDE, the edge distance
+ * outside, `Infinity` for an outline that encloses nothing.
+ *
+ * (M1) THE TWO REPORTED NUMBERS, on the square 0..10 × 0..10.
+ *      A prop centred at (10.4, 5) stands 0.4 m east of the x = 10 edge; the
+ *      nearest point of the outline is (10, 5), so the distance is 0.4.
+ *      With clearM 1.0: 0.4 < 1.0 -> EXCLUDED, and it is the tree that used to
+ *      hang over the courtyard.
+ *      A prop centred at (11.4, 5) is 1.4 m out: 1.4 < 1.0 is false -> KEPT.
+ *      The centre of the square, (5, 5), has distance 0 -> excluded whatever
+ *      the clearance, which is the (B) behaviour unchanged.
+ *      Past the CORNER, at (13, 14): neither edge is reachable perpendicularly,
+ *      so the nearest point is the corner (10, 10) and the distance is
+ *      hypot(3, 4) = 5 — the case that pins the segment clamping.
+ *
+ * (M2) NO CLEARANCE IS THE OLD TEST, spelled out and not derived: a point
+ *      INSIDE has distance 0, and `0 < 0` is false — so a clearM of 0 must
+ *      fall back to `pointInFootprint` or every prop would stand in the middle
+ *      of the building. The automatic undergrowth passes no clearance and has
+ *      to keep behaving exactly as it did.
+ *
+ * (M3) THE CONCAVE FIXTURE of (B), so the notch is judged by the same shape
+ *      the server judges: the notch point world (103, 47) is 1 m from both
+ *      notch edges (local (3,3) sits 1 m from the edge at local x = 2 and 1 m
+ *      from the one at local z = 2). So clearM 1.0 KEEPS it (1 < 1 is false)
+ *      and clearM 1.2 excludes it — an edge-exact pair the ray cast alone
+ *      cannot tell apart.
+ *
+ * (M4) IN THE SAMPLER, and this is the determinism half: ring 0..20 × 0..20,
+ *      density 0.5 -> wanted = round(400/100 * 0.5) = 2, one try each. The
+ *      footprint is the square 10..20 × 0..10. Fed 0.48 / 0.25 / 0.00 and
+ *      0.43 / 0.25 / 0.50:
+ *        x = 0 + 0.48*20 = 9.6, z = 0 + 0.25*20 = 5, yaw = 0
+ *          -> 0.4 m west of the x = 10 edge
+ *        x = 0 + 0.43*20 = 8.6, z = 5, yaw = 0.5*2pi = pi
+ *          -> 1.4 m west of it
+ *      With clearM 1.0 the first is dropped and the second stands at (8.6, 5)
+ *      with yaw pi — the SAME yaw it has with clearM 0, because all three
+ *      numbers are drawn before any test. That is the whole determinism
+ *      claim: the candidate stream is identical, only the verdict flips.
+ *
+ * (M5) `scatterClearM` — the two branches, by hand. An 8 m tree nobody has
+ *      measured: 8 * 0.5 = 4 m of clearance. The same tree measured 3 m
+ *      across: 3 / 2 = 1.5 m. A junk or absent extent falls back to the
+ *      estimate; a junk height is no clearance at all (0), which is the plain
+ *      containment test again.
+ *
+ * (M6) THE RED COUNTER-CHECK: a mutant whose blocking test is the old
+ *      `pointInFootprint` keeps the 0.4 m tree — the exact defect.
+ *
+ * ============================================================================
  * (C) scatterInstances — the sampler, with a HAND-FED random stream
  * ============================================================================
  * The seeded PRNG cannot be simulated on paper, so the checks feed a fixed
@@ -791,6 +854,16 @@ function randomInsteadOfHash(source) {
     '  return Math.random();\n');
 }
 
+/** Section (M6)'s mutant: the clearance is thrown away and the old "is its
+ *  CENTRE inside?" decides again — the state the user reported as scatter
+ *  overhanging into locations. */
+function centreInsteadOfClearance(source) {
+  return source.replace(
+    '  if (!(clear > 0)) return pointInFootprint(fp, x, z)\n'
+    + '  return footprintDistance(fp, x, z) < clear\n',
+    '  return pointInFootprint(fp, x, z)\n');
+}
+
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected, eps = 1e-9) {
@@ -850,7 +923,8 @@ async function main() {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
     scatterWantedCount, scatterCellAt, scatterCellInstances, scatterCellRing,
     scatterCellSeed, scatterCellSpan, scatterCellsInBox, wantedScatterCells,
-    SCATTER_CELL_M, SCATTER_MAX_PER_CELL,
+    footprintBlocks, footprintDistance, scatterClearM,
+    SCATTER_CELL_M, SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_CELL,
   } = await loadTs(SRC);
 
   const TAU = Math.PI * 2;
@@ -962,6 +1036,84 @@ async function main() {
     pointInFootprint({ points: [...L_WORLD, [100, 50]] }, 101, 49), true);
   check('B5 …and in the notch (outside)',
     pointInFootprint({ points: [...L_WORLD, [100, 50]] }, 103, 47), false);
+
+  console.log('\n(M) the CLEARANCE — a prop stops OVERHANGING a location');
+  const SQ_FP = { points: [[0, 0], [10, 0], [10, 10], [0, 10]] };
+  check('M1 (10.4, 5) is 0.4 m east of the x = 10 edge',
+    footprintDistance(SQ_FP, 10.4, 5), 0.4);
+  check('M1 (11.4, 5) is 1.4 m out', footprintDistance(SQ_FP, 11.4, 5), 1.4);
+  check('M1 the centre is INSIDE and reads 0',
+    footprintDistance(SQ_FP, 5, 5), 0);
+  check('M1 past the corner it is hypot(3, 4) = 5',
+    footprintDistance(SQ_FP, 13, 14), 5);
+  // Infinity survives no JSON round trip, so the four are asserted as the
+  // predicate they stand for: nothing can ever be that close.
+  check('M1 a degenerate outline is unreachable',
+    [footprintDistance({ points: [[0, 0], [10, 0]] }, 5, 5),
+      footprintDistance({}, 5, 5),
+      footprintDistance({ points: [[0, 0], [10, NaN], [10, 10]] }, 5, 5),
+      footprintDistance(SQ_FP, NaN, 5)].map((d) => d === Infinity),
+    [true, true, true, true]);
+  check('M1 …and therefore blocks nothing, at any clearance',
+    footprintBlocks({ points: [[0, 0], [10, NaN], [10, 10]] }, 5, 5, 1e6),
+    false);
+  check('M1 …and with clearM 1.0 the 0.4 m prop goes, the 1.4 m one stays',
+    [footprintBlocks(SQ_FP, 10.4, 5, 1), footprintBlocks(SQ_FP, 11.4, 5, 1)],
+    [true, false]);
+  check('M1 the prop INSIDE is excluded whatever the clearance',
+    [footprintBlocks(SQ_FP, 5, 5, 1), footprintBlocks(SQ_FP, 5, 5, 0)],
+    [true, true]);
+  check('M2 without a clearance it is the plain containment test again',
+    [footprintBlocks(SQ_FP, 10.4, 5, 0), footprintBlocks(SQ_FP, 10.4, 5),
+      footprintBlocks(SQ_FP, 10.4, 5, NaN)],
+    [false, false, false]);
+  check('M3 the concave NOTCH is exactly 1 m from both its edges',
+    footprintDistance(HUT, 103, 47), 1);
+  check('M3 …so clearM 1.0 keeps the prop there and 1.2 takes it away',
+    [footprintBlocks(HUT, 103, 47, 1), footprintBlocks(HUT, 103, 47, 1.2)],
+    [false, true]);
+  const CLEAR_SAMPLE = {
+    ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
+    footprints: [{ points: [[10, 0], [20, 0], [20, 10], [10, 10]] }],
+    triesPerPoint: 1,
+  };
+  const CLEAR_STREAM = [0.48, 0.25, 0.00, 0.43, 0.25, 0.50];
+  check('M4 without a clearance both candidates stand — 0.4 m and 1.4 m out',
+    scatterInstances({ ...CLEAR_SAMPLE, rng: stream(CLEAR_STREAM) }),
+    [{ x: 9.6, z: 5, yaw: 0 }, { x: 8.6, z: 5, yaw: Math.PI }]);
+  check('M4 clearM 1.0 SUBTRACTS the 0.4 m one and leaves the other untouched',
+    scatterInstances({ ...CLEAR_SAMPLE, clearM: 1, rng: stream(CLEAR_STREAM) }),
+    [{ x: 8.6, z: 5, yaw: Math.PI }]);
+  check('M4 …the same holds through the cell sampler',
+    scatterCellInstances({
+      ring: [[0, 0], [64, 0], [64, 64], [0, 64]], cx: 0, cz: 0,
+      densityPer100m2: 0.05,
+      seed: 'm4',
+      footprints: [{ points: [[10, 0], [20, 0], [20, 10], [10, 10]] }],
+      clearM: 1,
+      rng: stream([0.15, 0.078125, 0.00, 0.134375, 0.078125, 0.50]),
+    }),
+    [{ x: 8.6, z: 5, yaw: Math.PI }]);
+  check('M5 an 8 m prop nobody measured keeps 4 m — as wide as it is tall',
+    scatterClearM(8), 4);
+  check('M5 …measured 3 m across it keeps 1.5', scatterClearM(8, 3), 1.5);
+  check('M5 a junk extent falls back to the estimate',
+    [scatterClearM(8, 0), scatterClearM(8, NaN), scatterClearM(8, null)],
+    [4, 4, 4]);
+  check('M5 …and a junk height is no clearance at all',
+    [scatterClearM(0), scatterClearM(NaN), scatterClearM(-3)], [0, 0, 0]);
+  check('M5 the estimate ratio is a half', SCATTER_CLEAR_HEIGHT_RATIO, 0.5);
+  const centreMutant = await loadTs(SRC, centreInsteadOfClearance);
+  checkNot('M6 the "centre inside" mutant does NOT reproduce the M4 answer',
+    centreMutant.scatterInstances({
+      ...CLEAR_SAMPLE, clearM: 1, rng: stream(CLEAR_STREAM),
+    }),
+    [{ x: 8.6, z: 5, yaw: Math.PI }]);
+  check('M6 …it keeps the overhanging 0.4 m prop, which IS the defect',
+    centreMutant.scatterInstances({
+      ...CLEAR_SAMPLE, clearM: 1, rng: stream(CLEAR_STREAM),
+    }),
+    [{ x: 9.6, z: 5, yaw: 0 }, { x: 8.6, z: 5, yaw: Math.PI }]);
 
   console.log('\n  pointInRing — the even-odd rule both sides share');
   check('the centre of the square is inside', pointInRing(10, 10, SQUARE), true);
@@ -1273,6 +1425,17 @@ async function main() {
     const m = new RegExp(`const ${name} = (-?[0-9.]+);`).exec(groundSrc);
     check(`E ground.ts ${name} is ${want} m`, m ? Number(m[1]) : null, want);
   }
+  // …and the wiring of section (M) on the client side, which is not maths and
+  // can only be read: the clearance goes INTO the sampler, and it is derived
+  // from the measured spread of the entry's own meshes at its planted height.
+  check('E ground.ts hands the clearance to the cell sampler',
+    groundSrc.includes('          clearM,\n'), true);
+  check('E …derived from the measured spread, or estimated from the height',
+    groundSrc.includes(
+      'const clearM = scatterClearM(h, spread === null ? null : spread * h);'),
+    true);
+  check('E …and the measurement is filed where the mesh is grounded',
+    groundSrc.includes('noteSpread(url, geometry);'), true);
 
   // The constants of the LOD, which section (I) derives its expectations from.
   // Loaded here because (G) and (H) below read the same module.

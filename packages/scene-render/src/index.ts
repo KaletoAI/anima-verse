@@ -49,7 +49,8 @@ export type { AreaGeometry, Point2 } from './groundAreas'
 export {
   propGroundFit, scatterInstances, scatterSeed, scatterWantedCount,
   seededRandom, pointInRing, pointInFootprint, worldToLocalXZ,
-  SCATTER_MAX_PER_ENTRY, SCATTER_TRIES_PER_POINT,
+  footprintBlocks, footprintDistance, scatterClearM,
+  SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_ENTRY, SCATTER_TRIES_PER_POINT,
   scatterCellAt, scatterCellInstances, scatterCellRing, scatterCellSeed,
   scatterCellSpan, scatterCellsInBox, wantedScatterCells,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,

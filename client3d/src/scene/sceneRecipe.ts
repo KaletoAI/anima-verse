@@ -13,6 +13,7 @@ import {
 import { roomDoor } from '../game/doors';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
+import { wantsRecipeShell } from './shellPlan';
 import {
   applyPlateDepthBias, PLATE_Y_M, preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld,
@@ -346,6 +347,9 @@ function placeholderMaterial(): THREE.MeshStandardMaterial {
 // ── Mount ────────────────────────────────────────────────────────────────
 
 const SCENE_GROUP = 'scene';
+/** Name of the far-view shell group (`buildFarShell`) — a place without a
+ *  server model wears the recipe's own primitives instead of nothing. */
+const FAR_SHELL_GROUP = 'far-shell';
 
 // THE FIGURE SCALE IS GONE (E4 task 3). `figures.base_height_m_world` is the
 // constant 1.70 since k = 1 (task 1), which divided by the figure library's own
@@ -652,6 +656,22 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     }
   }
 
+  // ── Fernsicht-Hülle (finding 2026-08-20) ────────────────────────────────
+  // A place without a server model showed a socle plate and a label from the
+  // outside; its walls existed but only inside the crossfade. WHICH source a
+  // far view has is decided in `shellPlan.ts` (pure, hand-checked in
+  // `smoke_far_shell.mjs`), and 'recipe' means: stand the primitives just
+  // built outside as well. Everything after this point (extras, doors,
+  // markers, labels, models) is deliberately NOT part of it.
+  if (wantsRecipeShell({
+    isBuilding: tile.isBuilding,
+    natureSite: !!tile.natureSite,
+    areaDetail: !!scene.area_detail,
+    hasBuildingModel: scene.models.some((m) => m.role === 'building'),
+    plates: scene.plates.length,
+    walls: scene.walls.length,
+  })) buildFarShell(tile, builtPlates, builtWalls);
+
   // ── Extras (elevator) ───────────────────────────────────────────────────
   // Typed boxes, centre + size, straight from the payload — one entry per
   // part. The pads double as the stops for the level routing.
@@ -856,6 +876,21 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   }));
   if (stale()) return null;
 
+  // …and the second occasion for the far-view shell: a payload that DECLARED a
+  // building model whose mesh never loaded (and brought no placeholder either).
+  // The place would otherwise be exactly as shapeless as one with no model at
+  // all — the finding again, only harder to see because the payload says the
+  // shape exists. `hasBuildingModel` is false HERE on purpose: whatever the
+  // payload declared, nothing of it stands.
+  if (!tile.shell && !tile.serverModel && wantsRecipeShell({
+    isBuilding: tile.isBuilding,
+    natureSite: !!tile.natureSite,
+    areaDetail: !!scene.area_detail,
+    hasBuildingModel: false,
+    plates: scene.plates.length,
+    walls: scene.walls.length,
+  })) buildFarShell(tile, builtPlates, builtWalls);
+
   // ── Begehbarkeit abtasten (Sicht-/Spiel-Logik, bleibt Client) ───────────
   // Über ALLES im Raum: Platte, Wände, Diorama, Props.
   for (const [id, rg] of roomGroup) {
@@ -891,6 +926,107 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     + `${scene.markers.length} Marker, Etagen ${levels.join('/')}`
     + (verify.skipped ? ` — ${verify.skipped} Modell(e) NICHT ladbar` : ''));
   return verify.report(locId);
+}
+
+/**
+ * The FAR-VIEW SHELL of a location without a server model (user finding
+ * 2026-08-20): the § B primitives it already has, standing outside instead of
+ * only inside.
+ *
+ * The problem it answers: since the procedural hut was struck (2026-08-19) a
+ * building with a room layout but no mesh was a socle plate and a label — its
+ * walls existed, but they hang in `tile.interior`, which the crossfade only
+ * uncovers once the player ENTERS. So the world was full of places you could
+ * not see until you stood in them.
+ *
+ * WHAT IS COPIED, and nothing else: the LEVEL plates (the storey contours,
+ * `plate.room_id` absent) and every non-glass wall — contour and room alike,
+ * with their window and door gaps, because the payload delivers walls already
+ * split around every opening (§ B1). No models, no props, no markers, no
+ * labels, no room interiors: this is a SHAPE, not a second scene.
+ *
+ * THE GEOMETRY IS SHARED, ONLY THE MATERIAL IS A CLONE. `Mesh.clone()` keeps
+ * the same `BufferGeometry` — the shell costs a draw call per primitive and no
+ * vertex memory at all — while the material has to be its own, because the
+ * crossfade drives its opacity and the corridor fade
+ * (`applyOcclusionFade`) opens it up for an embodied avatar exactly as it does
+ * a model shell or a tree.
+ *
+ * IT IS A `tile.shell` and takes the shell handover unchanged: the moment a
+ * server model does arrive for this place, `applySceneBuilding` drops it
+ * (`dropFarShell`) and takes over `roofParts`/`roofMats` itself.
+ *
+ * ROOFLESS, AND SAID OUT LOUD: the payload has no roof primitive family, so a
+ * place seen from above is open. Inventing a lid would be the procedural hut
+ * again, one storey higher.
+ */
+function buildFarShell(tile: Tile,
+                       plates: { mesh: THREE.Mesh; plate: ScenePlate }[],
+                       walls: { mesh: THREE.Mesh; wall: SceneWall }[]): void {
+  const shell = new THREE.Group();
+  shell.name = FAR_SHELL_GROUP;
+  const mats: THREE.MeshStandardMaterial[] = [];
+  const take = (src: THREE.Mesh) => {
+    const copy = src.clone();
+    const base = src.material as THREE.Material;
+    const mat = base.clone() as THREE.MeshStandardMaterial;
+    // The crossfade writes `opacity` on this material (`applyTileFade` →
+    // roofMats), which an opaque material would ignore.
+    mat.transparent = true;
+    applyOcclusionFade(mat);
+    copy.material = mat;
+    copy.castShadow = true;
+    copy.receiveShadow = false;
+    // PICKING STAYS WITH THE SOCLE PLATE. A click on a place selected the tile
+    // before this shell existed and must select exactly the same tile now —
+    // so the copy is invisible to the raycaster (the pattern of
+    // `buildBoundaryMarks`), and what a click does cannot depend on whether a
+    // location happens to have a room layout.
+    copy.raycast = () => {};
+    mats.push(mat);
+    shell.add(copy);
+  };
+  // The parents of the originals (the scene group, a room group) carry no
+  // transform of their own, so a copy hung directly under the tile stands in
+  // exactly the same place.
+  // STOREYS AT OR ABOVE GROUND ONLY: a basement is not part of a silhouette,
+  // and its walls would stand under the tile's own opaque socle plate.
+  for (const { mesh, plate } of plates) {
+    if (!plate.room_id && plate.level >= 0) take(mesh);
+  }
+  for (const { mesh, wall } of walls) if (!wall.glass && wall.level >= 0) take(mesh);
+  if (!shell.children.length) return;
+  shell.userData.shellMats = mats;
+  tile.shell = shell;
+  tile.roofParts.push(shell);
+  tile.roofMats.push(...mats);
+  tile.group.add(shell);
+  // …and the label rises to the top of the real shape instead of floating at
+  // the fixed reading height a place without a model was given (`buildTile`).
+  // Same reading as the model branch: measured after the group hangs in the
+  // world, so the tile's own transform is in it.
+  shell.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(shell);
+  if (box.max.y > box.min.y) {
+    tile.height = box.max.y - box.min.y;
+    tile.labelObj?.position.set(0, tile.height + 2.2, 0);
+  }
+}
+
+/** Take the far-view shell down and free what it owns — its material clones.
+ *  The GEOMETRIES belong to the interior primitives it was cloned from and are
+ *  freed with them; disposing them here would empty the walls the player is
+ *  standing in. */
+function dropFarShell(tile: Tile): void {
+  const shell = tile.shell;
+  if (!shell) return;
+  tile.group.remove(shell);
+  const mats = (shell.userData.shellMats as THREE.Material[] | undefined) ?? [];
+  tile.roofParts = tile.roofParts.filter((o) => o !== shell);
+  tile.roofMats = tile.roofMats.filter((m) => !mats.includes(m));
+  for (const m of mats) m.dispose();
+  shell.clear();
+  tile.shell = undefined;
 }
 
 /** Building spec applied in full — shell swap plus cutouts. Shared by the
@@ -1035,10 +1171,9 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
  *  mehr zu blenden. */
 function applySceneBuilding(tile: Tile, model: THREE.Group,
                             display: NonNullable<SceneModelSpec['display']> = 'shell'): void {
-  if (tile.shell) {
-    tile.group.remove(tile.shell);
-    tile.shell = undefined;
-  }
+  // The handover: whatever stood in for the model — the far-view shell built
+  // from the recipe's own primitives — goes when the real one arrives.
+  dropFarShell(tile);
   tile.serverModel = model;
   // `area` = das Modell bleibt stehen und bekommt Löcher; das gilt NUR für
   // `ground`. Der Detail-Modus fadet und wird deshalb unten wie eine Hülle
@@ -1107,6 +1242,9 @@ export function unmountScene(tile: Tile): void {
   const prev = tile.group.children.find((c) => c.name === SCENE_GROUP)
     ?? tile.interior;
   if (prev && prev.name === SCENE_GROUP) tile.group.remove(prev);
+  // The far-view shell is a copy of THIS scene's primitives, so it dies with
+  // it — its geometries are the ones just taken out of the graph.
+  dropFarShell(tile);
   // Cutout-Material-Klone der vorigen Szene freigeben (Muster
   // disposeClipMaterials — die Texturen sind mit dem Cache geteilt).
   tile.cutouts?.dispose();

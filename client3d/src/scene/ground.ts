@@ -55,7 +55,8 @@ import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry,
   gridPlate, gridStepFor, pickVariant, pointInRing,
   propGroundFit, sampleCompositeGroundHeight, sampleCompositeHeight,
-  scatterCellInstances, scatterCellSeed, SCATTER_CELL_M, subdivideOnGrid,
+  scatterCellInstances, scatterCellSeed, scatterClearM,
+  SCATTER_CELL_M, subdivideOnGrid,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
@@ -412,6 +413,42 @@ function groundedGeometry(mesh: THREE.Mesh,
   }
   geo.computeBoundingSphere();
   return geo;
+}
+
+/**
+ * How WIDE a prop mesh is, per metre of its own height — the ledger behind the
+ * scatter's clearance (user finding 2026-08-20).
+ *
+ * `max(bboxX, bboxZ) / bboxHeight` of the grounded geometry, i.e. a pure
+ * SHAPE fact of the file and therefore independent of the target height any
+ * entry scales it to: the fit is uniform (`propGroundFit`), so the width at a
+ * planted height `h` is simply `spread · h`. Keyed by URL and module-global,
+ * because the very same tree is scattered by every area that names it and by
+ * every rebuild of every one of them.
+ *
+ * A prop nobody has loaded yet is NOT in here, and that is a state and not a
+ * gap: the sampler then estimates the width from the height (`scatterClearM`),
+ * exactly as the map editor's dot preview must, and the entry is re-sampled
+ * once the real measurement lands (`noteSpread`).
+ */
+const propSpread = new Map<string, number>();
+
+/** How long a measured prop width waits for its neighbours before the areas
+ *  are re-sampled (`noteSpread`) — long enough that a wood's files arrive in
+ *  ONE batch, short enough that the correction lands while the player is still
+ *  walking up to it. */
+const SPREAD_RESAMPLE_MS = 250;
+
+/** Read the ledger for the tiers of ONE entry — the WIDEST answer any of its
+ *  meshes gave, so the low mesh cannot overhang what the full one respects.
+ *  `null` = nothing measured yet (see `propSpread`). */
+function spreadOf(urls: readonly string[]): number | null {
+  let best: number | null = null;
+  for (const url of urls) {
+    const s = url ? propSpread.get(url) : undefined;
+    if (s !== undefined && (best === null || s > best)) best = s;
+  }
+  return best;
 }
 
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
@@ -1331,6 +1368,27 @@ export function createGround(): Ground {
     if (!cells.length) return out;
     readScatterList(area).forEach((entry, index) => {
       const density = Number(entry.density_per_100m2 ?? 0);
+      // An entry WITH a model gets its cone at the height the mesh will have —
+      // the cone is that prop's stand-in, and a knee-high one that turns into
+      // an 8 m tree is a pop where the sizes could simply agree. Only the
+      // built-in tuft (no model at all) keeps the hip-high tuft size.
+      const h = entry.model
+        ? scatterTargetH(entry.height_m, entry.prop_height_m)
+        : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
+      const variants = (entry.variants && typeof entry.variants === 'object')
+        ? entry.variants : {};
+      const model = typeof entry.model === 'string' ? entry.model : '';
+      const loUrl = pickVariant(variants, 'low') || model;
+      const hiUrl = pickVariant(variants, 'full') || model;
+      // HOW FAR THIS PROP HAS TO STAY OFF A PLACED LOCATION (finding
+      // 2026-08-20): half its own horizontal extent, measured on the loaded
+      // mesh at the height it is planted at (`propSpread`) and estimated from
+      // that height while no mesh of the entry has landed yet. Read BEFORE the
+      // sampling because it is an input to the rejection — it never touches the
+      // candidate stream, so a later refinement only ever adds or removes props
+      // at the rim of a footprint and leaves every other one where it stood.
+      const spread = spreadOf([hiUrl, loUrl]);
+      const clearM = scatterClearM(h, spread === null ? null : spread * h);
       const points: { x: number; z: number; yaw: number }[] = [];
       for (const [cx, cz] of cells) {
         for (const p of scatterCellInstances({
@@ -1340,18 +1398,11 @@ export function createGround(): Ground {
           densityPer100m2: density,
           seed: scatterCellSeed(area.id, index, cx, cz),
           footprints,
+          clearM,
           occluders,
         })) points.push(p);
       }
       if (!points.length) return;
-
-      // An entry WITH a model gets its cone at the height the mesh will have —
-      // the cone is that prop's stand-in, and a knee-high one that turns into
-      // an 8 m tree is a pop where the sizes could simply agree. Only the
-      // built-in tuft (no model at all) keeps the hip-high tuft size.
-      const h = entry.model
-        ? scatterTargetH(entry.height_m, entry.prop_height_m)
-        : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
       // THE one place the two authors of the wind meet (§ A9): the area's
       // amplitude times this prop's factor. Everything downstream — the tuft
       // below, `mountUrl`'s material, the clone-or-share decision — reads this
@@ -1415,11 +1466,6 @@ export function createGround(): Ground {
       low.count = 0;
       low.visible = false;
 
-      const variants = (entry.variants && typeof entry.variants === 'object')
-        ? entry.variants : {};
-      const model = typeof entry.model === 'string' ? entry.model : '';
-      const loUrl = pickVariant(variants, 'low') || model;
-      const hiUrl = pickVariant(variants, 'full') || model;
       // The sphere over the instances themselves, padded by how tall the prop
       // stands and how far the wind takes it — see `ScatterProp.sphere` for
       // the two jobs it does. Its CENTRE is also what the download queue sorts
@@ -1580,6 +1626,10 @@ export function createGround(): Ground {
       // model is never instanced at its file size — that number survived no
       // normalisation (`scatterTargetH`).
       const geometry = prop.owned.get(url) ?? groundedGeometry(mesh, prop.targetH);
+      // The mesh is grounded and scaled — so this is the moment its real width
+      // is known, and the clearance the scatter keeps from a placed location
+      // stops being an estimate (finding 2026-08-20).
+      noteSpread(url, geometry);
       // The clone is OURS and nothing else disposes it — the owned bag of
       // this rebuild was drained into `areaOwned` long before this answer
       // arrived (the load is asynchronous, the swap is not). So it rides on
@@ -1999,6 +2049,46 @@ export function createGround(): Ground {
         if (prop.high) group.add(prop.high);
       }
     }
+  }
+
+  /** A pending re-sample after a prop was MEASURED (`noteSpread`) — one timer
+   *  for all of them: a wood mounts several files within a few hundred
+   *  milliseconds, and re-sampling once per arrival would rebuild every area
+   *  of the world once per tree. */
+  let spreadTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * File how wide a loaded prop really is, and re-sample if that changes the
+   * clearance the entry was planted with.
+   *
+   * The sampler needs a width BEFORE the mesh exists, so it starts with the
+   * estimate (`scatterClearM` without an extent). When the file lands the true
+   * one is known — and since the clearance is a REJECTION and never touches
+   * the candidate stream, the correction subtracts (or gives back) props at the
+   * rim of a footprint and moves no other one by a millimetre.
+   *
+   * Once per URL per session: the second and every later mount of the same file
+   * finds the identical number and schedules nothing, so this converges after
+   * the first pass over a world instead of rebuilding on every load.
+   */
+  function noteSpread(url: string, geo: THREE.BufferGeometry): void {
+    const box = geo.boundingBox;
+    if (!url || !box) return;
+    const height = box.max.y - box.min.y;
+    if (!(height > 1e-6)) return;
+    const width = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+    if (!Number.isFinite(width) || width <= 0) return;
+    const spread = width / height;
+    const prev = propSpread.get(url);
+    if (prev !== undefined && Math.abs(prev - spread) < 1e-6) return;
+    propSpread.set(url, spread);
+    if (!areaMeshes.length || spreadTimer !== null) return;
+    // NOT straight away: this runs inside the load callback of a prop that is
+    // about to be mounted, and `rebuildScatter` disposes exactly that entry.
+    spreadTimer = setTimeout(() => {
+      spreadTimer = null;
+      if (areaMeshes.length) rebuildScatter();
+    }, SPREAD_RESAMPLE_MS);
   }
 
   /**
@@ -2696,6 +2786,13 @@ export function createGround(): Ground {
       // its one geometry and its material per kind outlive every rebuild and
       // are in no `*Owned` bag, so this is the only place they are freed.
       undergrowth.dispose();
+      // …and the one timer this module keeps: a re-sample waiting on a measured
+      // prop width would rebuild areas into a group that is already gone
+      // (`noteSpread`).
+      if (spreadTimer !== null) {
+        clearTimeout(spreadTimer);
+        spreadTimer = null;
+      }
     },
   };
 }
