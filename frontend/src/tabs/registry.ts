@@ -57,7 +57,7 @@ export const TABS: TabSpec[] = [
   { id: 'rules', label: 'Rules', Component: RulesTab },
   { id: 'states', label: 'States', Component: StatesTab },
   { id: 'items', label: 'Items', Component: ItemsTab },
-  { id: 'world', label: 'World', Component: WorldTab },
+  { id: 'world', label: 'Locations', Component: WorldTab },
   { id: 'map', label: 'Map', Component: MapTab },
   { id: 'terrain', label: 'Terrain', Component: TerrainTab },
   { id: 'surface-textures', label: 'Surface textures', Component: SurfaceTexturesTab },
