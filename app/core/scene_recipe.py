@@ -1339,6 +1339,14 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     max_m = width_m if width_m > 0 else extent
     offset_y = _num(meta.get("offset_y"))
     walk = _num(meta.get("walk_y"))
+    # Centre of the plot the model fills: the boundary's bbox centre in local
+    # metres. For a pin-centred plot this is (0, 0) — the square-era numbers
+    # are untouched; only an off-centre boundary moves the default stand.
+    _bnd = _boundary_local(map3d or {}, extent)
+    _xs = [p[0] for p in _bnd]
+    _zs = [p[1] for p in _bnd]
+    _bbox_cx = (min(_xs) + max(_xs)) / 2.0 if _bnd else 0.0
+    _bbox_cz = (min(_zs) + max(_zs)) / 2.0 if _bnd else 0.0
 
     if ground:
         # Level-0 floor, by definition — the terrain storey IS this model.
@@ -1365,7 +1373,16 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         # its location, so the rotated footprint is what gets measured.
         "max_m": _r(max_m),
         "measure": "yawed_xz",
-        "anchor": [_r(_num(meta.get("offset_x"))), _r(_num(meta.get("offset_z")))],
+        # The DEFAULT stand of a building is the centre of the plot it fills —
+        # since v6 that is the boundary's bbox CENTRE, not the pin: a boundary
+        # enlarged to one side moves the plot while the pin stays, and a model
+        # anchored at the pin then overflows the plate on that side (user
+        # finding 2026-08-20: the roof view showed only part of the house —
+        # snapshot camera and plate sit on the bbox centre, the mesh sat on
+        # the pin). Offsets shift from that centre, exactly as they used to
+        # shift from the pin when both were the same point (square era).
+        "anchor": [_r(_bbox_cx + _num(meta.get("offset_x"))),
+                   _r(_bbox_cz + _num(meta.get("offset_z")))],
         "bottom_y": _r(bottom),
         "walk_y_world": _r(walk_world),
     }

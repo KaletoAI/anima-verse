@@ -1383,6 +1383,28 @@ def test_building_spec() -> None:
         building_meta={**BUILDING_META, "width_m": 15.0}), "building")
     check("a declared width_m 15 on a 10 m location: max_m = 15",
           near(wide["max_m"], 15.0), str(wide.get("max_m")))
+    # THE DEFAULT STAND is the plot's centre — the boundary bbox centre, not
+    # the pin (user finding 2026-08-20: a plot enlarged to one side left the
+    # mesh on the pin, and the roof view showed only part of the house).
+    # Hand-derived: boundary [[0,0],[14,0],[14,10],[0,10]] has its bbox
+    # centre at (7, 5); with offsets (+1, −1) the anchor is (8, 4). The
+    # pin-centred fixtures above prove the (0,0) case never moved.
+    fx = model_fixture()
+    fx["map3d"]["boundary"] = [[0, 0], [14, 0], [14, 10], [0, 10]]
+    off = spec_of(scene_recipe.compose_scene(
+        fx, plan_width_m=14.0, room_metas=room_metas(),
+        building_meta={**BUILDING_META, "offset_x": 0.0, "offset_z": 0.0}),
+        "building")
+    check("off-centre boundary: anchor = bbox centre (7, 5)",
+          near(off["anchor"][0], 7.0) and near(off["anchor"][1], 5.0),
+          str(off.get("anchor")))
+    # BUILDING_META's own offsets are (+1, −1) — they shift FROM that centre.
+    off2 = spec_of(scene_recipe.compose_scene(
+        fx, plan_width_m=14.0, room_metas=room_metas(),
+        building_meta=dict(BUILDING_META)), "building")
+    check("...offsets shift FROM that centre: (8, 4)",
+          near(off2["anchor"][0], 8.0) and near(off2["anchor"][1], 4.0),
+          str(off2.get("anchor")))
     check("...and then nothing is estimated any more",
           "width_estimated" not in wide, str(sorted(wide)))
     check("the measurement stays the YAWED hull (a house must fit turned)",
