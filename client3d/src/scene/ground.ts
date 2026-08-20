@@ -59,8 +59,8 @@ import { AREA_POLYGON_OFFSET, buildAreaGeometry,
   SCATTER_CELL_M, subdivideOnGrid,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   worldHeightRange } from '@anima/scene-render';
-import type { GridBox, Point2, ScatterFootprint, SurfaceMaterialSpec,
-  WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
+import type { GridBox, Point2, ScatterFootprint, ScatterInstance,
+  SurfaceMaterialSpec, WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
 import type { HeightTileBatch } from '../api';
 import { localToWorld } from '../game/enterLocation';
@@ -454,8 +454,10 @@ function spreadOf(urls: readonly string[]): number | null {
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
 interface AreaMesh {
   mesh: THREE.Mesh;
-  /** one scatter entry per authored row — empty when nothing grows here
-   *  (finding B17: the list hangs on the AREA, not on the terrain type) */
+  /** one scatter entry per authored row AND model variant — empty when nothing
+   *  grows here (finding B17: the list hangs on the AREA, not on the terrain
+   *  type; § B2 addendum: a prop with four meshes is four entries, each holding
+   *  the instances the shared formula gave it) */
   scatter: ScatterProp[];
   /**
    * WHAT THE SCATTER IS SAMPLED FROM, kept so it can be sampled AGAIN without
@@ -493,6 +495,13 @@ interface AreaMesh {
  * every instance of the entry is in one of them, and a realloc inside the tick
  * would be a fresh vertex-buffer upload for a camera that merely walked a
  * metre.
+ *
+ * ONE MODEL VARIANT, NOT ONE AUTHORED ROW (§ B2 addendum, 2026-08-20). A prop
+ * with four active meshes gives its row four of these, each holding the
+ * instances the shared formula handed it (`buildScatter`). Everything in here
+ * is per-MESH already — two tiers, one tuft, one sphere, one impostor, one
+ * download wish — which is why a wood of four kinds of tree costs no second
+ * mechanism, only more entries in the list.
  */
 interface ScatterProp {
   /** the cheap mesh — the tuft cone at build time, the `low` tier once it has
@@ -874,6 +883,32 @@ function readScatterList(area: TerrainArea): TerrainScatterEntry[] {
   const raw = (area.meta as { scatter?: unknown } | undefined)?.scatter;
   if (!Array.isArray(raw)) return [];
   return raw.filter((e): e is TerrainScatterEntry => !!e && typeof e === 'object');
+}
+
+/**
+ * The MESHES one scatter row may draw — one tier map per active model variant
+ * of its prop, the primary one first (§ B2 addendum).
+ *
+ * `model_variants` is the list the server ships, and it ships it ONLY for a
+ * prop that really has more than one variant. Everything else — a single
+ * variant, a foreign URL, an old cached answer — is the one `variants` map
+ * this reader has always produced, so the list is never empty and the caller
+ * has exactly one shape to reason about: `n = maps.length`, and `n === 1` is
+ * the whole world as it was before variants existed.
+ *
+ * The FIRST element of `model_variants` IS `variants` by contract, so the list
+ * is taken whole rather than merged with it — reading both would be two names
+ * for the primary variant and one chance to disagree.
+ */
+function readVariantMaps(entry: TerrainScatterEntry): Record<string, string>[] {
+  const list = entry.model_variants;
+  if (Array.isArray(list)) {
+    const maps = list.filter(
+      (m): m is Record<string, string> => !!m && typeof m === 'object');
+    if (maps.length) return maps;
+  }
+  return [(entry.variants && typeof entry.variants === 'object')
+    ? entry.variants : {}];
 }
 
 /**
@@ -1300,7 +1335,8 @@ export function createGround(): Ground {
 
   /**
    * Deterministic prop scatter of one area — up to TWO InstancedMeshes per
-   * entry (the cheap one from the start, the full one when it is deserved).
+   * entry AND VARIANT (the cheap one from the start, the full one when it is
+   * deserved).
    *
    * WHAT GROWS HERE IS THE AREA'S OWN BUSINESS (finding B17). It used to hang
    * on the terrain TYPE, which could only ever say "all forest everywhere
@@ -1336,6 +1372,18 @@ export function createGround(): Ground {
    * `SCATTER_MAX_PER_CELL` is what a hand-edited density runs into now, and it
    * bites at the same 97.66 props per 100 m2 in every cell of every area —
    * a ceiling can no longer make two woods differ.
+   *
+   * A ROW IS AS MANY ENTRIES AS THE PROP HAS MESHES (§ B2 addendum, 2026-08-20).
+   * A prop may carry several models of the same object; a wood of 14 000 trees
+   * built from ONE of them is 14 000 copies of one tree, which is exactly what
+   * the variants exist to end. So the sampler is told how many there are
+   * (`variantCount`), hands every instance the variant it shows — the one
+   * shared formula `(hash(cell seed) + candidate) mod n`, `scatterVariantIndex`
+   * — and the points are split into one `ScatterProp` per (row, variant).
+   * Everything below is per PROP already (its own tuft, its own two tiers, its
+   * own sphere, its own LOD, its own impostor), so a variant is simply another
+   * one of them; a prop with a single variant produces the single entry it
+   * always produced, down to the same objects in the same order.
    *
    * WHAT IS DRAWN OF IT is not decided here either: the finished entry is
    * handed straight to `binProp` with the camera of the last tick, so a
@@ -1375,11 +1423,24 @@ export function createGround(): Ground {
       const h = entry.model
         ? scatterTargetH(entry.height_m, entry.prop_height_m)
         : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
-      const variants = (entry.variants && typeof entry.variants === 'object')
-        ? entry.variants : {};
       const model = typeof entry.model === 'string' ? entry.model : '';
-      const loUrl = pickVariant(variants, 'low') || model;
-      const hiUrl = pickVariant(variants, 'full') || model;
+      // THE MESHES THIS ROW MAY DRAW (§ B2 addendum). One tier map per active
+      // model variant of the prop, the primary one first; a prop with a single
+      // variant answers the one map it always did, so everything below runs
+      // once and produces the entry it always produced.
+      //
+      // Only the PRIMARY variant falls back to the authored `model` URL: that
+      // is the string the entry names, and the further variants exist only as
+      // the tier maps the server resolved for them.
+      const kinds = readVariantMaps(entry).map((variants, v) => {
+        const fallback = v === 0 ? model : '';
+        return {
+          variants,
+          model: fallback,
+          loUrl: pickVariant(variants, 'low') || fallback,
+          hiUrl: pickVariant(variants, 'full') || fallback,
+        };
+      });
       // HOW FAR THIS PROP HAS TO STAY OFF A PLACED LOCATION (finding
       // 2026-08-20): half its own horizontal extent, measured on the loaded
       // mesh at the height it is planted at (`propSpread`) and estimated from
@@ -1387,9 +1448,19 @@ export function createGround(): Ground {
       // sampling because it is an input to the rejection — it never touches the
       // candidate stream, so a later refinement only ever adds or removes props
       // at the rim of a footprint and leaves every other one where it stood.
-      const spread = spreadOf([hiUrl, loUrl]);
+      //
+      // ONE clearance for the whole ROW, over the meshes of EVERY variant: the
+      // sampling happens once and the split comes after it, so a clearance per
+      // variant would be a number the stream cannot have. The widest answer
+      // wins (`spreadOf`), which is the same rule the two tiers of one mesh
+      // already follow — a narrow variant keeps a little more distance from a
+      // wall than it needs, a wide one never overhangs it.
+      const spread = spreadOf(kinds.flatMap((k) => [k.hiUrl, k.loUrl]));
       const clearM = scatterClearM(h, spread === null ? null : spread * h);
-      const points: { x: number; z: number; yaw: number }[] = [];
+      // ONE BUCKET PER VARIANT, filled in cell order. The bucket a point falls
+      // into is the sampler's answer (`variant`), never a count of its own: the
+      // formula needs the CANDIDATE ordinal, and only the sampler knows it.
+      const buckets: ScatterInstance[][] = kinds.map(() => []);
       for (const [cx, cz] of cells) {
         for (const p of scatterCellInstances({
           ring,
@@ -1400,141 +1471,149 @@ export function createGround(): Ground {
           footprints,
           clearM,
           occluders,
-        })) points.push(p);
+          variantCount: kinds.length,
+        })) (buckets[p.variant ?? 0] ?? buckets[0]).push(p);
       }
-      if (!points.length) return;
       // THE one place the two authors of the wind meet (§ A9): the area's
       // amplitude times this prop's factor. Everything downstream — the tuft
       // below, `mountUrl`'s material, the clone-or-share decision — reads this
       // one number off `prop.sway`, so a stone with factor 0 arrives at 0 and
       // takes the existing "no sway, no clone" path without a second rule.
       const entrySway = scatterSway(sway, entry.sway_factor);
-      // v1 prop: a low cone in the kind's own colour. A `model` URL is honoured
-      // asynchronously below — the tufts stand immediately and are replaced by
-      // the mesh when it arrives, so a slow asset never delays the ground.
-      const geo = new THREE.ConeGeometry(TUFT_RADIUS_M, h, 5);
-      geo.translate(0, h / 2, 0);
-      const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
-        roughness: 0.95,
-      });
-      // The tuft's material is this entry's own, so it is simply patched —
-      // the reference height is the cone's, whose tip is what bends.
-      applySway(mat, entrySway, h);
-      // …and the corridor between camera and avatar takes it away where it
-      // stands in the way (`scene/occlusion.ts`). Chained after the wind, so
-      // the key of a swaying tuft reads `ground-sway@x+occlusion-corridor`.
-      applyOcclusionFade(mat);
-      sink.push(geo, mat);
-      // Typed on the BASE classes: `mountUrl` swaps geometry and material for
-      // the loaded ones, which are not a cone and not this material.
-      const low: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
-        = new THREE.InstancedMesh(geo, mat, points.length);
-      // One of each, reused: a big meadow places thousands of instances, and a
-      // fresh Vector3 per instance is garbage for nothing.
-      const m = new THREE.Matrix4();
-      const q = new THREE.Quaternion();
-      const up = new THREE.Vector3(0, 1, 0);
-      const at = new THREE.Vector3();
-      const s = new THREE.Vector3(1, 1, 1);
-      // The matrices are kept HERE, not in the mesh: they are the source both
-      // instance buffers are filled from per tick, and a mesh's buffer holds
-      // whatever the last binning put into it. `pos` is the same translation
-      // once more, as three tight floats — see `ScatterProp.pos`.
-      const srcMatrix = new Float32Array(points.length * 16);
-      const pos = new Float32Array(points.length * 3);
-      points.forEach((p, i) => {
-        q.setFromAxisAngle(up, p.yaw);
-        // EVERY instance samples its own ground (§ A16): the sampler decides
-        // where the tuft stands, the scatter only where it stands in XZ. A
-        // shared height would float half a wood over the slope it grows on.
-        // The props stay UPRIGHT on a slope — a tree grows towards the sky,
-        // and tilting one into the surface normal is a look, not a fix.
-        const y = heightAt(p.x, p.z);
-        m.compose(at.set(p.x, y, p.z), q, s);
-        m.toArray(srcMatrix, i * 16);
-        pos[i * 3] = p.x;
-        pos[i * 3 + 1] = y;
-        pos[i * 3 + 2] = p.z;
-      });
-      low.castShadow = false;
-      low.frustumCulled = true;
-      // Nothing is drawn until the entry has been binned (a few lines below,
-      // and every tick after that): a mesh whose buffer holds the matrices of
-      // the last camera position must not be shown at the count of the one
-      // before it.
-      low.count = 0;
-      low.visible = false;
+      kinds.forEach((kind, variantPos) => {
+        const points = buckets[variantPos];
+        // A variant no candidate of this window picked gets no mesh at all —
+        // and no download either, which is the point of splitting AFTER the
+        // sampling rather than building n meshes and filling them.
+        if (!points.length) return;
+        const { variants, loUrl, hiUrl } = kind;
+        // v1 prop: a low cone in the kind's own colour. A `model` URL is honoured
+        // asynchronously below — the tufts stand immediately and are replaced by
+        // the mesh when it arrives, so a slow asset never delays the ground.
+        const geo = new THREE.ConeGeometry(TUFT_RADIUS_M, h, 5);
+        geo.translate(0, h / 2, 0);
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(kindColor(area.kind)).multiplyScalar(0.75),
+          roughness: 0.95,
+        });
+        // The tuft's material is this entry's own, so it is simply patched —
+        // the reference height is the cone's, whose tip is what bends.
+        applySway(mat, entrySway, h);
+        // …and the corridor between camera and avatar takes it away where it
+        // stands in the way (`scene/occlusion.ts`). Chained after the wind, so
+        // the key of a swaying tuft reads `ground-sway@x+occlusion-corridor`.
+        applyOcclusionFade(mat);
+        sink.push(geo, mat);
+        // Typed on the BASE classes: `mountUrl` swaps geometry and material for
+        // the loaded ones, which are not a cone and not this material.
+        const low: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
+          = new THREE.InstancedMesh(geo, mat, points.length);
+        // One of each, reused: a big meadow places thousands of instances, and a
+        // fresh Vector3 per instance is garbage for nothing.
+        const m = new THREE.Matrix4();
+        const q = new THREE.Quaternion();
+        const up = new THREE.Vector3(0, 1, 0);
+        const at = new THREE.Vector3();
+        const s = new THREE.Vector3(1, 1, 1);
+        // The matrices are kept HERE, not in the mesh: they are the source both
+        // instance buffers are filled from per tick, and a mesh's buffer holds
+        // whatever the last binning put into it. `pos` is the same translation
+        // once more, as three tight floats — see `ScatterProp.pos`.
+        const srcMatrix = new Float32Array(points.length * 16);
+        const pos = new Float32Array(points.length * 3);
+        points.forEach((p, i) => {
+          q.setFromAxisAngle(up, p.yaw);
+          // EVERY instance samples its own ground (§ A16): the sampler decides
+          // where the tuft stands, the scatter only where it stands in XZ. A
+          // shared height would float half a wood over the slope it grows on.
+          // The props stay UPRIGHT on a slope — a tree grows towards the sky,
+          // and tilting one into the surface normal is a look, not a fix.
+          const y = heightAt(p.x, p.z);
+          m.compose(at.set(p.x, y, p.z), q, s);
+          m.toArray(srcMatrix, i * 16);
+          pos[i * 3] = p.x;
+          pos[i * 3 + 1] = y;
+          pos[i * 3 + 2] = p.z;
+        });
+        low.castShadow = false;
+        low.frustumCulled = true;
+        // Nothing is drawn until the entry has been binned (a few lines below,
+        // and every tick after that): a mesh whose buffer holds the matrices of
+        // the last camera position must not be shown at the count of the one
+        // before it.
+        low.count = 0;
+        low.visible = false;
 
-      // The sphere over the instances themselves, padded by how tall the prop
-      // stands and how far the wind takes it — see `ScatterProp.sphere` for
-      // the two jobs it does. Its CENTRE is also what the download queue sorts
-      // by (`near`): since the scatter is a camera window, that centre is a
-      // stone's throw from the camera, while the painted shape's own centre
-      // can be kilometres away in a wood this big — and a queue sorted by
-      // that would fetch the far wood's mesh before the one underfoot.
-      const sphere = instanceSphere(pos, h + SWAY_MAX_M);
-      const prop: ScatterProp = {
-        low,
-        high: null,
-        baseCount: points.length,
-        srcMatrix,
-        pos,
-        // EVERY INSTANCE STARTS AS `low`, and the 1 is the whole point: the
-        // hysteresis answers "whatever is already there" inside the 35…45 m
-        // band, so the starting value decides what a freshly built entry shows
-        // in it. A 0 (full) would download the good mesh for a wood 44 m away
-        // that the next tick demotes anyway; a 2 (hidden) would be a DEAD BAND
-        // — an entry built at 110.4…120 m would stay invisible, because coming
-        // back from hidden needs 0.92·cull, although at that distance it is
-        // plainly low and should be drawn.
-        tiers: new Uint8Array(points.length).fill(1),
-        // …and in NO buffer yet, so the first binning finds every instance
-        // changed and uploads both buffers once.
-        slots: new Uint8Array(points.length).fill(2),
-        // Both meshes share it: they hold subsets of these very positions,
-        // and nothing writes into it after this line.
-        sphere,
-        hidden: false,
-        disposed: false,
-        variants,
-        model,
-        loUrl,
-        hiUrl,
-        // A prop whose two tiers resolve to the same file is ONE mesh, and so
-        // is a tuft (both URLs empty) — see `hasHigh`.
-        hasHigh: !!hiUrl && hiUrl !== loUrl,
-        // The authored height wins, the prop's real one governs when none was
-        // authored, the flat fallback is the last resort (§ A9).
-        targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
-        sway: entrySway,
-        near: sphere.center,
-        wantLow: '',
-        wantHigh: '',
-        shownLow: '',
-        shownHigh: '',
-        owned: new Map(),
-        mats: new Map(),
-        // The far half is grown on demand, by the very tick that finds an
-        // instance of this entry beyond the cull line (`binImpostors`).
-        impostor: null,
-      };
-      // THE SPHERE IS SET, NOT COMPUTED, and both meshes of the entry get the
-      // same one. three.js would derive it from the instance buffer on the
-      // first frustum test and then keep that answer for ever — measured over
-      // whatever `count` happened to be at that moment, which after a binning
-      // is a subset near the camera. A wood would then be culled by the bounds
-      // of the four trees that were drawn when it was first looked at.
-      low.boundingSphere = prop.sphere;
-      // The tuft stands until the first mesh arrives; a prop with no model at
-      // all keeps it forever, and takes part in cull and thinning all the same.
-      // NOTHING is downloaded for an entry beyond the cull distance: its
-      // instances are not drawn, and a world of far-away woods would otherwise
-      // fetch every mesh in it at build time only to hide it. `binProp` is
-      // what asks — for this entry, at its own nearest instance.
-      if (lodCam) binProp(prop, lodCam);
-      else fillAll(prop);
-      out.push(prop);
+        // The sphere over the instances themselves, padded by how tall the prop
+        // stands and how far the wind takes it — see `ScatterProp.sphere` for
+        // the two jobs it does. Its CENTRE is also what the download queue sorts
+        // by (`near`): since the scatter is a camera window, that centre is a
+        // stone's throw from the camera, while the painted shape's own centre
+        // can be kilometres away in a wood this big — and a queue sorted by
+        // that would fetch the far wood's mesh before the one underfoot.
+        const sphere = instanceSphere(pos, h + SWAY_MAX_M);
+        const prop: ScatterProp = {
+          low,
+          high: null,
+          baseCount: points.length,
+          srcMatrix,
+          pos,
+          // EVERY INSTANCE STARTS AS `low`, and the 1 is the whole point: the
+          // hysteresis answers "whatever is already there" inside the 35…45 m
+          // band, so the starting value decides what a freshly built entry shows
+          // in it. A 0 (full) would download the good mesh for a wood 44 m away
+          // that the next tick demotes anyway; a 2 (hidden) would be a DEAD BAND
+          // — an entry built at 110.4…120 m would stay invisible, because coming
+          // back from hidden needs 0.92·cull, although at that distance it is
+          // plainly low and should be drawn.
+          tiers: new Uint8Array(points.length).fill(1),
+          // …and in NO buffer yet, so the first binning finds every instance
+          // changed and uploads both buffers once.
+          slots: new Uint8Array(points.length).fill(2),
+          // Both meshes share it: they hold subsets of these very positions,
+          // and nothing writes into it after this line.
+          sphere,
+          hidden: false,
+          disposed: false,
+          variants,
+          model: kind.model,
+          loUrl,
+          hiUrl,
+          // A prop whose two tiers resolve to the same file is ONE mesh, and so
+          // is a tuft (both URLs empty) — see `hasHigh`.
+          hasHigh: !!hiUrl && hiUrl !== loUrl,
+          // The authored height wins, the prop's real one governs when none was
+          // authored, the flat fallback is the last resort (§ A9).
+          targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
+          sway: entrySway,
+          near: sphere.center,
+          wantLow: '',
+          wantHigh: '',
+          shownLow: '',
+          shownHigh: '',
+          owned: new Map(),
+          mats: new Map(),
+          // The far half is grown on demand, by the very tick that finds an
+          // instance of this entry beyond the cull line (`binImpostors`).
+          impostor: null,
+        };
+        // THE SPHERE IS SET, NOT COMPUTED, and both meshes of the entry get the
+        // same one. three.js would derive it from the instance buffer on the
+        // first frustum test and then keep that answer for ever — measured over
+        // whatever `count` happened to be at that moment, which after a binning
+        // is a subset near the camera. A wood would then be culled by the bounds
+        // of the four trees that were drawn when it was first looked at.
+        low.boundingSphere = prop.sphere;
+        // The tuft stands until the first mesh arrives; a prop with no model at
+        // all keeps it forever, and takes part in cull and thinning all the same.
+        // NOTHING is downloaded for an entry beyond the cull distance: its
+        // instances are not drawn, and a world of far-away woods would otherwise
+        // fetch every mesh in it at build time only to hide it. `binProp` is
+        // what asks — for this entry, at its own nearest instance.
+        if (lodCam) binProp(prop, lodCam);
+        else fillAll(prop);
+        out.push(prop);
+      });
     });
     return out;
   }

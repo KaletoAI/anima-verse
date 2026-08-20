@@ -889,6 +889,35 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Clients** (Distanz-Hysterese, Sichtweite, Instanz-Budget — in
   `development_instructions/done/plan-scatter-lod.md` festgehalten), kein
   Payload-Vertrag: gespeichert bleiben die drei Felder oben.
+- **Hat das Prop mehrere Modell-Varianten, hängt der Server zusätzlich
+  `model_variants` an** — eine Stufen-Karte je AKTIVER Variante MIT Mesh, in
+  der Reihenfolge des Props, gebaut wie überall sonst (§ B2-Nachtrag): die
+  primäre behält ihre query-lose URL, jede weitere trägt `?variant=<i>`.
+  **`variants` IST Element 0.** Das Feld kommt NUR bei mehr als einer Variante
+  mit, also merkt ein Prop mit einer Variante von der Sache nichts.
+  **Welche Instanz welche Variante zeigt, steht NICHT im Payload** — und das
+  ist die eine Stelle, an der der gemalte Scatter von jeder anderen
+  Platzierung abweicht: seine Instanzen entstehen erst im Kamera-Fenster des
+  Clients, es gibt also keine Server-Zeile, an die eine Zahl gehängt werden
+  könnte. Stattdessen rechnen **beide Renderer dieselbe eine Formel** über den
+  Zellen-Seed, den der Sampler ohnehin hat (`@anima/scene-render`
+  → `scatterVariantIndex`, § B2-Nachtrag):
+
+  ```
+  variant = ( FNV-1a(scatterCellSeed(area, row, cx, cz)) + Kandidat ) mod n
+  ```
+
+  `Kandidat` ist die laufende Nummer im Strom der Zelle, **verworfene
+  eingeschlossen** — aus demselben Grund, aus dem der Yaw vor dem Test gezogen
+  wird: eine Ablehnung muss SUBTRAHIEREN. Ein über die Überlebenden gezählter
+  Index würde jeden Baum hinter einem neu gemalten Gebäude zu einer anderen
+  Baumart machen, und zwar auch dann noch, wenn nur die gemessene Prop-Breite
+  nachträglich genauer wird. `n <= 1` antwortet immer 0, also ist das Ergebnis
+  Zeichen für Zeichen das alte. Der 3D-Client baut daraus **eine
+  `InstancedMesh` je (Zeile, Variante)** statt je Zeile
+  (`ground.ts buildScatter`); Zahlen von Hand in
+  `client3d/scripts/smoke_scatter_math.mjs` Abschnitt (N). Die
+  Karten-Editor-Vorschau bleibt Punkte und fragt gar nicht erst nach Varianten.
 - **Der Server hängt an denselben Eintrag zusätzlich `prop_height_m`** — die
   ECHTE Höhe des Props in Metern aus seinem Bibliotheks-Datensatz
   (`app/core/props.prop_scatter_facts`, dieselbe Zahl, die der Props-Tab
@@ -3673,13 +3702,35 @@ Mesh ergänzt oder löscht, und eine Platzierung darf davon nicht verschwinden.
 Ohne `variant` die primäre Variante. Ein Index, für den das Prop keine
 Variante hat, ist 404 — nie stillschweigend ein anderes Mesh.
 
-**Noch nicht dabei:** der GEMALTE Gelände-Scatter (§ A9, `meta.scatter`)
-bleibt einvariant. Dort entstehen die Instanzen client-seitig in einem
-Kamera-Fenster, dessen Zellenmenge sich beim Laufen ändert; ein Index „i-te
-Instanz" ist also nicht stabil, und eine Variantenmischung bräuchte die
-Aufteilung der Punkte pro Zelle in eigene `InstancedMesh`-Einträge
-(`client3d/src/scene/ground.ts buildScatter`). Der Server liefert dort
-weiterhin nur `variants` der primären Variante.
+**Nachtrag 2026-08-20: der GEMALTE Gelände-Scatter mischt jetzt auch.**
+Er war als einziger ausgenommen, weil seine Instanzen client-seitig in einem
+Kamera-Fenster entstehen — es gibt keine Server-Zeile je Kopie, an die ein
+Index gehängt werden könnte. Die Zelle liefert ihn: der Seed **ist** stabil
+(`scatterCellSeed(area, row, cx, cz)`, eine reine Funktion aus Fläche, Zeile
+und Zellindex), und die laufende Nummer des KANDIDATEN in dieser Zelle
+ebenfalls. Also gilt dieselbe Formel mit gehashtem Seed —
+
+```
+variant = ( FNV-1a(Zellen-Seed) + Kandidaten-Nummer ) mod Anzahl aktiver Varianten
+```
+
+— gerechnet im Sampler selbst (`@anima/scene-render` → `scatterVariantIndex`,
+und `scatterSeedHash` ist genau der Zustand, aus dem `seededRandom` seinen
+Strom startet). Der Server liefert am Streu-Eintrag die LISTE
+(`model_variants`, § A9), der Client teilt die Punkte einer Zelle in einen
+Eimer je Variante und baut **eine `InstancedMesh` je (Zeile, Variante)**
+(`ground.ts buildScatter`). Der Kandidat und nicht der Überlebende wird
+gezählt, damit eine Ablehnung wie überall in diesem Modul nur SUBTRAHIERT:
+sonst wechselt jeder Baum hinter einem neu gesetzten Gebäude die Art. Bei
+einer Variante ist alles Zeichen für Zeichen wie vorher — kein Payload-Feld,
+kein zweites Mesh, `variant` steht nicht einmal an der Instanz.
+
+Handrechnung zur Nachprüfung (§ B5a): `FNV-1a('A') = 3 289 118 412`, das ist
+durch 3 teilbar, also gehen die Kandidaten 0…5 einer Zelle mit diesem Seed bei
+3 Varianten als **0, 1, 2, 0, 1, 2** los; wird Kandidat 2 von einer
+darübergemalten Fläche verworfen, bleiben **0, 1, 0, 1** — nicht 0, 1, 2, 0.
+Vollständige Ableitung inklusive der Hash-Arithmetik in
+`client3d/scripts/smoke_scatter_math.mjs` Abschnitt (N).
 
 ### Ergänzung 2026-08-20: Das Quellbild gehört der Variante
 

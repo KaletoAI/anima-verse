@@ -491,6 +491,91 @@
  *      19 505 against 19 461 props — the same wood twice. BEFORE: 46 and 645.
  *
  * ============================================================================
+ * (N) THE VARIANT MIX — a wood of 14 000 trees is not one tree
+ * ============================================================================
+ * A prop may carry up to four active model variants (§ B2 addendum). The room
+ * scatter and the world props have mixed them since 2026-08-19, resolved on
+ * the SERVER per copy; the painted terrain scatter could not, because its
+ * instances do not exist on the server at all — they are sampled client-side
+ * in a camera window whose cell set changes as the player walks. So a forest
+ * of 14 000 trees kept drawing ONE mesh 14 000 times.
+ *
+ * The mix therefore runs where the instances are made, with the SAME formula
+ * (`app/core/props.py scatter_variant_index`) over the seed the sampler
+ * already has — the CELL's own seed string:
+ *
+ *     variant = ( scatterSeedHash(cell seed) + candidate ) mod n
+ *
+ * (N1) THE HASH, BY HAND. `scatterSeedHash` is FNV-1a 32-bit — the very state
+ *      `seededRandom` starts its stream from, lifted out so one seed answers
+ *      one hash:
+ *        h = 2166136261 = 0x811C9DC5
+ *        for each char c:  h = ((h XOR c) * 16777619) mod 2^32
+ *      The empty string never enters the loop, so hash('') = 2166136261, the
+ *      offset basis itself. For the single character 'A' (0x41):
+ *        h XOR 0x41 = 0x811C9DC5 XOR 0x41 = 0x811C9D84 = 2166136196
+ *        16777619   = 2^24 + 403
+ *        (2166136196 * 2^24) mod 2^32 = (2166136196 mod 2^8) * 2^24
+ *                                     = 0x84 * 2^24 = 132 * 16777216
+ *                                     = 2 214 592 512
+ *        (2166136196 * 403)  mod 2^32 = 872 952 886 988 - 203 * 4 294 967 296
+ *                                     = 872 952 886 988 - 871 878 361 088
+ *                                     =   1 074 525 900
+ *        sum                          = 3 289 118 412   (< 2^32, no wrap)
+ *      -> hash('A') = 3 289 118 412. Its digit sum is 39, so it is divisible
+ *      by 3: hash('A') mod 3 = 0. UNSIGNED is the contract, not a detail —
+ *      `Math.imul` gives a SIGNED int32 and (-1) % 3 is -1 in JavaScript, so a
+ *      signed hash would hand a renderer a negative variant index.
+ *
+ * (N2) THE FORMULA, on that hash. With n = 3 and the seed 'A' (offset 0), the
+ *      candidates 0..5 walk the ring:
+ *        (0+0..5) mod 3  =  0, 1, 2, 0, 1, 2
+ *      — the same shape as the § B2 hand-check of the room scatter (seed 7,
+ *      3 variants -> 1, 2, 0, 1, 2, 0), which is the point: ONE formula, two
+ *      kinds of seed. The real cell seed of (K4),
+ *      `terrain:scatter:ta_1:0:-2,3`, hashes to 3 875 892 755, and
+ *      3 875 892 755 mod 3 = 2, so ITS cell starts at 2: 2, 0, 1, 2, 0, 1.
+ *      Every cell of a wood therefore enters the ring at its own offset, which
+ *      is what keeps a mixed forest from being one repeating pattern.
+ *      n <= 1 has nothing to choose from and answers 0 for every candidate.
+ *
+ * (N3) THE CANDIDATE, NOT THE SURVIVOR. The number the formula counts is the
+ *      candidate's ordinal in the cell's stream, rejected ones included —
+ *      the same choice that makes the yaw a wasted draw in (C) and (D). A
+ *      cell of 5 candidates at d = 1.25 (round(400/100 * 1.25) = 5) over the
+ *      20 x 20 square, with three variants and the seed 'A':
+ *        c0  0.10, 0.20, 0.00  -> ( 2,  4) yaw 0        kept   variant 0
+ *        c1  0.25, 0.25, 0.25  -> ( 5,  5) yaw tau/4    kept   variant 1
+ *        c2  0.50, 0.50, 0.50  -> (10, 10) yaw pi       kept   variant 2
+ *        c3  0.75, 0.30, 0.00  -> (15,  6) yaw 0        kept   variant 0
+ *        c4  0.40, 0.80, 0.00  -> ( 8, 16) yaw 0        kept   variant 1
+ *      Now paint an area OVER the middle — the occluder (8,8)..(12,12), which
+ *      covers c2 and nothing else. The survivors are c0, c1, c3, c4 and they
+ *      keep the variants 0, 1, 0, 1: a shape drawn over a wood removes the
+ *      trees under it and does not re-species the ones beside it. Counting
+ *      over the SURVIVORS would give 0, 1, 2, 0 instead — every tree behind
+ *      the new shape a different kind of tree. This is not a hypothetical:
+ *      the clearance an entry keeps from a building is REFINED the moment its
+ *      mesh lands (`ground.ts noteSpread` -> `rebuildScatter`), so a survivor
+ *      index would re-roll a wood a second after the player looked at it.
+ *
+ * (N4) n = 1 IS TODAY'S BEHAVIOUR, BYTE FOR BYTE. Without `variantCount`, with
+ *      0 and with 1 the sampler returns the very same objects it always did —
+ *      three keys, no `variant` at all. The absence IS the contract: every
+ *      existing consumer (the map editor's dot preview, the backdrop profile)
+ *      is untouched by the feature existing, and a prop with one variant costs
+ *      no payload field and no second mesh.
+ *
+ * (N5) THE MESHES. `ground.ts buildScatter` splits a cell's points into one
+ *      bucket per variant and builds ONE InstancedMesh pair per (row, variant)
+ *      — the existing per-row entry, once per variant. On the (N3) fixture:
+ *        no occluder: buckets [2, 2, 1] -> 3 meshes  (5 instances)
+ *        with it:     buckets [2, 2, 0] -> 2 meshes  (4 instances)
+ *      A variant no candidate picked gets NO mesh and NO download, which is
+ *      why the split happens after the sampling and not before it. The sums
+ *      are the whole instance count either way — a split may not lose a prop.
+ *
+ * ============================================================================
  * (E) THE CLIENT'S SCATTER CONSTANTS
  * ============================================================================
  * `client3d/src/scene/ground.ts` imports three.js and cannot be loaded here,
@@ -793,7 +878,21 @@ async function loadTs(src, mutate) {
 function yawOnAcceptance(source) {
   return source
     .replace('    const yaw = rnd() * Math.PI * 2\n', '')
-    .replace('out.push({ x, z, yaw })', 'out.push({ x, z, yaw: rnd() * Math.PI * 2 })');
+    .replace(
+      'out.push(mixing\n'
+      + '      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }\n'
+      + '      : { x, z, yaw })',
+      'out.push({ x, z, yaw: rnd() * Math.PI * 2 })');
+}
+
+/** Section (N3)'s mutant: the variant is counted over the SURVIVORS instead of
+ *  over the candidates, so a rejection shifts the whole rest of the cell into
+ *  other meshes — the wood behind a newly painted shape changes species.
+ *  See the header for the derivation. */
+function variantFromSurvivorIndex(source) {
+  return source.replace(
+    'variant: scatterVariantIndex(opts.seed, index, variants)',
+    'variant: scatterVariantIndex(opts.seed, out.length, variants)');
 }
 
 /** Section (G5)'s mutant: the precedence is turned around — the prop's library
@@ -923,6 +1022,7 @@ async function main() {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
     scatterWantedCount, scatterCellAt, scatterCellInstances, scatterCellRing,
     scatterCellSeed, scatterCellSpan, scatterCellsInBox, wantedScatterCells,
+    scatterSeedHash, scatterVariantIndex,
     footprintBlocks, footprintDistance, scatterClearM,
     SCATTER_CELL_M, SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_CELL,
   } = await loadTs(SRC);
@@ -1392,6 +1492,170 @@ async function main() {
     [Math.round(((Math.PI * 120 * 120) / 100) * (perCell(BIG_ROWS) / 40.96)),
       Math.round(((Math.PI * 120 * 120) / 100) * (perCell(SMALL_ROWS) / 40.96))],
     [19505, 19461]);
+
+  console.log('\n(N) the VARIANT MIX — a wood of 14 000 trees is not one tree');
+  // (N1) the hash. An INDEPENDENT FNV-1a, written out here and never imported:
+  // the point of the section is that the module's hash is this arithmetic, and
+  // a shared helper would be checking itself (same discipline as `localToWorld`
+  // above).
+  const fnv1a = (seed) => {
+    let h = 2166136261;
+    for (let i = 0; i < seed.length; i += 1) {
+      h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+    }
+    return h >>> 0;
+  };
+  check('N1 the empty seed is the offset basis itself',
+    scatterSeedHash(''), 2166136261);
+  check('N1 hash(\'A\') is the hand-derived 3 289 118 412',
+    scatterSeedHash('A'), 3289118412);
+  check('N1 …and 3 289 118 412 mod 3 = 0 — the offset of the (N3) fixture',
+    scatterSeedHash('A') % 3, 0);
+  check('N1 the real cell seed of (K4) hashes to 3 875 892 755',
+    scatterSeedHash(scatterCellSeed('ta_1', 0, -2, 3)), 3875892755);
+  check('N1 …the module agrees with an independently written FNV-1a',
+    ['', 'A', 'terrain:scatter:ta_1:0:-2,3', 'terrain:scatter:ta_big:7:31,-4']
+      .map(scatterSeedHash),
+    ['', 'A', 'terrain:scatter:ta_1:0:-2,3', 'terrain:scatter:ta_big:7:31,-4']
+      .map(fnv1a));
+  check('N1 the hash is UNSIGNED — a negative one would be a negative variant',
+    ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(scatterSeedHash)
+      .every((h) => h >= 0 && h < 2 ** 32 && Number.isInteger(h)), true);
+  // (N2) the formula
+  check('N2 seed \'A\', 3 variants, candidates 0..5 walk the ring from 0',
+    [0, 1, 2, 3, 4, 5].map((i) => scatterVariantIndex('A', i, 3)),
+    [0, 1, 2, 0, 1, 2]);
+  check('N2 the (K4) cell starts at 2 — every cell enters the ring on its own',
+    [0, 1, 2, 3, 4, 5].map((i) =>
+      scatterVariantIndex('terrain:scatter:ta_1:0:-2,3', i, 3)),
+    [2, 0, 1, 2, 0, 1]);
+  check('N2 n = 1 has nothing to choose from',
+    [0, 1, 2, 7].map((i) => scatterVariantIndex('A', i, 1)), [0, 0, 0, 0]);
+  check('N2 …and neither has n = 0, a negative n or junk',
+    [scatterVariantIndex('A', 3, 0), scatterVariantIndex('A', 3, -2),
+      scatterVariantIndex('A', 3, NaN), scatterVariantIndex('A', 3, null),
+      scatterVariantIndex('A', NaN, 3)], [0, 0, 0, 0, 0]);
+  check('N2 a big instance number wraps rather than running off the list',
+    [scatterVariantIndex('A', 3000, 4), scatterVariantIndex('A', 3001, 4)],
+    [(3289118412 + 3000) % 4, (3289118412 + 3001) % 4]);
+  check('N2 …and the answer is always a usable index',
+    [1, 2, 3, 4].every((n) => [0, 1, 2, 3, 4, 5, 6, 7].every((i) => {
+      const v = scatterVariantIndex(`terrain:scatter:ta_${i}:0:${i},${n}`, i, n);
+      return Number.isInteger(v) && v >= 0 && v < n;
+    })), true);
+  // (N3) the candidate, not the survivor
+  const MIX = {
+    ring: SQUARE, areaM2: 400, densityPer100m2: 1.25, seed: 'A',
+    triesPerPoint: 1, variantCount: 3,
+  };
+  const MIX_STREAM = [0.10, 0.20, 0.00, 0.25, 0.25, 0.25, 0.50, 0.50, 0.50,
+    0.75, 0.30, 0.00, 0.40, 0.80, 0.00];
+  /** The ring painted OVER the middle of (N3) — it covers c2 and nothing else. */
+  const OCC_MIDDLE = [[8, 8], [12, 8], [12, 12], [8, 12]];
+  const mixed = scatterInstances({ ...MIX, rng: stream(MIX_STREAM) });
+  check('N3 five candidates, five props, each with the variant of its ordinal',
+    mixed,
+    [{ x: 2, z: 4, yaw: 0, variant: 0 },
+      { x: 5, z: 5, yaw: TAU * 0.25, variant: 1 },
+      { x: 10, z: 10, yaw: Math.PI, variant: 2 },
+      { x: 15, z: 6, yaw: 0, variant: 0 },
+      { x: 8, z: 16, yaw: 0, variant: 1 }]);
+  const subtracted = scatterInstances({
+    ...MIX, occluders: [OCC_MIDDLE], rng: stream(MIX_STREAM),
+  });
+  check('N3 a shape painted over the middle takes c2 and nothing else away',
+    subtracted.map((p) => [p.x, p.z]), [[2, 4], [5, 5], [15, 6], [8, 16]]);
+  check('N3 …and the survivors keep the variants they had: 0, 1, 0, 1',
+    subtracted.map((p) => p.variant), [0, 1, 0, 1]);
+  const survivorMutant = await loadTs(SRC, variantFromSurvivorIndex);
+  checkNot('N3 the mutant "count the survivors" does NOT reproduce that',
+    survivorMutant.scatterInstances({
+      ...MIX, occluders: [OCC_MIDDLE], rng: stream(MIX_STREAM),
+    }).map((p) => p.variant), [0, 1, 0, 1]);
+  check('N3 …it re-species the wood behind the new shape: 0, 1, 2, 0',
+    survivorMutant.scatterInstances({
+      ...MIX, occluders: [OCC_MIDDLE], rng: stream(MIX_STREAM),
+    }).map((p) => p.variant), [0, 1, 2, 0]);
+  check('N3 …and it agrees where nothing was subtracted, which is why it hides',
+    survivorMutant.scatterInstances({ ...MIX, rng: stream(MIX_STREAM) })
+      .map((p) => p.variant), mixed.map((p) => p.variant));
+  // DETERMINISM: the production stream, twice, through the cell sampler.
+  const CELL_MIX = {
+    ring: [[0, 0], [64, 0], [64, 64], [0, 64]], cx: 0, cz: 0,
+    densityPer100m2: 0.2, seed: scatterCellSeed('ta_mix', 0, 0, 0),
+    variantCount: 3,
+  };
+  check('N3 the same cell answers the same mix twice — no load order in it',
+    scatterCellInstances(CELL_MIX).map((p) => p.variant),
+    scatterCellInstances(CELL_MIX).map((p) => p.variant));
+  check('N3 …and it is the formula on the CELL seed, not on anything else',
+    scatterCellInstances(CELL_MIX).map((p) => p.variant),
+    scatterCellInstances(CELL_MIX).map((_p, i) =>
+      scatterVariantIndex(scatterCellSeed('ta_mix', 0, 0, 0), i, 3)));
+  // Each cell enters the ring at ITS OWN offset. Not "every neighbour differs"
+  // — a hash is allowed to agree with its neighbour, and two of three cells
+  // sharing an offset is the arithmetic working, not failing. What must not
+  // happen is ONE offset for the whole wood, which would stamp the same mix
+  // out every 64 m.
+  const cellOffsets = [];
+  for (let cz = 0; cz < 4; cz += 1) {
+    for (let cx = 0; cx < 4; cx += 1) {
+      cellOffsets.push(
+        scatterVariantIndex(scatterCellSeed('ta_mix', 0, cx, cz), 0, 3));
+    }
+  }
+  check('N3 …and the 16 cells of a wood do not all enter the ring together',
+    new Set(cellOffsets).size, 3);
+  // (N4) the regression proof: one variant is the world as it was
+  const PLAIN = { ...MIX, variantCount: undefined };
+  const plain = scatterInstances({ ...PLAIN, rng: stream(MIX_STREAM) });
+  check('N4 without a variant count the instances carry three keys, as ever',
+    plain.map((p) => Object.keys(p).sort()),
+    plain.map(() => ['x', 'yaw', 'z']));
+  for (const n of [undefined, 0, 1]) {
+    check(`N4 variantCount ${String(n)} is byte for byte the old answer`,
+      scatterInstances({ ...MIX, variantCount: n, rng: stream(MIX_STREAM) }),
+      plain);
+  }
+  check('N4 …and the cell sampler passes that through untouched',
+    scatterCellInstances({ ...CELL_MIX, variantCount: 1 }),
+    scatterCellInstances({ ...CELL_MIX, variantCount: undefined }));
+  check('N4 a mixed cell places the SAME props in the SAME places as a plain one',
+    scatterCellInstances(CELL_MIX).map((p) => [p.x, p.z, p.yaw]),
+    scatterCellInstances({ ...CELL_MIX, variantCount: 1 })
+      .map((p) => [p.x, p.z, p.yaw]));
+  // (N5) the meshes — the split `ground.ts buildScatter` builds them from
+  const bucketsOf = (points, n) => {
+    const buckets = Array.from({ length: n }, () => []);
+    for (const p of points) (buckets[p.variant ?? 0] ?? buckets[0]).push(p);
+    return buckets;
+  };
+  check('N5 the (N3) cell fills three buckets 2 / 2 / 1 — three meshes',
+    bucketsOf(mixed, 3).map((b) => b.length), [2, 2, 1]);
+  check('N5 …with the occluder it is 2 / 2 / 0, so variant 2 gets NO mesh',
+    bucketsOf(subtracted, 3).map((b) => b.length), [2, 2, 0]);
+  check('N5 …and a split never loses a prop',
+    [bucketsOf(mixed, 3).reduce((s, b) => s + b.length, 0),
+      bucketsOf(subtracted, 3).reduce((s, b) => s + b.length, 0)],
+    [mixed.length, subtracted.length]);
+  check('N5 one variant is one bucket — the entry the row always had',
+    bucketsOf(plain, 1).map((b) => b.length), [plain.length]);
+  // …and that this is really what the client does, pinned by its source (E).
+  const mixSrc = await readFile(GROUND_SRC, 'utf8');
+  check('N5 buildScatter tells the sampler how many variants there are',
+    mixSrc.includes('variantCount: kinds.length'), true);
+  check('N5 …buckets the points by the sampler\'s answer, never by a count',
+    mixSrc.includes('(buckets[p.variant ?? 0] ?? buckets[0]).push(p)'), true);
+  check('N5 …and builds one entry per (row, variant)',
+    mixSrc.includes('kinds.forEach((kind, variantPos) => {')
+    && mixSrc.includes('const points = buckets[variantPos];'), true);
+  check('N5 …skipping a variant nothing picked, so it costs no download',
+    /const points = buckets\[variantPos\];[\s\S]{0,400}?if \(!points\.length\) return;/
+      .test(mixSrc), true);
+  check('N5 the client never CALLS the formula itself — the sampler decides',
+    /scatterVariantIndex\(/.test(mixSrc), false);
+  check('N5 the payload list it reads is `model_variants` (§ A9)',
+    mixSrc.includes('const list = entry.model_variants;'), true);
 
   console.log('\n(D) the RED counter-check — a mutant that fails these cases');
   const RED = {

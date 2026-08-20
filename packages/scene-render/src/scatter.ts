@@ -69,6 +69,18 @@ export interface ScatterInstance {
   x: number
   z: number
   yaw: number
+  /**
+   * WHICH model variant of the prop this instance shows (§ B2 addendum) —
+   * present ONLY when the caller asked for a mix (`variantCount > 1`).
+   *
+   * The absence is the contract, not a shortcut: a prop with one variant has
+   * nothing to choose, and an entry that is not asked about variants must come
+   * out of the sampler as the very object it always did — same keys, same
+   * values. That is what makes the mix a pure addition for every existing
+   * consumer (the map editor's dot preview, the backdrop profile) instead of a
+   * shape change every one of them has to be taught.
+   */
+  variant?: number
 }
 
 /** Instances one entry may place on one WHOLE area, whatever the density says.
@@ -101,6 +113,66 @@ export function scatterSeed(areaId: string, index: number): string {
 }
 
 /**
+ * FNV-1a 32-bit over a string — the STATE half of `seededRandom`, on its own.
+ *
+ *     h = 2166136261
+ *     for each char c:  h = (h XOR c) · 16777619   (mod 2^32)
+ *
+ * It is spelled out as its own function because a seed is asked TWO questions
+ * here: "give me a stream of numbers" (`seededRandom`) and "give me ONE number"
+ * (`scatterVariantIndex` — which variant a copy shows). Both must come out of
+ * the same seed by the same rule, and a second hash body would be a second
+ * answer waiting to drift.
+ *
+ * Unsigned, so the caller can do plain arithmetic on it: `Math.imul` returns a
+ * SIGNED int32, and `(-1) % 3` is `-1` in JavaScript — a negative hash would
+ * hand a negative variant index to a renderer.
+ */
+export function scatterSeedHash(seed: string): number {
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+/**
+ * WHICH active model variant one scattered copy shows (§ B2 addendum):
+ *
+ *     variant = ( scatterSeedHash(seed) + instance ) mod count
+ *
+ * THE SAME FORMULA THE SERVER RUNS for the scattered copies of a room
+ * placement (`app/core/props.py scatter_variant_index`) — the one difference
+ * is what the seed IS. There it is a stored uint32 on the placement; here it
+ * is the CELL's own seed string (`scatterCellSeed`), because the painted
+ * terrain scatter has no stored per-copy row to hang a number on: its
+ * instances are sampled client-side in a camera window whose cell set changes
+ * as the player walks. Hashing the cell seed gives every cell its own offset
+ * into the variant ring, and since that seed is a pure function of area, row
+ * and cell index, the same cell of the same world answers the same mix on
+ * every client, every reload and from every direction of approach.
+ *
+ * `instance` is the CANDIDATE ordinal in the cell's stream, not the position
+ * in the returned list — see `scatterInstances`, where the same choice makes
+ * the footprint and occluder tests a pure SUBTRACTION. A building dropped on a
+ * meadow must remove the props it covers without re-species-ing the wood
+ * behind it, and the clearance of an entry is refined the moment its mesh
+ * lands (`ground.ts noteSpread`), so a list position would re-roll every tree
+ * of a cell a second after it came into view.
+ *
+ * `count` 0 or 1 has nothing to choose from and answers 0.
+ */
+export function scatterVariantIndex(seed: string, instance: number,
+                                    count: number): number {
+  const n = Math.floor(Number(count))
+  if (!Number.isFinite(n) || n <= 1) return 0
+  const i = Math.floor(Number(instance))
+  if (!Number.isFinite(i)) return 0
+  return (((scatterSeedHash(seed) + i) % n) + n) % n
+}
+
+/**
  * Deterministic PRNG over a string seed: FNV-1a for the state, xorshift for
  * the stream.
  *
@@ -111,11 +183,7 @@ export function scatterSeed(areaId: string, index: number): string {
  * both sides pull the same numbers in the same order.
  */
 export function seededRandom(seed: string): () => number {
-  let h = 2166136261
-  for (let i = 0; i < seed.length; i += 1) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
+  let h = scatterSeedHash(seed) | 0
   return () => {
     h = Math.imul(h ^ (h >>> 15), 2246822519)
     h = Math.imul(h ^ (h >>> 13), 3266489917)
@@ -355,6 +423,19 @@ export interface ScatterSampleOptions {
   occluders?: readonly (readonly ScatterPoint2[])[]
   /** Hard ceiling; defaults to `SCATTER_MAX_PER_ENTRY`. */
   maxPoints?: number
+  /**
+   * How many ACTIVE model variants the prop of this entry has (§ B2 addendum).
+   *
+   * Absent, 0 or 1 = nothing to mix: the instances come out exactly as they
+   * always did, without a `variant` key. From 2 on every accepted instance
+   * carries the variant it shows, chosen by `scatterVariantIndex` from this
+   * entry's seed and the candidate's ordinal.
+   *
+   * It is an INPUT of the sampler rather than something the caller works out
+   * afterwards, because the ordinal the formula needs is the candidate's, and
+   * that number exists only in here — see `scatterVariantIndex`.
+   */
+  variantCount?: number
   /** Misses allowed per wanted instance; defaults to
    *  `SCATTER_TRIES_PER_POINT`. */
   triesPerPoint?: number
@@ -456,10 +537,22 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
   // candidate that has already drawn its three numbers.
   const clearM = opts.clearM
   const occluders = opts.occluders ?? []
+  // How many meshes this entry's prop has to choose between, and therefore
+  // whether the instances say anything about it at all (see `variantCount`).
+  const variants = Math.floor(Number(opts.variantCount))
+  const mixing = Number.isFinite(variants) && variants > 1
   const out: ScatterInstance[] = []
   let tries = wanted * (opts.triesPerPoint ?? SCATTER_TRIES_PER_POINT)
+  // THE CANDIDATE ORDINAL, counted over every point the stream draws — the
+  // rejected ones included. It is what the variant hangs on, for exactly the
+  // reason the yaw is drawn before the test: a rejection must SUBTRACT, and a
+  // number counted over the survivors instead would re-species every prop
+  // behind a newly placed building.
+  let candidate = 0
   while (out.length < wanted && tries > 0) {
     tries -= 1
+    const index = candidate
+    candidate += 1
     const x = minX + rnd() * (maxX - minX)
     const z = minZ + rnd() * (maxZ - minZ)
     const yaw = rnd() * Math.PI * 2
@@ -477,7 +570,9 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
       if (footprintBlocks(fp, x, z, clearM)) { covered = true; break }
     }
     if (covered) continue
-    out.push({ x, z, yaw })
+    out.push(mixing
+      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }
+      : { x, z, yaw })
   }
   return out
 }
@@ -698,6 +793,10 @@ export interface ScatterCellOptions {
   occluders?: readonly (readonly ScatterPoint2[])[]
   /** the per-cell guard; defaults to `SCATTER_MAX_PER_CELL` */
   maxPoints?: number
+  /** active model variants of this entry's prop — see
+   *  `ScatterSampleOptions.variantCount`. The seed the mix is drawn from is
+   *  this CELL's (`seed` above), so every cell of a wood mixes its own way. */
+  variantCount?: number
   /** the random stream, for the smoke check only — see `ScatterSampleOptions` */
   rng?: () => number
 }
@@ -738,6 +837,7 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     // that is still visible, i.e. double the density against the wall of a
     // house.
     triesPerPoint: 1,
+    variantCount: opts.variantCount,
     rng: opts.rng,
   })
   // …and the painted shape decides which of them are ITS props. The filter

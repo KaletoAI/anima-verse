@@ -248,7 +248,8 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
 
 def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Add what the PROP knows to every scatter entry naming one — ``variants``,
-    ``prop_height_m`` and ``sway_factor``, PAYLOAD ONLY, never stored (§ A9).
+    ``model_variants``, ``prop_height_m`` and ``sway_factor``, PAYLOAD ONLY,
+    never stored (§ A9).
 
     The stored entry keeps its exactly three authored fields; every addition is
     a fact about the PROP, not about the painting, so they are derived when the
@@ -260,6 +261,24 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     tiers the prop HAS — the same map and the same ``pickVariant`` rule the
     scene payload uses for props and buildings; it stays away when the prop
     carries no mesh.
+
+    ``model_variants`` is one such map per ACTIVE variant WITH a mesh, in the
+    prop's own order, and it rides along ONLY when the prop really has more
+    than one (§ B2 addendum) — exactly the rule of the scene payload
+    (``scene_recipe._prop_models``) and of the world props next door
+    (``world_props.payload_rows``). Element 0 IS ``variants``, the primary
+    variant, so a consumer that never heard of the field renders what it always
+    rendered, and the primary variant keeps its query-less URL, which is what
+    keeps every client cache valid.
+
+    WHICH variant a given instance shows is NOT resolved here, and that is the
+    one place the terrain scatter differs from every other placement: its
+    instances do not exist on the server. They are sampled client-side in a
+    camera window (``@anima/scene-render scatterCellInstances``), so the server
+    ships the LIST and the renderers run the one shared formula
+    (``scatterVariantIndex``: ``(hash(cell seed) + candidate) mod count``) over
+    the cell seed the sampler already uses. Same world, same cell, same mix, in
+    every client and after every reload.
 
     ``prop_height_m`` is the prop's REAL height in metres from its library
     record — the target height a client falls back to when the entry authors
@@ -299,17 +318,31 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 continue
             if prop_id not in cache:
                 facts = _props.prop_scatter_facts(prop_id)
+                base = f"/assets/props/{prop_id}/model"
+                maps: List[Dict[str, str]] = []
+                for pos, variant in enumerate(
+                        _props.active_variant_tiers(prop_id)):
+                    idx = int(variant.get("variant") or 0)
+                    # The PRIMARY variant (list position 0) keeps the bare URL
+                    # it has always had, whatever its store index — that
+                    # identity is what keeps existing client caches valid.
+                    maps.append(variant_urls(
+                        base if pos == 0 else f"{base}?variant={idx}",
+                        variant.get("tiers") or []))
                 cache[prop_id] = {
-                    "variants": variant_urls(
-                        f"/assets/props/{prop_id}/model",
-                        _props.model_tiers(prop_id)),
+                    "variants": maps,
                     "height": facts.get("height_m", 0.0),
                     "sway_factor": facts.get(
                         "sway_factor", _props.SWAY_FACTOR_DEFAULT),
                 }
             known = cache[prop_id]
             if known["variants"]:
-                entry["variants"] = dict(known["variants"])
+                entry["variants"] = dict(known["variants"][0])
+                # Only a prop that really HAS more than one variant says so: a
+                # one-element list beside an identical `variants` map would be
+                # the same fact twice in every payload of every world.
+                if len(known["variants"]) > 1:
+                    entry["model_variants"] = [dict(m) for m in known["variants"]]
             # 0.0 is "no such prop", never "no height authored" — a record
             # always has one (see props.prop_scatter_facts).
             if known["height"] > 0:

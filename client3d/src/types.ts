@@ -537,8 +537,19 @@ export interface TerrainScatterEntry {
    *  (`{full: "/assets/props/<id>/model?tier=full", …}`) — added by
    *  `GET /play/terrain`, never stored and never authored. Resolved with the
    *  one `pickVariant` rule; absent (an old cached answer, a foreign URL)
-   *  means `model` is all there is. */
+   *  means `model` is all there is. THE PRIMARY variant's map, i.e.
+   *  `model_variants[0]` whenever that field is there too. */
   variants?: Record<string, string>;
+  /** One tier map per ACTIVE model variant of the prop, in its own order
+   *  (§ B2 addendum) — added by `GET /play/terrain`, and ONLY when the prop
+   *  really has more than one. Absent = one variant, and the wood is one mesh
+   *  exactly as before.
+   *
+   *  WHICH of them an instance shows is not in the payload: the instances of a
+   *  painted scatter are sampled in the client's own camera window, so the
+   *  renderers run the shared formula over the cell seed instead
+   *  (`scatterVariantIndex`). */
+  model_variants?: Record<string, string>[];
 }
 
 /** An area's `meta`. Free-form by contract — the known key is named, the rest

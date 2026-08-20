@@ -101,9 +101,31 @@ Throwaway storage. Hand-derived expectations:
       authored fields per entry (the entry with a height: exactly those
       three).
       Both lookups are cached TOGETHER per call: seven parsable mentions
-      across two areas do FOUR props.model_tiers and FOUR
+      across two areas do FOUR props.active_variant_tiers and FOUR
       props.prop_scatter_facts reads — one per DISTINCT prop, and the sidecar
       facts are not a second walk of the directory (counted with wrappers).
+
+ [12b] MODEL VARIANTS of a scattered prop (§ B2 addendum, 2026-08-20). A prop
+      may carry several meshes of the same object; the entry then also gets
+      `model_variants`, one tier map per ACTIVE variant WITH a mesh, in the
+      prop's own order. Fixture `smoke-bush`: variant 0 with tiers [full, low],
+      variant 1 with [full], variant 2 active but EMPTY.
+        model_variants -> [{full: ".../model?tier=full",
+                            low:  ".../model?tier=low"},
+                           {full: ".../model?variant=1&tier=full"}]
+        variants       -> element 0, character for character — the primary
+                          variant keeps its query-less URL, so no client cache
+                          is invalidated by the feature existing
+        the EMPTY slot -> dropped; a map with no tier is a placement that
+                          renders nothing
+        the tree (ONE variant) -> NO `model_variants` key at all
+      Payload only, like every other addition: a fresh read of both entries
+      carries no `model_variants`.
+      WHICH instance shows which variant is deliberately NOT here. The painted
+      scatter's instances are sampled client-side in a camera window, so the
+      one formula runs in the renderers over the cell seed
+      (`@anima/scene-render scatterVariantIndex`); its numbers are checked in
+      `client3d/scripts/smoke_scatter_math.mjs` section (N).
       RED COUNTER-PROBES, EXECUTED, all built from the module's own pieces:
       a "loose URL" mutant (anything containing /assets/props/) hands the
       foreign URL a variants map, a "no tier parameter" mutant builds
@@ -586,6 +608,65 @@ check("a fresh read carries neither key (payload only)",
       [["density_per_100m2", "model"], ["density_per_100m2", "model"],
        ["density_per_100m2", "height_m", "model"]])
 
+# [12b] THE MODEL VARIANTS of a scattered prop (§ B2 addendum). A prop with
+# several meshes of the same object ships one tier map per ACTIVE variant that
+# HAS a mesh, in the prop's own order — and only when there really is more than
+# one, because a one-element list beside an identical `variants` map would be
+# the same fact twice in every payload of every world.
+#
+# WHICH instance shows which variant is NOT resolved here and cannot be: the
+# instances of a painted scatter are sampled in the client's camera window, so
+# the renderers run the shared formula over the cell seed
+# (`@anima/scene-render scatterVariantIndex`, checked numerically in
+# `client3d/scripts/smoke_scatter_math.mjs` section N). The server's whole job
+# is the LIST.
+BUSH = make_prop("smoke bush", ["full", "low"], height_m=1.4)
+_bush_v1 = props.add_variant(BUSH)
+_bush_g1 = props.model_gallery(BUSH, _bush_v1)
+_bush_p1 = _bush_g1.new_path(".glb")
+_bush_p1.write_bytes(b"glTF-smoke")
+# A third variant that stays EMPTY: an active slot without a mesh renders
+# nothing, so it must not appear in the list — a copy picking it would simply
+# be missing from the wood.
+_bush_v2 = props.add_variant(BUSH)
+check("the bush has two meshed variants and one empty slot",
+      [e["variant"] for e in props.active_variant_tiers(BUSH)],
+      [0, _bush_v1])
+_vb = terrain.save_area(
+    {"kind": "grass", "polygon": SQUARE,
+     "meta": {"scatter": [{"density_per_100m2": 4,
+                           "model": f"/assets/props/{BUSH}/model"},
+                          {"density_per_100m2": 4,
+                           "model": f"/assets/props/{TREE}/model"}]}})
+_bush_entries = next(a["meta"]["scatter"]
+                     for a in terrain.with_scatter_props(terrain.list_areas())
+                     if a["id"] == _vb["id"])
+check("two variants -> one tier map each, the primary one first",
+      _bush_entries[0].get("model_variants"),
+      [{"full": f"/assets/props/{BUSH}/model?tier=full",
+        "low": f"/assets/props/{BUSH}/model?tier=low"},
+       {"full": f"/assets/props/{BUSH}/model?variant={_bush_v1}&tier=full"}])
+check("…and `variants` IS element 0, the primary variant's map",
+      _bush_entries[0].get("variants"),
+      _bush_entries[0]["model_variants"][0])
+check("…so the primary variant keeps its query-less URL and every cache",
+      _bush_entries[0]["variants"]["full"],
+      f"/assets/props/{BUSH}/model?tier=full")
+check("the empty variant slot is dropped, not shipped as a mesh-less map",
+      len(_bush_entries[0]["model_variants"]), 2)
+check("a prop with ONE variant says nothing at all",
+      "model_variants" in _bush_entries[1], False)
+check("…and still gets the `variants` map it always got",
+      _bush_entries[1].get("variants"),
+      {"full": f"/assets/props/{TREE}/model?tier=full",
+       "low": f"/assets/props/{TREE}/model?tier=low"})
+check("model_variants is payload only, never stored",
+      ["model_variants" in e
+       for e in next(a["meta"]["scatter"] for a in terrain.list_areas()
+                     if a["id"] == _vb["id"])],
+      [False, False])
+terrain.delete_area(_vb["id"])
+
 # One read per DISTINCT prop, however often it is named: the payload is
 # refetched on every terrain_sig change, and each read walks a prop directory.
 # All sidecar facts come out of ONE call — a second walk per mention for the
@@ -593,12 +674,13 @@ check("a fresh read carries neither key (payload only)",
 _calls = []
 _facts_calls = []
 _real_tiers = props.model_tiers
+_real_variant_tiers = props.active_variant_tiers
 _real_facts = props.prop_scatter_facts
 
 
 def counting_tiers(prop_id):
     _calls.append(prop_id)
-    return _real_tiers(prop_id)
+    return _real_variant_tiers(prop_id)
 
 
 def counting_facts(prop_id):
@@ -612,17 +694,17 @@ _va2 = terrain.save_area(
                            "model": f"/assets/props/{TREE}/model"},
                           {"density_per_100m2": 1,
                            "model": f"/assets/props/{TREE}/model"}]}})
-props.model_tiers = counting_tiers
+props.active_variant_tiers = counting_tiers
 props.prop_scatter_facts = counting_facts
 try:
     served = terrain.with_scatter_props(terrain.list_areas())
 finally:
-    props.model_tiers = _real_tiers
+    props.active_variant_tiers = _real_variant_tiers
     props.prop_scatter_facts = _real_facts
 # Seven parsable mentions across the two areas, four distinct props (the two
 # without a mesh are looked up once as well and then remembered as "none").
-check("seven mentions of four props -> four tier lookups", sorted(_calls),
-      sorted([TREE, ROCK, GHOST, "nope"]))
+check("seven mentions of four props -> four variant-tier lookups",
+      sorted(_calls), sorted([TREE, ROCK, GHOST, "nope"]))
 check("…and four sidecar reads, one per distinct prop for BOTH facts",
       sorted(_facts_calls), sorted([TREE, ROCK, GHOST, "nope"]))
 _by_id = {a["id"]: (a["meta"].get("scatter") or []) for a in served}
