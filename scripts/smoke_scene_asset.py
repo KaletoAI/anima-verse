@@ -118,8 +118,42 @@ are (512.00, 406.93), (716.80, 512.00), (512.00, 645.18), (307.20, 512.00).
    "NO_NEW_IMAGE" instead of image bytes; indexing that string yields "N" and
    the cutout stage would die far from the cause. Every shape of it must come
    back as "no image".
+
+10. BEFORE AND AFTER — what the run replaces, and how the replacement is
+    marked. Two vocabularies of § B2 meet here, in the direction the rest of
+    the pipeline does not need: a placement's ``variant`` is a POSITION in the
+    prop's ACTIVE, MESHED variants, while a store index is what addresses a
+    file. HAND CASE — a prop with three variants, the middle one switched off,
+    so ``active_variant_tiers`` answers the store indices [0, 2]:
+
+        placement variant 0  → position 0 → store 0
+        placement variant 1  → position 1 → store 2   (NOT store 1 — that one
+                                                       is switched off)
+        placement without the field → position 0 → store 0
+        placement variant 3  → 3 mod 2 = 1 → store 2
+        placement variant 5  → 5 mod 2 = 1 → store 2
+
+    The MODULO is not defensiveness: both renderers resolve the index that way
+    (§ B2-Nachtrag, "Der Index wird MODULO gerechnet, nicht geklemmt"), so the
+    "before" picture has to be the one that was actually on screen. A prop with
+    no meshed variant at all has no before — a first generation replaces
+    nothing.
+
+    Three wirings decide whether that picture and its marker are true, and none
+    of them can be seen from a pure function — they are read out of the source:
+
+    a) the cutout is handed to the store WITH the origin (``**origin``). A
+       dropped kwarg would make every scene variant read as a product shot;
+    b) ``origin_ts`` is the run's OWN ``record["started_at"]``. A fresh clock
+       read would put the badge and the run directory a few seconds apart, and
+       findings here are numbers, not approximations;
+    c) the before picture is COPIED into the run directory BEFORE
+       ``run_attempts`` runs. A run that refines the very variant the placement
+       pointed at overwrites the original a moment later, so a live URL — or a
+       copy taken afterwards — would show the after in both frames.
 ──────────────────────────────────────────────────────────────────────────
 """
+import ast
 import sys
 from pathlib import Path
 
@@ -385,6 +419,39 @@ def part_contact():
                sa.sink_offset_y(-1.0, [0.0] * 9, -1.0,
                                 tolerance_m=0.05) is None)
 
+    # ── D — ONE DATUM (§ B1 addendum 2026-08-20) ────────────────────────
+    # `place()` compares the payload's own `bottom_y` (target.ground_y)
+    # against this sampler. Since the drawn storey floor became the datum, a
+    # yard placement's bottom_y is 0.08 (level plate) + 0.01 (clearance) =
+    # 0.09 while the terrain under it is flat 0 — so the sampler has to
+    # answer on the SAME floor or the check reads 0.09 as a gap: 0.09 > the
+    # 0.05 tolerance means nothing in contact, and the run sinks a correctly
+    # standing prop by 0.09 back into the slab it stands on.
+    print("  D — the floor datum: sampler and payload speak one frame")
+    flat_loc = {"id": "loc"}          # no pin, no boundary: world 0, relief 0
+    bare = sa.ground_sampler(flat_loc)
+    check("without a floor the sampler is the bare terrain", bare(3.0, -2.0),
+          0.0, 1e-9)
+    yard = sa.ground_sampler(flat_loc, 0.08)
+    check("on the yard's drawn floor it answers 0.08", yard(3.0, -2.0),
+          0.08, 1e-9)
+    room = sa.ground_sampler(flat_loc, 0.10)
+    check("in a built room, the room plate 0.10", room(1.0, 1.0), 0.10, 1e-9)
+    lifted = [yard(p[0], p[1]) for p in pts]
+    check("a yard prop at bottom_y 0.09 is IN CONTACT with it",
+          sa.contact_check(0.09, lifted, tolerance_m=0.05)["contact_ratio"],
+          1.0, 1e-9)
+    check_true("...and is therefore not sunk",
+               sa.sink_offset_y(0.09, lifted, 0.0, tolerance_m=0.05) is None)
+    # The regression pin: the same placement against the OLD, floor-blind
+    # sampler — every sample out of contact, and a −0.09 sink on top.
+    blind = [bare(p[0], p[1]) for p in pts]
+    check("floor-blind, the same prop is 'floating' (0/9)",
+          sa.contact_check(0.09, blind, tolerance_m=0.05)["contact_ratio"],
+          0.0, 1e-9)
+    check("...and would be sunk by the floor's own height",
+          sa.sink_offset_y(0.09, blind, 0.0, tolerance_m=0.05), -0.09, 1e-9)
+
 
 # ── [8] Retry budget ────────────────────────────────────────────────────
 
@@ -451,6 +518,129 @@ def part_backend():
     check("real bytes come through", sa._first_image([b"PNG"]), b"PNG")
 
 
+# ── [10] Before / after ─────────────────────────────────────────────────
+
+def _fn_ast(name):
+    """The AST of ONE top-level function of ``app/core/scene_asset.py``."""
+    src = Path(__file__).resolve().parents[1] / "app" / "core" / "scene_asset.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    return None
+
+
+def _origin_kwarg_passed():
+    """(a) ``_attempt`` unpacks the origin into ``save_source_image``."""
+    fn = _fn_ast("_attempt")
+    for node in ast.walk(fn) if fn else ():
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "save_source_image"):
+            continue
+        for kw in node.keywords:
+            if kw.arg is not None:          # a ** unpacking has no name
+                continue
+            if any(isinstance(n, ast.Name) and n.id == "origin"
+                   for n in ast.walk(kw.value)):
+                return True
+    return False
+
+
+def _origin_ts_from_record():
+    """(b) the origin's ``origin_ts`` is ``record["started_at"]``."""
+    fn = _fn_ast("generate")
+    for node in ast.walk(fn) if fn else ():
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and key.value == "origin_ts"):
+                continue
+            return (isinstance(value, ast.Subscript)
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id == "record"
+                    and isinstance(value.slice, ast.Constant)
+                    and value.slice.value == "started_at")
+    return False
+
+
+def _before_copied_before_attempts():
+    """(c) the before picture is written before the attempt loop starts."""
+    fn = _fn_ast("generate")
+    if fn is None:
+        return False
+    copy_line = 0
+    loop_line = 0
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "write_bytes"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "before_png"):
+            copy_line = node.lineno
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "run_attempts"):
+            loop_line = node.lineno
+    return bool(copy_line and loop_line and copy_line < loop_line)
+
+
+def part_before_after():
+    print("\n[10] Before and after — which variant this spot showed, and the "
+          "origin the new one carries")
+    from app.core import props as prop_store
+
+    original = prop_store.active_variant_tiers
+    try:
+        # Three variants, the middle one switched off: the payload lists the
+        # store indices 0 and 2, and a placement's number indexes THAT list.
+        prop_store.active_variant_tiers = lambda pid: [
+            {"variant": 0, "tiers": ["full"]}, {"variant": 2, "tiers": ["full"]}]
+        check("position 0 → store 0", sa.previous_variant("p", {"variant": 0}), 0)
+        check("position 1 → store 2 (variant 1 is switched off)",
+              sa.previous_variant("p", {"variant": 1}), 2)
+        check("no variant field → the primary one",
+              sa.previous_variant("p", {}), 0)
+        check("position 3 wraps: 3 mod 2 = 1 → store 2",
+              sa.previous_variant("p", {"variant": 3}), 2)
+        check("position 5 wraps the same way",
+              sa.previous_variant("p", {"variant": 5}), 2)
+        check("junk in the field reads as the primary one",
+              sa.previous_variant("p", {"variant": "left"}), 0)
+        prop_store.active_variant_tiers = lambda pid: []
+        check_true("a prop with no meshed variant has no before",
+                   sa.previous_variant("p", {"variant": 0}) is None)
+    finally:
+        prop_store.active_variant_tiers = original
+
+    loc = {"rooms": [
+        {"id": "hall", "layout": {"props": [
+            {"prop_id": "chair", "variant": 1, "offset_y": 0.25},
+            {"prop_id": "table"}]}},
+        {"id": "__ground__", "layout": {"props": []}}]}
+    got = sa.authored_placement(loc, "hall", 0)
+    check("the stored placement of hall#0", got.get("prop_id"), "chair")
+    check("...with its own variant", got.get("variant"), 1)
+    check("its offset_y is what the placement step starts from",
+          sa._authored_offset_y({"target": {"room_id": "hall", "index": 0}}, loc),
+          0.25, 1e-9)
+    check("a placement without offset_y starts at 0",
+          sa._authored_offset_y({"target": {"room_id": "hall", "index": 1}}, loc),
+          0.0, 1e-9)
+    check_true("an index the room does not have is empty",
+               sa.authored_placement(loc, "hall", 7) == {})
+    check_true("a room the location does not have is empty",
+               sa.authored_placement(loc, "cellar", 0) == {})
+    check_true("the yard is an ordinary room, empty of props here",
+               sa.authored_placement(loc, "__ground__", 0) == {})
+
+    check_true("the cutout is handed to the store WITH the origin",
+               _origin_kwarg_passed())
+    check_true("origin_ts is the run's own started_at, not a fresh clock read",
+               _origin_ts_from_record())
+    check_true("the before picture is copied BEFORE the attempt loop runs",
+               _before_copied_before_attempts())
+
+
 def main():
     part_expected()
     part_mask_grow()
@@ -461,6 +651,7 @@ def main():
     part_contact()
     part_retries()
     part_backend()
+    part_before_after()
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")

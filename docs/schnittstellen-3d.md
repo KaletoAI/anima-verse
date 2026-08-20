@@ -3842,6 +3842,50 @@ Nachprüfbar in `scripts/smoke_prop_variants.py` (§ B5a, Abschnitte 10–14):
 Handrechnung der Namen aus den Stämmen, ein Lauf in Variante 1 lässt
 `source.png` byte-identisch, das Neu-Meshen bekommt `source-v2.png` gereicht.
 
+### Ergänzung 2026-08-20: Woher das Bild stammt (`origin`)
+
+Ein Quellbild entsteht auf genau zwei Wegen, und der Unterschied ist sichtbar
+zu machen: als **Produktfoto** (Use Case `prop` — der Gegenstand allein vor
+neutralem Grund) oder als **Szenen-Ausschnitt** (`scene_asset.py` — in eine
+gerenderte Stelle hineingezeichnet und wieder herausgeschnitten). Der zweite
+trägt Licht, Boden und Umgebung EINER Location, ist also mit einem Produktfoto
+nicht austauschbar. Deshalb steht neben den vier Herkunftsfeldern:
+
+| Feld | Bedeutung |
+|---|---|
+| `origin` | `"scene_context"` — oder **gar nicht da**, und das ist das Produktfoto |
+| `origin_location` | Anzeigename der Location zum Zeitpunkt des Laufs |
+| `origin_location_id` | deren Id |
+| `origin_ts` | `started_at` DES LAUFS, nie eine frische Uhrzeit |
+
+**Abwesenheit ist der billigere Vertrag und deshalb der gewählte:** jedes je
+geschriebene Bild ist ein Produktfoto, bis ein Szenen-Lauf etwas anderes sagt —
+kein Prop im Feld muss migriert werden. Die drei Begleitfelder stehen nur MIT
+einem `origin` und werden mit ihm gelöscht; ein erneutes Produktfoto über
+dieselbe Variante entfernt sie, statt eine Location stehen zu lassen, an der
+dieses Bild nie aufgenommen wurde. Ablage wie bei den vier anderen: Basis-Stamm
+auf dem Master-Record (`source_origin*`), jede weitere Variante unter `image`
+an ihrem Eintrag. `GET /world/props/{id}/variants` liefert alle acht Felder je
+Variante; der **Library-Listeneintrag bleibt schlank** und trägt keines davon.
+
+**Vorher/Nachher.** Der Lauf hält fest, was er ersetzt: `result.json` bekommt
+`previous_variant` (die **Ablage-Nummer** der Variante, auf die die Platzierung
+vor dem Lauf zeigte) und das Bild dieser Variante als `before.png` **im
+Lauf-Verzeichnis**. Kopiert wird beim Start, nicht danach: verfeinert der Lauf
+genau diese Variante, überschreibt er ihr Quellbild wenige Zeilen später — eine
+Live-URL zeigte dann zweimal das Nachher. Umgerechnet wird mit MODULO wie in
+beiden Renderern (`variant` ist eine Position, `?variant=<i>` eine
+Ablage-Nummer). Der Streifen im Grundriss-Editor zeigt daraufhin vier Bilder:
+**Vorher → Kontext-Render → Edit-Ergebnis → Nachher (Freistellung + Mesh)**;
+die äußeren beiden sind dieselbe Art Bild und damit vergleichbar.
+
+Nachprüfbar in `scripts/smoke_prop_variants.py` Abschnitt 16 (Produktfoto
+schreibt keinen Schlüssel, der Ausschnitt schreibt alle vier, der Sanitizer der
+Variantenliste lässt sie stehen, ein Produktfoto darüber löscht sie) und
+`scripts/smoke_scene_asset.py` Abschnitt 10 (Handrechnung Position → Ablage-
+Nummer bei abgeschalteter Variante 1: 0→0, 1→2, 3→2; plus die drei
+Verdrahtungen, die keine reine Funktion sieht).
+
 ## Nachtrag 2026-08-20 (§ B1/B2): Dach-Modelle (`roof_only`)
 
 Ein Gebäudemodell ERSETZT die Fernsicht-Hülle: sobald ein Servermodell
@@ -3873,3 +3917,142 @@ Die Label-Höhe misst Hülle + Dach zusammen.
 Der Server setzt das Flag aus dem Sidecar des Modells
 (`location_model3d` → `get_client_meta` → `scene_recipe._building_model`); es
 entsteht ausschließlich beim Dach-Bau, nie beim Meshen eines Bildes.
+
+## Nachtrag 2026-08-20 (§ B1/B2): EIN Boden — der Anker des Gebäudemodells und die Steh-Höhe
+
+**Befund (Haus von Kai, gemessen — § B5a, keine Screenshots).** In einem Haus
+mit Grundriss lagen VIER Höhen, die eine sein müssten (Kachel-Meter):
+
+| Fläche | y |
+|---|---|
+| Gras-Sockelplatte der Kachel (`SOCLE_Y_M`) | 0,045 |
+| eigener Boden des Gebäude-Meshes (gemessen: 0,240 m Geländesockel über der Mesh-Unterkante) | 0,000 |
+| Etagenplatte / Raumplatte des Rezepts | 0,080 / 0,100 |
+| Props des Raums (`bottom_y` = Plattenoberkante + `PROP_CLEARANCE`) | 0,110 |
+| Figur (Strahl auf das Mesh + 0,01) | 0,010 |
+
+Die Figur lief also 9 cm UNTER dem Boden, auf dem ihre eigenen Möbel standen,
+und das Gras der Kachel deckte den Modellboden zu. Zwei Wurzeln, beide hier
+geschlossen — die Zahlen dieser Welt stehen als Fixture in
+`scripts/smoke_scene_recipe.py` und `client3d/scripts/smoke_walk_math.mjs`.
+
+**(A) Der Anker des Gebäudemodells ist seine BEGEHBARE FLÄCHE, nicht seine
+Unterkante.** `display: "shell"` folgt jetzt demselben Gesetz wie
+`display: "ground"`, nur auf den Boden gepinnt, den das Rezept für Etage 0
+wirklich zeichnet:
+
+```
+walk_y_world = LEVEL_PLATE_TOP + offset_y      (= 0,08 + Trimm)
+bottom_y     = walk_y_world − walk_y
+```
+
+Der frühere feste Sockelabstand (`BUILDING_BOTTOM_Y` = 0,06 über dem
+Kachelboden) pinnte die Mesh-UNTERKANTE. Das ist der Boden des Modells nur
+dann, wenn das Mesh keinen Geländesockel unter dem Haus trägt — trägt es
+einen, sinkt der Modellboden um genau dessen Dicke, und keine Zahl im Payload
+sagt es. Die Konstante ist ersatzlos weg.
+
+* **Was sich bewegt:** ein Gebäude mit `walk_y = 0` (nicht deklariert, die
+  Unterkante IST sein Boden) steigt um **0,02 m** — von 0,06 auf 0,08. Sonst
+  nichts. Das parametrische Dach (`roof_only`) rechnet seinen `offset_y` aus
+  demselben Anker und wandert mit (`app/core/roof_model.py`).
+* **Der `walk_y`-Regler bleibt die DEKLARATION des Admins.** Es wird nach wie
+  vor nichts gemessen, um ihn zu füllen — das Bernstein-Gesetz von § A2
+  (keine „dominante horizontale Lage", keine Auto-Ausrichtung) steht
+  unangetastet. Neu ist nur, dass der erklärte Wert das Modell PLATZIERT,
+  statt nur berichtet zu werden.
+
+**(B) Die Steh-Höhe im Gebäude ist die RAUMPLATTE, nicht die Modellhaut.**
+Der Client (`scene/tiles.tileWalkY`) nimmt für ein `shell`-Modell die höchste
+Platte, deren Umriss den Punkt enthält und deren Oberkante noch unter der
+Dachgrenze liegt (`walkCeiling`, dieselbe Regel wie für Strahl-Treffer), plus
+`WALK_CLEARANCE_M` = 0,01 — also exakt das `bottom_y` der Props desselben
+Raums. Damit gilt die Kette
+
+```
+Sockel < Etagenplatte ≤ Raumplatte = Prop-bottom_y − 0,01 = Steh-Höhe − 0,01
+```
+
+**Wo weiterhin das MESH antwortet** (unverändert): bei `display: "ground"` und
+`shell_area` (dort IST das Modell der Boden — Ufer, Hang, Seegrund), und auf
+jedem Punkt einer Gebäude-Kachel, den KEINE Platte deckt (Hof, Umriss-Rand,
+eine Location ohne Platten im Payload). Darunter liegt unverändert die
+Weltebene: `standY` nimmt weiter das Höhere von Kachel- und Weltantwort, und
+das Relief der Szene (`terrainLiftAt`) wird auf beide Antworten addiert.
+
+Dieselbe Fläche ist auch das Boden-SOLL der Begehbarkeits-Abtastung
+(`sampleRoomWalkables`), wenn der Raum KEIN Diorama hat: ein Diorama
+deklariert seine Standhöhe weiterhin selbst (`walk_y_world` am Raum-Spec) und
+schlägt die Platte, wie bisher.
+
+### Nachtrag-Teil 2 (§ B1): EIN Datum — der gezeichnete Boden der Etage
+
+Der Nachtrag oben zieht die Modelle auf den Boden, den das Rezept zeichnet.
+Dieselbe Frage stellt sich UNTER freiem Himmel, und dort war die Antwort seit
+der Meter-Welle (`8672c756`) auseinandergelaufen: die Etagenplatte entsteht
+seither auch aus der GEZEICHNETEN GRENZE (`_outline_world(map3d) or
+_drawn_boundary(map3d)`), also hat jede Location mit Grundstücksgrenze eine —
+opak, Oberkante 0,08, Körper 0,14 dick. Alles andere rechnete weiter gegen das
+abstrakte Etagen-Datum `level × storey`:
+
+| Fläche | vorher | jetzt |
+|---|---|---|
+| Etagenplatte (Etage 0) | 0,08 | 0,08 |
+| Outdoor-Raumplatte (§ A5, Textur ohne Körper) | 0,00 → **0,08 tief in der Platte** | 0,09 |
+| Overlay-Zone auf einer Fläche OHNE Modell (NPC-/Marker-Anker) | 0,00 → **0,08 tief drin** | 0,08 |
+| Overlay-Fläche mit erklärter Boden-Art (`_overlay_plates`) | 0,01 → **0,07 tief drin** | 0,09 |
+| `display: "ground"` — begehbare Fläche des Flächenmodells | 0,00 | 0,08 |
+| Props/Marker/Diorama eines Outdoor-Raums | 0,00 + Zuschlag | 0,09 + Zuschlag |
+| Props/Marker des HOFES (§ A13a, zeichnet keine eigene Fläche) | 0,00 + Zuschlag | **0,08** + Zuschlag |
+
+**Die Regel, einmal:** was das Rezept als BODEN einer Etage zeichnet, ist deren
+Etagenplatte — `level × storey + LEVEL_PLATE_TOP`. Jede Fläche, die selbst ein
+Boden ist, liegt darauf; eine körperlose Texturfläche zusätzlich um
+`OVERLAY_SURFACE_LIFT` = 0,01 höher, weil zwei koplanare Flächen sonst
+z-fighten. `_plate_top(recipe, slab)` ist die EINE Stelle, die das je Träger
+beantwortet — gebauter Raum 0,10 · Outdoor-Raum `slab + 0,01` · HOF `slab`
+(§ A13a: er zeichnet keine eigene Fläche, er IST der Hof, also steht er direkt
+auf der Etagenplatte; es gibt keine zweite Fläche, gegen die er z-fighten
+könnte) —, und Platte, Props, Marker und Diorama desselben Raums lesen alle
+diese eine Zahl. `slab` ist `LEVEL_PLATE_TOP`, wo die Location einen Umriss
+ODER eine gezeichnete Grenze hat, sonst 0: eine Location ohne jeden
+gezeichneten Boden behält das nackte Etagen-Datum.
+
+**Das Relief bleibt additiv.** Der Hof folgt weiter seinem Höhenfeld —
+`bottom_y = slab + Zuschlag + lift(x, z)`; nur das Datum darunter ist gewandert.
+
+**Marker: nur PROP-Marker wandern mit.** Ein Prop-Marker ist fertig komponiert
+(§ A4) und reist mit seinem Prop; ein RAUM-Marker bleibt eine Höhe über dem
+ETAGENBODEN, die der Renderer gegen seine abgetastete Fläche zurückrechnet —
+gäbe man ihm das Datum mit, zählte der Client die Platte zweimal.
+
+**Die Kontaktprüfung spricht dasselbe Datum.** `scene_asset.place` vergleicht
+`target.ground_y` (das `bottom_y` des Payloads) mit `ground_sampler`, und der
+kannte nur das GELÄNDE (Welt-Relief + Szenen-Relief, pin-relativ). Mit dem
+gewanderten Datum wäre der Boden selbst als Lücke gemessen worden: 0,09 gegen
+eine Toleranz von 0,05 heißt „nichts in Kontakt", und der Lauf hätte ein
+korrekt stehendes Prop um 0,09 in seine eigene Platte versenkt. Deshalb trägt
+das Sidecar jetzt `target.floor_y` — die Fläche, auf der die Platzierung steht
+(Raumplatte, sonst die Etagenplatte der Etage 0), abgelesen am Payload, nie
+neu gerechnet — und `ground_sampler(loc, floor_y)` hebt das Gelände darauf.
+Handgerechnet in `scripts/smoke_scene_asset.py` [7] D und
+`scripts/smoke_scene_context.py` [5].
+
+Dazu gehört die Klassifizierung: welche Räume auf einem Flächenmodell LIEGEN
+(Zonen) und welche gebaut werden, entscheidet jetzt derselbe Umriss wie die
+Platte (`_outline_world(...) or _drawn_boundary(...)`). Vorher hatte eine
+Location ohne gezeichneten Gebäude-Umriss GAR KEINEN Umriss, und weil eine
+BBox in nichts nicht drinliegen kann, wurde jeder Raum zur Zone auf einem
+Modell, das es womöglich nicht gibt.
+
+> **Achtung, Alt-Welten:** wer die versunkenen Flächen bisher mit
+> `layout.floor_offset_y` (typisch 0,10) hochgezogen hat, zählt nach diesem
+> Fix DOPPELT — der Offset ist die Neigung/Stufe eines Raums gegen seine
+> Etage, nicht der Plattenaufschlag. Das Datum ist jetzt der gezeichnete
+> Boden; solche Werkzeug-Offsets gehören auf 0 zurück.
+
+Handgerechnet in `scripts/smoke_scene_recipe.py` [4e] (boundary-only
+Flächen-Location, Wasser-Raum innen 0,09, Zone außen Anker 0,08 / Fläche 0,09,
+Prop im Outdoor-Raum 0,10, HOF-Prop 0,09, Hof-Prop-Marker 0,39,
+Hof-Raum-Marker 0,00) und [18] (§ A13a mit Relief: 0,09 + bilineare Probe) —
+die Konstellation ist die des Mondscheinsees.

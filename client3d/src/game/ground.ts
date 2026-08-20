@@ -1,8 +1,10 @@
 /**
- * Which ray hit on a location's server model counts as WALKABLE GROUND
- * (finding B8). Pure arithmetic, no imports — the raycast itself stays in
- * `scene/tiles.ts` (`tileGroundY`), only the accept rule lives here so it can
- * be checked by hand in `client3d/scripts/smoke_walk_math.mjs`.
+ * Which surface a figure stands on inside a location — the FLOOR OF THE
+ * RECIPE (`recipeFloorAt`) and, where the mesh is the ground, which ray hit
+ * counts (finding B8). Pure arithmetic; the only import is the equally pure
+ * polygon test. The lookups — the raycast, the tile's plate list — stay in
+ * `scene/tiles.ts` (`tileGroundY`), only the RULES live here so they can be
+ * checked by hand in `client3d/scripts/smoke_walk_math.mjs`.
  *
  * The rule follows the PAYLOAD, not a constant. A building model
  * (`display: "shell"`) is a house: its mesh carries a bit of ground skin
@@ -22,9 +24,62 @@
  * walk height falls back to the bare 1.2 m the client used before.
  */
 
+import { pointInPolygon, type Polygon } from './polygon';
+
 /** Clearance over a building's walkable surface that still counts as ground,
  *  in metres. Above it starts the roof / the next storey. */
 export const ROOF_CLEARANCE_M = 1.2;
+
+/** How far a figure's feet stand ABOVE the surface they were measured on, in
+ *  metres — the hair that keeps a sole out of the floor it stands on.
+ *
+ *  It is the server's own `PROP_CLEARANCE` (`app/core/scene_recipe.py`): a
+ *  prop's `bottom_y` is `plate top + 0.01`, so a figure standing on the same
+ *  plate and a chair standing on it are at the SAME height by construction.
+ *  Both the recipe-floor answer and the mesh-ray answer of `tileWalkY` add it,
+ *  which is what makes the two paths comparable at all. */
+export const WALK_CLEARANCE_M = 0.01;
+
+/** One floor plate of the scene recipe, as the walk rule reads it: its
+ *  outline in TILE-LOCAL metres and its `top_y`. Level plate and room plate
+ *  alike — which of them wins is the rule below, not the caller's business. */
+export interface WalkPlate {
+  top: number;
+  outline: readonly (readonly [number, number])[];
+}
+
+/**
+ * THE FLOOR OF THE RECIPE under a tile-local point, or `null` where the
+ * payload draws none (decision 2026-08-20, § B1/B2 addendum).
+ *
+ * The highest plate whose hull contains the point and whose top is still
+ * BELOW the walk ceiling — the same ceiling the mesh hits are judged by
+ * (`walkCeiling`), because this answers the same question a top-down ray
+ * does: the highest surface that is not already the next storey. So a
+ * ground-floor point answers the ground-floor plate, a room plate (0.10)
+ * beats the level plate (0.08) it lies on, and the first storey's 2.90 is
+ * out of reach at a ceiling of 1.28.
+ *
+ * WHY THE PLATE AND NOT THE MESH: a building model is the PICTURE of a
+ * house, and where its floor sits inside the mesh is a modelling accident —
+ * "Haus von Kai" carries a 0.240 m terrain pad under its walls, so the ray
+ * answered 0.000 while the room plate lay at 0.100 and the figure walked
+ * 9 cm below the furniture standing in the same room (measured, § B5a). The
+ * plate is what the payload draws AND what it stands the props on
+ * (`bottom_y = top + PROP_CLEARANCE`), so standing a figure on it makes
+ * figure and chair one height by construction.
+ */
+export function recipeFloorAt(plates: readonly WalkPlate[] | null | undefined,
+                              lx: number, lz: number,
+                              ceiling: number): number | null {
+  let best: number | null = null;
+  for (const plate of plates ?? []) {
+    if (!(plate.top < ceiling)) continue;
+    if (best !== null && plate.top <= best) continue;
+    if (pointInPolygon(lx, lz, plate.outline as Polygon)) best = plate.top;
+  }
+  return best;
+}
 
 /** What the scene payload says about the location's own model. `display` is
  *  the spec word of § B6 no. 10, `walkY` its `walk_y_world`. */

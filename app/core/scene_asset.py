@@ -12,7 +12,13 @@ answers "what stands there now":
    masked region, cleaned morphologically and intersected with ``rembg``. It
    becomes the target variant's SOURCE IMAGE (``props.save_source_image``),
    because that is what its mesh is made from and what a later re-mesh of the
-   same variant must find.
+   same variant must find. It is stamped ``origin "scene_context"`` with the
+   location and the run's own start stamp: a cutout carries the light and the
+   ground of ONE spot, so the admin has to be able to tell it from a product
+   shot at a glance. The picture this spot showed BEFORE the run is copied into
+   the run directory as ``before.png`` at trigger time — a run that refines the
+   same variant overwrites the original a moment later, and a live URL would
+   then show the after twice.
 3. **mesh**    — the cutout (transparent background) through
    ``service.generate_mesh(rig="none")`` and Blender ``normalize`` to the
    prop's DECLARED height. The metric scale comes from the spec, never from
@@ -492,7 +498,8 @@ def sink_offset_y(bottom_y: float, ground: Sequence[float], offset_y: float, *,
 
 # ── Ground truth in the scene frame ─────────────────────────────────────
 
-def ground_sampler(loc: Dict[str, Any]) -> Callable[[float, float], float]:
+def ground_sampler(loc: Dict[str, Any],
+                   floor_y: float = 0.0) -> Callable[[float, float], float]:
     """``(lx, lz) → ground height`` in the location's SCENE frame.
 
     Both halves of the ground, exactly as ``relief`` splits them: the world
@@ -503,6 +510,14 @@ def ground_sampler(loc: Dict[str, Any]) -> Callable[[float, float], float]:
     plateaued location the world half is flat and the term vanishes; on a
     location without a plateau it is the difference that decides whether a prop
     hovers.
+
+    ``floor_y`` is the THIRD term and the datum of the other two: the floor
+    the placement stands on (``target.floor_y``, § B1 addendum 2026-08-20) —
+    the room's plate, the yard's storey plate. The relief rides ON it, the way
+    the payload composes a ``bottom_y``; without it the check compares a
+    payload height against a bare terrain height and reads the floor itself as
+    a gap (0.09 at a 0.05 tolerance = nothing in contact, and the run sinks a
+    correctly standing prop into its own floor).
     """
     from app.core.relief import scene_ground_lift
     from app.core.world_geometry import ground_y, local_to_world
@@ -521,7 +536,9 @@ def ground_sampler(loc: Dict[str, Any]) -> Callable[[float, float], float]:
             world = float(ground_y(wx, wz)) - base
         except Exception:                    # pragma: no cover
             world = 0.0
-        return world + float(scene_ground_lift(loc, wx, wz))
+        # floor first, terrain ON it — the same order the payload composes a
+        # `bottom_y` in (plate top + clearance + the relief lift).
+        return float(floor_y) + world + float(scene_ground_lift(loc, wx, wz))
 
     return sample
 
@@ -865,7 +882,10 @@ def place(sidecar: Dict[str, Any], loc: Dict[str, Any], mesh: Dict[str, Any],
     depth = float(mesh.get("depth_m") or 0.0) or float(
         (target.get("dims_m") or [1.0, 1.0, 1.0])[1])
 
-    sample = ground_sampler(loc)
+    # ONE datum for both sides of the comparison (§ B1 addendum 2026-08-20):
+    # `ground_y` is the payload's own `bottom_y`, so the sampler is lifted
+    # onto the same floor the payload composed it from.
+    sample = ground_sampler(loc, float(target.get("floor_y") or 0.0))
     points = footprint_samples(anchor, width, depth, yaw)
     ground = [sample(p[0], p[1]) for p in points]
     bottom = ground_y + float(offset_y)
@@ -993,6 +1013,31 @@ def generate(location_id: str, room_id: str, index: int, *,
     # of the prop's active variants.
     variant = prop_store.target_variant(prop_id)
     record["variant"] = variant
+
+    # WHAT THIS SPOT SHOWED UNTIL NOW. Resolved and COPIED at trigger time,
+    # before a single pixel is written: the "before" of the comparison is the
+    # source image of the variant the placement pointed at, and when the run
+    # refines that very variant, the picture is overwritten a few lines below.
+    # A live URL would therefore show the AFTER in both frames. The run
+    # directory is immutable once written, so the copy stays true forever.
+    from app.models.world import get_location_by_id
+    loc_rec = get_location_by_id(location_id) or {}
+    placement_before = authored_placement(loc_rec, room_id, int(index))
+    prev = previous_variant(prop_id, placement_before)
+    record["previous_variant"] = prev
+    prev_src = prop_store.source_path(prop_id, prev) if prev is not None else None
+    if prev_src is not None:
+        before_png = out / "before.png"
+        before_png.write_bytes(prev_src.read_bytes())
+        record["files"]["before"] = str(before_png)
+
+    # The stamp the cutout's provenance carries is the RUN's own start — the
+    # same string this record already published — never a fresh clock read, so
+    # the badge in the admin and the run directory name one moment, not two.
+    origin = {"origin": prop_store.ORIGIN_SCENE_CONTEXT,
+              "origin_location": str(loc_rec.get("name") or location_id),
+              "origin_location_id": str(location_id),
+              "origin_ts": record["started_at"]}
     # A pinned seed fixes the FIRST attempt only — a reproduction reproduces
     # one attempt, and a retry that repeated the same seed would repeat the
     # same picture and therefore the same failure.
@@ -1001,7 +1046,7 @@ def generate(location_id: str, room_id: str, index: int, *,
         lambda attempt, seed: _attempt(
             out, attempt, seed, context_png, mask_png, region, backend,
             path_kind, composed, sidecar, expected, prop_id, variant, par,
-            mesh_backend_glob),
+            mesh_backend_glob, origin),
         retries=int(par["retries"]),
         seeds=[int(pinned)] if pinned else None)
     record["attempts"] = loop["attempts"]
@@ -1060,7 +1105,8 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
              path_kind: str, composed: Dict[str, str],
              sidecar: Dict[str, Any], expected: Sequence[float],
              prop_id: str, variant: int, par: Dict[str, Any],
-             mesh_backend_glob: str) -> Dict[str, Any]:
+             mesh_backend_glob: str,
+             origin: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """One insert → cutout → mesh → place pass. Every check is recorded."""
     suffix = "" if attempt == 0 else f"-{attempt + 1}"
     res: Dict[str, Any] = {"attempt": attempt, "failures": [], "files": {}}
@@ -1103,11 +1149,17 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
     # before the mesh, because it is what the attempt was made from whether or
     # not the mesh survives the height gate — and a retry overwrites it with
     # its own cutout, which is again the picture the stored mesh came from.
+    #
+    # The ORIGIN goes with it. A cutout carries the light, the ground and the
+    # surroundings of ONE spot, so a variant made this way is not a product
+    # shot and must not read as one — the store writes the marker only when it
+    # is handed one, and an image without it IS a product shot (props.py).
     from app.core import props as prop_store
     prop_store.save_source_image(
         prop_id, cutout_png.read_bytes(), variant,
         backend=str(getattr(backend, "name", "") or ""),
-        prompt=composed["prompt"], negative=composed["negative"])
+        prompt=composed["prompt"], negative=composed["negative"],
+        **(origin or {}))
     res["crop"] = {"x0": round(aff["x0"], 2), "y0": round(aff["y0"], 2),
                    "side": round(aff["side"], 2), "scale": round(aff["scale"], 5),
                    "size": aff["size"],
@@ -1173,21 +1225,58 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
     return res
 
 
+def authored_placement(loc: Dict[str, Any], room_id: str,
+                       index: int) -> Dict[str, Any]:
+    """The STORED placement dict of ``<room>#<index>``, or ``{}``.
+
+    Stored and not drafted, like everything this pipeline reads: the editor's
+    unsaved draft does not exist for it (``routes/scene_asset._placement``
+    enforces the same rule at the HTTP boundary)."""
+    for room in (loc.get("rooms") or []):
+        if str(room.get("id") or "") != str(room_id):
+            continue
+        props = ((room.get("layout") or {}).get("props") or [])
+        if 0 <= int(index) < len(props):
+            entry = props[int(index)]
+            return dict(entry) if isinstance(entry, dict) else {}
+        return {}
+    return {}
+
+
+def previous_variant(prop_id: str,
+                     placement: Dict[str, Any]) -> Optional[int]:
+    """Which STORE variant this placement showed before the run — or None when
+    the prop has no active, meshed variant at all (a first generation).
+
+    The two vocabularies of § B2 again, in the other direction than
+    :func:`_attempt` needs them: a placement's ``variant`` is a POSITION in the
+    prop's active meshed variants, and the store index is what addresses a
+    file. The position is taken MODULO the count, because that is exactly what
+    both renderers do with it — the "before" picture has to be the one that was
+    on screen, not the one a stricter reading would have shown.
+    """
+    from app.core.props import active_variant_tiers
+
+    positions = [e.get("variant") for e in active_variant_tiers(prop_id)]
+    if not positions:
+        return None
+    try:
+        pos = int(placement.get("variant") or 0)
+    except (TypeError, ValueError):
+        pos = 0
+    return positions[pos % len(positions)]
+
+
 def _authored_offset_y(sidecar: Dict[str, Any], loc: Dict[str, Any]) -> float:
     """The placement's stored ``offset_y``, or 0.0."""
     tgt = sidecar.get("target") or {}
-    room_id = str(tgt.get("room_id") or "")
-    index = int(tgt.get("index") if tgt.get("index") is not None else -1)
-    for room in (loc.get("rooms") or []):
-        if str(room.get("id") or "") != room_id:
-            continue
-        props = ((room.get("layout") or {}).get("props") or [])
-        if 0 <= index < len(props):
-            try:
-                return float(props[index].get("offset_y") or 0.0)
-            except (TypeError, ValueError):
-                return 0.0
-    return 0.0
+    entry = authored_placement(loc, str(tgt.get("room_id") or ""),
+                               int(tgt.get("index")
+                                   if tgt.get("index") is not None else -1))
+    try:
+        return float(entry.get("offset_y") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _tmp_plate_dir() -> Path:

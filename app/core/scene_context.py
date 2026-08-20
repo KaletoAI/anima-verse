@@ -693,14 +693,36 @@ def _dim(dims: Dict[str, Any], long_key: str, short_key: str,
     return default
 
 
+def _floor_datum(scene: Dict[str, Any], room_id: str) -> float:
+    """The floor a room's placements stand on, in scene metres — the room's
+    own plate top, else the storey-0 level plate (the ground room, § A13a,
+    draws none of its own), else 0.0 for a location that draws no floor at
+    all. Read off the payload, never recomputed: the composer already
+    decided it (``scene_recipe._plate_top``)."""
+    plates = [p for p in (scene.get("plates") or []) if isinstance(p, dict)]
+    for plate in plates:
+        if str(plate.get("room_id") or "") == str(room_id) and room_id:
+            try:
+                return float(plate.get("top_y") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+    for plate in plates:
+        if not plate.get("room_id") and int(plate.get("level") or 0) == 0:
+            try:
+                return float(plate.get("top_y") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 def resolve_target(scene: Dict[str, Any], target: Dict[str, Any], *,
                    placements: Optional[Sequence[Dict[str, Any]]] = None,
                    height_at: Optional[Callable[[float, float], float]] = None,
                    ) -> Dict[str, Any]:
     """WHICH spot is being rendered, as one flat description.
 
-    Three kinds, all of them ending in the same five numbers (anchor,
-    ground height, footprint, height, yaw):
+    Three kinds, all of them ending in the same numbers (anchor, ground
+    height, floor datum, footprint, height, yaw):
 
     * ``prop`` — the ``index``-th placement of ``room_id``. The PLACEMENT
       spec in the scene payload owns anchor, yaw and standing height (nothing
@@ -776,6 +798,19 @@ def resolve_target(scene: Dict[str, Any], target: Dict[str, Any], *,
         "prop_id": str(spec.get("id") or ""),
         "anchor": anchor,
         "ground_y": float(spec.get("bottom_y") or 0.0),
+        # THE FLOOR THIS PLACEMENT STANDS ON, over the storey datum (§ B1
+        # addendum 2026-08-20). ``ground_y`` above is the mesh's underside as
+        # the PAYLOAD draws it — room plate / drawn storey floor + clearance —
+        # while the ground sampler of the contact check knows only the
+        # terrain (world relief + scene relief, pin-relative). Both have to
+        # speak one datum or the check measures the floor itself as a gap:
+        # at the yard's 0.08 + 0.01 against a 0.05 tolerance every sample
+        # fell out of contact and the run sank the prop back into the slab.
+        # The room's own plate says it; the ground room (§ A13a) draws no
+        # plate and stands on the storey's, which is the level plate at
+        # level 0. A relief room's plate carries its FLAT base here — the
+        # sampler adds the very lift the payload added to ``bottom_y``.
+        "floor_y": _floor_datum(scene, room_id),
         "footprint": rect_footprint(anchor, width_m, depth_m, yaw),
         "dims_m": [width_m, depth_m, height_m],
         "height_m": height_m,
@@ -910,6 +945,7 @@ def build_context_scene(location_id: str, target: Dict[str, Any], *,
             "index": res["index"], "prop_id": res.get("prop_id", ""),
             "anchor": [round(c, 4) for c in res["anchor"]],
             "ground_y": round(res["ground_y"], 4),
+            "floor_y": round(float(res.get("floor_y") or 0.0), 4),
             "footprint": [[round(p[0], 4), round(p[1], 4)]
                           for p in res["footprint"]],
             "dims_m": res.get("dims_m"),

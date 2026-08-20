@@ -279,17 +279,30 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/worldHeight.ts');
 
-/** Transpile one IMPORT-FREE module and import it. Every file loaded this way
- *  says in its own header that it has no runtime import; should someone add
- *  one, this fails loudly — that is the alarm. */
-async function loadModule(path, name) {
+/** Transpile a PURE module and import it. Every file loaded this way is
+ *  free of runtime dependencies except the equally pure siblings named in
+ *  `deps` (same directory, listed by file name): should someone add an import
+ *  to `three`, the DOM or anything else, this fails loudly — that is the
+ *  alarm, and it is the reason the list is explicit rather than resolved.
+ *  `ground.ts` takes `polygon.ts` that way since it carries the recipe-floor
+ *  rule (§ B1/B2 addendum 2026-08-20), exactly as `smoke_walk_math.mjs` loads
+ *  the pair. */
+async function loadModule(path, name, deps = []) {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'worldheight-'));
+  const fixImports = (code) =>
+    code.replace(/(from\s*["'])(\.\/[\w-]+)(["'])/g, '$1$2.mjs$3');
   try {
+    for (const dep of deps) {
+      const src = await readFile(join(path, '..', `${dep}.ts`), 'utf8');
+      await writeFile(join(dir, `${dep}.mjs`),
+        fixImports(esbuild.transformSync(src, { loader: 'ts', format: 'esm' }).code),
+        'utf8');
+    }
     const source = await readFile(path, 'utf8');
     const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
     const file = join(dir, `${name}.mjs`);
-    await writeFile(file, out.code, 'utf8');
+    await writeFile(file, fixImports(out.code), 'utf8');
     return await import(`file://${file}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -314,7 +327,7 @@ const {
   sampleCompositeGroundHeight,
 } = await loadModule(SRC, 'worldHeight');
 const { groundLift, plateLift, standY } = await loadModule(
-  join(ROOT, 'client3d/src/game/ground.ts'), 'ground');
+  join(ROOT, 'client3d/src/game/ground.ts'), 'ground', ['polygon']);
 const { slopeBlocks } = await loadModule(
   join(ROOT, 'client3d/src/game/walk.ts'), 'walk');
 

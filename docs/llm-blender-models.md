@@ -160,12 +160,12 @@ the placement instead of leaving it to a dial:
 width_m  = max(AABB.x, AABB.z)       → scale = width_m / measured = exactly 1
 offset_x = AABB centre x             → place() re-centres it on its own centre
 offset_z = AABB centre z
-offset_y = roof base + AABB min y − BUILDING_BOTTOM_Y
+offset_y = roof base + AABB min y − LEVEL_PLATE_TOP
 ```
 
 The standard § B2 building placement then puts the mesh exactly on the vertices
 it was built from. For the 10 × 8 m example at 30°/0.40 m:
-`width_m 10.80`, `offset 5.00 / 4.00`, `offset_y 5.60906`, ridge at **8.2094 m**.
+`width_m 10.80`, `offset 5.00 / 4.00`, `offset_y 5.58906`, ridge at **8.2094 m**.
 
 ### The frame, converted once
 

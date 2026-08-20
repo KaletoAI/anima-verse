@@ -684,6 +684,44 @@
  *   ground / shell_area:      ceiling Infinity
  * The comparison is STRICT (`y < ceiling`), so 1.2 on a plain building is
  * already roof — the unchanged old behaviour.
+ *
+ * --- ONE FLOOR: the recipe's plate, not the mesh (decision 2026-08-20) -----
+ * `recipeFloorAt(plates, lx, lz, ceiling)` — where a figure stands INSIDE a
+ * building. The chain everything in a room has to meet (tile metres, § B1/B2
+ * addendum of docs/schnittstellen-3d.md):
+ *
+ *   socle plate 0.045 < level plate 0.08 <= room plate 0.10
+ *   prop bottom_y = room plate + PROP_CLEARANCE  = 0.11   (server)
+ *   walk height   = room plate + WALK_CLEARANCE_M = 0.11   (here)
+ *
+ * The rule: the HIGHEST plate whose hull contains the point and whose top is
+ * still below the walk ceiling — the same ceiling the ray hits are judged by,
+ * because it answers the same question (the highest surface that is not
+ * already the next storey). Derived by hand on the Haus-von-Kai payload
+ * (living room 8-point hull, kitchen 4-point hull, storey 2.8 m):
+ *
+ *   plates: level0 top 0.08 (house contour), living room 0.10, kitchen 0.10,
+ *           pool 0.00 (outdoor, thickness 0), level1 2.88, bedroom 2.90
+ *   ceiling for that building = walk_y_world (−0.22) + 1.2 = 0.98
+ *
+ *   (0.75, −1.5)  in the living room   -> 0.10   (room beats level plate)
+ *   (−2.5, 3.75)  in the kitchen       -> 0.10
+ *   (−5.8, −2.0)  the lift alcove — DRAWN INTO the living room -> 0.10
+ *                 (that house's contour is exactly its two rooms, so the
+ *                  "in the house, in no room -> level plate" case is derived
+ *                  on a synthetic 10 m square with one 4 × 3 m room instead:
+ *                  (−2, −2) -> 0.10, (2, 2) -> 0.08)
+ *   (3.7, 4.6)    in the pool          -> 0.00   (an outdoor room IS a floor)
+ *   (6.9, −6.5)   on the plot, outside the house -> null (the mesh answers)
+ *   the bedroom's 2.90 is never returned: 2.90 >= 0.98, the next storey.
+ *
+ * WHAT THIS REPLACED, the regression pin: the same point in the living room
+ * used to be the first accepted ray hit on the shell mesh. That mesh carries
+ * a 0.240 m terrain pad under its walls and was dialled offset_y −0.30, so
+ * its floor sat at 0.06 − 0.30 + 0.240 = 0.000 and the figure stood at
+ * 0.000 + 0.01 = 0.010 — 0.090 below the room plate its own props stood on
+ * and 0.035 below the tile's grass socle (0.045), which is exactly what the
+ * user saw. The plate answer is 0.10 + 0.01 = 0.11 = the props' bottom_y.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -3416,6 +3454,77 @@ async function main() {
     acceptsWalkHit(LAKE, 2.69), true);
   check('area: and the lake bed below zero (−0.8 m)',
     acceptsWalkHit(LAKE, -0.8), true);
+
+  console.log('\nground — ONE floor: the recipe plate the props stand on');
+  const { recipeFloorAt, WALK_CLEARANCE_M } = ground;
+  // The payload of "Haus von Kai" (worlds/Anima Divide, GET /play/locations/
+  // 20dc0cbd/scene), plates verbatim — the hulls are the outlines it ships.
+  const KAI_PLATES = [
+    { top: 0.08, outline: [[-4.5, -4.5], [6, -4.5], [6, 1.5], [-0.5, 1.5],
+      [-0.5, 6], [-4.5, 6], [-4.5, -1], [-6.22, -1], [-6.25, -3.11],
+      [-4.53, -3.13]] },
+    { top: 2.88, outline: [[-4.5, -4.5], [6, -4.5], [6, 1.5], [-0.5, 1.5],
+      [-0.5, 6], [-4.5, 6], [-4.5, -1], [-6.22, -1], [-6.25, -3.11],
+      [-4.53, -3.13]] },
+    { top: 0.10, outline: [[6, -4.5], [6, 1.5], [-4.5, 1.5], [-4.5, -1],
+      [-6.22, -1], [-6.25, -3.11], [-4.53, -3.13], [-4.5, -4.5]] },
+    { top: 2.90, outline: [[-6.25, -3.11], [-4.53, -3.13], [-4.5, -4.5],
+      [6, -4.5], [6, 1.5], [-0.5, 1.5], [-4.5, 1.5], [-4.5, -1],
+      [-6.22, -1]] },
+    { top: 0.00, outline: [[1.22, 3.12], [6.22, 3.12], [6.22, 6.12],
+      [1.22, 6.12]] },
+    { top: 0.10, outline: [[-0.5, 6], [-4.5, 6], [-4.5, 1.5], [-0.5, 1.5]] },
+  ];
+  // walk_y_world −0.22 (0.08 + offset_y −0.30) + ROOF_CLEARANCE 1.2.
+  const KAI_CEILING = walkCeiling({ display: 'shell', walkY: -0.22 });
+  check('the ceiling of that building is 0.98', KAI_CEILING, 0.98, 1e-9);
+  check('living room: the ROOM plate wins over the level plate under it',
+    recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING), 0.10);
+  check('kitchen: its own plate, same height',
+    recipeFloorAt(KAI_PLATES, -2.5, 3.75, KAI_CEILING), 0.10);
+  // The lift alcove (x −6.25…−4.5, z −3.11…−1) is DRAWN INTO the living
+  // room's hull, so it is that room's floor — and with it the house contour
+  // is exactly living room + kitchen, with no gap between them. Hence the
+  // level plate is proven on a synthetic pair below rather than here.
+  check('the lift alcove belongs to the living room hull, so 0.10',
+    recipeFloorAt(KAI_PLATES, -5.8, -2.0, KAI_CEILING), 0.10);
+  const GAP_PLATES = [
+    { top: 0.08, outline: [[-5, -5], [5, -5], [5, 5], [-5, 5]] },
+    { top: 0.10, outline: [[-4, -4], [0, -4], [0, -1], [-4, -1]] },
+  ];
+  check('inside the room: its plate (0.10)',
+    recipeFloorAt(GAP_PLATES, -2, -2, 1.2), 0.10);
+  check('inside the house but in no room: the storey contour (0.08)',
+    recipeFloorAt(GAP_PLATES, 2, 2, 1.2), 0.08);
+  check('the pool is an outdoor room and IS a floor at 0.00',
+    recipeFloorAt(KAI_PLATES, 3.7, 4.6, KAI_CEILING), 0.00);
+  check('on the plot but outside the house: no plate, the mesh answers',
+    recipeFloorAt(KAI_PLATES, 6.9, -6.5, KAI_CEILING), null);
+  check('the storey above is out of reach (2.90 >= 0.98)',
+    recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING) < 2.88, true);
+  check('...and with a ceiling above it, it IS the floor (upper storey)',
+    recipeFloorAt(KAI_PLATES, 0.75, -1.5, 4.0), 2.90);
+  check('no plates at all = no recipe floor', recipeFloorAt([], 0, 0, 1.2), null);
+  check('...and neither does a tile that never got a list',
+    recipeFloorAt(undefined, 0, 0, 1.2), null);
+  // THE CHAIN, hand-derived (§ B1/B2 addendum): socle < level <= room plate,
+  // and a figure stands exactly where the room's props stand.
+  const SOCLE_Y_M = 0.045;          // client `scene/tiles.SOCLE_Y_M`
+  const PROP_BOTTOM = 0.11;         // server: room plate 0.10 + PROP_CLEARANCE
+  const roomFloor = recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING);
+  check('the walk clearance IS the server\'s prop clearance', WALK_CLEARANCE_M, 0.01);
+  check('socle 0.045 < level plate 0.08 <= room plate 0.10',
+    SOCLE_Y_M < 0.08 && 0.08 <= roomFloor, true);
+  check('figure and chair stand at ONE height: plate + 0.01 = 0.11',
+    roomFloor + WALK_CLEARANCE_M, PROP_BOTTOM, 1e-9);
+  // The regression pin: the mesh answer the same point used to give.
+  const MESH_FLOOR = 0.06 + (-0.30) + 0.240;    // old pin + pad = 0.000
+  check('the OLD mesh answer was 0.010 — 0.090 under the plate, 0.035 under '
+    + 'the grass',
+    [MESH_FLOOR + WALK_CLEARANCE_M,
+      roomFloor + WALK_CLEARANCE_M - (MESH_FLOOR + WALK_CLEARANCE_M),
+      SOCLE_Y_M - (MESH_FLOOR + WALK_CLEARANCE_M)],
+    [0.010, 0.100, 0.035], 1e-9);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

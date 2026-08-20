@@ -3,7 +3,8 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { acceptsWalkHit, plateLift, standY, type GroundModelInfo } from '../game/ground';
+import { acceptsWalkHit, plateLift, recipeFloorAt, standY, walkCeiling,
+  WALK_CLEARANCE_M, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 import {
   asphaltTexture, grassTexture, paversTexture, waterTexture,
@@ -365,6 +366,13 @@ export interface Tile {
   outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
   levelSlabs: Map<number, THREE.Mesh>;
+  /** THE FLOORS OF THE RECIPE, as the walk rule reads them (§ B1 addendum
+   *  2026-08-20): one entry per built plate — its outline in TILE-LOCAL metres
+   *  and its `top_y`. `tileWalkY` stands a figure on the highest one whose
+   *  hull contains the point, which is the surface the payload already puts
+   *  the props and markers of that room on. Empty for a tile without a
+   *  recipe interior (an area model, a bare pin). */
+  walkPlates: WalkPlate[];
   /** Wand-Materialien je Etage (fürs Etagen-Umschalten). Liste, weil
    *  texturierte Wände je Stück ein eigenes Material mit eigener repeat
    *  brauchen (Szenen-Rezept) — der Legacy-Grundriss trägt genau eines ein. */
@@ -969,7 +977,8 @@ export function buildTile(loc: WorldLocation): Tile {
     roomSlots: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), levelFilter: 0, roomOutdoor: new Set(),
+    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), walkPlates: [],
+    levelFilter: 0, roomOutdoor: new Set(),
     fade: 0, fadeTarget: 0, occl: 0,
   };
 
@@ -1299,22 +1308,46 @@ const WALK_RAY_DOWN = new THREE.Vector3(0, -1, 0);
 
 /** The TILE's own answer — plate, model skin and scene relief, all measured
  *  from the tile centre. Split off so the world term above wraps the whole
- *  answer instead of one of its three exits. */
+ *  answer instead of one of its three exits.
+ *
+ *  THE RECIPE'S FLOOR COMES FIRST for a building (decision 2026-08-20). A
+ *  `shell` model is the PICTURE of a house; the floor of that house is the
+ *  plate the payload draws and the surface it stands the room's props and
+ *  markers on (`bottom_y = plate top + 0.01`). Raying the mesh instead asked a
+ *  second, unrelated surface: "Haus von Kai" carries a 0.24 m ground pad under
+ *  its walls, so the ray answered 0.000 while the room plate lay at 0.100 —
+ *  the figure walked 9 cm below the floor its own furniture stood on, at the
+ *  height of the tile's grass socle (0.045). Measured, § B5a.
+ *
+ *  THE MESH STILL ANSWERS where it IS the ground and nowhere else: an area
+ *  model (`ground` / `shell_area`, whose shore, slope and lake bed are the
+ *  terrain of the place) and every point of a building tile that no plate
+ *  covers — the yard around the house, a place whose payload draws no plates
+ *  at all. */
 function tileWalkY(tile: Tile, at: THREE.Vector3): number {
   const lift = tile.center.y + terrainLiftAt(tile, at.x, at.z);
   const target = tile.serverModel;
-  if (!target) return lift;
   const info: GroundModelInfo = {
     display: tile.modelIsGround ? 'ground'
       : tile.modelIsShellArea ? 'shell_area' : 'shell',
     walkY: tile.modelWalkY,
   };
+  if (info.display === 'shell' && tile.walkPlates.length) {
+    const local = worldToTile(tile, at.x, at.z);
+    const floor = recipeFloorAt(tile.walkPlates, local.x, local.z,
+                                walkCeiling(info));
+    if (floor !== null) {
+      return tile.center.y + floor + WALK_CLEARANCE_M
+        + terrainLiftAt(tile, at.x, at.z);
+    }
+  }
+  if (!target) return lift;
   walkRay.set(walkRayFrom.set(at.x, rayStartY, at.z), WALK_RAY_DOWN);
   for (const h of walkRay.intersectObject(target, true)) {
     // The hit is world y, the ceiling a tile height: compare them in the SAME
     // frame of reference, or the rule tips over with the plateau.
     if (acceptsWalkHit(info, h.point.y - tile.center.y)) {
-      return h.point.y + 0.01 + terrainLiftAt(tile, at.x, at.z);
+      return h.point.y + WALK_CLEARANCE_M + terrainLiftAt(tile, at.x, at.z);
     }
   }
   return lift;

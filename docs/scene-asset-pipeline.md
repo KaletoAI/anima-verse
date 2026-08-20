@@ -99,6 +99,16 @@ coordinates, so the plate camera also describes the patch, with `fx' = fx·s`
 and `cx' = (cx − x0)·s`. Any measurement taken in patch pixels can therefore be
 read back in plate pixels, and from there in metres.
 
+The cutout is stored as the target variant's **source image** before it is
+meshed, and stamped with where it was taken: `origin "scene_context"`, the
+location's id and display name, and the RUN's own `started_at` (never a fresh
+clock read). A cutout carries the light, the ground and the surroundings of one
+spot, so a variant made this way is not interchangeable with a product shot,
+and the Props tab marks it 🎬 instead of leaving the two indistinguishable. A
+product shot writes no origin key at all — absence IS the product shot, which
+is why no existing prop needed migrating (`docs/schnittstellen-3d.md`,
+"Ergänzung 2026-08-20: Woher das Bild stammt").
+
 > **SAM3 remains the documented upgrade path.** If the difference proves too
 > coarse in practice — a translucent object, a shadow that swallows the
 > silhouette — a text-guided segment of the same crop slots in exactly where
@@ -227,6 +237,7 @@ already running.
 Every run writes into the prop's own directory, `scene_asset/<ts>/`:
 
 ```
+before.png      the source image of the variant this spot showed UNTIL NOW
 context.png     the plate (stage 1)
 mask.png        the grown inpaint region, white = fill
 edit.png        what the image model drew          (per attempt: edit-2.png …)
@@ -234,7 +245,13 @@ cutout.png      the object, transparent background (per attempt)
 result.json     paths, prompt, backend, path taken, every check, timings
 ```
 
-which is also the triple preview the UI shows (plate / edit / mesh).
+which is also the picture strip the UI shows: **before → plate → edit →
+after**. `before.png` is copied at trigger time, not afterwards — a run that
+refines the very variant the placement pointed at overwrites that variant's
+source image in stage 2, so a live URL would show the after in both frames.
+`result.json` names the variant it came from as `previous_variant` (a STORE
+index, resolved from the placement's POSITION the way both renderers resolve
+it, modulo included). A first generation replaces nothing and has no before.
 
 ## Routes and UI
 
@@ -246,7 +263,7 @@ decision stays in the core:
 | `POST /generate` | starts the chain for one placement. Body `{location_id, room_id, placement_index}` plus the optional `{subject, image_backend, mesh_backend, seed}`. **409 = this placement is already running** (the core's double-start guard reporting load, not a defect). A placement the world does not carry is a 404 — the yard is an ordinary room here, named by its reserved id `__ground__`; an empty `room_id` names nothing. |
 | `GET /status` | `{running, prop_id, placement, last_run}` for one placement — the poll the editor runs while a job is out. `last_run` is the newest run **of this placement**; a prop stands in many places and its run directory holds all of them. |
 | `GET /runs/{prop_id}` | the same summary for every run the prop ever had, newest first (the directory names are timestamps, so their reverse sort IS the chronology). A directory without a readable `result.json` is a run still writing and stays invisible. |
-| `GET /runs/{prop_id}/{stamp}/{file}.png` | the four artefacts, ETag + 304. Path-escape-checked exactly like `assets.resolve_clip_path`: two segments, no dot segment, no backslash, PNG only, and the resolved path must still lie inside the prop's run directory. |
+| `GET /runs/{prop_id}/{stamp}/{file}.png` | the run's artefacts, ETag + 304. Path-escape-checked exactly like `assets.resolve_clip_path`: two segments, no dot segment, no backslash, PNG only, and the resolved path must still lie inside the prop's run directory. |
 | `POST /placement` | patches `variant` / `yaw` / `offset_y` of a stored placement through `world_ops.update_prop_placement` — the very writer the pipeline uses, sanitiser included. |
 
 `seed` pins the **first** attempt only; retries keep drawing fresh ones, because
@@ -260,8 +277,8 @@ are judged against beside them, and the core's own failure sentences verbatim.
 
 The UI is `frontend/src/tabs/world/ScenePropPanel.tsx`, inside the floor plan's
 selected-placement strip next to the yaw/height dials: **"🎬 Generate in
-scene"**, the placement's model-variant picker, and the collapsible triple
-preview with the readouts. The button is **disabled while the location has
+scene"**, the placement's model-variant picker, and the collapsible picture
+strip with the readouts. The button is **disabled while the location has
 unsaved changes** — the pipeline renders the STORED world, and a run's own
 writes would be lost to the next Save of a stale draft. When a run finishes the
 editor reloads the location, so the draft picks up the variant, yaw and sink

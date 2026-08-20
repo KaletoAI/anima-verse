@@ -358,6 +358,34 @@ def part_scene():
     check("target anchor x", side["target"]["anchor"][0], 3.0, M_TOL)
     check("target ground_y (= placement bottom_y)",
           side["target"]["ground_y"], 0.11, M_TOL)
+    # THE FLOOR THE PLACEMENT STANDS ON (§ B1 addendum 2026-08-20): the room's
+    # own plate, read off the payload — 0.11 − PROP_CLEARANCE 0.01 = 0.10.
+    # The contact check lifts its ground sampler onto exactly this, or the
+    # floor itself reads as a gap (`scene_asset.place`).
+    check("target floor_y (= the room's plate top)",
+          side["target"]["floor_y"], 0.10, M_TOL)
+    # A YARD placement (the ground room, § A13a) draws no plate of its own:
+    # its floor is the storey-0 LEVEL plate — 0.08 with the addendum's datum,
+    # and the yard prop's bottom_y is that plus the clearance = 0.09.
+    yard_scene = fixture_scene()
+    yard_scene["plates"] = [
+        {"level": 0, "outline": [[-10, -10], [10, -10], [10, 10], [-10, 10]],
+         "top_y": 0.08, "thickness": 0.14},
+        *yard_scene["plates"],
+    ]
+    for spec in yard_scene["models"]:
+        spec["room_id"] = "__ground__"
+        spec["bottom_y"] = 0.09
+    yard = sc.build_context_scene(
+        "ctx-demo", {"kind": "prop", "room_id": "__ground__", "index": 0},
+        location=fixture_location(), scene=yard_scene,
+        placements=placements, game=GameTime.from_parts(1, 46, 12, 0),
+        params={"width": 1024, "height": 1024},
+        height_at=lambda x, z: 0.0, model_files={})
+    yt = yard["sidecar"]["target"]
+    check("yard target ground_y (= its bottom_y)", yt["ground_y"], 0.09, M_TOL)
+    check("yard floor_y falls back to the storey-0 level plate",
+          yt["floor_y"], 0.08, M_TOL)
     # The sidecar rounds its metres to 4 decimals (0.1 mm) — the tolerance
     # here is that rounding, not slack in the maths.
     check("target span_m", side["target"]["span_m"], 5.656854, 1e-4)

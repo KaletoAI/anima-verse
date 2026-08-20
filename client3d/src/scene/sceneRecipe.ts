@@ -544,6 +544,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
    *  die Kachel-Matrizen stehen (sonst misst man Zwischenzustände). */
   const builtPlates: { mesh: THREE.Mesh; plate: ScenePlate }[] = [];
   const builtWalls: { mesh: THREE.Mesh; wall: SceneWall }[] = [];
+  // The floors of the PREVIOUS mount are gone with it (a remount arrives after
+  // `unmountScene`, but a tile built fresh never saw one) — the list below is
+  // filled from this payload alone.
+  tile.walkPlates = [];
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
     if (plate.relief && scene.terrain) {
@@ -569,6 +573,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       m.opacity = 0;
       m.depthWrite = false;
     }
+    // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate
+    // is one, level contour and room plate alike, and `tileWalkY` takes the
+    // highest one under the point. It is registered here rather than derived
+    // later because this is where the payload's outline and its `top_y` are
+    // in one hand — and it is registered for an AREA location too: there the
+    // model IS the ground and the walk rule never asks these, so the list
+    // costs nothing and stays true if that ever changes.
+    tile.walkPlates.push({ top: plate.top_y, outline: plate.outline });
     // Shadow flags are view state and stay here: upper storeys cast, every
     // plate receives.
     mesh.receiveShadow = true;
@@ -901,8 +913,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // walk_y (§ B6 Nr. 7): die deklarierte Standhöhe geht als Boden-SOLL in
     // die Abtastung — sie schlägt dort die Höhen-Heuristik, und damit stehen
     // auch die STEH-SPOTS (nicht nur Mitte/Exit) auf dem sichtbaren Boden.
-    // Ohne walk_y wie gehabt: dominante Lage + Tür-Referenz.
-    sampleRoomWalkables(tile, id, rg, walkY.get(id));
+    //
+    // Ohne Diorama ist das SOLL die ROOM PLATE (decision 2026-08-20): sie ist
+    // der Boden, den der Payload zeichnet und auf den er die Props des Raums
+    // stellt — dieselbe Fläche, auf der `tileWalkY` die Figuren stehen lässt.
+    // Vorher entschied hier die Höhen-Heuristik über die Strahl-Treffer, und
+    // die fand in einem Raum ohne Diorama den Boden des Hüllen-Meshes: NPC-
+    // Spots und Figuren standen auf zwei verschiedenen Böden.
+    sampleRoomWalkables(tile, id, rg, walkY.get(id) ?? roomPlateTop.get(id));
   }
 
   // ── Verify (§ B5a): primitives against the target ───────────────────────
@@ -1156,7 +1174,11 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       const declared = placements.find((r) => r.spec.role === 'room'
         && r.spec.room_id === id
         && r.spec.walk_y_world !== undefined)?.spec.walk_y_world;
-      sampleRoomWalkables(tile, id, rg, declared);
+      // …and without a declaring diorama the ROOM PLATE is the floor, exactly
+      // as in the mount above. The slot holder was placed on `plate.top_y` in
+      // the same loop that built the plate, so this IS that number.
+      sampleRoomWalkables(tile, id, rg,
+                          declared ?? tile.roomSlots.get(id)?.holder.position.y);
     }
   }
 }
@@ -1276,6 +1298,9 @@ export function unmountScene(tile: Tile): void {
   tile.modelIsGround = false;
   tile.modelIsShellArea = false;
   tile.modelWalkY = undefined;
+  // The floors of this scene leave with it: until the next mount the tile has
+  // its plate and the world under it, exactly as a place without a recipe.
+  tile.walkPlates = [];
   tile.terrain = undefined;
   tile.terrainExtent = undefined;
   // Drapierte Kachelplatte zurückbauen: das ebene Original ist die Kachel,

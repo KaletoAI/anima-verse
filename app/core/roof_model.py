@@ -654,14 +654,18 @@ def build_job(location_id: str, description: Any,
     # What the SIDECAR needs so the standard building-model placement puts the
     # roof exactly where these vertices are (metric law, § B2): the mesh is
     # measured by its widest XZ side, centred on its own AABB centre, and its
-    # lower edge lands on ``bottom_y = BUILDING_BOTTOM_Y + offset_y``.
-    from app.core.scene_recipe import BUILDING_BOTTOM_Y
+    # lower edge lands on ``bottom_y = LEVEL_PLATE_TOP − walk_y + offset_y``.
+    # A generated roof declares no ``walk_y`` (nobody walks on it), so the
+    # anchor is the storey-0 floor plate — the § B2 addendum of 2026-08-20
+    # moved that pin by 0.02 m and this derivation moves WITH it, or the roof
+    # would sit two centimetres off its own walls.
+    from app.core.scene_recipe import LEVEL_PLATE_TOP
     base_y = facts["roof_base_y"]
     job["placement"] = {
         "width_m": _r(max(box["size"][0], box["size"][2])),
         "offset_x": box["center"][0],
         "offset_z": box["center"][2],
-        "offset_y": _r(base_y + box["min"][1] - BUILDING_BOTTOM_Y),
+        "offset_y": _r(base_y + box["min"][1] - LEVEL_PLATE_TOP),
         "eaves_height_m": facts["eaves_height_m"],
         "roof_base_y": base_y,
         "ridge_y_world": _r(base_y + geo["ridge_y"]),
