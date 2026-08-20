@@ -40,7 +40,7 @@
     "\"once\" applies a discrete one-shot effect; cooldown blocks the LLM from re-setting it.": "\"einmalig\" wendet einen diskreten one-shot Effekt an; Cooldown blockt das LLM beim erneuten Setzen.",
     "(missing)": "(fehlt)",
     "(Top 12 by score)": "(Top 12 nach Score)",
-    "(zoom in)": "(reinzoomen)",
+    "(zoom in)": "(hineinzoomen)",
     "+ add": "+ hinzufügen",
     "+ new": "+ neu",
     "+90°": "+90°",
@@ -2006,6 +2006,15 @@
     "Negative sinks the prop into the ground, positive lifts it off — the same amount everywhere it stands: rooms, yard, painted scatter, world props. Use it for a mesh that carries no root ball or base plate. 0 = the prop stands on the ground; a single placement can still be trimmed with its own offset in the room editor.": "Negativ senkt das Prop in den Boden, positiv hebt es an — überall gleich, wo es steht: Räume, Außenbereich, gemalter Bewuchs, Welt-Props. Gedacht für Meshes ohne Wurzelballen oder Sockel. 0 = das Prop steht auf dem Boden; eine einzelne Platzierung lässt sich weiter mit ihrem eigenen Versatz im Raum-Editor trimmen.",
     "above the ground": "über dem Boden",
     "into the ground": "im Boden",
-    "on the ground": "auf dem Boden"
+    "on the ground": "auf dem Boden",
+    "Icons": "Icons",
+    "Roofs": "Dächer",
+    "How placed locations are drawn on the map": "Wie platzierte Orte auf der Karte gezeichnet werden",
+    "Location view": "Orts-Ansicht",
+    "Draw the floor plan’s ground-floor rooms over the terrain, coloured by their floor material and see-through. This is how a place is lined up with the painted ground — a lake against its water, a yard against its path.": "Zeichnet die Erdgeschoss-Räume des Grundrisses halbtransparent über das Gelände, eingefärbt nach ihrem Bodenmaterial. So richtet man einen Ort am gemalten Boden aus — einen See an seinem Wasser, einen Hof an seinem Weg.",
+    "Show each building model from above inside its outline. Switch away and back to refresh the pictures.": "Zeigt jedes Gebäudemodell von oben in seinem Umriss. Zum Aktualisieren der Bilder kurz um- und zurückschalten.",
+    "Switch the locations back on to see this": "Orte-Ebene wieder einschalten, um dies zu sehen",
+    "The flat 2D map icon of each location, as before.": "Das flache 2D-Karten-Icon jedes Ortes, wie bisher.",
+    "Zoom in to at least {n} px per metre": "Mindestens auf {n} px pro Meter hineinzoomen"
   }
 }

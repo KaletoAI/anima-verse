@@ -17,8 +17,10 @@ import {
 } from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, boundaryLocal, isPlaced,
-  pictureFrameLocal, type GhostSpec,
+  pictureFrameLocal, type GhostSpec, type LocationView,
 } from './PlacementLayer'
+import { LocationViewSwitch } from './LocationViewSwitch'
+import { surfaceColorMap } from './roomShapes'
 import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import { HeightLayer } from './HeightLayer'
 import {
@@ -140,6 +142,19 @@ import type {
  * fired in a tab that is not mounted next to this one. Toggle off/on is the
  * cheap, explicit refresh.
  *
+ * THE ROOMS are the third of the same switch (`LocationViewSwitch`) and cost
+ * nothing at all: they are the floor plan's own ground-floor hulls, drawn as
+ * flat semi-transparent colour over the painted ground through the very
+ * geometry the plan uses (`roomShapes` = `planGeometry.absOutline` plus the
+ * § A1.1 pin transform). They exist for the alignment case no picture serves:
+ * A LAKE HAS NO ROOF. Its water and shore rooms are what has to line up with
+ * the painted water, so the rooms are drawn see-through, the flat icon is
+ * dropped with the roof, and a room floor takes the colour the TERRAIN CATALOG
+ * gives its material — same material, same colour, so a misplaced shore reads
+ * as two colours and not as two shades. Nothing is fetched for it: the room
+ * layouts are already in `GET /world/locations`, which returns the full
+ * records.
+ *
  * THE WORLD RELIEF is the fourth mode (`heights`, § A16) and reads its own
  * endpoint: `GET /world/height-areas` plus `POST/PUT/DELETE` on the same path.
  * A height area is a polygon with a height and a ramp width — no kind, no
@@ -198,6 +213,12 @@ const BOUNDARY_PROBLEM_KINDS = new Set([
 /** Zoom floor for the roof views: under one pixel per metre even a big house
  *  is a smudge, and each picture costs a request plus a GL context. */
 const ROOF_MIN_PX_PER_M = 1
+/** Zoom floor for the ROOMS view. Not a budget gate like the roofs' — room
+ *  hulls are vector and cost nothing — but at world zoom a whole location is
+ *  a few pixels, so its rooms are dots that clutter exactly the painted
+ *  ground somebody is aligning them against. Under it the map falls back to
+ *  the flat icons, which is what it looked like before. */
+const ROOMS_MIN_PX_PER_M = 0.25
 /** Panning must not start a render per animation frame. */
 const ROOF_DEBOUNCE_MS = 300
 
@@ -432,11 +453,14 @@ export function MapTab() {
   // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
 
-  // Building roofs: the switch, the room-layout signatures the cache keys are
-  // built from, and the cache itself (`id|layout_sig` -> data URL, or null for
-  // "asked, there is none"). Session state — see the module docstring for why
-  // the refresh is the toggle and nothing else.
-  const [roofOn, setRoofOn] = useState(false)
+  // WHAT A FOOTPRINT SHOWS INSIDE ITS OUTLINE — one of three, never two
+  // (`LocationViewSwitch`): the flat 2D map icon, the rendered roof view, or
+  // the floor plan's ground-floor ROOMS as flat colour over the painted
+  // terrain. Session state like every other view switch here; the roof cache
+  // below hangs off it (see the module docstring for why the refresh is the
+  // switch and nothing else).
+  const [locView, setLocView] = useState<LocationView>('icons')
+  const roofOn = locView === 'roofs'
   /** Are the locations drawn at all? A pure VIEW switch, session-only like the
    *  roof one next to it — nothing about the world changes, only what this
    *  canvas shows. Switching them off is the way to reach ground and relief
@@ -932,12 +956,22 @@ export function MapTab() {
     })
   }, [])
 
-  /** The switch. Flipping it either way empties the cache: that is the whole,
-   *  deliberate refresh mechanism. */
-  const toggleRoofs = useCallback(() => {
+  /** The location-view switch. EVERY change empties the roof cache: leaving
+   *  the roofs frees the pictures, coming back re-renders them, and that is
+   *  the whole, deliberate refresh mechanism. */
+  const setLocationView = useCallback((v: LocationView) => {
     setRoofs({})
-    setRoofOn((v) => !v)
+    setLocView(v)
   }, [])
+
+  /** The Display panel's "Building roofs" checkbox, which is the same state
+   *  seen a second time — it lives in `TerrainTools.MapDisplayPanel` and the
+   *  three-state switch below the panel is its successor. Wired to the same
+   *  setter so the two can never disagree; the checkbox goes when the panel
+   *  is next touched. */
+  const toggleRoofs = useCallback(() => {
+    setLocationView(roofOn ? 'icons' : 'roofs')
+  }, [roofOn, setLocationView])
 
   /** Hiding the locations also drops what only makes sense while they are
    *  drawn: a selection whose chip would edit a square nobody can see, and an
@@ -1022,6 +1056,14 @@ export function MapTab() {
     }
     return out
   }, [placed, roofKey, roofOn, roofs])
+
+  /** ONE colour per ground material, out of the effective terrain catalog —
+   *  what the ROOMS view paints a room floor with. It has to be the catalog's
+   *  own colour and not a second table: the view exists to compare a room
+   *  against the painted ground under it, and two blues for one material
+   *  would be a difference the world does not have. */
+  const surfaceColors = useMemo(
+    () => surfaceColorMap(terrainTypes), [terrainTypes])
 
   // ── Writes ───────────────────────────────────────────────────────────────
 
@@ -2179,6 +2221,11 @@ export function MapTab() {
   // The switch is on but the zoom is under the budget gate — say so on the
   // switch itself, or the empty squares read as "there are no models".
   const roofsZoomedOut = roofOn && view.pxPerM < ROOF_MIN_PX_PER_M
+  // The same sentence for the rooms, with the other floor (see
+  // ROOMS_MIN_PX_PER_M) — and the fallback that goes with it: too far out,
+  // the footprints show their flat icons, which is what they always did.
+  const roomsZoomedOut = locView === 'rooms' && view.pxPerM < ROOMS_MIN_PX_PER_M
+  const drawnLocView: LocationView = roomsZoomedOut ? 'icons' : locView
 
   const selAnchor = selected ? anchorWidthM(selected) : null
   const selIsClone = !!(selected && (selected.template_location_id || '').trim())
@@ -2337,6 +2384,19 @@ export function MapTab() {
           onRoofs={toggleRoofs}
           roofsZoomedOut={roofsZoomedOut}
           roofMinPxPerM={ROOF_MIN_PX_PER_M}
+        />
+        {/* WHICH of the three pictures a footprint carries. A view like the
+            switches in the panel above, so it sits with them in the tray —
+            and it is a three-state control rather than two checkboxes because
+            the three never combine. */}
+        <LocationViewSwitch
+          value={locView}
+          onChange={setLocationView}
+          locationsOn={locsOn}
+          roofsZoomedOut={roofsZoomedOut}
+          roomsZoomedOut={roomsZoomedOut}
+          roofMinPxPerM={ROOF_MIN_PX_PER_M}
+          roomsMinPxPerM={ROOMS_MIN_PX_PER_M}
         />
         {primary === 'location' ? (
           <div className="ga-map-tray-hint">
@@ -2514,6 +2574,8 @@ export function MapTab() {
                   snapM={snapOn ? SNAP_M : 0}
                   iconVer={iconVer}
                   roofUrl={roofUrl}
+                  locView={drawnLocView}
+                  surfaceColors={surfaceColors}
                   ghost={ghost}
                   ghostPt={ghostPt}
                   // The handles set their own pointer events, so the wrapping

@@ -1957,6 +1957,12 @@ a.ga-btn {
 /* The view switches, one per line — in the tray they have a column, not a
    toolbar row, so no label wraps mid-word. */
 .ga-map-tray-checks { display: flex; flex-direction: column; gap: 6px; }
+/* The three-state location view (icon / roofs / rooms). One row of segmented
+   buttons: they are three answers to one question and never combine, so a
+   column of checkboxes would state the wrong thing about them. It wraps
+   rather than overflowing — the tray is 240 px wide. */
+.ga-map-view-switch { display: flex; flex-wrap: wrap; gap: 4px; }
+.ga-map-view-switch .ga-btn { flex: 1 1 auto; }
 .ga-map-tray-empty {
   font-size: 12px;
   color: var(--text-muted, #8b949e);

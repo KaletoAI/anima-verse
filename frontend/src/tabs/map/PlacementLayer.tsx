@@ -51,6 +51,15 @@
  * surface showing one says what is missing (the dashed ring here, a warning on
  * the selection chip, the seed button in the toolbar).
  *
+ * WHAT A FOOTPRINT CARRIES INSIDE ITS OUTLINE is one of three things
+ * (`locView`, the map's location-view switch), never two at once: the flat 2D
+ * map icon, the rendered roof view — or, since 2026-08-20, the FLOOR-PLAN
+ * ROOMS as flat colour (`FootRooms`). The rooms view exists for the alignment
+ * case a picture cannot serve: a lake is placed by lining its water and shore
+ * rooms up with the painted water, and a lake has no roof. It is therefore the
+ * one view that is semi-transparent and drops the icon too — seeing the ground
+ * UNDERNEATH is the whole point of it.
+ *
  * Moving is the canvas gesture, never HTML5 drag&drop: `pointerdown` on a
  * footprint stops propagation (so `MapCanvas` does not pan), the move runs on
  * window listeners so it survives leaving the canvas, and the commit fires
@@ -64,6 +73,7 @@ import {
   localToWorld, worldPolyToPath, worldToLocal, worldToScreen, type ScreenPt,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
+import { floorColor, polyBBox, roomShapesWorld, type RoomShape } from './roomShapes'
 import type { EditorLocation } from './mapTypes'
 
 /** Edge of the GHOST square a tray entry is armed with when its source has no
@@ -97,6 +107,25 @@ const COL_PLACED = '#8b949e'
 const COL_SELECTED = '#58a6ff'
 const COL_GHOST = '#3fb950'
 const COL_WARN = '#d29922'
+
+/** WHICH PICTURE a footprint carries (`MapTab`'s location view switch):
+ *  `icons` = the flat 2D map icon, as it always was; `roofs` = the rendered
+ *  top-down view of the building model; `rooms` = the floor-plan room shapes
+ *  as flat colour. Exactly one — two pictures of the same place in one
+ *  outline only compete. */
+export type LocationView = 'icons' | 'roofs' | 'rooms'
+
+/** How solid a room is drawn over the painted ground. SEMI-TRANSPARENT ON
+ *  PURPOSE: the whole reason to draw rooms on the world map is to see the
+ *  terrain painting UNDERNEATH them — a water room over painted water is how
+ *  a lake is aligned. An `always_visible` room is OUTDOOR ground rather than a
+ *  closed room, so it is drawn fainter still. */
+const ROOM_FILL_OPACITY = 0.5
+const ROOM_FILL_OPACITY_OPEN = 0.34
+/** Under this drawn width a room name is wider than the room it names — and
+ *  a location holds many rooms, so the labels crowd long before the
+ *  location's own does (`LABEL_MIN_PX`). */
+const ROOM_LABEL_MIN_PX = 34
 
 /** The location's width in metres, or `null` when it has none. Reads
  *  `map3d.plan_width_m` — since v6 Nr. 2 a DERIVED field (the wider side of
@@ -313,6 +342,79 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
 }
 
 /**
+ * THE ROOMS of a location, drawn as flat colour on the world map — the third
+ * location view.
+ *
+ * A ROOF RENDER SAYS WHERE THE BUILDING IS; THIS SAYS WHERE THE ROOMS ARE, and
+ * that is the difference the alignment case needs: a lake location is placed
+ * by lining its water and shore rooms up with the painted water, and the roof
+ * of a lake is nothing at all. So the hulls the floor plan drew are drawn
+ * again, here, over the terrain painting — semi-transparent, because seeing
+ * BOTH at once is the entire point.
+ *
+ * The polygons arrive in WORLD metres (`roomShapes.roomShapesWorld`, which
+ * applies the room's own rotation and then the § A1.1 pin transform), so this
+ * turns nothing and the sign trap of `FootSquare` does not exist here either.
+ * The caller clips the fills to the boundary; the labels stay unclipped, so a
+ * name is never cut in half and a room that reaches out of its boundary
+ * (`room_outside_boundary`) still says which one it is.
+ *
+ * The colour is the FLOOR MATERIAL, resolved against the map's own terrain
+ * catalog first (`floorColor`) — a room of painted-water floor comes out in
+ * the exact blue the painted water beside it has, so a misplaced shore reads
+ * as two colours instead of two shades.
+ */
+function FootRooms({ rooms, surfaceColors, stroke, part }: {
+  rooms: RoomShape[]
+  surfaceColors?: Record<string, string>
+  /** Outline colour — the footprint's own, so a selected location's rooms are
+   *  outlined in the selection colour like everything else about it. */
+  stroke: string
+  /** `shapes` goes inside the boundary clip, `labels` outside it — a name cut
+   *  in half by a clip edge is not a label. Two calls, one list, so the two
+   *  can never disagree about which rooms are drawn. */
+  part: 'shapes' | 'labels'
+}) {
+  const { view, w, h } = useMapView()
+  if (part === 'labels') {
+    return (
+      <g pointerEvents="none">
+        {rooms.map((room, i) => {
+          const bb = polyBBox(room.poly)
+          if (!bb || !room.name) return null
+          // Too narrow on screen for its own name — see ROOM_LABEL_MIN_PX.
+          if ((bb.maxX - bb.minX) * view.pxPerM < ROOM_LABEL_MIN_PX) return null
+          const c = worldToScreen((bb.minX + bb.maxX) / 2,
+            (bb.minZ + bb.maxZ) / 2, view, w, h)
+          return (
+            <text key={room.id || `l${i}`} x={c.x} y={c.y + 3} fontSize={10}
+              textAnchor="middle" fill="#e6edf3"
+              style={{ paintOrder: 'stroke', stroke: '#0d1117', strokeWidth: 3 }}>
+              {room.name}
+            </text>
+          )
+        })}
+      </g>
+    )
+  }
+  return (
+    <g pointerEvents="none">
+      {rooms.map((room, i) => {
+        const d = worldPolyToPath(room.poly, view, w, h)
+        if (!d) return null
+        return (
+          <path key={room.id || `r${i}`} d={d}
+            fill={floorColor(room.floor, surfaceColors)}
+            fillOpacity={room.open ? ROOM_FILL_OPACITY_OPEN : ROOM_FILL_OPACITY}
+            stroke={stroke} strokeWidth={0.75} strokeLinejoin="round"
+            strokeOpacity={0.8} />
+        )
+      })}
+    </g>
+  )
+}
+
+/**
  * One DRAWN footprint (v6): the boundary polygon in world metres, the pin as
  * an anchor dot and the yaw as a short arrow.
  *
@@ -325,6 +427,11 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
  * sits on an untransformed group above it, so it is evaluated in the very
  * screen space the path was built in.
  *
+ * THE ROOMS (`FootRooms`) share that clip and nothing else: they arrive as
+ * world metres like the boundary itself, so they stand OUTSIDE the picture's
+ * `rotate(−yaw)` group — inside it the yaw would be applied to them a second
+ * time. Their names are drawn outside the clip entirely.
+ *
  * THE ARROW POINTS ALONG LOCAL −z, the same direction the square marks with its
  * "north" edge. In screen pixels that is (−sin yaw, −cos yaw): at yaw 0 it
  * points up, at yaw 90 it points WEST — the docstring case above, where local
@@ -333,7 +440,7 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
  * big it is.
  */
 function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref,
-  iconRot, roofHref, picOffset }: {
+  iconRot, roofHref, picOffset, rooms, surfaceColors }: {
   /** The boundary in WORLD metres (already transformed). */
   world: Array<[number, number]>
   pin: ScreenPt
@@ -352,6 +459,10 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref
   /** Offset of the picture square from the pin, in local-frame pixels — see
    *  `pictureFrameLocal`. */
   picOffset?: [number, number]
+  /** The ROOMS view: level-0 room hulls in WORLD metres. They replace the
+   *  picture rather than joining it — the caller passes one or the other. */
+  rooms?: RoomShape[]
+  surfaceColors?: Record<string, string>
 }) {
   const { view, w, h } = useMapView()
   // `useId` returns something like ":r7:", which is not a usable fragment in
@@ -376,7 +487,23 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref
           <FootImage p={pin} size={size} iconHref={iconHref} iconRot={iconRot}
             roofHref={roofHref} offset={picOffset} />
         </g>
+        {/* The rooms are ALREADY world metres, so they stand outside the
+            picture's `rotate(−yaw)` group — inside it they would be turned a
+            second time. Same clip as the picture: what a location owns ends
+            at its outline. */}
+        {rooms && rooms.length ? (
+          <FootRooms rooms={rooms} surfaceColors={surfaceColors} stroke={stroke}
+            part="shapes" />
+        ) : null}
       </g>
+      {/* The room NAMES outside the clip — half a word cut off at a boundary
+          edge is not a label. Each one is gated on its own drawn width
+          (ROOM_LABEL_MIN_PX); there is no second, global zoom rule, so the
+          names appear room by room as the map is zoomed in. */}
+      {rooms && rooms.length ? (
+        <FootRooms rooms={rooms} surfaceColors={surfaceColors} stroke={stroke}
+          part="labels" />
+      ) : null}
       <path d={d} fill="none" fillRule="evenodd" stroke={stroke}
         strokeWidth={strokeWidth} strokeLinejoin="round"
         strokeDasharray={dashed ? '6 4' : undefined} />
@@ -458,6 +585,15 @@ export interface PlacementLayerProps {
    *  A missing entry (still rendering, no model, no scene) simply leaves the
    *  square as it was — the picture is an aid, never a precondition. */
   roofUrl?: Record<string, string>
+  /** WHICH PICTURE a footprint carries — the map's location-view switch.
+   *  Absent = `icons`, what the map has always drawn. In `rooms` the flat
+   *  icon is dropped as well: an opaque picture under the room colours would
+   *  hide exactly the painted ground the view exists to compare against. */
+  locView?: LocationView
+  /** `surface kind -> #rrggbb` from the effective terrain catalog, so a room
+   *  floor is drawn in the very colour the painted ground of the same
+   *  material has (`roomShapes.surfaceColorMap`). */
+  surfaceColors?: Record<string, string>
   /** An armed tray entry: its footprint follows the cursor and the placed
    *  ones stop taking pointer events, so a click can land on top of them. */
   ghost: GhostSpec | null
@@ -474,7 +610,8 @@ export interface PlacementLayerProps {
 }
 
 export function PlacementLayer({
-  locations, selectedId, onSelect, onMove, snapM, iconVer, roofUrl, ghost, ghostPt,
+  locations, selectedId, onSelect, onMove, snapM, iconVer, roofUrl,
+  locView = 'icons', surfaceColors, ghost, ghostPt,
   boundaryEdit, onBoundary,
 }: PlacementLayerProps) {
   const { view, w, h } = useMapView()
@@ -621,9 +758,20 @@ export function PlacementLayer({
             {bdWorld ? (
               <FootPoly world={bdWorld} pin={p} yaw={yaw} size={size}
                 stroke={stroke} strokeWidth={selected ? 2 : 1}
-                iconHref={mapIconUrl(loc.id, iconVer[loc.id] || 0)}
+                // The ROOMS view drops the flat icon with the roof: an opaque
+                // picture under the room colours would hide the very terrain
+                // painting the rooms are being aligned against.
+                iconHref={locView === 'rooms' ? undefined
+                  : mapIconUrl(loc.id, iconVer[loc.id] || 0)}
                 iconRot={loc.map_rotation_2d || 0}
-                roofHref={roofUrl?.[loc.id]}
+                roofHref={locView === 'roofs' ? roofUrl?.[loc.id] : undefined}
+                // The pin taken here is the DRAG position, exactly as the
+                // boundary above uses it — so the rooms ride a move and a yaw
+                // change with the outline they belong to instead of lagging
+                // one gesture behind it.
+                rooms={locView === 'rooms'
+                  ? roomShapesWorld(loc.rooms, cx, cz, yaw) : undefined}
+                surfaceColors={surfaceColors}
                 picOffset={frame ? [frame.cx * view.pxPerM,
                   frame.cz * view.pxPerM] : undefined} />
             ) : (

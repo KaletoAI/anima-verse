@@ -14,7 +14,7 @@
  * `MapGeometry` and part ways after it.
  */
 import type { MapBounds, StrokeStyle } from './mapMath'
-import type { Map3D } from '../world/worldTypes'
+import type { Map3D, RoomLayout } from '../world/worldTypes'
 
 export type { Map3D }
 
@@ -117,6 +117,14 @@ export interface EditorLocation extends MapGeometry {
    *  (a pin with an outline and no rooms) composes no scene at all — this
    *  field is how the map editor hears about it anyway. */
   boundary_problems?: string[]
+  /** The location's ROOMS with their floor-plan layouts, exactly as the full
+   *  record carries them (`world_ops.build_locations_payload` returns
+   *  `list_locations()` untouched, so nothing had to be added server-side for
+   *  this). The map's "Rooms" view draws their hulls over the painted ground
+   *  — see `roomShapes`. Only the two fields it needs are declared: this is
+   *  the MAP's read of a location, and the room EDITOR reads the same records
+   *  through `worldTypes.Location`, which has the rest. */
+  rooms?: Array<{ id?: string; name?: string; layout?: RoomLayout }>
 }
 
 /** A character on the worldmap (§ A1.4). `pos` is the truth; `location_id` is
