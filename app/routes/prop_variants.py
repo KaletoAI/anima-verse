@@ -206,6 +206,17 @@ async def prop_variant_upload(prop_id: str, index: int,
     return {"status": "ok", "warnings": result["warnings"]}
 
 
+@router.post("/props/{prop_id}/variants/{index}/source")
+async def prop_variant_source_upload(prop_id: str, index: int,
+                                     file: UploadFile = File(...)
+                                     ) -> Dict[str, Any]:
+    """Upload THIS variant's product-shot image — the picture its re-mesh
+    works from. The image belongs to the variant like its meshes do, so an
+    upload here can never overwrite another version's picture."""
+    from app.routes.world import _prop_source_upload
+    return await _prop_source_upload(prop_id, file, _variant(prop_id, index))
+
+
 @router.post("/props/{prop_id}/variants/{index}/generate")
 async def prop_variant_generate(prop_id: str, index: int,
                                 request: Request) -> Dict[str, Any]:
@@ -214,7 +225,12 @@ async def prop_variant_generate(prop_id: str, index: int,
     Same body as ``POST /world/props/{id}/generate``; the difference is the
     target: the unqualified route APPENDS a variant (that is the plain
     "generate another one" button), this one refines the variant the admin has
-    open, so a better bake replaces the mesh it is meant to replace."""
+    open, so a better bake replaces the mesh it is meant to replace.
+
+    The variant owns its SOURCE IMAGE as well, so all three modes stay inside
+    it: ``image_only`` re-renders this variant's picture and no other,
+    ``mesh_only`` meshes this variant's picture, and the full chain does both.
+    """
     from app.core.props import trigger_generation
     from app.routes.world import _mesh_int, _tier
     _variant(prop_id, index)

@@ -160,6 +160,25 @@ def get_surface_texture(filename: str, request: Request):
 # families. A prop's placement in a room is NOT here (that is the room recipe,
 # Fable's part) — this is the raw library.
 
+#: Sentinel for a ``variant`` parameter that is not a number at all — telling
+#: it apart from "absent" (= the primary variant) is the difference between a
+#: 404 and quietly serving another variant's file.
+_BAD_VARIANT = object()
+
+
+def _variant_index(variant: str):
+    """The ``?variant=`` query parameter as a store index: ``None`` when it is
+    absent (the PRIMARY variant), the index when it is a number, the
+    ``_BAD_VARIANT`` sentinel otherwise."""
+    raw = str(variant or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return _BAD_VARIANT
+
+
 @router.get("/props")
 def list_props():
     """Prop library — the lean client shape: a bare array
@@ -195,12 +214,9 @@ def get_prop_model(prop_id: str, request: Request, tier: str = "",
     never sees a request for one that does not exist. The build is asked for
     where the tier list is produced (``props._demand_low``)."""
     from app.core.props import model_path
-    idx: object = None
-    if str(variant).strip():
-        try:
-            idx = int(str(variant).strip())
-        except ValueError:
-            return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    idx = _variant_index(variant)
+    if idx is _BAD_VARIANT:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     path = model_path(prop_id, tier, variant=idx)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
@@ -209,11 +225,21 @@ def get_prop_model(prop_id: str, request: Request, tier: str = "",
 
 
 @router.get("/props/{prop_id}/source")
-def get_prop_source(prop_id: str, request: Request):
+def get_prop_source(prop_id: str, request: Request, variant: str = ""):
     """Serves the product-shot render a prop's mesh was made from (the
-    library thumbnail). 404 when the prop was uploaded without a source."""
+    library thumbnail). 404 when the prop was uploaded without a source.
+
+    ``variant`` picks one of the prop's MODEL variants — the image belongs to
+    the variant, not to the prop, because a variant is a whole version of the
+    object and its mesh was made from THIS picture. Absent = the PRIMARY
+    variant, which is the historic ``source.png`` and therefore exactly the
+    file this URL has always served. An index the prop has no variant for is
+    a 404, never another variant's image."""
     from app.core.props import source_path
-    path = source_path(prop_id)
+    idx = _variant_index(variant)
+    if idx is _BAD_VARIANT:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    path = source_path(prop_id, variant=idx)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "image/png",

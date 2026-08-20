@@ -1369,6 +1369,9 @@ def surface_texture_delete(kind: str, file: str = "") -> Dict[str, Any]:
 # room recipe) is Fable's part and lives elsewhere.
 
 _PROP_MODEL_MAX_BYTES = 100 * 1024 * 1024
+#: A product shot is stored downscaled to 1024 px — anything beyond this is a
+#: file that was never meant to be one.
+_PROP_SOURCE_MAX_BYTES = 20 * 1024 * 1024
 
 
 @router.get("/props")
@@ -1611,6 +1614,34 @@ async def prop_upload(prop_id: str, file: UploadFile = File(...),
     if not save_uploaded_glb(prop_id, contents, _tier(tier)):
         raise HTTPException(status_code=404, detail="Prop not found")
     return {"status": "ok", "warnings": result["warnings"]}
+
+
+async def _prop_source_upload(prop_id: str, file: UploadFile,
+                              variant: Any = None) -> Dict[str, Any]:
+    """Store an uploaded image as ONE variant's source image — the body of
+    both source-upload routes (unqualified = the primary variant, the twin in
+    ``routes/prop_variants.py`` = the one the admin has open).
+
+    The caller has already validated the prop (and the variant index), so a
+    refusal here can only mean unreadable bytes."""
+    from app.core.props import get_prop, save_source_image
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    contents = await file.read()
+    if len(contents) > _PROP_SOURCE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large (max 20 MB)")
+    if not save_source_image(prop_id, contents, variant):
+        raise HTTPException(status_code=400, detail="Not a readable image")
+    return {"status": "ok"}
+
+
+@router.post("/props/{prop_id}/source")
+async def prop_source_upload(prop_id: str,
+                             file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Upload the product-shot image of the prop's PRIMARY variant — the
+    picture a re-mesh ("3D from this image") then works from. Any readable
+    image format; it is stored as a PNG of at most 1024 px, alpha kept."""
+    return await _prop_source_upload(prop_id, file)
 
 
 @router.get("/props/{prop_id}/models")

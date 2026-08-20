@@ -9,7 +9,10 @@ answers "what stands there now":
    the sidecar's mask polygon (grown) when the backend can take a mask, a full
    img2img edit of the whole plate otherwise.
 2. **cutout**  — the difference between the plate before and after, inside the
-   masked region, cleaned morphologically and intersected with ``rembg``.
+   masked region, cleaned morphologically and intersected with ``rembg``. It
+   becomes the target variant's SOURCE IMAGE (``props.save_source_image``),
+   because that is what its mesh is made from and what a later re-mesh of the
+   same variant must find.
 3. **mesh**    — the cutout (transparent background) through
    ``service.generate_mesh(rig="none")`` and Blender ``normalize`` to the
    prop's DECLARED height. The metric scale comes from the spec, never from
@@ -1094,6 +1097,17 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
     cutout_png = out / f"cutout{suffix}.png"
     write_cutout(edit_png, cut["mask"], aff, cutout_png)
     res["files"]["cutout"] = str(cutout_png)
+    # The cutout IS this variant's source image (props.py, "THE SOURCE IMAGE
+    # FOLLOWS THE MESH"): the mesh below is made from this very picture, so a
+    # later re-mesh of the same variant has to find it and no other. Written
+    # before the mesh, because it is what the attempt was made from whether or
+    # not the mesh survives the height gate — and a retry overwrites it with
+    # its own cutout, which is again the picture the stored mesh came from.
+    from app.core import props as prop_store
+    prop_store.save_source_image(
+        prop_id, cutout_png.read_bytes(), variant,
+        backend=str(getattr(backend, "name", "") or ""),
+        prompt=composed["prompt"], negative=composed["negative"])
     res["crop"] = {"x0": round(aff["x0"], 2), "y0": round(aff["y0"], 2),
                    "side": round(aff["side"], 2), "scale": round(aff["scale"], 5),
                    "size": aff["size"],

@@ -31,8 +31,31 @@ never from what the code currently prints:
 
     → 1, 2, 0, 1, 2, 0.
 
+THE SOURCE IMAGE FOLLOWS THE MESH (2026-08-20). A variant is a whole version
+of the object, so the product shot it was meshed from belongs to it. The file
+name is derived BY HAND from the stored mesh stem, by the same suffix:
+
+    variant 0  stem `model`     → `source.png`      (the historic name)
+    variant 1  stem `model-v2`  → `source-v2.png`
+    variant 2  stem `model-v3`  → `source-v3.png`
+
+The stem is what the name follows, NOT the list position — deleting a middle
+variant must not rename its neighbour's picture any more than it renames its
+meshes. From that one law the rest is derivable and checked below:
+
+  - a render into variant 1 writes `source-v2.png` and leaves `source.png`
+    byte-identical; the re-mesh of variant 1 feeds `source-v2.png` to the
+    mesher, never variant 0's picture (that was the defect: one image, so an
+    older variant's re-mesh produced a mesh of the wrong object);
+  - deleting variant 1 removes `source-v2.png` and nothing else;
+  - the scene-asset pipeline hands its cutout to the SAME writer with the
+    run's target variant, so a later re-mesh reproduces that very picture —
+    with its alpha, because the cutout is transparent outside the object.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
+import ast
+import io
 import os
 import sys
 import tempfile
@@ -75,6 +98,96 @@ def put_mesh(prop_id: str, variant, tier: str = "full") -> str:
                       "source": "upload", "format": "glb", "tier": tier})
     g.select(p.name, tier)
     return p.name
+
+
+def png_bytes(color, *, alpha: bool = False) -> bytes:
+    """A tiny PNG — the stand-in for a rendered product shot / a cutout."""
+    from PIL import Image
+    img = Image.new("RGBA" if alpha else "RGB", (32, 32),
+                    (*color, 0) if alpha else color)
+    if alpha:
+        # Opaque in the middle, transparent around it — a cutout's shape.
+        for x in range(8, 24):
+            for y in range(8, 24):
+                img.putpixel((x, y), (*color, 255))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+# ── The GPU stand-ins for the generation chain ──────────────────────────
+# The chain is two GPU steps around pure bookkeeping, and only the bookkeeping
+# is under test here: WHICH file the render writes and WHICH file the mesher
+# is handed. Both steps are replaced by stubs that record their inputs, so the
+# real `_generate` runs from end to end without a backend.
+
+MESH_INPUTS: list = []
+
+
+class FakeBackend:
+    name = "fake-image"
+    api_type = "fake"
+    image_family = ""
+    model = ""
+
+    def generate(self, prompt, negative, params, log_meta=None):
+        return [png_bytes((10, 200, 30))]
+
+
+class FakeQueue:
+    def submit_gpu_task(self, **kw):
+        return kw["callable_fn"]()
+
+
+class FakeService:
+    def resolve_imagegen_target(self, glob):
+        return FakeBackend()
+
+    def _select_backend(self):
+        return FakeBackend()
+
+    def generate_mesh(self, *, source_image_path, output_path, **kw):
+        MESH_INPUTS.append(Path(source_image_path).name)
+        Path(output_path).write_bytes(b"glTF-stub")
+        return {"ok": True, "path": output_path, "format": "glb",
+                "rig": "none", "backend": "fake-mesh"}
+
+
+def install_fakes() -> None:
+    import app.core.llm_queue as llm_queue
+    import app.core.model3d as model3d
+    import app.imagegen.service as image_service
+    image_service.get_image_service = lambda: FakeService()
+    llm_queue.get_llm_queue = lambda: FakeQueue()
+    model3d.list_mesh_backends = lambda rig: {"default": "fake-mesh",
+                                              "backends": []}
+
+
+def scene_asset_writes_cutout_with_variant() -> bool:
+    """Does ``scene_asset._attempt`` hand its cutout to the prop store WITH
+    the run's variant?
+
+    The pipeline step itself needs an image backend and a GPU, so the wiring
+    is read out of the source instead: the call must be
+    ``save_source_image(prop_id, <cutout bytes>, variant, …)``. A call that
+    dropped the third argument would write into the PRIMARY variant — the very
+    defect this law exists against, and one no pure check downstream could
+    see."""
+    src = Path(__file__).resolve().parents[1] / "app" / "core" / "scene_asset.py"
+    tree = ast.parse(src.read_text())
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, ast.FunctionDef) and fn.name == "_attempt"):
+            continue
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "save_source_image"):
+                continue
+            args = node.args
+            return (len(args) >= 3
+                    and isinstance(args[2], ast.Name)
+                    and args[2].id == "variant")
+    return False
 
 
 def placement(prop_id: str, **extra) -> dict:
@@ -241,6 +354,119 @@ def main() -> int:
     check("...and the list is two records long",
           [v["stem"] for v in store.list_variants(fern)] == ["model", "model-v3"],
           str([v["stem"] for v in store.list_variants(fern)]))
+
+    print("\n[10] the source image is named after the STEM, like the meshes")
+    check("stem 'model' keeps the historic source.png",
+          store.source_name("model") == "source.png", store.source_name("model"))
+    check("stem 'model-v2' -> source-v2.png",
+          store.source_name("model-v2") == "source-v2.png",
+          store.source_name("model-v2"))
+    check("stem 'model-v3' -> source-v3.png",
+          store.source_name("model-v3") == "source-v3.png",
+          store.source_name("model-v3"))
+    check("a stem this store would never hand out has no image name",
+          store.source_name("../etc") == "" and store.source_name("") == "")
+
+    print("\n[11] generating into variant 1 writes ITS image, not variant 0's")
+    install_fakes()
+    lamp = store.create_prop(name="Lamp")["id"]
+    ok0 = store._generate(lamp, "a lamp", "", "fake", "fake-mesh", variant=0)
+    d = Path(store.prop_dir(lamp))
+    v0_img = d / "source.png"
+    check("the first run fills variant 0 through the chain", ok0.get("ok"), str(ok0))
+    check("...writing source.png — the historic name, no migration for it",
+          v0_img.exists() and not (d / "source-v2.png").exists(),
+          str(sorted(p.name for p in d.glob("source*"))))
+    v0_before = v0_img.read_bytes()
+    check("...and the mesher was handed exactly that file",
+          MESH_INPUTS == ["source.png"], str(MESH_INPUTS))
+
+    MESH_INPUTS.clear()
+    second = store.target_variant(lamp)
+    check("the next run targets a fresh variant 1", second == 1, str(second))
+    ok1 = store._generate(lamp, "another lamp", "", "fake", "fake-mesh",
+                          variant=second)
+    v1_img = d / "source-v2.png"
+    check("the second run went through", ok1.get("ok"), str(ok1))
+    check("...it wrote source-v2.png (variant 1 = stem model-v2)",
+          v1_img.exists(), str(sorted(p.name for p in d.glob("source*"))))
+    check("...and left variant 0's picture byte-identical",
+          v0_img.read_bytes() == v0_before)
+    check("...the mesher for variant 1 was handed variant 1's image",
+          MESH_INPUTS == ["source-v2.png"], str(MESH_INPUTS))
+    check("source_path() unqualified still answers the PRIMARY image",
+          store.source_path(lamp) == v0_img, str(store.source_path(lamp)))
+    check("...and each variant answers with its own",
+          (store.source_path(lamp, 0), store.source_path(lamp, 1))
+          == (v0_img, v1_img))
+    check("an index the prop has no variant for has no image",
+          store.source_path(lamp, 7) is None)
+    vs = store.list_variants(lamp)
+    check("the strip gets both images, the primary one WITHOUT a query",
+          [v["source_url"] for v in vs]
+          == [f"/assets/props/{lamp}/source",
+              f"/assets/props/{lamp}/source?variant=1"],
+          str([v["source_url"] for v in vs]))
+    check("...and each variant's own provenance beside it",
+          [v["image"]["prompt"] for v in vs] == ["a lamp", "another lamp"],
+          str([v["image"]["prompt"] for v in vs]))
+    check("the prop record shows the PRIMARY variant's provenance",
+          (store.get_prop(lamp) or {}).get("prompt") == "a lamp",
+          str((store.get_prop(lamp) or {}).get("prompt")))
+
+    print("\n[12] a re-mesh reads the image of the variant it refines")
+    MESH_INPUTS.clear()
+    re0 = store._generate(lamp, "", "", "", "fake-mesh", mesh_only=True,
+                          variant=0)
+    re1 = store._generate(lamp, "", "", "", "fake-mesh", mesh_only=True,
+                          variant=1)
+    check("both re-meshes ran", re0.get("ok") and re1.get("ok"),
+          f"{re0} / {re1}")
+    check("variant 0's re-mesh read source.png, variant 1's source-v2.png",
+          MESH_INPUTS == ["source.png", "source-v2.png"], str(MESH_INPUTS))
+    check("no image was rendered for a re-mesh (both files unchanged)",
+          v0_img.read_bytes() == v0_before)
+
+    print("\n[13] deleting a variant takes ITS image and no other")
+    check("delete_variant(1) succeeds", store.delete_variant(lamp, 1))
+    check("...source-v2.png is gone", not v1_img.exists())
+    check("...source.png is untouched",
+          v0_img.exists() and v0_img.read_bytes() == v0_before)
+    check("...and the freed slot starts without an image",
+          store.add_variant(lamp) == 1 and store.source_path(lamp, 1) is None)
+
+    print("\n[14] the scene-asset cutout becomes the target variant's image")
+    # The pipeline picks its variant ONCE per run (`props.target_variant`) and
+    # hands the cutout to the same writer — checked here on the writer, and on
+    # the call site's wiring, because the pipeline itself needs a GPU.
+    stone = store.create_prop(name="Stone")["id"]
+    put_mesh(stone, 0)                                  # variant 0 is taken
+    target = store.target_variant(stone)
+    check("a prop with one meshed variant targets a fresh variant 1",
+          target == 1, str(target))
+    cutout = png_bytes((200, 30, 30), alpha=True)
+    check("the cutout is stored as that variant's source image",
+          store.save_source_image(stone, cutout, target, backend="fake-image",
+                                  prompt="a stone"))
+    sp = store.source_path(stone, target)
+    check("...under the name its stem dictates",
+          sp is not None and sp.name == "source-v2.png", str(sp))
+    check("...variant 0 keeps having none (its mesh was uploaded)",
+          store.source_path(stone, 0) is None)
+    from PIL import Image
+    saved = Image.open(sp)
+    check("...and the transparency survived — a cutout is transparent "
+          "outside the object",
+          saved.mode == "RGBA" and saved.getpixel((0, 0))[3] == 0
+          and saved.getpixel((16, 16))[3] == 255,
+          f"{saved.mode} {saved.getpixel((0, 0))}")
+    MESH_INPUTS.clear()
+    store._generate(stone, "", "", "", "fake-mesh", mesh_only=True,
+                    variant=target)
+    check("...so a later re-mesh of that variant reproduces that picture",
+          MESH_INPUTS == ["source-v2.png"], str(MESH_INPUTS))
+    check("the pipeline hands the cutout to the writer WITH the run's variant",
+          scene_asset_writes_cutout_with_variant())
 
     print()
     if FAILURES:

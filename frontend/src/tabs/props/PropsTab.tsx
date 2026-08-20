@@ -21,7 +21,9 @@ import { PropCreateForm } from './PropCreateForm'
 import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
 import { CATEGORY_DATALIST_ID } from './propTypes'
-import type { ImageBackendInfo, MeshBackendInfo, PropFull } from './propTypes'
+import type {
+  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage,
+} from './propTypes'
 
 export type { ImageBackendInfo, MeshBackendInfo, PropFull, PropMarker } from './propTypes'
 
@@ -44,8 +46,13 @@ export function PropsTab() {
   const [regen, setRegen] = useState<
     { id: string; meshOnly: boolean; variant?: number } | null>(null)
   // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
-  // final prompt; the mesh stays until re-meshed from the new image).
-  const [imgRegen, setImgRegen] = useState<PropFull | null>(null)
+  // final prompt; the mesh stays until re-meshed from the new image). The
+  // VARIANT travels with it: the source image belongs to the variant, so the
+  // render targets exactly the one the detail has open, and `image` is that
+  // variant's current record — the dialog opens on the backend THIS picture
+  // was made with, not on the primary variant's.
+  const [imgRegen, setImgRegen] = useState<
+    { prop: PropFull; variant: number; image?: PropSourceImage } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
 
@@ -216,7 +223,8 @@ export function PropsTab() {
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
             onRegenerateMesh={(variant) =>
               setRegen({ id: selectedProp.id, meshOnly: true, variant })}
-            onRegenerateImage={() => setImgRegen(selectedProp)}
+            onRegenerateImage={(variant, image) =>
+              setImgRegen({ prop: selectedProp, variant, image })}
             onGenerating={startPoll}
             onRefresh={() => {
               setCacheBump((b) => b + 1)
@@ -266,14 +274,18 @@ export function PropsTab() {
           onClose={() => setRegen(null)}
         />
         <PropImageDialog
-          prop={imgRegen}
+          prop={imgRegen?.prop || null}
+          variant={imgRegen?.variant || 0}
+          image={imgRegen?.image}
           backends={imageBackends}
           onGenerate={(imageBackend, prompt, negative) => {
             const target = imgRegen
             setImgRegen(null)
             if (!target) return
+            // The variant-scoped route: the image belongs to the variant, so
+            // the render lands in ITS file and leaves every other one alone.
             void apiPost<{ status?: string }>(
-              `/world/props/${encodeURIComponent(target.id)}/generate`,
+              `/world/props/${encodeURIComponent(target.prop.id)}/variants/${target.variant}/generate`,
               { image_only: true, image_backend: imageBackend,
                 prompt, negative })
               .then((d) => {

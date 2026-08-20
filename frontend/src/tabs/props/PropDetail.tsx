@@ -25,7 +25,7 @@ import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
 import { orientedDims } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
-import type { PropFull, PropMarker, PropVariant } from './propTypes'
+import type { PropFull, PropMarker, PropSourceImage, PropVariant } from './propTypes'
 
 type DimKey = 'width_m' | 'depth_m' | 'height_m'
 
@@ -67,8 +67,11 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   /** Re-run the source→mesh chain with the stored description/name — this
    *  APPENDS another model variant. */
   onRegenerate: () => void
-  /** Render a NEW source image only — the mesh stays until re-meshed. */
-  onRegenerateImage: () => void
+  /** Render a NEW source image for the SELECTED variant only — its mesh stays
+   *  until re-meshed, and no other variant's image is touched. The variant's
+   *  current image record travels along so the dialog opens on the backend
+   *  THIS picture was made with. */
+  onRegenerateImage: (variant: number, image?: PropSourceImage) => void
   /** Reload the prop + bust the image cache — generations run in the
    *  background, this fetches the current state on demand. */
   onRefresh: () => void
@@ -129,6 +132,17 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   const shownHasMesh = shownVariant
     ? shownVariant.has_model
     : variant === 0 && prop.has_model
+  // The SOURCE IMAGE belongs to the variant just like its meshes do (variant 0
+  // keeps the historic `source.png`, every further one has `source-v<n>.png`),
+  // so the left pane shows, re-renders and uploads THIS variant's picture. The
+  // prop record answers only until the list has arrived — its image fields ARE
+  // the primary variant's.
+  const shownImage: PropSourceImage | null = shownVariant
+    ? (shownVariant.has_source ? shownVariant.image : null)
+    : (variants.length === 0 && variant === 0 && prop.has_source
+      ? { backend: prop.backend_image || '', prompt: prop.prompt || '',
+        negative: prop.negative || '', generated_at: prop.source_generated_at || '' }
+      : null)
   // The bbox/dims belong to the PROP, and the stored one was measured on the
   // primary variant — so only that one may re-measure them live. Otherwise
   // looking at a second variant would silently re-proportion the object.
@@ -193,14 +207,15 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
     width_m: false, depth_m: false, height_m: false,
   })
   const [liveBbox, setLiveBbox] = useState<[number, number, number] | null>(null)
-  // Source image beside the model (left pane of the split preview) — 404 =
-  // uploaded prop without a render, the pane then shows a placeholder.
+  // Source image beside the model (left pane of the split preview) — the
+  // server says whether THIS variant has one; the flag only catches a 404 that
+  // races the list (a delete between load and render).
   const [srcOk, setSrcOk] = useState(true)
   useEffect(() => {
     setPinned({ width_m: false, depth_m: false, height_m: false })
     setLiveBbox(null)
   }, [prop.id])
-  useEffect(() => { setSrcOk(true) }, [prop.id, cacheBump])
+  useEffect(() => { setSrcOk(true) }, [prop.id, variant, reloadKey])
 
   // Per render, so turning the orientation fix updates the suggestions live —
   // the viewer's measured box wins over the stored one.
@@ -233,6 +248,26 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [enc, onChanged, t, toast])
+
+  // Upload a picture as THIS variant's source image — the same act as
+  // uploading a GLB into its gallery, one step earlier in the chain: what the
+  // ⚙ re-mesh below then works from. Variant-scoped route, so it can never
+  // overwrite another version's picture.
+  const sourceUploadRef = useRef<HTMLInputElement>(null)
+  const uploadSource = useCallback(async (file: File) => {
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`/world/props/${enc}/variants/${variant}/source`,
+        { method: 'POST', body: fd, credentials: 'same-origin' })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.detail?.toString?.() || `HTTP ${res.status}`)
+      await meshesChanged()
+      toast(t('Saved'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, variant, meshesChanged, t, toast])
 
   // Commit all three at once: an invalid field falls back to the server value,
   // and nothing is sent when the trio is unchanged.
@@ -666,16 +701,21 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
           {pending ? (
             <span className="ga-hint">{t('Generating the model — this takes a few minutes.')}</span>
           ) : null}
-          {/* Split preview: the SOURCE IMAGE the mesh came from on the left,
-              the model on the right — and the image can be re-meshed
+          {/* Split preview: the SELECTED VARIANT's source image on the left,
+              its model on the right — and that image can be re-meshed
               directly (dialog picks backend / face count / texture size;
-              the image render is skipped). */}
+              the image render is skipped). Both panes follow the strip: the
+              image belongs to the variant, so a second version of the object
+              never shows (or overwrites) the first one's picture. */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap' }}>
           <div style={{ flex: '0 1 220px', minWidth: 160, display: 'flex',
             flexDirection: 'column', gap: 4 }}>
-            {srcOk ? (
+            <div className="ga-form-section-label" style={{ margin: 0 }}>
+              {t('Source image')} · {t('Variant')} {variant + 1}
+            </div>
+            {shownImage && srcOk ? (
               <img
-                src={`/assets/props/${enc}/source?v=${encodeURIComponent(prop.created_at || '')}-${cacheBump}`}
+                src={`/assets/props/${enc}/source?variant=${variant}&v=${reloadKey}`}
                 alt={t('Source image')}
                 onError={() => setSrcOk(false)}
                 style={{ width: '100%', flex: 1, maxHeight: 340,
@@ -685,21 +725,24 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               />
             ) : (
               <div className="ga-empty" style={{ flex: 1 }}>
-                {t('No source image (uploaded model).')}
+                {variants.length > 1
+                  ? t('This variant has no source image yet — render one or upload a picture.')
+                  : t('No source image (uploaded model).')}
               </div>
             )}
-            {/* Provenance of the CURRENT image: what it was generated with.
-                Full prompt/negative in the tooltip — the caption stays one
-                line. Uploaded/legacy images have no record and say so. */}
-            {srcOk ? (
+            {/* Provenance of the image SHOWN: what this variant's picture was
+                generated with. Full prompt/negative in the tooltip — the
+                caption stays one line. Uploaded/legacy images have no record
+                and say so. */}
+            {shownImage && srcOk ? (
               <span className="ga-hint" style={{ fontSize: 10, lineHeight: '13px' }}
-                title={prop.prompt
-                  ? `${t('Prompt')}: ${prop.prompt}${prop.negative
-                    ? `\n${t('Negative prompt')}: ${prop.negative}` : ''}`
+                title={shownImage.prompt
+                  ? `${t('Prompt')}: ${shownImage.prompt}${shownImage.negative
+                    ? `\n${t('Negative prompt')}: ${shownImage.negative}` : ''}`
                   : t('No generation record for this image.')}>
-                {prop.backend_image
-                  ? `🖼 ${prop.backend_image}${prop.source_generated_at
-                    ? ` · ${prop.source_generated_at.slice(0, 10)}` : ''}`
+                {shownImage.backend
+                  ? `🖼 ${shownImage.backend}${shownImage.generated_at
+                    ? ` · ${shownImage.generated_at.slice(0, 10)}` : ''}`
                   : t('No generation record for this image.')}
               </span>
             ) : null}
@@ -707,10 +750,22 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               <button type="button" className="ga-btn ga-btn-sm"
                 style={{ flex: 1 }}
                 disabled={pending}
-                onClick={onRegenerateImage}
-                title={t('Render a NEW source image (backend and prompt in the dialog). The current 3D model stays until you re-mesh from the new image.')}>
+                onClick={() => onRegenerateImage(variant, shownImage || undefined)}
+                title={t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
                 🖼 {pending ? t('Generating…') : t('New image')}
               </button>
+              <button type="button" className="ga-btn ga-btn-sm"
+                onClick={() => sourceUploadRef.current?.click()}
+                title={t('Upload a picture as this variant’s source image — the ⚙ re-mesh below then works from it.')}>
+                ⬆
+              </button>
+              <input ref={sourceUploadRef} type="file" accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void uploadSource(f)
+                  e.target.value = ''
+                }} />
               <button type="button" className="ga-btn ga-btn-sm"
                 onClick={onRefresh}
                 title={t('Reload — fetch the current image and metadata (the render runs in the background).')}>
@@ -718,9 +773,10 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
               </button>
             </div>
             {/* The re-mesh targets the SELECTED variant — that is the whole
-                difference to 🧊 above, which appends another one. */}
+                difference to 🧊 above, which appends another one. It reads
+                the image shown here, which is that variant's own. */}
             <button type="button" className="ga-btn ga-btn-sm"
-              disabled={pending || !srcOk}
+              disabled={pending || !shownImage || !srcOk}
               onClick={() => onRegenerateMesh(variant)}
               title={t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
               ⚙ {t('3D from this image')} · {t('Variant')} {variant + 1}

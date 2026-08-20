@@ -78,6 +78,23 @@ export interface PropFull {
  * serves without a `variant` parameter, i.e. what every consumer that knows
  * nothing about variants keeps getting.
  */
+/**
+ * What ONE variant's source image was made with — the provenance the image
+ * panel shows beside the picture it is displaying.
+ *
+ * The image belongs to the VARIANT, not to the prop: a variant is a whole
+ * version of the object, and its mesh was made from THIS picture (variant 0
+ * keeps the historic `source.png`, every further one gets `source-v<n>.png`).
+ */
+export interface PropSourceImage {
+  /** Image backend it was rendered on ('' = uploaded / no record). */
+  backend: string
+  prompt: string
+  negative: string
+  /** UTC ISO stamp of the render or upload ('' = no record). */
+  generated_at: string
+}
+
 export interface PropVariant {
   index: number
   /** File stem this variant's meshes are stored under (informational). */
@@ -92,6 +109,12 @@ export interface PropVariant {
   /** Canonical serving URL WITH its `variant` parameter ('' = no mesh yet). */
   model_url: string
   signature: string
+  /** This variant HAS a source image of its own (see PropSourceImage). */
+  has_source: boolean
+  /** Its serving URL, `variant` parameter included ('' = no image yet). */
+  source_url: string
+  /** What that image was rendered/uploaded with. */
+  image: PropSourceImage
 }
 
 export interface ImageBackendInfo {

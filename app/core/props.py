@@ -13,7 +13,8 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
     model_<ts>.json  — one sidecar per mesh: {created_at, source, format,
                        tier, backend, face_num, texture_size}
     selection.json   — {"model": {"<tier>": "<filename>"}}
-    source.png       — the product-shot render the meshes were made from
+    source.png       — the product-shot render THIS variant's meshes were made
+                       from (one per variant, see the source-image law below)
     sidecar.json     — the prop MASTER record: {name, category, width_m,
                        depth_m, height_m, dims_estimated, rotation{x,y,z},
                        tags[], markers[], bbox[3], created_at, source, prompt}
@@ -40,6 +41,26 @@ The stem is what separates them on disk: variant 0 keeps the historic
 tiers without a second mechanism. The stem is STORED, not derived from the
 position — deleting a variant in the middle must not rename the files of the
 one behind it. A record without the key has exactly one variant, the primary.
+
+THE SOURCE IMAGE FOLLOWS THE MESH (2026-08-20). A variant is not just a mesh
+gallery, it is a whole object version: the product-shot render it was meshed
+from belongs to the VARIANT, not to the prop. The file name follows the mesh
+stem by the SAME suffix::
+
+    model      → source.png          (variant 0, the historic name)
+    model-v2   → source-v2.png
+    model-v<n> → source-v<n>.png
+
+That naming IS the no-migration path, exactly as ``model`` vs ``model-v<n>``
+is for the meshes: an existing prop's image stays where it is, untouched.
+Everything the image is part of is variant-scoped with it — generating,
+uploading, re-meshing, serving and deleting; deleting a variant takes ITS
+image and no other. Without the law a second variant's render overwrote the
+one image, and a later re-mesh of an older variant produced a mesh of the
+WRONG picture. The image's provenance (backend, prompt, negative, timestamp)
+is stored by the same law: the base stem keeps the master-record keys
+(``backend_image`` / ``prompt`` / ``negative`` / ``source_generated_at``),
+every further variant carries its own under ``image`` on its variant entry.
 
 How many ACTIVE variants a prop may have is ``image_generation.prop_variant_max``
 (default 4). The FIRST ACTIVE variant is the **primary** one: it is what
@@ -111,7 +132,20 @@ VARIANT_MAX_CAP = 16
 #: The stems a variant may carry: the historic base stem, or ``model-v<n>``
 #: with n = 2…99. Validated on read, because the stem decides which files a
 #: gallery matches and must never become a path escape.
-_VARIANT_STEM_RE = re.compile(rf"^{MODEL_STEM}(-v[2-9][0-9]?)?$")
+_VARIANT_STEM_RE = re.compile(rf"^{MODEL_STEM}(-v([2-9]|1[0-9]))?$")
+# ^ v2..v19: the dispenser (`_free_stem`) can hand out v10..v17 at the
+#   configurable cap of 16, and the old `[2-9][0-9]?` never matched a
+#   leading 1 — such a variant was silently dropped on the next read
+#   (latent-bug find 2026-08-20). v1 stays excluded: the base stem IS
+#   variant 0, a stray "model-v1" must not be claimed.
+#: What a variant records about ITS source image. The base stem keeps these
+#: four on the MASTER record under their historic names (see ``_image_meta``);
+#: every further variant carries them under ``image`` on its own entry.
+IMAGE_META_KEYS = ("backend", "prompt", "negative", "generated_at")
+#: Master-record name of each of them, for the base stem.
+_IMAGE_META_MASTER = {"backend": "backend_image", "prompt": "prompt",
+                      "negative": "negative",
+                      "generated_at": "source_generated_at"}
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
@@ -268,7 +302,11 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     exactly ONE variant on the historic ``model`` stem. Entries with an
     unusable or duplicate stem are dropped individually; an empty result
     falls back to that same single primary variant, so this never answers
-    with "this prop has no variants at all"."""
+    with "this prop has no variants at all".
+
+    A non-primary variant's SOURCE-IMAGE provenance rides along under
+    ``image`` (the base stem keeps its four master-record keys instead) —
+    every writer stores the sanitized list back, so it has to survive here."""
     raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
     out: List[Dict[str, Any]] = []
     seen: set = set()
@@ -280,7 +318,12 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             if not _VARIANT_STEM_RE.match(stem) or stem in seen:
                 continue
             seen.add(stem)
-            out.append({"stem": stem, "active": bool(entry.get("active", True))})
+            rec: Dict[str, Any] = {"stem": stem,
+                                   "active": bool(entry.get("active", True))}
+            img = entry.get("image")
+            if isinstance(img, dict):
+                rec["image"] = {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
+            out.append(rec)
     return out or [{"stem": MODEL_STEM, "active": True}]
 
 
@@ -757,13 +800,16 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
 
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
-    tiers, has_model, model_file, model_url, signature}]`` — every variant,
-    active or not, in order.
+    tiers, has_model, model_file, model_url, signature, has_source,
+    source_url, image}]`` — every variant, active or not, in order.
 
-    ``model_url`` is the canonical serving URL WITH its ``variant`` parameter
-    (the primary one keeps the bare URL, which is the very string stored on
-    scatter entries)."""
-    entries = _variant_list(read_sidecar(prop_id))
+    ``model_url`` / ``source_url`` are the canonical serving URLs WITH their
+    ``variant`` parameter (the primary one keeps the bare URL, which is the
+    very string stored on scatter entries). ``image`` is what THIS variant's
+    source image was rendered with — the panel shows the provenance of the
+    picture it is displaying, not of some other variant's."""
+    meta = read_sidecar(prop_id)
+    entries = _variant_list(meta)
     primary = _active_indices(entries)[0]
     out: List[Dict[str, Any]] = []
     for i, entry in enumerate(entries):
@@ -771,6 +817,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
         tiers = sorted(g.tiers()) if g else []
         active_file = g.find() if g else None
         base = f"/assets/props/{prop_id}/model"
+        src_base = f"/assets/props/{prop_id}/source"
+        has_source = source_path(prop_id, i) is not None
         out.append({
             "index": i,
             "stem": entry["stem"],
@@ -781,6 +829,10 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "model_file": active_file.name if active_file else "",
             "model_url": (base if i == primary else f"{base}?variant={i}") if tiers else "",
             "signature": g.signature() if g else "",
+            "has_source": has_source,
+            "source_url": ((src_base if i == primary else f"{src_base}?variant={i}")
+                           if has_source else ""),
+            "image": _image_meta(meta, entry["stem"]),
         })
     return out
 
@@ -831,8 +883,13 @@ def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
 
 
 def delete_variant(prop_id: str, variant: int) -> bool:
-    """Remove one variant WITH its stored meshes and its selection entry.
-    Refused for the last remaining variant — a prop always has one."""
+    """Remove one variant WITH its stored meshes, its selection entry and its
+    SOURCE IMAGE. Refused for the last remaining variant — a prop always has
+    one.
+
+    The image goes because it belongs to this variant and to no other (the
+    source-image law); a freed stem is handed out again, and an inherited
+    picture would silently become the next variant's re-mesh input."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -851,6 +908,9 @@ def delete_variant(prop_id: str, variant: int) -> bool:
         # re-points what is left), and a freed stem may be handed out again —
         # so it goes with the variant.
         g.forget()
+    img = _source_file(pid, i)
+    if img and img.exists():
+        img.unlink()
     entries.pop(i)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
@@ -1002,12 +1062,108 @@ def delete_model(prop_id: str, filename: str = "",
     return True
 
 
-def source_path(prop_id: str) -> Optional[Path]:
-    d = _prop_dir(prop_id)
+# ── The source image, one per variant ───────────────────────────────────
+# A variant is a whole object version, so the product shot it was meshed from
+# belongs to it and not to the prop (module docstring, "THE SOURCE IMAGE
+# FOLLOWS THE MESH"). Same law as the meshes, same suffix, same
+# no-migration path: base stem → source.png, model-v<n> → source-v<n>.png.
+
+def source_name(stem: str) -> str:
+    """File name of the source image belonging to ONE mesh stem — ``''`` for
+    a stem this store would not hand out."""
+    if not _VARIANT_STEM_RE.match(stem or ""):
+        return ""
+    if stem == MODEL_STEM:
+        return SOURCE_NAME
+    return f"source-{stem.split('-', 1)[1]}.png"
+
+
+def _source_file(prop_id: str, variant: Any = None, *,
+                 create: bool = False) -> Optional[Path]:
+    """Where ONE variant's source image LIVES, whether or not it exists yet.
+    ``None`` for an unknown prop or an index this prop has no variant for."""
+    d = _prop_dir(prop_id, create=create)
     if not d:
         return None
-    p = d / SOURCE_NAME
-    return p if p.exists() else None
+    name = source_name(_stem_of(prop_id, variant))
+    return (d / name) if name else None
+
+
+def source_path(prop_id: str, variant: Any = None) -> Optional[Path]:
+    """The EXISTING source image of one variant — ``None`` (or a negative
+    index) means the PRIMARY variant, i.e. the same file every unqualified
+    read has always served. ``None`` when this variant has no image yet."""
+    p = _source_file(prop_id, variant)
+    return p if p and p.exists() else None
+
+
+def _image_meta(meta: Dict[str, Any], stem: str) -> Dict[str, str]:
+    """What is recorded about ONE variant's source image: backend, prompt,
+    negative, generated_at (empty strings when nothing is)."""
+    if stem == MODEL_STEM:
+        return {k: str(meta.get(m) or "") for k, m in _IMAGE_META_MASTER.items()}
+    for entry in _variant_list(meta):
+        if entry["stem"] == stem:
+            img = entry.get("image") or {}
+            return {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
+    return {k: "" for k in IMAGE_META_KEYS}
+
+
+def _set_image_meta(meta: Dict[str, Any], stem: str, *, backend: str = "",
+                    prompt: str = "", negative: str = "") -> None:
+    """Record what a freshly written source image was made with, IN PLACE.
+    The caller writes the sidecar."""
+    rec = {"backend": backend, "prompt": prompt, "negative": negative,
+           "generated_at": utc_now_iso()}
+    if stem == MODEL_STEM:
+        for k, m in _IMAGE_META_MASTER.items():
+            meta[m] = rec[k]
+        return
+    entries = _variant_list(meta)
+    for entry in entries:
+        if entry["stem"] == stem:
+            entry["image"] = rec
+    meta[VARIANTS_KEY] = entries
+
+
+def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
+                      backend: str = "", prompt: str = "",
+                      negative: str = "") -> bool:
+    """Store image bytes as ONE variant's source image (upload, or the scene
+    asset pipeline's cutout). False when the prop/variant is unknown or the
+    bytes are not a readable image.
+
+    The picture is normalised exactly like a rendered one — at most 1024 px on
+    the long edge, PNG — but an ALPHA channel survives: the scene-asset cutout
+    is transparent outside the object, and flattening it would hand the next
+    re-mesh a background the mesher has to guess away again."""
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+
+    # A prop that does not exist gets no directory: a write path may create
+    # the folder of a KNOWN prop, never conjure a ghost one from a typo'd id.
+    if not read_sidecar(prop_id):
+        return False
+    target = _source_file(prop_id, variant, create=True)
+    if not target:
+        return False
+    try:
+        img = Image.open(io.BytesIO(contents))
+        img.load()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+    img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+    if max(img.size) > 1024:
+        img.thumbnail((1024, 1024))
+    img.save(target, "PNG")
+    meta = _materialize_dims(prop_id, read_sidecar(prop_id))
+    _set_image_meta(meta, _stem_of(prop_id, variant), backend=backend,
+                    prompt=prompt, negative=negative)
+    _write_sidecar(prop_id, meta)
+    logger.info("Prop %s: source image stored for variant %s (%s, %d bytes)",
+                safe_prop_id(prop_id), variant, target.name, len(contents))
+    return True
 
 
 def save_uploaded_glb(prop_id: str, contents: bytes,
@@ -1448,7 +1604,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         "variant_tiers": variant_tiers,
     }
     if full:
+        # Image + provenance of the PRIMARY variant — the same file the bare
+        # `/source` URL serves, so the list thumbnail and the record agree.
+        # The per-variant records are in `list_variants`.
         has_source = source_path(prop_id) is not None
+        image = _image_meta(meta, entries[active_idx[0]]["stem"])
         # Per-run facts of the ACTIVE mesh (they live on its own sidecar since
         # the gallery rebuild) — the admin panel shows what the current model
         # was made with.
@@ -1473,10 +1633,10 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
                          ).encode()).hexdigest()[:12],
             "variant_count": len(variant_tiers),
             "variant_max": variant_max(),
-            "backend_image": meta.get("backend_image") or "",
-            "prompt": meta.get("prompt") or "",
-            "negative": meta.get("negative") or "",
-            "source_generated_at": meta.get("source_generated_at") or "",
+            "backend_image": image["backend"],
+            "prompt": image["prompt"],
+            "negative": image["negative"],
+            "source_generated_at": image["generated_at"],
             "model_url": f"/assets/props/{prop_id}/model" if has_model else "",
             "model_file": active_file.name if active_file else "",
             "source_url": f"/assets/props/{prop_id}/source" if has_source else "",
@@ -1594,10 +1754,11 @@ def is_pending(prop_id: str = "") -> List[str]:
     return [prop_id] if prop_id in ids else []
 
 
-# ── Generation chain: prompt → txt2img source.png → img2mesh GLB ─────────
+# ── Generation chain: prompt → txt2img source image → img2mesh GLB ───────
 # The interior counterpart of location_model3d for single objects. Two GPU
 # steps, both on the backend queue channel like every render: a txt2img
-# product-shot render (use case ``prop``) becomes source.png, then
+# product-shot render (use case ``prop``) becomes the VARIANT's source image
+# (source.png for the base stem, source-v<n>.png beyond it), then
 # ``service.generate_mesh(rig="none")`` turns it into model.glb (NEVER a
 # mesh-backend fallback — the existing rule). Runs on a worker thread with the
 # per-job double-start guard (prop_id|mesh backend).
@@ -1627,10 +1788,15 @@ def compose_prompt(subject: str, backend) -> Dict[str, str]:
 
 
 def _render_source(prop_id: str, backend_glob: str,
-                   prompt: str, negative: str) -> bool:
-    """txt2img render of the product shot → source.png. Runs the GPU job on
-    the backend queue channel (like every render). Records the image backend
-    + final prompt on the sidecar. Returns True on success."""
+                   prompt: str, negative: str, variant: Any = None) -> bool:
+    """txt2img render of the product shot → THIS VARIANT's source image. Runs
+    the GPU job on the backend queue channel (like every render). Records the
+    image backend + final prompt with the variant. Returns True on success.
+
+    ``variant`` None is the primary one, whose image keeps the historic
+    ``source.png``; every further variant renders into its own
+    ``source-v<n>.png``, so a second version of the object cannot overwrite
+    the picture the first one was meshed from."""
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backend = None
@@ -1681,22 +1847,12 @@ def _render_source(prop_id: str, backend_glob: str,
         logger.warning("Prop %s: empty source render", prop_id)
         return False
 
-    import io
-    from PIL import Image
-    img = Image.open(io.BytesIO(images[0])).convert("RGB")
-    if max(img.size) > 1024:
-        img.thumbnail((1024, 1024))
-    d = _prop_dir(prop_id, create=True)
-    img.save(d / SOURCE_NAME, "PNG")
-    meta = _materialize_dims(prop_id, read_sidecar(prop_id))
-    meta["backend_image"] = backend.name
-    meta["prompt"] = prompt
-    meta["negative"] = negative
-    # Provenance for the UI: the source panel shows what the CURRENT image
-    # was generated with (backend + when; prompt/negative in the tooltip).
-    meta["source_generated_at"] = utc_now_iso()
-    _write_sidecar(prop_id, meta)
-    return True
+    # One writer for every source image (upload, cutout, render): it norms the
+    # picture and records the provenance the panel shows for THIS variant
+    # (backend + when; prompt/negative in the tooltip).
+    return save_source_image(prop_id, images[0], variant,
+                             backend=backend.name, prompt=prompt,
+                             negative=negative)
 
 
 def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
@@ -1769,15 +1925,17 @@ def _generate(prop_id: str, prompt: str, negative: str,
         # renders a NEW source image and stops — re-meshing is its own,
         # separately triggered step ("3D from this image").
         if not mesh_only and not _render_source(prop_id, image_backend_glob,
-                                                prompt, negative):
+                                                prompt, negative, variant):
             error = "source render failed"
             return {"ok": False, "error": error}
         if image_only:
             return {"ok": True}
-        src = source_path(prop_id)
+        # The variant's OWN image — a re-mesh reproduces the picture the
+        # variant it refines was made from, never another variant's.
+        src = source_path(prop_id, variant)
         if not src:
-            error = ("no source image to mesh from" if mesh_only
-                     else "source image missing")
+            error = ("this variant has no source image to mesh from"
+                     if mesh_only else "source image missing")
             return {"ok": False, "error": error}
 
         from app.imagegen.service import get_image_service
@@ -2002,10 +2160,13 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
     False only while THIS prop+variant+backend combination is already
     generating (double-click guard), or when the prop does not exist.
 
-    ``variant`` names the model variant the mesh lands in. ``None`` lets
+    ``variant`` names the model variant the run belongs to — BOTH its source
+    image and its mesh, they are one version of the object. ``None`` lets
     :func:`target_variant` decide, which APPENDS a variant while the cap
     allows — that is the plain "generate" button. A re-mesh passes the index
-    it is refining (and so does ``image_only``, which touches no mesh at all).
+    it is refining, and so does ``image_only``, which re-renders exactly that
+    variant's picture and leaves every other one alone; with no index it is
+    the PRIMARY variant's image, like every other unqualified read.
 
     ``lod_faces`` additionally asks the mesh alias for reduced stages of the
     same bake; the smallest one lands as that variant's ``low`` tier."""

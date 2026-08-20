@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
-import type { ImageBackendInfo, PropFull } from './propTypes'
+import type { ImageBackendInfo, PropFull, PropSourceImage } from './propTypes'
 
 /** Same composition rule as the create form: style + subject. */
 const composePrompt = (prop: PropFull, backend?: ImageBackendInfo): string => {
@@ -22,9 +22,15 @@ const composePrompt = (prop: PropFull, backend?: ImageBackendInfo): string => {
   return style ? (subject ? `${style}, ${subject}` : style) : subject
 }
 
-export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
+export function PropImageDialog({ prop, variant, image, backends, onGenerate,
+  onClose }: {
   /** null = closed. */
   prop: PropFull | null
+  /** Model variant the render targets — the image belongs to the variant, so
+   *  this is also whose current picture the defaults come from. */
+  variant: number
+  /** That variant's current image record (absent = it has none yet). */
+  image?: PropSourceImage
   backends: ImageBackendInfo[]
   onGenerate: (imageBackend: string, prompt: string, negative: string) => void
   onClose: () => void
@@ -35,18 +41,20 @@ export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
   const [touched, setTouched] = useState(false)
   const [negative, setNegative] = useState('')
 
-  // Re-arm per open: the CURRENT image's backend stays preselected, but the
-  // prompt composes fresh from the (possibly just edited) description.
+  // Re-arm per open: THIS VARIANT's current image keeps its backend
+  // preselected, but the prompt composes fresh from the (possibly just
+  // edited) description. A variant without an image yet starts on the first
+  // backend — there is nothing of its own to continue from.
   useEffect(() => {
     if (!prop) return
-    const known = backends.find((b) => b.name === prop.backend_image)
+    const known = backends.find((b) => b.name === image?.backend)
     const initial = known || backends[0]
     setPicked(initial?.name || '')
     setPrompt(composePrompt(prop, initial))
     setTouched(false)
-    setNegative(prop.negative ?? (initial?.prompt_negative || ''))
+    setNegative(image?.negative || initial?.prompt_negative || '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prop?.id])
+  }, [prop?.id, variant])
 
   if (!prop) return null
 
@@ -57,7 +65,10 @@ export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
         style={{ maxWidth: 520 }}
         onClick={(e) => e.stopPropagation()}>
         <div className="ga-modal-header">
-          <span>{t('Regenerate source image')} — {prop.name}</span>
+          <span>
+            {t('Regenerate source image')} — {prop.name}
+            {' · '}{t('Variant')} {variant + 1}
+          </span>
           <button type="button" className="ga-modal-close" onClick={onClose}>×</button>
         </div>
         <div className="ga-modal-body">
@@ -100,7 +111,7 @@ export function PropImageDialog({ prop, backends, onGenerate, onClose }: {
                 </>
               )}
               <span className="ga-hint">
-                {t('The current 3D model stays — use “3D from this image” afterwards to re-mesh.')}
+                {t('The picture belongs to this variant — only its image is replaced, and its 3D model stays until you re-mesh it with “3D from this image”.')}
               </span>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <button type="button" className="ga-btn ga-btn-sm" onClick={onClose}>

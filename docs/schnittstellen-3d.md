@@ -3681,6 +3681,58 @@ Aufteilung der Punkte pro Zelle in eigene `InstancedMesh`-Einträge
 (`client3d/src/scene/ground.ts buildScatter`). Der Server liefert dort
 weiterhin nur `variants` der primären Variante.
 
+### Ergänzung 2026-08-20: Das Quellbild gehört der Variante
+
+Eine Variante ist nicht nur ein Mesh, sondern eine ganze **Fassung des
+Gegenstands** — und dazu gehört das Produktfoto, aus dem sie gemesht wurde.
+Das Bild folgt deshalb demselben Gesetz wie die Meshes, über **denselben
+gespeicherten Stamm-Suffix**:
+
+| Variante | Mesh-Stamm | Quellbild |
+|---|---|---|
+| 0 (historisch) | `model` | `source.png` |
+| weitere | `model-v<n>` | `source-v<n>.png` |
+
+Der Name folgt dem **Stamm**, nicht der Listenposition — eine gelöschte
+Variante in der Mitte benennt das Bild ihrer Nachbarin so wenig um wie deren
+Meshes. Und wie bei den Meshes IST diese Benennung der Migrationsweg: ein
+bestehendes Prop behält sein `source.png` unangetastet.
+
+Damit ist alles am Bild variantenweise: **Erzeugen** (`image_only` rendert
+genau die Variante, die der Admin offen hat), **Hochladen**, **Neu-Meshen**
+(liest das Bild SEINER Variante), **Ausliefern** und **Löschen** — eine
+gelöschte Variante nimmt ihr Bild mit, und ein wieder freigegebener Stamm
+startet ohne Bild. Auch die Herkunft (Backend, Prompt, Negativ, Zeitpunkt)
+liegt bei der Variante: der Basis-Stamm behält die Felder des Master-Records
+(`backend_image` / `prompt` / `negative` / `source_generated_at`), jede
+weitere Variante trägt sie unter `image` an ihrem Varianten-Eintrag.
+
+Befund-Anlass: es gab EIN `source.png` je Prop. Jede weitere Erzeugung
+überschrieb es, also verlor jede ältere Variante ihr Bild — und ein
+Neu-Meshen dieser Variante machte ein Mesh aus dem **falschen** Bild.
+
+**Ausliefern.** `GET /assets/props/{id}/source?variant=<i>`, mit `<i>` als
+**Ablage-Nummer** wie bei `/model`. Ohne `variant` die primäre Variante, also
+byte-genau die Datei, die diese URL immer schon geliefert hat — das ist kein
+Alias, sondern derselbe Primär-Varianten-Vertrag wie beim Mesh. Ein Index,
+für den das Prop keine Variante hat, ist 404.
+
+**Hochladen.** `POST /world/props/{id}/variants/{i}/source` (Multipart,
+`file`); unqualifiziert `POST /world/props/{id}/source` für die primäre
+Variante. Das Bild wird als PNG mit höchstens 1024 px abgelegt, **Alpha
+bleibt erhalten** — der Ausschnitt der Szenen-Pipeline ist außerhalb des
+Objekts transparent, und ein plattgerechnetes Bild gäbe dem Mesher einen
+Hintergrund zurück, den er gerade loswerden sollte.
+
+**Szenen-Pipeline.** `app/core/scene_asset.py` schreibt seinen Cutout als
+Quellbild der Ziel-Variante (`props.save_source_image` mit dem einmal
+gewählten `target_variant`), bevor daraus gemesht wird. Ein späteres
+Neu-Meshen derselben Variante reproduziert damit genau dieses Bild.
+
+Nachprüfbar in `scripts/smoke_prop_variants.py` (§ B5a, Abschnitte 10–14):
+Handrechnung der Namen aus den Stämmen, ein Lauf in Variante 1 lässt
+`source.png` byte-identisch, das Neu-Meshen bekommt `source-v2.png` gereicht.
+
 ## Nachtrag 2026-08-20 (§ B1/B2): Dach-Modelle (`roof_only`)
 
 Ein Gebäudemodell ERSETZT die Fernsicht-Hülle: sobald ein Servermodell
