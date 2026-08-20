@@ -323,13 +323,58 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float):
     return action
 
 
+def _patch_fbx_track_shape():
+    """Makes the FBX exporter write the MIXAMO track shape: every bone's
+    rotation curve (all samples) plus the hips translation — and nothing else.
+
+    Blender's baker keys location, rotation and scale of every bone and then
+    drops any curve with fewer than two distinct samples; a dropped curve
+    falls back to the bone's rest value on import. Two things go wrong with
+    that for a clip library: (1) the constant location/scale curves that DO
+    survive (float noise keeps them alive) are bone offsets in centimetres —
+    a consumer applying every track (the admin preview) smears them over a
+    metre-scaled model ("a stick figure is all that is left of the mesh",
+    2026-08-21); (2) a constant-but-NOT-rest rotation is lost entirely — the
+    clavicles have no dof in CMU data, so their whole curve is the 20° rest
+    alignment, and dropping it drops the shoulders. The only reliable place to
+    decide per curve is the exporter's own write mask, so it is set here:
+    rotation curves are always kept in full, the hips translation too, every
+    other translation and every scale curve is discarded.
+    """
+    import io_scene_fbx.fbx_utils as fu
+    if getattr(fu.AnimationCurveNodeWrapper, "_anima_patched", False):
+        return
+    orig = fu.AnimationCurveNodeWrapper.simplify
+
+    def simplify(self, fac, step, force_keep=False):
+        orig(self, fac, step, force_keep)
+        mask = self._frame_write_mask_array
+        if mask is None:
+            return
+        group = self.fbx_group[0]
+        key = str(self.elem_keys[0])
+        is_bone = PREFIX in key or PREFIX.rstrip(":") in key
+        if is_bone and group == "Lcl Rotation":
+            mask[:] = True
+        elif is_bone and group == "Lcl Translation" and "Hips" in key:
+            mask[:] = True
+        else:
+            mask[:] = False
+
+    fu.AnimationCurveNodeWrapper.simplify = simplify
+    fu.AnimationCurveNodeWrapper._anima_patched = True
+
+
 def _export(arm, path: Path):
+    _patch_fbx_track_shape()
     bpy.ops.object.select_all(action="DESELECT")
     arm.select_set(True)
     bpy.context.view_layer.objects.active = arm
+    # Track shape: see _patch_fbx_track_shape — the exporter's own options
+    # cannot express "rotations + hips translation only".
     bpy.ops.export_scene.fbx(
         filepath=str(path), use_selection=True, object_types={"ARMATURE"},
-        add_leaf_bones=False, bake_anim=True, bake_anim_use_all_bones=True,
+        add_leaf_bones=False, bake_anim=True, bake_anim_use_all_bones=False,
         bake_anim_use_nla_strips=False, bake_anim_use_all_actions=False,
         bake_anim_force_startend_keying=True, bake_anim_simplify_factor=0.0,
         armature_nodetype="NULL", axis_forward="-Z", axis_up="Y",

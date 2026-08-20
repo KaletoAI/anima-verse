@@ -46,6 +46,22 @@
  *   [5] the time base: the clip's duration equals the sidecar's
  *       `duration_s` (±1 frame = 0.034 s) — the server ends the interaction
  *       on that number, the client seeks the action with it.
+ *
+ *   [6] TRACK SHAPE — the Mixamo library's: rotation tracks plus ONE
+ *       position track (the hips), no scale tracks. Checked on all three
+ *       converted clips. And the consequence, measured the way the ADMIN
+ *       PREVIEW applies a clip (every track but the hips position, straight
+ *       onto a metre-scaled GLB, `Model3DViewer.tsx`): on `Test3_mia.glb`
+ *       the posed skeleton's body length (longest extent of the joint cloud
+ *       — the admin pivot may turn it onto any axis) stays within 0.7 … 1.3
+ *       of its bind length and the diagonal under 2.6 m; the library's own
+ *       `idle.fbx` is run first as the reference of the harness. The
+ *       2026-08-21 finding was the opposite — per-bone translation/scale
+ *       tracks in centimetres left "a stick figure of the mesh" (measured on
+ *       the character model of the finding: 151 m joint extent against 1.4 m
+ *       with the fixed export); the RED counter-probe below re-creates it by
+ *       adding one such track (100x the bone's rest offset) and watches the
+ *       body length run away (> 2×).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -163,6 +179,84 @@ async function main() {
   console.log('\n[5] time base');
   near('clip duration == sidecar duration_s', paths.a.duration, side.duration_s, 0.034);
   near('both halves have the same duration', paths.b.duration, paths.a.duration, 1e-3);
+
+  console.log('\n[6] track shape + the admin-preview application on a real GLB');
+  const shape = {};
+  for (const name of ['handshake__a', 'handshake__b', 'salsa__a', 'salsa__b', 'dance']) {
+    const obj = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, `${name}.fbx`))), '');
+    const clip = obj.animations[0];
+    const pos = clip.tracks.filter((t) => t.name.endsWith('.position'));
+    const scl = clip.tracks.filter((t) => t.name.endsWith('.scale'));
+    const rot = clip.tracks.filter((t) => t.name.endsWith('.quaternion'));
+    check(`${name}: rotations + the hips position only`,
+      pos.length === 1 && /Hips\.position$/.test(pos[0].name) && scl.length === 0 && rot.length >= 22,
+      `${rot.length} quaternion, ${pos.length} position (${pos.map((t) => t.name).join(',')}), ${scl.length} scale`);
+    shape[name] = clip;
+  }
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const THREE = await import('three');
+  const glbBytes = arrayBufferOf(await readFile(join(ROOT, 'client3d/public/models/Test3_mia.glb')));
+  const gltf = await new Promise((res, rej) => new GLTFLoader().parse(glbBytes, '', res, rej));
+  const model = gltf.scene;
+  model.updateMatrixWorld(true);
+  const bones = [];
+  model.traverse((o) => { if (o.isBone) bones.push(o); });
+  // The admin preview turns the whole pivot to undo the clip's armature
+  // rotation (hips quaternions are authored for a +90° X armature), so the
+  // posed skeleton may lie along any axis here: measure the LONGEST extent
+  // of the joint cloud (the body length) and the diagonal, not "height".
+  const extent = () => {
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    const v = new THREE.Vector3();
+    for (const b of bones) box.expandByPoint(b.getWorldPosition(v));
+    const size = box.getSize(new THREE.Vector3());
+    return { height: Math.max(size.x, size.y, size.z), span: size.length() };
+  };
+  const bind = extent();
+  check('Test3_mia binds with a plausible skeleton height', bind.height > 1.2 && bind.height < 2.2,
+    `${bind.height.toFixed(3)} m`);
+  // The admin preview's application: every track but the hips position, names
+  // matched by the bone names the GLB carries (mixamorig prefix without colon).
+  const adminApply = (clip) => {
+    const tracks = clip.tracks
+      .filter((t) => !(/hips/i.test(t.name) && t.name.endsWith('.position')))
+      .map((t) => { const c = t.clone(); c.name = c.name.replace(/^mixamorig:?/, 'mixamorig'); return c; });
+    const c = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    const mixer = new THREE.AnimationMixer(model);
+    const action = mixer.clipAction(c);
+    action.play();
+    mixer.update(clip.duration * 0.45);
+    const e = extent();
+    action.stop();
+    mixer.stopAllAction();
+    mixer.uncacheClip(c);
+    return e;
+  };
+  shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle.fbx'))), '').animations[0];
+  for (const name of ['idle', 'handshake__a', 'salsa__b', 'dance']) {
+    const e = adminApply(shape[name]);
+    check(`${name} applied admin-style keeps the skeleton intact`,
+      e.height > bind.height * 0.7 && e.height < bind.height * 1.3 && e.span < 2.6,
+      `body length ${e.height.toFixed(3)} m (bind ${bind.height.toFixed(3)}), diagonal ${e.span.toFixed(3)} m`);
+  }
+  // RED counter-probe: one centimetre translation track on the spine — what
+  // the old export wrote for every bone — and the skeleton runs away.
+  {
+    const clip = shape.handshake__a;
+    // Centimetre values on a metre skeleton = 100x the bone's own rest
+    // offset (the real Rosi model of the finding has metre bones; the public
+    // test rigs here carry centimetre bones, so the factor is applied to the
+    // rest offset rather than hard-coding "7.24").
+    const spineRest = bones.find((b) => /Spine$/.test(b.name));
+    const r = spineRest.position.clone().multiplyScalar(100);
+    const bad = clip.clone();
+    bad.tracks.push(new THREE.VectorKeyframeTrack(`${spineRest.name}.position`, [0, clip.duration],
+      [r.x, r.y, r.z, r.x, r.y, r.z]));
+    const e = adminApply(bad);
+    check('RED: a centimetre translation track blows the skeleton up (> 2x height)',
+      e.height > bind.height * 2, `height ${e.height.toFixed(3)} m vs bind ${bind.height.toFixed(3)}`);
+  }
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
