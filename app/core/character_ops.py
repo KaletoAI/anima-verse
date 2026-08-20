@@ -3368,15 +3368,17 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
     """Wipes ALL derived memory artifacts of one character — the admin test
     tool for the consolidation pipeline (watch it rebuild from a clean slate).
 
-    Included: memories table, summaries table (scene dailies, per-partner
-    dailies AND the weekly/monthly rollups), the day-consolidation cursor +
-    sleep flags (world_kv), mood history.
+    Thin adapter: the wipe itself is ``character_reset.reset_character`` at
+    scope ``memory``, the SAME implementation the import's re-init uses at
+    scope ``reinit``. There is exactly one store list (``character_reset.STORES``);
+    a new per-character table is added there, not in two divergent wipes.
 
-    Deliberately NOT included: chat_messages (messaging pillar — real
-    correspondence, not derived), scenes/utterances (shared world truth of ALL
-    participants), knowledge items, relationship config. The day cursor is set
-    to NOW so already-collapsed old scenes are not re-consolidated into new
-    day entries after the wipe.
+    Scope ``memory`` covers the whole day timeline the character page shows —
+    memories, summaries (dailies + weekly/season rollups), diary entries,
+    thoughts, mood/state/evolution history, the storyteller action log — plus
+    the day-consolidation cursor + sleep flags. Correspondence
+    (``chat_messages``) and the shared room record (``utterances``/``scenes``)
+    stay; see ``character_reset.KEPT``.
     """
     # Existence check via the character LIST — get_character_profile returns
     # a default profile for unknown names (ghost-character pitfall).
@@ -3385,48 +3387,5 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404,
                             detail=f"Character '{character_name}' not found")
 
-    result: Dict[str, Any] = {"character": character_name}
-
-    # 1. Memories (episodic/semantic/daily/commitment/relationship entries)
-    from app.models.memory import clear_memories
-    result["memories"] = clear_memories(character_name)
-
-    # 2. Summaries table — scene dailies, per-partner dailies AND the
-    # weekly/monthly rollups (kind='weekly'/'monthly' live here since the
-    # rollup-file migration).
-    from app.core.db import transaction
-    try:
-        with transaction() as conn:
-            cur = conn.execute(
-                "DELETE FROM summaries WHERE character_name=?", (character_name,))
-            result["summaries"] = cur.rowcount if cur.rowcount is not None else 0
-    except Exception as e:
-        logger.error("wipe memory: summaries delete failed for %s: %s",
-                     character_name, e)
-        result["summaries"] = 0
-
-    # 3. Day-consolidation cursor + sleep flags (cursor -> NOW, see docstring)
-    try:
-        from app.core import day_consolidation as _dc
-        _dc.set_cursor(character_name, utc_now().isoformat(timespec="seconds"))
-        _dc._kv_set(f"sleep_start:{character_name}", "")
-        _dc._kv_set(f"woke_main_sleep:{character_name}", "")
-        result["day_cursor"] = "reset"
-    except Exception as e:
-        logger.error("wipe memory: cursor reset failed for %s: %s",
-                     character_name, e)
-        result["day_cursor"] = "error"
-
-    # 4. Mood history
-    try:
-        with transaction() as conn:
-            cur = conn.execute(
-                "DELETE FROM mood_history WHERE character_name=?", (character_name,))
-            result["mood_history"] = cur.rowcount if cur.rowcount is not None else 0
-    except Exception as e:
-        logger.error("wipe memory: mood history failed for %s: %s",
-                     character_name, e)
-        result["mood_history"] = 0
-
-    logger.info("Memory wipe [%s]: %s", character_name, result)
-    return result
+    from app.core.character_reset import SCOPE_MEMORY, reset_character
+    return reset_character(character_name, scope=SCOPE_MEMORY)

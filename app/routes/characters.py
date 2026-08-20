@@ -2508,10 +2508,14 @@ def memory_list(character_name: str,
 @router.post("/{character_name}/memory/wipe")
 def memory_wipe(character_name: str,
                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Wipes ALL derived memory of the character (memories, summaries,
-    weekly/monthly rollups, day cursor, mood history) — admin test tool for
-    the consolidation pipeline. chat_messages and shared scenes/utterances
-    stay untouched."""
+    """Wipes ALL derived memory of the character — memories, summaries
+    (dailies + weekly/season rollups), diary entries, thoughts, mood/state/
+    evolution history, the action log and the day cursor, i.e. the entire day
+    timeline the character page shows. Admin test tool for the consolidation
+    pipeline. chat_messages and shared scenes/utterances stay untouched.
+
+    Runs ``character_reset.reset_character`` at scope ``memory`` — the same
+    implementation the import's re-init runs at scope ``reinit``."""
     return character_ops.wipe_character_memory(character_name)
 
 

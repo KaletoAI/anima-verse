@@ -275,8 +275,9 @@ export function CharactersTab() {
   }, [selected, consolidating, t, toast])
 
   // Memory wipe (admin test tool for the consolidation pipeline): clears the
-  // character's derived memory artifacts — memories, summaries, weekly/monthly
-  // rollups, day cursor, mood history. Chat history + shared scenes stay.
+  // character's derived memory artifacts — memories, summaries + rollups, the
+  // whole day timeline (diary entries, thoughts, mood/state/evolution history,
+  // action log) and the day cursor. Chat history + shared scenes stay.
   const wipeMemory = useCallback(async () => {
     if (!selected || wiping) return
     setWiping(true)
@@ -562,7 +563,7 @@ export function CharactersTab() {
                   {confirmWipe ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: '0.82em', color: '#e0a356' }}>
-                        {t('Wipe ALL memory of {name}? Memories, summaries, rollups — chat history stays. Irreversible.').replace('{name}', selected)}
+                        {t('Wipe ALL memory of {name}? Memories, summaries, rollups and the whole day timeline (diary, thoughts, mood/state history) — chat history stays. Irreversible.').replace('{name}', selected)}
                       </span>
                       <button className="ga-btn ga-btn-sm ga-btn-danger" disabled={wiping} onClick={() => { void wipeMemory() }}>
                         {wiping ? t('Wiping…') : t('Wipe')}
@@ -574,7 +575,7 @@ export function CharactersTab() {
                   ) : (
                     <button
                       className="ga-btn ga-btn-sm"
-                      title={t('Delete all derived memory (memories, summaries, weekly/monthly rollups, day cursor, mood history). Chat history and shared scenes stay. Test tool for the consolidation pipeline.')}
+                      title={t('Delete all derived memory: memories, summaries + weekly/season rollups, and the entire day timeline — diary entries, thoughts, mood/state/evolution history, action log, day cursor. Chat history and shared scenes stay. Test tool for the consolidation pipeline.')}
                       onClick={() => setConfirmWipe(true)}
                     >
                       🧹 {t('Wipe memory')}

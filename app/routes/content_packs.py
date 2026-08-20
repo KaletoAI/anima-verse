@@ -398,7 +398,8 @@ def _verify_checksum(content: bytes, expected: str) -> None:
 
 
 def _dispatch_install(pack_type: str, content: bytes,
-                      *, overwrite: bool = False) -> Dict[str, Any]:
+                      *, overwrite: bool = False,
+                      mode: str = "full", intro: str = "") -> Dict[str, Any]:
     """Route the ZIP to the matching importer based on `pack_type`.
 
     Marketplace installs always land in the active world, never in the
@@ -410,10 +411,17 @@ def _dispatch_install(pack_type: str, content: bytes,
     `states` merges by id anyway (`replace_all=False`), and the LOCATION
     importer has no overwrite at all — it always creates a new location, so a
     second install duplicates it (see the note in `_install_collection_selected`).
+
+    `mode`/`intro` are the character import's two modes ("full" clone vs
+    "fresh" re-initialize) and are ignored by every other pack type. A
+    marketplace character pack IS a character export ZIP — same manifest, same
+    old-world history inside — so the marketplace path offers exactly the same
+    choice the local ZIP import does.
     """
     if pack_type == "character":
         from app.core.character_io import import_character_from_zip
-        return import_character_from_zip(content, overwrite=overwrite)
+        return import_character_from_zip(content, overwrite=overwrite,
+                                         mode=mode, intro_text=intro)
     if pack_type == "item":
         from app.core.content_io import import_item_from_zip
         return import_item_from_zip(content, target="world", overwrite=overwrite)
@@ -433,7 +441,8 @@ def _dispatch_install(pack_type: str, content: bytes,
         from app.core.content_io import import_prop_from_zip
         return import_prop_from_zip(content, overwrite=overwrite)
     if pack_type == "collection":
-        return _install_collection(content, overwrite=overwrite)
+        return _install_collection(content, overwrite=overwrite,
+                                   mode=mode, intro=intro)
     if pack_type == "skill_package":
         from app.core.skill_package_io import install_skill_package_from_zip
         result = install_skill_package_from_zip(content, overwrite=True)
@@ -449,7 +458,8 @@ def _dispatch_install(pack_type: str, content: bytes,
     raise ValueError(f"unsupported pack type: {pack_type!r}")
 
 
-def _install_collection(content: bytes, *, overwrite: bool = False) -> Dict[str, Any]:
+def _install_collection(content: bytes, *, overwrite: bool = False,
+                        mode: str = "full", intro: str = "") -> Dict[str, Any]:
     """Install every sub-pack of a collection ZIP (marketplace path).
 
     Collection layout:
@@ -460,18 +470,33 @@ def _install_collection(content: bytes, *, overwrite: bool = False) -> Dict[str,
 
     The whole collection is one pack here, so there is no selection —
     otherwise identical to the generic import path below.
+
+    `mode`/`intro` apply collection-wide to the CHARACTER sub-packs only; a
+    collection may mix a character with items, and only the character importer
+    knows the concept.
     """
     return _install_collection_selected(content, selected_ids=None,
-                                       overwrite=overwrite)
+                                        overwrite=overwrite,
+                                        mode=mode, intro=intro)
 
 
 @router.post("/install")
 async def install_pack(request: Request) -> Dict[str, Any]:
     """Body: `{"pack_id": "...", "catalog_id": "..."}` — download from the
-    catalog and install via the matching importer. Verifies checksum."""
+    catalog and install via the matching importer. Verifies checksum.
+
+    Character packs accept the same two modes the local ZIP import offers
+    (`mode`: "full" | "fresh", plus `intro` for fresh) and an `overwrite` flag
+    — a marketplace character pack is a character export ZIP and carries the
+    character's history in ITS world, so re-initializing has to be offered
+    here too.
+    """
     body = await request.json()
     pack_id = (body.get("pack_id") or "").strip()
     catalog_id = (body.get("catalog_id") or "").strip()
+    overwrite = bool(body.get("overwrite"))
+    mode = (body.get("mode") or "full").strip().lower()
+    intro = (body.get("intro") or "").strip()
     if not pack_id:
         raise HTTPException(status_code=400, detail="pack_id required")
 
@@ -501,7 +526,8 @@ async def install_pack(request: Request) -> Dict[str, Any]:
     try:
         content = await _download(download_url, headers)
         _verify_checksum(content, (pack.get("checksum_sha256") or ""))
-        result = _dispatch_install(pack_type, content)
+        result = _dispatch_install(pack_type, content, overwrite=overwrite,
+                                   mode=mode, intro=intro)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -524,7 +550,8 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
     """Install a one-off pack from any URL. Gated by `allow_install_url`.
 
     Body: `{"url", "sha256", "type", "auth_token"?}`. If `auth_token` is
-    given, it overrides any per-catalog token.
+    given, it overrides any per-catalog token. Character packs additionally
+    accept `overwrite`, `mode` ("full" | "fresh") and `intro`.
     """
     if not bool(_cfg().get("allow_install_url")):
         raise HTTPException(
@@ -536,6 +563,9 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
     sha = (body.get("sha256") or "").strip()
     pack_type = (body.get("type") or "").strip()
     token = (body.get("auth_token") or "").strip()
+    overwrite = bool(body.get("overwrite"))
+    mode = (body.get("mode") or "full").strip().lower()
+    intro = (body.get("intro") or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="url required")
     if pack_type not in SUPPORTED_TYPES:
@@ -545,7 +575,8 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
     try:
         content = await _download(url, headers)
         _verify_checksum(content, sha)
-        result = _dispatch_install(pack_type, content)
+        result = _dispatch_install(pack_type, content, overwrite=overwrite,
+                                   mode=mode, intro=intro)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -560,6 +591,9 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
 async def install_pack_upload(
     file: UploadFile = File(...),
     pack_type: str = Query(..., description="character / item / item_bundle / rule / states / location / prop"),
+    overwrite: bool = Query(False, description="Replace an existing entity"),
+    mode: str = Query("full", description="character packs: full | fresh (re-initialize)"),
+    intro: str = Query("", description="character packs, mode=fresh: intro memory"),
 ) -> Dict[str, Any]:
     """Offline path: upload a pack ZIP directly."""
     if pack_type not in SUPPORTED_TYPES:
@@ -568,7 +602,8 @@ async def install_pack_upload(
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
     content = await file.read()
     try:
-        result = _dispatch_install(pack_type, content)
+        result = _dispatch_install(pack_type, content, overwrite=overwrite,
+                                   mode=mode, intro=intro)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
@@ -619,12 +654,14 @@ def _dispatch_install_selected(content: bytes, *, selected_ids, overwrite: bool,
         return import_map_layout_from_zip(content)
     if mtype == "collection":
         return _install_collection_selected(content, selected_ids=selected_ids,
-                                            overwrite=overwrite)
+                                            overwrite=overwrite,
+                                            mode=mode, intro=intro)
     raise ValueError(f"unsupported export type: {mtype!r}")
 
 
 def _install_collection_selected(content: bytes, *, selected_ids,
-                                 overwrite: bool = False) -> Dict[str, Any]:
+                                 overwrite: bool = False,
+                                 mode: str = "full", intro: str = "") -> Dict[str, Any]:
     """Install the picked sub-packs of a collection ZIP.
 
     `selected_ids` holds the ZIP-internal file paths the preview listed
@@ -700,8 +737,11 @@ def _install_collection_selected(content: bytes, *, selected_ids,
                 fail_count += 1
                 continue
             try:
+                # `mode`/`intro` apply collection-wide but only bite on
+                # character sub-packs — every other importer ignores them.
                 sub_result = _dispatch_install(sub_type, sub_bytes,
-                                               overwrite=overwrite)
+                                               overwrite=overwrite,
+                                               mode=mode, intro=intro)
             except FileExistsError as e:
                 results.append({"name": sub_name, "type": sub_type, "status": "exists",
                                 "error": str(e)})

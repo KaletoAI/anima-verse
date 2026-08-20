@@ -261,6 +261,11 @@ def _wipe_db_for_character(conn, character_name: str) -> None:
     """Remove all DB rows owned by character_name across all known tables.
 
     Mirrors `delete_character` — keep both in sync if you add new tables.
+
+    The `character_name` column sweep is blind to every store that names its
+    character differently (`perceiver`, `inviter`, `character_id`, `title`) or
+    inside a JSON list; `character_reset` sweeps those, and the caller runs it
+    right after this.
     """
     tables = [r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
@@ -303,14 +308,25 @@ def _restore_table(conn, table: str, rows: List[Dict[str, Any]]) -> int:
     return inserted
 
 
-# Fresh-start ("neu zugezogen"): welt-gebundene Historie verwerfen, Identität
-# (Profil, Outfits, Items, Secrets, Beziehungen, Wissen, Tagesablauf) behalten.
-# Siehe development_instructions/plan-character-import-fresh-start.md.
-_FRESH_SKIP_TABLES = {
-    "memories", "summaries", "diary_entries", "mood_history",
-    "state_history", "evolution_history", "chat_messages", "stories",
-    "scheduler_jobs", "assignments",
-}
+# Fresh start / re-initialize ("newly arrived"): the pack is a full snapshot of
+# the character IN ITS OLD WORLD, so a fresh start must not restore what the
+# re-init just decided to drop — otherwise the wipe runs and the pack promptly
+# puts the old relationships, knowledge and Retrospect soul files back.
+# The skip set is DERIVED from character_reset.STORES: one store list drives
+# both the wipe and the restore filter.
+def _fresh_skip_tables() -> frozenset:
+    from app.core.character_reset import restore_skip_tables
+    return restore_skip_tables()
+
+
+#: Soul files Retrospect wrote from lived experience. Authored identity
+#: (personality/presence/roleplay_rules/soul/tasks) is restored as always; these
+#: three are reset to an empty scaffold by the re-init instead of being
+#: restored, because free prose ("About others: … can never be trusted") is the
+#: one carrier no read-side dangling filter can ever see.
+def _fresh_skip_files() -> frozenset:
+    from app.core.character_reset import RETROSPECT_SOUL_FILES
+    return frozenset(f"soul/{fid}.md" for fid in RETROSPECT_SOUL_FILES)
 
 
 def import_character_from_zip(
@@ -324,11 +340,21 @@ def import_character_from_zip(
 
     mode:
       - "full": restore everything (re-import into the same/compatible world).
-      - "fresh": keep identity (profile, outfits, inventory, secrets,
-        relationships, knowledge, daily schedule), DROP world-bound history
-        (memories/summaries/diary/mood/state/evolution/chats/…) and seed one
-        intro memory from ``intro_text``. Dangling references (to characters not
-        in this world) are filtered read-side at prompt build time.
+        The pack is a complete snapshot including the character's history in
+        its previous world.
+      - "fresh": re-initialize — "this character starts fresh in THIS world".
+        Identity is restored (profile, soul/personality, outfits, inventory,
+        secrets, daily routine, gallery); everything world-bound is neither
+        restored nor left over: memories, summaries, diary, thoughts, mood/
+        state/evolution history, correspondence, knowledge, relationships in
+        BOTH directions, obligations, schedules, party/group/story membership,
+        the explored map, notifications and the Retrospect soul files
+        (beliefs/lessons/goals). Mechanical state (position, room, activity,
+        pose) falls back to the profile's own values. One intro memory is
+        seeded from ``intro_text``.
+
+    The result's ``reset`` block spells both modes out (what was cleared, what
+    was deliberately kept and why).
 
     Raises ValueError on bad input, FileExistsError on existing character
     without overwrite=True.
@@ -354,7 +380,10 @@ def import_character_from_zip(
             f"(use overwrite=true to replace)"
         )
 
-    # Wipe existing state on overwrite — both DB and FS.
+    # Wipe existing state on overwrite — both DB and FS. The column sweep is
+    # blind to the stores that name their character otherwise or inside JSON;
+    # the re-init sweep at the end of this function closes that for fresh, and
+    # a full clone restores its own rows over the top anyway.
     if already_exists and overwrite:
         with transaction() as t_conn:
             _wipe_db_for_character(t_conn, character_name)
@@ -364,13 +393,18 @@ def import_character_from_zip(
 
     # Restore filesystem
     char_dir.mkdir(parents=True, exist_ok=True)
+    skip_files = _fresh_skip_files() if fresh else frozenset()
     file_count = 0
+    files_skipped: List[str] = []
     for member in zf.namelist():
         if not member.startswith("files/"):
             continue
         rel = member[len("files/"):]
         safe_rel = _safe_relpath(rel)
         if not safe_rel:
+            continue
+        if safe_rel in skip_files:
+            files_skipped.append(safe_rel)
             continue
         target = char_dir / safe_rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -436,11 +470,12 @@ def import_character_from_zip(
         except Exception as e:
             logger.warning("import: height normalize failed for %s: %s",
                            character_name, e)
+    skip_tables = _fresh_skip_tables() if fresh else frozenset()
     for table in db_tables:
         if table == "characters":
             continue
-        if fresh and table in _FRESH_SKIP_TABLES:
-            db_stats[table] = 0  # bewusst verworfen (fresh start)
+        if table in skip_tables:
+            db_stats[table] = 0  # deliberately dropped (re-init)
             continue
         _restore_named(table)
 
@@ -456,6 +491,26 @@ def import_character_from_zip(
                     character_name, len(new_ids))
 
     zf.close()
+
+    # Re-init sweep — AFTER every restore, BEFORE the intro memory is seeded.
+    # Not restoring a table only covers what the pack carries; this clears what
+    # was already in the world under this name (a re-import over an existing
+    # character) AND every store the `character_name` column sweep cannot see:
+    # perceptions, party invites, explored cells, notifications, and the
+    # JSON-participant stores (intents, story arcs, group chats, parties).
+    # It also resets the Retrospect soul files to an empty scaffold.
+    reset_report: Dict[str, Any] = {}
+    if fresh:
+        from app.core.character_reset import (SCOPE_REINIT, describe_scope,
+                                              reset_character)
+        try:
+            reset_report = reset_character(character_name, scope=SCOPE_REINIT)
+        except Exception as e:
+            logger.error("Fresh import: re-init sweep failed for %s: %s",
+                         character_name, e)
+        reset_report["mode_doc"] = describe_scope(SCOPE_REINIT)
+        if files_skipped:
+            reset_report["files_not_restored"] = sorted(files_skipped)
 
     # Fresh start: seed one intro memory (identity kept, world history dropped).
     if fresh and (intro_text or "").strip():
@@ -480,6 +535,19 @@ def import_character_from_zip(
         "status": "success",
         "character": character_name,
         "mode": "fresh" if fresh else "full",
+        # What the two modes MEAN, spelled out in the result so a caller never
+        # has to guess whether a pack's old world came along.
+        "mode_description": (
+            "Re-initialized — identity restored (profile, soul/personality, "
+            "outfits, inventory, secrets, daily routine, gallery); world-bound "
+            "history neither restored from the pack nor left over."
+            if fresh else
+            "Full clone — everything the pack carries was restored, including "
+            "the character's history in its previous world."
+        ),
+        # Only present for a re-init: per-store counts of the sweep, plus the
+        # machine-readable list of what was cleared and what was kept and why.
+        "reset": reset_report,
         "files_imported": file_count,
         "db_rows_imported": db_stats,
         "overwritten": already_exists and overwrite,

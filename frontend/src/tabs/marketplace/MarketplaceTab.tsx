@@ -65,6 +65,18 @@ const PRETTY_TYPE: Record<string, string> = {
 // confirmation before install (kept in sync with the backend CODE_PACK_TYPES).
 const CODE_PACK_TYPES = new Set(['skill_package'])
 
+/**
+ * Whether installing this pack brings a character in — directly, or as a
+ * sub-pack of a collection (the catalog's `contents` list says so without a
+ * download). Those are the packs that get the import-mode choice, because a
+ * character pack is a snapshot of that character IN ITS OLD WORLD.
+ */
+function hasCharacter(pack: Pack): boolean {
+  if (pack.type === 'character') return true
+  return pack.type === 'collection'
+    && (pack.contents || []).some((c) => c.type === 'character')
+}
+
 function formatBytes(n?: number): string {
   if (!n) return ''
   if (n < 1024) return `${n} B`
@@ -88,6 +100,14 @@ export function MarketplaceTab() {
   const [filterTag, setFilterTag] = useState<string>('')
   const [search, setSearch] = useState<string>('')
   const [building, setBuilding] = useState(false)
+  // Character packs: the same two import modes the local ZIP import offers.
+  // A marketplace character pack IS a character export ZIP and carries the
+  // character's history in ITS world, so "re-initialize" has to be offered
+  // here too — otherwise the old world's relationships, knowledge and
+  // Retrospect soul files ride along into this one.
+  const [mode, setMode] = useState<'full' | 'fresh'>('full')
+  const [intro, setIntro] = useState('')
+  const [overwrite, setOverwrite] = useState(false)
 
   const load = useCallback(
     async (force: boolean, id?: string) => {
@@ -168,6 +188,11 @@ export function MarketplaceTab() {
       }
       const body: Record<string, unknown> = { pack_id: pack.id, catalog_id: activeId }
       if (CODE_PACK_TYPES.has(pack.type)) body.confirm_code = true
+      if (hasCharacter(pack)) {
+        body.overwrite = overwrite
+        body.mode = mode
+        if (mode === 'fresh') body.intro = intro.trim()
+      }
       setPendingTrust(null)
       setInstalling(pack.id)
       try {
@@ -186,7 +211,7 @@ export function MarketplaceTab() {
         setInstalling(null)
       }
     },
-    [activeId, t, toast],
+    [activeId, mode, intro, overwrite, t, toast],
   )
 
   if (loading && !catalog) return <div className="ga-loading">{t('Loading…')}</div>
@@ -318,7 +343,12 @@ export function MarketplaceTab() {
                   <button
                     type="button"
                     className={`ga-list-row${isActive ? ' is-active' : ''}`}
-                    onClick={() => setSelected(p)}
+                    onClick={() => {
+                      setSelected(p)
+                      // The mode choice belongs to the pack being looked at —
+                      // never carry a "fresh" pick over to the next pack.
+                      setMode('full'); setIntro(''); setOverwrite(false)
+                    }}
                   >
                     <span className="ga-list-row-main">
                       <strong>{p.name || p.id}</strong>
@@ -429,6 +459,60 @@ export function MarketplaceTab() {
                 {selected.room_count} {t('rooms')}
                 {selected.image_count ? `, ${selected.image_count} ${t('images')}` : ''}
               </p>
+            ) : null}
+            {hasCharacter(selected) ? (
+              <div style={{
+                marginTop: 12, paddingTop: 10,
+                borderTop: '1px solid var(--border, #30363d)',
+              }}>
+                <div style={{ fontSize: '0.82em', fontWeight: 600, marginBottom: 6 }}>
+                  {t('Import mode')}
+                </div>
+                <label style={{ display: 'flex', alignItems: 'baseline', gap: 8,
+                                padding: '3px 0', cursor: 'pointer' }}>
+                  <input type="radio" name="mp-char-import-mode" checked={mode === 'full'}
+                    onChange={() => setMode('full')} />
+                  <span>
+                    {t('Full clone')}{' '}
+                    <span style={{ opacity: 0.55, fontSize: '0.82em' }}>
+                      — {t('keep all history (same/compatible world)')}
+                    </span>
+                  </span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'baseline', gap: 8,
+                                padding: '3px 0', cursor: 'pointer' }}>
+                  <input type="radio" name="mp-char-import-mode" checked={mode === 'fresh'}
+                    onChange={() => setMode('fresh')} />
+                  <span>
+                    {t('Fresh start (newly arrived)')}{' '}
+                    <span style={{ opacity: 0.55, fontSize: '0.82em' }}>
+                      — {t('keep identity, drop world-bound history')}
+                    </span>
+                  </span>
+                </label>
+                {mode === 'fresh' ? (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: '0.78em', opacity: 0.7, marginBottom: 4 }}>
+                      {t('Intro memory')}
+                    </div>
+                    <textarea className="ga-input" rows={3} value={intro}
+                      onChange={(e) => setIntro(e.target.value)}
+                      placeholder={t('Short intro memory for the new arrival (editable)…')}
+                      style={{ width: '100%', resize: 'vertical' }} />
+                  </div>
+                ) : null}
+                <label style={{ display: 'flex', alignItems: 'baseline', gap: 8,
+                                marginTop: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={overwrite}
+                    onChange={(e) => setOverwrite(e.target.checked)} />
+                  <span>
+                    {t('Replace if already present')}{' '}
+                    <span style={{ opacity: 0.55, fontSize: '0.82em' }}>
+                      — {t('without this, an install of a character already here fails')}
+                    </span>
+                  </span>
+                </label>
+              </div>
             ) : null}
             {CODE_PACK_TYPES.has(selected.type) && pendingTrust === selected.id ? (
               <div style={{
