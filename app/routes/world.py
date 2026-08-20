@@ -826,6 +826,59 @@ async def location_model3d_upload(location_id: str, request: Request) -> Dict[st
     return {"status": "success", **meta, "warnings": result["warnings"]}
 
 
+# ── The generated ROOF (docs/llm-blender-models.md) ──
+# Two steps, deliberately: PROPOSE hands the admin a validated description to
+# look at and edit, BUILD executes exactly what comes back. Nothing here is
+# silent — the roof is a parametric building part, and its parameters are the
+# feature.
+
+@router.post("/locations/{location_id}/roof/propose")
+def location_roof_propose(location_id: str) -> Dict[str, Any]:
+    """Propose a roof for this location: one LLM call over the known facts.
+
+    Returns the footprint (with the source it came from), the storey count,
+    the eaves height and a VALIDATED build description — plus ``llm`` saying
+    whether the description really came from a model or is the clamped
+    default (an unrouted task is not an error here). 409 = the location has
+    nothing to roof."""
+    from app.core.roof_model import propose_roof
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    res = propose_roof(location_id)
+    if not res.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail="This location has no footprint to roof — draw a building "
+                   "outline, a boundary, or give it a room with a floor plan.")
+    return res
+
+
+@router.post("/locations/{location_id}/roof/generate")
+async def location_roof_generate(location_id: str, request: Request) -> Dict[str, Any]:
+    """Build the roof from a description (body: the description object, or
+    ``{description: {...}}``) and store it as the location's building model.
+
+    Background job — poll ``model3d/status`` for ``pending``. The description
+    is validated and clamped again here: what the UI sends is a suggestion,
+    not a contract."""
+    from app.blender import runner
+    from app.core.roof_model import trigger_roof_generation, validate_description
+    if not get_location_by_id(location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    if not runner.is_available():
+        raise HTTPException(status_code=503,
+                            detail="Blender is not available — the roof is "
+                                   "built locally, not on a backend.")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    raw = data.get("description") if isinstance(data.get("description"), dict) else data
+    desc = validate_description(raw)
+    if not trigger_roof_generation(location_id, desc):
+        return {"status": "already_running", "description": desc}
+    return {"status": "generating", "description": desc}
+
+
 @router.delete("/locations/{location_id}/model3d")
 def location_model3d_delete(location_id: str, file: str = "") -> Dict[str, Any]:
     """Remove ONE stored building model (?file=<name>) or all of them (no

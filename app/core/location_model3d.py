@@ -191,6 +191,13 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "shrinkable": bool(cap["shrinkable"]),
             "shrink_reason": cap["reason"],
             "active": bool(active and p.name == active.name),
+            # A generated ROOF (docs/llm-blender-models.md): a building model
+            # that is ONLY the roof and therefore does not replace the recipe
+            # shell in the client. The row says so, because "the model" of a
+            # location suddenly meaning "half of it" is exactly the kind of
+            # thing a list has to state.
+            "roof_only": bool(meta.get("roof_only")),
+            "roof": meta.get("roof") or {},
         })
     return out
 
@@ -363,6 +370,35 @@ def _gen_key(owner_id: str, room_id: str = "", source_image: str = "",
     return f"{owner_id}:{_stem(room_id)}:{source_image}:{backend_glob}:{tier}"
 
 
+def claim_job(location_id: str, room_id: str = "", *, kind: str = "") -> bool:
+    """Take the in-flight slot for a NON-meshing job on this subject.
+
+    The mesh jobs key themselves by (image, backend, tier); a parametric build
+    (the LLM-Blender roof) has none of the three, so it keys by its ``kind``
+    alone — one roof build per location at a time. Same set as every other
+    job, so ``is_pending`` and the admin panel's poll cover it without knowing
+    it exists. False = one is already running.
+    """
+    owner = _owner_id(location_id)
+    if not owner:
+        return False
+    key = _gen_key(owner, room_id, kind or "job")
+    with _lock:
+        if key in _generating:
+            return False
+        _generating.add(key)
+    return True
+
+
+def release_job(location_id: str, room_id: str = "", *, kind: str = "") -> None:
+    """Give the slot back — always in a ``finally``."""
+    owner = _owner_id(location_id)
+    if not owner:
+        return
+    with _lock:
+        _generating.discard(_gen_key(owner, room_id, kind or "job"))
+
+
 def is_pending(location_id: str, room_id: str = "") -> bool:
     """True while ANY generation job for this target is running/queued."""
     owner = _owner_id(location_id)
@@ -482,6 +518,12 @@ def get_client_meta(location_id: str, room_id: str = "",
     # the model hangs that far below the height offset. Nothing measures it.
     if meta.get("walk_y") is not None:
         out["walk_y"] = float(meta.get("walk_y") or 0.0)
+    # The model is ONLY the roof (docs/llm-blender-models.md): it travels into
+    # the scene spec as `roof_only`, and a renderer that reads it keeps the
+    # recipe shell standing underneath instead of handing the far view over.
+    # Absent = the model is the whole building, which is what it always was.
+    if meta.get("roof_only"):
+        out["roof_only"] = True
     return out
 
 
@@ -692,6 +734,57 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     if (tier or DEFAULT_TIER) == DEFAULT_TIER:
         request_low_tier(location_id, room_id, owner=owner)
     return meta
+
+
+def save_roof_model(location_id: str, contents: bytes, *,
+                    placement: Dict[str, Any],
+                    description: Dict[str, Any]) -> Dict[str, Any]:
+    """Store a GENERATED ROOF as the location's building model.
+
+    The roof is built from numbers (``app/core/roof_model.py``), so its
+    placement is not a dial anybody has to find: the sidecar is written with
+    the width, the two plane offsets and the height offset the build itself
+    computed, and the standard building placement (§ B2) then puts the mesh
+    exactly on the vertices it was built from — scale 1, no calibration.
+
+    ``roof_only`` is the display contract: this model is the roof and NOTHING
+    else, so the client keeps the recipe shell underneath it instead of
+    dropping it (docs/llm-blender-models.md).
+
+    The file serves BOTH tiers. A roof is a handful of triangles — asking the
+    distance-mesh path to decimate it would only risk destroying it, and
+    leaving the ``low`` tier empty would make ``_demand_low`` try exactly that
+    on every payload build.
+    """
+    owner = _owner_id(location_id)
+    if not owner:
+        raise ValueError("location not found")
+    target = _gallery(owner).new_path()
+    target.write_bytes(contents)
+    meta = {
+        "created_at": utc_now_iso(),
+        "source": "roof_build",
+        "format": "glb",
+        "rig": "none",
+        "tier": DEFAULT_TIER,
+        "backend": "blender",
+        "location": owner,
+        "roof_only": True,
+        "roof": dict(description or {}),
+        "width_m": float(placement.get("width_m") or 0.0),
+        "offset_x": float(placement.get("offset_x") or 0.0),
+        "offset_z": float(placement.get("offset_z") or 0.0),
+        "offset_y": float(placement.get("offset_y") or 0.0),
+        "eaves_height_m": float(placement.get("eaves_height_m") or 0.0),
+        "footprint_source": str(placement.get("footprint_source") or ""),
+    }
+    write_sidecar(target, meta)
+    select_model(location_id, target.name, "", DEFAULT_TIER)
+    select_model(location_id, target.name, "", LOW_TIER)
+    logger.info("Roof model %s: %s (%d bytes, %s, width %.2f m)", owner,
+                target.name, len(contents),
+                (description or {}).get("form") or "?", meta["width_m"])
+    return {**meta, "filename": target.name}
 
 
 def _reduce_to_low(location_id: str, owner: str, room_id: str, src: Path,

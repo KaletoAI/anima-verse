@@ -70,6 +70,14 @@
  *      the scene whose primitives it copies.
  * A fourth: the copies are invisible to the raycaster, so a click keeps
  * selecting what it selected before the shell existed.
+ *
+ * (B6) THE EXCEPTION TO B3, added 2026-08-20 with the generated roof
+ * (`docs/llm-blender-models.md`, § B addendum): a building model marked
+ * `roof_only` is NOT the building — it is a lid over the very walls the shell
+ * is built from. So it does not count towards `hasBuildingModel`, it does not
+ * trigger the handover, and it JOINS the shell in `roofParts`/`roofMats`
+ * instead of replacing it. The tier swap frees only the material clones it
+ * really replaced, because the kept shell's clones are in that list too.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -175,7 +183,8 @@ async function main() {
     recipe.includes('    applyOcclusionFade(mat);\n    copy.material = mat;'),
     true);
   check('B3 a real model takes over from it',
-    recipe.includes('  dropFarShell(tile);\n  tile.serverModel = model;'), true);
+    recipe.includes('  if (!roofOnly) dropFarShell(tile);\n  tile.serverModel = model;'),
+    true);
   check('B3 …and it dies with the scene it copies',
     recipe.includes('if (prev && prev.name === SCENE_GROUP) tile.group.remove(prev);\n'
       + '  // The far-view shell is a copy of THIS scene\'s primitives, so it dies with\n'
@@ -203,6 +212,26 @@ async function main() {
     true);
   check('B5 …and the mount asks the plan exactly twice',
     recipe.split('wantsRecipeShell({').length - 1, 2);
+
+  // (B6) THE ONE EXCEPTION TO B3 — a `roof_only` building model
+  // (§ B addendum 2026-08-20, docs/llm-blender-models.md). It is NOT the
+  // building, it is a lid over the walls the shell is made of, so the shell
+  // has to be built in the first place and then has to STAY. Four lines,
+  // and they are the whole contract change on this side.
+  check('B6 a roof-only model does not count as "this place has a shape"',
+    recipe.includes("scene.models.some((m) => m.role === 'building' && !m.roof_only)"),
+    true);
+  check('B6 …the spec decides, the renderer only executes',
+    recipe.includes("applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only);"),
+    true);
+  check('B6 …shell and roof fade TOGETHER (appended, not reset)',
+    [recipe.includes('tile.roofMats = roofOnly ? [...tile.roofMats] : [];'),
+      recipe.includes('const keptParts = roofOnly ? tile.roofParts : [];'),
+      recipe.includes('tile.roofParts = area ? [] : [...keptParts, model];')],
+    [true, true, true]);
+  check('B6 …and the tier swap frees only what it really replaced',
+    recipe.includes('for (const m of oldMats) if (!tile.roofMats.includes(m)) m.dispose();'),
+    true);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

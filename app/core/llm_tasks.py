@@ -73,6 +73,12 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "furnish_new":        {"label": "Furnish: Propose New Pieces", "priority": Priority.NORMAL, "category": "tool"},
     "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
 
+    # LLM-Blender models (docs/llm-blender-models.md): the roof form of ONE
+    # building as a small declarative JSON object. Everything the answer says
+    # is clamped server-side and shown to the admin BEFORE anything is built,
+    # so an unrouted task is not a broken feature — it is the default gable.
+    "roof_design":        {"label": "Roof Design (Blender)",       "priority": Priority.LOW,    "category": "tool"},
+
     # Summaries
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},
     "relationship_summary":  {"label": "Relationship Summary",     "priority": Priority.LOW, "category": "helper", "gate": "relationships.summary_enabled"},
@@ -380,6 +386,18 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": False,
+    },
+    "roof_design": {
+        # The smallest structured-output task in the catalog: a handful of
+        # lines in, one flat JSON object out. hallucination_risk low because
+        # NOTHING the model returns survives unchecked — an unknown form or an
+        # out-of-range pitch is clamped in `roof_model.validate_description`,
+        # and the admin sees and edits every number before the build runs.
+        # latency_sensitive True: this one call sits between the button and
+        # the dialog the user is looking at.
+        "tools": False, "vision": False, "json": True, "min_context": 2048,
+        "model_class": "small", "arch": "any", "hallucination_risk": "low",
+        "creative": True, "language_de": False, "latency_sensitive": True,
     },
 
     # --- Summaries ----------------------------------------------------------

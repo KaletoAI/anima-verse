@@ -3680,3 +3680,35 @@ Instanz" ist also nicht stabil, und eine Variantenmischung bräuchte die
 Aufteilung der Punkte pro Zelle in eigene `InstancedMesh`-Einträge
 (`client3d/src/scene/ground.ts buildScatter`). Der Server liefert dort
 weiterhin nur `variants` der primären Variante.
+
+## Nachtrag 2026-08-20 (§ B1/B2): Dach-Modelle (`roof_only`)
+
+Ein Gebäudemodell ERSETZT die Fernsicht-Hülle: sobald ein Servermodell
+eintrifft, nimmt der Client seine aus den § B Primitiven gebaute Hülle weg
+(`dropFarShell`), denn das Modell IST das Gebäude. Seit dem LLM-Blender-Dach
+(`docs/llm-blender-models.md`) gibt es ein Gebäudemodell, für das das nicht
+gilt: ein **parametrisch über den Umriss gebautes Dach**, ohne Wände. Als
+normales Gebäudemodell abgelegt, würde es genau die Wände verstecken, auf die
+es gehört.
+
+**Ein Feld, am `models[]`-Spec der Rolle `building`:**
+
+| Feld | Bedeutung |
+|---|---|
+| `roof_only` | `true` = das Modell ist NUR das Dach. Ein Renderer, der eine eigene Fernsicht-Hülle aus Platten und Wänden baut, LÄSST SIE STEHEN und setzt das Modell obendrauf. Fehlt/`false` = unverändert: das Modell ist das Gebäude und ersetzt die Hülle. |
+
+Alles andere am Spec bleibt das eines Gebäudes — `display: "shell"`, dieselbe
+`place()`-Routine (§ B2), dieselbe Maßgabe `measure: "yawed_xz"` mit
+deklarierter `width_m`. Das Dach blendet beim Reinzoomen aus wie ein Dach, und
+zwar GEMEINSAM mit der Hülle: beide liegen in `roofParts`/`roofMats`.
+
+Drei Stellen im Client, mehr nicht (`client3d/src/scene/sceneRecipe.ts`):
+`hasBuildingModel` zählt ein `roof_only`-Spec NICHT mit (sonst entstünde die
+Hülle gar nicht erst), `applySceneBuilding` überspringt `dropFarShell` und
+HÄNGT an `roofParts`/`roofMats` an statt sie zurückzusetzen, und der
+Stufen-Tausch entsorgt nur die Material-Klone, die er wirklich ersetzt hat.
+Die Label-Höhe misst Hülle + Dach zusammen.
+
+Der Server setzt das Flag aus dem Sidecar des Modells
+(`location_model3d` → `get_client_meta` → `scene_recipe._building_model`); es
+entsteht ausschließlich beim Dach-Bau, nie beim Meshen eines Bildes.

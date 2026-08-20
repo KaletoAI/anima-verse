@@ -126,6 +126,13 @@ export interface SceneModelSpec {
    *  Detail-Modus: ANKER wie `ground` (Gehfläche auf Etage 0), blendet aber
    *  beim Reinzoomen aus wie `shell` — darunter liegt die Detailszene. */
   display?: 'shell' | 'ground' | 'shell_area'
+  /** Nur am building-Spec: das Modell ist NUR DAS DACH (Nachtrag 2026-08-20,
+   *  docs/llm-blender-models.md) — parametrisch über den Umriss gebaut, ohne
+   *  Wände. Ein Renderer, der eine eigene Fernsicht-Hülle aus den § B
+   *  Primitiven baut, LÄSST SIE STEHEN und setzt dieses Modell obendrauf;
+   *  ohne das Flag ersetzt ein Gebäudemodell die Hülle wie bisher. Fehlt =
+   *  false = das Modell IST das Gebäude. */
+  roof_only?: boolean
   id: string
   /** ETag-Endpunkte je Auflösungsstufe (`full` = modellierte Qualität,
    *  `low` = Fernsicht-Mesh; fehlende Stufe fehlt im Objekt). LEER = kein

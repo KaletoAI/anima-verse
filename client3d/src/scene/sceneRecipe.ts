@@ -667,7 +667,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     isBuilding: tile.isBuilding,
     natureSite: !!tile.natureSite,
     areaDetail: !!scene.area_detail,
-    hasBuildingModel: scene.models.some((m) => m.role === 'building'),
+    // A ROOF-ONLY building model (§ B addendum 2026-08-20) is not an answer to
+    // "does this place have a shape": it is a lid over the shape the recipe
+    // primitives are. Counting it here would take the walls away and leave a
+    // roof floating over a socle plate.
+    hasBuildingModel: scene.models.some((m) => m.role === 'building' && !m.roof_only),
     plates: scene.plates.length,
     walls: scene.walls.length,
   })) buildFarShell(tile, builtPlates, builtWalls);
@@ -1036,7 +1040,7 @@ function dropFarShell(tile: Tile): void {
  *  outline) faded away like a shell (user finding 2026-07-28). */
 function applyBuildingModel(tile: Tile, placed: THREE.Group,
                             spec: SceneModelSpec): void {
-  applySceneBuilding(tile, placed, spec.display ?? 'shell');
+  applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only);
   // Die deklarierte Standhöhe reist mit: `tileGroundY` misst den Dachschutz
   // daran, statt an einer festen 1,2-m-Marke (Befund B8, game/ground.ts).
   tile.modelWalkY = spec.walk_y_world;
@@ -1113,7 +1117,11 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       applyBuildingModel(tile, placed, rec.spec);
       if (old) {
         tile.group.remove(old);
-        for (const m of oldMats) m.dispose();
+        // Only what the swap really replaced: with a roof-only model the far
+        // shell stays standing and KEEPS its material clones in `roofMats`
+        // (§ B addendum 2026-08-20) — disposing those would empty the walls
+        // under the new roof.
+        for (const m of oldMats) if (!tile.roofMats.includes(m)) m.dispose();
       }
     } else {
       applyModelClip(tile, placed, rec.spec);
@@ -1170,10 +1178,17 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
  *  −0,85 m). Seit die Spec nur noch EINEN Faktor liefert, gibt es auch nichts
  *  mehr zu blenden. */
 function applySceneBuilding(tile: Tile, model: THREE.Group,
-                            display: NonNullable<SceneModelSpec['display']> = 'shell'): void {
+                            display: NonNullable<SceneModelSpec['display']> = 'shell',
+                            roofOnly = false): void {
   // The handover: whatever stood in for the model — the far-view shell built
   // from the recipe's own primitives — goes when the real one arrives.
-  dropFarShell(tile);
+  //
+  // EXCEPT for a ROOF (§ B addendum 2026-08-20, docs/llm-blender-models.md):
+  // a `roof_only` model is a lid over the very walls the shell is, so there is
+  // nothing to hand over. The shell stays, the roof joins it, and both fade
+  // together on the way in — which is why the two lists below are APPENDED to
+  // instead of reset in that case.
+  if (!roofOnly) dropFarShell(tile);
   tile.serverModel = model;
   // `area` = das Modell bleibt stehen und bekommt Löcher; das gilt NUR für
   // `ground`. Der Detail-Modus fadet und wird deshalb unten wie eine Hülle
@@ -1193,14 +1208,17 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // Die Backstop-Höhe (−0,01 im Detail-Modus) setzt mountScene zentral —
   // hier würde sie nur dupliziert.
   tile.shellMats = [];
-  tile.roofMats = [];
+  // A kept far shell brought its own material clones into `roofMats`; they
+  // stay in the fade, the roof's clones are added to them below.
+  tile.roofMats = roofOnly ? [...tile.roofMats] : [];
+  const keptParts = roofOnly ? tile.roofParts : [];
   // An AREA location: the model IS the location and stays visible — it does not
   // go into roofParts/roofMats, which the crossfade takes away. The cutouts do
   // the revealing instead (`setEnabled` on the same fade state). Without a fade
   // there is no need for material clones either; the cutout routine clones on
   // its own account anyway — which is why the corridor fade below reaches only
   // the shell branch.
-  tile.roofParts = area ? [] : [model];
+  tile.roofParts = area ? [] : [...keptParts, model];
   tile.facadeMats = [];
   model.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -1229,6 +1247,9 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   tile.group.add(model);
   model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
+  // A roof measured ALONE is 2 m tall and would pull the label down into the
+  // walls it sits on — the readable height of the place is shell plus roof.
+  if (roofOnly && tile.shell) box.expandByObject(tile.shell);
   tile.height = box.max.y - box.min.y;
   tile.labelObj?.position.set(0, tile.height + 2.2, 0);
 }

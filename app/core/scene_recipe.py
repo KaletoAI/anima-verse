@@ -1373,6 +1373,13 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         # Not calibrated yet: the location's own width stands in, and the spec
         # says so — same signal the diorama gives (§ B2a).
         spec["width_estimated"] = True
+    if meta.get("roof_only"):
+        # A GENERATED ROOF (docs/llm-blender-models.md, § B addendum
+        # 2026-08-20): the model is the roof and nothing else, so it does NOT
+        # replace the far-view recipe shell — the renderer keeps the walls and
+        # puts this on top. Everything else about the spec stays a building's:
+        # it fades on zoom-in exactly like a roof should.
+        spec["roof_only"] = True
     return spec
 
 

@@ -10,7 +10,7 @@
  * the plot-share dial map3d.size is gone) and NO placement yaw (v6 Nr. 10 —
  * the orientation fix is the only turn a building mesh has).
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -58,6 +58,32 @@ export interface BuildingModelStatus {
   /** Blender refinement state — the gate for the CPU distance-mesh action. */
   blender?: BlenderStatus
 }
+
+/** The declarative build description of a generated roof (schema v1,
+ *  docs/llm-blender-models.md). Server-clamped on both ends of the wire. */
+export interface RoofDescription {
+  form: 'gable' | 'hip' | 'shed' | 'flat'
+  pitch_deg: number
+  overhang_m: number
+  ridge_axis: 'auto' | 'x' | 'z'
+  material: { tone: string; kind: 'shingle' | 'thatch' | 'metal' | 'tile' }
+  gable_tone?: string
+}
+
+/** What the propose step knows before anything is built. */
+interface RoofProposal {
+  ok?: boolean
+  llm?: boolean
+  storeys?: number
+  storey_height_m?: number
+  eaves_height_m?: number
+  footprint?: { source?: string; length_m?: number; depth_m?: number }
+  description_json?: RoofDescription
+}
+
+const ROOF_FORMS: RoofDescription['form'][] = ['gable', 'hip', 'shed', 'flat']
+const ROOF_KINDS: RoofDescription['material']['kind'][] =
+  ['shingle', 'thatch', 'metal', 'tile']
 
 // The plot-share dial (map3d.size, ]0, 1] of the extent) is GONE with
 // contract v6 Nr. 3: a model scales through its declared real width in
@@ -436,6 +462,17 @@ export function BuildingModelPanel({
     </>
   )
 
+  // The parametric way to a building model — buildings only: a room has no
+  // outline of its own to roof, its walls ARE the building's.
+  const roofBuilder = roomId ? null : (
+    <RoofBuilder
+      apiBase={enc}
+      blender={model3d?.blender}
+      pending={!!model3d?.pending}
+      onStarted={startPoll}
+    />
+  )
+
   const picker = (
     <MeshBackendDialog
       open={generateSource !== null}
@@ -487,6 +524,7 @@ export function BuildingModelPanel({
             {uploadButton}
           </div>
         )}
+        {model3d?.pending ? null : roofBuilder}
       </div>
     )
   }
@@ -698,6 +736,177 @@ export function BuildingModelPanel({
           {t('Generate more models via 🧊 on a gallery tile — new ones become the active model of their target tier.')}
         </span>
       </div>
+      {roofBuilder}
+    </div>
+  )
+}
+
+/**
+ * THE GENERATED ROOF (docs/llm-blender-models.md) — parametric geometry over
+ * the outline the location already has, instead of image-to-3D.
+ *
+ * PROPOSE, THEN BUILD, deliberately in two steps: the LLM picks a form and the
+ * user SEES those numbers and may change every one of them before a single
+ * vertex exists. Nothing here happens silently, and a build with the LLM
+ * unrouted is still a working feature — the proposal is simply the default
+ * gable then (the panel says which of the two it is showing).
+ */
+function RoofBuilder({ apiBase, blender, pending, onStarted }: {
+  apiBase: string
+  blender?: BlenderStatus
+  pending: boolean
+  onStarted: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const [proposal, setProposal] = useState<RoofProposal | null>(null)
+  const [desc, setDesc] = useState<RoofDescription | null>(null)
+
+  // Blender builds the roof locally — without it the button would only ever
+  // produce a 503, so it is not offered (the distance-mesh action next to it
+  // is gated the same way).
+  if (!blender?.usable) return null
+
+  const patch = (part: Partial<RoofDescription>) =>
+    setDesc((d) => (d ? { ...d, ...part } : d))
+
+  const propose = async () => {
+    setBusy(true)
+    try {
+      const d = await apiPost<RoofProposal>(`/world/locations/${apiBase}/roof/propose`, {})
+      setProposal(d)
+      setDesc(d.description_json || null)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const build = async () => {
+    if (!desc) return
+    setBusy(true)
+    try {
+      const d = await apiPost<{ status?: string }>(
+        `/world/locations/${apiBase}/roof/generate`, { description: desc })
+      toast(d?.status === 'already_running'
+        ? t('A roof is already being built for this location.')
+        : t('Building the roof…'))
+      setProposal(null)
+      setDesc(null)
+      onStarted()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const row: CSSProperties = {
+    display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em',
+  }
+  const fp = proposal?.footprint || {}
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          className="ga-btn ga-btn-sm"
+          disabled={busy || pending}
+          onClick={() => { void propose() }}
+          title={t('Build a roof onto the location’s outline — parametric geometry, not image-to-3D. The LLM proposes form, pitch and material; you edit them before the build.')}
+        >
+          🏠 {t('Generate roof (LLM)')}
+        </button>
+        <span className="ga-hint">
+          {t('The roof is built from the outline and the storey height. It is stored as a roof-only building model — the walls of the scene recipe stay visible underneath it.')}
+        </span>
+      </div>
+
+      {desc ? (
+        <div className="ga-form" style={{ gap: 6, padding: 8,
+          border: '1px solid var(--ga-border, #444)', borderRadius: 6 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: '0.82em' }}>
+            <span>{t('Footprint')}: {fp.length_m ?? '?'} × {fp.depth_m ?? '?'} m
+              {' '}({t('from')} {fp.source || '?'})</span>
+            <span>{t('Storeys')}: {proposal?.storeys ?? '?'}</span>
+            <span>{t('Eaves height')}: {proposal?.eaves_height_m ?? '?'} m</span>
+            <span className="ga-hint">
+              {proposal?.llm ? t('proposed by the LLM') : t('default — no LLM answer')}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <label style={row} title={t('Gable = two slopes with a ridge · hip = four slopes · shed = one slope · flat = a slab.')}>
+              {t('Form')}
+              <select className="ga-input" value={desc.form}
+                onChange={(e) => patch({ form: e.target.value as RoofDescription['form'] })}>
+                {ROOF_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </label>
+            <label style={row} title={t('Slope of the roof surface against the horizontal. A flat roof has none.')}>
+              {t('Pitch (°)')}
+              <input
+                type="range" min={5} max={60} step={1}
+                style={{ width: 110 }}
+                disabled={desc.form === 'flat'}
+                value={desc.pitch_deg}
+                onChange={(e) => patch({ pitch_deg: parseFloat(e.target.value) })}
+              />
+              <span style={{ width: 26, textAlign: 'right' }}>
+                {desc.form === 'flat' ? '—' : desc.pitch_deg}
+              </span>
+            </label>
+            <label style={row} title={t('How far the eaves stick out past the wall, in metres.')}>
+              {t('Overhang (m)')}
+              <input
+                className="ga-input" type="number" min={0} max={1} step={0.05}
+                style={{ width: 72 }}
+                value={desc.overhang_m}
+                onChange={(e) => patch({ overhang_m: parseFloat(e.target.value) || 0 })}
+              />
+            </label>
+            <label style={row} title={t('Auto runs the ridge along the long side of the footprint.')}>
+              {t('Ridge')}
+              <select className="ga-input" value={desc.ridge_axis}
+                onChange={(e) => patch({ ridge_axis: e.target.value as RoofDescription['ridge_axis'] })}>
+                {(['auto', 'x', 'z'] as const).map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </label>
+            <label style={row} title={t('The look of the roofing — it sets the surface roughness.')}>
+              {t('Material')}
+              <select className="ga-input" value={desc.material.kind}
+                onChange={(e) => patch({ material: { ...desc.material,
+                  kind: e.target.value as RoofDescription['material']['kind'] } })}>
+                {ROOF_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </label>
+            <label style={row} title={t('Roof colour — the weathered surface, not a paint chip.')}>
+              {t('Tone')}
+              <input
+                type="color"
+                value={desc.material.tone}
+                onChange={(e) => patch({ material: { ...desc.material, tone: e.target.value } })}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button className="ga-btn ga-btn-sm" disabled={busy || pending}
+              onClick={() => { void build() }}>
+              {t('Build roof')}
+            </button>
+            <button className="ga-btn ga-btn-sm" disabled={busy}
+              onClick={() => { setProposal(null); setDesc(null) }}>
+              {t('Cancel')}
+            </button>
+            <span className="ga-hint">
+              {t('The result becomes the active building model of this location (roof only) and is served to the 3D clients like any other.')}
+            </span>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
