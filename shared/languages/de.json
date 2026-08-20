@@ -1182,7 +1182,7 @@
     "Press F to talk to {name}": "Drücke F, um mit {name} zu sprechen",
     "Press F to use the elevator": "Drücke F, um den Fahrstuhl zu benutzen",
     "Preview": "Vorschau",
-    "Preview thinned: showing ~{p}% of authored density — zoom in for true density": "Vorschau ausgedünnt: gezeigt werden ~{p} % der eingestellten Dichte — für die echte Dichte hineinzoomen",
+    "~{p}% of {n} — zoom in for true density": "~{p} % von {n} — für die echte Dichte hineinzoomen",
     "Previous image": "Vorheriges Bild",
     "Priority": "Priorität",
     "Probability %": "Wahrscheinlichkeit %",

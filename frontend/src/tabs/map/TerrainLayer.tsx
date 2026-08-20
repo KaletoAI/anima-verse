@@ -67,10 +67,11 @@ import type { ScatterFootprint } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
-  decorateStroke, scatterPreviewJobs, scatterThinnedDots,
-  scatterThinnedPercentText, scatterTrueModeNext, scatterWindowCost,
-  scatterWindowDots, strokeToPolygon, visibleWorldRect, worldPolyToPath,
-  worldToScreen, type ScatterDot, type ScatterPreviewJob, type StrokeDeco,
+  decorateStroke, scatterAreaCosts, scatterAreaPlan, scatterPreviewJobs,
+  scatterThinnedByArea, scatterThinnedPercentText, scatterWindowDots,
+  strokeToPolygon, visibleWorldRect, worldPolyToPath, worldToScreen,
+  type ScatterDot, type ScatterPreviewJob, type ScatterThinnedDraw,
+  type StrokeDeco,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
 import type { TerrainArea, TerrainType } from './mapTypes'
@@ -123,6 +124,7 @@ const LABEL_BG = '#0d1117'
  *  the inactive mode from doing any work at all. */
 const NO_JOBS: ScatterPreviewJob[] = []
 const NO_DOTS: ScatterDot[] = []
+const NO_THINNED: ScatterThinnedDraw = { dots: NO_DOTS, badges: [] }
 
 /** The colour a kind is drawn in — catalog first, grey when unknown. */
 export function typeColor(types: Record<string, TerrainType>, kind: string): string {
@@ -247,59 +249,79 @@ export function TerrainLayer({
   ), [draftDeco, draftLine, draftPts, draftWidthM])
 
   /**
-   * WHAT GROWS ON THE GROUND, in the two modes of `mapMath`'s preview.
+   * WHAT GROWS ON THE GROUND, in the two modes of `mapMath`'s preview — and
+   * PER AREA, so one big wood cannot decide the picture of the small one
+   * beside it.
    *
    * The rows are collected once per data change (`scatterPreviewJobs` —
-   * cleaned rings, occluders, true counts); which of the two ways they are
-   * drawn hangs on what ONE SCREEN would cost:
+   * cleaned rings, occluders, true counts); which of the two ways EACH AREA is
+   * drawn hangs on what that area alone would cost (`scatterAreaCosts` →
+   * `scatterAreaPlan`):
    *
-   *  · zoomed in, when the visible rectangle's true instance count fits the
-   *    frame budget, the covered 64 m CELLS are enumerated and every instance
-   *    the 3D client plants is drawn — the preview and the world are then the
-   *    same picture, cell for cell (`scatterWindowDots`);
-   *  · zoomed out beyond it, the whole-area sample thinned to its dot budget,
-   *    with the label below saying what fraction of the authored density that
-   *    is (`scatterThinnedDots`).
+   *  · an area whose own bound fits `SCATTER_AREA_TRUE_MAX`: the covered 64 m
+   *    CELLS are enumerated and every instance the 3D client plants is drawn —
+   *    the preview and the world are then the same picture, cell for cell
+   *    (`scatterWindowDots`);
+   *  · an area over it: the whole-area sample thinned to its share of the dot
+   *    budget, with a badge on its own centroid saying what fraction of the
+   *    authored density that is (`scatterThinnedByArea`).
    *
-   * TWO MEMOS, NOT ONE, and the inactive one answers the SAME empty array
-   * every time: the window has to be re-sampled on every pan (that is what
-   * makes it true), while the thinned overview must NOT be — it depends on the
-   * data alone, and re-sampling a world's worth of props for a wheel notch is
-   * exactly the cost the overview exists to avoid.
+   * TWO MEMOS, NOT ONE, and each answers the SAME empty object when its half
+   * is empty: the true window has to be re-sampled on every pan (that is what
+   * makes it true), while the thinned sample must NOT be — it depends on the
+   * data and on WHICH areas are thinned, never on where the viewport sits, and
+   * re-sampling a world's worth of props for a wheel notch is exactly the cost
+   * the overview exists to avoid.
    */
   const rect = useMemo(() => visibleWorldRect(view, w, h), [view, w, h])
   // The ground part draws no dots, and collecting for it would mean paying the
   // whole scatter twice per render once the layer is split in two.
   const jobs = useMemo(() => (scatterPreview && part !== 'ground'
     ? scatterPreviewJobs(areas) : NO_JOBS), [areas, part, scatterPreview])
-  const cost = useMemo(() => scatterWindowCost(jobs, rect), [jobs, rect])
-  // The mode, with hysteresis (`scatterTrueModeNext`): a pan or a wheel notch
-  // at the boundary must not flap the whole dot layer between two pictures.
+  const costs = useMemo(() => scatterAreaCosts(jobs, rect), [jobs, rect])
+  // The plan, with per-area hysteresis: a pan or a wheel notch at the boundary
+  // must not flap an area between its two pictures.
   //
-  // THE RULE IS APPLIED IN THE RENDER, and the state only REMEMBERS which side
-  // of the band the last frame was on. Reading a stored mode instead would let
-  // one frame sample the new cost in the old mode — the frame that switches
-  // the preview on while zoomed out would enumerate a world's worth of cells
-  // before the correcting effect ever ran, which is the one thing a windowed
-  // sampler must never do.
-  const [lastMode, setLastMode] = useState(false)
-  const trueMode = useMemo(() => scatterTrueModeNext(lastMode, cost),
-    [cost, lastMode])
-  useEffect(() => { setLastMode(trueMode) }, [trueMode])
-  const windowDots = useMemo(() => (trueMode && jobs.length
-    ? scatterWindowDots(jobs, rect, footprints) : NO_DOTS),
-  [footprints, jobs, rect, trueMode])
-  const thinnedDots = useMemo(() => (!trueMode && jobs.length
-    ? scatterThinnedDots(jobs, footprints) : NO_DOTS),
-  [footprints, jobs, trueMode])
-  const scatterDots = trueMode ? windowDots : thinnedDots
-  /** …and, in the thinned mode, HOW MUCH of the authored density that is —
-   *  the honest half of an overview that cannot show it all. Empty in true
-   *  mode and on ground that grows nothing: there is no thinning to report. */
-  const thinnedPct = useMemo(() => (trueMode || !thinnedDots.length ? ''
-    : scatterThinnedPercentText(thinnedDots.length,
-      jobs.reduce((sum, j) => sum + j.wanted, 0))),
-  [jobs, thinnedDots, trueMode])
+  // THE RULE IS APPLIED IN THE RENDER, and the state only REMEMBERS which
+  // areas the last frame drew truly. Reading a stored plan instead would let
+  // one frame sample the new costs against the old plan — the frame that
+  // switches the preview on while zoomed out would enumerate a world's worth
+  // of cells before the correcting effect ever ran, which is the one thing a
+  // windowed sampler must never do.
+  const [lastTrue, setLastTrue] = useState('')
+  const plan = useMemo(
+    () => scatterAreaPlan(costs, new Set(lastTrue ? lastTrue.split('\n') : [])),
+    [costs, lastTrue],
+  )
+  // ONE STRING, not a Set: the memos below must not re-run because a new Set
+  // of the same ids was built, and a joined key compares by value for free.
+  const trueKey = plan.trueIds.join('\n')
+  useEffect(() => { setLastTrue(trueKey) }, [trueKey])
+  const trueJobs = useMemo(() => {
+    const ids = new Set(trueKey ? trueKey.split('\n') : [])
+    return ids.size ? jobs.filter((j) => ids.has(j.areaId)) : NO_JOBS
+  }, [jobs, trueKey])
+  const thinJobs = useMemo(() => {
+    const ids = new Set(trueKey ? trueKey.split('\n') : [])
+    return jobs.filter((j) => !ids.has(j.areaId))
+  }, [jobs, trueKey])
+  const windowDots = useMemo(() => (trueJobs.length
+    ? scatterWindowDots(trueJobs, rect, footprints) : NO_DOTS),
+  [footprints, rect, trueJobs])
+  const thinned = useMemo(() => (thinJobs.length
+    ? scatterThinnedByArea(thinJobs, footprints) : NO_THINNED),
+  [footprints, thinJobs])
+  const scatterDots = useMemo(
+    () => (thinned.dots.length ? [...windowDots, ...thinned.dots] : windowDots),
+    [thinned, windowDots],
+  )
+  /** …and, for every APPROXIMATED area, how much of it the dots on it are —
+   *  the honest half of a sample that cannot show it all. An area drawn
+   *  exactly gets none, and neither does one whose share rounded to nothing:
+   *  a badge over ground with no dots under it would name a density the
+   *  picture does not carry. */
+  const badges = useMemo(() => thinned.badges
+    .filter((b) => b.drawn > 0 && b.wanted > 0), [thinned])
 
   if (!w || !h) return null
 
@@ -383,19 +405,26 @@ export function TerrainLayer({
         </g>
       ) : null}
 
-      {/* …and, when the view is too wide to draw them all, what fraction of
-          the authored density these dots ARE. Bottom right, opposite the scale
-          bar: a preview that shows a hundredth of what grows and says nothing
-          is the defect this label closes, and it belongs on the picture rather
-          than in a tooltip nobody opens while comparing two forests. */}
-      {thinnedPct ? (
-        <text x={w - 10} y={h - 10} textAnchor="end" fontSize={11}
-          fill={COL_WARN} stroke={LABEL_BG} strokeWidth={3} paintOrder="stroke"
-          pointerEvents="none">
-          {t('Preview thinned: showing ~{p}% of authored density — zoom in for true density')
-            .replace('{p}', thinnedPct)}
-        </text>
-      ) : null}
+      {/* …and, for every area too thick to draw whole, what fraction of the
+          authored density its dots ARE — ON THAT AREA, at its centroid.
+          A preview that shows a hundredth of what grows and says nothing is
+          the defect this closes, and since the mode is now an area's own the
+          picture is routinely MIXED: one label in a corner would be wrong
+          about the exact wood and unattributable for the thinned one. An area
+          without a badge is an area drawn exactly. */}
+      {badges.map((b) => {
+        const s = worldToScreen(b.x, b.z, view, w, h)
+        if (s.x < -80 || s.y < -20 || s.x > w + 80 || s.y > h + 20) return null
+        return (
+          <text key={`b${b.areaId}`} x={s.x} y={s.y} textAnchor="middle"
+            fontSize={11} fill={COL_WARN} stroke={LABEL_BG} strokeWidth={3}
+            paintOrder="stroke" pointerEvents="none">
+            {t('~{p}% of {n} — zoom in for true density')
+              .replace('{p}', scatterThinnedPercentText(b.drawn, b.wanted))
+              .replace('{n}', String(b.wanted))}
+          </text>
+        )
+      })}
 
       {/* The outline of the SELECTED area — an overlay, not the stroke of its
           own fill: an area painted on top of it would otherwise cover the very

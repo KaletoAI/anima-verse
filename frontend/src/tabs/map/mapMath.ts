@@ -744,19 +744,39 @@ export function strokeToPolygon(points: Array<[number, number]>,
  * between two areas was right; the absolute density was silently a fraction of
  * the world's, with nothing on screen saying so.
  *
- * THE ANSWER IS THE CELL RASTER, WHERE THE USER LOOKS. Zoomed in far enough
- * that the visible rectangle's TRUE instance count fits a frame budget, the
- * preview enumerates the covered CELLS and draws the very instances the client
- * plants — same cell seeds, same ring, same footprints, same occluders, so the
- * two pictures are one picture (§ B5a: pinned numerically in
- * `scripts/smoke_scatter_preview.mjs`, never by comparing screenshots).
+ * THE ANSWER IS THE CELL RASTER, WHERE THE USER LOOKS. When an area's TRUE
+ * instance count fits a frame budget, the preview enumerates the covered CELLS
+ * and draws the very instances the client plants — same cell seeds, same ring,
+ * same footprints, same occluders, so the two pictures are one picture
+ * (§ B5a: pinned numerically in `scripts/smoke_scatter_preview.mjs`, never by
+ * comparing screenshots).
  *
- * Zoomed out beyond that budget the thinned whole-area sample stays — a world
- * of dense meadows is millions of props and no browser draws them — but it now
- * SAYS what it is, with the percentage of the authored density it managed to
- * show. A preview that lies quietly is the defect; a preview that says "this
- * is 0.06 % of what grows, zoom in" is a scale, which is the same doctrine the
+ * Beyond that budget the thinned whole-area sample stays — a world of dense
+ * meadows is millions of props and no browser draws them — but it now SAYS
+ * what it is, with the percentage of the authored density it managed to show.
+ * A preview that lies quietly is the defect; a preview that says "this is
+ * 0.06 % of what grows, zoom in" is a scale, which is the same doctrine the
  * canvas' metre grid and its 1.70 m figure follow.
+ *
+ * THE MODE IS AN AREA'S OWN (reported 2026-08-20, and this is the second half
+ * of the same defect). "The map draws 17 dots in my forest; the 3D client puts
+ * well over two hundred trees there." Both were right. The wood is 89 646 m2
+ * with two rows at 5 per 100 m2, i.e. 8 964 authored trees, and the client
+ * plants 8 576 of them (the ring filter and the areas painted over it take the
+ * rest) — one tree per 10 m2, which is what the author asked for. The preview
+ * drew 16 of those 8 964, because the mode was decided ONCE for the whole
+ * screen and the same viewport also held a 14.2 km2 deep forest of 2 005 260
+ * props. That sum is over any frame budget from any zoom, so the wood was
+ * thinned at EVERY zoom — its share of a 4 000-dot budget is 2·8 = 16 dots,
+ * 0.18 % — and true density was unreachable for it at every scale that still
+ * showed it whole.
+ *
+ * So the decision moved onto the AREA (`scatterAreaCosts`, `scatterAreaPlan`).
+ * An area whose own bound fits `SCATTER_AREA_TRUE_MAX` draws every instance
+ * exactly, whatever monsters share its viewport; the ones over it are thinned
+ * and say so on their own ground (`scatterThinnedByArea` badges). A sum guard
+ * (`SCATTER_TRUE_TOTAL`) still protects the frame, by demoting the LARGEST
+ * areas first — the order that leaves the most areas exact.
  * ========================================================================== */
 
 /**
@@ -811,22 +831,27 @@ export function scatterPreviewShares(wanted: readonly number[],
  *  points are the world's own either way. */
 export const SCATTER_PREVIEW_MAX = 4000
 
-/** Dots the TRUE-DENSITY window draws at most — the frame budget the mode
- *  switch is measured against.
+/** Dots ONE AREA may draw at true density — the budget its own mode switch is
+ *  measured against.
  *
  *  Higher than the overview's ceiling because these dots are the point: in
  *  this mode every one of them is an instance the 3D client really plants, so
- *  the number is what "one screen of world" is allowed to cost, not what a
- *  sample may spend. Eight thousand circles is a browser's comfortable frame;
- *  the cell raster keeps the count proportional to the VISIBLE ground, so it
- *  is reached by zooming out rather than by painting more world. */
-export const SCATTER_TRUE_BUDGET = 8000
+ *  the number is what one AREA is allowed to cost, not what a sample may
+ *  spend. Twelve thousand circles is a browser's comfortable frame, and it is
+ *  deliberately above the ~9 000 props of a 9-hectare wood at ten per 100 m2 —
+ *  a hand-painted forest is exactly the thing an author needs to see whole. */
+export const SCATTER_AREA_TRUE_MAX = 12000
 
-/** HYSTERESIS around that budget, so a pan or a wheel notch at the boundary
- *  cannot flap the two modes (and with them the whole dot layer) frame after
- *  frame: true density switches ON below `budget · 0.8` and back OFF only
- *  above `budget · 1.2`. Between 6 400 and 9 600 estimated instances whatever
- *  mode is running stays running. */
+/** …and what EVERY true-density area may draw together. The per-area cap alone
+ *  says nothing about a screen with five woods on it, so the sum is guarded
+ *  too — by demoting the LARGEST areas to the thinned sample first, which is
+ *  the order that keeps the most areas exact. */
+export const SCATTER_TRUE_TOTAL = 16000
+
+/** HYSTERESIS around those budgets, so a pan or a wheel notch at the boundary
+ *  cannot flap an area between its two pictures frame after frame: true
+ *  density switches ON below `cap · 0.8` and back OFF only above `cap · 1.2`.
+ *  In between whatever mode that area is running stays running. */
 export const SCATTER_TRUE_ON = 0.8
 export const SCATTER_TRUE_OFF = 1.2
 
@@ -934,19 +959,45 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
 
 /** What one screen of TRUE density would cost: the instances the cell sampler
  *  would draw, and the cells it would have to walk to draw them. */
-export interface ScatterWindowCost {
-  /** candidate instances over every row of every visible area — an UPPER
-   *  bound on the dots, since the ring filter, the occluders and the
-   *  footprints only ever subtract from it */
-  dots: number
+/** What true density would cost for ONE area, and the number its mode is
+ *  judged by. */
+export interface ScatterAreaCost {
+  areaId: string
+  /** candidate instances over every row of this area inside the window — an
+   *  UPPER bound on the dots, since the ring filter, the occluders and the
+   *  footprints only ever subtract from it. It is a LOOSE bound: partial cells
+   *  are counted at their FULL density, so an area whose polygon fills half of
+   *  its own bounding box is estimated at roughly twice what it draws. */
+  windowDots: number
   /** cells enumerated, summed over the rows (two rows of one area walk the
    *  same cells twice, and pay for them twice) */
   cells: number
+  /** what this area really plants on its WHOLE painted shape, Σ over its rows
+   *  (`A · d / 100`, exact arithmetic, no window and no estimate) */
+  wanted: number
+  /**
+   * THE NUMBER THE MODE HANGS ON: `min(wanted, windowDots)`.
+   *
+   * Both halves are needed and each is wrong alone. `windowDots` alone tells
+   * an author looking at a whole 9-hectare wood that it costs 25 830 dots when
+   * it draws 8 576 — the bounding box of a concave polygon is mostly not the
+   * polygon, and every rim cell is charged in full. `wanted` alone tells
+   * someone zoomed into four cells of a 14 km2 deep forest that it costs two
+   * million, when the window they are looking at holds 2 312.
+   *
+   * The smaller of the two is a bound on both counts at once, and it is tight
+   * exactly where each of them is: the whole area in view, and a small window
+   * of a huge one.
+   */
+  bound: number
+  /** the arithmetic mean of the area's ring — where its badge hangs */
+  cx: number
+  cz: number
 }
 
 /**
- * What true density would cost for the world rectangle `rect` — WITHOUT
- * sampling a single point.
+ * What true density would cost PER AREA for the world rectangle `rect` —
+ * WITHOUT sampling a single point.
  *
  * Per row: the visible rectangle is clipped against the area's own bounding
  * box, the cells of what is left are COUNTED (`scatterCellCountInBox`, index
@@ -954,14 +1005,46 @@ export interface ScatterWindowCost {
  * candidates. That is the same product the sampler will actually run, so the
  * mode switch below is measured in the currency it spends.
  *
- * An area the rectangle does not reach costs nothing at all, which is what
- * makes the answer hang on the WINDOW rather than on the size of the world.
+ * PER AREA AND NOT PER SCREEN, which is the whole of the 2026-08-20 round.
+ * A single global sum is decided by whatever the biggest painted shape in the
+ * viewport happens to be: on the reporting world a 14 km2 deep forest costs
+ * two million candidates from any zoom that shows a useful amount of map, so
+ * the 9-hectare wood beside it was drawn thinned to 16 dots of its 8 964 trees
+ * — 0.18 % — at EVERY zoom, with no way to reach the true picture. An area's
+ * own cost cannot be pushed over a budget by its neighbours.
+ *
+ * The rows are grouped by `areaId` and the result keeps the AREAS' order of
+ * first appearance, which is the server's bottom-to-top paint order.
+ *
+ * An area the rectangle does not reach costs nothing at all (and is left in
+ * the list with `bound` 0, so a caller can still see it): true density over an
+ * empty window enumerates nothing and draws nothing, which is the correct
+ * picture of ground nobody is looking at.
  */
-export function scatterWindowCost(jobs: readonly ScatterPreviewJob[],
-  rect: MapBounds): ScatterWindowCost {
-  let dots = 0
-  let cells = 0
+export function scatterAreaCosts(jobs: readonly ScatterPreviewJob[],
+  rect: MapBounds): ScatterAreaCost[] {
+  const order: string[] = []
+  const by = new Map<string, ScatterAreaCost>()
   for (const job of jobs) {
+    let cost = by.get(job.areaId)
+    if (!cost) {
+      let x = 0
+      let z = 0
+      for (const [px, pz] of job.ring) { x += px; z += pz }
+      const n = job.ring.length || 1
+      cost = {
+        areaId: job.areaId,
+        windowDots: 0,
+        cells: 0,
+        wanted: 0,
+        bound: 0,
+        cx: x / n,
+        cz: z / n,
+      }
+      by.set(job.areaId, cost)
+      order.push(job.areaId)
+    }
+    cost.wanted += job.wanted
     const [bMinX, bMinZ, bMaxX, bMaxZ] = job.box
     const minX = Math.max(rect.min_x, bMinX)
     const minZ = Math.max(rect.min_z, bMinZ)
@@ -970,31 +1053,84 @@ export function scatterWindowCost(jobs: readonly ScatterPreviewJob[],
     if (maxX < minX || maxZ < minZ) continue
     const n = scatterCellCountInBox(minX, minZ, maxX, maxZ)
     if (n <= 0) continue
-    cells += n
-    dots += n * job.perCell
+    cost.cells += n
+    cost.windowDots += n * job.perCell
   }
-  return { dots, cells }
+  const out = order.map((id) => by.get(id) as ScatterAreaCost)
+  for (const cost of out) cost.bound = Math.min(cost.wanted, cost.windowDots)
+  return out
+}
+
+/** Which areas the next frame draws at true density and which it thins — both
+ *  in the areas' own (paint) order, so a caller can split its rows by a
+ *  lookup and keep the list order it was handed. */
+export interface ScatterAreaPlan {
+  trueIds: string[]
+  thinnedIds: string[]
 }
 
 /**
- * Which mode the next frame draws in — the hysteresis rule, on its own.
+ * THE MODE, PER AREA — the rule on its own, with its hysteresis.
  *
- * TWO LIMITS, and they are limits of different kinds. The DOT budget is a
- * comfort limit and therefore hysteretic (`SCATTER_TRUE_ON` /
- * `SCATTER_TRUE_OFF`): drawing 9 000 circles for one more wheel notch costs a
- * slower frame and nothing else. The CELL count is a hard one: past
- * `SCATTER_CELLS_MAX` the shared enumerator answers an empty list, so a window
- * over it would draw an area's scatter as NOTHING — the one failure this whole
- * round exists to remove. It gets a one-sided band instead: true mode is
- * entered only well under the cap (`· SCATTER_TRUE_ON`) and left the moment
+ * THREE LIMITS, and they are limits of different kinds.
+ *
+ * The per-area DOT budget (`SCATTER_AREA_TRUE_MAX`) is a comfort limit and
+ * therefore hysteretic (`SCATTER_TRUE_ON` / `SCATTER_TRUE_OFF`): drawing a few
+ * thousand circles more for one wheel notch costs a slower frame and nothing
+ * else, but flapping between two pictures at the boundary is unreadable.
+ *
+ * The CELL count is a hard one: past `SCATTER_CELLS_MAX` the shared enumerator
+ * answers an empty list, so an area over it would be drawn as NOTHING. It gets
+ * a one-sided band instead — entered only well under the cap, left the moment
  * the cap itself is reached.
+ *
+ * The TOTAL (`SCATTER_TRUE_TOTAL`) is the guard the per-area cap cannot give:
+ * five woods that each fit may not fit together. It demotes the LARGEST
+ * bound first and stops as soon as the sum fits, which keeps the most areas
+ * exact — and it is the big one that has the least to lose, since a thinned
+ * sample of 12 000 props still shows its shape while a thinned sample of 300
+ * is a handful of dots. Ties fall to the area that comes later in the paint
+ * order, so the answer never depends on `Array.prototype.sort` being stable.
+ *
+ * `wasTrue` is which areas the LAST frame drew truly — the only state, and it
+ * is read, never written, here.
  */
-export function scatterTrueModeNext(on: boolean, cost: ScatterWindowCost
-): boolean {
-  const { dots, cells } = cost
-  if (!Number.isFinite(dots) || !Number.isFinite(cells)) return false
-  if (cells > SCATTER_CELLS_MAX * (on ? 1 : SCATTER_TRUE_ON)) return false
-  return dots <= SCATTER_TRUE_BUDGET * (on ? SCATTER_TRUE_OFF : SCATTER_TRUE_ON)
+export function scatterAreaPlan(costs: readonly ScatterAreaCost[],
+  wasTrue: ReadonlySet<string>): ScatterAreaPlan {
+  const candidates: ScatterAreaCost[] = []
+  const thinned = new Set<string>()
+  for (const cost of costs) {
+    const on = wasTrue.has(cost.areaId)
+    if (!Number.isFinite(cost.bound) || !Number.isFinite(cost.cells)) {
+      thinned.add(cost.areaId)
+      continue
+    }
+    if (cost.cells > SCATTER_CELLS_MAX * (on ? 1 : SCATTER_TRUE_ON)) {
+      thinned.add(cost.areaId)
+      continue
+    }
+    if (cost.bound > SCATTER_AREA_TRUE_MAX * (on ? SCATTER_TRUE_OFF : SCATTER_TRUE_ON)) {
+      thinned.add(cost.areaId)
+      continue
+    }
+    candidates.push(cost)
+  }
+  // The sum guard — largest bound first, later paint order first on a tie.
+  let sum = candidates.reduce((s, c) => s + c.bound, 0)
+  if (sum > SCATTER_TRUE_TOTAL) {
+    const pos = new Map(costs.map((c, i) => [c.areaId, i]))
+    const biggest = [...candidates].sort((a, b) => (b.bound - a.bound)
+      || ((pos.get(b.areaId) as number) - (pos.get(a.areaId) as number)))
+    for (const cost of biggest) {
+      if (sum <= SCATTER_TRUE_TOTAL) break
+      thinned.add(cost.areaId)
+      sum -= cost.bound
+    }
+  }
+  return {
+    trueIds: costs.filter((c) => !thinned.has(c.areaId)).map((c) => c.areaId),
+    thinnedIds: costs.filter((c) => thinned.has(c.areaId)).map((c) => c.areaId),
+  }
 }
 
 /** One previewed prop: where it stands and WHICH ROW of its area grew it (the
@@ -1047,21 +1183,68 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
   return out
 }
 
+/** An APPROXIMATED area, as its own badge: where to hang it, how many dots it
+ *  got and how many props those stand for. The text is
+ *  `scatterThinnedPercentText(drawn, wanted)` — the layer writes it, this is
+ *  the arithmetic behind it. */
+export interface ScatterAreaBadge {
+  areaId: string
+  /** the arithmetic mean of the area's ring, in world metres */
+  x: number
+  z: number
+  /** dots this area really got */
+  drawn: number
+  /** …of the props it really plants */
+  wanted: number
+}
+
+/** The thinned half of a mixed picture: its dots, and one badge per area that
+ *  had to be approximated. */
+export interface ScatterThinnedDraw {
+  dots: ScatterDot[]
+  badges: ScatterAreaBadge[]
+}
+
 /**
- * THE OVERVIEW PREVIEW: the whole world's scatter, thinned to `budget` dots
- * proportionally (`scatterPreviewShares`).
+ * THE OVERVIEW PREVIEW: the given areas' scatter, thinned to `budget` dots
+ * proportionally (`scatterPreviewShares`), with ONE BADGE PER AREA saying what
+ * fraction of it that is.
  *
  * Every dot is still a prop the sampler really places — a lower `maxPoints`
  * yields the PREFIX of the same stream — and the ratio between two areas is
- * the ratio of what grows on them. What it is NOT is the world's density, and
- * that is what `scatterThinnedPercentText` puts on the screen.
+ * the ratio of what grows on them. What it is NOT is the world's density.
+ *
+ * THE BADGE IS PER AREA AND NOT PER SCREEN (2026-08-20). One label in the
+ * corner could only ever report the whole picture, and since the modes became
+ * an area's own business a picture is routinely MIXED: an exact wood beside an
+ * approximated deep forest. A single "~0.2 %" over both is then wrong about
+ * one of them and unattributable for the other, so the number moved onto the
+ * ground it is about. An area drawn exactly carries no badge at all — nothing
+ * was approximated, so there is nothing to say.
+ *
+ * The badge counts the dots that were really PLACED, not the share that was
+ * asked for: the footprints and the covering areas subtract, and a preview
+ * that reports the request would overstate itself against a building.
  */
-export function scatterThinnedDots(jobs: readonly ScatterPreviewJob[],
+export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
   footprints: readonly ScatterFootprint[],
-  budget: number = SCATTER_PREVIEW_MAX): ScatterDot[] {
+  budget: number = SCATTER_PREVIEW_MAX): ScatterThinnedDraw {
   const shares = scatterPreviewShares(jobs.map((j) => j.wanted), budget)
-  const out: ScatterDot[] = []
+  const dots: ScatterDot[] = []
+  const order: string[] = []
+  const by = new Map<string, ScatterAreaBadge>()
   jobs.forEach((job, i) => {
+    let badge = by.get(job.areaId)
+    if (!badge) {
+      let x = 0
+      let z = 0
+      for (const [px, pz] of job.ring) { x += px; z += pz }
+      const n = job.ring.length || 1
+      badge = { areaId: job.areaId, x: x / n, z: z / n, drawn: 0, wanted: 0 }
+      by.set(job.areaId, badge)
+      order.push(job.areaId)
+    }
+    badge.wanted += job.wanted
     const share = shares[i]
     if (share < 1) return
     for (const p of scatterInstances({
@@ -1073,9 +1256,21 @@ export function scatterThinnedDots(jobs: readonly ScatterPreviewJob[],
       occluders: job.occluders,
       clearM: job.clearM,
       maxPoints: share,
-    })) out.push({ x: p.x, z: p.z, entry: job.index })
+    })) {
+      dots.push({ x: p.x, z: p.z, entry: job.index })
+      badge.drawn += 1
+    }
   })
-  return out
+  return { dots, badges: order.map((id) => by.get(id) as ScatterAreaBadge) }
+}
+
+/** The dots of `scatterThinnedByArea` without its badges — the plain overview,
+ *  kept because "what does this world thin to?" is a question about the dots
+ *  alone (and the shape of `ScatterDot` is what the two modes share). */
+export function scatterThinnedDots(jobs: readonly ScatterPreviewJob[],
+  footprints: readonly ScatterFootprint[],
+  budget: number = SCATTER_PREVIEW_MAX): ScatterDot[] {
+  return scatterThinnedByArea(jobs, footprints, budget).dots
 }
 
 /**
