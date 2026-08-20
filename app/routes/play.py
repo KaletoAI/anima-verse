@@ -2463,6 +2463,7 @@ def get_terrain_route(user=Depends(get_current_user)):
     part in, § A9) — derived here, not stored, so a low variant generated later
     or a corrected height reaches the clients with the next refetch.
     """
+    from app.core.heightfield import with_effective_water_level
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     from app.models import terrain
@@ -2473,7 +2474,12 @@ def get_terrain_route(user=Depends(get_current_user)):
         "default_kind": default_kind(),
         "types": sorted(effective_catalog().values(),
                         key=lambda t: t["kind"]),
-        "areas": terrain.with_scatter_props(terrain.list_areas()),
+        # A water area additionally carries ``meta.water_level_effective`` —
+        # the mirror height the bake carved with, derived where the author left
+        # ``water_level`` on "auto" (E1, § G4). Output only; the authored
+        # fields are untouched.
+        "areas": with_effective_water_level(
+            terrain.with_scatter_props(terrain.list_areas())),
         "sig": terrain.terrain_sig(),
     }
 
@@ -2533,7 +2539,7 @@ def get_heightfield_route(user=Depends(get_current_user)):
     never mixed: a reader takes either the tiles or the overview.
     """
     from app.core.heightfield import (TILE_M, TILE_STEP_M, get_field,
-                                      tile_index_keys)
+                                      index_stats_payload, tile_index_keys)
     field = get_field()
     return {
         "origin_x": field.get("origin_x", 0.0),
@@ -2546,6 +2552,12 @@ def get_heightfield_route(user=Depends(get_current_user)):
         "tile_m": TILE_M,
         "tile_step_m": TILE_STEP_M,
         "tiles": tile_index_keys(),
+        # THE PYRAMID (E1, § G2), additive: per mip level in
+        # ``mip_levels_m``, how many metres a renderer buys by drawing a tile
+        # at that level instead of at the 2 m base, plus the tile's own
+        # min/max. Nothing above it changed shape — a client that only reads
+        # the overview grid sees exactly the fields it always saw.
+        **index_stats_payload(),
     }
 
 
@@ -2562,6 +2574,11 @@ def get_heightfield_tiles_route(keys: str = "", user=Depends(get_current_user)):
     Auth and fog exactly like ``/play/heightfield``: any logged-in user, never
     fogged. ``keys`` is ``tx:tz,tx:tz`` (colon inside a key, comma between
     them), at most ``TILE_BATCH_MAX`` keys per request.
+
+    Since E1 every shipped tile carries its ``stats`` — ``min``/``max`` and one
+    ``max_vertical_error`` per entry of the payload's ``mip_levels_m`` (§ G2).
+    They ride HERE because the tile is already rastered; asking for the
+    statistics of a tile nobody loaded is what costs.
 
     Tiles the index does not know are LEFT OUT — the client already has the
     index from ``/play/heightfield`` and treats a missing tile as flat ground,

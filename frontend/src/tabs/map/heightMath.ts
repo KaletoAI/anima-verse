@@ -116,37 +116,6 @@ export function reliefStepNotice(stepM: number, defaultStepM: number
 }
 
 /**
- * HOW BIG A RIM A LEVELLED PLACE CAN STILL BE ENTERED OVER, in metres.
- *
- * A location with "Flatten terrain" pins the ground under its footprint to the
- * height at its own centre, and the transition to the untouched landscape is
- * exactly ONE grid cell wide (`heightfield.level_plateaus`, § A16.1). So the
- * whole climb has to happen over that one cell:
- *
- *     rim = maxGradient(…) · tile_step_m
- *
- * A place whose centre sits further above or below the ground at its rim keeps
- * an edge no walker crosses — legitimate (a mesa entered through an opening,
- * which the gate exempts) and miserable by accident, which is why it is said
- * out loud.
- *
- * `tileStepM` COMES FROM THE SERVER (`GET /world/height-areas` →
- * `tile_step_m`) and is never pinned here. It halved on 2026-08-14 when the
- * tiles went from a 4 m step to 2 m, and with it this number: 3.36 m → 1.68 m
- * at the default limits. A constant in this file would have gone on promising
- * twice the climb.
- *
- * `null` = nothing to say (no step answered yet, or unusable limits).
- */
-export function plateauRimM(maxSlopeDeg: number, maxStepM: number,
-  tileStepM: number): number | null {
-  if (!Number.isFinite(tileStepM) || tileStepM <= 0) return null
-  const g = maxGradient(maxSlopeDeg, maxStepM)
-  if (!g) return null
-  return Math.round(g * tileStepM * 100) / 100
-}
-
-/**
  * FROM WHICH MICRO-RELIEF AMPLITUDE the random hills of a ground kind can get
  * steeper than a walker climbs, in metres (§ A16.2).
  *
@@ -172,7 +141,7 @@ export function plateauRimM(maxSlopeDeg: number, maxStepM: number,
  * any steep flank; what this line names is the point from which the ground
  * breaks the SLOPE rule at all, which is the threshold the field warns at.
  *
- * BOTH INPUTS COME FROM THE SERVER, like `plateauRimM` next to it:
+ * BOTH INPUTS COME FROM THE SERVER, never pinned here:
  * `max_slope_deg` from the worldmap payload, `tile_step_m` from
  * `GET /world/height-areas`. A step pinned here would have gone on promising
  * the 4 m grid after the tiles halved on 2026-08-14.

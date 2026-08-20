@@ -89,9 +89,10 @@ class Region(NamedTuple):
     ``area_m2`` is the nesting rule of contract v6 (E1.2, smallest AREA wins),
     ``is_area`` whether the place is OPEN GROUND
     (``world_geometry.is_area_location`` — it decides how far the terrain pace
-    reaches into it) and ``level_ground`` whether it LEVELS the ground under
-    itself (opt-in since 2026-08-13), which decides whether the steepness rule
-    is measured inside it at all.
+    reaches into it) and ``level_ground`` whether it STAMPS A PLATEAU
+    under itself — since E1 (§ G5) that is ``draws_built_floor``, i.e. "does
+    this location draw a built floor", never a flag — which decides whether
+    the steepness rule is measured inside it at all.
     """
 
     lid: str
@@ -299,14 +300,14 @@ def _placement_sig(regions: Sequence[Region],
     a new context — it decides how far the terrain pace reaches into that place
     and therefore what a route costs.
 
-    SO DOES ``level_ground`` (opt-in flattening, 2026-08-13). It is the input
-    of a rule of THIS file — whether the steepness of the ground is measured
-    inside that place (:meth:`_Search.in_level_region`) — and the context
-    caches the answer per cell, so it belongs in the key that decides how long
-    the context lives. ``height_sig`` moves for the flag as well
-    (``placed_footprints`` only lists the flagged places), and that overlap is
-    the same deliberate one the two halves already have for a MOVE: either
-    would catch it, neither alone would catch everything.
+    SO DOES WHETHER THE PLACE IS BUILT (E1, § G5). It is the input of a rule
+    of THIS file — whether the steepness of the ground is measured inside that
+    place (:meth:`_Search.in_level_region`) — and the context caches the answer
+    per cell, so it belongs in the key that decides how long the context lives.
+    ``height_sig`` moves with it as well (``placed_footprints`` lists exactly
+    the built places), and that overlap is the same deliberate one the two
+    halves already have for a MOVE: either would catch it, neither alone would
+    catch everything.
     """
     places = sorted((r.lid, list(r.points), r.is_area, r.level_ground)
                     for r in regions)
@@ -352,7 +353,7 @@ def build_nav_context() -> NavContext:
     global _CACHE
     from app.core.boundary_entry import opening_world_points
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
-    from app.models.heightfield import height_sig
+    from app.models.heightfield import draws_built_floor, height_sig
     from app.models.terrain import list_areas, terrain_sig
     from app.models.world import list_locations
 
@@ -372,7 +373,14 @@ def build_nav_context() -> NavContext:
                               points=tuple(world_pts), bounds=box,
                               area_m2=polygon_area(world_pts),
                               is_area=is_area_location(loc),
-                              level_ground=bool(loc.get("level_ground"))))
+                              # WHO STAMPS A PLATEAU (E1, plan-ein-boden.md
+                              # § G5): the location that draws a BUILT floor,
+                              # never a flag. The ONE rule the bake uses, asked
+                              # of the same function, so the exemption below
+                              # cannot step back for a place the ground was
+                              # never levelled under (or fail to for one it
+                              # was).
+                              level_ground=draws_built_floor(loc)))
     max_step_m = get_max_step_height_m()
     max_slope_deg = get_max_slope_deg()
 
@@ -513,10 +521,10 @@ class _Search:
         # …and the same split kept as geometry, for the "the place wins"
         # tests below (:meth:`in_region`).
         self.exempt_regions = [r for r in ctx.regions if r.lid in self.exempt]
-        # The LEVELLING half of them (``level_ground``, opt-in since
-        # 2026-08-13) — the only places the STEEPNESS rule steps back for
-        # (:meth:`in_level_region`). The passability exemption above is a
-        # different rule and keeps the whole list.
+        # The PLATEAU half of them — the BUILT places (E1, § G5), the only
+        # ones the STEEPNESS rule steps back for (:meth:`in_level_region`).
+        # The passability exemption above is a different rule and keeps the
+        # whole list.
         self.level_regions = [r for r in self.exempt_regions if r.level_ground]
         min_x, min_z, max_x, max_z = _route_bounds(ctx, start, goal)
         self.min_i, self.min_j = cell_of(min_x, min_z)
@@ -549,11 +557,11 @@ class _Search:
                    for r in self.exempt_regions)
 
     def in_level_region(self, x: float, z: float) -> bool:
-        """Does that point lie inside an exempt boundary that LEVELS its
-        ground (``level_ground``)?
+        """Does that point lie inside an exempt boundary that STAMPS a
+        plateau, i.e. a BUILT place (E1, § G5)?
 
         The steepness half of the exemption, and it is a NARROWER list than
-        :meth:`in_region` on purpose (decision 2026-08-13): stepping back from
+        :meth:`in_region` on purpose: stepping back from
         the slope rule was only ever justified by the world grid being flat
         under the place, and since flattening is opt-in that is true of the
         flagged places alone. Under an unflagged one the authored landscape
@@ -596,11 +604,11 @@ class _Search:
         walks around in it freely, which is the two movement models
         disagreeing about the same square metre.
 
-        THE PASSABILITY EXEMPTION IS UNCONDITIONAL — it does NOT ask
-        ``level_ground``. Painted ground judges the world BETWEEN the places
-        whether or not a place levels its own; the flag only ever says who
-        moved the height field (decision 2026-08-13). The steepness question
-        below is the one that follows the flag.
+        THE PASSABILITY EXEMPTION IS UNCONDITIONAL — it does NOT ask whether
+        the place is built. Painted ground judges the world BETWEEN the places
+        whether or not a place stamps its own; being built only ever says who
+        moved the height field (E1, § G5). The steepness question below is the
+        one that follows it.
         """
         hit = self._blocked.get(cell)
         if hit is None:
@@ -659,17 +667,17 @@ class _Search:
 
         TWO EXEMPTIONS, both of them rules this file already lives by:
 
-        * INSIDE A **LEVELLING** PLACE nothing is measured (the place
-          wins). The world grid is levelled flat under such a place anyway, so
+        * INSIDE A **BUILT** PLACE nothing is measured (the place wins). The
+          world grid is stamped flat under such a place anyway (E1, § G5), so
           this only matters at the rim, where the plateau's own ramp would
-          otherwise wall its location in. Since flattening became opt-in
-          (``level_ground``, 2026-08-13) it is the FLAGGED places alone:
-          under an unflagged place the authored landscape runs on, so there is
-          real ground to judge and the rule judges it — the same ground the
-          walking gate of ``POST /play/pos`` judges, which never knew about
-          places. A location built on a steep slope without the flag can
-          therefore be unroutable; that is the authoring consequence the
-          decision accepted, and the cure is the flag.
+          otherwise wall its location in. Since "Ein Boden" it is the places
+          that DRAW A BUILT FLOOR alone — ``models.heightfield.
+          draws_built_floor``, the very rule the bake stamps by: under a
+          NATURAL place (a lake, a clearing) the authored landscape runs on,
+          so there is real ground to judge and the rule judges it, the same
+          ground the walking gate of ``POST /play/pos`` judges. A natural
+          location drawn onto a steep slope can therefore be unroutable; that
+          is the authoring consequence, and the cure is to give it a floor.
         * AT AN OPENING nothing is measured either (``OPENING_EXEMPT_M``) —
           the ramp-end exemption of the walking gate. A place on a plateau is
           entered exactly where its ground steps up.

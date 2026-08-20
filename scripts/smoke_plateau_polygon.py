@@ -1,56 +1,47 @@
 #!/usr/bin/env python3
-"""Smoke run for the PLATEAU AS A POLYGON DISTANCE FIELD (contract v6 no. 7).
+"""Smoke run for the AUTO-PLATEAU ON A CONCAVE OUTLINE (§ G5, Ein Boden).
 
 Throwaway storage, no server, no real world. Every number below is derived BY
 HAND in this header from the rules, never recorded from the current output.
 
-WHAT CHANGED IN v6
-------------------
-A levelling location used to hand the raster a SQUARE ``(cx, cz, w, yaw)``.
-It now hands it a POLYGON — ``(cx, cz, yaw_deg, boundary points in local
-metres)``, straight out of ``world_geometry.effective_boundary`` — and the
-plateau pass tests each raster point with ``polygon_distance`` in the
-location's own local frame instead of with the box distance of a square:
+WHAT THIS SCRIPT IS FOR
+-----------------------
+``scripts/smoke_height_bake.py`` proves the pure height function on a SQUARE
+plot. This one keeps the POLYGON half honest — a concave L, whose notch, whose
+own anchor and whose median are all places a "the footprint is a box" mistake
+shows up immediately.
 
-    d == 0            inside the outline   -> pinned to the plateau height
-    0 < d <= one cell the dilation ring    -> pinned as well (§ A16.1)
-    d >  one cell     untouched landscape
+WHAT CHANGED WITH "EIN BODEN" E1
+--------------------------------
+A built location no longer asks to be levelled (``level_ground`` is gone) and
+the stamp is no longer a raster operation:
 
-THE PLATEAU HEIGHT is read at ``polygon_interior_point`` mapped through the
-pin, NOT at the pin: a concave outline may leave its own anchor (and its own
-centroid) outside itself, and the plateau would then stand at a height nobody
-inside the place ever touches. The L below is exactly that case — its anchor
-is a polygon CORNER.
-
-OVERLAP is resolved by AREA now (v6 no. 6, "the smallest area wins"), because
-a polygon has no single edge to compare; ``smoke_heightfield.py`` [14] keeps
-that half honest with its four squares.
-
-WHAT THE RAMP IS — READ THIS BEFORE EXPECTING A BLEND
------------------------------------------------------
-§ A16.1 builds the ramp out of the RASTER, not out of a per-point blend: the
-footprint dilated by ONE CELL is pinned to the FULL plateau height, and the
-ramp is the bilinear span between the outermost pinned lattice point and the
-first untouched one. So a ring lattice point reads exactly the plateau, and
-the linear plateau -> terrain interpolation is what ``sample_height`` returns
-BETWEEN those two points. Case (c) below measures precisely that.
+    who stamps   every location that draws a BUILT floor — a ``map3d.outline``
+                 or at least one CLOSED room. Nothing else, no flag.
+    how high     the MEDIAN of the natural ground over the footprint, sampled
+                 on the 2 m world lattice (it was a single interior probe)
+    how wide     a smoothstep ramp of w = clamp(0.5·sqrt(area/pi), 2, 8) METRES
+                 OUTSIDE the outline (it was "one grid cell", i.e. 2 m on a
+                 tile and up to 32 m on a coarsened overview — the "zwei
+                 Böden" bug), widened where the rim step would exceed 35°
+    what it is   h = h0 + (h_before − h0)·smoothstep(d/w),  d = polygon
+                 distance in the location's own LOCAL frame; d = 0 inside
 
 THE FIXTURE
 -----------
-ONE height area, chosen so the landscape is a clean plane over the whole
-region of interest:
+ONE height area, chosen so the landscape is a clean plane over the region of
+interest:
 
     SLOPE   square (0,0)-(200,200), height_m 20, falloff_m 200
 
-    h_area(p) = 20 · min(1, d(p)/200)   with d = distance to the outline
-              = 20 · min(x, z, 200−x, 200−z) / 200
+    h_area(p) = 20 · min(x, z, 200−x, 200−z) / 200
 
 Everything below lives in x ∈ [6, 22], z ∈ [64, 76], where the west edge is
-always the nearest one (x < 60 ≤ z, 200−x, 200−z), so
+always the nearest one, so
 
     TERRAIN(x, z) = 20 · x / 200 = x / 10           (independent of z)
 
-ONE levelling location, an L, anchored at the pin (8, 66) with yaw 0 and the
+ONE built location, an L, anchored at the pin (8, 66) with yaw 0 and the
 boundary in LOCAL metres
 
     (0,0) (8,0) (8,4) (4,4) (4,8) (0,8)        clockwise, area 8·4 + 4·4 = 48
@@ -61,83 +52,110 @@ world x ∈ [12,16], z ∈ [70,74] — is OUTSIDE the location.
 
 The raster is ONE tile, ``rasterize_tile(0, 0, …)``: origin (0,0), 129 × 129
 support points at the 2 m tile step, so the world point (x, z) is the stored
-index (i, j) = (x/2, z/2) and ONE CELL — the ramp width — is 2 m.
+index (i, j) = (x/2, z/2).
 
 THE HAND-DERIVED NUMBERS
 ------------------------
-1) THE INTERIOR POINT. The L's centroid, by the shoelace rule on the local
-   points (cross_i = x_i·z_{i+1} − x_{i+1}·z_i):
+1) THE TARGET HEIGHT is the MEDIAN over the 2 m world lattice inside the
+   outline. The footprint box is (8,66)-(16,74), so the candidate lattice
+   points are local (lx, lz) with lx, lz ∈ {0, 2, 4, 6, 8}; those with
+   ``polygon_distance == 0`` (inside OR on the outline) are
 
-     crosses  0, 32, 16, 16, 32, 0            Σ = 96, so the area is 48
-     Σ (x_i + x_{i+1})·cross_i = 0 + 16·32 + 12·16 + 8·16 + 4·32 + 0 = 960
-     Σ (z_i + z_{i+1})·cross_i = 0 +  4·32 +  8·16 + 12·16 + 16·32 + 0 = 960
-     centroid = (960 / (6·48), 960 / (6·48)) = (10/3, 10/3) ≈ (3.333, 3.333)
+     lz = 0   lx = 0,2,4,6,8    (the whole south edge)      5 points
+     lz = 2   lx = 0,2,4,6,8    (inside the wide arm)       5
+     lz = 4   lx = 0,2,4,6,8    (interior + the edge z=4)   5
+     lz = 6   lx = 0,2,4        (lx = 6, 8 are 2 and 4 m out)   3
+     lz = 8   lx = 0,2,4        (the north edge)            3
+                                                           = 21 samples
 
-   which lies INSIDE the L (both coordinates below 4), so
-   ``polygon_interior_point`` returns it. In world metres:
+   with TERRAIN = (lx + 8)/10, i.e. the multiset
 
-     (8 + 10/3, 66 + 10/3) = (34/3, 208/3) ≈ (11.3333, 69.3333)
+     0.8 ×5,  1.0 ×5,  1.2 ×5,  1.4 ×3,  1.6 ×3
 
-2) THE PLATEAU HEIGHT. ``plateau_height`` mixes the four lattice points of
-   the enclosing 2 m cell bilinearly. The cell is x ∈ [10,12], z ∈ [68,70]
-   (tx = tz = (34/3 − 10)/2 = 2/3); the kernel there is TERRAIN, which is
-   linear in x, and bilinear interpolation reproduces a linear function
-   exactly, so
+   The median of 21 values is the 11th; the cumulative count is 5, 10, 15, so
+   the 11th is
 
-     h0 = TERRAIN(34/3) = 34/30 = 17/15 = 1.13333…   ->  stored as 1.133
+     h0 = 1.2                       (and the tile stores exactly 1.2)
 
-   THE PIN WOULD SAY SOMETHING ELSE: TERRAIN(8) = 0.8. That is the whole
-   point of reading at an interior point, and the red counter-probe below
-   asserts the plateau is NOT 0.8.
+   TWO OLDER ANSWERS ARE WRONG NOW, and both are asserted absent:
+     * the PIN would say TERRAIN(8) = 0.8 — an L may leave its own anchor
+       outside itself, which is why the pin was never the probe;
+     * the INTERIOR POINT (the centroid (10/3, 10/3), world x = 34/3) would
+       say 34/30 = 1.1333… — the pre-E1 rule. A single probe is decided by
+       whatever one square metre happens to do; the median has to be outvoted
+       by half the plot.
 
-3) (a) INSIDE THE WIDE ARM: world (14, 68) = local (6, 2), inside the L, so
-   distance 0 -> pinned. Stored index (7, 34) must be 1.133, where the
-   untouched landscape would have been TERRAIN(14) = 1.4.
+2) THE RAMP WIDTH. area = 48 m², so
+     0.5·sqrt(48/pi) = 0.5·3.908820… = 1.954410… m
+   which is UNDER the 2 m floor, so w = 2.0 m exactly.
+   SLOPE CAP: the rim is sampled every 2 m (perimeter 32 m -> 16 samples) and
+   carries TERRAIN(x) for x ∈ {8, 10, 12, 14, 16}, so the biggest rim step is
+   |1.2 − 1.6| = |1.2 − 0.8| = 0.4 m. tan(35°)·2.0 = 1.400415… m > 0.4, so the
+   width is NOT widened.
+
+3) (a) INSIDE: world (14, 68) = local (6, 2), d = 0 -> 1.2, where the
+   untouched landscape carries TERRAIN(14) = 1.4.
 
 4) (b) THE NOTCH: world (16, 74) = local (8, 8). The nearest outline points
-   are the corner (8,4) — hypot(0,4) = 4 — and the edges x = 4 (z ∈ [4,8])
-   and z = 4 (x ∈ [4,8]), both 4 m away, so d = 4 > 2: NO plateau and NO ramp
-   bleed. Stored index (8, 37) must be pure TERRAIN(16) = 1.6. Had the pass
-   treated the outline as its BOUNDING BOX, this point would be 1.133 — the
-   second red counter-probe.
+   are the corner (8,4) — hypot(0,4) = 4 — and the edges x = 4 and z = 4, both
+   4 m away, so d = 4 > w: untouched, TERRAIN(16) = 1.6. Had the pass treated
+   the outline as its BOUNDING BOX this point would be 1.2.
 
-   The ring DOES reach into the notch where it should: world (14, 72) =
-   local (6, 6) is exactly 2 m from the edge x = 4 (and from z = 4), i.e.
-   d = one cell -> pinned. Stored index (7, 36) = 1.133, not TERRAIN = 1.4.
+   The ramp DOES reach into the notch:
+     world (14, 72) = local (6, 6), d = 2 = w exactly
+        -> smoothstep(1) = 1 -> the landscape again, TERRAIN(14) = 1.4
+     world (13, 71) = local (5, 5), d = 1
+        -> t = 0.5, smoothstep = 0.25·(3−1) = 0.5
+        -> 1.2 + (TERRAIN(13) − 1.2)·0.5 = 1.2 + 0.1·0.5 = 1.25
+   RED COUNTER-PROBE: the OLD one-cell ring PINNED (14,72) to the plateau —
+   d = 2 ≤ one cell — so it read 1.133 there. It is 1.4 now.
 
-5) (c) THE RAMP, east of the wide arm along the lattice row z = 68
-   (local z = 2, so no z mixing at all — the row IS a lattice row):
+5) (c) THE RAMP east of the wide arm, along z = 68 (local z = 2, so the row is
+   a lattice row and no z mixing is involved). d = local x − 8:
 
-     x = 16  local (8, 2)   ON the outline, d = 0    -> 1.133
-     x = 18  local (10, 2)  d = 2 = one cell (ring)  -> 1.133
-     x = 20  local (12, 2)  d = 4 > 2                -> TERRAIN(20) = 2.0
+     x = 16     d = 0     -> 1.2
+     x = 16.5   d = 0.5   -> t = 0.25, ss = 0.0625·2.5 = 0.15625
+                             1.2 + (1.65−1.2)·0.15625 = 1.2703125
+     x = 17     d = 1     -> t = 0.5, ss = 0.5
+                             1.2 + (1.70−1.2)·0.5 = 1.45
+     x = 17.5   d = 1.5   -> t = 0.75, ss = 0.5625·1.5 = 0.84375
+                             1.2 + (1.75−1.2)·0.84375 = 1.6640625
+     x = 18     d = 2 = w -> TERRAIN(18) = 1.8
+     x = 20     d = 4     -> TERRAIN(20) = 2.0
 
-   so the ramp is the cell x ∈ [18, 20] and ``sample_height`` interpolates
-   linearly across it between the two STORED values 1.133 and 2.0:
+   RED COUNTER-PROBE: the OLD ring pinned x = 18 to the plateau (1.133) and,
+   on a 4 m overview, x = 20 as well — two rasters, two landscapes. Now the
+   whole ramp is 2 m wide whoever asks.
 
-     x = 19    -> 1.133 + 0.50·(2.0 − 1.133) = 1.133 + 0.4335 = 1.5665
-     x = 18.5  -> 1.133 + 0.25·(2.0 − 1.133) = 1.133 + 0.21675 = 1.34975
-     x = 19.5  -> 1.133 + 0.75·(2.0 − 1.133) = 1.133 + 0.65025 = 1.78325
+   THE STORED TILE IS A SAMPLING OF THAT, not a second opinion: it carries the
+   lattice points 1.2 (x=16) and 1.8 (x=18), and ``sample_height`` mixes them
+   linearly, so the tile answers 1.5 at x = 17 where the function itself says
+   1.45. That 0.05 m is the tile's own mip error, and it is checked here so
+   the difference is on the record rather than a surprise.
 
-7) A DRAWN SQUARE is a polygon like any other; a location that carries only
-   the legacy ``plan_width_m`` dial has NO area since 2026-08-19 and is no
-   input of the plateau pass at all (the map editor's "Seed missing
-   boundaries" is what turns such a dial into a real outline).
+6) (d) WHO STAMPS AT ALL. ``placed_footprints`` hands out a location with a
+   CLOSED room (or a drawn ``map3d.outline``) and no other. The same L with
+   only an ``always_visible`` zone is a natural place and stamps nothing —
+   and the dead ``level_ground`` flag changes neither answer.
 
-6) (d) THE SIGNATURE hashes the polygon POINTS. ``placed_footprints`` rounds
+7) (e) THE SIGNATURE hashes the polygon POINTS. ``placed_footprints`` rounds
    to the centimetre, so moving the boundary point (8,4) to (8.01,4) — one
    centimetre, the location itself standing perfectly still — must change
-   ``height_sig``. Redrawing an outline invalidates every client's raster
-   exactly like moving the place used to.
+   ``height_sig``.
 
-INJECTION POINTS — no world DB is queried for any of this. The geometry runs
-on ``rasterize_tile``, which is pure and takes literals. The signature half
-patches ``app.models.world.list_locations`` with PLAIN DICT locations, so the
-real ``placed_footprints`` runs over them; the empty throwaway world provides
-only the (empty) height areas and terrain the signature also hashes.
+8) A DRAWN SQUARE is a polygon like any other; a location that carries only
+   the legacy ``plan_width_m`` dial has NO area since 2026-08-19 and is no
+   input at all (the map editor's "Seed missing boundaries" turns such a dial
+   into a real outline).
+
+INJECTION POINTS — no world DB is queried for the geometry. It runs on
+``rasterize_tile``/``build_model``, which are pure and take literals. The
+signature half patches ``app.models.world.list_locations`` with PLAIN DICT
+locations, so the real ``placed_footprints`` runs over them.
 
 Usage:  ./.venv/bin/python scripts/smoke_plateau_polygon.py
 """
+import math
 import os
 import sys
 import tempfile
@@ -211,14 +229,20 @@ PIN_X, PIN_Z = 8.0, 66.0
 L_FP = (PIN_X, PIN_Z, 0.0, [(0.0, 0.0), (8.0, 0.0), (8.0, 4.0),
                             (4.0, 4.0), (4.0, 8.0), (0.0, 8.0)])
 
-STEP = hf.TILE_STEP_M                    # 2 m — one cell, i.e. the ramp width
-H0 = 34.0 / 30.0                         # the plateau, 1.13333…
-H0_STORED = round(H0, 3)                 # 1.133 — what the tile carries
+STEP = hf.TILE_STEP_M                    # 2 m — the tile lattice
+H0 = 1.2                                 # the MEDIAN target, exactly
+W = 2.0                                  # the ramp width, exactly (clamped up)
+OLD_H0 = round(34.0 / 30.0, 3)           # 1.133 — the pre-E1 interior probe
 
 
 def terrain(x):
     """The authored landscape of this fixture, by hand: x / 10."""
     return x / 10.0
+
+
+def ss(t):
+    t = min(max(t, 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
 def idx(x, z):
@@ -232,7 +256,8 @@ def at(tile, x, z):
 
 
 PLAIN = hf.rasterize_tile(0, 0, [SLOPE], footprints=())
-TILE = hf.rasterize_tile(0, 0, [SLOPE], footprints=[L_FP])
+MODEL = hf.build_model([SLOPE], [L_FP])
+TILE = hf.rasterize_tile(0, 0, (), model=MODEL)
 
 print("[1] the landscape under the L is the plane x / 10")
 check("the tile is 129 x 129 at the 2 m step",
@@ -241,86 +266,146 @@ for _x in (8, 10, 12, 14, 16, 18, 20, 22):
     near(f"TERRAIN({_x}) without any place", at(PLAIN, _x, 68), terrain(_x))
 near("...and it does not depend on z", at(PLAIN, 14, 74), terrain(14))
 
-print("\n[2] the plateau height comes from the INTERIOR point, not the pin")
+print("\n[2] the target height is the MEDIAN over the footprint")
 check("the L encloses 48 m²", polygon_area(L_FP[3]), 48.0)
-_inner = polygon_interior_point(L_FP[3])
-near("the interior point is the centroid (10/3, 10/3) — inside the L",
-     _inner[0], 10.0 / 3.0, 1e-12)
-near("...both coordinates", _inner[1], 10.0 / 3.0, 1e-12)
-_inner_world = local_to_world(_inner[0], _inner[1], PIN_X, PIN_Z, 0.0)
-near("in world metres that is x = 34/3", _inner_world[0], 34.0 / 3.0, 1e-12)
-near("...and z = 208/3", _inner_world[1], 208.0 / 3.0, 1e-12)
-near("the plateau reads 17/15 there",
-     hf.plateau_height(_inner_world[0], _inner_world[1], STEP,
-                       hf.area_boxes([SLOPE]), ()), H0, 1e-12)
+_inside = [(lx, lz) for lz in (0, 2, 4, 6, 8) for lx in (0, 2, 4, 6, 8)
+           if polygon_distance(float(lx), float(lz), L_FP[3]) <= 0.0]
+check("21 of the 25 lattice points of the box are inside or on the outline",
+      len(_inside), 21)
+check("...the four that are not are the notch corners",
+      sorted(set((lx, lz) for lz in (0, 2, 4, 6, 8) for lx in (0, 2, 4, 6, 8))
+             - set(_inside)), [(6, 6), (6, 8), (8, 6), (8, 8)])
+_samples = sorted(terrain(8 + lx) for lx, _lz in _inside)
+check("their heights are 0.8×5, 1.0×5, 1.2×5, 1.4×3, 1.6×3",
+      [round(v, 1) for v in _samples],
+      [0.8] * 5 + [1.0] * 5 + [1.2] * 5 + [1.4] * 3 + [1.6] * 3)
+near("...so the 11th, the median, is 1.2", _samples[10], H0)
+near("the stamp really carries it", MODEL.plateaus[0][5], H0, 1e-12)
 check_not("RED COUNTER-PROBE: the PIN would have said TERRAIN(8) = 0.8",
-          H0_STORED, 0.8)
+          round(MODEL.plateaus[0][5], 3), 0.8)
 near("...and the pin really sits that low in the landscape",
      at(PLAIN, PIN_X, PIN_Z), 0.8)
+_inner = polygon_interior_point(L_FP[3])
+near("the interior point (the pre-E1 probe, now a fallback) is (10/3,10/3)",
+     _inner[0], 10.0 / 3.0, 1e-12)
+_inner_world = local_to_world(_inner[0], _inner[1], PIN_X, PIN_Z, 0.0)
+near("...its world x is 34/3", _inner_world[0], 34.0 / 3.0, 1e-12)
+near("...where the landscape is 34/30", MODEL.natural(_inner_world[0],
+                                                      _inner_world[1]),
+     34.0 / 30.0, 1e-12)
+check_not("RED COUNTER-PROBE: that single probe (1.133) is NOT the target",
+          round(MODEL.plateaus[0][5], 3), OLD_H0)
+
+print("\n[2b] the ramp width is 2 m — the floor of the clamp")
+near("0.5·sqrt(48/pi) = 1.95441…", 0.5 * math.sqrt(48.0 / math.pi),
+     1.9544100476116797, 1e-12)
+check("...which is under the 2 m floor",
+      0.5 * math.sqrt(48.0 / math.pi) < hf.PLATEAU_RAMP_MIN_M, True)
+near("so the stamp's width is exactly 2.0", MODEL.plateaus[0][6], W, 1e-12)
+near("the biggest rim step is |1.2 − 1.6| = 0.4",
+     max(abs(H0 - terrain(x)) for x in (8, 10, 12, 14, 16)), 0.4, 1e-12)
+check("...well under tan(35°)·2 m = 1.4004…, so no widening",
+      0.4 < math.tan(math.radians(35.0)) * W, True)
 
 print("\n[3] (a) a point inside the wide arm IS the plateau")
 near("d(local (6,2)) = 0 — inside", polygon_distance(6.0, 2.0, L_FP[3]), 0.0)
-near("(14, 68) is levelled to 1.133", at(TILE, 14, 68), H0_STORED)
+near("(14, 68) is stamped to 1.2", at(TILE, 14, 68), H0)
 near("...where the untouched landscape had 1.4", at(PLAIN, 14, 68),
      terrain(14))
-near("(10, 68) too — local (2, 2)", at(TILE, 10, 68), H0_STORED)
-near("(10, 72) in the north arm — local (2, 6)", at(TILE, 10, 72), H0_STORED)
+near("(10, 68) too — local (2, 2)", at(TILE, 10, 68), H0)
+near("(10, 72) in the north arm — local (2, 6)", at(TILE, 10, 72), H0)
+check("...and the plot is EXACTLY flat over all 21 lattice points",
+      sorted(set(round(MODEL.final(8.0 + lx, 66.0 + lz), 12)
+                 for lx, lz in _inside)), [H0])
 
 print("\n[4] (b) the notch keeps the pure landscape")
 near("d(local (8,8)) = 4 — the corner (8,4) is the nearest outline point",
      polygon_distance(8.0, 8.0, L_FP[3]), 4.0)
-near("(16, 74) is TERRAIN(16) = 1.6, no plateau and no ramp bleed",
+near("(16, 74) is TERRAIN(16) = 1.6, no stamp and no ramp bleed",
      at(TILE, 16, 74), terrain(16))
 check("...exactly the value the place-less raster carries",
       at(TILE, 16, 74), at(PLAIN, 16, 74))
-check_not("RED COUNTER-PROBE: a BOUNDING-BOX plateau would have put 1.133 here",
-          at(TILE, 16, 74), H0_STORED)
-near("but the ring DOES reach into the notch: d(local (6,6)) = 2 = one cell",
+check_not("RED COUNTER-PROBE: a BOUNDING-BOX plateau would have put 1.2 here",
+          at(TILE, 16, 74), H0)
+near("the ramp DOES reach into the notch: d(local (6,6)) = 2 = w",
      polygon_distance(6.0, 6.0, L_FP[3]), 2.0)
-near("...so (14, 72) is pinned to 1.133", at(TILE, 14, 72), H0_STORED)
-check_not("...and is NOT the landscape's 1.4", at(TILE, 14, 72), terrain(14))
+near("...and at d = w the landscape is back: (14,72) = 1.4",
+     at(TILE, 14, 72), terrain(14))
+check_not("RED COUNTER-PROBE: the OLD one-cell ring pinned it to 1.133",
+          round(at(TILE, 14, 72), 3), OLD_H0)
+near("halfway in, (13,71) — d = 1 -> 1.2 + 0.1·smoothstep(0.5)",
+     MODEL.final(13.0, 71.0), 1.25, 1e-12)
 
-print("\n[5] (c) the ramp ring interpolates plateau -> terrain")
+print("\n[5] (c) the ramp east of the wide arm, along z = 68")
 near("(16, 68) — ON the outline, d = 0", polygon_distance(8.0, 2.0, L_FP[3]),
      0.0)
-near("...pinned", at(TILE, 16, 68), H0_STORED)
-near("(18, 68) — d = 2, the ring", polygon_distance(10.0, 2.0, L_FP[3]), 2.0)
-near("...carries the FULL plateau (§ A16.1: the ring is pinned, not blended)",
-     at(TILE, 18, 68), H0_STORED)
-near("(20, 68) — d = 4, untouched", polygon_distance(12.0, 2.0, L_FP[3]), 4.0)
-near("...so it is TERRAIN(20) = 2.0", at(TILE, 20, 68), terrain(20))
-near("the ramp cell mid-point (19, 68) is the mean of 1.133 and 2.0",
-     hf.sample_height(TILE, 19.0, 68.0), 1.5665, 1e-12)
-near("...a quarter in, (18.5, 68)", hf.sample_height(TILE, 18.5, 68.0),
-     1.34975, 1e-12)
-near("...three quarters in, (19.5, 68)", hf.sample_height(TILE, 19.5, 68.0),
-     1.78325, 1e-12)
-_ramp = [hf.sample_height(TILE, 18.0 + STEP * t / 8.0, 68.0)
-         for t in range(9)]
-check("...and the whole cell is one straight line, 1.133 -> 2.0",
-      all(abs(_ramp[t] - (H0_STORED + (2.0 - H0_STORED) * t / 8.0)) < 1e-12
-          for t in range(9)), True)
+near("...stamped", at(TILE, 16, 68), H0)
+for _x, _d, _want in ((16.5, 0.5, 1.2 + 0.45 * ss(0.25)),
+                      (17.0, 1.0, 1.45),
+                      (17.5, 1.5, 1.2 + 0.55 * ss(0.75)),
+                      (18.0, 2.0, terrain(18.0))):
+    near(f"({_x}, 68) — d = {_d} -> {_want}", MODEL.final(_x, 68.0), _want,
+         1e-12)
+near("...(16.5,68) is 1.2703125", MODEL.final(16.5, 68.0), 1.2703125, 1e-12)
+near("...(17.5,68) is 1.6640625", MODEL.final(17.5, 68.0), 1.6640625, 1e-12)
+near("(20, 68) — d = 4, untouched", at(TILE, 20, 68), terrain(20))
+check_not("RED COUNTER-PROBE: the OLD ring pinned (18,68) to the plateau",
+          round(at(TILE, 18, 68), 3), OLD_H0)
 
-print("\n[6] (d) height_sig hashes the polygon points")
+print("\n[5b] the TILE is a sampling of that function, and says so")
+near("the tile carries 1.2 at x = 16 and 1.8 at x = 18",
+     at(TILE, 16, 68) + at(TILE, 18, 68), 3.0, 1e-12)
+near("...so sample_height at x = 17 mixes them to 1.5",
+     hf.sample_height(TILE, 17.0, 68.0), 1.5, 1e-12)
+near("...while the function itself says 1.45", MODEL.final(17.0, 68.0), 1.45,
+     1e-12)
+near("...a 0.05 m sampling error, which is what the mip pyramid measures",
+     abs(hf.sample_height(TILE, 17.0, 68.0) - MODEL.final(17.0, 68.0)), 0.05,
+     1e-12)
+
+print("\n[6] (d) only a BUILT location stamps")
+
+BOUNDARY = [[0, 0], [8, 0], [8, 4], [4, 4], [4, 8], [0, 8]]
 
 
-def as_location(boundary, level=True):
-    """A PLAIN DICT location — the injection point of the signature half."""
-    return {"id": "l_shape", "name": "L", "pos_x": PIN_X, "pos_z": PIN_Z,
-            "yaw_deg": 0.0, "level_ground": level,
-            "map3d": {"boundary": boundary}}
+def as_location(boundary, rooms=None, **extra):
+    """A PLAIN DICT location — the injection point of the signature half.
+
+    The pin is the L's, so the boundary points ARE the local metres above.
+    """
+    loc = {"id": "l_shape", "name": "L", "pos_x": PIN_X, "pos_z": PIN_Z,
+           "yaw_deg": 0.0, "map3d": {"boundary": boundary},
+           "rooms": [{"id": "r1", "layout": {}}] if rooms is None else rooms}
+    loc.update(extra)
+    return loc
 
 
 def with_locations(locs):
     world_store.list_locations = lambda: list(locs)
 
 
-with_locations([as_location(L_LOCAL)])
-check("placed_footprints hands out the polygon, rounded to the centimetre",
+with_locations([as_location(BOUNDARY)])
+check("a CLOSED room makes the place built — the polygon comes out",
       store.placed_footprints(), [L_FP])
+with_locations([as_location(BOUNDARY, rooms=[{"id": "r1",
+                                              "layout": {"always_visible":
+                                                         True}}])])
+check("only an OPEN zone: natural, no stamp", store.placed_footprints(), [])
+with_locations([as_location(BOUNDARY, rooms=[{"id": "r1",
+                                              "layout": {"always_visible":
+                                                         True}},
+                                             {"id": "r2", "layout": {}}])])
+check("...one closed room among open ones is enough",
+      store.placed_footprints(), [L_FP])
+with_locations([as_location(BOUNDARY, rooms=[], level_ground=True)])
+check("RED COUNTER-PROBE: the dead level_ground flag stamps nothing",
+      store.placed_footprints(), [])
+
+print("\n[7] (e) height_sig hashes the polygon points")
+with_locations([as_location(BOUNDARY)])
 _sig = store.height_sig()
 
-_moved = [list(p) for p in L_LOCAL]
+_moved = [list(p) for p in BOUNDARY]
 _moved[2] = [8.01, 4]
 with_locations([as_location(_moved)])
 check("ONE boundary point moved by 1 cm — the place never moved",
@@ -330,22 +415,21 @@ check("...but the outline is a different one", store.placed_footprints()[0][3],
        (0.0, 8.0)])
 check_not("...so the signature moved with it", store.height_sig(), _sig)
 
-with_locations([as_location(L_LOCAL, level=False)])
-check("an UNFLAGGED location is no input at all", store.placed_footprints(),
-      [])
+with_locations([as_location(BOUNDARY, rooms=[])])
+check("a NATURAL location is no input at all", store.placed_footprints(), [])
 check_not("...which is again a different signature", store.height_sig(), _sig)
 
-with_locations([as_location(L_LOCAL)])
-check("putting the outline back restores the signature exactly",
+with_locations([as_location(BOUNDARY)])
+check("putting the room back restores the signature exactly",
       store.height_sig(), _sig)
 
-print("\n[7] a DRAWN square gets its plateau — a bare width gets none")
+print("\n[8] a DRAWN square gets its plateau — a bare width gets none")
 # The square as an OUTLINE: the centred 8 m square, corners ±4. These are the
 # very four corners the transition synthesis used to hand out for
 # ``plan_width_m`` 8 — and since 2026-08-19 they only exist when somebody drew
 # them (the map editor's "Seed missing boundaries" writes exactly this).
 _square = {"id": "sq", "name": "Square", "pos_x": 40.0, "pos_z": 40.0,
-           "yaw_deg": 0.0, "level_ground": True,
+           "yaw_deg": 0.0, "rooms": [{"id": "r1", "layout": {}}],
            "map3d": {"plan_width_m": 8.0,
                      "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]]}}
 check("effective_boundary hands out the drawn corners",
@@ -356,8 +440,8 @@ check("...and placed_footprints passes them on",
       store.placed_footprints(),
       [(40.0, 40.0, 0.0, [(-4.0, -4.0), (4.0, -4.0), (4.0, 4.0),
                           (-4.0, 4.0)])])
-# THE CLOSING CHECK: the same location WITHOUT the outline levels nothing —
-# it has no area, so the plateau pass never sees it, flag or no flag.
+# THE CLOSING CHECK: the same location WITHOUT the outline stamps nothing —
+# it has no area, so the model never sees it, built or not.
 _dial_only = {**_square, "map3d": {"plan_width_m": 8.0}}
 check("a width dial alone is no plateau input",
       effective_boundary(_dial_only), None)

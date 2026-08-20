@@ -373,9 +373,19 @@ def delete_terrain_type_route(kind: str) -> Dict[str, Any]:
 
 @router.get("/terrain-areas")
 def get_terrain_areas_route() -> Dict[str, Any]:
-    """All painted areas bottom-to-top, plus the change signature."""
+    """All painted areas bottom-to-top, plus the change signature.
+
+    A water area carries one ADDITIVE, server-computed field alongside its
+    authored ones: ``meta.water_level_effective`` — the mirror height the bake
+    really carved with (E1, § G4). The author's ``meta.water_level`` may be
+    unset ("auto (rim)"), and then this is the rim median the bake derived; set
+    it and the two are equal. It is output only and is never written back into
+    the authored field.
+    """
+    from app.core.heightfield import with_effective_water_level
     from app.models import terrain
-    return {"areas": terrain.list_areas(), "sig": terrain.terrain_sig()}
+    return {"areas": with_effective_water_level(terrain.list_areas()),
+            "sig": terrain.terrain_sig()}
 
 
 @router.post("/terrain-areas")

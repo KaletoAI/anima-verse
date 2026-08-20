@@ -339,10 +339,26 @@ check("the two are independent, and neighbours survive both",
       meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
                "note": "x"}),
       {"move_anim": "swim", "idle_anim": "treading-water", "note": "x"})
-check("water carries both in the shared seed — plus its two sink depths",
+# Since "Ein Boden" E1 (§ G4) both water kinds also carry the WATER FLAG —
+# ``meta.water``, the one thing that makes the bake carve a bed under an area
+# painted with them. It is a flag on the TYPE and never a match on the NAME:
+# kinds are an open vocabulary, so a world whose lakes are called "lagoon"
+# carves exactly like this one.
+check("water carries both clips in the shared seed — plus its two sink depths"
+      " and the water flag",
       (terrain_types.get_type("water") or {}).get("meta"),
-      {"move_anim": "swim", "idle_anim": "treading-water",
+      {"water": True, "move_anim": "swim", "idle_anim": "treading-water",
        "move_sink_m": 0.35, "idle_sink_m": 1.3})
+check("...so is_water_kind says yes for it",
+      terrain_types.is_water_kind("water"), True)
+check("...and no for the meadow next to it",
+      terrain_types.is_water_kind("grass"), False)
+check("...and no for a kind the catalog does not know",
+      terrain_types.is_water_kind("lagoon"), False)
+check("the flag is coerced to a plain bool on write",
+      meta_of({"water": "yes"}), {"water": True})
+check("...and a false one is kept as the explicit 'not water'",
+      meta_of({"water": 0}), {"water": False})
 check("...at the pace of a ground one wades through",
       (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
 check("...and it is walked into, not refused",
@@ -351,7 +367,7 @@ check("the barrier kind carries the same MOVE clip and pace — and no idle "
       "one, nobody stands in it",
       ((terrain_types.get_type("deep_water") or {}).get("meta"),
        (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
-      ({"move_anim": "swim"}, 0.4))
+      ({"water": True, "move_anim": "swim"}, 0.4))
 
 print("[8b] the two sink depths — how deep one stands IN the ground")
 check("the moving depth of water survives", meta_of({"move_sink_m": 0.35}),

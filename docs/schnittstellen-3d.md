@@ -4404,3 +4404,185 @@ Bodenlinie, Metermaß, der 1,70-m-Figur (nie mitskaliert) und der Kiste des Prop
 in seinen echten Maßen; der Reglerweg folgt der Prop-Höhe (mindestens ±0,5 m,
 höchstens das gespeicherte ±5 m), damit ein Schemel in seinen Zentimetern und
 eine Tanne in ihren Metern eingestellt wird.
+
+## Nachtrag 2026-08-21 (§ A16): Ein Boden — E1, die reine Höhenfunktion
+
+Etappe E1 aus `development_instructions/plan-ein-boden.md`. **Reine
+Datenbasis, sichtbar ändert sich nichts** — aber die Zahlen unter § A16
+ändern sich, und zwar überall dort, wo die alte Bake in *Rasterzellen* statt in
+*Metern* gemessen hat. Dieser Nachtrag beschreibt den neuen Stand; § A16 wird
+in E6 komplett neu geschrieben.
+
+### 1. `h_final` ist eine reine Funktion von (x, z)
+
+`app/core/heightfield.HeightModel` hält die ganze autorierte Welt und
+beantwortet `final(x, z)` für jeden reellen Punkt. Jede Rasterung in diesem
+Modul — die Übersicht, eine Kachel, jede Mip-Ebene — ist **nichts als diese
+Funktion auf einem Gitter abgetastet**. Reihenfolge:
+
+```
+Höhenflächen (stärkster Ausschlag gewinnt)
+  → Mikro-Relief (ADDITIV)
+  → Stempel: Wasser-Carve
+  → Stempel: Location-Plateaus
+```
+
+Der Punkt ist die **Metrik**: kein Schritt misst mehr „eine Rasterzelle".
+Vorher taten das zwei — die Kantenregel des Mikro-Reliefs fragte die vier
+GITTER-Nachbarn, und die Plateau-Rampe war EINE Zelle breit —, also war
+dieselbe Welt auf der 2-m-Kachel eine andere Landschaft als auf der
+vergröberten Übersicht (gemessen: Median 0,058 m, p95 0,675 m, **max 1,104 m**
+am selben Weltpunkt). Jetzt gilt:
+
+> **Zwei Gitter über demselben Modell tragen an jedem gemeinsamen Punkt
+> dieselbe Zahl — by construction, nicht by agreement.**
+
+Die Kantenregel des Reliefs sondiert seither bei festen
+`RELIEF_EDGE_PROBE_M = 2,0 m` (dem Kachel-Schritt, damit die Kacheln exakt die
+Höhen behalten, die sie hatten). Nachgewiesen in
+`scripts/smoke_height_bake.py` [4] (2/4/8/16/32/64-m-Gitter über dasselbe
+256-m-Fenster, **exakte** Gleichheit an allen gemeinsamen Punkten) und in
+`scripts/smoke_heightfield.py` [14b] (die 4-m-Übersicht gegen die Kacheln,
+Punkt für Punkt).
+
+### 2. Wasser senkt sein Bett — `meta` auf der gemalten Fläche (§ G4)
+
+Ob eine Bodenart **Wasser** ist, sagt der Katalog: `meta.water` am
+Terrain-Typ (`terrain_types.is_water_kind`). **Nie über den Namen** — Arten
+sind ein offenes Vokabular, eine Welt darf ihre Seen „lagoon" nennen.
+
+Die drei Zahlen liegen an der **Fläche** (`terrain_areas.meta`), weil zwei Seen
+in einer Welt auf zwei Höhen stehen:
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `water_level` | `float` (Welt-y, m) | Der Spiegel. **Optional**: fehlt er, nimmt die Bake den **Median der Naturhöhen entlang des Umrisses** (alle 2 m abgetastet) — und `models.terrain.save_area` schreibt genau diesen Wert beim Speichern fest, damit der See nicht mitwandert, wenn jemand einen Hügel daneben malt |
+| `water_depth_m` | `float` 0,2 … 20 (Default **2,0**) | Wie tief das Bett unter dem Spiegel liegt, sobald die Ufer-Rampe durch ist |
+| `shore_ramp_m` | `float` 0 … 20 (Default **3,0**) | Wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist; 0 = Stufe (Becken) |
+| `water_level_effective` | `float` (nur Ausgabe) | Der Spiegel, mit dem die Bake wirklich gecarvt hat — gleich `water_level`, wenn der Autor einen gesetzt hat, sonst der abgeleitete Rand-Median. Fährt additiv in `GET /world/terrain-areas` und `GET /play/terrain` mit und wird **nie** in das Autorenfeld zurückgeschrieben |
+
+Carve pro Punkt innerhalb des Polygons:
+
+```
+h = min(h, water_level − water_depth_m · smoothstep(min(d_innen / shore_ramp_m, 1)))
+```
+
+`d_innen` = Abstand zum **Umriss**. `min`, nie Zuweisung: der Carve darf den
+Boden nur senken — ein Ufer, das ohnehin unter dem Spiegel liegt, bleibt liegen.
+
+> **INVARIANTE (weltweit als Smoke prüfbar):** für jede Probe, die tiefer als
+> `shore_ramp_m` im Polygon liegt, gilt `h_final ≤ water_level − ε` mit
+> `ε = min(water_depth_m, 0,25)`. Damit ist „grünes Terrain sticht fern durchs
+> Wasser" **datenseitig** unmöglich, in jedem LOD.
+
+Gemessen in `smoke_height_bake.py` [1b] über die ganze Fläche (0,5-m-Gitter,
+4489 tiefe Proben, höchste 1,0 m gegen die Schranke 2,75 m).
+
+### 3. Gebäude stanzen ihr Grundstück — kein Flag mehr (§ G5)
+
+`level_ground` **gibt es nicht mehr**. Wer stempelt, entscheidet
+`models.heightfield.draws_built_floor(loc)` — die Umkehrung von
+`scene_recipe.is_natural_location`:
+
+* es gibt ein **`map3d.outline`** (eine gezeichnete Gebäudekontur), ODER
+* es gibt mindestens einen **geschlossenen Raum** (nicht `always_visible`;
+  die Grundfläche `__ground__` zählt nie mit).
+
+Ein natürlicher Ort (See, Lichtung, Wald) stempelt nichts — sein Boden IST das
+Relief. Ein übrig gebliebenes `level_ground` in gespeicherten Daten wird
+ignoriert; es gibt keinen Fallback-Leser.
+
+**Zielhöhe** = **Median** der Naturhöhen unter dem Grundriss, abgetastet auf dem
+2-m-Weltgitter (vorher: eine einzige Probe am garantierten Innenpunkt — ein
+Buckel entschied, wo das Haus steht).
+
+**Rampe**, AUSSERHALB des Umrisses, `smoothstep` über
+
+```
+w = clamp(0.5 · sqrt(Fläche/π), 2, 8)  Meter
+```
+
+und, wenn die Randstufe `Δ = max |h0 − h_natur|` entlang des Umrisses steiler
+wäre als `tan(35°) · w`, verbreitert auf `w = Δ / tan(35°)`.
+
+```
+h = h0 + (h_bisher − h0) · smoothstep(d / w)      d = Polygonabstand, 0 innen
+```
+
+`h_bisher` ist ausdrücklich der Stand der Pipeline, **nicht** die unberührte
+Landschaft: eine Hütte auf dem Dorfplatz läuft auf das Plateau des Platzes
+hinunter, nicht auf den Hang darunter. Überlappung wie gehabt: größte Fläche
+zuerst, kleinste schreibt zuletzt.
+
+> **EHRLICHE GRENZE:** die 35° sind die MITTLERE Steigung, und ein
+> `smoothstep` erreicht das 1,5-fache seines Mittels. Eine bis zur Kappung
+> verbreiterte Rampe hat also einen steilsten Meter von
+> `atan(1,5 · tan 35°) = 46,4°` — immer noch über der Laufgrenze von 40°. Ein
+> Ort an einer sehr steilen Flanke behält damit einen Rand, den seine
+> Öffnungs-Ausnahme tragen muss (§ A15 Nr. 8). Was der Stempel bringt: der Rand
+> ist eine mehrere Meter breite Rampe statt einer Ein-Zellen-Klippe von bis zu
+> 68° (gemessen in `scripts/smoke_slope_gate.py`).
+
+`nav_grid` fragt dieselbe Funktion: die Steilheits-Ausnahme innerhalb eines
+Ortes gilt jetzt für **gebaute** Orte statt für geflaggte.
+
+### 4. Die Pyramide — additive Felder an zwei Endpunkten (§ G2)
+
+Weil die Mip-Gitter **Teilmengen** des 2-m-Basisgitters sind (4/8/16/32/64 m
+sind Vielfache von 2 und teilen die 256 m Kantenlänge), braucht die Pyramide
+**keine zweite Auswertung** der Höhenfunktion — sie ist Arithmetik auf der
+Kachel, die es ohnehin gibt.
+
+```jsonc
+// GET /play/heightfield  — ZUSÄTZLICH zu allem aus § A16.3
+{
+  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
+  "tile_stats": {
+    "1,0": { "min": -9.0, "max": 10.445, "err": [0.5862, 0.85, 1.0, 1.1636, 3.3132] }
+  },
+  "tile_stats_complete": true      // false: der Rest kommt mit den Kacheln
+}
+
+// GET /play/heightfield/tiles  — ZUSÄTZLICH
+{
+  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
+  "tiles": { "1,0": { "origin_x": …, "heights": […], "stats": { "min": …, "max": …, "err": […] } } }
+}
+```
+
+`err[k]` ist der **größte senkrechte Fehler in Metern**, den ein Renderer
+macht, wenn er die Kachel auf Ebene `mip_levels_m[k]` zeichnet statt auf der
+2-m-Basis: `max |h_mip − h_basis|` über die Kachel, wobei `h_mip` das grobe
+Gitter bilinear zurückinterpoliert.
+
+> **Das ist eine EXAKTE Schranke, keine Stichprobe.** Innerhalb einer
+> Basiszelle sind beide Felder bilinear (das grobe auch, weil eine bilineare
+> Funktion auf einem Teilrechteck bilinear bleibt), ihre Differenz also
+> ebenfalls — und eine bilineare Funktion nimmt ihre Extrema **in den Ecken**
+> an. Das Maximum über die Basis-Stützpunkte IST damit das Maximum über das
+> Kontinuum. Nachgemessen in `smoke_height_bake.py` [6] auf einem 0,5-m-Raster
+> (513², die Schranke wird auf den Millimeter erreicht und nie überschritten).
+
+`min`/`max` sind die Höhen-Spanne der Kachel — die andere Hälfte dessen, was
+ein Quadtree-Knoten für Frustum und Occlusion braucht.
+
+**Kostenbudget** (gemessen 2026-08-21, 2×2-km-Welt mit Relief, drei Seen und
+zwanzig Grundstücken): Modellbau 20–30 ms, eine Kachel ~80 ms, ihre Statistik
+~20 ms, die 253²-Übersicht ~370 ms. `GET /play/heightfield` liefert die
+Statistik für höchstens `TILE_STATS_MAX = 64` indizierte Kacheln (≈ 6 s aus dem
+kalten Cache) — diese Arbeit ist keine zusätzliche, sondern nur vorgezogene:
+die Kacheln landen im Prozess-LRU, jede folgende Kachel-Batch ist ein Treffer.
+Über der Kappe sagt `tile_stats_complete: false`, und der Rest reist mit den
+Kacheln.
+
+### 5. Was sich an `height_sig` ändert
+
+Zusätzlich zu den Höhenflächen, den Platzierungen und dem Mikro-Relief hashen
+jetzt mit:
+
+* **die Wasser-Polygone** mit ihren drei Zahlen (`water_basis()`);
+* **ob ein Ort gebaut ist** — dafür braucht es kein neues Feld: ein Ort, der
+  einen Raum schließt, tritt in die Liste von `placed_footprints()` ein, und
+  ein Ort, der ihn öffnet, verlässt sie.
+
+`level_ground` ist aus der Signatur verschwunden.

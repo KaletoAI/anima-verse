@@ -36,13 +36,13 @@ import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
-import { readScatter } from './mapTypes'
+import { readScatter, readWater } from './mapTypes'
 import {
-  DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M, plateauRimM,
+  DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M,
 } from './heightMath'
 import type {
   EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
-  TerrainArea, TerrainMeta,
+  TerrainArea, TerrainMeta, TerrainWater,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
   TerrainTypesResp, WorldProp, WorldPropsResp, WorldmapPayload,
 } from './mapTypes'
@@ -63,13 +63,11 @@ import type {
  *   - `GET /play/worldmap?all=1` — for `world_bounds` alone, to frame the
  *     first view. The reload button refetches both.
  *
- * Writing goes through four routes only: `PATCH .../position` (place, move,
+ * Writing goes through three routes only: `PATCH .../position` (place, move,
  * turn, and — with null coordinates — unplace), `POST .../clone` (a template
- * instance at a point), `DELETE /world/locations/{id}` (clones only, as
- * before) and `PUT /world/locations/{id}` for the one field that is not a
- * position: `level_ground` ("Flatten terrain", § A16.1). Re-placing shifts the
- * occupants server-side, so the editor moves a location without thinking about
- * who stands inside it.
+ * instance at a point) and `DELETE /world/locations/{id}` (clones only, as
+ * before). Re-placing shifts the occupants server-side, so the editor moves a
+ * location without thinking about who stands inside it.
  *
  * Placing is click-arm-click, never HTML5 drag&drop: a tray entry arms a
  * ghost footprint that follows the cursor, the next click on the map commits
@@ -174,12 +172,11 @@ import type {
  * back on (review 2026-08-13). The editor says so, with the width that would
  * fix it, and refuses nothing — a cliff is a legitimate thing to build.
  *
- * The relief and the LOCATIONS are two data sets that no longer touch by
- * themselves: since 2026-08-13 a place levels the ground under itself only
- * when its own "Flatten terrain" box is ticked (`level_ground`, § A16.1).
- * Nothing here may promise a plateau that a placement makes on its own — the
- * warning belongs to the height area, and the flattening is a side note about
- * an option somebody has to switch on.
+ * The relief and the LOCATIONS meet in the BAKE, not in this editor: a
+ * location that draws a built floor stamps its own plateau into the height
+ * field automatically (plan "Ein Boden" § 2 G5), and a natural one leaves the
+ * relief alone. There is no flag to tick any more — the classification is the
+ * server's, so the chip states the rule and never recomputes it.
  *
  * Paint has TWO gestures and one result. `area` clicks an outline; `line`
  * clicks a centre line that `strokeToPolygon` widens into the very same kind
@@ -415,22 +412,12 @@ export function MapTab() {
   // which is the one state that says nothing at all.
   const [heightStepM, setHeightStepM] = useState(0)
   const [heightStepDefaultM, setHeightStepDefaultM] = useState(0)
-  /** The step of the fine height TILES, straight from the server. 0 = not
-   *  answered yet, and then the plateau-rim line simply says nothing — no
-   *  constant of our own (see `heightMath.plateauRimM`). */
-  const [tileStepM, setTileStepM] = useState(0)
   // The walk limit the steepness warning is measured against. It arrives with
   // the worldmap payload; the fallback is the server's own default
   // (`app/core/relief.DEFAULT_MAX_SLOPE_DEG`), so an older server warns with
   // the same number it judges with.
   const [maxSlopeDeg, setMaxSlopeDeg] = useState(DEFAULT_MAX_SLOPE_DEG)
   const [maxStepM, setMaxStepM] = useState(DEFAULT_MAX_STEP_M)
-  /** How high a rim a levelled place can still be entered over — the one cell
-   *  of ramp § A16.1 leaves it, out of the server's own two limits and the
-   *  server's own tile step. `null` until the step is answered. */
-  const plateauRim = useMemo(
-    () => plateauRimM(maxSlopeDeg, maxStepM, tileStepM),
-    [maxSlopeDeg, maxStepM, tileStepM])
   /** The top-down scatter preview — a VIEW, so it survives every mode. */
   const [scatterOn, setScatterOn] = useState(false)
   /** The prop library for the scatter model picker of the area chip — fetched
@@ -609,8 +596,6 @@ export function MapTab() {
       noteHeightStep(r.step_m)
       const def = Number(r.default_step_m)
       if (Number.isFinite(def) && def > 0) setHeightStepDefaultM(def)
-      const tile = Number(r.tile_step_m)
-      if (Number.isFinite(tile) && tile > 0) setTileStepM(tile)
     } catch (e) {
       toast(t('Failed to load heights') + ': ' + (e as Error).message, 'error')
       return false
@@ -1100,31 +1085,6 @@ export function MapTab() {
   }, [patchLocal, reload, t, toast])
 
   /**
-   * The flattening flag (§ A16.1). It is opt-in and default OFF: only a
-   * flagged location levels the world relief under its footprint, everything
-   * else lets the authored landscape run through. That makes it a property of
-   * the RECORD, not of the position, so it is the one write here that goes
-   * through `PUT /world/locations/{id}` — a partial body, the route touches
-   * only the fields it was sent. A clone has its own flag (the template never
-   * hands it down), and the id in the chip is the clone's own id, so the same
-   * write serves both.
-   *
-   * Nothing else has to be wired: the server re-rasters the height field on
-   * the write and `height_sig` changes, which is what makes the 3D client
-   * refetch.
-   */
-  const commitLevelGround = useCallback(async (loc: EditorLocation, on: boolean) => {
-    patchLocal(loc.id, { level_ground: on })
-    try {
-      await apiPut(`/world/locations/${encodeURIComponent(loc.id)}`,
-        { level_ground: on })
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      void reload()
-    }
-  }, [patchLocal, reload, t, toast])
-
-  /**
    * The DRAWN footprint (contract v6 Nr. 1): the boundary in LOCAL metres
    * around the pin, written through `boundaryApi` — the ONE write path this
    * canvas shares with the floor-plan editor, which reshapes the very same
@@ -1432,6 +1392,12 @@ export function MapTab() {
   /** What the selected area GROWS, checked (finding B17). */
   const selScatter = useMemo(
     () => readScatter(selectedArea?.meta), [selectedArea])
+
+  /** The selected area's WATER numbers, checked (plan "Ein Boden" § 2 G4).
+   *  Read for every area, not only the water ones: an area that is not water
+   *  simply has none of the keys, and the chip decides what to show. */
+  const selWater = useMemo(
+    () => readWater(selectedArea?.meta), [selectedArea])
 
   /**
    * The painted areas the tray lists, TOPMOST FIRST.
@@ -1869,6 +1835,28 @@ export function MapTab() {
     const meta: TerrainMeta = { ...a.meta }
     if (entries.length) meta.scatter = entries
     else delete meta.scatter
+    patchAreaLocal(a.id, { meta })
+    void putArea(a, { meta })
+  }, [patchAreaLocal, putArea, selectedArea])
+
+  /**
+   * The three numbers of a WATER area (plan "Ein Boden" § 2 G4): the mirror,
+   * how deep the bed is carved under it and how far the shore ramps back up.
+   *
+   * They ride in `meta` like the scatter list, so the same rule holds: the
+   * write is a full replace, the rest of `meta` travels along, and an
+   * `undefined` in the patch DELETES the key instead of storing a zero. That
+   * is what hands a field back to the server's own default — the rim median
+   * for the level, its configured defaults for depth and ramp.
+   */
+  const setAreaWater = useCallback((patch: Partial<TerrainWater>) => {
+    const a = selectedArea
+    if (!a) return
+    const meta: TerrainMeta = { ...a.meta }
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) delete meta[key]
+      else meta[key] = value
+    }
     patchAreaLocal(a.id, { meta })
     void putArea(a, { meta })
   }, [patchAreaLocal, putArea, selectedArea])
@@ -2623,8 +2611,10 @@ export function MapTab() {
               typesError={typesError}
               stroke={selStroke}
               scatter={selScatter}
+              water={selWater}
               props={propList}
               scatterColor={scatterColor}
+              onWater={setAreaWater}
               onKind={setAreaKind}
               onZOrder={bumpAreaZ}
               onWidth={setStrokeAreaWidth}
@@ -2821,29 +2811,16 @@ export function MapTab() {
                 />
                 <span className="ga-map-chip-label">°</span>
               </div>
-              {/* The flattening is authored per PLACEMENT (§ A16.1) and is off
-                  by default: the landscape does not care about a location
-                  unless one says so here. */}
-              <div className="ga-map-chip-row">
-                <label className="ga-map-toolbar-check"
-                  title={t('Level the world relief under this footprint, pinned to the height at its centre, so the location stands on flat ground. Off, the authored landscape runs straight through it and walkers follow the slope inside the location too.')}>
-                  <input type="checkbox" checked={!!selected.level_ground}
-                    onChange={(e) => { void commitLevelGround(selected, e.target.checked) }} />
-                  {t('Flatten terrain')}
-                </label>
+              {/* WHERE THE "FLATTEN TERRAIN" BOX USED TO SIT (plan "Ein Boden"
+                  § 2 G5). Levelling is no longer a handle: a location that
+                  draws a built floor stamps its own plateau into the height
+                  field, a natural one leaves the relief alone, and WHICH of
+                  the two a place is stays the server's classification. So this
+                  states the rule instead of asking the editor to re-derive
+                  it. */}
+              <div className="ga-map-chip-row ga-map-chip-label">
+                {t('Ground is levelled automatically under built locations.')}
               </div>
-              {/* THE RIM THE FLATTENING BUILDS, said out loud while the box is
-                  ticked. The ramp to the untouched landscape is exactly ONE
-                  grid cell wide, so the climb it can carry is
-                  tan(max_slope_deg) · tile_step_m — both numbers from the
-                  server, never pinned here (`heightMath.plateauRimM`). */}
-              {selected.level_ground && plateauRim !== null ? (
-                <div className="ga-map-chip-row ga-map-chip-label">
-                  {t('The ramp to the untouched ground is one grid cell wide ({cell} m), so it carries at most {rim} m. If this place stands further above or below the ground at its rim, the rim is a wall — only openings lead in.')
-                    .replace('{cell}', String(tileStepM))
-                    .replace('{rim}', String(plateauRim))}
-                </div>
-              ) : null}
               {/* What the SERVER says about the drawn outline (v6 Nr. 1 +
                   Nr. 9). Warnings, never refusals: a crossing outline and a
                   room hanging over the edge are both things the author has to

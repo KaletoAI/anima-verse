@@ -96,12 +96,6 @@ export interface WorldmapTravel {
  */
 export interface EditorLocation extends MapGeometry {
   passable?: boolean
-  /** Opt-in flattening (§ A16.1, `PUT /world/locations/{id}`): only a location
-   *  with this flag levels the world relief under its footprint. Absent =
-   *  `false` — the authored landscape then runs straight through the place.
-   *  It belongs to the PLACEMENT, so a clone carries its own and never
-   *  inherits the template's. */
-  level_ground?: boolean
   template_location_id?: string
   description?: string
   /** Chosen gallery file for the flat map icon (`PATCH .../map-image`); empty
@@ -267,7 +261,30 @@ export interface TerrainStroke {
 export type TerrainMeta = {
   stroke?: TerrainStroke
   scatter?: TerrainScatterEntry[]
-} & Record<string, unknown>
+} & TerrainWater & Record<string, unknown>
+
+/**
+ * THE THREE NUMBERS A WATER AREA CARRIES (plan "Ein Boden" § 2 G4).
+ *
+ * Water is the one surface that is FLAT: the bake presses the ground under a
+ * water polygon down to `water_level − depth` and runs a shore ramp back up to
+ * the untouched land, so no relief can poke through the mirror at any distance
+ * or in any level of detail. All three are optional — an unset field means
+ * "let the server decide", and the server's own default for the level is the
+ * median height along the rim of the polygon.
+ *
+ * They live in the area's free-form `meta`, which is a FULL REPLACE on every
+ * write, so an unset field is an absent key and never a stored zero.
+ */
+export interface TerrainWater {
+  /** The mirror, as a world-y height in metres. Absent = the rim median. */
+  water_level?: number
+  /** How deep the bed is carved under the mirror, in metres (0.2…20). */
+  water_depth_m?: number
+  /** Over how many metres the bed climbs back to the untouched land at the
+   *  shore, in metres (0…20). 0 = a wall at the water's edge. */
+  shore_ramp_m?: number
+}
 
 /** A painted polygon in world metres (§ A1.5). Points are `[x, z]`, 3–256 of
  *  them, auto-closed by the server. */
@@ -309,6 +326,34 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     if (typeof e.model === 'string' && e.model) entry.model = e.model
     out.push(entry)
   }
+  return out
+}
+
+/**
+ * The water numbers of an area, read through a check — the reader's half of
+ * `TerrainWater`, exactly as `readScatter` is for the scatter list.
+ *
+ * `meta` is free-form JSON the server passes through, so nothing in the type
+ * system guarantees a stored number IS a number. A value that is not finite
+ * loses its key rather than becoming 0: "0 m deep" and "the server decides"
+ * are different answers, and only one of them may be inferred from junk.
+ */
+export function readWater(meta: TerrainMeta | undefined): TerrainWater {
+  const out: TerrainWater = {}
+  const num = (v: unknown): number | undefined => {
+    // `null` and `''` both coerce to 0, which would invent a stored number
+    // where the key says nothing — only a real number counts.
+    if (typeof v !== 'number' && typeof v !== 'string') return undefined
+    if (typeof v === 'string' && v.trim() === '') return undefined
+    const n = Number(v)
+    return Number.isFinite(n) ? n : undefined
+  }
+  const level = num(meta?.water_level)
+  const depth = num(meta?.water_depth_m)
+  const ramp = num(meta?.shore_ramp_m)
+  if (level !== undefined) out.water_level = level
+  if (depth !== undefined) out.water_depth_m = depth
+  if (ramp !== undefined) out.shore_ramp_m = ramp
   return out
 }
 
@@ -358,11 +403,10 @@ export interface HeightAreasResp {
    *  constant of its own. */
   default_step_m?: number
   /** The step of the fine height TILES (`heightfield.TILE_STEP_M`), a
-   *  different number since 2026-08-14. One authoring limit hangs on it: the
-   *  ramp around a levelling footprint is exactly ONE CELL wide, so the rim it
-   *  can bridge is `tan(max_slope_deg) · tile_step_m` — see
-   *  `heightMath.plateauRimM`. It comes from the server for the same reason
-   *  the two above do: the number halved the day the tiles did. */
+   *  different number since 2026-08-14. The micro-relief warning of the
+   *  terrain tab is measured against it (`heightMath.reliefWarnAmpM`). It
+   *  comes from the server for the same reason the two above do: the number
+   *  halved the day the tiles did. */
   tile_step_m?: number
   /** The walk gate: steepest slope a figure climbs (`game.max_slope_deg`) and
    *  the highest single step it takes (`game.max_step_height_m`). The same two

@@ -196,29 +196,60 @@ weight is 0).
          0 against 0 and walked through. With ``max_slope_deg`` at 89 the very
          same report is accepted again, which pins the refusal on this rule.
       d) THE PLATEAU MAKES A PLACE ON A SLOPE WALKABLE, which is the whole
-         point of levelling — AND IT IS OPT-IN (``level_ground``, decision
-         2026-08-13): HOUSE carries the flag, or it would stand on the
-         untouched flank and repeat case (a) inside its own walls. HOUSE at
-         (3000, 3020), plan_width_m 8, no relief of its own, one opening on
-         the E edge at 0.5 -> world (3004, 3020).
-         Its centre sits ON the hill's outline, so the plateau is 0 and the
-         footprint plus one cell around it is pinned there:
+         point of the stamp — AND SINCE "EIN BODEN" E1 (§ G5) IT IS NOT A FLAG
+         BUT A LAW: HOUSE gets a CLOSED ROOM, i.e. it draws a built floor, or
+         it would stand on the untouched flank and repeat case (a) inside its
+         own walls. HOUSE at (3000, 3020), plan_width_m 8 (so the drawn
+         boundary is the centred 8 m square, world x ∈ [2996,3004],
+         z ∈ [3016,3024]), no relief of its own, one opening on the E edge at
+         0.5 -> world (3004, 3020).
+
+         THE TARGET IS THE MEDIAN over the footprint, on the 2 m world
+         lattice: x = 2996, 2998, 3000, 3002, 3004 in each of 5 rows, i.e.
+         5 × (0, 0, 0, 2.5, 5.0) = 15 zeros, 5 × 2.5 and 5 × 5.0. The 13th of
+         those 25 values is 0.0, so
+
+             h0 = 0.0                     (the same number the old single
+                                           interior probe gave, from a rule
+                                           that no longer depends on one point)
+
+         and the whole plot, edge included, is flat at 0:
            inside, (3001,3020) -> (3002,3020): Δh = 0 -> accepted, while the
            IDENTICAL metre out on the open flank (a) is refused.
-      e) THE OPENING IS LEVEL GROUND, and by construction rather than by
-         exemption: the pinned ring reaches one cell (4 m) PAST the footprint,
-         so the crossing at (3004, 3020) has the same height on both sides.
-         Walking (3005,3020) -> (3003,3020) is accepted with Δh = 0.
-         HONEST LIMIT, measured here and reported: the ramp itself lies
-         between 2 and 4 m outside the footprint (support points 3006 -> 3008,
-         0 -> 5 = atan(2.5) = 68.20°), which is outside the 1.5 m opening
-         tolerance — the exemption does not reach it. A plateau whose rim
-         rises more than tan(max_slope)·step_m = 1.68 m therefore keeps a wall
-         around itself, one cell out. Both numbers moved with the tile step on
-         2026-08-14: the ring is narrower, so the same rim is a steeper wall
-         standing closer in. It is the authoring limit § A16 names, and the
-         height editor computes it from the ``tile_step_m`` the server sends
-         rather than pinning it.
+
+      e) THE RAMP IS METRES WIDE NOW, and its width is derived. The 35° cap
+         is on the STEEPEST metre, and a smoothstep peaks at 1.5× its mean
+         gradient, so the widening carries the factor
+         (``SMOOTHSTEP_PEAK = 1.5``):
+             area = 64 m²  ->  0.5·sqrt(64/pi) = 4/sqrt(pi) = 2.256758… m
+             rim step  = |0.0 − 5.0| = 5.0 m at the east edge (the hill is at
+                         full height there)
+             peak of that width: 1.5·5.0/2.256758 = 3.323… m/m, far over
+             tan(35°) = 0.700208, so the width is WIDENED
+             w = 1.5·5.0 / tan(35°) = 10.711110… m
+         The tile lattice then carries, east of the plot (d = x − 3004),
+         heights rounded to the raster's mm:
+             (3004,3020) d = 0            -> 0.0
+             (3006,3020) d = 2            -> 5·smoothstep(2/w)  = 0.458
+             (3008,3020) d = 4            -> 5·smoothstep(4/w)  = 1.571
+             (3012,3020) d = 8  < w!      -> 5·smoothstep(8/w)  = 4.201
+             (3016,3020) d = 12 > w       -> the landscape, 5.0
+         and ``ground_y`` mixes the lattice, so (3005,3020) is
+         (0 + 0.458)/2 = 0.229.
+
+         THE OPENING IS CROSSED WITHOUT ANY EXEMPTION: walking
+         (3005,3020) -> (3003,3020) is 0.229 -> 0.0 over 2 m, atan(0.1145) =
+         6.5°, far under the 40° gate. Before E1 the same crossing needed the
+         pinned ring, and one cell further out it was a 68° wall; now it is a
+         ramp.
+
+         AND THE WHOLE RAMP IS WALKABLE BY CONSTRUCTION: the peak gradient is
+         exactly tan(35°) at the ramp's midpoint, so no lattice segment can
+         exceed it — the steepest measured 2-m segment is (3008 -> 3010),
+         (2.949 − 1.571)/2 = 0.689 m/m = atan(0.689) = 34.57° < 35° < 40°.
+         (The first cut of this wave capped the MEAN gradient instead, which
+         left a steepest metre of 44.9° — over the gate; that behaviour is the
+         red counter-probe below.)
 
 Usage:  ./.venv/bin/python scripts/smoke_slope_gate.py
 """
@@ -373,13 +404,21 @@ def set_map3d(location_id: str, **fields) -> None:
     _save_world_data(data)
 
 
-def set_level_ground(location_id: str, flag: bool = True) -> None:
-    """Ask for the FLATTENING under a place (``level_ground``) — opt-in since
-    2026-08-13, so a location levels nothing without it."""
+def make_built(location_id: str) -> None:
+    """Give a place a CLOSED room, which is what makes it stamp its plot.
+
+    Since "Ein Boden" E1 (§ G5) the plateau is not a flag any more: a location
+    that draws a BUILT floor — a ``map3d.outline`` or at least one room that
+    is not ``always_visible`` — planes the ground under itself, and a natural
+    one (a lake, a clearing) leaves the landscape running through it. A house
+    on a flank is the case the rule was written for.
+    """
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
-            loc["level_ground"] = bool(flag)
+            rooms = list(loc.get("rooms") or [])
+            rooms.append({"id": "hall", "name": "Hall", "layout": {}})
+            loc["rooms"] = rooms
     _save_world_data(data)
 
 
@@ -780,18 +819,20 @@ def main() -> int:
     set_map3d(HOUSE, plan_width_m=8.0,
               boundary_openings=[{"edge": 1, "at": 0.5, "width_m": 2.0,
                                   "type": "passage", "room": ""}])
-    # The levelling is OPT-IN (2026-08-13): without the flag this house would
-    # stand on the untouched flank, which is case (a) all over again.
-    set_level_ground(HOUSE)
+    # A place stamps its plot because it DRAWS A BUILT FLOOR (E1, § G5) —
+    # here one closed room. Without it this house would stand on the untouched
+    # flank, which is case (a) all over again.
+    make_built(HOUSE)
     set_known_locations(AVATAR, [CLIFF, TURNED, SPUN, PLAIN, DOME, HUT, HOUSE])
     check("the opening sits on the east edge (index 1)",
           opening_world_points(get_location_by_id(HOUSE)),
           [(1, (3004.0, 3020.0))])
-    near("the plateau is the ground at the house's centre",
+    near("the plateau target is the MEDIAN under the footprint",
          ground_y(3000, 3020), 0.0)
     near("...flat across the footprint, (3001,3020)", ground_y(3001, 3020), 0.0)
     near("...and (3002,3020)", ground_y(3002, 3020), 0.0)
-    near("...and one cell PAST it, (3005,3020)", ground_y(3005, 3020), 0.0)
+    near("...right up to its own east edge, (3004,3020)",
+         ground_y(3004, 3020), 0.0)
     # RED COUNTER-PROBE for the levelling: the SAME metre on the raster
     # WITHOUT the plateau pass rises 1.25 m (1.25 -> 2.5, the flank), i.e. the
     # very 51° the open flank is refused for.
@@ -812,13 +853,48 @@ def main() -> int:
     check("...and so is walking in through the opening",
           (payload or {}).get("ok") if status == "ok" else status, True)
     check("...into the house", (payload or {}).get("location_id"), HOUSE)
-    near("the RAMP outside, h(3006,3020)", ground_y(3006, 3020), 0.0)
-    near("...against the landscape at h(3008,3020)",
-         ground_y(3008, 3020), 5.0)
-    check_true("...which is a 68° wall one cell further out, and the 1.5 m "
-               "opening tolerance does not reach it",
-               relief.slope_blocks(5.0, 2.0, 0.4, 40.0)
-               and math.hypot(3007 - 3004, 0) > 1.5)
+    def _ss(t):
+        t = min(max(t, 0.0), 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    _w0 = 0.5 * math.sqrt(64.0 / math.pi)
+    _tan35 = math.tan(math.radians(35.0))
+    near("the un-capped ramp would be 0.5·sqrt(64/pi) = 2.2568 m", _w0,
+         2.2567583341910251, 1e-12)
+    check_true("...but its PEAK 1.5·5.0/w0 would be steeper than tan(35°)",
+               1.5 * 5.0 > _tan35 * _w0)
+    W_RAMP = 1.5 * 5.0 / _tan35
+    near("so the ramp is widened to 1.5·5.0/tan(35°) = 10.71111 m", W_RAMP,
+         10.71111005056586, 1e-9)
+    near("the RAMP outside, h(3006,3020) = 5·smoothstep(2/w)",
+         ground_y(3006, 3020), round(5.0 * _ss(2.0 / W_RAMP), 3), 1e-9)
+    near("...which is 0.458", ground_y(3006, 3020), 0.458, 1e-9)
+    near("...h(3008,3020) = 5·smoothstep(4/w) = 1.571",
+         ground_y(3008, 3020), 1.571, 1e-9)
+    near("...d = 8 is still INSIDE this wider ramp, h(3012,3020) = 4.201",
+         ground_y(3012, 3020), 4.201, 1e-9)
+    near("...and past the ramp the landscape is untouched, h(3016,3020)",
+         ground_y(3016, 3020), 5.0)
+    near("...so the mixed lattice puts (3005,3020) at 0.229",
+         ground_y(3005, 3020), 0.229, 1e-9)
+    check_true("WALKABLE BY CONSTRUCTION: the steepest 2-m segment "
+               "(3008 -> 3010) stays under the 40° gate",
+               not relief.slope_blocks(
+                   ground_y(3010, 3020) - ground_y(3008, 3020),
+                   2.0, 0.4, 40.0))
+    near("...its angle is 34.57° — under the 35° peak cap itself",
+         math.degrees(math.atan2(
+             ground_y(3010, 3020) - ground_y(3008, 3020), 2.0)),
+         34.5662, 1e-3)
+    # RED COUNTER-PROBE of the first cut (mean-gradient cap, w = Δ/tan35 =
+    # 7.14074 m): its lattice would carry h(3006) = 0.957 and h(3008) = 2.949,
+    # a segment of (2.949 − 0.957)/2 = 0.996 m/m = 44.9° — OVER the gate. The
+    # baked field must NOT reproduce those numbers.
+    check_true("red: the mean-cap ramp value 0.957 at (3006,3020) is gone",
+               abs(ground_y(3006, 3020) - 0.957) > 1e-6)
+    check_true("red: the 44.9° segment of the mean-cap ramp does not exist",
+               math.degrees(math.atan2(
+                   ground_y(3008, 3020) - ground_y(3006, 3020), 2.0)) < 35.0)
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

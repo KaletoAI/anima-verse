@@ -305,7 +305,21 @@ check("polygon rounded", area1["polygon"],
       [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
 check("polygon all floats",
       all(isinstance(c, float) for pt in area1["polygon"] for c in pt), True)
-check("meta default", area1["meta"], {})
+# SINCE "EIN BODEN" E1 (§ G4): "water" is a kind the catalog flags as a WATER
+# SURFACE, and saving a water area SETTLES its mirror height — the median of
+# the natural ground along its rim, written down so it stops following the
+# landscape around it. This world has no height area at all, so that ground is
+# flat and the median is exactly 0.0. The two widths keep their defaults and
+# are only stored when authored.
+check("meta default — the settled mirror of a water area on flat ground",
+      area1["meta"], {"water_level": 0.0})
+check("...and the plain sanitizer adds nothing (settling is a SAVE step)",
+      terrain.sanitize_area({"kind": "water", "polygon": SQUARE})["meta"], {})
+_authored = terrain.save_area({"kind": "water", "polygon": SQUARE,
+                               "meta": {"water_level": -1.5}})
+check("an AUTHORED mirror is never overwritten by the settle step",
+      _authored["meta"], {"water_level": -1.5})
+terrain.delete_area(_authored["id"])   # …and out again: [2] counts the rows
 check("listed once", [a["id"] for a in terrain.list_areas()], [area1["id"]])
 
 SIG_AFTER_AREA = terrain.terrain_sig()
@@ -542,11 +556,12 @@ _scat = terrain.save_area(
      "meta": {"scatter": [{"density_per_100m2": 9, "height_m": 6,
                            "model": "/assets/props/fern/model"}],
               "note": "free form"}})
+# ``water_level`` rides along because "water" is a water kind here (see [1]).
 check("the list survives the save/read round trip",
       next(a["meta"] for a in terrain.list_areas() if a["id"] == _scat["id"]),
       {"scatter": [{"density_per_100m2": 9.0, "height_m": 6.0,
                     "model": "/assets/props/fern/model"}],
-       "note": "free form"})
+       "note": "free form", "water_level": 0.0})
 terrain.delete_area(_scat["id"])
 
 print("[12] scatter enrichment — the tiers and the height the prop HAS")
@@ -998,7 +1013,8 @@ _str = terrain.save_area(
 check("the recipe survives the save/read round trip",
       next(a["meta"] for a in terrain.list_areas() if a["id"] == _str["id"]),
       {"stroke": {"points": [[0.0, 0.0], [10.0, 0.0]], "width_m": 3.0,
-                  "style": "wavy", "spacing_m": 8.0, "amplitude_m": 2.0}})
+                  "style": "wavy", "spacing_m": 8.0, "amplitude_m": 2.0},
+       "water_level": 0.0})
 
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])

@@ -210,6 +210,60 @@ def _sanitize_stroke(raw: Any) -> Dict[str, Any]:
     return out
 
 
+def _sanitize_water(meta: Dict[str, Any]) -> None:
+    """The three WATER numbers of a painted area, in place (E1, § G4).
+
+    A water polygon is the one painted shape that changes the GROUND without
+    being a height area: the bake sinks its bed under the mirror
+    (``core.heightfield.HeightModel._carve``), which is what makes "distant
+    terrain pokes through the lake" impossible in the DATA instead of
+    impossible in a shader. The three numbers are:
+
+    * ``water_level`` — the mirror, as a world y in metres. NO DEFAULT IS
+      INVENTED HERE: an absent level means "not settled yet", and
+      :func:`save_area` fills it in from the landscape (the median height along
+      the rim) so it is a stored number from then on and stops moving when
+      somebody paints a hill next to the lake. Only a finite number survives.
+    * ``water_depth_m`` — how far the bed lies under the mirror once the shore
+      ramp is done. Clamped, never refused: an authoring slip should make a
+      shallow lake, not lose the shape somebody drew.
+    * ``shore_ramp_m`` — how far INSIDE the rim that full depth is reached. 0
+      is legal and means a step, the walled basin.
+
+    They live on the AREA and not on the KIND because two lakes in one world
+    stand at two heights; whether a kind is water at all is the catalog's
+    answer (``terrain_types.is_water_kind``).
+    """
+    from app.core.heightfield import (WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M,
+                                      WATER_DEPTH_MIN_M,
+                                      WATER_SHORE_RAMP_DEFAULT_M,
+                                      WATER_SHORE_RAMP_MAX_M,
+                                      WATER_SHORE_RAMP_MIN_M)
+    # SERVER OUTPUT NEVER COMES BACK IN. ``water_level_effective`` is computed
+    # on the read path (``core.heightfield.with_effective_water_level``) so the
+    # editor can show what the carve really used; ``meta`` is a full replace on
+    # every write, so a client that round-trips what it read would otherwise
+    # store it. It is dropped here, once.
+    meta.pop("water_level_effective", None)
+    if "water_level" in meta:
+        level = _finite(meta.get("water_level"))
+        if level is None:
+            meta.pop("water_level", None)
+        else:
+            meta["water_level"] = round(level, 3)
+    for key, default, low, high in (
+            ("water_depth_m", WATER_DEPTH_DEFAULT_M,
+             WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
+            ("shore_ramp_m", WATER_SHORE_RAMP_DEFAULT_M,
+             WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M)):
+        if key not in meta:
+            continue
+        value = _finite(meta.get(key))
+        if value is None:
+            value = default
+        meta[key] = round(min(max(value, low), high), 3)
+
+
 def sanitize_area(raw: Any) -> Dict[str, Any]:
     """Whitelist + coerce one area; raises ValueError on junk."""
     from app.core.terrain_types import effective_catalog
@@ -240,6 +294,11 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
     # enough for the editor to regenerate it.
     if "stroke" in meta:
         meta["stroke"] = _sanitize_stroke(meta["stroke"])
+    # …and the three numbers of a WATER area (E1, § G4). They are whitelisted
+    # for every area rather than only for a water kind: a kind may be flagged
+    # as water AFTER a shape was painted with it, and a number that survived
+    # that edit is one the author already set.
+    _sanitize_water(meta)
     return {"id": area_id, "kind": kind,
             "polygon": _sanitize_polygon(raw.get("polygon")),
             "z_order": z_order,
@@ -419,10 +478,43 @@ def _note_relief_write() -> None:
     note_world_write()
 
 
+def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
+    """Give a WATER area a stored ``meta.water_level`` if it has none (§ G4).
+
+    THE DEFAULT IS THE MEDIAN NATURAL HEIGHT ALONG THE RIM, and it is written
+    down HERE, at save time, rather than being recomputed on every bake. The
+    difference matters: a computed default follows the landscape, so painting a
+    hill beside a lake would raise the lake — and a lake that moves when its
+    neighbourhood is edited is exactly the kind of hidden coupling this plan
+    exists to remove. Once stored it is a number the author owns and can drag.
+
+    A non-water kind, an already-set level and a world whose height model
+    cannot be built (no DB in a smoke run) all leave the area untouched: the
+    bake computes the same median on the fly in that case, so nothing is lost
+    but the stability.
+    """
+    from app.core.terrain_types import effective_catalog, is_water_kind
+    meta = area.get("meta")
+    if not isinstance(meta, dict) or "water_level" in meta:
+        return area
+    catalog = effective_catalog()
+    if not is_water_kind(str(area.get("kind") or ""), catalog):
+        return area
+    from app.core.heightfield import _median, _rim_samples, build_model
+    from app.models import heightfield as store
+    rim = _rim_samples(area.get("polygon") or [])
+    if not rim:
+        return area
+    model = build_model(store.list_height_areas(), (), list_areas(), catalog)
+    meta["water_level"] = round(
+        _median([model.natural(px, pz) for px, pz in rim]), 3)
+    return area
+
+
 def save_area(raw: Any) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one area; returns the
     sanitized entry. Raises ValueError when the area is not usable."""
-    area = sanitize_area(raw)
+    area = settle_water_level(sanitize_area(raw))
     now = utc_now_iso()
     with transaction() as conn:
         conn.execute(

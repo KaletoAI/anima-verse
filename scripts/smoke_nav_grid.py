@@ -220,7 +220,8 @@ Hand-derived expectations:
  [15] THE TWO EXEMPTIONS of the steepness rule (review finding I2). Both were
       untested: a mutant `openings=()` and a mutant `if False` on the
       footprint branch passed every case above. SINCE 2026-08-13 the footprint
-      half is FLAG-CONDITIONAL: flattening is opt-in (`level_ground`), and the
+      half asks whether the place is BUILT (E1, § G5 — a drawn building
+      outline or a closed room; the old `level_ground` flag is gone), and the
       only justification the exemption ever had — "the field is levelled flat
       under a place anyway" — holds for the flagged places alone.
 
@@ -228,7 +229,7 @@ Hand-derived expectations:
          WALL: height area (2200,0)-(2260,60), height 20, falloff 4 — twenty
          metres, so the plateau's rim is a wall by any measure. HOUSE at
          (2200,30), plan_width_m 8, one opening on the E edge at 0.5 -> world
-         (2204, 30), and `level_ground` SET — without the flag there is no
+         (2204, 30). While the place is NATURAL there is no
          plateau and therefore no rim to be exempt from. The house's centre
          sits ON the area's west outline, so its plateau is 0 and the
          footprint plus one cell around it is pinned there.
@@ -278,7 +279,7 @@ Hand-derived expectations:
          0·0.75 + 20·0.25 = 5, h(9,7) = 20 -> rise 15 over 4 -> 75.07° ->
          steep. THREE readings of that one cell, and each is the red probe of
          the next:
-           * footprint of edge 8 at (7,7), `level_ground` SET, route STARTS in
+           * footprint of edge 8 at (7,7), region marked as a PLATEAU, route STARTS in
              it (so it is exempt) -> free. The place levelled its ground, so
              there is nothing to measure.
            * the SAME footprint with the flag CLEARED -> steep again. The
@@ -448,6 +449,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import config, nav_grid, terrain_query, terrain_types  # noqa: E402
+from app.core import heightfield as hf_core  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
     boundary_world_points, effective_boundary, is_area_location,
     point_in_polygon, polygon_bounds, polygon_hits_aabb, segment_hits_polygon)
@@ -536,17 +538,6 @@ def set_area_model(location_id: str, flag: bool) -> None:
             else:
                 map3d.pop("area_model", None)
             loc["map3d"] = map3d
-    _save_world_data(data)
-
-
-def set_level_ground(location_id: str, flag: bool) -> None:
-    """Flip the OPT-IN FLATTENING of a location (``level_ground``, decision
-    2026-08-13) — the flag that decides whether the world grid is levelled
-    under it and therefore whether the steepness rule steps back inside it."""
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            loc["level_ground"] = bool(flag)
     _save_world_data(data)
 
 
@@ -936,8 +927,22 @@ height_store.save_height_area(
     {"id": "ridge", "height_m": 5.0, "falloff_m": 12.0,
      "polygon": [[3100, 0], [3112, 0], [3112, 12], [3100, 12]]})
 ctx = nav_grid.build_nav_context()
-check("the ridge raster is 6 × 6",
-      (ctx.height_field["rows"], ctx.height_field["cols"]), (6, 6))
+# SINCE "EIN BODEN" E1 (§ G4) A PAINTED LAKE SHAPES THE GROUND: a water area
+# carves its own bed (mirror − depth), so the OVERVIEW now has to cover every
+# painted lake as well as every height area. This world already holds three
+# deep_water squares — (8,-6)-(12,6), (100,-20)-(140,20) and (198,-2)-(202,2)
+# — so the union box runs from x = 8 to the ridge's 3112 and from z = -20 to
+# 20, and by hand
+#   origin = (floor(8/4)·4 - 4, floor(-20/4)·4 - 4) = (4, -24)
+#   cols   = ceil((3112 + 4 - 4)/4) + 1 = 778 + 1 = 779
+#   rows   = ceil((20 + 4 + 24)/4) + 1 = 12 + 1 = 13
+# The ridge's own numbers below are read off the 2 m TILES and are untouched
+# by that — which is the coherence claim of § G1 in passing.
+check("the overview now spans every painted lake as well as the ridge",
+      (ctx.height_field["rows"], ctx.height_field["cols"]), (13, 779))
+check("...anchored at (4, -24)",
+      (ctx.height_field["origin_x"], ctx.height_field["origin_z"]),
+      (4.0, -24.0))
 check("the ground around it is plain grass at factor 1.0",
       ctx.terrain_at(3106, -6), (True, 1.0))
 approx("its spine tops out at the authored 5 · 6/12 on the 2 m tile",
@@ -979,21 +984,25 @@ height_store.save_height_area(
 HOUSE = add_location(name="Smoke House", description="nav smoke")["id"]
 update_location_position(HOUSE, 2200.0, 30.0)
 set_plan_width(HOUSE, 8.0)
-# THE FLAG-OFF STATE FIRST: an unflagged place levels nothing, so there is no
-# plateau, no rim and no grid growth — the authored wall runs straight through
-# the house.
+# THE NATURAL STATE FIRST (E1, § G5): a place that draws no built floor
+# stamps nothing, so there is no plateau and no rim — the authored wall runs
+# straight through the house, and that is the ground the steepness rule and
+# the walking gate both judge.
+#
+# THE GRID: the wall (2200,0)-(2260,60) joins the three painted lakes of [2],
+# [4] and [6], so by hand
+#   origin = (floor(8/4)·4 - 4, floor(-20/4)·4 - 4) = (4, -24)
+#   cols   = ceil((2260 + 4 - 4)/4) + 1 = 565 + 1 = 566
+#   rows   = ceil((60 + 4 + 24)/4) + 1 = 22 + 1 = 23
 flat_ctx = nav_grid.build_nav_context()
-check("an unflagged house does not grow the grid",
-      (flat_ctx.height_field["rows"], flat_ctx.height_field["cols"]), (18, 18))
-check("...which is anchored at the area's own box",
+check("a NATURAL house is no input of the bake — the grid is the areas' own",
+      (flat_ctx.height_field["rows"], flat_ctx.height_field["cols"]),
+      (23, 566))
+check("...anchored at (4, -24)",
       (flat_ctx.height_field["origin_x"], flat_ctx.height_field["origin_z"]),
-      (2196.0, -4.0))
-approx("...and h(2205,29) is the authored wall, not a pinned apron",
+      (4.0, -24.0))
+approx("...and h(2205,29) is the authored wall, not a stamped plot",
        flat_ctx.height_at(2205, 29), 20.0)
-set_level_ground(HOUSE, True)
-ctx_before = nav_grid.build_nav_context()
-check_true("setting level_ground hands out a NEW context (placement hash)",
-           ctx_before is not flat_ctx, f"{flat_ctx.sig} -> {ctx_before.sig}")
 _house = _load_world_data()
 for _loc in _house["locations"]:
     if _loc.get("id") == HOUSE:
@@ -1006,27 +1015,32 @@ for _loc in _house["locations"]:
 _save_world_data(_house)
 ctx = nav_grid.build_nav_context()
 check_true("[I1] authoring an opening hands out a NEW context",
-           ctx is not ctx_before, f"{ctx_before.sig} -> {ctx.sig}")
+           ctx is not flat_ctx, f"{flat_ctx.sig} -> {ctx.sig}")
 check("the opening sits on the east edge (index 1)", ctx.openings,
       ((2204.0, 30.0),))
-check("the grid grew for the house's plateau",
-      (ctx.height_field["rows"], ctx.height_field["cols"]), (18, 20))
-approx("h(2205,29) — the pinned apron", ctx.height_at(2205, 29), 0.0)
-approx("h(2209,29) — past the falloff, the full wall",
-       ctx.height_at(2209, 29), 20.0)
-approx("h(2207,27) — pinned west, authored east", ctx.height_at(2207, 27),
-       10.0)
-approx("h(2207,31) — the same pair one cell north",
-       ctx.height_at(2207, 31), 10.0)
-approx("so the rise is hypot(20, 0)", math.hypot(20.0, 0.0), 20.0)
-approx("its angle over 4 m", math.degrees(math.atan2(20.0, 4.0)), 78.6901,
+
+# THE WALL'S OWN RAMP is where the steepness lives: the area is height 20 with
+# falloff 4, so h = 20·min(1, d/4) with d = min(x-2200, z, 2260-x, 60-z), i.e.
+# the rise sits between x = 2200 and x = 2204 — right under the house's plot
+# and its opening.
+approx("h(2199,29) — west of the wall, flat", ctx.height_at(2199, 29), 0.0)
+approx("h(2201,29) — 1 m in", ctx.height_at(2201, 29), 5.0)
+approx("h(2203,29) — 3 m in", ctx.height_at(2203, 29), 15.0)
+approx("h(2205,29) — past the falloff, the full wall",
+       ctx.height_at(2205, 29), 20.0)
+# ``too_steep`` is a CENTRAL difference over ±NAV_CELL_M (2 m), run 4 m:
+#   cell (2201,29): rise_x = h(2203,29) - h(2199,29) = 15, rise_z = 0
+#                   -> atan(15/4) = 75.07° > 40 -> too steep
+#   cell (2199,29): rise_x = h(2201,29) - h(2197,29) =  5, rise_z = 0
+#                   -> atan(5/4)  = 51.34° > 40 -> too steep as well
+near_cell = nav_grid.cell_of(2201, 29)
+far_cell = nav_grid.cell_of(2199, 29)
+check("the exempt cell is centred (2201, 29)", nav_grid.cell_centre(near_cell),
+      (2201.0, 29.0))
+approx("its rise over 4 m", math.degrees(math.atan2(15.0, 4.0)), 75.0686,
        1e-4)
-near_cell = nav_grid.cell_of(2207, 29)
-far_cell = nav_grid.cell_of(2209, 29)
-check("the exempt cell is centred (2207, 29)", nav_grid.cell_centre(near_cell),
-      (2207.0, 29.0))
-approx("...and lies 3.162 m from the opening",
-       math.hypot(2207 - 2204, 29 - 30), 3.1622777, 1e-6)
+approx("...and it lies 3.162 m from the opening — inside the 3.5 m tolerance",
+       math.hypot(2201 - 2204, 29 - 30), 3.1622777, 1e-6)
 search = nav_grid._Search(ctx, (2260.0, 58.0), (2258.0, 56.0))
 check("the cell at the opening is NOT blocked for its height",
       search.too_steep(near_cell), False)
@@ -1034,10 +1048,45 @@ blind = nav_grid._Search(_replace(ctx, openings=()),
                          (2260.0, 58.0), (2258.0, 56.0))
 check("RED COUNTER-PROBE: without the openings it is too steep",
       blind.too_steep(near_cell), True)
-approx("the control cell lies 5.1 m from the opening",
-       math.hypot(2209 - 2204, 29 - 30), 5.0990195, 1e-6)
+approx("the control cell lies 5.099 m from the opening",
+       math.hypot(2199 - 2204, 29 - 30), 5.0990195, 1e-6)
 check("...so it stays blocked — the exemption is local",
       search.too_steep(far_cell), True)
+
+# …AND WHAT A BUILT FLOOR DOES TO ALL OF IT (E1, § G5). One closed room and
+# the plot stamps: the target is the MEDIAN of the wall under the footprint
+# [2196,2204] × [26,34], whose 2 m lattice carries 15 zeros (x ≤ 2200, outside
+# or ON the wall's outline), 5 × 10 (x = 2202) and 5 × 20 (x = 2204) — the
+# 13th of those 25 values is 0.0. The rim step is the full 20 m, so the ramp
+# is widened to 1.5·20/tan(35°) = 42.844440 m (the cap holds the STEEPEST
+# metre at 35°, and a smoothstep peaks at 1.5x its mean) and the plot itself
+# is dead flat.
+_built = _load_world_data()
+for _loc in _built["locations"]:
+    if _loc.get("id") == HOUSE:
+        _loc["rooms"] = [{"id": "hall", "name": "Hall", "layout": {}}]
+_save_world_data(_built)
+built_ctx = nav_grid.build_nav_context()
+check_true("closing a room hands out a NEW context (placement hash)",
+           built_ctx is not ctx, f"{ctx.sig} -> {built_ctx.sig}")
+_stamp = hf_core.world_model().plateaus
+check("...and the world now holds exactly one plateau stamp", len(_stamp), 1)
+approx("its target is the median 0.0", _stamp[0][5], 0.0)
+approx("...and its ramp is 1.5·20/tan(35°)", _stamp[0][6],
+       1.5 * 20.0 / math.tan(math.radians(35.0)), 1e-9)
+approx("the plot is flat: h(2201,29)", built_ctx.height_at(2201, 29), 0.0,
+       2e-3)
+approx("...and h(2203,29)", built_ctx.height_at(2203, 29), 0.0, 2e-3)
+check("...so the cell at the opening is not steep even without the exemption",
+      nav_grid._Search(_replace(built_ctx, openings=()),
+                       (2260.0, 58.0), (2258.0, 56.0)).too_steep(near_cell),
+      False)
+_built = _load_world_data()
+for _loc in _built["locations"]:
+    if _loc.get("id") == HOUSE:
+        _loc["rooms"] = []
+_save_world_data(_built)
+nav_grid.build_nav_context()
 
 # The footprint half, on a hand-built context: after levelling no cell INSIDE
 # a footprint can be steep, so the guard is measured where a cliff and a
@@ -1053,8 +1102,11 @@ CLIFF_SQ = ((3.0, 3.0), (11.0, 3.0), (11.0, 11.0), (3.0, 11.0))
 
 
 def cliff_ctx(level_ground):
-    """The hand-built cliff with ONE placed boundary over it, flagged or
-    not."""
+    """The hand-built cliff with ONE placed boundary over it, BUILT or not.
+
+    ``level_ground`` is the ``Region`` field that says "this place stamps a
+    plateau" — since E1 (§ G5) it is filled from ``draws_built_floor``, not
+    from a flag."""
     return nav_grid.NavContext(
         areas=[], catalog={},
         regions=[nav_grid.Region(lid="fp", points=CLIFF_SQ,
@@ -1074,7 +1126,7 @@ inside = nav_grid._Search(hand, (7.0, 7.0), (7.0, 7.0))
 check("a route that starts in a LEVELLING place walks its own ground",
       inside.too_steep(nav_grid.cell_of(7, 7)), False)
 unflagged = nav_grid._Search(cliff_ctx(False), (7.0, 7.0), (7.0, 7.0))
-check("RED COUNTER-PROBE: without level_ground the same cell measures for "
+check("RED COUNTER-PROBE: for a NATURAL place the same cell measures for "
       "real", unflagged.too_steep(nav_grid.cell_of(7, 7)), True)
 check("...and is therefore blocked, out of its own place",
       unflagged.blocked(nav_grid.cell_of(7, 7)), True)
@@ -1187,13 +1239,34 @@ check("the village really counts as open ground",
 # 15 samples of 2 m, midpoints x = 871 … 899: ten west of the 890.5 shore on
 # grass (10 * 2 / 1.0 = 20 s) and five in the lake inside the footprint
 # (5 * 2 / 0.4 = 25 s) -> 45 s. No midpoint sits on the polygon edge.
-approx("30 m into the village cost 20 s of grass + 25 s of wading",
-       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 45.0)
+#
+# SINCE "EIN BODEN" E1 (§ G4) THE LAKE ALSO HAS A BED. The kind is flagged as
+# water, so the bake carves it: the mirror is the median height along the rim
+# — flat 0 here — and the default depth is 2 m, reached 3 m inside the shore,
+# so the walk DESCENDS 2 m on its way in and the climb penalty
+# (SLOPE_COST_S_PER_M = 4 s/m, [14]) is paid for it:
+#     45 s  +  4 s/m · 2.0 m  =  53 s
+# The descent is monotone (the shore profile only falls), so the sum of |Δh|
+# along the polyline is exactly the 2 m of depth and nothing more.
+_lake_bed = hf_core.world_model()
+approx("the lake's mirror is the rim median, 0.0",
+       _lake_bed.water_level_by_area[
+           [a["id"] for a in terrain.list_areas()
+            if a["kind"] == "water"][0]], 0.0)
+approx("...and its bed at the goal is 2 m under it",
+       _lake_bed.final(900.0, 0.0), -2.0, 1e-9)
+approx("...while the approach on grass is still flat",
+       _lake_bed.final(870.0, 0.0), 0.0)
+approx("30 m into the village cost 20 s of grass + 25 s of wading + 8 s of "
+       "descending into the bed",
+       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
+       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
 r = nav_grid.route((870, 0), (900, 0))
 check("the route is still the straight line into the village", r,
       [(870.0, 0.0), (900.0, 0.0)])
-approx("...and the journey pays the water for it",
-       sum(nav_grid.segment_costs(r)), 45.0)
+approx("...and the journey pays the water AND the bed for it",
+       sum(nav_grid.segment_costs(r)),
+       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
 # RED COUNTER-PROBE 1 (round 2): the SAME lake under a BUILDING. Nothing
 # changes but the area flag, and the five wet midpoints go back to the
 # neutral 1.0 -> 15 parts of 2 m at 1.0 = 30 s. That is the reach decision,
@@ -1204,23 +1277,31 @@ check_true("flipping the flag really hands out a new context",
            built_ctx is not lake_ctx, "")
 check("the same point is BUILT now",
       nav_grid._region_scope(900.0, 0.0, built_ctx.regions), "built")
-approx("RED COUNTER-PROBE: a HALL on the same lake is walked dry in 30 s",
-       nav_grid._segment_cost(built_ctx, (870.0, 0.0), (900.0, 0.0)), 30.0)
+# …dry, but not level: the bed is a property of the painted WATER, not of the
+# place standing on it, so the 8 s of descent stay.
+approx("RED COUNTER-PROBE: a HALL on the same lake is walked dry in 30 s "
+       "(+ the same 8 s of bed)",
+       nav_grid._segment_cost(built_ctx, (870.0, 0.0), (900.0, 0.0)),
+       30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
 set_area_model(LAKE_ID, True)
 lake_ctx = nav_grid.build_nav_context()
 approx("...and the village wades again",
-       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 45.0)
+       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
+       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
 # RED COUNTER-PROBE 2: the rule BEFORE finding 3, where every footprint
 # neutralised its ground — the same 30 s, from the other direction.
 _rule = nav_grid.effective_speed_factor
 nav_grid.effective_speed_factor = (
     lambda factor, scope: 1.0 if scope != "wilderness"
     else max(factor, terrain_query.MIN_SPEED_FACTOR))
-approx("RED COUNTER-PROBE: the old place-neutral rule walks it dry in 30 s",
-       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 30.0)
+approx("RED COUNTER-PROBE: the old place-neutral rule walks it dry in 30 s "
+       "(+ the bed's 8 s)",
+       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
+       30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
 nav_grid.effective_speed_factor = _rule
 approx("...and the real rule is back",
-       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)), 45.0)
+       nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
+       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
 # The wilderness half: sand out in the open, no footprint anywhere near it.
 terrain.save_area({"kind": "sand",
                    "polygon": [[1200, -20], [1240, -20], [1240, 20],

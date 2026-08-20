@@ -4,8 +4,8 @@
     {"kind": "forest",     "name": "Forest",     "color": "#386641", "passable": true,  "speed_factor": 0.7,  "surface": "forest",     "meta": {"sway_m": 0.04, "undergrowth": 0.6}},
     {"kind": "sand",       "name": "Sand",       "color": "#e9c46a", "passable": true,  "speed_factor": 0.85, "surface": "sand"},
     {"kind": "path",       "name": "Path",       "color": "#b08968", "passable": true,  "speed_factor": 1.2},
-    {"kind": "water",      "name": "Water",      "color": "#4a90d9", "passable": true,  "speed_factor": 0.4, "surface": "water",      "meta": {"move_anim": "swim", "idle_anim": "treading-water", "move_sink_m": 0.35, "idle_sink_m": 1.3}},
-    {"kind": "deep_water", "name": "Deep water", "color": "#1d3f6e", "passable": false, "speed_factor": 0.4, "surface": "deep_water", "meta": {"move_anim": "swim"}},
+    {"kind": "water",      "name": "Water",      "color": "#4a90d9", "passable": true,  "speed_factor": 0.4, "surface": "water",      "meta": {"water": true, "move_anim": "swim", "idle_anim": "treading-water", "move_sink_m": 0.35, "idle_sink_m": 1.3}},
+    {"kind": "deep_water", "name": "Deep water", "color": "#1d3f6e", "passable": false, "speed_factor": 0.4, "surface": "deep_water", "meta": {"water": true, "move_anim": "swim"}},
     {"kind": "rock",       "name": "Rock",       "color": "#8d99ae", "passable": false, "speed_factor": 0.0}
   ]
 }

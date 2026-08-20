@@ -137,6 +137,13 @@ UNDERGROWTH_MIN, UNDERGROWTH_MAX = 0.0, 1.0
 #: user asked for ("just to make random small hills"), not a choppy field.
 DEFAULT_RELIEF_WAVE_M = 32.0
 
+#: The catalog meta key that marks a kind as a WATER SURFACE (E1, § G4) — see
+#: :func:`is_water_kind`. It lives on the TYPE because "is this water" is a
+#: property of the material; the three numbers that shape one lake
+#: (``water_level``, ``water_depth_m``, ``shore_ramp_m``) live on the AREA,
+#: because two lakes in one world stand at two heights.
+WATER_META_KEY = "water"
+
 
 def _shared_path() -> Path:
     from app.core.paths import get_shared_dir
@@ -297,6 +304,16 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     if "undergrowth" in meta:
         _clamped_meta_number(meta, "undergrowth",
                              UNDERGROWTH_MIN, UNDERGROWTH_MAX)
+    # AND ONE MORE since "Ein Boden" (E1, § G4): is this ground a WATER
+    # SURFACE? It is a plain flag and it is authored, never guessed from the
+    # kind's NAME — terrain kinds are an open vocabulary, and a world whose
+    # lakes are called "lagoon" must carve exactly like one whose lakes are
+    # called "water". What it switches on is the bake's water stamp: an area
+    # painted with a flagged kind sinks its own bed under its water level
+    # (``core.heightfield.HeightModel._carve``) and carries the three numbers
+    # that shape it (``models.terrain._sanitize_water``).
+    if WATER_META_KEY in meta:
+        meta[WATER_META_KEY] = bool(meta[WATER_META_KEY])
     entry = {
         "kind": kind,
         "name": name,
@@ -315,6 +332,28 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
         entry["surface"] = raw.get("surface")
         _trimmed_meta_string(entry, "surface")
     return entry
+
+
+def is_water_kind(kind: str,
+                  catalog: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+    """Is this terrain kind a WATER SURFACE (E1, plan-ein-boden.md § G4)?
+
+    THE ONE PLACE THAT ANSWERS IT, and it answers from the CATALOG, never from
+    the name: kinds are an open vocabulary here, so "water", "lagoon" and
+    "brook" are all the same question and only the author knows it. The flag is
+    ``meta.water`` on the type; a kind without it is not water, and a kind the
+    catalog does not know at all is not water either.
+
+    ``catalog`` may be handed in — the bake holds one already and this sits on
+    a per-point path — and defaults to :func:`effective_catalog`.
+    """
+    if catalog is None:
+        catalog = effective_catalog()
+    entry = catalog.get((kind or "").strip())
+    if not isinstance(entry, dict):
+        return False
+    meta = entry.get("meta")
+    return bool(isinstance(meta, dict) and meta.get(WATER_META_KEY))
 
 
 def _world_types() -> Dict[str, Dict[str, Any]]:

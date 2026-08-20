@@ -203,47 +203,89 @@ def _invalidate() -> None:
             "Could not re-raster the heightfield after a write: %s", exc)
 
 
+def draws_built_floor(loc: Dict[str, Any]) -> bool:
+    """Does this location draw a BUILT floor — i.e. does it stamp its plot?
+
+    THE INVERSE OF ``scene_recipe.is_natural_location``, deliberately
+    replicated rather than imported: that function asks the same two questions
+    of the COMPOSED room recipes, this one asks them of the STORED location,
+    and importing the scene recipe here would drag the whole scene builder into
+    the walking gate's import path. The two questions are the contract, and
+    they are:
+
+    1. is there a ``map3d.outline`` — a drawn BUILDING contour? The drawn
+       ``boundary`` does NOT count: it is the plot, the edge of the place, and
+       drawing where a lake ends is not the same as drawing a floor.
+    2. is there a CLOSED room — one that is not ``always_visible`` (§ A5, an
+       open zone)? The yard (``GROUND_ROOM_ID``, § A13a) is inherently open and
+       never counts.
+
+    Either one makes the location BUILT, and a built location planes the ground
+    under itself (§ G5). A natural location — the lake, the clearing, the
+    forest — stamps nothing: its floor IS the relief, and the landscape runs
+    through it unchanged.
+    """
+    from app.models.world import GROUND_ROOM_ID
+    map3d = loc.get("map3d")
+    if isinstance(map3d, dict):
+        outline = map3d.get("outline")
+        if isinstance(outline, list) and len(outline) >= 3:
+            return True
+    for room in (loc.get("rooms") or []):
+        if not isinstance(room, dict):
+            continue
+        if str(room.get("id") or "") == GROUND_ROOM_ID:
+            continue
+        layout = room.get("layout")
+        layout = layout if isinstance(layout, dict) else {}
+        if not layout.get("always_visible"):
+            return True
+    return False
+
+
 def placed_footprints() -> List[Tuple[float, float, float,
                                       List[Tuple[float, float]]]]:
-    """``(cx, cz, yaw_deg, boundary points)`` of every location that LEVELS
-    the ground — the POLYGON footprint (contract v6 no. 1 and no. 7).
+    """``(cx, cz, yaw_deg, boundary points)`` of every location that STAMPS a
+    plateau — the POLYGON footprint (contract v6 no. 1 and no. 7).
 
-    The second input of the raster since E8 task 4: the ground under such a
-    footprint is levelled to a plateau, so where those places stand is part of
-    what the world's relief IS. The outline comes from
-    ``world_geometry.effective_boundary``, the ONE place that answers "what
-    ground does this location own": the DRAWN ``map3d.boundary`` and nothing
-    else. Since 2026-08-19 a location that only carries the legacy
-    ``plan_width_m`` dial is no input here at all — it has no area, so it
-    levels nothing until somebody draws its outline (the map editor's "Seed
+    The second input of the bake: the ground under such a footprint is stamped
+    flat, so where those places stand is part of what the world's relief IS.
+    The outline comes from ``world_geometry.effective_boundary``, the ONE place
+    that answers "what ground does this location own": the DRAWN
+    ``map3d.boundary`` and nothing else. A location that only carries the
+    legacy ``plan_width_m`` dial is no input here — it has no area, so it
+    stamps nothing until somebody draws its outline (the map editor's "Seed
     missing boundaries" writes exactly the square it used to get for free).
     A redrawn outline reshapes the plateau.
 
-    The points are LOCAL metres around the pin — the frame the plateau pass
-    tests in (one inverse pin transform per raster point, no per-query polygon
-    rotation). Everything is rounded to the centimetre and the tenth of a
-    degree — the precision the placement itself is stored at — so the
+    **STAMPING IS A LAW, NOT A FLAG** (E1, plan-ein-boden.md § G5). The
+    ``level_ground`` opt-in of 2026-08-13 is gone: every location that draws a
+    BUILT floor (:func:`draws_built_floor`) appears here, and no natural one
+    does. That is the same rule the scene builder already uses to decide
+    whether a place has a storey slab at all — a house that draws a floor and a
+    plot that does not plane under it were two independent grounds, which is
+    the whole finding the plan was written for ("Haus versinkt fern / taucht
+    nah fast auf").
+
+    The points are LOCAL metres around the pin — the frame the plateau stamp
+    tests in (one inverse pin transform per evaluated point, no per-query
+    polygon rotation). Everything is rounded to the centimetre and the tenth of
+    a degree — the precision the placement itself is stored at — so the
     signature over this list does not flap on float noise, while a boundary
     point moved by a centimetre does change it.
 
-    **FLATTENING IS OPT-IN** (decision 2026-08-13): only a location whose
-    ``level_ground`` flag is set appears here. The landscape is authored and a
-    place is put ON it — "the landscape should not mind the place; one may even
-    want a rise inside it" — so an unflagged location changes no height at all.
-
-    ONE FILTER, THREE CONSEQUENCES, and that is why it sits here rather than in
-    the raster: this list is what :func:`height_sig` hashes AND what
-    ``core.heightfield.rasterize`` grows its grid for AND what
-    ``level_plateaus`` pins. So flipping the flag changes the list membership
-    and therefore the signature — every client refetches, the stored raster is
-    stale and is rebuilt — without a single extra field anywhere. An unflagged
-    place needs no grid coverage either, because it writes nothing into it.
+    ONE RULE, TWO CONSEQUENCES, and that is why it sits here rather than in the
+    bake: this list is what :func:`height_sig` hashes AND what
+    ``core.heightfield.build_model`` stamps with. So closing a room or drawing
+    a building outline changes the list membership and therefore the signature
+    — every client refetches, the stored raster is stale and is rebuilt —
+    without a single extra field anywhere.
     """
     from app.core.world_geometry import effective_boundary
     from app.models.world import list_locations
     out: List[Tuple[float, float, float, List[Tuple[float, float]]]] = []
     for loc in list_locations():
-        if not loc.get("level_ground"):
+        if not draws_built_floor(loc):
             continue
         eff = effective_boundary(loc)
         if eff is None:
@@ -284,6 +326,29 @@ def relief_basis() -> List[Dict[str, Any]]:
     return out
 
 
+def water_basis() -> List[Dict[str, Any]]:
+    """The WATER inputs of the bake, in hashable form (E1, § G4).
+
+    Every painted area of a water kind with the three numbers that shape its
+    carve — the mirror height (absent while it is still "auto"), the depth and
+    the shore ramp. They belong in the signature for the same reason the height
+    areas do: moving a lake's level moves the ground under it, and a client
+    holding the old grid would draw a bed the server does not have.
+
+    A world that flags no kind as water contributes an empty list and costs
+    nothing, exactly like :func:`relief_basis` on a world without hills.
+    """
+    from app.core.heightfield import water_areas, water_meta
+    from app.core.terrain_types import effective_catalog
+    from app.models.terrain import list_areas
+    out: List[Dict[str, Any]] = []
+    for area, _box in water_areas(list_areas(), effective_catalog()):
+        level, depth, ramp = water_meta(area)
+        out.append({"id": area.get("id"), "polygon": area.get("polygon"),
+                    "level": level, "depth": depth, "ramp": ramp})
+    return out
+
+
 def height_sig() -> str:
     """10-char signature over the authored height areas AND the placements.
 
@@ -300,10 +365,14 @@ def height_sig() -> str:
     used to stand — and the server, which samples the same field, would agree
     with nobody.
 
-    SO DOES THE ``level_ground`` FLAG, and it costs nothing extra: only the
-    flagged places are in :func:`placed_footprints`, so switching the
-    flattening on or off adds or removes a whole entry from the basis while the
-    place stands perfectly still (decision 2026-08-13).
+    SO DOES WHETHER A PLACE IS BUILT AT ALL (E1, § G5), and it costs nothing
+    extra: only the locations that draw a built floor are in
+    :func:`placed_footprints`, so closing a room or drawing a building outline
+    adds a whole entry to the basis while the place stands perfectly still.
+
+    AND SO DO THE WATER POLYGONS (:func:`water_basis`, E1, § G4): a lake's
+    mirror, depth and shore ramp shape the ground under it exactly as a height
+    area does.
 
     AND SO DOES THE MICRO-RELIEF (:func:`relief_basis`, decision 2026-08-13):
     since a terrain KIND may carry hills, painting such a kind — or editing its
@@ -312,7 +381,8 @@ def height_sig() -> str:
     """
     basis = json.dumps({"areas": list_height_areas(),
                         "places": placed_footprints(),
-                        "terrain": relief_basis()},
+                        "terrain": relief_basis(),
+                        "water": water_basis()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 

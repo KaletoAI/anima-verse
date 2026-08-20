@@ -173,153 +173,118 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
     404 the second time. GET /play/heightfield returns exactly the field plus
     its signature.
-[11] THE PLATEAU (E8 task 4) — AND IT IS OPT-IN (decision 2026-08-13). A place
-    that ASKS FOR IT (``level_ground``) is put ON the world and the ground
-    under it is levelled to carry it — the footprint pinned to the authored
-    height at its own CENTRE, dilated by one cell so the ramp starts outside
-    the place (the flat-hull pattern of the scene relief). A place that does NOT ask for
-    it changes no height at all: the landscape runs through it, because "the
-    landscape should not mind the place — one may even want a rise inside it".
+[11] THE AUTO-PLATEAU (E1, plan-ein-boden.md § G5). A location that draws a
+    BUILT floor — a ``map3d.outline`` or at least one CLOSED room — stamps its
+    plot flat. There is no flag any more: ``level_ground`` is gone, and a
+    NATURAL place (a lake, a clearing) leaves the landscape running through it.
 
-    NO AREAS, NO GRID. A location on an unpainted world levels 0 onto 0: the
+    NO AREAS, NO GRID. A location on an unpainted world stamps 0 onto 0: the
     raster stays empty (rows/cols 0), because a grid of zeros describes exactly
     what its absence describes.
 
     THE CASE: HILL again (square (0,0)-(40,40), height 5, falloff 4) and a
-    location "Hut" at (2, 2) with plan_width_m 8, yaw 0 — footprint x, z in
-    [-2, 6], deliberately on the FLANK, where levelling has something to do.
-    The SAME hut is measured twice, once per flag state.
+    location "Hut" at (2, 2) with the drawn 8 m square, yaw 0 — footprint
+    x, z in [-2, 6], deliberately on the FLANK. The SAME hut is measured twice,
+    once natural, once built.
 
-    0) FLAG OFF (the default). ``placed_footprints()`` does not list the hut at
-       all, so the raster gets no footprint: the grid is the plain hill raster
-       of [1] (13 × 13, origin (-4,-4)) and the field is byte-for-byte the pure
-       area result. The authored landscape answers everywhere, hut or no hut:
+    0) NATURAL. ``placed_footprints()`` does not list it, so the bake gets no
+       footprint: the grid is the plain hill raster of [1] (13 x 13, origin
+       (-4,-4)) and the field is byte-for-byte the pure area result:
          h( 4, 4) = 5      the support point 4 m inside the outline
-         h( 6, 6) = 5      distance min(6, 34) = 6 > falloff 4, so full height
-         h( 8, 4) = 5      the support point where the plateau's ramp would be
-         h(-1, 5) = 0      outside the outline — all four corners of its cell
-                           are 0 (x = -4 and x = 0 are outside/ON the outline)
-       NOT MEASURED AT THE CENTRE: h(2,2) is the same number in BOTH states (a
-       plateau is pinned to exactly the authored height at its centre), so the
-       centre is the one point that cannot tell the two apart.
-       RED COUNTER-PROBE, executed: with ``placed_footprints`` replaced by its
-       pre-decision version (no flag filter) every one of those four points
-       moves to the plateau height and the grid grows to 15 × 15.
+         h( 6, 6) = 5      distance min(6, 34) = 6 > falloff 4, full height
+         h( 8, 4) = 5      where the plateau's ramp will be
+         h(-1, 5) = 0      outside the outline
+         h( 2, 2) = 2.5    the hill's own ramp, 2 m in
 
-       ``ground_y`` READS THE TILE, the field checks read the OVERVIEW, and
-       since 2026-08-14 those are two different steps (2 m and 4 m). Every
-       ``h(...)`` above is unaffected — it is the authored landscape at a point
-       both lattices carry — but the plateau height is not, see b).
-
-    0b) THE SIGNATURE FOLLOWS THE FLAG. Setting it changes ``height_sig``
+    0b) THE SIGNATURE FOLLOWS THE FLOOR. Closing a room changes ``height_sig``
        without the hut moving a centimetre (it enters the hashed list of
-       places), and clearing it again returns EXACTLY the signature from before
-       — the basis is the same data, so the hash has to be.
+       places), and opening it again returns EXACTLY the signature from before.
 
-    a) THE GRID GROWS to hold the plateau and its ramp. The footprint box
-       [-2,6]^2 widened by one step is [-6,10]^2, so the union with the hill's
-       box is (-6,-6)-(40,40):
-         origin = floor(-6/4)·4 - 4 = -12  (both axes)
-         points = ceil((40 + 4 + 12)/4) + 1 = 14 + 1 = 15 per axis
-       Support point (i, j) therefore sits at (-12 + 4i, -12 + 4j). Without the
-       growth the plateau would be cut off at the border and meet the flat
-       world outside the grid as a cliff.
+    a) THE TARGET IS THE MEDIAN, on the 2 m world lattice inside the footprint.
+       Those 25 points are x, z in {-2, 0, 2, 4, 6}, the landscape there is
+       5 * min(1, min(x,z)/4) (both other edges are 34 m away), so
 
-    b) THE PLATEAU HEIGHT is the authored landscape at the centre (2, 2), read
-       BEFORE anything is levelled — and it is a property of the LATTICE one
-       reads it on, which is why there are two numbers since the tiles went to
-       2 m (2026-08-14):
-         OVERVIEW, step 4: the cell (0,0)-(4,4) has the corners (0,0)=0,
-           (4,0)=0, (0,4)=0 (all ON the outline) and (4,4)=5 (4 m in), both
-           fractions 0.5 -> 0.25 · 5 = 1.25 m. That is what the grid checks
-           below see.
-         TILE, step 2: (2,2) IS a support point, so no mixing happens at all
-           and the plateau stands at the authored ramp itself,
-           5 · min(1, 2/4) = 2.5 m. That is what ``ground_y`` answers.
-       The finer number is the truer one — 2.5 is the ramp's exact height at
-       (2,2) — and the gap is the honest cost of two rasters: the distant
-       picture pins this place a metre and a quarter lower than the ground
-       every rule walks on.
+         x or z <= 0  -> 0     16 points   (outside the hill, or ON its outline)
+         min = 2      -> 2.5    5 points
+         min >= 4     -> 5      4 points
 
-    c) THE PINNED POINTS are those within one step of the footprint (the exact
-       distance to the rectangle, not to its box): x in {-4, 0, 4, 8}
-       (overshoots 2, 0, 0, 2) and the same in z, so i, j in {2, 3, 4, 5} —
-       every combination, since the worst pair is hypot(2, 2) = 2.83 <= 4.
-         (i,j) = (3,3) = (0,0)  authored 0 -> 1.25   the place raises the ground
-         (i,j) = (4,4) = (4,4)  authored 5 -> 1.25   and cuts it down
-         (i,j) = (2,2) = (-4,-4) authored 0 -> 1.25  the dilation ring, OUTSIDE
-                                                     the footprint
-       The border ring of the grid stays 0 (i or j 0 or 14) — the invariant the
-       clamp outside the grid rests on.
+       and the 13th of the 25 sorted values is 0.0:  h0 = 0.0.
+       THE OLD SINGLE PROBE at the centre said 2.5. Two thirds of this plot lie
+       OFF the hill; the median says so, one probe cannot. Red counter-probe.
 
-    d) FLAT ACROSS THE WHOLE PLACE: sampled at the centre (2,2), at the corner
-       (6,6) and at (-1,5) ``ground_y`` answers 2.5 everywhere, because every
-       cell touching the footprint has four pinned corners.
+    b) THE RAMP IS METRES WIDE. area = 64 m² -> 0.5*sqrt(64/pi) = 2.256758 m,
+       but the rim step is the full 5.0 m (the north-east rim stands at the
+       hill's full height). The 35° cap holds the STEEPEST metre, and a
+       smoothstep peaks at 1.5x its mean, so the test is 1.5*5.0 = 7.5 >
+       tan(35°)*2.256758 = 1.580175 and the width is widened to
+       w = 1.5*5.0/tan(35°) = 10.711110 m.
 
-    e) THE RAMP is the ONE cell between the ring and the landscape, and a cell
-       is 2 m on the tile the rule reads. East of the ring, on the row z = 4:
-       the pinned ring reaches x = 8 (the footprint ends at 6, one cell is 2),
-       so h(8,4) = 2.5, and h(10,4) = 5 (authored: distance min(10,30,4,36) = 4
-       = the falloff, so the full height), hence
-         h( 9,4) = 2.5 + 2.5·0.5 = 3.75
-         h(10,4) = 5.0
-         h(11,4) = 5.0            (both its corners, 10 and 12, are authored 5)
-       — monotone up. HONESTLY: 2.5 m over 2 m is atan(1.25) = 51.3 deg, past
-       the default max_slope_deg of 40 — this rim is a wall a walker cannot
-       climb, and gets in through an opening (§ A15 no. 8 exempts them). That
-       is the authoring limit the height tool warns about, and it HALVED with
-       the cell: a ramp of one cell now carries tan(40 deg)·2 = 1.68 m where it
-       carried 3.36 m at the 4 m step. The editor computes it from the
-       ``tile_step_m`` the server sends, so the sentence moved with the world.
+    c) THE GRID GROWS to hold the plot AND its ramp: the footprint box [-2,6]²
+       widened by 10.711110 is [-12.71111, 16.71111]², so with the hill's box
+         origin = floor(-12.71111/4)*4 - 4 = -20   (both axes)
+         points = ceil((40 + 4 + 20)/4) + 1 = 16 + 1 = 17 per axis
+       Support point (i, j) sits at (-20 + 4i, -20 + 4j), and (4,4) — inside
+       the footprint, index (6,6) — is stamped to 0.0 where the landscape
+       carried 5.0. The border ring stays 0.
 
-    f) THE PLATEAU WANDERS WITH THE PLACE. Moving the hut to (20, 2) changes
-       the signature (placements are part of it), frees (4,4) back to its
-       authored 5 and levels the new footprint instead: the new centre reads
-       h(20,2) = 5 · min(1, 2/4) = 2.5 — the 2 m lattice carries that point, so
-       it is the authored ramp itself — and (22,4) and (18,4), both authored 5
-       and both inside the new footprint, are cut to that same 2.5. Deleting
-       the hut gives all of them back their 5.
-[12] TWO PLACES ON ONE HILL (review finding I3). Everything in [11] has a
-    single footprint, and two rules the docstrings call load-bearing are
-    invisible with one: that every plateau height is sampled BEFORE any
-    levelling, and that on overlap the SMALLEST footprint wins. Both need a
-    nested pair.
+    d) FLAT ACROSS THE WHOLE PLOT: (2,2), (6,6) and (-1,5) all read 0.0.
 
-    THE CASE, on the same HILL: SQUARE at (6, 6) with plan_width_m 24
-    (footprint [-6, 18]²) and HUT at (2, 2) with plan_width_m 4 (footprint
-    [0, 4]², entirely inside the square). BOTH FLAGGED ``level_ground`` — an
-    unflagged place is not in the list at all, so nesting only has a question
-    to answer between two levelling ones.
+    e) THE RAMP east of the plot, on the row z = 4 (d = x - 6, and the
+       landscape is the hill's full 5.0 from x = 4 on, so h = 5*smoothstep(d/w)):
+         h( 8,4)  d = 2   -> 5*smoothstep(0.186722) = 0.458
+         h(10,4)  d = 4   -> 5*smoothstep(0.373445) = 1.571
+         h(12,4)  d = 6   -> 5*smoothstep(0.560167) = 2.949
+         h(14,4)  d = 8   -> 5*smoothstep(0.746890) = 4.201
+         h(18,4)  d = 12  > w                        -> 5.0
+       monotone, and the OLD one-cell ring would have pinned h(8,4) to the
+       plateau instead. WALKABLE BY CONSTRUCTION: the peak gradient is exactly
+       tan(35°), so the steepest measured 2-m segment (10 -> 12) is
+       atan((2.949-1.571)/2) = 34.57° — under the cap and under the 40° gate.
+       (The first cut capped the MEAN instead; its 7.14074 m ramp carried a
+       44.9° metre — the red counter-probes below pin that behaviour as gone.)
 
-    THE GRID: the boxes grown by one step are [-10, 22]² and [-4, 8]², so the
-    bounds are (-10,-10)-(40,40):
-      origin = floor(-10/4)·4 - 4 = -16,  points = ceil((40+4+16)/4)+1 = 16
-    Support point (i, j) sits at (-16 + 4i, -16 + 4j).
+    f) THE PLATEAU WANDERS WITH THE PLACE. Moved to (20, 2) the footprint is
+       [16,24] x [-2,6], whose 25 lattice heights are 10 zeros (z <= 0), 5 x 2.5
+       (z = 2) and 10 x 5.0 (z in {4,6}) — the 13th is 2.5, so h(20,2) = 2.5 and
+       (22,4) and (18,4) are cut to it. Deleting the hut gives the hill back.
 
-    THE TWO HEIGHTS, both read off the UNTOUCHED area raster AT THE TILE STEP
-    (that is the raster ``ground_y`` levels on):
-      SQUARE at (6, 6): a support point, distance min(6, 34) = 6 >= the
-                        falloff 4                                    -> 5
-      HUT    at (2, 2): a support point too, distance 2 of a 4 m ramp -> 2.5
-    The widest is levelled first, so the HUT writes last and wins where they
-    overlap:
-      ground_y(2, 2)   = 2.5      the hut's own plateau
-      ground_y(14, 14) = 5        the square's, outside the hut's ring
-      (i,j) = (4,4) = (0,0)   -> 1.25   pinned by the hut
-      (i,j) = (7,5) = (12,4)  -> 5      the square's, past the hut's ring
-      (i,j) = (3,3) = (-4,-4) -> 5      the hut's ring has ROUNDED corners
-                                        (overshoot pair (4,4), hypot 5.66 > 4),
-                                        so the square shows through there
-      (i,j) = (6,6) = (8,8)   -> 5      the same corner on the far side
+[12] TWO PLACES ON ONE PLANE (review finding I3). Two rules the docstrings
+    call load-bearing are invisible with a single footprint: that every target
+    is read BEFORE any stamp, and that on overlap the SMALLEST wins. Both need
+    a nested pair — and both need the two MEDIANS to differ, which is why the
+    landscape here is a long plane rather than the 4 m ramp of HILL:
 
-    TWO RED COUNTER-PROBES, and they are the point of the case:
-      * LARGEST WINS (the sort key reversed): the hut is levelled first and
-        the square overwrites it -> ground_y(2,2) = 5, not 1.25.
-      * SAMPLED WHILE WRITING (h0 read inside the write loop instead of all of
-        them up front): the square has already pinned (0,0)…(4,4) to 5 when
-        the hut asks for its own height, so the hut levels to 5 as well ->
-        ground_y(2,2) = 5. Which is the failure mode the "before" exists for:
-        the answer would depend on the order the DB returned the two places.
+      PLANE  square (0,0)-(200,200), height 20, falloff 200
+             -> TERRAIN(x, z) = min(x, z)/10 in the south-west quadrant
+
+    SQUARE at (60,60), drawn width 40 -> footprint [40,80]², area 1600 m².
+      Its 2 m lattice is x, z in {40, 42, ..., 80} (21 values); with
+      TERRAIN = min(x,z)/10 the number of pairs whose minimum is the k-th value
+      is (21-k)² - (20-k)² = 41 - 2k. The median of 441 is the 221st, and
+      41 + 39 + 37 + 35 + 33 + 31 = 216 after k = 5, 245 after k = 6 — so the
+      221st sits at k = 6, min = 52:            h0(SQUARE) = 5.2
+      ramp: 0.5*sqrt(1600/pi) = 11.2838 -> CLAMPED to 8.0; the biggest rim step
+      is |5.2 - 8.0| = 2.8 and tan(35°)*8 = 5.6017 > 2.8, so 8.0 stands.
+    HUT2 at (48,48), drawn width 8 -> footprint [44,52]², area 64 m².
+      lattice {44, 46, 48, 50, 52}, counts 9, 7, 5, 3, 1; the median of 25 is
+      the 13th, 9 then 16 -> k = 1, min = 46:    h0(HUT2) = 4.6
+      ramp: 0.5*sqrt(64/pi) = 2.256758; rim step |4.6 - 5.2| = 0.6 <
+      tan(35°)*2.256758 = 1.580175, so 2.256758 stands.
+
+    THE SMALLEST WRITES LAST:
+      ground_y(48,48) = 4.6      the hut's own plateau, not the square's 5.2
+      ground_y(70,70) = 5.2      the square's, far outside the hut
+      ground_y(56,48) = 5.2      4 m out of the hut, past its 2.2568 m ramp —
+                                 and NOT the landscape's 4.8
+      ground_y(54,48) = 4.6 + 0.6*smoothstep(2/2.256758) = 5.178467
+                                 THE NESTING IN ONE NUMBER: the hut's ramp
+                                 blends back to what the pipeline HOLDS there
+                                 (the square's plateau), not to the landscape.
+                                 The tile stores millimetres, so it reads 5.178.
+
+    RED COUNTER-PROBE, EXECUTED: a model that only knows FP_BIG — which is
+    exactly what "largest wins" and "sampled while writing" would both leave —
+    answers 5.2 at the hut's centre.
 
 [13] THE MICRO-RELIEF OF A TERRAIN KIND (decision 2026-08-13). A terrain type
     may carry ``relief_amplitude_m`` (0.05..2.0 m) and ``relief_wave_m``
@@ -384,9 +349,9 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
        relief first, then the |max| rule of the area pass — give exactly 5.0 at
        that point, because 5 deflects more strongly than 4.404 and overwrites
        it. That mutant is built in this script from the module's own pieces
-       (``_apply_micro_relief`` + ``area_height_at``).
+       (``HeightModel._micro`` + ``area_height_at``).
     f) THE PLATEAU STILL WINS. A place at (20,20) with plan_width_m 16 and
-       ``level_ground`` set is pinned to the ground at its centre READ FROM THE
+       drawn boundary is stamped to the MEDIAN of the ground under it, READ FROM THE
        FINISHED, BUMPY landscape: relief(20,20) = −0.292580240552, so the
        plateau stands at 5 − 0.292580240552 = 4.707419759448 -> 4.707. The
        support point (16,16) from b) now reads 4.707 as well — the noise is not
@@ -418,20 +383,19 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
        2026-08-14, which is what made a 4 m swell authorable), no wave -> 32.0,
        amplitude 0/junk -> no relief at all.
     l) THE EDGE RULE — the relief may LIFT its neighbour, never sink it (user
-       decision 2026-08-13). At a support point one of whose four grid
-       neighbours carries no relief (a flat topmost kind or unpainted ground)
-       the noise is clamped to max(0, noise); inner points keep theirs.
+       decision 2026-08-13), MEASURED IN METRES SINCE E1. At a point one of
+       whose four probes at RELIEF_EDGE_PROBE_M = 2 m carries no relief (a flat
+       topmost kind or unpainted ground) the noise is clamped to
+       max(0, noise); inner points keep theirs. The rule is the same; only the
+       ruler changed — it used to be "one grid cell", i.e. 2 m on a tile and
+       4 m on this overview, so the two rasters clamped different points.
 
        THE FIXTURE: "g" (amplitude 1.0, wave 16) painted over (0,0)-(40,40)
        with a FLAT "w" (water) over (40,0)-(80,40) east of it, and no height
-       area at all — so every support point reads its bare relief. The grid is
-       the one of the grass box alone (the flat kind does not grow it): 13 × 13
-       from origin (−4,−4), step 4. The ray-cast contains the LOWER edges only
-       (`world_geometry.point_in_polygon`, `x < cross_x`), so the grass points
-       are i, j = 1..10 (x, z = 0..36) and the water starts at i = 11 (x = 40)
-       — the seam runs between them.
+       area at all — so every point reads its bare relief. It is measured on
+       the TILE (step 2), where the 2 m probe lands on the lattice.
 
-       THE FOUR POINTS, all by hand from rnd(u, v) of b):
+       THE POINTS, all by hand from rnd(u, v) of b):
          rnd(2,1) = −0.057022939436   rnd(3,1) =  0.968026378658
          rnd(2,2) = −0.201629256364   rnd(3,2) = −0.737533572596
          rnd(0,1) = −0.100840141065   rnd(0,0) =  0.494826480746
@@ -439,29 +403,32 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
        19349663 = 3811796645 -> 2414331557 -> 2414313814 -> 1930931094, and
        1930931094/2**32·2−1 = −0.100840141065.)
 
-         (36,32) i=10 j=9  BORDER (i+1 is water), fx = 2.25 -> tx = 0.25,
-                           fz = 2.0 -> tz = 0:
-                           0.75·(−0.201629256364) + 0.25·(−0.737533572596)
-                           = −0.335605335422   -> CLAMPED to 0.0
-         (36,16) i=10 j=5  the same border column, tz = 0 on v = 1:
-                           0.75·(−0.057022939436) + 0.25·(0.968026378658)
-                           = +0.199239390088   -> KEPT, the shore lifts
-         (32,16) i=9  j=5  INNER (all four neighbours are grass), fx = 2.0:
-                           rnd(2,1) = −0.057022939436  -> KEPT, still a dip
-         (0,16)  i=1  j=5  BORDER to UNPAINTED ground, fx = 0, fz = 1:
-                           rnd(0,1) = −0.100840141065  -> CLAMPED to 0.0
-         (0,0)   i=1  j=1  the same border, positive:
-                           rnd(0,0) = +0.494826480746  -> KEPT
-       and the seam itself is level: (36,32) and the water point (40,32) both
-       read 0.0, which is the finding — the lake no longer sinks with the
-       meadow beside it.
+         (38,32) fx = 2.375 -> tx = 0.375 on the row v = 2 (fz = 2, tz = 0):
+                 0.625·(−0.201629256364) + 0.375·(−0.737533572596)
+                 = −0.402593374952  -> its +2 m probe (40,32) is water
+                                    -> CLAMPED to 0.0
+         (36,32) tx = 0.25: 0.75·rnd(2,2) + 0.25·rnd(3,2) = −0.335605335422
+                 -> both probes (34/38) are grass -> KEPT. THE BAND IS 2 m WIDE.
+         (38,16) the row v = 1: 0.625·rnd(2,1) + 0.375·rnd(3,1)
+                 = +0.327370554849 -> a HILL: kept, the shore runs out
+         (32,16) fx = 2.0, i.e. the corner rnd(2,1) = −0.057022939436, all four
+                 probes inside -> KEPT, still a dip
+         ( 0,16) the −2 m probe is unpainted: rnd(0,1) = −0.100840141065
+                 -> CLAMPED to 0.0
+         ( 0, 0) the same border, positive: rnd(0,0) -> KEPT
+       and the seam itself is level: (38,32) and the water point (40,32) both
+       read 0.0 — the finding the rule was written for (the lake no longer
+       sinks with the meadow beside it).
 
-       RED COUNTER-PROBE, EXECUTED: the same pass without the clamp, rebuilt
-       in this script from the module's own pieces (`relief_inputs` +
-       `micro_relief_at` + `point_in_polygon`, i.e. the topmost-kind rule and
-       the noise, without the mask). It puts −0.335605335422 back at (36,32)
-       and −0.100840141065 at (0,16) — the values the finding was about — and
-       agrees with the shipped pass at every point that is NOT a clamped one.
+       TWO RED COUNTER-PROBES, both executed:
+       * NO CLAMP: the same pass rebuilt from the module's own pieces
+         (`relief_inputs` + `micro_relief_at` + `point_in_polygon`) puts
+         −0.402593374952 back at (38,32) and −0.100840141065 at (0,16), and
+         agrees with the shipped pass at every point that is NOT clamped.
+       * THE OLD RULER: before E1 the 4 m overview probed 4 m and clamped
+         (36,32) to 0 while the 2 m tile probed 2 m and kept −0.336 — 0.336 m
+         apart at ONE world point. The last check of the block is that the
+         overview and the tile now carry the same number there.
 
 [14] THE TILES THE RULES READ (v2, 2026-08-14). The world grid above is ONE
     raster over everything, so the point budget coarsens it as soon as somebody
@@ -490,90 +457,84 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
       A2     square (300,200)-(420,300), height −9, falloff 0 (a wall)
       GRASS  terrain kind "g", amplitude 1.0, wave 16, painted as a BAND over
              (264,240)-(396,264) — deliberately ACROSS the z = 256 seam
-      FP_BIG   (340,140) width 40   level_ground
-      FP_SMALL (356,152) width  8   level_ground, inside FP_BIG
-      FP_WEST  (260,220) width  8   level_ground, at A1's west edge
-      FP_FAR  (2000,2000) width 20  level_ground, 1.6 km away
+      FP_BIG   (340,140) width 40
+      FP_SMALL (356,152) width  8   inside FP_BIG
+      FP_WEST  (260,220) width  8   at A1's west edge
+      FP_FAR  (2000,2000) width 20  1.6 km away, on the flat world
 
     a) THE OVERVIEW, at the forced step 2 — the TILE step, so the comparison
-       is about the tiles and not about two resolutions. The GRASS band lies
-       inside the two height boxes, so the union is
-       A1 ∪ A2 = (258,100)-(420,300); the levelling footprints grow it by
-       their own box PLUS one step where they are relevant, i.e. where that
-       grown box still touches the authored one:
-         FP_BIG   box (320,120)-(360,160) -> grown (318,118)-(362,162)  yes
-         FP_SMALL box (352,148)-(360,156) -> grown (350,146)-(362,158)  yes
-         FP_WEST  box (256,216)-(264,224) -> grown (254,214)-(266,226)  yes
-         FP_FAR   box (1990,1990)-(2010,2010) -> grown (1988,…)-(2012,…) NO
-       so bounds = (254,100)-(420,300) and
-         origin = (floor(254/2)·2 − 2, floor(100/2)·2 − 2) = (252, 98)
-         cols   = ceil((420 + 2 − 252)/2) + 1 = 86
-         rows   = ceil((300 + 2 −  98)/2) + 1 = 103     -> 8858 points
+       is about the numbers and not about two resolutions. THE FOUR STAMPS
+       first (E1, § G5): each target is the MEDIAN of the landscape under the
+       footprint on the 2 m world lattice, each ramp a smoothstep of
+       w = clamp(0.5·sqrt(area/pi), 2, 8) m, widened to 1.5·Δ/tan(35°) where
+       the rim step Δ demands it (the 35° cap holds the STEEPEST metre, and a
+       smoothstep peaks at 1.5x its mean).
+         FP_BIG   [320,360]² : 441 lattice heights = 357 x 6.0 and 21 each of
+                  4.5, 3.0, 1.5, 0.0 (the east rim runs out of A1), the 221st
+                  is 6.0                       -> h0 6.0, Δ 6.0, w = 12.853332
+                  (0.5·sqrt(1600/pi) = 11.28 is clamped to 8, and 1.5·6.0 >
+                  tan(35°)·8 = 5.6017, so it widens again)
+         FP_SMALL [352,360]x[148,156]: 25 heights = 5 each of 6.0, 4.5, 3.0,
+                  1.5, 0.0, the 13th is 3.0    -> h0 3.0, Δ 3.0, w = 6.426666
+         FP_WEST  [256,264]²: 25 heights = 10 x 0 (x <= 258, outside A1 or ON
+                  its outline), 5 x 1.5, 5 x 3.0, 5 x 4.5, the 13th is 1.5
+                                               -> h0 1.5, Δ 3.0, w = 6.426666
+         FP_FAR   1.6 km away on flat ground   -> h0 0.0, w = 5.641896, and it
+                  stamps 0 onto 0
+       THE GRID therefore reaches 6.426666 m west of FP_WEST's box, x =
+       249.573334, and the union with A1 u A2 = (258,100)-(420,300) gives
+         origin = (floor(249.573334/2)·2 − 2, floor(100/2)·2 − 2) = (246, 98)
+         cols   = ceil((420 + 2 − 246)/2) + 1 = 89
+         rows   = ceil((300 + 2 −  98)/2) + 1 = 103     -> 9167 points
     b) THE TILE INDEX is pure box coverage, tile (tx, tz) = floor(p/256):
          A1     (258,100)-(360,260) -> tx 1, tz 0..1  -> (1,0) (1,1)
          A2     (300,200)-(420,300) -> tx 1, tz 0..1  -> (1,0) (1,1)
          GRASS  (264,240)-(396,264) -> tx 1, tz 0..1  -> (1,0) (1,1)
-         FP_BIG/FP_SMALL grown      -> tx 1, tz 0     -> (1,0)
-         FP_WEST grown (254,…)-(266,…) -> tx 0..1, tz 0 -> (0,0) (1,0)
-         FP_FAR irrelevant          -> nothing
-       = {(0,0), (1,0), (1,1)}, three tiles — the same three the 4 m ring gave,
-       and it is worth saying why the narrower ring did not lose (0,0): the
-       ring is measured from the footprint's BOX (256…264), so 2 m still reach
-       across the seam at x = 256. TWO OF THE THREE INDEX CASES ARE IN THAT
-       LIST: (0,0) exists ONLY because a footprint's ramp ring crosses that
-       seam, and the far hut adds no tile at all — it would level 0 onto 0,
-       which is why the relevance rule may drop it. (0,1) is absent, and so the
-       whole strip x < 256, z >= 256 is answered 0 without a raster — which the
-       equality run measures against the overview, whose support points there
-       are all outside every polygon.
+         FP_BIG / FP_SMALL + ramp   -> tx 1, tz 0     -> (1,0)
+         FP_WEST + ramp (249.6,…)-(270.4,…) -> tx 0..1, tz 0 -> (0,0) (1,0)
+         FP_FAR out in the flat world -> dropped (it writes nothing anywhere)
+       = {(0,0), (1,0), (1,1)}, three tiles. (0,0) exists ONLY because a
+       plateau's RAMP crosses the seam at x = 256, and the far hut adds no tile
+       at all. (0,1) is absent, so the whole strip x < 256, z >= 256 is
+       answered 0 without a raster.
     c) HAND VALUES on the lattice (all outside GRASS, so no noise is involved):
        (260,104) A1 only, distance to the outline 2      -> 6 · 2/8 = 1.5
        (348,232) A1 gives 6, A2 gives −9, |−9| wins      -> −9
        (416,296) A2 only                                 -> −9
-       and the three plateau heights, each read from the landscape at the
-       footprint's own centre BEFORE any levelling:
-       FP_BIG   (340,140) distance min(82,20,40,120) = 20 >= 8   -> 6.0
-       FP_SMALL (356,152) distance min(98, 4,52,108) =  4        -> 3.0
-       FP_WEST  (260,220) distance min( 2,100,120,40) = 2        -> 1.5
-       so (356,152) is pinned by BOTH squares and reads the NARROWER one's 3.0,
-       while (344,152) — 8 m from FP_SMALL's square, i.e. past its one-cell
-       ring — keeps FP_BIG's 6.0. (254,220) is FP_WEST's ring, 2 m west of its
-       square and IN THE NEIGHBOUR TILE: 1.5. THE RING IS EXACTLY ONE CELL, so
-       the 2 m step moved it: (252,220), which the 4 m raster still pinned, is
-       now 4 m out and therefore the flat world, 0.0 — the honest price of the
-       finer step, and the number the editor warning now has to name
-       (tan(40°)·2 = 1.68 m instead of 3.36 m).
-       (254,220) GUARDS THE PURE PLATEAU HEIGHT. FP_WEST's centre (260,220)
-       lies OUTSIDE tile (0,0), which still has to level the ring reaching into
-       it. Read from the window's own array — the way the overview did while it
-       was the only raster — the corner would clamp to the tile border and the
-       place would stand at the ground of (256,220), i.e. at 0.0 in one tile
-       and 1.5 in the other. It is 1.5 in both.
+       (340,140) FP_BIG's plateau                        -> 6.0
+       (356,152) inside FP_SMALL, the NARROWER place has the last word -> 3.0
+       (344,152) 8 m west of FP_SMALL, past its 6.426666 m ramp -> FP_BIG's 6.0
+       and FP_WEST's ramp, which lives IN THE NEIGHBOUR TILE and whose
+       landscape west of A1 is flat 0:
+       (254,220) d = 2 -> 1.5 + (0 − 1.5)·smoothstep(2/6.426666) = 1.154598
+       (252,220) d = 4 -> 1.5 − 1.5·0.679952                     = 0.480072
+       (250,220) d = 6 -> 1.5 − 1.5·0.987343                     = 0.018986
+       (248,220) d = 8 > w                                       = 0.0
+       (254,220) GUARDS THE PURE STAMP GEOMETRY. FP_WEST's pin (260,220) lies
+       OUTSIDE tile (0,0), which still has to ramp into it — and the target and
+       the width are properties of the WORLD, computed once, so both tiles
+       answer the same number.
     d) THE SEAM. A tile carries its edges (129 × 129 points for 256 m at 2 m,
        (256/2) + 1 per axis), so
        the last row of tile (1,0) IS the first row of tile (1,1) — checked
        value by value, because "the ground is continuous across the seam" is
        exactly what a client stitching two tiles depends on. The bilinear
        samples of the equality run include points sitting ON both seams.
-    e) RED COUNTER-PROBES, all three built in this script from the module's own
-       pieces:
-       * NO APRON: the micro-relief's edge clamp asks the four NEIGHBOURS of a
-         point, so a tile must evaluate a one-point ring outside its own
-         window. With the pre-v2 rule ("a point on the window border borders
-         flat ground") the clamp fires along the whole seam row z = 256, which
-         runs through the middle of the painted band. The row's ELEVEN INNER
-         dips — x = 350, 352, 354, 378, 380, 382, 384, 386, 388, 390, 392, the
-         points whose four neighbours (2 m away now) are painted too and whose
-         noise points down — are the discriminating ones: the world keeps them,
-         the mutant cuts every one to 0. The list is longer than the four the
-         4 m step had, and it is longer for both reasons at once: the row has
-         twice the points, and a neighbour 2 m away is more often still inside
-         the band than one 4 m away (x = 392 used to be excluded because its
-         eastern neighbour 396 lay on the band's own edge; at 2 m that
-         neighbour is 394, well inside). It is predicted here from the module's
-         noise formula and the ray-cast alone — never from a raster.
-       * PLATEAU ORDER REVERSED (narrowest first): (356,152) reads FP_BIG's
-         6.0 instead of FP_SMALL's 3.0.
+    e) THE CLAIM E1 EXISTS FOR, and it could not even be stated before: the
+       overview AT ITS OWN DEFAULT 4 m STEP carries the tiles' number at every
+       shared point. The old bake measured its plateau ramps and its relief
+       edge rule in cells, so the 4 m grid and the 2 m tiles were two
+       landscapes; now the step is nothing but sampling density.
+       RED COUNTER-PROBES, all executed from the module's own pieces:
+       * THE OLD RULER of the edge rule, rebuilt with a probe distance handed
+         in: on the seam row z = 256 through the painted band it answers
+         differently at 4 m than at 2 m — the first such point is x = 392,
+         whose eastern 4 m probe (396) lies on the band's own edge while its
+         2 m probe (394) is well inside. The new rule answers the same on both
+         rasters at every one of those points.
+       * PLATEAU ORDER REVERSED (largest last): a model that only knows FP_BIG
+         — which is what both that mutant and "sampled while writing" would
+         leave — puts 6.0 on (356,152) instead of FP_SMALL's 3.0.
        * A TILE STRICKEN FROM THE INDEX: without (0,0) the point (254,220)
          answers 0.0 instead of FP_WEST's ramp — the index is not a hint, it is
          the statement "everywhere else is flat".
@@ -1022,9 +983,22 @@ check("...and the limits are the same ones the walk gate reads",
      (relief.get_max_slope_deg(), relief.get_max_step_height_m()))
 
 payload = get_heightfield_route(user={"role": "user"})
+# The three pyramid fields are ADDITIVE (E1, § G2): everything a pre-E1
+# client read is still there and still means the same thing.
 check("payload keys", sorted(payload.keys()),
-      ["cols", "heights", "origin_x", "origin_z", "rows", "sig", "step_m",
-       "tile_m", "tile_step_m", "tiles"])
+      ["cols", "heights", "mip_levels_m", "origin_x", "origin_z", "rows",
+       "sig", "step_m", "tile_m", "tile_stats", "tile_stats_complete",
+       "tile_step_m", "tiles"])
+check("the mip levels are the five of MIP_LEVELS_M",
+      payload["mip_levels_m"], [4.0, 8.0, 16.0, 32.0, 64.0])
+check("...and every indexed tile carries min/max and one error per level",
+      sorted(payload["tile_stats"].keys()), payload["tiles"])
+check("...completely, on a world of one tile",
+      payload["tile_stats_complete"], True)
+check("the stats record is min/max/err",
+      sorted(payload["tile_stats"]["0,0"].keys()), ["err", "max", "min"])
+check("...with one error per level",
+      len(payload["tile_stats"]["0,0"]["err"]), 5)
 check("payload signature", payload["sig"], store.height_sig())
 check("payload shape", (payload["rows"], payload["cols"]), (13, 13))
 # The overview carries the TILE INDEX with it (§ A16.3): the one area here is
@@ -1041,7 +1015,10 @@ near("payload height at (20,20)",
 batch = get_heightfield_tiles_route(keys="0:0,5:5,nonsense",
                                     user={"role": "user"})
 check("batch keys", sorted(batch.keys()),
-      ["sig", "step_m", "tile_m", "tiles"])
+      ["mip_levels_m", "sig", "step_m", "tile_m", "tiles"])
+check("...and a shipped tile carries its own stats with it",
+      sorted(batch["tiles"]["0,0"].keys()),
+      ["cols", "heights", "origin_x", "origin_z", "rows", "stats"])
 check("the batch answers the indexed tile and nothing else",
       sorted(batch["tiles"].keys()), ["0,0"])
 near("...and it is the fine ground under the hill's centre",
@@ -1051,48 +1028,47 @@ near("...and it is the fine ground under the hill's centre",
 check("DELETE", route_status(delete_height_area_route, new_id), 200)
 check("DELETE again", route_status(delete_height_area_route, new_id), 404)
 
-print("\n[11] the plateau under a footprint — and its opt-in flag")
+print("\n[11] the auto-plateau under a BUILT footprint (E1, § G5)")
 for _a in store.list_height_areas():
     store.delete_height_area(_a["id"])
 
 
-def set_level_ground(loc_id, on):
-    """Flip the ``level_ground`` flag of a placed location — the ONE input of
-    the opt-in flattening. Written through ``_save_world_data``, i.e. the same
-    writer the PUT route uses, so the re-raster hook runs with it."""
+def make_built(loc_id, built=True):
+    """Give a placed location a CLOSED room, or take it away again.
+
+    THE ONE INPUT of the stamp since E1 (§ G5): a location that draws a BUILT
+    floor — a ``map3d.outline`` or at least one room that is not
+    ``always_visible`` — planes its plot; a natural one does not. Written
+    through ``_save_world_data``, i.e. the same writer the PUT route uses, so
+    the re-raster hook runs with it.
+    """
     data = _load_world_data()
     for loc in data["locations"]:
         if loc.get("id") == loc_id:
-            loc["level_ground"] = bool(on)
+            loc["rooms"] = ([{"id": "hall", "name": "Hall", "layout": {}}]
+                            if built else [])
     _save_world_data(data)
-
-
-def unfiltered_footprints():
-    """THE MUTANT of the red counter-probe below: ``placed_footprints`` as it
-    was before the decision — every placed location levels, flag or no flag."""
-    from app.core.world_geometry import effective_boundary
-    from app.models.world import list_locations
-    out = []
-    for loc in list_locations():
-        eff = effective_boundary(loc)
-        if eff is None:
-            continue
-        cx, cz, yaw, points = eff
-        out.append((round(cx, 2), round(cz, 2), round(yaw, 1),
-                    [(round(lx, 2), round(lz, 2)) for lx, lz in points]))
-    return out
-
 
 
 def _square_map3d(width):
     """The DRAWN centred square of that edge, plus the width the sanitizer
     derives from its bounding box. Since 2026-08-19 a width alone is no shape
-    at all — a location without an outline has no area, so nothing to level —
+    at all — a location without an outline has no area, so nothing to stamp —
     and these are the very corners the deleted synthesis produced, so every
     hand-derived number in this file stays put."""
     h = round(float(width) / 2.0, 2)
     return {"plan_width_m": width,
             "boundary": [[-h, -h], [h, -h], [h, h], [-h, h]]}
+
+
+TAN35 = math.tan(math.radians(35.0))
+
+
+def ss(t):
+    """smoothstep, re-derived here rather than imported."""
+    t = min(max(t, 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
 
 HUT = add_location("Hut", "a place on the flank")["id"]
 _world = _load_world_data()
@@ -1106,8 +1082,7 @@ check("a placed location alone raises no grid", hf.get_field()["rows"], 0)
 check("...and the ground stays flat", ground_y(2, 2), 0.0)
 
 store.save_height_area(dict(HILL))
-check("an UNFLAGGED place is no input of the raster",
-      store.placed_footprints(), [])
+check("a NATURAL place is no input of the bake", store.placed_footprints(), [])
 field = hf.get_field()
 check("so the grid is the plain hill raster",
       (field["rows"], field["cols"]), (13, 13))
@@ -1120,71 +1095,122 @@ near("the landscape runs through the place: h(4,4)", ground_y(4, 4), 5.0)
 near("...at the footprint corner (6,6)", ground_y(6, 6), 5.0)
 near("...where the plateau's ramp would be, h(8,4)", ground_y(8, 4), 5.0)
 near("...and outside the outline h(-1,5) is still 0", ground_y(-1, 5), 0.0)
-near("the CENTRE cannot tell the two states apart", ground_y(2, 2), 2.5)
-
-_real_footprints = store.placed_footprints
-store.placed_footprints = unfiltered_footprints
-hf.invalidate_cache()
-_mutant = hf.get_field()
-check("RED COUNTER-PROBE: without the flag filter the grid grows again",
-      (_mutant["rows"], _mutant["cols"]), (15, 15))
-near("...and the mutant levels (6,6) to the plateau", ground_y(6, 6), 2.5)
-near("...and (4,4)", ground_y(4, 4), 2.5)
-near("...and (8,4)", ground_y(8, 4), 2.5)
-near("...and (-1,5)", ground_y(-1, 5), 2.5)
-store.placed_footprints = _real_footprints
-hf.invalidate_cache()
-near("the real filter puts the landscape back", ground_y(6, 6), 5.0)
+near("the hill's own ramp at the centre, h(2,2)", ground_y(2, 2), 2.5)
 
 _sig_flat = store.height_sig()
-set_level_ground(HUT, True)
-check("flagging the place changes the signature — it never moved",
+make_built(HUT)
+check("closing a room changes the signature — the place never moved",
       store.height_sig() != _sig_flat, True)
+
+# THE TARGET, by hand. The footprint is the centred 8 m square at (2,2), i.e.
+# world [-2,6]², and the 2 m world lattice inside it is x, z ∈ {-2,0,2,4,6}.
+# The landscape is HILL, 5 · min(1, d/4) with d = min(x, z, 40-x, 40-z), so on
+# those 25 points d = min(x, z) and
+#     x or z ≤ 0  -> 0   (outside the hill or ON its outline)
+#     min = 2     -> 2.5
+#     min ≥ 4     -> 5
+# giving 16 zeros, 5 × 2.5 and 4 × 5.0. The median of 25 values is the 13th,
+# and the zeros already fill 1…16 — so
+#     h0 = 0.0
+# THE MEDIAN IS THE POINT: the old single probe at the centre would have said
+# 2.5 (the ramp's height there). Two thirds of this plot lie OFF the hill, and
+# the median says so; one probe cannot.
+_lat = [-2.0, 0.0, 2.0, 4.0, 6.0]
+_vals = sorted(5.0 * min(1.0, max(0.0, min(x, z)) / 4.0)
+               for x in _lat for z in _lat)
+check("the 25 lattice heights are 16×0, 5×2.5, 4×5",
+      (_vals.count(0.0), _vals.count(2.5), _vals.count(5.0)), (16, 5, 4))
+near("...so the median, the 13th, is 0.0", _vals[12], 0.0)
+check_not("RED COUNTER-PROBE: the old single probe at the centre said 2.5",
+          _vals[12], 2.5)
+
+# THE RAMP: area 64 m² -> 0.5·sqrt(64/pi) = 2.256758… m, but the rim step is
+# the full 5.0 m (the north-east rim sits at the hill's full height). The cap
+# holds the STEEPEST metre (smoothstep peaks at 1.5x its mean), so the test is
+# 1.5·5.0 = 7.5 > tan(35°)·2.256758 = 1.580175 and the width is widened to
+#     w = 1.5·5.0/tan(35°) = 10.711110…
+W_HUT = 1.5 * 5.0 / TAN35
+near("the un-capped ramp would be 2.256758 m",
+     0.5 * math.sqrt(64.0 / math.pi), 2.2567583341910251, 1e-12)
+near("...but the 5 m rim step widens it to 10.711110 m", W_HUT,
+     10.71111005056586, 1e-9)
+
+# THE GRID GROWS to hold the plateau AND its ramp: the footprint box [-2,6]²
+# widened by 10.711110 is [-12.71111, 16.71111]², so the union with the hill's
+# box is (-12.71111,-12.71111)-(40,40):
+#     origin = floor(-12.71111/4)·4 - 4 = -4·4 - 4 = -20   (both axes)
+#     points = ceil((40 + 4 + 20)/4) + 1 = 16 + 1 = 17 per axis
 field = hf.get_field()
 check("the grid grew for the plateau + ramp",
-      (field["rows"], field["cols"]), (15, 15))
-check("...anchored one ring outside (-6, -6)",
-      (field["origin_x"], field["origin_z"]), (-12.0, -12.0))
-near("the plateau height = the authored ground at the centre",
-     at(field, 3, 3), 1.25)
-near("the levelling RAISES (0,0) from 0", at(field, 3, 3), 1.25)
-near("...and CUTS (4,4) down from 5", at(field, 4, 4), 1.25)
-near("the dilation ring outside the footprint, (-4,-4)", at(field, 2, 2), 1.25)
+      (field["rows"], field["cols"]), (17, 17))
+check("...anchored one ring outside the ramp box, at (-20,-20)",
+      (field["origin_x"], field["origin_z"]), (-20.0, -20.0))
+# Support point (i, j) sits at (-20 + 4i, -20 + 4j).
+near("(4,4) is INSIDE the footprint and stamped to 0.0", at(field, 6, 6), 0.0)
+near("...where the authored landscape carried 5.0",
+     hf.sample_height(hf.rasterize(store.list_height_areas()), 4, 4), 5.0)
+near("(0,0) is inside too, and was 0 anyway", at(field, 5, 5), 0.0)
 check("the border ring is still 0",
-      [at(field, 0, 0), at(field, 14, 14), at(field, 0, 7), at(field, 7, 14)],
+      [at(field, 0, 0), at(field, 16, 16), at(field, 0, 7), at(field, 7, 16)],
       [0.0, 0.0, 0.0, 0.0])
-near("flat at the centre", ground_y(2, 2), 2.5)
-near("flat at the footprint corner (6,6)", ground_y(6, 6), 2.5)
-near("flat at (-1, 5)", ground_y(-1, 5), 2.5)
-near("the ramp starts at the ring, h(8,4)", ground_y(8, 4), 2.5)
-near("h(9,4)", ground_y(9, 4), 3.75)
-near("h(10,4) — the authored landscape again", ground_y(10, 4), 5.0)
-near("h(11,4) — and it stays there", ground_y(11, 4), 5.0)
-near("h(12,4)", ground_y(12, 4), 5.0)
-check("the ramp is monotone",
-      [round(ground_y(8 + k, 4), 4) for k in range(5)]
-      == sorted(round(ground_y(8 + k, 4), 4) for k in range(5)), True)
-check("...and this rim is steeper than a walker climbs (51.3 deg)",
-      round(math.degrees(math.atan2(5.0 - 2.5, hf.TILE_STEP_M)), 1), 51.3)
-check("...which is exactly what one cell of ramp carries: tan(40 deg)·2",
-      round(math.tan(math.radians(40.0)) * hf.TILE_STEP_M, 2), 1.68)
 
-set_level_ground(HUT, False)
-near("clearing the flag gives the landscape back at (6,6)",
+near("flat at the centre", ground_y(2, 2), 0.0)
+near("flat at the footprint corner (6,6)", ground_y(6, 6), 0.0)
+near("flat at (-1, 5)", ground_y(-1, 5), 0.0)
+# THE RAMP east of the plot, on the row z = 4. d = x - 6, and the landscape
+# there is the hill's full 5.0 from x = 4 on, so h = 5·smoothstep(d/w):
+#     h( 8,4)  d = 2   -> 5·smoothstep(0.186722) = 0.458
+#     h(10,4)  d = 4   -> 5·smoothstep(0.373445) = 1.571
+#     h(12,4)  d = 6   -> 5·smoothstep(0.560167) = 2.949
+#     h(14,4)  d = 8   -> 5·smoothstep(0.746890) = 4.201
+#     h(18,4)  d = 12  > w                        -> 5.0
+near("the ramp at h(8,4)", ground_y(8, 4), round(5.0 * ss(2.0 / W_HUT), 3),
+     1e-9)
+near("...which is 0.458", ground_y(8, 4), 0.458, 1e-9)
+near("h(10,4) = 1.571", ground_y(10, 4), 1.571, 1e-9)
+near("h(12,4) = 2.949", ground_y(12, 4), 2.949, 1e-9)
+near("h(14,4) = 4.201", ground_y(14, 4), 4.201, 1e-9)
+near("h(18,4) — past the ramp, the landscape again", ground_y(18, 4), 5.0)
+check("the ramp is monotone",
+      [round(ground_y(6 + 2 * k, 4), 4) for k in range(7)]
+      == sorted(round(ground_y(6 + 2 * k, 4), 4) for k in range(7)), True)
+check_not("RED COUNTER-PROBE: the OLD one-cell ring pinned h(8,4) to the "
+          "plateau", round(ground_y(8, 4), 3), 0.0)
+# WALKABLE BY CONSTRUCTION: the peak gradient is exactly tan(35°) at the
+# ramp's midpoint, so no 2-m segment can exceed the cap. The steepest one is
+# (10 -> 12): atan((2.949 − 1.571)/2) = 34.57°.
+check("...and the steepest metre of that ramp is 34.6 deg — under the cap",
+      round(math.degrees(math.atan2(ground_y(12, 4) - ground_y(10, 4),
+                                    hf.TILE_STEP_M)), 1), 34.6)
+check_not("RED COUNTER-PROBE: the mean-cap ramp value 0.957 at h(8,4) is "
+          "gone", round(ground_y(8, 4), 3), 0.957)
+
+make_built(HUT, False)
+near("making the place natural gives the landscape back at (6,6)",
      ground_y(6, 6), 5.0)
 check("...the grid shrinks to the plain hill raster",
       (hf.get_field()["rows"], hf.get_field()["cols"]), (13, 13))
-check("...and the signature is EXACTLY the one from before the flag",
+check("...and the signature is EXACTLY the one from before the room",
       store.height_sig(), _sig_flat)
-set_level_ground(HUT, True)
-near("flagging it again levels (6,6) once more", ground_y(6, 6), 2.5)
+make_built(HUT)
+near("closing the room again stamps (6,6) once more", ground_y(6, 6), 0.0)
 
 _sig_before = store.height_sig()
 update_location_position(HUT, 20.0, 2.0, 0.0)
 check("moving the place changes the height signature",
       store.height_sig() != _sig_before, True)
 near("the old plateau is gone — (4,4) is the hill again", ground_y(4, 4), 5.0)
-near("the new plateau stands at the new centre", ground_y(20, 2), 2.5)
+# The new footprint is [16,24] × [-2,6]. Its 25 lattice points carry
+# d = min(x, z, 40-x, 40-z) = min(z, ...) for z ≤ 6, i.e. 5 zeros per z ≤ 0
+# row, 2.5 for z = 2 and 5.0 for z ∈ {4, 6} — 10 zeros, 5 × 2.5, 10 × 5.0, so
+# the 13th value is 2.5.
+_lat_x = [16.0, 18.0, 20.0, 22.0, 24.0]
+_vals2 = sorted(5.0 * min(1.0, max(0.0, min(x, z, 40.0 - x, 40.0 - z)) / 4.0)
+                for x in _lat_x for z in _lat)
+check("the moved plot's 25 heights are 10×0, 5×2.5, 10×5",
+      (_vals2.count(0.0), _vals2.count(2.5), _vals2.count(5.0)), (10, 5, 10))
+near("...so its median is 2.5", _vals2[12], 2.5)
+near("the new plateau stands there", ground_y(20, 2), 2.5)
 near("...and cut (22,4) down from 5", ground_y(22, 4), 2.5)
 near("...and (18,4), inside it, likewise", ground_y(18, 4), 2.5)
 
@@ -1194,45 +1220,105 @@ near("...and at (22,4)", ground_y(22, 4), 5.0)
 check("...and the grid is the plain hill raster again",
       (hf.get_field()["rows"], hf.get_field()["cols"]), (13, 13))
 
-print("\n[12] two places on one hill — sampled before, smallest wins")
+print("\n[12] two places on one plane — medians, and the smallest last")
+# [11] has a single footprint, and two rules the docstrings call load-bearing
+# are invisible with one: that every target height is read BEFORE any stamp,
+# and that on overlap the SMALLEST footprint wins. Both need a nested pair —
+# and both need the two medians to DIFFER, which is why the landscape here is
+# a long plane rather than the short 4 m ramp of HILL.
+for _a in store.list_height_areas():
+    store.delete_height_area(_a["id"])
+PLANE = {"polygon": square(0, 0, 200, 200), "height_m": 20.0,
+         "falloff_m": 200.0}
+store.save_height_area(dict(PLANE))
+# TERRAIN(x, z) = 20 · min(x, z, 200-x, 200-z) / 200 = min(x, z)/10 in the
+# south-west quadrant, which is where everything below lives.
+
+
+def plane(x, z):
+    return 20.0 * min(1.0, max(0.0, min(x, z, 200.0 - x, 200.0 - z)) / 200.0)
+
+
+near("the plane at (52,52)", ground_y(52, 52), 5.2)
+near("...and at (46,46)", ground_y(46, 46), 4.6)
 
 
 def place_square(name, x, z, width):
-    """A placed location with a scale anchor and the flattening flag — the
-    three inputs the raster has of a place."""
+    """A placed location with a drawn outline AND a closed room — the two
+    inputs the bake has of a place since E1."""
     loc_id = add_location(name, "plateau smoke")["id"]
     data = _load_world_data()
     for loc in data["locations"]:
         if loc.get("id") == loc_id:
             loc["map3d"] = _square_map3d(width)
-            loc["level_ground"] = True
+            loc["rooms"] = [{"id": "hall", "name": "Hall", "layout": {}}]
     _save_world_data(data)
     update_location_position(loc_id, x, z)
     return loc_id
 
 
-SQUARE = place_square("Square", 6.0, 6.0, 24.0)
-HUT2 = place_square("Hut on the square", 2.0, 2.0, 4.0)
-field = hf.get_field()
-check("the grid holds both plateaus", (field["rows"], field["cols"]), (16, 16))
-check("...anchored at (-16, -16)",
-      (field["origin_x"], field["origin_z"]), (-16.0, -16.0))
-# At the TILE step, because that is the raster ``ground_y`` levels on.
-_bare = hf.rasterize(store.list_height_areas(), step_m=hf.TILE_STEP_M)
-near("the square's height, read off the UNTOUCHED raster",
-     hf.sample_height(_bare, 6, 6), 5.0)
-near("the hut's, likewise", hf.sample_height(_bare, 2, 2), 2.5)
-near("the SMALLEST footprint wins: ground_y(2,2)", ground_y(2, 2), 2.5)
-check_not("...and it is neither of the two mutants' 5.0", ground_y(2, 2), 5.0)
-near("the square's plateau outside the hut's ring", ground_y(14, 14), 5.0)
-near("(0,0) belongs to the hut", at(field, 4, 4), 1.25)
-near("(12,4) to the square", at(field, 7, 5), 5.0)
-near("(-4,-4): the hut's ring has rounded corners", at(field, 3, 3), 5.0)
-near("(8,8): the same corner on the far side", at(field, 6, 6), 5.0)
+# SQUARE at (60,60) width 40 -> footprint [40,80]², area 1600 m².
+#   its 2 m lattice is x, z ∈ {40, 42, …, 80} (21 values), and with
+#   TERRAIN = min(x,z)/10 the count of pairs whose minimum is the k-th value
+#   is (21-k)² - (20-k)² = 41 - 2k. The median of 441 values is the 221st;
+#   cumulating 41, 39, 37, 35, 33, 31, 29 reaches 216 after k = 5 and 245
+#   after k = 6, so the 221st sits at k = 6, i.e. min = 52:
+#       h0(SQUARE) = 5.2
+#   ramp: 0.5·sqrt(1600/pi) = 11.2838 -> CLAMPED to 8.0; the biggest rim step
+#   is |5.2 - 8.0| = 2.8 and tan(35°)·8 = 5.6017 > 2.8, so 8.0 stands.
+# HUT2 at (48,48) width 8 -> footprint [44,52]², area 64 m².
+#   lattice x, z ∈ {44, 46, 48, 50, 52}, counts 9, 7, 5, 3, 1; the median of
+#   25 is the 13th, cumulating 9 then 16 -> k = 1, min = 46:
+#       h0(HUT2) = 4.6
+#   ramp: 0.5·sqrt(64/pi) = 2.256758; the biggest rim step is |4.6 - 5.2| =
+#   0.6 < tan(35°)·2.256758 = 1.580175, so 2.256758 stands.
+SQUARE = place_square("Square", 60.0, 60.0, 40.0)
+HUT2 = place_square("Hut on the square", 48.0, 48.0, 8.0)
+W_HUT2 = 0.5 * math.sqrt(64.0 / math.pi)
+
+_lat_sq = [40.0 + 2 * k for k in range(21)]
+_sq_vals = sorted(plane(x, z) for x in _lat_sq for z in _lat_sq)
+near("SQUARE's median over its 441 lattice points is 5.2", _sq_vals[220], 5.2,
+     1e-12)
+_lat_h = [44.0, 46.0, 48.0, 50.0, 52.0]
+_h_vals = sorted(plane(x, z) for x in _lat_h for z in _lat_h)
+near("HUT2's median over its 25 is 4.6", _h_vals[12], 4.6, 1e-12)
+
+near("the SMALLEST footprint wins: ground_y(48,48) is the hut's 4.6",
+     ground_y(48, 48), 4.6, 1e-9)
+check_not("...and NOT the square's 5.2", round(ground_y(48, 48), 3), 5.2)
+near("the square's plateau outside the hut's ramp, ground_y(70,70)",
+     ground_y(70, 70), 5.2, 1e-9)
+near("...and at (56,48), 4 m out of the hut, past its 2.2568 m ramp",
+     ground_y(56, 48), 5.2, 1e-9)
+check_not("...where the untouched landscape would have been 4.8",
+          round(ground_y(56, 48), 3), 4.8)
+# THE NESTING, in one number: 2 m outside the hut the ramp blends back to what
+# the pipeline HOLDS there — the square's plateau, 5.2 — and not to the
+# landscape's 4.8.
+near("2 m out, (54,48) = 4.6 + 0.6·smoothstep(2/2.256758) = 5.178467…",
+     4.6 + 0.6 * ss(2.0 / W_HUT2), 5.1784674945906515, 1e-12)
+near("...and the tile, which stores millimetres, carries 5.178",
+     ground_y(54, 48), 5.178, 1e-9)
+check_not("...and NOT the 4.6 + 0.2·smoothstep the landscape would give",
+          round(ground_y(54, 48), 6), round(4.6 + 0.2 * ss(2.0 / W_HUT2), 6))
+
+# RED COUNTER-PROBE, executed: the two mutants the "before" and the order
+# exist for both answer the SQUARE's plateau at the hut's centre.
+_square_only = hf.build_model(store.list_height_areas(),
+                              [fp for fp in store.placed_footprints()
+                               if abs(fp[0] - 60.0) < 1e-9])
+near("LARGEST-WINS / SAMPLED-WHILE-WRITING would both say 5.2 at (48,48)",
+     _square_only.final(48.0, 48.0), 5.2, 1e-9)
+check_not("...which is not what the real bake answers",
+          round(ground_y(48, 48), 3), round(_square_only.final(48.0, 48.0), 3))
+
 delete_location(HUT2)
-near("without the hut the square levels (2,2) to its own 5",
-     ground_y(2, 2), 5.0)
+near("without the hut the square stamps (48,48) to its own 5.2",
+     ground_y(48, 48), 5.2, 1e-9)
 delete_location(SQUARE)
+near("...and without either the plane is back", ground_y(48, 48), 4.8, 1e-9)
+
 
 print("\n[13] the micro-relief of a terrain kind")
 from app.core import terrain_types  # noqa: E402
@@ -1318,22 +1404,21 @@ check("rastering twice is the same grid",
 
 # RED COUNTER-PROBE, executed: relief BEFORE the areas — the |max| rule of the
 # area pass then overwrites every point the hill covers.
-_relief = hf.relief_inputs(terrain.list_areas(),
-                           terrain_types.effective_catalog())
-_mut = [[0.0] * f13["cols"] for _ in range(f13["rows"])]
-hf._apply_micro_relief(f13["origin_x"], f13["origin_z"], f13["step_m"],
-                       _mut, _relief)
-for _j in range(f13["rows"]):
-    _pz = f13["origin_z"] + _j * f13["step_m"]
-    for _i in range(f13["cols"]):
-        _v = hf.area_height_at(HILL, f13["origin_x"] + _i * f13["step_m"], _pz)
-        if _v is None:
-            continue
-        _cur = _mut[_j][_i]
-        if abs(_v) > abs(_cur) or (abs(_v) == abs(_cur) and _v > _cur):
-            _mut[_j][_i] = _v
+_mut_model = hf.build_model(store.list_height_areas(), (),
+                            terrain.list_areas(),
+                            terrain_types.effective_catalog())
+_px = f13["origin_x"] + 5 * f13["step_m"]
+_pz = f13["origin_z"] + 5 * f13["step_m"]
+_noise = _mut_model._micro(_px, _pz)
+_area = hf.area_height_at(HILL, _px, _pz) or 0.0
+_swapped = _noise
+if abs(_area) > abs(_swapped) or (abs(_area) == abs(_swapped)
+                                  and _area > _swapped):
+    _swapped = _area
 near("RED COUNTER-PROBE: with the passes swapped (16,16) collapses to the "
-     "bare 5.0", _mut[5][5], 5.0)
+     "bare 5.0", _swapped, 5.0)
+near("...while the real order carries the relief with it", _noise + _area,
+     4.404, 5e-4)
 
 print("  [13d] negative lattice indices")
 near("rnd(−1,−1)", hf.lattice_noise(SEED_G, -1, -1), RND_M11, 1e-11)
@@ -1354,23 +1439,36 @@ terrain.delete_area(WIDE["id"])
 GRASS = terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
 store.save_height_area(dict(HILL))
 
-print("  [13f] the plateau still wins")
-PLACE = add_location("Bump", "a levelled place on bumpy ground")["id"]
+print("  [13f] the plateau still wins — and it is the MEDIAN of the bumps")
+PLACE = add_location("Bump", "a built place on bumpy ground")["id"]
 _w = _load_world_data()
 for _loc in _w["locations"]:
     if _loc.get("id") == PLACE:
         _loc["map3d"] = _square_map3d(16)
-        _loc["level_ground"] = True
+        _loc["rooms"] = [{"id": "hall", "name": "Hall", "layout": {}}]
 _save_world_data(_w)
 update_location_position(PLACE, 20.0, 20.0, 0.0)
 f13f = raster_now()
-near("the plateau stands on the BUMPY ground at its centre",
-     at(f13f, 6, 6), 4.707, 5e-4)
-near("...and (16,16) is levelled to it, without the noise on top",
-     at(f13f, 5, 5), 4.707, 5e-4)
+# The footprint is the centred 16 m square at (20,20), world [12,28]², and the
+# 2 m world lattice inside it is x, z ∈ {12, 14, …, 28} — 81 points. All of
+# them are at least 12 m inside HILL (falloff 4), so the AREA there is a flat
+# 5.0 and the whole variation is the noise; all of them are also at least 10 m
+# inside the painted grass, so the edge rule never fires. The target is
+# therefore 5.0 + the MEDIAN of the 81 noise values, re-derived here from
+# ``micro_relief_at`` (the primitive [13b] pins by hand).
+_lat16 = [12.0 + 2 * k for k in range(9)]
+_bump = sorted(hf.micro_relief_at((SEED_G, 1.0, 16.0), x, z)
+               for x in _lat16 for z in _lat16)
+H0_BUMP = 5.0 + _bump[40]
+near("the plateau is the MEDIAN of the bumpy ground under it",
+     at(f13f, 6, 6), round(H0_BUMP, 3), 5e-4)
+near("...and (16,16) is stamped to it, without the noise on top",
+     at(f13f, 5, 5), round(H0_BUMP, 3), 5e-4)
 check_not("...i.e. no longer its own 4.404", round(at(f13f, 5, 5), 3), 4.404)
 near("the authored ground at the centre really is 5 + relief(20,20)",
      5.0 + R_20_20, 4.707419759448, 1e-11)
+check_not("RED COUNTER-PROBE: the old SINGLE probe at the centre said 4.707,"
+          " and one bump decided it", round(at(f13f, 5, 5), 3), 4.707)
 delete_location(PLACE)
 
 print("  [13g] the topmost kind decides")
@@ -1463,46 +1561,91 @@ set_relief("g", amplitude=1.0, wave=16.0)
 set_relief("w")                     # the flat neighbour: water
 terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
 terrain.save_area({"kind": "w", "polygon": square(40, 0, 80, 40)})
-f13l = raster_now()
 _areas_l = terrain.list_areas()
-check("the flat neighbour does not grow the grid",
-      (f13l["rows"], f13l["cols"], f13l["origin_x"], f13l["origin_z"]),
-      (13, 13, -4.0, -4.0))
 check("kind_at agrees where the seam runs",
       [kind_at(36, 32, areas=_areas_l), kind_at(40, 32, areas=_areas_l)],
       ["g", "w"])
-near("an INNER dip is still a dip", at(f13l, 9, 5), R_32_16, 5e-4)
-near("THE FINDING: a border dip toward the water is pulled up to 0",
-     at(f13l, 10, 9), 0.0)
-near("...while a border hill runs out into it", at(f13l, 10, 5), R_36_16, 5e-4)
-near("...and the water itself is where it always was", at(f13l, 11, 9), 0.0)
+
+# THE RULE IS MEASURED ON THE TILE NOW (E1, § G1), and that is the whole
+# change: the probe is a fixed 2 m instead of "one grid cell", so it lands on
+# the tile lattice and the overview reads the SAME number at the same point.
+# Before E1 the 4 m overview probed 4 m and clamped (36,32) while the 2 m tile
+# probed 2 m and kept it — 0.336 m apart at one world point, the "zwei Böden"
+# bug in miniature. The last check of this block is that they now agree.
+t13l = hf.get_tile(0, 0)
+
+
+def tat(x, z):
+    """The tile's stored value at a world point on tile (0,0)."""
+    return t13l["heights"][int(z / 2)][int(x / 2)]
+
+
+# THE HAND VALUES, from the constants of [13b] (wave 16, amplitude 1):
+#   (38,32): fx = 2.375 -> tx = 0.375 on the row v = 2 (fz = 2.0, tz = 0)
+#            0.625·rnd(2,2) + 0.375·rnd(3,2)
+#          = 0.625·(-0.201629256364) + 0.375·(-0.737533572596)
+#          = -0.402593374952            -> a DIP, and its +2 m probe (40,32)
+#                                          is water -> CLAMPED to 0.0
+#   (36,32): tx = 0.25 -> 0.75·rnd(2,2) + 0.25·rnd(3,2) = -0.335605335422
+#                                       -> both probes (34/38) are grass -> KEPT
+#   (38,16): the row v = 1 -> 0.625·rnd(2,1) + 0.375·rnd(3,1)
+#          = 0.625·(-0.057022939436) + 0.375·(0.968026378658)
+#          = +0.327370554849            -> a HILL: kept, the shore runs out
+#   ( 0,16): the -2 m probe is unpainted ground; rnd(0,1) = -0.100840141065
+#                                       -> CLAMPED to 0.0
+#   ( 0, 0): rnd(0,0) = +0.494826480746 -> KEPT
+R_38_32 = 0.625 * RND_22 + 0.375 * RND_32
+R_36_32_T = 0.75 * RND_22 + 0.25 * RND_32
+R_38_16 = 0.625 * RND_21 + 0.375 * RND_31
+near("the hand arithmetic at (38,32) is -0.402593374952", R_38_32,
+     -0.402593374952, 1e-11)
+near("...and at (36,32) it is -0.335605335422", R_36_32_T, -0.335605335422,
+     1e-11)
+near("an INNER dip is still a dip: (32,16) IS the corner rnd(2,1)",
+     tat(32, 16), R_32_16, 5e-4)
+near("THE FINDING: the border dip at (38,32) is pulled up to 0", tat(38, 32),
+     0.0)
+near("...while the border HILL at (38,16) runs out into the water",
+     tat(38, 16), R_38_16, 5e-4)
+near("...and the water itself is where it always was", tat(40, 32), 0.0)
 near("the same at the border to UNPAINTED ground: the dip is pulled up",
-     at(f13l, 1, 5), 0.0)
-near("...and the hill is kept", at(f13l, 1, 1), RND_00, 5e-4)
+     tat(0, 16), 0.0)
+near("...and the hill is kept", tat(0, 0), RND_00, 5e-4)
+near("2 m further in, the dip at (36,32) SURVIVES — the band is 2 m wide",
+     tat(36, 32), R_36_32_T, 5e-4)
 
 # RED COUNTER-PROBE, executed: the pass WITHOUT the mask, rebuilt from the
 # module's own pieces — the topmost-kind rule (`relief_inputs` + the ray-cast)
 # and the noise, and nothing else. It is the state the finding was reported on.
 _relief_l = hf.relief_inputs(_areas_l, terrain_types.effective_catalog())
-_unclamped = [[0.0] * f13l["cols"] for _ in range(f13l["rows"])]
-for _j in range(f13l["rows"]):
-    _pz = f13l["origin_z"] + _j * f13l["step_m"]
-    for _i in range(f13l["cols"]):
-        _px = f13l["origin_x"] + _i * f13l["step_m"]
-        _params = None
-        for _area, _p, _b in _relief_l:
-            if point_in_polygon(_px, _pz, _area.get("polygon")):
-                _params = _p
-        _unclamped[_j][_i] = round(hf.micro_relief_at(_params, _px, _pz), 3)
+
+
+def _unclamped_at(px, pz):
+    _params = None
+    for _area, _p, _b in _relief_l:
+        if point_in_polygon(px, pz, _area.get("polygon")):
+            _params = _p
+    return hf.micro_relief_at(_params, px, pz)
+
+
 near("RED COUNTER-PROBE: without the clamp the border dip is back",
-     _unclamped[9][10], R_36_32, 5e-4)
+     _unclamped_at(38, 32), R_38_32, 1e-11)
 near("...and so is the one toward unpainted ground",
-     _unclamped[5][1], RND_01, 5e-4)
-_moved = [(i, j) for j in range(f13l["rows"]) for i in range(f13l["cols"])
-          if _unclamped[j][i] != at(f13l, i, j)]
+     _unclamped_at(0, 16), RND_01, 1e-11)
+_moved = [(x, z) for z in range(0, 42, 2) for x in range(0, 42, 2)
+          if round(_unclamped_at(x, z), 3) != round(tat(x, z), 3)]
 check("the clamp moves ONLY border points, and only downward-pointing ones",
-      all(_unclamped[j][i] < 0 and at(f13l, i, j) == 0.0
-          for i, j in _moved) and len(_moved) > 0, True)
+      all(_unclamped_at(x, z) < 0 and tat(x, z) == 0.0
+          for x, z in _moved) and len(_moved) > 0, True)
+
+# AND THE POINT OF THE REWRITE: the 4 m OVERVIEW answers the same numbers.
+f13l = raster_now()
+near("the overview carries the same dip at (36,32)", at(f13l, 10, 9),
+     R_36_32_T, 5e-4)
+near("...and the same clamped 0 at the seam (40,32)", at(f13l, 11, 9), 0.0)
+check("RED COUNTER-PROBE: before E1 the overview's own 4 m probe clamped "
+      "(36,32) to 0 while the tile kept it — 0.336 m apart at one point",
+      round(at(f13l, 10, 9), 3) == round(tat(36, 32), 3), True)
 
 print("\n[14] the tiles the rules read — the same ground, twice")
 
@@ -1529,21 +1672,62 @@ T14_RELIEF = hf.relief_inputs(T14_TERRAIN, T14_CATALOG)
 T14_S = hf.TILE_STEP_M
 F14 = hf.rasterize(T14_AREAS, step_m=T14_S, footprints=T14_FPS,
                    terrain_areas=T14_TERRAIN, terrain_catalog=T14_CATALOG)
-check("the overview is anchored at (252, 98)",
-      (F14["origin_x"], F14["origin_z"]), (252.0, 98.0))
-check("...86 × 103 points at the 2 m tile step",
-      (F14["cols"], F14["rows"], F14["step_m"]), (86, 103, 2.0))
-near("(260,104) — A1's ramp, 2 m in", at(F14, 4, 3), 1.5)
-near("(348,232) — the hollow beats the ridge", at(F14, 48, 67), -9.0)
-near("(416,296) — the hollow alone", at(F14, 82, 99), -9.0)
-near("(340,140) — FP_BIG's plateau", at(F14, 44, 21), 6.0)
-near("(356,152) — the NARROWER place wins", at(F14, 52, 27), 3.0)
-near("(344,152) — past its ring, FP_BIG again", at(F14, 46, 27), 6.0)
-near("(254,220) — FP_WEST's ring, outside every area", at(F14, 1, 61), 1.5)
-near("(252,220) — one cell further out, and one cell is 2 m now: flat",
-     at(F14, 0, 61), 0.0)
+# THE FOUR STAMPS, each with its target (the MEDIAN under it) and its ramp
+# width in METRES (§ G5). The 35° cap holds the STEEPEST metre (smoothstep
+# peaks at 1.5x its mean), so a widened width carries the factor:
+#   FP_BIG   h0 = 6.0   w = 1.5·6.0/tan(35°) = 12.853332…  (1.5·6.0 > 5.6017)
+#   FP_SMALL h0 = 3.0   w = 1.5·3.0/tan(35°) = 6.426666…   (1.5·3.0 > 1.5802)
+#   FP_WEST  h0 = 1.5   w = 1.5·3.0/tan(35°) = 6.426666…
+#   FP_FAR   h0 = 0.0   w = 0.5·sqrt(400/pi) = 5.641896  (0 onto 0, no rim)
+_stamps = {(round(p[0]), round(p[1])): (round(p[5], 6), round(p[6], 6))
+           for p in hf.build_model(T14_AREAS, T14_FPS, T14_TERRAIN,
+                                   T14_CATALOG).plateaus}
+check("FP_BIG stamps 6.0 over 12.853332 m", _stamps[(340, 140)],
+      (6.0, 12.853332))
+check("FP_SMALL stamps 3.0 over 6.426666 m", _stamps[(356, 152)],
+      (3.0, 6.426666))
+check("FP_WEST stamps 1.5 over 6.426666 m", _stamps[(260, 220)],
+      (1.5, 6.426666))
+check("FP_FAR stamps 0 onto 0 over 5.641896 m", _stamps[(2000, 2000)],
+      (0.0, 5.641896))
+# THE GRID therefore reaches 6.426666 m west of FP_WEST's box, i.e. to
+# x = 256 − 6.426666 = 249.573334, and
+#   origin_x = floor(249.573334/2)·2 − 2 = 248 − 2 = 246
+#   cols     = ceil((420 + 2 − 246)/2) + 1 = 88 + 1 = 89
+#   origin_z = floor(100/2)·2 − 2 = 98
+#   rows     = ceil((300 + 2 − 98)/2) + 1 = 102 + 1 = 103
+check("the overview is anchored at (246, 98)",
+      (F14["origin_x"], F14["origin_z"]), (246.0, 98.0))
+check("...89 × 103 points at the 2 m tile step",
+      (F14["cols"], F14["rows"], F14["step_m"]), (89, 103, 2.0))
+# Support point (i, j) sits at (246 + 2i, 98 + 2j).
+near("(260,104) — A1's ramp, 2 m in", at(F14, 7, 3), 1.5)
+near("(348,232) — the hollow beats the ridge", at(F14, 51, 67), -9.0)
+near("(416,296) — the hollow alone", at(F14, 85, 99), -9.0)
+near("(340,140) — FP_BIG's plateau", at(F14, 47, 21), 6.0)
+near("(356,152) — the NARROWER place wins", at(F14, 55, 27), 3.0)
+near("(344,152) — past FP_SMALL's ramp (8 m > 6.4267), FP_BIG again",
+     at(F14, 49, 27), 6.0)
+# THE RAMP, in metres now. 2 m west of FP_WEST's square the landscape is 0
+# (x < 258, outside A1), so h = 1.5 + (0 − 1.5)·smoothstep(2/6.426666)
+#   t = 0.311207…, smoothstep = 0.230268… -> 1.5 − 0.345402 = 1.154598
+# 4 m out it is 1.5 − 1.5·0.679952 = 0.480072, 6 m out
+# 1.5 − 1.5·0.987343 = 0.018986, and 8 m > w is the flat landscape.
+_W_WEST = 1.5 * 3.0 / TAN35
+near("(254,220) — 2 m into FP_WEST's ramp", at(F14, 4, 61),
+     round(1.5 - 1.5 * ss(2.0 / _W_WEST), 3), 1e-9)
+near("...which is 1.155", at(F14, 4, 61), 1.155, 1e-9)
+near("(252,220) — 4 m out, halfway down", at(F14, 3, 61), 0.48, 1e-9)
+near("(250,220) — 6 m out, nearly the landscape again", at(F14, 2, 61),
+     0.019, 1e-9)
+near("(248,220) — 8 m out, past the ramp: flat", at(F14, 1, 61), 0.0)
+check_not("RED COUNTER-PROBE: the OLD one-cell ring pinned (254,220) to the "
+          "full 1.5 and cut off at 4 m", round(at(F14, 4, 61), 3), 1.5)
+check_not("RED COUNTER-PROBE: the mean-cap ramp put 0.825 there",
+          round(at(F14, 4, 61), 3), 0.825)
 
-T14_INDEX = hf.tile_index_from(T14_AREAS, T14_RELIEF, T14_FPS)
+T14_INDEX = hf.tile_index_from(T14_AREAS, T14_FPS, T14_TERRAIN,
+                               T14_CATALOG)
 check("the tile index is the three hand-derived keys",
       sorted(T14_INDEX), [(0, 0), (1, 0), (1, 1)])
 
@@ -1621,126 +1805,94 @@ near("...which is what the overview says there too",
 check("the ramp ring at A1's west edge DOES index the neighbour tile",
       (0, 0) in T14_INDEX, True)
 near("...and the ramp is really in it, 2 m west of the square",
-     t14_sample(254, 220), 1.5)
-near("...while 4 m west of it — the old ring width — the world is flat",
-     t14_sample(252, 220), 0.0)
+     t14_sample(254, 220), 1.155, 1e-9)
+near("...still descending 4 m west of it", t14_sample(252, 220), 0.48, 1e-9)
+near("...nearly down 6 m out", t14_sample(250, 220), 0.019, 1e-9)
+near("...and flat 8 m out, where the 6.426666 m ramp ends",
+     t14_sample(248, 220), 0.0)
 check("the strip west of the seam and south of it has no tile",
       (0, 1) in T14_INDEX, False)
 near("...so a point there is 0 without a raster", t14_sample(100, 300), 0.0)
 near("a point east of everything likewise", t14_sample(600, 150), 0.0)
 
 
-def t14_tile_no_apron(tx, tz):
-    """RED COUNTER-PROBE (a): the tile with the PRE-v2 window rule — the relief
-    mask is the window itself and a point on its border counts as bordering
-    flat ground. Rebuilt from the module's own pieces (`_window_grid` for the
-    areas, `relief_inputs` + `micro_relief_at` + the ray-cast for the
-    noise)."""
-    ox, oz = tx * hf.TILE_M, tz * hf.TILE_M
-    n = hf.TILE_POINTS
-    s = T14_S
-    boxes = hf.area_boxes(T14_AREAS)
-    heights = hf._window_grid(ox, oz, s, n, n, boxes, ())
-    mask = [[None] * n for _ in range(n)]
-    for _area, _params, _box in T14_RELIEF:
-        for j in range(n):
-            for i in range(n):
-                if point_in_polygon(ox + s * i, oz + s * j,
-                                    _area.get("polygon")):
-                    mask[j][i] = _params
-    for j in range(n):
-        for i in range(n):
-            params = mask[j][i]
-            if params is None:
-                continue
-            noise = hf.micro_relief_at(params, ox + s * i, oz + s * j)
-            flat = (i == 0 or j == 0 or i == n - 1 or j == n - 1
-                    or mask[j - 1][i] is None or mask[j + 1][i] is None
-                    or mask[j][i - 1] is None or mask[j][i + 1] is None)
-            if noise < 0.0 and flat:
-                noise = 0.0
-            heights[j][i] += noise
-    window = (ox, oz, ox + hf.TILE_M, oz + hf.TILE_M)
-    near_fps = [fp for fp in T14_FPS
-                if hf._overlaps(hf._grown(hf._footprint_box(fp), s), window)]
-    hf.level_plateaus(ox, oz, s, heights, near_fps, boxes, T14_RELIEF)
-    return [[round(v, 3) for v in row] for row in heights]
+def t14_old_edge(x, z, probe):
+    """RED COUNTER-PROBE (a): the micro-relief edge rule as it was — the four
+    probes at ONE GRID CELL, i.e. at ``probe`` metres.
+
+    Rebuilt from the module's own pieces (``relief_inputs`` + the ray-cast +
+    ``micro_relief_at``), so it measures the RULE and not the raster. The
+    whole point of E1 is that ``probe`` used to be the step of whichever grid
+    one happened to be on — 2 m on a tile, 4 m on this overview, up to 32 m on
+    a coarsened one — and the answers came apart exactly there.
+    """
+    def _params(px, pz):
+        found = None
+        for _area, _p, _b in T14_RELIEF:
+            if point_in_polygon(px, pz, _area.get("polygon")):
+                found = _p
+        return found
+
+    params = _params(x, z)
+    if params is None:
+        return 0.0
+    noise = hf.micro_relief_at(params, x, z)
+    if noise < 0.0 and (_params(x - probe, z) is None
+                        or _params(x + probe, z) is None
+                        or _params(x, z - probe) is None
+                        or _params(x, z + probe) is None):
+        return 0.0
+    return noise
 
 
 print("  [14b] the red counter-probes")
-_mut_apron = t14_tile_no_apron(1, 0)
-# The seam row z = 256 is the tile's last row (j = 128) and the overview's row
-# j = (256 − 98)/2 = 79; column i of the tile is x = 256 + 2i, i.e. the
-# overview's i + 2 — (256 + 2i − 252)/2 = i + 2.
-_T14_SEAM_ROW = (256 - int(F14["origin_z"])) // int(T14_S)
-_T14_SEAM_COL = (256 - int(F14["origin_x"])) // int(T14_S)
-check("the seam row z = 256 is the overview's row 79, its column 256 is 2",
-      (_T14_SEAM_ROW, _T14_SEAM_COL), (79, 2))
-_apron_off = [i for i in range(hf.TILE_POINTS)
-              if _mut_apron[T14_LAST][i] != T14_T10["heights"][T14_LAST][i]]
-# The points that row MUST lose: the ones INSIDE the painted band, all four
-# neighbours painted too, whose noise points DOWN. Asked of the module's own
-# noise and the ray-cast, never of the raster. At the 2 m step there are
-# eleven of them where the 4 m step had four — twice the points on the row,
-# and a neighbour 2 m out falls inside the band where a 4 m one did not
-# (x = 392 is in the list now: its eastern neighbour is 394, not 396).
-_t14_band = T14_TERRAIN[0]["polygon"]
-_seam_dips = [i for i in range(hf.TILE_POINTS)
-              if all(point_in_polygon(256.0 + T14_S * i + dx, 256.0 + dz,
-                                      _t14_band)
-                     for dx, dz in ((0, 0), (T14_S, 0), (-T14_S, 0),
-                                    (0, T14_S), (0, -T14_S)))
-              and hf.micro_relief_at(T14_RELIEF[0][1], 256.0 + T14_S * i,
-                                     256.0) < 0.0]
-check("the seam row has eleven inner dips, from x = 350 to x = 392",
-      [256 + T14_S * i for i in _seam_dips],
-      [350.0, 352.0, 354.0, 378.0, 380.0, 382.0, 384.0, 386.0, 388.0,
-       390.0, 392.0])
-check("RED COUNTER-PROBE: without the apron the seam row loses exactly those",
-      _apron_off, _seam_dips)
-check("...every one of them a dip the world keeps and the mutant cuts to 0",
-      all(T14_T10["heights"][T14_LAST][i] < _mut_apron[T14_LAST][i]
-          for i in _apron_off), True)
-check("...the shipped tile matches the overview at each of those points",
-      all(T14_T10["heights"][T14_LAST][i]
-          == at(F14, i + _T14_SEAM_COL, _T14_SEAM_ROW)
-          for i in _apron_off), True)
-check("...and the mutant matches it at none of them",
-      all(_mut_apron[T14_LAST][i] != at(F14, i + _T14_SEAM_COL, _T14_SEAM_ROW)
-          for i in _apron_off), True)
+# THE OVERVIEW AT ITS OWN DEFAULT STEP. Before E1 this comparison could not be
+# made at all: the 4 m overview measured its plateau ramps and its relief edge
+# rule in 4 m cells and the 2 m tiles in 2 m cells, so the two rasters were
+# two landscapes (measured max 1.104 m apart). Now the step is nothing but
+# sampling density, and every point the 4 m grid shares with a tile must carry
+# the identical number.
+F14_4 = hf.rasterize(T14_AREAS, footprints=T14_FPS,
+                     terrain_areas=T14_TERRAIN, terrain_catalog=T14_CATALOG)
+check("the default overview stands at 4 m", F14_4["step_m"], 4.0)
+_off4 = []
+for _j in range(F14_4["rows"]):
+    _z = F14_4["origin_z"] + _j * 4.0
+    for _i in range(F14_4["cols"]):
+        _x = F14_4["origin_x"] + _i * 4.0
+        if not (hf.tile_key(_x, _z) in T14_INDEX):
+            continue
+        _tiled = round(t14_sample(_x, _z), 3)
+        if at(F14_4, _i, _j) != _tiled:
+            _off4.append((_x, _z, at(F14_4, _i, _j), _tiled))
+check("the 4 m overview carries the TILES' number at every shared point",
+      (len(_off4), _off4[:2]), (0, []))
 
-
-def t14_tile_widest_last(tx, tz):
-    """RED COUNTER-PROBE (b): the plateau pass with the sort key REVERSED —
-    smallest area first, so the largest writes last and wins where they
-    overlap."""
-    from app.core.world_geometry import (local_to_world, polygon_area,
-                                         polygon_distance,
-                                         polygon_interior_point,
-                                         world_to_local)
-    ox, oz = tx * hf.TILE_M, tz * hf.TILE_M
-    n = hf.TILE_POINTS
-    s = T14_S
-    boxes = hf.area_boxes(T14_AREAS)
-    heights = hf._window_grid(ox, oz, s, n, n, boxes, T14_RELIEF)
-    for cx, cz, yaw, points in sorted(T14_FPS,
-                                      key=lambda fp: polygon_area(fp[3])):
-        inner = polygon_interior_point(points)
-        wx, wz = local_to_world(inner[0], inner[1], cx, cz, yaw)
-        h0 = hf.plateau_height(wx, wz, s, boxes, T14_RELIEF)
-        for j in range(n):
-            pz = oz + s * j
-            for i in range(n):
-                lx, lz = world_to_local(ox + s * i, pz, cx, cz, yaw)
-                if polygon_distance(lx, lz, points) <= s + 1e-9:
-                    heights[j][i] = h0
-    return [[round(v, 3) for v in row] for row in heights]
-
+# …and here is what that used to cost, on the seam row z = 256 of the painted
+# band: the old rule probed 4 m on the overview and 2 m on a tile, so every
+# point whose 4 m neighbour is outside the band and whose 2 m neighbour is not
+# was clamped in one raster and kept in the other.
+_seam_split = [256.0 + T14_S * i for i in range(hf.TILE_POINTS)
+               if round(t14_old_edge(256.0 + T14_S * i, 256.0, 4.0), 6)
+               != round(t14_old_edge(256.0 + T14_S * i, 256.0, 2.0), 6)]
+check(f"RED COUNTER-PROBE: the old rule answered differently at "
+      f"{len(_seam_split)} points of that one row",
+      len(_seam_split) > 0, True)
+check("...and the new rule answers the same everywhere on it",
+      [x for x in _seam_split
+       if round(t14_sample(x, 256.0), 3)
+       != round(hf.sample_height(F14_4, x, 256.0), 3)], [])
+check("the seam row's split points start at x = 392 — the last 2 m before "
+      "the band's east edge at 396, where a 4 m probe already reaches out",
+      _seam_split[0], 392.0)
 
 # (356,152) inside tile (1,0): i = (356 − 256)/2 = 50, j = 152/2 = 76.
-_mut_order = t14_tile_widest_last(1, 0)
+# RED COUNTER-PROBE (b): the plateau order. The rule is "largest area first,
+# so the SMALLEST writes last"; a model that only knows FP_BIG is exactly what
+# the reversed order would leave at the hut's centre.
+_big_only = hf.build_model(T14_AREAS, [T14_BIG], T14_TERRAIN, T14_CATALOG)
 near("RED COUNTER-PROBE: widest last puts FP_BIG's 6.0 on (356,152)",
-     _mut_order[76][50], 6.0)
+     _big_only.final(356.0, 152.0), 6.0)
 near("...where the shipped tile has the narrower place's 3.0",
      T14_T10["heights"][76][50], 3.0)
 near("RED COUNTER-PROBE: with the ring tile struck from the index the ramp "
@@ -1771,7 +1923,8 @@ check("tile_index() is the hand-derived set", sorted(hf.tile_index()),
       [(0, 0), (1, 0), (1, 1)])
 near("world_height on a support point", hf.world_height(348, 232), -9.0)
 near("...on the plateau two places share", hf.world_height(356, 152), 3.0)
-near("...on the ramp in the neighbour tile", hf.world_height(254, 220), 1.5)
+near("...on the ramp in the neighbour tile", hf.world_height(254, 220),
+     1.155, 1e-9)
 near("...between the support points, right on the seam",
      hf.world_height(290, 256), t14_sample(290, 256), 1e-12)
 near("...0 where no tile is indexed", hf.world_height(100, 300), 0.0)
@@ -1848,9 +2001,9 @@ check("an unindexed tile is simply left out — no error, no empty grid",
 check("the batch carries THE one signature", _batch["sig"], store.height_sig())
 check("...the tile edge", _batch["tile_m"], 256.0)
 check("...and the always-fine step", _batch["step_m"], 2.0)
-check("a tile entry is the grid without its own step",
+check("a tile entry is the grid without its own step, plus its stats",
       sorted(_batch["tiles"]["1,0"].keys()),
-      ["cols", "heights", "origin_x", "origin_z", "rows"])
+      ["cols", "heights", "origin_x", "origin_z", "rows", "stats"])
 check("...and it IS the tile the rules read",
       _batch["tiles"]["1,0"]["heights"] == hf.get_tile(1, 0)["heights"], True)
 check("...at the tile's own origin",

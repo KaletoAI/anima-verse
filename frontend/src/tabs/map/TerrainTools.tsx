@@ -23,6 +23,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { SliderInput } from '../../components/SliderInput'
 import type { PropRef } from '../../lib/refs'
 import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
@@ -30,6 +31,7 @@ import { STROKE_STYLES, type StrokeStyle } from './mapMath'
 import { typeColor } from './TerrainLayer'
 import type {
   HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType,
+  TerrainWater,
 } from './mapTypes'
 
 /**
@@ -371,6 +373,33 @@ export const FALLOFF_MAX_M = 1000
  *  would teach the warning to be ignored. */
 export const HEIGHT_DEFAULT_M = 3
 export const FALLOFF_DEFAULT_M = 10
+
+/**
+ * WHICH PAINTED GROUND CARRIES A WATER MIRROR (plan "Ein Boden" § 2 G4).
+ *
+ * The bake stamps a mirror under areas of exactly this kind — one entry, so
+ * the day a second water kind joins the catalog it is one line here and one
+ * line in the bake, never a guess spread over the editor. Everything else the
+ * chip offers (kind palette, layers, scatter) is unaffected.
+ */
+export const WATER_KIND = 'water'
+
+/** The server's own defaults for the two carved numbers, shown as the
+ *  placeholder of an unset field so the author reads what the bake will do
+ *  instead of an empty box. The level has no constant: its default is the
+ *  MEDIAN HEIGHT ALONG THE RIM of the polygon, which only the server can
+ *  compute — an unset level says "auto (rim)" and no number. */
+export const WATER_DEPTH_DEFAULT_M = 2
+export const SHORE_RAMP_DEFAULT_M = 3
+/** The knobs' ranges, mirrored from the bake's clamps. */
+export const WATER_DEPTH_MIN_M = 0.2
+export const WATER_DEPTH_MAX_M = 20
+export const SHORE_RAMP_MAX_M = 20
+/** How far the level slider sweeps around a level that is already SET — a
+ *  water mirror is trimmed in centimetres, not dragged across the world. An
+ *  unset one sweeps the full world height range instead (`HEIGHT_MAX_M`), so
+ *  the first number can be any height a world has. */
+export const WATER_LEVEL_SPAN_M = 10
 
 /**
  * A metre knob with a NAMED clamp — the `WidthField` pattern, with a sign and
@@ -900,6 +929,87 @@ export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayer
   )
 }
 
+/**
+ * THE THREE NUMBERS OF A WATER AREA (plan "Ein Boden" § 2 G4).
+ *
+ * A lake is the one surface in this world that is FLAT, and until the bake
+ * knew that, distant terrain kept poking through it: the mirror was drawn on
+ * one raster and the ground under it on another, so a coarse level of detail
+ * put a green ridge where the near view had water. The mirror is now a stored
+ * number, the bake presses the bed to `level − depth` under the whole polygon
+ * and ramps it back to the untouched land over the shore width, and the "is
+ * the ground under the water?" question has a single answer at every distance.
+ *
+ * ALL THREE FIELDS MAY BE EMPTY, and empty is the normal state. It means "the
+ * server decides": the level then sits at the median height along the rim of
+ * this polygon — the number a lake would have if it simply filled the hollow
+ * somebody painted — and depth and shore take the bake's own defaults, which
+ * the empty fields show as their placeholder.
+ *
+ * The level slider sweeps the FULL world height range while nothing is set (a
+ * mountain lake has to be reachable in one go) and tightens to
+ * ±`WATER_LEVEL_SPAN_M` around a level that IS set, because the second visit
+ * to this field trims centimetres rather than moving the lake.
+ */
+function WaterFields({ water, onWater }: {
+  water: TerrainWater
+  onWater: (patch: Partial<TerrainWater>) => void
+}) {
+  const { t } = useI18n()
+  const level = water.water_level
+  const levelMin = level === undefined
+    ? -HEIGHT_MAX_M
+    : Math.max(-HEIGHT_MAX_M, level - WATER_LEVEL_SPAN_M)
+  const levelMax = level === undefined
+    ? HEIGHT_MAX_M
+    : Math.min(HEIGHT_MAX_M, level + WATER_LEVEL_SPAN_M)
+  return (
+    <>
+      <div className="ga-map-chip-row">
+        <SliderInput
+          label={t('Water level (m)')}
+          title={t('The height the water surface stands at, as a world height in metres. Empty = the server pins it to the median height along the rim of this area.')}
+          value={level}
+          fallback={0}
+          min={levelMin} max={levelMax} step={0.05} fineStep="any"
+          clearable placeholder={t('auto (rim)')}
+          onChange={(v) => onWater({ water_level: v })}
+          onClear={() => onWater({ water_level: undefined })}
+          readback={level === undefined
+            ? <span className="ga-map-chip-label">{t('auto (rim)')}</span>
+            : null}
+        />
+      </div>
+      <div className="ga-map-chip-row">
+        <SliderInput
+          label={t('Depth (m)')}
+          title={t('How far the bed is carved below the water surface. Empty = the bake’s own default.')}
+          value={water.water_depth_m}
+          fallback={WATER_DEPTH_DEFAULT_M}
+          min={WATER_DEPTH_MIN_M} max={WATER_DEPTH_MAX_M} step={0.1}
+          fineStep="any"
+          clearable placeholder={String(WATER_DEPTH_DEFAULT_M)}
+          onChange={(v) => onWater({ water_depth_m: v })}
+          onClear={() => onWater({ water_depth_m: undefined })}
+        />
+        <SliderInput
+          label={t('Shore ramp (m)')}
+          title={t('Over how many metres the bed climbs back to the untouched land at the water’s edge. 0 = a wall at the shore.')}
+          value={water.shore_ramp_m}
+          fallback={SHORE_RAMP_DEFAULT_M}
+          min={0} max={SHORE_RAMP_MAX_M} step={0.5} fineStep="any"
+          clearable placeholder={String(SHORE_RAMP_DEFAULT_M)}
+          onChange={(v) => onWater({ shore_ramp_m: v })}
+          onClear={() => onWater({ shore_ramp_m: undefined })}
+        />
+      </div>
+      <div className="ga-map-chip-row ga-map-chip-label">
+        {t('This keeps terrain from poking through the water at any distance. The world height field is baked down to the water level minus the depth under this whole area and ramped back up to the land over the shore width, so every level of detail stays below the same mirror. Leave a field empty to let the server decide — the level then sits at the median height along the rim of this area.')}
+      </div>
+    </>
+  )
+}
+
 export interface TerrainAreaChipProps {
   area: TerrainArea
   types: Record<string, TerrainType>
@@ -920,9 +1030,16 @@ export interface TerrainAreaChipProps {
    *  the prop library its model picker offers. */
   scatter: TerrainScatterEntry[]
   props: PropRef[]
+  /** The area's water numbers, already CHECKED (`mapTypes.readWater`). Only
+   *  a `WATER_KIND` area shows them; every other one carries an empty object
+   *  and the chip says nothing about water. */
+  water: TerrainWater
   /** The preview colour of the n-th entry — the same one the map draws. */
   scatterColor: (index: number) => string
   onScatter: (entries: TerrainScatterEntry[]) => void
+  /** Write one or more water numbers. `undefined` in the patch DROPS the key,
+   *  which hands the field back to the server's default. */
+  onWater: (patch: Partial<TerrainWater>) => void
   /** Drop `meta.stroke` and keep the polygon: the area becomes an ordinary
    *  one, editable point by point. One way, hence the confirmation. */
   onConvert: () => void
@@ -952,8 +1069,9 @@ export interface TerrainAreaChipProps {
  * asked for — see `ScatterEditor`.
  */
 export function TerrainAreaChip({
-  area, types, typeList, typesError, stroke, scatter, props, scatterColor,
-  onKind, onZOrder, onWidth, onScatter, onConvert, onDelete, onClose,
+  area, types, typeList, typesError, stroke, scatter, props, water,
+  scatterColor,
+  onKind, onZOrder, onWidth, onScatter, onWater, onConvert, onDelete, onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
   const [armed, setArmed] = useState(false)
@@ -1008,6 +1126,14 @@ export function TerrainAreaChip({
             onPick={() => onKind(ty.kind)} />
         ))}
       </div>
+      {/* THE WATER MIRROR (plan "Ein Boden" § 2 G4). Not folded away like the
+          scatter: an area that is water has these three numbers and nothing
+          else to say about them, and the level is the field the shore optics
+          hang on. An area whose kind the catalog no longer knows cannot be
+          written at all, so it does not offer them either. */}
+      {area.kind === WATER_KIND && known ? (
+        <WaterFields water={water} onWater={onWater} />
+      ) : null}
       {/* What grows here (finding B17). Folded away by default: most areas
           grow nothing, and an area is selected far more often to be reshaped
           or re-layered than to be planted. An area whose kind the catalog no
@@ -1350,10 +1476,10 @@ export interface HeightAreaChipProps {
  * that would fix it, and nothing is refused.
  *
  * The warning is about THIS area and nothing else. A location dropped on the
- * flank does not soften it any more: since 2026-08-13 a place levels the
- * ground under itself only when its own "Flatten terrain" box is ticked
- * (`level_ground`, § A16.1), so that is said once, as a side note about an
- * option — never as a plateau the editor can count on.
+ * flank may soften it — a BUILT one stamps its own plateau into the height
+ * field (plan "Ein Boden" § 2 G5) — but which locations are built is the
+ * server's classification, so that is said once as a side note and never
+ * counted on as a plateau the editor can predict.
  *
  * Deleting arms an inline confirmation (no `window.confirm`); the state is
  * local because the chip is remounted per area (`key`).
@@ -1400,11 +1526,11 @@ export function HeightAreaChip({
             .replace('{deg}', String(Math.round(maxSlopeDeg)))
             .replace('{step}', String(maxStepM))}
       </div>
-      {/* The opt-in side note: the relief no longer bends for a placement, so
-          the chip says who does the flattening and that somebody has to ask
-          for it. */}
+      {/* The side note about placements: a built location standing here
+          stamps its own plateau, a natural one lets this relief run straight
+          through. The rule is stated, never re-derived here. */}
       <div className="ga-map-chip-row ga-map-chip-label">
-        {t('A location standing here only levels the ground under itself when its “Flatten terrain” box is ticked — otherwise this relief runs straight through it.')}
+        {t('Ground is levelled automatically under built locations.')}
       </div>
       <div className="ga-map-chip-actions">
         {armed ? (
