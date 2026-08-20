@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Smoke run for the map editor's SCATTER PREVIEW BUDGET —
- * `scatterPreviewShares` in `frontend/src/tabs/map/mapMath.ts`, over the count
- * rule of the shared sampler (`scatterWantedCount`,
- * `packages/scene-render/src/scatter.ts`).
+ * Smoke run for the map editor's SCATTER PREVIEW — its two modes, the
+ * hysteresis between them and the budget each of them spends. Everything under
+ * "the scatter preview" in `frontend/src/tabs/map/mapMath.ts`, over the count
+ * rule and the cell raster of the shared sampler
+ * (`packages/scene-render/src/scatter.ts`).
  *
  * Usage:  node scripts/smoke_scatter_preview.mjs
  *
@@ -126,6 +127,128 @@
  *      its share, and a lower ceiling yields the PREFIX of the same stream
  *      (pinned in `smoke_scatter_math.mjs`, C14), so a previewed dot is always
  *      a prop the sampler really places.
+ *
+ * ############################################################################
+ * WHAT WENT WRONG THE SECOND TIME (reported 2026-08-20)
+ * ############################################################################
+ * "The preview and the 3D client disagree hard — the client shows far more."
+ *
+ * Both halves above were about the RATIO between two areas, and both are still
+ * right. What neither of them fixed is the ABSOLUTE density: the client plants
+ * the authored number per 100 m2 through the 64 m cell raster
+ * (`scatterCellInstances`), while the preview drew a 4 000-dot sample of the
+ * whole world. On the reporting world that is 3 995 dots for 6 282 498 props —
+ * 0.06 % of what grows, with nothing on the screen saying so.
+ *
+ * THE FIX, and what sections (E)-(H) pin: where the user LOOKS (zoomed in far
+ * enough that one screen fits a frame budget) the preview runs the very same
+ * cell sampler over the covered cells and draws the client's own instances;
+ * beyond that budget the thinned overview stays, and SAYS what fraction it is.
+ *
+ * ============================================================================
+ * (E) THE MODE SWITCH — cost in the currency the sampler spends
+ * ============================================================================
+ * The cost of one screen is counted, never sampled: per row, the visible
+ * rectangle is clipped against the area's bounding box, the cells of what is
+ * left are counted, and each carries the cell sampler's own wanted count
+ *
+ *     perCell = round(4096 / 100 · density)      (4 096 m2 = one 64 m cell)
+ *
+ * (E1) THE FIXTURE (also (F)'s): an area from (0,0) to (192,64) — three cells
+ *      wide, one cell tall — with ONE row at 5 per 100 m2.
+ *        perCell = round(40.96 · 5) = round(204.8) = 205
+ *      A viewport rect of 0.5 .. 190 by 0.5 .. 60 falls in cells
+ *      floor(0.5/64)=0 .. floor(190/64)=2 in x and 0 .. 0 in z, i.e. the three
+ *      cells (0,0), (1,0), (2,0).
+ *        cost = { dots: 3 · 205 = 615, cells: 3 }
+ * (E2) A viewport that misses the area entirely (x from 1 000) costs NOTHING —
+ *      the whole point of a windowed preview: { dots: 0, cells: 0 }.
+ * (E3) The budget is 8 000 dots, the band 0.8 / 1.2 around it, i.e. ON at or
+ *      below 6 400 and OFF only above 9 600:
+ *        6 400 dots: off -> ON, on -> on
+ *        6 401 dots: off -> off (not yet), on -> ON (still)
+ *        9 600 dots: on -> on, off -> off
+ *        9 601 dots: on -> OFF
+ * (E4) NO FLAPPING, which is what the band is for. A pan that walks
+ *      6 300 -> 6 500 -> 6 300 -> 9 000 -> 6 500 from the true mode stays in
+ *      it the whole way: [true, true, true, true, true]. The same walk from
+ *      the overview enters it only on the first value that is under 6 400:
+ *      [true, true, true, true, true] — 6 300 switches it on and nothing
+ *      after that leaves. Starting at 9 000 instead: 9 000 -> off, then
+ *      6 500 -> still off (over 6 400), then 6 300 -> on.
+ * (E5) THE CELL LIMIT IS NOT HYSTERETIC in the same way, because it is not a
+ *      comfort limit: past SCATTER_CELLS_MAX (4 096) the shared enumerator
+ *      answers an EMPTY list, and a window over it would draw an area's
+ *      scatter as nothing at all. So it is entered only under 4 096 · 0.8 =
+ *      3 276.8 and left at the cap itself:
+ *        3 276 cells: off -> ON        (dots 0, so the budget never bites)
+ *        3 277 cells: off -> off, on -> on
+ *        4 096 cells: on -> on
+ *        4 097 cells: on -> OFF
+ * (E6) A junk cost (NaN dots) is never true mode.
+ *
+ * ============================================================================
+ * (F) THE 1:1 PIN — the preview's dots ARE the client's instances
+ * ============================================================================
+ * The claim of § B5a form: for the same cell, the same area and the same
+ * inputs, the preview's job builder produces the byte-identical instance list
+ * a direct `scatterCellInstances` call does. Not "looks similar" — the same
+ * objects, in the same order, with the same keys.
+ *
+ * THE FIXTURE, on top of (E1)'s area (id `ta_pin`, one row at 5 per 100 m2,
+ * no model and no height):
+ *   · a second area painted ON TOP of it, x 150..192, with no scatter of its
+ *     own — the OCCLUDER: ground that is covered grows nothing, so the props
+ *     of the third cell east of x = 150 are subtracted.
+ *   · a placed location's footprint, the square 70..110 by 10..50, which the
+ *     props of the second cell keep clear of.
+ *   · the entry names no model and no height, so it is a tuft: 0.8 m tall,
+ *     and a prop is assumed to be as wide as it is tall, hence
+ *     clearM = 0.8 · 0.5 = 0.40 m (`scatterClearM`). The direct call is given
+ *     that 0.40 as a literal — if the builder ever estimates differently, the
+ *     lists stop matching, which is the point of pinning it.
+ * (F1) Cell (0,0) has NO footprint and NO occluder over it, and it lies whole
+ *      inside the area, so its 205 candidates are all accepted: 205 dots, the
+ *      authored density to the dot (205 / 40.96 = 5.005 per 100 m2 against an
+ *      authored 5 — the rounding of 204.8, nothing else).
+ * (F2) Cell (1,0) carries the footprint, cell (2,0) the occluder, so both draw
+ *      FEWER than 205 — a preview that ignored either would show 205 there
+ *      too, and this is the red counter-probe that says the exclusions really
+ *      ran.
+ * (F3) THE PIN: `scatterWindowDots` over the three cells === the concatenation
+ *      of three direct `scatterCellInstances` calls with
+ *      `scatterCellSeed('ta_pin', 0, cx, 0)`, byte for byte (JSON).
+ * (F4) …and no instance carries a `variant` key on EITHER side: the map
+ *      editor reads no variant maps (`readScatter` whitelists three fields),
+ *      so a mix would itself be a mismatch with what the builder asks for.
+ * (F5) The order is the raster's own: row-major cells, x inner — so the first
+ *      dot of the list lies in cell (0,0) and the last in cell (2,0).
+ *
+ * ============================================================================
+ * (G) THE THINNED LABEL — what the overview admits to
+ * ============================================================================
+ * `drawn / Σ wanted`, in percent, with the precision following the size (whole
+ * percent from 10 up, one decimal from 1, two below, `<0.01` under a hundredth
+ * of a percent).
+ * (G1) THE REPORTING WORLD, straight out of (A1): 3 995 dots of 6 282 498
+ *      props = 0.0635% -> "0.06". The label the map now carries.
+ * (G2) 500 of 1 000 = 50% -> "50";  105 of 1 000 = 10.5% -> "11" (rounded, at
+ *      or above ten a decimal says nothing);  99 of 1 000 = 9.9% -> "9.9";
+ *      12 of 1 000 = 1.2% -> "1.2";  1 of 10 000 = 0.01% -> "0.01";
+ *      1 of 1 000 000 = 0.0001% -> "<0.01".
+ * (G3) Everything drawn is "100": 614 of 614 -> "100".
+ * (G4) Nothing grown or nothing drawn is "0", never NaN or "Infinity".
+ *
+ * ============================================================================
+ * (H) DETERMINISM — the same world twice is the same picture
+ * ============================================================================
+ * (H1) Two independent runs of the whole path (jobs built again from the raw
+ *      areas, dots sampled again) are byte-identical. A preview that redraws
+ *      differently on a pan would be indistinguishable from random to an
+ *      author comparing two forests.
+ * (H2) …and the window is a SLICE of one world, not a picture of a walk: the
+ *      dots of cell (1,0) come out the same whether the viewport covered one
+ *      cell or all three.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -191,9 +314,15 @@ function firstComeFirstServed(wanted, budget) {
 }
 
 async function main() {
-  const { scatterPreviewShares } = await loadBundled(SRC, 'scatterpreview-');
-  const { scatterWantedCount, SCATTER_MAX_PER_ENTRY } =
-    await loadBundled(SCATTER_SRC, 'scattercount-');
+  const {
+    scatterPreviewShares, scatterPreviewJobs, scatterWindowCost,
+    scatterTrueModeNext, scatterWindowDots, scatterThinnedPercentText,
+    SCATTER_TRUE_BUDGET, SCATTER_TRUE_ON, SCATTER_TRUE_OFF,
+  } = await loadBundled(SRC, 'scatterpreview-');
+  const {
+    scatterWantedCount, SCATTER_MAX_PER_ENTRY, scatterCellInstances,
+    scatterCellSeed, SCATTER_CELL_M, SCATTER_CELLS_MAX,
+  } = await loadBundled(SCATTER_SRC, 'scattercount-');
 
   console.log('(A) the reporting world — four areas, sixteen rows');
   /** area m2 + the authored densities, in the server's bottom-to-top order */
@@ -279,6 +408,140 @@ async function main() {
     [0, 0, 0, 0]);
   check('D7 an explicit ceiling overrides the standing one',
     scatterWantedCount(10000, 3, 100), 100);
+
+  /* ------------------------------------------------------------------ *
+   * The fixture of (E) and (F): three cells of painted ground, one row,
+   * one occluding area on top of it and one footprint in the middle.
+   * ------------------------------------------------------------------ */
+  const AREA_RING = [[0, 0], [192, 0], [192, 64], [0, 64]];
+  /** painted OVER the first one, x 150..192 — it grows nothing itself and is
+   *  therefore only ever an occluder (see `scatterPreviewJobs`) */
+  const COVER_RING = [[150, 0], [192, 0], [192, 64], [150, 64]];
+  const AREAS = [
+    { id: 'ta_pin', kind: 'forest', polygon: AREA_RING,
+      meta: { scatter: [{ density_per_100m2: 5 }] } },
+    { id: 'ta_cover', kind: 'water', polygon: COVER_RING, meta: {} },
+  ];
+  /** a placed location's drawn outline, 70..110 by 10..50 (world metres) */
+  const FOOTPRINTS = [{ points: [[70, 10], [110, 10], [110, 50], [70, 50]] }];
+  /** 0.5 .. 190 by 0.5 .. 60 -> the cells (0,0), (1,0), (2,0) */
+  const RECT = { min_x: 0.5, min_z: 0.5, max_x: 190, max_z: 60 };
+  /** the tuft's clearance, by hand: 0.8 m tall, as wide as it is tall,
+   *  half of that kept clear -> 0.40 m */
+  const CLEAR_M = 0.4;
+  const cellDirect = (cx, cz) => scatterCellInstances({
+    ring: AREA_RING,
+    cx,
+    cz,
+    densityPer100m2: 5,
+    seed: scatterCellSeed('ta_pin', 0, cx, cz),
+    footprints: FOOTPRINTS,
+    clearM: CLEAR_M,
+    occluders: [COVER_RING],
+  }).map((p) => ({ x: p.x, z: p.z, entry: 0 }));
+
+  console.log('\n(E) the mode switch — what one screen would cost');
+  const jobs = scatterPreviewJobs(AREAS);
+  check('E1 the covering area grows nothing, so there is ONE row to draw',
+    [jobs.length, jobs[0]?.areaId, jobs[0]?.index, jobs[0]?.density,
+      jobs[0]?.clearM, jobs[0]?.perCell, jobs[0]?.wanted],
+    // wanted over the whole shape: 192 · 64 = 12 288 m2 at 5 per 100 m2 is
+    // round(122.88 · 5) = round(614.4) = 614 props.
+    [1, 'ta_pin', 0, 5, 0.4, 205, 614]);
+  check('E1 one 64 m cell of ground at 5 per 100 m2 carries 205 candidates',
+    scatterWantedCount(SCATTER_CELL_M * SCATTER_CELL_M, 5, 4000), 205);
+  check('E1 the three-cell viewport costs 615 instances over 3 cells',
+    scatterWindowCost(jobs, RECT), { dots: 615, cells: 3 });
+  check('E2 a viewport that misses the painted ground costs nothing',
+    scatterWindowCost(jobs, { min_x: 1000, min_z: 1000, max_x: 1190,
+      max_z: 1060 }), { dots: 0, cells: 0 });
+  check('E3 the budget is 8 000 dots with a 0.8 / 1.2 band',
+    [SCATTER_TRUE_BUDGET, SCATTER_TRUE_ON, SCATTER_TRUE_OFF,
+      SCATTER_TRUE_BUDGET * SCATTER_TRUE_ON, SCATTER_TRUE_BUDGET * SCATTER_TRUE_OFF],
+    [8000, 0.8, 1.2, 6400, 9600]);
+  const modeAt = (on, dots, cells = 3) => scatterTrueModeNext(on, { dots, cells });
+  check('E3 6 400 switches true density ON, 6 401 does not',
+    [modeAt(false, 6400), modeAt(false, 6401)], [true, false]);
+  check('E3 …and once on it stays on to 9 600, off at 9 601',
+    [modeAt(true, 6401), modeAt(true, 9600), modeAt(true, 9601)],
+    [true, true, false]);
+  const walk = (start, costs) => {
+    let on = start;
+    return costs.map((d) => { on = modeAt(on, d); return on; });
+  };
+  check('E4 a pan across the band never leaves the true mode',
+    walk(true, [6300, 6500, 6300, 9000, 6500]),
+    [true, true, true, true, true]);
+  check('E4 …and from the overview it is entered on the first value under 6 400',
+    walk(false, [6500, 9000, 6300, 6500, 9000]),
+    [false, false, true, true, true]);
+  check('E5 the cell cap is 4 096, entered under 3 276.8 and left at the cap',
+    [SCATTER_CELLS_MAX, modeAt(false, 0, 3276), modeAt(false, 0, 3277),
+      modeAt(true, 0, 3277), modeAt(true, 0, 4096), modeAt(true, 0, 4097)],
+    [4096, true, false, true, true, false]);
+  check('E6 a junk cost is never true mode',
+    [modeAt(true, NaN), modeAt(false, NaN), modeAt(true, 100, NaN)],
+    [false, false, false]);
+
+  console.log('\n(F) the 1:1 pin — the preview draws the client\'s instances');
+  const dots = scatterWindowDots(jobs, RECT, FOOTPRINTS);
+  const inCell = (cx) => dots.filter((d) => d.x >= cx * 64 && d.x < (cx + 1) * 64);
+  check('F1 the untouched cell draws its full 205 — the authored density',
+    [inCell(0).length,
+      Math.round((inCell(0).length / ((64 * 64) / 100)) * 1000) / 1000],
+    [205, 5.005]);
+  check('F2 the footprint and the covering area SUBTRACT from the other two',
+    [inCell(1).length < 205, inCell(2).length < 205,
+      inCell(1).length > 0, inCell(2).length > 0],
+    [true, true, true, true]);
+  // …and WHERE the two exclusions bit, as predicates that can be read off the
+  // fixture: nothing stands on the footprint (nor within its 0.40 m clearance
+  // of it) and nothing stands on ground the covering area hides.
+  check('F2 no dot stands on the footprint or in its 0.40 m clearance',
+    dots.filter((d) => d.x > 69.6 && d.x < 110.4 && d.z > 10 && d.z < 50).length,
+    0);
+  check('F2 no dot stands on the ground the covering area hides (x > 150)',
+    dots.filter((d) => d.x > 150).length, 0);
+  check('F2 …and the window is 615 candidates minus exactly those',
+    [dots.length < 615, dots.length === inCell(0).length + inCell(1).length
+      + inCell(2).length], [true, true]);
+  const direct = [...cellDirect(0, 0), ...cellDirect(1, 0), ...cellDirect(2, 0)];
+  check('F3 every dot is the very instance the cell sampler answers, byte for byte',
+    JSON.stringify(dots), JSON.stringify(direct));
+  check('F4 no instance carries a variant key on either side',
+    [dots.some((d) => 'variant' in d),
+      direct.some((d) => 'variant' in d),
+      Object.keys(dots[0]).sort()],
+    [false, false, ['entry', 'x', 'z']]);
+  check('F5 the raster order is row-major, x inner',
+    [dots[0].x < 64, dots[dots.length - 1].x >= 128], [true, true]);
+  // RED COUNTER-PROBE: without the footprint the same window is a DIFFERENT
+  // picture — otherwise (F3) would be pinning an exclusion that never ran.
+  differs('F2 …a run without the footprint really does differ',
+    scatterWindowDots(jobs, RECT, []), dots);
+
+  console.log('\n(G) the label of the thinned overview');
+  check('G1 the reporting world: 3 995 dots of 6 282 498 props is "0.06"',
+    scatterThinnedPercentText(3995, 6282498), '0.06');
+  check('G2 the precision follows the size',
+    [scatterThinnedPercentText(500, 1000), scatterThinnedPercentText(105, 1000),
+      scatterThinnedPercentText(99, 1000), scatterThinnedPercentText(12, 1000),
+      scatterThinnedPercentText(1, 10000), scatterThinnedPercentText(1, 1000000)],
+    ['50', '11', '9.9', '1.2', '0.01', '<0.01']);
+  check('G3 everything drawn is 100', scatterThinnedPercentText(614, 614), '100');
+  check('G4 nothing grown or nothing drawn is 0, never NaN',
+    [scatterThinnedPercentText(0, 1000), scatterThinnedPercentText(10, 0),
+      scatterThinnedPercentText(NaN, 10), scatterThinnedPercentText(10, NaN)],
+    ['0', '0', '0', '0']);
+
+  console.log('\n(H) determinism');
+  const again = scatterWindowDots(scatterPreviewJobs(AREAS), RECT, FOOTPRINTS);
+  check('H1 the whole path run twice is the same picture',
+    JSON.stringify(again), JSON.stringify(dots));
+  const oneCell = scatterWindowDots(jobs,
+    { min_x: 70, min_z: 10, max_x: 100, max_z: 40 }, FOOTPRINTS);
+  check('H2 a one-cell viewport draws that cell exactly as the wide one did',
+    JSON.stringify(oneCell), JSON.stringify(cellDirect(1, 0)));
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

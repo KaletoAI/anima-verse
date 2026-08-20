@@ -50,7 +50,15 @@
  *   pointInPolygon(0, 0, [[0,0], [1,1]]) -> false  (fewer than 3 points is
  *     not an area at all — the server fails closed the same way)
  */
-import { seededRandom, worldToLocalXZ } from '@anima/scene-render'
+import {
+  cleanRing, polygonArea, scatterCellCountInBox, scatterCellInstances,
+  scatterCellSeed, scatterCellsInBox, scatterClearM, scatterInstances,
+  scatterSeed, scatterWantedCount, seededRandom, worldToLocalXZ,
+  SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
+} from '@anima/scene-render'
+import type { Point2, ScatterFootprint } from '@anima/scene-render'
+import { readScatter } from './mapTypes'
+import type { TerrainArea } from './mapTypes'
 
 /** Viewport state: world point at the canvas centre + zoom. */
 export interface View {
@@ -726,11 +734,33 @@ export function strokeToPolygon(points: Array<[number, number]>,
 }
 
 /* ==========================================================================
- * The scatter preview's DOT BUDGET
+ * THE SCATTER PREVIEW — true density in the window, a thinned overview beyond
+ *
+ * WHAT WENT WRONG (reported 2026-08-20). "The preview and the 3D client
+ * disagree hard — the client shows far more." True by construction: since the
+ * world's scatter became a camera window of 64 m cells the CLIENT plants the
+ * AUTHORED density (`scatterCellInstances`, uncapped per area), while this
+ * preview drew a budget-thinned sample of the WHOLE painted shape. The RATIO
+ * between two areas was right; the absolute density was silently a fraction of
+ * the world's, with nothing on screen saying so.
+ *
+ * THE ANSWER IS THE CELL RASTER, WHERE THE USER LOOKS. Zoomed in far enough
+ * that the visible rectangle's TRUE instance count fits a frame budget, the
+ * preview enumerates the covered CELLS and draws the very instances the client
+ * plants — same cell seeds, same ring, same footprints, same occluders, so the
+ * two pictures are one picture (§ B5a: pinned numerically in
+ * `scripts/smoke_scatter_preview.mjs`, never by comparing screenshots).
+ *
+ * Zoomed out beyond that budget the thinned whole-area sample stays — a world
+ * of dense meadows is millions of props and no browser draws them — but it now
+ * SAYS what it is, with the percentage of the authored density it managed to
+ * show. A preview that lies quietly is the defect; a preview that says "this
+ * is 0.06 % of what grows, zoom in" is a scale, which is the same doctrine the
+ * canvas' metre grid and its 1.70 m figure follow.
  * ========================================================================== */
 
 /**
- * How the preview's dot budget is split over the entries that want dots —
+ * How the OVERVIEW's dot budget is split over the entries that want dots —
  * PROPORTIONALLY, never first-come-first-served.
  *
  * THE BUG THIS REPLACES (reported 2026-08-19). The preview used to sample area
@@ -774,4 +804,300 @@ export function scatterPreviewShares(wanted: readonly number[],
   if (cap <= 0) return counts.map(() => 0)
   if (total <= cap) return counts
   return counts.map((n) => (n > 0 ? Math.max(1, Math.floor((n * cap) / total)) : 0))
+}
+
+/** Dots the THINNED overview draws at most, over all areas together — the
+ *  ceiling `scatterPreviewShares` spends. It caps SVG NODES, not props: the
+ *  points are the world's own either way. */
+export const SCATTER_PREVIEW_MAX = 4000
+
+/** Dots the TRUE-DENSITY window draws at most — the frame budget the mode
+ *  switch is measured against.
+ *
+ *  Higher than the overview's ceiling because these dots are the point: in
+ *  this mode every one of them is an instance the 3D client really plants, so
+ *  the number is what "one screen of world" is allowed to cost, not what a
+ *  sample may spend. Eight thousand circles is a browser's comfortable frame;
+ *  the cell raster keeps the count proportional to the VISIBLE ground, so it
+ *  is reached by zooming out rather than by painting more world. */
+export const SCATTER_TRUE_BUDGET = 8000
+
+/** HYSTERESIS around that budget, so a pan or a wheel notch at the boundary
+ *  cannot flap the two modes (and with them the whole dot layer) frame after
+ *  frame: true density switches ON below `budget · 0.8` and back OFF only
+ *  above `budget · 1.2`. Between 6 400 and 9 600 estimated instances whatever
+ *  mode is running stays running. */
+export const SCATTER_TRUE_ON = 0.8
+export const SCATTER_TRUE_OFF = 1.2
+
+/**
+ * One entry of one area, with everything BOTH preview modes need — collected
+ * once per data change, because neither mode may re-clean a ring or re-measure
+ * an area on a pan.
+ *
+ * `wanted` is the entry's TRUE prop count over the whole painted shape
+ * (`A · d / 100`, no ceiling); `perCell` is what one full 64 m cell of it
+ * carries. The first is what the overview's share budget is split by, the
+ * second what the window's cost is counted in — and both come from the ONE
+ * shared count rule (`scatterWantedCount`), so no mode can disagree with the
+ * world about how thick the ground is.
+ */
+export interface ScatterPreviewJob {
+  /** the area this row belongs to — half of every cell seed */
+  areaId: string
+  /** the row's index in `meta.scatter` — the other half, and the dot colour */
+  index: number
+  /** the CLEANED world ring of the area */
+  ring: Point2[]
+  /** its bounding box in world metres, `[minX, minZ, maxX, maxZ]` */
+  box: [number, number, number, number]
+  /** enclosed ground, m2 */
+  areaM2: number
+  /** the cleaned rings of every area painted ABOVE this one */
+  occluders: Point2[][]
+  /** instances per 100 m2, as authored */
+  density: number
+  /** the instance's horizontal half-extent (`scatterClearM`) — the ESTIMATE,
+   *  see `scatterPreviewJobs` */
+  clearM: number
+  /** true props over the whole area, uncapped */
+  wanted: number
+  /** …and over one full cell (`SCATTER_MAX_PER_CELL` guarded) */
+  perCell: number
+}
+
+/**
+ * Every scattering row of every area, ready to draw — the shared half of the
+ * two modes.
+ *
+ * `areas` arrives BOTTOM TO TOP (the server's `z_order` order), so an area's
+ * occluders are the rings after its own index: only the ground an area
+ * actually SHOWS is scattered, on the map exactly as in the world.
+ *
+ * THE ONE APPROXIMATION IN HERE, and it is the one this preview has always
+ * made: the dots have no mesh to measure, so a prop is assumed to be as wide
+ * as it is tall (`scatterClearM` with no measured extent) when it is kept
+ * clear of a placed location. The 3D client measures the loaded geometry and
+ * clears a little differently for very slim or very wide props — a handful of
+ * instances at the rim of a footprint, never a different density.
+ */
+export function scatterPreviewJobs(areas: readonly TerrainArea[]
+): ScatterPreviewJob[] {
+  const rings = areas.map((a) => cleanRing(a.polygon))
+  const jobs: ScatterPreviewJob[] = []
+  areas.forEach((a, ai) => {
+    const entries = readScatter(a.meta)
+    if (!entries.length) return
+    const ring = rings[ai]
+    if (ring.length < 3) return
+    const areaM2 = polygonArea(ring)
+    const occluders = rings.slice(ai + 1).filter((r) => r.length >= 3)
+    let minX = Infinity
+    let minZ = Infinity
+    let maxX = -Infinity
+    let maxZ = -Infinity
+    for (const [x, z] of ring) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+    entries.forEach((e, i) => {
+      // Arithmetic, not a sample: what this row plants follows from the area
+      // and the density alone, and both modes have to know it before the first
+      // point is drawn. NO CEILING on the area count — `SCATTER_MAX_PER_ENTRY`
+      // would flatten every large area to the same 2 000, which is the very
+      // defect that made a 13.7 km2 wood and a 0.84 km2 wood look 14 times
+      // apart.
+      const wanted = scatterWantedCount(areaM2, e.density_per_100m2, Infinity)
+      if (wanted < 1) return
+      jobs.push({
+        areaId: a.id,
+        index: i,
+        ring,
+        box: [minX, minZ, maxX, maxZ],
+        areaM2,
+        occluders,
+        density: e.density_per_100m2,
+        clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
+          : (e.model ? 2 : 0.8)),
+        wanted,
+        // The window's unit of cost — the count the CELL sampler asks for,
+        // from the same rule and with the same per-cell guard it applies.
+        perCell: scatterWantedCount(SCATTER_CELL_M * SCATTER_CELL_M,
+          e.density_per_100m2, SCATTER_MAX_PER_CELL),
+      })
+    })
+  })
+  return jobs
+}
+
+/** What one screen of TRUE density would cost: the instances the cell sampler
+ *  would draw, and the cells it would have to walk to draw them. */
+export interface ScatterWindowCost {
+  /** candidate instances over every row of every visible area — an UPPER
+   *  bound on the dots, since the ring filter, the occluders and the
+   *  footprints only ever subtract from it */
+  dots: number
+  /** cells enumerated, summed over the rows (two rows of one area walk the
+   *  same cells twice, and pay for them twice) */
+  cells: number
+}
+
+/**
+ * What true density would cost for the world rectangle `rect` — WITHOUT
+ * sampling a single point.
+ *
+ * Per row: the visible rectangle is clipped against the area's own bounding
+ * box, the cells of what is left are COUNTED (`scatterCellCountInBox`, index
+ * arithmetic — no list is built), and each of them carries `perCell`
+ * candidates. That is the same product the sampler will actually run, so the
+ * mode switch below is measured in the currency it spends.
+ *
+ * An area the rectangle does not reach costs nothing at all, which is what
+ * makes the answer hang on the WINDOW rather than on the size of the world.
+ */
+export function scatterWindowCost(jobs: readonly ScatterPreviewJob[],
+  rect: MapBounds): ScatterWindowCost {
+  let dots = 0
+  let cells = 0
+  for (const job of jobs) {
+    const [bMinX, bMinZ, bMaxX, bMaxZ] = job.box
+    const minX = Math.max(rect.min_x, bMinX)
+    const minZ = Math.max(rect.min_z, bMinZ)
+    const maxX = Math.min(rect.max_x, bMaxX)
+    const maxZ = Math.min(rect.max_z, bMaxZ)
+    if (maxX < minX || maxZ < minZ) continue
+    const n = scatterCellCountInBox(minX, minZ, maxX, maxZ)
+    if (n <= 0) continue
+    cells += n
+    dots += n * job.perCell
+  }
+  return { dots, cells }
+}
+
+/**
+ * Which mode the next frame draws in — the hysteresis rule, on its own.
+ *
+ * TWO LIMITS, and they are limits of different kinds. The DOT budget is a
+ * comfort limit and therefore hysteretic (`SCATTER_TRUE_ON` /
+ * `SCATTER_TRUE_OFF`): drawing 9 000 circles for one more wheel notch costs a
+ * slower frame and nothing else. The CELL count is a hard one: past
+ * `SCATTER_CELLS_MAX` the shared enumerator answers an empty list, so a window
+ * over it would draw an area's scatter as NOTHING — the one failure this whole
+ * round exists to remove. It gets a one-sided band instead: true mode is
+ * entered only well under the cap (`· SCATTER_TRUE_ON`) and left the moment
+ * the cap itself is reached.
+ */
+export function scatterTrueModeNext(on: boolean, cost: ScatterWindowCost
+): boolean {
+  const { dots, cells } = cost
+  if (!Number.isFinite(dots) || !Number.isFinite(cells)) return false
+  if (cells > SCATTER_CELLS_MAX * (on ? 1 : SCATTER_TRUE_ON)) return false
+  return dots <= SCATTER_TRUE_BUDGET * (on ? SCATTER_TRUE_OFF : SCATTER_TRUE_ON)
+}
+
+/** One previewed prop: where it stands and WHICH ROW of its area grew it (the
+ *  dot's colour, `TerrainLayer.scatterColor`). */
+export interface ScatterDot {
+  x: number
+  z: number
+  /** the row's index in `meta.scatter` */
+  entry: number
+}
+
+/**
+ * THE TRUE-DENSITY PREVIEW: the very instances the 3D client plants, over the
+ * cells the rectangle covers.
+ *
+ * Every point in here comes out of `scatterCellInstances` with the CELL seed
+ * (`scatterCellSeed(areaId, row, cx, cz)`), the area's cleaned ring as the
+ * filter, the occluders above it and the same footprint clearance — i.e. the
+ * identical call `client3d/src/scene/ground.ts buildScatter` makes for the
+ * same cell. The two windows differ (a camera square there, a viewport here);
+ * the CELLS do not, and a cell is the whole unit of the raster, so wherever
+ * the two overlap they are the same props to the metre.
+ *
+ * Cells are enumerated per area and only inside its own bounding box, so a
+ * viewport over empty ground walks nothing.
+ */
+export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
+  rect: MapBounds, footprints: readonly ScatterFootprint[]): ScatterDot[] {
+  const out: ScatterDot[] = []
+  for (const job of jobs) {
+    const [bMinX, bMinZ, bMaxX, bMaxZ] = job.box
+    const minX = Math.max(rect.min_x, bMinX)
+    const minZ = Math.max(rect.min_z, bMinZ)
+    const maxX = Math.min(rect.max_x, bMaxX)
+    const maxZ = Math.min(rect.max_z, bMaxZ)
+    if (maxX < minX || maxZ < minZ) continue
+    for (const [cx, cz] of scatterCellsInBox(minX, minZ, maxX, maxZ)) {
+      for (const p of scatterCellInstances({
+        ring: job.ring,
+        cx,
+        cz,
+        densityPer100m2: job.density,
+        seed: scatterCellSeed(job.areaId, job.index, cx, cz),
+        footprints,
+        clearM: job.clearM,
+        occluders: job.occluders,
+      })) out.push({ x: p.x, z: p.z, entry: job.index })
+    }
+  }
+  return out
+}
+
+/**
+ * THE OVERVIEW PREVIEW: the whole world's scatter, thinned to `budget` dots
+ * proportionally (`scatterPreviewShares`).
+ *
+ * Every dot is still a prop the sampler really places — a lower `maxPoints`
+ * yields the PREFIX of the same stream — and the ratio between two areas is
+ * the ratio of what grows on them. What it is NOT is the world's density, and
+ * that is what `scatterThinnedPercentText` puts on the screen.
+ */
+export function scatterThinnedDots(jobs: readonly ScatterPreviewJob[],
+  footprints: readonly ScatterFootprint[],
+  budget: number = SCATTER_PREVIEW_MAX): ScatterDot[] {
+  const shares = scatterPreviewShares(jobs.map((j) => j.wanted), budget)
+  const out: ScatterDot[] = []
+  jobs.forEach((job, i) => {
+    const share = shares[i]
+    if (share < 1) return
+    for (const p of scatterInstances({
+      ring: job.ring,
+      areaM2: job.areaM2,
+      densityPer100m2: job.density,
+      seed: scatterSeed(job.areaId, job.index),
+      footprints,
+      occluders: job.occluders,
+      clearM: job.clearM,
+      maxPoints: share,
+    })) out.push({ x: p.x, z: p.z, entry: job.index })
+  })
+  return out
+}
+
+/**
+ * WHAT FRACTION OF THE AUTHORED DENSITY the overview managed to draw, as the
+ * text of the layer's label: `drawn / Σ wanted`, in percent.
+ *
+ * The scale of the number is the point, not its digits — on the reporting
+ * world it is 3 995 dots against 6 282 498 props, i.e. 0.06 %, and "0.06"
+ * says something "0" never could. So the precision follows the size: whole
+ * percent from 10 up, one decimal from 1, two below that, and anything under a
+ * hundredth of a percent is `<0.01` rather than a row of zeroes.
+ *
+ * `0` when nothing grows or nothing is drawn — a world without scatter has no
+ * density to be a fraction of.
+ */
+export function scatterThinnedPercentText(drawn: number, wanted: number): string {
+  const d = Number(drawn)
+  const w = Number(wanted)
+  if (!Number.isFinite(d) || !Number.isFinite(w) || d <= 0 || w <= 0) return '0'
+  const p = (d / w) * 100
+  if (p >= 10) return String(Math.round(p))
+  if (p >= 1) return p.toFixed(1)
+  if (p < 0.01) return '<0.01'
+  return p.toFixed(2)
 }

@@ -53,7 +53,7 @@ export {
   footprintBlocks, footprintDistance, scatterClearM,
   SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_ENTRY, SCATTER_TRIES_PER_POINT,
   scatterCellAt, scatterCellInstances, scatterCellRing, scatterCellSeed,
-  scatterCellSpan, scatterCellsInBox, wantedScatterCells,
+  scatterCellSpan, scatterCellsInBox, scatterCellCountInBox, wantedScatterCells,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
 } from './scatter'
 export type {

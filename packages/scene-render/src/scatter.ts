@@ -711,6 +711,30 @@ export function scatterCellRing(cx: number, cz: number): ScatterPoint2[] {
 }
 
 /**
+ * HOW MANY cells `scatterCellsInBox` would hand back — counted from the index
+ * ranges alone, without building the list.
+ *
+ * It exists because "does this window fit a frame budget?" has to be asked
+ * BEFORE anything is enumerated (the map editor's preview asks it on every pan
+ * and zoom, `mapMath.scatterWindowCost`), and `scatterCellsInBox(...).length`
+ * cannot answer it: past its own ceiling that function answers `[]`, i.e. the
+ * SAME zero as an empty box — a caller reading the length would take the
+ * largest window there is for the cheapest one.
+ *
+ * 0 for a junk or inverted box: nothing to enumerate, which is the answer the
+ * list form gives too. The count itself is never capped.
+ */
+export function scatterCellCountInBox(minX: number, minZ: number,
+                                      maxX: number, maxZ: number): number {
+  if (![minX, minZ, maxX, maxZ].every((v) => Number.isFinite(v))) return 0
+  if (maxX < minX || maxZ < minZ) return 0
+  const cols = scatterCellAt(maxX) - scatterCellAt(minX) + 1
+  const rows = scatterCellAt(maxZ) - scatterCellAt(minZ) + 1
+  if (!(cols > 0) || !(rows > 0)) return 0
+  return cols * rows
+}
+
+/**
  * Every cell whose square meets the world box `minX..maxX` × `minZ..maxZ`,
  * row-major (z outer, x inner) — a stable order a smoke can name.
  *
@@ -723,15 +747,14 @@ export function scatterCellsInBox(minX: number, minZ: number,
                                   maxX: number, maxZ: number,
                                   maxCells: number = SCATTER_CELLS_MAX
 ): [number, number][] {
-  if (![minX, minZ, maxX, maxZ].every((v) => Number.isFinite(v))) return []
-  if (maxX < minX || maxZ < minZ) return []
+  // ONE counting rule, and it lives in `scatterCellCountInBox` — the budget
+  // that decides whether this list is built at all asks the same question.
+  const total = scatterCellCountInBox(minX, minZ, maxX, maxZ)
+  if (total <= 0 || total > maxCells) return []
   const firstX = scatterCellAt(minX)
   const lastX = scatterCellAt(maxX)
   const firstZ = scatterCellAt(minZ)
   const lastZ = scatterCellAt(maxZ)
-  const cols = lastX - firstX + 1
-  const rows = lastZ - firstZ + 1
-  if (!(cols > 0) || !(rows > 0) || cols * rows > maxCells) return []
   const out: [number, number][] = []
   for (let cz = firstZ; cz <= lastZ; cz += 1) {
     for (let cx = firstX; cx <= lastX; cx += 1) out.push([cx, cz])

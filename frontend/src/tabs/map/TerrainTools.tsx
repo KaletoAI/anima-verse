@@ -1289,7 +1289,7 @@ export function MapDisplayPanel({
       {open ? (
         <div className="ga-map-tray-checks">
           <label className="ga-map-toolbar-check"
-            title={t('Show what the areas grow, as dots — exactly the points the 3D world plants (footprints of placed locations stay clear).')}>
+            title={t('Show what the areas grow, as dots. Zoomed in it draws exactly the props the 3D world plants; zoomed out too far for that, a thinned sample that says on the map which fraction of the density it shows. Footprints of placed locations stay clear either way.')}>
             <input type="checkbox" checked={scatterPreview}
               onChange={(e) => onScatterPreview(e.target.checked)} />
             🌲 {t('Scatter preview')}

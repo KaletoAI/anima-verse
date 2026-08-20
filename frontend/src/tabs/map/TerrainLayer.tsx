@@ -11,6 +11,13 @@
  * running draft. Everywhere else both parts stay in one piece, underneath the
  * placements, which is where ground belongs while locations are being moved.
  *
+ * The SCATTER PREVIEW has two modes and the zoom decides between them: close
+ * enough that one screen's true instance count fits the frame budget, it draws
+ * the very props the 3D client plants (the shared 64 m cell sampler, same
+ * seeds); wider than that, the thinned whole-world sample of before — which
+ * now says so on the picture. The maths of both, and the hysteresis between
+ * them, is `mapMath` (see the scatter-preview section there).
+ *
  * Inside the paint part the order never changes: fills, then the scatter
  * preview, then the selection outline / centre line / handles / draft. The
  * overlays are how the user sees WHAT they are editing, so nothing this layer
@@ -55,19 +62,17 @@
  * handles are the SHARED gesture (`PolygonHandles`), the same one the height
  * areas of the world relief are edited with.
  */
-import { useMemo } from 'react'
-import {
-  cleanRing, polygonArea, scatterClearM, scatterInstances, scatterSeed,
-  scatterWantedCount,
-} from '@anima/scene-render'
-import type { ScatterFootprint, Point2 } from '@anima/scene-render'
+import { useEffect, useMemo, useState } from 'react'
+import type { ScatterFootprint } from '@anima/scene-render'
+import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
-  decorateStroke, scatterPreviewShares, strokeToPolygon, worldPolyToPath,
-  worldToScreen, type StrokeDeco,
+  decorateStroke, scatterPreviewJobs, scatterThinnedDots,
+  scatterThinnedPercentText, scatterTrueModeNext, scatterWindowCost,
+  scatterWindowDots, strokeToPolygon, visibleWorldRect, worldPolyToPath,
+  worldToScreen, type ScatterDot, type ScatterPreviewJob, type StrokeDeco,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
-import { readScatter } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
 /** One opacity for every fill — see the module docstring. */
@@ -105,22 +110,19 @@ export function scatterColor(index: number): string {
     % SCATTER_COLORS.length]
 }
 
-/** Dots the preview draws at most, over ALL areas together.
- *
- *  The POINTS are always the world's own — the shared sampler answers them
- *  whatever this says. This caps how many of them become SVG circles: a world
- *  of dense meadows samples tens of thousands, and a browser asked for that
- *  many nodes stops being an editor.
- *
- *  HOW it is spent is `scatterPreviewShares` (`mapMath`): every entry of every
- *  area keeps its proportional share, and no scattering area is left blank.
- *  Spending it in list order — the state before 2026-08-19 — drew the first
- *  wood in full and left every area behind it empty, which reads as ground
- *  that grows nothing. */
-const SCATTER_PREVIEW_MAX = 4000
-
 /** Radius of a preview dot in pixels. */
 const SCATTER_DOT_R = 1.8
+
+/** The canvas' own background (`MapCanvas.BG_COLOR`) — the thinning label is
+ *  written over painted ground, so it carries this as a stroke behind its
+ *  glyphs (`paint-order: stroke`) and stays readable on any fill. */
+const LABEL_BG = '#0d1117'
+
+/** Nothing to draw, as ONE object each: an empty array literal per render
+ *  would be a new identity every time and defeat the memos that exist to keep
+ *  the inactive mode from doing any work at all. */
+const NO_JOBS: ScatterPreviewJob[] = []
+const NO_DOTS: ScatterDot[] = []
 
 /** The colour a kind is drawn in — catalog first, grey when unknown. */
 export function typeColor(types: Record<string, TerrainType>, kind: string): string {
@@ -221,6 +223,7 @@ export function TerrainLayer({
   scatterPreview, footprints,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
+  const { t } = useI18n()
 
   const selected = useMemo(
     () => areas.find((a) => a.id === selectedId) || null,
@@ -244,102 +247,59 @@ export function TerrainLayer({
   ), [draftDeco, draftLine, draftPts, draftWidthM])
 
   /**
-   * The scatter of every area, sampled ONCE per data change — in WORLD
-   * metres, so panning and zooming only re-project it.
+   * WHAT GROWS ON THE GROUND, in the two modes of `mapMath`'s preview.
    *
-   * WHAT THIS SHOWS, EXACTLY (and what it deliberately does not). The points
-   * come from `scatterInstances` (@anima/scene-render), the shared sampler,
-   * with the area's own seed, its cleaned ring and the same footprints. What
-   * it is NOT, since the world's scatter became a camera window of 64 m cells
-   * (2026-08-19, `client3d/src/scene/ground.ts → buildScatter`): the very
-   * points the 3D client plants. Those exist only around a camera, and a map
-   * of a whole world has no camera — sampling the client's cells over a
-   * viewport would be hundreds of thousands of candidates on every pan.
+   * The rows are collected once per data change (`scatterPreviewJobs` —
+   * cleaned rings, occluders, true counts); which of the two ways they are
+   * drawn hangs on what ONE SCREEN would cost:
    *
-   * So this draws the same sampler at a THINNED density over the whole shape,
-   * and the property that matters is preserved exactly: `wanted` is the area's
-   * TRUE prop count (A · d / 100, with no ceiling — the ceiling that made two
-   * equally authored woods differ is what this round removed), and the budget
-   * is split proportionally, so the DOT DENSITY of two areas is in the same
-   * ratio as the prop density the client plants. Two woods authored alike show
-   * alike; a meadow at twice the density shows twice the dots per hectare.
+   *  · zoomed in, when the visible rectangle's true instance count fits the
+   *    frame budget, the covered 64 m CELLS are enumerated and every instance
+   *    the 3D client plants is drawn — the preview and the world are then the
+   *    same picture, cell for cell (`scatterWindowDots`);
+   *  · zoomed out beyond it, the whole-area sample thinned to its dot budget,
+   *    with the label below saying what fraction of the authored density that
+   *    is (`scatterThinnedDots`).
    *
-   * The rings are cleaned ONCE up front, because an area also has to know the
-   * rings of the areas ABOVE it: only the topmost area of a spot scatters
-   * there. `areas` arrives bottom to top, so those are the rings after its own
-   * index.
+   * TWO MEMOS, NOT ONE, and the inactive one answers the SAME empty array
+   * every time: the window has to be re-sampled on every pan (that is what
+   * makes it true), while the thinned overview must NOT be — it depends on the
+   * data alone, and re-sampling a world's worth of props for a wheel notch is
+   * exactly the cost the overview exists to avoid.
    */
-  const scatterDots = useMemo(() => {
-    // The ground part draws no dots, and sampling for it would mean paying the
-    // whole scatter twice per render once the layer is split in two.
-    if (!scatterPreview || part === 'ground') return []
-    const rings = areas.map((a) => cleanRing(a.polygon))
-    /** One entry of one area, with everything its sample needs — collected
-     *  BEFORE anything is placed, because the budget below is a question about
-     *  all of them together. */
-    type Job = {
-      ring: Point2[]
-      areaM2: number
-      occluders: Point2[][]
-      seed: string
-      color: string
-      density: number
-      wanted: number
-      clearM: number
-    }
-    const jobs: Job[] = []
-    areas.forEach((a, ai) => {
-      const entries = readScatter(a.meta)
-      if (!entries.length) return
-      const ring = rings[ai]
-      if (ring.length < 3) return
-      const areaM2 = polygonArea(ring)
-      const occluders = rings.slice(ai + 1).filter((r) => r.length >= 3)
-      entries.forEach((e, i) => {
-        // Arithmetic, not a sample: what this entry PLANTS is known from the
-        // area and the density alone, and the budget has to know it for every
-        // entry before the first point is drawn.
-        //
-        // NO CEILING (`Infinity`): this is the count that says how thick the
-        // ground really is, and `SCATTER_MAX_PER_ENTRY` would flatten every
-        // large area to the same 2 000 — which is the very defect that made a
-        // 13.7 km2 wood and a 0.84 km2 wood look 14 times apart.
-        const wanted = scatterWantedCount(areaM2, e.density_per_100m2, Infinity)
-        if (wanted < 1) return
-        jobs.push({
-          ring, areaM2, occluders, seed: scatterSeed(a.id, i),
-          color: scatterColor(i), density: e.density_per_100m2, wanted,
-          // APPROXIMATION: the preview draws DOTS and has no mesh to measure,
-          // so a prop counts as half as wide as it is tall (scatterClearM
-          // without a measured extent). The 3D client measures the loaded
-          // geometry and clears slightly differently for very slim or very
-          // wide props.
-          clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
-            : (e.model ? 2 : 0.8)),
-        })
-      })
-    })
-    if (!jobs.length) return []
-    // …and now the budget, PROPORTIONALLY over every entry of every area —
-    // see `scatterPreviewShares`. Spending it in list order drew the first
-    // wood in full and the rest of the world not at all.
-    const shares = scatterPreviewShares(jobs.map((j) => j.wanted),
-                                        SCATTER_PREVIEW_MAX)
-    const out: { x: number; z: number; color: string }[] = []
-    jobs.forEach((job, i) => {
-      const share = shares[i]
-      if (share < 1) return
-      for (const p of scatterInstances({
-        ring: job.ring, areaM2: job.areaM2, densityPer100m2: job.density,
-        seed: job.seed, footprints, occluders: job.occluders,
-        clearM: job.clearM,
-        // A lower ceiling gives the PREFIX of the same stream, so a thinned
-        // preview draws props the world really plants.
-        maxPoints: share,
-      })) out.push({ x: p.x, z: p.z, color: job.color })
-    })
-    return out
-  }, [areas, footprints, part, scatterPreview])
+  const rect = useMemo(() => visibleWorldRect(view, w, h), [view, w, h])
+  // The ground part draws no dots, and collecting for it would mean paying the
+  // whole scatter twice per render once the layer is split in two.
+  const jobs = useMemo(() => (scatterPreview && part !== 'ground'
+    ? scatterPreviewJobs(areas) : NO_JOBS), [areas, part, scatterPreview])
+  const cost = useMemo(() => scatterWindowCost(jobs, rect), [jobs, rect])
+  // The mode, with hysteresis (`scatterTrueModeNext`): a pan or a wheel notch
+  // at the boundary must not flap the whole dot layer between two pictures.
+  //
+  // THE RULE IS APPLIED IN THE RENDER, and the state only REMEMBERS which side
+  // of the band the last frame was on. Reading a stored mode instead would let
+  // one frame sample the new cost in the old mode — the frame that switches
+  // the preview on while zoomed out would enumerate a world's worth of cells
+  // before the correcting effect ever ran, which is the one thing a windowed
+  // sampler must never do.
+  const [lastMode, setLastMode] = useState(false)
+  const trueMode = useMemo(() => scatterTrueModeNext(lastMode, cost),
+    [cost, lastMode])
+  useEffect(() => { setLastMode(trueMode) }, [trueMode])
+  const windowDots = useMemo(() => (trueMode && jobs.length
+    ? scatterWindowDots(jobs, rect, footprints) : NO_DOTS),
+  [footprints, jobs, rect, trueMode])
+  const thinnedDots = useMemo(() => (!trueMode && jobs.length
+    ? scatterThinnedDots(jobs, footprints) : NO_DOTS),
+  [footprints, jobs, trueMode])
+  const scatterDots = trueMode ? windowDots : thinnedDots
+  /** …and, in the thinned mode, HOW MUCH of the authored density that is —
+   *  the honest half of an overview that cannot show it all. Empty in true
+   *  mode and on ground that grows nothing: there is no thinning to report. */
+  const thinnedPct = useMemo(() => (trueMode || !thinnedDots.length ? ''
+    : scatterThinnedPercentText(thinnedDots.length,
+      jobs.reduce((sum, j) => sum + j.wanted, 0))),
+  [jobs, thinnedDots, trueMode])
 
   if (!w || !h) return null
 
@@ -407,20 +367,34 @@ export function TerrainLayer({
         })}
       </g>
 
-      {/* What the areas grow, seen from above — the SAME points the 3D world
-          plants. Inert to the pointer: this is a view, and a click on it has
-          to reach the canvas underneath, which is where the area hit test
-          lives. */}
+      {/* What the areas grow, seen from above — in the true-density mode the
+          SAME instances the 3D world plants, cell for cell. Inert to the
+          pointer: this is a view, and a click on it has to reach the canvas
+          underneath, which is where the area hit test lives. */}
       {scatterDots.length ? (
         <g pointerEvents="none">
           {scatterDots.map((d, i) => {
             const s = worldToScreen(d.x, d.z, view, w, h)
             return (
               <circle key={`s${i}`} cx={s.x} cy={s.y} r={SCATTER_DOT_R}
-                fill={d.color} fillOpacity={0.9} />
+                fill={scatterColor(d.entry)} fillOpacity={0.9} />
             )
           })}
         </g>
+      ) : null}
+
+      {/* …and, when the view is too wide to draw them all, what fraction of
+          the authored density these dots ARE. Bottom right, opposite the scale
+          bar: a preview that shows a hundredth of what grows and says nothing
+          is the defect this label closes, and it belongs on the picture rather
+          than in a tooltip nobody opens while comparing two forests. */}
+      {thinnedPct ? (
+        <text x={w - 10} y={h - 10} textAnchor="end" fontSize={11}
+          fill={COL_WARN} stroke={LABEL_BG} strokeWidth={3} paintOrder="stroke"
+          pointerEvents="none">
+          {t('Preview thinned: showing ~{p}% of authored density — zoom in for true density')
+            .replace('{p}', thinnedPct)}
+        </text>
       ) : null}
 
       {/* The outline of the SELECTED area — an overlay, not the stroke of its
