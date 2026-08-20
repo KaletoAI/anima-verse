@@ -64,6 +64,13 @@ export interface PropFull {
   variant_tiers?: Array<{ variant: number; tiers: string[] }>
   /** How many active variants actually carry a mesh. */
   variant_count?: number
+  /** ACTIVE model variants in total — the ones a scene renders. */
+  variants_total?: number
+  /** How many of the active variants still lack their mesh resp. their source
+   *  image. Counts only, deliberately: the library list flags THAT a prop is
+   *  incomplete, the variant strip in the detail says which variant it is. */
+  variants_missing_mesh?: number
+  variants_missing_image?: number
   /** Configured ceiling on ACTIVE variants (image_generation.prop_variant_max). */
   variant_max?: number
 }

@@ -131,6 +131,14 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 ) : (
                   <span className="ga-tag ga-tag-missing">{t('no mesh')}</span>
                 )}
+                {/* The counterpart of the list badge: the row says HOW MANY
+                    variants lack their product shot, here stands which one. */}
+                {v.has_source ? null : (
+                  <span className="ga-tag ga-tag-missing"
+                    title={t('This variant has no source image — it cannot be re-meshed until one is rendered or uploaded.')}>
+                    {t('no image')}
+                  </span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 3 }}>
                 <button

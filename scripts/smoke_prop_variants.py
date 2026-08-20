@@ -52,6 +52,21 @@ meshes. From that one law the rest is derivable and checked below:
     run's target variant, so a later re-mesh reproduces that very picture —
     with its alpha, because the cutout is transparent outside the object.
 
+THE LIBRARY LIST FLAGS INCOMPLETE VARIANTS (2026-08-20). The admin record
+carries three counts over the ACTIVE variants — `variants_total`,
+`variants_missing_mesh`, `variants_missing_image` — and nothing else: the row
+badge says THAT a variant is missing something, the variant strip in the detail
+says which. HAND CASE, three active variants:
+
+    variant 0   mesh + source image     complete
+    variant 1   mesh, no source image   → variants_missing_image
+    variant 2   source image, no mesh   → variants_missing_mesh
+
+    → variants_total 3, variants_missing_mesh 1, variants_missing_image 1
+
+A switched-off variant renders nowhere, so it cannot be missing anything
+either: switching variant 2 off leaves 2 / 0 / 1.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import ast
@@ -467,6 +482,47 @@ def main() -> int:
           MESH_INPUTS == ["source-v2.png"], str(MESH_INPUTS))
     check("the pipeline hands the cutout to the writer WITH the run's variant",
           scene_asset_writes_cutout_with_variant())
+
+    print("\n[15] the record counts INCOMPLETE variants — the library badges")
+    # Hand case (docstring): three active variants, one without a mesh, one
+    # without a source image → 3 / 1 / 1.
+    #   variant 0  mesh + image        complete
+    #   variant 1  mesh, no image      counts in variants_missing_image
+    #   variant 2  image, no mesh      counts in variants_missing_mesh
+    crate = store.create_prop(name="Crate")["id"]
+    put_mesh(crate, 0)
+    store.save_source_image(crate, png_bytes((90, 90, 90)), 0,
+                            backend="fake-image", prompt="a crate")
+    put_mesh(crate, store.target_variant(crate))         # variant 1: no image
+    third = store.add_variant(crate)                     # variant 2: no mesh
+    check("the third variant was appended as an empty slot", third == 2, str(third))
+    store.save_source_image(crate, png_bytes((80, 60, 40)), third,
+                            backend="fake-image", prompt="a crate, again")
+    rec = store.get_prop(crate) or {}
+    counts = (rec.get("variants_total"), rec.get("variants_missing_mesh"),
+              rec.get("variants_missing_image"))
+    check("three active variants, one meshless, one imageless -> 3 / 1 / 1",
+          counts == (3, 1, 1), str(counts))
+    check("...and the meshed ones are exactly total minus the meshless one",
+          rec.get("variant_count") == 2
+          and rec.get("variants_total") - rec.get("variants_missing_mesh") == 2,
+          str(rec.get("variant_count")))
+    # A switched-off variant is not rendered anywhere, so it cannot be missing
+    # anything either: switching off the meshless variant 2 leaves two active
+    # variants, no missing mesh, and variant 1's missing image.
+    store.set_variant_active(crate, 2, False)
+    rec = store.get_prop(crate) or {}
+    counts = (rec.get("variants_total"), rec.get("variants_missing_mesh"),
+              rec.get("variants_missing_image"))
+    check("switching the meshless variant off -> 2 / 0 / 1",
+          counts == (2, 0, 1), str(counts))
+    # The counts are ADMIN detail: the lean record is the client's prop
+    # library, and a badge is nothing it renders.
+    lean = {p["id"]: p for p in store.list_props()}[crate]
+    check("the lean record carries none of the three counts",
+          not any(k in lean for k in ("variants_total", "variants_missing_mesh",
+                                      "variants_missing_image")),
+          str(sorted(lean.keys())))
 
     print()
     if FAILURES:

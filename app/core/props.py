@@ -1614,6 +1614,14 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         # The per-variant records are in `list_variants`.
         has_source = source_path(prop_id) is not None
         image = _image_meta(meta, entries[active_idx[0]]["stem"])
+        # What the library LIST needs to flag an incomplete prop: how many of
+        # the ACTIVE variants (the ones a scene renders) still lack their mesh
+        # resp. their source image. Three counts, never the variant records —
+        # a row only has to say THAT something is missing; which one it is, is
+        # what the variant strip in the detail shows.
+        missing_mesh = sum(1 for vt in tier_lists if not vt)
+        missing_image = sum(1 for i in active_idx
+                            if source_path(prop_id, i) is None)
         # Per-run facts of the ACTIVE mesh (they live on its own sidecar since
         # the gallery rebuild) — the admin panel shows what the current model
         # was made with.
@@ -1638,6 +1646,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
                          ).encode()).hexdigest()[:12],
             "variant_count": len(variant_tiers),
             "variant_max": variant_max(),
+            # Active variants in total, and how many of them are incomplete.
+            # `variants_total - variants_missing_mesh == variant_count`.
+            "variants_total": len(active_idx),
+            "variants_missing_mesh": missing_mesh,
+            "variants_missing_image": missing_image,
             "backend_image": image["backend"],
             "prompt": image["prompt"],
             "negative": image["negative"],

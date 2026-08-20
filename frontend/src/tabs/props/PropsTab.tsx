@@ -165,6 +165,14 @@ export function PropsTab() {
           ) : (
             visible.map((p) => {
               const isActive = p.id === selected
+              // Incompleteness of the ACTIVE variants, straight from the three
+              // counts the record carries. A prop with no mesh at all already
+              // says "no model", so the mesh badge only speaks up when SOME
+              // variants have one and others do not.
+              const total = p.variants_total || 0
+              const noMesh = p.has_model ? (p.variants_missing_mesh || 0) : 0
+              const noImage = p.variants_missing_image || 0
+              const fraction = (n: number) => `${n}/${total}`
               return (
                 <li key={p.id}>
                   <button
@@ -194,6 +202,26 @@ export function PropsTab() {
                     {(p.variant_count || 0) > 1 ? (
                       <span className="ga-tag" title={t('Model variants of this prop')}>
                         ×{p.variant_count}
+                      </span>
+                    ) : null}
+                    {/* An incomplete variant is invisible in the list otherwise
+                        — the thumbnail and the ×N badge come from the primary
+                        variant alone, so a second one without a mesh or
+                        without its own product shot never shows up. */}
+                    {noMesh > 0 ? (
+                      <span className="ga-tag ga-tag-missing"
+                        title={t('{n} of {total} active model variants have no mesh yet. Open the prop — the variant strip says which one and meshes it.')
+                          .replace('{n}', String(noMesh))
+                          .replace('{total}', String(total))}>
+                        ⬡ {fraction(noMesh)} {t('mesh missing')}
+                      </span>
+                    ) : null}
+                    {noImage > 0 ? (
+                      <span className="ga-tag ga-tag-missing"
+                        title={t('{n} of {total} active model variants have no source image. Without it that variant cannot be re-meshed. Open the prop — the variant strip says which one.')
+                          .replace('{n}', String(noImage))
+                          .replace('{total}', String(total))}>
+                        🖼 {fraction(noImage)} {t('image missing')}
                       </span>
                     ) : null}
                   </button>
