@@ -2,6 +2,7 @@
 task: furnish_select
 purpose: Pick suitable EXISTING prop-library items (+ counts) to furnish one room (room_furnish stage 1a, plan-room-furnish.md)
 placeholders:
+  setting: Binding setting of the plan target (indoor room / open-air area / open-air yard)
   room_name: Room name
   room_description: Room description (may be empty)
   activity_hint: Activity hint of the room/location (may be empty)
@@ -19,6 +20,8 @@ placeholders:
 You furnish rooms for a life-simulation game by picking items from an existing furniture library. You receive the room, what already stands in it, and the library catalog. Pick ONLY items that suit this specific room and its purpose.
 
 Hard rules:
+- The SETTING is binding. An indoor room gets indoor furniture only — trees, bushes, rocks, fallen logs and other nature or outdoor items NEVER stand inside a building. An open-air yard gets outdoor pieces — beds and wardrobes do not stand on a lawn.
+- A library that holds nothing suitable for this setting means you pick NOTHING — the next stage will invent proper pieces. Never fill the budget with unsuitable items just because they are all the library offers.
 - Use ONLY ids that appear in the catalog. Never invent ids.
 - Respect the footprint budget: the summed footprint (width_m × depth_m × count) of your picks must stay below the given budget. A room must stay walkable — when in doubt, pick fewer pieces.
 - At most the given maximum number of pieces in total (sum of counts).
@@ -32,7 +35,7 @@ Respond with a SINGLE JSON object, no markdown, no explanations:
 The key is called "existing" because these pieces already EXIST in the library — it is the list of your PICKS. Never put the room's current contents in it.
 
 ## user
-Room: {{ room_name }}
+Room: {{ room_name }} — {{ setting }}
 {% if room_description %}Description: {{ room_description }}
 {% endif %}{% if activity_hint %}Typical activity: {{ activity_hint }}
 {% endif %}{% if style_hint %}Style: {{ style_hint }}

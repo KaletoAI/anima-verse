@@ -2,6 +2,7 @@
 task: furnish_new
 purpose: Propose MISSING furniture pieces (not in the library) with dims, generation subject and a marker suggestion (room_furnish stage 1b, plan-room-furnish.md)
 placeholders:
+  setting: Binding setting of the plan target (indoor room / open-air area / open-air yard)
   room_name: Room name
   room_description: Room description (may be empty)
   activity_hint: Activity hint of the room/location (may be empty)
@@ -30,6 +31,8 @@ Per proposed piece deliver:
 - "count": how many of this piece the room needs.
 
 Hard rules:
+- The SETTING is binding: indoor rooms get indoor pieces, open-air areas get outdoor pieces.
+- The essentials of the room's PURPOSE come first. When the covered list plainly does not serve this room's function (wrong setting, wrong kind of item), still propose the missing essentials.
 - Never propose something whose name (or an obvious synonym) is already in the library list or in the room.
 - Respect the footprint budget (width_m × depth_m × count summed over all proposals) and the cap on new kinds. Proposing nothing is a valid answer — and the right one when the budget is 0.
 - Dimensions between 0.05 and 5 metres per axis.
@@ -38,7 +41,7 @@ Respond with a SINGLE JSON object, no markdown, no explanations:
 {"new": [{"name": "...", "description": "...", "category": "...", "width_m": 0.0, "depth_m": 0.0, "height_m": 0.0, "marker": {"animation": "...", "at": [0.5, 0.45, 0.5]} , "count": 1}, ...]}
 
 ## user
-Room: {{ room_name }}
+Room: {{ room_name }} — {{ setting }}
 {% if room_description %}Description: {{ room_description }}
 {% endif %}{% if activity_hint %}Typical activity: {{ activity_hint }}
 {% endif %}{% if style_hint %}Style: {{ style_hint }}

@@ -570,7 +570,18 @@ def _phase_select(room_id: str) -> None:
                  - _used_area(placed, library))
     room_name = _room_label(room)
     style_hint = str(room.get("style_hint") or loc.get("style_hint") or "")
+    # The setting is BINDING context for both stages (user finding 2026-08-20:
+    # a tree-only library got picked into a living room because the LLM never
+    # learned the room was indoors). The yard is open-air by nature — its
+    # record has no indoor flag, and falling back to the LOCATION's flag would
+    # call a house's yard "indoor".
+    from app.models.world import GROUND_ROOM_ID, resolve_indoor_flag
+    is_yard = str(room.get("id") or "") == GROUND_ROOM_ID
+    setting = ("open-air yard of the location" if is_yard
+               else ("indoor room inside a building"
+                     if resolve_indoor_flag(loc, room) else "open-air area"))
     common = {
+        "setting": setting,
         "room_name": room_name,
         "room_description": str(room.get("description") or ""),
         "activity_hint": get_room_activity_hint(str(loc.get("id") or ""),
