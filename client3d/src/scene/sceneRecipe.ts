@@ -16,7 +16,7 @@ import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
 import {
   applyPlateDepthBias, PLATE_Y_M, preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
-  surfaceMaterialSpec, tileDirToWorld, tileToWorld,
+  surfaceMaterialSpec, tileDirToWorld, tilePlateIsBackstop, tilePlateY, tileToWorld,
   type PlacedSceneModel, type Tile,
 } from './tiles';
 
@@ -464,9 +464,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // instead of pushed back. Restoring it here rather than zeroing it is the
     // point — a mounted scene used to strip the bias off the very plate the
     // tile was built with.
-    tile.groundPlate.position.y = tile.modelIsShellArea ? -0.05 : PLATE_Y_M;
+    // A NATURAL location (§ B1 addendum 2026-08-20 part 3) draws no storey
+    // slab, so its zone surfaces lie at 0.01 instead of 0.09 and the plate has
+    // to go the same 0.14 m further down (`tilePlateY`) — at 0.04 it would sit
+    // ABOVE them and bury the sand and the water it is meant to back.
+    tile.groundPlate.position.y = tilePlateY(scene);
     const gm = tile.groundPlate.material as THREE.MeshStandardMaterial;
-    if (tile.modelIsShellArea) {
+    if (tilePlateIsBackstop(scene)) {
       gm.polygonOffset = true;
       gm.polygonOffsetFactor = 1;
       gm.polygonOffsetUnits = 2;

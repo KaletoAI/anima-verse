@@ -612,6 +612,52 @@ export const PLATE_Y_M = 0.04;
 export const SOCLE_Y_M = 0.045;
 
 /**
+ * WHERE THE TILE'S OWN PLATE GOES WHILE A SCENE IS MOUNTED, in metres.
+ *
+ * Three states, and the payload alone decides which (§ B1 addendum
+ * 2026-08-20 part 2 — the server classifies, the renderer places):
+ *
+ *  - a DETAIL scene (`area_detail`) makes the plate the BACKSTOP under the
+ *    storey-0 surfaces: −0.05, i.e. 0.14 m under the zone plates at 0.09.
+ *    1 cm was not enough for the depth buffer at range (z-fighting waves,
+ *    user picture 2026-08-03).
+ *  - a NATURAL location (`natural_floor`) draws no storey slab at all, so its
+ *    zone surfaces sit at 0.01 rather than 0.09 — the SAME 0.14 m of clearance
+ *    is 0.01 − 0.14 = −0.13. Without this the plate would bury the very
+ *    textures it backs: outside detail mode it sits at 0.04, three centimetres
+ *    ABOVE them, and with its own depth bias pulling it forward it wins even
+ *    where it is level.
+ *  - anything else keeps the plate where the tile built it (0.04) — it lies ON
+ *    the world ground there and is not a backstop at all.
+ *
+ * The tile plate is DRAPED over the world ground (`plateGeometry`) while these
+ * scene surfaces are flat, so the clearance is a clearance only where the
+ * landscape under the footprint is level with the pin; where the world rises
+ * more than 0.14 m above it the plate comes through the zone textures. That is
+ * the authored mismatch (a flat drawn zone over a rolling landscape), not a
+ * datum question — `level_ground` on the location is what flattens it.
+ */
+export const BACKSTOP_Y_M = -0.05;
+export const NATURAL_BACKSTOP_Y_M = -0.13;
+
+/** The y of the tile's own ground plate for a mounted scene — the ONE rule,
+ *  hoisted out of `mountScene` so `smoke_walk_math.mjs` can check it by hand
+ *  instead of copying the three numbers. */
+export function tilePlateY(scene: { area_detail?: boolean;
+                                    natural_floor?: boolean }): number {
+  if (scene.natural_floor) return NATURAL_BACKSTOP_Y_M;
+  if (scene.area_detail) return BACKSTOP_Y_M;
+  return PLATE_Y_M;
+}
+
+/** Is the tile's own plate a BACKSTOP under this scene (pushed back in the
+ *  depth test) rather than the ground it normally is (pulled forward)? */
+export function tilePlateIsBackstop(scene: { area_detail?: boolean;
+                                             natural_floor?: boolean }): boolean {
+  return !!(scene.area_detail || scene.natural_floor);
+}
+
+/**
  * The DEPTH BIAS of a footprint plate — one rung in front of the world ground's
  * own ladder (`scene/ground.AREA_OFFSET_MAX` = 32, so this is −33).
  *

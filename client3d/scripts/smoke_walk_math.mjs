@@ -3532,35 +3532,63 @@ async function main() {
   // (worlds/Anima Divide, GET /play/locations/2e2f52e9/scene). Every number
   // below is derived by hand from the payload the server composes:
   //
-  //   level plate (the whole boundary, grass)   top_y 0.08
-  //   room plate  "Mondhütte" (sand)            top_y 0.09
-  //   diorama bottom_y = plate 0.09 + DIORAMA_CLEARANCE 0.02
-  //                    + layout.model_offset_y (−0.30)          = −0.19
-  //   walk_y_world = bottom_y + walk_y                          = −0.19 + w
+  // MONDSCHEINSEE IS A NATURAL LOCATION (§ B1 addendum 2026-08-20 part 3,
+  // `scene_recipe.is_natural_location`): no drawn building contour and not one
+  // closed room, so the payload emits NO level plate and its storey datum is
+  // the bare terrain. The slab era's grass podium (top 0.08, body 0.14) is
+  // gone, and every number of this chain moved down with it:
   //
-  // So a dialled walk_y of 0.35 is a declared 0.16, and the figure stands one
-  // WALK_CLEARANCE above it: 0.17. What it did instead: `shell_area` skipped
-  // the plate branch, the location has no mesh to ray, and the answer was the
-  // bare tile floor 0.00 — the dial looked dead in the client while the same
-  // number moved the NPC spots (`sampleRoomWalkables`).
+  //   level plate (the whole boundary, grass)   NONE — not emitted
+  //   room plate  "Mondhütte" (sand)            top_y 0.00 + 0.01 = 0.01
+  //   diorama bottom_y = surface 0.01 + DIORAMA_CLEARANCE 0.02
+  //                    + layout.model_offset_y (−0.30)          = −0.27
+  //   walk_y_world = bottom_y + walk_y                          = −0.27 + w
+  //
+  // So a dialled walk_y of 0.35 is a declared 0.08, and the figure stands one
+  // WALK_CLEARANCE above it: 0.09. (The slab era said −0.19 / 0.16 / 0.17 for
+  // the same dials — the whole chain sat 0.08 higher.) What it did instead
+  // before 17f162ab: `shell_area` skipped the plate branch, the location has
+  // no mesh to ray, and the answer was the bare tile floor 0.00 — the dial
+  // looked dead in the client while the same number moved the NPC spots
+  // (`sampleRoomWalkables`).
+  //
+  // AND ABOVE ALL OF IT stands `standY` (§ A16): the WORLD relief runs on
+  // under a footprint that does not level its ground, and the Mondscheinsee
+  // does not (`level_ground` is opt-in and unset). Measured against the world
+  // heightfield of that world, the ground inside the hut's hull stands 0.18 to
+  // 0.41 m over the pin — above every number in the chain above — so the
+  // figure walks on the TERRAIN there, which is exactly what "the floor is the
+  // world terrain" means. The chain still has to be right: it is what answers
+  // wherever the landscape is level with the pin, and it is what the NPC spots
+  // of the same room take bare.
   console.log('\nground — a DECLARED walk height beats plate and mesh');
-  const { declaredFloorAt, plateCeiling } = ground;
+  const { declaredFloorAt, plateCeiling, standY } = ground;
   const HUT = [[-27.56, 10.43], [-19.8, 10.23], [-18.64, 15.37],
     [-24.15, 16.61], [-26.81, 13.67]];
-  const HUT_BOTTOM = 0.09 + 0.02 + (-0.30);
-  check('the diorama hangs at bottom_y −0.19', HUT_BOTTOM, -0.19, 1e-9);
+  const HUT_BOTTOM = 0.01 + 0.02 + (-0.30);
+  check('the diorama hangs at bottom_y −0.27', HUT_BOTTOM, -0.27, 1e-9);
   const HUT_WALK = HUT_BOTTOM + 0.35;
-  check('a dialled walk_y 0.35 is walk_y_world 0.16', HUT_WALK, 0.16, 1e-9);
+  check('a dialled walk_y 0.35 is walk_y_world 0.08', HUT_WALK, 0.08, 1e-9);
   const LAKE_FLOORS = [{ roomId: 'd5535ee7', top: HUT_WALK, outline: HUT }];
   // The hut's anchor point (payload `anchor` [−21.28, 13.12]) is inside it.
   check('inside the hut the DECLARATION answers, not the plate',
-    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12), 0.16, 1e-9);
-  check('...and the figure stands one clearance above it: 0.17',
-    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M, 0.17, 1e-9);
-  check('...0.17 above the bare tile floor 0.00 the client used to give, and '
-    + '0.07 above the room plate it would otherwise take',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12), 0.08, 1e-9);
+  check('...and the figure stands one clearance above it: 0.09',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M, 0.09, 1e-9);
+  check('...0.09 above the bare tile floor 0.00 the client used to give, and '
+    + '0.07 above the room surface it would otherwise take',
     declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M
-      - (0.09 + WALK_CLEARANCE_M), 0.07, 1e-9);
+      - (0.01 + WALK_CLEARANCE_M), 0.07, 1e-9);
+  // THE WORLD STILL WINS where it is higher (§ A16). 0.18 is the MEASURED
+  // world ground inside the hut's hull, over the pin; the declaration answers
+  // 0.09, so the figure stands on the landscape. Both readings of the same
+  // rule are pinned, so a future change to either cannot pass unnoticed.
+  check('the world relief over the See out-tops the whole chain (0.18 > 0.09)',
+    standY(declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M,
+      0.18), 0.18, 1e-9);
+  check('...and on level ground the declaration is what answers',
+    standY(declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M,
+      0.0), 0.09, 1e-9);
   // Out on the lake (the "Seemitte" water plate at 0.09) nothing is declared.
   check('outside the hut nothing is declared', declaredFloorAt(LAKE_FLOORS, 0, 0), null);
   check('no declarations at all', declaredFloorAt([], -21.28, 13.12), null);
@@ -3607,14 +3635,25 @@ async function main() {
   check('...but its PLATES are still judged at 1.2',
     plateCeiling({ display: 'shell_area' }), 1.2, 1e-9);
   const LAKE_PLATES = [
-    { top: 0.08, outline: BIG },       // the grass level plate
-    { top: 0.09, outline: SMALL },     // the hut's sand plate
+    { top: 0.01, outline: BIG },       // the shore's sand, on the terrain
+    { top: 0.01, outline: SMALL },     // the hut's sand surface
     { top: 2.90, outline: SMALL },     // a hypothetical storey above it
   ];
-  check('an area location without a mesh: the sand plate 0.09 is the ground',
-    recipeFloorAt(LAKE_PLATES, 0, 0, plateCeiling({ display: 'shell_area' })), 0.09);
+  check('a natural location without a mesh: the sand at 0.01 is the ground',
+    recipeFloorAt(LAKE_PLATES, 0, 0, plateCeiling({ display: 'shell_area' })), 0.01);
   check('...and the storey above stays out of reach',
     recipeFloorAt(LAKE_PLATES, 0, 0, walkCeiling({ display: 'shell_area' })), 2.90);
+  // A BUILT area location still has its slab and its 0.09 zone surfaces — the
+  // very same rule, on the datum of 47abc26b, unchanged.
+  const BUILT_PLATES = [
+    { top: 0.08, outline: BIG },       // the grass level plate
+    { top: 0.09, outline: SMALL },     // an outdoor zone on it
+  ];
+  check('a BUILT one keeps the slab and its 0.09 zone surface',
+    recipeFloorAt(BUILT_PLATES, 0, 0, plateCeiling({ display: 'shell_area' })), 0.09);
+  // (Where the TILE's own plate goes under such a scene — the backstop rung
+  // the natural datum needed — is derived in `smoke_plate_drape.mjs` § 7,
+  // next to the drape it belongs to.)
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

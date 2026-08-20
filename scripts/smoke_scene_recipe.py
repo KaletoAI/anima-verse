@@ -1579,36 +1579,43 @@ def test_floor_relation() -> None:
 
 
 def test_boundary_only_datum() -> None:
-    """A BOUNDARY-ONLY area location — no drawn building outline, no model
-    (the user's "Mondscheinsee"). The datum regression of the metric wave
-    (8672c756) and its fix, hand-derived.
+    """A BOUNDARY-ONLY area location — no drawn building outline, no closed
+    room, no model (the user's "Mondscheinsee"). NATURE DRAWS NO SLAB, and
+    the whole datum chain is hand-derived from that.
 
-    WHAT 8672c756 CHANGED: the level plate's contour gained the fallback
-    ``_outline_world(map3d) or _drawn_boundary(map3d)``. So a location with
-    nothing but a drawn boundary suddenly HAS an opaque storey slab —
-    top 0 × 3.0 + 0.08 = 0.08, thickness 0.14, i.e. a body from −0.06 to 0.08.
-    Everything else still measured from the abstract storey datum 0:
+    THE TWO WAVES THAT LED HERE.
 
-        outdoor plate  0 × 3.0 + 0.0   = 0.00   -> 0.08 inside the slab
-        overlay zone   0 × 3.0         = 0.00   -> NPCs 0.08 inside it
-        overlay plate  0.00 + 0.01     = 0.01   -> 0.07 inside it
+    1. The metric wave (8672c756) gave the level plate's contour the fallback
+       ``_outline_world(map3d) or _drawn_boundary(map3d)``, so a location with
+       nothing but a drawn boundary suddenly HAD an opaque storey slab —
+       top 0.08, thickness 0.14, a body from −0.06 to 0.08 — while everything
+       else still measured from the abstract storey datum 0 and sank into it.
+    2. The datum wave (47abc26b) aligned everything ONTO that slab: surfaces
+       at 0.09, zone anchors at 0.08. Right for a house on a plot. For the
+       lake it made the sand and the water a hard-edged 14 cm PODIUM of grass
+       standing over the landscape, with the terrain drape cutting grey
+       triangles into its rim (user screenshots 2026-08-20).
 
-    The fix is ONE datum: what the recipe DRAWS as the floor of a storey is
-    its level plate, and everything that is a floor of that storey sits on it.
+    THE DECISION (2026-08-20, binding): a NATURAL location — no building
+    contour AND no closed room (``is_natural_location``) — draws no slab at
+    all. Its floor IS the world terrain, and its surfaces ride it:
 
-        level plate                    = 0.08
-        outdoor / overlay surface      = 0.08 + 0.01 = 0.09   (anti-coplanar)
-        zone anchor (NPCs, markers)    = 0.08
-        prop in such a room            = 0.09 + 0.01 = 0.10
+        level plate                    = NONE, not emitted at all
+        slab (the storey's drawn floor)= 0.00
+        outdoor / overlay surface      = 0.00 + 0.01 = 0.01   (anti-coplanar
+                                         against the terrain under it)
+        zone anchor (NPCs, markers)    = 0.00
+        prop in such a room            = 0.01 + 0.01 = 0.02
+        yard prop (§ A13a, no surface) = 0.00 + 0.01 = 0.01
 
-    Both ways a room can be classified answer the same 0.09: inside the
+    Both ways a room can be classified answer the same 0.01: inside the
     boundary it is an ordinary § A5 texture plate, outside it a zone ON the
-    model. The classification itself is the second half of the fix — before
-    it, a boundary-only location had NO contour, so a bbox could not be
-    "inside" one and EVERY room was declared a zone on a model that need not
-    even exist.
+    model. That classification is the OTHER half of 47abc26b and stays — a
+    boundary-only location has a contour to be inside of, so a room in the
+    middle of the lake is not declared a zone on a model that need not exist.
     """
-    print("\n[4e] boundary-only area location: one datum for the drawn floor")
+    print("\n[4e] boundary-only NATURAL location: no slab, the terrain is the "
+          "floor")
     lake = {"id": "lake", "name": "Lake", "layout": {
         "x": 1.0, "y": 1.0, "w": 3.0, "d": 3.0, "level": 0,
         "always_visible": True, "surfaces": {"floor": "water"},
@@ -1626,13 +1633,14 @@ def test_boundary_only_datum() -> None:
         "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]]},
         "rooms": [lake, far, yard]}
     sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    check("the payload says NATURAL — the server classifies, not the renderer",
+          sc.get("natural_floor") is True, str(sc.get("natural_floor")))
     level = [p for p in sc["plates"] if not p.get("room_id")]
-    check("the drawn boundary alone gives a storey slab (8672c756)",
-          len(level) == 1 and near(level[0]["top_y"], 0.08)
-          and near(level[0]["thickness"], 0.14), str(level))
+    check("NO level plate is emitted — no body, no thickness, no cut edge",
+          level == [], str(level))
     water = [p for p in sc["plates"] if p.get("room_id") == "lake"]
-    check("the water surface lies ON that slab, not inside it: 0.09",
-          len(water) == 1 and near(water[0]["top_y"], 0.09)
+    check("the water surface rides the terrain: 0.00 + 0.01",
+          len(water) == 1 and near(water[0]["top_y"], 0.01)
           and water[0].get("texture_kind") == "water", str(water))
     check("...and it is still a pure texture surface (no body)",
           near(water[0]["thickness"], 0.0), str(water[0]["thickness"]))
@@ -1641,34 +1649,34 @@ def test_boundary_only_datum() -> None:
           not (next(r for r in sc["rooms"] if r["room_id"] == "lake")
                .get("overlay")))
     zone = next(r for r in sc["rooms"] if r["room_id"] == "far")["overlay"]
-    check("a room OUTSIDE it stays a zone — and its anchor is the drawn "
-          "floor 0.08, where the NPCs stand",
-          zone and near(zone["y"], 0.08), str(zone and zone.get("y")))
+    check("a room OUTSIDE it stays a zone — and its anchor is the bare "
+          "storey datum 0.00, where the NPCs stand",
+          zone and near(zone["y"], 0.0), str(zone and zone.get("y")))
     sand = [p for p in sc["plates"] if p.get("room_id") == "far"]
-    check("...and its surface lands on the same 0.09 as the water",
-          len(sand) == 1 and near(sand[0]["top_y"], 0.09), str(sand))
+    check("...and its surface lands on the same 0.01 as the water",
+          len(sand) == 1 and near(sand[0]["top_y"], 0.01), str(sand))
     props = [m for m in sc["models"] if m["role"] == "prop"]
     prop = next(m for m in props if m["room_id"] == "lake")
-    check("a prop of the outdoor room stands ON that surface: 0.09 + 0.01",
-          near(prop["bottom_y"], 0.10), str(prop.get("bottom_y")))
+    check("a prop of the outdoor room stands ON that surface: 0.01 + 0.01",
+          near(prop["bottom_y"], 0.02), str(prop.get("bottom_y")))
     # THE YARD (§ A13a) draws no surface of its own — it IS the ground — so
-    # its placements stand DIRECTLY on the storey's level plate: 0.08 + the
-    # 0.01 clearance = 0.09, one hair lower than a prop in an outdoor ROOM
-    # (whose texture surface rides the anti-coplanar 0.01). Before the
-    # addendum the yard prop sat at 0.01, 0.07 inside the slab.
+    # its placements stand DIRECTLY on the storey's floor, which is the bare
+    # terrain datum here: 0.00 + the 0.01 clearance = 0.01, one hair lower
+    # than a prop in an outdoor ROOM (whose texture surface rides the
+    # anti-coplanar 0.01).
     yard_prop = next(m for m in props if m["room_id"] == GROUND_ID)
-    check("a YARD prop stands on the level plate itself: 0.08 + 0.01",
-          near(yard_prop["bottom_y"], 0.09), str(yard_prop.get("bottom_y")))
+    check("a YARD prop stands on the bare storey floor: 0.00 + 0.01",
+          near(yard_prop["bottom_y"], 0.01), str(yard_prop.get("bottom_y")))
     check("...one 0.01 below the outdoor ROOM's prop, which rides its own "
           "texture surface",
           near(prop["bottom_y"] - yard_prop["bottom_y"], 0.01),
           f'{prop["bottom_y"]} vs {yard_prop["bottom_y"]}')
     # A PROP marker is composed FINISHED (§ A4), so it rides the datum with
-    # its prop: 0.08 + 0.01 + the seat's own 0.30 over the placement = 0.39.
+    # its prop: 0.00 + 0.01 + the seat's own 0.30 over the placement = 0.31.
     seat = next(m for m in sc["markers"]
                 if m["room_id"] == GROUND_ID and m["source"] == "prop")
-    check("the yard's prop marker rides the datum too: 0.09 + 0.30",
-          near(seat["y_world"], 0.39), str(seat["y_world"]))
+    check("the yard's prop marker rides the datum too: 0.01 + 0.30",
+          near(seat["y_world"], 0.31), str(seat["y_world"]))
     # A ROOM marker stays what § A4 makes it: a height over the STOREY floor,
     # which the renderer re-derives against the surface it samples. It must
     # NOT gain the datum here — the client would add the sampled floor on top
@@ -1677,14 +1685,55 @@ def test_boundary_only_datum() -> None:
                  if m["room_id"] == GROUND_ID and m["source"] == "room")
     check("...while a ROOM marker stays storey-relative (§ A4): 0.00",
           near(stand["y_world"], 0.0), str(stand["y_world"]))
-    # THE REGRESSION PIN, in the numbers of the old datum: the surface at
-    # 0.01 and the anchor at 0.00 against a slab whose top is 0.08.
-    check("the old numbers (0.01 surface, 0.00 anchor) are buried 0.07/0.08 "
-          "deep in that slab — and are gone",
-          near(0.08 - 0.01, 0.07) and near(0.08 - 0.0, 0.08)
-          and water[0]["top_y"] > level[0]["top_y"]
-          and zone["y"] >= level[0]["top_y"],
-          f"{water[0]['top_y']} / {zone['y']} vs {level[0]['top_y']}")
+    # THE REGRESSION PIN, in the numbers of the slab era: EVERY surface of
+    # this location stood on a 0.14 m body whose top was 0.08 — the podium
+    # the user photographed. Nothing of it is left, and the surface is
+    # exactly one anti-coplanar hair over the terrain.
+    check("the podium of the slab era (top 0.08, body 0.14) is gone — every "
+          "surface is one 0.01 hair over the terrain",
+          not level and near(water[0]["top_y"], 0.01)
+          and near(sand[0]["top_y"], 0.01) and near(zone["y"], 0.0),
+          f"{water[0]['top_y']} / {sand[0]['top_y']} / {zone['y']}")
+
+    # ── THE CLASSIFICATION ITSELF ────────────────────────────────────────
+    # ONE closed room flips the whole location back onto the slab: a place
+    # with a room somebody drew walls around is a BUILT place, however wild
+    # its plot. Same fixture, one room's `always_visible` taken away.
+    hut = {"id": "hut", "name": "Hut", "layout": {
+        "x": -4.0, "y": -4.0, "w": 2.0, "d": 2.0, "level": 0,
+        "surfaces": {"floor": "wood"}}}
+    built = scene_recipe.compose_scene(
+        {**loc, "rooms": [lake, far, yard, hut]}, plan_width_m=PLAN_W)
+    b_level = [p for p in built["plates"] if not p.get("room_id")]
+    check("ONE closed room flips it back to the slab datum of 47abc26b",
+          not built.get("natural_floor") and len(b_level) == 1
+          and near(b_level[0]["top_y"], 0.08)
+          and near(b_level[0]["thickness"], 0.14), str(b_level))
+    b_water = next(p for p in built["plates"] if p.get("room_id") == "lake")
+    check("...and the water is back on that slab: 0.08 + 0.01",
+          near(b_water["top_y"], 0.09), str(b_water["top_y"]))
+    check("...while the closed room keeps its own plate body: 0.10 / 0.02",
+          near(next(p for p in built["plates"]
+                    if p.get("room_id") == "hut")["top_y"], 0.10))
+    # THE YARD IS NOT A CLOSED ROOM (§ A13a). It carries no `always_visible`
+    # flag at all — it is the open ground of the place by definition — so a
+    # location whose only non-outdoor "room" is the yard stays natural. The
+    # fixture above already proves it (it HAS a yard and is natural); this
+    # pins the reason rather than the coincidence.
+    check("the yard alone never makes a location built (§ A13a)",
+          scene_recipe.is_natural_location(loc["map3d"], [
+              {"room_id": GROUND_ID, "is_ground": True},
+              {"room_id": "lake", "always_visible": True}]))
+    check("a DRAWN BUILDING CONTOUR makes it built, whatever its rooms",
+          not scene_recipe.is_natural_location(
+              {**loc["map3d"], "outline": [[-1, -1], [1, -1], [1, 1]]},
+              [{"room_id": "lake", "always_visible": True}]))
+    # `area_model` is deliberately NOT part of the rule: the Mondscheinsee has
+    # none and is the very case it exists for.
+    check("a model is not what makes a place natural — the See has none",
+          scene_recipe.is_natural_location(
+              {"boundary": loc["map3d"]["boundary"]},
+              [{"room_id": "lake", "always_visible": True}]))
 
 
 def test_area_room_walk_height() -> None:
@@ -1694,13 +1743,18 @@ def test_area_room_walk_height() -> None:
     The dial is ``walk_y`` on the ROOM MODEL's sidecar (Game-Admin →
     RoomModelAdjust, "Walkable floor (m)"): metres above the mesh's lower
     edge, a pure statement, never measured. The composer turns it into the
-    absolute ``walk_y_world`` and nothing else touches it:
+    absolute ``walk_y_world`` and nothing else touches it. This location is
+    the NATURAL one (§ B1 addendum 2026-08-20 part 3: a drawn boundary, no
+    building outline, one open zone), so its storey floor is the terrain:
 
-        room plate of an outdoor room inside the boundary  = 0.08 + 0.01 = 0.09
-        diorama bottom_y = plate 0.09 + DIORAMA_CLEARANCE 0.02
-                           + layout.model_offset_y (−0.30)         = −0.19
-        walk_y_world     = bottom_y + walk_y                       = −0.19 + w
-                           w = 0.35                                =  0.16
+        surface of an outdoor room, natural location      = 0.00 + 0.01 = 0.01
+        diorama bottom_y = surface 0.01 + DIORAMA_CLEARANCE 0.02
+                           + layout.model_offset_y (−0.30)         = −0.27
+        walk_y_world     = bottom_y + walk_y                       = −0.27 + w
+                           w = 0.35                                =  0.08
+
+    (The slab era answered 0.09 / −0.19 / 0.16 for the same dials — the whole
+    chain sat 0.08 higher, on the podium the level plate drew.)
 
     That half was always right; the finding was that the number never reached
     a walking figure. TWO holes, both in the client, both pinned below at the
@@ -1712,8 +1766,9 @@ def test_area_room_walk_height() -> None:
          plate. Two floors in one room, which the one-datum law forbids.
       2. In an AREA location the plate branch was skipped entirely
          (``display`` ``shell_area``), and Mondscheinsee has no model to ray:
-         the answer was the bare tile floor 0.00 — 0.17 below where the
-         declaration puts the figure, and 0.09 below the sand it walks on.
+         the answer was the bare tile floor 0.00 — in the slab era 0.17 below
+         where the declaration put the figure and 0.09 below the sand it walks
+         on; on the natural datum the same hole is 0.09 and 0.01 deep.
 
     The SIGNATURE half is checked here too: the dial lives in ``room_metas``,
     which ``_signature`` hashes, so a running client re-fetches on the next
@@ -1742,18 +1797,19 @@ def test_area_room_walk_height() -> None:
 
     sc = scene_with(0.35)
     plate = [p for p in sc["plates"] if p.get("room_id") == "hut"][0]
-    check("the room's own surface lies on the storey floor: 0.09",
-          near(plate["top_y"], 0.09), str(plate["top_y"]))
+    check("the natural location's surface rides the terrain: 0.00 + 0.01",
+          sc.get("natural_floor") and near(plate["top_y"], 0.01),
+          str(plate["top_y"]))
     spec = spec_of(sc, "room", "hut")
-    check("the diorama hangs at plate + clearance + offset = −0.19",
-          near(spec["bottom_y"], -0.19), str(spec.get("bottom_y")))
-    check("a dialled walk_y 0.35 reaches the payload as walk_y_world 0.16",
-          near(spec["walk_y_world"], 0.16), str(spec.get("walk_y_world")))
+    check("the diorama hangs at surface + clearance + offset = −0.27",
+          near(spec["bottom_y"], -0.27), str(spec.get("bottom_y")))
+    check("a dialled walk_y 0.35 reaches the payload as walk_y_world 0.08",
+          near(spec["walk_y_world"], 0.08), str(spec.get("walk_y_world")))
     check("...and it is 0.07 above the plate the figure would otherwise take",
           near(spec["walk_y_world"] - plate["top_y"], 0.07),
           f'{spec["walk_y_world"]} vs {plate["top_y"]}')
     check("a walk_y of 0 is a VALUE (the mesh's lower edge), not an absence",
-          near(spec_of(scene_with(0.0), "room", "hut")["walk_y_world"], -0.19),
+          near(spec_of(scene_with(0.0), "room", "hut")["walk_y_world"], -0.27),
           str(spec_of(scene_with(0.0), "room", "hut").get("walk_y_world")))
     check("without the dial the room declares nothing at all",
           "walk_y_world" not in spec_of(scene_with(), "room", "hut"),
@@ -2673,13 +2729,16 @@ def test_ground_placements() -> None:
     # ── A prop at local (3, −2): the anchor is that point, verbatim ──────
     # Hand-derived: the ground has no rect, so nothing is added to `at`; it
     # draws no surface of its own either, so the prop stands PROP_CLEARANCE
-    # (0.01 m) over the storey's DRAWN floor — the level plate at
-    # LEVEL_PLATE_TOP 0.08, because this location has a contour (§ B1
-    # addendum 2026-08-20). 0.08 + 0.01 = 0.09, which is 0.02 lower than the
-    # same prop in a built room (ROOM_PLATE_TOP 0.10 + 0.01 = 0.11) and 0.01
-    # lower than in an outdoor ROOM, whose texture surface rides the extra
-    # anti-coplanar 0.01. Before the addendum this was 0.01 — 0.07 inside the
-    # slab it was supposedly standing on.
+    # (0.01 m) over the storey's DRAWN floor.
+    #
+    # WHICH FLOOR THAT IS depends on the location, and this fixture is the
+    # NATURAL one (`ground_fixture` with `solo`: a drawn boundary, no building
+    # outline, and the yard is the only "room" — § B1 addendum 2026-08-20
+    # part 2). Nature draws no slab, so the storey floor is the bare 0.00 and
+    # the prop stands at 0.00 + 0.01 = 0.01, on the terrain. The BUILT twin is
+    # right below: with the fixture's ordinary closed room in place the
+    # location has a slab again and the very same yard prop stands at
+    # 0.08 + 0.01 = 0.09.
     sc = scene_recipe.compose_scene(
         ground_fixture(props=[{"prop_id": "table", "at": [3.0, -2.0]}],
                        markers=[{"at": [-1.0, 2.0], "animation": "sit"}]),
@@ -2690,8 +2749,20 @@ def test_ground_placements() -> None:
           str([(p["room_id"], p["anchor"]) for p in props]))
     check("its anchor IS the stored local metre (3, −2)",
           props and props[0]["anchor"] == [3.0, -2.0], str(props[0]["anchor"]))
-    check("bottom_y = the drawn storey floor 0.08 + PROP_CLEARANCE = 0.09",
-          near(props[0]["bottom_y"], 0.09), str(props[0]["bottom_y"]))
+    check("natural yard: bottom_y = the bare terrain 0.00 + PROP_CLEARANCE",
+          sc.get("natural_floor") and near(props[0]["bottom_y"], 0.01),
+          str(props[0]["bottom_y"]))
+    # THE BUILT TWIN — the same yard, the same prop, in a location that has a
+    # closed room and therefore a slab: 0.08 + 0.01 = 0.09, the number of
+    # 47abc26b, unchanged.
+    built = scene_recipe.compose_scene(
+        ground_fixture(props=[{"prop_id": "table", "at": [3.0, -2.0]}],
+                       solo=False), plan_width_m=PLAN_W)
+    built_prop = next(m for m in built["models"]
+                      if m["role"] == "prop" and m["room_id"] == GROUND_ID)
+    check("...and with ONE closed room in the place: the slab's 0.08 + 0.01",
+          not built.get("natural_floor") and near(built_prop["bottom_y"], 0.09),
+          str(built_prop["bottom_y"]))
     # The same prop inside room "a" (x −4, y −4) stands on a plate: the
     # contrast is what proves the ground took the outdoor branch.
     in_room = fixture()
@@ -2713,17 +2784,17 @@ def test_ground_placements() -> None:
     # sit → the figure's root drops 0.314 × 1.70 m = 0.5338 below the surface.
     check("...and carries the sit root drop 0.314 × 1.70 = 0.5338",
           near(mk[0]["root_offset"], 0.5338), str(mk[0]["root_offset"]))
-    # The table brings its own seat marker: 0.08 (the drawn storey floor) +
-    # 0.01 clearance plus the marker's composed height over the placement —
-    # in a room the same seat sits on the room plate, i.e. 0.10 − 0.08 =
-    # 0.02 m higher.
+    # The table brings its own seat marker: the yard's storey floor (0.00 on
+    # this NATURAL location) + 0.01 clearance plus the marker's composed
+    # height over the placement — in the built fixture's room the same seat
+    # sits on the room plate, i.e. 0.10 − 0.00 = 0.10 m higher.
     seat = [m for m in sc["markers"] if m["source"] == "prop"]
     room_seat = [m for m in scene_recipe.compose_scene(
         in_room, plan_width_m=PLAN_W)["markers"] if m["source"] == "prop"]
-    check("the yard's prop marker rides 0.02 lower than the room's "
-          "(0.10 room plate vs 0.08 storey floor)",
+    check("the yard's prop marker rides 0.10 lower than the room's "
+          "(0.10 room plate vs 0.00 bare terrain)",
           len(seat) == 1 and len(room_seat) == 1
-          and near(room_seat[0]["y_world"] - seat[0]["y_world"], 0.02),
+          and near(room_seat[0]["y_world"] - seat[0]["y_world"], 0.10),
           f'{seat and seat[0]["y_world"]} vs '
           f'{room_seat and room_seat[0]["y_world"]}')
     # ── Still geometry-less: no plate, no wall, no room block ────────────
@@ -2764,13 +2835,15 @@ def test_ground_placements() -> None:
     check("the hand-weighted lift is not flat (the fixture would prove "
           "nothing at 0)", abs(lift) > 1e-6, str(lift))
     rel_prop = [m for m in rel["models"] if m["role"] == "prop"][0]
-    # THE RELIEF STAYS ADDITIVE (§ B1 addendum 2026-08-20): the datum moved
-    # to the drawn floor, the yard still follows its own height field on top
-    # of it — 0.08 + 0.01 + the bilinear sample.
+    # THE RELIEF STAYS ADDITIVE (§ B1 addendum 2026-08-20): the datum is the
+    # floor the location DRAWS — nothing on this natural fixture — and the
+    # yard follows its own height field on top of it: 0.00 + 0.01 + the
+    # bilinear sample. That the two terms are independent is the point; the
+    # built twin above has the same relief law over a 0.08 slab.
     check("the yard prop stands on the drawn floor PLUS the terrain: "
-          "0.09 + the bilinear sample",
-          near(rel_prop["bottom_y"], round(0.09 + lift, 4), 1e-3),
-          f'{rel_prop["bottom_y"]} vs {round(0.09 + lift, 4)}')
+          "0.01 + the bilinear sample",
+          near(rel_prop["bottom_y"], round(0.01 + lift, 4), 1e-3),
+          f'{rel_prop["bottom_y"]} vs {round(0.01 + lift, 4)}')
     # The ground pins NOTHING flat: the notch is zero because it is outside
     # the boundary, never because a yard hull flattened it. Compared against
     # the very same location WITHOUT the yard — rooms and all, so the only

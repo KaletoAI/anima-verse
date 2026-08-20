@@ -399,6 +399,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       o.scale.set(PLATE_M, PLATE_M, 1)
       o.position.x = stage[0]
       o.position.z = stage[1]
+      // NATURAL LOCATION (§ B1 addendum 2026-08-20 part 3): no storey slab, so
+      // the zone surfaces come at 0.01 instead of 0.09 and a stage at y = 0
+      // would be one centimetre under them — a coplanar fight across a 60 m
+      // plate. The stage drops the same 0.14 m the 3D client's tile plate
+      // drops (`tiles.tilePlateY`, −0.13): ONE number, both renderers.
+      o.position.y = sc?.natural_floor ? -0.13 : 0
     }
     // A ground location brings its own floor: the stage plate would cut the
     // model at y = 0 exactly like the 3D client's tile plate did (Mondscheinsee

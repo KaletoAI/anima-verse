@@ -387,6 +387,53 @@ async function main() {
     check('applyPlateDepthBias: units', mat.polygonOffsetUnits, -33);
   }
 
+  // ---- [7] where the plate goes under a MOUNTED scene ----------------------
+  //
+  // While a scene is up the tile's own plate is not the ground any more but
+  // the BACKSTOP under the payload's storey-0 surfaces, and how deep it goes
+  // follows the payload alone (`tiles.tilePlateY`, § B1 addendum 2026-08-20
+  // part 2). Derived by hand from the two surface datums:
+  //
+  //   detail scene on a slab   zone surfaces 0.09  ->  0.09 − 0.14 = −0.05
+  //   NATURAL location         zone surfaces 0.01  ->  0.01 − 0.14 = −0.13
+  //   anything else            the plate IS the ground             =  0.04
+  //
+  // The 0.14 m is the clearance the 2026-08-03 z-fight finding bought (1 cm
+  // was not enough for the depth buffer at range). Without the natural rung
+  // the plate would sit at 0.04 — three centimetres ABOVE the sand and the
+  // water it backs, and with its own depth bias pulling it forward it would
+  // win even where it is level with them.
+  console.log('\n[7] the tile plate under a mounted scene (tilePlateY)');
+  {
+    const CLEARANCE = 0.14;
+    check('a natural scene: 0.01 − 0.14', tiles.tilePlateY({ natural_floor: true }),
+          0.01 - CLEARANCE);
+    check('a detail scene on a slab: 0.09 − 0.14',
+          tiles.tilePlateY({ area_detail: true }), 0.09 - CLEARANCE);
+    check('the two rungs differ by exactly the slab (0.08)',
+          tiles.tilePlateY({ area_detail: true })
+            - tiles.tilePlateY({ natural_floor: true }), 0.08);
+    check('natural wins where a location is both',
+          tiles.tilePlateY({ area_detail: true, natural_floor: true }), -0.13);
+    check('an ordinary building scene leaves it its PLATE_Y_M',
+          tiles.tilePlateY({}), tiles.PLATE_Y_M);
+    check('natural -> backstop (pushed back, not pulled forward)',
+          tiles.tilePlateIsBackstop({ natural_floor: true }) ? 1 : 0, 1);
+    check('detail  -> backstop', tiles.tilePlateIsBackstop({ area_detail: true }) ? 1 : 0, 1);
+    check('neither -> the plate keeps its own forward bias',
+          tiles.tilePlateIsBackstop({}) ? 1 : 0, 0);
+    // The clearance is a clearance only where the landscape is level with the
+    // pin: this plate is DRAPED (§ 1 above) and the scene's zone surfaces are
+    // flat, so it comes through wherever the world rises more than 0.14 m over
+    // the pin — measured on the Mondscheinsee (world heightfield of worlds/
+    // Anima Divide): 21.5 % of the "Seeufer" polygon, up to +0.41 m. That is
+    // the authored mismatch, a flat drawn zone over a rolling landscape, and
+    // `level_ground` on the location is what settles it — not the datum.
+    check('the natural rung keeps EXACTLY the clearance the slab era had',
+          (0.01 - tiles.tilePlateY({ natural_floor: true }))
+            - (0.09 - tiles.tilePlateY({ area_detail: true })), 0);
+  }
+
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

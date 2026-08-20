@@ -4219,11 +4219,98 @@ Modell, das es womöglich nicht gibt.
 > Etage, nicht der Plattenaufschlag. Das Datum ist jetzt der gezeichnete
 > Boden; solche Werkzeug-Offsets gehören auf 0 zurück.
 
-Handgerechnet in `scripts/smoke_scene_recipe.py` [4e] (boundary-only
-Flächen-Location, Wasser-Raum innen 0,09, Zone außen Anker 0,08 / Fläche 0,09,
-Prop im Outdoor-Raum 0,10, HOF-Prop 0,09, Hof-Prop-Marker 0,39,
-Hof-Raum-Marker 0,00) und [18] (§ A13a mit Relief: 0,09 + bilineare Probe) —
-die Konstellation ist die des Mondscheinsees.
+Handgerechnet in `scripts/smoke_scene_recipe.py` [4e] und [18] — die
+Konstellation ist die des Mondscheinsees. **Für eine NATÜRLICHE Location
+gelten seit Teil 3 andere Zahlen; die Tabelle oben beschreibt den GEBAUTEN
+Fall.**
+
+### Nachtrag-Teil 3 (§ B1): die Natur zeichnet KEINE Platte
+
+**Befund (Mondscheinsee, User-Bilder 2026-08-20).** Teil 2 hat jede Fläche auf
+die Etagenplatte gezogen — richtig für ein Haus auf seinem Grundstück, falsch
+für einen See. Sand und Wasser lagen als hartkantiges **14-cm-Podest** über der
+Landschaft: die Etagenplatte (Oberkante 0,08, Körper 0,14, Textur = die
+Boden-Art der Location, hier Gras) ist ein extrudierter Körper, ihre
+Schnittkanten sind grasbezogene Wände, und die drapierte Kachelplatte darunter
+schnitt graue Zacken in ihren Rand. Zwei Wellen, eine Wurzel: `8672c756` gab
+JEDER Location mit gezeichneter Grenze eine Platte, `47abc26b` richtete alles
+darauf aus.
+
+**Die Entscheidung (bindend, 2026-08-20): eine NATÜRLICHE Location zeichnet
+keine Platte — ihr Boden IST das Weltgelände.**
+
+**Was „natürlich" heißt** (`scene_recipe.is_natural_location`, Server-Sache,
+kein Renderer leitet es ab): eine Location, die KEINEN gebauten Boden zeichnet
+— (1) kein `map3d.outline`, also hat niemand eine Gebäude-Kontur gezogen, und
+(2) keinen GESCHLOSSENEN Raum, also ist jeder Raum `always_visible` (§ A5). Der
+HOF (§ A13a) zählt nie mit: er ist von Natur aus offen. Die gezeichnete
+`boundary` zählt ebenfalls nicht — sie ist das Grundstück, und wo ein See endet
+zu zeichnen ist kein Boden. `area_model` ist ABSICHTLICH nicht Teil der Regel:
+der Mondscheinsee hat gar kein Modell und ist genau der Fall, für den sie da
+ist. **Ein einziger geschlossener Raum kippt die Location zurück auf das
+Platten-Datum von Teil 2.**
+
+| Fläche | gebaut (Teil 2) | NATÜRLICH (Teil 3) |
+|---|---|---|
+| Etagenplatte (Etage 0) | 0,08 / 0,14 dick | **entfällt** — kein Primitiv, keine Kante |
+| `slab` (der gezeichnete Etagenboden) | 0,08 | 0,00 |
+| Outdoor-Raumplatte / Overlay-Fläche | 0,09 | 0,01 |
+| Overlay-Zone (NPC-/Marker-Anker) | 0,08 | 0,00 |
+| Props/Marker/Diorama eines Outdoor-Raums | 0,09 + Zuschlag | 0,01 + Zuschlag |
+| Props/Marker des HOFES (§ A13a) | 0,08 + Zuschlag | 0,00 + Zuschlag |
+| `display: "ground"` — begehbare Fläche des Flächenmodells | 0,08 | `slab` |
+
+`_plate_top(recipe, slab)` bleibt die EINE Stelle, die das je Träger
+beantwortet; nur `slab` ist jetzt 0. Der 1-cm-Aufschlag der Texturflächen ist
+dabei BEDINGUNGSLOS geworden (vorher fiel er ohne Platte weg): eine
+Zonen-Fläche liegt auf dem GELÄNDE, und das ist eine Fläche wie jede andere —
+Sand auf 0,00 über Gelände auf 0,00 ist genau das Z-Fighting, gegen das die
+Konstante erfunden wurde.
+
+**Auch das Flächenmodell folgt `slab`** (`display: "ground"`). Das ist kein
+Beiwerk, sondern die Bedingung dafür, dass es EIN Datum bleibt: die Zonen auf
+so einem Mesh lesen ihre Höhe am `walk_y_world` des Modells ab, die Props IN
+denselben Zonen aber an `_plate_top(recipe, slab)`. Ein hart auf 0,08 gepinntes
+Mesh bei `slab = 0` stellte jedes Hof-Prop 7 cm INS Mesh.
+
+**Payload-Feld** (additiv, nur wenn wahr): `natural_floor: true`. Der Server
+klassifiziert, die Renderer platzieren.
+
+**Was die Renderer damit tun.** Die kachel-eigene Platte (`scene/tiles.ts`,
+kein Payload-Primitiv) ist unter einer montierten Szene der BACKSTOP unter den
+Etage-0-Flächen. Wie tief, sagt jetzt der Payload — `tiles.tilePlateY`:
+
+```
+Detailszene auf einer Platte   Flächen 0,09  ->  0,09 − 0,14 = −0,05
+NATÜRLICH                      Flächen 0,01  ->  0,01 − 0,14 = −0,13
+sonst                          die Platte IST der Boden      =  0,04
+```
+
+Die 0,14 m sind der Abstand, den der Z-Fighting-Befund vom 2026-08-03 gekauft
+hat. Ohne die natürliche Sprosse säße die Platte auf 0,04 — drei Zentimeter
+ÜBER dem Sand, den sie stützen soll, und ihre eigene Tiefen-Vorspannung
+gewänne auch gleichauf. Die Admin-Vorschau senkt ihre Bühnenplatte um dieselbe
+Zahl (`FloorPlanPreview`).
+
+**Was das NICHT löst, und warum es hier steht.** Die Kachelplatte ist
+DRAPIERT, die Zonen-Flächen des Payloads sind eben. Der Abstand ist also nur
+dort ein Abstand, wo die Landschaft mit dem Pin auf einer Höhe liegt; wo die
+Welt mehr als 0,14 m über den Pin steigt, kommt die Platte durch die Zone —
+am Mondscheinsee auf 21,5 % des Ufer-Polygons, bis +0,41 m (gemessen am
+Weltgelände von `worlds/Anima Divide`). Das ist die AUTORENSEITIGE
+Nichtübereinstimmung — eine flach gezeichnete Zone über einer welligen
+Landschaft —, kein Datum-Problem: `level_ground` an der Location legt das Feld
+unter ihrem Grundriss flach und räumt es aus. Der Abstand vor und nach dieser
+Welle ist derselbe, die Regel führt also keine Regression ein.
+
+Handgerechnet in `scripts/smoke_scene_recipe.py` [4e] (natürlich: keine
+Etagenplatte, Wasser/Sand 0,01, Zonen-Anker 0,00, Prop im Outdoor-Raum 0,02,
+HOF-Prop 0,01, Hof-Prop-Marker 0,31 — plus der Klassifizierung selbst: ein
+geschlossener Raum kippt zurück auf 0,08/0,09), [4i] (Mondhütte: Fläche 0,01,
+Diorama −0,27, `walk_y` 0,35 → `walk_y_world` 0,08 → Steh-Höhe 0,09), [18]
+(§ A13a, natürlich UND gebaut nebeneinander) sowie
+`client3d/scripts/smoke_plate_drape.mjs` [7] und
+`client3d/scripts/smoke_walk_math.mjs`.
 
 ## Nachtrag 2026-08-20 (§ B2/§ A9/§ A9a): Ein Prop steht überall gleich tief — `ground_offset_m`
 

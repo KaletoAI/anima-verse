@@ -439,6 +439,14 @@ export interface ScenePayload {
    *  this; `display: shell_area` on the building spec is merely its
    *  per-model consequence. */
   area_detail?: boolean
+  /** THE FLOOR OF THIS LOCATION IS THE WORLD TERRAIN (§ B1 addendum
+   *  2026-08-20 part 3, `scene_recipe.is_natural_location`): nobody drew a
+   *  building contour and every room is an open zone, so the payload emits NO
+   *  level plate and its storey datum is a bare 0 — the zone surfaces ride the
+   *  terrain 1 cm up instead of a 14 cm slab. The classification is the
+   *  SERVER's; a renderer must not re-derive it from the plate list. Only
+   *  present when true. */
+  natural_floor?: boolean
 }
 
 /**
