@@ -1,0 +1,22 @@
+name: interact
+capability_label: "Pair interactions"
+capability_description: "The character can do something TOGETHER with someone present — shake hands, dance — which plays a synchronised pair animation for both in 3D."
+version: "1.0.0"
+description: Pair-interaction verb — two present characters play a pair animation clip together at one anchor
+enabled_default: true
+
+skills:
+  - skill_id: interact
+    class: InteractSkill
+    always_load: true
+    default_enabled: true
+    cascade_brake: true
+
+templates:
+  llm: templates/llm
+
+config_schema:
+  interact:
+    label: InteractWith (pair animations)
+    fields:
+      enabled: {type: bool, label: Enabled, default: true}

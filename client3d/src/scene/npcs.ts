@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import type { MapCharacter } from '../types';
+import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, groundSink, idleClip, moveClip, sinkForState,
   type GroundScope, type GroundSink } from '../game/walk';
@@ -130,6 +130,8 @@ interface Npc {
    *  `progressM` keeps running and only reconciles against a fresh poll; a new
    *  key is a new journey and is adopted whole. */
   route: (TravelRoute & { key: string }) | null;
+  /** running pair interaction (§ A8a) — placement AND clip come from it */
+  interaction: PairPlay | null;
   activity: string;
   travelLine: THREE.Line | null;
   travelKey: string;
@@ -152,6 +154,25 @@ export interface TravelRoute {
    *  only runs against a genuinely NEW payload */
   stamp: number;
 }
+
+/** A pair interaction as the renderer runs it (§ A8a): the anchor the two
+ *  halves are placed at, and ONE number — the clip time in GAME seconds —
+ *  advanced locally at `rate` and reconciled against each new poll. */
+export interface PairPlay {
+  id: string;
+  /** `<kind>__<role>` — the clip half this figure plays */
+  clip: string;
+  anchor: { x: number; z: number; yaw: number };
+  /** clip time in game seconds */
+  elapsed: number;
+  duration: number;
+  /** game seconds per real second (0 = frozen) */
+  rate: number;
+  stamp: number;
+}
+
+/** Beyond this drift (clip seconds) a fresh poll snaps the local clip time. */
+export const PAIR_SNAP_S = 0.3;
 
 /** Identity of a polyline — same points, same journey. */
 function routeKey(points: MetrePoint[]): string {
@@ -183,6 +204,10 @@ export interface NpcState {
    *  no line is drawn and nothing is extrapolated. The travel line is drawn
    *  from THIS — there is no second field naming a destination. */
   route?: TravelRoute;
+  /** Running pair interaction (§ A8a), straight from the worldmap row. */
+  interaction?: MapInteraction | null;
+  /** which worldmap poll this state came from (reconciliation of `elapsed`) */
+  stamp?: number;
 }
 
 export class NpcManager {
@@ -507,6 +532,7 @@ export class NpcManager {
       // activity, animation). The travel line is cleared: a player walking on
       // foot has no server journey to draw, and drawing one from `st.pos`
       // would start it where the figure is not.
+      this.adoptInteraction(npc, st);
       if (st.char.name === this.playerDriven) {
         npc.activity = st.char.activity || '';
         npc.animation = st.char.activity_animation || undefined;
@@ -693,7 +719,7 @@ export class NpcManager {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
-      target: st.pos.clone(), pace: 1, face: st.face ?? null, waypoints: [], route: null, activity: st.char.activity || '',
+      target: st.pos.clone(), pace: 1, face: st.face ?? null, waypoints: [], route: null, interaction: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -786,6 +812,69 @@ export class NpcManager {
   }
 
   /** Pro Frame: Richtung Ziel laufen, Animation nach Zustand wählen. */
+  /** Is this figure bound in a pair interaction right now? main.ts asks
+   *  before it reports the avatar's position: the clip moves the root, and a
+   *  reported "move" would make the server end the very interaction. */
+  inInteraction(name: string): boolean {
+    return !!this.npcs.get(name)?.interaction;
+  }
+
+  /** Take the interaction block of a worldmap row (§ A8a). A new id is a new
+   *  interaction and is adopted whole; the same id keeps the locally advanced
+   *  clip time and only snaps it when a genuinely NEW poll disagrees by more
+   *  than PAIR_SNAP_S. The rate is authoritative on every update — a freeze
+   *  must stop the mixer at once. */
+  private adoptInteraction(npc: Npc, st: NpcState) {
+    const it = st.interaction;
+    if (!it || !it.anchor) {
+      npc.interaction = null;
+      return;
+    }
+    const clip = `${it.kind}__${it.role}`;
+    const stamp = st.stamp ?? 0;
+    if (!npc.interaction || npc.interaction.id !== it.id || npc.interaction.clip !== clip) {
+      npc.interaction = {
+        id: it.id, clip, anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw },
+        elapsed: it.elapsed_s, duration: it.duration_s, rate: it.rate ?? 0, stamp,
+      };
+      npc.route = null;
+      npc.waypoints = [];
+      this.updateTravelLine(npc, null);
+      return;
+    }
+    const cur = npc.interaction;
+    cur.rate = it.rate ?? 0;
+    cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw };
+    if (cur.stamp !== stamp) {
+      if (Math.abs(cur.elapsed - it.elapsed_s) > PAIR_SNAP_S) cur.elapsed = it.elapsed_s;
+      cur.stamp = stamp;
+    }
+  }
+
+  /** One frame of a pair interaction: the figure stands at
+   *  `anchor + R_y(yaw) · clipRoot(t)`, its root turned by `yaw`, and plays
+   *  its clip half at game-clock time `t`. Returns false when the half is not
+   *  bound on this rig (or the figure has no rig) — then the ordinary
+   *  placement runs, the clip falls back to the activity kind. */
+  private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean): boolean {
+    const it = npc.interaction!;
+    if (!npc.figure || !this.figures) return false;
+    it.elapsed = Math.min(it.duration || Infinity, it.elapsed + dt * it.rate);
+    const root = this.figures.pairRootAt(it.clip, it.elapsed);
+    if (!root) return false;
+    if (!npc.figure.playPair(it.clip, it.elapsed, it.rate)) return false;
+    const c = Math.cos(it.anchor.yaw);
+    const s = Math.sin(it.anchor.yaw);
+    const x = it.anchor.x + root.x * c + root.z * s;
+    const z = it.anchor.z - root.x * s + root.z * c;
+    npc.root.position.set(x, this.groundY(x, z), z);
+    npc.figure.setYaw(it.anchor.yaw);
+    npc.figure.update(dt);
+    npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
+    npc.label.visible = labelVisible;
+    return true;
+  }
+
   tick(dt: number, camDist: number) {
     const labelVisible = camDist < 55;
     const now = performance.now();
@@ -799,6 +888,7 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
+      if (npc.interaction && this.tickInteraction(npc, dt, camDist, labelVisible)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
       // ONE number carries the whole journey — the metres walked along the
       // polyline — and the point is re-derived from it by arc length, so a

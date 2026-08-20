@@ -12,6 +12,15 @@ layout is ``[<set>/]<kind>[_<n>].<ext>``:
   the clips root, one directory per set. Clips lying in the root itself are
   the neutral ones (set "").
 
+A PAIR clip — two files recorded together, one per partner — carries the
+ROLE as a ``__a`` / ``__b`` suffix of the stem: ``handshake__a.fbx`` and
+``handshake__b.fbx`` are the two halves of the kind ``handshake``. The double
+underscore is the role separator and nothing else (a single ``_`` stays part
+of the kind). A pair kind has no solo file; it is played by two figures at a
+shared anchor, in lockstep. Next to the files a ``<kind>.json`` SIDECAR
+(written by ``scripts/clip_import_cmu.py``) holds duration, frame rate and
+the anchor geometry; ``clip_meta()`` reads it.
+
 Both vocabularies are OPEN — a new kind is just a new file, a new set just a
 new directory, nothing is hardcoded. Which set a character uses (and the
 fallback chain when its set lacks a kind) is ``app/core/animation_sets.py``.
@@ -19,13 +28,16 @@ fallback chain when its set lacks a kind) is ``app/core/animation_sets.py``.
 This module is the ONE place that scans the clips directory; the assets
 route, the animation sets and the pose presets all read from here.
 """
+import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.paths import get_animation_clips_dir
 
 CLIP_EXTS = (".fbx", ".glb", ".gltf")
+PAIR_ROLES = ("a", "b")
+ROLE_SEPARATOR = "__"
 
 
 def parse_clip_name(filename: str) -> str:
@@ -46,8 +58,20 @@ def parse_clip_name(filename: str) -> str:
         spell_casting.fbx    -> "spell_casting"
         Sit_A.fbx            -> "sit_a"
     """
+    return parse_clip_role(filename)[0]
+
+
+def parse_clip_role(filename: str) -> Tuple[str, str]:
+    """``(kind, role)`` from a file name — role ``"a"``/``"b"`` for the half of
+    a pair clip (``kiss__b.fbx`` → ``("kiss", "b")``), ``""`` for a solo clip.
+    The numbering suffix is cut BEFORE the role is read, so ``hug__a_02.fbx``
+    is a second take of the A half."""
     stem = Path(filename).stem.strip().lower()
-    return re.sub(r"_\d+$", "", stem) or stem
+    stem = re.sub(r"_\d+$", "", stem) or stem
+    head, sep, tail = stem.rpartition(ROLE_SEPARATOR)
+    if sep and head and tail in PAIR_ROLES:
+        return head, tail
+    return stem, ""
 
 
 def clip_entries() -> List[Dict[str, Any]]:
@@ -68,7 +92,8 @@ def clip_entries() -> List[Dict[str, Any]]:
                 continue
             if p.suffix.lower() not in CLIP_EXTS:
                 continue
-            out.append({"kind": parse_clip_name(p.name), "set": cset, "path": p})
+            kind, role = parse_clip_role(p.name)
+            out.append({"kind": kind, "role": role, "set": cset, "path": p})
         return out
 
     entries = _files_of(root, "")
@@ -87,6 +112,31 @@ def clip_files() -> List[Path]:
 def clip_kinds() -> List[str]:
     """The animation kinds that actually exist right now."""
     return sorted({e["kind"] for e in clip_entries()} - {""})
+
+
+def pair_kinds() -> List[str]:
+    """Kinds that exist as a COMPLETE pair (both halves present in one set)."""
+    halves: Dict[Tuple[str, str], set] = {}
+    for e in clip_entries():
+        if e["role"]:
+            halves.setdefault((e["set"], e["kind"]), set()).add(e["role"])
+    return sorted({k for (_s, k), roles in halves.items() if roles >= set(PAIR_ROLES)})
+
+
+def clip_meta(kind: str, cset: str = "") -> Optional[Dict[str, Any]]:
+    """The ``<kind>.json`` sidecar of a clip (duration, fps, pair geometry),
+    None when there is none. Looked up in the set directory, then the root."""
+    root = get_animation_clips_dir()
+    candidates = [root / cset / f"{kind}.json"] if cset else []
+    candidates.append(root / f"{kind}.json")
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            return data if isinstance(data, dict) else None
+    return None
 
 
 def clip_sets() -> List[str]:

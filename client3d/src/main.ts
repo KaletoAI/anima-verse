@@ -1839,6 +1839,19 @@ async function startApp(username: string, role: string) {
   }
 
   function computeNpcStates(map: WorldMap): NpcState[] {
+    const states = computeNpcPlacements(map);
+    // A running pair interaction (§ A8a) rides along on every state, whatever
+    // placement branch produced it — the NpcManager lets it override the
+    // placement for as long as it lasts. The poll stamp goes with it so the
+    // locally advanced clip time reconciles only against a NEW payload.
+    for (const st of states) {
+      st.interaction = st.char.interaction ?? null;
+      st.stamp = mapStamp;
+    }
+    return states;
+  }
+
+  function computeNpcPlacements(map: WorldMap): NpcState[] {
     const byLoc = new Map<string, MapCharacter[]>();
     hiddenChars.clear();
     const states: NpcState[] = [];
@@ -3160,8 +3173,10 @@ async function startApp(username: string, role: string) {
     if (walkIn) {
       const arrived = Math.hypot(walkIn.goal.x - pos.x, walkIn.goal.z - pos.z)
         < WALK_IN_ARRIVE;
-      markMoved({ x: pos.x, z: pos.z });
-      tickPosReport({ x: pos.x, z: pos.z });
+      if (!npcs.inInteraction(avatarName)) {
+        markMoved({ x: pos.x, z: pos.z });
+        tickPosReport({ x: pos.x, z: pos.z });
+      }
       if (!arrived && performance.now() <= walkIn.until) return;
       walkIn = null;
     }
@@ -3254,6 +3269,10 @@ async function startApp(username: string, role: string) {
     // Reporting the goal would put the server up to one lead ahead of the
     // picture — and at a boundary that is the difference between a legal
     // point and a refused one.
+    // In a pair interaction (§ A8a) the CLIP moves the figure, not the
+    // player: reporting that as a move would make the server end the very
+    // interaction (a manual position write releases both partners).
+    if (npcs.inInteraction(avatarName)) return;
     markMoved({ x: pos.x, z: pos.z });
     tickPosReport({ x: pos.x, z: pos.z });
   });

@@ -254,7 +254,29 @@ export interface MapCharacter {
   movement_target_name?: string;
   /** running journey (§ A11); null/absent when the character is not travelling */
   travel?: MapTravel | null;
+  /** running PAIR interaction (§ A8a); null/absent when there is none */
+  interaction?: MapInteraction | null;
   avatar_url?: string;
+}
+
+/** A pair interaction as the server states it (§ A8a): two characters play
+ *  the two halves of one pair clip (`<kind>__a` / `<kind>__b`) at ONE anchor,
+ *  in lockstep on the GAME clock. The clip frame has its origin at the anchor
+ *  and +X pointing from A to B; a figure stands at
+ *  `anchor + R_y(yaw) · clipRoot` (three.js Y rotation) and its root is
+ *  turned by `yaw` — the body's facing inside the clip comes from the clip. */
+export interface MapInteraction {
+  id: string;
+  kind: string;
+  role: 'a' | 'b';
+  partner: string;
+  anchor: { x: number; z: number; yaw: number };
+  started_at_game: string;
+  /** GAME seconds into the clip at the time of this payload */
+  elapsed_s: number;
+  duration_s: number;
+  /** GAME seconds per REAL second right now (0 = frozen world) */
+  rate: number;
 }
 
 export interface MapEvent {

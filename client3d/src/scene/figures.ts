@@ -104,6 +104,9 @@ function normBoneName(name: string): string {
  * exact value is not delicate.
  */
 export const MAX_REST_FRAME_DEV_DEG = 30;
+/** Drift (clip seconds) between the local mixer and the server's game-clock
+ *  position of a pair clip beyond which the action is re-seeked. */
+export const PAIR_RESYNC_S = 0.2;
 
 /** The convention the shared clip library was authored in: a bone's child sits
  *  on that bone's own +Y axis. */
@@ -506,6 +509,53 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   return out;
 }
 
+/** `<kind>__a` / `<kind>__b` — the half of a pair clip (contract § A8a). */
+export function isPairClipName(name: string): boolean {
+  return /__[ab]$/.test(name);
+}
+
+/** The horizontal root path of a clip: hips XZ per keyframe in METRES of the
+ *  clip's own frame (Mixamo clips are authored in centimetres). */
+export interface RootPath {
+  times: Float32Array;
+  /** x0, z0, x1, z1, … */
+  xz: Float32Array;
+}
+
+export function extractRootPath(clip: THREE.AnimationClip): RootPath {
+  const track = clip.tracks.find((t) => t.name.endsWith('.position')
+    && /hips\./i.test(t.name.replace(/^mixamorig:?/i, '')));
+  if (!track) return { times: new Float32Array([0]), xz: new Float32Array([0, 0]) };
+  const n = track.times.length;
+  const xz = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    xz[i * 2] = track.values[i * 3] / 100;
+    xz[i * 2 + 1] = track.values[i * 3 + 2] / 100;
+  }
+  return { times: Float32Array.from(track.times), xz };
+}
+
+/** Root XZ at clip time `t` (linear between keys, clamped at both ends). */
+export function rootPathAt(path: RootPath, t: number): { x: number; z: number } {
+  const { times, xz } = path;
+  const n = times.length;
+  if (n === 0) return { x: 0, z: 0 };
+  if (t <= times[0]) return { x: xz[0], z: xz[1] };
+  if (t >= times[n - 1]) return { x: xz[(n - 1) * 2], z: xz[(n - 1) * 2 + 1] };
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid; else hi = mid;
+  }
+  const span = times[hi] - times[lo] || 1;
+  const f = (t - times[lo]) / span;
+  return {
+    x: xz[lo * 2] + (xz[hi * 2] - xz[lo * 2]) * f,
+    z: xz[lo * 2 + 1] + (xz[hi * 2 + 1] - xz[lo * 2 + 1]) * f,
+  };
+}
+
 type ClipKind = string;   // offenes Vokabular — der Server bestimmt die kinds
 
 const CLIP_SYNONYMS: Record<string, string[]> = {
@@ -564,6 +614,8 @@ export class FigureLibrary {
   private tierCache = new Map<string, Map<FigureTier, LoadedModel>>();
   /** Server-Clips: kind -> (set|'' -> Clip) */
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
+  /** Root path of every pair-clip half (`<kind>__<role>`), clip-frame metres */
+  private pairRoots = new Map<string, RootPath>();
   /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
   private charSets = new Map<string, string[]>();
   /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
@@ -653,8 +705,10 @@ export class FigureLibrary {
     // carry itself, and a rig the library does not fit borrows from another
     // model (bone names rewritten, mixamorig prefix mapping).
     const serverClips = await getAnimationClips();
+    // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
+    // an interaction asks for; a solo clip keeps its plain kind.
     const sources: Array<{ kind: string; set: string; url: string }> = serverClips.map((c) => ({
-      kind: c.kind, set: c.set ?? '', url: c.url,
+      kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '', url: c.url,
     }));
     if (!sources.length) {
       // Dev/offline fallback: the local manifest clips (no sets)
@@ -669,6 +723,12 @@ export class FigureLibrary {
         if (!animations[0]) continue;
         const clip = animations[0].clone();
         clip.name = kind;
+        // The half of a pair clip carries ROOT MOTION inside the anchor frame
+        // (the handshake's approach, the dance's travel). `adaptExternalClips`
+        // strips the horizontal hips motion like for every clip, so the root
+        // path is kept aside here and drives the figure's ROOT instead — in
+        // true world metres, independent of the figure's own scale.
+        if (isPairClipName(kind)) this.pairRoots.set(kind, extractRootPath(clip));
         if (!this.clipIndex.has(kind)) this.clipIndex.set(kind, new Map());
         const bySet = this.clipIndex.get(kind)!;
         if (!bySet.has(set)) bySet.set(set, clip);   // first hit per kind+set
@@ -705,6 +765,13 @@ export class FigureLibrary {
   }
 
   private loadFile!: (url: string, forceFbx?: boolean) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
+
+  /** Root XZ of a pair-clip half at clip time `t`, in clip-frame metres —
+   *  null when no such clip is loaded. */
+  pairRootAt(clipName: string, t: number): { x: number; z: number } | null {
+    const path = this.pairRoots.get(clipName);
+    return path ? rootPathAt(path, t) : null;
+  }
 
   /** Set-Fallback-Kette eines Charakters merken (aus /play/worldmap). */
   setCharacterSets(charName: string, sets: string[] | undefined) {
@@ -1288,6 +1355,41 @@ export class Figure {
   faceTowards(dir: THREE.Vector3) {
     if (dir.lengthSq() < 1e-6) return;
     this.targetYaw = Math.atan2(dir.x, dir.z);
+  }
+
+  /** Turn the ROOT to an absolute yaw (radians, three.js Y rotation) — for a
+   *  pair interaction the anchor decides, the clip carries the body's facing. */
+  setYaw(yaw: number) {
+    this.targetYaw = yaw;
+  }
+
+  /** Play the half of a PAIR clip in lockstep with the game clock (§ A8a):
+   *  `t` is the clip time in GAME seconds, `rate` the game seconds per real
+   *  second the mixer advances at between polls (0 = frozen). Re-seeks only
+   *  when the local time drifted more than PAIR_RESYNC_S from `t`, so a poll
+   *  never makes the figure stutter. Returns false when the half is not
+   *  bound on this rig — the caller then falls back to a solo clip. */
+  playPair(clipName: string, t: number, rate: number): boolean {
+    const action = this.actions.get(clipName);
+    if (!action) return false;
+    this.setClipDrop(0);
+    this.terrainClip = false;
+    this.sink = 0;
+    const duration = action.getClip().duration || 1;
+    const want = Math.min(Math.max(t, 0), duration);
+    if (this.current !== action) {
+      action.reset().fadeIn(0.25).play();
+      action.time = want;
+      this.current?.fadeOut(0.25);
+      this.current = action;
+      this.currentKind = clipName;
+      this.root.userData.clipKind = clipName;
+      this.root.userData.clipBound = true;
+    } else if (Math.abs(action.time - want) > PAIR_RESYNC_S) {
+      action.time = want;
+    }
+    action.timeScale = rate;
+    return true;
   }
 
   /** Neigung aus einem Animations-Marker (Grad): `tilt` = Kopf hoch/tief,

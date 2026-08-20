@@ -1592,6 +1592,10 @@ def _cancel_journey_for_manual_write(character_name: str) -> None:
     """
     if not character_name:
         return
+    # Same rule for a pair interaction: its anchor holds the figure, so a
+    # manual move has to release it (and the partner).
+    from app.core.interaction_engine import end_interaction
+    end_interaction(character_name, reason="moved")
     profile = get_character_profile(character_name) or {}
     if not ((profile.get("movement_target") or "").strip()
             or isinstance(profile.get("journey"), dict)):
@@ -1737,6 +1741,13 @@ def set_pose_intent(character_name: str, pose: str) -> None:
     if (profile.get("pose_key") or "") == key and (profile.get("pose_flavor") or "") == flavor:
         return
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
+    inter = profile.get("interaction")
+    if isinstance(inter, dict) and inter.get("pose_key") != key:
+        # A new pose mid-interaction releases both partners; the engine
+        # re-reads and saves the profile, so re-load before writing the pose.
+        from app.core.interaction_engine import end_interaction
+        end_interaction(character_name, reason="pose")
+        profile = get_character_profile(character_name) or {}
     profile["pose_key"] = key
     profile["pose_flavor"] = flavor
     save_character_profile(character_name, profile)

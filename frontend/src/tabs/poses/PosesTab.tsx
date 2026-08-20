@@ -41,6 +41,8 @@ interface Entry {
 interface CatalogData {
   entries: Entry[]
   kinds: string[]
+  /** kinds that exist as a PAIR clip (two halves) — two-person poses */
+  pair_kinds?: string[]
   problems: string[]
 }
 
@@ -487,7 +489,12 @@ export function PosesTab() {
                     <select
                       className="ga-input"
                       value={draft.animation}
-                      onChange={(e) => upd('animation', e.target.value)}
+                      onChange={(e) => {
+                        const kind = e.target.value
+                        // a pair clip has no solo half: the pose becomes a two-person one
+                        setDraft((d) => (d ? { ...d, animation: kind,
+                          solo: data.pair_kinds?.includes(kind) ? false : d.solo } : d))
+                      }}
                     >
                       <option value="">{t('— pick a kind —')}</option>
                       {data.kinds.map((k) => (
@@ -502,6 +509,11 @@ export function PosesTab() {
                         </option>
                       ) : null}
                     </select>
+                    {data.pair_kinds?.includes(draft.animation) ? (
+                      <div className="ga-hint" style={{ marginTop: 4 }}>
+                        {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
+                      </div>
+                    ) : null}
                   </Field>
                 ) : null}
               </div>

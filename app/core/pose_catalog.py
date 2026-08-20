@@ -81,11 +81,22 @@ def validate_catalog(axis: str) -> List[str]:
         return problems
     seen: Dict[str, str] = {}
     defaults = 0
+    pairs: set = set()
+    if axis == "pose":
+        try:
+            from app.core.animation_clips import pair_kinds
+            pairs = set(pair_kinds())
+        except Exception:
+            pairs = set()
     for key, entry in catalog.items():
         if not entry["prompt"]:
             problems.append(f"{axis}/{key}: empty prompt")
         if axis == "pose" and not entry["animation"]:
             problems.append(f"{axis}/{key}: missing animation kind")
+        if axis == "pose" and entry["animation"] in pairs and entry["solo"]:
+            # A pair clip has no solo half — the pose needs a partner.
+            problems.append(f"{axis}/{key}: '{entry['animation']}' is a pair "
+                            f"animation, the pose must not be solo")
         if entry["_default"]:
             defaults += 1
         for alias in [key] + entry["synonyms"]:

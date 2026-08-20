@@ -4,7 +4,8 @@
 Usage: ./.venv/bin/python scripts/smoke_pose_catalog.py
 
 Expected values, derived BY HAND from plan-pose-katalog.md:
-- pose catalog: 50 entries (transferred 1:1 from the 51 curated presets,
+- pose catalog: 52 entries (50 transferred 1:1 from the 51 curated presets
+  + the two partner poses "shaking hands" / "dancing together" of 2026-08-20,
   minus `bending_to_fridge`, removed by the user on 2026-08-17; the set still
   includes the `sleeping` entry Task 3 needs), every entry has
   a non-empty animation kind, exactly one _default (standing).
@@ -120,7 +121,7 @@ from app.core.pose_catalog import (  # noqa: E402
 
 failures = []
 for axis, expected_count, expected_default in (
-        ("pose", 50, "standing"), ("expression", 8, "neutral")):
+        ("pose", 52, "standing"), ("expression", 8, "neutral")):
     catalog = get_catalog(axis)
     if len(catalog) != expected_count:
         failures.append(f"{axis}: {len(catalog)} entries, expected {expected_count}")
@@ -473,7 +474,7 @@ try:
         _pc.catalog_path = _real_path
         _reload()
     # the real catalog file is untouched: back to the 50 curated entries
-    assert len(get_catalog("pose")) == 50, len(get_catalog("pose"))
+    assert len(get_catalog("pose")) == 52, len(get_catalog("pose"))
     assert "kneading" not in get_catalog("pose")
 
     print("OK smoke_pose_catalog stage 5")

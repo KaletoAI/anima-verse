@@ -284,6 +284,8 @@ export async function getCharactersAtLocation(locationId: string): Promise<AtLoc
 
 export interface ApiClip {
   kind: string;
+  /** `a`/`b` for the half of a PAIR clip (`<kind>__a`), empty for a solo clip */
+  role?: string;
   /** Figur, für die der Clip autoriert wurde (female/male/animal/…); leer = Default */
   set?: string;
   name: string;

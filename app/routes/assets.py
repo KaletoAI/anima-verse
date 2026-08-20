@@ -23,7 +23,8 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from app.core.animation_clips import CLIP_EXTS, clip_entries
+from app.core.animation_clips import (CLIP_EXTS, clip_entries, clip_meta,
+                                      pair_kinds)
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 from app.core.paths import get_animation_clips_dir
@@ -37,10 +38,13 @@ router = APIRouter(prefix="/assets", tags=["assets"])
 def list_animation_clips() -> Dict[str, Any]:
     """Lists the shared animation clips.
 
-    Per clip: ``kind`` (the activity category), ``set`` (the figure it was made
-    for — empty = the neutral figure), plus name/url/size. ``kinds`` and
+    Per clip: ``kind`` (the activity category), ``role`` (``a``/``b`` for the
+    half of a pair clip, empty for a solo clip), ``set`` (the figure it was
+    made for — empty = the neutral figure), plus name/url/size. ``kinds`` and
     ``sets`` list the vocabularies actually present; both are OPEN — a new one
-    is just a new file or directory, nothing is hardcoded.
+    is just a new file or directory, nothing is hardcoded. ``pairs`` maps every
+    complete pair kind to its sidecar (duration, fps, anchor geometry) — the
+    data a client needs to play both halves at one anchor (§ A8a).
 
     A set clip's ``url`` carries its directory segment. Clients take the URL
     from this listing opaquely — they never build it from name + set.
@@ -51,6 +55,7 @@ def list_animation_clips() -> Dict[str, Any]:
         cset = entry["set"]
         clips.append({
             "kind": entry["kind"],
+            "role": entry["role"],
             "set": cset,
             "name": p.stem,
             "filename": p.name,
@@ -59,8 +64,19 @@ def list_animation_clips() -> Dict[str, Any]:
             "size": p.stat().st_size,
         })
     from app.core.animation_sets import available_sets
+    pairs = {}
+    for kind in pair_kinds():
+        meta = clip_meta(kind) or {}
+        pairs[kind] = {
+            "duration_s": meta.get("duration_s"),
+            "fps": meta.get("fps"),
+            "frames": meta.get("frames"),
+            "geometry": meta.get("geometry") or {},
+        }
     return {"clips": clips,
             "kinds": sorted({c["kind"] for c in clips}),
+            "pair_kinds": sorted(pairs),
+            "pairs": pairs,
             # Sets that HAVE clips …
             "clip_sets": sorted({c["set"] for c in clips if c["set"]}),
             # … and everything selectable on a character: the base sets

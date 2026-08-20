@@ -473,6 +473,9 @@ def start_journey(character_name: str,
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": game_time().canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
+    # Walking away ends a running pair interaction for BOTH participants.
+    from app.core.interaction_engine import end_interaction
+    end_interaction(character_name, reason="journey")
     profile = get_character_profile(character_name)
     profile["journey"] = journey
     profile["movement_target"] = target_id
@@ -1134,6 +1137,13 @@ class TravelTicker:
                 advance_all_journeys()
             except Exception:
                 logger.exception("travel tick failed")
+            try:
+                # Pair interactions end on the game clock too; the same beat
+                # closes the ones whose clip has run out.
+                from app.core.interaction_engine import settle_finished
+                settle_finished()
+            except Exception:
+                logger.exception("interaction settle failed")
             await asyncio.sleep(_TICK_SECONDS)
 
 

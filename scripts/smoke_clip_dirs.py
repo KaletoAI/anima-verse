@@ -56,6 +56,14 @@ def build_tree() -> None:
     (CLIPS / ".hidden" / "walk.fbx").write_bytes(b"hidden")
     (CLIPS / "male" / "deeper").mkdir()
     (CLIPS / "male" / "deeper" / "walk.fbx").write_bytes(b"too-deep")
+    # A PAIR clip: two halves of ONE kind "hug" + its sidecar, and a lone half
+    # ("kiss__a" without a "kiss__b") that must not count as a pair.
+    (CLIPS / "hug__a.fbx").write_bytes(b"hug-a")
+    (CLIPS / "hug__b.fbx").write_bytes(b"hug-b")
+    (CLIPS / "hug.json").write_text(
+        '{"kind": "hug", "pair": true, "fps": 30, "frames": 60, "duration_s": 2.0,'
+        ' "geometry": {"root_distance_m": 0.5}}', encoding="utf-8")
+    (CLIPS / "kiss__a.fbx").write_bytes(b"kiss-a-only")
 
 
 def test_parse() -> None:
@@ -121,7 +129,7 @@ def test_discovery() -> None:
     print("\n[1] clip_entries()")
     entries = ac.clip_entries()
     got = sorted((e["set"], e["kind"], e["path"].name) for e in entries)
-    check("exactly the four real clips are found", len(entries) == 4, str(got))
+    check("exactly the seven real clips are found", len(entries) == 7, str(got))
     check("the root clip has the empty set", ("", "sit", "sit.fbx") in got)
     check("a hyphen is part of the kind, not a separator",
           ("", "swim-idle", "swim-idle.fbx") in got)
@@ -138,12 +146,28 @@ def test_discovery() -> None:
           all("deeper" not in e["path"].parts for e in entries))
 
     print("\n[2] the derived lists")
-    check("clip_kinds", ac.clip_kinds() == ["dance", "sit", "swim-idle"],
+    check("clip_kinds lists a pair kind ONCE, a lone half too",
+          ac.clip_kinds() == ["dance", "hug", "kiss", "sit", "swim-idle"],
           str(ac.clip_kinds()))
     check("clip_sets", ac.clip_sets() == ["lady", "male"], str(ac.clip_sets()))
     check("clip_files returns the same files",
-          len(ac.clip_files()) == 4
+          len(ac.clip_files()) == 7
           and all(isinstance(p, Path) for p in ac.clip_files()))
+
+    print("\n[2b] pair clips")
+    for name, want in (("hug__a.fbx", ("hug", "a")), ("hug__b_02.fbx", ("hug", "b")),
+                       ("spell_casting.fbx", ("spell_casting", "")),
+                       ("x__c.fbx", ("x__c", "")), ("__a.fbx", ("__a", ""))):
+        check(f"parse_clip_role({name}) == {want}", ac.parse_clip_role(name) == want,
+              str(ac.parse_clip_role(name)))
+    roles = sorted((e["kind"], e["role"]) for e in ac.clip_entries() if e["role"])
+    check("entries carry the role", roles == [("hug", "a"), ("hug", "b"), ("kiss", "a")],
+          str(roles))
+    check("pair_kinds needs BOTH halves", ac.pair_kinds() == ["hug"], str(ac.pair_kinds()))
+    meta = ac.clip_meta("hug") or {}
+    check("clip_meta reads the sidecar", meta.get("duration_s") == 2.0
+          and meta.get("geometry", {}).get("root_distance_m") == 0.5, str(meta))
+    check("clip_meta is None without a sidecar", ac.clip_meta("sit") is None)
 
     print("\n[3] the same kind exists per set (the chain has something to pick)")
     sits = {e["set"] for e in ac.clip_entries() if e["kind"] == "sit"}
@@ -160,11 +184,18 @@ def test_listing() -> None:
           "/assets/animation-clips/sit.fbx" in urls)
     check("the lowercased set is used in the URL, not the directory case",
           "/assets/animation-clips/lady/dance_02.fbx" in urls)
-    check("the payload shape is unchanged",
-          set(data) == {"clips", "kinds", "clip_sets", "sets"}, str(sorted(data)))
-    check("per-clip fields are unchanged",
-          set(data["clips"][0]) == {"kind", "set", "name", "filename", "url", "size"},
+    check("the payload shape",
+          set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets", "sets"},
+          str(sorted(data)))
+    check("per-clip fields",
+          set(data["clips"][0]) == {"kind", "role", "set", "name", "filename", "url", "size"},
           str(sorted(data["clips"][0])))
+    check("pairs carries the sidecar of every complete pair",
+          data["pair_kinds"] == ["hug"] and data["pairs"]["hug"]["duration_s"] == 2.0
+          and data["pairs"]["hug"]["geometry"]["root_distance_m"] == 0.5,
+          str(data["pairs"]))
+    check("a pair half's URL is the plain file",
+          "/assets/animation-clips/hug__b.fbx" in urls)
     check("clip_sets lists only sets that have clips",
           data["clip_sets"] == ["lady", "male"], str(data["clip_sets"]))
     check("sets merges the base sets with the discovered ones",

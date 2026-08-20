@@ -212,6 +212,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
     from app.core.animation_sets import resolve_sets as resolve_animation_sets
+    from app.core.interaction_engine import payload_for as _interaction_payload
     from app.core.world_geometry import (effective_boundary, local_to_world,
                                          polygon_plan_width_m)
     from app.core.boundary_entry import opening_world_frames
@@ -569,6 +570,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "movement_target_id": mt,
             "movement_target_name": target_name,
             "travel": travel,
+            # Running pair interaction (§ A8a): kind/role/partner/anchor and
+            # the GAME-clock start, so both figures play their halves in
+            # lockstep at one anchor; null when the character has none.
+            "interaction": (None if _thin else
+                            _interaction_payload(name, _prof, _now_game, _factor)),
             "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
         })
 

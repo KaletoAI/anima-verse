@@ -54,6 +54,28 @@ Both vocabularies are OPEN — **no list exists in the code** (only `female`,
 character already carries). A new kind is just a new file, a new set just a new
 directory.
 
+## Pair clips — `<kind>__a.fbx` + `<kind>__b.fbx`
+
+Two files recorded TOGETHER, one per partner, are a pair clip of one kind:
+`handshake__a.fbx` and `handshake__b.fbx`. The double underscore is the ROLE
+separator and nothing else (a single `_` stays part of the kind; a trailing
+`_<n>` numbering is cut first, so `hug__a_02.fbx` is a second take of A's
+half). A pair kind has no solo file — it is played by two figures at one
+anchor, in lockstep (`docs/schnittstellen-3d.md` § A8a). Both halves share
+one frame of reference: origin at the XZ midpoint of the two roots at the
+anchor moment, +X from A to B, floor at y = 0, full root motion kept. A
+sidecar `<kind>.json` next to them carries duration, fps and that geometry.
+
+The converter `scripts/clip_import_cmu.py` writes such pairs (and solo clips)
+from the CMU Graphics Lab mocap database — whose data, unlike Mixamo's, may be
+redistributed with the repository:
+
+    ./.venv/bin/python scripts/clip_import_cmu.py handshake 18_01 19_01
+    ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --in-place
+
+It retargets onto the library's own `idle.fbx` skeleton, so the result keeps
+the same skeleton — and the same standing hip height — as every other clip.
+
 ## Hard requirements for the files
 
 Violating these does not fail loudly — it produces characters that walk on their

@@ -123,9 +123,13 @@ def list_entries(axis: str = Query("pose"),
             "axis": axis,
         })
     out.sort(key=lambda p: p["key"])
+    from app.core.animation_clips import pair_kinds
     return {
         "entries": out,
         "kinds": epm.available_animation_kinds() if axis == "pose" else [],
+        # Kinds that exist as a PAIR clip (two halves, § A8a): such a pose is
+        # a two-person one and has to carry solo: false.
+        "pair_kinds": pair_kinds() if axis == "pose" else [],
         "problems": pose_catalog.validate_catalog(axis),
     }
 

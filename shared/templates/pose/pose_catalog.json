@@ -483,6 +483,33 @@
         "autoritaet"
       ],
       "animation": "idle"
+    },
+    "shaking hands": {
+      "prompt": "two people shaking hands, firm handshake, standing face to face, friendly eye contact",
+      "synonyms": [
+        "handshake",
+        "shake hands",
+        "händeschütteln",
+        "hände schütteln",
+        "die hand geben",
+        "begrüßung per handschlag"
+      ],
+      "animation": "handshake",
+      "solo": false
+    },
+    "dancing together": {
+      "prompt": "two people dancing salsa together as a couple, close hold, hips moving, facing each other",
+      "synonyms": [
+        "salsa",
+        "couple dance",
+        "dance together",
+        "dancing with someone",
+        "zusammen tanzen",
+        "paartanz",
+        "salsa tanzen"
+      ],
+      "animation": "salsa",
+      "solo": false
     }
   }
 }

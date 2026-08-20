@@ -1499,6 +1499,67 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   den Clip. Die Keyword-Heuristik `activityToClipKind` im Client ist ein
   Workaround und fällt mit v4 (§ B6).
 
+## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker (2026-08-20)
+
+**Clip-Paar.** Ein Paar-Clip besteht aus zwei Dateien, die ZUSAMMEN aufgenommen
+wurden: `<kind>__a.fbx` + `<kind>__b.fbx` (Doppel-Unterstrich = Rollentrenner,
+sonst gilt die Kind-Regel von § A8). Beide Hälften liegen in EINEM Bezugsrahmen:
+Ursprung = XZ-Mitte der beiden Wurzeln am Ankerframe, **+X zeigt von A nach B**,
+Boden bei y = 0. Jede Hälfte behält ihre volle Root-Bewegung (Hüft-Position) in
+diesem Rahmen — die Annäherung des Handschlags, das Wandern eines Tanzes. Ein
+Sidecar `<kind>.json` neben den Dateien trägt `duration_s`, `fps`, `frames` und
+`geometry` (`anchor_s`, `root_distance_m`, `roles.{a,b}.anchor_xz_m` = Hüft-XZ
+der Rolle am Ankerframe, in m). `GET /assets/animation-clips` liefert pro Clip
+`role` (`a`/`b`/leer) sowie `pair_kinds` + `pairs.<kind>` (= Sidecar).
+Erzeugung: `scripts/clip_import_cmu.py` (CMU-Mocap → Mixamo-Skelett, Blender
+headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
+
+**Zustand (Server).** `app/core/interaction_engine.py` bindet zwei Charaktere an
+ein Paar: Profil-Dict `interaction` auf BEIDEN, reine Funktion der SPIELZEIT wie
+`journey` (Freeze friert die Geste ein). Auslöser: Katalog-Pose mit `solo:false`,
+deren `animation` ein vollständiges Paar ist (Verb `InteractWith`, Plugin
+`plugins/interact`). Anker = Mittelpunkt der beiden Positionen, `yaw` so, dass
+Clip-+X auf die Weltrichtung Actor→Partner fällt. Der Server setzt beide
+Spielzustands-Positionen auf `anchor + R(yaw)·anchor_xz_m` der Rolle (so sehen
+Wahrnehmung, Regeln und Karte die beiden dort, wo der Clip sie am Anker hält).
+Ende: Ticker (`settle_finished`, Spielzeit ≥ `duration_s`), Reise, manuelle
+Positionsänderung, neue Pose — immer für BEIDE.
+
+**Payload (Worldmap, pro Charakter):**
+
+```json
+"interaction": {
+  "id": "049b7a009533", "kind": "handshake", "role": "a", "partner": "Bob",
+  "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708},
+  "started_at_game": "Y0001-D001T12:00:00",
+  "elapsed_s": 0.8, "duration_s": 2.533, "rate": 1.0
+}
+```
+`null`, wenn keine läuft (auch unter Nebel ausgedünnt). `elapsed_s` ist die
+Clip-Zeit in SPIELsekunden zum Payload-Zeitpunkt, `rate` Spielsekunden pro
+Realsekunde (0 = Freeze).
+
+**Renderer.** Figur-Root = `anchor + R_y(yaw)·clipRoot(t)` mit der three.js-
+Y-Drehung (`x' = x·cos + z·sin`, `z' = −x·sin + z·cos`); `clipRoot(t)` ist die
+Hüft-XZ der Hälfte (cm → m) — im Client aus dem ROHEN Clip gezogen, weil
+`adaptExternalClips` die horizontale Hüftbewegung für alle Clips entfernt. Der
+Root wird um `yaw` gedreht, die Körperrichtung steckt im Clip. Clip-Zeit `t`
+läuft lokal mit `rate` weiter und wird nur gegen einen NEUEN Poll nachgezogen
+(> 0,3 s Drift). Die Hälfte `<kind>__<role>` ist eine normale Action der Figur;
+fehlt sie auf dem Rig, gilt die gewöhnliche Platzierung + `activity_animation`.
+Marker-Blickrichtung und Nachbar-Blick greifen während einer Interaktion nicht.
+Der Avatar meldet währenddessen keine Position (die Clip-Bewegung wäre sonst
+ein „Move", der die Interaktion serverseitig beendet).
+
+**Numerische Prüfung (§ B5a):** `scripts/smoke_interaction.py` (Anker, Yaw,
+Rollen-Positionen, Spielzeit-Ende, Abbrüche, Payload),
+`client3d/scripts/smoke_clip_pair.mjs` (echte FBX-Hälften per FBXLoader:
+Root-Bahn am Ankerframe = Sidecar, Anker-Transformation = Server-Formel).
+Bekannte Grenze des Piloten: Handkontakt ist nicht garantiert — die Proportionen
+des Mixamo-Skeletts sind nicht die der Schauspieler (Handschlag: Hände ~25 cm
+statt 11 cm auseinander); Körpergrößen-Unterschiede (`height_cm`) skalieren die
+Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
+
 ## A9. Terrain & Oberflächen (AV3D-13 v2)
 
 - **Nachtrag 2026-08-20 (E2c) — JAHRESZEITEN.** Eine Art darf je Jahreszeit
