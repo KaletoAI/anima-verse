@@ -67,6 +67,7 @@ def try_render(case: str, path: str, **kw):
 # room_furnish._phase_select builds this dict once and passes it to both
 # stage-1 templates (room_furnish.py:497-506).
 FURNISH_COMMON = {
+    "setting": "indoor room inside a building",
     "room_name": "Workshop",
     "room_description": "A cluttered workbench room at the back of the house.",
     "activity_hint": "repairing tools",
@@ -76,6 +77,7 @@ FURNISH_COMMON = {
     "area_m2": 20.8,
 }
 FURNISH_COMMON_EMPTY = {
+    "setting": "open-air yard of the location",
     "room_name": "Room",
     "room_description": "",
     "activity_hint": "",

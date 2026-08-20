@@ -37,8 +37,8 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
   // 🧊 in the room gallery picks a source image — the backend picker lives in
   // the model panel on the 3D tab, so switch there or the dialog stays unseen.
   useEffect(() => {
-    if (modelGenSource) setTab('3d')
-  }, [modelGenSource])
+    if (modelGenSource && room.id !== GROUND_ROOM_ID) setTab('3d')
+  }, [modelGenSource, room.id])
 
   const upd = useCallback(<K extends keyof Room>(k: K, v: Room[K]) => {
     setDraft((prev) => ({ ...prev, [k]: v }))
@@ -86,9 +86,12 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
         </p>
       ) : null}
       <nav className="ga-subtabs">
+        {/* The yard has no diorama: its floor IS the terrain and its
+            furnishing are props (contract § A13a), so the room 3D tab has
+            nothing to offer there (user finding 2026-08-20). */}
         {([
           { id: 'general', label: 'General' },
-          { id: '3d', label: '3D world' },
+          ...(isGround ? [] : [{ id: '3d', label: '3D world' }]),
         ] as Array<{ id: 'general' | '3d'; label: string }>).map((tb) => (
           <button
             key={tb.id}
@@ -100,7 +103,7 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
           </button>
         ))}
       </nav>
-      {tab === '3d' ? (
+      {tab === '3d' && !isGround ? (
         <div className="ga-form">
           <BuildingModelPanel
             locationId={location.id}
@@ -215,18 +218,21 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
                 onChange={(e) => upd('image_prompt_night', e.target.value)}
               />
             </Field>
-            <Field
-              label={t('3D model prompt')}
-              help="image_prompt"
-              hint={t('Subject for the 3D-model source image (🧊). Falls back to the room description when empty.')}
-            >
-              <textarea
-                className="ga-textarea"
-                rows={2}
-                value={draft.image_prompt_building || ''}
-                onChange={(e) => upd('image_prompt_building', e.target.value)}
-              />
-            </Field>
+            {/* No diorama for the yard — no source-image prompt either. */}
+            {isGround ? null : (
+              <Field
+                label={t('3D model prompt')}
+                help="image_prompt"
+                hint={t('Subject for the 3D-model source image (🧊). Falls back to the room description when empty.')}
+              >
+                <textarea
+                  className="ga-textarea"
+                  rows={2}
+                  value={draft.image_prompt_building || ''}
+                  onChange={(e) => upd('image_prompt_building', e.target.value)}
+                />
+              </Field>
+            )}
           </div>
         </div>
 

@@ -63,14 +63,19 @@ CALL_SITES = {
         commitments_block="",
         lang_instruction="\nWrite the memory contents in German."),
     "consolidation_daily": dict(
-        day_str="2026-08-03", character_name="Beta", existing="",
-        lang_instruction=DE, contents="- x", thoughts_of_day=""),
+        # Mirrors memory_service.py ~800: the game-calendar wave replaced
+        # day_str with the world-calendar label (game_ts, no real dates).
+        game_date="Winter, day 19 \u00b7 Year 2", character_name="Beta",
+        existing="", lang_instruction=DE, contents="- x", thoughts_of_day=""),
     "consolidation_weekly": dict(
         week_key="2026-W31", character_name="Beta",
         lang_instruction=DE, entries_text="- 2026-08-03: x"),
     "consolidation_monthly": dict(
-        month_key="2026-08", character_name="Beta",
-        lang_instruction=DE, entries_text="- 2026-W31: x"),
+        # Mirrors memory_service.py ~1044: the game-calendar wave replaced
+        # month_key with the season pair (world calendar, no real months).
+        season_key="Y0002-S1", season_label="Winter \u00b7 Year 2",
+        character_name="Beta",
+        lang_instruction=DE, entries_text="- Y0002-D109: x"),
     "consolidation_today": dict(
         speaker_a="Alpha", speaker_b="Beta", lang_instruction=DE,
         history_text="Alpha: hi"),

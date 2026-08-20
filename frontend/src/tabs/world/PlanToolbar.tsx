@@ -67,6 +67,11 @@ interface PlanToolbarProps {
   ground: boolean
   /** The one sentence that explains the refusal above. */
   groundHint: string
+  /** The other refusal: NOTHING is selected, so there is no shape to work on.
+   *  Without it a greyed-out tool still showed its normal tooltip and named no
+   *  reason at all — the state a location whose rooms are all unplaced starts
+   *  in (user finding 2026-08-20). */
+  noSelectionHint: string
   propsOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
@@ -84,7 +89,7 @@ interface PlanToolbarProps {
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasOutline,
   outlineDraftLen, hasElevator, building, canSuggest,
-  canFitToModel, canCurve, ground, groundHint, onFitToModel,
+  canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
   onCancelDraw, onSuggest, onProps,
@@ -97,8 +102,14 @@ export function PlanToolbar({
   // A room tool is available when a room is selected — never on the yard,
   // which has no rectangle, no hull and no walls (§ A13a).
   const shape = hasSelection && !ground
-  /** Tooltip of a shape tool: its own text, or the reason it is off. */
-  const shapeHint = (title: string) => (ground ? groundHint : title)
+  /** Tooltip of a shape tool: its own text, or the reason it is off — the
+   *  yard first (it IS a selection, just one without geometry), otherwise the
+   *  empty selection. A disabled tool always names its reason. */
+  const shapeHint = (title: string) => {
+    if (ground) return groundHint
+    if (!hasSelection) return noSelectionHint
+    return title
+  }
 
   return (
     <div className="ga-plan-toolbar">

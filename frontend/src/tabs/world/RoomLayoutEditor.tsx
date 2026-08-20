@@ -72,6 +72,22 @@ const FALLBACK_VIEW_M = 10
 /** Rasters the grid selector offers, in metres (0 = free hand). */
 const GRID_STEPS = [0, 0.1, 0.25, 0.5, 1, 2] as const
 
+/**
+ * `?planDebug=1` — trace the DRAW PATH to the console.
+ *
+ * "I cannot draw" is a report about something that did NOT happen, and every
+ * step of the pen has its own early return: the tool may refuse to arm, the
+ * click may never reach the canvas, the snap engine may move the point, the
+ * commit may reject the hull. Off the flag nothing is logged and nothing is
+ * computed; on it, every one of those exits names itself, so the next report
+ * carries the exit instead of the symptom.
+ */
+const PLAN_DEBUG = typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).get('planDebug') === '1'
+const planLog = (step: string, data?: unknown) => {
+  if (PLAN_DEBUG) console.info(`[plan] ${step}`, data ?? '')
+}
+
 /** The 2D symbol of one wall opening (door swing arc, window double line,
  *  dashed passage) — shared by the editable markers and the mirrored,
  *  render-only ghosts of the neighbours' openings. */
@@ -691,25 +707,59 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms.length])
 
+  /**
+   * THE SNAP RADIUS IN METRES — one derivation, two readers.
+   *
+   * A pixel radius converted through the window's live metres-per-pixel, with
+   * a 0.05 m floor so a zoomed-out 400 m plot does not snap across half a
+   * house. `computeSnap` aims with it and `snapTargets` decides with it which
+   * hulls may be aimed at at all; deriving it twice would let the two drift.
+   */
+  const snapTolM = useMemo(
+    () => Math.max(SNAP_TOL_PX * (view.size / (CANVAS_W * planZoom)), 0.05),
+    [view.size, planZoom])
+
   // Snapping while drawing (always on, Shift = free-hand): targets are the
   // hulls of the placed rooms on the current level plus the draft's own
   // vertices; tolerances blend a pixel radius with a 0.15 m floor.
   const snapTargets = useMemo(() => {
     if (clickMode !== 'outline' && clickMode !== 'draw-room') return null
-    // A hull SMALLER than the smallest room this editor lets anyone draw is
-    // not geometry to align to — it is fraction-era debris (a rectangle from
-    // before rooms were stored in metres, now a few centimetres wide). Such a
-    // room's four corners sit in a box around the pin, exactly where an
-    // author starts a new plan, and `snapDrawPoint` gives a vertex inside
-    // `tol` unconditional priority over the metre grid: measured on a 14 m
-    // plot, `tol` is 0.387 m around each of them while the whole cluster is
-    // 26 px wide, so the centre of the plan becomes one continuous snap trap
-    // and the drawn shape is never the shape that was clicked (user finding
-    // 2026-08-20). They stay drawn, selectable and editable — they just stop
-    // steering the pen. The banner under the plan says why they are specks.
+    // A HULL SMALLER THAN THE SNAP RADIUS IS A TRAP, NOT AN ANCHOR.
+    //
+    // `snapDrawPoint` gives a vertex inside `tol` unconditional priority over
+    // the metre grid (rule 2), so a shape whose whole bounding box fits inside
+    // `tol` cannot be aimed AT — it can only steal clicks that were meant for
+    // the ground next to it, and the drawn shape is never the shape that was
+    // clicked (user finding 2026-08-20). This is what fraction-era debris
+    // looks like: `layout.x/y/w/d` were shares of a reference square before
+    // rooms were stored in metres, so the room is now a few centimetres wide
+    // and its corners sit in a box around the pin — exactly where an author
+    // starts a new plan.
+    //
+    // MEASURED ON THE HULL, NOT ON THE STORED RECTANGLE: what enters
+    // `buildSnapTargets` is `absOutline(hull)`, and a fraction-era room
+    // carries a UNIT-SQUARE outline (its points were shares of the rect too),
+    // so its rectangle and the box it really occupies are different numbers —
+    // 0.15 m against 1 m for the reported world. Filtering on the rectangle
+    // therefore measured the wrong box in both directions.
+    //
+    // The floor stays MIN_ROOM_M: a hull under the smallest room this editor
+    // lets anyone draw is debris at every zoom level. Above it the rule is
+    // relative, so a real 0.4 m nook stays a snap target on a 5 m plot
+    // (tol ≈ 0.11 m) and stops being one on a 74 m plot (tol ≈ 1.76 m), where
+    // it is 2 px wide and unaimable anyway. Such rooms stay drawn, selectable
+    // and editable — they just stop steering the pen; the banner under the
+    // plan says why they are specks.
+    const minHullM = Math.max(MIN_ROOM_M, snapTolM)
     const hulls = hullsOf(rooms, level,
       clickMode === 'draw-room' ? drawTarget : '')
-      .filter((hh) => hh.w >= MIN_ROOM_M && hh.d >= MIN_ROOM_M)
+      .filter((hh) => {
+        const pts = absOutline(hh)
+        const xs = pts.map((p) => p[0])
+        const ys = pts.map((p) => p[1])
+        return Math.max(...xs) - Math.min(...xs) >= minHullM
+          && Math.max(...ys) - Math.min(...ys) >= minHullM
+      })
     return buildSnapTargets(hulls, {
       // Rooms snap onto the building outline; while the OUTLINE itself is
       // being redrawn it is not a target.
@@ -721,16 +771,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       boundary: boundaryM,
       extraPoints: outlineDraft,
     })
-  }, [clickMode, rooms, level, outlineDraft, drawTarget, map3d?.outline, boundaryM])
+  }, [clickMode, rooms, level, outlineDraft, drawTarget, map3d?.outline,
+    boundaryM, snapTolM])
 
   const computeSnap = useCallback((clientX: number, clientY: number,
       alt: boolean): SnapResult => {
     const raw = pointerM(clientX, clientY)
-    // Tolerances in METRES: the pixel radius converted through the live
-    // metres-per-pixel of the window, with a 0.05 m floor so a zoomed-out
-    // 400 m plot does not snap across half a house.
+    // Tolerances in METRES: the aiming radius is `snapTolM`, the ONE
+    // derivation the target list was filtered with; only the closing radius
+    // is its own number.
     const mPerPx = view.size / (CANVAS_W * planZoomRef.current)
-    const tol = Math.max(SNAP_TOL_PX * mPerPx, 0.05)
+    const tol = snapTolM
     const prev = outlineDraft.length ? outlineDraft[outlineDraft.length - 1] : undefined
     const prev2 = outlineDraft.length >= 2 ? outlineDraft[outlineDraft.length - 2] : undefined
     return snapDrawPoint(raw, {
@@ -745,10 +796,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       grid: gridStep,
       alt,
     })
-  }, [outlineDraft, snapTargets, pointerM, view.size, gridStep])
+  }, [outlineDraft, snapTargets, pointerM, view.size, gridStep, snapTolM])
 
   const commitOutline = useCallback(() => {
-    if (outlineDraft.length < 3) return
+    if (outlineDraft.length < 3) {
+      planLog('commitOutline refused: fewer than 3 points',
+        { draftLen: outlineDraft.length })
+      return
+    }
     onMap3d?.('outline', outlineDraft)
     setOutlineDraft([])
     setHoverSnap(null)
@@ -918,7 +973,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // longer renormalizes. Redrawing clears the openings (their edge indices
   // point into the OLD hull); the markers stay.
   const commitRoomDraft = useCallback(() => {
-    if (!drawTarget || outlineDraft.length < 3) return
+    if (!drawTarget || outlineDraft.length < 3) {
+      planLog('commitRoomDraft refused: no target or fewer than 3 points',
+        { drawTarget, draftLen: outlineDraft.length })
+      return
+    }
     const xs = outlineDraft.map((p) => p[0])
     const ys = outlineDraft.map((p) => p[1])
     const minX = Math.min(...xs)
@@ -926,6 +985,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const w = Math.max(...xs) - minX
     const d = Math.max(...ys) - minY
     if (w < MIN_ROOM_M || d < MIN_ROOM_M) {
+      planLog('commitRoomDraft refused: bbox under MIN_ROOM_M',
+        { w, d, min: MIN_ROOM_M, draft: outlineDraft })
       toast(t('The shape is too small — keep drawing or press Esc.'), 'error')
       return
     }
@@ -938,6 +999,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // In metres an "area" threshold is a real area: 0.04 m² is a 20 cm square,
     // the same slip of the hand MIN_ROOM_M catches on a side.
     if (Math.abs(shoelace) / 2 < MIN_ROOM_M * MIN_ROOM_M) {
+      planLog('commitRoomDraft refused: area under MIN_ROOM_M²',
+        { areaM2: Math.abs(shoelace) / 2, draft: outlineDraft })
       toast(t('The shape has no area — keep drawing or press Esc.'), 'error')
       return
     }
@@ -1382,17 +1445,55 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // room geometry is refused there (§ A13a). Markers and props are not
     // geometry — they are content, and they stay.
     if (groundSel && (m === 'draw-room' || m === 'curve' || m === 'door'
-        || m === 'window')) return
+        || m === 'window')) {
+      planLog('armMode refused: the yard has no room geometry', { mode: m })
+      return
+    }
     if (m === 'draw-room') {
-      if (!selectedRoom?.id) return
+      if (!selectedRoom?.id) {
+        planLog('armMode refused: no room selected', { selected })
+        return
+      }
       setDrawTarget(selectedRoom.id)
     }
     // Curves bend hull edges — without a drawn hull there is nothing to bend.
-    if (m === 'curve' && !selectedRoom?.layout?.outline?.length) return
+    if (m === 'curve' && !selectedRoom?.layout?.outline?.length) {
+      planLog('armMode refused: the selected room has no drawn hull')
+      return
+    }
     setOutlineDraft([])
     setHoverSnap(null)
     setClickMode(m)
-  }, [clickMode, selectedRoom, groundSel, cancelDraw])
+    planLog('armed', { mode: m })
+  }, [clickMode, selected, selectedRoom, groundSel, cancelDraw])
+
+  /**
+   * Arm the hull pen ON A NAMED ROOM — the route that does NOT go through the
+   * selection.
+   *
+   * The toolbar's ⬠ redraws the SELECTED shape, and only a room that is
+   * already on the plan (or the yard, which refuses) can be selected. A
+   * location whose rooms have no layout yet therefore has nothing selectable
+   * but the yard, and the yard turns every room tool off: pressing ⬠ there
+   * did nothing and said nothing (user finding 2026-08-20 — a location with a
+   * drawn boundary, no pin and not one placed room). This is the way in for
+   * exactly that state, and the "Not on the plan" chips use it too — one
+   * arming path, not two.
+   */
+  const armDrawFor = useCallback((roomId: string) => {
+    if (!roomId || roomId === GROUND_ROOM_ID) {
+      planLog('armDrawFor refused: no room id, or the yard', { roomId })
+      return
+    }
+    planLog('armDrawFor', { roomId })
+    setSelected(roomId)
+    setDrawTarget(roomId)
+    setOutlineDraft([])
+    setHoverSnap(null)
+    setArmedProp('')
+    setPropGhost(null)
+    setClickMode('draw-room')
+  }, [setSelected])
 
   // Room shell: pick the surface-texture kind for floor or wall. Empty keys
   // are pruned, an all-empty map drops the field — the client then falls back
@@ -1824,6 +1925,33 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         </div>
       ) : null}
 
+      {/* NOTHING IS ON THE PLAN YET. The ⬠ tool in the strip redraws the
+          SELECTED shape, and with no room placed there is nothing selectable
+          but the yard — which turns every room tool off. The way in used to be
+          a chip at the very bottom of this column, below the canvas, the scale
+          bar, the findings and two more rows; the plan itself just sat there
+          refusing every click without a word (user finding 2026-08-20). So the
+          way in is stated HERE, above the canvas, and it is the same one
+          arming path. */}
+      {!placedHere.length && unplaced.length ? (
+        <div className="ga-anchor-banner">
+          <span style={{ flex: 1, minWidth: 200 }}>
+            {t('No room of this location is on the plan yet — the ⬠ tool in the strip redraws a room that already has a shape. Pick a room here to draw its first one:')}
+          </span>
+          {unplaced.map((room) => (
+            <button
+              key={room.id || room.name}
+              type="button"
+              className={`ga-btn ga-btn-sm${clickMode === 'draw-room' && drawTarget === room.id ? ' ga-btn-primary' : ''}`}
+              onClick={() => armDrawFor(room.id || '')}
+              title={t('Draw this room on the current level — click to place points, click the first point to close, Shift = free-hand, Esc = cancel.')}
+            >
+              ⬠ {room.name || room.id}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {/* Review banner: a furnishing proposal is waiting for the selected
           room — the ghosts on the plan are exactly what Accept stores. */}
       {reviewing ? (
@@ -1865,6 +1993,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         canCurve={!groundSel && !!selectedRoom?.layout?.outline?.length}
         ground={groundSel}
         groundHint={yardNoGeometry}
+        noSelectionHint={t('Nothing is selected — these tools work on ONE shape. Pick a room with the chips under the plan; a room that has no shape yet is drawn with its own ⬠ button in the hint above the plan.')}
         onFitToModel={fitToModel}
         propsOpen={propsOpen}
         onMode={armMode}
@@ -1921,12 +2050,29 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           // also when the click lands inside a room — capture phase keeps
           // the room handlers out of the way.
           if (clickMode !== 'outline' && clickMode !== 'draw-room'
-              && clickMode !== 'elevator' && clickMode !== 'boundary-door') return
+              && clickMode !== 'elevator' && clickMode !== 'boundary-door') {
+            planLog('canvas click ignored: no drawing/placement mode armed',
+              { clickMode, target: (e.target as HTMLElement).tagName })
+            return
+          }
           e.stopPropagation()
           if (clickMode === 'outline' || clickMode === 'draw-room') {
             // Clicks go through the snap engine (Shift = free-hand); landing on
             // the first vertex closes the polygon.
             const res = computeSnap(e.clientX, e.clientY, e.shiftKey)
+            planLog('canvas click -> draft point', {
+              clickMode,
+              drawTarget,
+              raw: pointerM(e.clientX, e.clientY),
+              snapped: res.p,
+              kind: res.kind,
+              tolM: snapTolM,
+              targets: snapTargets
+                ? { points: snapTargets.points.length,
+                    segments: snapTargets.segments.length }
+                : null,
+              draftLen: outlineDraft.length,
+            })
             if (res.kind === 'close') {
               if (clickMode === 'outline') commitOutline()
               else commitRoomDraft()
@@ -2585,12 +2731,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             />
           )
         })() : null}
-        {placedHere.length === 0 ? (
+        {/* Empty plan: say where the pen is, not just that there is nothing.
+            "Below" used to mean a chip row past the scale bar and three other
+            blocks; the ⬠ buttons in the banner sit right above the canvas.
+            Gone while a mode is armed — a sentence about the empty plan on
+            top of the plan being drawn is in the way. */}
+        {placedHere.length === 0 && !clickMode ? (
           <span className="ga-hint" style={{
             position: 'absolute', inset: 0, display: 'flex',
             alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
           }}>
-            {t('No rooms on this level yet — click a room below to place it.')}
+            {unplaced.length
+              ? t('No rooms on this level yet — start one with the ⬠ buttons above the plan.')
+              : t('No rooms on this level yet.')}
           </span>
         ) : null}
         {/* Topmost aid: the person is what everything else is compared to. */}
@@ -3404,13 +3557,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               key={room.id || room.name}
               type="button"
               className={`ga-btn ga-btn-sm${clickMode === 'draw-room' && drawTarget === room.id ? ' ga-btn-primary' : ''}`}
-              onClick={() => {
-                setSelected(room.id || '')
-                setDrawTarget(room.id || '')
-                setOutlineDraft([])
-                setHoverSnap(null)
-                setClickMode('draw-room')
-              }}
+              onClick={() => armDrawFor(room.id || '')}
               title={t('Draw this room on the current level — click to place points, click the first point to close, Shift = free-hand, Esc = cancel.')}
             >
               ⬠ {room.name || room.id}
