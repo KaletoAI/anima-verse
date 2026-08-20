@@ -57,12 +57,13 @@ import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   PLAN_MAX_M, SNAP_TOL_PX, absOutline, buildSnapTargets, clamp,
-  edgePointOnEdge, edgeSegment, exteriorEdges, fmtM, nearestPolygonEdge,
-  normalizeOpeningEdge, outlineOf, planMapView, r4, rM, rotateOpeningCW,
+  edgePointOnEdge, edgeSegment, exteriorEdges, fmtM, localToRoom,
+  nearestPolygonEdge, normalizeOpeningEdge, outlineOf, planMapView, r4, rM,
+  rotateAbout,
   sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid, viewFx, viewFz,
   viewMx, viewMz, viewportFor,
 } from './planGeometry'
-import type { EdgeLetter, PlanView, PolyRoom, Pt, SnapResult } from './planGeometry'
+import type { PlanView, PolyRoom, Pt, SnapResult } from './planGeometry'
 import {
   BOUNDARY_SEED_M, boundaryComplaint, putLocationBoundary, seedSquare,
 } from './boundaryApi'
@@ -230,8 +231,10 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
     const lay = r.layout
     if (!r.id || r.id === skipId || !hasRect(lay)) continue
     if ((lay.level || 0) !== level) continue
+    // `rotation` rides along: the hull a neighbour shares, a snap target or
+    // an exterior wall is the room as DRAWN, i.e. turned (v6 addendum).
     out.push({ id: r.id, x: lay.x, y: lay.y, w: lay.w, d: lay.d,
-               outline: lay.outline })
+               outline: lay.outline, rotation: lay.rotation })
   }
   return out
 }
@@ -246,13 +249,24 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
  * the whole conversion:
  *
  *   room-local metres (what `rx`/`rz` want) = stored `at` − atOrigin
- *   stored `at` = plan metres − (lay.x − atOrigin), clamped to
+ *   stored `at` = `storedAt(...)` of the plan point, clamped to
  *                 atOrigin … atOrigin + w/d
  *
  * For an ordinary room both collapse to what the editor always did.
  */
 const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
   (ground ? [lay.x, lay.y] : [0, 0])
+
+/**
+ * A plan point (LOCATION-local metres) in the frame `at` is STORED in: the
+ * yard's `at` already is a location metre, a room's is room-local — and a
+ * TURNED room's is room-local in its STRAIGHT frame, so the cursor has to be
+ * turned back (contract v6 addendum). The inverse of what the room div is
+ * drawn with; without it every drag on a turned room would drop the piece
+ * somewhere else.
+ */
+const storedAt = (lay: PlacedLayout, ground: boolean, p: Pt): Pt =>
+  (ground ? p : localToRoom(lay, p))
 
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, onServerEdit, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
@@ -951,10 +965,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     return dims.fpX >= dims.fpZ ? { w: long, d: short } : { w: short, d: long }
   }, [modelDims])
 
-  // Auto-correct placed rooms to their derived size (rotation 90/270 swaps
-  // w/d, matching the rotate-as-unit behavior). Runs whenever dims change;
-  // centimetre rounding keeps it from oscillating. The rectangle grows around
-  // its own centre — there is no square to clamp it into.
+  // Auto-correct placed rooms to their derived size. NO rotation swap any
+  // more (v6 addendum): the stored rectangle is the room's own STRAIGHT
+  // frame, and the model stands in that same frame — the turn is applied to
+  // rect and model together on the way out, so the derived size is the
+  // model's unturned footprint. (Until the addendum the rect stayed straight
+  // while only the model turned, and the swap was the compensation for that
+  // gap.) Runs whenever dims change; centimetre rounding keeps it from
+  // oscillating. The rectangle grows around its own centre — there is no
+  // square to clamp it into.
   useEffect(() => {
     let changed = false
     const next = roomsRef.current.map((r) => {
@@ -963,9 +982,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // to legacy diorama-model rooms without an outline (D4).
       const ds = r.id && !r.layout?.outline?.length ? derivedSize(r.id) : null
       if (!hasRect(lay) || !ds) return r
-      const swap = ((lay.rotation || 0) % 180) === 90
-      const wantW = rM(swap ? ds.d : ds.w)
-      const wantD = rM(swap ? ds.w : ds.d)
+      const wantW = rM(ds.w)
+      const wantD = rM(ds.d)
       if (Math.abs(lay.w - wantW) < 0.005 && Math.abs(lay.d - wantD) < 0.005) return r
       changed = true
       return { ...r, layout: { ...lay,
@@ -992,9 +1010,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const long = Math.min(dims.widthM, PLAN_MAX_M)
     const aspect = Math.min(dims.fpX, dims.fpZ) / (Math.max(dims.fpX, dims.fpZ) || 1)
     const short = Math.max(long * aspect, MIN_ROOM_M)
+    // No rotation swap (v6 addendum): rect and model share the room's
+    // straight frame and are turned together afterwards.
     let wantW = dims.fpX >= dims.fpZ ? long : short
     let wantD = dims.fpX >= dims.fpZ ? short : long
-    if (((lay.rotation || 0) % 180) === 90) [wantW, wantD] = [wantD, wantW]
     let scaleHull = 1
     if (lay.outline?.length) {
       // A drawn hull keeps the SHAPE it was drawn in — only its size follows
@@ -1165,8 +1184,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         }
         updateLayout(drag.roomId, { x: rM(nx), y: rM(ny) })
       } else if (drag.kind === 'resize') {
-        const dx = (e.clientX - drag.startX) * mPerPx
-        const dy = (e.clientY - drag.startY) * mPerPx
+        // w/d live in the room's STRAIGHT frame, so the cursor's travel is
+        // turned back into it (v6 addendum) — otherwise dragging the handle
+        // of a turned room grew it sideways to the hand.
+        const [dx, dy] = rotateAbout(
+          [(e.clientX - drag.startX) * mPerPx,
+           (e.clientY - drag.startY) * mPerPx], [0, 0], -(lay.rotation || 0))
         const nw = e.shiftKey ? drag.origW + dx : snapToGrid(drag.origW + dx, step)
         const nd = e.shiftKey ? drag.origD + dy : snapToGrid(drag.origD + dy, step)
         const wantW = clamp(rM(nw), MIN_ROOM_M, PLAN_MAX_M)
@@ -1213,10 +1236,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // room's min corner, and it may legitimately leave the hull (a road
         // bend does) — the server clamps it to the plain ±500 m plan window
         // since v6, not to a bbox-relative one, so this does the same.
-        const [fx, fy] = pointerM(e.clientX, e.clientY)
+        const [cu, cv] = localToRoom(lay, pointerM(e.clientX, e.clientY))
         const c: [number, number] = [
-          rM(clamp(fx - lay.x, -PLAN_MAX_M, PLAN_MAX_M)),
-          rM(clamp(fy - lay.y, -PLAN_MAX_M, PLAN_MAX_M)),
+          rM(clamp(cu, -PLAN_MAX_M, PLAN_MAX_M)),
+          rM(clamp(cv, -PLAN_MAX_M, PLAN_MAX_M)),
         ]
         updateLayout(drag.roomId, {
           outline_curves: (lay.outline_curves || []).map((cv) =>
@@ -1226,12 +1249,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // Prop / ghost / model drag: reposition inside the room — METRES from
         // the room's min corner. The piece keeps its real size, only `at`
         // moves; the raster applies unless Shift asks for free hand.
-        const [fx, fy] = pointerM(e.clientX, e.clientY)
         const raster = (v: number) => (e.shiftKey ? v : snapToGrid(v, step))
         const o = atOrigin(lay, ground)
+        const [su, sv] = storedAt(lay, ground,
+                                 pointerM(e.clientX, e.clientY))
         const at: [number, number] = [
-          rM(clamp(raster(fx - (lay.x - o[0])), o[0], o[0] + lay.w)),
-          rM(clamp(raster(fy - (lay.y - o[1])), o[1], o[1] + lay.d)),
+          rM(clamp(raster(su), o[0], o[0] + lay.w)),
+          rM(clamp(raster(sv), o[1], o[1] + lay.d)),
         ]
         if (drag.kind === 'model') {
           // The room's DIORAMA model is positioned like a prop: the anchor
@@ -1386,14 +1410,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     if (clickMode === 'boundary') return
     if ((!clickMode && !armedProp && !calibrationRoomId) || !room.id) return
     e.stopPropagation()
-    const [mxRaw, myRaw] = pointerM(e.clientX, e.clientY)
     const raster = (v: number) => (e.shiftKey ? v : snapToGrid(v, gridStep))
-    // In the frame the shape STORES its placements in: room-local for a room,
-    // location-local on the yard (§ A13a) — `atOrigin` is the only difference,
-    // and it is [0, 0] everywhere but there.
+    // In the frame the shape STORES its placements in: room-local for a room
+    // (its STRAIGHT frame — a turned room turns the cursor back), and
+    // location-local on the yard (§ A13a).
     const o = atOrigin(lay, ground)
-    const px = rM(clamp(raster(mxRaw - (lay.x - o[0])), o[0], o[0] + lay.w))
-    const py = rM(clamp(raster(myRaw - (lay.y - o[1])), o[1], o[1] + lay.d))
+    const [mxRaw, myRaw] = storedAt(lay, ground,
+                                    pointerM(e.clientX, e.clientY))
+    const px = rM(clamp(raster(mxRaw), o[0], o[0] + lay.w))
+    const py = rM(clamp(raster(myRaw), o[1], o[1] + lay.d))
     if (!clickMode && !armedProp) {
       // Calibration figure armed: a click inside ITS room moves the
       // reference person there (UI state only, never stored).
@@ -1475,7 +1500,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       const lay0 = lay
       const others = hullsOf(roomsRef.current, lay0.level || 0, room.id)
       const hull: PolyRoom = { id: room.id, x: lay0.x, y: lay0.y,
-        w: lay0.w, d: lay0.d, outline: lay0.outline }
+        w: lay0.w, d: lay0.d, outline: lay0.outline,
+        rotation: lay0.rotation }
       const shared = sharedEdges(hull, others).find((sh) => sh.edge === edge)
       const openings: RoomOpening[] = [...(lay.openings || []),
         clickMode === 'window'
@@ -1604,60 +1630,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     })
   }, [selected, updateLayout])
 
-  // Rotate the room AS A UNIT (clockwise on the plan): the rectangle swaps
-  // w/d around its centre and everything inside turns with it. In METRES the
-  // room-local turn is (u, v) -> (d − v, u): a point at v = d (the south edge)
-  // lands at the new u = 0 (west), and the frame that was w × d is now d × w
-  // — the metric twin of the old (x, y) -> (1 − y, x) on the unit square.
-  // `rotation` itself yaws the room MODEL inside the rectangle.
-  const rotateSelected = () => {
+  // ROTATION IS ONE FIELD NOW (contract v6 addendum, 2026-08-20).
+  //
+  // `layout.rotation` turns the WHOLE room about its rect centre — hull,
+  // walls, openings, markers, props and the 3D model in one move — so this
+  // button no longer BAKES a turn into every stored coordinate. It sets the
+  // angle, nothing else: the rectangle keeps its size (there is no w/d swap
+  // any more, the room's own frame stays straight), the openings keep their
+  // edge indices, and the drawing is turned on the way out.
+  //
+  // That also ends an old inconsistency: the bake turned the geometry
+  // CLOCKWISE on the plan while the very same call bumped `rotation` +90,
+  // which turns counter-clockwise in world axes (§ A1.1). One angle, one
+  // sense, one field.
+  /** Write the selected room's angle (0…359; 0 drops the field). */
+  const setRotation = (deg: number) => {
+    if (!selectedRoom || groundSel || !hasRect(selectedRoom.layout)) return
+    const norm = ((Math.round(deg) % 360) + 360) % 360
+    updateLayout(selectedRoom.id || '', { rotation: norm || undefined })
+  }
+
+  const rotateSelected = (step = 90) => {
     const lay = selectedRoom?.layout
     // Turning the yard would mean turning the location boundary — a map-tab
     // edit, not a floor-plan one (§ A13a).
     if (!hasRect(lay) || !selectedRoom || groundSel) return
-    const w = lay.d
-    const d = lay.w
-    const turn = ([u, v]: [number, number]): [number, number] =>
-      [rM(lay.d - v), rM(u)]
-    updateLayout(selectedRoom.id || '', {
-      rotation: (((lay.rotation || 0) + 90) % 360) || undefined,
-      w,
-      d,
-      x: rM(lay.x + (lay.w - w) / 2),
-      y: rM(lay.y + (lay.d - d) / 2),
-      ...(lay.model_at ? { model_at: turn(lay.model_at) } : {}),
-      ...(lay.markers?.length
-        ? { markers: lay.markers.map((m) => ({
-            ...m,
-            at: turn(m.at),
-            ...(m.rotation !== undefined ? { rotation: (m.rotation + 90) % 360 } : {}),
-          })) }
-        : {}),
-      // Props turn with the room like markers do — their yaw follows the 90°
-      // step so a bed keeps facing the same wall.
-      ...(lay.props?.length
-        ? { props: lay.props.map((p) => ({ ...p, at: turn(p.at),
-            yaw: r4((((p.yaw || 0) + 90) % 360)) || undefined })) }
-        : {}),
-      // Openings turn with the room. A drawn outline rotates by baking the
-      // point transform, so its edge indices stay put; on the implicit
-      // rectangle an index steps one edge clockwise (at is measured along the
-      // clockwise direction and stays); legacy letters keep their own rule.
-      ...(lay.outline?.length
-        ? { outline: lay.outline.map(turn) }
-        : {}),
-      // Curve control points bake the same transform as the outline points;
-      // edge indices stay (the hull's vertex order is unchanged).
-      ...(lay.outline?.length && lay.outline_curves?.length
-        ? { outline_curves: lay.outline_curves.map((cv) => ({ ...cv,
-            c: turn(cv.c) })) }
-        : {}),
-      ...(lay.openings?.length
-        ? { openings: lay.openings.map((o) => (typeof o.edge === 'string'
-            ? { ...o, ...rotateOpeningCW(o.edge as EdgeLetter, o.at) }
-            : lay.outline?.length ? o : { ...o, edge: (o.edge + 1) % 4 })) }
-        : {}),
-    })
+    setRotation((lay.rotation || 0) + step)
   }
 
   // "Suggest openings": a door on every shared wall (once per pair, on the
@@ -2466,6 +2464,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 background: lay.outline?.length ? 'transparent'
                   : isSel ? 'rgba(88,166,255,0.18)' : 'rgba(139,148,158,0.12)',
                 borderRadius: 4, boxSizing: 'border-box',
+                // THE ROOM IS DRAWN TURNED (contract v6 addendum). One CSS
+                // rotation about the box centre carries the whole shape with
+                // it — hull path, curve handles, openings, markers, props,
+                // label — because every child is placed in this box's own
+                // frame. NEGATED for the screen: a positive plan angle turns
+                // counter-clockwise in world axes (§ A1.1) while CSS turns
+                // clockwise on a y-down screen, the same negation the prop
+                // yaw uses below. Hit tests undo exactly this turn
+                // (`localToRoom`).
+                ...(lay.rotation ? {
+                  transform: `rotate(${-lay.rotation}deg)`,
+                  transformOrigin: '50% 50%',
+                } : {}),
                 // The yard cannot be moved — it is the plot, not a rectangle
                 // on it (§ A13a).
                 cursor: clickMode || armedProp ? 'crosshair'
@@ -2659,11 +2670,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                       setSelected(room.id || '')
                       // Stacked footprints: repeated clicks cycle through
                       // everything under the cursor (topmost first).
-                      const host = e.currentTarget.parentElement as HTMLDivElement
-                      const rect = host.getBoundingClientRect()
+                      // Metres from the shape's min corner — through the
+                      // CANVAS, not through the room box: a turned box has a
+                      // rotated bounding rect, and its client rect would be
+                      // the wrong frame (v6 addendum).
+                      const hit = storedAt(lay, ground,
+                                           pointerM(e.clientX, e.clientY))
                       const hits = propsAtPoint(content || {}, o,
-                        ((e.clientX - rect.left) / rect.width) * lay.w,
-                        ((e.clientY - rect.top) / rect.height) * lay.d)
+                        hit[0] - o[0], hit[1] - o[1])
                       if (hits.length < 2) {
                         setPropSel(i)
                         return
@@ -3125,6 +3139,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onAlwaysVisible={(v) => updateLayout(selectedRoom?.id || '', {
           always_visible: v || undefined,
         })}
+        onRotation={setRotation}
         onReliefFlat={(v) => updateLayout(selectedRoom?.id || '', {
           relief_flat: v || undefined,
         })}

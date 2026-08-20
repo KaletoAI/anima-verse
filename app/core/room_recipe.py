@@ -31,6 +31,13 @@ LOCAL METRES around the location's anchor pin, the same frame ``layout.x/y``,
 ``map3d.outline`` and ``map3d.boundary`` are stored in. There is no fraction
 anywhere in this module any more; a length ending in ``_m`` is the same metre,
 and since E4 that is already a world metre too (k = 1).
+
+THE ROOM MAY BE TURNED (contract v6 addendum "Der Raum dreht sich ganz"):
+``layout.rotation`` turns the WHOLE room about its rect centre
+``(x + w/2, y + d/2)`` on the way from the room's own frame into the
+location's. :func:`room_transform` is that step, and it is the only place it
+happens — storage stays straight, so drawing stays a straight-on gesture.
+
 Yaw/facing are degrees; the compass vocabulary of the room markers applies
 (0 = south, 90 = east, …), composed prop facing = ``facing − placement.yaw``
 (the plan yaw turns clockwise in the top view, the compass counts the other
@@ -122,7 +129,11 @@ _WALKABLE_TYPES = ("door", "passage")
 
 
 def _layout_rect(lay: Any) -> Optional[tuple]:
-    """(x, y, w, d) of a layout, or None when it is not a usable rectangle."""
+    """(x, y, w, d) of a layout, or None when it is not a usable rectangle.
+
+    This is the room's UNROTATED rectangle — the frame everything inside the
+    room is stored in. ``layout.rotation`` never touches it (see
+    :func:`room_transform`)."""
     if not isinstance(lay, dict):
         return None
     try:
@@ -132,40 +143,89 @@ def _layout_rect(lay: Any) -> Optional[tuple]:
         return None
 
 
+def layout_rotation(lay: Any) -> float:
+    """``layout.rotation`` in degrees, 0 when absent or unusable.
+
+    Contract v6 addendum "Der Raum dreht sich ganz": the angle turns the
+    WHOLE room about its rect centre, not just its model."""
+    if not isinstance(lay, dict):
+        return 0.0
+    try:
+        return float(lay.get("rotation") or 0) % 360.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def room_transform(lay: Any) -> Any:
+    """``f(u, v) -> (x, y)``: ROOM-local metres → LOCATION-local metres.
+
+    Two steps, in this order and nowhere else in the codebase:
+
+    1. translate by the room's min corner (``layout.x``/``y``),
+    2. turn the whole room about its rect CENTRE ``(x + w/2, y + d/2)`` by
+       ``layout.rotation``, with the ONE rotation of § A1.1
+       (``world_geometry.local_to_world``) — the same matrix the map uses for
+       a location pin and the same sense both renderers apply to a placement
+       yaw (``rotation.y = +rad(yaw)``).
+
+    Everything a room owns goes through here: its hull, its curve control
+    points, its prop placements, its markers and its diorama anchor. Storage
+    stays in the room's own straight frame — the turn is applied on the way
+    out, so drawing stays a straight-on gesture.
+
+    A layout without a usable rectangle (the GROUND room, § A13a) or without
+    a rotation gets the plain translation; the identity path costs nothing.
+    """
+    rect = _layout_rect(lay)
+    if not rect:
+        return lambda u, v: (float(u), float(v))
+    x, y, w, d = rect
+    rot = layout_rotation(lay)
+    if not rot:
+        return lambda u, v: (x + float(u), y + float(v))
+    from app.core.world_geometry import local_to_world
+    cx, cy = x + w / 2.0, y + d / 2.0
+    return lambda u, v: local_to_world(x + float(u) - cx, y + float(v) - cy,
+                                       cx, cy, rot)
+
+
 def _abs_outline(lay: Dict[str, Any]) -> List[List[float]]:
     """A layout's hull in ABSOLUTE LOCAL METRES (mirrors
     ``planGeometry.absOutline``); [] when the layout has no usable rect.
 
     The stored points are metres from the room's own min corner, so placing
-    the hull is a translation by ``x``/``y`` — nothing is scaled here any
-    more."""
+    the hull is the room transform: translation plus the room's own turn
+    about its rect centre. Nothing is scaled here."""
     rect = _layout_rect(lay)
     if not rect:
         return []
-    x, y, w, d = rect
+    _x, _y, w, d = rect
     pts = lay.get("outline")
     if not isinstance(pts, list) or len(pts) < 3:
         pts = _rect_outline(w, d)
+    place = room_transform(lay)
     try:
-        return [[x + float(u), y + float(v)] for u, v in pts]
+        return [list(place(float(u), float(v))) for u, v in pts]
     except (TypeError, ValueError):
         return []
 
 
 def _abs_shape(lay: Dict[str, Any]) -> List[List[float]]:
     """Like ``_abs_outline`` but with curved edges TESSELLATED — the shape a
-    renderer actually sees. Beziers are affine-invariant, so tessellating in
-    the room-local frame and translating afterwards is exact."""
+    renderer actually sees. Beziers are affine-invariant and a rotation is
+    affine, so tessellating in the room-local frame and placing afterwards is
+    exact."""
     rect = _layout_rect(lay)
     if not rect:
         return []
-    x, y, w, d = rect
+    _x, _y, w, d = rect
     pts = lay.get("outline")
     if not isinstance(pts, list) or len(pts) < 3:
         pts = _rect_outline(w, d)
     tess, _ = tessellate(pts, lay.get("outline_curves"))
+    place = room_transform(lay)
     try:
-        return [[x + float(u), y + float(v)] for u, v in tess]
+        return [list(place(float(u), float(v))) for u, v in tess]
     except (TypeError, ValueError):
         return []
 
@@ -343,15 +403,19 @@ def _square(cx: float, cy: float, half: float) -> List[List[float]]:
             [cx + half, cy + half], [cx - half, cy + half]]
 
 
-def _join_placements(lay: Dict[str, Any], ox: float, oy: float,
+def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                      default_u: float, default_v: float,
                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """``(placements, prop_markers)`` of one layout, joined with the library.
 
-    ``ox``/``oy`` translate a stored ``at`` into the payload frame: a ROOM's
-    min corner for a room layout, ``0/0`` for the ground, whose ``at`` already
-    IS a location-local metre (§ A13a). ``default_u``/``default_v`` stand in
-    for a placement without ``at`` (a room's centre; the pin for the ground).
+    ``place`` maps a stored ``at`` into the payload frame: the ROOM transform
+    for a room layout (min corner + the room's own turn, :func:`room_transform`),
+    the identity for the ground, whose ``at`` already IS a location-local
+    metre (§ A13a). ``room_yaw`` is the room's rotation in degrees: a prop
+    stands IN the room, so the room's turn is added to its own placement yaw —
+    that is what keeps a bed against the same wall when the room turns.
+    ``default_u``/``default_v`` stand in for a placement without ``at`` (a
+    room's centre; the pin for the ground).
 
     Dangling ids keep their placement and are flagged ``missing`` — world data
     lives in the DB, props are files, so there is no referential integrity by
@@ -365,11 +429,14 @@ def _join_placements(lay: Dict[str, Any], ox: float, oy: float,
             continue
         pid = str(placement.get("prop_id") or "")
         at = placement.get("at") or [default_u, default_v]
-        yaw = float(placement.get("yaw") or 0)
+        # The prop's OWN yaw plus the room's — one turn of the room turns
+        # every piece of furniture in it by the same angle.
+        yaw = (float(placement.get("yaw") or 0) + room_yaw) % 360
         off_y = float(placement.get("offset_y") or 0)
+        px, py = place(float(at[0]), float(at[1]))
         entry: Dict[str, Any] = {
             "prop_id": pid,
-            "at": [_r(ox + float(at[0])), _r(oy + float(at[1]))],
+            "at": [_r(px), _r(py)],
             "yaw": _r(yaw, 1),
             "offset_y": _r(off_y, 3),
         }
@@ -527,7 +594,8 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
     if not isinstance(lay, dict) or not (lay.get("props") or lay.get("markers")):
         return None
     boundary = boundary_points(map3d)
-    placements, prop_markers = _join_placements(lay, 0.0, 0.0, 0.0, 0.0)
+    placements, prop_markers = _join_placements(
+        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0)
 
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
@@ -610,7 +678,14 @@ def compose_recipe(room: Dict[str, Any],
     # opening edge indices past the inserted points; on a curve-free outline
     # it is the identity.
     tess_pts, edge_map = tessellate(pts, lay.get("outline_curves"))
-    outline = [[_r(x + float(u)), _r(y + float(v))] for u, v in tess_pts]
+    # ONE transform for the whole room (contract v6 addendum): min corner plus
+    # the room's own turn about its rect centre. The hull leaves here already
+    # turned, so plates, walls, doorways, clips and the boundary check all see
+    # the same rotated shape without knowing rotation exists.
+    place = room_transform(lay)
+    room_yaw = layout_rotation(lay)
+    outline = [[_r(px), _r(py)]
+               for px, py in (place(float(u), float(v)) for u, v in tess_pts)]
 
     own_id = str(room.get("id") or "")
     others = [s for s in (siblings or [])
@@ -631,7 +706,8 @@ def compose_recipe(room: Dict[str, Any],
             if 0 <= e < len(edge_map):
                 op["edge"] = edge_map[e]
 
-    placements, prop_markers = _join_placements(lay, x, y, w / 2, d / 2)
+    placements, prop_markers = _join_placements(lay, place, room_yaw,
+                                                w / 2, d / 2)
 
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
@@ -662,8 +738,8 @@ def compose_recipe(room: Dict[str, Any],
         for marker in (lay.get("markers") or []):
             mat = marker.get("at") if isinstance(marker, dict) else None
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
-                keepouts.append(_square(x + float(mat[0]), y + float(mat[1]),
-                                        SCATTER_POINT_CLEAR_M))
+                mx, my = place(float(mat[0]), float(mat[1]))
+                keepouts.append(_square(mx, my, SCATTER_POINT_CLEAR_M))
         _scatter_into(placements, scatter_sources, outline, keepouts,
                       variant_seed)
 

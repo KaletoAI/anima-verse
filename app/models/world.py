@@ -1218,7 +1218,8 @@ def project_exit_to_opening(layout: Any) -> Optional[Dict[str, Any]]:
     - the target edge is shorter than the standard door.
     """
     from app.core.room_recipe import (  # local: keeps world.py import-light
-        _WALKABLE_TYPES, _abs_outline, _normalize_opening, _unit_edge)
+        _WALKABLE_TYPES, _abs_outline, _normalize_opening, _unit_edge,
+        room_transform)
 
     if not isinstance(layout, dict):
         return None
@@ -1228,8 +1229,11 @@ def project_exit_to_opening(layout: Any) -> Optional[Dict[str, Any]]:
     try:
         u = min(max(float(ex[0]), 0.0), 1.0)
         v = min(max(float(ex[1]), 0.0), 1.0)
-        px = float(layout["x"]) + u * float(layout["w"])
-        py = float(layout["y"]) + v * float(layout["d"])
+        # Through the room transform, like the hull below — the projection is
+        # only meaningful when point and hull sit in the SAME frame, and a
+        # turned room turns both (contract v6 addendum).
+        px, py = room_transform(layout)(u * float(layout["w"]),
+                                        v * float(layout["d"]))
     except (KeyError, TypeError, ValueError):
         return None
     outline = _abs_outline(layout)

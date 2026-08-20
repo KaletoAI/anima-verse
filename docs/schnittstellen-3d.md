@@ -187,6 +187,64 @@
 >     `POST /play/scene-preview`-Body raus. Räume, Props, Extras und Marker
 >     behalten ihren eigenen Platzierungs-Yaw.
 >
+> 11. **`layout.rotation` dreht den GANZEN Raum — um seine Rechteck-Mitte**
+>     (2026-08-20). Bisher drehte das Feld nur das Raum-MODELL: ein um 30°
+>     gedrehter Raum zeigte gedrehte Inhalte in einer geraden Hülle. Das war
+>     kein Entwurf, sondern eine Lücke aus der Referenzquadrat-Ära, in der das
+>     Feld gespeichert, aber ausschließlich als Modell-Yaw ausgewertet wurde
+>     (die 90°-Taste im Grundriss-Editor buk den Dreh stattdessen in jede
+>     gespeicherte Koordinate ein — und zwar im entgegengesetzten Drehsinn zum
+>     Feld). **Ab jetzt gilt wörtlich:**
+>
+>     * **Ein Winkel, ein Drehpunkt: die Mitte des Rechtecks**
+>       `(x + w/2, y + d/2)` im Location-lokalen Rahmen, gedreht mit der EINEN
+>       Abbildung aus § A1.1 (`world_geometry.local_to_world`,
+>       `x' = cx + lx·cos θ + lz·sin θ`, `z' = cz − lx·sin θ + lz·cos θ`).
+>       Positive Grad drehen also im Weltrahmen genauso herum wie ein
+>       Platzierungs-Yaw (`rotation.y = +rad(θ)` in beiden Renderern) — auf dem
+>       y-nach-unten-Grundriss ist das gegen den Uhrzeigersinn, weshalb jede
+>       CSS/SVG-Darstellung des Winkels `-θ` zeichnet.
+>     * **Was mitdreht:** die Bodenplatte und die Hülle (`outline`, inklusive
+>       tessellierter Kurven und `outline_curves`), die Schalenwände, die
+>       Öffnungen (sie sitzen auf den gedrehten Kanten — **die Kanten-INDIZES
+>       und `at` ändern sich nicht**, eine Drehung erhält die Umlaufrichtung),
+>       die Schwellen (`doorways`), Marker (Position **und** `facing`),
+>       Prop-Placements (Position **und** `yaw`, samt ihrer Prop-Marker), der
+>       Diorama-Anker (`model_at`) und die Streu-Kopien. Der Diorama-Spec
+>       trägt weiterhin `yaw_deg = layout.rotation`: einen starren Körper um
+>       die Rechteck-Mitte zu drehen IST „Anker mitdrehen + Mesh um den Anker
+>       drehen", und der Anker dreht jetzt mit.
+>     * **Gespeichert wird UNGEDREHT.** `layout.x/y/w/d` bleiben das gerade
+>       Rechteck, `outline`/`markers[].at`/`props[].at`/`model_at` bleiben
+>       Meter in dessen geradem Rahmen. Der Dreh ist eine Abbildung auf dem
+>       Weg nach draußen (`room_recipe.room_transform` — der einzige Ort, an
+>       dem ein Raum-Meter zu einem Location-Meter wird; im Editor
+>       `planGeometry.roomToLocal`/`localToRoom`). **Gezeichnet wird gerade,
+>       gedreht wird danach**: neue Geometrie entsteht immer im geraden Rahmen
+>       des Raums, der Editor rechnet den Cursor dafür zurück.
+>     * **Die 90°-Taste backt nichts mehr ein.** Sie setzt nur noch den
+>       Winkel (+90); es gibt keinen w/d-Tausch, kein Umindizieren von
+>       Öffnungen und keine mitgedrehten Marker/Props in der Speicherung mehr.
+>       Damit endet auch der alte Vorzeichen-Widerspruch (Bake im
+>       Uhrzeigersinn, Feld dagegen). Freie Winkel stehen im Raum-Panel;
+>       gespeichert wird weiterhin ganzzahlig 0…359.
+>     * **Türen bleiben KOLLINEARITÄTS-Sache.** Eine gemeinsame Wand entsteht
+>       nur dort, wo zwei (gedrehte) Hüllenkanten tatsächlich kollinear und
+>       antiparallel laufen (`SHARE_TOL_M` 0,15 m, Überlappung ab 0,8 m —
+>       `room_recipe._mirrored_openings`, `scene_recipe._doorways`,
+>       `planGeometry.sharedEdges`). Ein um 30° gedrehter Raum an einem
+>       geraden hat schlicht **keine** gemeinsame Wand und bekommt daher keine
+>       gespiegelte Öffnung. Das ist dokumentiert, nicht repariert — es gibt
+>       keine „fast kollinear"-Sonderregel.
+>     * **Der Dreh kann einen Raum vom Grundstück schieben.** `problems[]
+>       room_outside_boundary` (Nr. 9) misst die GEDREHTE Hülle, ebenso der
+>       Überlappungs-Check des Karten-Apply (`layout_apply`).
+>     * **Kein Migrationscode.** Eine Welt, in der ein Raum bisher nur sein
+>       Modell drehte, zeigt jetzt den ganzen Raum gedreht — das ist die
+>       Korrektur, keine Regression. Ebenso entfällt der Rotations-Tausch in
+>       der modellabgeleiteten Rechteckgröße des Editors (er war die
+>       Kompensation genau dieser Lücke).
+>
 > Wo der Rest des Dokuments „Quadrat", „Kante `plan_width_m`", eine
 > `[0,1]`-Fraktion, `tile_fit`, `map3d.size` oder Kanten-Buchstaben
 > N/S/E/W nennt, gilt die Liste oben. Numerische Verifikation weiterhin

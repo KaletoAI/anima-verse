@@ -1473,8 +1473,13 @@ def test_room_and_prop_specs() -> None:
     d = spec_of(sc, "room", "d")
     check("the diorama scales like a prop: width_m over its XZ side",
           near(d["max_m"], 4.0) and d.get("measure") == "xz", str(d))
-    check("anchor from layout.model_at", d["anchor"] == [1.5, 2.5],
-          str(d["anchor"]))
+    # Room "d": rect x 1 y 1 w 2 d 2 → centre (2, 2); `rotation` 45 turns the
+    # WHOLE room about that centre (v6 addendum), the anchor included.
+    #   model_at (0.5, 1.5) → unrotated (1.5, 2.5) → offset (−0.5, +0.5)
+    #   x' = 2 + (−0.5·cos45 + 0.5·sin45) = 2 + 0        = 2.0
+    #   z' = 2 − (−0.5·sin45) + 0.5·cos45 = 2 + √2/2     = 2.7071
+    check("anchor from layout.model_at, TURNED with the room",
+          d["anchor"] == [2.0, 2.7071], str(d["anchor"]))
     check("indoor: bottom_y = room plate 0.10 + 0.02 + model_offset_y",
           near(d["bottom_y"], 0.22), str(d["bottom_y"]))
     # An outdoor room has NO plate (§ A5): its diorama rests on the storey
@@ -1601,10 +1606,16 @@ def test_clip_outline() -> None:
           str(spec_of(plain, "room", "d").keys()))
     clipped = model_scene(clip_d=True)
     d = spec_of(clipped, "room", "d")
-    # Room d: x 1 y 1 w 2 d 2 → world x 1…3, z 1…3.
-    check("clip_outline = the room shell in world metres",
-          d.get("clip_outline") == [[1.0, 1.0], [3.0, 1.0],
-                                    [3.0, 3.0], [1.0, 3.0]],
+    # Room d: x 1 y 1 w 2 d 2 → straight it would be x 1…3, z 1…3, but it
+    # carries `rotation` 45 and the shell turns with it (v6 addendum). Corners
+    # relative to the centre (2, 2) are (∓1, ∓1); with cos45 = sin45 = √2/2:
+    #   (−1, −1) → (2 − √2/2 − √2/2, 2 + √2/2 − √2/2) = (0.5858, 2.0)
+    #   ( 1, −1) → (2 + √2/2 − √2/2, 2 − √2/2 − √2/2) = (2.0, 0.5858)
+    #   ( 1,  1) → (2 + √2/2 + √2/2, 2 − √2/2 + √2/2) = (3.4142, 2.0)
+    #   (−1,  1) → (2 − √2/2 + √2/2, 2 + √2/2 + √2/2) = (2.0, 3.4142)
+    check("clip_outline = the TURNED room shell in world metres",
+          d.get("clip_outline") == [[0.5858, 2.0], [2.0, 0.5858],
+                                    [3.4142, 2.0], [2.0, 3.4142]],
           str(d.get("clip_outline")))
     check("...the SAME points as the room's floor plate",
           d.get("clip_outline") == plate_of(clipped, "d")["outline"],
@@ -2426,6 +2437,188 @@ def test_ground_placements() -> None:
           "layout" not in empty[0], str(empty[0]))
 
 
+# ── The room turns as a WHOLE (contract v6 addendum, 2026-08-20) ────────
+#
+# ONE hand derivation for this whole block. `layout.rotation` turns the room
+# about its rect CENTRE (x + w/2, y + d/2) with the § A1.1 matrix
+#
+#     x' = cx + lx·cos θ + lz·sin θ
+#     z' = cz − lx·sin θ + lz·cos θ        (lx, lz = point − centre)
+#
+# At θ = 90° (cos = 0, sin = 1) that collapses to (lx, lz) → (lz, −lx).
+#
+# THE ROOM: x 0, y 1, w 4, d 2 → centre (0 + 4/2, 1 + 2/2) = (2, 2).
+# Its rect corners run clockwise (0,1) (4,1) (4,3) (0,3), i.e. offsets from
+# the centre (−2,−1) (2,−1) (2,1) (−2,1) → turned (−1,2) (−1,−2) (1,−2) (1,2)
+# → world (1,4) (1,0) (3,0) (3,4). A 4 × 2 room lying east–west becomes a
+# 2 × 4 room lying north–south, still centred on (2, 2). A rotation preserves
+# orientation, so the winding stays clockwise and the edge INDICES do not
+# move: edge 0 is still the room's own north wall, now running (1,4) → (1,0).
+ROT_ROOM_TURNED = [[1.0, 4.0], [1.0, 0.0], [3.0, 0.0], [3.0, 4.0]]
+
+
+def rot_fixture(*, rotation: int = 90, extra_rooms=(), boundary=None) -> dict:
+    """The turned room alone on a 10 m plot (contour = the whole square)."""
+    loc = {
+        "id": "loc",
+        "map3d": {
+            "plan_width_m": PLAN_W,
+            "storey_height_m": STOREY_REAL,
+            "outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
+        },
+        "rooms": [
+            {"id": "t", "name": "T", "layout": {
+                "x": 0.0, "y": 1.0, "w": 4.0, "d": 2.0, "level": 0,
+                "rotation": rotation,
+                # Room-local metres, all of them measured in the room's OWN
+                # straight frame — that is what the turn is applied to.
+                "props": [{"prop_id": "table", "at": [1.0, 0.5], "yaw": 30}],
+                "markers": [{"at": [3.0, 1.5], "animation": "idle",
+                             "rotation": 45}],
+                "openings": [{"edge": 0, "at": 0.5, "type": "door",
+                              "width_m": 1.0, "height_m": 2.1,
+                              "to": "outside"}],
+            }},
+            *extra_rooms,
+        ],
+    }
+    if boundary is not None:
+        loc["map3d"]["boundary"] = boundary
+    return loc
+
+
+def rot_scene(**kw) -> dict:
+    return scene_recipe.compose_scene(rot_fixture(**kw), plan_width_m=PLAN_W)
+
+
+def test_room_rotation() -> None:
+    print("\n[19] the room turns as a WHOLE (v6 addendum)")
+    stub_props()
+    sc = rot_scene()
+
+    plate = plate_of(sc, "t")
+    check("the floor plate is the TURNED hull, not a straight shell",
+          plate.get("outline") == ROT_ROOM_TURNED, str(plate.get("outline")))
+    check("...and so is the room block the editor draws",
+          [r for r in sc["rooms"] if r["room_id"] == "t"][0]["outline"]
+          == ROT_ROOM_TURNED)
+    straight = plate_of(rot_scene(rotation=0), "t")
+    check("without a rotation nothing moves (the ordinary plan)",
+          straight.get("outline") == [[0.0, 1.0], [4.0, 1.0],
+                                      [4.0, 3.0], [0.0, 3.0]],
+          str(straight.get("outline")))
+
+    # Walls follow the hull: edge 0 now runs (1,4) → (1,0), so its wall
+    # pieces stand on x = 1 and their outward normal is (uz, −ux) with
+    # (ux, uz) = (0, −1) → (−1, 0), pointing WEST out of the room.
+    edge0 = [w for w in sc["walls"] if w.get("room_id") == "t"
+             and near(w["from"][0], 1.0) and near(w["to"][0], 1.0)]
+    check("the shell walls stand on the turned edge (x = 1)",
+          len(edge0) == 2 and all(near(w["outward_normal"][0], -1.0)
+                                  and near(w["outward_normal"][1], 0.0)
+                                  for w in edge0),
+          str([(w["from"], w["to"]) for w in edge0]))
+
+    # PROP: room-local (1.0, 0.5) → straight (0 + 1, 1 + 0.5) = (1, 1.5) →
+    # offset (−1, −0.5) → turned (−0.5, 1) → world (2 − 0.5, 2 + 1) = (1.5, 3).
+    # Its own yaw rides on top of the room's: 30 + 90 = 120.
+    prop = spec_of(sc, "prop", "table")
+    check("a prop lands on the hand point of the turned room",
+          prop["anchor"] == [1.5, 3.0], str(prop["anchor"]))
+    check("...and its yaw is its own PLUS the room's",
+          near(prop["yaw_deg"], 120.0), str(prop["yaw_deg"]))
+
+    # MARKER: room-local (3.0, 1.5) → straight (3, 2.5) → offset (1, 0.5) →
+    # turned (0.5, −1) → world (2.5, 1.0); facing 45 + 90 = 135.
+    mk = [m for m in sc["markers"] if m["source"] == "room"][0]
+    check("a room marker turns with the room", mk["at_world"] == [2.5, 1.0],
+          str(mk["at_world"]))
+    check("...and its facing turns by the same angle",
+          near(mk["facing"], 135.0), str(mk.get("facing")))
+
+    # OPENING: edge 0 keeps its INDEX; the world point is the midpoint of the
+    # turned edge (1,4) → (1,0), i.e. (1, 2). The edge direction is (0, −1),
+    # which is what `along` carries.
+    op = [r for r in sc["rooms"] if r["room_id"] == "t"][0]["openings"][0]
+    check("the opening keeps its edge index (the hull's winding is intact)",
+          op["edge"] == 0 and near(op["at"], 0.5), str(op))
+    door = [d for d in sc["doorways"] if "t" in d["rooms"]][0]
+    check("its threshold sits on the turned edge's midpoint",
+          door["at_world"] == [1.0, 2.0], str(door["at_world"]))
+    check("...running along the turned edge (0, −1)",
+          near(door["along"][0], 0.0) and near(door["along"][1], -1.0),
+          str(door["along"]))
+
+
+def test_rotation_outside_boundary() -> None:
+    print("\n[19b] a turn can push a room off the plot (v6 Nr. 9)")
+    from app.core.room_recipe import compose_recipe
+    # Plot = the 10 m square (−5…5). The room is 8 × 2 at x −4, y 2 →
+    # centre (0, 3), straight bbox x −4…4, z 2…4: inside on every probe.
+    # Turned by 90° the offsets (∓4, ∓1) become (∓1, ±4) → world
+    # (−1,7) (−1,−1) (1,−1) (1,7): z = 7 is 2 m past the plot's north edge.
+    boundary = [[-5, -5], [5, -5], [5, 5], [-5, 5]]
+    room = {"id": "long", "layout": {"x": -4.0, "y": 2.0, "w": 8.0, "d": 2.0,
+                                     "level": 0}}
+
+    def strays(rotation: int) -> list:
+        lay = dict(room["layout"])
+        if rotation:
+            lay["rotation"] = rotation
+        recipe = compose_recipe({**room, "layout": lay}, [])
+        return scene_recipe.rooms_outside_boundary([recipe], boundary)
+
+    check("straight it fits on the plot", strays(0) == [], str(strays(0)))
+    check("turned 90° it pokes out — and is named",
+          strays(90) == ["long"], str(strays(90)))
+
+
+def test_rotation_shared_walls() -> None:
+    print("\n[19c] shared walls stay COLINEARITY-based")
+    from app.core.room_recipe import compose_recipe
+    # A: x 0, y 0, w 4, d 2 → centre (2, 1). Turned 90° its corners are
+    # (1,3) (1,−1) (3,−1) (3,3) — so its edge 2 is the wall x = 3, z −1…3.
+    # B: x 2, y 0, w 4, d 2 → centre (4, 1). Turned 90° → (3,3) (3,−1)
+    # (5,−1) (5,3) — its edge 0 is the SAME wall, run the other way.
+    # (On paper the two rectangles overlap; turned they are neighbours — the
+    # detection reads the turned hull, which is exactly the point.)
+    a = {"id": "a", "layout": {"x": 0.0, "y": 0.0, "w": 4.0, "d": 2.0,
+                               "rotation": 90,
+                               "openings": [{"edge": 2, "at": 0.5,
+                                             "type": "door", "width_m": 1.0,
+                                             "height_m": 2.1, "to": "b"}]}}
+    b = {"id": "b", "layout": {"x": 2.0, "y": 0.0, "w": 4.0, "d": 2.0,
+                               "rotation": 90}}
+    rb = compose_recipe(b, [a])
+    mirror = [o for o in rb["openings"] if o.get("mirrored")]
+    # A's door sits at (3, −1 + 0.5·4) = (3, 1). Projected onto B's edge 0
+    # ((3,3) → (3,−1), direction (0,−1)): t = (1 − 3)·(−1) = 2 → at = 2/4.
+    check("two rooms turned ALIKE still share their wall",
+          len(mirror) == 1 and mirror[0]["edge"] == 0
+          and near(mirror[0]["at"], 0.5), str(mirror))
+
+    # The same pair, straight: A east wall x = 4 (edge 1), C west wall
+    # x = 4 (edge 3) — the plain neighbour case, unchanged.
+    a0 = {"id": "a", "layout": {"x": 0.0, "y": 0.0, "w": 4.0, "d": 2.0,
+                                "openings": [{"edge": 1, "at": 0.5,
+                                              "type": "door", "width_m": 1.0,
+                                              "height_m": 2.1, "to": "c"}]}}
+    c0 = {"id": "c", "layout": {"x": 4.0, "y": 0.0, "w": 4.0, "d": 2.0}}
+    straight = [o for o in compose_recipe(c0, [a0])["openings"]
+                if o.get("mirrored")]
+    check("...as do two straight ones", len(straight) == 1
+          and straight[0]["edge"] == 3, str(straight))
+
+    # 30° against 0°: C's walls now run at 30°, so NO edge of C is
+    # antiparallel to A's east wall — there is no shared wall to mirror
+    # into. Documented, not repaired.
+    c30 = {"id": "c", "layout": {**c0["layout"], "rotation": 30}}
+    skew = [o for o in compose_recipe(c30, [a0])["openings"]
+            if o.get("mirrored")]
+    check("30° against 0° simply has no shared wall — and no mirror",
+          skew == [], str(skew))
+
+
 def main() -> int:
     test_scalars()
     test_scale_is_one()
@@ -2455,6 +2648,9 @@ def main() -> int:
     test_area_detail()
     test_terrain()
     test_ground_placements()
+    test_room_rotation()
+    test_rotation_outside_boundary()
+    test_rotation_shared_walls()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

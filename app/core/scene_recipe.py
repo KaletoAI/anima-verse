@@ -52,7 +52,8 @@ from typing import (Any, Callable, Dict, Iterator, List, Optional, Set,
 from app.core.log import get_logger
 from app.core.model_store import DEFAULT_TIER, variant_urls
 from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
-                                  compose_recipe)
+                                  compose_recipe, layout_rotation,
+                                  room_transform)
 from app.core.scatter_curves import (relief_cells, terrain_grid,
                                      terrain_height, variant_mix)
 
@@ -1438,8 +1439,13 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     at = recipe.get("model_at")
     if not isinstance(at, (list, tuple)) or len(at) != 2:
         at = [w / 2, d / 2]          # absent = centred, in the room's metres
-    anchor_u = x + _num(at[0], w / 2)
-    anchor_v = y + _num(at[1], d / 2)
+    # The anchor rides the room's own turn (contract v6 addendum): rotating a
+    # rigid body about the rect centre IS "move the anchor + spin the mesh
+    # about it by the same angle", and the spin is ``yaw_deg`` below. Without
+    # the moved anchor the model spun in place inside a straight shell — the
+    # gap the addendum closes.
+    place = room_transform(room.get("layout"))
+    anchor_u, anchor_v = place(_num(at[0], w / 2), _num(at[1], d / 2))
     spec: Dict[str, Any] = {
         "role": "room",
         "id": room_id,
@@ -1700,6 +1706,11 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     room_id = recipe.get("room_id") or ""
     floor_y = _room_floor_y(recipe, storey)
     x, y, w, d = _room_rect(recipe, room)
+    # A room marker is a spot IN the room, so it rides the room's own turn —
+    # position through the room transform, facing by the same angle (compass
+    # facing grows in the same sense as a placement yaw, § A1.8).
+    place = room_transform(room.get("layout"))
+    room_yaw = layout_rotation(room.get("layout"))
     figure_h = FIGURE_HEIGHT_M
 
     def _root_drop(animation: Any) -> float:
@@ -1710,8 +1721,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     out: List[Dict[str, Any]] = []
     for marker in recipe.get("markers") or []:
         at = marker.get("at") or [w / 2, d / 2]
-        anchor_u = x + _num(at[0], w / 2)
-        anchor_v = y + _num(at[1], d / 2)
+        anchor_u, anchor_v = place(_num(at[0], w / 2), _num(at[1], d / 2))
         entry: Dict[str, Any] = {
             "room_id": room_id,
             "at_world": [_r(anchor_u), _r(anchor_v)],
@@ -1722,7 +1732,8 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "source": "room",
         }
         if marker.get("rotation") is not None:
-            entry["facing"] = _r(_num(marker.get("rotation")), 1)
+            entry["facing"] = _r((_num(marker.get("rotation")) + room_yaw)
+                                 % 360, 1)
         # Tilt axes (2026-07-28): a figure on a slope is not upright, and
         # facing is only the compass. Applied AFTER the facing, in the
         # figure's own frame — tilt = head up/down, roll = leaning sideways.

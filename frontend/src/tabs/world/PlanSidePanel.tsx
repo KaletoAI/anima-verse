@@ -45,6 +45,11 @@ interface PlanSidePanelProps {
   markerMode: boolean
   onArmMarker: () => void
   onAlwaysVisible: (value: boolean) => void
+  /** The room's own turn in degrees (contract v6 addendum): it turns the
+   *  WHOLE room about its rect centre. The toolbar's ↻ steps 90°, this is
+   *  the free angle — same field, and it is written where it has always
+   *  been read. */
+  onRotation: (deg: number) => void
   /** Terrain-relief opt-out of THIS room (only offered on outdoor rooms). */
   onReliefFlat: (value: boolean) => void
   /** Walls opt-out of THIS room. Stored negative (`no_walls`), shown positive
@@ -81,7 +86,7 @@ const FURNISH_BADGE: Record<string, string> = {
 export function PlanSidePanel({
   room, ground, groundName,
   clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  markerMode, onArmMarker, onAlwaysVisible, onReliefFlat, onNoWalls,
+  markerMode, onArmMarker, onAlwaysVisible, onRotation, onReliefFlat, onNoWalls,
   onFloorOffset,
   surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
@@ -100,12 +105,28 @@ export function PlanSidePanel({
   ) : (
     <>
       <div className="ga-plan-panel-title">{ground ? groundName : (room.name || room.id)}</div>
-      <span className="ga-hint">
-        {ground
-          ? t('The location surface: the area no room takes up. Props and markers stand on the terrain here; it has no walls, no floor plan and no size of its own.')
-          : `${t('Rotation')}: ${layout?.rotation || 0}°${
-            layout?.outline?.length ? ` · ⬠ ${layout.outline.length}` : ''}`}
-      </span>
+      {ground ? (
+        <span className="ga-hint">
+          {t('The location surface: the area no room takes up. Props and markers stand on the terrain here; it has no walls, no floor plan and no size of its own.')}
+        </span>
+      ) : (
+        <span className="ga-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {t('Rotation')}
+          <input
+            type="number"
+            min={0}
+            max={359}
+            step={5}
+            value={layout?.rotation || 0}
+            disabled={!layout}
+            onChange={(e) => onRotation(parseInt(e.target.value, 10) || 0)}
+            title={t('Turns the WHOLE room about its centre — hull, walls, openings, markers, props and the 3D model. Drawing stays straight: new geometry is drawn in the room’s own unturned frame and turned afterwards.')}
+            style={{ width: 58 }}
+          />
+          °
+          {layout?.outline?.length ? ` · ⬠ ${layout.outline.length}` : ''}
+        </span>
+      )}
       {/* THE SHELL BLOCK — a room's own description of its walls, its floor
           and where it sits. The yard has none of it (§ A13a): it is not a
           built thing, it is the ground the built things stand on, and its

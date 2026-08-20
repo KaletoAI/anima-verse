@@ -103,32 +103,45 @@ def room_outline_local(layout: Dict[str, Any]) -> List[List[float]]:
 
     A stored layout carries ``x``/``y`` (the room's minimum corner in the
     location frame) and, optionally, an ``outline`` whose points are metres
-    relative to THAT corner (contract v6 Nr. 2). Adding the two is the whole
-    transform; without an outline the shell is the rectangle's four corners,
-    clockwise in map view.
+    relative to THAT corner (contract v6 Nr. 2); ``layout.rotation`` turns the
+    whole room about its rect centre on the way out (v6 addendum). Both steps
+    live in ``room_recipe.room_transform`` — the ONE place a room-local metre
+    becomes a location-local one — so the draft is measured with exactly the
+    geometry the composed world gets. Without an outline the shell is the
+    rectangle's four corners, clockwise in map view.
     """
-    x = float(layout.get("x") or 0.0)
-    y = float(layout.get("y") or 0.0)
+    from app.core.room_recipe import room_transform
     w = float(layout.get("w") or 0.0)
     d = float(layout.get("d") or 0.0)
+    place = room_transform(layout)
     outline = layout.get("outline")
-    if isinstance(outline, list) and len(outline) >= 3:
-        return [[x + float(p[0]), y + float(p[1])] for p in outline]
-    return [[x, y], [x + w, y], [x + w, y + d], [x, y + d]]
+    pts = (outline if isinstance(outline, list) and len(outline) >= 3
+           else [[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]])
+    return [list(place(float(p[0]), float(p[1]))) for p in pts]
 
 
 def _boxes_overlap(a: Dict[str, Any], b: Dict[str, Any],
                    tol: float = OVERLAP_TOL_M) -> bool:
-    """Do two room rectangles share floor by more than ``tol`` in BOTH axes?
+    """Do two room shells share floor by more than ``tol`` in BOTH axes?
 
     Hand-derived: A at x −2 … 2, B at x 1 … 4 overlap by 1 m; A at x −2 … 2 and
     B at x 2 … 4 overlap by 0 — a shared wall, which is what neighbouring rooms
     are made of and must never warn.
+
+    Measured on the PLACED shell, not on ``x/y/w/d``: a turned room's stored
+    rectangle is its straight frame, and its bounding box in the location is
+    the box of the turned hull. For an unturned room the two are the same box
+    (the sanitizer folds a drawn hull's bbox into the rect), so nothing moves
+    for the ordinary plan.
     """
-    ax0, ay0 = float(a["x"]), float(a["y"])
-    ax1, ay1 = ax0 + float(a["w"]), ay0 + float(a["d"])
-    bx0, by0 = float(b["x"]), float(b["y"])
-    bx1, by1 = bx0 + float(b["w"]), by0 + float(b["d"])
+    def _box(lay: Dict[str, Any]) -> tuple:
+        pts = room_outline_local(lay)
+        xs = [p[0] for p in pts]
+        zs = [p[1] for p in pts]
+        return (min(xs), min(zs), max(xs), max(zs))
+
+    ax0, ay0, ax1, ay1 = _box(a)
+    bx0, by0, bx1, by1 = _box(b)
     return (min(ax1, bx1) - max(ax0, bx0) > tol
             and min(ay1, by1) - max(ay0, by0) > tol)
 

@@ -208,7 +208,7 @@ export function PlanToolbar({
         icon="↻"
         disabled={!shape}
         onClick={onRotate}
-        title={shapeHint(t('Rotate the room 90° clockwise — hull, markers and 3D model turn together. Now: {deg}°')
+        title={shapeHint(t('Turn the room 90° — hull, walls, openings, markers, props and the 3D model turn together about the room’s centre. You draw straight and turn afterwards: new geometry is always drawn in the room’s own unturned frame. Free angles in the room panel. Now: {deg}°')
           .replace('{deg}', String(selectionRotation)))}
       />
       <Tool

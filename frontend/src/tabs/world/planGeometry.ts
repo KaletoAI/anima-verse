@@ -21,6 +21,11 @@
  * y points DOWN like the screen (it is the local z of § A1.1), so a hull that
  * winds clockwise on screen has a positive shoelace sum and its interior lies
  * to the RIGHT of every directed edge.
+ *
+ * `layout.rotation` turns the WHOLE room about its rect centre on the way
+ * from the room's frame into the location's (contract v6 addendum) — see
+ * `roomToLocal` / `localToRoom` below. Everything STORED stays in the room's
+ * straight frame; the turn is applied when a room-local metre is placed.
  */
 
 /** Smallest room a drawing may commit, in metres — below this a hull is a
@@ -235,20 +240,55 @@ export const normalizeOpeningEdge = (
   }
 }
 
-/** Hull polygon lifted from room-local metres into LOCATION-local metres — a
- *  pure translation now that both frames count the same unit (v6 Nr. 2). */
-export const absOutline = (
-  lay: { x: number; y: number; w: number; d: number; outline?: Pt[] }): Pt[] =>
-  outlineOf(lay).map(([u, v]) => [lay.x + u, lay.y + v] as Pt)
+// ── The room's own turn (contract v6 addendum, 2026-08-20) ──
+// `layout.rotation` turns the WHOLE room about its rect centre — hull, walls,
+// openings, markers, props and the 3D model alike. Storage stays in the
+// room's own STRAIGHT frame: you draw straight, then turn. This is the
+// editor's mirror of `room_recipe.room_transform` — change both or neither.
 
-/** Edge + position of an opening after rotating the room 90° clockwise, so
- *  openings turn with the room like markers do. `at` stays a ratio of its
- *  edge, which is why this rule is unchanged by the metric wave. */
-export const rotateOpeningCW = (edge: EdgeLetter, at: number): { edge: EdgeLetter; at: number } =>
-  edge === 'N' ? { edge: 'E', at }
-    : edge === 'E' ? { edge: 'S', at: r4(1 - at) }
-      : edge === 'S' ? { edge: 'W', at }
-        : { edge: 'N', at: r4(1 - at) }
+/** A room layout as far as the geometry cares. */
+export interface RoomFrame {
+  x: number; y: number; w: number; d: number
+  outline?: Pt[]; rotation?: number
+}
+
+/** Rotate `p` about `c` by `deg`, in the ONE sense of § A1.1
+ *  (`world_geometry.local_to_world`, three.js `rotation.y = +rad(θ)`):
+ *      x' = cx + lx·cos θ + lz·sin θ
+ *      z' = cz − lx·sin θ + lz·cos θ
+ *  Positive degrees therefore turn COUNTER-CLOCKWISE on the y-down plan,
+ *  which is why every CSS/SVG rendering of an angle here uses `-deg`. */
+export function rotateAbout(p: Pt, c: Pt, deg: number): Pt {
+  if (!deg) return p
+  const rad = (deg * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const lx = p[0] - c[0]
+  const lz = p[1] - c[1]
+  return [c[0] + lx * cos + lz * sin, c[1] - lx * sin + lz * cos]
+}
+
+/** The centre a room turns about: its rect centre in LOCATION-local metres. */
+export const roomCentre = (lay: RoomFrame): Pt =>
+  [lay.x + lay.w / 2, lay.y + lay.d / 2]
+
+/** ROOM-local metres → LOCATION-local metres: translate by the min corner,
+ *  then turn the whole room about its centre. The one conversion. */
+export const roomToLocal = (lay: RoomFrame, p: Pt): Pt =>
+  rotateAbout([lay.x + p[0], lay.y + p[1]], roomCentre(lay), lay.rotation || 0)
+
+/** The inverse — LOCATION-local metres → ROOM-local metres. Every hit test
+ *  and every drag goes through it, so the cursor lands where the room is
+ *  DRAWN and not where its straight frame would be. */
+export const localToRoom = (lay: RoomFrame, p: Pt): Pt => {
+  const q = rotateAbout(p, roomCentre(lay), -(lay.rotation || 0))
+  return [q[0] - lay.x, q[1] - lay.y]
+}
+
+/** Hull polygon lifted from room-local metres into LOCATION-local metres —
+ *  translation plus the room's own turn (v6 Nr. 2 + the rotation addendum). */
+export const absOutline = (lay: RoomFrame): Pt[] =>
+  outlineOf(lay).map((p) => roomToLocal(lay, p))
 
 // ── Adjacency geometry (B4) — pure functions over room hulls ──
 // Coordinates ARE metres since v6 Nr. 2, so the thresholds apply directly and
@@ -259,9 +299,7 @@ export const SHARE_TOL_M = 0.15
 export const MIN_SHARE_M = 0.8
 export const MIN_WINDOW_EDGE_M = 2.5
 
-export interface PolyRoom {
-  id: string; x: number; y: number; w: number; d: number; outline?: Pt[]
-}
+export interface PolyRoom extends RoomFrame { id: string }
 export interface SharedEdge { edge: number; at: number; neighborId: string }
 
 /** Shared edges of room A with the given others (same level only): edges of
