@@ -491,6 +491,11 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
       ? (data.terrain as SceneTerrain) : undefined,
     // Detail-Modus der Location (v5.2 Nr. 10) — gilt auch ohne Modell.
     area_detail: data.area_detail === true ? true : undefined,
+    // The floor of this location is the world terrain (§ B1 addendum part 3).
+    // Dropping this field here silently pinned the tile plate to the detail
+    // rung (−0.05) instead of the natural one (−0.13) — 8 cm above the very
+    // sand and water surfaces it must back (found 2026-08-21).
+    natural_floor: data.natural_floor === true ? true : undefined,
   };
 }
 
