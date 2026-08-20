@@ -31,9 +31,13 @@ from pathlib import Path
 from app.core import paths as _paths
 _paths.init()
 
-# Load JSON config from the (now-known) storage directory
-from app.core.config import load as _load_config
+# Load JSON config from the (now-known) storage directory. The load itself is
+# read-only; migrate_file() is the ONE place that persists the dead-field strip
+# and the default seeding — the running world's config.json stays current,
+# while every script that merely loads a world leaves it untouched.
+from app.core.config import load as _load_config, migrate_file as _migrate_config_file
 _load_config(_paths.get_config_path())
+_migrate_config_file(_paths.get_config_path())
 
 # Welt-DB initialisieren (idempotent, legt world.db an falls noetig)
 from app.core.db import init_schema as _init_db_schema

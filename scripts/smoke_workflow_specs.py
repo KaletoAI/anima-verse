@@ -22,8 +22,11 @@ What is checked here, all hand-derived, no snapshots:
      VALUE is legacy. Checked against the consumer's source line AND on the
      migrated profile, whose key must still be ``workflow``.
   4. The config half of the migration (``config._rewrite_legacy_workflow_specs``)
-     against a temp config.json: messaging_frame.target and the imagegen
-     defaults are rewritten, living neighbours stay, second run writes nothing.
+     against a hand-built config dict: messaging_frame.target and the imagegen
+     defaults are rewritten, living neighbours stay, the second run is a no-op.
+     The rewriter is in-memory only (``config.load()`` is a read path) — the
+     disk side belongs to ``config.migrate_file()`` and is checked in
+     scripts/smoke_dead_config_fields.py.
   5. The per-character half (``migrate_legacy_workflow_specs_once``) against a
      THROWAWAY world: the legacy profile is rewritten, an already-canonical one
      is left alone, the file-backed skill configs
@@ -146,7 +149,7 @@ def main():
     eq("the migration targets exactly that field",
        PROFILE_SPEC_FIELDS, (("outfit_imagegen", "workflow"),))
 
-    print("4) the config half against a temp config.json")
+    print("4) the config half against a hand-built config dict")
     check("messaging_frame.target" in cfgmod.LEGACY_SPEC_FIELDS,
           "messaging_frame.target is covered")
     fixture = {
@@ -163,38 +166,32 @@ def main():
                             "prompt": "modern smartphone, pure green screen"},
         "log_level": "INFO",
     }
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "config.json"
-        cfg = copy.deepcopy(fixture)
-        path.write_text(json.dumps(cfg), encoding="utf-8")
-        changed = cfgmod._rewrite_legacy_workflow_specs(cfg, path)
-        check(changed is True, "the rewrite reports a change")
-        on_disk = json.loads(path.read_text(encoding="utf-8"))
-        for label, dotted, expected in [
-            ("messaging_frame.target", ("messaging_frame", "target"), "Z-Image"),
-            ("outfit default", ("image_generation", "outfit_imagegen_default"), "Flux*"),
-            ("story engine default", ("story_engine", "imagegen_default"), "Z-Image"),
-            ("bare workflow: -> auto", ("random_events", "event_imagegen_default"), ""),
-            ("backend: prefix kept", ("image_generation", "expression_imagegen_default"),
-             "backend:Krea2"),
-            ("bare glob kept", ("image_generation", "location_imagegen_default"), "Together*"),
-            ("nested plugin field kept", ("skills", "instagram", "imagegen_default"), "Flux2*"),
-        ]:
-            node = on_disk
-            for part in dotted:
-                node = node.get(part, {}) if isinstance(node, dict) else {}
-            eq(f"{label} on disk", node, expected)
-        eq("living neighbour untouched",
-           on_disk["image_generation"]["backends"], fixture["image_generation"]["backends"])
-        eq("living top-level key untouched", on_disk.get("log_level"), "INFO")
-        eq("the prompt sibling of target is untouched",
-           on_disk["messaging_frame"]["prompt"], "modern smartphone, pure green screen")
-        eq("no section lost", sorted(on_disk.keys()), sorted(fixture.keys()))
+    cfg = copy.deepcopy(fixture)
+    changed = cfgmod._rewrite_legacy_workflow_specs(cfg)
+    check(changed is True, "the rewrite reports a change")
+    for label, dotted, expected in [
+        ("messaging_frame.target", ("messaging_frame", "target"), "Z-Image"),
+        ("outfit default", ("image_generation", "outfit_imagegen_default"), "Flux*"),
+        ("story engine default", ("story_engine", "imagegen_default"), "Z-Image"),
+        ("bare workflow: -> auto", ("random_events", "event_imagegen_default"), ""),
+        ("backend: prefix kept", ("image_generation", "expression_imagegen_default"),
+         "backend:Krea2"),
+        ("bare glob kept", ("image_generation", "location_imagegen_default"), "Together*"),
+        ("nested plugin field kept", ("skills", "instagram", "imagegen_default"), "Flux2*"),
+    ]:
+        node = cfg
+        for part in dotted:
+            node = node.get(part, {}) if isinstance(node, dict) else {}
+        eq(f"{label} rewritten", node, expected)
+    eq("living neighbour untouched",
+       cfg["image_generation"]["backends"], fixture["image_generation"]["backends"])
+    eq("living top-level key untouched", cfg.get("log_level"), "INFO")
+    eq("the prompt sibling of target is untouched",
+       cfg["messaging_frame"]["prompt"], "modern smartphone, pure green screen")
+    eq("no section lost", sorted(cfg.keys()), sorted(fixture.keys()))
 
-        mtime = path.stat().st_mtime_ns
-        check(cfgmod._rewrite_legacy_workflow_specs(cfg, path) is False,
-              "second run reports no change")
-        eq("second run wrote nothing", path.stat().st_mtime_ns, mtime)
+    check(cfgmod._rewrite_legacy_workflow_specs(cfg) is False,
+          "second run reports no change")
 
     print("5) the per-character half against a throwaway world")
     from app.models.character import (get_character_dir, get_character_profile,

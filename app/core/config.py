@@ -550,26 +550,21 @@ _DEFAULT_MARKETPLACE_CATALOGS = [
 ]
 
 
-def _seed_default_marketplace_catalogs(config: dict, config_path: Path) -> bool:
+def _seed_default_marketplace_catalogs(config: dict) -> bool:
     """Seeds the public catalog on a fresh world.
 
     Idempotent: only fires when `content_marketplace.catalogs` is absent.
     If the admin clears the list to [], it stays empty — explicit choice
     beats implicit re-seeding.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     cm = config.setdefault("content_marketplace", {})
     if "catalogs" in cm:
         return False
     import copy
     cm["catalogs"] = copy.deepcopy(_DEFAULT_MARKETPLACE_CATALOGS)
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Default marketplace catalog seeded -> %s", config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to seed default marketplace catalog to %s: %s", config_path, e)
-        return False
+    return True
 
 
 # Mesh (img2mesh) backends a BRAND-NEW world starts with — the gateway alias
@@ -637,13 +632,15 @@ def _default_mesh_backend_entries() -> list:
     return out
 
 
-def _seed_default_mesh_backends(config: dict, config_path: Path) -> bool:
+def _seed_default_mesh_backends(config: dict) -> bool:
     """Seeds the mesh backend catalog (img2mesh + mesh2mesh) into a BRAND-NEW
     world's config.
 
     Only ever called for a world whose config.json did not exist yet: an
     existing world's backend list is the admin's, and silently appending
     aliases to it would resurrect entries they deleted on purpose.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     ig = config.setdefault("image_generation", {})
     backends = ig.setdefault("backends", [])
@@ -651,26 +648,20 @@ def _seed_default_mesh_backends(config: dict, config_path: Path) -> bool:
            for b in backends):
         return False
     backends.extend(_default_mesh_backend_entries())
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Default mesh backends seeded (%d) -> %s",
-                    len(_DEFAULT_MESH_BACKENDS) + 1, config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to seed default mesh backends to %s: %s",
-                     config_path, e)
-        return False
+    logger.info("Default mesh backends seeded (%d)",
+                len(_DEFAULT_MESH_BACKENDS) + 1)
+    return True
 
 
-def _migrate_backend_categories(config: dict, config_path: Path) -> bool:
+def _migrate_backend_categories(config: dict) -> bool:
     """One-time rename of the backend category ``generate`` -> ``txt2img``.
 
     The category vocabulary became explicit about the direction of the alias
     (txt2img / img2img / inpaint / img2mesh). Nothing ever branched on the old
     ``generate`` value (only ``inpaint`` carries behaviour), so this is a pure
     label migration — image-to-image aliases can be re-tagged in the admin.
-    Runs BEFORE the secrets overlay, so no secrets can leak into config.json.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     backends = (config.get("image_generation") or {}).get("backends") or []
     changed = False
@@ -678,20 +669,12 @@ def _migrate_backend_categories(config: dict, config_path: Path) -> bool:
         if isinstance(be, dict) and be.get("category") == "generate":
             be["category"] = "txt2img"
             changed = True
-    if not changed:
-        return False
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Backend categories migrated: 'generate' -> 'txt2img' (%s)",
-                    config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to migrate backend categories in %s: %s", config_path, e)
-        return False
+    if changed:
+        logger.info("Backend categories migrated: 'generate' -> 'txt2img'")
+    return changed
 
 
-def _migrate_lora_triggers(config: dict, config_path: Path) -> bool:
+def _migrate_lora_triggers(config: dict) -> bool:
     """One-time consolidation of the LoRA library to one entry per LoRA.
 
     Old shape: one entry per (lora, endpoint) pair — ``{lora, word, endpoint,
@@ -704,6 +687,8 @@ def _migrate_lora_triggers(config: dict, config_path: Path) -> bool:
     union of the non-empty endpoints — unless a member had the empty endpoint
     ("all backends"), which wins as ``backends: []``; ``missing_on`` collects
     the endpoints of members flagged missing.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     ig = config.get("image_generation") or {}
     triggers = ig.get("lora_triggers")
@@ -751,25 +736,21 @@ def _migrate_lora_triggers(config: dict, config_path: Path) -> bool:
             entry["missing_on"] = []
 
     ig["lora_triggers"] = [merged[n] for n in order]
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("LoRA library migrated: %d entries -> %d unique (%s)",
-                    len(triggers), len(order), config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to migrate LoRA library in %s: %s", config_path, e)
-        return False
+    logger.info("LoRA library migrated: %d entries -> %d unique",
+                len(triggers), len(order))
+    return True
 
 
-def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
+def _seed_default_use_cases(config: dict) -> bool:
     """Legt die Use-Case-Prompt-Struktur an (leere Felder, 2 Familien je Use-Case).
 
     Die Felder bleiben LEER — die eingebauten Defaults (_DEFAULT_IMAGE_USE_CASES)
     greifen als Resolver-Fallback und werden in der Admin-UI als grauer
     Placeholder gezeigt. Geseedet wird nur die Struktur, damit der Admin die
     Eintraege sieht/editieren/erweitern kann. Idempotent + Backfill fehlender
-    Use-Cases. Returns True wenn etwas geschrieben wurde.
+    Use-Cases. Returns True wenn sich etwas geaendert hat.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     import copy
     ig = config.setdefault("image_generation", {})
@@ -788,24 +769,19 @@ def _seed_default_use_cases(config: dict, config_path: Path) -> bool:
             if fam not in styles:
                 styles[fam] = copy.deepcopy(empty_fields)
                 changed = True
-    if not changed:
-        return False
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Use-case prompt structure seeded/extended -> %s", config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to seed use_cases to %s: %s", config_path, e)
-        return False
+    if changed:
+        logger.info("Use-case prompt structure seeded/extended")
+    return changed
 
 
-def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> bool:
+def _strip_legacy_imagegen_prompt_fields(config: dict) -> bool:
     """Removes the old style fields that now live in the use cases.
 
     - Backends:  prompt_prefix / negative_prompt
     They are functionally dead already (no env mirror, no reader left) — this
     only tidies up config.json. Idempotent.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     ig = config.get("image_generation", {})
     changed = False
@@ -829,16 +805,9 @@ def _strip_legacy_imagegen_prompt_fields(config: dict, config_path: Path) -> boo
               "map_2d_image_prompt_suffix"):
         if k in ig:
             del ig[k]; changed = True
-    if not changed:
-        return False
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Legacy image-gen style fields removed (workflow/backend) -> %s", config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to strip legacy imagegen fields from %s: %s", config_path, e)
-        return False
+    if changed:
+        logger.info("Legacy image-gen style fields removed (workflow/backend)")
+    return changed
 
 
 # Config fields whose feature was removed: no schema entry, no reader, no
@@ -880,16 +849,17 @@ DEAD_TOPLEVEL_FIELDS: tuple = tuple(sorted(
     {k for keys in DEAD_CONFIG_FIELDS.values() for k in keys}))
 
 
-def _strip_dead_config_fields(config: dict, config_path: Path) -> bool:
-    """Removes the DEAD_CONFIG_FIELDS from config.json, once, at load time.
+def _strip_dead_config_fields(config: dict) -> bool:
+    """Removes the DEAD_CONFIG_FIELDS from the config dict.
 
     Sweeps both depths: inside the owning section AND at the top level, where
     worlds older than the sectioning still carry some of them.
 
     Same pattern as _strip_legacy_imagegen_prompt_fields: no fallback reader,
     no alias — the fields are gone from code, so they go from the world file
-    too. Idempotent; writes only when something was actually removed, and runs
-    BEFORE the secrets overlay so no secret can leak into config.json.
+    too. Idempotent; returns True only when something was actually removed.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     changed = False
     for section, keys in DEAD_CONFIG_FIELDS.items():
@@ -904,16 +874,9 @@ def _strip_dead_config_fields(config: dict, config_path: Path) -> bool:
         if key in config:
             del config[key]
             changed = True
-    if not changed:
-        return False
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        logger.info("Dead config fields removed (feature gone) -> %s", config_path)
-        return True
-    except OSError as e:
-        logger.error("Failed to strip dead config fields from %s: %s", config_path, e)
-        return False
+    if changed:
+        logger.info("Dead config fields removed (feature gone)")
+    return changed
 
 
 # Config fields that hold a RENDER TARGET — a backend-name glob ("Flux2*", or
@@ -938,13 +901,14 @@ LEGACY_SPEC_FIELDS: tuple = (
 )
 
 
-def _rewrite_legacy_workflow_specs(config: dict, config_path: Path) -> bool:
-    """Rewrites "workflow:<glob>" render targets to the bare glob, at load time.
+def _rewrite_legacy_workflow_specs(config: dict) -> bool:
+    """Rewrites "workflow:<glob>" render targets to the bare glob.
 
     Same pattern as _strip_dead_config_fields above: no fallback reader, no
-    alias — the world file gets the canonical spelling once. Idempotent; writes
-    only when something actually changed, and runs BEFORE the secrets overlay
-    so no secret can leak into config.json.
+    alias — the world file gets the canonical spelling once. Idempotent;
+    returns True only when something actually changed.
+
+    In-memory only — see `migrate_file()` for the disk side.
     """
     from app.core.workflow_spec_migration import strip_legacy_workflow_prefix
     changed = False
@@ -964,14 +928,81 @@ def _rewrite_legacy_workflow_specs(config: dict, config_path: Path) -> bool:
         node[key] = new
         changed = True
         logger.info("Legacy render spec rewritten: %s %r -> %r", dotted, old, new)
-    if not changed:
+    return changed
+
+
+def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
+    """Runs every load-time normalisation over ``config``, IN MEMORY.
+
+    Strip (dead/legacy fields) + seed (use-case blocks, marketplace catalog,
+    and — for a brand-new world only — the mesh backend catalog) + the two
+    one-time renames. Every step is idempotent, so a second run over the same
+    dict returns False. Returns True when any step changed something.
+
+    This is the shared body of `load()` (which never touches disk) and
+    `migrate_file()` (which persists the very same result).
+    """
+    changed = False
+    if _seed_default_use_cases(config):
+        changed = True
+    if fresh_world and _seed_default_mesh_backends(config):
+        changed = True
+    if _strip_legacy_imagegen_prompt_fields(config):
+        changed = True
+    if _strip_dead_config_fields(config):
+        changed = True
+    if _rewrite_legacy_workflow_specs(config):
+        changed = True
+    if _seed_default_marketplace_catalogs(config):
+        changed = True
+    if _migrate_backend_categories(config):
+        changed = True
+    if _migrate_lora_triggers(config):
+        changed = True
+    return changed
+
+
+def migrate_file(config_path: Optional[Path] = None) -> bool:
+    """Applies the load-time normalisations TO DISK. Returns True if written.
+
+    `load()` is a pure READ path — it normalises only the in-memory config, so
+    that merely opening a world (a smoke script, a CLI, an export run) leaves
+    the world's files byte-identical. Persisting is this function's job, and it
+    is called from exactly one place: the server boot, right after `load()` —
+    the RUNNING world's config.json is meant to stay current. The admin save
+    path needs no call: it serialises the whole in-memory config back out
+    (`/admin/settings/raw` -> page state -> `config.save`), so the seeded and
+    stripped state lands there by itself.
+
+    Deliberately works on a FRESH READ of the file rather than on `_CONFIG`:
+    by the time boot calls this, `_CONFIG` carries the secrets.json overlay,
+    and dumping that would leak API keys into the tracked config.json. The
+    re-read dict is exactly what the old in-load writers used to persist.
+    """
+    path = Path(config_path) if config_path else _CONFIG_PATH
+    fresh_world = not path.exists()
+    on_disk: dict = {}
+    if not fresh_world:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                on_disk = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error("Config migration skipped — cannot read %s: %s", path, e)
+            return False
+        if not isinstance(on_disk, dict):
+            logger.error("Config migration skipped — %s is not an object", path)
+            return False
+
+    if not _apply_file_migrations(on_disk, fresh_world):
         return False
+
     try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(path, on_disk)
+        logger.info("Config file migrated (strip + seed) -> %s", path)
         return True
     except OSError as e:
-        logger.error("Failed to rewrite legacy render specs in %s: %s", config_path, e)
+        logger.error("Failed to write migrated config to %s: %s", path, e)
         return False
 
 
@@ -981,6 +1012,9 @@ def load(config_path: Optional[Path] = None) -> dict:
     secrets.json (sibling of config.json) holds sensitive fields and is gitignored.
     Falls back to empty config if config.json doesn't exist.
     Also populates os.environ for backward compatibility.
+
+    READ-ONLY: the strip/seed normalisations below run in memory only, so
+    loading a world never modifies its files. `migrate_file()` persists them.
     """
     global _CONFIG, _CONFIG_PATH, _SECRETS_PATH
     if config_path:
@@ -1004,15 +1038,8 @@ def load(config_path: Optional[Path] = None) -> dict:
             logger.error("Failed to load config from %s: %s", path, e)
             _CONFIG = {}
 
-    _seed_default_use_cases(_CONFIG, path)
-    if fresh_world:
-        _seed_default_mesh_backends(_CONFIG, path)
-    _strip_legacy_imagegen_prompt_fields(_CONFIG, path)
-    _strip_dead_config_fields(_CONFIG, path)
-    _rewrite_legacy_workflow_specs(_CONFIG, path)
-    _seed_default_marketplace_catalogs(_CONFIG, path)
-    _migrate_backend_categories(_CONFIG, path)
-    _migrate_lora_triggers(_CONFIG, path)
+    # Normalise IN MEMORY — nothing lands on disk here (see migrate_file()).
+    _apply_file_migrations(_CONFIG, fresh_world)
 
     # Overlay secrets.json (gitignored — holds api keys / passwords)
     if _SECRETS_PATH.exists():
