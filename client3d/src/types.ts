@@ -40,19 +40,22 @@ export interface Room {
   layout?: RoomLayout;
 }
 
-/** AV3D-1: optionale 3D-Metadaten einer Location. */
+/** AV3D-1: optional 3D metadata of a location. */
 export interface Map3dMeta {
   style?: string;   // house | tower | shop | hall | generic | ...
   floors?: number;
-  /** Flächen-Location (Dorf, See, Wald) — das Modell IST der Boden bzw.
-   *  (mit Detail-Modus) eine ausblendende Hülle. Fürs Panel: Räume sind
-   *  dort Zonen, keine Zimmer. */
+  /** Area location (village, lake, forest) — the model IS the ground, or
+   *  (in detail mode) a shell that fades out. For the panel: rooms are
+   *  zones there, not chambers. */
   area_model?: boolean;
-  color?: string;   // Grundfarbe der Fassade, z.B. "#8fa3b0"
-  /** Drehung des Gebäude-Modells um die Hochachse in Grad (Fallback: map_rotation_2d) */
-  rotation?: number;
-  /** Anteil des Modells am Bezugsquadrat der Location (0..1, Default 1) */
-  size?: number;
+  color?: string;   // base colour of the facade, e.g. "#8fa3b0"
+  // `rotation` — the building yaw around the up axis — is GONE with contract
+  // v6 Nr. 10: the model sidecar's own orientation fix (`fix_euler` y) already
+  // turns the mesh around that very axis, and the location itself is turned
+  // by its anchor pin (§ A1.1). `map_rotation_2d` is strictly the flat ICON
+  // artwork rotation and never reaches a 3D renderer.
+  // `size` — the model's share of the reference square — is GONE with v6
+  // Nr. 3: every model scales through its declared real width in metres.
   /** AV3D-12: gezeichneter Gebäude-Grundriss — Polygonpunkte als Fraktionen
    *  des Bezugsquadrats (`plan_width_m`), automatisch geschlossen. Der Client
    *  rendert daraus pro genutzter Etage Boden und Wände (Tür im EG). */

@@ -55,9 +55,16 @@ import type { PlanMode } from './PlanToolbar'
 import { ScenePropPanel } from './ScenePropPanel'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
-import { GROUND_ROOM_ID, hasRect } from './worldTypes'
+import { GROUND_ROOM_ID, groundRoomLabel, hasRect } from './worldTypes'
 
 const CANVAS_W = 420
+/** Under this side length a room is not a small room but a LEFTOVER: in the
+ *  fraction era `layout.x/y/w/d` were shares of a reference square, and the
+ *  metre wave reinterprets those numbers as metres without converting them
+ *  (contract v6 Nr. 2 — "no migration code, a world from the fraction era
+ *  simply delivers tiny rooms"). Half a metre is well below any real room and
+ *  well above the centimetre rounding, so it separates the two cleanly. */
+const TINY_ROOM_M = 0.5
 /** Edge of the drawing window when there is nothing at all to frame — no
  *  boundary, no room, no building outline. Ten metres is a room-sized plot,
  *  which is what a location starts as. */
@@ -441,8 +448,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   }, [map3d?.boundary, boundaryM])
   /** The ground room itself — the server ships one with every location. */
   const groundRoom = rooms.find((r) => r.id === GROUND_ROOM_ID)
-  /** Its label: the author's name for it, else the neutral word. */
-  const yardName = groundRoom?.name?.trim() || t('Yard')
+  /** Its label: the author's name for it, else the ONE shared default —
+   *  the same word the room tree uses, never a second name for one room. */
+  const yardName = groundRoomLabel(groundRoom, t)
 
   /** Everything the plan DRAWS on this level: the rooms with a rectangle plus
    *  — on level 0, once a boundary exists — the yard. */
@@ -467,6 +475,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   /** Rooms only — the yard is never "placed" by an author, so it must not
    *  answer the questions that ask whether anybody drew anything yet. */
   const placedHere = placed.filter((p) => !p.ground)
+  /** Fraction-era leftovers: rooms whose rectangle is a few centimetres
+   *  across because it was a [0,1] share before rooms were stored in metres.
+   *  NOTHING repairs them by itself — a room with a diorama model heals from
+   *  the model's declared real width, a room without one has no width to heal
+   *  from — so the editor names them instead of leaving the author wondering
+   *  why their plan is a speck near the pin. All levels, not just this one:
+   *  the answer must not depend on which floor happens to be open. */
+  const tinyRooms = useMemo(() => rooms.filter((r) =>
+    r.id !== GROUND_ROOM_ID && hasRect(r.layout)
+    && (r.layout.w < TINY_ROOM_M || r.layout.d < TINY_ROOM_M)), [rooms])
   // The yard is not a room to be drawn: it can never be "not on the plan",
   // it simply is the location's surface (§ A13a).
   const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID)
@@ -560,8 +578,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const snapshotFrame = useMemo(() => {
     const xs = boundaryM.map((p) => p[0])
     const zs = boundaryM.map((p) => p[1])
+    // WIDER side, not the x side: `plan_width_m` (and with it the payload's
+    // `extent_m`) is the wider bbox side, so the fallback has to be the same
+    // number — otherwise a plot that is deeper than it is wide gets a frame
+    // too small for its own outline (the map derives it the same way in
+    // `PlacementLayer.pictureFrameLocal`).
     const size = scene?.extent_m
-      || Math.max(...xs) - Math.min(...xs)
+      || Math.max(Math.max(...xs) - Math.min(...xs),
+                  Math.max(...zs) - Math.min(...zs))
       || FALLBACK_VIEW_M
     return { center: [(Math.min(...xs) + Math.max(...xs)) / 2,
                       (Math.min(...zs) + Math.max(...zs)) / 2] as [number, number],
@@ -672,8 +696,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // vertices; tolerances blend a pixel radius with a 0.15 m floor.
   const snapTargets = useMemo(() => {
     if (clickMode !== 'outline' && clickMode !== 'draw-room') return null
+    // A hull SMALLER than the smallest room this editor lets anyone draw is
+    // not geometry to align to — it is fraction-era debris (a rectangle from
+    // before rooms were stored in metres, now a few centimetres wide). Such a
+    // room's four corners sit in a box around the pin, exactly where an
+    // author starts a new plan, and `snapDrawPoint` gives a vertex inside
+    // `tol` unconditional priority over the metre grid: measured on a 14 m
+    // plot, `tol` is 0.387 m around each of them while the whole cluster is
+    // 26 px wide, so the centre of the plan becomes one continuous snap trap
+    // and the drawn shape is never the shape that was clicked (user finding
+    // 2026-08-20). They stay drawn, selectable and editable — they just stop
+    // steering the pen. The banner under the plan says why they are specks.
     const hulls = hullsOf(rooms, level,
       clickMode === 'draw-room' ? drawTarget : '')
+      .filter((hh) => hh.w >= MIN_ROOM_M && hh.d >= MIN_ROOM_M)
     return buildSnapTargets(hulls, {
       // Rooms snap onto the building outline; while the OUTLINE itself is
       // being redrawn it is not a target.
@@ -2565,6 +2601,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       </div>
       </div>
       <PlanScaleBar view={view} canvasPx={canvasPx} />
+      {/* The editor's OWN finding, not the server's: rooms left over from the
+          fraction era. Gentle — it is a "here is why", not an error, and it
+          names the rooms so the author can go and fix the right ones. */}
+      {tinyRooms.length ? (
+        <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
+          <div className="ga-anchor-banner">
+            <span>⚠ {t('{rooms} — smaller than {n} m. These are leftovers from before rooms were stored in metres; their old share of the reference square is now read as metres. Nothing repairs them automatically: delete them, or redraw their hull with ⬠.')
+              .replace('{rooms}', tinyRooms.map((r) => r.name || r.id).join(', '))
+              .replace('{n}', String(TINY_ROOM_M))}</span>
+          </div>
+        </div>
+      ) : null}
       {/* Findings of the SERVER about this floor plan (§ 4.3,
           plan-betreten-und-tueren.md): the composer states them, the editor
           only shows them — at the room it names, otherwise at the location. */}

@@ -890,8 +890,9 @@ def build_context_scene(location_id: str, target: Dict[str, Any], *,
         "frame": {
             "kind": "location_local",
             "axes": "x=east, y=up, z=south (metres)",
-            # The pin exactly as ``world_geometry.placed_boundary`` reads it —
-            # NOT ``map3d.rotation``, which turns the building MODEL (§ A1).
+            # The pin exactly as ``world_geometry.placed_boundary`` reads it.
+            # It is the ONLY turn a location has (§ A1.1) — the second dial
+            # ``map3d.rotation`` is gone with v6 Nr. 10.
             "pin": {
                 "x": float((location or {}).get("pos_x") or 0.0),
                 "z": float((location or {}).get("pos_z") or 0.0),

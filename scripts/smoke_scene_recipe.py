@@ -1306,6 +1306,11 @@ def stub_props() -> None:
 
 
 def model_fixture(*, room_width_m: float = 4.0, map_yaw=None,
+                  # `map_yaw` writes a STRAY `map3d.rotation` — the field is
+                  # deleted with v6 Nr. 10 and nothing may read it any more;
+                  # `map_rotation_2d` is the flat icon's display rotation and
+                  # is equally out of the scene. Both are here so the smoke
+                  # can prove they reach nothing.
                   map_rotation_2d: int = 90, clip_d: bool = False,
                   clip_garden: bool = False, d_outline=None) -> dict:
     d_layout = {
@@ -1393,9 +1398,12 @@ def test_building_spec() -> None:
     check("a stray map3d.size scales NOTHING (v6 Nr. 3: the dial is gone)",
           near(ignored["max_m"], EXTENT), str(ignored.get("max_m")))
     from app.core.world_ops import _sanitize_map3d
-    kept = _sanitize_map3d({"plan_width_m": 10, "rotation": 90, "size": 0.5})
+    kept = _sanitize_map3d({"plan_width_m": 10, "rotation": 90, "size": 0.5,
+                            "style": "house"})
     check("...and a submitted size does not even survive the save",
-          "size" not in kept and kept.get("rotation") == 90, str(kept))
+          "size" not in kept and kept.get("style") == "house", str(kept))
+    check("...nor does a submitted rotation (v6 Nr. 10: the dial is gone)",
+          "rotation" not in kept, str(kept))
     check("no per-axis fields survive",
           not {"box", "scale_mode", "scale_axes"} & set(b), str(sorted(b)))
     check("a shell STANDS on the ground: bottom_y = 0.06 + offset_y",
@@ -1406,10 +1414,16 @@ def test_building_spec() -> None:
           str(b["anchor"]))
     check("the meta fix rides along", near(b["fix_euler"]["y"], 90.0),
           str(b["fix_euler"]))
-    check("yaw falls back to map_rotation_2d", near(b["yaw_deg"], 90.0),
-          str(b["yaw_deg"]))
-    check("an explicit map3d.rotation wins — including 0",
-          near(spec_of(model_scene(map_yaw=0), "building")["yaw_deg"], 0.0))
+    # v6 Nr. 10: a BUILDING has no placement yaw at all any more. The old
+    # chain `map3d.rotation` -> `map_rotation_2d` turned the mesh around the
+    # SAME axis as the sidecar's own orientation fix (`fix_euler` y, checked
+    # one line up as 90) — one axis, one dial. The fixture still carries
+    # `map_rotation_2d` 90 and a `map3d.rotation`, and NEITHER may reach the
+    # spec.
+    check("a building carries no yaw of its own — constant 0",
+          near(b["yaw_deg"], 0.0), str(b["yaw_deg"]))
+    check("...not even from a stray map3d.rotation left in the world data",
+          near(spec_of(model_scene(map_yaw=270), "building")["yaw_deg"], 0.0))
     check("no building meta → no building spec",
           not spec_of(scene_recipe.compose_scene(fixture(), plan_width_m=PLAN_W),
                       "building"))
@@ -1597,7 +1611,15 @@ def test_signature() -> None:
     stub_props()
     base = model_scene()["signature"]
     check("stable for identical input", model_scene()["signature"] == base)
-    check("a map3d edit moves it", model_scene(map_yaw=180)["signature"] != base)
+    styled = model_fixture()
+    styled["map3d"]["style"] = "tower"
+    check("a map3d edit moves it", scene_recipe.compose_scene(
+        styled, plan_width_m=PLAN_W, room_metas=room_metas(),
+        building_meta=BUILDING_META)["signature"] != base)
+    # ...and `map_rotation_2d` does NOT (v6 Nr. 10): it is the flat map
+    # icon's display rotation, it shapes no scene, so it is out of the hash.
+    check("the 2D icon rotation does not move it any more",
+          model_scene(map_rotation_2d=270)["signature"] == base)
     dialed = scene_recipe.compose_scene(
         model_fixture(), plan_width_m=PLAN_W, room_metas=room_metas(),
         building_meta={**BUILDING_META, "offset_y": 0.3})

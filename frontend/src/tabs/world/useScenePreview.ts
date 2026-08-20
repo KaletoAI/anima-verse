@@ -22,7 +22,6 @@ const DEBOUNCE_MS = 300
 
 export function useScenePreview(locationId: string, rooms: Room[],
                                 map3d: Map3D | undefined,
-                                fallbackYawDeg: number,
                                 terrain: string,
                                 // The building model the admin is LOOKING at
                                 // ('' = the active one): the spec must be
@@ -44,7 +43,6 @@ export function useScenePreview(locationId: string, rooms: Room[],
     const timer = window.setTimeout(() => {
       postScenePreview<ScenePayload>({
         id: locationId,
-        map_rotation_2d: fallbackYawDeg,
         // The ground outside is the server's call too (plan-grundflaeche.md
         // § 5) — the draft terrain travels along so an edited ground shows
         // up here exactly as the 3D client will render it.
@@ -68,7 +66,7 @@ export function useScenePreview(locationId: string, rooms: Room[],
         })
     }, DEBOUNCE_MS)
     return () => { stale = true; window.clearTimeout(timer) }
-  }, [locationId, rooms, map3d, fallbackYawDeg, terrain, modelVer, buildingModelFile])
+  }, [locationId, rooms, map3d, terrain, modelVer, buildingModelFile])
 
   return { scene, error }
 }

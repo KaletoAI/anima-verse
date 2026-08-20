@@ -714,15 +714,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         val = raw.get(key)
         if isinstance(val, str) and val.strip():
             out[key] = val.strip()
-    # Building placement on the map tile (docs/schnittstellen-3d.md):
-    # rotation = yaw in degrees (explicit 0 is meaningful — absent falls back
-    # to map_rotation_2d on the client).
-    rot = raw.get("rotation")
-    if rot is not None and f"{rot}".strip() != "":
-        try:
-            out["rotation"] = int(round(float(rot))) % 360
-        except (TypeError, ValueError):
-            pass
+    # ``rotation`` — the building yaw on the map tile — is GONE with v6
+    # (Nr. 5): it turned the mesh around the very axis the model sidecar's
+    # own orientation fix (``fix_euler`` y) already turns, so it was a second
+    # dial on one axis and nothing but a source of arithmetic error. The
+    # location itself is turned by its anchor pin (§ A1.1), ``map_rotation_2d``
+    # is strictly the 2D ICON artwork rotation. Nothing reads the field and
+    # it is not kept here either: a location saved once drops it.
     # ``size`` — the model's ]0, 1] share of the location's bounding box — is
     # GONE with v6 (Nr. 3): a model scales through its DECLARED REAL WIDTH in
     # metres (sidecar ``width_m``), like every other model in the contract.

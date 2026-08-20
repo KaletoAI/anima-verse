@@ -6,7 +6,7 @@ import { ListHeader } from '../../components/ListHeader'
 import { ImportButton } from '../../components/ImportExport'
 import { loadItems, type ItemRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
-import { DANGER_LEVELS, GROUND_ROOM_ID, type Location, type Selection } from './worldTypes'
+import { DANGER_LEVELS, GROUND_ROOM_ID, groundRoomLabel, type Location, type Selection } from './worldTypes'
 import { LocationEditor } from './LocationEditor'
 import { RoomEditor } from './RoomEditor'
 import { LocationGallery } from './LocationGallery'
@@ -339,10 +339,11 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
             const isRoomSelected =
               selection?.kind === 'room' && selection.locationId === location.id && selection.roomId === r.id
             const isEntry = !!r.id && r.id === eid
-            // The ground room may stay unnamed — show the translated default
-            // instead of its reserved id.
+            // The ground room may stay unnamed — show the ONE shared default
+            // instead of its reserved id (`groundRoomLabel`, so the tree and
+            // the floor plan never name one room twice).
             const isGround = r.id === GROUND_ROOM_ID
-            const label = r.name || (isGround ? t('Outside') : r.id)
+            const label = isGround ? groundRoomLabel(r, t) : (r.name || r.id)
             return (
               <li key={r.id}>
                 <button

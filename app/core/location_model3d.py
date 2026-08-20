@@ -413,9 +413,10 @@ def get_client_meta(location_id: str, room_id: str = "",
     tiers, signature}``) of the ACTIVE model, or None when there is none — no
     backend/model enumeration (that is the admin status's job). ``rotation``
     is the admin's persisted 90°-step orientation fix; the client applies it
-    to the model root on load. Map placement (the yaw) is NOT here — that is
-    ``map3d.rotation`` on the location (rooms: ``room.layout``), delivered via
-    the worldmap/locations (see schnittstellen-3d.md).
+    to the model root on load — and since v6 Nr. 10 it is the ONLY thing that
+    turns a BUILDING mesh (the second dial ``map3d.rotation`` is gone). A
+    ROOM diorama still has a placement yaw of its own in ``room.layout``,
+    delivered via the scene recipe (see schnittstellen-3d.md).
 
     The placement dials come from the DEFAULT tier's sidecar: a low variant is
     the same object at a coarser resolution, so it inherits the orientation

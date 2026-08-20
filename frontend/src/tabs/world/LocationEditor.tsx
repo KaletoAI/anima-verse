@@ -6,7 +6,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
-import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, type Location, type Map3D, type SurfaceKind } from './worldTypes'
+import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, groundRoomLabel, type Location, type Map3D, type SurfaceKind } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
 import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel } from './BuildingModelPanel'
@@ -211,7 +211,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             <option value="">— {t('arrive on the ground')} —</option>
             {(draft.rooms || []).map((r) => (
               <option key={r.id || r.name} value={r.id || ''}>
-                {r.name || (r.id === GROUND_ROOM_ID ? t('Outside') : r.id) || '?'}
+                {r.id === GROUND_ROOM_ID ? groundRoomLabel(r, t) : (r.name || r.id || '?')}
               </option>
             ))}
           </select>
@@ -396,7 +396,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   // dials of a non-active model move the model they belong to.
   const [previewModelFile, setPreviewModelFile] = useState('')
   const { scene, error: sceneError } = useScenePreview(
-    location.id, draft.rooms || [], draft.map3d, location.map_rotation_2d || 0,
+    location.id, draft.rooms || [], draft.map3d,
     draft.terrain || '', previewModelFile)
 
   const tab3d = (
@@ -458,47 +458,11 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             />
           </div>
         </Field>
-        {/* Rotation on the world tile. It belongs to the LOCATION, not to any
-            model: the tile is turned whether a building model exists or not,
-            and the 2D icon yaw is the fallback either way. It used to live in
-            the model panel and therefore disappeared with the model
-            (E5 inventory 1a). */}
-        <Field label={t('Rotation on tile (°)')} hint={t('How the location is turned on its world tile. Empty = follow the 2D icon rotation.')}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="range"
-              min={0}
-              max={359}
-              step={1}
-              value={draft.map3d?.rotation ?? (location.map_rotation_2d || 0)}
-              onChange={(e) => updMap3d('rotation', parseInt(e.target.value, 10) || 0)}
-              style={{ flex: 1, minWidth: 0 }}
-            />
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={359}
-              style={{ width: 70 }}
-              value={draft.map3d?.rotation ?? ''}
-              placeholder={String(location.map_rotation_2d || 0)}
-              onChange={(e) => {
-                const n = parseInt(e.target.value, 10)
-                updMap3d('rotation', Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined)
-              }}
-            />
-            {draft.map3d?.rotation !== undefined ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                onClick={() => updMap3d('rotation', undefined)}
-                title={t('Back to default: follow the 2D icon rotation.')}
-              >
-                ↺
-              </button>
-            ) : null}
-          </div>
-        </Field>
+        {/* "Rotation on tile (°)" (map3d.rotation) is GONE with v6 Nr. 10:
+            it turned the building mesh around the same axis the model
+            sidecar's own orientation fix already turns, so it duplicated a
+            dial instead of adding one. The location is turned by its anchor
+            pin, the mesh by its sidecar fix. */}
         <Field label={t('Floors')} hint={t('Procedural fallback only (no building model). Empty = derived from the floor plan (highest level + 1).')}>
           <input
             className="ga-input"
@@ -593,7 +557,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           locationId={location.id}
           mapIconUrl={mapIconUrl}
           map3d={draft.map3d}
-          fallbackYawDeg={location.map_rotation_2d || 0}
           scene={scene}
           onPreviewFileChange={setPreviewModelFile}
           generateSource={modelGenSrc}
@@ -668,7 +631,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           storeyHeightM={draft.map3d?.storey_height_m}
           onStoreyHeight={(v) => updMap3d('storey_height_m', v)}
-          fallbackYawDeg={location.map_rotation_2d || 0}
           scene={scene}
           sceneError={sceneError}
           calibration={calibration}

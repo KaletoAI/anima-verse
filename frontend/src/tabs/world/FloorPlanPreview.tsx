@@ -88,9 +88,6 @@ interface FloorPlanPreviewProps {
    *  size the preview shows (measureKit). The preview owns the state for its
    *  own toolbar fields; a parent may override for fields it hosts itself. */
   measure?: MeasureKey
-  /** The 2D icon rotation (map_rotation_2d) — the contract's yaw fallback
-   *  when map3d.rotation is unset (the model turns with the 2D icon). */
-  fallbackYawDeg?: number
   /** The server-composed scene of the current draft (useScenePreview in the
    *  parent — the 2D editor reads the same response). null = not there yet
    *  or the composer failed; then there is nothing to render. */
@@ -104,7 +101,7 @@ interface FloorPlanPreviewProps {
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, fallbackYawDeg = 0, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
+export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   // Reference sizes: the toolbar's own fields drive them; a parent may push
   // one in for a field it hosts (the model tab does that).
@@ -1493,7 +1490,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
-      fallbackYawDeg, scene, calibration, verify, measure])
+      scene, calibration, verify, measure])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>

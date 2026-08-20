@@ -173,6 +173,20 @@
 >    Bedien-Sprache für die bisherige Flag-Trias (`always_visible` +
 >    `no_walls` [+ `relief_flat`]) — die Felder selbst bleiben.
 >
+> 10. **~~`map3d.rotation`~~ ("Rotation on tile") — ERSATZLOS GESTRICHEN**
+>     (2026-08-20). Sie drehte das Gebäude-Mesh um genau die Achse, die der
+>     Orientierungs-Fix des Modell-Sidecars (`fix_euler` y) schon dreht —
+>     ein zweiter Regler auf einer Achse, also nur eine Fehlerquelle. Ein
+>     `role: "building"`-Spec trägt `yaw_deg` jetzt konstant `0.0`; gedreht
+>     wird das Mesh vom Sidecar-Fix, der Ort von seinem Anker-Pin (§ A1.1).
+>     Gelöscht sind der Sanitizer-Zweig (`world_ops._sanitize_map3d`), der
+>     Editor-Regler, der Typ in beiden Clients und `scene_recipe._building_yaw`
+>     — kein Alias, kein Fallback-Leser, keine Migration. `map_rotation_2d`
+>     bleibt ausschließlich die 90°-Anzeigedrehung des flachen KARTEN-ICONS
+>     und ist damit auch aus der Szenen-Signatur und dem
+>     `POST /play/scene-preview`-Body raus. Räume, Props, Extras und Marker
+>     behalten ihren eigenen Platzierungs-Yaw.
+>
 > Wo der Rest des Dokuments „Quadrat", „Kante `plan_width_m`", eine
 > `[0,1]`-Fraktion, `tile_fit`, `map3d.size` oder Kanten-Buchstaben
 > N/S/E/W nennt, gilt die Liste oben. Numerische Verifikation weiterhin
@@ -617,11 +631,10 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
   `world_to_local` ist die Umkehrung (Drehung um −yaw). **Verbindlich ist
   diese Abbildung, nicht ein Richtungswort:** bei `yaw_deg` 90 zeigt die
   lokale +x-Achse auf Welt **−z**. In three.js ist das
-  `rotation.y = +rad(yaw_deg)` — **derselbe Drehsinn wie in der
-  Szenen-Yaw-Kette** (`map3d.rotation`, § A1.8: `rotation.y = +rad(yaw)`,
-  angeglichen mit E4). Die beiden Felder bleiben trotzdem verschiedene
-  Dinge — das eine dreht die Location in der Welt, das andere das Modell in
-  der Szene; wer sie verwechselt, spiegelt die Location.
+  `rotation.y = +rad(yaw_deg)` — **derselbe Drehsinn wie überall sonst in
+  diesem Vertrag** (§ A1.8: `rotation.y = +rad(yaw)`, angeglichen mit E4).
+  Seit v6 Nr. 10 ist der Anker-Pin die EINZIGE Drehung einer Location: die
+  zweite, `map3d.rotation`, ist gelöscht.
   **Entschieden 2026-08-07:** Dieser Drehsinn ist ab jetzt DER Standard
   dieses Vertrags — für jede Rotation, Karte wie Szene. `k = 1` ist mit E4
   gelandet (2026-08-09), und mit **E4/Task 3** (2026-08-09) ist auch die
@@ -1001,8 +1014,17 @@ E1 unberührt:
   rechnet weiterhin richtig.
 - **Etagenhöhe** `storey = map3d.storey_height_m` (Meter), sonst 3.
   Etagenboden von Level n = `n × storey`.
-- **Yaw-Kette der Szene:** `yaw = map3d.rotation` (explizite 0 zählt) →
-  `map_rotation_2d` → 0; three.js **`rotation.y = +rad(yaw)`**.
+- **Yaw-Kette der Szene: MIT v6 (Nr. 10) ERSATZLOS GESTRICHEN.** Ein
+  GEBÄUDE-Spec trägt `yaw_deg` konstant `0.0`; gedreht wird das Mesh allein
+  vom Orientierungs-Fix seines Sidecars (`fix_euler` y) und der Ort allein
+  von seinem Anker-Pin (§ A1.1) — die alte Kette
+  `map3d.rotation` → `map_rotation_2d` war ein ZWEITER Regler auf derselben
+  Achse und damit nur eine Fehlerquelle. `map3d.rotation` ist gelöscht
+  (Sanitizer-Zweig, Editor-Regler, Typ, `_building_yaw`), ohne Migration und
+  ohne Alias-Leser; `map_rotation_2d` bleibt ausschließlich die Anzeige-
+  Drehung des flachen KARTEN-ICONS (§ A1.9) und erreicht keinen 3D-Renderer
+  mehr. Räume, Props und Extras behalten ihren eigenen Platzierungs-Yaw.
+  Die Renderformel bleibt three.js **`rotation.y = +rad(yaw)`**.
   **Erledigt mit E4 (2026-08-09, Task 3):** das frühere Minus ist weg,
   verbindlicher Drehsinn ist die Weltkarten-Konvention `yaw_deg` (§ A1.1) —
   für jede Rotation, Karte wie Szene. Der SERVER ändert dafür nichts:
@@ -1014,7 +1036,8 @@ E1 unberührt:
   `primitives.ts` wurde geprüft und ist **nicht** gekippt worden — er ist
   hergeleitet korrekt (eine achsparallele Wand hätte gleich AUSGESEHEN,
   deshalb war das eine Rechnung, kein Blick). Alte `map3d.rotation`-Werte
-  drehen seitdem gespiegelt — bewusst, ohne Migration.
+  drehten seitdem gespiegelt — bewusst, ohne Migration; mit v6 Nr. 10 ist das
+  Feld ganz weg.
 - **Rotations-Fixe** (Modell-Meta, Prop-Bibliothek): Euler **'YXZ'**, in
   Grad, VOR jeder Messung anwenden. Yaw (y) außen, Tilt (x) und Roll (z)
   im schon gedrehten Rahmen — „nach vorn kippen" heißt damit unabhängig
@@ -1065,8 +1088,9 @@ E1 unberührt:
   **gezeichnet** hat die Kachelbilder zuletzt der Spieler-Panel, der seit
   **E5** eine Schemakarte ist, § A11). Geblieben sind allein
   `map_image_2d` und `map_rotation_2d`: das Footprint-Icon der Karte und
-  der Yaw in der Szenen-Kette (§ A1.8), der im Rezept und in der
-  Draft-Vorschau mitreist.
+  **allein dessen 90°-Anzeigedrehung**. Der früher daran hängende Yaw der
+  Szenen-Kette ist mit v6 Nr. 10 weg (§ A1.8) — `map_rotation_2d` erreicht
+  keinen 3D-Renderer, keine Szenen-Signatur und keine Draft-Vorschau mehr.
 
 Der **Reise-Payload (§ A11) war in E1 unverändert** (Zellen-Felder auf einer
 Meter-Karte, praktisch aber `travel: null`, weil ohne Raster keine Reise

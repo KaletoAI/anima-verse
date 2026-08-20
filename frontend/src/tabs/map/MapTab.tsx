@@ -14,7 +14,7 @@ import {
 } from './mapMath'
 import {
   NO_ANCHOR_WIDTH_M, PlacementLayer, anchorWidthM, boundaryLocal, isPlaced,
-  type GhostSpec,
+  pictureFrameLocal, type GhostSpec,
 } from './PlacementLayer'
 import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import { HeightLayer } from './HeightLayer'
@@ -124,9 +124,14 @@ import type {
  *     creates and releases a GL context per run, and browsers cap live ones;
  *   - cached per session under `id|layout_sig`, so panning back and forth
  *     costs nothing.
- * REFRESH IS MANUAL, deliberately (v1 decision): the cache is only dropped when
- * the toggle is switched off and on again (or the tab is left). A model that is
- * re-generated in the World tab does NOT invalidate anything here —
+ * REFRESH IS MANUAL, deliberately (v1 decision), with ONE exception: writing a
+ * location's BOUNDARY drops that location's picture right away (`dropRoof`).
+ * The outline is the picture's own frame, so a kept picture would be stretched
+ * over a square it was never rendered for — and the key alone does not catch
+ * it, because `layout_sig` is only refetched by a full `reload()`. Otherwise
+ * the cache is dropped when the toggle is switched off and on again (or the
+ * tab is left). A model that is re-generated in the World tab does NOT
+ * invalidate anything here —
  * `layout_sig` covers the room layouts and the location's `map3d` (E5 B11),
  * not the model files behind them, and the `anima-model3d-changed` event is
  * fired in a tab that is not mounted next to this one. Toggle off/on is the
@@ -927,6 +932,27 @@ export function MapTab() {
   const roofKey = useCallback(
     (id: string) => `${id}|${layoutSigs[id] || ''}`, [layoutSigs])
 
+  /** Throw away every cached picture of ONE location.
+   *
+   *  A boundary write changes the frame the roof was rendered in (`extent_m`
+   *  is the boundary's bbox width) and, for a building without a declared
+   *  `width_m`, the model's own size with it — so the stored picture is wrong
+   *  from that moment on. The cache key rides on `layout_sig`, and the map
+   *  refetches that only on a full reload, so the write has to invalidate
+   *  directly. User finding 2026-08-20: after 10 m → 14 m the map kept
+   *  serving the 10 m snapshot, stretched 40 % across the new square. */
+  const dropRoof = useCallback((id: string) => {
+    setRoofs((prev) => {
+      const next: Record<string, string | null> = {}
+      let hit = false
+      for (const [k, v] of Object.entries(prev)) {
+        if (k === id || k.startsWith(`${id}|`)) { hit = true; continue }
+        next[k] = v
+      }
+      return hit ? next : prev
+    })
+  }, [])
+
   /** The switch. Flipping it either way empties the cache: that is the whole,
    *  deliberate refresh mechanism. */
   const toggleRoofs = useCallback(() => {
@@ -973,16 +999,23 @@ export function MapTab() {
           try {
             const scene = await apiGet<ScenePayload>(
               `/play/locations/${encodeURIComponent(loc.id)}/scene`)
-            // The snapshot images the payload as it stands — the spec yaw
-            // (`map3d.rotation`) belongs IN the picture, the location's own
-            // yaw is added by the footprint square. The derivation with the
-            // numbers is in `PlacementLayer`'s `FootSquare`.
+            // The snapshot images the payload as it stands; the location's
+            // own yaw is added by the footprint outline. Since v6 Nr. 10 the
+            // building spec carries no yaw of its own any more, so the only
+            // turn inside the picture is the model's sidecar fix.
+            // FRAME: the same square `PlacementLayer` draws the image into —
+            // edge `extent_m`, centred on the BOUNDARY BOUNDING BOX, not on
+            // the pin (`pictureFrameLocal`). A boundary dragged out to one
+            // side leaves the pin off-centre, and rendering pin-centred while
+            // drawing bbox-centred shifts the roof against its own outline.
             // `solidBuilding`: the editor's default is a TRACING ghost
             // (opacity 0.55, no depth write) — pale, and on a building
             // exported as one mesh its own underside can paint over the roof.
             // The map wants the roof itself, opaque and depth-sorted.
+            const frame = pictureFrameLocal(loc)
             url = await renderTopDownSnapshot({
               models: scene.models || [], extentM: scene.extent_m, level: 0,
+              centerM: frame ? [frame.cx, frame.cz] : [0, 0],
               includeRooms: false, buildingId: loc.id, solidBuilding: true,
             })
           } catch {
@@ -1113,11 +1146,14 @@ export function MapTab() {
         `/world/locations/${encodeURIComponent(loc.id)}`, { map3d })
       const stored = r?.location?.map3d
       if (stored) patchLocal(loc.id, { map3d: stored })
+      // The outline IS the picture's frame — a cached roof from the old one
+      // would be stretched over the new square.
+      dropRoof(loc.id)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       void reload()
     }
-  }, [patchLocal, reload, t, toast])
+  }, [dropRoof, patchLocal, reload, t, toast])
 
   /** The first shape: a centred square of the location's own width, which the
    *  user then drags into the outline they mean. Every placed location gets

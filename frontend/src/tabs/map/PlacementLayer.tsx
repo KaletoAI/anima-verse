@@ -106,6 +106,43 @@ export function anchorWidthM(loc: EditorLocation): number | null {
 }
 
 /**
+ * THE PICTURE FRAME of a location — the square a roof render or a map icon
+ * covers — in LOCAL metres around the pin: `{cx, cz}` its centre, `size` its
+ * edge. `null` when the location has no drawn boundary and therefore no area.
+ *
+ * The edge is `plan_width_m` (= the scene payload's `extent_m`), and the
+ * centre is the BOUNDING-BOX CENTRE of the drawn outline, **not the pin**.
+ * Since v6 Nr. 2 `plan_width_m` is the wider bbox side, so this square is
+ * exactly the one that contains the polygon — while the pin may sit anywhere
+ * inside it. Dragging a boundary out to one side (the user's 10 m → 14 m,
+ * 2026-08-20) moves the pin off-centre, and a pin-centred picture then shows
+ * the roof shifted against its own outline by half the growth.
+ *
+ * ONE derivation, two consumers: `MapTab` hands exactly this `{cx, cz}` to
+ * `renderTopDownSnapshot` as `centerM` and this `size` is what the image box
+ * below is drawn with, so the camera frame and the box it lands in cannot
+ * drift apart. The floor-plan editor derives the same frame from the same
+ * numbers (`RoomLayoutEditor.snapshotFrame`).
+ */
+export function pictureFrameLocal(loc: EditorLocation):
+{ cx: number; cz: number; size: number } | null {
+  const pts = boundaryLocal(loc)
+  if (!pts) return null
+  const xs = pts.map((p) => p[0])
+  const zs = pts.map((p) => p[1])
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minZ = Math.min(...zs)
+  const maxZ = Math.max(...zs)
+  // The server's derived width wins — it is what the scene payload reports as
+  // `extent_m`, and the snapshot is rendered at that edge. Only a location
+  // whose width has not been written back yet falls to the local measurement.
+  const size = anchorWidthM(loc) ?? Math.max(maxX - minX, maxZ - minZ)
+  if (!(size > 0)) return null
+  return { cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, size }
+}
+
+/**
  * The DRAWN footprint of a location (contract v6 Nr. 1), in LOCAL metres
  * around the pin — or `null` when the location has none and therefore has no
  * area at all.
@@ -172,41 +209,35 @@ export function mapIconUrl(locId: string, ver: number): string {
  * always was a screen rotation (the legacy CSS `rotate()` on the tile image),
  * never a § A1.1 world angle.
  *
- * THE ROOF VIEW CARRIES NO EXTRA ROTATION — neither `iconRot` nor a neutralised
- * model yaw. It is a top-down render of the location's SCENE payload, and that
- * payload is TILE-LOCAL: `compose_scene` never reads `location.yaw_deg`, so the
- * only turn baked into the picture is the building spec's own
- * `yaw_deg = map3d.rotation ?? map_rotation_2d` (`scene_recipe.py:1070-1075`).
- * The square's `rotate(−yaw)` then adds exactly what the 3D client's tile group
- * adds (`client3d/src/scene/tiles.ts:592`, `rotation.y = +rad(yaw_deg)`).
+ * THE ROOF VIEW CARRIES NO ROTATION OF ITS OWN — no `iconRot`, and since
+ * contract v6 Nr. 10 nothing baked in either. It is a top-down render of the
+ * location's SCENE payload, and that payload is TILE-LOCAL: `compose_scene`
+ * never reads `location.yaw_deg`, and the building spec's `yaw_deg` is now
+ * constant 0 (the mesh is turned by its sidecar fix, which is part of the
+ * model, not of the placement). So the picture stands in the LOCATION-LOCAL
+ * frame, and the square's `rotate(−yaw)` adds exactly what the 3D client's
+ * location group adds (`rotation.y = +rad(yaw_deg)`) — one turn, once.
  * Hand-checked, so nobody has to prove it twice — location (10,20), yaw 90,
- * edge 10 m, view {cx:10, cz:20, pxPerM:1} on 200×200 (square centre (100,100),
- * corners 95…105; the snapshot images `extent_m` with image-right = local +x,
- * image-top = local −z):
+ * edge 10 m, pin-centred boundary, view {cx:10, cz:20, pxPerM:1} on 200×200
+ * (square centre (100,100), corners 95…105; the snapshot images `extent_m`
+ * with image-right = local +x, image-top = local −z):
  *
- *   map3d.rotation = 0, model point local (1,0)
+ *   model point local (1,0)
  *     3D client: local_to_world -> x = 10 + cos90 = 10, z = 20 − sin90 = 19
  *                -> world (10,19) -> screen (100, 99)
  *     here:      image u = 0.5 + 1/10 = 0.6, v = 0.5 -> (101,100);
  *                rotate(−90) about (100,100): (1,0) -> (0,−1) -> (100, 99)  ✔
- *   map3d.rotation = 90, same model point (1,0)
- *     3D client: spec yaw first -> tile-local (0,−1); tile yaw 90 -> world
- *                (9,20) -> screen (99, 100)
- *     here:      the spec yaw is IN the image, so the point sits at (0,−1) ->
- *                u = 0.5, v = 0.4 -> (100,99); rotate(−90) -> (99, 100)  ✔
- *     with the yaw stripped out of the image it would land on (100,99) — a
- *     90° lie, i.e. off by exactly `map3d.rotation`.
  *
- * That is also why the roof gets NO `iconRot`. For a location without
- * `map3d.rotation` the spec yaw already IS `map_rotation_2d` — and the two
- * turns run against each other: a spec yaw θ reaches the image as three's
- * `R_y(+θ)`, which in image pixels (u right = local +x, v down = local +z) is
- * `(u,v) → (u·cosθ + v·sinθ, −u·sinθ + v·cosθ)`, i.e. SVG `rotate(−θ)`, while
- * `iconRot` is applied as SVG `rotate(+θ)`. Adding it would CANCEL the baked
- * yaw (`rotate(−θ)·rotate(+θ) = identity`) and hand back exactly the neutral
- * picture rejected above — not double it.
+ * Adding `iconRot` on top would be a second turn on the same axis: `iconRot`
+ * is applied as SVG `rotate(+θ)` while everything the payload contributes
+ * arrives as `rotate(−θ)`, so it would not double the turn but MIRROR it. The
+ * 90°-step display rotation belongs to the flat ICON artwork alone.
+ *
+ * The picture's square is NOT necessarily centred on the pin — see
+ * `pictureFrameLocal`. The offset is applied inside the same `rotate(−yaw)`
+ * group, i.e. in local metres, which is the frame the snapshot camera used.
  */
-function FootImage({ p, size, iconHref, iconRot, roofHref }: {
+function FootImage({ p, size, iconHref, iconRot, roofHref, offset }: {
   p: ScreenPt
   size: number
   iconHref?: string
@@ -216,20 +247,27 @@ function FootImage({ p, size, iconHref, iconRot, roofHref }: {
    *  REPLACES the 2D icon — two pictures of the same place in one square only
    *  compete. */
   roofHref?: string
+  /** Where the picture's square sits relative to `p`, in PIXELS of the local
+   *  frame (x right, z down — this runs inside the caller's `rotate(−yaw)`).
+   *  `pictureFrameLocal` × `view.pxPerM`; absent = centred on the pin, which
+   *  is what a pin-centred outline gives anyway. */
+  offset?: [number, number]
 }) {
   const half = size / 2
+  const cx = p.x + (offset?.[0] || 0)
+  const cy = p.y + (offset?.[1] || 0)
   // FULLY opaque: the picture is rendered solid (`solidBuilding`), and the
   // grey ground underneath has nothing to add — it is the placeholder for a
   // location that shows no building. Outline and direction are drawn AFTER it
   // by the caller and therefore stay on top.
   if (roofHref) {
-    return <image href={roofHref} x={p.x - half} y={p.y - half}
+    return <image href={roofHref} x={cx - half} y={cy - half}
       width={size} height={size} />
   }
   if (iconHref) {
-    return <image href={iconHref} x={p.x - half} y={p.y - half}
+    return <image href={iconHref} x={cx - half} y={cy - half}
       width={size} height={size} preserveAspectRatio="xMidYMid slice"
-      transform={iconRot ? `rotate(${iconRot} ${p.x} ${p.y})` : undefined} />
+      transform={iconRot ? `rotate(${iconRot} ${cx} ${cy})` : undefined} />
   }
   return null
 }
@@ -291,7 +329,7 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
  * big it is.
  */
 function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
-  iconRot, roofHref }: {
+  iconRot, roofHref, picOffset }: {
   /** The boundary in WORLD metres (already transformed). */
   world: Array<[number, number]>
   pin: ScreenPt
@@ -303,6 +341,9 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
   iconHref?: string
   iconRot?: number
   roofHref?: string
+  /** Offset of the picture square from the pin, in local-frame pixels — see
+   *  `pictureFrameLocal`. */
+  picOffset?: [number, number]
 }) {
   const { view, w, h } = useMapView()
   // `useId` returns something like ":r7:", which is not a usable fragment in
@@ -323,7 +364,7 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
       <g clipPath={`url(#${clipId})`}>
         <g transform={`rotate(${-yaw} ${pin.x} ${pin.y})`}>
           <FootImage p={pin} size={size} iconHref={iconHref} iconRot={iconRot}
-            roofHref={roofHref} />
+            roofHref={roofHref} offset={picOffset} />
         </g>
       </g>
       <path d={d} fill="none" fillRule="evenodd" stroke={stroke}
@@ -530,12 +571,16 @@ export function PlacementLayer({
   return (
     <g pointerEvents={ghost ? 'none' : undefined}>
       {ordered.map((loc) => {
-        const anchor = anchorWidthM(loc)
         const dragging = drag && drag.id === loc.id
         const cx = dragging ? drag.x : (loc.pos_x as number)
         const cz = dragging ? drag.z : (loc.pos_z as number)
         const p = worldToScreen(cx, cz, view, w, h)
-        const size = Math.max(MIN_DRAWN_PX, (anchor ?? NO_ANCHOR_WIDTH_M) * view.pxPerM)
+        // The picture's square: edge AND centre from the ONE derivation, so
+        // the box matches the frame the snapshot was rendered in (MapTab
+        // hands the same centre to `renderTopDownSnapshot`).
+        const frame = pictureFrameLocal(loc)
+        const size = Math.max(MIN_DRAWN_PX,
+          (frame?.size ?? NO_ANCHOR_WIDTH_M) * view.pxPerM)
         const selected = loc.id === selectedId
         const yaw = yawOf(loc)
         // The DRAWN footprint is the ONLY footprint (v6 Nr. 1, closing wave
@@ -558,7 +603,9 @@ export function PlacementLayer({
                 stroke={stroke} strokeWidth={selected ? 2 : 1}
                 iconHref={mapIconUrl(loc.id, iconVer[loc.id] || 0)}
                 iconRot={loc.map_rotation_2d || 0}
-                roofHref={roofUrl?.[loc.id]} />
+                roofHref={roofUrl?.[loc.id]}
+                picOffset={frame ? [frame.cx * view.pxPerM,
+                  frame.cz * view.pxPerM] : undefined} />
             ) : (
               <FootPin p={p} yaw={yaw} stroke={stroke}
                 strokeWidth={selected ? 2 : 1} />

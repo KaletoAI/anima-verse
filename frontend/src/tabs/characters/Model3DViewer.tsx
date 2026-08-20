@@ -92,8 +92,9 @@ const loadClip = (kind: string) => {
 }
 
 /** Placement of a building model on its map tile — mirrors the worldmap
- *  contract (map3d.rotation in schnittstellen-3d.md; the model's SIZE comes
- *  from the scene spec's `max_m`, the declared real width of v6 Nr. 3). */
+ *  contract (schnittstellen-3d.md; the model's SIZE comes from the scene
+ *  spec's `max_m`, the declared real width of v6 Nr. 3, and a BUILDING has no
+ *  placement yaw at all since v6 Nr. 10). */
 export interface TilePlacement {
   /** Edge length of the stage in WORLD metres (the payload's `extent_m` =
    *  the footprint edge `plan_width_m`) — the SAME

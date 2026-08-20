@@ -6,8 +6,9 @@
  * stored — the list below the viewer previews any of them, "Select" makes one
  * the ACTIVE model the 3D clients get; generation/upload auto-select their
  * new model. For buildings the viewer shows the world tile (2D map icon as
- * ground texture) with the map3d.rotation yaw and the model's declared real
- * width (contract v6 Nr. 3 — the plot-share dial map3d.size is gone).
+ * ground texture) with the model's declared real width (contract v6 Nr. 3 —
+ * the plot-share dial map3d.size is gone) and NO placement yaw (v6 Nr. 10 —
+ * the orientation fix is the only turn a building mesh has).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -74,8 +75,6 @@ interface BuildingModelPanelProps {
   /** Draft map3d — the panel READS the tile rotation to show the model the way
    *  the world will (the dial itself lives in the location's placement block). */
   map3d?: Map3D
-  /** The 2D icon rotation: the client's yaw fallback when map3d.rotation is unset. */
-  fallbackYawDeg?: number
   /** The server-composed scene of the current draft — the panel renders the
    *  building's placement spec out of it instead of computing its own. That
    *  is what makes the walk-height dial visible here: it moves `bottom_y`. */
@@ -93,7 +92,6 @@ export function BuildingModelPanel({
   roomId = '',
   mapIconUrl,
   map3d,
-  fallbackYawDeg = 0,
   scene,
   onPreviewFileChange,
   generateSource,
@@ -412,8 +410,6 @@ export function BuildingModelPanel({
     }
   }, [enc, load, locationId, roomId, uploadTier, t, toast])
 
-  const yaw = map3d?.rotation
-  const effectiveYaw = yaw ?? fallbackYawDeg
   // What an UNDECLARED building width falls back to: the location's own
   // width — the boundary's bounding box (scene.extent_m = plan_width_m).
   const boundaryWidthM = scene?.extent_m || map3d?.plan_width_m || 0
@@ -521,7 +517,11 @@ export function BuildingModelPanel({
           // the floor-plan preview, and the walk-height dial visibly moves
           // the model against the square (which is level 0).
           : { extentM: scene?.extent_m || map3d?.plan_width_m || 10,
-            spec: buildingSpec, yawDeg: effectiveYaw,
+            // No yaw of its own any more (v6 Nr. 10): the SPEC carries it,
+            // and for a building that is constant 0 — the mesh is turned by
+            // its orientation fix, the location by its anchor pin. The
+            // viewer reads `spec.yaw_deg` wherever a spec is given anyway.
+            spec: buildingSpec, yawDeg: 0,
             measure, k: scene?.k, planWidthM: map3d?.plan_width_m,
             storeyWorld: scene?.storey_m,
             storeyRealM: map3d?.storey_height_m || 3,
@@ -636,10 +636,10 @@ export function BuildingModelPanel({
         </span>
       </div>
 
-      {/* "Rotation on tile (°)" used to stand here and vanished with the
-          model — but a location is placed on its tile whether or not it has
-          one, and the 2D icon yaw is the fallback either way. It lives in the
-          location's own placement block now (E5 inventory 1a).
+      {/* "Rotation on tile (°)" used to stand here, then moved to the
+          location's own placement block — and is GONE altogether with v6
+          Nr. 10: it turned the mesh around the very axis the orientation fix
+          above already turns. One axis, one dial.
 
           The former "Size (fraction of the extent)" dial is gone as well
           (v6 Nr. 3): a model states its real width in metres up in the model

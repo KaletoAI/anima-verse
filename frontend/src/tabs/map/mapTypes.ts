@@ -24,8 +24,8 @@ export type { Map3D }
  * `pos_x`/`pos_z` are world METRES and `null` when the location is unplaced —
  * it then stands on no map at all. `yaw_deg` is the § A1.1 rotation and is
  * written through unchanged: NO sign conversion anywhere in the editor
- * (`map3d.rotation` is the OTHER, scene-side field — mixing them mirrors the
- * location).
+ * (the scene-side `map3d.rotation` that used to sit next to it is gone with
+ * v6 Nr. 10 — the pin is the only turn a location has).
  */
 export interface MapGeometry {
   id: string

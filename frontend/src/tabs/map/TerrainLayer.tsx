@@ -57,7 +57,8 @@
  */
 import { useMemo } from 'react'
 import {
-  cleanRing, polygonArea, scatterInstances, scatterSeed, scatterWantedCount,
+  cleanRing, polygonArea, scatterClearM, scatterInstances, scatterSeed,
+  scatterWantedCount,
 } from '@anima/scene-render'
 import type { ScatterFootprint, Point2 } from '@anima/scene-render'
 import { useMapView } from './MapCanvas'
@@ -284,6 +285,7 @@ export function TerrainLayer({
       color: string
       density: number
       wanted: number
+      clearM: number
     }
     const jobs: Job[] = []
     areas.forEach((a, ai) => {
@@ -307,6 +309,13 @@ export function TerrainLayer({
         jobs.push({
           ring, areaM2, occluders, seed: scatterSeed(a.id, i),
           color: scatterColor(i), density: e.density_per_100m2, wanted,
+          // APPROXIMATION: the preview draws DOTS and has no mesh to measure,
+          // so a prop counts as half as wide as it is tall (scatterClearM
+          // without a measured extent). The 3D client measures the loaded
+          // geometry and clears slightly differently for very slim or very
+          // wide props.
+          clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
+            : (e.model ? 2 : 0.8)),
         })
       })
     })
@@ -323,6 +332,7 @@ export function TerrainLayer({
       for (const p of scatterInstances({
         ring: job.ring, areaM2: job.areaM2, densityPer100m2: job.density,
         seed: job.seed, footprints, occluders: job.occluders,
+        clearM: job.clearM,
         // A lower ceiling gives the PREFIX of the same stream, so a thinned
         // preview draws props the world really plants.
         maxPoints: share,

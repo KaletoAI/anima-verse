@@ -30,7 +30,9 @@ interface PlanSidePanelProps {
    *  offset — is absent there, because the yard is the location surface and
    *  has no shell to describe. */
   ground: boolean
-  /** Display name of the yard ("Yard", or the author's own name for it). */
+  /** Display name of the yard — `worldTypes.groundRoomLabel`, i.e. the
+   *  author's own name or the ONE shared default. Never a second word for
+   *  the same room. */
   groundName: string
   /** Open animation-clip vocabulary — the marker tool drops this kind. */
   clipKinds: string[]

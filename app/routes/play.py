@@ -1340,13 +1340,8 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
               "name": r.get("name") or "",
               "layout": r.get("layout")}
              for r in (data.get("rooms") or []) if isinstance(r, dict)]
-    try:
-        rotation_2d = int(data.get("map_rotation_2d") or 0)
-    except (TypeError, ValueError):
-        rotation_2d = 0
     draft = {
         "id": str(data.get("id") or ""),
-        "map_rotation_2d": rotation_2d,
         # The ground outside is part of the draft: an edited terrain must
         # change the preview's ground plate, or the editor would show one
         # ground and the client another — the very split § 5 closes.

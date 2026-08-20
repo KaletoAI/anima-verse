@@ -1266,14 +1266,6 @@ def _fix_euler(rotation: Any) -> Dict[str, float]:
     return {axis: _r(_num(rot.get(axis)), 3) for axis in ("x", "y", "z")}
 
 
-def _building_yaw(location: Dict[str, Any], map3d: Dict[str, Any]) -> float:
-    """Yaw chain (§ A1): map3d.rotation (an explicit 0 counts) →
-    map_rotation_2d → 0."""
-    if (map3d or {}).get("rotation") is not None:
-        return _num(map3d.get("rotation"))
-    return _num(location.get("map_rotation_2d"))
-
-
 def _variants(base_url: str, tiers: Any) -> Dict[str, str]:
     """``models[].variants`` (§ B1): one URL per resolution tier the subject
     HAS. A model that declares no tiers is a ``full`` one — that is what every
@@ -1363,7 +1355,12 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
                               meta.get("tiers")),
         "level": 0,
         "fix_euler": _fix_euler(meta.get("rotation")),
-        "yaw_deg": _r(_building_yaw(location, map3d), 1),
+        # A building has NO yaw dial of its own any more (v6 Nr. 10): the
+        # sidecar's orientation fix (``fix_euler`` y) turns the mesh, and the
+        # location itself is turned by its anchor pin (§ A1.1). The old
+        # ``map3d.rotation`` → ``map_rotation_2d`` chain was a second turn on
+        # the SAME axis and only ever a source of arithmetic error.
+        "yaw_deg": 0.0,
         # The width is met AFTER the yaw — a model turned 325° must still fit
         # its location, so the rotated footprint is what gets measured.
         "max_m": _r(max_m),
@@ -1768,7 +1765,6 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     import json
     payload = {
         "map3d": location.get("map3d") or {},
-        "map_rotation_2d": location.get("map_rotation_2d") or 0,
         "plan_width_m": round(float(plan_width_m or 0), 3),
         "ground_kind": ground_kind,
         "rooms": {str(r.get("room_id") or ""): r.get("signature") or ""

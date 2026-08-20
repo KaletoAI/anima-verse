@@ -165,9 +165,13 @@ export interface Map3D {
   footprint?: number[]
   style?: string
   color?: string
-  /** Building yaw on the map tile in degrees (0..359). Absent = the 3D client
-   *  falls back to map_rotation_2d (the model turns with the 2D icon). */
-  rotation?: number
+  // `rotation` — the building yaw on the map tile — is GONE with contract
+  // v6 Nr. 10: it turned the mesh around the same axis the model sidecar's
+  // own orientation fix (`fix_euler` y) already turns, a second dial on one
+  // axis and nothing but a source of arithmetic error. A location is turned
+  // by its anchor pin (`yaw_deg`), a mesh by its sidecar fix, and
+  // `map_rotation_2d` is strictly the flat ICON artwork rotation. The server
+  // sanitizer drops a submitted value.
   // `size` — the MODEL's share of the location's reference square — is GONE
   // with contract v6 Nr. 3: every model scales through a declared real width
   // in metres (`width_m` on the sidecar), and an undeclared building fills
@@ -266,7 +270,6 @@ export type {
  *  stands, including unsaved layouts. */
 export interface SceneDraft {
   id: string
-  map_rotation_2d?: number
   map3d?: Map3D
   rooms: Array<{ id: string; name?: string; layout?: RoomLayout }>
 }
@@ -329,6 +332,22 @@ export interface Location {
  *  the editor only has to recognise it (an unnamed one is labelled, not left
  *  showing its raw id). */
 export const GROUND_ROOM_ID = '__ground__'
+
+/**
+ * THE display name of a location's ground room — one source, everywhere.
+ *
+ * The server creates the room with an EMPTY name (`world.ensure_ground_room`),
+ * so the label a user reads is a CLIENT default, and it has to be the same
+ * default in every surface: the room tree, the plan's "On the plan:" target
+ * list, the plan side panel and the furnish dialog all name one and the same
+ * room. The floor plan used to call it "Yard" while the tree called it
+ * "Outside" (German "Draußen"), which read as two rooms (user finding
+ * 2026-08-20). An author who gives it a name of its own overrides both.
+ */
+export function groundRoomLabel(room: { name?: string } | null | undefined,
+                                t: (s: string) => string): string {
+  return room?.name?.trim() || t('Outside')
+}
 
 /** A layout whose ROOM SHAPE is resolved: the rectangle is there, so every
  *  geometry helper (`outlineOf`, `absOutline`, plates, walls, snapping) can
