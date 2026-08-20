@@ -112,6 +112,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
 
   const [variants, setVariants] = useState<PropVariant[]>([])
   const [variantMax, setVariantMax] = useState(1)
+  // The world's season names + the one it is in now (E2c) — the season chips
+  // are a pick from this list, and an empty list (a world without seasons)
+  // means the strip shows no season controls at all.
+  const [worldSeasons, setWorldSeasons] = useState<string[]>([])
+  const [currentSeason, setCurrentSeason] = useState('')
   // The variant everything below the strip works on. Index, not stem: that is
   // what every variant-scoped route takes.
   const [variant, setVariant] = useState(0)
@@ -121,11 +126,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   useEffect(() => { setPreviewFile('') }, [prop.id, variant])
   const loadVariants = useCallback(async () => {
     try {
-      const d = await apiGet<{ variants?: PropVariant[]; max?: number }>(
+      const d = await apiGet<{ variants?: PropVariant[]; max?: number
+        world_seasons?: string[]; current_season?: string }>(
         `/world/props/${enc}/variants`)
       const list = d.variants || []
       setVariants(list)
       setVariantMax(d.max || 1)
+      setWorldSeasons(d.world_seasons || [])
+      setCurrentSeason(d.current_season || '')
       // Clamping belongs HERE and not in an effect of its own: a deletion
       // shortens the list, and a separate effect would fight the strip, which
       // selects the freshly added slot before its record has arrived.
@@ -973,6 +981,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             onSelect={setVariant}
             onChanged={meshesChanged}
             generating={generatingVariants}
+            worldSeasons={worldSeasons}
+            currentSeason={currentSeason}
           />
 
           {/* The SELECTED variant's mesh gallery: every stored run, one active

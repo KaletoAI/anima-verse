@@ -1214,7 +1214,12 @@ async def room_model3d_width(location_id: str, room_id: str,
 def surface_textures_admin() -> Dict[str, Any]:
     """Admin listing: textures + running generations + backends with their
     resolved use-case style, so the dialog can show and edit the COMPLETE
-    final prompt before generating (final-prompt rule)."""
+    final prompt before generating (final-prompt rule).
+
+    ``world_seasons`` / ``current_season`` are the world's season names and
+    the one it is in now (E2c): a version can be selected FOR a season, and
+    the picker offers exactly those names. An empty list = a world without
+    seasons, and then the season controls stay away."""
     from app.core.surface_textures import (admin_list, compose_prompt,
                                             is_pending)
     from app.imagegen.service import get_image_service
@@ -1238,8 +1243,18 @@ def surface_textures_admin() -> Dict[str, Any]:
     # kind (admin_list), and it is the only text that reaches a prompt. The
     # curated wording is seeded INTO that field when a kind is created, so
     # there is nothing left for the dialog to merge.
+    from app.core.game_time import get_calendar
+    from app.core.timeutils import game_time
+    cal = get_calendar()
+    try:
+        current = (cal.seasons[game_time().parts(cal).season_index].name
+                   if cal.seasons else "")
+    except Exception:
+        current = ""
     return {"textures": admin_list(), "pending": is_pending(),
-            "backends": backends, "blends": get_blends()}
+            "backends": backends, "blends": get_blends(),
+            "world_seasons": [s.name for s in cal.seasons],
+            "current_season": current}
 
 
 @router.post("/surface-textures/generate")
@@ -1343,14 +1358,21 @@ async def surface_texture_size(kind: str, request: Request) -> Dict[str, Any]:
 
 @router.post("/surface-textures/{kind}/select")
 async def surface_texture_select(kind: str, request: Request) -> Dict[str, Any]:
-    """Make a stored version the ACTIVE one (body: {file}) — the one the
-    3D client gets via /assets/surface-textures."""
-    from app.core.surface_textures import select_texture
+    """Make a stored version the ACTIVE one (body: {file, season?}) — the one
+    the 3D client gets via /assets/surface-textures.
+
+    ``season`` targets one SEASON SLOT of the kind instead of its seasonless
+    default (E2c): the world shows that version while that season lasts and
+    falls back to the default otherwise. An empty ``file`` WITH a season clears
+    that slot again. The answer carries the kind's slots as they now stand, so
+    the strip re-draws from the server rather than from a guess."""
+    from app.core.surface_textures import select_texture, selection_slots
     data = await request.json()
     if not isinstance(data, dict) or not select_texture(
-            kind, str(data.get("file") or "").strip()):
+            kind, str(data.get("file") or "").strip(),
+            season=str(data.get("season") or "").strip()):
         raise HTTPException(status_code=404, detail="No such texture version")
-    return {"status": "ok"}
+    return {"status": "ok", "slots": selection_slots(kind)}
 
 
 @router.delete("/surface-textures/{kind}")

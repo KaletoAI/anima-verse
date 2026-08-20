@@ -42,6 +42,20 @@ tiers without a second mechanism. The stem is STORED, not derived from the
 position — deleting a variant in the middle must not rename the files of the
 one behind it. A record without the key has exactly one variant, the primary.
 
+SEASONS (E2c, 2026-08-20). A variant may name the seasons it depicts::
+
+    "model_variants": [{"stem": "model", "active": true},
+                       {"stem": "model-v2", "active": true,
+                        "seasons": ["Winter"]}]
+
+Names from the world's ``game_seasons``, matched case-insensitively against
+the current season's key/name; the key is stored only when it names something,
+because "no dependency" is the default and absence is how a default is stored.
+EFFECTIVELY active = manually active AND in season, and that single gate
+(``_effective_indices``) is what the scatter, the placements, the world props
+and the serving URLs all read. A prop whose variants carry no tag never even
+reads the clock.
+
 THE SOURCE IMAGE FOLLOWS THE MESH (2026-08-20). A variant is not just a mesh
 gallery, it is a whole object version: the product-shot render it was meshed
 from belongs to the VARIANT, not to the prop. The file name follows the mesh
@@ -125,6 +139,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.game_time import (current_season_tokens, sanitize_season_tags,
+                                season_tags_active)
 from app.core.log import get_logger
 from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   read_sidecar as read_model_sidecar,
@@ -179,6 +195,11 @@ _IMAGE_ORIGIN_MASTER = {"origin": "source_origin",
                         "origin_ts": "source_origin_ts"}
 #: The one origin value that is ever written. The other kind is ABSENCE.
 ORIGIN_SCENE_CONTEXT = "scene_context"
+#: SEASON TAGS of a variant (E2c, 2026-08-20). Optional list of season names
+#: from the world's ``game_seasons``; stored only when non-empty, because
+#: absence IS the default "no dependency" and an empty list beside a missing
+#: key would be the same fact in two shapes. See ``_effective_indices``.
+SEASONS_KEY = "seasons"
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
@@ -355,7 +376,10 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     every writer stores the sanitized list back, so it has to survive here.
     The origin keys survive the same way but are kept only when they carry
     something: an absent ``origin`` means product shot, and writing four empty
-    strings onto every variant would turn that absence into noise."""
+    strings onto every variant would turn that absence into noise.
+
+    ``seasons`` (E2c) survives by the same law: kept when it names seasons,
+    dropped when it is empty — no dependency is stored as ABSENCE."""
     raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
     out: List[Dict[str, Any]] = []
     seen: set = set()
@@ -376,6 +400,9 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
                     val = str(img.get(k) or "")
                     if val:
                         rec["image"][k] = val
+            seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
+            if seasons:
+                rec[SEASONS_KEY] = seasons
             out.append(rec)
     return out or [{"stem": MODEL_STEM, "active": True}]
 
@@ -403,28 +430,67 @@ def _active_indices(entries: List[Dict[str, Any]]) -> List[int]:
     return (idx or [0])[:variant_max()]
 
 
+def _effective_indices(entries: List[Dict[str, Any]]) -> List[int]:
+    """Indices of the variants that render RIGHT NOW — manually active AND in
+    season (E2c).
+
+    A variant may declare the seasons it depicts (``seasons``, names from the
+    world's ``game_seasons``, matched case-insensitively). Effectively active =
+    manually active AND (no seasons OR the current GAME season is among them).
+    This is the ONE gate: the scene payload, the terrain scatter, the world
+    props and every serving URL inherit it from here.
+
+    Two guarantees hold it together:
+
+    * NO TAG ANYWHERE, NO CLOCK. A prop whose variants carry no ``seasons``
+      takes the first branch and never reads the calendar — its answer is
+      character for character the pre-feature one, and the feature costs it
+      nothing.
+    * A PLACEMENT IS NEVER A HOLE. If the season filter empties the set — every
+      variant of the prop is out of season — the manual set stands. Seasonal
+      DISAPPEARANCE is not what this does: a prop nobody tagged for summer must
+      not vanish from every room for three seasons, the same reason
+      :func:`_active_indices` refuses to answer with an empty list. Tag ONE
+      variant per season to swap them; tag all of them with the same season and
+      you get that season's look all year.
+    """
+    idx = _active_indices(entries)
+    if not any(e.get(SEASONS_KEY) for e in entries):
+        return idx
+    now = current_season_tokens()
+    in_season = [i for i in idx
+                 if season_tags_active(entries[i].get(SEASONS_KEY), now)]
+    return in_season or idx
+
+
 def _stem_of(prop_id: str, variant: Any = None,
              meta: Optional[Dict[str, Any]] = None) -> str:
     """File stem of ONE variant of a prop — ``None`` (or a negative index)
-    means the PRIMARY variant, i.e. the first active one. ``''`` when the
-    index names no variant this prop has."""
+    means the PRIMARY variant, i.e. the first EFFECTIVELY active one. ``''``
+    when the index names no variant this prop has."""
     entries = _variant_list(read_sidecar(prop_id) if meta is None else meta)
     if variant is None:
-        return entries[_active_indices(entries)[0]]["stem"]
+        return entries[_effective_indices(entries)[0]]["stem"]
     try:
         i = int(variant)
     except (TypeError, ValueError):
         return ""
     if i < 0:
-        return entries[_active_indices(entries)[0]]["stem"]
+        return entries[_effective_indices(entries)[0]]["stem"]
     return entries[i]["stem"] if i < len(entries) else ""
 
 
 def primary_variant(prop_id: str) -> int:
-    """Index of the prop's PRIMARY variant — the first active one. This is
-    what every unqualified read resolves to (``/model`` without a ``variant``
-    parameter, the bbox measurement, the payload's single ``variants`` map)."""
-    return _active_indices(_variant_list(read_sidecar(prop_id)))[0]
+    """Index of the prop's PRIMARY variant — the first EFFECTIVELY active one
+    (:func:`_effective_indices`). This is what every unqualified read resolves
+    to (``/model`` without a ``variant`` parameter, the bbox measurement, the
+    payload's single ``variants`` map).
+
+    Season-aware ON PURPOSE (E2c): every payload publishes element 0 of the
+    effective list under the BARE URL, so the file that URL serves has to be
+    the same one — otherwise a season-swapped prop would ship a winter entry
+    and serve the summer mesh under it."""
+    return _effective_indices(_variant_list(read_sidecar(prop_id)))[0]
 
 
 def scatter_variant_index(seed: Any, instance: Any, count: Any) -> int:
@@ -882,8 +948,12 @@ def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
 
 
 def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
-    """Every ACTIVE variant that HAS a mesh, in payload order:
+    """Every EFFECTIVELY ACTIVE variant that HAS a mesh, in payload order:
     ``[{"variant": <store index>, "tiers": [...]}, …]``.
+
+    "Effectively" = manually active AND in season (E2c,
+    :func:`_effective_indices`) — the season gate sits in that one function, so
+    the scatter, the world props and the scene payload all inherit it here.
 
     This is what becomes ``model_variants`` in the scene payload, and the
     reason element 0 is the primary variant is the whole compatibility
@@ -898,7 +968,7 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     URL index would silently serve the mesh the admin just switched off."""
     entries = _variant_list(read_sidecar(prop_id))
     out: List[Dict[str, Any]] = []
-    for i in _active_indices(entries):
+    for i in _effective_indices(entries):
         tiers = model_tiers(prop_id, i)
         if tiers:
             out.append({"variant": i, "tiers": tiers})
@@ -907,8 +977,14 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
 
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
-    tiers, has_model, model_file, model_url, signature, has_source,
-    source_url, image}]`` — every variant, active or not, in order.
+    seasons, in_season, tiers, has_model, model_file, model_url, signature,
+    has_source, source_url, image}]`` — every variant, active or not, in order.
+
+    ``seasons`` are the season names this variant is tagged for (E2c; empty =
+    no dependency, the default) and ``in_season`` says whether that tag matches
+    the world's CURRENT season — the strip needs both: the chips show what is
+    stored, the flag shows what renders. ``primary`` follows the EFFECTIVE
+    order, because the bare URL does too.
 
     ``model_url`` / ``source_url`` are the canonical serving URLs WITH their
     ``variant`` parameter (the primary one keeps the bare URL, which is the
@@ -918,7 +994,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     ``origin``, which is what the strip's 🎬 badge is drawn from."""
     meta = read_sidecar(prop_id)
     entries = _variant_list(meta)
-    primary = _active_indices(entries)[0]
+    primary = _effective_indices(entries)[0]
+    now = current_season_tokens()
     out: List[Dict[str, Any]] = []
     for i, entry in enumerate(entries):
         g = model_gallery(prop_id, i)
@@ -931,6 +1008,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "index": i,
             "stem": entry["stem"],
             "active": bool(entry["active"]),
+            "seasons": list(entry.get(SEASONS_KEY) or []),
+            "in_season": season_tags_active(entry.get(SEASONS_KEY), now),
             "primary": i == primary,
             "tiers": tiers,
             "has_model": bool(tiers),
@@ -995,6 +1074,40 @@ def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     if not active and len([e for e in entries if e["active"]]) <= 1:
         return False
     entries[i]["active"] = bool(active)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
+def set_variant_seasons(prop_id: str, variant: int, seasons: Any) -> bool:
+    """Tag one variant with the seasons it depicts, or clear the tag (E2c).
+
+    The names come from the world's ``game_seasons`` and are stored VERBATIM;
+    matching is case-insensitive, so a pack authored in another world keeps
+    working as long as the season is spelled the same. An empty list clears the
+    key — no dependency is ABSENCE, never an empty list beside a missing one.
+
+    Deliberately NOT refused for a generating variant (unlike the on/off
+    toggle): a tag moves no file and renames no stem. It CAN move the primary
+    variant, which is a payload fact and not a job's business — the run writes
+    into the store index it was started with, and that number does not change.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= i < len(entries):
+        return False
+    clean = sanitize_season_tags(seasons)
+    if clean:
+        entries[i][SEASONS_KEY] = clean
+    else:
+        entries[i].pop(SEASONS_KEY, None)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -1726,7 +1839,13 @@ def _all_prop_ids() -> List[str]:
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
     meta = _ensure_bbox(prop_id, meta)
     entries = _variant_list(meta)
-    active_idx = _active_indices(entries)
+    # EFFECTIVELY active (E2c): manually active AND in season. The record is a
+    # RENDER payload — the client prop library and every room recipe read
+    # `variant_tiers` off it — so it has to answer with the cast a scene shows
+    # now, exactly like `active_variant_tiers` does for the scatter next door.
+    # The authoring views (`list_variants`, the cap, the generation target)
+    # keep reading the manual set.
+    active_idx = _effective_indices(entries)
     # Which resolution tiers each ACTIVE variant HAS — the selection decides,
     # not the presence of files (an admin may have switched a variant off with
     # the __none__ sentinel). Element 0 is the PRIMARY variant, so
@@ -1778,8 +1897,15 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         # resp. their source image. Three counts, never the variant records —
         # a row only has to say THAT something is missing; which one it is, is
         # what the variant strip in the detail shows.
-        missing_mesh = sum(1 for vt in tier_lists if not vt)
-        missing_image = sum(1 for i in active_idx
+        # Over the MANUALLY active variants, not the in-season ones (E2c): a
+        # summer variant without its mesh is still a prop to finish while the
+        # world is in winter, and a badge that hides it for three seasons hides
+        # a defect, not a season.
+        manual_idx = _active_indices(entries)
+        manual_tiers = [sorted(g.tiers()) if g else []
+                        for g in (model_gallery(prop_id, i) for i in manual_idx)]
+        missing_mesh = sum(1 for vt in manual_tiers if not vt)
+        missing_image = sum(1 for i in manual_idx
                             if source_path(prop_id, i) is None)
         # Per-run facts of the ACTIVE mesh (they live on its own sidecar since
         # the gallery rebuild) — the admin panel shows what the current model
@@ -1806,8 +1932,10 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             "variant_count": len(variant_tiers),
             "variant_max": variant_max(),
             # Active variants in total, and how many of them are incomplete.
-            # `variants_total - variants_missing_mesh == variant_count`.
-            "variants_total": len(active_idx),
+            # `variants_total - variants_missing_mesh == variant_count`
+            # whenever no variant is out of season (E2c) — off-season ones
+            # count here, because the badge is an authoring to-do list.
+            "variants_total": len(manual_idx),
             "variants_missing_mesh": missing_mesh,
             "variants_missing_image": missing_image,
             "backend_image": image["backend"],

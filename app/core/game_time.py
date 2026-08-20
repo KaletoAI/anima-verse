@@ -414,6 +414,112 @@ def default_calendar_config() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Season TAGS — "this thing belongs to these seasons" (E2c, 2026-08-20)
+# ---------------------------------------------------------------------------
+#
+# A prop's model variant and a surface texture's version may declare WHICH
+# seasons they depict. The vocabulary lives here because the world calendar
+# owns what a season is; the two libraries only store the strings.
+#
+# Three rules, and they are the whole feature:
+#
+#   1. NO tags = no dependency. That is the default, and it is stored as
+#      ABSENCE — a library that never heard of seasons is byte-identical.
+#   2. A tag matches CASE-INSENSITIVELY against the current season's key, its
+#      base name and every localized name. Tags travel in content packs as
+#      plain strings, so a pack tagged "Winter" has to find a world whose
+#      season is keyed ``winter``, and one tagged for a season this world
+#      does not have simply never matches (documented, not an error).
+#   3. A world with NO seasons at all ignores tags entirely — the feature is
+#      INERT there rather than hiding everything that carries a tag.
+
+#: How many season tags one entry may carry. A world has a handful of seasons;
+#: anything beyond this is a corrupted record, not an authoring choice.
+SEASON_TAGS_MAX = 16
+#: Longest single tag kept — a season NAME, never a sentence.
+SEASON_TAG_MAXLEN = 64
+
+
+def sanitize_season_tags(raw: Any) -> List[str]:
+    """A stored ``seasons`` list, cleaned: trimmed non-empty strings, no
+    case-insensitive duplicates, at most :data:`SEASON_TAGS_MAX`.
+
+    The strings are kept VERBATIM (display names as the author picked them);
+    only the matching is case-insensitive. Anything that is not a list at all
+    answers ``[]`` — i.e. "no dependency", the default.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for value in raw:
+        if isinstance(value, (dict, list, tuple, bool)) or value is None:
+            continue
+        tag = str(value).strip()[:SEASON_TAG_MAXLEN]
+        if not tag or tag.lower() in seen:
+            continue
+        seen.add(tag.lower())
+        out.append(tag)
+        if len(out) >= SEASON_TAGS_MAX:
+            break
+    return out
+
+
+def season_tokens(season: Optional[Season]) -> frozenset:
+    """Every lowercase spelling ONE season answers to: its key, its base name
+    and its localized names. This is the set a tag is matched against."""
+    if season is None:
+        return frozenset()
+    words = {season.key, season.name}
+    words.update((season.names or {}).values())
+    return frozenset(w.strip().lower() for w in words if str(w).strip())
+
+
+def current_season_tokens() -> frozenset:
+    """The spellings of the season the world is in RIGHT NOW — empty when the
+    world has no seasons or no readable clock.
+
+    An empty set is the INERT state: :func:`season_tags_active` then answers
+    True for every tag, so a world without a calendar behaves exactly as it did
+    before the feature existed. Both reads are cheap and cached
+    (``get_calendar`` module-cached, ``game_time`` anchor-cached), but the
+    callers still take the no-tags shortcut first so an untagged library never
+    touches the clock at all.
+    """
+    cal = get_calendar()
+    if not cal.seasons:
+        return frozenset()
+    try:
+        from app.core.timeutils import game_time
+        index = game_time().parts(cal).season_index
+    except Exception:
+        # No world DB (a smoke, a boot before the schema): no season, and the
+        # tags go inert rather than blanking every seasonal entry.
+        return frozenset()
+    if not 0 <= index < len(cal.seasons):
+        return frozenset()
+    return season_tokens(cal.seasons[index])
+
+
+def season_tags_active(tags: Any, current: Optional[frozenset] = None) -> bool:
+    """Is something tagged ``tags`` in season right now?
+
+    ``[]``/absent → True (no dependency). A world without seasons → True
+    (inert). Otherwise True iff one tag names the current season.
+
+    ``current`` lets a caller that checks many entries read
+    :func:`current_season_tokens` ONCE and hand it down.
+    """
+    clean = sanitize_season_tags(tags)
+    if not clean:
+        return True
+    now = current_season_tokens() if current is None else current
+    if not now:
+        return True
+    return any(tag.lower() in now for tag in clean)
+
+
+# ---------------------------------------------------------------------------
 # GameDuration
 # ---------------------------------------------------------------------------
 

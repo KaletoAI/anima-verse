@@ -1501,6 +1501,18 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
 
 ## A9. Terrain & Oberflächen (AV3D-13 v2)
 
+- **Nachtrag 2026-08-20 (E2c) — JAHRESZEITEN.** Eine Art darf je Jahreszeit
+  eine andere ihrer gespeicherten Fassungen zeigen; die Auswahl steht in
+  `shared/surface_textures/selection.json` (`{"": <Datei>, "<saison>":
+  <Datei>}`), aufgelöst wird sie SERVERSEITIG in
+  `surface_textures.texture_file`. Der Vertrag ändert sich damit **nicht**:
+  Räume und Terrain nennen weiterhin nur die `kind`, und
+  `/assets/surface-textures` liefert wie immer genau EINE `url` je Art — nur
+  eben die der laufenden Jahreszeit, mit der saisonlosen Fassung als Rückfall.
+  Weil jede Fassung ihren eigenen Dateinamen hat, ist auch kein Cache
+  betroffen. **Offen:** der 3D-Client holt diese Liste NUR beim Start; ein
+  Jahreszeitenwechsel erreicht seine Böden erst beim Neuladen (die
+  Admin-Vorschau holt sie bei jedem Mount neu).
 - Location sagt per `terrain` WELCHE Art; `/assets/surface-textures`
   sagt WIE: Flächen (`url` kachelbar, `size_m`, Kachelung im
   Welt-Maßstab) oder Zusammenstellungen (`blend` mit `toward`/`zones`/
@@ -3350,7 +3362,11 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
 ```
 {
   signature,                 # deckt map3d + alle Raum-Layouts + Modell-
-                             # Metas + Prop-Sidecars der Location ab
+                             # Metas + Prop-Sidecars der Location ab —
+                             # dazu die aktuelle Jahreszeit als Token
+                             # (E2c): Prop-Varianten und Boden-Texturen
+                             # wechseln mit der Spielzeit, ohne dass ein
+                             # gespeicherter Wert sich bewegt
   k, storey_m,               # abgeleitete Skalare (Welt-Einheiten)
   levels: [ { level, floor_y } ],
   style: { wall_color, floor_color, glass_color, glass_opacity,
@@ -3775,6 +3791,23 @@ und die primäre Variante behält ihre bisherige URL ohne Query (`…/model` bzw
 wird. Die primäre Variante ist die **erste AKTIVE** der Liste — nicht
 zwangsläufig die zuerst erzeugte.
 
+**Nachtrag 2026-08-20 (E2c) — JAHRESZEITEN.** Eine Variante darf die
+Jahreszeiten nennen, die sie zeigt (`seasons` auf dem Prop-Sidecar, Namen aus
+`game_seasons` der Welt, unabhängig von Groß-/Kleinschreibung gematcht).
+**Wirksam aktiv = manuell aktiv UND (kein Tag ODER aktuelle Spiel-Jahreszeit
+dabei)**; „aktiv" heißt ab hier überall dieses Wirksam-Aktiv
+(`props._effective_indices` — EIN Tor, das Streuung, Platzierungen und
+Welt-Props gemeinsam lesen). **Der Payload ändert seine FORM nicht:** es
+kommen keine Felder dazu, es stehen nur andere Einträge in `model_variants`,
+und die primäre Variante ist die erste wirksam aktive — die query-lose URL
+folgt ihr mit (`/assets/props/<id>/model` liefert dieselbe Datei wie
+`model_variants[0]`). Zwei Randregeln: ist KEINE Variante in der Saison, gilt
+wieder der manuelle Satz (eine Platzierung wird nie zum Loch), und eine Welt
+ohne Jahreszeiten ignoriert die Tags vollständig. Renderer bleiben dumm — sie
+sehen nur eine andere Liste. Was sie sehen MÜSSEN, ist der Wechsel: die
+Szenen-`signature` (§ B1) nimmt die aktuelle Jahreszeit als Token auf, und
+`terrain_sig`/`world_props_sig` hashen ohnehin den angereicherten Block.
+
 **Wer die Variante wählt: der Server. Wer sie ausführt: der Renderer.**
 Der Index steht fertig in der Spec; kein Renderer würfelt und keiner rechnet
 ihn nach. Für Streu-Kopien einer Platzierung (`scatter_count`/`scatter_seed`,
@@ -4030,6 +4063,34 @@ Dieselbe Fläche ist auch das Boden-SOLL der Begehbarkeits-Abtastung
 (`sampleRoomWalkables`), wenn der Raum KEIN Diorama hat: ein Diorama
 deklariert seine Standhöhe weiterhin selbst (`walk_y_world` am Raum-Spec) und
 schlägt die Platte, wie bisher.
+
+**(C) Die Ansage eines Raums gilt auch für die LAUFENDE Figur** (Nachtrag
+2026-08-20, User-Befund „Mondhütte"). Teil (B) hat die Deklaration nur an die
+Abtastung gehängt: `tileWalkY` kannte die gezeichneten Platten und den
+Mesh-Strahl und sonst nichts. Der Regler bewegte damit die NPC-Spots und die
+Raummitte, während die Figur weiter auf der Platte stand — zwei Böden in einem
+Raum, genau was Teil (B) ausschließen sollte. Zwei Löcher, beide geschlossen:
+
+1. **Die Deklaration wird ZUERST gefragt**, in jedem `display`-Modus
+   (`game/ground.declaredFloorAt`): ein Raum, dessen Diorama-Spec ein
+   `walk_y_world` trägt, bestimmt die Steh-Höhe innerhalb seiner Raum-Hülle —
+   vor Platte und vor Mesh, ohne Relief-Aufschlag (das `bottom_y` ist am
+   Modell-Anker bereits gehoben). Decken sich mehrere Ansagen, gewinnt die
+   KLEINERE Hülle (v6 Nr. 6, `polygonArea`) — eine Hütte in einer
+   Ufer-Zone ist die spezifischere Antwort.
+2. **Die Platten antworten auch ohne Mesh**, ebenfalls in jedem Modus: eine
+   Flächen-Location, deren Modell nie erzeugt wurde (Mondscheinsee), zeichnet
+   nur ihre Zonen-Platten, und die SIND ihr Boden. Wo ein Mesh existiert,
+   bleibt die Flächen-Regel unberührt (Befund B8: Ufer, Hang, Seegrund
+   antworten weiter per Strahl). Der Plattengriff wird dabei an
+   `plateCeiling` gemessen und nicht an `walkCeiling`: die `Infinity` der
+   Flächen gilt für Mesh-TREFFER, nicht für Etagen.
+
+Gemessen an Mondhütte in Mondscheinsee: Raumplatte 0,09, Diorama-`bottom_y`
+−0,19, also `walk_y` 0,35 → `walk_y_world` 0,16 → Steh-Höhe 0,17. Vorher:
+0,00 (der blanke Kachelboden). Hand-Zahlen in
+`client3d/scripts/smoke_walk_math.mjs` und `scripts/smoke_scene_recipe.py`
+[4i].
 
 ### Nachtrag-Teil 2 (§ B1): EIN Datum — der gezeichnete Boden der Etage
 

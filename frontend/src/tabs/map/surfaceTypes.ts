@@ -17,7 +17,12 @@ export interface TexVersion {
   backend: string
   prompt: string
   negative: string
+  /** The version that renders RIGHT NOW — season already resolved (E2c). */
   active: boolean
+  /** Season slots this version is selected for: `''` is the seasonless
+   *  default, every other entry a season name (lowercased). A kind with only
+   *  the `''` slot behaves exactly as it did before seasons existed. */
+  seasons: string[]
 }
 
 export interface TexGroup {

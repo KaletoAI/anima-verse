@@ -59,6 +59,27 @@ Expectations are derived BY HAND from the E5 Task 4 rules, not recorded:
       4 descriptions seeded (grass, sand, coast, custom) and 4 names seeded
       (grass, sand, coast, old_kind). The SECOND run returns {} and leaves
       the file's mtime alone, and so does a run from a different world.
+
+  [7] SEASON SLOTS (E2c, 2026-08-20). A kind may hold ONE active version per
+      season beside its seasonless default; rooms and terrain keep naming
+      nothing but the kind. The split lives in ``selection.json``, which
+      already answers "which version is active" — a season only makes the
+      question more precise. Fixture: the shipped calendar (4 seasons × 30
+      days -> season starts 0/30/60/90) plus a hand-picked instant, day 35 =
+      day 5 of summer, day 95 = day 5 of winter, both at noon
+      ((D-1) × 86400 + 43200 s). Two versions of a kind ``moss2``:
+        seasonless only        -> stored as the BARE STRING it always was
+        + winter slot          -> {"": <summer file>, "winter": <winter file>}
+                                  (the season lowercased on the way in)
+        summer                 -> the seasonless default (the fallback)
+        winter                 -> the winter file, in the CLIENT list too —
+                                  which says nothing about seasons at all
+        admin_list             -> each version names the slots it holds, and
+                                  `active` is the one rendering right now
+        clearing the slot      -> back to the bare string, back to the default
+        an unknown season name -> never matches (packs travel as strings)
+        deleting a version     -> every slot pointing at it goes with it
+      INERTNESS: an untagged library answers byte-identically in every season.
 """
 import json
 import logging
@@ -280,6 +301,84 @@ check("beta's world.db was not touched", (WORLD_B / "world.db").read_bytes(),
 stats = st.migrate_world_dirs_once()
 check("a rerun still reports gamma's leftover",
       (stats.get("moved"), stats.get("kept_in_world")), (0, 1))
+
+print("[7] SEASON slots: one kind, one version per season (E2c)")
+# Fixture (the smoke has no world clock): the shipped calendar — 4 seasons ×
+# 30 days, season starts 0/30/60/90 — and a hand-picked instant. Day-of-year
+# 35 is day 5 of SUMMER, 95 is day 5 of WINTER; a GameTime counts whole
+# seconds from Year 1 Day 1 00:00, so day D at noon is (D-1) × 86400 + 43200.
+from app.core import game_time as gt  # noqa: E402
+from app.core import timeutils as tu  # noqa: E402
+
+
+def set_season(day_of_year):
+    gt._CALENDAR_CACHE = gt.Calendar.default()
+    now = gt.GameTime((day_of_year - 1) * gt.DAY_SECONDS + 12 * 3600)
+    tu.game_time = lambda: now
+    return gt.Calendar.default().seasons[now.parts().season_index].key
+
+
+check("day 95 is winter", set_season(95), "winter")
+check("day 35 is summer", set_season(35), "summer")
+
+summer_moss = st.save_uploaded("moss2", JPEG).get("filename", "")
+time.sleep(1.1)   # the version stamp is unix SECONDS
+winter_moss = st.save_uploaded("moss2", JPEG2).get("filename", "")
+# Two uploads: the second one took the seasonless selection (rule of [2]).
+check("the newest upload is the default pick",
+      (st.texture_file("moss2") or Path("")).name, winter_moss)
+check("select puts the first one back", st.select_texture("moss2", summer_moss),
+      True)
+sel_plain = json.loads((st._dir() / "selection.json").read_text())["moss2"]
+check("a seasonless kind is still stored as a BARE STRING", sel_plain,
+      summer_moss)
+# Now the winter slot. Stored shape becomes the dict — and ONLY now.
+check("select for a season", st.select_texture("moss2", winter_moss, "Winter"),
+      True)
+check("...stored as slots, the season lowercased",
+      json.loads((st._dir() / "selection.json").read_text())["moss2"],
+      {"": summer_moss, "winter": winter_moss})
+check("summer still resolves to the seasonless default (fallback)",
+      (st.texture_file("moss2") or Path("")).name, summer_moss)
+set_season(95)
+check("winter resolves to the winter version",
+      (st.texture_file("moss2") or Path("")).name, winter_moss)
+check("...and the CLIENT list carries that url, nothing about seasons",
+      next(e for e in st.list_textures() if e["kind"] == "moss2")["url"],
+      f"/assets/surface-textures/{winter_moss}")
+listed = next(g for g in st.admin_list() if g["kind"] == "moss2")
+check("the admin strip says which slots each version holds",
+      {v["filename"]: v["seasons"] for v in listed["versions"]},
+      {winter_moss: ["winter"], summer_moss: [""]})
+check("...and which one renders right now",
+      [v["filename"] for v in listed["versions"] if v["active"]],
+      [winter_moss])
+check("clearing the winter slot falls back to the default",
+      (st.select_texture("moss2", "", "Winter"),
+       (st.texture_file("moss2") or Path("")).name),
+      (True, summer_moss))
+check("...and the file is a bare string again",
+      json.loads((st._dir() / "selection.json").read_text())["moss2"],
+      summer_moss)
+# A season NAME this world does not have never matches — packs travel as
+# strings, and an unknown season is inert, not an error.
+st.select_texture("moss2", winter_moss, "Monsoon")
+check("an unknown season name simply never wins",
+      (st.texture_file("moss2") or Path("")).name, summer_moss)
+# Deleting a version sweeps EVERY slot that pointed at it.
+st.select_texture("moss2", winter_moss, "Winter")
+st.delete_texture("moss2", winter_moss)
+check("deleting a version drops its season slot too",
+      json.loads((st._dir() / "selection.json").read_text())["moss2"],
+      summer_moss)
+check("...and the kind keeps rendering its default",
+      (st.texture_file("moss2") or Path("")).name, summer_moss)
+# INERTNESS: a library nobody tagged answers the same in every season.
+set_season(35)
+before = json.dumps(st.list_textures(), sort_keys=True)
+set_season(95)
+check("an untagged library is byte-identical across seasons",
+      json.dumps(st.list_textures(), sort_keys=True), before)
 
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
 if FAILURES:

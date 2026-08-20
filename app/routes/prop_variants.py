@@ -47,9 +47,9 @@ async def _body(request: Request) -> Dict[str, Any]:
 
 @router.get("/props/{prop_id}/variants")
 def prop_variants(prop_id: str) -> Dict[str, Any]:
-    """The prop's model variants: ``{variants: [{index, stem, active,
-    primary, tiers, has_model, model_file, model_url, signature}], max,
-    generating_variants}``.
+    """The prop's model variants: ``{variants: [{index, stem, active, seasons,
+    in_season, primary, tiers, has_model, model_file, model_url, signature}],
+    max, generating_variants, world_seasons, current_season}``.
 
     ``max`` is the configured ceiling on ACTIVE variants
     (``image_generation.prop_variant_max``) — the strip greys its "add" action
@@ -57,13 +57,29 @@ def prop_variants(prop_id: str) -> Dict[str, Any]:
 
     ``generating_variants`` are the STORE indices with a run in flight, so the
     strip knows which chip is busy the moment it loads; while a run lasts the
-    admin gets the same list from the polled ``GET /world/props``."""
+    admin gets the same list from the polled ``GET /world/props``.
+
+    ``world_seasons`` are the season NAMES this world runs on and
+    ``current_season`` the one it is in right now (E2c) — the season chips are
+    a pick from that list, never free text, and the server sends it so the
+    strip does not have to fetch the calendar itself. Empty list = a world
+    without seasons, and then the chips stay away: the tags would be inert."""
+    from app.core.game_time import get_calendar
     from app.core.props import (get_prop, list_variants, pending_variants,
                                 variant_max)
+    from app.core.timeutils import game_time
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
+    cal = get_calendar()
+    try:
+        current = (cal.seasons[game_time().parts(cal).season_index].name
+                   if cal.seasons else "")
+    except Exception:
+        current = ""
     return {"variants": list_variants(prop_id), "max": variant_max(),
-            "generating_variants": pending_variants(prop_id).get(prop_id, [])}
+            "generating_variants": pending_variants(prop_id).get(prop_id, []),
+            "world_seasons": [s.name for s in cal.seasons],
+            "current_season": current}
 
 
 @router.post("/props/{prop_id}/variants")
@@ -100,6 +116,25 @@ async def prop_variant_active(prop_id: str, index: int,
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one active variant")
     return {"status": "ok", "index": index, "active": active}
+
+
+@router.post("/props/{prop_id}/variants/{index}/seasons")
+async def prop_variant_seasons(prop_id: str, index: int,
+                               request: Request) -> Dict[str, Any]:
+    """Tag one variant with the seasons it depicts (body: ``{seasons: [name,
+    …]}``; ``[]`` clears the tag).
+
+    An in-season variant renders, an out-of-season one does not — that is the
+    whole rule (E2c). Never refused for a running generation: a tag moves no
+    file and renumbers nothing. The answer carries the SANITIZED list, so the
+    strip shows what was really stored."""
+    from app.core.props import list_variants, set_variant_seasons
+    _variant(prop_id, index)
+    body = await _body(request)
+    if not set_variant_seasons(prop_id, index, body.get("seasons")):
+        raise HTTPException(status_code=404, detail="Variant not found")
+    return {"status": "ok", "index": index,
+            "seasons": list_variants(prop_id)[index]["seasons"]}
 
 
 @router.delete("/props/{prop_id}/variants/{index}")

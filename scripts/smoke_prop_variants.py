@@ -109,10 +109,33 @@ checked in section 17, and the user finding it comes from:
     nothing), while deleting or toggling the RUNNING variant is refused — a
     delete would take the files the job is writing and renumber its neighbours.
 
+SEASON-TAGGED VARIANTS (E2c, 2026-08-20). A variant may name the seasons it
+depicts; EFFECTIVELY active = manually active AND (no tag OR the world's
+current season among them), matched case-insensitively against the season's
+key and names. Section 18 derives its cases by hand from the shipped calendar
+(4 seasons × 30 days, spring/summer/autumn/winter → season starts 0/30/60/90,
+so day-of-year 5/35/65/95 is day 5 of spring/summer/autumn/winter):
+
+  - a birch with variants [untagged, "Winter", "Spring"+"SUMMER"] renders
+    [0, 1] in winter, [0, 2] in spring AND in summer (the tag "SUMMER" is
+    matched lowercased), and [0] in autumn;
+  - an oak with ONLY tagged variants ["Summer"] / ["Winter"] moves its PRIMARY
+    variant with the season — and the bare `/model` URL, which is what every
+    payload publishes as element 0, has to serve that same mesh;
+  - in autumn NEITHER oak variant matches: the manual set stands, because a
+    placement must never become a hole (props._effective_indices);
+  - the library badges (`variants_total`) stay on the MANUAL set — a summer
+    variant without a mesh is still a to-do while the world is in winter;
+  - INERTNESS, twice over: an untagged prop answers byte-identically in every
+    season, and a world whose calendar has no seasons ignores every tag;
+  - the SCENE signature carries the season, so a season change reaches a
+    polling client even where nothing stored has moved.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import ast
 import io
+import json
 import os
 import sys
 import tempfile
@@ -276,6 +299,186 @@ def spec_of(prop_id: str, **extra) -> dict:
     # (`variants` / `model_variants` / `variant`), never its `bottom_y` — and
     # the slab feeds nothing but that.
     return _prop_models(recipe, 0.0, 0.0)[0]
+
+
+# ── Season fixture (E2c) ────────────────────────────────────────────────
+# The world clock lives in world_kv and this smoke has no DB, so the two
+# inputs of `game_time.current_season_tokens` are set directly: the CALENDAR
+# (the shipped default — 4 seasons × 30 days, spring/summer/autumn/winter)
+# and the INSTANT. That is the fixture, not the code under test: everything
+# below reads the season through the real resolution.
+#
+# The instant is derived BY HAND. Season starts are the cumulative lengths
+# 0/30/60/90, so day-of-year `i × 30 + 5` (1-based) is day 5 of season i:
+#
+#     spring -> day  5   summer -> day 35
+#     autumn -> day 65   winter -> day 95
+#
+# and a GameTime counts whole seconds from Year 1 Day 1 00:00, so day D at
+# noon is `(D - 1) × 86400 + 43200`. Winter: 94 × 86400 + 43200 = 8_164_800.
+
+SEASON_KEYS = ("spring", "summer", "autumn", "winter")
+
+
+def set_season(key: str) -> None:
+    """Put the world into season ``key`` (see the hand derivation above)."""
+    from app.core import game_time as gt
+    from app.core import timeutils
+    gt._CALENDAR_CACHE = gt.Calendar.default()
+    day = SEASON_KEYS.index(key) * 30 + 5
+    gt._SMOKE_NOW = gt.GameTime((day - 1) * gt.DAY_SECONDS + 12 * 3600)
+    timeutils.game_time = lambda: gt._SMOKE_NOW
+
+
+def set_no_seasons() -> None:
+    """A world whose calendar has NO seasons at all — the inert case."""
+    from app.core import game_time as gt
+    gt._CALENDAR_CACHE = gt.Calendar(seasons=())
+
+
+def season_section() -> None:
+    from app.core import game_time as gt
+
+    print("\n[18] SEASON-tagged variants (E2c)")
+    set_season("winter")
+    cal = gt.Calendar.default()
+    parts = gt._SMOKE_NOW.parts(cal)
+    check("the fixture really lands on winter, day 5",
+          cal.seasons[parts.season_index].key == "winter"
+          and parts.day_of_season == 5,
+          f"{cal.seasons[parts.season_index].key} d{parts.day_of_season}")
+
+    # ── The sanitizer: what a `seasons` field may be ──
+    birch = store.create_prop(name="Birch")["id"]
+    put_mesh(birch, 0)
+    put_mesh(birch, store.target_variant(birch))     # variant 1
+    put_mesh(birch, store.target_variant(birch))     # variant 2
+    check("three variants to work with", len(store.list_variants(birch)) == 3,
+          str([v["stem"] for v in store.list_variants(birch)]))
+    store.set_variant_seasons(birch, 1, ["Winter"])
+    store.set_variant_seasons(birch, 2, ["Spring", "SUMMER", "spring", "",
+                                         None, {"x": 1}])
+    vs = store.list_variants(birch)
+    check("an untagged variant stores NO key at all",
+          store.read_sidecar(birch)["model_variants"][0].get("seasons") is None,
+          str(store.read_sidecar(birch)["model_variants"][0]))
+    check("tags are kept VERBATIM", vs[1]["seasons"] == ["Winter"],
+          str(vs[1]["seasons"]))
+    check("case-insensitive dedupe, junk dropped",
+          vs[2]["seasons"] == ["Spring", "SUMMER"], str(vs[2]["seasons"]))
+
+    # ── The gate: manually active AND in season ──
+    # HAND CASE, world in WINTER:
+    #   variant 0  no tag            -> in season (no dependency)
+    #   variant 1  ["Winter"]        -> in season
+    #   variant 2  ["Spring","SUMMER"] -> OUT
+    #   => effective [0, 1]
+    check("winter: the untagged and the winter variant render",
+          [e["variant"] for e in store.active_variant_tiers(birch)] == [0, 1],
+          str([e["variant"] for e in store.active_variant_tiers(birch)]))
+    check("...and the recipe list agrees (one gate, not two)",
+          [e["variant"] for e in (store.get_prop(birch) or {})["variant_tiers"]]
+          == [0, 1])
+    check("in_season says which is which",
+          [v["in_season"] for v in store.list_variants(birch)]
+          == [True, True, False])
+    set_season("spring")
+    check("spring: the SUMMER/SPRING variant renders instead — [0, 2]",
+          [e["variant"] for e in store.active_variant_tiers(birch)] == [0, 2],
+          str([e["variant"] for e in store.active_variant_tiers(birch)]))
+    check("case-insensitive match: 'SUMMER' finds the summer season",
+          (set_season("summer") or
+           [e["variant"] for e in store.active_variant_tiers(birch)]) == [0, 2])
+    set_season("autumn")
+    check("autumn: neither tag matches, only the untagged one is left — [0]",
+          [e["variant"] for e in store.active_variant_tiers(birch)] == [0],
+          str([e["variant"] for e in store.active_variant_tiers(birch)]))
+    store.set_variant_seasons(birch, 1, [])
+    check("clearing a tag drops the key and the variant is back",
+          store.read_sidecar(birch)["model_variants"][1].get("seasons") is None
+          and [e["variant"] for e in store.active_variant_tiers(birch)] == [0, 1])
+    store.set_variant_seasons(birch, 1, ["Winter"])
+
+    # ── The primary variant follows the season, and so does the bare URL ──
+    # HAND CASE: an oak with a summer and a winter variant and NOTHING
+    # untagged. In winter the effective list is [1] alone, so the payload's
+    # single `variants` map — the bare URL — has to serve variant 1's mesh.
+    oak = store.create_prop(name="Oak")["id"]
+    put_mesh(oak, 0)
+    put_mesh(oak, store.target_variant(oak))
+    store.set_variant_seasons(oak, 0, ["Summer"])
+    store.set_variant_seasons(oak, 1, ["Winter"])
+    set_season("winter")
+    check("winter: the summer variant is gone, the winter one is primary",
+          [e["variant"] for e in store.active_variant_tiers(oak)] == [1]
+          and store.primary_variant(oak) == 1)
+    check("...and the BARE model URL serves that very mesh",
+          store.model_path(oak).name == store.model_path(oak, variant=1).name,
+          store.model_path(oak).name)
+    check("...which is variant 1's stem, not variant 0's",
+          store._stem_of(oak) == "model-v2", store._stem_of(oak))
+    set_season("summer")
+    check("summer: the other way round",
+          [e["variant"] for e in store.active_variant_tiers(oak)] == [0]
+          and store.primary_variant(oak) == 0
+          and store._stem_of(oak) == "model")
+    set_season("autumn")
+    # DEGENERATE CASE: no variant is in season. The manual set stands — a
+    # placement must never become a hole (see props._effective_indices).
+    check("autumn: NEITHER matches, so the manual set stands — [0, 1]",
+          [e["variant"] for e in store.active_variant_tiers(oak)] == [0, 1],
+          str([e["variant"] for e in store.active_variant_tiers(oak)]))
+
+    # ── The library badges stay on the MANUAL set ──
+    # The oak has 2 manually active variants all year; in winter only one of
+    # them renders, and the row must still say "2".
+    set_season("winter")
+    rec = store.get_prop(oak) or {}
+    check("variants_total counts the manual actives, not the in-season ones",
+          rec["variants_total"] == 2, str(rec["variants_total"]))
+    check("...while variant_count is what renders now", rec["variant_count"] == 1,
+          str(rec["variant_count"]))
+
+    # ── INERTNESS 1: a prop nobody tagged is byte-identical ──
+    fir = store.create_prop(name="Fir")["id"]
+    put_mesh(fir, 0)
+    put_mesh(fir, store.target_variant(fir))
+    set_season("spring")
+    spring = json.dumps([store.active_variant_tiers(fir),
+                         store.list_variants(fir)], sort_keys=True)
+    set_season("winter")
+    winter = json.dumps([store.active_variant_tiers(fir),
+                         store.list_variants(fir)], sort_keys=True)
+    check("an untagged prop answers byte-identically in every season",
+          spring == winter, spring[:60])
+
+    # ── INERTNESS 2: a world without seasons ignores the tags ──
+    set_no_seasons()
+    check("no seasons in the world: every tagged variant renders again",
+          [e["variant"] for e in store.active_variant_tiers(birch)] == [0, 1, 2]
+          and [e["variant"] for e in store.active_variant_tiers(oak)] == [0, 1])
+    check("...and in_season is True for all of them",
+          [v["in_season"] for v in store.list_variants(birch)]
+          == [True, True, True])
+
+    # ── The SCENE signature carries the season ──
+    # `_signature` is pure, so the two calls differ in nothing but the clock.
+    from app.core.scene_recipe import _signature
+    set_season("spring")
+    sig_spring = _signature({"map3d": {}}, 0.0, [], {}, {})
+    sig_spring2 = _signature({"map3d": {}}, 0.0, [], {}, {})
+    set_season("winter")
+    sig_winter = _signature({"map3d": {}}, 0.0, [], {}, {})
+    check("the scene signature is stable within a season",
+          sig_spring == sig_spring2)
+    check("...and moves when the season does — polling clients refetch",
+          sig_spring != sig_winter, f"{sig_spring[:8]} vs {sig_winter[:8]}")
+    set_no_seasons()
+    sig_none_a = _signature({"map3d": {}}, 0.0, [], {}, {})
+    set_season("winter")
+    set_no_seasons()
+    check("a world without seasons has ONE signature, whatever the clock says",
+          sig_none_a == _signature({"map3d": {}}, 0.0, [], {}, {}))
 
 
 def main() -> int:
@@ -770,6 +973,8 @@ def main() -> int:
     check("every key is released when the runs finish",
           store.pending_variants() == {} and store.is_pending() == [],
           str(store.pending_variants()))
+
+    season_section()
 
     print()
     if FAILURES:

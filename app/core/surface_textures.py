@@ -37,7 +37,20 @@ Files in that directory:
     <kind>_<ts>.json         — sidecar: created_at, source, backend, prompt,
                                negative, size_m
     <kind>.jpg / <kind>.json — the legacy single-version store, stays valid
-    selection.json           — {"<kind>": "<active filename>"}
+    selection.json           — {"<kind>": "<active filename>"} or, once a
+                               kind is seasonal, {"<kind>": {"": "<file>",
+                               "<season>": "<file>"}}
+
+SEASONS (E2c, 2026-08-20). A kind's versions may be SPLIT BY SEASON: the same
+``forest`` shows leaf litter in summer and snow in winter, and a room keeps
+storing nothing but the kind. The split lives in ``selection.json`` — that
+file already answers "which version of this kind is active", and a season only
+makes the question more precise. Season names come from the world's
+``game_seasons`` (matched case-insensitively, stored lowercased), the ``""``
+slot is the seasonless fallback, and a kind with no season slot keeps the bare
+string it always had. The resolution happens HERE, in ``texture_file``, so
+every consumer — the client list, the scene payload, the admin preview — gets
+one finished URL and never learns that seasons exist.
 
 Without a selection entry the NEWEST version is active. Generation runs
 through the normal image pipeline — use case ``surface_texture``,
@@ -180,7 +193,7 @@ def _files_by_kind() -> Dict[str, List[Path]]:
     return out
 
 
-def _read_selection() -> Dict[str, str]:
+def _read_selection() -> Dict[str, Any]:
     sp = _dir() / _SEL_FILE
     if sp.exists():
         try:
@@ -192,23 +205,88 @@ def _read_selection() -> Dict[str, str]:
     return {}
 
 
-def _write_selection(sel: Dict[str, str]) -> None:
+def _write_selection(sel: Dict[str, Any]) -> None:
     (_dir(create=True) / _SEL_FILE).write_text(
         json.dumps(sel, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _selection_slots(value: Any) -> Dict[str, str]:
+    """ONE kind's selection as ``{season key: filename}`` with ``""`` = the
+    seasonless default.
+
+    Two stored shapes, one reading (E2c, 2026-08-20). A plain string is what
+    every world holds today and stays the default pick::
+
+        "grass": "grass_1784407246.jpg"
+
+    A dict adds season slots beside it — the season NAMES come from the
+    world's ``game_seasons``, and the ``""`` entry is the fallback the
+    resolution drops back to::
+
+        "deep_forest": {"": "deep_forest_1786831378.jpg",
+                        "winter": "deep_forest_1786831520.jpg"}
+
+    The file gallery per kind is unchanged; this only says which of its
+    versions is active WHEN. Nothing is written in the dict shape until a
+    season slot is set, so a library nobody tagged is byte-identical.
+    """
+    if isinstance(value, str):
+        return {"": value} if value.strip() else {}
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for season, filename in value.items():
+        if not isinstance(filename, str) or not filename.strip():
+            continue
+        out[str(season).strip().lower()] = filename.strip()
+    return out
+
+
+def _store_slots(slots: Dict[str, str]) -> Any:
+    """The storage shape of one kind's slots — a bare string while only the
+    seasonless default is set, so the file keeps looking exactly as it did."""
+    clean = {k: v for k, v in slots.items() if v}
+    if not clean:
+        return ""
+    if set(clean) == {""}:
+        return clean[""]
+    return dict(sorted(clean.items()))
+
+
+def _pick_file(kind: str, filename: str) -> Optional[Path]:
+    """A selected file name as a path — path-escape safe and of THIS kind."""
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        return None
+    p = _dir() / filename
+    return p if p.exists() and _stem_kind(p.stem) == kind else None
 
 
 def texture_file(kind: str) -> Optional[Path]:
     """The ACTIVE version of a kind: the selection entry when it points at an
     existing file, else the newest stored version (legacy files need no
-    migration this way)."""
+    migration this way).
+
+    SEASONS (E2c): when the kind has season slots, the one naming the world's
+    current season wins and the seasonless entry is the fallback — so a room
+    keeps storing nothing but the ``kind`` and still gets snow on the forest
+    floor in winter. A library without season slots never reads the clock.
+    """
     kind = safe_kind(kind)
     if not kind:
         return None
-    sel = _read_selection().get(kind, "")
-    if sel and "/" not in sel and "\\" not in sel and ".." not in sel:
-        p = _dir() / sel
-        if p.exists() and _stem_kind(p.stem) == kind:
-            return p
+    slots = _selection_slots(_read_selection().get(kind))
+    seasonal = [s for s in slots if s]
+    if seasonal:
+        from app.core.game_time import current_season_tokens
+        now = current_season_tokens()
+        for season in sorted(seasonal):
+            if season in now:
+                p = _pick_file(kind, slots[season])
+                if p:
+                    return p
+    p = _pick_file(kind, slots.get("", ""))
+    if p:
+        return p
     files = _files_by_kind().get(kind) or []
     return files[0] if files else None
 
@@ -258,16 +336,45 @@ def set_size_m(kind: str, size_m: float, filename: str = "") -> bool:
     return True
 
 
-def select_texture(kind: str, filename: str) -> bool:
-    """Make ``filename`` the active version of its kind."""
+def select_texture(kind: str, filename: str, season: str = "") -> bool:
+    """Make ``filename`` the active version of its kind.
+
+    ``season`` targets ONE season slot instead of the seasonless default
+    (E2c) — the name as the world spells it, stored lowercased and matched
+    case-insensitively against the current season. Passing an EMPTY
+    ``filename`` with a season clears that slot, which is how a kind stops
+    being seasonal; the seasonless slot cannot be cleared this way, because a
+    kind without one falls back to its newest version and that is a different
+    statement.
+    """
     kind = safe_kind(kind)
-    p = file_by_name(filename) if kind else None
-    if not p or _stem_kind(p.stem) != kind:
+    if not kind:
         return False
+    slot = str(season or "").strip().lower()
     sel = _read_selection()
-    sel[kind] = p.name
+    slots = _selection_slots(sel.get(kind))
+    if not str(filename or "").strip() and slot:
+        if slot not in slots:
+            return False
+        slots.pop(slot)
+    else:
+        p = file_by_name(filename)
+        if not p or _stem_kind(p.stem) != kind:
+            return False
+        slots[slot] = p.name
+    stored = _store_slots(slots)
+    if stored:
+        sel[kind] = stored
+    else:
+        sel.pop(kind, None)
     _write_selection(sel)
     return True
+
+
+def selection_slots(kind: str) -> Dict[str, str]:
+    """One kind's active files by season slot (``""`` = the seasonless
+    default) — what the admin strip marks its versions with."""
+    return _selection_slots(_read_selection().get(safe_kind(kind)))
 
 
 # ── Blend compositions (AV3D-13 v2) ─────────────────────────────────────
@@ -451,12 +558,19 @@ def resolve_terrain_kind(terrain: Any, known) -> str:
 def admin_list() -> List[Dict[str, Any]]:
     """Admin listing — ALL versions per kind (newest first) incl. HOW each
     was made: [{kind, name, description, versions: [{filename, url, size_m,
-    created_at, source, backend, prompt, negative, active}]}]."""
+    created_at, source, backend, prompt, negative, active, seasons}]}].
+
+    ``active`` is the version that renders RIGHT NOW (season resolved);
+    ``seasons`` are the season slots this version is selected for, ``[""]``
+    being the seasonless default (E2c). The two together are what the strip
+    draws: which file the world is showing, and which slots each file holds."""
     out = []
     by_kind = _files_by_kind()
     kmeta = _read_kind_meta()
+    sel = _read_selection()
     for kind in sorted(by_kind):
         active = texture_file(kind)
+        slots = _selection_slots(sel.get(kind))
         versions = []
         for p in by_kind[kind]:
             meta = _read_meta(p)
@@ -470,6 +584,7 @@ def admin_list() -> List[Dict[str, Any]]:
                 "prompt": meta.get("prompt", ""),
                 "negative": meta.get("negative", ""),
                 "active": bool(active and p.name == active.name),
+                "seasons": sorted(s for s, f in slots.items() if f == p.name),
             })
         entry = kmeta.get(kind) or {}
         out.append({"kind": kind, "name": entry.get("name", ""),
@@ -499,10 +614,20 @@ def delete_texture(kind: str, filename: str = "") -> bool:
         for p in files:
             p.unlink()
             _sidecar_path(p).unlink(missing_ok=True)
+    # Every slot that pointed at a deleted file goes with it (E2c: a kind may
+    # hold one pick per season, so this is a sweep, not one key) — what is left
+    # falls back to the newest remaining version.
     sel = _read_selection()
-    if kind in sel and not (_dir() / sel[kind]).exists():
-        sel.pop(kind)
-        _write_selection(sel)
+    if kind in sel:
+        slots = {s: f for s, f in _selection_slots(sel[kind]).items()
+                 if (_dir() / f).exists()}
+        stored = _store_slots(slots)
+        if stored != sel[kind]:
+            if stored:
+                sel[kind] = stored
+            else:
+                sel.pop(kind)
+            _write_selection(sel)
     return True
 
 

@@ -36,6 +36,10 @@ export function SurfaceTexturesTab() {
   // "coast" = water → sand → whatever the other neighbors are.
   const [blends, setBlends] = useState<Record<string, Blend>>({})
   const [blendEdit, setBlendEdit] = useState<{ kind: string; blend: Blend } | null>(null)
+  // The world's seasons (E2c): a version may be selected FOR one of them.
+  // Empty = a world without seasons, and then the season controls stay away.
+  const [worldSeasons, setWorldSeasons] = useState<string[]>([])
+  const [currentSeason, setCurrentSeason] = useState('')
   const [loaded, setLoaded] = useState(false)
   // Selected list row: a texture kind, `blend:<kind>` or '' (nothing).
   const [sel, setSel] = useState('')
@@ -60,12 +64,15 @@ export function SurfaceTexturesTab() {
   const load = useCallback(async () => {
     try {
       const d = await apiGet<{ textures?: TexGroup[]; pending?: string[]
-        backends?: BackendInfo[]; blends?: Record<string, Blend> }>(
+        backends?: BackendInfo[]; blends?: Record<string, Blend>
+        world_seasons?: string[]; current_season?: string }>(
         '/world/surface-textures')
       setTextures(d.textures || [])
       setPending(d.pending || [])
       setBackends(d.backends || [])
       setBlends(d.blends || {})
+      setWorldSeasons(d.world_seasons || [])
+      setCurrentSeason(d.current_season || '')
       setLoaded(true)
       return d
     } catch {
@@ -186,8 +193,11 @@ export function SurfaceTexturesTab() {
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [load, t, toast])
 
-  const select = useCallback((k: string, filename: string) => {
-    void apiPost(`/world/surface-textures/${encodeURIComponent(k)}/select`, { file: filename })
+  // `season` targets ONE season slot instead of the default pick; an empty
+  // filename with a season clears that slot (E2c).
+  const select = useCallback((k: string, filename: string, season = '') => {
+    void apiPost(`/world/surface-textures/${encodeURIComponent(k)}/select`,
+      { file: filename, season })
       .then(() => load())
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
   }, [load, t, toast])
@@ -441,7 +451,9 @@ export function SurfaceTexturesTab() {
             cacheBump={cacheBump}
             armedDel={armedDel}
             onSize={(filename, raw) => setSize(selectedGroup.kind, filename, raw)}
-            onSelect={(filename) => select(selectedGroup.kind, filename)}
+            onSelect={(filename, season) => select(selectedGroup.kind, filename, season)}
+            worldSeasons={worldSeasons}
+            currentSeason={currentSeason}
             onRemove={(filename) => remove(selectedGroup.kind, filename)}
             onZoom={(v) => setZoom({ kind: selectedGroup.kind, v })}
             onUpload={() => pickUpload(selectedGroup.kind)}

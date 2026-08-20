@@ -16,6 +16,13 @@
  *
  * The active cap comes from the server (`image_generation.prop_variant_max`),
  * so "add" is greyed with a reason instead of letting the POST come back 409.
+ *
+ * SEASONS (E2c): a variant may be tagged with the seasons it depicts — one row
+ * of toggle chips per variant, offered from the world's own season list, never
+ * free text. Untagged (the default) means every season. A variant that is
+ * tagged for another season keeps its meshes but renders nowhere until that
+ * season comes round, which the chip row says in as many words. A world
+ * without seasons gets no chips at all: the tags would be inert.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -25,7 +32,7 @@ import { SCENE_CONTEXT_ORIGIN } from './propTypes'
 import type { PropVariant } from './propTypes'
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
-  onChanged, generating = [] }: {
+  onChanged, generating = [], worldSeasons = [], currentSeason = '' }: {
   propId: string
   /** Every variant, active or not, in order (from PropDetail's load). */
   variants: PropVariant[]
@@ -45,6 +52,11 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
    *  write into that slot, and a delete renumbers everything behind it.
    *  Adding a slot is never blocked by a run: it appends at the end. */
   generating?: number[]
+  /** The world's season NAMES (`game_seasons`) — the only values a chip may
+   *  set. Empty = a world without seasons, and then no chips are drawn. */
+  worldSeasons?: string[]
+  /** The season the world is in right now, for the "renders now" hint. */
+  currentSeason?: string
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -87,6 +99,19 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     void run(
       () => apiPost(`/world/props/${enc}/variants/${v.index}/active`, { active: !v.active }),
       v.active ? t('Variant switched off') : t('Variant switched on'))
+  }, [enc, run, t])
+
+  // Toggling ONE season on a variant: the chips are a set, and the server
+  // stores what it is sent — so the new set is computed here and posted whole.
+  const toggleSeason = useCallback((v: PropVariant, season: string) => {
+    const has = v.seasons.some((s) => s.toLowerCase() === season.toLowerCase())
+    const next = has
+      ? v.seasons.filter((s) => s.toLowerCase() !== season.toLowerCase())
+      : [...v.seasons, season]
+    void run(
+      () => apiPost(`/world/props/${enc}/variants/${v.index}/seasons`,
+        { seasons: next }),
+      next.length ? t('Seasons saved') : t('Season tag cleared'))
   }, [enc, run, t])
 
   const remove = useCallback((index: number) => {
@@ -166,6 +191,41 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   </span>
                 ) : null}
               </div>
+              {/* Season chips (E2c). A set, not a single choice: a variant may
+                  depict two seasons. No chip lit = every season, which is why
+                  the row needs no "always" chip of its own. */}
+              {worldSeasons.length ? (
+                <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                  {worldSeasons.map((season) => {
+                    const on = v.seasons.some(
+                      (s) => s.toLowerCase() === season.toLowerCase())
+                    return (
+                      <button
+                        key={season}
+                        type="button"
+                        className={`ga-btn ga-btn-sm${on ? ' ga-btn-primary' : ''}`}
+                        style={{ padding: '0 5px', fontSize: '0.85em' }}
+                        disabled={busy}
+                        onClick={() => toggleSeason(v, season)}
+                        title={on
+                          ? t('This variant renders in {season}. Click to drop that season; with no season left it renders all year.')
+                            .replace('{season}', season)
+                          : t('Show this variant only in {season} (and in every other season you light up here).')
+                            .replace('{season}', season)}
+                      >
+                        {season}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+              {v.seasons.length && !v.in_season ? (
+                <span className="ga-tag ga-tag-missing"
+                  title={t('Out of season — this variant is not rendered while the world is in {season}.')
+                    .replace('{season}', currentSeason || '—')}>
+                  {t('out of season')}
+                </span>
+              ) : null}
               <div style={{ display: 'flex', gap: 3 }}>
                 <button
                   type="button"
@@ -219,6 +279,9 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       </div>
       <span className="ga-hint">
         {t('Several meshes of the SAME object — scattered copies pick one of them, so a wood is not one tree twenty times. ★ marks the primary variant, which is what anything that does not ask for a variant gets. The selected chip decides which variant the preview and the mesh gallery below show.')}
+        {worldSeasons.length ? (
+          ' ' + t('A variant with no season chip lit renders all year; light one up and it renders only then. If EVERY variant is out of season the prop keeps rendering its primary one — a placement never becomes a hole.')
+        ) : null}
         {' '}
         {`${t('Active:')} ${activeCount}/${max}`}
       </span>

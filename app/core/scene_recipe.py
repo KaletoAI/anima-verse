@@ -1883,13 +1883,32 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
 
     ``ground_kind`` is in here as the RESOLVED kind, not as the raw
     ``terrain`` text: it is what the payload carries, and it also moves when
-    the library gains or loses the entry a terrain names."""
+    the library gains or loses the entry a terrain names.
+
+    THE SEASON is in here as a token (E2c, 2026-08-20), and it is the one
+    input that is not a stored value: a season change swaps prop variants
+    (``props._effective_indices``) and surface textures
+    (``surface_textures.texture_file``) without touching a single sidecar. The
+    room signatures DO move with the variant lists they carry, so props alone
+    would be covered — the textures would not, and a running client would keep
+    a summer ground under a winter sky until it reloaded. One token settles
+    both, and a world without seasons contributes the empty string, i.e. the
+    signature it always had."""
     import hashlib
     import json
+    from app.core.game_time import get_calendar
+    from app.core.timeutils import game_time
+    try:
+        cal = get_calendar()
+        season = (cal.seasons[game_time().parts(cal).season_index].key
+                  if cal.seasons else "")
+    except Exception:
+        season = ""
     payload = {
         "map3d": location.get("map3d") or {},
         "plan_width_m": round(float(plan_width_m or 0), 3),
         "ground_kind": ground_kind,
+        "season": season,
         "rooms": {str(r.get("room_id") or ""): r.get("signature") or ""
                   for r in recipes},
         "building_meta": building_meta or {},

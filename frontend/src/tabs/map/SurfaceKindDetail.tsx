@@ -25,19 +25,25 @@ interface SurfaceKindDetailProps {
   /** Filename armed for deletion ('' = none). */
   armedDel: string
   onSize: (filename: string, raw: string) => void
-  onSelect: (filename: string) => void
+  /** Select a version — for the seasonless default, or for ONE season slot
+   *  (E2c). An empty filename with a season clears that slot again. */
+  onSelect: (filename: string, season?: string) => void
   onRemove: (filename: string) => void
   onZoom: (version: TexVersion) => void
   onUpload: () => void
   /** Persist name / description / material class. The ID is not editable. */
   onMeta: (meta: { name?: string; description?: string
                    material?: Record<string, unknown> }) => void
+  /** The world's season NAMES; empty = no seasons, no season controls. */
+  worldSeasons?: string[]
+  /** The season the world is in right now (for the "shown now" marker). */
+  currentSeason?: string
   generateForm: ReactNode
 }
 
 export function SurfaceKindDetail({
   group, pending, cacheBump, armedDel, onSize, onSelect, onRemove, onZoom,
-  onUpload, onMeta, generateForm,
+  onUpload, onMeta, worldSeasons = [], currentSeason = '', generateForm,
 }: SurfaceKindDetailProps) {
   const { t } = useI18n()
   const mat = (group.material || {}) as Record<string, unknown>
@@ -179,6 +185,9 @@ export function SurfaceKindDetail({
         ) : null}
         <span className="ga-hint">
           {t('The ⭐ active version is what the 3D client gets; click a thumbnail to enlarge.')}
+          {worldSeasons.length ? (
+            ' ' + t('A version can also be chosen FOR a season: the world shows it while that season lasts and falls back to the ⭐ default otherwise. Rooms and terrain keep naming nothing but the kind.')
+          ) : null}
         </span>
         <div className="ga-tex-versions">
           {group.versions.map((v) => (
@@ -226,6 +235,33 @@ export function SurfaceKindDetail({
                   {armedDel === v.filename ? t('Really delete?') : '🗑'}
                 </button>
               </div>
+              {/* Season slots (E2c): one toggle per season of the world. Lit =
+                  this version is what the kind shows in that season. Nothing
+                  lit anywhere = the kind is seasonless, exactly as before. */}
+              {worldSeasons.length ? (
+                <div className="ga-tex-card-row" style={{ flexWrap: 'wrap' }}>
+                  {worldSeasons.map((season) => {
+                    const key = season.toLowerCase()
+                    const on = v.seasons.includes(key)
+                    const now = season.toLowerCase() === currentSeason.toLowerCase()
+                    return (
+                      <button
+                        key={season}
+                        type="button"
+                        className={`ga-btn ga-btn-sm${on ? ' ga-btn-primary' : ''}`}
+                        style={{ padding: '0 5px', fontSize: '0.85em' }}
+                        onClick={() => onSelect(on ? '' : v.filename, season)}
+                        title={on
+                          ? t('Shown in {season}. Click to drop that slot — the kind falls back to its ⭐ default there.')
+                            .replace('{season}', season)
+                          : t('Show THIS version in {season}.').replace('{season}', season)}
+                      >
+                        {season}{now ? ' ·' : ''}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

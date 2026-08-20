@@ -216,6 +216,20 @@ Throwaway storage. Hand-derived expectations:
       keys next to `stroke` survive; and the recipe survives a save/read
       round trip.
 
+ [16] SEASON-tagged model variants (E2c, 2026-08-20). A variant may name the
+      seasons it depicts, so the ENRICHED entry changes while every stored row
+      stays put — and `terrain_sig`, which hashes that enriched block, has to
+      follow or a running client keeps the wrong wood. Fixture: the shipped
+      calendar (4 seasons × 30 days -> season starts 0/30/60/90) and a
+      hand-picked instant, day-of-year 35 = day 5 of SUMMER and 95 = day 5 of
+      WINTER, both at noon ((D - 1) × 86400 + 43200 seconds).
+      With `smoke-bush` from [12b] (two meshed variants):
+        untagged            -> 2 maps, and ONE signature for both seasons
+        variant 1 "Winter"  -> summer publishes 1 map, and the signature moved
+        the same in winter  -> 2 maps again, and the signature is character for
+                               character the untagged one, because the payload
+                               is the same payload
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
 import asyncio
@@ -1096,6 +1110,56 @@ differs("…and it keeps a 0.0 the payload law forbids",
 
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])
+
+# ── [16] SEASON-tagged variants move terrain_sig (E2c) ──────────────────
+# The scatter entry carries the prop's ACTIVE variants, and since E2c a
+# variant may be tagged for a season — so the served block changes while every
+# stored row stays put. `terrain_sig` hashes the ENRICHED block, so it has to
+# follow. Fixture (a smoke has no world clock): the shipped calendar — 4
+# seasons × 30 days, season starts 0/30/60/90 — and a hand-picked instant,
+# day-of-year 35 = day 5 of SUMMER, 95 = day 5 of WINTER, each at noon:
+# (D - 1) × 86400 + 43200.
+print("\n[16] season-tagged variants reach a polling client (E2c)")
+from app.core import game_time as _gt  # noqa: E402
+from app.core import timeutils as _tu  # noqa: E402
+
+
+def _set_season(day_of_year):
+    _gt._CALENDAR_CACHE = _gt.Calendar.default()
+    _now = _gt.GameTime((day_of_year - 1) * _gt.DAY_SECONDS + 12 * 3600)
+    _tu.game_time = lambda: _now
+
+
+_season_area = terrain.save_area(
+    {"kind": "grass", "polygon": SQUARE,
+     "meta": {"scatter": [{"density_per_100m2": 4,
+                           "model": f"/assets/props/{BUSH}/model"}]}})
+
+
+def _bush_maps():
+    entry = next(a["meta"]["scatter"][0]
+                 for a in terrain.with_scatter_props(terrain.list_areas())
+                 if a["id"] == _season_area["id"])
+    return entry.get("model_variants") or [entry.get("variants")]
+
+
+_set_season(95)
+_sig_untagged = terrain.terrain_sig()
+check("untagged: both bush variants are published", len(_bush_maps()), 2)
+_set_season(35)
+check("…and the signature does not care which season it is",
+      terrain.terrain_sig(), _sig_untagged)
+props.set_variant_seasons(BUSH, _bush_v1, ["Winter"])
+_sig_summer = terrain.terrain_sig()
+check("summer: the winter variant leaves the entry", len(_bush_maps()), 1)
+check("…and the signature moved, without a row being touched",
+      _sig_summer != _sig_untagged, True)
+_set_season(95)
+check("winter: it is back", len(_bush_maps()), 2)
+check("…and the winter signature is the untagged one again "
+      "(the payload is identical)", terrain.terrain_sig(), _sig_untagged)
+props.set_variant_seasons(BUSH, _bush_v1, [])
+terrain.delete_area(_season_area["id"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

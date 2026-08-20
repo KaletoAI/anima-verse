@@ -89,7 +89,16 @@ HAND-DERIVED EXPECTATIONS
 
   [7] the signature
         `world_props_sig` is stable over a re-read and MOVES when a placement
-        moves — that is the whole contract a client rebuilds on.
+        moves — that is the whole contract a client rebuilds on. Since E2c it
+        must move with the CLOCK as well: the rows carry the prop's ACTIVE
+        variants, and a season-tagged one leaves and re-enters them without a
+        single DB row changing. Hand fixture (the shipped calendar, 4 × 30
+        days, season starts 0/30/60/90): day-of-year 35 = day 5 of summer,
+        95 = day 5 of winter. A fence with an untagged second variant answers
+        identically in both; tag that variant "Winter" and summer publishes no
+        `model_variants` at all while winter publishes two — and the two
+        signatures differ. Clearing the tag restores the untagged answer byte
+        for byte, which is the inertness rule.
 
   [8] the EDITOR listing (`GET /world/world-props`)
         A second shape beside the payload block, and deliberately so: the map
@@ -326,6 +335,47 @@ wp.save_world_prop({**last, "x": last["x"] + 1.0})
 check("moves when a placement moves", wp.world_props_sig() != sig_a, True)
 check("delete works", wp.delete_world_prop(last["id"]), True)
 check("deleting twice is False", wp.delete_world_prop(last["id"]), False)
+
+# ── SEASONS (E2c): the signature has to move with the CLOCK too ──
+# The rows are derived from `props.active_variant_tiers`, so a season swap
+# changes the payload without touching a single DB row. Fixture (a smoke has
+# no world clock): the shipped calendar — 4 seasons × 30 days, season starts
+# 0/30/60/90 — plus a hand-picked instant, day-of-year 35 = day 5 of SUMMER
+# and 95 = day 5 of WINTER, at noon: (D-1) × 86400 + 43200.
+from app.core import game_time as _gt  # noqa: E402
+from app.core import timeutils as _tu  # noqa: E402
+
+
+def _set_season(day_of_year: int) -> None:
+    _gt._CALENDAR_CACHE = _gt.Calendar.default()
+    now = _gt.GameTime((day_of_year - 1) * _gt.DAY_SECONDS + 12 * 3600)
+    _tu.game_time = lambda: now
+
+
+for row in wp.list_world_props():
+    wp.delete_world_prop(row["id"])
+wp.save_world_prop({"prop_id": FENCE, "x": 5.0, "z": 5.0})
+_set_season(95)
+check("the fence has both variants while nothing is tagged",
+      len(wp.payload_rows()[0]["model_variants"]), 2)
+sig_untagged_winter = wp.world_props_sig()
+_set_season(35)
+check("an untagged prop gives the SAME signature in another season",
+      wp.world_props_sig(), sig_untagged_winter)
+prop_store.set_variant_seasons(FENCE, 1, ["Winter"])
+sig_summer = wp.world_props_sig()
+check("summer: the winter variant is gone from the row",
+      "model_variants" in wp.payload_rows()[0], False)
+_set_season(95)
+check("winter: both are published again",
+      len(wp.payload_rows()[0]["model_variants"]), 2)
+check("...and the signature moved with the season, not with a row",
+      wp.world_props_sig() != sig_summer, True)
+prop_store.set_variant_seasons(FENCE, 1, [])
+check("clearing the tag restores the summer answer byte for byte",
+      (_set_season(35) or wp.world_props_sig()), sig_untagged_winter)
+for row in wp.list_world_props():
+    wp.delete_world_prop(row["id"])
 
 print("\n[8] the editor listing")
 for row in wp.list_world_props():

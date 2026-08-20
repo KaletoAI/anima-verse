@@ -130,6 +130,11 @@ export interface PropVariant {
   stem: string
   /** Switched off variants keep their meshes but are not rendered. */
   active: boolean
+  /** Season names this variant depicts (E2c); empty = every season. */
+  seasons: string[]
+  /** Does that tag match the world's CURRENT season? An untagged variant is
+   *  always in season, and so is every variant in a world without seasons. */
+  in_season: boolean
   primary: boolean
   /** Resolution tiers this variant HAS (`full` / `low`). */
   tiers: string[]
