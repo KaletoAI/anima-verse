@@ -290,7 +290,8 @@ def _geometry(loc: Dict[str, Any], room: Dict[str, Any]) -> Dict[str, Any]:
                 "is_rect": False, "openings": openings}
     if not all(k in lay for k in ("x", "y", "w", "d")):
         raise FurnishError(
-            "This room has no floor plan yet — draw its layout first.", 409)
+            "This room has no floor plan saved yet — draw its layout and "
+            "save the location first.", 409)
     w_m = round(float(lay["w"]), 3)
     d_m = round(float(lay["d"]), 3)
     pts = lay.get("outline") or [[0.0, 0.0], [w_m, 0.0], [w_m, d_m], [0.0, d_m]]

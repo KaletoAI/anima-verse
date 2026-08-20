@@ -3137,10 +3137,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         surfaceKinds={surfaceKinds}
         onSurface={setSurface}
         furnishState={furnish.status?.state || ''}
-        furnishDisabled={!selectedRoom}
+        // Furnish reads the SAVED world, not the draft (the job runs
+        // server-side): a freshly drawn room that is not saved yet would
+        // 409 with "no floor plan" — the same rule Generate-in-scene
+        // already enforces (user finding 2026-08-20, bedroom level 1).
+        furnishDisabled={!selectedRoom || unsaved}
         furnishHint={!selectedRoom
           ? t('Select a room with a floor plan first.')
-          : groundSel
+          : unsaved
+            ? t('Save the location first — furnishing works on the saved floor plan.')
+            : groundSel
             ? t('Let the LLM furnish the yard: it picks library props and a solver places them inside the location boundary, clear of the rooms and the entrances.')
             : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
         onFurnish={() => setFurnishOpen(true)}
