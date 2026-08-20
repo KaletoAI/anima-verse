@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
+import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -600,68 +601,54 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                   // directly dialable in real units.
                   const dimM = parseFloat(dims[axis.dim]) || prop[axis.dim]
                   return (
-                    <div key={axis.label} className="ga-marker-axis">
-                      <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>
-                        {t(axis.label)}
-                      </span>
-                      <input
-                        type="range"
-                        min={axis.min}
-                        max={AT_MAX}
-                        step={0.005}
-                        value={m.at[ax]}
-                        style={{ flex: 1, minWidth: 60 }}
-                        onChange={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.valueAsNumber)}
-                      />
-                      <input
-                        className="ga-input"
-                        type="number"
-                        min={axis.min}
-                        max={AT_MAX}
-                        step={0.005}
-                        style={{ width: 72, flex: '0 0 auto' }}
-                        value={m.at[ax]}
-                        onChange={(e) => setMarkerAt(i, ax as 0 | 1 | 2, e.target.value)}
-                      />
-                      <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
-                        title={t('Fraction × the dimension typed above.')}>
-                        {(m.at[ax] * dimM).toFixed(2)} m
-                      </span>
-                    </div>
+                    <SliderInput
+                      key={axis.label}
+                      className="ga-marker-axis"
+                      style={{ display: 'flex', fontSize: '0.8em' }}
+                      label={(
+                        <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>
+                          {t(axis.label)}
+                        </span>
+                      )}
+                      ariaLabel={t(axis.label)}
+                      min={axis.min}
+                      max={AT_MAX}
+                      step={0.005}
+                      fineStep={0.001}
+                      value={m.at[ax]}
+                      onChange={(v) => setMarkerAt(i, ax as 0 | 1 | 2, v)}
+                      sliderWidth="auto"
+                      sliderStyle={{ flex: 1, minWidth: 60 }}
+                      inputWidth={72}
+                      readback={(
+                        <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
+                          title={t('Fraction × the dimension typed above.')}>
+                          {(m.at[ax] * dimM).toFixed(2)} m
+                        </span>
+                      )}
+                    />
                   )
                 })}
-                <div className="ga-marker-axis"
-                  title={t('Facing in degrees: 0 south, 90 east, 180 north, 270 west. Unset = the client default (face the neighbours).')}>
-                  <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>🧭 {t('Facing')}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={360}
-                    step={5}
-                    value={m.facing ?? 0}
-                    style={{ flex: 1, minWidth: 60 }}
-                    onChange={(e) => patchMarker(i, {
-                      facing: ((e.target.valueAsNumber % 360) + 360) % 360,
-                    })}
-                  />
-                  <input
-                    className="ga-input"
-                    type="number"
-                    min={0}
-                    max={359}
-                    step={1}
-                    style={{ width: 72, flex: '0 0 auto' }}
-                    value={m.facing ?? ''}
-                    placeholder="—"
-                    onChange={(e) => {
-                      const raw = e.target.value.trim()
-                      if (raw === '') { patchMarker(i, { facing: undefined }); return }
-                      const n = parseInt(raw, 10)
-                      patchMarker(i, {
-                        facing: Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined,
-                      })
-                    }}
-                  />
+                <SliderInput
+                  className="ga-marker-axis"
+                  style={{ display: 'flex', fontSize: '0.8em' }}
+                  title={t('Facing in degrees: 0 south, 90 east, 180 north, 270 west. Unset = the client default (face the neighbours).')}
+                  label={<span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>🧭 {t('Facing')}</span>}
+                  ariaLabel={t('Facing')}
+                  min={0}
+                  max={360}
+                  step={5}
+                  fineStep={1}
+                  value={m.facing}
+                  fallback={0}
+                  clearable
+                  placeholder="—"
+                  onChange={(v) => patchMarker(i, { facing: ((v % 360) + 360) % 360 })}
+                  onClear={() => patchMarker(i, { facing: undefined })}
+                  sliderWidth="auto"
+                  sliderStyle={{ flex: 1, minWidth: 60 }}
+                  inputWidth={72}
+                >
                   <button
                     type="button"
                     className="ga-btn ga-btn-sm"
@@ -672,7 +659,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                   >
                     ✕
                   </button>
-                </div>
+                </SliderInput>
               </div>
             ))
           )}

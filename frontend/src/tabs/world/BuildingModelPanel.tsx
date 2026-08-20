@@ -15,6 +15,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog, type MeshBackend, type MeshGenerateOpts } from '../../components/MeshBackendDialog'
+import { SliderInput } from '../../components/SliderInput'
 import {
   BuildDistanceMeshButton, DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow,
   TierPicker, TierSummary,
@@ -845,19 +846,24 @@ function RoofBuilder({ apiBase, blender, pending, onStarted }: {
                 {ROOF_FORMS.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>
             </label>
-            <label style={row} title={t('Slope of the roof surface against the horizontal. A flat roof has none.')}>
-              {t('Pitch (°)')}
-              <input
-                type="range" min={5} max={60} step={1}
-                style={{ width: 110 }}
-                disabled={desc.form === 'flat'}
-                value={desc.pitch_deg}
-                onChange={(e) => patch({ pitch_deg: parseFloat(e.target.value) })}
-              />
-              <span style={{ width: 26, textAlign: 'right' }}>
-                {desc.form === 'flat' ? '—' : desc.pitch_deg}
-              </span>
-            </label>
+            <SliderInput
+              label={t('Pitch (°)')}
+              ariaLabel={t('Roof pitch (°)')}
+              title={t('Slope of the roof surface against the horizontal. A flat roof has none.')}
+              min={5}
+              max={60}
+              step={1}
+              fineStep={0.5}
+              disabled={desc.form === 'flat'}
+              value={desc.pitch_deg}
+              onChange={(v) => patch({ pitch_deg: v })}
+              sliderWidth={110}
+              inputWidth={68}
+              style={row}
+              readback={desc.form === 'flat'
+                ? <span style={{ width: 26, textAlign: 'right' }}>—</span>
+                : null}
+            />
             <label style={row} title={t('How far the eaves stick out past the wall, in metres.')}>
               {t('Overhang (m)')}
               <input

@@ -54,6 +54,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { SliderInput } from '../../components/SliderInput'
 import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   PLAN_MAX_M, SNAP_TOL_PX, absOutline, buildSnapTargets, clamp,
@@ -3215,52 +3216,54 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 one can measure against the 1.70 m figure on the plan. On the
                 YARD the very same field is location-local metres (§ A13a), so
                 the range starts at the boundary box's corner instead of 0. */}
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            <SliderInput
+              label="X"
+              ariaLabel={t('Prop position X (m)')}
               title={groundSel
                 ? t('Fine-tune the position: metres east of the anchor pin (negative = west).')
-                : t('Fine-tune the position: metres from the room’s west edge.')}>
-              X
-              <input
-                type="range" min={selOrigin[0]}
-                max={selOrigin[0] + (selLay?.w || 0)} step={0.01}
-                value={placement.at[0]}
-                onChange={(e) => patchProp({
-                  at: [rM(parseFloat(e.target.value) || 0), placement.at[1]] as [number, number],
-                })}
-                style={{ width: 100 }}
-              />
-              <span style={{ minWidth: 52 }}>{fmtM(placement.at[0])} m</span>
-            </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+                : t('Fine-tune the position: metres from the room’s west edge.')}
+              min={selOrigin[0]}
+              max={selOrigin[0] + (selLay?.w || 0)}
+              step={0.01}
+              value={placement.at[0]}
+              onChange={(v) => patchProp({
+                at: [rM(v), placement.at[1]] as [number, number],
+              })}
+              unit="m"
+              sliderWidth={100}
+              readback={<span style={{ minWidth: 52 }}>{fmtM(placement.at[0])} m</span>}
+            />
+            <SliderInput
+              label="Y"
+              ariaLabel={t('Prop position Y (m)')}
               title={groundSel
                 ? t('Fine-tune the position: metres south of the anchor pin (negative = north).')
-                : t('Fine-tune the position: metres from the room’s north edge.')}>
-              Y
-              <input
-                type="range" min={selOrigin[1]}
-                max={selOrigin[1] + (selLay?.d || 0)} step={0.01}
-                value={placement.at[1]}
-                onChange={(e) => patchProp({
-                  at: [placement.at[0], rM(parseFloat(e.target.value) || 0)] as [number, number],
-                })}
-                style={{ width: 100 }}
-              />
-              <span style={{ minWidth: 52 }}>{fmtM(placement.at[1])} m</span>
-            </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Yaw in degrees — free values; R while placing steps 90°.')}>
-              ↻
-              <input
-                type="range" min={0} max={359.5} step={0.5}
-                value={placement.yaw || 0}
-                onChange={(e) => {
-                  const v = Math.round((parseFloat(e.target.value) || 0) * 10) / 10
-                  patchProp({ yaw: v || undefined })
-                }}
-                style={{ width: 120 }}
-              />
-              <span style={{ minWidth: 44 }}>{(placement.yaw || 0).toFixed(1)}°</span>
-            </label>
+                : t('Fine-tune the position: metres from the room’s north edge.')}
+              min={selOrigin[1]}
+              max={selOrigin[1] + (selLay?.d || 0)}
+              step={0.01}
+              value={placement.at[1]}
+              onChange={(v) => patchProp({
+                at: [placement.at[0], rM(v)] as [number, number],
+              })}
+              unit="m"
+              sliderWidth={100}
+              readback={<span style={{ minWidth: 52 }}>{fmtM(placement.at[1])} m</span>}
+            />
+            <SliderInput
+              label="↻"
+              ariaLabel={t('Prop yaw (°)')}
+              title={t('Yaw in degrees — free values; R while placing steps 90°.')}
+              min={0}
+              max={359.5}
+              step={0.5}
+              fineStep={0.1}
+              value={placement.yaw || 0}
+              onChange={(v) => patchProp({ yaw: v || undefined })}
+              unit="°"
+              sliderWidth={120}
+              inputWidth={68}
+            />
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
               title={t('Vertical offset in metres, additive to the floor (e.g. a picture on the wall).')}>
               ↕ m
@@ -3381,19 +3384,20 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               ⌂ {t('Model placement')}:
             </span>
             {(['X', 'Y'] as const).map((label, axis) => (
-              <label key={label} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-                title={t('Anchor of the room model: metres from the room’s min corner.')}>
-                {label}
-                <input type="range" min={0} max={axis === 0 ? lay.w : lay.d} step={0.01}
-                  value={mAt[axis]}
-                  style={{ width: 110 }}
-                  onChange={(e) => setAt(axis as 0 | 1, e.target.valueAsNumber)} />
-                <input className="ga-input" type="number" min={0}
-                  max={axis === 0 ? lay.w : lay.d} step={0.01}
-                  style={{ width: 72 }} value={mAt[axis]}
-                  onChange={(e) => setAt(axis as 0 | 1, Number(e.target.value) || 0)} />
-                <span style={{ opacity: 0.7 }}>m</span>
-              </label>
+              <SliderInput
+                key={label}
+                label={label}
+                ariaLabel={t('Room model anchor')}
+                title={t('Anchor of the room model: metres from the room’s min corner.')}
+                min={0}
+                max={axis === 0 ? lay.w : lay.d}
+                step={0.01}
+                value={mAt[axis]}
+                onChange={(v) => setAt(axis as 0 | 1, v)}
+                unit="m"
+                sliderWidth={110}
+                style={{ gap: 4 }}
+              />
             ))}
             <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
               title={t('Height offset of the MODEL in real metres, relative to the room floor — negative sinks it.')}>
@@ -3465,95 +3469,61 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             </button>
             {/* Fine X/Y correction after the coarse mouse placement — METRES
                 from the room's min corner (v6 Nr. 2). */}
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+            <SliderInput
+              label="X"
+              ariaLabel={t('Marker position X (m)')}
               title={groundSel
                 ? t('Fine-tune the marker position: metres east of the anchor pin (negative = west).')
-                : t('Fine-tune the marker position: metres from the room’s west edge.')}>
-              X
-              <input
-                type="range"
-                min={selOrigin[0]}
-                max={selOrigin[0] + (selLay?.w || 0)}
-                step={0.01}
-                value={marker.at[0]}
-                onChange={(e) => patchMarker({
-                  at: [rM(parseFloat(e.target.value) || 0), marker.at[1]] as [number, number],
-                })}
-                style={{ width: 100 }}
-              />
-              <input
-                className="ga-input"
-                type="number"
-                min={selOrigin[0]}
-                max={selOrigin[0] + (selLay?.w || 0)}
-                step={0.01}
-                value={marker.at[0]}
-                onChange={(e) => patchMarker({
-                  at: [rM(parseFloat(e.target.value) || 0), marker.at[1]] as [number, number],
-                })}
-                style={{ width: 74 }}
-              />
-              <span style={{ opacity: 0.7 }}>m</span>
-            </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+                : t('Fine-tune the marker position: metres from the room’s west edge.')}
+              min={selOrigin[0]}
+              max={selOrigin[0] + (selLay?.w || 0)}
+              step={0.01}
+              value={marker.at[0]}
+              onChange={(v) => patchMarker({
+                at: [rM(v), marker.at[1]] as [number, number],
+              })}
+              unit="m"
+              sliderWidth={100}
+              inputWidth={74}
+            />
+            <SliderInput
+              label="Y"
+              ariaLabel={t('Marker position Y (m)')}
               title={groundSel
                 ? t('Fine-tune the marker position: metres south of the anchor pin (negative = north).')
-                : t('Fine-tune the marker position: metres from the room’s north edge.')}>
-              Y
-              <input
-                type="range"
-                min={selOrigin[1]}
-                max={selOrigin[1] + (selLay?.d || 0)}
-                step={0.01}
-                value={marker.at[1]}
-                onChange={(e) => patchMarker({
-                  at: [marker.at[0], rM(parseFloat(e.target.value) || 0)] as [number, number],
-                })}
-                style={{ width: 100 }}
-              />
-              <input
-                className="ga-input"
-                type="number"
-                min={selOrigin[1]}
-                max={selOrigin[1] + (selLay?.d || 0)}
-                step={0.01}
-                value={marker.at[1]}
-                onChange={(e) => patchMarker({
-                  at: [marker.at[0], rM(parseFloat(e.target.value) || 0)] as [number, number],
-                })}
-                style={{ width: 74 }}
-              />
-              <span style={{ opacity: 0.7 }}>m</span>
-            </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}>
-              🧭
-              <input
-                type="range"
-                min={0}
-                max={359}
-                step={1}
-                value={fac ?? 0}
-                onChange={(e) => patchMarker({ rotation: parseInt(e.target.value, 10) || 0 })}
-                style={{ width: 120 }}
-              />
-              <input
-                className="ga-input"
-                type="number"
-                min={0}
-                max={359}
-                step={1}
-                value={fac ?? ''}
-                placeholder="—"
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10)
-                  patchMarker({ rotation: Number.isFinite(n) ? n : undefined })
-                }}
-                style={{ width: 62 }}
-              />
-              <span style={{ minWidth: 34 }}>
-                {fac !== undefined && FACING[fac] ? FACING[fac] : ''}
-              </span>
+                : t('Fine-tune the marker position: metres from the room’s north edge.')}
+              min={selOrigin[1]}
+              max={selOrigin[1] + (selLay?.d || 0)}
+              step={0.01}
+              value={marker.at[1]}
+              onChange={(v) => patchMarker({
+                at: [marker.at[0], rM(v)] as [number, number],
+              })}
+              unit="m"
+              sliderWidth={100}
+              inputWidth={74}
+            />
+            <SliderInput
+              label="🧭"
+              ariaLabel={t('Marker facing (°)')}
+              title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}
+              min={0}
+              max={359}
+              step={1}
+              value={fac}
+              fallback={0}
+              clearable
+              placeholder="—"
+              onChange={(v) => patchMarker({ rotation: v })}
+              onClear={() => patchMarker({ rotation: undefined })}
+              sliderWidth={120}
+              inputWidth={62}
+              readback={(
+                <span style={{ minWidth: 34 }}>
+                  {fac !== undefined && FACING[fac] ? FACING[fac] : ''}
+                </span>
+              )}
+            >
               {fac !== undefined ? (
                 <button
                   type="button"
@@ -3564,71 +3534,39 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   ↺
                 </button>
               ) : null}
-            </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Additive to the seat height the client samples under the marker.')}>
-              {t('Height offset (m)')}
-              <input
-                type="range"
-                min={-1}
-                max={1}
-                step={0.01}
-                value={marker.offset_y ?? 0}
-                onChange={(e) => {
-                  const v = Math.round(parseFloat(e.target.value) * 100) / 100
-                  patchMarker({ offset_y: v === 0 ? undefined : v })
-                }}
-                style={{ width: 120 }}
-              />
-              <input
-                className="ga-input"
-                type="number"
-                min={-1}
-                max={1}
-                step={0.01}
-                value={marker.offset_y ?? 0}
-                onChange={(e) => {
-                  const v = Math.round((parseFloat(e.target.value) || 0) * 100) / 100
-                  patchMarker({ offset_y: v === 0 ? undefined : v })
-                }}
-                style={{ width: 74 }}
-              />
-            </label>
+            </SliderInput>
+            <SliderInput
+              label={t('Height offset (m)')}
+              ariaLabel={t('Marker height offset (m)')}
+              title={t('Additive to the seat height the client samples under the marker.')}
+              min={-1}
+              max={1}
+              step={0.01}
+              value={marker.offset_y ?? 0}
+              onChange={(v) => patchMarker({ offset_y: v === 0 ? undefined : v })}
+              sliderWidth={120}
+              inputWidth={74}
+            />
             {/* Lean axes: a figure on a slope is not upright, and the compass
                 alone cannot say that. Applied after the facing, in the
                 figure's own frame. */}
             {([['tilt', '⤢', t('Tilt (°): head up (+) or down (−) — for lying or leaning figures.')],
               ['roll', '⤡', t('Roll (°): lean sideways — right (+) or left (−).')]] as const)
               .map(([key, icon, hint]) => (
-                <label key={key} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-                  title={hint}>
-                  {icon}
-                  <input
-                    type="range"
-                    min={-90}
-                    max={90}
-                    step={1}
-                    value={marker[key] ?? 0}
-                    onChange={(e) => {
-                      const v = Math.round(parseFloat(e.target.value) || 0)
-                      patchMarker({ [key]: v === 0 ? undefined : v })
-                    }}
-                    style={{ width: 100 }}
-                  />
-                  <input
-                    className="ga-input"
-                    type="number"
-                    min={-90}
-                    max={90}
-                    step={1}
-                    value={marker[key] ?? 0}
-                    onChange={(e) => {
-                      const v = Math.round(parseFloat(e.target.value) || 0)
-                      patchMarker({ [key]: v === 0 ? undefined : v })
-                    }}
-                    style={{ width: 62 }}
-                  />
-                </label>
+                <SliderInput
+                  key={key}
+                  label={icon}
+                  ariaLabel={hint}
+                  title={hint}
+                  min={-90}
+                  max={90}
+                  step={1}
+                  value={marker[key] ?? 0}
+                  onChange={(v) => patchMarker({ [key]: v === 0 ? undefined : v })}
+                  unit="°"
+                  sliderWidth={100}
+                  inputWidth={62}
+                />
               ))}
             <button
               type="button"
@@ -3735,36 +3673,37 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           </button>
           {/* Metres from the anchor pin (v6 Nr. 2) — the same frame the
               boundary is drawn in, so the sliders sweep the whole window. */}
-          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Fine-tune the elevator position: metres east of the anchor pin (negative = west).')}>
-            X
-            <input
-              type="range"
-              min={view.x0}
-              max={view.x0 + view.size}
-              step={0.05}
-              value={map3d.elevator[0]}
-              onChange={(e) => onMap3d?.('elevator',
-                [rM(parseFloat(e.target.value) || 0), map3d.elevator![1]] as [number, number])}
-              style={{ width: 100 }}
-            />
-            <span style={{ minWidth: 56 }}>{fmtM(map3d.elevator[0])} m</span>
-          </label>
-          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Fine-tune the elevator position: metres south of the anchor pin (negative = north).')}>
-            Y
-            <input
-              type="range"
-              min={view.z0}
-              max={view.z0 + view.size}
-              step={0.05}
-              value={map3d.elevator[1]}
-              onChange={(e) => onMap3d?.('elevator',
-                [map3d.elevator![0], rM(parseFloat(e.target.value) || 0)] as [number, number])}
-              style={{ width: 100 }}
-            />
-            <span style={{ minWidth: 56 }}>{fmtM(map3d.elevator[1])} m</span>
-          </label>
+          <SliderInput
+            label="X"
+            ariaLabel={t('Elevator position X (m)')}
+            title={t('Fine-tune the elevator position: metres east of the anchor pin (negative = west).')}
+            min={view.x0}
+            max={view.x0 + view.size}
+            step={0.05}
+            fineStep={0.01}
+            value={map3d.elevator[0]}
+            onChange={(v) => onMap3d?.('elevator',
+              [rM(v), map3d.elevator![1]] as [number, number])}
+            unit="m"
+            sliderWidth={100}
+            readback={<span style={{ minWidth: 56 }}>{fmtM(map3d.elevator[0])} m</span>}
+          />
+          <SliderInput
+            label="Y"
+            ariaLabel={t('Elevator position Y (m)')}
+            title={t('Fine-tune the elevator position: metres south of the anchor pin (negative = north).')}
+            min={view.z0}
+            max={view.z0 + view.size}
+            step={0.05}
+            fineStep={0.01}
+            value={map3d.elevator[1]}
+            onChange={(v) => onMap3d?.('elevator',
+              [map3d.elevator![0], rM(v)] as [number, number])}
+            unit="m"
+            sliderWidth={100}
+            readback={<span style={{ minWidth: 56 }}>{fmtM(map3d.elevator[1])} m</span>}
+          />
+
         </div>
       ) : null}
 

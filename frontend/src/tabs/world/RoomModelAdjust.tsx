@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { SliderInput } from '../../components/SliderInput'
 import { notifyModel3dChanged } from './topDownSnapshot'
 
 interface ActiveModel {
@@ -267,31 +268,21 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           const set = (v: number) => onCalibrationAt(
             idx === 0 ? [v, cur[1]] : [cur[0], v])
           return (
-            <label key={axis} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Position of the calibration figure in the room, in metres from its north-west corner.')}>
-              {axis.toUpperCase()}
-              <input
-                type="range"
-                min={0}
-                max={span || 10}
-                step={0.01}
-                value={cur[idx]}
-                onChange={(e) => set(Math.round(parseFloat(e.target.value) * 100) / 100)}
-                style={{ width: 90 }}
-              />
-              <input
-                className="ga-input"
-                type="number"
-                min={0}
-                max={span || 10}
-                step={0.01}
-                style={{ width: 66 }}
-                value={cur[idx]}
-                onChange={(e) => set(
-                  Math.round((parseFloat(e.target.value) || 0) * 100) / 100)}
-              />
-              <span style={{ opacity: 0.7 }}>m</span>
-            </label>
+            <SliderInput
+              key={axis}
+              label={axis.toUpperCase()}
+              ariaLabel={t('Calibration figure position')}
+              title={t('Position of the calibration figure in the room, in metres from its north-west corner.')}
+              min={0}
+              max={span || 10}
+              step={0.01}
+              value={cur[idx]}
+              onChange={set}
+              unit="m"
+              sliderWidth={90}
+              inputWidth={66}
+              style={{ gap: 4 }}
+            />
           )
         })
       ) : null}
