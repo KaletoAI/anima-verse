@@ -48,15 +48,22 @@ async def _body(request: Request) -> Dict[str, Any]:
 @router.get("/props/{prop_id}/variants")
 def prop_variants(prop_id: str) -> Dict[str, Any]:
     """The prop's model variants: ``{variants: [{index, stem, active,
-    primary, tiers, has_model, model_file, model_url, signature}], max}``.
+    primary, tiers, has_model, model_file, model_url, signature}], max,
+    generating_variants}``.
 
     ``max`` is the configured ceiling on ACTIVE variants
     (``image_generation.prop_variant_max``) — the strip greys its "add" action
-    out with it instead of letting the server refuse."""
-    from app.core.props import get_prop, list_variants, variant_max
+    out with it instead of letting the server refuse.
+
+    ``generating_variants`` are the STORE indices with a run in flight, so the
+    strip knows which chip is busy the moment it loads; while a run lasts the
+    admin gets the same list from the polled ``GET /world/props``."""
+    from app.core.props import (get_prop, list_variants, pending_variants,
+                                variant_max)
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
-    return {"variants": list_variants(prop_id), "max": variant_max()}
+    return {"variants": list_variants(prop_id), "max": variant_max(),
+            "generating_variants": pending_variants(prop_id).get(prop_id, [])}
 
 
 @router.post("/props/{prop_id}/variants")
@@ -80,10 +87,15 @@ async def prop_variant_active(prop_id: str, index: int,
                               request: Request) -> Dict[str, Any]:
     """Switch one variant on or off (body: ``{active: bool}``). Switching the
     LAST active one off is refused with a 409: a prop that renders nothing is
-    the ``__none__`` selection sentinel's job, not a toggle's."""
-    from app.core.props import set_variant_active
+    the ``__none__`` selection sentinel's job, not a toggle's. A variant with a
+    generation in flight is refused too, with its own reason."""
+    from app.core.props import set_variant_active, variant_generating
     _variant(prop_id, index)
     active = bool((await _body(request)).get("active", True))
+    if variant_generating(prop_id, index):
+        raise HTTPException(
+            status_code=409,
+            detail="This variant is generating right now")
     if not set_variant_active(prop_id, index, active):
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one active variant")
@@ -93,9 +105,13 @@ async def prop_variant_active(prop_id: str, index: int,
 @router.delete("/props/{prop_id}/variants/{index}")
 def prop_variant_delete(prop_id: str, index: int) -> Dict[str, Any]:
     """Remove one variant WITH its stored meshes. Refused for the last
-    remaining variant."""
-    from app.core.props import delete_variant
+    remaining variant, and while THIS variant is generating."""
+    from app.core.props import delete_variant, variant_generating
     _variant(prop_id, index)
+    if variant_generating(prop_id, index):
+        raise HTTPException(
+            status_code=409,
+            detail="This variant is generating right now")
     if not delete_variant(prop_id, index):
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one variant")

@@ -1381,7 +1381,8 @@ def props_admin() -> Dict[str, Any]:
     use-case style so the dialog can show and edit the COMPLETE final source
     prompt (final-prompt rule); ``mesh_backends`` are the rig-'none' img2mesh
     aliases."""
-    from app.core.props import compose_prompt, is_pending, list_props
+    from app.core.props import (compose_prompt, is_pending, list_props,
+                                pending_variants)
     from app.core.model3d import list_mesh_backends
     from app.imagegen.service import get_image_service
     svc = get_image_service()
@@ -1401,6 +1402,10 @@ def props_admin() -> Dict[str, Any]:
     except Exception:
         pass
     return {"props": list_props(full=True), "pending": is_pending(),
+            # WHICH variant of a pending prop is running, by store index — the
+            # strip puts its spinner on that chip, while `pending` stays the
+            # aggregate the library row shows.
+            "generating_variants": pending_variants(),
             "image_backends": image_backends,
             "mesh_backends": list_mesh_backends("none").get("backends", [])}
 

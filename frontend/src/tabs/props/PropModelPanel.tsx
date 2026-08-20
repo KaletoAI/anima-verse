@@ -54,7 +54,9 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   /** Reload the prop record — selecting/deleting a mesh changes has_model and
    *  may re-measure the dims. */
   onChanged: () => Promise<unknown>
-  /** A generation of THIS prop is running (server state, from the container). */
+  /** A generation of THIS VARIANT is running (server state, from the
+   *  container) — the gallery below belongs to one variant, and a run in
+   *  another one blocks nothing here. */
   pending?: boolean
   /** Start the container's pending poll — a low variant runs in the
    *  background like every mesh job. */

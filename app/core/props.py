@@ -123,7 +123,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
@@ -883,7 +883,11 @@ def add_variant(prop_id: str) -> int:
     does not exist or the active cap is already reached.
 
     The slot carries no mesh yet — a generation targeted at it fills it. This
-    is what "generating appends instead of replacing" runs on."""
+    is what "generating appends instead of replacing" runs on.
+
+    Deliberately NOT gated on a running generation: appending a slot is a
+    sidecar edit at the END of the list, it renumbers nothing and touches no
+    file a job holds. The cap is the only ceiling."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -903,7 +907,11 @@ def add_variant(prop_id: str) -> int:
 def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     """Switch one variant on or off. Switching the LAST active one off is
     refused: a prop with no active variant would render nothing, and that
-    state belongs to the ``__none__`` selection sentinel, not to a toggle."""
+    state belongs to the ``__none__`` selection sentinel, not to a toggle.
+
+    A variant that is GENERATING right now cannot be toggled either — the
+    active set decides which variant is the primary one, and moving that under
+    a running job would send its image or its mesh to another stem."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -914,6 +922,8 @@ def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     except (TypeError, ValueError):
         return False
     if not 0 <= i < len(entries):
+        return False
+    if variant_generating(pid, i):
         return False
     if not active and len([e for e in entries if e["active"]]) <= 1:
         return False
@@ -930,7 +940,11 @@ def delete_variant(prop_id: str, variant: int) -> bool:
 
     The image goes because it belongs to this variant and to no other (the
     source-image law); a freed stem is handed out again, and an inherited
-    picture would silently become the next variant's re-mesh input."""
+    picture would silently become the next variant's re-mesh input.
+
+    Refused as well while THIS variant is generating: the run is about to write
+    the very files the delete removes, and a deletion renumbers every variant
+    behind it — the job would land in a stranger's slot."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -941,6 +955,8 @@ def delete_variant(prop_id: str, variant: int) -> bool:
     except (TypeError, ValueError):
         return False
     if not 0 <= i < len(entries) or len(entries) <= 1:
+        return False
+    if variant_generating(pid, i):
         return False
     g = model_gallery(pid, i)
     if g:
@@ -1826,21 +1842,73 @@ def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
 # ── Generation state (populated by the generation chain, A2) ─────────────
 
 def _gen_key(prop_id: str, variant: Any, backend_glob: str) -> str:
-    """Double-start key: prop, VARIANT and backend. Two variants of the same
-    prop may generate side by side — they are two objects to the GPU — while
-    the same variant on the same backend stays one job."""
-    return (f"{prop_id}|{'' if variant is None else int(variant)}"
-            f"|{(backend_glob or '').strip().lower()}")
+    """Double-start key: prop, STORE VARIANT INDEX and backend. Two variants of
+    the same prop may generate side by side — they are two objects to the GPU —
+    while the same variant on the same backend stays one job.
+
+    ``None`` is not a key of its own: an unqualified run works on the PRIMARY
+    variant, so it resolves to that variant's index here. Otherwise the same
+    picture could be rendered twice at once — once through the plain route and
+    once through the primary variant's own — and the pair would race for one
+    file. Resolving also makes the middle field always an integer, which is
+    what :func:`pending_variants` reports back to the admin."""
+    idx = primary_variant(prop_id) if variant is None else int(variant)
+    return f"{prop_id}|{idx}|{(backend_glob or '').strip().lower()}"
+
+
+def _split_gen_key(key: str) -> Tuple[str, int]:
+    """``(prop id, store variant index)`` of an in-flight key. ``-1`` for a key
+    whose middle field is not an index — nothing writes such a key today, and a
+    malformed one must not take a whole listing down."""
+    pid, _, rest = key.partition("|")
+    idx, _, _ = rest.partition("|")
+    try:
+        return pid, int(idx)
+    except ValueError:
+        return pid, -1
 
 
 def is_pending(prop_id: str = "") -> List[str]:
     """Prop ids with at least one running generation (any variant, any
-    backend)."""
+    backend) — the boolean aggregate the library list row shows."""
     with _lock:
-        ids = sorted({k.split("|", 1)[0] for k in _generating})
+        ids = sorted({_split_gen_key(k)[0] for k in _generating})
     if not prop_id:
         return ids
     return [prop_id] if prop_id in ids else []
+
+
+def pending_variants(prop_id: str = "") -> Dict[str, List[int]]:
+    """Which VARIANTS are generating right now: ``{prop id: [store index, …]}``.
+
+    The indices are STORE indices — the position in the prop's own variant
+    list, the same number every variant-scoped route takes — never a position
+    in some filtered view. A switched-off variant keeps its index, so the strip
+    can put the spinner on the chip the job actually writes into.
+
+    Props with nothing running do not appear at all; a ``prop_id`` narrows the
+    answer to that prop (still as a map, so the caller reads it the same way)."""
+    with _lock:
+        keys = list(_generating)
+    out: Dict[str, set] = {}
+    for key in keys:
+        pid, idx = _split_gen_key(key)
+        if idx < 0 or (prop_id and pid != prop_id):
+            continue
+        out.setdefault(pid, set()).add(idx)
+    return {pid: sorted(idx) for pid, idx in out.items()}
+
+
+def variant_generating(prop_id: str, variant: Any) -> bool:
+    """Is THIS variant of this prop generating right now? The gate on the two
+    verbs that would pull the ground from under a running job — deleting the
+    variant it writes into, or switching it off mid-run."""
+    pid = safe_prop_id(prop_id)
+    try:
+        idx = primary_variant(pid) if variant is None else int(variant)
+    except (TypeError, ValueError):
+        return False
+    return idx in pending_variants(pid).get(pid, [])
 
 
 # ── Generation chain: prompt → txt2img source image → img2mesh GLB ───────

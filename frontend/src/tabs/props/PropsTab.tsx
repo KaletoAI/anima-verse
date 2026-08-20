@@ -32,6 +32,11 @@ export function PropsTab() {
   const { toast } = useToast()
   const [props, setProps] = useState<PropFull[]>([])
   const [pending, setPending] = useState<string[]>([])
+  // WHICH variant of a pending prop is running, by STORE index — the same
+  // number every variant-scoped route takes, so the strip can put the spinner
+  // on the chip the job writes into instead of on the first one. `pending`
+  // stays the aggregate: the library row says THAT the prop is busy.
+  const [genVariants, setGenVariants] = useState<Record<string, number[]>>({})
   const [imageBackends, setImageBackends] = useState<ImageBackendInfo[]>([])
   const [meshBackends, setMeshBackends] = useState<MeshBackendInfo[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -61,10 +66,12 @@ export function PropsTab() {
   const load = useCallback(async () => {
     try {
       const d = await apiGet<{ props?: PropFull[]; pending?: string[]
+        generating_variants?: Record<string, number[]>
         image_backends?: ImageBackendInfo[]; mesh_backends?: MeshBackendInfo[] }>(
         '/world/props')
       setProps(d.props || [])
       setPending(d.pending || [])
+      setGenVariants(d.generating_variants || {})
       setImageBackends(d.image_backends || [])
       setMeshBackends(d.mesh_backends || [])
       setLoaded(true)
@@ -244,6 +251,7 @@ export function PropsTab() {
           <PropDetail
             prop={selectedProp}
             pending={pending.includes(selectedProp.id)}
+            generatingVariants={genVariants[selectedProp.id] || []}
             cacheBump={cacheBump}
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
@@ -291,7 +299,12 @@ export function PropsTab() {
                 ...(opts.tier ? { tier: opts.tier } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'
-                  ? t('This prop is already generating.')
+                  // The refusal is per (variant, backend) — a re-mesh names
+                  // its variant, the appending run has the target picked for
+                  // it, so the two say different things.
+                  ? (target.meshOnly
+                    ? t('This variant is already generating.')
+                    : t('This prop is already generating into that variant.'))
                   : target.meshOnly
                     ? t('Meshing the source image…')
                     : t('Generating another model variant…'))
@@ -318,7 +331,7 @@ export function PropsTab() {
                 prompt, negative })
               .then((d) => {
                 toast(d?.status === 'already_running'
-                  ? t('This prop is already generating.')
+                  ? t('This variant is already generating.')
                   : t('Rendering a new source image…'))
                 startPoll()
               })

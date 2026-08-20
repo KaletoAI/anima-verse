@@ -89,6 +89,26 @@ From "absence is the product shot" three things follow and are checked:
     master record alike — a stale location would keep pointing at a spot the
     new picture was never taken at.
 
+THE IN-FLIGHT GUARD IS PER (PROP, VARIANT) (2026-08-20). A variant is a whole
+version of the object, so a run belongs to ONE of them — the guard key is
+``prop | store variant index | backend``, and what it protects against is the
+DOUBLE START of the same job, nothing else. From that one law follows what is
+checked in section 17, and the user finding it comes from:
+
+  - two variants of the same prop generate side by side (the GPU channel
+    serializes the backend work; the guard is not a second queue);
+  - the same variant on the same backend a second time is refused;
+  - an unqualified run resolves ``None`` to the PRIMARY variant's index, so the
+    plain route and the primary variant's own route are the SAME key — one
+    picture, one job;
+  - the admin is told WHICH variant runs, by STORE index: rendering variant 3's
+    image put "Generating…" on variant 1 as long as the state was a per-prop
+    boolean. A switched-off variant keeps its index, so the mapping case is
+    checked with one variant off — indices, never positions;
+  - adding a slot during a run is ACCEPTED (it appends at the end and renumbers
+    nothing), while deleting or toggling the RUNNING variant is refused — a
+    delete would take the files the job is writing and renumber its neighbours.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import ast
@@ -96,6 +116,8 @@ import io
 import os
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -626,6 +648,128 @@ def main() -> int:
     check("the lean library record still carries no origin at all",
           not any(k.startswith("source_origin") or k == "origin"
                   for k in {p["id"]: p for p in store.list_props()}[torch]))
+
+    print("\n[17] the in-flight guard is per (prop, VARIANT), not per prop")
+    # The chain itself is two GPU steps and has no business here — what is
+    # under test is the BOOKKEEPING around it. So `_generate` is replaced by a
+    # stub that blocks until this smoke lets it go: that is what makes several
+    # runs overlap in one process, which is the whole situation the guard is
+    # about.
+    release = threading.Event()
+    started = threading.Semaphore(0)
+    ran: list = []
+    real_generate = store._generate
+
+    def blocking_generate(prop_id, prompt, negative, image_glob, mesh_glob,
+                          **kw):
+        ran.append(kw.get("variant"))
+        started.release()
+        release.wait(10)
+        return {"ok": True}
+
+    store._generate = blocking_generate
+    try:
+        shelf = store.create_prop(name="Shelf")["id"]
+        put_mesh(shelf, 0)
+        put_mesh(shelf, store.target_variant(shelf))     # variant 1
+        put_mesh(shelf, store.target_variant(shelf))     # variant 2
+        check("the prop has three variants to run on",
+              len(store.list_variants(shelf)) == 3,
+              str([v["stem"] for v in store.list_variants(shelf)]))
+
+        ok_v0 = store.trigger_generation(shelf, mesh_backend_glob="fake-mesh",
+                                         mesh_only=True, variant=0)
+        started.acquire(timeout=5)
+        ok_v2 = store.trigger_generation(shelf, mesh_backend_glob="fake-mesh",
+                                         mesh_only=True, variant=2)
+        started.acquire(timeout=5)
+        check("variant 0 starts", ok_v0)
+        check("...and variant 2 starts WHILE it runs — two objects, two jobs",
+              ok_v2)
+        again = store.trigger_generation(shelf, mesh_backend_glob="fake-mesh",
+                                         mesh_only=True, variant=0)
+        check("...but variant 0 a second time is refused (double-click guard)",
+              not again)
+        check("...and no third job was started for it",
+              sorted(ran) == [0, 2], str(ran))
+
+        check("the aggregate names the prop once",
+              store.is_pending() == [shelf], str(store.is_pending()))
+        check("the detail gets the STORE indices that run: 0 and 2",
+              store.pending_variants().get(shelf) == [0, 2],
+              str(store.pending_variants()))
+        check("...narrowed to one prop it answers the same",
+              store.pending_variants(shelf) == {shelf: [0, 2]},
+              str(store.pending_variants(shelf)))
+        check("variant_generating() agrees per variant",
+              (store.variant_generating(shelf, 0),
+               store.variant_generating(shelf, 1),
+               store.variant_generating(shelf, 2)) == (True, False, True))
+
+        # THE MAPPING CASE: switching variant 1 off makes store index and
+        # display position part company — variant 2 becomes the SECOND active
+        # one. The report must stay on the store indices, or the spinner walks
+        # to the wrong chip.
+        check("a variant that is NOT running can still be switched off",
+              store.set_variant_active(shelf, 1, False))
+        actives = [v["index"] for v in store.list_variants(shelf) if v["active"]]
+        check("...leaving actives 0 and 2, i.e. index 2 at position 1",
+              actives == [0, 2], str(actives))
+        check("...and the report is STILL 0 and 2, not 0 and 1",
+              store.pending_variants().get(shelf) == [0, 2],
+              str(store.pending_variants()))
+        store.set_variant_active(shelf, 1, True)
+
+        # Adding is a sidecar edit at the END of the list — allowed mid-run.
+        added = store.add_variant(shelf)
+        check("adding a variant DURING a run is accepted", added == 3,
+              str(added))
+        check("...and the running jobs still point at 0 and 2",
+              store.pending_variants().get(shelf) == [0, 2],
+              str(store.pending_variants()))
+        check("...the fresh slot may be deleted again, it runs nothing",
+              store.delete_variant(shelf, added))
+
+        # Deleting or toggling the RUNNING variant is not.
+        check("deleting the running variant 0 is refused",
+              not store.delete_variant(shelf, 0))
+        check("...and it is still there",
+              len(store.list_variants(shelf)) == 3,
+              str([v["stem"] for v in store.list_variants(shelf)]))
+        check("switching the running variant 0 off is refused",
+              not store.set_variant_active(shelf, 0, False))
+        check("...switching the running variant 2 off is refused as well",
+              not store.set_variant_active(shelf, 2, False))
+        check("...and both are still active",
+              [v["index"] for v in store.list_variants(shelf) if v["active"]]
+              == [0, 1, 2])
+
+        # An unqualified run IS the primary variant's run — one key, one job.
+        vase = store.create_prop(name="Vase")["id"]
+        put_mesh(vase, 0)
+        check("the primary variant of a fresh prop is 0",
+              store.primary_variant(vase) == 0)
+        plain = store.trigger_generation(vase, prompt="a vase", image_only=True)
+        started.acquire(timeout=5)
+        check("an unqualified image run starts", plain)
+        check("...and reports as the PRIMARY variant's, not as a nameless one",
+              store.pending_variants().get(vase) == [0],
+              str(store.pending_variants()))
+        check("...so naming variant 0 explicitly is refused as a double start",
+              not store.trigger_generation(vase, prompt="a vase",
+                                           image_only=True, variant=0))
+    finally:
+        release.set()
+        store._generate = real_generate
+    # The threads clear their key in a `finally`, so the guard empties by
+    # itself — waiting for that is what proves it, not a manual discard.
+    for _ in range(200):
+        if not store.pending_variants():
+            break
+        time.sleep(0.01)
+    check("every key is released when the runs finish",
+          store.pending_variants() == {} and store.is_pending() == [],
+          str(store.pending_variants()))
 
     print()
     if FAILURES:

@@ -53,11 +53,18 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
 ]
 const MARKER_SAVE_DEBOUNCE_MS = 400
 
-export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
-  armedDelete, onRegenerate, onRegenerateMesh, onRegenerateImage,
-  onRefresh, onGenerating }: {
+export function PropDetail({ prop, pending, generatingVariants, cacheBump,
+  onChanged, onDelete, armedDelete, onRegenerate, onRegenerateMesh,
+  onRegenerateImage, onRefresh, onGenerating }: {
   prop: PropFull
+  /** ANY variant of this prop is generating — the aggregate. Only the two
+   *  prop-level actions read it; everything variant-scoped asks
+   *  `generatingVariants` instead. */
   pending: boolean
+  /** STORE indices with a run in flight (server state, polled by the
+   *  container). A variant switched off keeps its index, so these are matched
+   *  against a chip's `index`, never against its position in the strip. */
+  generatingVariants: number[]
   cacheBump: number
   onChanged: () => Promise<unknown>
   onDelete: () => void
@@ -128,6 +135,10 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
   }, [enc])
   useEffect(() => { void loadVariants() }, [loadVariants, reloadKey])
   const shownVariant = variants.find((v) => v.index === variant) || null
+  // Is the variant the detail has OPEN the one that is generating? Every
+  // variant-scoped action below reads this instead of the prop-level flag —
+  // rendering variant 3's image must not put "Generating…" on variant 1.
+  const variantBusy = generatingVariants.includes(variant)
   // Until the list has arrived the prop record answers for the first variant —
   // `has_model` there IS the primary variant's state, so the viewer does not
   // flash its empty box on every prop switch.
@@ -452,10 +463,17 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
         deleteLabel={armedDelete ? t('Really delete?') : t('Delete prop')}
         extra={
           <>
+            {/* The one PROP-level action: it does not name a variant, the
+                server picks the target (an empty slot, a fresh one, or the
+                last one at the cap). Two of those at once would race for the
+                same slot, so it stays gated on the prop's aggregate — unlike
+                everything below the strip, which names its variant. */}
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={pending}
               onClick={onRegenerate}
-              title={`${t('Re-render the source image from the stored description (name as fallback) and mesh it as ANOTHER model variant of this prop — the existing variants stay, dims and markers too. At the limit the run lands in the last variant.')} ${t('Maximum active variants:')} ${variantMax}`}>
+              title={pending
+                ? t('A generation of this prop is already running — it picks the variant it appends to, so only one at a time.')
+                : `${t('Re-render the source image from the stored description (name as fallback) and mesh it as ANOTHER model variant of this prop — the existing variants stay, dims and markers too. At the limit the run lands in the last variant.')} ${t('Maximum active variants:')} ${variantMax}`}>
               🧊 {pending ? t('Generating…') : t('Regenerate')}
             </button>
             {/* The whole props/<id>/ folder travels: sidecar, meshes,
@@ -690,8 +708,16 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
         {/* Preview: the viewer plus the orientation fix that steers it —
             sticky, so it stays in view while a long marker list scrolls. */}
         <div className="ga-form ga-detail-cols-sticky">
-          {pending ? (
-            <span className="ga-hint">{t('Generating the model — this takes a few minutes.')}</span>
+          {variantBusy ? (
+            <span className="ga-hint">
+              {`${t('Generating the model — this takes a few minutes.')} · ${t('Variant')} ${variant + 1}`}
+            </span>
+          ) : pending ? (
+            // Another variant of the same prop is busy — worth saying, but it
+            // blocks nothing here.
+            <span className="ga-hint">
+              {t('Another variant of this prop is generating.')}
+            </span>
           ) : null}
           {/* Split preview: the SELECTED VARIANT's source image on the left,
               its model on the right — and that image can be re-meshed
@@ -753,10 +779,12 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             <div style={{ display: 'flex', gap: 4 }}>
               <button type="button" className="ga-btn ga-btn-sm"
                 style={{ flex: 1 }}
-                disabled={pending}
+                disabled={variantBusy}
                 onClick={() => onRegenerateImage(variant, shownImage || undefined)}
-                title={t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
-                🖼 {pending ? t('Generating…') : t('New image')}
+                title={variantBusy
+                  ? t('This variant is generating right now.')
+                  : t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
+                🖼 {variantBusy ? t('Generating…') : t('New image')}
               </button>
               <button type="button" className="ga-btn ga-btn-sm"
                 onClick={() => sourceUploadRef.current?.click()}
@@ -780,9 +808,11 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
                 difference to 🧊 above, which appends another one. It reads
                 the image shown here, which is that variant's own. */}
             <button type="button" className="ga-btn ga-btn-sm"
-              disabled={pending || !shownImage || !srcOk}
+              disabled={variantBusy || !shownImage || !srcOk}
               onClick={() => onRegenerateMesh(variant)}
-              title={t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
+              title={variantBusy
+                ? t('This variant is generating right now.')
+                : t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
               ⚙ {t('3D from this image')} · {t('Variant')} {variant + 1}
             </button>
           </div>
@@ -871,7 +901,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             selected={variant}
             onSelect={setVariant}
             onChanged={meshesChanged}
-            disabled={pending}
+            generating={generatingVariants}
           />
 
           {/* The SELECTED variant's mesh gallery: every stored run, one active
@@ -883,7 +913,7 @@ export function PropDetail({ prop, pending, cacheBump, onChanged, onDelete,
             preview={previewFile}
             onPreview={setPreviewFile}
             onChanged={meshesChanged}
-            pending={pending}
+            pending={variantBusy}
             onGenerating={onGenerating}
           />
         </div>

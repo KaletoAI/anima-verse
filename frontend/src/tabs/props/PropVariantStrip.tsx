@@ -25,7 +25,7 @@ import { SCENE_CONTEXT_ORIGIN } from './propTypes'
 import type { PropVariant } from './propTypes'
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
-  onChanged, disabled = false }: {
+  onChanged, generating = [] }: {
   propId: string
   /** Every variant, active or not, in order (from PropDetail's load). */
   variants: PropVariant[]
@@ -38,9 +38,13 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   /** Reload the variant list and the prop record (a variant changes both the
    *  strip and the prop's mesh signature). */
   onChanged: () => Promise<unknown>
-  /** A generation of this prop is running — mutating the list meanwhile would
-   *  race the job that is about to write into one of these slots. */
-  disabled?: boolean
+  /** STORE indices with a generation in flight. Matched against a chip's own
+   *  `index`, NOT against its position in this list: a switched-off variant
+   *  keeps its index, so the two part company as soon as one is toggled off.
+   *  Only those chips lose their toggle and their delete — the job is about to
+   *  write into that slot, and a delete renumbers everything behind it.
+   *  Adding a slot is never blocked by a run: it appends at the end. */
+  generating?: number[]
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -96,6 +100,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {variants.map((v) => {
           const isSelected = v.index === selected
+          const isBusy = generating.includes(v.index)
           return (
             <div
               key={v.index}
@@ -125,6 +130,14 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 {v.primary ? '★ ' : ''}{t('Variant')} {v.index + 1}
               </button>
               <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* The spinner belongs on the chip the server names, and on no
+                    other one — this is the whole point of the store index. */}
+                {isBusy ? (
+                  <span className="ga-source"
+                    title={t('A generation is running for this variant — its image or its mesh is being written right now.')}>
+                    {t('generating…')}
+                  </span>
+                ) : null}
                 {v.has_model ? (
                   v.tiers.map((tier) => (
                     <span key={tier} className="ga-tag ga-tag-tier">{tier}</span>
@@ -158,25 +171,29 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   type="button"
                   className={`ga-btn ga-btn-sm${v.active ? ' ga-btn-primary' : ''}`}
                   style={{ flex: 1 }}
-                  disabled={busy || disabled}
+                  disabled={busy || isBusy}
                   onClick={() => toggle(v)}
-                  title={v.active
-                    ? t('Switch this variant off — its meshes stay stored, but nothing renders it any more. The last active variant cannot be switched off.')
-                    : t('Switch this variant back on — it counts against the active limit again.')}
+                  title={isBusy
+                    ? t('This variant is generating right now — switching it off would move the primary variant under the running job.')
+                    : v.active
+                      ? t('Switch this variant off — its meshes stay stored, but nothing renders it any more. The last active variant cannot be switched off.')
+                      : t('Switch this variant back on — it counts against the active limit again.')}
                 >
                   {v.active ? '☑' : '☐'} {t('Active')}
                 </button>
                 <button
                   type="button"
                   className={`ga-btn ga-btn-sm${armedDel === v.index ? ' ga-btn-danger' : ''}`}
-                  disabled={busy || disabled || variants.length < 2}
+                  disabled={busy || isBusy || variants.length < 2}
                   onClick={() => {
                     if (armedDel === v.index) remove(v.index)
                     else setArmedDel(v.index)
                   }}
-                  title={variants.length < 2
-                    ? t('A prop always keeps one variant.')
-                    : t('Delete this variant with all its stored meshes.')}
+                  title={isBusy
+                    ? t('This variant is generating right now — the run is about to write the very files a delete would remove.')
+                    : variants.length < 2
+                      ? t('A prop always keeps one variant.')
+                      : t('Delete this variant with all its stored meshes.')}
                 >
                   {armedDel === v.index ? t('Really?') : '×'}
                 </button>
@@ -188,7 +205,10 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
           type="button"
           className="ga-btn ga-btn-sm"
           style={{ alignSelf: 'center' }}
-          disabled={busy || disabled || capReached}
+          // NOT gated on a running generation: appending a slot renumbers
+          // nothing and touches no file a job holds. `busy` is only this
+          // strip's own in-flight request — the concurrent-add guard.
+          disabled={busy || capReached}
           onClick={add}
           title={capReached
             ? t('The limit of active variants is reached — switch one off or delete it first.')
