@@ -916,6 +916,11 @@ def request_low_tier(location_id: str, room_id: str = "",
     key = f"{owner}:{room_id}"
     if key in _lod_failed:
         return
+    # An explicitly DESELECTED low tier is a decision, not a gap (user
+    # finding 2026-08-20): the sentinel means "serve the full model at
+    # distance", and refilling it here made the deselection impossible.
+    if _gallery(owner, room_id).tier_declined(LOW_TIER):
+        return
     with _lock:
         if key in _lod_building:
             return

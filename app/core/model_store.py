@@ -210,21 +210,31 @@ class ModelGallery:
         the default tier) — distinct from "no files stored"."""
         return self.selection().get(DEFAULT_TIER) == SEL_NONE
 
+    def tier_declined(self, tier: str) -> bool:
+        """The admin explicitly deselected THIS tier (sentinel) — the
+        auto-LOD demand must not refill it (user finding 2026-08-20)."""
+        t = normalize_tier(tier) or DEFAULT_TIER
+        return self.selection().get(t) == SEL_NONE
+
     def select(self, filename: str, tier: str = DEFAULT_TIER) -> bool:
         """Make ``filename`` the active file of ``tier``. An EMPTY filename
-        deselects: on the default tier it persists the ``__none__`` sentinel
-        (render nothing until another file is chosen or generated), on any
-        other tier it drops the entry (that tier simply does not exist).
+        deselects: it persists the ``__none__`` sentinel — on the default
+        tier that means "render nothing", on any other tier "this tier is
+        DECLINED" (resolution falls through to the full model and the
+        auto-LOD demand leaves it alone).
         False when a non-empty file does not belong to the stem or is
         missing."""
         tier = normalize_tier(tier) or DEFAULT_TIER
         sel = self._read_all()
         entry = dict(sel.get(self.stem) or {})
         if not filename:
-            if tier == DEFAULT_TIER:
-                entry[tier] = SEL_NONE
-            else:
-                entry.pop(tier, None)
+            # EVERY tier persists the sentinel (user finding 2026-08-20):
+            # dropping the entry made a deselected ``low`` indistinguishable
+            # from a never-built one, so the auto-LOD demand rebuilt and
+            # re-selected it on the next payload — the deselection never
+            # stuck. With the sentinel the tier is DECLINED: resolution falls
+            # through to the full model and the demand stays quiet.
+            entry[tier] = SEL_NONE
         else:
             if not self.file(filename):
                 return False

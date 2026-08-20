@@ -1384,6 +1384,11 @@ def request_low_tier(prop_id: str, variant: Any = None) -> None:
     key = _lod_key(pid, variant)
     if key in _lod_failed:
         return
+    # An explicitly DESELECTED low tier is a decision, not a gap (user
+    # finding 2026-08-20) — same rule as the location galleries.
+    g = model_gallery(pid, variant)
+    if g is not None and g.tier_declined(LOW_TIER):
+        return
     with _lock:
         if key in _lod_building:
             return
