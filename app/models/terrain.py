@@ -451,6 +451,14 @@ def terrain_sig() -> str:
     ``sig``.
     """
     from app.core.terrain_types import effective_catalog
-    basis = json.dumps({"areas": list_areas(), "types": effective_catalog()},
+    # The ENRICHED block, not the stored rows (2026-08-20, same doctrine as
+    # the seed catalog above and the same fix world_props_sig applied): the
+    # scatter enrichment (variant tier maps, prop heights) is half of what a
+    # client consumes, and a prop gaining a variant or a low mesh has to
+    # reach a running client the same way a painted row does. Hashing the
+    # stored rows alone kept the old sig while /play/terrain already served
+    # the new maps.
+    basis = json.dumps({"areas": with_scatter_props(list_areas()),
+                        "types": effective_catalog()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
