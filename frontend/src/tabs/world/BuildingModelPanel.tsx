@@ -71,12 +71,11 @@ interface BuildingModelPanelProps {
   roomId?: string
   /** Ground texture for the tile — the location's current 2D map icon, if any. */
   mapIconUrl?: string
-  /** Draft map3d — the rotation is read from and written into it (building only). */
+  /** Draft map3d — the panel READS the tile rotation to show the model the way
+   *  the world will (the dial itself lives in the location's placement block). */
   map3d?: Map3D
   /** The 2D icon rotation: the client's yaw fallback when map3d.rotation is unset. */
   fallbackYawDeg?: number
-  /** Write a placement field into the draft (undefined removes = back to default). */
-  onMap3dField?: (key: 'rotation', value: number | undefined) => void
   /** The server-composed scene of the current draft — the panel renders the
    *  building's placement spec out of it instead of computing its own. That
    *  is what makes the walk-height dial visible here: it moves `bottom_y`. */
@@ -95,7 +94,6 @@ export function BuildingModelPanel({
   mapIconUrl,
   map3d,
   fallbackYawDeg = 0,
-  onMap3dField,
   scene,
   onPreviewFileChange,
   generateSource,
@@ -481,10 +479,14 @@ export function BuildingModelPanel({
           <span className="ga-hint">{t('Generating the 3D model — this takes a few minutes.')}</span>
         ) : (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Neutral, not a nag (E5 inventory 1a): a 3D model is optional
+                polish, not a missing step. A location renders from its scene
+                recipe and its props without one — the lake is the proof. The
+                two ways to get one are still named, as an offer. */}
             <span className="ga-hint">
               {roomId
-                ? t('No model yet — generate it from a gallery image assigned to this room (🧊 on a tile) or upload a GLB.')
-                : t('No model yet — generate it from a building image (🧊 on a gallery tile below) or upload a GLB.')}
+                ? t('No room model (optional). A room renders from its floor plan and its props; a diorama is polish — generate one from a gallery image assigned to this room (🧊 on a tile) or upload a GLB.')
+                : t('No building model (optional). The location renders from its outline and its props; a model is polish — generate one from a building image (🧊 on a gallery tile below) or upload a GLB.')}
             </span>
             {uploadButton}
           </div>
@@ -634,63 +636,19 @@ export function BuildingModelPanel({
         </span>
       </div>
 
-      {/* Map placement (map3d.rotation) — building only: a room
-          gets its position from the floor-plan layout instead. Edits the
-          LOCATION draft, so it is applied live in the viewer above but
-          persisted via the location's Save button, like every other map3d
-          field. */}
-      {!roomId && onMap3dField ? (
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.82em' }}>
-          {t('Rotation on tile (°)')}
-          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="range"
-              min={0}
-              max={359}
-              step={1}
-              value={effectiveYaw}
-              onChange={(e) => onMap3dField('rotation', parseInt(e.target.value, 10) || 0)}
-              style={{ width: 140 }}
-            />
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={359}
-              style={{ width: 70 }}
-              value={yaw ?? ''}
-              placeholder={String(fallbackYawDeg)}
-              onChange={(e) => {
-                const n = parseInt(e.target.value, 10)
-                onMap3dField('rotation', Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined)
-              }}
-            />
-            {yaw !== undefined ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                onClick={() => onMap3dField('rotation', undefined)}
-                title={t('Back to default: follow the 2D icon rotation.')}
-              >
-                ↺
-              </button>
-            ) : null}
-          </span>
-        </label>
-        {/* The former "Size (fraction of the extent)" dial is gone (v6 Nr. 3):
-            a model states its real width in metres up in the model row, like
-            every other model in the contract. An AREA location said so
-            already — its model IS the place and fills the whole extent. */}
-        {map3d?.area_model ? (
-          <span className="ga-hint" style={{ fontSize: '0.82em' }}>
-            {t('Area location: the model IS the ground — the height offset does not apply. Set the extent on the floor plan, the model width and the walk height above.')}
-          </span>
-        ) : null}
-        <span className="ga-hint" style={{ paddingBottom: 4 }}>
-          {t('Placement on the world tile — saved with the location.')}
+      {/* "Rotation on tile (°)" used to stand here and vanished with the
+          model — but a location is placed on its tile whether or not it has
+          one, and the 2D icon yaw is the fallback either way. It lives in the
+          location's own placement block now (E5 inventory 1a).
+
+          The former "Size (fraction of the extent)" dial is gone as well
+          (v6 Nr. 3): a model states its real width in metres up in the model
+          row, like every other model in the contract. An AREA location said
+          so already — its model IS the place and fills the whole extent. */}
+      {!roomId && map3d?.area_model ? (
+        <span className="ga-hint" style={{ fontSize: '0.82em' }}>
+          {t('Area location: the model IS the ground — the height offset does not apply. Set the extent on the floor plan, the model width and the walk height above.')}
         </span>
-      </div>
       ) : null}
 
       {/* Stored models — like the image gallery: click previews, the tier

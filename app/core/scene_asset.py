@@ -86,7 +86,12 @@ _running: set = set()
 
 
 def params(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """The pipeline's dials — schema defaults, world config, then overrides."""
+    """The pipeline's dials — schema defaults, world config, then overrides.
+
+    An override key the dial list does not name survives as-is: that is how the
+    optional ``seed`` reaches :func:`generate` without a second parameter
+    channel beside the one the admin route already fills.
+    """
     def cfg(key: str, default: Any) -> Any:
         try:
             from app.core import config
@@ -985,12 +990,17 @@ def generate(location_id: str, room_id: str, index: int, *,
     # of the prop's active variants.
     variant = prop_store.target_variant(prop_id)
     record["variant"] = variant
+    # A pinned seed fixes the FIRST attempt only — a reproduction reproduces
+    # one attempt, and a retry that repeated the same seed would repeat the
+    # same picture and therefore the same failure.
+    pinned = par.get("seed")
     loop = run_attempts(
         lambda attempt, seed: _attempt(
             out, attempt, seed, context_png, mask_png, region, backend,
             path_kind, composed, sidecar, expected, prop_id, variant, par,
             mesh_backend_glob),
-        retries=int(par["retries"]))
+        retries=int(par["retries"]),
+        seeds=[int(pinned)] if pinned else None)
     record["attempts"] = loop["attempts"]
     ok = loop["ok"]
     if ok:
@@ -1116,12 +1126,30 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
     # The placement now points at the mesh that was made FOR it: the variant it
     # landed in, the yaw the plate camera implies and the offset the contact
     # check settled on. Written through the sanitizer, like every other edit.
+    #
+    # ``variant`` here is the STORE index (props.target_variant), but a
+    # placement's field is resolved by the renderers as the POSITION within
+    # the active, meshed variants (scene_recipe._variant_index over
+    # model_variants). The two diverge the moment any variant is switched
+    # off or mesh-less — writing the store index would then point the
+    # placement at a DIFFERENT mesh than the one just generated. Convert at
+    # the boundary between the two vocabularies, exactly where the asset
+    # URLs already do it the other way around (§ B2 addendum).
+    from app.core.props import active_variant_tiers
+    positions = [e.get("variant") for e in active_variant_tiers(prop_id)]
+    try:
+        render_pos = positions.index(variant)
+    except ValueError:
+        res["failures"].append(
+            f"generated variant {variant} is not active+meshed "
+            f"(active: {positions})")
+        return res
     from app.core.world_ops import update_prop_placement
     stored = update_prop_placement(
         str(sidecar.get("location_id") or ""),
         str((sidecar.get("target") or {}).get("room_id") or ""),
         int((sidecar.get("target") or {}).get("index") or 0),
-        {"variant": variant, "yaw": placement["yaw_deg"],
+        {"variant": render_pos, "yaw": placement["yaw_deg"],
          "offset_y": placement["offset_y"]})
     res["stored_placement"] = stored
     if stored is None:

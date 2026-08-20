@@ -458,6 +458,47 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             />
           </div>
         </Field>
+        {/* Rotation on the world tile. It belongs to the LOCATION, not to any
+            model: the tile is turned whether a building model exists or not,
+            and the 2D icon yaw is the fallback either way. It used to live in
+            the model panel and therefore disappeared with the model
+            (E5 inventory 1a). */}
+        <Field label={t('Rotation on tile (°)')} hint={t('How the location is turned on its world tile. Empty = follow the 2D icon rotation.')}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="range"
+              min={0}
+              max={359}
+              step={1}
+              value={draft.map3d?.rotation ?? (location.map_rotation_2d || 0)}
+              onChange={(e) => updMap3d('rotation', parseInt(e.target.value, 10) || 0)}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <input
+              className="ga-input"
+              type="number"
+              min={0}
+              max={359}
+              style={{ width: 70 }}
+              value={draft.map3d?.rotation ?? ''}
+              placeholder={String(location.map_rotation_2d || 0)}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10)
+                updMap3d('rotation', Number.isFinite(n) ? ((n % 360) + 360) % 360 : undefined)
+              }}
+            />
+            {draft.map3d?.rotation !== undefined ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                onClick={() => updMap3d('rotation', undefined)}
+                title={t('Back to default: follow the 2D icon rotation.')}
+              >
+                ↺
+              </button>
+            ) : null}
+          </div>
+        </Field>
         <Field label={t('Floors')} hint={t('Procedural fallback only (no building model). Empty = derived from the floor plan (highest level + 1).')}>
           <input
             className="ga-input"
@@ -553,7 +594,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           mapIconUrl={mapIconUrl}
           map3d={draft.map3d}
           fallbackYawDeg={location.map_rotation_2d || 0}
-          onMap3dField={(key, v) => updMap3d(key, v)}
           scene={scene}
           onPreviewFileChange={setPreviewModelFile}
           generateSource={modelGenSrc}
@@ -592,6 +632,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           scene={scene}
           calibrationRoomId={calibration?.roomId || ''}
           onCalibrationAt={(at) => setCalibration((cur) => (cur ? { ...cur, at } : cur))}
+          unsaved={dirty}
+          onServerEdit={onChanged}
         >
           {floorSelRoom?.id ? (
             <RoomModelAdjust

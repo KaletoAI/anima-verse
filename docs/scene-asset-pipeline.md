@@ -234,7 +234,38 @@ cutout.png      the object, transparent background (per attempt)
 result.json     paths, prompt, backend, path taken, every check, timings
 ```
 
-which is also the triple preview the UI wave shows (plate / edit / mesh).
+which is also the triple preview the UI shows (plate / edit / mesh).
+
+## Routes and UI
+
+`app/routes/scene_asset.py`, prefix `/world/scene-asset` — a thin adapter, every
+decision stays in the core:
+
+| route | does |
+|---|---|
+| `POST /generate` | starts the chain for one placement. Body `{location_id, room_id, placement_index}` plus the optional `{subject, image_backend, mesh_backend, seed}`. **409 = this placement is already running** (the core's double-start guard reporting load, not a defect). A placement the world does not carry is a 404 — the yard is an ordinary room here, named by its reserved id `__ground__`; an empty `room_id` names nothing. |
+| `GET /status` | `{running, prop_id, placement, last_run}` for one placement — the poll the editor runs while a job is out. `last_run` is the newest run **of this placement**; a prop stands in many places and its run directory holds all of them. |
+| `GET /runs/{prop_id}` | the same summary for every run the prop ever had, newest first (the directory names are timestamps, so their reverse sort IS the chronology). A directory without a readable `result.json` is a run still writing and stays invisible. |
+| `GET /runs/{prop_id}/{stamp}/{file}.png` | the four artefacts, ETag + 304. Path-escape-checked exactly like `assets.resolve_clip_path`: two segments, no dot segment, no backslash, PNG only, and the resolved path must still lie inside the prop's run directory. |
+| `POST /placement` | patches `variant` / `yaw` / `offset_y` of a stored placement through `world_ops.update_prop_placement` — the very writer the pipeline uses, sanitiser included. |
+
+`seed` pins the **first** attempt only; retries keep drawing fresh ones, because
+a retry on the same seed would redraw the same picture and fail the same way.
+
+The **summary** the three read-routes return is built in one place
+(`_summary`) and is the UI's whole contract: the run's `files` with the LAST
+attempt's `edit`/`cutout` folded over them (a failed run never promotes them,
+and they are exactly what explains the failure), the checks with the band they
+are judged against beside them, and the core's own failure sentences verbatim.
+
+The UI is `frontend/src/tabs/world/ScenePropPanel.tsx`, inside the floor plan's
+selected-placement strip next to the yaw/height dials: **"🎬 Generate in
+scene"**, the placement's model-variant picker, and the collapsible triple
+preview with the readouts. The button is **disabled while the location has
+unsaved changes** — the pipeline renders the STORED world, and a run's own
+writes would be lost to the next Save of a stale draft. When a run finishes the
+editor reloads the location, so the draft picks up the variant, yaw and sink
+the run wrote.
 
 ## Configuration
 
@@ -267,6 +298,14 @@ the SAME plate camera as `scripts/smoke_scene_context.py`:
   suggestion, and the honest finding that sinking cannot flatten a slope);
 * the retry budget with injected attempts, and the `NO_NEW_IMAGE` cache
   sentinel in every shape it can arrive in.
+
+`scripts/smoke_scene_asset_routes.py` does the same for the HTTP surface — the
+router on a bare app, a faked world and trigger, a hand-written run history:
+the 409 double-start guard, the status shape (a run on placement 4 must not
+light up 3), the summary values read off a record written by hand, and the
+path-escape rule in every shape it can be sent (the dot segments go
+percent-encoded, because an HTTP client collapses them in the URL itself and a
+plain spelling would never reach the handler).
 
 ## Known limits
 

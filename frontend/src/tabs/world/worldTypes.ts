@@ -104,6 +104,12 @@ export interface RoomPropPlacement {
   yaw?: number
   /** Vertical offset in metres (clamped ±5), additive to the floor. */
   offset_y?: number
+  /** WHICH model variant of the prop this placement shows (E2.3) — a POSITION
+   *  in the prop's ACTIVE meshes, not a store index; out of range wraps, so a
+   *  deleted mesh never makes a placement disappear. Absent = the primary one.
+   *  Only a manual placement carries it: a scattered copy derives its variant
+   *  from the seed at compose time. */
+  variant?: number
   /** Scatter (plan-area-detail-scenes.md, v5.2 Nr. 12): this many COPIES of
    *  the prop are thrown over the room area at compose time; the placement
    *  itself stays as the manually positioned anchor. Σ ≤ 120 per room. */

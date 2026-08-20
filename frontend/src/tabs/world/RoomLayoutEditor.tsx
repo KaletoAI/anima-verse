@@ -52,6 +52,7 @@ import { PlanFigure, PlanMetreGrid, PlanScaleBar } from './PlanMeasure'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
+import { ScenePropPanel } from './ScenePropPanel'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, hasRect } from './worldTypes'
@@ -125,6 +126,14 @@ interface RoomLayoutEditorProps {
    *  it moves the figure (fraction of the room rectangle, UI state only). */
   calibrationRoomId?: string
   onCalibrationAt?: (at: [number, number]) => void
+  /** The location draft carries unsaved changes. The scene-asset pipeline
+   *  reads the STORED world, so its button has to know: a placement that only
+   *  exists in this draft does not exist for it. */
+  unsaved?: boolean
+  /** Something wrote into the STORED location behind the editor's back (a
+   *  finished scene-asset run sets variant/yaw/offset on the placement) —
+   *  the parent reloads so the draft stops being stale. */
+  onServerEdit?: () => void
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -192,7 +201,7 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
 const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
   (ground ? [lay.x, lay.y] : [0, 0])
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, onServerEdit, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -2683,6 +2692,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onReliefFlat={(v) => updateLayout(selectedRoom?.id || '', {
           relief_flat: v || undefined,
         })}
+        onNoWalls={(v) => updateLayout(selectedRoom?.id || '', {
+          no_walls: v || undefined,
+        })}
         onFloorOffset={(v) => updateLayout(selectedRoom?.id || '', {
           floor_offset_y: v,
         })}
@@ -2872,6 +2884,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             >
               × {t('Remove')}
             </button>
+            {/* The scene-asset pipeline works on THIS placement — the button,
+                the variant picker and the triple preview of the newest run
+                belong beside the dials that describe it. */}
+            <ScenePropPanel
+              locationId={locationId}
+              roomId={selectedRoom.id || ''}
+              index={propSel}
+              propId={placement.prop_id}
+              unsaved={unsaved}
+              variant={placement.variant}
+              onVariant={(v) => patchProp({ variant: v })}
+              onApplied={onServerEdit || (() => {})}
+            />
           </div>
         )
       })() : null}
@@ -2940,20 +2965,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 {t('Clip model to room bounds')}
               </label>
             ) : null}
-            {/* Walls opt-out: open zones, pavilions, areas inside an area
-                model. The UI is positive ("render walls"), the stored field
-                is negative — so the default (no field) means walls. Shown for
-                outdoor rooms too: an open zone with window openings in the
-                plan should still be able to render wall-less. */}
-            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
-              <input type="checkbox"
-                checked={!lay.no_walls}
-                onChange={(e) => updateLayout(selectedRoom.id || '', {
-                  no_walls: e.target.checked ? undefined : true,
-                })} />
-              {t('Render walls')}
-            </label>
+            {/* "Render walls" used to stand here and was therefore invisible
+                until a room HAD a diorama — a wall-less zone is exactly a room
+                that has none (E5 inventory 1a). It lives in the side panel
+                now, with the room's other shell properties. */}
             <button type="button" className="ga-btn ga-btn-sm"
               title={t('Back to the centred default placement.')}
               onClick={() => updateLayout(selectedRoom.id || '', {

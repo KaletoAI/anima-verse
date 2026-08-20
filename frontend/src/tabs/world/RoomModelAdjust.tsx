@@ -172,11 +172,13 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
   }, [model, walkDraft, enc, roomId, t, toast])
 
   if (!loaded) return null
+  // Neutral, not a nag (E5 inventory 1a): a room diorama is optional polish.
+  // The room renders from its floor plan and its props without one, so the
+  // empty state states a fact instead of asking for a generation.
   if (!model) {
     return (
       <span className="ga-hint">
-        {t('{name}: no room model yet — generate one in the room editor’s 3D tab.')
-          .replace('{name}', roomName)}
+        {t('{name}: no room diorama (optional).').replace('{name}', roomName)}
       </span>
     )
   }

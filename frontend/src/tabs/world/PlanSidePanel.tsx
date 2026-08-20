@@ -45,6 +45,9 @@ interface PlanSidePanelProps {
   onAlwaysVisible: (value: boolean) => void
   /** Terrain-relief opt-out of THIS room (only offered on outdoor rooms). */
   onReliefFlat: (value: boolean) => void
+  /** Walls opt-out of THIS room. Stored negative (`no_walls`), shown positive
+   *  — it is a property of the room SHELL, not of any model it may carry. */
+  onNoWalls: (value: boolean) => void
   /** Height offset of the ROOM in real metres (undefined = 0). */
   onFloorOffset: (value: number | undefined) => void
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
@@ -76,7 +79,8 @@ const FURNISH_BADGE: Record<string, string> = {
 export function PlanSidePanel({
   room, ground, groundName,
   clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  markerMode, onArmMarker, onAlwaysVisible, onReliefFlat, onFloorOffset,
+  markerMode, onArmMarker, onAlwaysVisible, onReliefFlat, onNoWalls,
+  onFloorOffset,
   surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
   propsOpen, onPickProp, armedPropId,
@@ -131,6 +135,24 @@ export function PlanSidePanel({
           <span>{t('Keep flat (road, clearing)')}</span>
         </label>
       ) : null}
+
+      {/* Walls opt-out: open zones, pavilions, areas inside an area model.
+          The UI is positive ("render walls"), the stored field is negative —
+          so the default (no field) means walls. It describes the room SHELL,
+          which is why it stands here and not in the model strip: a wall-less
+          zone usually has no diorama at all, and there it stayed invisible
+          (E5 inventory 1a). Outdoor rooms are asked too — an open zone with
+          window openings in the plan should still be able to render
+          wall-less. */}
+      <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+        title={t('Off: this room gets no walls at all — no segments, no window sill or head, no glass. Its floor and openings stay (the plan keeps drawing them), and the building outline is unaffected.')}>
+        <input
+          type="checkbox"
+          checked={!layout.no_walls}
+          onChange={(e) => onNoWalls(!e.target.checked)}
+        />
+        <span>{t('Render walls')}</span>
+      </label>
 
       {/* Where the ROOM sits, as opposed to a model inside it. It belongs to
           the room, not to a diorama — it used to live in the model-placement
